@@ -75,7 +75,11 @@ describe("host answers are validated", () => {
     }
     expect(() => parseScriptRunResult({ status: "maybe" })).toThrow(WorkspaceHostError);
     expect(() => parseScriptRunResult({ status: "refused", code: "nope" })).toThrow(WorkspaceHostError);
-    expect(() => parseScriptRunStatus({ run_handle: "r", state: "paused" })).toThrow(WorkspaceHostError);
+    expect(parseScriptRunStatus({ run_handle: "r", state: "paused" })).toMatchObject({
+      state: "unknown",
+      unknownState: "paused",
+    });
+    expect(() => parseScriptRunStatus({ run_handle: "r", state: "" })).toThrow(WorkspaceHostError);
     expect(() => parseScriptPreflight({})).toThrow(WorkspaceHostError);
   });
 
@@ -215,9 +219,11 @@ describe("messages", () => {
     expect(stateLabel("waiting_for_solve")).toContain("COMPUTE");
     expect(stateLabel("exited")).toBe("Finished");
     const base = { exitCode: 1, durationSeconds: 2.5, error: "boom", requestedDevice: "gpu", resolvedDevice: null, resultsDir: null };
-    expect(receiptText({ ...base, outcome: "failed" })).toContain("no CPU fallback");
+    expect(receiptText({ ...base, outcome: "failed" })).toContain("resolved execution unknown");
+    expect(receiptText({ ...base, outcome: "failed" })).not.toContain("no CPU fallback");
+    expect(receiptText({ ...base, outcome: "failed", resolvedDevice: "cpu", resolvedKnown: true })).toContain("forced-GPU violation");
     expect(receiptText({ ...base, outcome: "cancelled" })).toBe("Stopped after 2.5 s.");
-    expect(receiptText({ ...base, outcome: "completed" })).toBe("Finished after 2.5 s.");
+    expect(receiptText({ ...base, outcome: "completed" })).toMatch(/^Finished after 2\.5 s\. /);
     expect(receiptText({ ...base, outcome: "not_started", error: null })).toContain("Not started");
   });
 });

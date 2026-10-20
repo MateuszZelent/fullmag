@@ -9,6 +9,7 @@ import {
 import { useSessionCollection } from "../resources/useSessionCollection";
 import { useSessionBootstrapStatus } from "../resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
+import { CommandFeedbackPresenter } from "./CommandFeedbackPresenter";
 import { WorkspaceRenderProfiler } from "../performance/reactRenderProfiler";
 import { SlotHost } from "./SlotHost";
 import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
@@ -47,6 +48,26 @@ export function WorkspaceShellClient() {
   const startOwnsPage = sessionState !== "ready" && project.state !== "ready";
   const refetchSessions = sessions.resource.refetch;
   const refetchStatus = sessionStatus.refetch;
+  const collectionStatus = sessions.resource.status;
+  // Realtime starts only after a session identity is confirmed. While the
+  // collection is empty, discover sessions activated by the local launcher.
+  useEffect(() => {
+    if (
+      sessions.state !== "no-session" ||
+      (collectionStatus !== "ready" && collectionStatus !== "error")
+    ) {
+      return;
+    }
+    const refreshVisibleCollection = () => {
+      if (document.visibilityState === "visible") refetchSessions();
+    };
+    const timer = window.setTimeout(refreshVisibleCollection, 5_000);
+    document.addEventListener("visibilitychange", refreshVisibleCollection);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", refreshVisibleCollection);
+    };
+  }, [collectionStatus, refetchSessions, sessions.state]);
   const retryStatusAndCollection = useCallback(() => {
     refetchSessions();
     refetchStatus();
@@ -127,6 +148,7 @@ function ProjectWorkspaceShell({
         <WorkspaceDockLayout />
       </WorkspaceRenderProfiler>
       {homeOpen ? <HomeOverlay /> : null}
+      <CommandFeedbackPresenter />
     </WorkspaceContentScopeProvider>
   );
 }
@@ -167,6 +189,7 @@ function HomeShell({
       <div className="fm-workspace-overlay-host">
         <SlotHost slotId="overlay" />
       </div>
+      <CommandFeedbackPresenter />
     </div>
   );
 }
@@ -210,6 +233,7 @@ function ActiveWorkspaceShell() {
         <SlotHost slotId="overlay" />
         <SimulationStartupOverlayView state={startupState} />
       </div>
+      <CommandFeedbackPresenter />
     </>
   );
 }

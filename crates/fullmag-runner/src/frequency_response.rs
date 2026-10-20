@@ -573,6 +573,7 @@ fn dense_frequency_response_progress_update(
         scalar_row_due: true,
         terminal_field_snapshot: false,
         finished: false,
+        magnetization_carrier: None,
     }
 }
 
@@ -670,6 +671,7 @@ fn native_frequency_response_progress_update(
         scalar_row_due: true,
         terminal_field_snapshot: false,
         finished: false,
+        magnetization_carrier: None,
     }
 }
 

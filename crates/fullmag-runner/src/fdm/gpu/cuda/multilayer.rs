@@ -17,6 +17,7 @@ use fullmag_engine::{
 };
 use fullmag_fdm_demag::{
     compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy,
+    VolumeWeightedTransfer,
 };
 use fullmag_ir::{
     ExchangeBoundaryCondition, ExecutionPrecision, FdmGridCertificateIR, FdmLayerPlanIR,
@@ -34,6 +35,7 @@ use crate::fdm::gpu::cuda::native::{
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
 use crate::fdm::validate_multilayer_grid_budget;
+use crate::preview::flatten_vectors;
 use crate::relaxation::{
     llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
@@ -42,8 +44,8 @@ use crate::schedules::{
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
-    FieldSnapshot, RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats,
-    StepUpdate,
+    FieldSnapshot, LivePreviewField, RunError, RunResult, RunStatus, StateObservables, StepAction,
+    StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -347,7 +349,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
@@ -543,6 +545,57 @@ fn validate_device_resident_cuda_multilayer_lane(
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+/// Pure lane preflight for accepted-state materialization. This intentionally
+/// mirrors the dispatch selector without checking device availability or
+/// constructing native solver contexts/backends.
+pub(crate) fn validate_accepted_fdm_multilayer_cuda_lane(
+    plan: &FdmMultilayerPlanIR,
+) -> Result<(), RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
+
+    let memory_model = if plan.planner_summary.requested_strategy == "auto"
+        && plan.integrator != IntegratorChoice::Heun
+        && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible(&plan.layers)
+    {
+        fullmag_fdm_demag::KernelAdmissionModel::CudaNativeSingleGrid
+    } else {
+        fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload
+    };
+    validate_multilayer_grid_budget(plan, memory_model)?;
+    validate_cuda_multilayer_execution_contract(plan)?;
+
+    // This is the dispatcher's first choice and needs no device probe.
+    if validate_device_resident_cuda_multilayer_lane(plan).is_ok() {
+        return Ok(());
+    }
+
+    if memory_model == fullmag_fdm_demag::KernelAdmissionModel::CudaNativeSingleGrid {
+        // Match the dispatcher's exact native-stacked resolution. This builds
+        // host-side plan/context data only; it does not probe or create a CUDA
+        // backend/context.
+        return match resolve_cuda_multilayer_execution_shape(plan)? {
+            Some(_) => Ok(()),
+            None => Err(RunError {
+                message: "CUDA multilayer selected the native single-grid memory model but its native-stacked shape is not eligible".into(),
+            }),
+        };
+    }
+
+    if !matches!(
+        plan.integrator,
+        IntegratorChoice::Heun | IntegratorChoice::Rk4 | IntegratorChoice::Rk23
+    ) {
+        return Err(RunError {
+            message: format!(
+                "accepted CUDA-assisted multilayer materialization supports only Heun, RK4, and fixed-step RK23, got {:?}",
+                plan.integrator
+            ),
+        });
     }
     Ok(())
 }
@@ -869,7 +922,7 @@ fn execute_cuda_assisted_multilayer_double(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
     pure_damping_relax: bool,
     contexts: Vec<LayerContext>,
@@ -1001,24 +1054,26 @@ fn execute_cuda_assisted_multilayer_double(
             &mut artifacts,
         )?;
 
-        if let Some((grid, on_step)) = live.as_mut() {
-            let action = on_step(StepUpdate {
-                coupled_checkpoint: None,
-                stats: latest_stats.clone(),
-                grid: [grid[0], grid[1], grid[2]],
-                fem_mesh_generation_id: None,
-                magnetization: None,
-                preview_field: None,
-                cached_preview_fields: None,
-                hysteresis_field_m_t: None,
-                hysteresis_point_index: None,
-                hysteresis_settle_step_index: None,
-                hysteresis_settle_step_kind: None,
-                hysteresis_settle_step_method: None,
-                scalar_row_due: false,
-                terminal_field_snapshot: false,
-                finished: false,
-            });
+        if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+            let fields_due = crate::types::fdm_multilayer_live_field_due(
+                latest_stats.step,
+                *field_every_n,
+            );
+            let update = make_multilayer_live_step_update(
+                plan,
+                &contexts,
+                Some(&observables),
+                &latest_stats,
+                [grid[0], grid[1], grid[2]],
+                *layout,
+                *field_every_n,
+                &crate::quantities::field_materialization_quantity_ids(),
+                fields_due,
+                false,
+                None,
+                None,
+            );
+            let action = on_step(update);
             match action {
                 StepAction::Continue => {}
                 StepAction::Stop => {
@@ -1095,6 +1150,21 @@ fn execute_cuda_assisted_multilayer_double(
         })?;
     }
 
+    if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+        emit_multilayer_terminal_step_updates(
+            plan,
+            &contexts,
+            Some(&final_observables),
+            &final_stats,
+            [grid[0], grid[1], grid[2]],
+            *layout,
+            *field_every_n,
+            None,
+            None,
+            on_step.as_mut(),
+        );
+    }
+
     let transfer_counters = assisted_transfer_counters(&gpu_contexts, native_demag.as_ref());
     let stage_telemetry = native_demag
         .as_ref()
@@ -1151,7 +1221,7 @@ fn execute_cuda_assisted_multilayer_single(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
     pure_damping_relax: bool,
     contexts: Vec<LayerContext>,
@@ -1265,24 +1335,26 @@ fn execute_cuda_assisted_multilayer_single(
             &mut artifacts,
         )?;
 
-        if let Some((grid, on_step)) = live.as_mut() {
-            let action = on_step(StepUpdate {
-                coupled_checkpoint: None,
-                stats: latest_stats.clone(),
-                grid: [grid[0], grid[1], grid[2]],
-                fem_mesh_generation_id: None,
-                magnetization: None,
-                preview_field: None,
-                cached_preview_fields: None,
-                hysteresis_field_m_t: None,
-                hysteresis_point_index: None,
-                hysteresis_settle_step_index: None,
-                hysteresis_settle_step_kind: None,
-                hysteresis_settle_step_method: None,
-                scalar_row_due: false,
-                terminal_field_snapshot: false,
-                finished: false,
-            });
+        if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+            let fields_due = crate::types::fdm_multilayer_live_field_due(
+                latest_stats.step,
+                *field_every_n,
+            );
+            let update = make_multilayer_live_step_update(
+                plan,
+                &contexts,
+                Some(&observables),
+                &latest_stats,
+                [grid[0], grid[1], grid[2]],
+                *layout,
+                *field_every_n,
+                &crate::quantities::field_materialization_quantity_ids(),
+                fields_due,
+                false,
+                None,
+                None,
+            );
+            let action = on_step(update);
             match action {
                 StepAction::Continue => {}
                 StepAction::Stop => {
@@ -1329,6 +1401,20 @@ fn execute_cuda_assisted_multilayer_single(
         0,
         &final_observables,
     );
+    if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+        emit_multilayer_terminal_step_updates(
+            plan,
+            &contexts,
+            Some(&final_observables),
+            &final_stats,
+            [grid[0], grid[1], grid[2]],
+            *layout,
+            *field_every_n,
+            None,
+            None,
+            on_step.as_mut(),
+        );
+    }
     if !steps
         .iter()
         .any(|step| step.step == final_stats.step && (step.time - final_stats.time).abs() <= 1e-18)
@@ -1410,7 +1496,7 @@ fn execute_native_device_resident_cuda_multilayer(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     validate_device_resident_cuda_multilayer_lane(plan)?;
@@ -1488,22 +1574,38 @@ fn execute_native_device_resident_cuda_multilayer(
         stage_telemetry =
             Some(backend.snapshot_multilayer_demag_stage_telemetry(plan.layers.len() as u64)?);
 
+        let field_output_due = field_schedules
+            .iter()
+            .any(|schedule| is_due(native_stats.time, schedule.next_time));
+        let live_snapshot_due = live.as_ref().is_some_and(|(_, field_every_n, _, _)| {
+            crate::types::fdm_multilayer_live_field_due(native_stats.step, *field_every_n)
+        });
         let snapshot_due = default_scalar_trace
             || scalar_schedules
                 .iter()
                 .any(|schedule| is_due(native_stats.time, schedule.next_time))
-            || field_schedules
-                .iter()
-                .any(|schedule| is_due(native_stats.time, schedule.next_time))
-            || live.is_some()
+            || field_output_due
+            || live_snapshot_due
             || plan.relaxation.is_some();
+        let mut live_observation_error = None;
         let observables = if snapshot_due {
-            Some(snapshot_native_multilayer_observables(
+            match snapshot_native_multilayer_observables(
                 plan,
                 &contexts,
                 &backend,
                 &mut transfer_counters,
-            )?)
+            ) {
+                Ok(observables) => Some(observables),
+                Err(error) if !field_output_due => {
+                    eprintln!(
+                        "[fullmag-runner] CUDA multilayer optional live observation: {}",
+                        error.message
+                    );
+                    live_observation_error = Some(error.message);
+                    None
+                }
+                Err(error) => return Err(error),
+            }
         } else {
             None
         };
@@ -1540,46 +1642,58 @@ fn execute_native_device_resident_cuda_multilayer(
             )?;
         }
 
-        if let Some((grid, on_step)) = live.as_mut() {
-            match on_step(StepUpdate {
-                coupled_checkpoint: None,
-                stats: stats.clone(),
-                grid: [grid[0], grid[1], grid[2]],
-                fem_mesh_generation_id: None,
-                magnetization: None,
-                preview_field: None,
-                cached_preview_fields: None,
-                hysteresis_field_m_t: None,
-                hysteresis_point_index: None,
-                hysteresis_settle_step_index: None,
-                hysteresis_settle_step_kind: None,
-                hysteresis_settle_step_method: None,
-                scalar_row_due: false,
-                terminal_field_snapshot: false,
-                finished: false,
-            }) {
+        if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+            let fields_due = crate::types::fdm_multilayer_live_field_due(
+                stats.step,
+                *field_every_n,
+            );
+            let magnetization_override = if observables.is_none() && fields_due {
+                match copy_native_multilayer_m(&backend, plan) {
+                    Ok(magnetization) => Some(magnetization),
+                    Err(error) => {
+                        live_observation_error = Some(match live_observation_error.take() {
+                            Some(previous) => format!("{previous}; exact M copy failed: {}", error.message),
+                            None => format!("exact M copy failed: {}", error.message),
+                        });
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let update = make_multilayer_live_step_update(
+                plan,
+                &contexts,
+                observables.as_ref(),
+                &stats,
+                [grid[0], grid[1], grid[2]],
+                *layout,
+                *field_every_n,
+                &crate::quantities::field_materialization_quantity_ids(),
+                fields_due,
+                false,
+                magnetization_override.as_deref(),
+                live_observation_error.as_deref(),
+            );
+            match on_step(update) {
                 StepAction::Continue => {}
                 StepAction::Stop => cancelled = true,
                 StepAction::Pause => paused = true,
             }
         }
 
-        let stop_for_relaxation = if let Some(observables) = observables.as_ref() {
-            let plateau_range = energy_plateau.record(observables.total_energy);
-            plan.relaxation.as_ref().is_some_and(|control| {
-                stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || torque_confirmation.observe_stats(
-                        control,
-                        &stats,
-                        plateau_range,
-                        plan.gyromagnetic_ratio,
-                        average_damping(&contexts),
-                        pure_damping_relax,
-                    )
-            })
-        } else {
-            false
-        };
+        let plateau_range = energy_plateau.record(stats.e_total);
+        let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
+            stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
+                || torque_confirmation.observe_stats(
+                    control,
+                    &stats,
+                    plateau_range,
+                    plan.gyromagnetic_ratio,
+                    average_damping(&contexts),
+                    pure_damping_relax,
+                )
+        });
         if let Some(observables) = observables {
             latest_observables = Some((stats.step, stats.time, observables));
         }
@@ -1590,26 +1704,69 @@ fn execute_native_device_resident_cuda_multilayer(
     }
 
     let final_native_stats = latest_native_stats.unwrap_or_default();
+    let final_field_output_due = field_schedules.iter().any(|schedule| {
+        !schedule
+            .last_sampled_time
+            .is_some_and(|time| same_time(time, final_native_stats.time))
+    });
+    let mut terminal_observation_error = None;
     let final_observables = match latest_observables {
         Some((step, time, observables))
             if step == final_native_stats.step && same_time(time, final_native_stats.time) =>
         {
-            observables
+            Some(observables)
         }
-        _ => snapshot_native_multilayer_observables(
+        _ => match snapshot_native_multilayer_observables(
             plan,
             &contexts,
             &backend,
             &mut transfer_counters,
-        )?,
+        ) {
+            Ok(observables) => Some(observables),
+            Err(error) if !final_field_output_due => {
+                eprintln!(
+                    "[fullmag-runner] CUDA multilayer terminal observation unavailable: {}",
+                    error.message
+                );
+                terminal_observation_error = Some(error.message);
+                None
+            }
+            Err(error) => return Err(error),
+        },
     };
-    let final_stats = make_step_stats(
-        final_native_stats.step,
-        final_native_stats.time,
-        final_native_stats.dt,
-        final_native_stats.wall_time_ns,
-        &final_observables,
-    );
+    let final_stats = final_observables
+        .as_ref()
+        .map(|observables| {
+            make_step_stats(
+                final_native_stats.step,
+                final_native_stats.time,
+                final_native_stats.dt,
+                final_native_stats.wall_time_ns,
+                observables,
+            )
+        })
+        .unwrap_or_else(|| final_native_stats.clone());
+    let final_magnetization = match final_observables.as_ref() {
+        Some(observables) => observables.magnetization.clone(),
+        None => copy_native_multilayer_m(&backend, plan)?,
+    };
+    if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+        let magnetization_override = final_observables
+            .is_none()
+            .then_some(final_magnetization.as_slice());
+        emit_multilayer_terminal_step_updates(
+            plan,
+            &contexts,
+            final_observables.as_ref(),
+            &final_stats,
+            [grid[0], grid[1], grid[2]],
+            *layout,
+            *field_every_n,
+            magnetization_override,
+            terminal_observation_error.as_deref(),
+            on_step.as_mut(),
+        );
+    }
     if !steps
         .iter()
         .any(|step| step.step == final_stats.step && same_time(step.time, final_stats.time))
@@ -1635,7 +1792,11 @@ fn execute_native_device_resident_cuda_multilayer(
             scope: "full".into(),
             revision: final_stats.step.saturating_add(1),
             values: FieldSnapshot::flatten_vec3(select_state_observable_field(
-                &final_observables,
+                final_observables.as_ref().ok_or_else(|| RunError {
+                    message: terminal_observation_error
+                        .clone()
+                        .unwrap_or_else(|| "CUDA multilayer terminal field snapshot is unavailable".into()),
+                })?,
                 &schedule.name,
                 false,
             )?),
@@ -1673,7 +1834,7 @@ fn execute_native_device_resident_cuda_multilayer(
         result: RunResult {
             status,
             steps,
-            final_magnetization: final_observables.magnetization.clone(),
+            final_magnetization,
             completion: Some(completion),
         },
         initial_magnetization,
@@ -1942,6 +2103,1039 @@ fn snapshot_native_multilayer_observables(
     };
     transfer_counters.finish_host_snapshot();
     Ok(observables)
+}
+
+fn copy_native_multilayer_m(
+    backend: &NativeFdmBackend,
+    plan: &FdmMultilayerPlanIR,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    let mut layers = Vec::with_capacity(plan.layers.len());
+    for (layer_index, layer) in plan.layers.iter().enumerate() {
+        let layer_index = u32::try_from(layer_index).map_err(|_| RunError {
+            message: "CUDA multilayer layer index exceeds the native ABI range".into(),
+        })?;
+        let magnetization = backend.copy_layer_m(
+            layer_index,
+            layer.initial_magnetization.len(),
+        )?;
+        if magnetization.len() != layer.initial_magnetization.len() {
+            return Err(RunError {
+                message: format!(
+                    "CUDA multilayer layer {layer_index} returned an incomplete exact M carrier"
+                ),
+            });
+        }
+        layers.push(magnetization);
+    }
+    Ok(flatten_layers(&layers))
+}
+
+/// Snapshot an accepted multilayer FDM state on the same CUDA execution route
+/// that produced it. Assisted multilayer observations retain their host-assisted
+/// residency and original engine identity.
+pub(crate) fn snapshot_accepted_multilayer_observables(
+    plan: &FdmMultilayerPlanIR,
+    accepted_m: &[[f64; 3]],
+    quantities: &[&str],
+    execution_engine: &str,
+) -> Result<(StateObservables, Vec<crate::types::LivePreviewField>), RunError> {
+    if let Some(layer) = plan.layers.iter().find(|layer| {
+        layer.native_active_mask.as_ref().is_some_and(|mask| {
+            mask.len() != layer.initial_magnetization.len()
+        })
+    }) {
+        return Err(RunError {
+            message: format!(
+                "accepted CUDA multilayer active mask for layer '{}' does not match its native grid",
+                layer.layer_id
+            ),
+        });
+    }
+    if accepted_m.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(RunError {
+            message: "accepted CUDA multilayer magnetization contains nonfinite values".into(),
+        });
+    }
+    let native_cell_count = plan.layers.iter().try_fold(0usize, |count, layer| {
+        count.checked_add(layer.initial_magnetization.len())
+    }).ok_or_else(|| RunError {
+        message: "accepted CUDA multilayer cell count overflows usize".into(),
+    })?;
+    if accepted_m.len() != native_cell_count {
+        return Err(RunError {
+            message: format!(
+                "accepted CUDA multilayer M has {} samples, expected {native_cell_count} in native-layer order",
+                accepted_m.len()
+            ),
+        });
+    }
+
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    let (contexts, default_states) = build_contexts_and_states(plan, pure_damping_relax)?;
+    let observables = match execution_engine {
+        "cuda_native_multilayer_convolution" => {
+            validate_device_resident_cuda_multilayer_lane(plan)?;
+            let mut backend = NativeFdmBackend::create_multilayer_v2(plan)?;
+            let mut offset = 0usize;
+            for (layer_index, layer) in plan.layers.iter().enumerate() {
+                let end = offset.checked_add(layer.initial_magnetization.len()).ok_or_else(|| RunError {
+                    message: "accepted CUDA multilayer layer offset overflows usize".into(),
+                })?;
+                backend.upload_layer_magnetization(
+                    layer_index as u32,
+                    accepted_m.get(offset..end).ok_or_else(|| RunError {
+                        message: "accepted CUDA multilayer M does not cover a layer".into(),
+                    })?,
+                )?;
+                offset = end;
+            }
+            if offset != accepted_m.len() {
+                return Err(RunError {
+                    message: "accepted CUDA multilayer layer map is incomplete".into(),
+                });
+            }
+            backend.refresh_multilayer_demag()?;
+            let mut transfer_counters = DeviceResidentMultilayerTransferCounters::new(
+                plan.layers.len(),
+                std::mem::size_of::<f64>(),
+            );
+            snapshot_native_multilayer_observables(
+                plan,
+                &contexts,
+                &backend,
+                &mut transfer_counters,
+            )?
+        }
+        "cuda_native_multilayer_single_grid" => {
+            let native = build_native_stacked_cuda_plan(plan)?.ok_or_else(|| RunError {
+                message: "accepted CUDA multilayer state is not eligible for the native stacked-grid evaluator".into(),
+            })?;
+            let global_grid = native.global_grid;
+            let global_count = usize::try_from(
+                u64::from(global_grid[0])
+                    .checked_mul(u64::from(global_grid[1]))
+                    .and_then(|value| value.checked_mul(u64::from(global_grid[2])))
+                    .ok_or_else(|| RunError {
+                        message: "accepted CUDA native-stacked grid size overflows u64".into(),
+                    })?,
+            ).map_err(|_| RunError {
+                message: "accepted CUDA native-stacked grid is not addressable".into(),
+            })?;
+            let mut global_m = native.combined_plan.initial_magnetization.clone();
+            if global_m.len() != global_count || native.layers.len() != plan.layers.len() {
+                return Err(RunError {
+                    message: "accepted CUDA native-stacked plan has an inconsistent layer/grid map".into(),
+                });
+            }
+            let global_dims = [global_grid[0] as usize, global_grid[1] as usize, global_grid[2] as usize];
+            let mut source_offset = 0usize;
+            for (layer, mapping) in plan.layers.iter().zip(native.layers.iter()) {
+                let layer_count = layer.initial_magnetization.len();
+                let source_end = source_offset.checked_add(layer_count).ok_or_else(|| RunError {
+                    message: "accepted CUDA native-stacked source offset overflows usize".into(),
+                })?;
+                let local_m = accepted_m.get(source_offset..source_end).ok_or_else(|| RunError {
+                    message: "accepted CUDA native-stacked M does not cover a layer".into(),
+                })?;
+                let [nx, ny, nz] = mapping.native_grid;
+                if local_m.len() != nx.checked_mul(ny).and_then(|n| n.checked_mul(nz)).ok_or_else(|| RunError {
+                    message: "accepted CUDA native-stacked layer grid overflows usize".into(),
+                })? {
+                    return Err(RunError {
+                        message: format!("accepted CUDA native-stacked layer '{}' has an invalid local grid", layer.layer_id),
+                    });
+                }
+                for z in 0..nz {
+                    for y in 0..ny {
+                        for x in 0..nx {
+                            let local_index = z * ny * nx + y * nx + x;
+                            if layer.native_active_mask.as_ref().is_some_and(|mask| !mask[local_index]) {
+                                continue;
+                            }
+                            let gx = mapping.offset[0].checked_add(x).ok_or_else(|| RunError {
+                                message: "accepted CUDA native-stacked x offset overflows usize".into(),
+                            })?;
+                            let gy = mapping.offset[1].checked_add(y).ok_or_else(|| RunError {
+                                message: "accepted CUDA native-stacked y offset overflows usize".into(),
+                            })?;
+                            let gz = mapping.offset[2].checked_add(z).ok_or_else(|| RunError {
+                                message: "accepted CUDA native-stacked z offset overflows usize".into(),
+                            })?;
+                            if gx >= global_dims[0] || gy >= global_dims[1] || gz >= global_dims[2] {
+                                return Err(RunError {
+                                    message: "accepted CUDA native-stacked layer maps outside the global grid".into(),
+                                });
+                            }
+                            let global_index = gz * global_dims[1] * global_dims[0] + gy * global_dims[0] + gx;
+                            global_m[global_index] = local_m[local_index];
+                        }
+                    }
+                }
+                source_offset = source_end;
+            }
+            if source_offset != accepted_m.len() {
+                return Err(RunError {
+                    message: "accepted CUDA native-stacked layer map is incomplete".into(),
+                });
+            }
+            let mut backend = NativeFdmBackend::create(&native.combined_plan)?;
+            backend.upload_magnetization(&global_m)?;
+            backend.refresh_observables()?;
+            observe_native_stacked_cuda(&backend, &native)?
+        }
+        "cuda_assisted_multilayer" => {
+            let assisted_dispatch_selected =
+                !validate_device_resident_cuda_multilayer_lane(plan).is_ok()
+                    && validate_accepted_fdm_multilayer_cuda_lane(plan).is_ok()
+                    && !(plan.planner_summary.requested_strategy == "auto"
+                        && plan.integrator != IntegratorChoice::Heun
+                        && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible(
+                            &plan.layers,
+                        ));
+            if !assisted_dispatch_selected {
+                return Err(RunError {
+                    message: "accepted CUDA multilayer engine does not match CUDA-assisted dispatch".into(),
+                });
+            }
+            let mut states = default_states;
+            let mut offset = 0usize;
+            for (layer, state) in plan.layers.iter().zip(states.iter_mut()) {
+                let end = offset.checked_add(layer.initial_magnetization.len()).ok_or_else(|| RunError {
+                    message: "accepted CUDA-assisted layer offset overflows usize".into(),
+                })?;
+                let values = accepted_m.get(offset..end).ok_or_else(|| RunError {
+                    message: "accepted CUDA-assisted M does not cover a layer".into(),
+                })?;
+                state.magnetization_mut().copy_from_slice(values);
+                offset = end;
+            }
+            if offset != accepted_m.len() {
+                return Err(RunError {
+                    message: "accepted CUDA-assisted layer map is incomplete".into(),
+                });
+            }
+
+            let mut native_demag = build_native_multilayer_demag_operator(plan)?;
+            let mut gpu_contexts = build_gpu_contexts(plan)?;
+            let observables = match plan.precision {
+                ExecutionPrecision::Double => {
+                    let demag_runtime = if plan.enable_demag && native_demag.is_none() {
+                        Some(build_multilayer_demag_runtime(plan)?)
+                    } else {
+                        None
+                    };
+                    observe_multilayer_cuda(
+                        &contexts,
+                        &mut gpu_contexts,
+                        &states,
+                        demag_runtime.as_ref(),
+                        native_demag.as_mut(),
+                    )?
+                }
+                ExecutionPrecision::Single => {
+                    let single_states = states
+                        .iter()
+                        .map(|state| LayerStateSingle {
+                            magnetization: to_f32_vectors(state.magnetization()),
+                            time_seconds: state.time_seconds,
+                        })
+                        .collect::<Vec<_>>();
+                    let demag_runtime = if plan.enable_demag && native_demag.is_none() {
+                        Some(build_multilayer_demag_runtime_f32(plan)?)
+                    } else {
+                        None
+                    };
+                    observe_multilayer_cuda_single(
+                        &contexts,
+                        &mut gpu_contexts,
+                        &single_states,
+                        demag_runtime.as_ref(),
+                        native_demag.as_mut(),
+                    )?
+                }
+            };
+            observables
+        }
+        other => {
+            return Err(RunError {
+                message: format!("accepted CUDA multilayer materialization does not support execution engine '{other}'"),
+            });
+        }
+    };
+
+    let sample_count = observables.magnetization.len();
+    if sample_count != native_cell_count {
+        return Err(RunError {
+            message: "accepted CUDA multilayer snapshot changed native-layer sample count".into(),
+        });
+    }
+    let fields = build_multilayer_live_preview_fields(
+        plan,
+        &contexts,
+        &observables,
+        quantities,
+        None,
+    )?;
+    Ok((observables, fields))
+}
+
+/// Materialize the target-only Airbox H_demag field for an accepted CUDA
+/// multilayer state. Source magnetization projection is host-side overlap
+/// transfer; the target-grid Newell convolution and field copy are performed
+/// by a native CUDA FDM backend. The original execution engine is retained in
+/// the manifest, including the host-assisted lane identity.
+pub(crate) fn materialize_airbox_observation_snapshot_gpu(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &FdmMultilayerPlanIR,
+    execution_engine: &str,
+) -> Result<Vec<crate::types::AuxiliaryArtifact>, RunError> {
+    let target = crate::fdm::cpu::airbox_observation::airbox_observation_target(problem, plan)
+        .map_err(|message| RunError { message })?;
+    let Some(target) = target else {
+        return Ok(Vec::new());
+    };
+    if !plan.enable_demag {
+        return Err(RunError {
+            message: "Airbox observation requires demagnetization enabled".into(),
+        });
+    }
+    validate_accepted_fdm_multilayer_cuda_lane(plan)?;
+    match execution_engine {
+        "cuda_native_multilayer_convolution" => {
+            validate_device_resident_cuda_multilayer_lane(plan)?;
+        }
+        "cuda_native_multilayer_single_grid" => {
+            if validate_device_resident_cuda_multilayer_lane(plan).is_ok()
+                || build_native_stacked_cuda_plan(plan)?.is_none()
+            {
+                return Err(RunError {
+                    message: "accepted CUDA multilayer engine does not match native single-grid dispatch".into(),
+                });
+            }
+        }
+        "cuda_assisted_multilayer" => {
+            if validate_device_resident_cuda_multilayer_lane(plan).is_ok()
+                || (plan.planner_summary.requested_strategy == "auto"
+                    && plan.integrator != IntegratorChoice::Heun
+                    && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible(&plan.layers))
+            {
+                return Err(RunError {
+                    message: "accepted CUDA multilayer engine does not match CUDA-assisted dispatch".into(),
+                });
+            }
+        }
+        other => {
+            return Err(RunError {
+                message: format!("GPU Airbox observation does not support execution engine '{other}'"),
+            });
+        }
+    }
+
+    let target_grid = [
+        u32::try_from(target.shape[0]).map_err(|_| RunError {
+            message: "GPU Airbox target grid x-axis exceeds u32".into(),
+        })?,
+        u32::try_from(target.shape[1]).map_err(|_| RunError {
+            message: "GPU Airbox target grid y-axis exceeds u32".into(),
+        })?,
+        u32::try_from(target.shape[2]).map_err(|_| RunError {
+            message: "GPU Airbox target grid z-axis exceeds u32".into(),
+        })?,
+    ];
+    let target_cost = fullmag_plan::checked_fdm_grid_cost(
+        target_grid,
+        fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+    )
+    .map_err(|error| RunError {
+        message: format!("GPU Airbox target grid budget rejected before allocation: {error}"),
+    })?;
+    let target_cells = usize::try_from(target_cost.cells).map_err(|_| RunError {
+        message: format!(
+            "GPU Airbox target cell count {} is not addressable",
+            target_cost.cells
+        ),
+    })?;
+    let target_region_mask = vec![0u32; target_cells];
+    let target_grid_certificate = FdmGridCertificateIR::new_with_masks(
+        target.origin_m,
+        target_grid,
+        target.spacing_m,
+        target_cost.cells,
+        target_cost.estimated_bytes,
+        None,
+        &target_region_mask,
+    )
+    .map_err(|message| RunError {
+        message: format!("GPU Airbox target grid certificate is invalid: {message}"),
+    })?;
+
+    let mut projected_m = vec![[0.0; 3]; target_cells];
+    let mut source_offset = 0usize;
+    for layer in &plan.layers {
+        let native_grid = layer.native_grid.map(|axis| axis as usize);
+        let native_cells = native_grid.iter().try_fold(1usize, |count, axis| {
+            count.checked_mul(*axis)
+        }).ok_or_else(|| RunError {
+            message: format!("GPU Airbox source grid for '{}' overflows usize", layer.layer_id),
+        })?;
+        let source_end = source_offset.checked_add(native_cells).ok_or_else(|| RunError {
+            message: "GPU Airbox source layer offset overflows usize".into(),
+        })?;
+        let local_m = &layer.initial_magnetization;
+        if layer.initial_magnetization.len() != native_cells {
+            return Err(RunError {
+                message: format!("GPU Airbox source layer '{}' M length differs from its native grid", layer.layer_id),
+            });
+        }
+        if local_m.iter().flatten().any(|value| !value.is_finite()) {
+            return Err(RunError {
+                message: format!("GPU Airbox source layer '{}' magnetization contains nonfinite values", layer.layer_id),
+            });
+        }
+        if layer.native_active_mask.as_ref().is_some_and(|mask| mask.len() != native_cells) {
+            return Err(RunError {
+                message: format!("GPU Airbox source layer '{}' active mask differs from its native grid", layer.layer_id),
+            });
+        }
+        if layer.material.ms_field.as_ref().is_some_and(|field| {
+            field.len() != native_cells || field.iter().any(|value| !value.is_finite() || *value <= 0.0)
+        }) {
+            return Err(RunError {
+                message: format!("GPU Airbox source layer '{}' Ms field is invalid", layer.layer_id),
+            });
+        }
+        if !layer.material.saturation_magnetisation.is_finite()
+            || layer.material.saturation_magnetisation <= 0.0
+        {
+            return Err(RunError {
+                message: format!("GPU Airbox source layer '{}' saturation magnetisation is invalid", layer.layer_id),
+            });
+        }
+        let physical_m = local_m
+            .iter()
+            .enumerate()
+            .map(|(index, magnetization)| {
+                let ms = layer
+                    .material
+                    .ms_field
+                    .as_ref()
+                    .map(|field| field[index])
+                    .unwrap_or(layer.material.saturation_magnetisation);
+                [magnetization[0] * ms, magnetization[1] * ms, magnetization[2] * ms]
+            })
+            .collect::<Vec<_>>();
+        if physical_m.iter().flatten().any(|value| !value.is_finite()) {
+            return Err(RunError {
+                message: format!("GPU Airbox source layer '{}' physical M contains nonfinite values", layer.layer_id),
+            });
+        }
+        let transfer = VolumeWeightedTransfer::new(
+            native_grid,
+            layer.native_cell_size,
+            layer.native_origin,
+            target.shape,
+            target.spacing_m,
+            target.origin_m,
+            TransferBoundaryPolicy { periodic_axes: [false; 3] },
+        ).map_err(|message| RunError {
+            message: format!("GPU Airbox source transfer for '{}': {message}", layer.layer_id),
+        })?;
+        let layer_target_m = transfer
+            .push_m(&physical_m, layer.native_active_mask.as_deref())
+            .map_err(|message| RunError {
+                message: format!("GPU Airbox source transfer for '{}': {message}", layer.layer_id),
+            })?;
+        if layer_target_m.len() != target_cells {
+            return Err(RunError {
+                message: format!("GPU Airbox source transfer for '{}' produced an invalid target length", layer.layer_id),
+            });
+        }
+        for (sum, contribution) in projected_m.iter_mut().zip(layer_target_m) {
+            for component in 0..3 {
+                sum[component] += contribution[component];
+            }
+        }
+        source_offset = source_end;
+    }
+    let expected_source_cells = plan.layers.iter().try_fold(0usize, |count, layer| {
+        count.checked_add(layer.initial_magnetization.len())
+    }).ok_or_else(|| RunError {
+        message: "GPU Airbox source cell count overflows usize".into(),
+    })?;
+    if source_offset != expected_source_cells || projected_m.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(RunError {
+            message: "GPU Airbox projected source M is incomplete or nonfinite".into(),
+        });
+    }
+
+    let first_layer = plan.layers.first().ok_or_else(|| RunError {
+        message: "GPU Airbox observation requires at least one source layer".into(),
+    })?;
+    let mut target_plan = single_layer_cuda_plan(plan, first_layer);
+    target_plan.origin_m = target.origin_m;
+    target_plan.grid.cells = target_grid;
+    target_plan.grid_certificate = Some(target_grid_certificate);
+    target_plan.cell_size = target.spacing_m;
+    target_plan.region_mask = target_region_mask;
+    target_plan.active_mask = None;
+    target_plan.initial_magnetization = projected_m;
+    target_plan.material = FdmMaterialIR {
+        name: "airbox-observation".to_string(),
+        saturation_magnetisation: 1.0,
+        exchange_stiffness: 0.0,
+        damping: 0.0,
+        ..Default::default()
+    };
+    target_plan.enable_exchange = false;
+    target_plan.enable_demag = true;
+    target_plan.external_field = None;
+    target_plan.periodicity = None;
+    target_plan.resolved_periodic_images = None;
+    target_plan.boundary_correction = None;
+    target_plan.boundary_phi_floor = None;
+    target_plan.boundary_delta_min = None;
+    target_plan.boundary_geometry = None;
+    target_plan.interfacial_dmi = None;
+    target_plan.rotated_interfacial_dmi = None;
+    target_plan.bulk_dmi = None;
+    target_plan.dind_field = None;
+    target_plan.dbulk_field = None;
+    target_plan.antenna_zeeman_masks.clear();
+    target_plan.solved_antenna_drive_bases.clear();
+    target_plan.field_drives.clear();
+    target_plan.regional_field_drive_bases.clear();
+    target_plan.temperature = None;
+    target_plan.thermal_seed_config = None;
+    target_plan.has_oersted_cylinder = false;
+    target_plan.oersted_current = None;
+    target_plan.oersted_radius = None;
+    target_plan.oersted_center = None;
+    target_plan.oersted_axis = None;
+    target_plan.static_external_field_xyz = None;
+    target_plan.oersted_field_xyz = None;
+    target_plan.oersted_realization = None;
+
+    let mut backend = NativeFdmBackend::create(&target_plan)?;
+    backend.refresh_observables()?;
+    let field = backend.copy_h_demag(target_cells)?;
+    let observation_device = backend.device_info().ok();
+    let (demag_operator_kind, fft_backend) = match execution_engine {
+        "cuda_native_multilayer_convolution" => {
+            ("native_multilayer_tensor_fft_newell", "cuFFT")
+        }
+        "cuda_native_multilayer_single_grid" => ("tensor_fft_newell", "cuFFT"),
+        "cuda_assisted_multilayer" => {
+            let native_multilayer_demag = plan.mode == "three_d"
+                && plan.planner_summary.resolved_mode == "three_d"
+                && native_cuda_identity_descriptor_eligible(plan)?;
+            if native_multilayer_demag {
+                ("native_multilayer_tensor_fft_newell", "cuFFT")
+            } else {
+                ("multilayer_tensor_fft_newell", "rustfft")
+            }
+        }
+        _ => unreachable!("execution engine was checked above"),
+    };
+    let build_identity = crate::artifacts::build_identity_json();
+    let mut source_runtime_identity = serde_json::json!({
+        "execution_engine": execution_engine,
+        "precision": precision_name(plan.precision),
+        "demag_operator_kind": demag_operator_kind,
+        "fft_backend": fft_backend,
+        "problem_source_hash": problem.problem_meta.source_hash,
+        "run_status": "accepted_state",
+        "build_identity": build_identity,
+        "observation_execution_engine": "native_cuda_fdm_single_grid",
+        "observation_precision": precision_name(plan.precision),
+        "observation_source_projection": "host_volume_weighted_transfer",
+    });
+    if let Some(device_name) = observation_device
+        .as_ref()
+        .map(|device| device.name.as_str())
+        .filter(|name| !name.is_empty())
+    {
+        source_runtime_identity["device"] = serde_json::json!(device_name);
+        source_runtime_identity["observation_device"] = serde_json::json!(device_name);
+    }
+    crate::fdm::cpu::airbox_observation::build_airbox_observation_artifacts(
+        problem,
+        plan,
+        &target,
+        &field,
+        source_runtime_identity,
+    )
+    .map_err(|message| RunError { message })
+}
+
+fn accepted_multilayer_scalar_field(
+    plan: &FdmMultilayerPlanIR,
+    contexts: &[LayerContext],
+    observables: &StateObservables,
+    quantity: &str,
+) -> Result<Vec<f64>, RunError> {
+    let sample_count = observables.magnetization.len();
+    if quantity == "frozen_spins" {
+        let frozen = plan.frozen_spins.as_ref().ok_or_else(|| RunError {
+            message: "accepted CUDA multilayer frozen_spins is unavailable".into(),
+        })?;
+        if frozen.frozen_mask.len() != sample_count {
+            return Err(RunError {
+                message: "accepted CUDA multilayer frozen_spins does not cover the M carrier".into(),
+            });
+        }
+        return Ok(frozen
+            .frozen_mask
+            .iter()
+            .map(|value| if *value { 1.0 } else { 0.0 })
+            .collect());
+    }
+
+    let mut offset = 0usize;
+    let mut values = Vec::with_capacity(sample_count);
+    for (layer, context) in plan.layers.iter().zip(contexts) {
+        let count = layer.initial_magnetization.len();
+        let end = offset.checked_add(count).ok_or_else(|| RunError {
+            message: "accepted CUDA multilayer scalar offset overflows usize".into(),
+        })?;
+        let m = observables.magnetization.get(offset..end).ok_or_else(|| RunError {
+            message: "accepted CUDA multilayer scalar M is shorter than its layer map".into(),
+        })?;
+        let density = match quantity {
+            "mat_ms" => (0..count).map(|i| context.problem.ms_at(i)).collect(),
+            "mat_aex" => (0..count).map(|i| context.problem.a_at(i)).collect(),
+            "mat_alpha" => (0..count).map(|i| context.problem.alpha_at(i)).collect(),
+            "eden_ex" => {
+                if plan.enable_exchange {
+                    let h_ex = observables.exchange_field.get(offset..end).ok_or_else(|| RunError {
+                        message: "accepted CUDA multilayer H_ex is shorter than its layer map".into(),
+                    })?;
+                    context.problem.exchange_energy_density_from_field(m, h_ex)
+                } else {
+                    vec![0.0; count]
+                }
+            }
+            "eden_demag" => {
+                if plan.enable_demag {
+                    let h_demag = observables.demag_field.get(offset..end).ok_or_else(|| RunError {
+                        message: "accepted CUDA multilayer H_demag is shorter than its layer map".into(),
+                    })?;
+                    context.problem.demag_energy_density_from_fields(m, h_demag)
+                } else {
+                    vec![0.0; count]
+                }
+            }
+            "eden_ext" => {
+                if plan.external_field.is_some() {
+                    let h_ext = observables.external_field.get(offset..end).ok_or_else(|| RunError {
+                        message: "accepted CUDA multilayer H_ext is shorter than its layer map".into(),
+                    })?;
+                    context.problem.external_energy_density_from_fields(m, h_ext)
+                } else {
+                    vec![0.0; count]
+                }
+            }
+            "eden_ani" => context.problem.anisotropy_energy_density_from_vectors(m),
+            "eden_dmi" => context.problem.dmi_energy_density_from_vectors(m),
+            "eden_rotated_dmi" => {
+                context.problem.rotated_interfacial_dmi_energy_density_from_vectors(m)
+            }
+            "eden_total" => {
+                let mut total = vec![0.0; count];
+                if plan.enable_exchange {
+                    let h_ex = observables.exchange_field.get(offset..end).ok_or_else(|| RunError {
+                        message: "accepted CUDA multilayer H_ex is shorter than its layer map".into(),
+                    })?;
+                    add_multilayer_energy_density(
+                        &mut total,
+                        context.problem.exchange_energy_density_from_field(m, h_ex),
+                        quantity,
+                    )?;
+                }
+                if plan.enable_demag {
+                    let h_demag = observables.demag_field.get(offset..end).ok_or_else(|| RunError {
+                        message: "accepted CUDA multilayer H_demag is shorter than its layer map".into(),
+                    })?;
+                    add_multilayer_energy_density(
+                        &mut total,
+                        context.problem.demag_energy_density_from_fields(m, h_demag),
+                        quantity,
+                    )?;
+                }
+                if plan.external_field.is_some() {
+                    let h_ext = observables.external_field.get(offset..end).ok_or_else(|| RunError {
+                        message: "accepted CUDA multilayer H_ext is shorter than its layer map".into(),
+                    })?;
+                    add_multilayer_energy_density(
+                        &mut total,
+                        context.problem.external_energy_density_from_fields(m, h_ext),
+                        quantity,
+                    )?;
+                }
+                add_multilayer_energy_density(
+                    &mut total,
+                    context.problem.anisotropy_energy_density_from_vectors(m),
+                    quantity,
+                )?;
+                add_multilayer_energy_density(
+                    &mut total,
+                    context.problem.dmi_energy_density_from_vectors(m),
+                    quantity,
+                )?;
+                total
+            }
+            other => {
+                return Err(RunError {
+                    message: format!("accepted CUDA multilayer scalar '{other}' is unavailable"),
+                });
+            }
+        };
+        if density.len() != count {
+            return Err(RunError {
+                message: format!(
+                    "accepted CUDA multilayer scalar '{quantity}' evaluator returned an invalid layer length"
+                ),
+            });
+        }
+        values.extend(density);
+        offset = end;
+    }
+    if offset != sample_count {
+        return Err(RunError {
+            message: "accepted CUDA multilayer scalar map does not cover the complete M carrier".into(),
+        });
+    }
+    Ok(values)
+}
+
+fn add_multilayer_energy_density(
+    total: &mut [f64],
+    density: Vec<f64>,
+    quantity: &str,
+) -> Result<(), RunError> {
+    if density.len() != total.len() {
+        return Err(RunError {
+            message: format!(
+                "accepted CUDA multilayer energy-density term for '{quantity}' returned an invalid layer length"
+            ),
+        });
+    }
+    for (sum, value) in total.iter_mut().zip(density) {
+        *sum += value;
+    }
+    Ok(())
+}
+
+fn build_multilayer_live_preview_fields(
+    plan: &FdmMultilayerPlanIR,
+    contexts: &[LayerContext],
+    observables: &StateObservables,
+    requested_quantities: &[&str],
+    source_clock: Option<&StepStats>,
+) -> Result<Vec<LivePreviewField>, RunError> {
+    let sample_count = observables.magnetization.len();
+    let grid_axis = u32::try_from(sample_count).map_err(|_| RunError {
+        message: "CUDA multilayer live field carrier exceeds the supported u32 grid axis".into(),
+    })?;
+    let carrier_grid = [grid_axis, 1, 1];
+    let active_mask = accepted_multilayer_active_mask(plan);
+    let quantities = crate::quantities::active_fdm_multilayer_preview_quantities(
+        plan,
+        requested_quantities,
+    );
+    let mut fields = Vec::with_capacity(quantities.len());
+    for id in quantities {
+        let spec = crate::quantities::quantity_spec(id).ok_or_else(|| RunError {
+            message: format!("CUDA multilayer live quantity '{id}' has no catalog entry"),
+        })?;
+        let values = match spec.shape {
+            fullmag_quantities::QuantityShape::VectorField => {
+                select_multilayer_preview_vector_field(plan, contexts, observables, id)?
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+            }
+            fullmag_quantities::QuantityShape::SpatialScalar => {
+                accepted_multilayer_scalar_field(plan, contexts, observables, id)?
+            }
+            _ => {
+                return Err(RunError {
+                    message: format!("CUDA multilayer live quantity '{id}' is not a spatial field"),
+                });
+            }
+        };
+        let expected = sample_count.checked_mul(spec.n_comp as usize).ok_or_else(|| RunError {
+            message: format!("CUDA multilayer live quantity '{id}' length overflows usize"),
+        })?;
+        if values.len() != expected || values.iter().any(|value| !value.is_finite()) {
+            return Err(RunError {
+                message: format!(
+                    "CUDA multilayer live quantity '{id}' is not a complete finite native-layer field"
+                ),
+            });
+        }
+        fields.push(LivePreviewField {
+            config_revision: 0,
+            source_step: source_clock.map_or(0, |clock| clock.step),
+            source_time_seconds: source_clock.map(|clock| clock.time),
+            source_revision: source_clock.map_or(0, |clock| clock.step),
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
+            quantity: id.to_string(),
+            unit: crate::quantities::quantity_unit(id).to_string(),
+            spatial_kind: "fdm_multilayer".into(),
+            quantity_domain: crate::quantities::quantity_spatial_domain(id).into(),
+            preview_grid: carrier_grid,
+            original_grid: carrier_grid,
+            vector_field_values: values,
+            x_chosen_size: 0,
+            y_chosen_size: 0,
+            applied_x_chosen_size: 0,
+            applied_y_chosen_size: 0,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: active_mask.clone(),
+        });
+    }
+    Ok(fields)
+}
+
+fn select_multilayer_preview_vector_field(
+    plan: &FdmMultilayerPlanIR,
+    contexts: &[LayerContext],
+    observables: &StateObservables,
+    quantity: &str,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    if !matches!(quantity, "H_ani_cubic" | "H_dmi_bulk") {
+        return crate::fdm::artifacts::select_state_observable_field(observables, quantity, false);
+    }
+
+    // The native multilayer payload exposes total H_eff and its native terms,
+    // but not these two separate catalog components. Derive only those local
+    // components from the exact accepted M and layer material; this does not
+    // replace native H_demag/H_eff or the source execution engine.
+    let mut output = Vec::with_capacity(observables.magnetization.len());
+    let mut offset = 0usize;
+    for (layer, context) in plan.layers.iter().zip(contexts) {
+        let end = offset.checked_add(layer.initial_magnetization.len()).ok_or_else(|| RunError {
+            message: format!("CUDA multilayer '{quantity}' layer offset overflows usize"),
+        })?;
+        let magnetization = observables
+            .magnetization
+            .get(offset..end)
+            .ok_or_else(|| RunError {
+                message: format!("CUDA multilayer '{quantity}' M carrier is shorter than its layer map"),
+            })?;
+        let field = match quantity {
+            "H_ani_cubic" => context.problem.anisotropy_field_components(magnetization).1,
+            "H_dmi_bulk" => context.problem.bulk_dmi_field(magnetization),
+            _ => unreachable!(),
+        };
+        if field.len() != magnetization.len() {
+            return Err(RunError {
+                message: format!("CUDA multilayer '{quantity}' evaluator returned an invalid layer length"),
+            });
+        }
+        output.extend(field);
+        offset = end;
+    }
+    if offset != observables.magnetization.len() {
+        return Err(RunError {
+            message: format!("CUDA multilayer '{quantity}' layer map does not cover the full M carrier"),
+        });
+    }
+    Ok(output)
+}
+
+fn make_multilayer_live_step_update(
+    plan: &FdmMultilayerPlanIR,
+    contexts: &[LayerContext],
+    observables: Option<&StateObservables>,
+    stats: &StepStats,
+    grid: [u32; 3],
+    layout: Option<&serde_json::Value>,
+    field_every_n: u64,
+    requested_quantities: &[&str],
+    fields_due: bool,
+    terminal: bool,
+    magnetization_override: Option<&[[f64; 3]]>,
+    source_error: Option<&str>,
+) -> StepUpdate {
+    let publish_magnetization = fields_due || terminal;
+    let publish_full_catalog = terminal || (field_every_n == 1 && fields_due);
+    let mut update_stats = stats.clone();
+    let magnetization = if publish_magnetization {
+        observables
+            .map(|observables| flatten_vectors(&observables.magnetization))
+            .or_else(|| magnetization_override.map(flatten_vectors))
+    } else {
+        None
+    };
+    let magnetization_carrier = if magnetization.is_some() {
+        crate::types::fdm_multilayer_live_magnetization_carrier(layout, &update_stats)
+    } else {
+        None
+    };
+    let cached_preview_fields = if publish_full_catalog {
+        let materialization = match (observables, magnetization_carrier.is_some()) {
+            (Some(observables), true) => build_multilayer_live_preview_fields(
+                plan,
+                contexts,
+                observables,
+                requested_quantities,
+                Some(&update_stats),
+            ),
+            (None, _) => Err(RunError {
+                message: source_error
+                    .unwrap_or("CUDA multilayer live field capture is missing its source observables")
+                    .to_string(),
+            }),
+            (_, false) => Err(RunError {
+                message: "CUDA multilayer live field capture has no valid native-layer layout carrier".into(),
+            }),
+        };
+        let active_quantities = crate::quantities::active_fdm_multilayer_preview_quantities(
+            plan,
+            requested_quantities,
+        );
+        match materialization {
+            Ok(fields) => {
+                let statuses = fields
+                    .iter()
+                    .map(|field| crate::types::LiveFieldMaterializationStatus {
+                        quantity: field.quantity.clone(),
+                        source_step: update_stats.step,
+                        request_revision: update_stats.step,
+                        state: crate::types::LiveFieldMaterializationState::Complete,
+                        error: None,
+                    })
+                    .collect();
+                merge_multilayer_live_field_statuses(&mut update_stats, statuses);
+                Some(fields)
+            }
+            Err(error) => {
+                eprintln!(
+                    "[fullmag-runner] CUDA multilayer live observation: {}",
+                    error.message
+                );
+                let statuses = active_quantities
+                    .into_iter()
+                    .map(|quantity| crate::types::LiveFieldMaterializationStatus {
+                        quantity: quantity.into(),
+                        source_step: update_stats.step,
+                        request_revision: update_stats.step,
+                        state: crate::types::LiveFieldMaterializationState::Error,
+                        error: Some(error.message.clone()),
+                    })
+                    .collect();
+                merge_multilayer_live_field_statuses(&mut update_stats, statuses);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    StepUpdate {
+        coupled_checkpoint: None,
+        stats: update_stats,
+        grid,
+        fem_mesh_generation_id: None,
+        magnetization,
+        preview_field: None,
+        cached_preview_fields,
+        hysteresis_field_m_t: None,
+        hysteresis_point_index: None,
+        hysteresis_settle_step_index: None,
+        hysteresis_settle_step_kind: None,
+        hysteresis_settle_step_method: None,
+        scalar_row_due: terminal,
+        terminal_field_snapshot: terminal,
+        finished: false,
+        magnetization_carrier,
+    }
+}
+
+fn emit_multilayer_terminal_step_updates(
+    plan: &FdmMultilayerPlanIR,
+    contexts: &[LayerContext],
+    observables: Option<&StateObservables>,
+    stats: &StepStats,
+    grid: [u32; 3],
+    layout: Option<&serde_json::Value>,
+    field_every_n: u64,
+    magnetization_override: Option<&[[f64; 3]]>,
+    source_error: Option<&str>,
+    on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+) {
+    let catalog_quantities = crate::quantities::field_materialization_quantity_ids();
+    let active_quantities = crate::quantities::active_fdm_multilayer_preview_quantities(
+        plan,
+        &catalog_quantities,
+    );
+    if active_quantities.is_empty() {
+        let update = make_multilayer_live_step_update(
+            plan,
+            contexts,
+            observables,
+            stats,
+            grid,
+            layout,
+            field_every_n,
+            &[],
+            false,
+            true,
+            magnetization_override,
+            source_error,
+        );
+        let _ = on_step(update);
+        return;
+    }
+    for quantity in active_quantities {
+        let update = make_multilayer_live_step_update(
+            plan,
+            contexts,
+            observables,
+            stats,
+            grid,
+            layout,
+            field_every_n,
+            &[quantity],
+            false,
+            true,
+            magnetization_override,
+            source_error,
+        );
+        let _ = on_step(update);
+    }
+}
+
+fn merge_multilayer_live_field_statuses(
+    stats: &mut StepStats,
+    refreshed: Vec<crate::types::LiveFieldMaterializationStatus>,
+) {
+    let refreshed_quantities = refreshed
+        .iter()
+        .map(|status| status.quantity.clone())
+        .collect::<std::collections::HashSet<_>>();
+    stats
+        .field_materialization_states
+        .retain(|status| !refreshed_quantities.contains(&status.quantity));
+    stats.field_materialization_states.extend(refreshed);
+}
+
+fn accepted_multilayer_active_mask(plan: &FdmMultilayerPlanIR) -> Option<Vec<bool>> {
+    let has_mask = plan.layers.iter().any(|layer| layer.native_active_mask.is_some());
+    has_mask.then(|| {
+        let mut mask = Vec::new();
+        for layer in &plan.layers {
+            if let Some(layer_mask) = layer.native_active_mask.as_deref() {
+                mask.extend_from_slice(layer_mask);
+            } else {
+                mask.extend(std::iter::repeat(true).take(layer.initial_magnetization.len()));
+            }
+        }
+        mask
+    })
 }
 
 fn canonical_snapshot_effective_field(
@@ -2427,11 +3621,16 @@ fn execute_native_stacked_cuda_multilayer(
     native: &NativeStackedCudaPlan,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     let mut backend = NativeFdmBackend::create(&native.combined_plan)?;
+    let preview_contexts = native
+        .layers
+        .iter()
+        .map(|layer| layer.context.clone())
+        .collect::<Vec<_>>();
     let device_info = backend.device_info().ok();
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut steps: Vec<StepStats> = Vec::new();
@@ -2486,10 +3685,10 @@ fn execute_native_stacked_cuda_multilayer(
     );
 
     let initial_observables = observe_native_stacked_cuda(&backend, native)?;
+    let initial_stats = make_step_stats(0, 0.0, 0.0, 0, &initial_observables);
     if default_scalar_trace {
-        let stats = make_step_stats(0, 0.0, 0.0, 0, &initial_observables);
-        artifacts.record_scalar(&stats)?;
-        steps.push(stats);
+        artifacts.record_scalar(&initial_stats)?;
+        steps.push(initial_stats.clone());
     }
     record_due_fields(
         &initial_observables,
@@ -2502,7 +3701,7 @@ fn execute_native_stacked_cuda_multilayer(
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
-    let mut latest_stats: Option<StepStats> = None;
+    let mut latest_stats: Option<StepStats> = Some(initial_stats);
     let mut cancelled = false;
     let mut paused = false;
     while latest_stats.as_ref().map_or(0.0, |stats| stats.time) < until_seconds {
@@ -2512,24 +3711,40 @@ fn execute_native_stacked_cuda_multilayer(
         if let Some(next) = native_stats.dt_suggested {
             dt = next;
         }
+        let field_output_due = field_schedules
+            .iter()
+            .any(|schedule| is_due(native_stats.time, schedule.next_time));
+        let live_snapshot_due = live.as_ref().is_some_and(|(_, field_every_n, _, _)| {
+            crate::types::fdm_multilayer_live_field_due(native_stats.step, *field_every_n)
+        });
         let need_observables = default_scalar_trace
             || scalar_schedules
                 .iter()
                 .any(|schedule| is_due(native_stats.time, schedule.next_time))
-            || field_schedules
-                .iter()
-                .any(|schedule| is_due(native_stats.time, schedule.next_time))
-            || live.is_some()
+            || field_output_due
+            || live_snapshot_due
             || plan.relaxation.is_some();
+        let mut live_observation_error = None;
         let observables = if need_observables {
-            Some(observe_native_stacked_cuda(&backend, native)?)
+            match observe_native_stacked_cuda(&backend, native) {
+                Ok(observables) => Some(observables),
+                Err(error) if !field_output_due => {
+                    eprintln!(
+                        "[fullmag-runner] CUDA native-stacked optional live observation: {}",
+                        error.message
+                    );
+                    live_observation_error = Some(error.message);
+                    None
+                }
+                Err(error) => return Err(error),
+            }
         } else {
             None
         };
         let stats = observables
             .as_ref()
             .map(|observables| make_native_stacked_step_stats(&native_stats, observables))
-            .unwrap_or(native_stats);
+            .unwrap_or_else(|| native_stats.clone());
 
         if default_scalar_trace
             || scalar_schedules
@@ -2550,53 +3765,43 @@ fn execute_native_stacked_cuda_multilayer(
                 &mut field_schedules,
                 &mut artifacts,
             )?;
-            if let Some((_, on_step)) = live.as_mut() {
-                let action = on_step(StepUpdate {
-                    coupled_checkpoint: None,
-                    stats: stats.clone(),
-                    grid: native.global_grid,
-                    fem_mesh_generation_id: None,
-                    magnetization: None,
-                    preview_field: None,
-                    cached_preview_fields: None,
-                    hysteresis_field_m_t: None,
-                    hysteresis_point_index: None,
-                    hysteresis_settle_step_index: None,
-                    hysteresis_settle_step_kind: None,
-                    hysteresis_settle_step_method: None,
-                    scalar_row_due: false,
-                    terminal_field_snapshot: false,
-                    finished: false,
-                });
-                match action {
-                    StepAction::Continue => {}
-                    StepAction::Stop => {
-                        cancelled = true;
-                    }
-                    StepAction::Pause => {
-                        paused = true;
+        }
+        if let Some((_, field_every_n, layout, on_step)) = live.as_mut() {
+            let fields_due = crate::types::fdm_multilayer_live_field_due(
+                stats.step,
+                *field_every_n,
+            );
+            let magnetization_override = if observables.is_none() && fields_due {
+                match copy_native_stacked_m(&backend, native) {
+                    Ok(magnetization) => Some(magnetization),
+                    Err(error) => {
+                        live_observation_error = Some(match live_observation_error.take() {
+                            Some(previous) => {
+                                format!("{previous}; exact M copy failed: {}", error.message)
+                            }
+                            None => format!("exact M copy failed: {}", error.message),
+                        });
+                        None
                     }
                 }
-            }
-        } else if let Some((_, on_step)) = live.as_mut() {
-            let action = on_step(StepUpdate {
-                coupled_checkpoint: None,
-                stats: stats.clone(),
-                grid: native.global_grid,
-                fem_mesh_generation_id: None,
-                magnetization: None,
-                preview_field: None,
-                cached_preview_fields: None,
-                hysteresis_field_m_t: None,
-                hysteresis_point_index: None,
-                hysteresis_settle_step_index: None,
-                hysteresis_settle_step_kind: None,
-                hysteresis_settle_step_method: None,
-                scalar_row_due: false,
-                terminal_field_snapshot: false,
-                finished: false,
-            });
-            match action {
+            } else {
+                None
+            };
+            let update = make_multilayer_live_step_update(
+                plan,
+                &preview_contexts,
+                observables.as_ref(),
+                &stats,
+                native.global_grid,
+                *layout,
+                *field_every_n,
+                &crate::quantities::field_materialization_quantity_ids(),
+                fields_due,
+                false,
+                magnetization_override.as_deref(),
+                live_observation_error.as_deref(),
+            );
+            match on_step(update) {
                 StepAction::Continue => {}
                 StepAction::Stop => {
                     cancelled = true;
@@ -2629,9 +3834,52 @@ fn execute_native_stacked_cuda_multilayer(
         }
     }
 
-    let final_observables = observe_native_stacked_cuda(&backend, native)?;
-    let final_stats =
-        latest_stats.unwrap_or_else(|| make_step_stats(0, 0.0, 0.0, 0, &final_observables));
+    let terminal_time = latest_stats.as_ref().map_or(0.0, |stats| stats.time);
+    let final_field_output_due = field_schedules.iter().any(|schedule| {
+        !schedule
+            .last_sampled_time
+            .is_some_and(|time| same_time(time, terminal_time))
+    });
+    let mut terminal_observation_error = None;
+    let final_observables = match observe_native_stacked_cuda(&backend, native) {
+        Ok(observables) => Some(observables),
+        Err(error) if !final_field_output_due => {
+            eprintln!(
+                "[fullmag-runner] CUDA native-stacked terminal observation unavailable: {}",
+                error.message
+            );
+            terminal_observation_error = Some(error.message);
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    let final_stats = latest_stats.unwrap_or_else(|| {
+        final_observables
+            .as_ref()
+            .map(|observables| make_step_stats(0, 0.0, 0.0, 0, observables))
+            .unwrap_or_default()
+    });
+    let final_magnetization = match final_observables.as_ref() {
+        Some(observables) => observables.magnetization.clone(),
+        None => copy_native_stacked_m(&backend, native)?,
+    };
+    if let Some((_, field_every_n, layout, on_step)) = live.as_mut() {
+        let magnetization_override = final_observables
+            .is_none()
+            .then_some(final_magnetization.as_slice());
+        emit_multilayer_terminal_step_updates(
+            plan,
+            &preview_contexts,
+            final_observables.as_ref(),
+            &final_stats,
+            native.global_grid,
+            *layout,
+            *field_every_n,
+            magnetization_override,
+            terminal_observation_error.as_deref(),
+            on_step.as_mut(),
+        );
+    }
     if !steps
         .iter()
         .any(|step| step.step == final_stats.step && (step.time - final_stats.time).abs() <= 1e-18)
@@ -2658,7 +3906,11 @@ fn execute_native_stacked_cuda_multilayer(
             scope: "full".into(),
             revision: (final_stats.step as u64).saturating_add(1),
             values: FieldSnapshot::flatten_vec3(select_state_observable_field(
-                &final_observables,
+                final_observables.as_ref().ok_or_else(|| RunError {
+                    message: terminal_observation_error.clone().unwrap_or_else(|| {
+                        "CUDA native-stacked terminal field snapshot is unavailable".into()
+                    }),
+                })?,
                 &schedule.name,
                 false,
             )?),
@@ -2690,7 +3942,7 @@ fn execute_native_stacked_cuda_multilayer(
         result: RunResult {
             status,
             steps,
-            final_magnetization: final_observables.magnetization.clone(),
+            final_magnetization,
             completion: Some(completion),
         },
         initial_magnetization,
@@ -3763,6 +5015,31 @@ fn observe_native_stacked_cuda(
         &rotated_dmi_full,
         &effective_full,
     )
+}
+
+fn copy_native_stacked_m(
+    backend: &NativeFdmBackend,
+    native: &NativeStackedCudaPlan,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    let cell_count = native.combined_plan.initial_magnetization.len();
+    let magnetization = backend.copy_m(cell_count)?;
+    if magnetization.len() != cell_count {
+        return Err(RunError {
+            message: "CUDA native-stacked backend returned an incomplete exact M carrier".into(),
+        });
+    }
+    let layer_values = extract_native_stacked_field(&magnetization, native);
+    let expected = native.layers.iter().try_fold(0usize, |total, layer| {
+        total.checked_add(layer.native_grid.iter().try_fold(1usize, |count, axis| {
+            count.checked_mul(*axis as usize)
+        })?)
+    });
+    if expected != Some(layer_values.len()) {
+        return Err(RunError {
+            message: "CUDA native-stacked exact M carrier does not cover all native layers".into(),
+        });
+    }
+    Ok(layer_values)
 }
 
 fn observe_native_stacked_fields(

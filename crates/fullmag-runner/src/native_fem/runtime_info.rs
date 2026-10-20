@@ -13,6 +13,7 @@ use std::ffi::CStr;
 #[derive(Debug, Clone)]
 pub(crate) struct DeviceInfo {
     pub name: String,
+    pub is_gpu_enabled: bool,
     pub compute_capability: String,
     pub driver_version: i32,
     pub runtime_version: i32,
@@ -198,6 +199,7 @@ impl DeviceInfo {
             .to_string();
         Self {
             name,
+            is_gpu_enabled: info.is_gpu_enabled != 0,
             compute_capability: format!(
                 "{}.{}",
                 info.compute_capability_major, info.compute_capability_minor

@@ -23,6 +23,19 @@
   scrollbar-color: var(--fm-border-default) transparent;
 }
 
+/* ── Disabled reason (focusable wrapper around a disabled control) ── */
+.fm-disabled-reason {
+  display: inline-flex;
+  min-width: 0;
+  border-radius: var(--fm-radius-sm);
+  outline: none;
+}
+
+.fm-disabled-reason:focus-visible {
+  outline: 2px solid var(--fm-accent);
+  outline-offset: 1px;
+}
+
 /* ── Tooltip ── */
 .fm-tooltip {
   z-index: var(--fm-z-portal);
@@ -744,6 +757,34 @@
 
 .fm-toast__close:hover {
   color: var(--fm-text-primary);
+}
+
+.fm-toast__body {
+  display: grid;
+  gap: var(--fm-space-1);
+  min-width: 0;
+}
+
+.fm-toast__body .fm-toast__description {
+  overflow-wrap: anywhere;
+}
+
+.fm-toast__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+}
+
+.fm-toast__repeat {
+  color: var(--fm-text-muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fm-font-weight-normal);
+}
+
+.fm-toast__action:focus-visible,
+.fm-toast__close:focus-visible {
+  outline: 2px solid var(--fm-accent);
+  outline-offset: 1px;
 }
 
 .fm-toast[data-variant="success"] .fm-toast__title { color: var(--fm-success); }

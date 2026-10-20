@@ -35,7 +35,7 @@ describe("Viewport3DErrorBoundary", () => {
     );
 
     expect(source).toContain('role="alert"');
-    expect(source).toContain("3D viewport failed before the canvas became ready");
+    expect(source).toContain("3D viewport stopped rendering because of an error");
     expect(source).toContain("Retry viewport");
     expect(source).toContain("componentDidCatch");
     expect(source).toContain("queueMicrotask");

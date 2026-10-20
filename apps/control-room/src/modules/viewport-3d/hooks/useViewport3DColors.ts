@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import type { ColorRepresentation } from "three";
+
+import { FERROMAGNETIC_PRIMITIVE_COLOR_TOKENS } from "@/kernel/visualization/primitiveSurfaceColor";
 
 import type {
   Viewport3DColors,
@@ -45,6 +48,9 @@ export function readViewport3DColorsFromStyles(
   const textPrimary = read("--fm-text-primary");
   const textSecondary = read("--fm-text-secondary");
   const wire = read("--fm-text-muted") || read("--fm-text-secondary");
+  const primitivePalette = FERROMAGNETIC_PRIMITIVE_COLOR_TOKENS.map(
+    (token) => read(token) || accent,
+  );
   if (accent && background && field && mesh && wire) {
     return {
       accent,
@@ -65,6 +71,7 @@ export function readViewport3DColorsFromStyles(
       mesh,
       panel,
       panelRaised,
+      primitivePalette,
       success,
       textPrimary,
       textSecondary,
@@ -128,6 +135,7 @@ function readViewport3DColorsFromDocument(): Viewport3DColors | null {
 export function useViewport3DColors() {
   const clientReady = useClientReady();
   const [colors, setColors] = useState<Viewport3DColors | null>(null);
+  const [colorsUnavailable, setColorsUnavailable] = useState(false);
 
   useEffect(() => {
     if (!clientReady || typeof window === "undefined") {
@@ -146,12 +154,17 @@ export function useViewport3DColors() {
         setColors((current) =>
           sameViewport3DColors(current, nextColors) ? current : nextColors,
         );
+        setColorsUnavailable(false);
         return;
       }
 
       attempts += 1;
       if (attempts < MAX_COLOR_READ_ATTEMPTS) {
         retryId = window.setTimeout(updateColors, COLOR_READ_RETRY_MS);
+      } else {
+        // Theme tokens never resolved; report it instead of an endless
+        // "Preparing viewport". A later theme/style mutation retries.
+        setColorsUnavailable(true);
       }
     };
 
@@ -186,7 +199,7 @@ export function useViewport3DColors() {
     };
   }, [clientReady]);
 
-  return { clientReady, colors };
+  return { clientReady, colors, colorsUnavailable };
 }
 
 function sameViewport3DColors(
@@ -203,11 +216,23 @@ function sameViewport3DColors(
     left.mesh === right.mesh &&
     left.panel === right.panel &&
     left.panelRaised === right.panelRaised &&
+    sameColorPalette(left.primitivePalette, right.primitivePalette) &&
     left.success === right.success &&
     left.textPrimary === right.textPrimary &&
     left.textSecondary === right.textSecondary &&
     left.wire === right.wire &&
     sameHudColors(left.hud, right.hud)
+  );
+}
+
+function sameColorPalette(
+  left: readonly ColorRepresentation[] | undefined,
+  right: readonly ColorRepresentation[] | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return (
+    left.length === right.length &&
+    left.every((color, index) => color === right[index])
   );
 }
 

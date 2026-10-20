@@ -169,7 +169,7 @@ export function resolveViewport3DRefreshCountdownDisplay(input: {
       detail: "waiting",
       progress: 1,
       state: "waiting",
-      title: "Next field sync",
+      title: "Estimated next field sync",
     };
   }
 
@@ -179,7 +179,7 @@ export function resolveViewport3DRefreshCountdownDisplay(input: {
     detail: formatViewport3DRefreshRemaining(remainingMs),
     progress,
     state: "counting",
-    title: "Next field sync",
+    title: "Estimated next field sync",
   };
 }
 

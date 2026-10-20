@@ -13,7 +13,7 @@ use fullmag_runner::{
 };
 
 use super::resolved_spatial_field::{
-    full_field_publication_carrier_identity, resolve_current_spatial_field,
+    full_field_publication_carrier_identity, resolve_current_spatial_field_metadata,
 };
 
 #[utoipa::path(
@@ -102,15 +102,17 @@ fn annotate_runtime_quantity_state(
             preliminary.provider == fullmag_runner::QuantityProviderCapability::Available;
 
         let status = relevant_field_materialization_status(snapshot, &entry.id);
-        let resolved_field = resolve_current_spatial_field(
+        let resolved_field = resolve_current_spatial_field_metadata(
             snapshot,
             &entry.id,
             usize::from(spec.n_comp),
         )
         .ok()
-        .flatten()
-        .filter(|field| !field.values.is_empty());
-        let has_payload = resolved_field.is_some();
+        .flatten();
+        // Metadata resolution validates the descriptor's value_count and
+        // current domain without reading a binary field payload.
+        let has_payload = resolved_field.is_some()
+            || crate::accepted_field_materialization::current_global_energy(snapshot, &entry.id).is_some();
         let unavailable_payload_state = || {
             if supported {
                 ("unmaterialized", Some("field_unmaterialized"))

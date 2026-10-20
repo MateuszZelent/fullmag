@@ -89,6 +89,12 @@ export function MeshJobsPanelView({
         <output className="fm-footer__empty">
           {model.activeTitle}
         </output>
+        {model.lastBuildError ? (
+          <div className="fm-footer-mesh-jobs__error" role="alert">
+            <span className="fm-footer-mesh-jobs__error-label">Last build error</span>
+            <span className="fm-footer-mesh-jobs__error-message">{model.lastBuildError}</span>
+          </div>
+        ) : null}
       </section>
 
       <section className="fm-footer-diagnostics__panel" aria-label="Mesh build pipeline">

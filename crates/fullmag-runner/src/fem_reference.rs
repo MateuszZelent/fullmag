@@ -773,6 +773,7 @@ fn execute_reference_fem_impl(
                     scalar_row_due: preview_due && preview_targets_global_scalar,
                     terminal_field_snapshot: false,
                     finished: false,
+                    magnetization_carrier: None,
                 });
                 if preview_due {
                     last_preview_revision = Some(display_selection.revision);
@@ -934,6 +935,7 @@ fn execute_reference_fem_impl(
                     scalar_row_due: due_scalar_row,
                     terminal_field_snapshot: false,
                     finished: false,
+                    magnetization_carrier: None,
                 });
                 if preview_due {
                     last_preview_revision = Some(
@@ -1011,6 +1013,7 @@ fn execute_reference_fem_impl(
                 scalar_row_due: due_scalar_row,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 last_preview_revision = Some(

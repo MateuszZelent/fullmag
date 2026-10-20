@@ -40,6 +40,8 @@ mod accepted_fem_gpu_state;
 mod accepted_fem_study_worker;
 mod accepted_antenna_inspection_worker;
 mod accepted_study_worker;
+mod accepted_observation_spool;
+mod accepted_field_binary;
 mod accepted_project_storage;
 mod analysis;
 mod artifacts;
@@ -64,6 +66,8 @@ mod field_render_png;
 mod field_slice;
 mod field_store;
 mod live_command_journal;
+mod live_execution_binding;
+mod accepted_field_materialization;
 mod live_accepted_execution;
 mod live_accepted_projection;
 mod live_scene_preparation;
@@ -388,6 +392,16 @@ fn current_live_realtime_changes(
             recommended_fetch: Some("/v2/sessions/current/data/tables/default/rows".to_string()),
         },
         RealtimeResourceChange {
+            resource: RealtimeResourceName::Simulation,
+            revision: realtime_state.revisions.scalars_revision
+                .saturating_add(realtime_state.revisions.field_revision),
+            resource_id: Some("energies-current".to_string()),
+            quantity_ids: Vec::new(),
+            broad: false,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/simulation/solver/energies/current".to_string()),
+        },
+        RealtimeResourceChange {
             resource: RealtimeResourceName::Domain,
             revision: realtime_state.revisions.topology_revision,
             resource_id: None,
@@ -708,6 +722,8 @@ fn current_live_realtime_change_revision_changed(
         RealtimeResourceName::Stages => previous.stages_revision != change.revision,
         RealtimeResourceName::Simulation => match change.resource_id.as_deref() {
             Some("preparation") => previous.simulation_preparation_revision != change.revision,
+            Some("energies-current") => previous.scalars_revision
+                .saturating_add(previous.field_revision) != change.revision,
             _ => true,
         },
         RealtimeResourceName::SceneDocument => previous.scene_revision != Some(change.revision),
@@ -5330,11 +5346,25 @@ async fn commit_current_live_scene_document_with_context(
                 )));
             }
         }
+        // Classify the actual version that will be committed. A v1 -> v2
+        // migration is not silently treated as metadata-only for an active run.
+        scene_document.version = "scene.v2".to_string();
+        crate::live_execution_binding::validate_active_scene_mutation(state, snapshot, &scene_document)
+            .await?;
         let previous_scene = snapshot.scene_document.clone();
+        let metadata_only = previous_scene.as_ref().is_some_and(|before| {
+            fullmag_authoring::scene_execution_input_identity(before).ok()
+                .zip(fullmag_authoring::scene_execution_input_identity(&scene_document).ok())
+                .is_some_and(|(before, after)| before == after)
+        });
         let region_impact = previous_scene
             .as_ref()
             .map(|before| {
-                fullmag_authoring::classify_region_realization_impact(before, &scene_document)
+                if metadata_only {
+                    fullmag_authoring::RegionRealizationImpact::default()
+                } else {
+                    fullmag_authoring::classify_region_realization_impact(before, &scene_document)
+                }
             })
             .unwrap_or(fullmag_authoring::RegionRealizationImpact {
                 topology: true,
@@ -5348,7 +5378,6 @@ async fn commit_current_live_scene_document_with_context(
             .as_ref()
             .map(|current_scene| current_scene.revision.saturating_add(1))
             .unwrap_or_else(|| scene_document.revision.saturating_add(1));
-        scene_document.version = "scene.v2".to_string();
         scene_document.revision = next_revision;
         let builder_state = match scene_document_builder_projection(&scene_document) {
             Ok(state) => Some(state),
@@ -5380,7 +5409,7 @@ async fn commit_current_live_scene_document_with_context(
         snapshot.scene_document = Some(scene_document.clone());
         snapshot.region_realization_revisions =
             snapshot.region_realization_revisions.advance(region_impact);
-        let allow_live_magnetization_rebuild = snapshot
+        let allow_live_magnetization_rebuild = !metadata_only && snapshot
             .live_state
             .as_ref()
             .map(|live_state| {
@@ -6781,6 +6810,9 @@ fn resolve_global_scalar_quantity(
     current: &SessionStateResponse,
     requested: &str,
 ) -> Option<String> {
+    if accepted_field_materialization::current_global_energy(current, requested).is_some() {
+        return Some(requested.to_owned());
+    }
     let is_global_scalar = |quantity_id: &str| {
         quantity_spec(quantity_id).is_some_and(|spec| spec.shape == QuantityKind::GlobalScalar)
     };
@@ -6827,6 +6859,9 @@ fn current_preview_source(current: &SessionStateResponse) -> (u64, f64) {
 }
 
 fn current_global_scalar_value(current: &SessionStateResponse, quantity: &str) -> Option<f64> {
+    if let Some(value) = accepted_field_materialization::current_global_energy(current, quantity) {
+        return Some(value);
+    }
     if has_nonphysical_latest_step(current) {
         return None;
     }

@@ -573,11 +573,34 @@ live frames may omit `source_time_seconds` for wire compatibility, but a `Comple
 batch must expose it and it must equal the current run's `solver_time_seconds`; availability or a
 matching generation alone is insufficient terminal provenance.
 
-The batch is session-memory state, not a durable field artifact. It survives only while the
+The interactive batch described here is session-memory state, not a durable field artifact. It survives only while the
 interactive session remains resident; restart, reconnect, or process recovery requires an explicit
 scheduled artifact/output path and must not claim that this cache is disk persistence. `Failed` or
 `Cancelled` runs do not publish a `Completed` terminal batch. They may retain a previously complete
 nonterminal batch with its original step/time and status, but must not relabel it as final.
+
+The accepted-worker path additionally captures observations from the original
+solver context and binds them to the immutable final state before publishing
+`accepted_quantity_bundle.v1` in CAS. This is separate from the interactive
+cache above. `capture_solver_observables` and
+`materialize_captured_observables` require the exact clock, layout and
+magnetization digest; delayed/sampled previews cannot be relabelled final.
+Dynamic drive, transport, thermal and constraint inputs remain owned by that
+original context. A missing legacy capture does not authorize reconstructing
+those inputs from magnetization alone. Live fields use bounded binary
+generations at accepted-step cadence; the browser observes resource revisions,
+not one guaranteed rendered frame for each solver iteration. These source
+changes have no new runtime or CUDA qualification evidence.
+
+Terminal capture is independent of display cadence. Producers emit one complete
+catalog quantity per callback, preserving the same final M digest, clock and
+carrier; the accepted worker writes private F64LE files and metadata, then
+validates completeness before publishing an atomic CAS metadata bundle with
+bounded binary chunks. Catalog/readiness consumers resolve metadata only.
+Selecting a quantity reads that field within its admitted memory budget; this
+does not provide fully out-of-core solving or chunk-selective spatial queries.
+Live preview limits remain separate. FEM uses its native local-node map and
+topology rather than a FDM grid; no node map is inferred from array length.
 
 `disable_preview_3d` is a benchmark/display switch for intermediate preview payloads. It is not a
 request to skip terminal scientific-field finalization, nor proof that a final field was persisted.
@@ -911,3 +934,7 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 | Session field promotion | `crates/fullmag-cli/src/live_workspace.rs` | `ingest_preview_fields_from_update` | Promotes incoming fields individually into session state. | CLI control plane | part of current path, not proof of an atomic terminal generation/batch |
 | Field source-time transport | `crates/fullmag-runner/src/types.rs` | `LivePreviewField` | Carries the optional solver-time provenance for live and terminal fields. | Runner/API | source-level contract; terminal proof remains lane-gated |
 | Field metadata resource | `crates/fullmag-api/src/schemas/fields.rs` | `FieldMeta`, `FieldDescriptor` | Exposes `source_time_seconds` with SI-second semantics to resource consumers. | API | source-level contract; terminal proof remains lane-gated |
+
+| Accepted original-context fields | crates/fullmag-runner/src/accepted_materialization.rs | capture_solver_observables, materialize_captured_observables | Copy complete same-clock fields and bind them to the final immutable state before CAS publication. | FDM CPU/GPU | source-visible; runtime NOT VERIFIED |
+| Terminal binary spool | crates/fullmag-api/src/accepted_observation_spool.rs | write_fragment | Write one complete quantity with accepted-source guards and admitted budgets. | FDM/FEM CPU/GPU | source-only; runtime NOT VERIFIED |
+| Terminal binary publication | crates/fullmag-api/src/accepted_field_materialization.rs | materialize_spool | Validate complete catalog and publish immutable CAS chunks plus metadata. | FDM/FEM CPU/GPU | source-only; runtime NOT VERIFIED |

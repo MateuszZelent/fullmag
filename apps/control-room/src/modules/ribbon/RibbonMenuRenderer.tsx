@@ -67,6 +67,10 @@ function renderNode(
           {node.shortcut ? (
             <span className="fm-dropdown-shortcut">{node.shortcut}</span>
           ) : null}
+          {/* Disabled items ignore pointer events, so `title` alone never shows the reason. */}
+          {node.disabled && node.tooltip ? (
+            <span className="fm-dropdown-reason">{node.tooltip}</span>
+          ) : null}
         </DropdownMenuItem>
       );
 

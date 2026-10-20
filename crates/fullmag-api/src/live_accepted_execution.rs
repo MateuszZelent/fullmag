@@ -175,7 +175,10 @@ pub(crate) async fn submit_live_command_with_transition(
         // accepted run whose manual start gate is still held. Check the
         // durable gate before preparing anything new; otherwise the same
         // authored Study can receive a second RunIntent while its first run
-        // is merely waiting for Compute.
+        // is merely waiting for Compute. In Docker API-only runtime this one
+        // decision covers both `waiting_for_compute` and `waiting_for_solve`,
+        // so the `waiting_for_solve` fallback below cannot release a gate
+        // whose preparation is still pending.
         if docker_api_only_runtime() {
             match current_live_waiting_for_compute_gate(state, context).await? {
                 Some(ExistingAcceptedRunGate::Held(_run_id)) => {
@@ -459,7 +462,10 @@ fn accepted_frontier_preparation_is_ready(
 /// Resolve the durable start gate for the existing accepted run before a new
 /// command can prepare another Study. The live read model uses
 /// `waiting_for_compute` both for a held manual gate and for an already
-/// released run, so its status alone is not an admission decision.
+/// released run, and the accepted projector republishes a held gate as
+/// `waiting_for_solve`, so status alone is not an admission decision. Both
+/// statuses resolve here, and a held gate is released only after the accepted
+/// frontier preparation is ready (`Pending` otherwise).
 async fn current_live_waiting_for_compute_gate(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
@@ -479,7 +485,11 @@ async fn current_live_waiting_for_compute_gate(
         let Some(run) = snapshot.run.as_ref() else {
             return Ok(None);
         };
-        if run.status != "waiting_for_compute" {
+        // The accepted projector reports a held durable gate as
+        // `waiting_for_solve`, while startup publishes `waiting_for_compute`.
+        // Both are the same held gate and get one decision, always including
+        // the accepted-frontier preparation readiness check.
+        if !matches!(run.status.as_str(), "waiting_for_compute" | "waiting_for_solve") {
             return Ok(None);
         }
         let run_id = run.run_id.clone();
@@ -546,7 +556,7 @@ pub(crate) async fn release_accepted_live_study_with_transition(
     context: &CurrentLiveRequestContext,
     request_id: &str,
 ) -> Result<Option<AcceptedLiveExecution>, ApiError> {
-    let run_id = {
+    let (run_id, scene_revision, execution_input) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
@@ -561,7 +571,9 @@ pub(crate) async fn release_accepted_live_study_with_transition(
         let Some(run) = snapshot.run.as_ref() else {
             return Ok(None);
         };
-        run.run_id.clone()
+        let scene = snapshot.scene_document.as_ref()
+            .ok_or_else(|| ApiError::conflict("accepted run has no authored scene"))?;
+        (run.run_id.clone(), scene.revision, crate::live_execution_binding::input_identity(scene)?)
     };
     let Some(store_root) = state.submit_store_root.clone() else {
         return Err(ApiError::with_status_and_code(
@@ -605,6 +617,14 @@ pub(crate) async fn release_accepted_live_study_with_transition(
                 format!("accepted startup RunIntent is not typed: {error:#}"),
             )
         })?;
+        intent.validate().map_err(|error| {
+            ApiError::conflict(format!("accepted release intent is invalid: {error}"))
+        })?;
+        crate::live_execution_binding::validate_input_binding(
+            &intent.specification,
+            &execution_input,
+            scene_revision,
+        )?;
         let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
             &store,
             &typed_run_id,
@@ -1735,12 +1755,14 @@ fn prepare_live_accepted(
         .validate_for_save()
         .map_err(|error| ApiError::unprocessable_with_code("accepted_project_invalid", error.to_string()))?;
 
+    let execution_input = crate::live_execution_binding::input_identity(scene)?;
     let mut parameters = json!({
         "live_workspace": {
             "api_instance_id": api_instance_id,
             "session_id": &context.session_id,
             "session_epoch": context.session_epoch,
             "scene_revision": effective_scene.revision,
+            "execution_input": execution_input,
             "command_id": &command_id,
             "request_idempotency_key": &request_idempotency_key,
             "step_id": selected_step_id,

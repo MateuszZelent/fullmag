@@ -432,7 +432,9 @@ export interface MeshObjectConfigResource {
   revision: number;
 }
 export interface MeshUniverseConfigReplaceRequest {
-  config?: JsonObject | null;
+  config: JsonObject;
+  /** Resource revision the draft was based on; stale values return 409. */
+  expected_revision?: number;
 }
 export interface MeshUniverseConfigResource {
   config?: JsonObject | null;
@@ -864,9 +866,22 @@ export interface TableRowsQuery {
 }
 export type SessionExportRequest =
   components["schemas"]["SessionExportRequest"];
-export type ScriptSyncRequest = components["schemas"]["ScriptSyncRequest"];
-export type ScriptSyncResponse = components["schemas"]["ScriptSyncResponse"];
-export type ScriptSourceResponse = components["schemas"]["ScriptSourceResponse"];
+// The intersections cover fields added in `crates/fullmag-api/src/types.rs`
+// (revision-bound canonical export) until the OpenAPI artifacts are
+// regenerated with `pnpm run generate:api`; they are no-ops afterwards.
+export type ScriptSyncRequest = components["schemas"]["ScriptSyncRequest"] & {
+  expected_scene_revision?: number | null;
+};
+/** `not_checked` unless the exported script was actually lowered and compared. */
+export type ScriptExportFidelity = "not_checked" | (string & {});
+export type ScriptSyncResponse = components["schemas"]["ScriptSyncResponse"] & {
+  source?: string | null;
+  scene_revision?: number | null;
+  fidelity?: ScriptExportFidelity;
+};
+export type ScriptSourceResponse = components["schemas"]["ScriptSourceResponse"] & {
+  canonical?: boolean;
+};
 export type SessionExportResponse =
   components["schemas"]["SessionExportResponse"];
 export type SessionImportCommitRequest =

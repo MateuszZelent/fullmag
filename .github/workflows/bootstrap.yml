@@ -788,6 +788,8 @@ jobs:
         run: |
           python -B scripts/test_fullmag_docker_runtime.py -v
           python -B scripts/test_docker_backend_dev.py -v
+          python -B scripts/test_docker_operator_capability.py -v
+          python -B scripts/test_docker_build_control_cache_admission.py -v
           python -B scripts/test_docker_container_runtime_recovery.py -v
           python -B scripts/test_docker_volume_container_recovery.py -v
           python -B scripts/test_docker_volume_dev_runtime_state.py -v

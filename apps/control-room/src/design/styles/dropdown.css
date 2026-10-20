@@ -91,6 +91,19 @@
   letter-spacing: 0.05em;
 }
 
+/* Disabled-command reason: wraps under the item label. */
+.fm-dropdown-item:has(.fm-dropdown-reason) {
+  flex-wrap: wrap;
+}
+
+.fm-dropdown-reason {
+  flex-basis: 100%;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.35;
+  white-space: normal;
+}
+
 .fm-dropdown-badge {
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-xs);

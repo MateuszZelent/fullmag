@@ -29,7 +29,7 @@ describe("viewport3dRefreshCountdown", () => {
     expect(display).toMatchObject({
       detail: "0.3s",
       state: "counting",
-      title: "Next field sync",
+      title: "Estimated next field sync",
     });
     expect(display?.progress).toBeGreaterThan(0.65);
     expect(display?.progress).toBeLessThan(0.75);

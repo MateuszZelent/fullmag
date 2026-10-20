@@ -1003,7 +1003,11 @@ pub(crate) struct QuantityDescriptor {
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[serde(transparent)]
-pub(crate) struct LatestFields(BTreeMap<String, Value>);
+pub(crate) struct LatestFields(
+    BTreeMap<String, Value>,
+    #[serde(skip)]
+    BTreeMap<String, Arc<crate::accepted_field_binary::AcceptedFieldReader>>,
+);
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct CachedPreviewFields {
@@ -1029,11 +1033,13 @@ impl LatestFields {
     }
 
     pub(crate) fn insert(&mut self, quantity: String, value: Value) {
+        self.1.remove(&quantity);
         self.0.insert(quantity, value);
     }
 
     pub(crate) fn remove(&mut self, quantity: &str) {
         self.0.remove(quantity);
+        self.1.remove(quantity);
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
@@ -1044,9 +1050,58 @@ impl LatestFields {
         self.0.iter_mut()
     }
 
-    pub(crate) fn into_inner(self) -> BTreeMap<String, Value> {
-        self.0
+    pub(crate) fn binary_reader(
+        &self,
+        quantity: &str,
+    ) -> Option<&Arc<crate::accepted_field_binary::AcceptedFieldReader>> {
+        let reader = self.1.get(quantity)?;
+        let reference = crate::accepted_field_binary::binary_field_ref_from_metadata(self.0.get(quantity)?)?;
+        (reference == *reader.reference()).then_some(reader)
     }
+
+    pub(crate) fn attach_binary(
+        &mut self,
+        quantity: String,
+        reader: Arc<crate::accepted_field_binary::AcceptedFieldReader>,
+    ) -> Result<(), crate::error::ApiError> {
+        let raw = self
+            .0
+            .get(&quantity)
+            .ok_or_else(|| crate::error::ApiError::conflict("binary field metadata is missing"))?;
+        let reference = crate::accepted_field_binary::binary_field_ref_from_metadata(raw)
+            .ok_or_else(|| crate::error::ApiError::conflict("binary field metadata is invalid"))?;
+        if reference != *reader.reference() {
+            return Err(crate::error::ApiError::conflict(
+                "binary field reader does not match its metadata reference",
+            ));
+        }
+        self.1.insert(quantity, reader);
+        Ok(())
+    }
+
+    /// Merge raw field metadata and only those typed readers whose descriptors
+    /// still match the incoming raw values.
+    pub(crate) fn merge_from(&mut self, incoming: LatestFields) {
+        let LatestFields(incoming_values, incoming_readers) = incoming;
+        for (quantity, value) in incoming_values {
+            self.insert(quantity.clone(), value);
+            if let Some(reader) = incoming_readers.get(&quantity) {
+                let _ = self.attach_binary(quantity, Arc::clone(reader));
+            }
+        }
+    }
+
+    pub(crate) fn binary_source_is_registered(&self, quantity: &str, raw: &Value) -> bool {
+        if raw.get("accepted_binary_field").is_none() {
+            return true;
+        }
+        let Some(reader) = self.binary_reader(quantity) else {
+            return false;
+        };
+        crate::accepted_field_binary::binary_field_ref_from_metadata(raw)
+            .is_some_and(|reference| reference == *reader.reference())
+    }
+
 }
 
 impl CachedPreviewFields {
@@ -1305,10 +1360,21 @@ pub(crate) struct SessionAssetImportResponse {
     pub summary: ImportedAssetSummary,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Default, Deserialize, ToSchema)]
 pub(crate) struct ScriptSyncRequest {
     #[serde(default)]
     pub overrides: Option<Value>,
+    /// SceneDocument revision the caller exported from. When present, the
+    /// sync fails with 409 `scene_revision_mismatch` unless the current scene
+    /// has exactly this revision before and after rendering.
+    #[serde(default)]
+    pub expected_scene_revision: Option<u64>,
+}
+
+pub(crate) const SCRIPT_SYNC_FIDELITY_NOT_CHECKED: &str = "not_checked";
+
+fn default_script_sync_fidelity() -> String {
+    SCRIPT_SYNC_FIDELITY_NOT_CHECKED.to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -1332,6 +1398,18 @@ pub(crate) struct ScriptSyncResponse {
     /// Managed export copy path for `user_file` sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_copy_path: Option<String>,
+    /// Canonical source text written by this sync, read back under the same
+    /// request so it matches `scene_revision` (no second GET required).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// SceneDocument revision the canonical source was rendered from; absent
+    /// when the session has no SceneDocument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_revision: Option<u64>,
+    /// Round-trip fidelity verdict of the exported source. `not_checked`
+    /// unless the exported script was actually lowered and compared.
+    #[serde(default = "default_script_sync_fidelity")]
+    pub fidelity: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -1346,6 +1424,11 @@ pub(crate) struct ScriptSourceResponse {
     /// carries the copy when it exists, otherwise the read-only original).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_copy_path: Option<String>,
+    /// True when `source` is the canonical Fullmag rendering (managed script
+    /// or managed export copy). False when a `user_file` session has no
+    /// export copy yet and `source` is the user's original, unmodified file.
+    #[serde(default)]
+    pub canonical: bool,
 }
 
 /// Where the current session's Python script comes from and whether Fullmag
@@ -2130,6 +2213,7 @@ mod tests {
                 adaptive_h_max: String::new(),
                 adaptive_max_passes: 5,
                 adaptive_error_tolerance: String::new(),
+                order: None,
             },
             universe: None,
             domain_frame: None,

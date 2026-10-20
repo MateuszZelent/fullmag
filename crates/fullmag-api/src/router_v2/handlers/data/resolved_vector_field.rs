@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::data::field_resolution::{
-    field_values_match_current_domain, flatten_json_field_values, is_fdm_snapshot, json_field_grid,
-    live_magnetization_values,
+    field_values_match_current_domain, flatten_current_field_values, is_fdm_snapshot,
+    json_field_grid, live_magnetization_values,
 };
 use crate::router_v2::handlers::data::fields::{
     persisted_hysteresis_magnetization_values, validate_hysteresis_snapshot_stage_scope,
@@ -63,7 +63,7 @@ pub(crate) async fn resolve_topological_charge_magnetization(
     } else if let Some((values, grid)) = live_magnetization_values(snapshot) {
         (values, grid, ResolvedFieldSourceKind::CurrentLive)
     } else if let Some(raw) = snapshot.latest_fields.get("m") {
-        let values = flatten_json_field_values(raw);
+        let values = flatten_current_field_values(snapshot, "m", raw)?;
         if !field_values_match_current_domain(snapshot, "m", 3, &values)
             || values.iter().any(|value| !value.is_finite())
         {

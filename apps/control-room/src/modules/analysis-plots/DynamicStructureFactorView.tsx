@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import type { DynamicStructureFactorResource } from "@/kernel/api/apiTypes";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
@@ -32,6 +32,37 @@ export function DynamicStructureFactorView({
   const heatmapColumns = useMemo(() => new Set(cells.map((cell) => cell.wavevectorIndex)).size, [cells]);
   const boundedWavevectorIndex = Math.min(wavevectorIndex, Math.max(0, (resource?.wavevector_count ?? 1) - 1));
   const boundedFrequencyIndex = Math.min(frequencyIndex, Math.max(0, (resource?.frequency_count ?? 1) - 1));
+  // Roving tabindex: the heatmap is one Tab stop; arrows move between cells.
+  const heatmapRef = useRef<HTMLDivElement | null>(null);
+  const [activeCellKey, setActiveCellKey] = useState<string | null>(null);
+  const selectableCellKeys = useMemo(
+    () => cells
+      .filter((cell) => Boolean(onPointSelect && dynamicStructureFactorPointSelection(resource, cell.frequencyIndex, cell.wavevectorIndex, spectrum)))
+      .map((cell) => `${cell.frequencyIndex}:${cell.wavevectorIndex}`),
+    [cells, onPointSelect, resource, spectrum],
+  );
+  const focusCellKey = activeCellKey && selectableCellKeys.includes(activeCellKey)
+    ? activeCellKey
+    : selectableCellKeys[0] ?? null;
+  const moveHeatmapFocus = (event: KeyboardEvent<HTMLSpanElement>, index: number) => {
+    const step = event.key === "ArrowRight" ? 1
+      : event.key === "ArrowLeft" ? -1
+        : event.key === "ArrowDown" ? Math.max(1, heatmapColumns)
+          : event.key === "ArrowUp" ? -Math.max(1, heatmapColumns)
+            : 0;
+    if (step === 0) return false;
+    event.preventDefault();
+    const target = cells[index + step];
+    if (!target) return true;
+    const targetKey = `${target.frequencyIndex}:${target.wavevectorIndex}`;
+    setActiveCellKey(targetKey);
+    heatmapRef.current
+      ?.querySelector<HTMLElement>(`[data-cell-key="${targetKey}"]`)
+      ?.focus();
+    return true;
+  };
+  const kRange = formatHeatmapAxisRange(resource?.k_rad_per_m, resource?.wavevector_unit ?? "rad/m");
+  const fRange = formatHeatmapAxisRange(resource?.frequency_hz, resource?.frequency_unit ?? "Hz");
   return (
     <ChartSection
       className="fm-analysis-plots__panel--dsf"
@@ -55,15 +86,19 @@ export function DynamicStructureFactorView({
           Showing a decimated projection; this is not the full JSON payload.
         </p>
       ) : null}
+      <p className="fm-analysis-plots__heatmap-axes">
+        Columns: wavevector k {kRange} · Rows: frequency f {fRange} · Cell opacity: {scale === "log" ? "log-normalized" : "linear-normalized"} {spectrum === "source" ? "|H|²" : "S"} (fainter = weaker)
+      </p>
       <div
         className="fm-analysis-plots__heatmap"
+        ref={heatmapRef}
         role="grid"
         aria-label={`${cells.length} sampled S(k,f) cells`}
         style={{
           gridTemplateColumns: `repeat(${Math.max(1, heatmapColumns)}, minmax(2px, 1fr))`,
         }}
       >
-        {cells.map((cell) => {
+        {cells.map((cell, cellIndex) => {
           const selection = dynamicStructureFactorPointSelection(
             resource,
             cell.frequencyIndex,
@@ -82,17 +117,19 @@ export function DynamicStructureFactorView({
               : `Unavailable ${spectrum === "source" ? "Source H(k,f)" : "Response S(k,f)"} point ${cell.frequencyIndex}:${cell.wavevectorIndex}`}
             className="fm-analysis-plots__heatmap-cell"
             {...(selection ? { "data-result-item-id": selection.itemId } : {})}
+            data-cell-key={cellKey}
             key={cellKey}
-            onClick={selectable ? activate : undefined}
-            onKeyDown={selectable ? (event) => {
-              if (event.key === "Enter" || event.key === " ") {
+            onClick={selectable ? () => { setActiveCellKey(cellKey); activate(); } : undefined}
+            onKeyDown={(event) => {
+              if (moveHeatmapFocus(event, cellIndex)) return;
+              if (selectable && (event.key === "Enter" || event.key === " ")) {
                 event.preventDefault();
                 activate();
               }
-            } : undefined}
+            }}
             role="gridcell"
             style={{ opacity: Math.max(0.04, scale === "log" ? cell.logNormalizedPower : cell.normalizedPower) }}
-            tabIndex={selectable ? 0 : -1}
+            tabIndex={selectable && cellKey === focusCellKey ? 0 : -1}
             title={`k=${cell.kRadPerM.toExponential(4)} rad/m, f=${cell.frequencyHz.toExponential(4)} Hz, ${spectrum === "source" ? "|H|²" : "S"}=${cell.power.toExponential(4)}`}
           />;
         })}
@@ -113,4 +150,17 @@ export function DynamicStructureFactorView({
       </div>
     </ChartSection>
   );
+}
+
+function formatHeatmapAxisRange(values: readonly number[] | undefined, unit: string): string {
+  if (!values || values.length === 0) return "-";
+  let min = Infinity;
+  let max = -Infinity;
+  for (const value of values) {
+    if (!Number.isFinite(value)) continue;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  if (!Number.isFinite(min)) return "-";
+  return `${min.toExponential(3)} – ${max.toExponential(3)} ${unit}`;
 }

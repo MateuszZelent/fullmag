@@ -18,6 +18,7 @@ export function createCommandContext(
     objectEditSession: kernel.objectEditSession,
     bus: kernel.bus,
     chartViewportHandoff: kernel.chartViewportHandoff,
+    feedback: patch.feedback,
     cameraRegistry: kernel.cameraRegistry,
     input: patch.input,
     source,

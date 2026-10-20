@@ -29,6 +29,7 @@ pub(crate) fn publish_initial_scalar_without_field_snapshot(
         scalar_row_due: true,
         terminal_field_snapshot: false,
         finished: false,
+        magnetization_carrier: None,
     }))
 }
 

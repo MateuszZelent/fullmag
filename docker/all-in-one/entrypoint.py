@@ -2,6 +2,8 @@
 import ctypes
 import hashlib
 import os
+import re
+import secrets
 import subprocess
 import sys
 import signal
@@ -17,8 +19,17 @@ DEVICE_ACCESS_CPU = "cpu"
 DEVICE_ACCESS_GPU = "gpu"
 CUDA_COMPATIBILITY_ROOT = Path("/usr/local/cuda/compat")
 RUNTIME_CONTROL_ROOT = Path("/opt/fullmag/runtime-control")
+BUILD_CONTROL_BACKEND_ROOT = Path("/opt/fullmag/control/backend")
 FEM_MESH_CACHE_ROOT = Path("/build/cache/fem-mesh")
 CUDA_CACHE_ROOT = Path("/build/cache/cuda-compute")
+
+OPERATOR_CAPABILITY_ENV = "FULLMAG_LOCAL_COMPUTE_OPERATOR_TOKEN"
+OPERATOR_CAPABILITY_DIRNAME = "operator-capability"
+OPERATOR_CAPABILITY_FILENAME = "token"
+OPERATOR_CAPABILITY_TOKEN_BYTES = 16
+OPERATOR_CAPABILITY_MAX_BYTES = 64
+_CONTROL_VOLUME_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,127}")
+_OPERATOR_TOKEN_RE = re.compile(r"[0-9a-f]{32}")
 
 
 def _technical_path(name, default):
@@ -52,6 +63,211 @@ def technical_paths():
     if control == state_root:
         raise RuntimeError("FULLMAG_RUNTIME_CONTROL_ROOT must not be the user /state root")
     return control, fem_mesh, cuda_cache
+
+
+def _operator_capability_enabled():
+    """Enable the private operator capability only for direct DEV backends."""
+
+    if os.environ.get("FULLMAG_DOCKER_ROLE") != "backend":
+        return False
+    volume = os.environ.get("FULLMAG_BUILD_CONTROL_VOLUME")
+    if not isinstance(volume, str) or not volume:
+        return False
+    if _CONTROL_VOLUME_NAME_RE.fullmatch(volume) is None:
+        raise RuntimeError("FULLMAG_BUILD_CONTROL_VOLUME is invalid")
+    return True
+
+
+def _operator_assert_no_links(path, name):
+    """Reject symlinks and Windows reparse points in a capability path."""
+
+    path = Path(path)
+    if not path.is_absolute() or any(part == ".." for part in path.parts):
+        raise RuntimeError(f"{name} must be absolute without parent traversal")
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise RuntimeError(f"cannot inspect {name}") from error
+        if stat.S_ISLNK(metadata.st_mode) or bool(
+                getattr(metadata, "st_file_attributes", 0) & 0x400):
+            raise RuntimeError(f"{name} traverses a link or reparse point")
+
+
+def _operator_metadata(path, name):
+    try:
+        return Path(path).lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise RuntimeError(f"cannot inspect {name}") from error
+
+
+def _operator_require_directory(path, name, *, create=False, mode=None):
+    path = Path(path)
+    _operator_assert_no_links(path, name)
+    metadata = _operator_metadata(path, name)
+    if metadata is None and create:
+        try:
+            path.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        metadata = _operator_metadata(path, name)
+    if (metadata is None or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or (mode is not None and stat.S_IMODE(metadata.st_mode) != mode)):
+        raise RuntimeError(f"{name} must be a private directory owned by the backend")
+    return path
+
+
+def operator_capability_path(control_root=BUILD_CONTROL_BACKEND_ROOT):
+    """Return the fixed backend control-volume path for the capability token."""
+
+    backend_root = _operator_require_directory(control_root, "backend control namespace")
+    return backend_root / OPERATOR_CAPABILITY_DIRNAME / OPERATOR_CAPABILITY_FILENAME
+
+
+def _operator_require_file(path, name):
+    metadata = _operator_metadata(path, name)
+    if (metadata is None or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)):
+        raise RuntimeError(f"{name} must be one private regular file")
+    return metadata
+
+
+def read_operator_capability(control_root=BUILD_CONTROL_BACKEND_ROOT):
+    """Read and validate the image-private operator token for a fixed backend."""
+
+    if not _operator_capability_enabled():
+        return None
+    path = operator_capability_path(control_root)
+    _operator_require_directory(path.parent, "operator capability directory", mode=0o700)
+    _operator_assert_no_links(path.parent, "operator capability parent")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise RuntimeError("operator capability is unavailable") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if (not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_size > OPERATOR_CAPABILITY_MAX_BYTES
+                or metadata.st_nlink != 1
+                or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)):
+            raise RuntimeError("operator capability file is not private and regular")
+        raw = bytearray()
+        while len(raw) <= OPERATOR_CAPABILITY_MAX_BYTES:
+            chunk = os.read(descriptor, OPERATOR_CAPABILITY_MAX_BYTES + 1 - len(raw))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        if len(raw) > OPERATOR_CAPABILITY_MAX_BYTES:
+            raise RuntimeError("operator capability file is too large")
+    except OSError as error:
+        raise RuntimeError("operator capability cannot be read") from error
+    finally:
+        os.close(descriptor)
+    if len(raw) != OPERATOR_CAPABILITY_TOKEN_BYTES * 2 + 1 or raw[-1:] != b"\n":
+        raise RuntimeError("operator capability has an invalid format")
+    try:
+        token = bytes(raw[:-1]).decode("ascii", "strict")
+    except UnicodeDecodeError as error:
+        raise RuntimeError("operator capability has an invalid format") from error
+    if _OPERATOR_TOKEN_RE.fullmatch(token) is None:
+        raise RuntimeError("operator capability has an invalid format")
+    return token
+
+
+def prepare_operator_capability(control_root=BUILD_CONTROL_BACKEND_ROOT):
+    """Rotate the private token once before API startup in direct DEV mode."""
+
+    if not _operator_capability_enabled():
+        return None
+    path = operator_capability_path(control_root)
+    _operator_require_directory(path.parent, "operator capability directory", create=True, mode=0o700)
+    _operator_assert_no_links(path.parent, "operator capability parent")
+    existing = _operator_metadata(path, "operator capability")
+    if existing is not None:
+        _operator_require_file(path, "operator capability")
+    token = secrets.token_hex(OPERATOR_CAPABILITY_TOKEN_BYTES)
+    payload = (token + "\n").encode("ascii")
+    temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
+             | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_CLOEXEC", 0))
+    descriptor = None
+    temporary_created = False
+    try:
+        try:
+            descriptor = os.open(temporary, flags, 0o600)
+            temporary_created = True
+            metadata = os.fstat(descriptor)
+            if (not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_nlink != 1
+                    or metadata.st_uid != os.getuid()
+                    or stat.S_IMODE(metadata.st_mode) != 0o600):
+                raise RuntimeError("operator capability temporary file is not private and regular")
+            offset = 0
+            while offset < len(payload):
+                offset += os.write(descriptor, payload[offset:])
+            os.fsync(descriptor)
+        except OSError as error:
+            raise RuntimeError("operator capability cannot be published") from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        try:
+            _operator_require_file(temporary, "operator capability temporary file")
+            _operator_assert_no_links(path.parent, "operator capability parent")
+            existing = _operator_metadata(path, "operator capability")
+            if existing is not None:
+                _operator_require_file(path, "operator capability")
+            os.replace(temporary, path)
+            directory_descriptor = os.open(
+                path.parent,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+            if read_operator_capability(control_root) != token:
+                raise RuntimeError("operator capability changed after publication")
+            return token
+        except OSError as error:
+            raise RuntimeError("operator capability cannot be durably published") from error
+    finally:
+        if temporary_created:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+
+
+def _api_environment_with_operator_capability(api_environment, control_root=BUILD_CONTROL_BACKEND_ROOT):
+    """Give only the API child a freshly rotated private operator token."""
+
+    environment = dict(api_environment)
+    if not _operator_capability_enabled():
+        return environment
+    if OPERATOR_CAPABILITY_ENV in os.environ:
+        raise RuntimeError("operator capability must not be supplied through the environment")
+    environment.pop(OPERATOR_CAPABILITY_ENV, None)
+    token = prepare_operator_capability(control_root)
+    if token is not None:
+        environment[OPERATOR_CAPABILITY_ENV] = token
+    return environment
 
 
 def _configure_device_access():
@@ -128,7 +344,7 @@ def activate_startup_script():
         if any(name in os.environ for name in (
                 "FULLMAG_STARTUP_SCRIPT", "FULLMAG_STARTUP_PROVENANCE",
                 "FULLMAG_STARTUP_API", "FULLMAG_STARTUP_PROVENANCE_SHA256",
-                "FULLMAG_STARTUP_HELPER_SHA256")):
+                "FULLMAG_STARTUP_HELPER_SHA256", "FULLMAG_STARTUP_RECEIPT_KEY")):
             raise RuntimeError("startup activation environment is incomplete")
         return None
     helper_path = Path("/opt/fullmag/docker_startup_script.py")
@@ -164,6 +380,11 @@ def activate_startup_script():
         docker_startup_script = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = docker_startup_script
         spec.loader.exec_module(docker_startup_script)
+        receipt_key = os.environ.get("FULLMAG_STARTUP_RECEIPT_KEY")
+        if receipt_key is not None:
+            docker_startup_script.ACTIVATION_RECEIPT_PATH = (
+                docker_startup_script.activation_receipt_path_for_key(receipt_key)
+            )
         try:
             return docker_startup_script.run_from_environment()
         except Exception as error:
@@ -251,6 +472,7 @@ def serve():
         configuration = service.ensure_configuration(paths)
     print("[fullmag-backend] Starting API and runtime service", flush=True)
     with service.accepted_reattach_api_input(paths, preflight=accepted_preflight) as (api_environment, restore_input):
+        api_environment = _api_environment_with_operator_capability(api_environment)
         api = subprocess.Popen(["/opt/fullmag/package/bin/fullmag-api"],
                                env=api_environment, stdin=restore_input)
     handle = None

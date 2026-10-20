@@ -36,6 +36,7 @@
   --fm-accent-soft: #2a2d52;
 
   --fm-chart-blue:    #89b4fa;
+  --fm-surface-magnetic: var(--fm-chart-blue);
   --fm-chart-green:   #a6e3a1;
   --fm-chart-yellow:  #f9e2af;
   --fm-surface-antenna: var(--fm-chart-yellow);
@@ -147,6 +148,7 @@
   --fm-accent-soft: #d3e5fd;
 
   --fm-chart-blue:    #1e66f5;
+  --fm-surface-magnetic: var(--fm-chart-blue);
   --fm-chart-green:   #40a02b;
   --fm-chart-yellow:  #df8e1d;
   --fm-surface-antenna: var(--fm-chart-yellow);

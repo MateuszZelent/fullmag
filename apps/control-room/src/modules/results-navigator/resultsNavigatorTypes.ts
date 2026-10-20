@@ -304,6 +304,12 @@ export interface FrequencyDomainNavigatorInput {
     states?: Partial<Record<"kittelFit" | "peaks" | "resonanceFits", NavigatorNodeStatus>>;
   } | null;
   identity: NavigatorIdentity | null;
+  /**
+   * True when `/simulation/stages/execution` answered 204/null: this runtime
+   * does not publish stage execution, so a missing run/stage identity is a
+   * neutral "not published" state rather than a defect.
+   */
+  stageExecutionUnpublished?: boolean;
   manifest: NavigatorManifestSummary | null;
   manifestState?: NavigatorNodeStatus;
   progress?: NavigatorProgressDescriptor | null;

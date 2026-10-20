@@ -33,6 +33,7 @@ This is not a second Fullmag product and not an FDM/FEM fork. It is one browser 
 21. `24-geometry-object-authoring-lifecycle.md` - end-to-end plan for adding scene objects, primitive display fallback, mesh rebuild synchronization, and explorer/ribbon/inspector/viewport integration.
 22. `25-viewport-3d-field-data-architecture.md` - production field-data contract for scalar surfaces, vector glyphs, colorbars, scoped requests, worker builds, and no-duplicate shader/vector payloads.
 23. `26-viewport-3d-surface-field-projection.md` - diagnostic projection modes for 3D surface shader coloring, including raw nodal, flat surface-face, and thickness-average views.
+24. `33-ui-glossary.md` - user-facing vocabulary (Universe/Airbox, Compute Study/Compute Fields/Run stage/Solve, Relax/Minimize), label rules, disabled reasons, empty-state CTAs and command feedback states.
 
 ## Authority
 

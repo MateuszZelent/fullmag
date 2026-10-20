@@ -179,6 +179,8 @@ pub(crate) async fn sync_current_live_script_with_request(
         "[fullmag-api] RX <- frontend script sync {}",
         script_path.display()
     );
+    let scene_revision = scene_document.as_ref().map(|document| document.revision);
+    ensure_expected_scene_revision(req.expected_scene_revision, scene_revision)?;
     let user_file = origin == SCRIPT_ORIGIN_USER_FILE;
     let managed_copy = user_file.then(|| managed_export_copy_path(&workspace_root, &script_path));
     if !has_input_script && req.overrides.is_some() {
@@ -250,6 +252,41 @@ pub(crate) async fn sync_current_live_script_with_request(
         response.written_to = "script".to_string();
         response.source_script_modified = has_input_script;
     }
+    // Bind the returned source to the scene revision it was rendered from:
+    // a concurrent scene commit during rendering invalidates this export.
+    let revision_after = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref().map(|document| document.revision));
+    if revision_after != scene_revision {
+        return Err(ApiError::conflict_with_code(
+            "scene_revision_mismatch",
+            format!(
+                "scene changed while the canonical script was rendered (revision {:?} -> {:?}); export again",
+                scene_revision, revision_after
+            ),
+        ));
+    }
+    let written_path = PathBuf::from(&response.script_path);
+    let source = match response.source.take() {
+        Some(source) => source,
+        None => run_blocking_script_operation(move || {
+            std::fs::read_to_string(&written_path).map_err(|error| {
+                ApiError::internal(format!(
+                    "failed to read canonical script '{}': {}",
+                    written_path.display(),
+                    error
+                ))
+            })
+        })
+        .await?,
+    };
+    response.source = Some(source);
+    response.scene_revision = scene_revision;
+    // No round-trip comparison runs on this path; never claim one.
+    response.fidelity = SCRIPT_SYNC_FIDELITY_NOT_CHECKED.to_string();
     if !has_input_script {
         let mut current = state.current_live_state.write().await;
         if let Some(snapshot) = current.as_mut() {
@@ -263,6 +300,24 @@ pub(crate) async fn sync_current_live_script_with_request(
         response.script_path
     );
     Ok(response)
+}
+
+fn ensure_expected_scene_revision(
+    expected: Option<u64>,
+    current: Option<u64>,
+) -> Result<(), ApiError> {
+    match expected {
+        Some(expected) if current != Some(expected) => Err(ApiError::conflict_with_code(
+            "scene_revision_mismatch",
+            format!(
+                "expected scene revision {expected}, current revision is {}",
+                current
+                    .map(|revision| revision.to_string())
+                    .unwrap_or_else(|| "unavailable".to_string())
+            ),
+        )),
+        _ => Ok(()),
+    }
 }
 
 pub(crate) async fn get_current_live_script_source(
@@ -286,17 +341,20 @@ pub(crate) async fn get_current_live_script_source(
         &script_path.to_string_lossy(),
     );
     let mut managed_copy_path = None;
-    let script_path = if origin == SCRIPT_ORIGIN_USER_FILE {
+    // For `user_file` sessions only the managed export copy is canonical.
+    // Without a copy the user's original is returned for viewing, flagged as
+    // non-canonical and without a managed copy path, so callers cannot
+    // mistake it for a Fullmag rendering.
+    let (script_path, canonical) = if origin == SCRIPT_ORIGIN_USER_FILE {
         let copy = managed_export_copy_path(&state.current_workspace_root, &script_path);
-        managed_copy_path = Some(copy.display().to_string());
-        // Prefer the canonical copy; without one the original is only read.
         if copy.is_file() {
-            copy
+            managed_copy_path = Some(copy.display().to_string());
+            (copy, true)
         } else {
-            script_path
+            (script_path, false)
         }
     } else {
-        script_path
+        (script_path, true)
     };
 
     if !script_path.is_file() {
@@ -325,6 +383,7 @@ pub(crate) async fn get_current_live_script_source(
         source,
         origin: origin.to_string(),
         managed_copy_path,
+        canonical,
     })
 }
 
@@ -1551,7 +1610,7 @@ study.relax(algorithm="projected_gradient_bb", max_steps=1, tolA=1e-30)
             );
         }
         let first =
-            sync_current_live_script_with_request(&state, ScriptSyncRequest { overrides: None })
+            sync_current_live_script_with_request(&state, ScriptSyncRequest::default())
                 .await
                 .expect("initial generated sync");
         assert_eq!(first.source_kind, "scene_document");
@@ -1566,7 +1625,7 @@ study.relax(algorithm="projected_gradient_bb", max_steps=1, tolA=1e-30)
             .expect("Run stage");
         }
         let second =
-            sync_current_live_script_with_request(&state, ScriptSyncRequest { overrides: None })
+            sync_current_live_script_with_request(&state, ScriptSyncRequest::default())
                 .await
                 .expect("generated re-export");
         assert_eq!(second.source_kind, "scene_document");
@@ -1578,6 +1637,7 @@ study.relax(algorithm="projected_gradient_bb", max_steps=1, tolA=1e-30)
             &state,
             ScriptSyncRequest {
                 overrides: Some(serde_json::json!({})),
+                ..ScriptSyncRequest::default()
             },
         )
         .await
@@ -1603,6 +1663,7 @@ study.relax(algorithm="projected_gradient_bb", max_steps=1, tolA=1e-30)
             &state,
             ScriptSyncRequest {
                 overrides: Some(serde_json::json!({})),
+                ..ScriptSyncRequest::default()
             },
         )
         .await

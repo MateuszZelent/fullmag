@@ -471,7 +471,7 @@ export function AirboxMeshParametersPanel({
           message:
             fdmReplanMessage?.message ??
             (isFdm
-              ? "Canonical Universe policy saved. FDM grid realization remains pending until the runtime lane resolves."
+              ? "Canonical Airbox policy saved. FDM grid realization remains pending until the runtime lane resolves."
               : "Canonical Airbox policy saved. The realized shared-domain mesh is stale until rebuilt."),
         });
       }
@@ -586,8 +586,8 @@ export function AirboxMeshParametersPanel({
           <FeedbackBanner
             kind="warning"
             message={runtimeLane === "fdm"
-              ? "Apply Universe Policy saves the canonical policy and queues an FDM grid replan."
-              : "Apply Universe Policy saves canonical authoring. FDM grid actions wait for runtime lane resolution."}
+              ? "Apply Airbox Policy saves the canonical policy and queues an FDM grid replan."
+              : "Apply Airbox Policy saves canonical authoring. FDM grid actions wait for runtime lane resolution."}
           />
         ) : null}
         {!draft.authoredConfigPresent && resource.effective_config ? (
@@ -602,15 +602,15 @@ export function AirboxMeshParametersPanel({
             message={
               isFdm
                 ? runtimeLane === "fdm"
-                  ? "Unapplied changes. Apply Universe Policy to save and queue the FDM grid replan."
-                  : "Unapplied changes. Apply Universe Policy to save the canonical policy."
+                  ? "Unapplied changes. Apply Airbox Policy to save and queue the FDM grid replan."
+                  : "Unapplied changes. Apply Airbox Policy to save the canonical policy."
                 : "Unapplied changes. Apply Airbox Policy or Apply & Build before trusting the current Airbox mesh."
             }
           />
         ) : null}
         <div className="fm-inspector-toolbar">
           <Button disabled={!sessionScopeKey || pending || validationError !== null} size="sm" type="button" variant="primary" onClick={() => void (inspectorEditSession?.apply() ?? applyPolicy())}>
-            Apply Universe Policy
+            Apply Airbox Policy
           </Button>
           {!isFdm && runtimeLane === "fem" ? (
             <Button disabled={!sessionScopeKey || pending || buildPending || validationError !== null} size="sm" type="button" variant="secondary" onClick={() => void build()}>

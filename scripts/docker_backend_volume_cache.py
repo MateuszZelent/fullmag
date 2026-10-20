@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import posixpath
 import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping
@@ -83,6 +84,7 @@ _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _VOLUME_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _HEX_OR_ID = re.compile(r"^[0-9a-f]{64}$")
+_CONTROL_NAMESPACE = re.compile(r"^namespaces/[0-9a-f]{32}$")
 _WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/].*$")
 
 
@@ -144,6 +146,16 @@ def _require_identifier(value: str, label: str) -> str:
     if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
         raise BackendVolumeCacheError(f"{label} is not a safe identifier")
     return value
+
+
+def _validated_control_namespace(value: Any) -> str:
+    if not isinstance(value, str) or (value and _CONTROL_NAMESPACE.fullmatch(value) is None):
+        raise BackendVolumeCacheError("control namespace must be empty or namespaces/<32 lowercase hexadecimal characters>")
+    return value
+
+
+def _control_namespace_subpath(value: str) -> str:
+    return _validated_control_namespace(value)
 
 
 def _source_root(value: str | os.PathLike[str]) -> str:
@@ -270,6 +282,11 @@ _labels = volume_labels
 
 def mount_specs(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
     volumes = profile["volume_names"]
+    control_namespace = _validated_control_namespace(profile.get("control_namespace", ""))
+    control_volume = {"nocopy": True}
+    control_subpath = _control_namespace_subpath(control_namespace)
+    if control_subpath:
+        control_volume["subpath"] = control_subpath
     return [
         {
             "type": "volume",
@@ -290,7 +307,7 @@ def mount_specs(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
             "source": COMPOSE_CONTROL_VOLUME,
             "target": CONTROL_TARGET,
             "read_only": False,
-            "volume": {"nocopy": True},
+            "volume": control_volume,
         },
     ]
 
@@ -393,12 +410,14 @@ def _plan(
     toolchain_image: str,
     cargo_profile: str,
     control_volume_name: str,
+    control_namespace: str,
 ) -> dict[str, Any]:
     repo_path = Path(repo)
     if not repo_path.is_absolute() or repo_path.is_symlink() or not repo_path.is_dir():
         raise BackendVolumeCacheError("repo must be an absolute real directory")
     image = _require_image_id(image, "runtime image")
     toolchain_image = _require_image_id(toolchain_image, "toolchain image")
+    control_namespace = _validated_control_namespace(control_namespace)
     worktree_id = _require_identifier(str(layout.get("worktree_id", "")), "worktree_id")
     project_id = _safe_project_id(layout)
     control_project = layout.get("compose_project")
@@ -429,6 +448,9 @@ def _plan(
         "runtime_image_id": image,
         "toolchain_image_id": toolchain_image,
         "control_project": control_project,
+        # This transport selector scopes only the control volume mount. It is
+        # intentionally absent from cache/unit/owner identity derivation.
+        "control_namespace": control_namespace,
         "volume_names": volume_names,
         "volume_roles": {
             BUILD_VOLUME_ROLE: {"target": BUILD_TARGET, "labels": _labels({
@@ -481,6 +503,7 @@ def prepare(
     toolchain_image: str,
     cargo_profile: str = "backend-dev",
     control_volume_name: str | None = None,
+    control_namespace: str = "",
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
 ) -> dict[str, Any]:
@@ -498,6 +521,7 @@ def prepare(
         layout, repo, image, runroot, source_root=source_root,
         toolchain_image=toolchain_image, cargo_profile=cargo_profile,
         control_volume_name=control_volume_name,
+        control_namespace=control_namespace,
     )
     if docker is not None:
         profile["volume_documents"] = ensure_volume_pair(
@@ -518,6 +542,7 @@ def prepare_ready(
     toolchain_image: str,
     cargo_profile: str = "backend-dev",
     control_volume_name: str | None = None,
+    control_namespace: str = "",
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
 ) -> dict[str, Any]:
@@ -539,6 +564,7 @@ def prepare_ready(
         toolchain_image=toolchain_image,
         cargo_profile=cargo_profile,
         control_volume_name=control_volume_name,
+        control_namespace=control_namespace,
         active_consumers=active_consumers,
     )
     if not isinstance(profile.get("volume_documents"), Mapping):
@@ -1134,6 +1160,110 @@ def validate_maintenance_overlay(document: Mapping[str, Any], profile: Mapping[s
             raise BackendVolumeCacheError(f"maintenance environment mismatch: {key}")
 
 
+def _declared_volume_subpath(
+    document: Mapping[str, Any], mount: Mapping[str, Any], target: str
+) -> tuple[bool, str | None]:
+    """Read an explicit subpath, correlating HostConfig to the inspected mount."""
+
+    values: list[str] = []
+
+    def collect(value: Any) -> None:
+        if value is None:
+            return
+        if not isinstance(value, str):
+            raise BackendVolumeCacheError("control mount subpath is malformed")
+        values.append(value)
+
+    for key in ("SubPath", "Subpath", "subpath"):
+        if key in mount:
+            collect(mount.get(key))
+    for key in ("VolumeOptions", "volume_options", "volume"):
+        options = mount.get(key)
+        if isinstance(options, Mapping):
+            for subpath_key in ("SubPath", "Subpath", "subpath"):
+                if subpath_key in options:
+                    collect(options.get(subpath_key))
+
+    host_config = document.get("HostConfig")
+    host_mounts = host_config.get("Mounts") if isinstance(host_config, Mapping) else None
+    if host_mounts is not None and not isinstance(host_mounts, list):
+        raise BackendVolumeCacheError("backend container host mount inventory is malformed")
+    if isinstance(host_mounts, list):
+        matches = [
+            item for item in host_mounts
+            if isinstance(item, Mapping) and item.get("Target") == target
+        ]
+        if len(matches) > 1:
+            raise BackendVolumeCacheError("control mount has ambiguous HostConfig entries")
+        if matches:
+            host_mount = matches[0]
+            if (host_mount.get("Type") != "volume"
+                    or host_mount.get("Source") != mount.get("Name", mount.get("name"))):
+                raise BackendVolumeCacheError("control mount HostConfig identity differs")
+            options = host_mount.get("VolumeOptions")
+            if options is not None and not isinstance(options, Mapping):
+                raise BackendVolumeCacheError("control mount HostConfig options are malformed")
+            if isinstance(options, Mapping):
+                for key in ("Subpath", "SubPath", "subpath"):
+                    if key in options:
+                        collect(options.get(key))
+
+    if not values:
+        return False, None
+    if any(value != values[0] for value in values[1:]):
+        raise BackendVolumeCacheError("control mount subpath observations disagree")
+    return True, values[0]
+
+
+def _validate_control_mount_subpath(
+    document: Mapping[str, Any],
+    mount: Mapping[str, Any],
+    target: str,
+    expected_name: str,
+    expected_subpath: str,
+    volume_documents: Any,
+) -> None:
+    if mount.get("Name", mount.get("name")) != expected_name:
+        raise BackendVolumeCacheError("backend control mount volume identity changed")
+    explicit, observed = _declared_volume_subpath(document, mount, target)
+    if explicit and observed != expected_subpath:
+        raise BackendVolumeCacheError("backend control mount subpath changed")
+
+    root_mountpoint = None
+    control_volume = (
+        volume_documents.get(CONTROL_VOLUME_ROLE)
+        if isinstance(volume_documents, Mapping) else None
+    )
+    if isinstance(control_volume, Mapping):
+        if control_volume.get("Name") != expected_name:
+            raise BackendVolumeCacheError("backend control volume receipt name changed")
+        root_mountpoint = _validate_mountpoint(control_volume.get("Mountpoint"))
+
+    source = mount.get("Source", mount.get("source"))
+    if source is not None and not isinstance(source, str):
+        raise BackendVolumeCacheError("backend control mount source is malformed")
+    if root_mountpoint is not None and source:
+        normalized_source = posixpath.normpath(source)
+        expected_root = posixpath.normpath(root_mountpoint)
+        expected_source = posixpath.normpath(
+            posixpath.join(root_mountpoint, expected_subpath)
+            if expected_subpath else root_mountpoint
+        )
+        if normalized_source not in {expected_root, expected_source}:
+            raise BackendVolumeCacheError("backend control mount source does not match its volume subpath")
+
+    if explicit:
+        return
+    if root_mountpoint is None or not source:
+        raise BackendVolumeCacheError("backend control mount subpath is not provable")
+    expected_source = posixpath.normpath(
+        posixpath.join(root_mountpoint, expected_subpath)
+        if expected_subpath else root_mountpoint
+    )
+    if posixpath.normpath(source) != expected_source:
+        raise BackendVolumeCacheError("backend control mount source does not prove its exact subpath")
+
+
 def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) -> dict[str, Any]:
     """Fail closed unless the backend owns exactly the three named volume mounts."""
 
@@ -1165,6 +1295,11 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
     for key, value in _cache_environment(profile).items():
         if env.get(key) != value:
             raise BackendVolumeCacheError(f"backend container cache environment mismatch: {key}")
+    control_namespace = _validated_control_namespace(profile.get("control_namespace", ""))
+    observed_namespace = env.get("FULLMAG_CONTROL_NAMESPACE")
+    if ((control_namespace and observed_namespace != control_namespace)
+            or (observed_namespace not in {None, ""} and observed_namespace != control_namespace)):
+        raise BackendVolumeCacheError("backend container control namespace differs from its cache profile")
     labels = config.get("Labels")
     if not isinstance(labels, Mapping):
         raise BackendVolumeCacheError("backend container has no cache labels")
@@ -1212,6 +1347,21 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
         matching[target] = mount
     if set(matching) != set(expected):
         raise BackendVolumeCacheError("backend container is missing a cache volume mount")
+    raw_volume_documents = profile.get("volume_documents")
+    if raw_volume_documents is not None and not isinstance(raw_volume_documents, Mapping):
+        raise BackendVolumeCacheError("backend cache volume inventory is malformed")
+    volume_documents = (
+        _validate_volume_documents(raw_volume_documents, profile)
+        if isinstance(raw_volume_documents, Mapping) else None
+    )
+    _validate_control_mount_subpath(
+        document,
+        matching[CONTROL_TARGET],
+        CONTROL_TARGET,
+        profile["volume_names"][CONTROL_VOLUME_ROLE],
+        _control_namespace_subpath(control_namespace),
+        volume_documents,
+    )
     return {
         "schema": SCHEMA,
         "state": "attested",

@@ -616,8 +616,8 @@ const studyTab: RibbonTabContent = {
       actions: [
         { id: "study-sweep-relax",    icon: icon(BarChart3), label: "Sweep+Relax",   disabled: true, iconColor: "text-violet-400" },
         { id: "study-sweep-snap",     icon: icon(Camera),    label: "Sweep+Snap",    disabled: true, iconColor: "text-sky-400" },
-        { id: "study-relax-run",      icon: icon(Play),      label: "Relaxâ†’Run",     disabled: true, iconColor: "text-emerald-400" },
-        { id: "study-relax-eigen",    icon: icon(Sigma),     label: "Relaxâ†’Eigen",   iconColor: "text-amber-400",  disabled: true },
+        { id: "study-relax-run",      icon: icon(Play),      label: "Relax → Run",     disabled: true, iconColor: "text-emerald-400" },
+        { id: "study-relax-eigen",    icon: icon(Sigma),     label: "Relax → Eigen",   iconColor: "text-amber-400",  disabled: true },
         { id: "study-param-sweep",    icon: icon(BarChart3), label: "Param Sweep",   disabled: true, iconColor: "text-cyan-400" },
         { id: "study-current-sweep",  icon: icon(Zap),       label: "Current Sweep", disabled: true, iconColor: "text-yellow-400" },
       ],
@@ -648,10 +648,10 @@ const studyTab: RibbonTabContent = {
       subtitle: "runtime",
       tone: "compute",
       actions: [
-        { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Evaluate active fields for the current magnetization" },
-        { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Evaluate current energies without changing magnetization" },
+        { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Compute Fields: materialize field quantities for the current magnetization without running the study" },
+        { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Compute Energies: evaluate energy terms for the current magnetization without running the study" },
         { id: "study.prepare-live", icon: icon(Layers3), label: "Prepare", iconColor: C.blue, tooltip: "Materialize the current Live scene preparation receipt without starting the solver" },
-        { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Submit the study solve command" },
+        { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Compute Study: run the study stages on the solver (same as Study > Compute Study, F5)" },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
         { id: "study.save-checkpoint", icon: icon(Save), label: "Save Checkpoint", iconColor: C.blue },
@@ -1715,14 +1715,18 @@ function applyCommandStateToMenuNode(
       context,
       nodeCommandContext,
     );
-    const disabledReason = disabledByCommand
-      ? context.commands?.get(cmdId)?.disabledReason?.(nodeCommandContext)
-      : null;
+    const disabledReason = disabledByMissingCommand
+      ? `Command unavailable: ${node.label}`
+      : disabledByCommand
+        ? context.commands?.get(cmdId)?.disabledReason?.(nodeCommandContext) ??
+          `Command unavailable: ${node.label}`
+        : null;
 
     return {
       ...node,
       disabled: node.disabled || disabledByMissingCommand || disabledByCommand,
-      tooltip: node.tooltip ?? disabledReason ?? undefined,
+      // Match action precedence: while disabled, the reason replaces the static tooltip.
+      tooltip: disabledReason ?? node.tooltip,
     };
   }
 

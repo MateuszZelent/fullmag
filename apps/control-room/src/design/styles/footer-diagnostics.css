@@ -334,3 +334,29 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Mesh Jobs: published `last_build_error` (unstructured producer text). */
+.fm-footer-mesh-jobs__error {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--fm-space-1);
+  border: 1px solid color-mix(in srgb, var(--fm-danger) 48%, var(--fm-border-default));
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-danger) 10%, var(--fm-bg-panel));
+  padding: var(--fm-space-1) var(--fm-space-2);
+}
+
+.fm-footer-mesh-jobs__error-label {
+  color: var(--fm-danger);
+  font-size: var(--fm-font-size-2xs);
+  font-weight: 700;
+}
+
+.fm-footer-mesh-jobs__error-message {
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

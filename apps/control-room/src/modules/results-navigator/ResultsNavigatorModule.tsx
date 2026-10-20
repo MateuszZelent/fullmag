@@ -433,6 +433,10 @@ function CurrentResultsNavigator({
       }),
     [currentRun.data, stageExecution.data],
   );
+  // 204/null stage execution: the runtime does not publish stage progress.
+  const stageExecutionUnpublished =
+    stageExecution.data === null &&
+    (stageExecution.status === "ready" || stageExecution.status === "idle");
   const input = useMemo<FrequencyDomainNavigatorInput>(
     () => {
       const typedSpectrum = navigatorSpectrumFromResource(spectrum.data);
@@ -456,6 +460,7 @@ function CurrentResultsNavigator({
       return {
         branches: typedBranches,
         identity,
+        stageExecutionUnpublished,
         manifest: navigatorManifestFromResource(manifest.data),
         manifestState: manifest.data
           ? undefined
@@ -527,6 +532,7 @@ function CurrentResultsNavigator({
       identity,
       manifest.data,
       manifest.status,
+      stageExecutionUnpublished,
       response,
       responseDiagnostics,
       responseProgress.data,

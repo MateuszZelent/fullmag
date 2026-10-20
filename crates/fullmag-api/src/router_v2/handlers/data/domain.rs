@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::fields::{load_fdm_multilayer_airbox_carrier, FdmMultilayerAirboxCarrier};
+use super::fields::{load_fdm_multilayer_airbox_carrier, load_fdm_multilayer_airbox_carrier_for_quantity, FdmMultilayerAirboxCarrier};
 use super::multilayer_identity::correlate_multilayer_layers;
 use super::resolved_spatial_field::{
     load_fdm_multilayer_native_layer_membership, native_layer_membership_generation_id,
@@ -756,7 +756,17 @@ fn fdm_multilayer_airbox_resource(
 ) -> FdmMultilayerAirboxResource {
     match load_fdm_multilayer_airbox_carrier(snapshot) {
         Ok(Some(carrier)) => {
-            fdm_multilayer_airbox_resource_from_carrier(carrier, observation_revision)
+            let mut resource = fdm_multilayer_airbox_resource_from_carrier(carrier, observation_revision);
+            match load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, "H_eff") {
+                Ok(Some(effective)) if resource.carrier_fingerprint.as_deref()
+                    == Some(format!("sha256:{}", effective.carrier_fingerprint).as_str()) => {
+                    resource.h_eff_available = true;
+                    resource.h_eff_unavailable_reason = None;
+                }
+                Err(reason) => resource.h_eff_unavailable_reason = Some(reason),
+                _ => {}
+            }
+            resource
         }
         Ok(None) => unavailable_fdm_multilayer_airbox_resource("airbox_carrier_missing"),
         Err(reason) => {
@@ -774,13 +784,14 @@ fn fdm_multilayer_airbox_resource_from_carrier(
         h_demag_available: true,
         h_eff_available: false,
         unavailable_reason: None,
-        h_eff_unavailable_reason: Some("fdm_multilayer_airbox_h_eff_unavailable.v1".into()),
+        h_eff_unavailable_reason: Some(carrier.unavailable_quantities.get("H_eff").cloned()
+            .unwrap_or_else(|| "fdm_multilayer_airbox_h_eff_not_materialized".into())),
         cells: Some(carrier.cells),
         origin_m: Some(carrier.origin_m),
         cell_size_m: Some(carrier.cell_size_m),
         carrier_fingerprint: Some(format!("sha256:{}", carrier.carrier_fingerprint)),
         sample_count: Some(carrier.sample_count as u64),
-        value_count: Some(carrier.values.len() as u64),
+        value_count: (carrier.sample_count as u64).checked_mul(3),
         // The field-plane carrier revision is content-derived and must match
         // the FMVP topology revision. `observation_revision` is the session
         // resource revision, not the carrier identity.

@@ -4,6 +4,7 @@ import {
   BufferGeometry,
   CylinderGeometry,
   ExtrudeGeometry,
+  Matrix4,
   Path,
   Shape,
   SphereGeometry,
@@ -17,6 +18,7 @@ import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type {
   Viewport3DBoxCylinderDifferencePreview,
+  Viewport3DCylinderCylinderDifferencePreview,
   Viewport3DPrimitiveObject,
 } from "../viewport3dPrimitiveModel";
 
@@ -122,8 +124,17 @@ export function createPrimitiveObjectGeometry(
     geometry.computeVertexNormals();
     return geometry;
   }
-  if (object.kind === "box-cylinder-difference" && object.csgPreview) {
+  if (
+    object.kind === "box-cylinder-difference" &&
+    object.csgPreview?.kind === "box-cylinder-difference"
+  ) {
     return createBoxCylinderDifferenceGeometry(object.csgPreview);
+  }
+  if (
+    object.kind === "cylinder-cylinder-difference" &&
+    object.csgPreview?.kind === "cylinder-cylinder-difference"
+  ) {
+    return createCylinderCylinderDifferenceGeometry(object.csgPreview);
   }
 
   const [x, y, z] = object.bounds.size;
@@ -140,12 +151,23 @@ export function createPrimitiveObjectGeometry(
 
 /** Presentation only: a literal user override precedes the authored antenna role default. */
 export function primitiveObjectSurfaceColor(
-  object: Pick<Viewport3DPrimitiveObject, "role">,
+  object: Pick<Viewport3DPrimitiveObject, "role"> &
+    Partial<Pick<Viewport3DPrimitiveObject, "objectId">>,
   settings: VisualizationTargetSettings,
   colors: Viewport3DColors,
+  assignments?: ReadonlyMap<string, number>,
 ) {
-  const resolved = resolvePrimitiveSurfaceColor(object.role, settings);
+  const resolved = resolvePrimitiveSurfaceColor(
+    object.role,
+    settings,
+    object.objectId,
+    assignments,
+  );
+  if (resolved.paletteIndex !== undefined) {
+    return colors.primitivePalette?.[resolved.paletteIndex] ?? colors.accent;
+  }
   if (resolved.source === "antenna-theme") return colors.antenna ?? colors.mesh;
+  if (resolved.source === "magnetic-theme") return colors.accent;
   if (resolved.source === "object-theme") return colors.mesh;
   return resolved.color;
 }
@@ -194,6 +216,45 @@ function createBoxCylinderDifferenceGeometry(
   return geometry;
 }
 
+function createCylinderCylinderDifferenceGeometry(
+  preview: Viewport3DCylinderCylinderDifferencePreview,
+): BufferGeometry {
+  const axisIndex = cardinalAxisIndex(preview.cylinderAxis);
+  if (axisIndex === null) {
+    const [x, y, z] = preview.boundsSize;
+    return new BoxGeometry(x, y, z);
+  }
+
+  const planeAxes = planeAxesForCardinalAxis(axisIndex);
+  const innerCenterX =
+    preview.innerCenter[planeAxes[0]] - preview.outerCenter[planeAxes[0]];
+  const innerCenterY =
+    preview.innerCenter[planeAxes[1]] - preview.outerCenter[planeAxes[1]];
+  const shape = new Shape();
+  shape.absarc(0, 0, preview.outerRadius, 0, Math.PI * 2, false);
+  const hole = new Path();
+  hole.absarc(
+    innerCenterX,
+    innerCenterY,
+    preview.innerRadius,
+    0,
+    Math.PI * 2,
+    true,
+  );
+  shape.holes.push(hole);
+
+  const geometry = new ExtrudeGeometry(shape, {
+    bevelEnabled: false,
+    curveSegments: 64,
+    depth: preview.outerHeight,
+  });
+  geometry.translate(0, 0, -preview.outerHeight / 2);
+  if (axisIndex !== 2) {
+    remapExtrudedCardinalAxisGeometry(geometry, axisIndex);
+  }
+  return geometry;
+}
+
 function cardinalAxisIndex(axis: readonly [number, number, number]): 0 | 1 | 2 | null {
   const abs = axis.map((value) => Math.abs(value)) as [number, number, number];
   const max = Math.max(...abs);
@@ -217,21 +278,22 @@ function remapExtrudedCardinalAxisGeometry(
   geometry: BufferGeometry,
   axisIndex: 0 | 1,
 ): void {
-  const position = geometry.getAttribute("position") as BufferAttribute | undefined;
-  if (!position) return;
-
-  for (let index = 0; index < position.count; index += 1) {
-    const localX = position.getX(index);
-    const localY = position.getY(index);
-    const localZ = position.getZ(index);
-    if (axisIndex === 0) {
-      position.setXYZ(index, localZ, localX, localY);
-    } else {
-      position.setXYZ(index, localX, localZ, localY);
-    }
-  }
-
-  position.needsUpdate = true;
+  // Rotate normals together with positions. Both maps preserve handedness;
+  // swapping only Y/Z would invert the winding of an extrusion along Y.
+  const rotation = axisIndex === 0
+    ? new Matrix4().set(
+        0, 0, 1, 0,
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 0, 1,
+      )
+    : new Matrix4().set(
+        1, 0, 0, 0,
+        0, 0, -1, 0,
+        0, 1, 0, 0,
+        0, 0, 0, 1,
+      );
+  geometry.applyMatrix4(rotation);
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
 }

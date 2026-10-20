@@ -1125,7 +1125,13 @@ def _recreate_after_drift(group: RetainedGroup, args: argparse.Namespace, *, dra
 
 
 def _reconcile_group(group: RetainedGroup, args: argparse.Namespace) -> None:
-    from docker_volume_dev import restart_idle, resume
+    from docker_volume_dev import (
+        INCLUDE_UNTRACKED_ENV,
+        normalize_include_untracked_paths,
+        parse_include_untracked_json,
+        restart_idle,
+        resume,
+    )
 
     mode = _service_mode(group)
     if mode in {"running-healthy", "backend-running-frontend-stopped"}:
@@ -1144,6 +1150,27 @@ def _reconcile_group(group: RetainedGroup, args: argparse.Namespace) -> None:
                 "Retained script-output mapping changed while the backend is unhealthy; "
                 "automatic up will not interrupt its pending operation"
             ) from error
+        _recreate_after_drift(group, args, drain=group.backend_running)
+        return
+    pinned_environment = _backend_environment(group.backend)
+    pinned_allowlist = parse_include_untracked_json(
+        pinned_environment.get(INCLUDE_UNTRACKED_ENV, "[]")
+    )
+    requested_allowlist = getattr(args, "include_untracked", None)
+    desired_allowlist = (
+        pinned_allowlist
+        if requested_allowlist is None
+        else normalize_include_untracked_paths(requested_allowlist)
+    )
+    # Carry the retained value through resume/recreate when the CLI option was
+    # omitted; an explicit empty list remains the programmatic clear operation.
+    args.include_untracked = desired_allowlist
+    if desired_allowlist != pinned_allowlist:
+        if mode == "busy-unhealthy-backend":
+            raise DockerDevUpError(
+                "Live-source allowlist changed while the backend is unhealthy; "
+                "automatic up will not interrupt a pending build or unknown runtime"
+            )
         _recreate_after_drift(group, args, drain=group.backend_running)
         return
     if mode == "busy-unhealthy-backend":

@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { parseQuantityInput } from "@/kernel/authoring/object-edit/quantityInput";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { FormField } from "../primitives/FormField";
 import {
@@ -704,32 +705,49 @@ function FrequencyResponseStageDraftFields({
 }
 
 function frequencyDraftPreview(value: string | null | undefined): string {
-  const parsed = Number(value ?? "");
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = parseQuantityInput(String(value ?? ""), "frequency");
+  if (parsed.parseStatus !== "valid" || parsed.parsedSI === null || parsed.parsedSI <= 0) {
     return "Stored as Hz; preview not available";
   }
-  return `Stored as Hz; preview ${formatFrequencyHz(parsed)}`;
+  return `Stored as Hz; preview ${formatFrequencyHz(parsed.parsedSI)}`;
 }
 
 function frequencyListDraftPreview(value: string | null | undefined): string {
-  const frequencies = parseNumberList(value).filter(
-    (entry) => Number.isFinite(entry) && entry > 0,
-  );
+  const { invalid, values } = parseFrequencyList(value);
+  const frequencies = values.filter((entry) => entry > 0);
+  const invalidNote = invalid.length
+    ? ` Not recognized: ${invalid.join(", ")}.`
+    : "";
   if (!frequencies.length) {
-    return "Comma or whitespace separated values in Hz.";
+    return `Comma or whitespace separated values in Hz (attached units such as 10GHz are accepted).${invalidNote}`;
   }
   return `Stored as Hz; preview ${frequencies
     .map((entry) => formatFrequencyHz(entry))
-    .join(", ")}`;
+    .join(", ")}.${invalidNote}`;
 }
 
-function parseNumberList(value: string | null | undefined): number[] {
-  return String(value ?? "")
-    .split(/[\s,;]+/)
-    .flatMap((entry) => {
-      const parsed = Number(entry.trim());
-      return Number.isFinite(parsed) ? [parsed] : [];
-    });
+/**
+ * Splits a frequency list like the authoring model does (commas, semicolons or
+ * whitespace; a unit must be attached, e.g. "10GHz") and keeps unparsable
+ * tokens so the user sees them instead of having them silently dropped.
+ */
+function parseFrequencyList(value: string | null | undefined): {
+  invalid: string[];
+  values: number[];
+} {
+  const invalid: string[] = [];
+  const values: number[] = [];
+  for (const token of String(value ?? "").split(/[,;\s]+/)) {
+    const trimmed = token.trim();
+    if (!trimmed) continue;
+    const parsed = parseQuantityInput(trimmed, "frequency");
+    if (parsed.parseStatus === "valid" && parsed.parsedSI !== null) {
+      values.push(parsed.parsedSI);
+    } else {
+      invalid.push(trimmed);
+    }
+  }
+  return { invalid, values };
 }
 
 function CalculationModeDraftField({

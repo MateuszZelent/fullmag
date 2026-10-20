@@ -56,9 +56,10 @@ use crate::schedules::{
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FdmCpuEvaluationTelemetry, FdmCpuStateLayoutProvenance,
-    FdmCpuStepTransactionTelemetry, FdmFftRuntimeTelemetry, FieldSnapshot, LivePreviewRequest,
-    LiveStepConsumer, RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats,
-    StepUpdate,
+    FdmCpuStepTransactionTelemetry, FdmFftRuntimeTelemetry, FieldSnapshot,
+    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
+    LivePreviewRequest, LiveStepConsumer, RunError, RunResult, RunStatus, StateObservables,
+    StepAction, StepStats, StepUpdate,
 };
 #[cfg(test)]
 use crate::FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA;
@@ -666,11 +667,36 @@ pub(crate) fn snapshot_vector_fields_from_state(
     oersted_field: Option<&[Vector3]>,
     antenna_field: Option<&[Vector3]>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
+    snapshot_vector_fields_from_state_with_additional_effective_field(
+        problem,
+        state,
+        quantities,
+        request,
+        grid,
+        active_mask,
+        oersted_field,
+        antenna_field,
+        None,
+    )
+}
+
+fn snapshot_vector_fields_from_state_with_additional_effective_field(
+    problem: &ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    quantities: &[&str],
+    request: &LivePreviewRequest,
+    grid: [u32; 3],
+    active_mask: Option<&[bool]>,
+    oersted_field: Option<&[Vector3]>,
+    antenna_field: Option<&[Vector3]>,
+    additional_effective_field: Option<&[Vector3]>,
+) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let mut direct_fields = DirectFieldSnapshotCache::new_with_source_fields(
         problem,
         state,
         oersted_field,
         antenna_field,
+        additional_effective_field,
     );
     let mut observables = None;
     let mut cached = Vec::new();
@@ -725,6 +751,330 @@ pub(crate) fn snapshot_vector_fields_from_state(
     }
 
     Ok(cached)
+}
+
+fn capture_full_active_cpu_fields(
+    problem: &mut ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    plan: &FdmPlanIR,
+    grid: [u32; 3],
+    source_step: u64,
+    source_time_seconds: f64,
+    accepted_thermal_context: Option<(u64, f64)>,
+    spin_transport: Option<&FdmSpinTransportWorkflow>,
+    config_revision: u64,
+) -> Result<Vec<crate::LivePreviewField>, RunError> {
+    let quantities = field_materialization_quantity_ids();
+    let quantities = active_fdm_preview_quantities(
+        crate::dispatch::FdmEngine::CpuReference,
+        plan,
+        &quantities,
+    );
+    capture_cpu_fields_for_quantities(
+        problem,
+        state,
+        plan,
+        grid,
+        source_step,
+        source_time_seconds,
+        accepted_thermal_context,
+        spin_transport,
+        config_revision,
+        &quantities,
+    )
+}
+
+fn capture_one_active_cpu_field(
+    problem: &mut ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    plan: &FdmPlanIR,
+    grid: [u32; 3],
+    source_step: u64,
+    source_time_seconds: f64,
+    accepted_thermal_context: Option<(u64, f64)>,
+    spin_transport: Option<&FdmSpinTransportWorkflow>,
+    config_revision: u64,
+    quantity: &str,
+) -> Result<crate::LivePreviewField, RunError> {
+    if quantity == "m" {
+        let capture_started = Instant::now();
+        let request = LivePreviewRequest {
+            revision: config_revision,
+            quantity: "m".to_string(),
+            component: "3D".to_string(),
+            layer: 0,
+            all_layers: true,
+            every_n: 1,
+            x_chosen_size: 0,
+            y_chosen_size: 0,
+            auto_scale_enabled: false,
+            max_points: 0,
+        };
+        let mut field = build_grid_preview_field(
+            &request,
+            state.magnetization(),
+            grid,
+            plan.active_mask.as_deref(),
+        );
+        field.config_revision = config_revision;
+        field.source_step = source_step;
+        field.source_time_seconds = Some(source_time_seconds);
+        field.source_revision = config_revision;
+        field.materialized_at_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        field.materialization_wall_time_ns = capture_started.elapsed().as_nanos() as u64;
+        return Ok(field);
+    }
+
+    let fields = capture_cpu_fields_for_quantities(
+        problem,
+        state,
+        plan,
+        grid,
+        source_step,
+        source_time_seconds,
+        accepted_thermal_context,
+        spin_transport,
+        config_revision,
+        &[quantity],
+    )?;
+    if fields.len() != 1 {
+        return Err(RunError {
+            message: format!(
+                "CPU FDM terminal observation did not produce active quantity '{quantity}'"
+            ),
+        });
+    }
+    Ok(fields.into_iter().next().expect("one captured field"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_cpu_fields_for_quantities(
+    problem: &mut ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    plan: &FdmPlanIR,
+    grid: [u32; 3],
+    source_step: u64,
+    source_time_seconds: f64,
+    accepted_thermal_context: Option<(u64, f64)>,
+    spin_transport: Option<&FdmSpinTransportWorkflow>,
+    config_revision: u64,
+    requested_quantities: &[&str],
+) -> Result<Vec<crate::LivePreviewField>, RunError> {
+    let quantities = active_fdm_preview_quantities(
+        crate::dispatch::FdmEngine::CpuReference,
+        plan,
+        requested_quantities,
+    );
+    let request = LivePreviewRequest {
+        revision: config_revision,
+        quantity: "m".to_string(),
+        component: "3D".to_string(),
+        layer: 0,
+        all_layers: true,
+        every_n: 1,
+        x_chosen_size: 0,
+        y_chosen_size: 0,
+        auto_scale_enabled: false,
+        max_points: 0,
+    };
+
+    let accepted_transport_evaluation = if let Some(workflow) = spin_transport {
+        let accepted = workflow.accepted().ok_or_else(|| RunError {
+            message: "CPU FDM full-field capture has no accepted spin-transport endpoint".into(),
+        })?;
+        if accepted.evaluated_time_s != source_time_seconds {
+            return Err(RunError {
+                message: format!(
+                    "CPU FDM full-field capture transport endpoint time {} does not match source time {}",
+                    accepted.evaluated_time_s, source_time_seconds
+                ),
+            });
+        }
+        Some(accepted)
+    } else {
+        None
+    };
+    let transport_oersted_field = accepted_transport_evaluation
+        .and_then(|accepted| accepted.combined_oersted_field_apm.as_deref());
+    if transport_oersted_field.is_some_and(|field| {
+        field.len() != state.magnetization().len()
+            || field.iter().flatten().any(|value| !value.is_finite())
+    }) {
+        return Err(RunError {
+            message: "CPU FDM full-field capture received an invalid accepted transport Oersted field".into(),
+        });
+    }
+    if let Some((accepted_thermal_step, accepted_thermal_dt)) = accepted_thermal_context {
+        if !accepted_thermal_dt.is_finite()
+            || accepted_thermal_dt <= 0.0
+            || accepted_thermal_step.checked_add(1) != Some(problem.thermal_step())
+        {
+            return Err(RunError {
+                message: "CPU FDM full-field capture thermal context does not match the latest accepted step".into(),
+            });
+        }
+    }
+
+    // Evaluate dynamic per-node sources at this accepted endpoint while keeping
+    // the live problem, state, thermal seed, constraints, and workspaces intact.
+    // Coupled transport publishes its accepted Oersted realization separately
+    // from the plan's antenna/Oersted per-node field.
+    let previous_per_node_field = std::mem::replace(
+        &mut problem.terms.per_node_field,
+        resolved_per_node_external_field(plan, source_time_seconds),
+    );
+    let previous_thermal_step = problem.thermal_step();
+    let previous_thermal_dt = problem.thermal_dt;
+    if let Some((accepted_thermal_step, accepted_thermal_dt)) = accepted_thermal_context {
+        problem.restore_thermal_step(accepted_thermal_step);
+        problem.thermal_dt = accepted_thermal_dt;
+    }
+    let capture_started = Instant::now();
+    let capture_result = (|| {
+        let antenna_field = resolved_antenna_zeeman_field(plan, source_time_seconds);
+        let mut oersted_field = resolved_oersted_visual_field_for_count(
+            problem,
+            plan,
+            state.magnetization().len(),
+            source_time_seconds,
+            &antenna_field,
+        );
+        if let Some(transport_oersted_field) = transport_oersted_field {
+            for (value, transport_value) in oersted_field.iter_mut().zip(transport_oersted_field) {
+                value[0] += transport_value[0];
+                value[1] += transport_value[1];
+                value[2] += transport_value[2];
+            }
+        }
+        snapshot_vector_fields_from_state_with_additional_effective_field(
+            problem,
+            state,
+            &quantities,
+            &request,
+            grid,
+            plan.active_mask.as_deref(),
+            Some(&oersted_field),
+            Some(&antenna_field),
+            transport_oersted_field,
+        )
+    })();
+    problem.terms.per_node_field = previous_per_node_field;
+    problem.restore_thermal_step(previous_thermal_step);
+    problem.thermal_dt = previous_thermal_dt;
+    let mut fields = capture_result?;
+    let materialization_wall_time_ns = capture_started.elapsed().as_nanos() as u64;
+    let materialized_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    for field in &mut fields {
+        field.config_revision = config_revision;
+        field.source_step = source_step;
+        field.source_time_seconds = Some(source_time_seconds);
+        field.source_revision = config_revision;
+        field.materialized_at_unix_ms = materialized_at_unix_ms;
+        field.materialization_wall_time_ns = materialization_wall_time_ns;
+    }
+    Ok(fields)
+}
+
+fn accepted_cpu_thermal_capture_context(
+    problem: &ExchangeLlgProblem,
+    accepted_dt: f64,
+    coupled_transport: bool,
+    is_direct_minimization: bool,
+) -> Result<Option<(u64, f64)>, RunError> {
+    if is_direct_minimization {
+        return Ok(None);
+    }
+    let accepted_thermal_step = problem.thermal_step().checked_sub(1).ok_or_else(|| RunError {
+        message: "CPU FDM accepted full-field capture has no preceding thermal interval".into(),
+    })?;
+    let thermal_dt = if coupled_transport {
+        // Coupled stage methods evaluate every trial against this fixed,
+        // authored thermal interval and only advance its counter on commit.
+        problem.thermal_dt
+    } else {
+        // Ordinary integrators use an attempt-local override that is cleared
+        // before returning; the accepted report carries the realized dt.
+        accepted_dt
+    };
+    if !thermal_dt.is_finite() || thermal_dt <= 0.0 {
+        return Err(RunError {
+            message: "CPU FDM accepted full-field capture has an invalid thermal timestep".into(),
+        });
+    }
+    Ok(Some((accepted_thermal_step, thermal_dt)))
+}
+
+fn mark_full_fields_materialized(stats: &mut StepStats, fields: &[LivePreviewField]) {
+    for field in fields {
+        stats
+            .field_materialization_states
+            .retain(|status| status.quantity != field.quantity);
+        stats
+            .field_materialization_states
+            .push(LiveFieldMaterializationStatus {
+                quantity: field.quantity.clone(),
+                source_step: field.source_step,
+                request_revision: field.source_revision,
+                state: LiveFieldMaterializationState::Complete,
+                error: None,
+            });
+    }
+}
+
+fn mark_full_fields_materialization_error(
+    stats: &mut StepStats,
+    plan: &FdmPlanIR,
+    source_step: u64,
+    request_revision: u64,
+    error: &str,
+) {
+    let quantities = field_materialization_quantity_ids();
+    let quantities = active_fdm_preview_quantities(
+        crate::dispatch::FdmEngine::CpuReference,
+        plan,
+        &quantities,
+    );
+    for quantity in quantities {
+        stats
+            .field_materialization_states
+            .retain(|status| status.quantity != quantity);
+        stats
+            .field_materialization_states
+            .push(LiveFieldMaterializationStatus {
+                quantity: quantity.to_string(),
+                source_step,
+                request_revision,
+                state: LiveFieldMaterializationState::Error,
+                error: Some(error.to_string()),
+            });
+    }
+}
+
+fn mark_field_materialization_error(
+    stats: &mut StepStats,
+    quantity: &str,
+    source_step: u64,
+    request_revision: u64,
+    error: &str,
+) {
+    stats
+        .field_materialization_states
+        .retain(|status| status.quantity != quantity);
+    stats
+        .field_materialization_states
+        .push(LiveFieldMaterializationStatus {
+            quantity: quantity.to_string(),
+            source_step,
+            request_revision,
+            state: LiveFieldMaterializationState::Error,
+            error: Some(error.to_string()),
+        });
 }
 
 fn build_direct_preview_field_if_available(
@@ -1781,6 +2131,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         hysteresis_settle_step_method: None,
                         terminal_field_snapshot: false,
                         finished: false,
+                        magnetization_carrier: None,
                     });
                     if preview_due {
                         last_preview_revision = Some(
@@ -2208,6 +2559,41 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 } else {
                     None
                 };
+                let config_revision = display_selection
+                    .as_ref()
+                    .map(|selection| selection.revision)
+                    .unwrap_or(0);
+                let full_fields_due = heavy_payload_due && live.field_every_n == 1;
+                let mut full_fields_capture_error = None;
+                let cached_preview_fields = if full_fields_due {
+                    match accepted_cpu_thermal_capture_context(
+                        &problem,
+                        report.dt_used,
+                        spin_transport.is_some(),
+                        is_direct_minimization,
+                    )
+                    .and_then(|thermal_context| {
+                        capture_full_active_cpu_fields(
+                            &mut problem,
+                            &state,
+                            plan,
+                            live.grid,
+                            step_count,
+                            state.time_seconds,
+                            thermal_context,
+                            spin_transport.as_ref(),
+                            config_revision,
+                        )
+                    }) {
+                        Ok(fields) => Some(fields),
+                        Err(error) => {
+                            full_fields_capture_error = Some(error.message);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
                 if preview_field.is_none() && preview_due && !preview_targets_global_scalar {
                     let selection = display_selection.as_ref().expect("checked preview_due");
                     let request = selection.preview_request();
@@ -2232,6 +2618,17 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     state.magnetization(),
                     &problem,
                 );
+                if let Some(fields) = cached_preview_fields.as_deref() {
+                    mark_full_fields_materialized(&mut update_stats, fields);
+                } else if let Some(error) = full_fields_capture_error.as_deref() {
+                    mark_full_fields_materialization_error(
+                        &mut update_stats,
+                        plan,
+                        step_count,
+                        config_revision,
+                        error,
+                    );
+                }
                 if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
                     apply_average_m_to_step_stats_with_active_mask(
                         &mut update_stats,
@@ -2244,6 +2641,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     live_copy_metrics.add_f64_payload(values);
                 }
                 if let Some(field) = preview_field.as_ref() {
+                    live_copy_metrics.add_f64_payload(&field.vector_field_values);
+                }
+                for field in cached_preview_fields.as_deref().unwrap_or_default() {
                     live_copy_metrics.add_f64_payload(&field.vector_field_values);
                 }
                 if live_copy_metrics.payload_count > 0 {
@@ -2264,7 +2664,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     fem_mesh_generation_id: None,
                     magnetization,
                     preview_field,
-                    cached_preview_fields: None,
+                    cached_preview_fields,
                     hysteresis_field_m_t: None,
                     hysteresis_point_index: None,
                     hysteresis_settle_step_index: None,
@@ -2272,6 +2672,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     hysteresis_settle_step_method: None,
                     terminal_field_snapshot: false,
                     finished: false,
+                    magnetization_carrier: None,
                 });
                 if preview_due {
                     last_preview_revision = Some(
@@ -2360,128 +2761,144 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     if !paused && !cancelled {
         if let Some(live) = live.as_mut() {
             if let Some(mut final_stats) = steps.last().cloned() {
-                let live_materialization_started = Instant::now();
                 let display_selection = live.display_selection.map(|get| get());
-                let materialization_quantities = field_materialization_quantity_ids();
-                let materialization_quantities = active_fdm_preview_quantities(
-                    crate::dispatch::FdmEngine::CpuReference,
-                    plan,
-                    &materialization_quantities,
-                );
                 let config_revision = display_selection
                     .as_ref()
                     .map(|selection| selection.revision)
                     .unwrap_or(0);
-                let antenna_field = resolved_antenna_zeeman_field(plan, state.time_seconds);
-                let oersted_field = resolved_oersted_visual_field_for_count(
-                    &problem,
+                let (accepted_thermal_context, thermal_context_error) = if final_stats.step > 0 {
+                    match accepted_cpu_thermal_capture_context(
+                        &problem,
+                        final_stats.dt,
+                        spin_transport.is_some(),
+                        is_direct_minimization,
+                    ) {
+                        Ok(context) => (context, None),
+                        Err(error) => (None, Some(error.message)),
+                    }
+                } else {
+                    (None, None)
+                };
+                let terminal_spin_transport = spin_transport.as_ref();
+                let quantities = field_materialization_quantity_ids();
+                let quantities = active_fdm_preview_quantities(
+                    crate::dispatch::FdmEngine::CpuReference,
                     plan,
-                    state.magnetization().len(),
-                    state.time_seconds,
-                    &antenna_field,
+                    &quantities,
                 );
-                let mut cached_preview_fields = snapshot_vector_fields_from_state(
-                    &problem,
-                    &state,
-                    &materialization_quantities,
-                    &LivePreviewRequest {
-                        revision: config_revision,
-                        quantity: "m".to_string(),
-                        component: "3D".to_string(),
-                        layer: 0,
-                        all_layers: true,
-                        every_n: 1,
-                        x_chosen_size: 0,
-                        y_chosen_size: 0,
-                        auto_scale_enabled: false,
-                        max_points: 0,
-                    },
-                    live.grid,
-                    plan.active_mask.as_deref(),
-                    Some(&oersted_field),
-                    Some(&antenna_field),
-                )?;
-                let materialized_at_unix_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-                for field in &mut cached_preview_fields {
-                    field.source_step = final_stats.step;
-                    field.source_time_seconds = Some(final_stats.time);
-                    field.source_revision = final_stats.step;
-                    field.materialized_at_unix_ms = materialized_at_unix_ms;
+                for quantity in &quantities {
+                    final_stats
+                        .field_materialization_states
+                        .retain(|status| status.quantity != *quantity);
+                    final_stats.field_materialization_states.push(
+                        LiveFieldMaterializationStatus {
+                            quantity: (*quantity).to_string(),
+                            source_step: final_stats.step,
+                            request_revision: config_revision,
+                            state: LiveFieldMaterializationState::Pending,
+                            error: None,
+                        },
+                    );
                 }
-                let preview_field = if let Some(selection) = display_selection.as_ref() {
-                    let preview_field = if !display_is_global_scalar(selection) {
-                        let request = selection.preview_request();
-                        if let Some(field) = build_direct_preview_field_if_available(
-                            &problem,
-                            &state,
-                            &request,
-                            live.grid,
-                            plan.active_mask.as_deref(),
-                        )? {
-                            Some(field)
+                let terminal_magnetization = flatten_vectors(state.magnetization());
+                for quantity in &quantities {
+                    let capture_started = Instant::now();
+                    let capture_result = if *quantity != "m" {
+                        if let Some(error) = thermal_context_error.as_deref() {
+                            Err(RunError {
+                                message: error.to_string(),
+                            })
                         } else {
-                            let observables = observe_state_with_antenna_field(
-                                &problem,
+                            capture_one_active_cpu_field(
+                                &mut problem,
                                 &state,
-                                Some(antenna_field.clone()),
-                            )?;
-                            Some(build_grid_preview_field(
-                                &request,
-                                select_observables(&observables, &request.quantity)?,
+                                plan,
                                 live.grid,
-                                plan.active_mask.as_deref(),
-                            ))
+                                final_stats.step,
+                                final_stats.time,
+                                accepted_thermal_context,
+                                terminal_spin_transport,
+                                config_revision,
+                                quantity,
+                            )
                         }
                     } else {
-                        None
+                        capture_one_active_cpu_field(
+                            &mut problem,
+                            &state,
+                            plan,
+                            live.grid,
+                            final_stats.step,
+                            final_stats.time,
+                            accepted_thermal_context,
+                            terminal_spin_transport,
+                            config_revision,
+                            quantity,
+                        )
                     };
-                    preview_field
-                } else {
-                    None
-                };
-                let magnetization = Some(flatten_vectors(state.magnetization()));
-                let mut live_copy_metrics = FieldCopyMetrics::default();
-                if let Some(values) = magnetization.as_deref() {
-                    live_copy_metrics.add_f64_payload(values);
+
+                    let cached_preview_fields = match capture_result {
+                        Ok(field) => {
+                            mark_full_fields_materialized(
+                                &mut final_stats,
+                                std::slice::from_ref(&field),
+                            );
+                            Some(vec![field])
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[fullmag-runner] CPU FDM terminal observation quantity {}: {}",
+                                quantity, error.message
+                            );
+                            let source_step = final_stats.step;
+                            mark_field_materialization_error(
+                                &mut final_stats,
+                                quantity,
+                                source_step,
+                                config_revision,
+                                &error.message,
+                            );
+                            None
+                        }
+                    };
+
+                    let mut copy_metrics = FieldCopyMetrics::default();
+                    copy_metrics.add_f64_payload(&terminal_magnetization);
+                    if let Some(field) = cached_preview_fields
+                        .as_ref()
+                        .and_then(|fields| fields.first())
+                    {
+                        copy_metrics.add_f64_payload(&field.vector_field_values);
+                    }
+                    copy_metrics.wall_time_ns = capture_started.elapsed().as_nanos() as u64;
+                    live_field_snapshot_metrics.add(copy_metrics);
+                    apply_finalization_field_copy_metrics(&mut final_stats, copy_metrics);
+
+                    let _ = (live.on_step)(StepUpdate {
+                        coupled_checkpoint: final_frozen_checkpoint
+                            .clone()
+                            .or_else(|| final_coupled_checkpoint.clone())
+                            .or_else(|| final_abm3_checkpoint.clone()),
+                        stats: final_stats.clone(),
+                        scalar_row_due: true,
+                        grid: live.grid,
+                        fem_mesh_generation_id: None,
+                        magnetization: Some(terminal_magnetization.clone()),
+                        preview_field: None,
+                        cached_preview_fields,
+                        hysteresis_field_m_t: None,
+                        hysteresis_point_index: None,
+                        hysteresis_settle_step_index: None,
+                        hysteresis_settle_step_kind: None,
+                        hysteresis_settle_step_method: None,
+                        terminal_field_snapshot: true,
+                        finished: false,
+                        magnetization_carrier: None,
+                    });
                 }
-                if let Some(field) = preview_field.as_ref() {
-                    live_copy_metrics.add_f64_payload(&field.vector_field_values);
-                }
-                for field in &cached_preview_fields {
-                    live_copy_metrics.add_f64_payload(&field.vector_field_values);
-                }
-                if live_copy_metrics.payload_count > 0 {
-                    live_copy_metrics.wall_time_ns =
-                        live_materialization_started.elapsed().as_nanos() as u64;
-                }
-                live_field_snapshot_metrics.add(live_copy_metrics);
-                apply_finalization_field_copy_metrics(&mut final_stats, live_copy_metrics);
                 if let Some(stats) = steps.last_mut() {
-                    apply_finalization_field_copy_metrics(stats, live_copy_metrics);
+                    *stats = final_stats;
                 }
-                let _ = (live.on_step)(StepUpdate {
-                    coupled_checkpoint: final_frozen_checkpoint
-                        .clone()
-                        .or_else(|| final_coupled_checkpoint.clone())
-                        .or_else(|| final_abm3_checkpoint.clone()),
-                    stats: final_stats,
-                    scalar_row_due: true,
-                    grid: live.grid,
-                    fem_mesh_generation_id: None,
-                    magnetization,
-                    preview_field,
-                    cached_preview_fields: Some(cached_preview_fields),
-                    hysteresis_field_m_t: None,
-                    hysteresis_point_index: None,
-                    hysteresis_settle_step_index: None,
-                    hysteresis_settle_step_kind: None,
-                    hysteresis_settle_step_method: None,
-                    terminal_field_snapshot: false,
-                    finished: false,
-                });
             }
         }
     }
@@ -3545,11 +3962,12 @@ struct DirectFieldSnapshotCache<'a> {
     torque_field: Option<Vec<Vector3>>,
     oersted_field_override: Option<&'a [Vector3]>,
     antenna_field: Option<&'a [Vector3]>,
+    additional_effective_field: Option<&'a [Vector3]>,
 }
 
 impl<'a> DirectFieldSnapshotCache<'a> {
     fn new(problem: &'a ExchangeLlgProblem, state: &'a ExchangeLlgState) -> Self {
-        Self::new_with_source_fields(problem, state, None, None)
+        Self::new_with_source_fields(problem, state, None, None, None)
     }
 
     fn new_with_source_fields(
@@ -3557,6 +3975,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
         state: &'a ExchangeLlgState,
         oersted_field_override: Option<&'a [Vector3]>,
         antenna_field: Option<&'a [Vector3]>,
+        additional_effective_field: Option<&'a [Vector3]>,
     ) -> Self {
         Self {
             problem,
@@ -3574,6 +3993,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             torque_field: None,
             oersted_field_override,
             antenna_field,
+            additional_effective_field,
         }
     }
 
@@ -3792,6 +4212,13 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 .map_err(|error| RunError {
                     message: format!("CPU FDM snapshot '{}': effective field: {}", name, error),
                 })?;
+            if let Some(additional_field) = self.additional_effective_field {
+                for (effective, additional) in effective_field.iter_mut().zip(additional_field) {
+                    effective[0] += additional[0];
+                    effective[1] += additional[1];
+                    effective[2] += additional[2];
+                }
+            }
             if let Some(active_mask) = self.problem.active_mask.as_deref() {
                 let demag_field = self.base_values("H_demag", name)?.to_vec();
                 let external_field = self.base_values("H_ext", name)?.to_vec();
@@ -5239,6 +5666,7 @@ mod tests {
             &state,
             None,
             Some(&antenna_field),
+            None,
         );
 
         let values = select_direct_preview_values(&mut direct_fields, "H_ant")

@@ -10,6 +10,8 @@ export interface Viewport3DColors {
   mesh: ColorRepresentation;
   panel?: ColorRepresentation;
   panelRaised?: ColorRepresentation;
+  /** Resolved theme colors for stable primitive object assignments. */
+  primitivePalette?: readonly ColorRepresentation[];
   success?: ColorRepresentation;
   textPrimary?: ColorRepresentation;
   textSecondary?: ColorRepresentation;

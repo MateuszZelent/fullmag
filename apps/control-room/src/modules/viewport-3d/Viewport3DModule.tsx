@@ -33,6 +33,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 import {
   isScalarSpatialQuantityId,
+  quantityDisplayName,
   quantityUnitForColorbar,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
@@ -103,6 +104,7 @@ import { withObjectPlacementDraftPreview } from "./viewport3dPrimitiveModel";
 import {
   useViewport3DSceneModel,
   type Viewport3DFieldDataIssue,
+  type Viewport3DFieldPresentationFreshness,
 } from "./hooks/useViewport3DSceneModel";
 import {
   createViewport3DVisualizationDebugCandidateBuilder,
@@ -499,6 +501,7 @@ interface Viewport3DColorbarLegend {
   paletteGradient: string;
   quantityId?: string;
   range?: MeshQualityRange | null;
+  rangeState?: Viewport3DColorbarPlan["rangeState"];
   scopeId?: string | null;
   scopeKind?: Viewport3DColorbarPlan["scopeKind"];
   sourceUnit?: string | null;
@@ -696,6 +699,7 @@ function resolveViewport3DColorbarLegendFromPlan({
       paletteGradient: viewport3DColorPaletteGradientCss(plan.palette),
       quantityId: plan.quantityId,
       range: plan.range,
+      rangeState: plan.rangeState,
       scopeId: plan.scopeId,
       scopeKind: plan.scopeKind,
       sourceUnit: unit || null,
@@ -951,6 +955,38 @@ export function resolveViewport3DColorbarLegendsFromPlans({
   return Array.from(sharedScalePlans.values(), (plan) =>
     resolveViewport3DColorbarLegendFromPlan({ labelByTargetId, plan }),
   );
+}
+
+function resolveViewport3DColorbarRangeLabel({
+  hasBufferRange,
+  hasMetadataRange,
+  rangeState,
+}: {
+  hasBufferRange: boolean;
+  hasMetadataRange: boolean;
+  rangeState?: Viewport3DColorbarPlan["rangeState"];
+}): string {
+  if (rangeState === "stale-compatible") {
+    return hasBufferRange
+      ? "Previous compatible range"
+      : "Loading field range";
+  }
+  if (rangeState === "pending") {
+    return hasMetadataRange
+      ? "Metadata range; rendered range pending"
+      : "Loading field range";
+  }
+  if (rangeState === "unavailable") {
+    return hasMetadataRange ? "Metadata range" : "Field range unavailable";
+  }
+  if (rangeState === "current") {
+    if (hasBufferRange) return "Rendered range";
+    if (hasMetadataRange) return "Metadata range";
+    return "Loading field range";
+  }
+  if (hasBufferRange) return "Rendered range";
+  if (hasMetadataRange) return "Metadata range";
+  return "Loading field range";
 }
 
 function viewport3DColorbarEffectiveScaleKey(
@@ -1386,6 +1422,7 @@ interface Viewport3DFrameProps
   domainSummary: string;
   effectAntialias: boolean;
   fieldDataIssue: Viewport3DFieldDataIssue | null;
+  fieldPresentationFreshness: Viewport3DFieldPresentationFreshness | null;
   fieldRefresh: Viewport3DFieldRefreshState;
   fdmFieldIdentityCompatible: boolean;
   fdmSelectionCellOrdinal: number | null;
@@ -1427,7 +1464,7 @@ export default function Viewport3DModule({
   moduleId,
   slotId,
 }: ModuleProps) {
-  const { clientReady, colors } = useViewport3DColors();
+  const { clientReady, colors, colorsUnavailable } = useViewport3DColors();
   const sessionIdentity = useSessionResourceIdentity();
   const selection = useSelectionSelector((state) => state, {
     isEqual: selectionSnapshotEquals,
@@ -2018,6 +2055,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   domainSummary,
   effectAntialias,
   fieldDataIssue,
+  fieldPresentationFreshness,
   fieldRefresh,
   fdmSelectionCellOrdinal,
   fdmSelectionAnnouncement,
@@ -2101,7 +2139,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     );
   const [orbitDebugRevision, setOrbitDebugRevision] = useState(0);
   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
-  const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
+  // The field-data issue dialog opens only on explicit request; the HUD
+  // banner is the non-modal, persistent indication of the issue.
+  const [openedResourceIssueKey, setOpenedResourceIssueKey] =
     useState<string | null>(null);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
@@ -2541,17 +2581,13 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     visualizationDebugSource,
   ]);
   const resourceIssueOpen = Boolean(
-    fieldDataIssue && dismissedResourceIssueKey !== fieldDataIssue.key,
+    fieldDataIssue && openedResourceIssueKey === fieldDataIssue.key,
   );
   const setResourceIssueOpen = useCallback(
     (open: boolean) => {
-      if (open) {
-        setDismissedResourceIssueKey(null);
-        return;
-      }
-      setDismissedResourceIssueKey(fieldDataIssue?.key ?? null);
+      setOpenedResourceIssueKey(open ? (fieldDataIssue?.key ?? null) : null);
     },
-    [fieldDataIssue?.key, setDismissedResourceIssueKey],
+    [fieldDataIssue?.key, setOpenedResourceIssueKey],
   );
   useEffect(() => {
     if (captureRevision <= 0) return;
@@ -2729,7 +2765,29 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-antenna-field-sample-count={antennaFieldOverlay?.count}
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
     >
-      <div aria-live="polite" className="fm-viewport-3d__hud">
+      <div className="fm-viewport-3d__hud">
+        {fieldDataIssue ? (
+          <div className="fm-viewport-3d__issue-banner" role="status">
+            <span className="fm-viewport-3d__issue-banner-text">
+              {`${fieldDataIssue.quantityId} cannot be rendered: ${fieldDataIssue.message}`}
+            </span>
+            <Button onClick={() => setResourceIssueOpen(true)} size="sm" type="button" variant="secondary">
+              Details
+            </Button>
+            <Button onClick={fieldDataIssue.retry} size="sm" type="button" variant="secondary">
+              Retry
+            </Button>
+          </div>
+        ) : null}
+        {fieldPresentationFreshness && fieldPresentationFreshness !== "current" && !fieldDataIssue ? (
+          <span
+            className="fm-viewport-3d__freshness-badge"
+            data-freshness={fieldPresentationFreshness}
+            role="status"
+          >
+            {VIEWPORT_FIELD_FRESHNESS_LABEL[fieldPresentationFreshness]}
+          </span>
+        ) : null}
         {savedViewportActive && sessionIdentity ? (
           <fieldset
             aria-label="Viewport source"
@@ -2918,6 +2976,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       </div>
       {clientReady && colors ? (
         <Viewport3DCanvas
+          // Keyboard users reach the scene, hear a text summary and open the
+          // camera controls with Enter; Tab always moves on (no focus trap).
+          aria-label={`3D viewport: ${selectedLabel}. ${domainSummary}. Press Enter for camera controls.`}
+          aria-roledescription="3D viewport"
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && event.target === event.currentTarget) {
+              event.preventDefault();
+              viewport3dStore.setCameraDialogOpen(true);
+            }
+          }}
+          role="region"
+          tabIndex={0}
           camera={canvasCamera}
           className="fm-viewport-3d__canvas"
           dpr={canvasDpr}
@@ -2964,7 +3034,11 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           />
         </Viewport3DCanvas>
       ) : (
-        <div className="fm-viewport-3d__placeholder">Preparing viewport</div>
+        <div className="fm-viewport-3d__placeholder" role="status">
+          {colorsUnavailable
+            ? "Viewport theme tokens could not be read; the 3D view cannot render. Reload the page or switch the theme to retry."
+            : "Preparing viewport"}
+        </div>
       )}
       {discretizationKind && (
         <div
@@ -3019,6 +3093,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
 });
 
 const INSPECT_TOOLTIP_OFFSET_PX = 14;
+
+const VIEWPORT_FIELD_FRESHNESS_LABEL: Record<
+  Exclude<Viewport3DFieldPresentationFreshness, "current">,
+  string
+> = {
+  loading: "Loading field data",
+  materializing: "Computing field — showing previous data until it is ready",
+  stale: "Previous field data — refresh pending",
+  unsupported: "Field not available for this run",
+};
 
 type FdmCellSelectionRef = Extract<SelectionRef, { type: "fdm-cell" }>;
 
@@ -3251,8 +3335,14 @@ export const Viewport3DColorbar = memo(function Viewport3DColorbar({
   const componentLabel = legend.quantityId && isScalarSpatialQuantityId(legend.quantityId)
     ? null
     : viewport3DColorbarComponentLabel(legend.colorMode);
-  const unitLabel = effectiveDisplayUnit || legend.sourceUnit || "1";
-  const rangeLabel = range ? "Rendered range" : "Loading field range";
+  // Dimensionless quantities carry an explicit "1" in the catalog; an empty
+  // unit means the catalog has no unit for this quantity.
+  const unitLabel = effectiveDisplayUnit || legend.sourceUnit || "unit unknown";
+  const rangeLabel = resolveViewport3DColorbarRangeLabel({
+    hasBufferRange: Boolean(legend.range),
+    hasMetadataRange: Boolean(metadataRange),
+    rangeState: legend.rangeState,
+  });
   return (
     <aside
       aria-label={`Color range: ${label}, ${minLabel} to ${maxLabel}`}
@@ -3264,7 +3354,7 @@ export const Viewport3DColorbar = memo(function Viewport3DColorbar({
             <span className="fm-viewport-3d__colorbar-context">{targetLabel}</span>
           ) : null}
           <span className="fm-viewport-3d__colorbar-quantity">
-            {legend.quantityId ?? label}
+            {legend.quantityId ? quantityDisplayName(legend.quantityId) : label}
           </span>
           {componentLabel ? (
             <span className="fm-viewport-3d__colorbar-component">
@@ -3338,9 +3428,8 @@ export const Viewport3DInspectTooltip = memo(function Viewport3DInspectTooltip({
       : [sample.message];
   return (
     <div
-      aria-live="polite"
       className="fm-viewport-3d__inspect-tooltip"
-      role="status"
+      role="tooltip"
       title={provenance ?? undefined}
       style={{
         left: screenPosition.x + INSPECT_TOOLTIP_OFFSET_PX,
@@ -3348,7 +3437,7 @@ export const Viewport3DInspectTooltip = memo(function Viewport3DInspectTooltip({
       }}
     >
       <div className="fm-viewport-3d__inspect-tooltip-header">
-        <span>{sample.quantityId}</span>
+        <span title={sample.quantityId}>{quantityDisplayName(sample.quantityId)}</span>
         <span>{sample.targetLabel}</span>
       </div>
       <div className="fm-viewport-3d__inspect-tooltip-values">
@@ -3499,7 +3588,9 @@ function Viewport3DResourceIssueDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby="fm-viewport-field-data-issue-description">
         <DialogHeader>
-          <DialogTitle>Magnetic field data unavailable</DialogTitle>
+          <DialogTitle>
+            {issue ? `${issue.quantityId} data unavailable` : "Field data unavailable"}
+          </DialogTitle>
           <DialogDescription id="fm-viewport-field-data-issue-description">
             {issue
               ? `Quantity ${issue.quantityId} cannot be rendered because ${issue.message}`

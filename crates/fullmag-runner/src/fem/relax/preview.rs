@@ -15,12 +15,15 @@ use crate::native_fem::{
     NativeFemPreviewSnapshot,
 };
 use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask};
-use crate::quantities::{active_fem_preview_quantities, field_materialization_quantity_ids};
+use crate::quantities::{
+    active_fem_preview_quantities, field_materialization_quantity_ids, quantity_spec,
+};
 use crate::solver_profile::{current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns};
 use crate::types::{
-    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
-    LivePreviewRequest, RunError,
+    LiveFemLocalNodeMapIdentity, LiveFieldMaterializationState, LiveFieldMaterializationStatus,
+    LiveMagnetizationCarrier, LivePreviewField, LivePreviewRequest, RunError,
 };
+use crate::ObservationClock;
 use crate::DisplaySelectionState;
 
 #[allow(unexpected_cfgs)]
@@ -145,6 +148,8 @@ struct DeferredLiveMagnetization {
     node_count: usize,
     source_step: u64,
     source_revision: u64,
+    source_clock: ObservationClock,
+    fem_local_node_map: LiveFemLocalNodeMapIdentity,
 }
 
 struct DeferredFemSnapshotFrame {
@@ -326,6 +331,8 @@ fn materialize_magnetization(
         values: payload,
         source_step: deferred.source_step,
         source_revision: deferred.source_revision,
+        source_clock: deferred.source_clock,
+        fem_local_node_map: deferred.fem_local_node_map,
         materialized_at_unix_ms: unix_time_ms(),
         materialization_wall_time_ns: field_copy_wall_time_ns,
         field_copy_bytes,
@@ -892,6 +899,10 @@ pub(crate) struct FemPreviewHandoff {
     active_ready: Option<LivePreviewField>,
     cached_ready: Vec<LivePreviewField>,
     magnetization_ready: Option<FemLiveMagnetizationPayload>,
+    /// The native map is read and validated once per stage. `Some(None)` is a
+    /// cached refusal; a missing native map must not trigger a count-based
+    /// identity fallback on later callbacks.
+    local_node_map_identity: Option<Option<LiveFemLocalNodeMapIdentity>>,
     next_magnetization_revision: u64,
     preview_superseded_count: u64,
     timings: FemPreviewHandoffTimings,
@@ -1300,17 +1311,43 @@ impl FemPreviewHandoff {
 
     pub(crate) fn request_magnetization(
         &mut self,
+        backend: &NativeFemBackend,
         node_count: usize,
         source_step: u64,
+        source_time: f64,
+        solver_dt: f64,
+        fem_mesh_generation_id: Option<&str>,
     ) -> Result<Option<FemLiveMagnetizationPayload>, RunError> {
         self.harvest_completed()?;
         let ready = self.magnetization_ready.take();
+        if self.local_node_map_identity.is_none() && fem_mesh_generation_id.is_some() {
+            self.local_node_map_identity = Some(native_local_node_map_identity(
+                backend,
+                fem_mesh_generation_id,
+                node_count,
+            ));
+        }
+        let Some(fem_local_node_map) = self
+            .local_node_map_identity
+            .as_ref()
+            .and_then(Option::as_ref)
+            .cloned()
+        else {
+            return Ok(ready);
+        };
         self.next_magnetization_revision = self.next_magnetization_revision.saturating_add(1);
         let request_revision = self.next_magnetization_revision;
+        let source_clock = ObservationClock {
+            accepted_step: source_step,
+            time_seconds: source_time,
+            dt_seconds: (solver_dt > 0.0).then_some(solver_dt),
+        };
         let deferred = DeferredLiveMagnetization {
             node_count,
             source_step,
             source_revision: request_revision,
+            source_clock,
+            fem_local_node_map,
         };
         if self.pending.stage_magnetization(deferred).is_err() {
             self.preview_superseded_count = self.preview_superseded_count.saturating_add(1);
@@ -1601,7 +1638,14 @@ impl FemPreviewHandoff {
             }
             self.start_cache_cycle(requests, source_step);
 
-            if let Ok(ready) = self.request_magnetization(node_count, source_step) {
+            if let Ok(ready) = self.request_magnetization(
+                backend,
+                node_count,
+                source_step,
+                source_time,
+                solver_dt,
+                None,
+            ) {
                 if ready.is_some() {
                     magnetization = ready;
                 }
@@ -1669,9 +1713,40 @@ pub(crate) struct FemLiveMagnetizationPayload {
     pub(crate) values: Vec<f64>,
     pub(crate) source_step: u64,
     pub(crate) source_revision: u64,
+    pub(crate) source_clock: ObservationClock,
+    pub(crate) fem_local_node_map: LiveFemLocalNodeMapIdentity,
     pub(crate) materialized_at_unix_ms: u64,
     pub(crate) materialization_wall_time_ns: u64,
     pub(crate) field_copy_bytes: u64,
+}
+
+pub(crate) fn live_magnetization_carrier(
+    payload: &FemLiveMagnetizationPayload,
+) -> LiveMagnetizationCarrier {
+    LiveMagnetizationCarrier {
+        // The runner's plan boundary replaces this placeholder with its exact
+        // canonical FEM study layout before invoking the caller.
+        layout: serde_json::Value::Null,
+        source_clock: payload.source_clock,
+        fem_local_node_map: Some(payload.fem_local_node_map.clone()),
+    }
+}
+
+pub(super) fn native_local_node_map_identity(
+    backend: &NativeFemBackend,
+    mesh_generation_id: Option<&str>,
+    expected_node_count: usize,
+) -> Option<LiveFemLocalNodeMapIdentity> {
+    let mesh_generation_id = mesh_generation_id.filter(|value| !value.is_empty())?;
+    let map = backend.local_node_index_map().ok()?;
+    if usize::try_from(map.local_node_count).ok() != Some(expected_node_count) {
+        return None;
+    }
+    Some(LiveFemLocalNodeMapIdentity {
+        mesh_generation_id: mesh_generation_id.to_owned(),
+        local_node_index_map_sha256: map.content_sha256().ok()?,
+        node_count: expected_node_count,
+    })
 }
 
 /// Build the active FEM preview field.
@@ -1686,6 +1761,167 @@ pub(crate) fn build_fem_live_preview_field(
     node_count: usize,
 ) -> Result<LivePreviewField, RunError> {
     backend.copy_live_preview_field(request, node_count)
+}
+
+/// Copy a coherent, complete generation from the original native context.
+/// The accepted worker requests cadence one; sampled display previews keep
+/// using the asynchronous handoff. No clock, RNG, current or activation state
+/// is reconstructed here, and this helper never advances the integrator.
+pub(crate) fn capture_native_fem_observables(
+    backend: &NativeFemBackend,
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    mesh_generation_id: Option<&str>,
+    update: &mut crate::types::StepUpdate,
+) -> Result<(), RunError> {
+    let node_count = plan.mesh.nodes.len();
+    let map = native_local_node_map_identity(backend, mesh_generation_id, node_count)
+        .ok_or_else(|| RunError { message: "native live observations require the actual local-node map".into() })?;
+    let clock = ObservationClock {
+        accepted_step: update.stats.step, time_seconds: update.stats.time,
+        dt_seconds: (update.stats.dt > 0.0).then_some(update.stats.dt),
+    };
+    clock.validate().map_err(|error| RunError { message: error.to_string() })?;
+    let quantities = active_fem_preview_quantities(engine, plan, &field_materialization_quantity_ids());
+    let started = std::time::Instant::now();
+    let mut fields = Vec::with_capacity(quantities.len());
+    for quantity in quantities {
+        fields.push(capture_native_fem_observable_field(
+            backend,
+            engine,
+            plan,
+            clock,
+            quantity,
+        )?);
+    }
+    let magnetization = fields.iter().find(|field| field.quantity == "m")
+        .map(|field| field.vector_field_values.clone())
+        .ok_or_else(|| RunError { message: "native live observation omitted m".into() })?;
+    update.stats.field_copy_bytes = update.stats.field_copy_bytes.saturating_add(
+        fields.iter().map(|field| (field.vector_field_values.len() as u64).saturating_mul(8)).sum::<u64>());
+    update.stats.field_copy_wall_time_ns = update.stats.field_copy_wall_time_ns.saturating_add(elapsed_ns(started));
+    update.stats.magnetization_source_step = Some(clock.accepted_step);
+    update.stats.field_materialization_states = fields.iter().map(|field| LiveFieldMaterializationStatus {
+        quantity: field.quantity.clone(), source_step: clock.accepted_step,
+        request_revision: clock.accepted_step, state: LiveFieldMaterializationState::Complete, error: None,
+    }).collect();
+    update.magnetization = Some(magnetization);
+    update.magnetization_carrier = Some(LiveMagnetizationCarrier {
+        layout: serde_json::Value::Null, source_clock: clock, fem_local_node_map: Some(map),
+    });
+    update.cached_preview_fields = Some(fields);
+    Ok(())
+}
+
+pub(super) fn capture_native_fem_observable_field(
+    backend: &NativeFemBackend,
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    clock: ObservationClock,
+    quantity: &str,
+) -> Result<LivePreviewField, RunError> {
+    clock.validate().map_err(|error| RunError { message: error.to_string() })?;
+    let quantity = crate::quantities::normalized_quantity_name(quantity)?;
+    if !active_fem_preview_quantities(engine, plan, &[quantity]).contains(&quantity) {
+        return Err(RunError {
+            message: format!("native FEM terminal observation quantity '{quantity}' is inactive"),
+        });
+    }
+    let node_count = plan.mesh.nodes.len();
+    let request = LivePreviewRequest {
+        quantity: quantity.into(),
+        all_layers: true,
+        every_n: 1,
+        auto_scale_enabled: false,
+        max_points: u32::MAX,
+        ..LivePreviewRequest::default()
+    };
+    let started = std::time::Instant::now();
+    let mut field = if engine == FemEngine::CpuNative && quantity == "H_ant" {
+        build_fem_antenna_preview_field(
+            &request,
+            plan,
+            clock.accepted_step,
+            clock.time_seconds,
+        )?
+    } else {
+        build_fem_live_preview_field(backend, &request, node_count)?
+    };
+    let expected_components = quantity_spec(quantity).map_or(3, |spec| spec.n_comp as usize);
+    let expected_values = node_count
+        .checked_mul(expected_components)
+        .ok_or_else(|| RunError {
+            message: format!("native FEM terminal observation '{quantity}' value count overflow"),
+        })?;
+    if field.preview_grid[0] as usize != node_count
+        || field.preview_grid[1..] != [1, 1]
+        || field.auto_downscaled
+        || field.applied_layer_stride != 1
+        || field.vector_field_values.len() != expected_values
+    {
+        return Err(RunError {
+            message: format!(
+                "native FEM terminal observation '{quantity}' did not produce all {node_count} local nodes"
+            ),
+        });
+    }
+    field.source_step = clock.accepted_step;
+    field.source_time_seconds = Some(clock.time_seconds);
+    field.source_revision = clock.accepted_step;
+    field.materialized_at_unix_ms = unix_time_ms();
+    field.materialization_wall_time_ns = elapsed_ns(started);
+    Ok(field)
+}
+
+pub(super) fn build_native_fem_magnetization_field_from_values(
+    plan: &FemPlanIR,
+    clock: ObservationClock,
+    values: &[[f64; 3]],
+) -> Result<LivePreviewField, RunError> {
+    clock.validate().map_err(|error| RunError {
+        message: error.to_string(),
+    })?;
+    let node_count = plan.mesh.nodes.len();
+    if values.len() != node_count || values.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(RunError {
+            message: format!(
+                "native FEM terminal magnetization has {} values for {node_count} local nodes or contains non-finite values",
+                values.len()
+            ),
+        });
+    }
+    let request = LivePreviewRequest {
+        quantity: "m".into(),
+        all_layers: true,
+        every_n: 1,
+        auto_scale_enabled: false,
+        max_points: u32::MAX,
+        ..LivePreviewRequest::default()
+    };
+    let started = std::time::Instant::now();
+    let mut field = build_mesh_preview_field_with_active_mask(
+        &request,
+        values,
+        mesh_quantity_active_mask("m", &plan.mesh),
+    );
+    if field.preview_grid[0] as usize != node_count
+        || field.preview_grid[1..] != [1, 1]
+        || field.auto_downscaled
+        || field.applied_layer_stride != 1
+        || field.vector_field_values.len() != node_count.saturating_mul(3)
+    {
+        return Err(RunError {
+            message: format!(
+                "native FEM terminal magnetization did not produce all {node_count} local nodes"
+            ),
+        });
+    }
+    field.source_step = clock.accepted_step;
+    field.source_time_seconds = Some(clock.time_seconds);
+    field.source_revision = clock.accepted_step;
+    field.materialized_at_unix_ms = unix_time_ms();
+    field.materialization_wall_time_ns = elapsed_ns(started);
+    Ok(field)
 }
 
 fn build_fem_antenna_preview_field(

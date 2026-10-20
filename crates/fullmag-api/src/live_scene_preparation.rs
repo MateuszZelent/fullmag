@@ -612,13 +612,14 @@ pub(crate) async fn prepare_current_live_scene_with_transition(
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
         let (metadata, fem_mesh) = prepared_domain_publication(snapshot, &read_model)?;
+        let session_status = preparation_session_status(snapshot);
         let mut prepared_snapshot = snapshot.clone();
         crate::session::apply_current_live_snapshot(
             &mut prepared_snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: context.session_id.clone(),
                 session: None,
-                session_status: Some("awaiting_command".into()),
+                session_status,
                 metadata: Some(metadata),
                 mesh_workspace: Some(mesh_workspace),
                 stage_execution: None,
@@ -890,6 +891,30 @@ pub(crate) async fn publish_accepted_frontier_preparation(
     }
 }
 
+/// Session status published with a preparation receipt. Preparation of a new
+/// stage frontier may be published while the accepted run is executing; it
+/// must not flip that session back to `awaiting_command` (the projector would
+/// only restore `running` on its next tick, causing status/control flicker).
+/// Before execution the established `awaiting_command` publication remains.
+fn preparation_session_status(snapshot: &SessionStateResponse) -> Option<String> {
+    let executing = |status: &str| {
+        matches!(
+            status,
+            "running" | "paused" | "breaking" | "queued" | "dispatched" | "claimed"
+        )
+    };
+    if executing(&snapshot.session.status)
+        || snapshot
+            .run
+            .as_ref()
+            .is_some_and(|run| executing(&run.status))
+    {
+        None
+    } else {
+        Some("awaiting_command".into())
+    }
+}
+
 pub(crate) fn ensure_preparation_run_is_active(snapshot: &SessionStateResponse) -> Result<(), ApiError> {
     let stopped = |status: &str| {
         matches!(
@@ -921,6 +946,9 @@ pub(crate) fn ensure_preparation_run_is_active(snapshot: &SessionStateResponse) 
 /// receipt to the current-live read model.  FDM uses the same path when its
 /// accepted preparation receipt is already available, keeping the two lanes
 /// on one publication contract.
+/// Callers own the transition fence and validate the accepted snapshot before
+/// entering this bridge. An absent receipt returns pending before repeating
+/// that expensive validation; an existing receipt is always fully validated.
 pub(crate) async fn publish_accepted_task_preparation_with_transition(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
@@ -1022,33 +1050,11 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
                 "accepted preparation RunSpec run identity mismatch",
             ));
         }
-        let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
-            &store,
-            &typed_run_id,
-            &specification.snapshot.project_id,
-        )
-        .map_err(|error| {
-            ApiError::conflict(format!(
-                "accepted preparation snapshot validation failed: {error:#}"
-            ))
-        })?;
         let task_id = fullmag_session::task_id_for_study_step(
             typed_run_id.as_str(),
             &step_id_for_worker,
         )
         .map_err(|error| ApiError::bad_request(format!("accepted step id is invalid: {error}")))?;
-        let execution_plan = accepted
-            .lowered
-            .steps
-            .iter()
-            .find(|step| step.step_id == step_id_for_worker)
-            .and_then(|step| step.execution_plan.clone())
-            .ok_or_else(|| {
-                ApiError::conflict_with_code(
-                    "accepted_preparation_plan_missing",
-                    "accepted preparation step has no canonical execution plan",
-                )
-            })?;
         // `None` is the only pending state. Once an envelope exists, every
         // decode, CAS, plan, certificate, and accepted-run binding error is a
         // durable integrity failure and must surface immediately; mapping it
@@ -1072,6 +1078,32 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
                 ),
             ));
         }
+        // Pending polls hold the live transition fence. Do not repeatedly
+        // reconstruct a large inline FEM plan while there is no receipt to
+        // publish. Existing envelopes still require the complete immutable
+        // snapshot, plan, and native evidence validation below.
+        let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &typed_run_id,
+            &specification.snapshot.project_id,
+        )
+        .map_err(|error| {
+            ApiError::conflict(format!(
+                "accepted preparation snapshot validation failed: {error:#}"
+            ))
+        })?;
+        let execution_plan = accepted
+            .lowered
+            .steps
+            .iter()
+            .find(|step| step.step_id == step_id_for_worker)
+            .and_then(|step| step.execution_plan.clone())
+            .ok_or_else(|| {
+                ApiError::conflict_with_code(
+                    "accepted_preparation_plan_missing",
+                    "accepted preparation step has no canonical execution plan",
+                )
+            })?;
         let receipt = accepted
             .read_task_preparation_receipt(&store, &task_id)
             .map_err(|error| {
@@ -1182,13 +1214,14 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
     }
     ensure_preparation_run_is_active(snapshot)?;
     let (metadata, fem_mesh) = prepared_domain_publication(snapshot, &read_model)?;
+    let session_status = preparation_session_status(snapshot);
     let mut prepared_snapshot = snapshot.clone();
     crate::session::apply_current_live_snapshot(
         &mut prepared_snapshot,
         CurrentLiveSnapshotRequest {
             session_id: context.session_id.clone(),
             session: None,
-            session_status: Some("awaiting_command".into()),
+            session_status,
             metadata: Some(metadata),
             mesh_workspace: Some(mesh_workspace),
             stage_execution: None,

@@ -260,7 +260,12 @@ fn main() {
             panic!("FULLMAG_FEM_NATIVE_CUDA and FULLMAG_FEM_ENABLE_CUDA must agree");
         }
     }
-    let enable_cuda = native_cuda.or(configured_cuda).unwrap_or(use_mfem_stack);
+    // MFEM itself is shared by CPU and GPU. Merely selecting that stack must
+    // not make a standalone fem-native build require a CUDA toolchain.
+    // Explicit managed recipe flags retain precedence over Cargo defaults.
+    let cargo_cuda = std::env::var_os("CARGO_FEATURE_CUDA").is_some();
+    let enable_cuda = native_cuda.or(configured_cuda)
+        .unwrap_or(use_mfem_stack && (cargo_cuda || require_gpu));
     if enable_cuda && !use_mfem_stack {
         panic!("CUDA-enabled FEM requires FULLMAG_USE_MFEM_STACK=ON");
     }

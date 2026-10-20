@@ -1087,3 +1087,10 @@
   white-space: nowrap;
   border-width: 0;
 }
+
+.fm-analysis-plots__heatmap-axes {
+  margin: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-variant-numeric: tabular-nums;
+}

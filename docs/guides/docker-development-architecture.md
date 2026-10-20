@@ -60,6 +60,12 @@ wolumenów Docker pod `/build` i `/opt/fullmag/package`. Cache Cargo, CMake,
 CUDA, MFEM, hypre, libCEED, zależności pnpm, staging, pakiety, logi, receipty
 i provenance należą do technicznych wolumenów grupy; Docker Desktop przechowuje
 je w swoim wewnętrznym dysku danych, a nie w Windows `storage` projektu.
+Control volume przechowuje kontrolę operacji, manifesty, receipty i provenance
+launchera, a package volume przechowuje kandydata, bieżący pakiet, rollback oraz
+metadane rotacji. Warstwy obrazów i ich BuildKit context pozostają w magazynie
+obrazu/BuildKit Dockera. Mały hostowy run root może zawierać wyłącznie dane
+operacyjne sesji i handoffu; nie jest stagingiem, cache'em ani magazynem
+receiptów buildu.
 Frontend ma analogiczny nazwany wolumen cache/control. Przygotowanie wolumenów
 i migracja technicznych markerów mają dowód częściowy; cold build, API, mounty,
 brak zapisu buildu do hosta oraz pomiary restartu i kompilacji przyrostowej
@@ -242,29 +248,34 @@ Implementacja i regresje źródłowe nie zastępują testu tej operacji w Docker
 
 Jeżeli własny backend zakończył się terminalnym błędem, a jego usługi są
 zatrzymane i wszystkie należące do niego rezerwacje native zostały zwolnione,
-można jawnie odtworzyć ten sam stan przez `docker-dev-recreate`. Polecenie
-wymaga dokładnego receiptu tego runu oraz dokładnego SHA-256 poprzedniej
-konfiguracji runtime; nie wyszukuje „najnowszego” runu i odrzuca niezgodność
-CAS. Opcjonalny checkout musi być tym samym checkoutem zapisanym w receipcie,
-a port powinien pozostać taki sam:
+można użyć wyłącznie wolumenowej trasy z dokładnym pinem próby i konfiguracji.
+`docker-dev-recreate --direct-development` jest wycofane i bieżący launcher
+odrzuca tę trasę. `docker-dev-resume` służy do wznowienia potwierdzonej,
+zatrzymanej próby; `docker-dev-recreate-volume` służy do odtworzenia usług przy
+zmianie obrazu lub mountów. Obie komendy wymagają tego samego zarejestrowanego
+checkoutu, exact config SHA i portu:
 
 ```powershell
-just docker-dev-recreate `
-  $runReceipt $previousConfigSha256 $source 3197
+just docker-dev-resume `
+  $attempt $configSha256 $source 3197 false
+just docker-dev-recreate-volume `
+  $attempt $configSha256 $source 3197 false
 ```
 
-Recepta wywołuje `recreate --direct-development`, więc po walidacji używa tego
-samego backendowego build-then-serve i istniejącego cache. Zachowuje run state,
-session store i zaakceptowany marker. Identyfikatory kontenerów mogą się
-zmienić; run, sesja i zadanie pozostają te same. Nie ponawia startupowego POST
-ani polecenia Solve i nie uruchamia osobnego `up` lub kontenera budującego.
+Resume zachowuje istniejące usługi i wolumeny; `restart_backend=true` można
+ustawić tylko dla zatrzymanego, dokładnie przypiętego backendu. Recreate-volume
+zachowuje named build/package/frontend/control volumes i dane sesji, a
+`fresh_state=true` tworzy nowy root sesji wyłącznie w zwykłej, jawnie wybranej
+recreacji. Żadna z tych komend nie uruchamia osobnego `up`, kontenera budującego,
+startupowego POST ani Solve.
 
 Ta ścieżka nie jest recovery nieznanego ownera. Nie używaj jej dla aktywnego
 runu, niepotwierdzonego zatrzymania, obcej grupy ani niewolnych rezerwacji.
 Nie dodawaj `--recover-idle-failure`, `--assembly-receipt` ani skryptu startowego;
 nie resetuje ownera, nie usuwa cache i nie tworzy nowej grupy. W razie błędu
 tożsamości, CAS, provenance lub storage pozostaje fail-closed, z zachowanym
-receiptem i diagnostyką.
+receiptem i diagnostyką. Stara recepta hostowego receipt DEV pozostaje ścieżką
+odrzuconą, a nie instrukcją kompatybilności.
 
 ### Logi i gotowość
 
@@ -345,11 +356,20 @@ wykonania symulacji. Nie wolno usuwać markera ani powtarzać nieznanej aktywacj
 Niezgodność źródeł, provenance, polityki, tożsamości lub kontraktu odpowiedzi
 pozostaje błędem startupu. Nie jest traktowana jako zwykłe odrzucenie modelu.
 
-`examples/permalloy_layer_cofeb_rings_relax_300nm.py` korzysta z zaimplementowanej
-ścieżki source-contract v2: jeden swept `prism6` i jedno odłączone ciało `tet4`
-z własnymi materiałami. Managed FEM runtime, wykonanie native operatorów,
-parytet CPU/GPU i kwalifikacja fizyczna tego workloadu pozostają **NOT VERIFIED**.
-Udany smoke jednego materiału nie jest dowodem wykonania rings.
+`examples/permalloy_layer_cofeb_rings_relax_300nm.py` pokazuje wąski,
+źródłowo wsparty przypadek dwóch rozłącznych ciał: aktywną warstwę permalloy
+oraz aktywny `top_ring`, dające odpowiednio swept `prism6` i odłączone `tet4`
+z własnymi materiałami. Blok `bottom_ring` i jego konfiguracja są w bieżącym
+skrypcie zakomentowane, więc dokument nie może opisywać dwóch aktywnych
+CoFeB rings. Python `_disconnected_mixed_p1_pair` rozpoznaje tylko parę Box +
+translated annulus, a `_validate_authored_mixed_p1_scope` wybiera dla niej
+wariant dwóch materiałów; nie jest to bezwarunkowe ograniczenie liczby materiałów.
+Planner `validate_mixed_p1_v2_execution_scope` utrzymuje dodatkowe bramki
+strict/double, explicit FEM/CPU-or-GPU, dodatnią przerwę, body-owned P1 i brak
+fallbacku. Source contract może więc opisać ten bounded case, lecz dokładny
+GPU run, device identity, native operator, CPU/GPU parity i kwalifikacja
+fizyczna nadal pozostają **NOT VERIFIED**. Sam planner lub source test nie jest
+dowodem wykonania rings.
 
 ## Dane i wersje
 
@@ -551,7 +571,8 @@ Nowy wariant wymaga rzeczywistego potwierdzenia:
 Wcześniejszy backend ze źródeł `4b3a89501c3ec8cd2bb2fc9aaba34ad1a0de7900`
 zbudował się poprawnie; ten wynik nie kwalifikuje jeszcze nowego cyklu
 jednego kontenera. Wcześniejsze próby przeglądarkowe i HMR dotyczą starej
-orkiestracji. Wykonanie FEM GPU i oryginalnego rings pozostaje **NOT VERIFIED**.
+orkiestracji. Wykonanie FEM GPU i pełnego wariantu rings, w tym odkomentowanej
+geometrii `bottom_ring`, pozostaje **NOT VERIFIED**.
 Wymagane CI/review/merge oraz dostępność prywatnego runnera managed FEM są
 osobnymi bramkami. Szczegółowe dowody i ograniczenia trafiają do checkpointu
 zadania w rozwiązanym storage, nie do rosnącej historii komend w tym przewodniku.

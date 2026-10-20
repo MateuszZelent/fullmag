@@ -2,7 +2,8 @@ import { requestThemeToggle } from "@/design/theme/themeEvents";
 
 import { homeView } from "./homeView";
 
-import type { CommandContribution } from "../commands/commandTypes";
+import type { CommandContext, CommandContribution } from "../commands/commandTypes";
+import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import { applyAuthoringHistoryWorkspaceTransition } from "../authoring/authoringHistoryWorkspaceRestore";
 import { pickProjectArchive } from "../persistence/ProjectDocumentController";
 
@@ -11,6 +12,27 @@ function canonicalCopyFileName(scriptPath: string): string {
   return name.endsWith(".canonical.py")
     ? name
     : `${name.replace(/\.py$/, "")}.canonical.py`;
+}
+
+function exportPythonDraftBlockReason(ctx: CommandContext): string | null {
+  const transition = ctx.pendingForms?.getTransitionSnapshot();
+  if (!transition) return null;
+  if (transition.applyingOwnerCount > 0 || transition.preparing) {
+    return "Inspector changes are being applied. Save the canonical copy after they finish so the file matches the saved scene.";
+  }
+  if (transition.dirtyOwnerCount > 0) {
+    return "Inspector has unapplied changes that would not be in the exported file. Apply or Reset them first.";
+  }
+  return null;
+}
+
+function currentSceneRevision(ctx: CommandContext): number | null {
+  const status = ctx.resourceData?.[SESSION_STATUS_RESOURCE_KEY] as
+    | { resources?: { scene_revision?: unknown } }
+    | null
+    | undefined;
+  const revision = status?.resources?.scene_revision;
+  return typeof revision === "number" && Number.isFinite(revision) ? revision : null;
 }
 
 function disabledPlaceholder(
@@ -318,9 +340,11 @@ export const SHELL_COMMANDS: CommandContribution[] = [
     group: "workspace",
     category: "File",
     scope: "workspace",
-    isEnabled: (ctx) => Boolean(ctx.api),
+    isEnabled: (ctx) => Boolean(ctx.api) && exportPythonDraftBlockReason(ctx) === null,
     disabledReason: (ctx) =>
-      ctx.api ? null : "Save canonical copy requires an active workspace API.",
+      ctx.api
+        ? exportPythonDraftBlockReason(ctx)
+        : "Save canonical copy requires an active workspace API.",
     run: async (ctx) => {
       if (!ctx.api) {
         return {
@@ -328,26 +352,52 @@ export const SHELL_COMMANDS: CommandContribution[] = [
           status: "failed",
         };
       }
+      // Drafts are never applied implicitly: the file must match the saved
+      // scene, so dirty or applying Inspector forms block the export.
+      const draftBlock = exportPythonDraftBlockReason(ctx);
+      if (draftBlock) {
+        return { message: draftBlock, status: "failed" };
+      }
       const requestOptions = ctx.sessionScopeKey
         ? { sessionScopeKey: ctx.sessionScopeKey }
         : undefined;
+      const expectedSceneRevision = currentSceneRevision(ctx);
       // The API writes the canonical script to a managed copy when the session
       // script is a user file; the user's own source is never overwritten.
-      const sync = await ctx.api.model.syncAuthoringScript({}, requestOptions);
-      const script = await ctx.api.model.authoringScript(requestOptions);
+      // The sync response carries the source rendered from one scene
+      // revision, so no second GET can mix revisions.
+      const sync = await ctx.api.model.syncAuthoringScript(
+        expectedSceneRevision === null
+          ? {}
+          : { expected_scene_revision: expectedSceneRevision },
+        requestOptions,
+      );
+      if (typeof sync.source !== "string") {
+        return {
+          message:
+            "Canonical copy was not saved: the API did not return the rendered source for this scene revision.",
+          status: "failed",
+        };
+      }
       if (typeof document !== "undefined") {
-        const blob = new Blob([script.source], { type: "text/x-python;charset=utf-8" });
+        const blob = new Blob([sync.source], { type: "text/x-python;charset=utf-8" });
         const href = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
-        anchor.download = canonicalCopyFileName(script.script_path);
+        anchor.download = canonicalCopyFileName(sync.script_path);
         anchor.href = href;
         anchor.click();
         URL.revokeObjectURL(href);
       }
+      const revisionNote =
+        typeof sync.scene_revision === "number"
+          ? ` Scene revision ${sync.scene_revision}.`
+          : "";
+      const fidelityNote = ` Round-trip fidelity: ${!sync.fidelity || sync.fidelity === "not_checked" ? "not checked" : sync.fidelity}.`;
       return {
-        message: sync.source_script_modified
-          ? `Canonical Python saved from ${script.script_path}.`
-          : `Canonical copy saved; your script was not modified (managed copy: ${script.script_path}).`,
+        message: (sync.source_script_modified
+          ? `Canonical Python saved from ${sync.script_path}.`
+          : `Canonical copy saved; your script was not modified (managed copy: ${sync.script_path}).`) +
+          revisionNote + fidelityNote,
         status: "completed",
       };
     },

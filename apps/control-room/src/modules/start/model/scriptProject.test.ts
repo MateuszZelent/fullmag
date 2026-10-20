@@ -104,7 +104,7 @@ describe("describeFidelity", () => {
   it("says verified only for a verified round trip", () => {
     const verified = describeFidelity({ scene_exported: true, round_trip: "verified", notes: [] });
     expect(verified.tone).toBe("ok");
-    expect(verified.detail).toContain("remains the source for runs");
+    expect(verified.detail).toContain("Compute in this workspace runs the project scene");
   });
 });
 

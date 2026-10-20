@@ -175,9 +175,10 @@ pub fn scene_document_to_script_builder(
                         object.material_ref, object.id
                     ))
                 })?;
-            let magnetization_ref = object
-                .magnetization_ref
-                .as_ref()
+            // Mirror the geometry/runtime resolution: an override for the
+            // object's primary region replaces the object-level reference.
+            let magnetization_ref = scene_object_primary_region_override(object)
+                .or(object.magnetization_ref.as_ref())
                 .filter(|reference| !reference.trim().is_empty())
                 .ok_or_else(|| {
                     SceneDocumentValidationError::new(format!(
@@ -417,10 +418,45 @@ fn scene_stage_u64_is_exportable(value: &crate::SceneStageU64) -> bool {
     }
 }
 
+fn scene_object_primary_region_id(object: &SceneObject) -> String {
+    object
+        .region_name
+        .clone()
+        .unwrap_or_else(|| format!("region:{}", object.id))
+}
+
+fn scene_object_primary_region_override(object: &SceneObject) -> Option<&String> {
+    object
+        .region_overrides
+        .get(&scene_object_primary_region_id(object))
+        .and_then(|entry| entry.magnetization_ref.as_ref())
+}
+
+/// Legacy per-region overrides other than the primary-region magnetization
+/// have no canonical DSL representation. Fail closed instead of silently
+/// exporting a script without them.
+fn reject_unexportable_region_overrides(
+    scene: &SceneDocument,
+) -> Result<(), SceneDocumentValidationError> {
+    for object in &scene.objects {
+        let primary = scene_object_primary_region_id(object);
+        for (region_id, entry) in &object.region_overrides {
+            if region_id != &primary && entry.magnetization_ref.is_some() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "scene_document_legacy_region_overrides_not_supported: object '{}' region '{}' must be migrated to authored object regions before script export",
+                    object.id, region_id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn scene_document_to_script_builder_overrides(
     scene: &SceneDocument,
 ) -> Result<Value, SceneDocumentValidationError> {
     validate_stage_builder_numeric_values(scene)?;
+    reject_unexportable_region_overrides(scene)?;
     let builder = scene_document_to_script_builder(scene)?;
     // The solver projection is magnetic-only; script export owns the complete
     // authored inventory, including conductors without magnetic assignments.
@@ -502,6 +538,8 @@ pub fn scene_document_to_script_builder_overrides(
             "hmin": parse_optional_text_f64(&builder.mesh.hmin),
             "maximum_element_size": builder.mesh.maximum_element_size.as_deref().map(parse_optional_text_f64_or_auto).unwrap_or(Value::Null),
             "minimum_element_size": builder.mesh.minimum_element_size.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
+            // Null is "not authored": the Python rewriter keeps the loaded order.
+            "order": builder.mesh.order.map(Value::from).unwrap_or(Value::Null),
             "calibrate_for": builder.mesh.calibrate_for.clone().map(Value::String).unwrap_or(Value::Null),
             "size_preset": builder.mesh.size_preset.clone().map(Value::String).unwrap_or(Value::Null),
             "size_factor": builder.mesh.size_factor,
@@ -606,6 +644,43 @@ pub fn scene_document_to_script_builder_overrides(
                     stage_fields.insert(key.to_string(), value.clone());
                 }
             }
+            // Keep parity with the Python SceneDocument adapter
+            // (`builder_overrides_from_scene_document`): first-class eigen
+            // fields are always emitted; fields carried in `extra` are emitted
+            // only when present so the rewriter keeps loaded values otherwise.
+            stage_fields.insert(
+                "eigen_damping_policy".to_string(),
+                string_or_null(&stage.eigen_damping_policy),
+            );
+            stage_fields.insert(
+                "eigen_spin_wave_bc".to_string(),
+                string_or_null(&stage.eigen_spin_wave_bc),
+            );
+            stage_fields.insert(
+                "eigen_spin_wave_bc_config".to_string(),
+                stage
+                    .eigen_spin_wave_bc_config
+                    .clone()
+                    .filter(Value::is_object)
+                    .unwrap_or(Value::Null),
+            );
+            // Stage autosave mirrors the Python adapter: always present, and
+            // null explicitly clears a loaded stage policy.
+            stage_fields.insert(
+                "autosave".to_string(),
+                stage.extra.get("autosave").cloned().unwrap_or(Value::Null),
+            );
+            for key in [
+                "eigen_operator",
+                "eigen_frequency_min",
+                "eigen_frequency_max",
+                "eigen_k_path",
+                "eigen_magnetostatic_bc",
+            ] {
+                if let Some(value) = stage.extra.get(key) {
+                    stage_fields.insert(key.to_string(), value.clone());
+                }
+            }
             stage_override
         }).collect::<Vec<_>>(),
         "study_pipeline": builder.study_pipeline.as_ref().map(|document| {
@@ -614,6 +689,14 @@ pub fn scene_document_to_script_builder_overrides(
         "table_autosave": builder.table_autosave.as_ref().map(|table| {
             serde_json::to_value(table).unwrap_or(Value::Null)
         }).unwrap_or(Value::Null),
+        // Presence is authoritative in the Python rewriter: null clears the
+        // loaded output storage, and the drive list replaces loaded drives.
+        "output_storage": builder.output_storage.as_ref().map(|storage| {
+            serde_json::to_value(storage).unwrap_or(Value::Null)
+        }).unwrap_or(Value::Null),
+        "field_drives": builder.field_drives.iter()
+            .map(|drive| serde_json::to_value(drive).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
         "initial_state": builder.initial_state.as_ref().map(|initial_state| serde_json::json!({
             "magnet_name": initial_state.magnet_name,
             "source_path": initial_state.source_path,
@@ -2587,6 +2670,7 @@ mod tests {
                 adaptive_h_max: String::new(),
                 adaptive_max_passes: 2,
                 adaptive_error_tolerance: "1e-3".to_string(),
+                order: None,
             },
             universe: Some(ScriptBuilderUniverseState {
                 mode: "auto".to_string(),

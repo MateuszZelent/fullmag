@@ -170,6 +170,14 @@
   overflow-wrap: break-word;
 }
 
+.fm-inspector-feedback__detail {
+  display: block;
+  margin-top: var(--fm-space-1);
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+}
+
 .fm-region-inline-diagnostics {
   display: grid;
   gap: var(--fm-space-1);

@@ -14,30 +14,30 @@
 
 use fullmag_ir::{FemPlanIR, IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR};
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use crate::artifact_pipeline::{apply_artifact_enqueue_metrics, ArtifactRecorder};
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use crate::dispatch::FemEngine;
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use crate::interactive_runtime::{
     cached_display_refresh_due, display_is_global_scalar, display_refresh_due,
 };
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::llg_overdamped_uses_pure_damping;
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use crate::schedules::{advance_due_schedules, is_due, OutputSchedule};
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use crate::solver_profile::{current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns};
 use crate::types::{ExecutionProvenance, RelaxationControllerPolicyProvenance};
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use crate::types::{FieldSnapshot, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use super::preview::FemPreviewHandoff;
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use super::scalars::{ensure_fem_object_scalars, publish_initial_scalar_without_field_snapshot};
 
 fn convergence_controller_policy() -> RelaxationControllerPolicyProvenance {
@@ -161,7 +161,7 @@ pub fn stop_summary(control: &RelaxationControlIR) -> String {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 pub(crate) struct LlgOverdampedExecution {
     pub(crate) latest_stats: Option<StepStats>,
     pub(crate) backend_completion: Option<fullmag_ir::StageCompletionIR>,
@@ -170,7 +170,7 @@ pub(crate) struct LlgOverdampedExecution {
     pub(crate) preview_handoff: FemPreviewHandoff,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 pub(crate) fn execute_llg_overdamped(
     backend: &mut NativeFemBackend,
     engine: FemEngine,
@@ -307,8 +307,14 @@ pub(crate) fn execute_llg_overdamped(
                             current_stats.dt,
                         )?
                     };
-                    let magnetization_payload =
-                        preview_handoff.request_magnetization(node_count, current_stats.step)?;
+                    let magnetization_payload = preview_handoff.request_magnetization(
+                        backend,
+                        node_count,
+                        current_stats.step,
+                        current_stats.time,
+                        current_stats.dt,
+                        fem_mesh_generation_id.as_deref(),
+                    )?;
                     preview_handoff.dispatch_staged(backend);
                     live_stats.preview_superseded_count = preview_handoff.take_superseded_count();
                     live_stats.field_materialization_states =
@@ -325,6 +331,9 @@ pub(crate) fn execute_llg_overdamped(
                     let field_copy_bytes = magnetization_payload
                         .as_ref()
                         .map_or(0, |payload| payload.field_copy_bytes);
+                    let magnetization_carrier = magnetization_payload
+                        .as_ref()
+                        .map(super::preview::live_magnetization_carrier);
                     let magnetization = magnetization_payload.map(|payload| {
                         live_stats.magnetization_source_step = Some(payload.source_step);
                         live_stats.magnetization_source_revision = Some(payload.source_revision);
@@ -347,12 +356,13 @@ pub(crate) fn execute_llg_overdamped(
                         elapsed_current_thread_cpu_ns(preview_callback_cpu_started);
                     live_stats.preview_callback_thread_cpu_started_ns =
                         preview_callback_cpu_started;
-                    let action = (live.on_step)(StepUpdate {
+                    let mut update = StepUpdate {
                         coupled_checkpoint: None,
                         stats: live_stats,
                         grid: live.grid,
                         fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                         magnetization,
+                        magnetization_carrier,
                         preview_field,
                         cached_preview_fields,
                         hysteresis_field_m_t: None,
@@ -363,7 +373,13 @@ pub(crate) fn execute_llg_overdamped(
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         terminal_field_snapshot: false,
                         finished: false,
-                    });
+                    };
+                    if live.field_every_n == 1 {
+                        if let Err(error) = super::preview::capture_native_fem_observables(
+                            backend, engine, plan, fem_mesh_generation_id.as_deref(), &mut update,
+                        ) { eprintln!("[fullmag-runner] native FEM observation: {}", error.message); }
+                    }
+                    let action = (live.on_step)(update);
                     if preview_due {
                         last_preview_revision = Some(display_selection.revision);
                     }
@@ -447,10 +463,20 @@ pub(crate) fn execute_llg_overdamped(
             preview_handoff.reset_timings();
             let preview_start = std::time::Instant::now();
             let magnetization = if stats.step % heavy_payload_every == 0 {
-                preview_handoff.request_magnetization(node_count, stats.step)?
+                preview_handoff.request_magnetization(
+                    backend,
+                    node_count,
+                    stats.step,
+                    stats.time,
+                    stats.dt,
+                    fem_mesh_generation_id.as_deref(),
+                )?
             } else {
                 preview_handoff.poll_magnetization()?
             };
+            let magnetization_carrier = magnetization
+                .as_ref()
+                .map(super::preview::live_magnetization_carrier);
             let magnetization = if let Some(payload) = magnetization {
                 live_stats.field_copy_wall_time_ns = live_stats
                     .field_copy_wall_time_ns
@@ -541,12 +567,13 @@ pub(crate) fn execute_llg_overdamped(
             live_stats.preview_callback_thread_cpu_time_ns =
                 elapsed_current_thread_cpu_ns(preview_callback_cpu_started);
             live_stats.preview_callback_thread_cpu_started_ns = preview_callback_cpu_started;
-            let action = (live.on_step)(StepUpdate {
+            let mut update = StepUpdate {
                 coupled_checkpoint: None,
                 stats: live_stats,
                 grid: live.grid,
                 fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                 magnetization,
+                magnetization_carrier,
                 preview_field,
                 cached_preview_fields,
                 hysteresis_field_m_t: None,
@@ -557,7 +584,13 @@ pub(crate) fn execute_llg_overdamped(
                 scalar_row_due: preview_due && preview_targets_global_scalar,
                 terminal_field_snapshot: false,
                 finished: false,
-            });
+            };
+            if live.field_every_n == 1 {
+                if let Err(error) = super::preview::capture_native_fem_observables(
+                    backend, engine, plan, fem_mesh_generation_id.as_deref(), &mut update,
+                ) { eprintln!("[fullmag-runner] native FEM observation: {}", error.message); }
+            }
+            let action = (live.on_step)(update);
             if preview_due {
                 last_preview_revision = Some(
                     display_selection

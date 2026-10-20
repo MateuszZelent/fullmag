@@ -34,6 +34,40 @@ export type Viewport3DFieldDomainCompatibility =
       status: "mismatch";
     };
 
+type Viewport3DFieldDomainMismatchReason = Extract<
+  Viewport3DFieldDomainCompatibility,
+  { status: "mismatch" }
+>["reason"];
+
+const FIELD_DOMAIN_MISMATCH_TEXT: Record<Viewport3DFieldDomainMismatchReason, string> = {
+  "domain-generation-mismatch":
+    "the field was computed for a different domain generation than the one shown",
+  "domain-generation-unknown":
+    "the field does not declare which domain generation it belongs to",
+  "duplicate-node-index": "the field maps two samples to the same location",
+  "fdm-carrier-identity-unknown":
+    "the grid carrier identity of the displayed domain is not published yet",
+  "mesh-topology-hash-mismatch":
+    "the field belongs to a different mesh topology than the one shown",
+  "mesh-topology-revision-mismatch":
+    "the field belongs to an older or newer mesh revision than the one shown",
+  "missing-node-indices": "the compact field carries no sample-to-location map",
+  "node-index-out-of-range":
+    "the field references locations outside the displayed domain",
+  "point-count-mismatch":
+    "the field sample count does not match the displayed domain",
+};
+
+/**
+ * User-facing explanation for a blocked field buffer. The internal reason
+ * code stays available for diagnostics; the renderer never guesses a map.
+ */
+export function describeViewport3DFieldDomainMismatch(
+  reason: Viewport3DFieldDomainMismatchReason,
+): string {
+  return `${FIELD_DOMAIN_MISMATCH_TEXT[reason]}; it is not drawn until matching data arrives (${reason}).`;
+}
+
 export function safeViewport3DDomainGenerationId(value: unknown): string | null {
   if (typeof value === "string") return value;
   return typeof value === "number" && Number.isSafeInteger(value)
@@ -129,6 +163,27 @@ export function resolveViewport3DFieldDomainCompatibility({
     hasDuplicateFieldNodeIndex(field.nodeIndices, field.pointCount)
   ) {
     return { reason: "duplicate-node-index", status: "mismatch" };
+  }
+
+  if (
+    domain.discretization !== "fdm" &&
+    (field.indexing === "explicit_node_indices" ||
+      field.indexing === "sampled_node_indices")
+  ) {
+    if (!field.nodeIndices || field.nodeIndices.length !== field.pointCount) {
+      return { reason: "missing-node-indices", status: "mismatch" };
+    }
+    for (let index = 0; index < field.nodeIndices.length; index += 1) {
+      const nodeIndex = field.nodeIndices[index];
+      if (
+        nodeIndex === undefined ||
+        !Number.isSafeInteger(nodeIndex) ||
+        nodeIndex < 0 ||
+        (domain.pointCount > 0 && nodeIndex >= domain.pointCount)
+      ) {
+        return { reason: "node-index-out-of-range", status: "mismatch" };
+      }
+    }
   }
 
   if (domain.discretization === "fdm") {

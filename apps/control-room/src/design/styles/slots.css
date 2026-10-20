@@ -214,6 +214,35 @@
   color: var(--fm-text-primary);
 }
 
+/* Resolved execution does not honour the requested intent (e.g. GPU → CPU). */
+.fm-status-bar__engine[data-tone="warning"] {
+  border-color: color-mix(
+    in srgb,
+    var(--fm-warning) 64%,
+    var(--fm-border-default)
+  );
+  background: color-mix(in srgb, var(--fm-warning) 12%, var(--fm-bg-panel-raised));
+}
+
+.fm-status-bar__engine[data-tone="warning"] .fm-status-bar__engine-label,
+.fm-status-bar__engine[data-tone="warning"] .fm-status-bar__engine-detail {
+  color: var(--fm-warning);
+}
+
+.fm-status-bar__compute-cta {
+  flex-shrink: 0;
+  margin-inline-start: var(--fm-space-1);
+}
+
+.fm-status-bar__compute-cta[aria-disabled="true"],
+.fm-footer-telemetry__compute-cta[aria-disabled="true"] {
+  cursor: not-allowed;
+  border-color: var(--fm-border-disabled);
+  background: var(--fm-bg-disabled);
+  color: var(--fm-text-disabled);
+  box-shadow: none;
+}
+
 .fm-status-bar__engine-label {
   color: var(--fm-accent);
   font-weight: 700;

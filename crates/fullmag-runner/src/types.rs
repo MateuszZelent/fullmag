@@ -4,6 +4,7 @@ use fullmag_ir::{
     FemEigenExecutionResolutionIR, FemMeshPartRole, FemMeshPartSelector, MeshQualityIR,
     StageCompletionIR,
 };
+use crate::observation::ObservationClock;
 pub use fullmag_quantities::{
     FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation,
 };
@@ -12,6 +13,29 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
+
+pub(crate) fn fdm_multilayer_live_magnetization_carrier(
+    layout: Option<&serde_json::Value>,
+    stats: &StepStats,
+) -> Option<LiveMagnetizationCarrier> {
+    let layout = layout.filter(|layout| {
+        layout.get("backend").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
+            && layout.get("layout_error").is_none()
+    })?;
+    Some(LiveMagnetizationCarrier {
+        layout: layout.clone(),
+        source_clock: ObservationClock {
+            accepted_step: stats.step,
+            time_seconds: stats.time,
+            dt_seconds: (stats.dt > 0.0).then_some(stats.dt),
+        },
+        fem_local_node_map: None,
+    })
+}
+
+pub(crate) fn fdm_multilayer_live_field_due(step: u64, field_every_n: u64) -> bool {
+    field_every_n != u64::MAX && step > 0 && step % field_every_n.max(1) == 0
+}
 
 #[cfg(test)]
 thread_local! {
@@ -2045,6 +2069,14 @@ pub struct StepUpdate {
     /// Sent periodically (not every step) to limit bandwidth.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub magnetization: Option<Vec<f64>>,
+    /// Exact layout and source clock for the live magnetization carrier.
+    /// Kept separate from the field bytes so consumers can validate the native
+    /// ordering without inferring it from a value count.
+    // Internal producer-to-worker proof. The field bytes remain on the
+    // existing binary/data path; this compact metadata must not leak into the
+    // JSON or websocket control plane.
+    #[serde(skip)]
+    pub magnetization_carrier: Option<LiveMagnetizationCarrier>,
     /// **Deprecated (Q17):** Use [`fullmag_quantities::LiveQuantityFrame`]
     /// via [`Self::to_v2()`] instead.
     ///
@@ -2085,6 +2117,26 @@ pub struct StepUpdate {
     /// true when simulation has completed.
     #[serde(default)]
     pub finished: bool,
+}
+
+/// Lightweight identity accompanying a live magnetization field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveMagnetizationCarrier {
+    /// Canonical study-state layout serialized by the resolved plan.
+    pub layout: serde_json::Value,
+    /// Step/time/dt observed by the same producer as the values.
+    pub source_clock: ObservationClock,
+    /// Present only when values came from the FEM local-node AoS carrier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_local_node_map: Option<LiveFemLocalNodeMapIdentity>,
+}
+
+/// Proof of the native FEM local-node ordering used by one live m payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveFemLocalNodeMapIdentity {
+    pub mesh_generation_id: String,
+    pub local_node_index_map_sha256: String,
+    pub node_count: usize,
 }
 
 impl StepUpdate {
@@ -5542,6 +5594,7 @@ mod tests {
                 scalar_row_due: false,
                 terminal_field_snapshot: false,
                 finished: step == 7,
+                magnetization_carrier: None,
             };
             assert_eq!(
                 update.fem_mesh_generation_id.as_deref(),
@@ -5664,6 +5717,7 @@ mod tests {
             scalar_row_due: false,
             terminal_field_snapshot: false,
             finished: false,
+            magnetization_carrier: None,
         };
 
         let v2 = update.to_v2();
@@ -5719,6 +5773,7 @@ mod tests {
             scalar_row_due: false,
             terminal_field_snapshot: false,
             finished: false,
+            magnetization_carrier: None,
         };
 
         let v2 = update.to_v2();
@@ -5777,6 +5832,7 @@ mod tests {
             scalar_row_due: false,
             terminal_field_snapshot: false,
             finished: true,
+            magnetization_carrier: None,
         };
 
         let v2 = update.to_v2();

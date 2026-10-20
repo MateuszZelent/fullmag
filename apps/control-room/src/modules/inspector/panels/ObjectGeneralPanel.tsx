@@ -43,7 +43,11 @@ import {
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useObjectVisualizationSelector } from "@/kernel/visualization/useObjectVisualization";
-import { resolvePrimitiveSurfaceColor } from "@/kernel/visualization/primitiveSurfaceColor";
+import {
+  createPrimitiveSurfaceColorAssignments,
+  isFerromagneticPrimitiveRole,
+  resolvePrimitiveSurfaceColor,
+} from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -342,11 +346,25 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   );
 
   const metricsModel = resolveObjectMetricsPanelModel(objectMetrics.data);
-  const presentationRole = scene.data?.objects?.find(
+  const primitiveColorAssignments = useMemo(
+    () =>
+      createPrimitiveSurfaceColorAssignments(
+        scene.data?.objects
+          ?.filter((entry) => isFerromagneticPrimitiveRole(entry.role))
+          .map((entry) => entry.id) ?? [],
+      ),
+    [scene.data?.objects],
+  );
+  const presentationObject = scene.data?.objects?.find(
     (entry) => entry.id === object.objectId,
-  )?.role;
+  );
   const primitiveColor = visualizationSettings
-    ? resolvePrimitiveSurfaceColor(presentationRole, visualizationSettings)
+    ? resolvePrimitiveSurfaceColor(
+        presentationObject?.role,
+        visualizationSettings,
+        object.objectId,
+        primitiveColorAssignments,
+      )
     : null;
 
   function createAuthoringMutationContext() {

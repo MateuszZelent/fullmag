@@ -728,7 +728,7 @@ describe("StudyStageAuthoringModel", () => {
       device: "gpu",
       mode: "strict",
     }).map((issue) => issue.message)).toEqual(expect.arrayContaining([
-      "dt_max is required and must be finite and positive.",
+      "Adaptive dt max is required and must be a positive time.",
       "Adaptive FDM execution requires an explicit CPU device.",
     ]));
   });
@@ -1573,7 +1573,7 @@ describe("StudyStageAuthoringModel", () => {
             timestepMode: "fixed",
           },
         ]),
-      ).toThrow("fixed_timestep must be a positive finite number.");
+      ).toThrow("Fixed dt must be a positive finite number.");
     },
   );
 
@@ -2049,8 +2049,8 @@ describe("StudyStageAuthoringModel", () => {
       "Settle step 1 max_steps must be a positive integer.",
       "Settle step 1 alpha must be a positive finite number.",
       "Settle step 1 torque_tolerance must be a positive finite number.",
-      "Settle step 1 retry_with_smaller_dt requires retry_timestep_scale.",
-      "Settle step 1 dt_min must be smaller than or equal to timestep_s.",
+      "Settle step 1 retry with smaller timestep requires a Retry scale.",
+      "Settle step 1 Minimum timestep must be smaller than or equal to Timestep.",
     ]);
 
     expect(
@@ -2426,10 +2426,10 @@ describe("StudyStageAuthoringModel", () => {
         ]),
       }).map((issue) => issue.message),
     ).toEqual([
-      "Field segment 1 requires segmentId.",
-      "Field segment 1 requires endpointPolicy.",
+      "Field segment 1 requires a Segment ID.",
+      "Field segment 1 requires an Endpoint policy.",
       "Field segment 1 step must be a positive finite number.",
-      "Field segment 1 startField and stopField must differ.",
+      "Field segment 1 Start field and Stop field must differ.",
     ]);
   });
 

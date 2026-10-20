@@ -14,16 +14,16 @@
 //! | `TangentPlaneImplicit`  | dev      | dev        | under development; not production-qualified |
 
 pub mod algorithm;
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 pub(crate) mod direct_minimizer;
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 pub(crate) mod finalize;
 pub mod llg_overdamped;
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 pub(crate) mod preview;
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 pub(crate) mod scalars;
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 pub(crate) mod snapshots;
 pub mod stop;
 

@@ -12,8 +12,9 @@ use sha2::{Digest, Sha256};
 
 use super::fdm_region_membership::{load_resolved_fdm_membership, ResolvedFdmMembership};
 use super::field_resolution::{
-    fem_magnetic_node_indices, fem_nodal_visualization_projection_allowed,
-    flatten_json_field_values, is_fdm_snapshot, json_field_grid,
+    current_fem_nodal_projection_kind, fem_magnetic_node_indices,
+    fem_nodal_visualization_projection_allowed, field_value_count_matches_current_domain,
+    flatten_current_field_values, is_fdm_snapshot, json_field_grid, json_field_value_count,
 };
 use crate::artifacts::read_json_artifact_value;
 use crate::error::ApiError;
@@ -412,6 +413,29 @@ impl ResolvedSpatialField<'static> {
 
 impl ResolvedSpatialField<'_> {
     pub(crate) fn validate_contract(&self) -> Result<(), ApiError> {
+        if self.component_count == 0
+            || self.values.len() % self.component_count != 0
+            || self.values.iter().any(|value| !value.is_finite())
+        {
+            return Err(ApiError::conflict(format!(
+                "resolved field '{}' disagrees with the canonical quantity contract",
+                self.quantity_id
+            )));
+        }
+        self.validate_carrier_contract(self.values.len() / self.component_count)
+    }
+
+    pub(crate) fn validate_metadata_contract(&self, local_count: usize) -> Result<(), ApiError> {
+        if !self.values.is_empty() || self.component_count == 0 || local_count == 0 {
+            return Err(ApiError::conflict(format!(
+                "metadata-only field '{}' has invalid payload or sample count",
+                self.quantity_id
+            )));
+        }
+        self.validate_carrier_contract(local_count)
+    }
+
+    fn validate_carrier_contract(&self, local_count: usize) -> Result<(), ApiError> {
         let spec = quantity_spec(&self.quantity_id).ok_or_else(|| {
             ApiError::not_found(format!("unknown spatial quantity '{}'", self.quantity_id))
         })?;
@@ -420,7 +444,6 @@ impl ResolvedSpatialField<'_> {
             || self.component_count != spec.n_comp as usize
             || self.default_component != spec.default_component
             || self.component_count == 0
-            || self.values.len() % self.component_count != 0
         {
             return Err(ApiError::conflict(format!(
                 "resolved field '{}' disagrees with the canonical quantity contract",
@@ -433,9 +456,13 @@ impl ResolvedSpatialField<'_> {
                 self.quantity_id
             )));
         }
-        let local_count = self.values.len() / self.component_count;
+        let value_count = local_count
+            .checked_mul(self.component_count)
+            .ok_or_else(|| ApiError::conflict("resolved field value count overflowed"))?;
         match &self.carrier {
-            SpatialFieldCarrier::ArtifactSamples(carrier) => carrier.validate(self.values.len(), self.component_count)?,
+            SpatialFieldCarrier::ArtifactSamples(carrier) => {
+                carrier.validate(value_count, self.component_count)?
+            }
             SpatialFieldCarrier::FdmCells {
                 cells,
                 origin_m,
@@ -2161,22 +2188,52 @@ pub(crate) fn resolve_current_spatial_field<'a>(
     quantity_id: &str,
     component_count: usize,
 ) -> Result<Option<ResolvedSpatialField<'a>>, ApiError> {
-    let Some(_) = quantity_spec(quantity_id) else {
+    let Some(mut field) =
+        resolve_current_spatial_field_metadata(snapshot, quantity_id, component_count)?
+    else {
         return Ok(None);
     };
     let Some(source) = resolved_current_field_source(snapshot, quantity_id, component_count) else {
         return Ok(None);
     };
-    let (values, grid, source_kind, quantity_revision, field_generation) = match source {
+    field.values = match source {
+        ResolvedCurrentFieldSource::Latest(raw) => {
+            flatten_current_field_values(snapshot, quantity_id, raw)?
+        }
+        ResolvedCurrentFieldSource::Preview(field) => field.vector_field_values.clone(),
+        ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, .. } => values.to_vec(),
+    };
+    field.validate_contract()?;
+    Ok(Some(field))
+}
+
+/// Resolve the current field's carrier and provenance from small metadata
+/// only. The returned `values` vector is intentionally empty; callers use the
+/// qualified source descriptor's value count to report payload availability.
+pub(crate) fn resolve_current_spatial_field_metadata<'a>(
+    snapshot: &'a SessionStateResponse,
+    quantity_id: &str,
+    component_count: usize,
+) -> Result<Option<ResolvedSpatialField<'a>>, ApiError> {
+    let Some(spec) = quantity_spec(quantity_id) else {
+        return Ok(None);
+    };
+    if spec.location == QuantityLocation::Global || component_count == 0 {
+        return Ok(None);
+    }
+    let Some(source) = resolved_current_field_source(snapshot, quantity_id, component_count) else {
+        return Ok(None);
+    };
+    let (value_count, grid, source_kind, quantity_revision, field_generation) = match source {
         ResolvedCurrentFieldSource::Latest(raw) => (
-            flatten_json_field_values(raw),
+            json_field_value_count(raw),
             json_field_grid(raw),
             SpatialFieldSourceKind::Materialized,
             exact_latest_quantity_revision(snapshot, raw, quantity_id),
             exact_latest_field_generation(snapshot, raw),
         ),
         ResolvedCurrentFieldSource::Preview(field) => (
-            field.vector_field_values.clone(),
+            field.vector_field_values.len(),
             Some(field.preview_grid),
             SpatialFieldSourceKind::Preview,
             snapshot
@@ -2187,7 +2244,7 @@ pub(crate) fn resolve_current_spatial_field<'a>(
             None,
         ),
         ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid } => (
-            values.to_vec(),
+            values.len(),
             Some(grid),
             SpatialFieldSourceKind::Live,
             snapshot
@@ -2205,11 +2262,22 @@ pub(crate) fn resolve_current_spatial_field<'a>(
             None,
         ),
     };
-    resolve_spatial_field_from_values(
+    if value_count == 0
+        || value_count % component_count != 0
+        || !field_value_count_matches_current_domain(
+            snapshot,
+            quantity_id,
+            component_count,
+            value_count,
+        )
+    {
+        return Ok(None);
+    }
+    resolve_spatial_field_metadata(
         snapshot,
         quantity_id,
         component_count,
-        values,
+        value_count / component_count,
         grid,
         source_kind,
         quantity_revision,
@@ -2235,8 +2303,6 @@ pub(crate) fn resolve_spatial_field_from_values<'a>(
     field_generation: Option<String>,
     provenance: SpatialFieldProvenance,
 ) -> Result<ResolvedSpatialField<'a>, ApiError> {
-    let spec = quantity_spec(quantity_id)
-        .ok_or_else(|| ApiError::not_found(format!("unknown spatial quantity '{quantity_id}'")))?;
     if component_count == 0
         || values.is_empty()
         || values.len() % component_count != 0
@@ -2247,6 +2313,46 @@ pub(crate) fn resolve_spatial_field_from_values<'a>(
         )));
     }
     let point_count = values.len() / component_count;
+    let mut field = resolve_spatial_field_metadata(
+        snapshot,
+        quantity_id,
+        component_count,
+        point_count,
+        grid,
+        source_kind,
+        quantity_revision,
+        field_generation,
+        provenance,
+    )?;
+    field.values = values;
+    field.validate_contract()?;
+    Ok(field)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_spatial_field_metadata<'a>(
+    snapshot: &'a SessionStateResponse,
+    quantity_id: &str,
+    component_count: usize,
+    point_count: usize,
+    grid: Option<[u32; 3]>,
+    source_kind: SpatialFieldSourceKind,
+    quantity_revision: u64,
+    field_generation: Option<String>,
+    provenance: SpatialFieldProvenance,
+) -> Result<ResolvedSpatialField<'a>, ApiError> {
+    let spec = quantity_spec(quantity_id)
+        .ok_or_else(|| ApiError::not_found(format!("unknown spatial quantity '{quantity_id}'")))?;
+    if spec.location == QuantityLocation::Global {
+        return Err(ApiError::conflict(format!(
+            "global quantity '{quantity_id}' has no spatial carrier"
+        )));
+    }
+    if component_count == 0 || point_count == 0 {
+        return Err(ApiError::conflict(format!(
+            "field '{quantity_id}' metadata violates the canonical component contract"
+        )));
+    }
     let carrier = if is_fdm_snapshot(snapshot) {
         let cells = resolved_grid(snapshot, grid, point_count);
         let (origin_m, cell_size_m) = fdm_grid_geometry(snapshot)
@@ -2282,6 +2388,16 @@ pub(crate) fn resolve_spatial_field_from_values<'a>(
         })?;
         let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
         match spec.location {
+            QuantityLocation::Cell
+                if matches!(source_kind, SpatialFieldSourceKind::Materialized | SpatialFieldSourceKind::Preview)
+                    && point_count == mesh.nodes.len()
+                    && current_fem_nodal_projection_kind(snapshot, quantity_id).is_some() =>
+            {
+                SpatialFieldCarrier::FemNodes {
+                    topology: mesh, topology_fingerprint,
+                    mapping: EntityMapping::Identity { entity_count: point_count },
+                }
+            }
             QuantityLocation::Cell if point_count == mesh.cell_count() => {
                 SpatialFieldCarrier::FemElements {
                     topology: mesh,
@@ -2339,10 +2455,10 @@ pub(crate) fn resolve_spatial_field_from_values<'a>(
             snapshot.mesh_revision
         },
         source_grid: grid,
-        values,
+        values: Vec::new(),
         carrier,
     };
-    field.validate_contract()?;
+    field.validate_metadata_contract(point_count)?;
     Ok(field)
 }
 

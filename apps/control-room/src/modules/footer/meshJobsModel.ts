@@ -35,6 +35,11 @@ interface MeshJobsViewportConfirmation {
 export interface MeshJobsModel {
   activeTitle: string;
   historyRows: MeshJobsHistoryRow[];
+  /**
+   * Published `last_build_error` of the mesh resource. Unstructured text: no
+   * object/region attribution is inferred from it.
+   */
+  lastBuildError?: string | null;
   latestRows: MeshJobsSummaryRow[];
   logRows: MeshJobsLogRow[];
   phaseRows: NormalizedMeshBuildPhase[];
@@ -83,6 +88,43 @@ function targetKind(build: Record<string, unknown> | null | undefined): string {
       build?.target_kind,
     "mesh",
   );
+}
+
+const MESH_LOG_SOURCES = new Set(["gmsh", "mesh", "meshing", "mesh_build", "remesh"]);
+
+interface MeshBuildLogIdentity {
+  commandId: string | null;
+  phaseIds: ReadonlySet<string>;
+}
+
+function meshBuildLogIdentity(
+  activeBuild: Record<string, unknown> | null | undefined,
+  phaseRows: readonly NormalizedMeshBuildPhase[],
+): MeshBuildLogIdentity {
+  const commandId =
+    text(asRecord(activeBuild?.provenance)?.command_id, "") ||
+    text(asRecord(activeBuild?.active_build)?.command_id, "") ||
+    null;
+  return {
+    commandId,
+    phaseIds: new Set(phaseRows.map((phase) => phase.id)),
+  };
+}
+
+/**
+ * Structured identity (command id of the mesh build, a published pipeline
+ * phase id, or a mesh log source) admits an entry regardless of wording; the
+ * text heuristic remains only for entries the producer did not tag.
+ */
+function isMeshBuildLogEntry(
+  entry: { message: string; command_id?: string | null; phase_id?: string | null; source?: string | null },
+  identity: MeshBuildLogIdentity,
+): boolean {
+  if (identity.commandId && entry.command_id === identity.commandId) return true;
+  if (entry.phase_id && identity.phaseIds.has(entry.phase_id)) return true;
+  const source = entry.source?.trim().toLowerCase();
+  if (source && MESH_LOG_SOURCES.has(source)) return true;
+  return isMeshBuildLog(entry.message);
 }
 
 function isMeshBuildLog(message: string): boolean {
@@ -169,7 +211,12 @@ function viewportRows(
 }
 
 export function buildMeshJobsModel(input: MeshJobsModelInput): MeshJobsModel {
-  const activeStatus = text(input.activeBuild?.status, "idle");
+  // The mesh resource has no top-level `status`; the running build reports it
+  // inside `active_build`.
+  const activeStatus = text(
+    input.activeBuild?.status ?? asRecord(input.activeBuild?.active_build)?.status,
+    "idle",
+  );
   const activeTarget = targetKind(input.activeBuild);
   const published = asRecord(input.activeBuild?.published_resources);
   const activeTitle =
@@ -179,9 +226,11 @@ export function buildMeshJobsModel(input: MeshJobsModelInput): MeshJobsModel {
   const phaseRows = normalizeMeshBuildPhases(
     input.activeBuild?.mesh_pipeline_status,
   );
+  const logIdentity = meshBuildLogIdentity(input.activeBuild, phaseRows);
+  const lastBuildError = text(input.activeBuild?.last_build_error, "") || null;
   const logRows =
     input.engineLog?.entries
-      .filter((entry) => isMeshBuildLog(entry.message))
+      .filter((entry) => isMeshBuildLogEntry(entry, logIdentity))
       .slice(-50)
       .reverse()
       .map((entry) => {
@@ -199,6 +248,7 @@ export function buildMeshJobsModel(input: MeshJobsModelInput): MeshJobsModel {
   return {
     activeTitle,
     historyRows: historyRows(input.history),
+    lastBuildError,
     latestRows: [
       {
         label: "Scene revision",

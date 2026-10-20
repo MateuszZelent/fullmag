@@ -8,15 +8,15 @@ use fullmag_authoring::{SceneDocument, SceneMaterialParameterAssignment, SceneOb
 use serde_json::Value;
 use std::path::Path as FsPath;
 
-use super::field_resolution::flatten_json_field_values;
+use super::field_resolution::{flatten_current_field_values, json_field_value_count};
 use crate::artifacts::read_json_artifact_value;
 use crate::error::ApiError;
 use crate::schemas::authoring::{
     MaterialParameterFieldDataListResource, MaterialParameterFieldDataResource,
     MaterialParameterFieldDataSummaryResource,
 };
-use crate::session::current_artifact_dir;
-use crate::types::{AppState, LatestFields};
+use crate::session::{current_artifact_dir, latest_field_source_is_qualified};
+use crate::types::{AppState, SessionStateResponse};
 
 #[utoipa::path(
     get,
@@ -52,29 +52,7 @@ pub async fn get_material_field_data_catalog(
     Ok(Json(MaterialParameterFieldDataListResource {
         scene_revision: scene.revision,
         region_coefficients_revision: Some(snapshot.region_realization_revisions.coefficients),
-        fields: material_field_data_resources(
-            scene,
-            snapshot.region_realization_revisions.coefficients,
-            &snapshot.latest_fields,
-            &assets,
-        )
-        .into_iter()
-        .map(|resource| MaterialParameterFieldDataSummaryResource {
-            field_id: resource.field_id.clone(),
-            assignment_id: resource.assignment_id.clone(),
-            asset_id: resource.asset_id.clone(),
-            owner_object_id: resource.owner_object_id.clone(),
-            parameter: resource.parameter.clone(),
-            source_region_id: resource.source_region_id.clone(),
-            unit: resource.unit.clone(),
-            realization_status: resource.realization_status.clone(),
-            sample_count: resource.sample_count,
-            href: format!(
-                "/v2/sessions/current/data/material-fields/{}",
-                resource.field_id
-            ),
-        })
-        .collect(),
+        fields: material_field_data_summaries(scene, snapshot, &assets),
     }))
 }
 
@@ -113,37 +91,65 @@ pub async fn get_material_field_data(
     let artifact_dir = current_artifact_dir(snapshot);
     let assets = material_field_assets(snapshot.metadata.as_ref(), artifact_dir.as_deref());
 
-    material_field_data_resources(
-        scene,
+    let selected = scene.objects.iter().find_map(|object| {
+        object
+            .material_parameter_fields
+            .iter()
+            .find(|field| field.assignment_id == field_id)
+            .map(|field| (object, field))
+    });
+    let Some((object, field)) = selected else {
+        return Err(ApiError::not_found(format!(
+            "material field '{field_id}' not found"
+        )));
+    };
+    material_field_data_resource(
+        scene.revision,
         snapshot.region_realization_revisions.coefficients,
-        &snapshot.latest_fields,
+        object,
+        field,
+        snapshot,
         &assets,
     )
-    .into_iter()
-    .find(|resource| resource.field_id == field_id || resource.assignment_id == field_id)
     .map(Json)
-    .ok_or_else(|| ApiError::not_found(format!("material field '{field_id}' not found")))
 }
 
-fn material_field_data_resources(
+fn material_field_data_summaries(
     scene: &SceneDocument,
-    region_coefficients_revision: u64,
-    latest_fields: &LatestFields,
+    snapshot: &SessionStateResponse,
     assets: &[fullmag_ir::MaterialFieldAssetIR],
-) -> Vec<MaterialParameterFieldDataResource> {
+) -> Vec<MaterialParameterFieldDataSummaryResource> {
     scene
         .objects
         .iter()
         .flat_map(|object| {
             object.material_parameter_fields.iter().map(|field| {
-                material_field_data_resource(
-                    scene.revision,
-                    region_coefficients_revision,
-                    object,
-                    field,
-                    latest_fields,
-                    assets,
-                )
+                let parameter = material_parameter_name(field);
+                let asset = matching_material_field_asset(field, &parameter, assets);
+                let sample_count = asset
+                    .map(|asset| asset.values.len())
+                    .unwrap_or_else(|| latest_material_field_value_count(snapshot, &parameter));
+                MaterialParameterFieldDataSummaryResource {
+                    field_id: field.assignment_id.clone(),
+                    assignment_id: field.assignment_id.clone(),
+                    asset_id: asset.map(|asset| asset.asset_id.clone()),
+                    owner_object_id: field.owner_object.clone(),
+                    parameter,
+                    source_region_id: field.region_id.clone(),
+                    unit: asset
+                        .map(|asset| asset.unit.clone())
+                        .or_else(|| material_field_metadata(&field.value).0),
+                    realization_status: if asset.is_some() || sample_count > 0 {
+                        "realized".to_string()
+                    } else {
+                        "authored_pending_realization".to_string()
+                    },
+                    sample_count: sample_count as u64,
+                    href: format!(
+                        "/v2/sessions/current/data/material-fields/{}",
+                        field.assignment_id
+                    ),
+                }
             })
         })
         .collect()
@@ -154,19 +160,16 @@ fn material_field_data_resource(
     region_coefficients_revision: u64,
     _object: &SceneObject,
     field: &SceneMaterialParameterAssignment,
-    latest_fields: &LatestFields,
+    snapshot: &SessionStateResponse,
     assets: &[fullmag_ir::MaterialFieldAssetIR],
-) -> MaterialParameterFieldDataResource {
-    let parameter = serde_json::to_value(&field.parameter)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
+) -> Result<MaterialParameterFieldDataResource, ApiError> {
+    let parameter = material_parameter_name(field);
     let (unit, frame, location) = material_field_metadata(&field.value);
     let asset = matching_material_field_asset(field, &parameter, assets);
-    let values = asset
-        .map(|asset| asset.values.clone())
-        .unwrap_or_else(|| latest_material_field_values(latest_fields, &parameter));
+    let values = match asset {
+        Some(asset) => asset.values.clone(),
+        None => latest_material_field_values(snapshot, &parameter)?,
+    };
     let computed_stats = material_values_stats(&values);
     let realization_status = if asset.is_none() && values.is_empty() {
         "authored_pending_realization"
@@ -174,7 +177,7 @@ fn material_field_data_resource(
         "realized"
     };
 
-    MaterialParameterFieldDataResource {
+    Ok(MaterialParameterFieldDataResource {
         field_id: field.assignment_id.clone(),
         assignment_id: field.assignment_id.clone(),
         asset_id: asset.map(|asset| asset.asset_id.clone()),
@@ -207,7 +210,15 @@ fn material_field_data_resource(
             .map(|asset| asset.mean)
             .or(computed_stats.map(|stats| stats.2)),
         values,
-    }
+    })
+}
+
+fn material_parameter_name(field: &SceneMaterialParameterAssignment) -> String {
+    serde_json::to_value(&field.parameter)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 fn material_field_assets(
@@ -319,18 +330,40 @@ fn material_field_metadata(
     (unit, frame, location)
 }
 
-fn latest_material_field_values(latest_fields: &LatestFields, parameter: &str) -> Vec<f64> {
-    let lookup_keys = match parameter {
-        "ms" | "Ms" => &["mat_ms", "Ms", "ms"][..],
-        "aex" | "Aex" => &["mat_aex", "Aex", "aex"][..],
-        "alpha" => &["mat_alpha", "alpha"][..],
-        other => &[other][..],
-    };
+fn latest_material_field_values(
+    snapshot: &SessionStateResponse,
+    parameter: &str,
+) -> Result<Vec<f64>, ApiError> {
+    for quantity in material_field_lookup_keys(parameter) {
+        let Some(raw) = snapshot.latest_fields.get(quantity) else {
+            continue;
+        };
+        if !latest_field_source_is_qualified(snapshot, quantity, raw) {
+            continue;
+        }
+        return flatten_current_field_values(snapshot, quantity, raw);
+    }
+    Ok(Vec::new())
+}
 
-    lookup_keys
-        .iter()
-        .find_map(|key| latest_fields.get(key).map(flatten_json_field_values))
-        .unwrap_or_default()
+fn latest_material_field_value_count(snapshot: &SessionStateResponse, parameter: &str) -> usize {
+    material_field_lookup_keys(parameter)
+        .into_iter()
+        .find_map(|quantity| {
+            let raw = snapshot.latest_fields.get(quantity)?;
+            latest_field_source_is_qualified(snapshot, quantity, raw)
+                .then(|| json_field_value_count(raw))
+        })
+        .unwrap_or(0)
+}
+
+fn material_field_lookup_keys(parameter: &str) -> Vec<&str> {
+    match parameter {
+        "ms" | "Ms" => vec!["mat_ms", "Ms", "ms"],
+        "aex" | "Aex" => vec!["mat_aex", "Aex", "aex"],
+        "alpha" => vec!["mat_alpha", "alpha"],
+        other => vec![other],
+    }
 }
 
 fn material_values_stats(values: &[f64]) -> Option<(f64, f64, f64)> {

@@ -1,12 +1,21 @@
-"""Permalloy layer with two ultrathin CoFeB rings above and below it.
+"""Thin magnetic layer with one CoFeB ring above it (FEM, energy minimization).
 
-Geometry:
-    - Permalloy base layer: 300 nm x 1000 nm x 10 nm.
-    - CoFeB top ring: circular vertical annulus, 300 nm outer diameter,
-      200 nm inner diameter, 1 nm thick along y; its lower outer edge is
-      10 nm above the top surface.
-    - CoFeB bottom ring: same vertical annulus; its upper outer edge is 10 nm
-      below the bottom surface.
+Geometry (as executed):
+    - Base layer "permalloy_layer": 2000 nm x 600 nm x 1.6 nm box centred at
+      the origin, meshed as a swept prism layer (one element through thickness).
+    - CoFeB top ring "cofeb_top_ring": vertical annulus whose axis is x,
+      300 nm outer / 100 nm inner diameter (radii 150 nm / 50 nm), 50 nm long
+      along x; its lower outer edge is 10 nm above the layer's top surface.
+    - The bottom ring below the layer is kept as a commented-out block and is
+      not part of this model.
+
+Study (as executed):
+    - One minimization stage (``add_minimize``, method "bb") limited to
+      ``MINIMIZE_MAX_STEPS`` steps; the default is 10 and can be changed with
+      the ``FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS`` environment variable.
+    - The LLG relax stage is commented out; despite the file name no relax
+      stage runs. ``FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS`` only matters if that
+      block is re-enabled with ``max_steps=RELAX_MAX_STEPS``.
 
 Run with:
     fullmag --dev -i examples/permalloy_layer_cofeb_rings_relax_300nm.py
@@ -18,7 +27,8 @@ import fullmag as fm
 
 
 NM = 1e-9
-MINIMIZE_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS", "6000"))
+# Default matches the previously hard-coded stage limit of 10 steps.
+MINIMIZE_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS", "10"))
 RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS", "10000"))
 
 LAYER_SIZE = (2000 * NM, 600 * NM, 1.6 * NM)
@@ -135,12 +145,13 @@ study.build_domain_mesh()
 # study.solver(dt=1e-18, integrator="heun", g=2.115)
 # study.save("m", every=1e-16)
 # study.save("E_total", every=1e-16)
-study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"])
+# Minimization has an iteration clock, so sample accepted steps rather than time.
+study.tableautosave(every_steps=1, quantities=["t", "step", "mx", "my", "mz", "E_total"])
 
 
 study.stages.add_minimize(
     method="bb",
-    max_steps=10,
+    max_steps=MINIMIZE_MAX_STEPS,
     tolA=1e-4,
 )
 

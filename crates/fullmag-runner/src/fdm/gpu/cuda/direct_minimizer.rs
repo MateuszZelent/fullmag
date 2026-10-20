@@ -26,6 +26,7 @@ use crate::relaxation::vector_math::tangent_gradient_from_field;
 use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 use crate::scalar_metrics::single_object_scalars;
 use crate::types::{LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
+use std::time::Instant;
 
 pub(crate) struct CudaDirectMinimizerOutcome {
     pub(crate) latest_stats: Option<StepStats>,
@@ -154,23 +155,32 @@ pub(crate) fn execute_direct_minimizer(
 
     while direct_minimizer_within_runtime_budget(&state, control) {
         if let Some(live) = live.as_mut() {
-            if let Some(display_selection) = live.display_selection.map(|get| get()) {
-                let preview_due = display_refresh_due(
-                    last_preview_revision,
-                    &display_selection,
-                    current_stats.step,
-                );
-                let preview_targets_global_scalar = display_is_global_scalar(&display_selection);
-                let mut observation_publication = live_observations.as_mut().map(|scheduler| {
-                    scheduler.observe(
-                        backend,
-                        &display_selection,
-                        current_stats.step,
-                        current_stats.time,
-                        current_stats.dt,
-                    )
+            let display_selection = live.display_selection.map(|get| get());
+            let preview_due = display_selection
+                .as_ref()
+                .is_some_and(|selection| {
+                    display_refresh_due(last_preview_revision, selection, current_stats.step)
                 });
-                let (preview_field, cached_preview_fields) =
+            let preview_targets_global_scalar = display_selection
+                .as_ref()
+                .is_some_and(display_is_global_scalar);
+            let heavy_payload_every = live.field_every_n.max(1);
+            let heavy_payload_due = current_stats.step > 0
+                && current_stats.step % heavy_payload_every == 0;
+            let full_fields_due = heavy_payload_due && live.field_every_n == 1;
+            if display_selection.is_some() || heavy_payload_due {
+                let mut observation_publication = display_selection.as_ref().and_then(|selection| {
+                    live_observations.as_mut().map(|scheduler| {
+                        scheduler.observe(
+                            backend,
+                            selection,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
+                        )
+                    })
+                });
+                let (preview_field, scheduler_cached_preview_fields) =
                     if let Some(publication) = observation_publication.as_mut() {
                         publication.apply_to_stats(&mut current_stats);
                         (
@@ -180,6 +190,57 @@ pub(crate) fn execute_direct_minimizer(
                     } else {
                         (None, None)
                     };
+                let config_revision = display_selection
+                    .as_ref()
+                    .map(|selection| selection.revision)
+                    .unwrap_or(0);
+                let cached_preview_fields = if full_fields_due {
+                    let capture_started = Instant::now();
+                    match super::execute::capture_full_active_cuda_fields(
+                        backend,
+                        plan,
+                        live.grid,
+                        current_stats.step,
+                        current_stats.time,
+                        config_revision,
+                        None,
+                    ) {
+                        Ok(mut fields) => {
+                            super::execute::mark_full_fields_materialized(
+                                &mut current_stats,
+                                &fields,
+                            );
+                            if let Some(mut scheduler_fields) = scheduler_cached_preview_fields {
+                                scheduler_fields.retain(|scheduled| {
+                                    !fields
+                                        .iter()
+                                        .any(|full| full.quantity == scheduled.quantity)
+                                });
+                                fields.extend(scheduler_fields);
+                            }
+                            current_stats.cached_preview_wall_time_ns = current_stats
+                                .cached_preview_wall_time_ns
+                                .saturating_add(capture_started.elapsed().as_nanos() as u64);
+                            Some(fields)
+                        }
+                        Err(error) => {
+                            let source_step = current_stats.step;
+                            super::execute::mark_full_fields_materialization_error(
+                                &mut current_stats,
+                                plan,
+                                source_step,
+                                config_revision,
+                                &error.message,
+                            );
+                            current_stats.cached_preview_wall_time_ns = current_stats
+                                .cached_preview_wall_time_ns
+                                .saturating_add(capture_started.elapsed().as_nanos() as u64);
+                            None
+                        }
+                    }
+                } else {
+                    scheduler_cached_preview_fields
+                };
                 let action = (live.on_step)(StepUpdate {
                     coupled_checkpoint: None,
                     stats: current_stats.clone(),
@@ -196,9 +257,12 @@ pub(crate) fn execute_direct_minimizer(
                     scalar_row_due: preview_due && preview_targets_global_scalar,
                     terminal_field_snapshot: false,
                     finished: false,
+                    magnetization_carrier: None,
                 });
                 if preview_due {
-                    last_preview_revision = Some(display_selection.revision);
+                    last_preview_revision = display_selection
+                        .as_ref()
+                        .map(|selection| selection.revision);
                 }
                 if action == StepAction::Stop {
                     cancelled = true;

@@ -79,7 +79,7 @@ docker-dev-restart-idle attempt config_sha256 source_root port="3197":
 
 # Replace exact retained volume DEV services, preserving caches and Windows state.
 docker-dev-recreate-volume attempt config_sha256 source_root port="3197" fresh_state="false" recovery_authorization="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} {{if recovery_authorization == "" { "" } else { "--recovery-authorization " + quote(recovery_authorization) }}} {{if fresh_state == "true" { "--fresh-state" } else if fresh_state == "false" { "" } else { error("fresh_state must be true or false") }}}
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if recovery_authorization == "" { "" } else { " --recovery-authorization " + quote(recovery_authorization) }}}{{if fresh_state == "true" { " --fresh-state" } else if fresh_state == "false" { "" } else { error("fresh_state must be true or false") }}}
 
 # Explicit managed recovery of one stopped Docker namespace. The old attempt,
 # Compose config digest, source checkout, frontend port, and control-volume

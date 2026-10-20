@@ -1337,22 +1337,26 @@ class MagneticRegionV2:
     exact_sweep: ExactSweepEvidenceV2 | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "object_id": self.object_id,
             "body_marker": self.body_marker,
             "material_marker": self.material_marker,
             "cell_family_counts": dict(self.cell_family_counts),
-            "exact_sweep": self.exact_sweep.to_dict() if self.exact_sweep is not None else None,
         }
+        # Match MagneticRegionV2IR's canonical omission of absent evidence.
+        # The complete serialized payload is bound by the native certificate hash.
+        if self.exact_sweep is not None:
+            payload["exact_sweep"] = self.exact_sweep.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "MagneticRegionV2":
-        if set(payload) != {"object_id", "body_marker", "material_marker", "cell_family_counts", "exact_sweep"}:
+        if set(payload) - {"exact_sweep"} != {"object_id", "body_marker", "material_marker", "cell_family_counts"}:
             raise ValueError("mixed v2 magnetic region has an unexpected field set")
         counts = payload["cell_family_counts"]
         if not isinstance(counts, dict) or any(type(key) is not str or type(value) is not int or value <= 0 for key, value in counts.items()):
             raise TypeError("mixed v2 magnetic region cell_family_counts is invalid")
-        sweep = payload["exact_sweep"]
+        sweep = payload.get("exact_sweep")
         if sweep is not None and not isinstance(sweep, dict):
             raise TypeError("mixed v2 magnetic region exact_sweep must be an object or null")
         if not isinstance(payload["object_id"], str) or type(payload["body_marker"]) is not int or type(payload["material_marker"]) is not int:

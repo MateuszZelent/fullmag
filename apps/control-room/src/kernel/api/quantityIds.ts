@@ -63,7 +63,7 @@ export function quantityCatalogSupportsQuantity(
   targetKind: "airbox" | "spatial" = "spatial",
 ): boolean | null {
   if (!catalog) return null;
-  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  const canonicalQuantityId = storedFieldQuantityId(quantityId);
   const entry = catalog.quantities.find(
     (quantity) => resolveCanonicalQuantityId(quantity.id) === canonicalQuantityId,
   );
@@ -93,6 +93,7 @@ const CANONICAL_QUANTITY_IDS: Record<string, string> = {
   eden_ani: "eden_ani",
   eden_demag: "eden_demag",
   eden_dmi: "eden_dmi",
+  eden_drive: "eden_drive",
   eden_rotated_dmi: "eden_rotated_dmi",
   eden_ex: "eden_ex",
   eden_ext: "eden_ext",
@@ -137,6 +138,7 @@ const SCALAR_SPATIAL_QUANTITY_IDS = new Set([
   "eden_ani",
   "eden_demag",
   "eden_dmi",
+  "eden_drive",
   "eden_rotated_dmi",
   "eden_ex",
   "eden_ext",
@@ -178,6 +180,7 @@ const QUANTITY_UNITS: Record<string, string> = {
   eden_ani: "J/m³",
   eden_demag: "J/m³",
   eden_dmi: "J/m³",
+  eden_drive: "J/m³",
   eden_rotated_dmi: "J/m³",
   eden_ex: "J/m³",
   eden_ext: "J/m³",
@@ -191,6 +194,43 @@ const QUANTITY_UNITS: Record<string, string> = {
   mat_ms: "A/m",
   torque: "T",
 };
+
+const QUANTITY_DISPLAY_NAMES: Record<string, string> = {
+  B_drive: "Drive flux density",
+  E_ani: "Anisotropy energy",
+  E_demag: "Demagnetization energy",
+  E_dmi: "DMI energy",
+  E_ex: "Exchange energy",
+  E_ext: "Zeeman energy",
+  E_total: "Total energy",
+  H_ani: "Anisotropy field",
+  H_demag: "Demagnetizing field",
+  H_dmi: "DMI field",
+  H_drive: "Drive field",
+  H_eff: "Effective field",
+  H_ex: "Exchange field",
+  H_ext: "External field",
+  H_oe: "Oersted field",
+  H_therm: "Thermal field",
+  dm_dt: "Magnetization rate dm/dt",
+  eden_ani: "Anisotropy energy density",
+  eden_demag: "Demagnetization energy density",
+  eden_dmi: "DMI energy density",
+  eden_ex: "Exchange energy density",
+  eden_ext: "Zeeman energy density",
+  eden_total: "Total energy density",
+  m: "Magnetization m",
+};
+
+/**
+ * Human-readable quantity name for legends and tooltips. Unknown ids fall
+ * back to the id itself, so diagnostics never lose the exact identifier.
+ */
+export function quantityDisplayName(quantityId: string): string {
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  const name = QUANTITY_DISPLAY_NAMES[canonicalQuantityId];
+  return name ? `${name} (${canonicalQuantityId})` : canonicalQuantityId;
+}
 
 export const VACUUM_PERMEABILITY_H_PER_M = 4e-7 * Math.PI;
 
@@ -247,11 +287,11 @@ export function fieldCatalogQuantitySupportsAirbox(
   fieldCatalog: FieldCatalogResource | null | undefined,
   quantityId: string,
 ): boolean {
-  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  const canonicalQuantityId = storedFieldQuantityId(quantityId);
   return fieldCatalog?.quantities.some(
     (quantity) =>
       quantity.domain === "full_domain" &&
-      resolveCanonicalQuantityId(quantity.quantity_id) === canonicalQuantityId,
+      storedFieldQuantityId(quantity.quantity_id) === canonicalQuantityId,
   ) ?? false;
 }
 

@@ -8,7 +8,6 @@ import type {
   Viewport3DPrimitiveRenderModel,
   Viewport3DPrimitiveObject,
 } from "./viewport3dPrimitiveModel";
-import type { Viewport3DColors } from "./viewport3dTypes";
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
 import {
   isMoveCommitPending,
@@ -20,16 +19,6 @@ import {
 } from "./moveCommitLock";
 
 export type { MoveAxis, MoveCommitHandler, MoveCommitLockToken, Translation3 };
-
-const FALLBACK_MOVE_GIZMO_COLORS: Viewport3DColors = {
-  accent: 0x89b4fa,
-  background: 0x11111b,
-  danger: 0xf38ba8,
-  field: 0xa6e3a1,
-  mesh: 0x313244,
-  success: 0xa6e3a1,
-  wire: 0x6c7086,
-};
 
 export interface MoveDraft {
   objectId: string;
@@ -178,8 +167,9 @@ export function MoveObjectGizmo({
   onDraftChange?: (draft: MoveDraft | null) => void;
   onGestureActiveChange?: (active: boolean) => void;
 }) {
-  const { colors: themeColors } = useViewport3DColors();
-  const colors = themeColors ?? FALLBACK_MOVE_GIZMO_COLORS;
+  // Theme tokens only: the gizmo waits for resolved Mocha/Latte colours
+  // instead of drawing a hard-coded palette in the wrong theme.
+  const { colors } = useViewport3DColors();
   const origin = object.translation ?? object.bounds.center;
   const [originX, originY, originZ] = origin;
   const [draft, setDraft] = useState<MoveDraft | null>(null);
@@ -223,6 +213,7 @@ export function MoveObjectGizmo({
     : [0, 0, 0];
   const length = Math.max(Math.max(...object.bounds.size) * 0.7, 1e-12);
 
+  if (!colors) return null;
   return (
     <group
       name={`move-gizmo:${object.objectId}`}

@@ -1405,6 +1405,7 @@ fn default_mesh() -> ScriptBuilderMeshState {
         adaptive_h_max: String::new(),
         adaptive_max_passes: 5,
         adaptive_error_tolerance: String::new(),
+        order: None,
     }
 }
 

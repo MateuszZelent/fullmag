@@ -24,6 +24,7 @@ import type { Viewport3DBounds } from "./viewport3dRenderModel";
 type Viewport3DPrimitiveKind =
   | "box"
   | "box-cylinder-difference"
+  | "cylinder-cylinder-difference"
   | "cylinder"
   | "sphere"
   | "microstrip"
@@ -60,8 +61,21 @@ export interface Viewport3DBoxCylinderDifferencePreview {
   kind: "box-cylinder-difference";
 }
 
+export interface Viewport3DCylinderCylinderDifferencePreview {
+  boundsSize: [number, number, number];
+  cylinderAxis: [number, number, number];
+  innerCenter: [number, number, number];
+  innerHeight: number;
+  innerRadius: number;
+  kind: "cylinder-cylinder-difference";
+  outerCenter: [number, number, number];
+  outerHeight: number;
+  outerRadius: number;
+}
+
 type Viewport3DPrimitiveCsgPreview =
-  Viewport3DBoxCylinderDifferencePreview;
+  | Viewport3DBoxCylinderDifferencePreview
+  | Viewport3DCylinderCylinderDifferencePreview;
 
 export interface Viewport3DMagnetizationTexturePreview {
   assetId: string;
@@ -157,6 +171,7 @@ function geometryDescriptorAxis(value: unknown): [number, number, number] {
 
 function csgPreviewFromGeometry(
   geometry: JsonRecord,
+  objectTransform?: JsonRecord | null,
 ): Viewport3DPrimitiveCsgPreview | null {
   if (geometryDescriptorKind(geometry.geometry_kind ?? geometry.kind) !== "difference") {
     return null;
@@ -167,8 +182,15 @@ function csgPreviewFromGeometry(
   const tool = asRecord(params?.tool);
   if (!base || !tool) return null;
 
-  const baseKind = geometryDescriptorKind(base.geometry_kind ?? base.kind);
-  const toolKind = geometryDescriptorKind(tool.geometry_kind ?? tool.kind);
+  const baseKind = resolveGeometryDescriptor(base)?.kind ??
+    geometryDescriptorKind(base.geometry_kind ?? base.kind);
+  const toolKind = resolveGeometryDescriptor(tool)?.kind ??
+    geometryDescriptorKind(tool.geometry_kind ?? tool.kind);
+
+  if (baseKind === "cylinder" && toolKind === "cylinder") {
+    return cylinderCylinderDifferencePreview(base, tool, objectTransform);
+  }
+
   if (baseKind !== "box" || toolKind !== "cylinder") return null;
 
   const boxSize = geometryDescriptorSize(base);
@@ -193,6 +215,158 @@ function csgPreviewFromGeometry(
     cylinderRadius,
     kind: "box-cylinder-difference",
   };
+}
+
+interface ResolvedGeometryDescriptor {
+  kind: string;
+  params: JsonRecord;
+  translation: [number, number, number];
+}
+
+function resolveGeometryDescriptor(value: unknown): ResolvedGeometryDescriptor | null {
+  let descriptor = asRecord(value);
+  let translation: [number, number, number] = [0, 0, 0];
+  for (let depth = 0; descriptor && depth < 8; depth += 1) {
+    const kind = geometryDescriptorKind(descriptor.geometry_kind ?? descriptor.kind);
+    const params = geometryDescriptorParams(descriptor) ?? {};
+    const offset = asVec3(params.translation);
+    if (offset) {
+      translation = [
+        translation[0] + offset[0],
+        translation[1] + offset[1],
+        translation[2] + offset[2],
+      ];
+    }
+    if (kind !== "translate") {
+      return { kind, params, translation };
+    }
+    descriptor = asRecord(params.base);
+  }
+  return null;
+}
+
+function cylinderCylinderDifferencePreview(
+  base: JsonRecord,
+  tool: JsonRecord,
+  objectTransform?: JsonRecord | null,
+): Viewport3DCylinderCylinderDifferencePreview | null {
+  if (!supportsUnrotatedUnitScaleTransform(objectTransform)) return null;
+  const outer = resolveGeometryDescriptor(base);
+  const inner = resolveGeometryDescriptor(tool);
+  if (!outer || !inner || outer.kind !== "cylinder" || inner.kind !== "cylinder") {
+    return null;
+  }
+
+  const outerRadius = asNumber(outer.params.radius);
+  const outerHeight = asNumber(outer.params.height);
+  const innerRadius = asNumber(inner.params.radius);
+  const innerHeight = asNumber(inner.params.height);
+  const cylinderAxis = asVec3(outer.params.axis) ?? [0, 0, 1];
+  const innerAxis = asVec3(inner.params.axis) ?? [0, 0, 1];
+  const axisIndex = cardinalAxisIndex(cylinderAxis);
+  if (
+    outerRadius === null || outerRadius <= 0 ||
+    outerHeight === null || outerHeight <= 0 ||
+    innerRadius === null || innerRadius <= 0 ||
+    innerHeight === null || innerHeight <= 0 ||
+    innerRadius >= outerRadius ||
+    axisIndex === null || cardinalAxisIndex(innerAxis) !== axisIndex
+  ) {
+    return null;
+  }
+
+  const coordinateScale = Math.max(
+    ...outer.translation.map(Math.abs),
+    ...inner.translation.map(Math.abs),
+  );
+  const tolerance = Math.max(
+    Math.max(outerRadius, innerRadius, outerHeight, innerHeight) * 1e-9,
+    coordinateScale * Number.EPSILON * 128,
+  );
+  const planeAxes = planeAxesForCardinalAxis(axisIndex);
+  if (planeAxes.some((axis) =>
+    Math.abs(inner.translation[axis] - outer.translation[axis]) > tolerance
+  )) {
+    return null;
+  }
+  const axialOffset = inner.translation[axisIndex] - outer.translation[axisIndex];
+  if (Math.abs(axialOffset) + outerHeight / 2 > innerHeight / 2 + tolerance) {
+    return null;
+  }
+
+  const boundsSize: [number, number, number] = [
+    2 * outerRadius,
+    2 * outerRadius,
+    2 * outerRadius,
+  ];
+  boundsSize[axisIndex] = outerHeight;
+  return {
+    boundsSize,
+    cylinderAxis,
+    innerCenter: inner.translation,
+    innerHeight,
+    innerRadius,
+    kind: "cylinder-cylinder-difference",
+    outerCenter: outer.translation,
+    outerHeight,
+    outerRadius,
+  };
+}
+
+function supportsUnrotatedUnitScaleTransform(
+  transform?: JsonRecord | null,
+): boolean {
+  if (!transform) return true;
+  const rotationQuat = transform.rotation_quat;
+  if (rotationQuat !== undefined && rotationQuat !== null) {
+    if (
+      !Array.isArray(rotationQuat) ||
+      rotationQuat.length !== 4 ||
+      !rotationQuat.every((value) => typeof value === "number" && Number.isFinite(value))
+    ) {
+      return false;
+    }
+    const [x, y, z, w] = rotationQuat;
+    if (
+      Math.abs(x) > 1e-12 ||
+      Math.abs(y) > 1e-12 ||
+      Math.abs(z) > 1e-12 ||
+      Math.abs(Math.abs(w) - 1) > 1e-12
+    ) {
+      return false;
+    }
+  }
+  const rotation = transform.rotation;
+  if (rotation !== undefined && rotation !== null) {
+    const vector = asVec3(rotation);
+    if (!vector || vector.some((value) => Math.abs(value) > 1e-12)) return false;
+  }
+  const scale = transform.scale;
+  if (scale !== undefined && scale !== null) {
+    const vector = asVec3(scale);
+    if (!vector || vector.some((value) => Math.abs(value - 1) > 1e-12)) return false;
+  }
+  return true;
+}
+
+function cylinderDifferenceFallbackBounds(
+  geometry: JsonRecord,
+): { center: [number, number, number]; size: [number, number, number] } | null {
+  if (geometryDescriptorKind(geometry.geometry_kind ?? geometry.kind) !== "difference") {
+    return null;
+  }
+  const base = resolveGeometryDescriptor(asRecord(asRecord(geometry.geometry_params)?.base));
+  if (!base || base.kind !== "cylinder") return null;
+  const radius = asNumber(base.params.radius);
+  const height = asNumber(base.params.height);
+  if (radius === null || radius <= 0 || height === null || height <= 0) return null;
+  const axisIndex = cardinalAxisIndex(asVec3(base.params.axis) ?? [0, 0, 1]);
+  const diameter = 2 * radius;
+  const size: [number, number, number] = axisIndex === null
+    ? [Math.max(diameter, height), Math.max(diameter, height), Math.max(diameter, height)]
+    : [diameter, diameter, diameter];
+  if (axisIndex !== null) size[axisIndex] = height;
+  return { center: base.translation, size };
 }
 
 function boundsFromMinMax(
@@ -248,12 +422,29 @@ function boundsFromGeometry(
   if (min && max) return boundsFromMinMax(min, max);
 
   const params = asRecord(geometry.geometry_params);
-  const csgPreview = csgPreviewFromGeometry(geometry);
+  const csgPreview = csgPreviewFromGeometry(geometry, transform);
+  const csgFallbackBounds = csgPreview
+    ? null
+    : cylinderDifferenceFallbackBounds(geometry);
+  const csgSize = csgPreview?.kind === "box-cylinder-difference"
+    ? csgPreview.boxSize
+    : csgPreview?.kind === "cylinder-cylinder-difference"
+      ? csgPreview.boundsSize
+      : null;
   const size =
-    csgPreview?.boxSize ??
+    csgSize ??
+    csgFallbackBounds?.size ??
     boundsSizeFromParams(geometry, params) ??
     [1, 1, 1];
-  const translation = asVec3(transform?.translation) ?? [0, 0, 0];
+  const objectTranslation = asVec3(transform?.translation) ?? [0, 0, 0];
+  const geometryCenter = csgPreview?.kind === "cylinder-cylinder-difference"
+    ? csgPreview.outerCenter
+    : csgFallbackBounds?.center ?? [0, 0, 0];
+  const translation: [number, number, number] = [
+    objectTranslation[0] + geometryCenter[0],
+    objectTranslation[1] + geometryCenter[1],
+    objectTranslation[2] + geometryCenter[2],
+  ];
   const half: [number, number, number] = [
     size[0] / 2,
     size[1] / 2,
@@ -344,7 +535,10 @@ function manifestSceneRevision(
 
 function objectHasCsgPreview(object: JsonRecord | null | undefined): boolean {
   const geometry = asRecord(object?.geometry);
-  return Boolean(geometry && csgPreviewFromGeometry(geometry));
+  return Boolean(geometry && csgPreviewFromGeometry(
+    geometry,
+    asRecord(object?.transform),
+  ));
 }
 
 function magnetizationAssetById(scene: JsonRecord, assetId: string | null): JsonRecord | null {
@@ -464,8 +658,11 @@ function geometryKey(
   ].join(":");
 }
 
-function primitiveKindFromGeometry(geometry: JsonRecord): Viewport3DPrimitiveKind {
-  const csgPreview = csgPreviewFromGeometry(geometry);
+function primitiveKindFromGeometry(
+  geometry: JsonRecord,
+  transform?: JsonRecord | null,
+): Viewport3DPrimitiveKind {
+  const csgPreview = csgPreviewFromGeometry(geometry, transform);
   if (csgPreview) return csgPreview.kind;
   return lowerGeometryKind(geometry.geometry_kind ?? geometry.kind);
 }
@@ -521,7 +718,7 @@ export function buildViewport3DPrimitiveRenderModel(
 
     const state = objectMeshState(objectId, sceneRevision, manifest, object);
     const transform = asRecord(object.transform);
-    const csgPreview = csgPreviewFromGeometry(geometry);
+    const csgPreview = csgPreviewFromGeometry(geometry, transform);
     let antennaPreview: AuthoredAntennaGeometry | undefined;
     if (geometry.geometry_kind === "MicrostripAntennaLayout" || geometry.geometry_kind === "CPWAntennaLayout") {
       try {
@@ -541,7 +738,7 @@ export function buildViewport3DPrimitiveRenderModel(
         csgPreview,
         fallbackLabel: fallbackLabel(state),
         geometryKey: geometryKey(objectId, geometry, transform),
-        kind: antennaPreview ? geometry.geometry_kind === "CPWAntennaLayout" ? "cpw" : "microstrip" : primitiveKindFromGeometry(geometry),
+        kind: antennaPreview ? geometry.geometry_kind === "CPWAntennaLayout" ? "cpw" : "microstrip" : primitiveKindFromGeometry(geometry, transform),
         label: asString(object.name) ?? objectId,
         magnetizationTexturePreview: magnetizationTexturePreview(
           sceneRecord,

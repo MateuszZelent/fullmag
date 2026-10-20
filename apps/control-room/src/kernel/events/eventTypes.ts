@@ -1,5 +1,9 @@
 import type { RuntimeCommandPrecondition } from "../api/apiTypes";
-import type { CommandContext } from "../commands/commandTypes";
+import type {
+  CommandContext,
+  CommandFeedbackOwner,
+  CommandOutcomeStatus,
+} from "../commands/commandTypes";
 import type { MeshBuildConfirmCommandId } from "../authoring/meshBuildConfirmation";
 import type { ModuleId, SlotId } from "../types";
 import type { LayoutState } from "../layout/layoutTypes";
@@ -133,6 +137,25 @@ export interface KernelEventMap {
   "command:completed": {
     commandId: string;
     status: "completed" | "failed" | "cancelled" | "pending";
+  };
+  /**
+   * Emitted exactly once per `CommandRegistry.execute` invocation, including
+   * admission failures (missing/disabled) that never reach `command:submitted`.
+   * `pending` is an ACK/unconfirmed state, never a completion.
+   */
+  "command:outcome": {
+    backendCommandId: string | null;
+    commandId: string;
+    feedback: CommandFeedbackOwner;
+    invocationId: string;
+    message: string | null;
+    observation: "waiting" | "disconnected" | "publication-unconfirmed" | null;
+    phase: "admission" | "run";
+    sessionScopeKey: string | null;
+    source: CommandContext["source"];
+    sourceDetail: string | null;
+    status: CommandOutcomeStatus;
+    title: string | null;
   };
   "resource:invalidated": {
     resourceKey: string;

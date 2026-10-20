@@ -5,7 +5,7 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
     pure_damping_relax: bool,
     contexts: Vec<LayerContext>,
@@ -115,18 +115,32 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
             &mut artifacts,
         )?;
 
-        if let Some((grid, on_step)) = live.as_mut() {
+        if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+            let magnetization = crate::types::fdm_multilayer_live_field_due(
+                latest_stats.step,
+                *field_every_n,
+            )
+            .then(|| crate::preview::flatten_vectors(&observables.magnetization));
+            let magnetization_carrier = magnetization.as_ref().and_then(|_| {
+                crate::types::fdm_multilayer_live_magnetization_carrier(*layout, &latest_stats)
+            });
             let action = on_step(StepUpdate {
                 coupled_checkpoint: None,
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
-                    fem_mesh_generation_id: None,
-                magnetization: None,
+                fem_mesh_generation_id: None,
+                magnetization,
                 preview_field: None,
                 cached_preview_fields: None,
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
                 scalar_row_due: false,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier,
             });
             match action {
                 StepAction::Continue => {}

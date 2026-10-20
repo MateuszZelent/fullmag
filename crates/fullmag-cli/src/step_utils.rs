@@ -492,6 +492,7 @@ pub(crate) fn initial_step_update(
             hysteresis_settle_step_index: None, hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None, scalar_row_due: false,
             terminal_field_snapshot: false, finished: false,
+            magnetization_carrier: None,
         },
         BackendPlanIR::AntennaExternalLeadInspection(_) => {
             antenna_inspection_step_update(stats, false)
@@ -512,6 +513,7 @@ pub(crate) fn initial_step_update(
             scalar_row_due: false,
             terminal_field_snapshot: false,
             finished: false,
+            magnetization_carrier: None,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -533,6 +535,7 @@ pub(crate) fn initial_step_update(
             scalar_row_due: false,
             terminal_field_snapshot: false,
             finished: false,
+            magnetization_carrier: None,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -550,6 +553,7 @@ pub(crate) fn initial_step_update(
             scalar_row_due: false,
             terminal_field_snapshot: false,
             finished: false,
+            magnetization_carrier: None,
         },
         BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -567,6 +571,7 @@ pub(crate) fn initial_step_update(
             scalar_row_due: false,
             terminal_field_snapshot: false,
             finished: false,
+            magnetization_carrier: None,
         },
         BackendPlanIR::FemFrequencyResponse(fem) => {
             let mut stats = stats;
@@ -587,6 +592,7 @@ pub(crate) fn initial_step_update(
                 scalar_row_due: false,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             }
         }
     }
@@ -612,6 +618,7 @@ fn antenna_inspection_step_update(
         scalar_row_due: false,
         terminal_field_snapshot: false,
         finished,
+        magnetization_carrier: None,
     }
 }
 
@@ -699,6 +706,7 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             terminal_field_snapshot: false,
             finished,
+            magnetization_carrier: None,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -720,6 +728,7 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             terminal_field_snapshot: false,
             finished,
+            magnetization_carrier: None,
         },
         BackendPlanIR::Fem(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -737,6 +746,7 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             terminal_field_snapshot: false,
             finished,
+            magnetization_carrier: None,
         },
         BackendPlanIR::FemEigen(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -754,6 +764,7 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             terminal_field_snapshot: false,
             finished,
+            magnetization_carrier: None,
         },
         BackendPlanIR::FemFrequencyResponse(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -771,6 +782,7 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             terminal_field_snapshot: false,
             finished,
+            magnetization_carrier: None,
         },
     })
 }
@@ -808,6 +820,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             terminal_field_snapshot: false,
             finished,
+            magnetization_carrier: None,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -829,6 +842,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             terminal_field_snapshot: false,
             finished,
+            magnetization_carrier: None,
         },
         BackendPlanIR::Fem(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -846,6 +860,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             terminal_field_snapshot: false,
             finished,
+            magnetization_carrier: None,
         },
         BackendPlanIR::FemEigen(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -863,6 +878,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             terminal_field_snapshot: false,
             finished,
+            magnetization_carrier: None,
         },
         BackendPlanIR::FemFrequencyResponse(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
@@ -880,6 +896,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             terminal_field_snapshot: false,
             finished,
+            magnetization_carrier: None,
         },
     }
 }

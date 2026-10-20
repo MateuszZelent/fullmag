@@ -116,6 +116,20 @@
   ],
   "sources": [
     {
+      "id": "terminalBinarySpool",
+      "path": "crates/fullmag-api/src/accepted_observation_spool.rs",
+      "symbol": "write_fragment",
+      "responsibility": "Write one complete terminal quantity per fragment under storage and memory budgets, retaining exact source identity",
+      "evidence_status": "source-visible only; no build, test or runtime proof"
+    },
+    {
+      "id": "terminalBinaryPublication",
+      "path": "crates/fullmag-api/src/accepted_field_materialization.rs",
+      "symbol": "materialize_spool",
+      "responsibility": "Validate catalog completeness and accepted source before publishing per-field CAS chunks and metadata",
+      "evidence_status": "source-visible only; no build, test or runtime proof"
+    },
+    {
       "id": "python_exchange",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class Exchange",
@@ -198,6 +212,18 @@
       "path": "crates/fullmag-api/src/schemas/fields.rs",
       "symbol": "FieldMeta",
       "responsibility": "resource metadata transport for optional source_time_seconds in SI seconds"
+    },
+    {
+      "id": "accepted_original_context_capture",
+      "path": "crates/fullmag-runner/src/accepted_materialization.rs",
+      "symbol": "capture_solver_observables",
+      "responsibility": "preserves complete same-clock fields from the original solver without reconstructing dynamic primary inputs"
+    },
+    {
+      "id": "accepted_terminal_capture_binding",
+      "path": "crates/fullmag-runner/src/accepted_materialization.rs",
+      "symbol": "materialize_captured_observables",
+      "responsibility": "binds original-context observables to the immutable accepted state before CAS publication; source-only, runtime NOT VERIFIED"
     }
   ],
   "public_api": {

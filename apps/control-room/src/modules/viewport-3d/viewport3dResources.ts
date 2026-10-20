@@ -15,6 +15,7 @@ import {
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import {
   canonicalFieldVectorQuery,
+  fieldVectorComponentsSemanticallyEqual,
   parseCanonicalFieldVectorResourceKey,
   serializeCanonicalFieldVectorResourceKey,
   type CanonicalFieldVectorQuery,
@@ -321,8 +322,9 @@ export function resolveViewport3DFieldVectorIdentityMatch(
     return { matches: false, reason: "quantity" };
   }
 
-  const requestedScopeKind = request.query.scope_kind ?? "full";
-  const requestedScopeId = request.query.scope_id ?? null;
+  const requestedQuery = canonicalFieldVectorQuery(request.quantityId, request.query);
+  const requestedScopeKind = requestedQuery.scopeKind;
+  const requestedScopeId = requestedQuery.scopeId ?? null;
   const responseScopeKind = field.scopeKind ?? envelope.responseMetadata?.scopeKind ?? null;
   const responseScopeId = field.scopeId ?? envelope.responseMetadata?.scopeId ?? null;
   const responseGenerationId =
@@ -340,7 +342,7 @@ export function resolveViewport3DFieldVectorIdentityMatch(
     return { matches: false, reason: "artifact_generation" };
   }
   const responseCarrierRevision =
-    field.meshTopologyHash ?? envelope.responseMetadata?.meshTopologyHash ?? null;
+    envelope.responseMetadata?.carrierRevision ?? field.meshTopologyRevision ?? null;
   const expectedGenerationId = normalizeStringIdentity(request.query.expected_generation_id);
   const expectedCarrierRevision =
     normalizeStringIdentity(request.query.expected_carrier_revision);
@@ -369,7 +371,10 @@ export function resolveViewport3DFieldVectorIdentityMatch(
   }
   if (
     envelope.responseMetadata?.identityIssues.some(
-      (issue) => issue.field === "meshTopologyHash",
+      (issue) =>
+        issue.field === "meshTopologyHash" ||
+        issue.field === "carrierRevision" ||
+        issue.field === "carrierDigest",
     )
   ) {
     return { matches: false, reason: "carrier" };
@@ -405,7 +410,10 @@ export function resolveViewport3DFieldVectorIdentityMatch(
     envelope.data.nComp === 1 && requestedComponent === "full"
       ? null
       : envelope.responseMetadata?.component ?? null;
-  if (responseComponent !== null && responseComponent !== requestedComponent) {
+  if (
+    responseComponent !== null &&
+    !fieldVectorComponentsSemanticallyEqual(responseComponent, requestedComponent)
+  ) {
     return { matches: false, reason: "component" };
   }
 

@@ -9,6 +9,10 @@ import {
   type ActiveLaneCapabilitySnapshot,
   type ActiveLaneOperationId,
 } from "@/kernel/resources/useActiveLaneCapabilities";
+import {
+  parseQuantityInput,
+  type QuantityDimension,
+} from "@/kernel/authoring/object-edit/quantityInput";
 import { DEFAULT_RELAX_TORQUE_APM } from "@/shared/domain/physics/torqueUnits";
 import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
 import { validateFieldDriveDraft } from "@/shared/domain/physics/fieldDrive";
@@ -32,6 +36,20 @@ import {
 } from "./StageAutosaveDraft";
 
 type JsonRecord = Record<string, unknown>;
+
+/**
+ * Parses one authored numeric draft value. Dimensionless values keep the
+ * historic `Number()` semantics; time and frequency fields additionally accept
+ * an explicit unit suffix ("2 ps", "10GHz") and are converted to SI.
+ */
+function draftNumber(value: string, dimension: QuantityDimension = "dimensionless"): number {
+  const trimmed = value.trim();
+  if (dimension === "dimensionless") return trimmed ? Number(trimmed) : Number.NaN;
+  const parsed = parseQuantityInput(trimmed, dimension);
+  return parsed.parseStatus === "valid" && parsed.parsedSI !== null
+    ? parsed.parsedSI
+    : Number.NaN;
+}
 
 function finiteKRequestFromDraft(draft: StudyFftResponseStageDraft): JsonObject {
   const text = draft.probeCount ?? "128";
@@ -1326,6 +1344,7 @@ export function studyStageDraftToSceneStage(
                   sample_period_s: requiredNumber(
                     draft.tableAutosave.samplePeriodS,
                     "sample_period_s",
+                    "time",
                   ),
                 }),
             table_id: "default",
@@ -1353,6 +1372,7 @@ export function studyStageDraftToSceneStage(
             every_seconds: requiredNumber(
               draft.autosave.everySeconds,
               "autosave cadence",
+              "time",
             ),
             kind: draft.autosave.outputKind,
             name: requiredText(draft.autosave.quantity, "autosave quantity"),
@@ -1399,7 +1419,7 @@ export function studyStageDraftToSceneStage(
       entrypoint_kind: "flat_run",
       kind: "run",
       stage_id: requiredText(draft.stageId, "run"),
-      until_seconds: String(requiredNumber(draft.untilSeconds, "until_seconds")),
+      until_seconds: String(requiredNumber(draft.untilSeconds, "until_seconds", "time")),
     };
     const autosave = stageAutosaveDraftToValue(draft.stageAutosave, "run");
     if (autosave) stage.autosave = autosave;
@@ -1413,12 +1433,12 @@ export function studyStageDraftToSceneStage(
     stage.eigen_target = stage.target;
     stage.operator = requiredText(draft.operator, "linearized_llg");
     stage.eigen_operator = stage.operator;
-    setOptionalNumber(stage, "target_frequency", draft.targetFrequency);
-    setOptionalNumber(stage, "eigen_target_frequency", draft.targetFrequency);
-    setOptionalNumber(stage, "frequency_min", draft.frequencyMin);
-    setOptionalNumber(stage, "frequency_max", draft.frequencyMax);
-    setOptionalNumber(stage, "eigen_frequency_min", draft.frequencyMin);
-    setOptionalNumber(stage, "eigen_frequency_max", draft.frequencyMax);
+    setOptionalNumber(stage, "target_frequency", draft.targetFrequency, "frequency");
+    setOptionalNumber(stage, "eigen_target_frequency", draft.targetFrequency, "frequency");
+    setOptionalNumber(stage, "frequency_min", draft.frequencyMin, "frequency");
+    setOptionalNumber(stage, "frequency_max", draft.frequencyMax, "frequency");
+    setOptionalNumber(stage, "eigen_frequency_min", draft.frequencyMin, "frequency");
+    setOptionalNumber(stage, "eigen_frequency_max", draft.frequencyMax, "frequency");
     setOptionalText(stage, "eigen_k_path", draft.kPath);
     stage.magnetostatic_bc = requiredText(draft.magnetostaticBc, "open");
     stage.eigen_magnetostatic_bc = stage.magnetostatic_bc;
@@ -1426,7 +1446,7 @@ export function studyStageDraftToSceneStage(
   }
   if (draft.kind === "frequency_response") {
     const stage = spectralSceneStage(draft, "frequency_response");
-    stage.frequencies_hz = requiredNumberList(draft.frequenciesHz, "frequencies_hz");
+    stage.frequencies_hz = requiredNumberList(draft.frequenciesHz, "Frequencies", "frequency");
     stage.frequency_values_hz = stage.frequencies_hz;
     stage.excitation_field_au_per_m = requiredVector3(
       draft.excitationField,
@@ -1604,11 +1624,12 @@ export function studyStageDraftToSceneStage(
       stage,
       "max_relaxation_time_s",
       draft.maxRelaxationTime,
+      "time",
     );
     setOptionalNumber(stage, "relax_alpha", draft.relaxAlpha);
     setOptionalText(stage, "integrator", draft.solver);
     if (draft.timestepMode === "fixed" && draft.dt.trim()) {
-      stage.fixed_timestep = String(requiredNumber(draft.dt, "fixed_timestep"));
+      stage.fixed_timestep = String(requiredNumber(draft.dt, "Fixed dt", "time"));
     } else if (draft.timestepMode === "adaptive") {
       const adaptive: JsonObject = { tolerance_mode: draft.toleranceMode };
       if (draft.toleranceMode === "advanced") {
@@ -1619,10 +1640,10 @@ export function studyStageDraftToSceneStage(
         adaptive.rtol = 0;
       }
       if (draft.dt.trim() !== "auto") {
-        setOptionalNumber(adaptive, "dt_initial", draft.dt);
+        setOptionalNumber(adaptive, "dt_initial", draft.dt, "time");
       }
-      setOptionalNumber(adaptive, "dt_min", draft.dtMin);
-      setOptionalNumber(adaptive, "dt_max", draft.dtMax);
+      setOptionalNumber(adaptive, "dt_min", draft.dtMin, "time");
+      setOptionalNumber(adaptive, "dt_max", draft.dtMax, "time");
       if (draft.toleranceMode === "advanced") {
         adaptive.safety = requiredNumber(draft.safety, "safety");
         adaptive.growth_limit = requiredNumber(
@@ -1646,7 +1667,7 @@ export function studyStageDraftToSceneStage(
     const fieldEvery = optionalInteger(draft.fieldEvery);
     if (fieldEvery !== null) fieldRefresh.every_n = fieldEvery;
     if (Object.keys(fieldRefresh).length > 0) stage.field_refresh = fieldRefresh;
-    setOptionalNumber(stage, "demag_interval_s", draft.demagInterval);
+    setOptionalNumber(stage, "demag_interval_s", draft.demagInterval, "time");
   }
 
   const autosave = stageAutosaveDraftToValue(draft.stageAutosave, "relax");
@@ -1725,6 +1746,7 @@ export function validateStudyStageDraft(
           draft.tableAutosave.samplePeriodS,
           "Table autosave t_sampling",
           true,
+          "time",
         );
       }
       if (commaSeparatedValues(draft.tableAutosave.tableQuantities).length === 0) {
@@ -1759,6 +1781,7 @@ export function validateStudyStageDraft(
         draft.autosave.everySeconds,
         "Autosave cadence",
         true,
+        "time",
       );
     }
     if (draft.autosave.readOnly) {
@@ -1795,7 +1818,7 @@ export function validateStudyStageDraft(
     return issues;
   }
   if (draft.kind === "run") {
-    validatePositiveNumber(issues, draft.untilSeconds, "Until seconds", true);
+    validatePositiveNumber(issues, draft.untilSeconds, "Until seconds", true, "time");
     if (draft.legacyRunFixedTimestep.trim()) {
       issues.push({
         message:
@@ -1816,22 +1839,25 @@ export function validateStudyStageDraft(
       draft.targetFrequency,
       "Target frequency",
       draft.target === "nearest",
+      "frequency",
     );
     validatePositiveNumber(
       issues,
       draft.frequencyMin,
       "Frequency min",
       draft.target === "frequency_window",
+      "frequency",
     );
     validatePositiveNumber(
       issues,
       draft.frequencyMax,
       "Frequency max",
       draft.target === "frequency_window",
+      "frequency",
     );
     if (draft.target === "frequency_window") {
-      const min = Number(draft.frequencyMin);
-      const max = Number(draft.frequencyMax);
+      const min = draftNumber(draft.frequencyMin, "frequency");
+      const max = draftNumber(draft.frequencyMax, "frequency");
       if (Number.isFinite(min) && Number.isFinite(max) && min >= max) {
         issues.push({
           message: "Frequency min must be less than frequency max.",
@@ -1868,7 +1894,7 @@ export function validateStudyStageDraft(
   }
   if (draft.kind === "frequency_response") {
     validateSpectralOptions(issues, draft, SUPPORTED_RESPONSE_CALCULATION_MODES);
-    validatePositiveNumberList(issues, draft.frequenciesHz, "Frequencies");
+    validatePositiveNumberList(issues, draft.frequenciesHz, "Frequencies", "frequency");
     validateRequiredVector3(issues, draft.excitationField, "Excitation field");
     validateFiniteNumber(issues, draft.excitationPhaseRad, "Excitation phase", true);
     validateOptionalVector3(issues, draft.kVector, "k vector");
@@ -1958,7 +1984,7 @@ export function validateStudyStageDraft(
         severity: "error",
       });
     }
-    validatePositiveNumber(issues, draft.maxRelaxationTime, "Max relaxation time", false);
+    validatePositiveNumber(issues, draft.maxRelaxationTime, "Max relaxation time", false, "time");
     validatePositiveNumber(issues, draft.relaxAlpha, "Relax alpha", false);
     if (draft.timestepMode === "auto") {
       issues.push({
@@ -1966,14 +1992,14 @@ export function validateStudyStageDraft(
         severity: "error",
       });
     } else if (draft.timestepMode === "adaptive") {
-      validatePositiveNumber(issues, draft.dtMin, "dt_min", true);
+      validatePositiveNumber(issues, draft.dtMin, "Adaptive dt min", true, "time");
       if (!draft.dtMax.trim()) {
         issues.push({
-          message: "dt_max is required and must be finite and positive.",
+          message: "Adaptive dt max is required and must be a positive time.",
           severity: "error",
         });
       } else {
-        validatePositiveNumber(issues, draft.dtMax, "dt_max", true);
+        validatePositiveNumber(issues, draft.dtMax, "Adaptive dt max", true, "time");
       }
       if (draft.solver !== "rk23" && draft.solver !== "rk45") {
         issues.push({ message: "Adaptive policy requires RK23 or RK45.", severity: "error" });
@@ -2005,10 +2031,16 @@ export function validateStudyStageDraft(
         validateStageAdaptiveController(issues, draft);
       }
     }
-    validatePositiveNumber(issues, draft.demagInterval, "Demag interval", false);
+    validatePositiveNumber(issues, draft.demagInterval, "Demag interval", false, "time");
     validatePositiveInteger(issues, draft.fieldEvery, "Field refresh", false);
     if (draft.timestepMode !== "auto" && draft.dt.trim()) {
-      validatePositiveNumber(issues, draft.dt, "dt", true);
+      validatePositiveNumber(
+        issues,
+        draft.dt,
+        draft.timestepMode === "fixed" ? "Fixed dt" : "Initial dt",
+        true,
+        "time",
+      );
     }
   }
   for (const message of validateStageAutosaveDraft(draft.stageAutosave, "relax")) {
@@ -2052,8 +2084,8 @@ function validateStageAdaptiveBounds(
   issues: StudyStageDraftValidation[],
   draft: StudyStageDraft,
 ): void {
-  const minimum = Number(draft.dtMin);
-  const maximum = Number(draft.dtMax);
+  const minimum = draftNumber(draft.dtMin, "time");
+  const maximum = draftNumber(draft.dtMax, "time");
   if (
     draft.dtMin.trim() &&
     draft.dtMax.trim() &&
@@ -2061,17 +2093,23 @@ function validateStageAdaptiveBounds(
     Number.isFinite(maximum) &&
     maximum < minimum
   ) {
-    issues.push({ message: "dt_max must be greater than or equal to dt_min.", severity: "error" });
+    issues.push({
+      message: "Adaptive dt max must be greater than or equal to Adaptive dt min.",
+      severity: "error",
+    });
   }
   if (draft.dt.trim()) {
-    const initial = Number(draft.dt);
+    const initial = draftNumber(draft.dt, "time");
     if (
       Number.isFinite(initial) &&
       Number.isFinite(minimum) &&
       Number.isFinite(maximum) &&
       (initial < minimum || initial > maximum)
     ) {
-      issues.push({ message: "dt_initial must lie within adaptive bounds.", severity: "error" });
+      issues.push({
+        message: "Initial dt must lie between Adaptive dt min and Adaptive dt max.",
+        severity: "error",
+      });
     }
   }
 }
@@ -2166,6 +2204,7 @@ function validatePositiveNumber(
   value: string,
   label: string,
   required: boolean,
+  dimension: QuantityDimension = "dimensionless",
 ): void {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -2174,7 +2213,7 @@ function validatePositiveNumber(
     }
     return;
   }
-  const parsed = Number(trimmed);
+  const parsed = draftNumber(trimmed, dimension);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     issues.push({
       message: `${label} must be a positive finite number.`,
@@ -2927,7 +2966,7 @@ function validateSettleRetryPolicy(
   );
   if (retryScale !== null && (retryScale <= 0 || retryScale >= 1)) {
     issues.push({
-      message: `${label} retry_timestep_scale must be positive and smaller than 1.`,
+      message: `${label} Retry scale must be positive and smaller than 1.`,
       severity: "error",
     });
   }
@@ -2942,7 +2981,7 @@ function validateSettleRetryPolicy(
   }
   if (policy === "retry_with_smaller_dt" && retryScale === null) {
     issues.push({
-      message: `${label} retry_with_smaller_dt requires retry_timestep_scale.`,
+      message: `${label} retry with smaller timestep requires a Retry scale.`,
       severity: "error",
     });
   }
@@ -2961,19 +3000,19 @@ function validateSettleTimesteps(
   );
   if (timestep !== null && timestep <= 0) {
     issues.push({
-      message: `${label} timestep_s must be a positive finite number.`,
+      message: `${label} Timestep must be a positive finite number.`,
       severity: "error",
     });
   }
   if (minTimestep !== null && minTimestep <= 0) {
     issues.push({
-      message: `${label} dt_min must be a positive finite number.`,
+      message: `${label} Minimum timestep must be a positive finite number.`,
       severity: "error",
     });
   }
   if (timestep !== null && minTimestep !== null && minTimestep > timestep) {
     issues.push({
-      message: `${label} dt_min must be smaller than or equal to timestep_s.`,
+      message: `${label} Minimum timestep must be smaller than or equal to Timestep.`,
       severity: "error",
     });
   }
@@ -3082,8 +3121,8 @@ function validateMinorLoop(
     return;
   }
 
-  const reversal = finiteObjectNumber(loop.reversal_mT ?? loop.reversalMt);
-  const returnField = finiteObjectNumber(loop.return_mT ?? loop.returnMt);
+  const reversal = finiteObjectNumber(loop.reversal_mT ?? loop.reversalMt ?? loop.reversalField);
+  const returnField = finiteObjectNumber(loop.return_mT ?? loop.returnMt ?? loop.returnField);
   if (reversal === null) {
     issues.push({
       message: `${label} reversal_mT must be a finite number.`,
@@ -3155,8 +3194,8 @@ function parseMinorLoopDrafts(value: string): MinorLoopDraft[] {
     parsed.forEach((item, index) => {
       const loop = asRecord(item);
       if (!loop) return;
-      const reversal = finiteObjectNumber(loop.reversal_mT ?? loop.reversalMt);
-      const returnField = finiteObjectNumber(loop.return_mT ?? loop.returnMt);
+      const reversal = finiteObjectNumber(loop.reversal_mT ?? loop.reversalMt ?? loop.reversalField);
+      const returnField = finiteObjectNumber(loop.return_mT ?? loop.returnMt ?? loop.returnField);
       if (reversal === null || returnField === null) return;
       loops.push({ index, returnField, reversal });
     });
@@ -3188,27 +3227,27 @@ function validateFieldSegment(
   const stepValue = typeof step === "number" ? step : Number(String(step ?? "").trim());
 
   if (!segmentId) {
-    issues.push({ message: `${label} requires segmentId.`, severity: "error" });
+    issues.push({ message: `${label} requires a Segment ID.`, severity: "error" });
   }
   if (!endpointPolicy) {
-    issues.push({ message: `${label} requires endpointPolicy.`, severity: "error" });
+    issues.push({ message: `${label} requires an Endpoint policy.`, severity: "error" });
   } else if (!SUPPORTED_FIELD_SEGMENT_ENDPOINT_POLICIES.has(endpointPolicy)) {
     issues.push({
-      message: `${label} endpointPolicy must be include_stop, skip_start, or include_both.`,
+      message: `${label} Endpoint policy must be one of: include stop, skip start, include both.`,
       severity: "error",
     });
   }
   if (!Number.isFinite(startValue)) {
-    issues.push({ message: `${label} startField must be a finite number.`, severity: "error" });
+    issues.push({ message: `${label} Start field must be a finite number.`, severity: "error" });
   }
   if (!Number.isFinite(stopValue)) {
-    issues.push({ message: `${label} stopField must be a finite number.`, severity: "error" });
+    issues.push({ message: `${label} Stop field must be a finite number.`, severity: "error" });
   }
   if (!Number.isFinite(stepValue) || stepValue <= 0) {
     issues.push({ message: `${label} step must be a positive finite number.`, severity: "error" });
   }
   if (Number.isFinite(startValue) && Number.isFinite(stopValue) && startValue === stopValue) {
-    issues.push({ message: `${label} startField and stopField must differ.`, severity: "error" });
+    issues.push({ message: `${label} Start field and Stop field must differ.`, severity: "error" });
   }
 }
 
@@ -3257,9 +3296,9 @@ function validateDenseWindow(
     return;
   }
 
-  const center = finiteObjectNumber(window.center_mT ?? window.centerMt);
-  const halfWidth = finiteObjectNumber(window.half_width_mT ?? window.halfWidthMt);
-  const step = finiteObjectNumber(window.step_mT ?? window.stepMt);
+  const center = finiteObjectNumber(window.center_mT ?? window.centerMt ?? window.centerField);
+  const halfWidth = finiteObjectNumber(window.half_width_mT ?? window.halfWidthMt ?? window.halfWidth);
+  const step = finiteObjectNumber(window.step_mT ?? window.stepMt ?? window.step);
   const priority = window.priority;
 
   if (center === null) {
@@ -3352,8 +3391,8 @@ function parseDenseWindowDrafts(value: string): DenseWindowDraft[] {
     parsed.forEach((item, index) => {
       const window = asRecord(item);
       if (!window) return;
-      const center = finiteObjectNumber(window.center_mT ?? window.centerMt);
-      const halfWidth = finiteObjectNumber(window.half_width_mT ?? window.halfWidthMt);
+      const center = finiteObjectNumber(window.center_mT ?? window.centerMt ?? window.centerField);
+      const halfWidth = finiteObjectNumber(window.half_width_mT ?? window.halfWidthMt ?? window.halfWidth);
       if (center === null || halfWidth === null || halfWidth <= 0) return;
       const rawPriority = window.priority;
       const priority =
@@ -3879,15 +3918,20 @@ function normalizeHysteresisDenseWindow(value: unknown): JsonObject {
     return {};
   }
   const normalized: JsonObject = {};
-  const center = window.center_mT ?? window.centerMt;
-  const halfWidth = window.half_width_mT ?? window.halfWidthMt;
-  const step = window.step_mT ?? window.stepMt;
+  const center = window.center_mT ?? window.centerMt ?? window.centerField;
+  const halfWidth = window.half_width_mT ?? window.halfWidthMt ?? window.halfWidth;
+  const step = window.step_mT ?? window.stepMt ?? window.step;
 
-  if (typeof center === "number") normalized.center_mT = center;
-  if (typeof halfWidth === "number") normalized.half_width_mT = halfWidth;
-  if (typeof step === "number") normalized.step_mT = step;
-  if (typeof window.reason === "string") normalized.reason = window.reason;
-  if (typeof window.priority === "number") normalized.priority = window.priority;
+  // The structured editor stores text drafts; the request carries SI-mT numbers.
+  const centerValue = finiteObjectNumber(center);
+  const halfWidthValue = finiteObjectNumber(halfWidth);
+  const stepValue = finiteObjectNumber(step);
+  const priorityValue = finiteObjectNumber(window.priority);
+  if (centerValue !== null) normalized.center_mT = centerValue;
+  if (halfWidthValue !== null) normalized.half_width_mT = halfWidthValue;
+  if (stepValue !== null) normalized.step_mT = stepValue;
+  if (typeof window.reason === "string" && window.reason.trim()) normalized.reason = window.reason;
+  if (priorityValue !== null && Number.isInteger(priorityValue)) normalized.priority = priorityValue;
   return normalized;
 }
 
@@ -3897,11 +3941,19 @@ function normalizeHysteresisMinorLoop(value: unknown): JsonObject {
     return {};
   }
   const normalized: JsonObject = {};
-  const reversal = loop.reversal_mT ?? loop.reversalMt;
-  const returnField = loop.return_mT ?? loop.returnMt;
+  const reversal = loop.reversal_mT ?? loop.reversalMt ?? loop.reversalField;
+  const returnField = loop.return_mT ?? loop.returnMt ?? loop.returnField;
 
-  if (typeof reversal === "number") normalized.reversal_mT = reversal;
-  if (typeof returnField === "number") normalized.return_mT = returnField;
+  const reversalValue = finiteObjectNumber(reversal);
+  const returnValue = finiteObjectNumber(returnField);
+  if (reversalValue !== null) normalized.reversal_mT = reversalValue;
+  if (returnValue !== null) normalized.return_mT = returnValue;
+  // The editor's closure choice is the IR continuation policy; the parent
+  // branch is an editor-only hint with no IR field.
+  const continuation = loop.continuation_policy ?? loop.closurePolicy;
+  if (typeof continuation === "string" && continuation.trim()) {
+    normalized.continuation_policy = continuation;
+  }
   return normalized;
 }
 
@@ -3933,8 +3985,12 @@ function requiredDeviceTarget(value: string): string {
   throw new Error("device must be cpu, gpu, cuda, cuda:<index>, or auto.");
 }
 
-function requiredNumber(value: string, field: string): number {
-  const parsed = Number(value.trim());
+function requiredNumber(
+  value: string,
+  field: string,
+  dimension: QuantityDimension = "dimensionless",
+): number {
+  const parsed = draftNumber(value, dimension);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`${field} must be a positive finite number.`);
   }
@@ -3972,12 +4028,14 @@ function requiredInteger(value: string, field: string): number {
   return parsed;
 }
 
-function requiredNumberList(value: string, field: string): number[] {
-  const values = positiveNumberList(value);
-  if (values.length === 0) {
-    throw new Error(`${field} requires at least one positive finite number.`);
-  }
-  return values;
+function requiredNumberList(
+  value: string,
+  field: string,
+  dimension: QuantityDimension = "dimensionless",
+): number[] {
+  const message = positiveDraftNumberListError(value, field, dimension);
+  if (message) throw new Error(message);
+  return positiveDraftNumberList(value, dimension).values;
 }
 
 function requiredVector3(value: string, field: string): number[] {
@@ -4050,14 +4108,46 @@ function strictFiniteNumberList(value: string): number[] | null {
   return values;
 }
 
-function positiveNumberList(value: string): number[] {
+/**
+ * Positive list values with the tokens that could not be used, so a typo is
+ * reported instead of silently dropped. Tokens are separated by commas or
+ * whitespace; a unit must be attached to its number ("10GHz").
+ */
+function positiveDraftNumberList(
+  value: string,
+  dimension: QuantityDimension,
+): { invalid: string[]; nonPositive: string[]; values: number[] } {
+  const invalid: string[] = [];
+  const nonPositive: string[] = [];
   const values: number[] = [];
-  for (const entry of finiteNumberList(value)) {
-    if (entry > 0) {
-      values.push(entry);
-    }
+  for (const token of value.split(/[,;\s]+/)) {
+    const entry = token.trim();
+    if (!entry) continue;
+    const parsed = draftNumber(entry, dimension);
+    if (!Number.isFinite(parsed)) invalid.push(entry);
+    else if (parsed > 0) values.push(parsed);
+    else nonPositive.push(entry);
   }
-  return values;
+  return { invalid, nonPositive, values };
+}
+
+/** First user-facing problem of a positive list, or null; no token is dropped silently. */
+function positiveDraftNumberListError(
+  value: string,
+  label: string,
+  dimension: QuantityDimension,
+): string | null {
+  const { invalid, nonPositive, values } = positiveDraftNumberList(value, dimension);
+  if (invalid.length > 0) {
+    return `${label} contains values that are not numbers: ${invalid.join(", ")}.`;
+  }
+  if (values.length === 0) {
+    return `${label} requires at least one positive finite number.`;
+  }
+  if (nonPositive.length > 0) {
+    return `${label} values must be positive: ${nonPositive.join(", ")}.`;
+  }
+  return null;
 }
 
 function parseJsonOrString(value: string, fallback: string): JsonObject | string {
@@ -4103,10 +4193,11 @@ function setOptionalNumber(
   target: JsonObject,
   key: string,
   value: string,
+  dimension: QuantityDimension = "dimensionless",
 ): void {
   const trimmed = value.trim();
   if (!trimmed) return;
-  const parsed = Number(trimmed);
+  const parsed = draftNumber(trimmed, dimension);
   if (Number.isFinite(parsed) && parsed > 0) {
     target[key] = parsed;
   }
@@ -4121,13 +4212,10 @@ function validatePositiveNumberList(
   issues: StudyStageDraftValidation[],
   value: string,
   label: string,
+  dimension: QuantityDimension = "dimensionless",
 ): void {
-  if (positiveNumberList(value).length === 0) {
-    issues.push({
-      message: `${label} requires at least one positive finite number.`,
-      severity: "error",
-    });
-  }
+  const message = positiveDraftNumberListError(value, label, dimension);
+  if (message) issues.push({ message, severity: "error" });
 }
 
 function validateRequiredVector3(

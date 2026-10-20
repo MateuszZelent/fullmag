@@ -143,7 +143,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     execute_reference_fdm_multilayer_with_checkpoint(
@@ -160,7 +160,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
     checkpoint: Option<serde_json::Value>,
 ) -> Result<ExecutedRun, RunError> {
@@ -470,15 +470,48 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
                 &mut artifacts,
             )?;
 
-            if let Some((grid, on_step)) = live.as_mut() {
+            if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+                let magnetization = crate::types::fdm_multilayer_live_field_due(
+                    latest_stats.step,
+                    *field_every_n,
+                )
+                .then(|| flatten_vectors(&observables.magnetization));
+                let magnetization_carrier = magnetization.as_ref().and_then(|_| {
+                    crate::types::fdm_multilayer_live_magnetization_carrier(
+                        *layout,
+                        &latest_stats,
+                    )
+                });
+                let cached_preview_fields = if magnetization.is_some() && *field_every_n == 1 {
+                    match live_fields_from_observables(plan, &contexts, &states, &observables, &latest_stats) {
+                        Ok(fields) => {
+                            latest_stats.field_materialization_states = fields.iter().map(|field| crate::types::LiveFieldMaterializationStatus {
+                                quantity: field.quantity.clone(), source_step: latest_stats.step,
+                                request_revision: latest_stats.step, state: crate::types::LiveFieldMaterializationState::Complete, error: None,
+                            }).collect();
+                            Some(fields)
+                        }
+                        Err(error) => {
+                            eprintln!("[fullmag-runner] CPU multilayer live observation: {}", error.message);
+                            latest_stats.field_materialization_states = active_fdm_multilayer_preview_quantities(
+                                plan, &crate::quantities::field_materialization_quantity_ids(),
+                            ).into_iter().map(|quantity| crate::types::LiveFieldMaterializationStatus {
+                                quantity: quantity.into(), source_step: latest_stats.step,
+                                request_revision: latest_stats.step, state: crate::types::LiveFieldMaterializationState::Error,
+                                error: Some(error.message.clone()),
+                            }).collect();
+                            None
+                        }
+                    }
+                } else { None };
                 let action = on_step(StepUpdate {
                     coupled_checkpoint: final_abm3_checkpoint.clone(),
                     stats: latest_stats.clone(),
                     grid: [grid[0], grid[1], grid[2]],
                     fem_mesh_generation_id: None,
-                    magnetization: None,
+                    magnetization,
                     preview_field: None,
-                    cached_preview_fields: None,
+                    cached_preview_fields,
                     hysteresis_field_m_t: None,
                     hysteresis_point_index: None,
                     hysteresis_settle_step_index: None,
@@ -487,6 +520,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
                     scalar_row_due: false,
                     terminal_field_snapshot: false,
                     finished: false,
+                    magnetization_carrier,
                 });
                 match action {
                     StepAction::Continue => {}
@@ -651,27 +685,93 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
     // physical carrier). Publish the final native payload explicitly as a
     // multilayer field; the API then slices it using the artifact layout.
     if !paused && !cancelled {
-        if let Some((grid, on_step)) = live.as_mut() {
-            let cached_preview_fields =
-                build_multilayer_live_preview_fields(plan, &final_observables, final_stats.step);
-            let _ = on_step(StepUpdate {
-                stats: final_stats.clone(),
-                scalar_row_due: true,
-                grid: [grid[0], grid[1], grid[2]],
-                fem_mesh_generation_id: None,
-                magnetization: Some(flatten_vectors(&final_observables.magnetization)),
-                preview_field: None,
-                cached_preview_fields: (!cached_preview_fields.is_empty())
-                    .then_some(cached_preview_fields),
-                hysteresis_field_m_t: None,
-                hysteresis_point_index: None,
-                hysteresis_settle_step_index: None,
-                hysteresis_settle_step_kind: None,
-                hysteresis_settle_step_method: None,
-                terminal_field_snapshot: false,
-                finished: false,
-                coupled_checkpoint: final_abm3_checkpoint.clone(),
-            });
+        if let Some((grid, _field_every_n, layout, on_step)) = live.as_mut() {
+            let quantities = crate::quantities::field_materialization_quantity_ids();
+            let quantities = active_fdm_multilayer_preview_quantities(plan, &quantities);
+            let terminal_magnetization = flatten_vectors(&final_observables.magnetization);
+            let magnetization_carrier = crate::types::fdm_multilayer_live_magnetization_carrier(
+                *layout,
+                &final_stats,
+            );
+            let mut terminal_stats = final_stats.clone();
+            let source_step = final_stats.step;
+            for quantity in &quantities {
+                terminal_stats
+                    .field_materialization_states
+                    .retain(|status| status.quantity != *quantity);
+                terminal_stats.field_materialization_states.push(
+                    crate::types::LiveFieldMaterializationStatus {
+                        quantity: (*quantity).to_string(),
+                        source_step,
+                        request_revision: source_step,
+                        state: crate::types::LiveFieldMaterializationState::Pending,
+                        error: None,
+                    },
+                );
+            }
+            for quantity in &quantities {
+                let cached_preview_fields = match live_field_from_observables(
+                    plan,
+                    &contexts,
+                    &states,
+                    &final_observables,
+                    &final_stats,
+                    quantity,
+                ) {
+                    Ok(field) => {
+                        terminal_stats
+                            .field_materialization_states
+                            .retain(|status| status.quantity != *quantity);
+                        terminal_stats.field_materialization_states.push(
+                            crate::types::LiveFieldMaterializationStatus {
+                                quantity: (*quantity).to_string(),
+                                source_step,
+                                request_revision: source_step,
+                                state: crate::types::LiveFieldMaterializationState::Complete,
+                                error: None,
+                            },
+                        );
+                        Some(vec![field])
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "[fullmag-runner] CPU multilayer terminal observation quantity {}: {}",
+                            quantity, error.message
+                        );
+                        terminal_stats
+                            .field_materialization_states
+                            .retain(|status| status.quantity != *quantity);
+                        terminal_stats.field_materialization_states.push(
+                            crate::types::LiveFieldMaterializationStatus {
+                                quantity: (*quantity).to_string(),
+                                source_step,
+                                request_revision: source_step,
+                                state: crate::types::LiveFieldMaterializationState::Error,
+                                error: Some(error.message),
+                            },
+                        );
+                        None
+                    }
+                };
+                let _ = on_step(StepUpdate {
+                    stats: terminal_stats.clone(),
+                    scalar_row_due: true,
+                    grid: [grid[0], grid[1], grid[2]],
+                    fem_mesh_generation_id: None,
+                    magnetization: Some(terminal_magnetization.clone()),
+                    preview_field: None,
+                    cached_preview_fields,
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
+                    terminal_field_snapshot: true,
+                    finished: false,
+                    coupled_checkpoint: final_abm3_checkpoint.clone(),
+                    magnetization_carrier: magnetization_carrier.clone(),
+                });
+            }
         }
     }
 
@@ -737,6 +837,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
     })
 }
 
+#[cfg(test)]
 fn build_multilayer_live_preview_fields(
     plan: &FdmMultilayerPlanIR,
     observables: &StateObservables,
@@ -839,6 +940,55 @@ pub(crate) fn snapshot_vector_fields(
     snapshot_fields(plan, quantities, request)
 }
 
+/// Evaluate observables for an already accepted multilayer magnetization.
+/// This constructs the same native-layer evaluator as preview generation but
+/// never advances an integration step. The caller has already installed and
+/// validated the exact accepted M in the plan.
+pub(crate) fn observe_accepted_state(
+    plan: &FdmMultilayerPlanIR,
+    time_seconds: f64,
+) -> Result<StateObservables, RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    if plan.precision != ExecutionPrecision::Double {
+        return Err(RunError {
+            message: "accepted CPU multilayer observations require double precision".into(),
+        });
+    }
+    if !time_seconds.is_finite() {
+        return Err(RunError {
+            message: "accepted multilayer observation time must be finite".into(),
+        });
+    }
+    if plan.frozen_spins.is_some() {
+        return Err(RunError {
+            message: "accepted multilayer observation cannot reconstruct the Frozen Spins activation reference".into(),
+        });
+    }
+    crate::fdm::validate_multilayer_grid_budget(
+        plan,
+        fullmag_fdm_demag::KernelAdmissionModel::CpuFp64Catalog,
+    )?;
+
+    let integrator = match plan.integrator {
+        IntegratorChoice::Heun => fullmag_engine::TimeIntegrator::Heun,
+        IntegratorChoice::Rk4 => fullmag_engine::TimeIntegrator::RK4,
+        IntegratorChoice::Rk23 => fullmag_engine::TimeIntegrator::RK23,
+        IntegratorChoice::Rk45 => fullmag_engine::TimeIntegrator::RK45,
+        IntegratorChoice::Abm3 => fullmag_engine::TimeIntegrator::ABM3,
+    };
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    let (contexts, mut states) = build_contexts_and_states(plan, integrator, pure_damping_relax)?;
+    for state in &mut states {
+        state.time_seconds = time_seconds;
+    }
+    let demag_runtime = if plan.enable_demag {
+        Some(build_multilayer_demag_runtime(plan)?)
+    } else {
+        None
+    };
+    observe_multilayer(&contexts, &states, demag_runtime.as_ref())
+}
+
 fn snapshot_fields(
     plan: &FdmMultilayerPlanIR,
     quantities: &[&str],
@@ -865,10 +1015,81 @@ fn snapshot_fields(
         None
     };
     let observables = observe_multilayer(&contexts, &states, demag_runtime.as_ref())?;
+    snapshot_fields_from_observables(plan, &contexts, &states, &observables, quantities, request)
+}
+
+fn live_fields_from_observables(
+    plan: &FdmMultilayerPlanIR,
+    contexts: &[LayerContext],
+    states: &[ExchangeLlgState],
+    observables: &StateObservables,
+    stats: &StepStats,
+) -> Result<Vec<LivePreviewField>, RunError> {
+    let quantities = crate::quantities::field_materialization_quantity_ids();
+    let active = active_fdm_multilayer_preview_quantities(plan, &quantities);
+    let request = crate::types::LivePreviewRequest {
+        all_layers: true, every_n: 1, auto_scale_enabled: false, max_points: u32::MAX,
+        ..crate::types::LivePreviewRequest::default()
+    };
+    let mut fields = snapshot_fields_from_observables(plan, contexts, states, observables, &active, &request)?;
+    for field in &mut fields {
+        field.source_step = stats.step;
+        field.source_time_seconds = Some(stats.time);
+        field.source_revision = stats.step;
+    }
+    Ok(fields)
+}
+
+fn live_field_from_observables(
+    plan: &FdmMultilayerPlanIR,
+    contexts: &[LayerContext],
+    states: &[ExchangeLlgState],
+    observables: &StateObservables,
+    stats: &StepStats,
+    quantity: &str,
+) -> Result<LivePreviewField, RunError> {
+    let request = crate::types::LivePreviewRequest {
+        all_layers: true,
+        every_n: 1,
+        auto_scale_enabled: false,
+        max_points: u32::MAX,
+        ..crate::types::LivePreviewRequest::default()
+    };
+    let fields = snapshot_fields_from_observables(
+        plan,
+        contexts,
+        states,
+        observables,
+        &[quantity],
+        &request,
+    )?;
+    if fields.len() != 1 {
+        return Err(RunError {
+            message: format!(
+                "CPU multilayer terminal observation did not produce active quantity '{quantity}'"
+            ),
+        });
+    }
+    let mut field = fields.into_iter().next().expect("one captured field");
+    field.source_step = stats.step;
+    field.source_time_seconds = Some(stats.time);
+    field.source_revision = stats.step;
+    Ok(field)
+}
+
+fn snapshot_fields_from_observables(
+    plan: &FdmMultilayerPlanIR,
+    contexts: &[LayerContext],
+    states: &[ExchangeLlgState],
+    observables: &StateObservables,
+    quantities: &[&str],
+    request: &crate::types::LivePreviewRequest,
+) -> Result<Vec<LivePreviewField>, RunError> {
     let native_point_count = observables.magnetization.len();
-    let scalar_fields = build_multilayer_scalar_fields(plan, &contexts, &states, &observables)?;
     let active_mask = multilayer_active_mask(plan);
     let active_quantities = active_fdm_multilayer_preview_quantities(plan, quantities);
+    let scalar_fields =
+        build_multilayer_scalar_fields(plan, contexts, states, observables, &active_quantities)?;
     let mut result = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for requested in quantities {
@@ -996,81 +1217,162 @@ fn build_multilayer_scalar_fields(
     contexts: &[LayerContext],
     states: &[ExchangeLlgState],
     observables: &StateObservables,
+    quantities: &[&'static str],
 ) -> Result<std::collections::HashMap<&'static str, Vec<f64>>, RunError> {
-    let mut fields = std::collections::HashMap::from([
-        ("eden_ex", Vec::new()),
-        ("eden_demag", Vec::new()),
-        ("eden_ext", Vec::new()),
-        ("eden_ani", Vec::new()),
-        ("eden_dmi", Vec::new()),
-        ("eden_rotated_dmi", Vec::new()),
-        ("eden_total", Vec::new()),
-        ("mat_ms", Vec::new()),
-        ("mat_aex", Vec::new()),
-        ("mat_alpha", Vec::new()),
-        ("frozen_spins", Vec::new()),
-    ]);
-    if let Some(frozen) = plan.frozen_spins.as_ref() {
-        fields
-            .get_mut("frozen_spins")
-            .unwrap()
-            .extend(
-                frozen
-                    .frozen_mask
-                    .iter()
-                    .map(|value| if *value { 1.0 } else { 0.0 }),
-            );
+    let mut fields = std::collections::HashMap::new();
+    for quantity in quantities {
+        if quantity_spec(quantity)
+            .is_some_and(|spec| spec.shape == fullmag_quantities::QuantityShape::SpatialScalar)
+        {
+            fields.entry(*quantity).or_insert_with(Vec::new);
+        }
     }
+    if fields.is_empty() {
+        return Ok(fields);
+    }
+    if fields.contains_key("frozen_spins") {
+        if let Some(frozen) = plan.frozen_spins.as_ref() {
+            fields
+                .get_mut("frozen_spins")
+                .expect("selected frozen-spin field")
+                .extend(
+                    frozen
+                        .frozen_mask
+                        .iter()
+                        .map(|value| if *value { 1.0 } else { 0.0 }),
+                );
+        }
+    }
+    let need_total = fields.contains_key("eden_total");
+    let need_local_observables = need_total
+        || fields.contains_key("eden_ex")
+        || fields.contains_key("eden_ext");
+    let need_demag = need_total || fields.contains_key("eden_demag");
     let mut offset = 0usize;
     for (context, state) in contexts.iter().zip(states) {
-        let local = context.problem.observe(state).map_err(|error| RunError {
-            message: format!("multilayer scalar snapshot observables failed: {error}"),
-        })?;
+        let local = if need_local_observables {
+            Some(context.problem.observe(state).map_err(|error| RunError {
+                message: format!("multilayer scalar snapshot observables failed: {error}"),
+            })?)
+        } else {
+            None
+        };
         let count = state.magnetization().len();
-        let demag = observables
-            .demag_field
-            .get(offset..offset + count)
-            .ok_or_else(|| RunError {
-                message: "multilayer demag snapshot length does not match layer state".to_string(),
-            })?;
         let m = state.magnetization();
-        let ex = context
-            .problem
-            .exchange_energy_density_from_field(m, &local.exchange_field);
-        let demag = context.problem.demag_energy_density_from_fields(m, demag);
-        let ext = context
-            .problem
-            .external_energy_density_from_fields(m, &local.external_field);
-        let ani = context.problem.anisotropy_energy_density_from_vectors(m);
-        let dmi = context.problem.dmi_energy_density_from_vectors(m);
-        let rotated_dmi = context
-            .problem
-            .rotated_interfacial_dmi_energy_density_from_vectors(m);
-        let total = (0..count)
-            .map(|index| ex[index] + demag[index] + ext[index] + ani[index] + dmi[index])
-            .collect::<Vec<_>>();
-        fields.get_mut("eden_ex").unwrap().extend(ex);
-        fields.get_mut("eden_demag").unwrap().extend(demag);
-        fields.get_mut("eden_ext").unwrap().extend(ext);
-        fields.get_mut("eden_ani").unwrap().extend(ani);
-        fields.get_mut("eden_dmi").unwrap().extend(dmi);
-        fields
-            .get_mut("eden_rotated_dmi")
-            .unwrap()
-            .extend(rotated_dmi);
-        fields.get_mut("eden_total").unwrap().extend(total);
-        fields
-            .get_mut("mat_ms")
-            .unwrap()
-            .extend((0..count).map(|index| context.problem.ms_at(index)));
-        fields
-            .get_mut("mat_aex")
-            .unwrap()
-            .extend((0..count).map(|index| context.problem.a_at(index)));
-        fields
-            .get_mut("mat_alpha")
-            .unwrap()
-            .extend((0..count).map(|index| context.problem.alpha_at(index)));
+        let demag = if need_demag {
+            Some(
+                observables
+                    .demag_field
+                    .get(offset..offset + count)
+                    .ok_or_else(|| RunError {
+                        message: "multilayer demag snapshot length does not match layer state"
+                            .to_string(),
+                    })?,
+            )
+        } else {
+            None
+        };
+        let mut total = if need_total {
+            let local = local.as_ref().expect("total energy needs local fields");
+            Some(context.problem.exchange_energy_density_from_field(
+                m,
+                &local.exchange_field,
+            ))
+        } else {
+            None
+        };
+        if fields.contains_key("eden_ex") {
+            let values = if let Some(total_values) = total.as_ref() {
+                total_values.clone()
+            } else {
+                let local = local.as_ref().expect("exchange density needs local fields");
+                context
+                    .problem
+                    .exchange_energy_density_from_field(m, &local.exchange_field)
+            };
+            if let Some(field) = fields.get_mut("eden_ex") {
+                field.extend_from_slice(&values);
+            }
+        }
+        if fields.contains_key("eden_demag") || need_total {
+            let values = context
+                .problem
+                .demag_energy_density_from_fields(m, demag.expect("demag density requested"));
+            if let Some(field) = fields.get_mut("eden_demag") {
+                field.extend_from_slice(&values);
+            }
+            if let Some(total_values) = total.as_mut() {
+                for (sum, value) in total_values.iter_mut().zip(values) {
+                    *sum += value;
+                }
+            }
+        }
+        if fields.contains_key("eden_ext") || need_total {
+            let local = local.as_ref().expect("external density needs local fields");
+            let values = context
+                .problem
+                .external_energy_density_from_fields(m, &local.external_field);
+            if let Some(field) = fields.get_mut("eden_ext") {
+                field.extend_from_slice(&values);
+            }
+            if let Some(total_values) = total.as_mut() {
+                for (sum, value) in total_values.iter_mut().zip(values) {
+                    *sum += value;
+                }
+            }
+        }
+        if fields.contains_key("eden_ani") || need_total {
+            let values = context.problem.anisotropy_energy_density_from_vectors(m);
+            if let Some(field) = fields.get_mut("eden_ani") {
+                field.extend_from_slice(&values);
+            }
+            if let Some(total_values) = total.as_mut() {
+                for (sum, value) in total_values.iter_mut().zip(values) {
+                    *sum += value;
+                }
+            }
+        }
+        if fields.contains_key("eden_dmi") || need_total {
+            let values = context.problem.dmi_energy_density_from_vectors(m);
+            if let Some(field) = fields.get_mut("eden_dmi") {
+                field.extend_from_slice(&values);
+            }
+            if let Some(total_values) = total.as_mut() {
+                for (sum, value) in total_values.iter_mut().zip(values) {
+                    *sum += value;
+                }
+            }
+        }
+        if let Some(total) = total {
+            fields
+                .get_mut("eden_total")
+                .expect("total energy field was selected")
+                .extend(total);
+        }
+        if fields.contains_key("eden_rotated_dmi") {
+            fields
+                .get_mut("eden_rotated_dmi")
+                .expect("selected rotated-DMI field")
+                .extend(context.problem.rotated_interfacial_dmi_energy_density_from_vectors(m));
+        }
+        if fields.contains_key("mat_ms") {
+            fields
+                .get_mut("mat_ms")
+                .expect("selected Ms field")
+                .extend((0..count).map(|index| context.problem.ms_at(index)));
+        }
+        if fields.contains_key("mat_aex") {
+            fields
+                .get_mut("mat_aex")
+                .expect("selected Aex field")
+                .extend((0..count).map(|index| context.problem.a_at(index)));
+        }
+        if fields.contains_key("mat_alpha") {
+            fields
+                .get_mut("mat_alpha")
+                .expect("selected alpha field")
+                .extend((0..count).map(|index| context.problem.alpha_at(index)));
+        }
         offset += count;
     }
     Ok(fields)

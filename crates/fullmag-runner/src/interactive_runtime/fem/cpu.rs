@@ -180,6 +180,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -296,6 +297,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 cached_preview_fields,
                 scalar_row_due,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -475,6 +477,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -613,6 +616,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 cached_preview_fields: None,
                 scalar_row_due,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);

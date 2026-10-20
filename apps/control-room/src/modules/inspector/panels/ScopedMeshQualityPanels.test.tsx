@@ -757,7 +757,7 @@ describe("scoped mesh quality panels", () => {
     );
 
     expect(html).toContain("Transactions");
-    expect(html).toContain("Apply Universe Policy");
+    expect(html).toContain("Apply Airbox Policy");
   });
 
   it("renders airbox quality histograms in the airbox mesh panel", () => {
@@ -819,7 +819,7 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Padding X");
     expect(html).toContain("Center X");
     expect(html).toContain(
-      "Apply Universe Policy saves the canonical policy and queues an FDM grid replan.",
+      "Apply Airbox Policy saves the canonical policy and queues an FDM grid replan.",
     );
     expect(html).not.toContain("Maximum element growth rate");
     expect(html).not.toContain("Curvature factor");

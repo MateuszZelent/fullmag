@@ -801,7 +801,8 @@ export function FrozenSpinsPreviewDetails({
         <FeedbackBanner
           key={`${warning.code}:${warning.message}`}
           kind="warning"
-          message={`${warning.code}: ${warning.message}`}
+          detail={`Code: ${warning.code}`}
+          message={warning.message}
         />
       ))}
     </div>

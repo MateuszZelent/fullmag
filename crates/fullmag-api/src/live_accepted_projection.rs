@@ -14,6 +14,7 @@ use crate::error::ApiError;
 use crate::types::{
     AppState, CurrentLiveFieldFrameRequest, CurrentLiveFieldGeneration, SessionStateResponse,
 };
+use fullmag_authoring::SceneExecutionInputIdentity;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -23,21 +24,29 @@ struct ProjectionContext {
     run_id: String,
     session_epoch: u64,
     scene_revision: u64,
+    execution_input: Option<SceneExecutionInputIdentity>,
     api_instance_id: String,
     allow_api_instance_rebind: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct ProjectionCursor {
     api_instance_id: String,
     session_id: String,
     session_epoch: u64,
     scene_revision: u64,
+    /// Computational input digest; when present it binds the cursor instead of
+    /// the raw scene revision, so metadata-only edits keep the cursor.
+    execution_input_sha256: Option<String>,
     run_id: String,
     run_revision: u64,
     artifact_revision: u64,
     status: &'static str,
     latest_output_identity: Option<String>,
+    live_observation_identity: Option<String>,
+    live_observation_sequence: Option<u64>,
+    live_magnetization_sequence: Option<u64>,
+    stage_execution: crate::types::StageExecutionState,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +68,11 @@ struct DurableProjection {
     latest_state: Option<VerifiedOutput>,
     latest_total_energy: Option<fullmag_application::StudyScalarArtifact>,
     latest_output_identity: Option<String>,
+    live_observation: Option<(usize, crate::accepted_study_worker::AcceptedLiveObservation)>,
+    live_observation_identity: Option<String>,
+    live_observation_sequence: Option<u64>,
+    live_magnetization_sequence: Option<u64>,
+    stage_execution: crate::types::StageExecutionState,
 }
 
 /// Start the read-only accepted-output projector for the Docker API-only
@@ -113,11 +127,19 @@ async fn poll_once(
         session_id: context.session_id.clone(),
         session_epoch: context.session_epoch,
         scene_revision: context.scene_revision,
+        execution_input_sha256: context
+            .execution_input
+            .as_ref()
+            .map(|identity| identity.sha256.clone()),
         run_id: context.run_id.clone(),
         run_revision: projection.run_catalog_revision,
         artifact_revision: projection.artifact_catalog_revision,
         status: projection.status,
         latest_output_identity: projection.latest_output_identity.clone(),
+        live_observation_identity: projection.live_observation_identity.clone(),
+        live_observation_sequence: projection.live_observation_sequence,
+        live_magnetization_sequence: projection.live_magnetization_sequence,
+        stage_execution: projection.stage_execution.clone(),
     };
     if cursor.as_ref() == Some(&next_cursor) {
         return Ok(());
@@ -126,7 +148,26 @@ async fn poll_once(
     // transition fence.  Publish a stage-specific pinned domain before the
     // output field is admitted, then apply the field under that same fence.
     let _transition = state.current_live_session_transition.lock().await;
-    if let Err(error) = ensure_stage_preparation(state, &context, &projection).await {
+    let stage_preparation = if let Some((_, observation)) = projection
+        .live_observation
+        .as_ref()
+        .filter(|(_, observation)| observation.magnetization_values.is_some())
+    {
+        ensure_stage_preparation_for_step(
+            state,
+            &context,
+            &observation.header.step_id,
+            None,
+        )
+        .await
+        .and_then(|prepared| {
+            validate_live_magnetization_domain(observation, &prepared.execution_plan)?;
+            Ok(())
+        })
+    } else {
+        ensure_stage_preparation(state, &context, &projection).await
+    };
+    if let Err(error) = stage_preparation {
         if let Err(clear_error) = clear_stale_magnetization(state, &context).await {
             tracing::error!(
                 error = %clear_error,
@@ -141,7 +182,7 @@ async fn poll_once(
 }
 
 async fn capture_context(state: &AppState) -> Result<Option<ProjectionContext>, ApiError> {
-    let (session_id, run_id, scene_revision) = {
+    let (session_id, run_id, scene_revision, execution_input) = {
         let current = state.current_live_state.read().await;
         let Some(snapshot) = current.as_ref() else {
             return Ok(None);
@@ -159,6 +200,7 @@ async fn capture_context(state: &AppState) -> Result<Option<ProjectionContext>, 
             snapshot.session.session_id.clone(),
             run.run_id.clone(),
             scene.revision,
+            crate::live_execution_binding::input_identity(scene)?,
         )
     };
     let reattach = state.accepted_run_reattach_identity.read().await;
@@ -173,6 +215,7 @@ async fn capture_context(state: &AppState) -> Result<Option<ProjectionContext>, 
         run_id,
         session_epoch,
         scene_revision,
+        execution_input: Some(execution_input),
         api_instance_id: state.request_scope_instance_id.clone(),
         allow_api_instance_rebind,
     }))
@@ -227,16 +270,12 @@ fn load_durable_projection(
     }
 
     let status = accepted_projection_status(&store, &context.run_id, &run_catalog.tasks)?;
-    if previous_cursor.is_some_and(|cursor| {
+    let durable_changed = !previous_cursor.is_some_and(|cursor| {
         cursor_matches_context(cursor, context)
             && cursor.run_revision == run_catalog.revision
             && cursor.artifact_revision == artifact_catalog.revision
             && cursor.status == status
-    }) {
-        // Run/artifact catalog revisions are the durable change signal.  Do
-        // not decode every CAS object on the steady-state polling interval.
-        return Ok(None);
-    }
+    });
     let specification: fullmag_application::RunSpecification =
         serde_json::from_value(intent.specification.clone()).map_err(|error| {
             ApiError::conflict(format!(
@@ -274,7 +313,93 @@ fn load_durable_projection(
                 })
         })
         .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
-    let verified = load_verified_outputs(&store, &run_catalog, &artifact_catalog, &task_order)?;
+    let active_task = run_catalog
+        .tasks
+        .iter()
+        .filter(|task| {
+            matches!(
+                task.lifecycle,
+                fullmag_session::FmsTaskLifecycle::Running
+                    | fullmag_session::FmsTaskLifecycle::Stopping
+            )
+        })
+        .filter_map(|task| task_order.get(&task.task_id).map(|order| (*order, task)))
+        .max_by_key(|(order, _)| *order);
+    let mut live_observation_identity = None;
+    let mut live_observation_sequence = None;
+    let mut live_magnetization_sequence = None;
+    let live_observation = if let Some((order, task)) = active_task {
+        let step_id = accepted.lowered.steps.iter().find_map(|step| {
+            let task_id = fullmag_session::task_id_for_study_step(&context.run_id, &step.step_id)
+                .ok()?;
+            (task_id == task.task_id).then(|| step.step_id.clone())
+        });
+        if let (Some(step_id), Some(attempt_id), Some(ownership_epoch)) =
+            (step_id, task.attempt_id.as_deref(), task.ownership_epoch)
+        {
+            let identity = format!("{}:{attempt_id}:{ownership_epoch}", task.task_id);
+            let known_magnetization_sequence = previous_cursor
+                .filter(|cursor| {
+                    cursor_matches_context(cursor, context)
+                        && cursor.live_observation_identity.as_deref() == Some(identity.as_str())
+                })
+                .and_then(|cursor| cursor.live_magnetization_sequence);
+            let observation = crate::accepted_study_worker::read_accepted_live_observation(
+                store_root,
+                &context.run_id,
+                &task.task_id,
+                &step_id,
+                attempt_id,
+                ownership_epoch,
+                known_magnetization_sequence,
+            )
+            .map_err(|error| {
+                ApiError::conflict(format!("read accepted live observation: {error:#}"))
+            })?;
+            live_observation_identity = Some(identity);
+            live_observation_sequence = observation
+                .as_ref()
+                .map(|observation| observation.header.sequence);
+            live_magnetization_sequence = observation.as_ref().and_then(|observation| {
+                observation
+                    .header
+                    .magnetization
+                    .as_ref()
+                    .and_then(|reference| {
+                        (observation.magnetization_values.is_some()
+                            || known_magnetization_sequence == Some(reference.sequence))
+                        .then_some(reference.sequence)
+                    })
+                    .or(known_magnetization_sequence)
+            });
+            observation.map(|observation| (order, observation))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let live_changed = previous_cursor.is_none_or(|cursor| {
+        !cursor_matches_context(cursor, context)
+            || cursor.live_observation_identity != live_observation_identity
+            || cursor.live_observation_sequence != live_observation_sequence
+            || cursor.live_magnetization_sequence != live_magnetization_sequence
+    });
+    if !durable_changed && !live_changed {
+        // Keep the bounded sidecar header fresh, but do not decode CAS outputs
+        // or rebuild the read model until a durable or live sequence changes.
+        return Ok(None);
+    }
+    let verified = if durable_changed {
+        load_verified_outputs(&store, &run_catalog, &artifact_catalog, &task_order)?
+    } else {
+        Vec::new()
+    };
+    let stage_terminal_details = if durable_changed {
+        load_stage_terminal_details(&store, &context.run_id, &run_catalog.tasks)?
+    } else {
+        std::collections::BTreeMap::new()
+    };
     let latest_state = verified
         .iter()
         .filter(|output| output.data_kind == "state")
@@ -298,7 +423,37 @@ fn load_durable_projection(
     let latest_output_identity = latest_state
         .as_ref()
         .map(|output| output.object_ref.clone())
-        .or_else(|| latest_total_energy.as_ref().map(scalar_identity));
+        .or_else(|| latest_total_energy.as_ref().map(scalar_identity))
+        .or_else(|| {
+            previous_cursor
+                .filter(|cursor| cursor_matches_context(cursor, context))
+                .and_then(|cursor| cursor.latest_output_identity.clone())
+        });
+    let stage_execution = if !durable_changed {
+        if let Some(cursor) = previous_cursor.filter(|cursor| cursor_matches_context(cursor, context)) {
+            let mut stage_execution = cursor.stage_execution.clone();
+            refresh_live_stage_progress(&mut stage_execution, live_observation.as_ref());
+            stage_execution
+        } else {
+            build_stage_execution(
+                &accepted,
+                &run_catalog.tasks,
+                live_observation.as_ref(),
+                &verified,
+                &stage_terminal_details,
+                status,
+            )?
+        }
+    } else {
+        build_stage_execution(
+            &accepted,
+            &run_catalog.tasks,
+            live_observation.as_ref(),
+            &verified,
+            &stage_terminal_details,
+            status,
+        )?
+    };
     let command_id = intent
         .specification
         .pointer("/parameters/live_workspace/command_id")
@@ -312,14 +467,228 @@ fn load_durable_projection(
         latest_state,
         latest_total_energy,
         latest_output_identity,
+        live_observation,
+        live_observation_identity,
+        live_observation_sequence,
+        live_magnetization_sequence,
+        stage_execution,
     }))
+}
+
+fn build_stage_execution(
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+    tasks: &[fullmag_session::FmsTaskCatalogEntry],
+    live_observation: Option<&(usize, crate::accepted_study_worker::AcceptedLiveObservation)>,
+    verified_outputs: &[VerifiedOutput],
+    terminal_details: &std::collections::BTreeMap<String, Option<String>>,
+    status: &'static str,
+) -> Result<crate::types::StageExecutionState, ApiError> {
+    let tasks_by_id = tasks
+        .iter()
+        .map(|task| (task.task_id.as_str(), task))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut stages = Vec::with_capacity(accepted.lowered.steps.len());
+    for step in &accepted.lowered.steps {
+        let task_id = fullmag_session::task_id_for_study_step(accepted.run.specification.run_id.as_str(), &step.step_id)
+            .map_err(|error| ApiError::conflict(format!("accepted stage identity is invalid: {error}")))?;
+        let task = tasks_by_id.get(task_id.as_str()).copied();
+        let lifecycle = task.map(|task| task.lifecycle);
+        let stage_status = match lifecycle {
+            Some(fullmag_session::FmsTaskLifecycle::Running | fullmag_session::FmsTaskLifecycle::Stopping) => {
+                crate::types::StageLifecycleState::Running
+            }
+            Some(fullmag_session::FmsTaskLifecycle::Succeeded) => crate::types::StageLifecycleState::Completed,
+            Some(fullmag_session::FmsTaskLifecycle::Failed | fullmag_session::FmsTaskLifecycle::Interrupted) => {
+                crate::types::StageLifecycleState::Failed
+            }
+            Some(fullmag_session::FmsTaskLifecycle::Cancelled) => crate::types::StageLifecycleState::Cancelled,
+            Some(fullmag_session::FmsTaskLifecycle::Accepted | fullmag_session::FmsTaskLifecycle::Queued | fullmag_session::FmsTaskLifecycle::Preparing) | None => {
+                crate::types::StageLifecycleState::Pending
+            }
+        };
+        let mut record = crate::session::accepted_stage_record(
+            &step.step_id,
+            None,
+            stage_status,
+        );
+        if let Some(detail) = task
+            .and_then(|task| terminal_details.get(&task.task_id))
+            .and_then(Option::as_ref)
+        {
+            record.state_transition_reason = Some(detail.clone());
+        }
+        if let Some(output) = verified_outputs
+            .iter()
+            .filter(|output| output.step_id == step.step_id && output.data_kind == "state")
+            .max_by(|left, right| compare_magnetization_outputs(left, right))
+        {
+            if let fullmag_application::DecodedStudyArtifact::MagnetizationState(state) = &output.decoded {
+                record.completed_step = Some(state.step);
+                record.applied_step = Some(state.step);
+                if state.time_s.is_finite() && state.time_s >= 0.0 {
+                    record.applied_time_seconds = Some(state.time_s);
+                }
+            }
+        }
+        if let Some((_, observation)) = live_observation.filter(|(_, observation)| {
+            observation.header.step_id == step.step_id
+        }) {
+            let stats = &observation.header.stats;
+            if stats.time.is_finite()
+                && stats.time >= 0.0
+                && stats.dt.is_finite()
+                && stats.dt >= 0.0
+            {
+                record.applied_step = Some(stats.step);
+                record.applied_time_seconds = Some(stats.time);
+                record.progress_label = Some("Solver update".to_owned());
+                record.progress_detail = Some(format!(
+                    "step {}; time {:.9e} s; dt {:.9e} s",
+                    stats.step, stats.time, stats.dt
+                ));
+                record.last_progress_unix_ms = Some(observation.header.written_at_unix_ms);
+            }
+        }
+        stages.push(record);
+    }
+    Ok(crate::session::accepted_stage_execution_state(
+        stages,
+        crate::session::accepted_runtime_lifecycle_state(status),
+    ))
+}
+
+fn refresh_live_stage_progress(
+    stage_execution: &mut crate::types::StageExecutionState,
+    live_observation: Option<&(usize, crate::accepted_study_worker::AcceptedLiveObservation)>,
+) {
+    let Some((_, observation)) = live_observation else {
+        return;
+    };
+    let Some(stage) = stage_execution.stages.iter_mut().find(|stage| {
+        stage.stage_id.as_deref() == Some(observation.header.step_id.as_str())
+    }) else {
+        return;
+    };
+    let stats = &observation.header.stats;
+    if stats.time.is_finite()
+        && stats.time >= 0.0
+        && stats.dt.is_finite()
+        && stats.dt >= 0.0
+    {
+        stage.applied_step = Some(stats.step);
+        stage.applied_time_seconds = Some(stats.time);
+        stage.progress_label = Some("Solver update".to_owned());
+        stage.progress_detail = Some(format!(
+            "step {}; time {:.9e} s; dt {:.9e} s",
+            stats.step, stats.time, stats.dt
+        ));
+        stage.last_progress_unix_ms = Some(observation.header.written_at_unix_ms);
+    }
+}
+
+/// Read raw terminal details only from the exact task attempt journal. The
+/// task catalog remains authoritative for lifecycle, and this path does not
+/// infer a typed scientific stop criterion from a generic task outcome.
+fn load_stage_terminal_details(
+    store: &fullmag_session::SessionStore,
+    run_id: &str,
+    tasks: &[fullmag_session::FmsTaskCatalogEntry],
+) -> Result<
+    std::collections::BTreeMap<String, Option<String>>,
+    ApiError,
+> {
+    use fullmag_session::{FmsCoordinatorJournalDirection as Direction, FmsTaskLifecycle as Life};
+
+    let terminal_tasks = tasks
+        .iter()
+        .filter(|task| {
+            matches!(task.lifecycle, Life::Failed | Life::Cancelled | Life::Interrupted)
+        })
+        .collect::<Vec<_>>();
+    if terminal_tasks.is_empty() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    let journal = store
+        .read_coordinator_journal(run_id)
+        .map_err(|error| ApiError::conflict(format!("read accepted terminal journal: {error}")))?;
+    let mut reasons = std::collections::BTreeMap::new();
+    for task in terminal_tasks {
+        let mut failure_detail = None;
+        let mut stop_detail = None;
+        if let (Some(attempt_id), Some(ownership_epoch)) =
+            (task.attempt_id.as_deref(), task.ownership_epoch)
+        {
+            for entry in journal.iter().filter(|entry| {
+                entry.task_id == task.task_id
+                    && entry.attempt_id == attempt_id
+                    && entry.ownership_epoch == ownership_epoch
+            }) {
+                let transition: fullmag_application::CoordinatorTransition =
+                    serde_json::from_value(entry.payload.clone()).map_err(|error| {
+                        ApiError::conflict(format!(
+                            "accepted task coordinator transition is invalid: {error}"
+                        ))
+                    })?;
+                let claim = &transition.checkpoint.claim;
+                if claim.run_id.as_str() != run_id
+                    || claim.task_id.as_str() != task.task_id
+                    || claim.attempt_id.as_str() != attempt_id
+                    || claim.ownership_epoch.value() != ownership_epoch
+                {
+                    return Err(ApiError::conflict(
+                        "accepted terminal journal claim differs from its task attempt",
+                    ));
+                }
+                match (entry.direction, &transition.message) {
+                    (
+                        Direction::Command,
+                        fullmag_application::CoordinatorMessage::Command(envelope),
+                    ) => {
+                        if let fullmag_application::WorkerCommand::Stop { reason } =
+                            &envelope.command
+                        {
+                            stop_detail = Some(reason.clone());
+                        }
+                    }
+                    (
+                        Direction::Event,
+                        fullmag_application::CoordinatorMessage::Event(envelope),
+                    ) => match &envelope.event {
+                        fullmag_application::WorkerEvent::Failed { reason, .. }
+                        | fullmag_application::WorkerEvent::Rejected { reason } => {
+                            failure_detail = Some(reason.clone());
+                        }
+                        _ => {}
+                    },
+                    _ => {
+                        return Err(ApiError::conflict(
+                            "accepted terminal journal direction differs from its transition",
+                        ));
+                    }
+                }
+            }
+        }
+        let detail = match task.lifecycle {
+            Life::Failed | Life::Interrupted => failure_detail,
+            Life::Cancelled => stop_detail,
+            _ => continue,
+        };
+        reasons.insert(task.task_id.clone(), detail);
+    }
+    Ok(reasons)
 }
 
 fn cursor_matches_context(cursor: &ProjectionCursor, context: &ProjectionContext) -> bool {
     cursor.api_instance_id == context.api_instance_id
         && cursor.session_id == context.session_id
         && cursor.session_epoch == context.session_epoch
-        && cursor.scene_revision == context.scene_revision
+        && match (
+            cursor.execution_input_sha256.as_deref(),
+            context.execution_input.as_ref(),
+        ) {
+            (Some(cursor_input), Some(identity)) => cursor_input == identity.sha256,
+            _ => cursor.scene_revision == context.scene_revision,
+        }
         && cursor.run_id == context.run_id
 }
 
@@ -377,11 +746,22 @@ fn validate_live_intent(
             != Some(context.api_instance_id.as_str()))
         || live.get("session_id").and_then(Value::as_str) != Some(context.session_id.as_str())
         || live.get("session_epoch").and_then(Value::as_u64) != Some(context.session_epoch)
-        || live.get("scene_revision").and_then(Value::as_u64) != Some(context.scene_revision)
     {
         return Err(ApiError::conflict_with_code(
             "accepted_projection_live_binding_mismatch",
-            "accepted RunIntent is not bound to the current session epoch and scene revision",
+            "accepted RunIntent is not bound to the current API instance, session and epoch",
+        ));
+    }
+    if let Some(identity) = context.execution_input.as_ref() {
+        crate::live_execution_binding::validate_input_binding(
+            specification,
+            identity,
+            context.scene_revision,
+        )?;
+    } else if live.get("scene_revision").and_then(Value::as_u64) != Some(context.scene_revision) {
+        return Err(ApiError::conflict_with_code(
+            "accepted_projection_live_binding_mismatch",
+            "historical accepted RunIntent requires its exact scene revision",
         ));
     }
     Ok(())
@@ -405,6 +785,12 @@ fn catalog_status(tasks: &[fullmag_session::FmsTaskCatalogEntry]) -> &'static st
         .any(|task| task.lifecycle == fullmag_session::FmsTaskLifecycle::Cancelled)
     {
         return "cancelled";
+    }
+    if tasks
+        .iter()
+        .any(|task| task.lifecycle == fullmag_session::FmsTaskLifecycle::Stopping)
+    {
+        return "stopping";
     }
     if tasks
         .iter()
@@ -607,7 +993,29 @@ async fn ensure_stage_preparation(
     else {
         return Ok(());
     };
+    let prepared = ensure_stage_preparation_for_step(
+        state,
+        context,
+        &output.step_id,
+        output.accepted_state_ref.as_ref(),
+    )
+    .await?;
+    validate_accepted_state_domain(
+        state_output,
+        &prepared.execution_plan,
+        &prepared.plan_fingerprint,
+        context.run_id.as_str(),
+        output.step_id.as_str(),
+        output.accepted_state_ref.as_ref(),
+    )
+}
 
+async fn ensure_stage_preparation_for_step(
+    state: &Arc<AppState>,
+    context: &ProjectionContext,
+    step_id: &str,
+    accepted_state_ref: Option<&fullmag_quantities::AcceptedStateRef>,
+) -> Result<PreparedProjectionDomain, ApiError> {
     let existing = {
         let current = state.current_live_state.read().await;
         current.as_ref().and_then(|snapshot| {
@@ -615,18 +1023,13 @@ async fn ensure_stage_preparation(
             if workspace.get("accepted_run_id").and_then(Value::as_str)
                 != Some(context.run_id.as_str())
                 || workspace.get("accepted_step_id").and_then(Value::as_str)
-                    != Some(output.step_id.as_str())
+                    != Some(step_id)
             {
                 return None;
             }
             let preparation_id = workspace.get("preparation_id").and_then(Value::as_str)?;
             let plan_fingerprint = workspace.get("plan_fingerprint").and_then(Value::as_str)?;
-            if !accepted_state_ref_matches_plan(
-                output.accepted_state_ref.as_ref(),
-                context.run_id.as_str(),
-                output.step_id.as_str(),
-                plan_fingerprint,
-            ) {
+            if !accepted_state_ref_matches_plan(accepted_state_ref, context.run_id.as_str(), step_id, plan_fingerprint) {
                 return None;
             }
             let metadata = snapshot.metadata.as_ref()?;
@@ -643,7 +1046,7 @@ async fn ensure_stage_preparation(
     };
 
     let prepared = if let Some(existing) = existing {
-        reread_durable_stage_preparation(state, context, output, &existing).await?;
+        reread_durable_stage_preparation(state, context, step_id, &existing).await?;
         existing
     } else {
         let live_context = crate::types::CurrentLiveRequestContext {
@@ -657,7 +1060,7 @@ async fn ensure_stage_preparation(
                 state,
                 &live_context,
                 &context.run_id,
-                &output.step_id,
+                step_id,
                 "accepted_projection_stage_preparation",
             )
             .await?;
@@ -667,15 +1070,7 @@ async fn ensure_stage_preparation(
             plan_fingerprint: published.read_model.plan_fingerprint,
         }
     };
-
-    validate_accepted_state_domain(
-        state_output,
-        &prepared.execution_plan,
-        &prepared.plan_fingerprint,
-        context.run_id.as_str(),
-        output.step_id.as_str(),
-        output.accepted_state_ref.as_ref(),
-    )
+    Ok(prepared)
 }
 
 /// Re-read the durable stage and its exact task receipt before trusting an
@@ -684,7 +1079,7 @@ async fn ensure_stage_preparation(
 async fn reread_durable_stage_preparation(
     state: &Arc<AppState>,
     context: &ProjectionContext,
-    output: &VerifiedOutput,
+    step_id: &str,
     domain: &PreparedProjectionDomain,
 ) -> Result<(), ApiError> {
     let store_root = state.submit_store_root.clone().ok_or_else(|| {
@@ -695,7 +1090,7 @@ async fn reread_durable_stage_preparation(
         )
     })?;
     let run_id = context.run_id.clone();
-    let step_id = output.step_id.clone();
+    let step_id = step_id.to_owned();
     let expected_preparation_id = domain.preparation_id.clone();
     let expected_plan_fingerprint = domain.plan_fingerprint.clone();
     tokio::task::spawn_blocking(move || {
@@ -798,6 +1193,90 @@ fn accepted_state_ref_matches_plan(
     reference.id.run_id == run_id
         && reference.id.stage_id.as_deref() == Some(step_id)
         && reference.id.domain_digest == plan_fingerprint
+}
+
+fn validate_live_magnetization_domain(
+    observation: &crate::accepted_study_worker::AcceptedLiveObservation,
+    execution_plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<(), ApiError> {
+    let reference = observation
+        .header
+        .magnetization
+        .as_ref()
+        .ok_or_else(|| domain_mismatch("accepted live field has no payload reference"))?;
+    let values = observation
+        .magnetization_values
+        .as_ref()
+        .ok_or_else(|| domain_mismatch("accepted live field payload was not read"))?;
+    let (expected_backend, expected_sample_count) = match &execution_plan.backend_plan {
+        fullmag_ir::BackendPlanIR::Fdm(plan)
+            if matches!(observation.header.realization.as_str(), "fdm_cpu" | "fdm_gpu")
+                && reference.fem_local_node_map.is_none() =>
+        {
+            ("fdm", plan.initial_magnetization.len())
+        }
+        fullmag_ir::BackendPlanIR::FdmMultilayer(plan)
+            if matches!(observation.header.realization.as_str(), "fdm_cpu" | "fdm_gpu")
+                && reference.fem_local_node_map.is_none() =>
+        {
+            let mut expected_offset = 0usize;
+            for layer in &plan.layers {
+                expected_offset = expected_offset
+                    .checked_add(layer.initial_magnetization.len())
+                    .ok_or_else(|| domain_mismatch("pinned FDM multilayer sample count overflows"))?;
+            }
+            ("fdm_multilayer", expected_offset)
+        }
+        fullmag_ir::BackendPlanIR::Fem(plan)
+            if plan.fe_order == 1
+                && matches!(observation.header.realization.as_str(), "fem_cpu" | "fem_gpu") =>
+        {
+            let map = reference
+                .fem_local_node_map
+                .as_ref()
+                .ok_or_else(|| domain_mismatch("accepted live FEM field has no native node-map identity"))?;
+            let node_count = plan.mesh.nodes.len();
+            if map.mesh_generation_id.is_empty()
+                || map.node_count != node_count
+                || !fullmag_quantities::is_canonical_sha256(&map.local_node_index_map_sha256)
+            {
+                return Err(domain_mismatch(
+                    "accepted live FEM node-map identity does not match the pinned P1 node domain",
+                ));
+            }
+            ("fem", node_count)
+        }
+        _ => {
+            return Err(domain_mismatch(
+                "accepted live field requires an explicitly mapped FDM or native FEM CPU/GPU lane",
+            ));
+        }
+    };
+    let expected_layout = fullmag_runner::study_magnetization_layout_for_plan(execution_plan)
+        .map_err(|error| {
+            domain_mismatch(format!(
+                "pinned live {expected_backend} layout is unavailable: {}",
+                error.message
+            ))
+        })?;
+    let expected_fingerprint =
+        fullmag_application::study_state_layout_sha256(&expected_layout).map_err(|error| {
+            domain_mismatch(format!("pinned live FDM fingerprint is unavailable: {error}"))
+        })?;
+    if reference.layout != expected_layout
+        || reference.space_fingerprint != expected_fingerprint
+        || usize::try_from(reference.sample_count).ok() != Some(expected_sample_count)
+        || values.len() != expected_sample_count
+        || !reference.source_time_s.is_finite()
+        || reference.source_time_s < 0.0
+        || !reference.solver_dt_s.is_finite()
+        || reference.solver_dt_s < 0.0
+    {
+        return Err(domain_mismatch(
+            "accepted live field does not exactly match the pinned native layout and source clock",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_accepted_state_domain(
@@ -931,6 +1410,10 @@ async fn clear_stale_magnetization(
     }
     let mut fields = snapshot.latest_fields.clone();
     fields.remove("m");
+    let stale = fields.entries().filter(|(_, value)| {
+        value.pointer("/provenance/source").and_then(Value::as_str) == Some("accepted_live_observation")
+    }).map(|(id, _)| id.clone()).collect::<Vec<_>>();
+    for id in stale { fields.remove(&id); }
     let sequence = snapshot
         .terminal_field_generations
         .get(&context.run_id)
@@ -1049,39 +1532,253 @@ async fn apply_projection(
         changed = true;
     }
 
-    if let Some(output) = projection.latest_state.as_ref() {
-        if let fullmag_application::DecodedStudyArtifact::MagnetizationState(state_output) =
-            &output.decoded
-        {
-            let frame = accepted_output_frame(&next, state_output.step, state_output.time_s)?;
-            let mut fields = crate::types::LatestFields::default();
-            fields.insert(
-                "m".to_string(),
-                json!({
-                    "source_step": state_output.step,
-                    "source_time_seconds": state_output.time_s,
-                    "solver_dt": state_output.solver_dt_s,
-                    "source_revision": projection.artifact_catalog_revision,
-                    "carrier_fingerprint": state_output.space_fingerprint.clone(),
-                    "values": state_output.values.clone(),
-                    "layout": state_output.layout.clone(),
-                    "provenance": state_output.provenance.clone(),
-                    "observation_frame": frame,
+    if crate::session::replace_current_live_stage_execution(
+        &mut next,
+        projection.stage_execution.clone(),
+    ) {
+        changed = true;
+    }
+    if let Some((_, observation)) = projection.live_observation.as_ref() {
+        let stats = &observation.header.stats;
+        if stats.kind.is_physical_observation() {
+            let row = crate::types::ScalarRow {
+                kind: stats.kind.clone(),
+                solver_progress: stats.solver_progress.clone(),
+                observation_frame: None,
+                step: stats.step,
+                time: stats.time,
+                solver_dt: stats.dt,
+                error_estimate: stats.error_estimate,
+                max_error: stats.max_error,
+                dt_suggested: stats.dt_suggested,
+                rejected_attempts: stats.rejected_attempts,
+                pseudo_time_s: stats.pseudo_time_s,
+                active_runtime_s: None,
+                mx: stats.mx,
+                my: stats.my,
+                mz: stats.mz,
+                e_ex: stats.e_ex,
+                e_demag: stats.e_demag,
+                e_ext: stats.e_ext,
+                e_ani: stats.e_ani,
+                e_dmi: stats.e_dmi,
+                e_rotated_dmi: Some(stats.e_rotated_dmi),
+                e_total: stats.e_total,
+                max_dm_dt: stats.max_dm_dt,
+                max_h_eff: stats.max_h_eff,
+                max_h_demag: stats.max_h_demag,
+                max_torque_Apm: stats.max_torque_Apm,
+                max_torque_T: stats.max_torque_T,
+                per_object_scalars: Default::default(),
+                table_expressions: Vec::new(),
+            };
+            if row.is_physical_observation() {
+                let scalar_revision = next.scalar_revision;
+                crate::session::apply_current_live_scalar_frame(
+                    &mut next,
+                    crate::types::CurrentLiveScalarFrameRequest {
+                        session_id: context.session_id.clone(),
+                        latest_scalar_row: Some(row),
+                    },
+                )?;
+                changed |= next.scalar_revision != scalar_revision;
+            }
+        }
+    }
+
+    let live_stage_is_newer = projection.live_observation.as_ref().is_some_and(
+        |(live_order, _)| {
+            projection
+                .latest_state
+                .as_ref()
+                .is_none_or(|state_output| *live_order >= state_output.task_order)
+        },
+    );
+    let live_field = projection.live_observation.as_ref().and_then(|(order, observation)| {
+        (live_stage_is_newer && projection.latest_state.as_ref().is_none_or(|state| *order >= state.task_order))
+            .then_some(observation)
+            .filter(|observation| observation.magnetization_values.is_some())
+    });
+    if let Some(observation) = live_field {
+        let reference = observation
+            .header
+            .magnetization
+            .as_ref()
+            .ok_or_else(|| domain_mismatch("accepted live field has no payload reference"))?;
+        let values = observation
+            .magnetization_values
+            .as_ref()
+            .ok_or_else(|| domain_mismatch("accepted live field payload was not read"))?;
+        let frame = accepted_output_frame(&next, reference.source_step, reference.source_time_s)?;
+        let mut fields = crate::types::LatestFields::default();
+        fields.insert(
+            "m".to_string(),
+            json!({
+                "source_step": reference.source_step,
+                "source_time_seconds": reference.source_time_s,
+                "solver_dt": reference.solver_dt_s,
+                "source_revision": reference.sequence,
+                "carrier_fingerprint": reference.space_fingerprint,
+                "values": values,
+                "layout": reference.layout,
+                "provenance": {
+                    "source": "accepted_live_observation",
+                    "run_id": observation.header.run_id,
+                    "task_id": observation.header.task_id,
+                    "step_id": observation.header.step_id,
+                    "attempt_id": observation.header.attempt_id,
+                    "ownership_epoch": observation.header.ownership_epoch,
+                    "realization": observation.header.realization,
+                    "fem_local_node_map": reference.fem_local_node_map,
+                    "observation_identity": format!(
+                        "{}:{}:{}",
+                        observation.header.task_id,
+                        observation.header.attempt_id,
+                        observation.header.ownership_epoch
+                    ),
+                    "sequence": reference.sequence,
+                    "written_at_unix_ms": observation.header.written_at_unix_ms,
+                },
+                "observation_frame": frame,
+            }),
+        );
+        let provenance = fields.get("m").and_then(|field| field.get("provenance"))
+            .cloned().ok_or_else(|| domain_mismatch("accepted live provenance missing"))?;
+        for field in &observation.fields {
+            if field.quantity_id == "m" || field.layout != reference.layout {
+                return Err(domain_mismatch("accepted live quantity carrier differs from magnetization"));
+            }
+            fields.insert(field.quantity_id.clone(), json!({
+                "values": field.values, "n_comp": field.n_comp,
+                "layout": field.layout, "carrier_id": field.carrier_id,
+                "spatial_kind": field.spatial_kind,
+                "carrier_fingerprint": reference.space_fingerprint,
+                "source_step": reference.source_step, "source_time_seconds": reference.source_time_s,
+                "solver_dt": reference.solver_dt_s, "source_revision": reference.sequence,
+                "observation_frame": frame, "provenance": provenance,
+            }));
+        }
+        let field_revision = next.field_revision;
+        let generation = next
+            .terminal_field_generations
+            .get(&context.run_id)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(1);
+        crate::session::apply_current_live_accepted_field_frame(
+            &mut next,
+            CurrentLiveFieldFrameRequest {
+                session_id: context.session_id.clone(),
+                latest_fields: Some(fields),
+                replace_latest_fields: false,
+                field_generation: Some(CurrentLiveFieldGeneration {
+                    run_id: context.run_id.clone(),
+                    sequence: generation,
                 }),
-            );
-            crate::session::apply_current_live_accepted_field_frame(
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+            frame,
+        )?;
+        changed |= next.field_revision != field_revision;
+    } else if live_stage_is_newer {
+        let active_identity = projection.live_observation_identity.as_deref();
+        let displayed_identity = next
+            .latest_fields
+            .get("m")
+            .and_then(|field| field.pointer("/provenance/observation_identity"))
+            .and_then(Value::as_str);
+        let expected_sequence = projection
+            .live_observation
+            .as_ref()
+            .and_then(|(_, observation)| observation.header.magnetization.as_ref())
+            .map(|reference| reference.sequence);
+        let displayed_sequence = next
+            .latest_fields
+            .get("m")
+            .and_then(|field| field.pointer("/provenance/sequence"))
+            .and_then(Value::as_u64);
+        let stale_field = active_identity.is_some_and(|identity| {
+            displayed_identity != Some(identity)
+                || expected_sequence.is_some_and(|sequence| {
+                    displayed_sequence != Some(sequence)
+                })
+        });
+        if stale_field && next.latest_fields.get("m").is_some() {
+            let mut fields = next.latest_fields.clone();
+            fields.remove("m");
+            let stale = fields.entries().filter(|(_, value)| {
+                value.pointer("/provenance/source").and_then(Value::as_str) == Some("accepted_live_observation")
+            }).map(|(id, _)| id.clone()).collect::<Vec<_>>();
+            for id in stale { fields.remove(&id); }
+            let field_revision = next.field_revision;
+            let generation = next
+                .terminal_field_generations
+                .get(&context.run_id)
+                .copied()
+                .unwrap_or_default()
+                .saturating_add(1);
+            crate::session::apply_current_live_field_frame(
                 &mut next,
                 CurrentLiveFieldFrameRequest {
                     session_id: context.session_id.clone(),
                     latest_fields: Some(fields),
-                    replace_latest_fields: false,
-                    field_generation: None,
+                    replace_latest_fields: true,
+                    field_generation: Some(CurrentLiveFieldGeneration {
+                        run_id: context.run_id.clone(),
+                        sequence: generation,
+                    }),
                     preview_fields: None,
-                    clear_preview_cache: false,
+                    clear_preview_cache: true,
                 },
-                frame,
             )?;
-            changed = true;
+            changed |= next.field_revision != field_revision;
+        }
+    } else {
+        if let Some(output) = projection.latest_state.as_ref() {
+            if let fullmag_application::DecodedStudyArtifact::MagnetizationState(state_output) =
+                &output.decoded
+            {
+                let frame = accepted_output_frame(&next, state_output.step, state_output.time_s)?;
+                let mut fields = crate::types::LatestFields::default();
+                fields.insert(
+                    "m".to_string(),
+                    json!({
+                        "source_step": state_output.step,
+                        "source_time_seconds": state_output.time_s,
+                        "solver_dt": state_output.solver_dt_s,
+                        "source_revision": projection.artifact_catalog_revision,
+                        "carrier_fingerprint": state_output.space_fingerprint.clone(),
+                        "accepted_state_ref": output.accepted_state_ref,
+                        "state_object_ref": output.object_ref,
+                        "values": state_output.values.clone(),
+                        "layout": state_output.layout.clone(),
+                        "provenance": state_output.provenance.clone(),
+                        "observation_frame": frame,
+                    }),
+                );
+                let final_generation = next.terminal_field_generations.get(&context.run_id)
+                    .copied().unwrap_or_default().saturating_add(1);
+                crate::session::apply_current_live_accepted_field_frame(
+                    &mut next,
+                    CurrentLiveFieldFrameRequest {
+                        session_id: context.session_id.clone(),
+                        latest_fields: Some(fields),
+                        // Final m supersedes every intermediate field. The
+                        // verified CAS bundle is adopted below as one source;
+                        // no earlier live H may remain falsely current.
+                        replace_latest_fields: true,
+                        field_generation: Some(CurrentLiveFieldGeneration {
+                            run_id: context.run_id.clone(),
+                            sequence: final_generation,
+                        }),
+                        preview_fields: None,
+                        clear_preview_cache: true,
+                    },
+                    frame,
+                )?;
+                changed = true;
+            }
         }
     }
     if !changed && previous_status == projection.status {
@@ -1101,6 +1798,17 @@ async fn apply_projection(
     {
         let mut current = state.current_live_state.write().await;
         *current = Some(next.clone());
+    }
+    if terminal && projection.latest_state.as_ref().is_some_and(|output| output.accepted_state_ref.is_some()) {
+        match crate::accepted_field_materialization::adopt_terminal_bundle(state).await {
+            Ok(()) => {
+                if let Some(published) = state.current_live_state.read().await.as_ref() {
+                    next = published.clone();
+                }
+            }
+            Err(error) => tracing::warn!(code = ?error.code, error = %error,
+                "accepted terminal observation bundle unavailable; final magnetization remains valid"),
+        }
     }
     crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;
     let display_revision = state.current_display_selection.read().await.revision;
@@ -1323,6 +2031,7 @@ mod tests {
             session_id: "session".into(),
             session_epoch: 4,
             scene_revision: 9,
+            execution_input: None,
             run_id: "run".into(),
             allow_api_instance_rebind: false,
         };
@@ -1349,6 +2058,7 @@ mod tests {
             session_id: "session".into(),
             session_epoch: 1,
             scene_revision: 4,
+        execution_input: None,
             run_id: "run".into(),
             allow_api_instance_rebind: true,
         };
@@ -1374,6 +2084,7 @@ mod tests {
             session_id: "session-b".into(),
             session_epoch: 2,
             scene_revision: 7,
+            execution_input: None,
             run_id: "run-b".into(),
             allow_api_instance_rebind: false,
         };
@@ -1382,11 +2093,19 @@ mod tests {
             session_id: "session-a".into(),
             session_epoch: 1,
             scene_revision: 7,
+            execution_input_sha256: None,
             run_id: "run-a".into(),
             run_revision: 1,
             artifact_revision: 1,
             status: "running",
             latest_output_identity: None,
+            live_observation_identity: None,
+            live_observation_sequence: None,
+            live_magnetization_sequence: None,
+            stage_execution: crate::session::accepted_stage_execution_state(
+                Vec::new(),
+                crate::types::RuntimeLifecycleState::Unknown,
+            ),
         };
         assert!(!cursor_matches_context(&previous, &context));
     }

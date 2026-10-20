@@ -628,6 +628,7 @@ def activate(args: argparse.Namespace) -> None:
         source_root=str(selected),
         image_id=image,
         backend_container=backend_id,
+        request_id=args.request_id,
     )
 
     from docker_volume_dev import _startup_helper

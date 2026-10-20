@@ -8,9 +8,13 @@ export interface FidelityView {
 }
 
 /**
- * Words for the fidelity verdict. A verified round trip still says the stored
- * script is the source for runs; a failed one says the scene is not a copy.
+ * Words for the fidelity verdict. Workspace Compute always runs the project
+ * scene; the stored script is the import source and archive, and only a
+ * separate "Run in new window" executes the script itself.
  */
+const SCENE_RUNS_NOTE =
+  "Compute in this workspace runs the project scene; the stored script is kept as the import source and archive, and runs only when you start it separately with Run in new window.";
+
 export function describeFidelity(fidelity: ScriptFidelityResource): FidelityView {
   const notes = fidelity.notes;
   switch (fidelity.round_trip) {
@@ -19,7 +23,7 @@ export function describeFidelity(fidelity: ScriptFidelityResource): FidelityView
         tone: "ok",
         headline: "Round trip verified",
         detail:
-          "Geometry, materials, grid and study of the scene match the original script. The script is stored in the project and remains the source for runs.",
+          `The compared parts of the scene (geometry, materials, magnets and initial state, regions, grid, study, runtime request and mesh policy) match a second evaluation of the original script. ${SCENE_RUNS_NOTE}`,
         notes,
       };
     case "failed":
@@ -27,7 +31,7 @@ export function describeFidelity(fidelity: ScriptFidelityResource): FidelityView
         tone: "warning",
         headline: "Round trip failed",
         detail:
-          "The scene in this project is not an exact copy of the script. Scene edits may not reproduce what the script does; the stored script remains the source for runs.",
+          `The scene in this project is not an exact copy of the script. ${SCENE_RUNS_NOTE} Results may therefore differ from running the script directly.`,
         notes,
       };
     case "not_checked":
@@ -35,7 +39,7 @@ export function describeFidelity(fidelity: ScriptFidelityResource): FidelityView
         tone: "warning",
         headline: "Round trip not checked",
         detail:
-          "The scene was exported but could not be compared with the script. The stored script remains the source for runs.",
+          `The scene was exported but could not be compared with the script. ${SCENE_RUNS_NOTE}`,
         notes,
       };
   }

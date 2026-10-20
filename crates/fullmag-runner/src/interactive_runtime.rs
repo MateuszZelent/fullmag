@@ -2916,6 +2916,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -3019,6 +3020,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 scalar_row_due,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -3256,6 +3258,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -3372,6 +3375,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 scalar_row_due,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -3683,6 +3687,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -3766,6 +3771,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 scalar_row_due,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -4051,6 +4057,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -4145,6 +4152,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 scalar_row_due,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -4281,6 +4289,7 @@ fn publish_final_cuda_observations(
         // A delayed observation is not an authoritative terminal state batch.
         terminal_field_snapshot: false,
         finished: false,
+        magnetization_carrier: None,
     });
 }
 
@@ -4481,6 +4490,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -4609,6 +4619,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 scalar_row_due,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -4811,6 +4822,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -4962,6 +4974,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 scalar_row_due,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -5243,6 +5256,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -5333,6 +5347,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 scalar_row_due,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -5520,6 +5535,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);
@@ -5592,6 +5608,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 scalar_row_due,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             if preview_due {
                 checkpoint.mark_display_refreshed(display_state.revision);

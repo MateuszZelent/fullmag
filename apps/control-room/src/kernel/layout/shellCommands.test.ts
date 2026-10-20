@@ -116,13 +116,12 @@ describe("SHELL_COMMANDS", () => {
       source_script_modified: true,
       written: true,
       written_to: "script",
-    }));
-    const authoringScript = vi.fn(async () => ({
-      bytes: 81,
-      script_path: "/tmp/example.py",
       source:
         'study.stages.tableautosave("auto")\nstudy.stages.autosave("m", every="auto")\n',
+      scene_revision: 4,
+      fidelity: "not_checked",
     }));
+    const authoringScript = vi.fn();
 
     expect(command).toBeDefined();
     expect(command?.group).not.toBe("workspace-placeholder");
@@ -136,9 +135,11 @@ describe("SHELL_COMMANDS", () => {
 
     // Without a session scope there are no request options.
     expect(syncAuthoringScript).toHaveBeenCalledWith({}, undefined);
-    expect(authoringScript).toHaveBeenCalledWith(undefined);
+    // The sync response carries the source; no second GET mixes revisions.
+    expect(authoringScript).not.toHaveBeenCalled();
     expect(result).toEqual({
-      message: "Canonical Python saved from /tmp/example.py.",
+      message:
+        "Canonical Python saved from /tmp/example.py. Scene revision 4. Round-trip fidelity: not checked.",
       status: "completed",
     });
   });
@@ -157,14 +158,10 @@ describe("SHELL_COMMANDS", () => {
       source_script_modified: false,
       written: true,
       written_to: "export_copy",
-    }));
-    const authoringScript = vi.fn(async () => ({
-      bytes: 81,
-      managed_copy_path: "/state/exports/model.canonical.py",
-      origin: "user_file",
-      script_path: "/state/exports/model.canonical.py",
       source: "study = fm.study('x')",
+      fidelity: "not_checked",
     }));
+    const authoringScript = vi.fn();
 
     const result = await command?.run({
       api: {

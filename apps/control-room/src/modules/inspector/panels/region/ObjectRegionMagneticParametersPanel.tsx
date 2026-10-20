@@ -16,6 +16,7 @@ import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { RegionMaterialParameter, RegionMaterialConflictPolicy } from "../ObjectRegionsPanelModel";
+import { useQuantityFieldDraftKeys } from "../../primitives/QuantityField";
 import { PhysicalScalarField } from "../ObjectRegionsPanel";
 import { publishRegionAuthoringScene } from "../regionAuthoringInvalidation";
 import {
@@ -64,6 +65,24 @@ type LocalFeedback =
       message: string;
     }
   | null;
+
+const MATERIAL_FIELD_DRAFT_PARTS = [
+  "Value",
+  "Base",
+  "Gradient X",
+  "Gradient Y",
+  "Gradient Z",
+  "Inside",
+  "Outside",
+  "Radius",
+  "Center X",
+  "Center Y",
+  "Center Z",
+] as const;
+
+function materialFieldDraftKey(index: number, part: string): string {
+  return `material-field:${index}:${part}`;
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -208,6 +227,16 @@ function useObjectRegionMagneticParametersPanelView({
     ? acknowledgedFieldBaseline.fields
     : baseFieldDrafts;
   const fieldDraftDirty = JSON.stringify(fieldDrafts) !== JSON.stringify(fieldBaseline);
+  // Uncommitted field text belongs to this section's draft: invalid text
+  // blocks Apply, and Revert discards it together with the numeric draft.
+  const materialFieldTextDrafts = useQuantityFieldDraftKeys(
+    fieldDrafts.flatMap((_, index) =>
+      MATERIAL_FIELD_DRAFT_PARTS.map((part) => materialFieldDraftKey(index, part)),
+    ),
+  );
+  const materialFieldTextBlockReason = materialFieldTextDrafts.invalidLabels.length > 0
+    ? `Correct ${materialFieldTextDrafts.invalidLabels[0]} before applying fields.`
+    : undefined;
   const fieldMutationInFlight = useRef(false);
 
   function replaceFieldDrafts(fields: MaterialFieldDraft[]): void {
@@ -375,6 +404,7 @@ function useObjectRegionMagneticParametersPanelView({
   function resetMaterialFields(): void {
     if (fieldMutationInFlight.current) return;
     replaceFieldDrafts(fieldBaseline);
+    materialFieldTextDrafts.remove();
     setFieldFeedback(null);
   }
 
@@ -627,6 +657,7 @@ function useObjectRegionMagneticParametersPanelView({
             )}
             {field.kind === "constant" ? (
               <PhysicalScalarField
+                draftKey={materialFieldDraftKey(index, "Value")}
                 label="Value"
                 unit={field.unit}
                 value={field.scalar}
@@ -636,24 +667,28 @@ function useObjectRegionMagneticParametersPanelView({
             {field.kind === "linear" ? (
               <>
                 <PhysicalScalarField
+                  draftKey={materialFieldDraftKey(index, "Base")}
                   label="Base"
                   unit={field.unit}
                   value={field.base}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { base: next })}
                 />
                 <PhysicalScalarField
+                  draftKey={materialFieldDraftKey(index, "Gradient X")}
                   label="Gradient X"
                   unit={`${field.unit}/m`}
                   value={field.gradient[0]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "gradient", 0, next)}
                 />
                 <PhysicalScalarField
+                  draftKey={materialFieldDraftKey(index, "Gradient Y")}
                   label="Gradient Y"
                   unit={`${field.unit}/m`}
                   value={field.gradient[1]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "gradient", 1, next)}
                 />
                 <PhysicalScalarField
+                  draftKey={materialFieldDraftKey(index, "Gradient Z")}
                   label="Gradient Z"
                   unit={`${field.unit}/m`}
                   value={field.gradient[2]}
@@ -664,36 +699,42 @@ function useObjectRegionMagneticParametersPanelView({
             {field.kind === "radial" ? (
               <>
                 <PhysicalScalarField
+                  draftKey={materialFieldDraftKey(index, "Inside")}
                   label="Inside"
                   unit={field.unit}
                   value={field.inside}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { inside: next })}
                 />
                 <PhysicalScalarField
+                  draftKey={materialFieldDraftKey(index, "Outside")}
                   label="Outside"
                   unit={field.unit}
                   value={field.outside}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { outside: next })}
                 />
                 <PhysicalScalarField
+                  draftKey={materialFieldDraftKey(index, "Radius")}
                   label="Radius"
                   unit="m"
                   value={field.radius}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { radius: next })}
                 />
                 <PhysicalScalarField
+                  draftKey={materialFieldDraftKey(index, "Center X")}
                   label="Center X"
                   unit="m"
                   value={field.center[0]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "center", 0, next)}
                 />
                 <PhysicalScalarField
+                  draftKey={materialFieldDraftKey(index, "Center Y")}
                   label="Center Y"
                   unit="m"
                   value={field.center[1]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "center", 1, next)}
                 />
                 <PhysicalScalarField
+                  draftKey={materialFieldDraftKey(index, "Center Z")}
                   label="Center Z"
                   unit="m"
                   value={field.center[2]}
@@ -782,7 +823,13 @@ function useObjectRegionMagneticParametersPanelView({
             Add Field
           </Button>
           <Button
-            disabled={fieldPending || !canWriteRegion || !fieldDraftDirty}
+            disabled={
+              fieldPending ||
+              !canWriteRegion ||
+              !fieldDraftDirty ||
+              materialFieldTextBlockReason !== undefined
+            }
+            disabledReason={materialFieldTextBlockReason}
             size="sm"
             type="button"
             variant="primary"

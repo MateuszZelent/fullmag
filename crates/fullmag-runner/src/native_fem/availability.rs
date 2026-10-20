@@ -1,7 +1,7 @@
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use fullmag_fem_sys as ffi;
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::ffi::CStr;
 
 #[allow(dead_code)]
@@ -361,7 +361,7 @@ pub(crate) fn is_cpu_available() -> bool {
 }
 
 pub(crate) fn native_availability() -> GpuAvailability {
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     {
         let mut info = ffi::fullmag_fem_availability_info {
             available: 0,
@@ -425,7 +425,8 @@ pub(crate) fn native_availability() -> GpuAvailability {
             .to_string_lossy()
             .to_string();
 
-        GpuAvailability {
+        #[allow(unused_mut)]
+        let mut availability = GpuAvailability {
             available: info.available == 1,
             available_any: info.available_any == 1,
             available_cpu: info.available_cpu == 1,
@@ -447,9 +448,23 @@ pub(crate) fn native_availability() -> GpuAvailability {
             reason,
             reason_cpu,
             reason_gpu,
+        };
+        #[cfg(not(feature = "fem-gpu"))]
+        {
+            availability.available = availability.native_fem_cpu_available;
+            availability.available_any = availability.native_fem_cpu_available;
+            availability.available_cpu = availability.native_fem_cpu_available;
+            availability.available_gpu = false;
+            availability.native_fem_gpu_available = false;
+            availability.native_fem_gpu_full_demag_available = false;
+            availability.mfem_cuda_available = false;
+            availability.hypre_gpu_available = false;
+            availability.reason_gpu =
+                "fullmag-runner was built without the fem-gpu feature".to_string();
         }
+        availability
     }
-    #[cfg(not(feature = "fem-gpu"))]
+    #[cfg(not(any(feature = "fem-gpu", feature = "fem-native")))]
     {
         GpuAvailability {
             available: false,
@@ -470,8 +485,8 @@ pub(crate) fn native_availability() -> GpuAvailability {
             resolved_gpu_index: -1,
             memory_free_bytes: 0,
             memory_total_bytes: 0,
-            reason: "fullmag-runner was built without the fem-gpu feature".to_string(),
-            reason_cpu: "fullmag-runner was built without the fem-gpu feature".to_string(),
+            reason: "fullmag-runner was built without the fem-native feature".to_string(),
+            reason_cpu: "fullmag-runner was built without the fem-native feature".to_string(),
             reason_gpu: "fullmag-runner was built without the fem-gpu feature".to_string(),
         }
     }
@@ -665,7 +680,7 @@ fn c_char_array_to_string<const N: usize>(chars: &[std::os::raw::c_char; N]) -> 
         .to_string()
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn last_global_error_or(fallback: &str) -> String {
     let err = unsafe { ffi::fullmag_fem_backend_last_error(std::ptr::null_mut()) };
     if !err.is_null() {

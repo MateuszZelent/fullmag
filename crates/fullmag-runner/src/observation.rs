@@ -15,6 +15,10 @@ pub const FDM_GPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA: &str =
     "fullmag.fdm.gpu.accepted-state-snapshot.v1";
 pub const FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE: &str =
     "solver/fdm_gpu_accepted_state_snapshot.v1.json";
+pub const FDM_MULTILAYER_OBSERVATION_SNAPSHOT_SCHEMA: &str =
+    "fullmag.fdm.multilayer.observation-snapshot.v1";
+pub const FDM_MULTILAYER_OBSERVATION_SNAPSHOT_FILE: &str =
+    "solver/fdm_multilayer_observation_snapshot.v1.json";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -187,6 +191,203 @@ impl FdmGpuAcceptedStateSnapshotV1 {
         }
         Ok(())
     }
+}
+
+/// Observation identity for terminal FDM multilayer magnetization.
+///
+/// This is deliberately not a continuation/restart state: the multilayer
+/// runners do not expose the integrator and RNG carriers required to claim
+/// that contract. It binds the final M artifact's layout, values, clock, and
+/// the actual execution lane/engine so downstream accepted-field work cannot
+/// confuse a live preview or a different realization for this terminal M.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FdmMultilayerObservationSnapshotV1 {
+    pub schema_version: String,
+    pub state_role: String,
+    pub clock: ObservationClock,
+    pub execution_lane: FdmMultilayerObservationLane,
+    pub execution_engine: String,
+    pub layout_sha256: String,
+    pub magnetization_digest: String,
+    pub clock_digest: String,
+    pub state_digest: String,
+    pub primary_carrier_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FdmMultilayerObservationLane {
+    Cpu,
+    Gpu,
+}
+
+impl FdmMultilayerObservationLane {
+    fn accepts_engine(self, execution_engine: &str) -> bool {
+        match self {
+            Self::Cpu => execution_engine == "cpu_reference_multilayer",
+            Self::Gpu => matches!(
+                execution_engine,
+                "cuda_assisted_multilayer"
+                    | "cuda_native_multilayer_convolution"
+                    | "cuda_native_multilayer_single_grid"
+            ),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Gpu => "gpu",
+        }
+    }
+}
+
+impl FdmMultilayerObservationSnapshotV1 {
+    const CARRIER_EXECUTION: &'static str =
+        "fdm.multilayer.observation.execution-lane-engine.v1";
+    const CARRIER_LAYOUT: &'static str = "fdm.multilayer.observation.layout-json.sha256.v1";
+    const CARRIER_MAGNETIZATION: &'static str =
+        "fdm.multilayer.observation.magnetization-f64be.sha256.v1";
+
+    pub fn from_final_magnetization(
+        clock: ObservationClock,
+        execution_lane: FdmMultilayerObservationLane,
+        execution_engine: &str,
+        layout: &serde_json::Value,
+        magnetization: &[[f64; 3]],
+    ) -> Result<Self, AcceptedStateIdentityError> {
+        if !execution_lane.accepts_engine(execution_engine)
+            || layout.get("backend").and_then(serde_json::Value::as_str)
+                != Some("fdm_multilayer")
+            || layout.get("layout_error").is_some()
+        {
+            return Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet);
+        }
+        let layout_sha256 = observation_layout_digest(layout)?;
+        let magnetization_digest = magnetization_digest_f64be(magnetization)?;
+        let execution_identity = format!("{}\0{}", execution_lane.as_str(), execution_engine);
+        let carriers = [
+            AcceptedPrimaryCarrier {
+                carrier_id: Self::CARRIER_EXECUTION,
+                canonical_bytes: execution_identity.as_bytes(),
+            },
+            AcceptedPrimaryCarrier {
+                carrier_id: Self::CARRIER_LAYOUT,
+                canonical_bytes: layout_sha256.as_bytes(),
+            },
+            AcceptedPrimaryCarrier {
+                carrier_id: Self::CARRIER_MAGNETIZATION,
+                canonical_bytes: magnetization_digest.as_bytes(),
+            },
+        ];
+        let digests = accepted_state_digests(clock, &carriers)?;
+        let snapshot = Self {
+            schema_version: FDM_MULTILAYER_OBSERVATION_SNAPSHOT_SCHEMA.to_string(),
+            state_role: "observation_only".to_string(),
+            clock,
+            execution_lane,
+            execution_engine: execution_engine.to_string(),
+            layout_sha256,
+            magnetization_digest,
+            clock_digest: digests.clock_digest,
+            state_digest: digests.state_digest,
+            primary_carrier_ids: vec![
+                Self::CARRIER_EXECUTION.to_string(),
+                Self::CARRIER_LAYOUT.to_string(),
+                Self::CARRIER_MAGNETIZATION.to_string(),
+            ],
+        };
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
+    pub fn validate(&self) -> Result<(), AcceptedStateIdentityError> {
+        if self.schema_version != FDM_MULTILAYER_OBSERVATION_SNAPSHOT_SCHEMA
+            || self.state_role != "observation_only"
+            || !self.execution_lane.accepts_engine(&self.execution_engine)
+        {
+            return Err(AcceptedStateIdentityError::InvalidSnapshotSchema);
+        }
+        if !fullmag_quantities::is_canonical_sha256(&self.layout_sha256) {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "layout_sha256",
+            });
+        }
+        if !fullmag_quantities::is_canonical_sha256(&self.magnetization_digest) {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "magnetization_digest",
+            });
+        }
+        let expected_carriers = [
+            Self::CARRIER_EXECUTION,
+            Self::CARRIER_LAYOUT,
+            Self::CARRIER_MAGNETIZATION,
+        ];
+        let actual_carriers = self
+            .primary_carrier_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if actual_carriers.as_slice() != expected_carriers.as_slice() {
+            return Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet);
+        }
+        let execution_identity = format!(
+            "{}\0{}",
+            self.execution_lane.as_str(),
+            self.execution_engine
+        );
+        let digests = accepted_state_digests(
+            self.clock,
+            &[
+                AcceptedPrimaryCarrier {
+                    carrier_id: Self::CARRIER_EXECUTION,
+                    canonical_bytes: execution_identity.as_bytes(),
+                },
+                AcceptedPrimaryCarrier {
+                    carrier_id: Self::CARRIER_LAYOUT,
+                    canonical_bytes: self.layout_sha256.as_bytes(),
+                },
+                AcceptedPrimaryCarrier {
+                    carrier_id: Self::CARRIER_MAGNETIZATION,
+                    canonical_bytes: self.magnetization_digest.as_bytes(),
+                },
+            ],
+        )?;
+        if digests.clock_digest != self.clock_digest {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "clock_digest",
+            });
+        }
+        if digests.state_digest != self.state_digest {
+            return Err(AcceptedStateIdentityError::InvalidDigest {
+                field: "state_digest",
+            });
+        }
+        Ok(())
+    }
+
+    pub fn validate_against(
+        &self,
+        layout: &serde_json::Value,
+        magnetization: &[[f64; 3]],
+    ) -> Result<(), AcceptedStateIdentityError> {
+        self.validate()?;
+        if observation_layout_digest(layout)? != self.layout_sha256
+            || magnetization_digest_f64be(magnetization)? != self.magnetization_digest
+        {
+            return Err(AcceptedStateIdentityError::InvalidPrimaryCarrierSet);
+        }
+        Ok(())
+    }
+}
+
+fn observation_layout_digest(
+    layout: &serde_json::Value,
+) -> Result<String, AcceptedStateIdentityError> {
+    let bytes = serde_json::to_vec(layout)
+        .map_err(|_| AcceptedStateIdentityError::InvalidPrimaryCarrierSet)?;
+    Ok(format!("sha256:{:x}", Sha256::digest(&bytes)))
 }
 
 pub(crate) fn magnetization_digest_f64be(

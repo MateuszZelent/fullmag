@@ -28,7 +28,7 @@ use crate::python_bridge::{
     map_remesh_progress_message, python_mesh_preparation_update, PythonMeshPreparationUpdate,
 };
 use crate::simulation_preparation::{
-    PreparationLogLevel, PreparationStageId, PreparationTransitionError, SimulationPreparationState,
+    PreparationLogLevel, PreparationStageId, PreparationStatus, PreparationTransitionError, SimulationPreparationState,
 };
 use crate::types::*;
 
@@ -891,6 +891,16 @@ pub(crate) fn transition_preparation(
             Some(preparation) => update(preparation).map_err(Into::into),
             None => Err(anyhow!("simulation preparation state is not initialized")),
         };
+        if transition_result.is_ok()
+            && state.simulation_preparation.as_ref().is_some_and(|preparation|
+                preparation.status == PreparationStatus::Failed)
+            && matches!(state.session.status.as_str(), "bootstrapping" | "materializing_script") {
+            // Publish failure and lifecycle together. Keeping the API alive
+            // for diagnostics must not leave a finished preparation busy.
+            state.session.status = "failed".to_string();
+            state.run.status = "failed".to_string();
+            set_live_state_status(&mut state.live_state, "failed", Some(true));
+        }
     });
     transition_result
 }
@@ -2228,6 +2238,7 @@ mod tests {
             terminal_field_snapshot: false,
             finished: false,
             coupled_checkpoint: None,
+            magnetization_carrier: None,
         }
     }
 

@@ -73,7 +73,7 @@ describe("Mx3ImportReport", () => {
       />,
     );
     expect(/<button[^>]*>Create project…<\/button>/.exec(withCreator)?.[0]).not.toContain(' disabled=""');
-    expect(withCreator).toContain("Create project runs the translated script once");
+    expect(withCreator).toContain("evaluates the translated script twice");
     const without = render("standardproblem4");
     expect(/<button[^>]*>Create project…<\/button>/.exec(without)?.[0]).toContain(' disabled=""');
   });

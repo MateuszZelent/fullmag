@@ -24477,7 +24477,7 @@ export interface operations {
                     "x-fullmag-carrier-digest"?: string;
                     /** @description Immutable artifact carrier ID; present for FMVP v6 */
                     "x-fullmag-carrier-id"?: string;
-                    /** @description Lossless decimal u64 artifact carrier revision; present for FMVP v6 */
+                    /** @description Lossless decimal u64 carrier revision used by expected_carrier_revision; present for live carriers when available and artifact inspection FMVP v6 */
                     "x-fullmag-carrier-revision"?: string;
                     /** @description Resolved component projection */
                     "x-fullmag-component"?: string;

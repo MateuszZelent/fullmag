@@ -643,6 +643,13 @@ bool prepare_gpu_full_domain_snapshot(
     const bool needs_full_domain_demag =
         observable == FULLMAG_FEM_OBSERVABLE_H_DEMAG ||
         observable == FULLMAG_FEM_OBSERVABLE_H_EFF;
+    if (context.gpu_state.device.lifecycle.allocated &&
+        needs_full_domain_demag &&
+        !context.gpu_state.device.fields.accepted_observables_valid) {
+        handle.last_error =
+            "GPU accepted-endpoint observable cache is invalid; refresh a snapshot before reading fields";
+        return false;
+    }
     if (!context.gpu_state.device.lifecycle.allocated ||
         !context.demag.enabled ||
         !needs_full_domain_demag ||

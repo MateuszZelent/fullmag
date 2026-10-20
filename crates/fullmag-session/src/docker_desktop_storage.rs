@@ -1113,11 +1113,11 @@ fn is_managed_runtime_services_scaffold(root: &Path) -> Result<bool> {
         return Ok(false);
     }
 
-    runtime_services_scaffold_inventory(root, &mounted)
+    runtime_services_scaffold_root_inventory(root, &mounted)
 }
 
 #[cfg(target_os = "linux")]
-fn runtime_services_scaffold_inventory(root: &Path, mounted: &Path) -> Result<bool> {
+fn runtime_services_scaffold_root_inventory(root: &Path, mounted: &Path) -> Result<bool> {
     let mounted_metadata = fs::symlink_metadata(mounted)?;
     if !mounted_metadata.is_dir() || mounted_metadata.file_type().is_symlink() {
         return Ok(false);
@@ -1132,10 +1132,77 @@ fn runtime_services_scaffold_inventory(root: &Path, mounted: &Path) -> Result<bo
     {
         return Ok(false);
     }
-    if fs::read_dir(mounted)?.next().transpose()?.is_some() {
-        return Ok(false);
-    }
     Ok(true)
+}
+
+#[cfg(target_os = "linux")]
+fn runtime_services_scaffold_inventory(root: &Path, mounted: &Path) -> Result<bool> {
+    Ok(runtime_services_scaffold_root_inventory(root, mounted)?
+        && fs::read_dir(mounted)?.next().transpose()?.is_none())
+}
+
+/// A fresh Windows store can share the group's already drained technical
+/// volume. Validate the complete previous owner transition without changing
+/// that volume, and keep its native lock held through store initialization.
+#[cfg(target_os = "linux")]
+fn lock_drained_scaffold(root: &Path) -> Result<crate::runtime_service::RuntimeServiceOwnerLockGuard> {
+    use crate::runtime_service::{
+        validate_descriptor, RuntimeServiceOwnerDescriptor, RuntimeServiceOwnerLockGuard,
+        RuntimeServiceState,
+    };
+
+    let guard = RuntimeServiceOwnerLockGuard::try_acquire_existing(root)?
+        .context("runtime-services scaffold still has an active owner")?;
+    let read_owner = |relative: &str| -> Result<RuntimeServiceOwnerDescriptor> {
+        let path = crate::repository_path::checked_path(root, relative)?;
+        let owner = serde_json::from_slice(&read_bounded_regular_file(&path, MAX_EVIDENCE_BYTES)?)?;
+        validate_descriptor(&owner)?;
+        Ok(owner)
+    };
+    let owner = read_owner("runtime-services/OWNER.json")?;
+    if owner.state != RuntimeServiceState::Drained || owner.target_id != "docker-all" {
+        bail!("runtime-services scaffold has no drained Docker owner");
+    }
+    let receipt_path = crate::repository_path::checked_path(
+        Path::new("/opt/fullmag/runtime-control"), "runtime-service/process-tree.json",
+    )?;
+    let receipt: serde_json::Value = serde_json::from_slice(
+        &read_bounded_regular_file(&receipt_path, MAX_EVIDENCE_BYTES)?,
+    )?;
+    if receipt["schema"] != "fullmag.docker-process-tree.v1" || receipt["state"] != "drained" {
+        bail!("runtime-services scaffold has no authenticated drained process receipt");
+    }
+    let terminal: RuntimeServiceOwnerDescriptor = serde_json::from_value(
+        receipt["terminal_service_owner"].clone(),
+    )?;
+    validate_descriptor(&terminal)?;
+    if terminal != owner {
+        bail!("runtime-services scaffold terminal owner differs from its descriptor");
+    }
+    let pin = read_owner(&format!("runtime-services/docker-client-{}.json", owner.owner_token))?;
+    let previous: RuntimeServiceOwnerDescriptor = serde_json::from_value(
+        receipt["service_owner"].clone(),
+    )?;
+    for mut ready in [pin, previous] {
+        validate_descriptor(&ready)?;
+        if ready.state != RuntimeServiceState::Ready {
+            bail!("runtime-services scaffold has no pinned ready owner");
+        }
+        // Only heartbeat, lifecycle state and successful child exit statuses
+        // may change between the pinned ready owner and its terminal proof.
+        ready.state = RuntimeServiceState::Drained;
+        ready.heartbeat_at = owner.heartbeat_at;
+        for child in &mut ready.children {
+            child.status = "exited_success".to_string();
+        }
+        ready.children.sort_by(|left, right| left.role.cmp(&right.role));
+        let mut expected = owner.clone();
+        expected.children.sort_by(|left, right| left.role.cmp(&right.role));
+        if ready != expected {
+            bail!("runtime-services scaffold owner transition differs from its pin");
+        }
+    }
+    Ok(guard)
 }
 
 fn initialize_store_under(parent: &Path, relative: &str) -> Result<(PathBuf, bool)> {
@@ -1147,6 +1214,12 @@ fn initialize_store_under(parent: &Path, relative: &str) -> Result<(PathBuf, boo
                 && relative == "session-store"
                 && is_managed_runtime_services_scaffold(&root)?
             {
+                let mounted = crate::repository_path::checked_path(&root, "runtime-services")?;
+                let _owner_guard = if runtime_services_scaffold_inventory(&root, &mounted)? {
+                    None
+                } else {
+                    Some(lock_drained_scaffold(&root)?)
+                };
                 drop(crate::SessionStore::open(&root)?);
                 return Ok((root, true));
             }

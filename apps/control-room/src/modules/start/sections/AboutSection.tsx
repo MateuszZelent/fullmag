@@ -182,7 +182,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
             </a>
           </Button>
           <Button onClick={handleCopyBibtex} size="sm" type="button" variant="secondary">
-            {copiedBibtex ? <Check size={14} style={{ color: "var(--fm-success)" }} /> : <Copy size={14} />}
+            {copiedBibtex ? <Check size={14} className="fm-about-icon--success" /> : <Copy size={14} />}
             {copiedBibtex ? "BibTeX Copied!" : "Copy BibTeX"}
           </Button>
         </div>
@@ -292,7 +292,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
                 <h2 className="fm-about-pipeline__title" id="fm-about-pipeline-title">
                   Canonical Execution Pipeline
                 </h2>
-                <p style={{ margin: "4px 0 0", fontSize: "12px", color: "var(--fm-start-meta)" }}>
+                <p className="fm-about-note-meta">
                   Strict lowering from authoring to hardware lanes with full reproducibility and zero silent fallback.
                 </p>
               </div>
@@ -363,13 +363,13 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
 
                 <div className="fm-about-author-affil">
                   <div><strong>{author.institution}</strong></div>
-                  <div style={{ color: "var(--fm-start-meta)", fontSize: "11px" }}>
+                  <div className="fm-about-meta-xs">
                     {author.department}, {author.location}
                   </div>
                 </div>
 
                 {author.grantBadge && (
-                  <div style={{ marginBottom: "10px" }}>
+                  <div className="fm-about-block">
                     <span className="fm-start-badge fm-start-badge--fem">
                       ★ {author.grantBadge}
                     </span>
@@ -383,13 +383,13 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
             ))}
           </div>
 
-          <div className="fm-about-coordination-bar" style={{ marginTop: "16px" }}>
-            <Award size={18} style={{ color: "var(--fm-accent)", flexShrink: 0 }} />
+          <div className="fm-about-coordination-bar fm-about-section-gap">
+            <Award className="fm-about-icon--accent" size={18} />
             <span>Project coordination: <strong>{FULLMAG_COORDINATION}</strong></span>
           </div>
 
           {/* ── European Union Horizon Europe MSCA Grant Banner ── */}
-          <div className="fm-about-grant" style={{ marginTop: "16px" }}>
+          <div className="fm-about-grant fm-about-section-gap">
             <div aria-hidden="true" className="fm-about-grant__eu-flag">
               <svg height="24" viewBox="0 0 48 34" width="36">
                 <rect fill="var(--fm-bg-panel-raised)" height="34" width="48" />
@@ -418,7 +418,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
             Cite FullMag
           </h2>
           <div className="fm-about-citation-box">
-            <p className="fm-start-inspector__note" style={{ margin: 0 }}>
+            <p className="fm-start-inspector__note fm-about-flush">
               {FULLMAG_CITATION_NOTE}.
             </p>
 
@@ -428,16 +428,16 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
 
             <div className="fm-about-bibtex-wrapper">
               <div className="fm-about-bibtex-header">
-                <span style={{ fontSize: "11px", fontFamily: "var(--fm-font-mono)", color: "var(--fm-start-meta)" }}>
+                <span className="fm-about-mono-meta">
                   software (fullmag_2026) · BibTeX
                 </span>
-                <div style={{ display: "flex", gap: "8px" }}>
+                <div className="fm-about-row">
                   <Button onClick={handleCopyCitation} size="sm" type="button" variant="ghost">
-                    {copiedCitation ? <Check size={12} style={{ color: "var(--fm-success)" }} /> : <Copy size={12} />}
+                    {copiedCitation ? <Check size={12} className="fm-about-icon--success" /> : <Copy size={12} />}
                     {copiedCitation ? "Copied" : "Copy Plain Text"}
                   </Button>
                   <Button onClick={handleCopyBibtex} size="sm" type="button" variant="secondary">
-                    {copiedBibtex ? <Check size={12} style={{ color: "var(--fm-success)" }} /> : <Copy size={12} />}
+                    {copiedBibtex ? <Check size={12} className="fm-about-icon--success" /> : <Copy size={12} />}
                     {copiedBibtex ? "Copied" : "Copy BibTeX"}
                   </Button>
                 </div>
@@ -455,7 +455,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
             Toolchain & Verified Ecosystem
           </h2>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          <div className="fm-about-stack">
             <div className="fm-about-toolchain">
               {FULLMAG_TOOLCHAIN_BADGES.map((badge) => (
                 <div
@@ -469,12 +469,12 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
             </div>
 
             <div className="fm-about-citation-box">
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <h3 style={{ margin: 0, fontSize: "13px", fontWeight: "600", color: "var(--fm-text-primary)" }}>
+              <div className="fm-about-row-between">
+                <h3 className="fm-about-subheading">
                   Host System Diagnostics
                 </h3>
                 <Button onClick={handleCopyDiagnostics} size="sm" type="button" variant="secondary">
-                  {copiedDiag ? <Check size={14} style={{ color: "var(--fm-success)" }} /> : <Cpu size={14} />}
+                  {copiedDiag ? <Check size={14} className="fm-about-icon--success" /> : <Cpu size={14} />}
                   {copiedDiag ? "Copied Diagnostics" : "Copy Diagnostics"}
                 </Button>
               </div>
@@ -495,7 +495,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
                   </div>
                 </dl>
               ) : (
-                <p className="fm-start-inspector__note" style={{ margin: 0 }}>
+                <p className="fm-start-inspector__note fm-about-flush">
                   Host build details are reported by the desktop runtime. Running in {tauriInvoke() ? "desktop mode" : "browser environment"}.
                 </p>
               )}
@@ -510,7 +510,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
           License & Terms
         </h2>
         <div className="fm-about-citation-box">
-          <p className="fm-start-about__text" style={{ margin: 0 }}>
+          <p className="fm-start-about__text fm-about-flush">
             {FULLMAG_LICENSE}
           </p>
         </div>

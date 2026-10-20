@@ -25,7 +25,11 @@ use crate::fdm::gpu::cuda::spin_transport::{
 #[cfg(feature = "cuda")]
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 #[cfg(feature = "cuda")]
-use crate::preview::flatten_vectors;
+use crate::preview::{build_grid_preview_field, flatten_vectors};
+#[cfg(feature = "cuda")]
+use crate::quantities::{
+    active_fdm_preview_quantities, field_materialization_quantity_ids, quantity_spec,
+};
 #[cfg(feature = "cuda")]
 use crate::relaxation::direct_minimizer::direct_minimizer_control;
 #[cfg(feature = "cuda")]
@@ -47,12 +51,245 @@ use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 #[cfg(feature = "cuda")]
 use crate::types::{
     ExecutionProvenance, FdmGpuEndpointCacheTelemetry, FdmGpuObservationPolicyProvenance,
-    RunResult, RunStatus, StepAction, StepStats, StepUpdate,
+    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
+    LivePreviewRequest, RunResult, RunStatus, StepAction, StepStats, StepUpdate,
 };
 #[cfg(feature = "cuda")]
 use crate::{
     FdmGpuAcceptedStateSnapshotV1, ObservationClock, FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE,
 };
+
+#[cfg(feature = "cuda")]
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(feature = "cuda")]
+pub(super) fn capture_full_active_cuda_fields(
+    backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
+    grid: [u32; 3],
+    source_step: u64,
+    source_time_seconds: f64,
+    config_revision: u64,
+    magnetization: Option<&[[f64; 3]]>,
+) -> Result<Vec<LivePreviewField>, RunError> {
+    let quantities = field_materialization_quantity_ids();
+    let quantities = active_fdm_preview_quantities(
+        crate::dispatch::FdmEngine::CudaFdm,
+        plan,
+        &quantities,
+    );
+    capture_cuda_fields_for_quantities(
+        backend,
+        plan,
+        grid,
+        source_step,
+        source_time_seconds,
+        config_revision,
+        magnetization,
+        &quantities,
+    )
+}
+
+#[cfg(feature = "cuda")]
+fn capture_one_active_cuda_field(
+    backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
+    grid: [u32; 3],
+    source_step: u64,
+    source_time_seconds: f64,
+    config_revision: u64,
+    magnetization: &[[f64; 3]],
+    quantity: &str,
+) -> Result<LivePreviewField, RunError> {
+    let fields = capture_cuda_fields_for_quantities(
+        backend,
+        plan,
+        grid,
+        source_step,
+        source_time_seconds,
+        config_revision,
+        Some(magnetization),
+        &[quantity],
+    )?;
+    if fields.len() != 1 {
+        return Err(RunError {
+            message: format!(
+                "CUDA FDM terminal observation did not produce active quantity '{quantity}'"
+            ),
+        });
+    }
+    Ok(fields.into_iter().next().expect("one captured field"))
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn capture_cuda_fields_for_quantities(
+    backend: &NativeFdmBackend,
+    plan: &FdmPlanIR,
+    grid: [u32; 3],
+    source_step: u64,
+    source_time_seconds: f64,
+    config_revision: u64,
+    magnetization: Option<&[[f64; 3]]>,
+    requested_quantities: &[&str],
+) -> Result<Vec<LivePreviewField>, RunError> {
+    let quantities = active_fdm_preview_quantities(
+        crate::dispatch::FdmEngine::CudaFdm,
+        plan,
+        requested_quantities,
+    );
+    let cell_count = (grid[0] as usize)
+        .checked_mul(grid[1] as usize)
+        .and_then(|count| count.checked_mul(grid[2] as usize))
+        .ok_or_else(|| RunError {
+            message: "CUDA live field capture grid size overflow".to_string(),
+        })?;
+    let owned_magnetization;
+    let magnetization = if let Some(magnetization) = magnetization {
+        magnetization
+    } else {
+        owned_magnetization = backend.copy_m(cell_count)?;
+        &owned_magnetization
+    };
+    if magnetization.len() != cell_count {
+        return Err(RunError {
+            message: format!(
+                "CUDA live field capture expected {cell_count} magnetization cells, received {}",
+                magnetization.len()
+            ),
+        });
+    }
+
+    let capture_started = Instant::now();
+    let base_request = LivePreviewRequest {
+        revision: config_revision,
+        quantity: "m".to_string(),
+        component: "3D".to_string(),
+        layer: 0,
+        all_layers: true,
+        every_n: 1,
+        x_chosen_size: grid[0],
+        y_chosen_size: grid[1],
+        auto_scale_enabled: false,
+        max_points: 0,
+    };
+    let mut fields = Vec::with_capacity(quantities.len());
+    for quantity in quantities {
+        let mut request = base_request.clone();
+        request.quantity = quantity.to_string();
+        let field = if quantity == "m" {
+            build_grid_preview_field(&request, magnetization, grid, plan.active_mask.as_deref())
+        } else {
+            backend.copy_live_preview_field(&request, grid, plan.active_mask.as_deref())?
+        };
+        let expected_components = quantity_spec(quantity)
+            .map(|spec| spec.n_comp as usize)
+            .unwrap_or(3);
+        let expected_values = cell_count
+            .checked_mul(expected_components)
+            .ok_or_else(|| RunError {
+                message: format!("CUDA live field '{}' value count overflow", quantity),
+            })?;
+        if field.original_grid != grid
+            || field.preview_grid != grid
+            || field.auto_downscaled
+            || field.vector_field_values.len() != expected_values
+        {
+            return Err(RunError {
+                message: format!(
+                    "CUDA live field '{}' did not produce the required full grid {:?}",
+                    quantity, grid
+                ),
+            });
+        }
+        fields.push(field);
+    }
+
+    let materialization_wall_time_ns = capture_started.elapsed().as_nanos() as u64;
+    let materialized_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    for field in &mut fields {
+        field.config_revision = config_revision;
+        field.source_step = source_step;
+        field.source_time_seconds = Some(source_time_seconds);
+        field.source_revision = config_revision;
+        field.materialized_at_unix_ms = materialized_at_unix_ms;
+        field.materialization_wall_time_ns = materialization_wall_time_ns;
+    }
+    Ok(fields)
+}
+
+#[cfg(feature = "cuda")]
+pub(super) fn mark_full_fields_materialized(stats: &mut StepStats, fields: &[LivePreviewField]) {
+    for field in fields {
+        stats
+            .field_materialization_states
+            .retain(|status| status.quantity != field.quantity);
+        stats
+            .field_materialization_states
+            .push(LiveFieldMaterializationStatus {
+                quantity: field.quantity.clone(),
+                source_step: field.source_step,
+                request_revision: field.source_revision,
+                state: LiveFieldMaterializationState::Complete,
+                error: None,
+            });
+    }
+}
+
+#[cfg(feature = "cuda")]
+pub(super) fn mark_full_fields_materialization_error(
+    stats: &mut StepStats,
+    plan: &FdmPlanIR,
+    source_step: u64,
+    request_revision: u64,
+    error: &str,
+) {
+    let quantities = field_materialization_quantity_ids();
+    let quantities = active_fdm_preview_quantities(
+        crate::dispatch::FdmEngine::CudaFdm,
+        plan,
+        &quantities,
+    );
+    for quantity in quantities {
+        stats
+            .field_materialization_states
+            .retain(|status| status.quantity != quantity);
+        stats
+            .field_materialization_states
+            .push(LiveFieldMaterializationStatus {
+                quantity: quantity.to_string(),
+                source_step,
+                request_revision,
+                state: LiveFieldMaterializationState::Error,
+                error: Some(error.to_string()),
+            });
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn mark_field_materialization_error(
+    stats: &mut StepStats,
+    quantity: &str,
+    source_step: u64,
+    request_revision: u64,
+    error: &str,
+) {
+    stats
+        .field_materialization_states
+        .retain(|status| status.quantity != quantity);
+    stats
+        .field_materialization_states
+        .push(LiveFieldMaterializationStatus {
+            quantity: quantity.to_string(),
+            source_step,
+            request_revision,
+            state: LiveFieldMaterializationState::Error,
+            error: Some(error.to_string()),
+        });
+}
 
 #[cfg(feature = "cuda")]
 fn frozen_spins_checkpoint_value(
@@ -734,6 +971,7 @@ pub(crate) fn execute_cuda_fdm(
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         terminal_field_snapshot: false,
                         finished: false,
+                        magnetization_carrier: None,
                     });
                     if preview_due {
                         last_preview_revision = Some(display_selection.revision);
@@ -890,7 +1128,7 @@ pub(crate) fn execute_cuda_fdm(
                             )
                         })
                     });
-                let (preview_field, cached_preview_fields) =
+                let (preview_field, scheduler_cached_preview_fields) =
                     if let Some(publication) = observation_publication.as_mut() {
                         publication.apply_to_stats(&mut sampled_stats);
                         (
@@ -900,6 +1138,57 @@ pub(crate) fn execute_cuda_fdm(
                     } else {
                         (None, None)
                     };
+                let full_fields_due = heavy_payload_due && live.field_every_n == 1;
+                let cached_preview_fields = if full_fields_due {
+                    let capture_started = Instant::now();
+                    match capture_full_active_cuda_fields(
+                        &backend,
+                        plan,
+                        live.grid,
+                        sampled_stats.step,
+                        sampled_stats.time,
+                        display_selection
+                            .as_ref()
+                            .map(|selection| selection.revision)
+                            .unwrap_or(0),
+                        magnetization_cache.as_deref(),
+                    ) {
+                        Ok(mut fields) => {
+                            mark_full_fields_materialized(&mut sampled_stats, &fields);
+                            if let Some(mut scheduler_fields) = scheduler_cached_preview_fields {
+                                scheduler_fields.retain(|scheduled| {
+                                    !fields
+                                        .iter()
+                                        .any(|full| full.quantity == scheduled.quantity)
+                                });
+                                fields.extend(scheduler_fields);
+                            }
+                            sampled_stats.cached_preview_wall_time_ns = sampled_stats
+                                .cached_preview_wall_time_ns
+                                .saturating_add(capture_started.elapsed().as_nanos() as u64);
+                            Some(fields)
+                        }
+                        Err(error) => {
+                            let source_step = sampled_stats.step;
+                            mark_full_fields_materialization_error(
+                                &mut sampled_stats,
+                                plan,
+                                source_step,
+                                display_selection
+                                    .as_ref()
+                                    .map(|selection| selection.revision)
+                                    .unwrap_or(0),
+                                &error.message,
+                            );
+                            sampled_stats.cached_preview_wall_time_ns = sampled_stats
+                                .cached_preview_wall_time_ns
+                                .saturating_add(capture_started.elapsed().as_nanos() as u64);
+                            None
+                        }
+                    }
+                } else {
+                    scheduler_cached_preview_fields
+                };
                 let action = (live.on_step)(StepUpdate {
                     coupled_checkpoint: final_frozen_checkpoint.clone(),
                     stats: sampled_stats.clone(),
@@ -917,6 +1206,7 @@ pub(crate) fn execute_cuda_fdm(
                         || (preview_due && preview_targets_global_scalar),
                     terminal_field_snapshot: false,
                     finished: false,
+                    magnetization_carrier: None,
                 });
                 if preview_due {
                     last_preview_revision = Some(
@@ -1031,52 +1321,135 @@ pub(crate) fn execute_cuda_fdm(
         latest_stats.as_ref().map_or(0.0, |stats| stats.time),
         latest_stats.as_ref().map_or(0.0, |stats| stats.dt),
     )?;
+    let terminal_capture = latest_stats
+        .clone()
+        .unwrap_or_else(|| current_stats.clone());
+    let mut terminal_stats = terminal_capture;
     if let Some(scheduler) = live_observations.as_mut() {
         let terminal_display_state = live
             .as_ref()
             .and_then(|consumer| consumer.display_selection.map(|get| get()))
             .unwrap_or_default();
-        let publish_terminal_update = live
-            .as_ref()
-            .is_some_and(|consumer| consumer.display_selection.is_some());
-        let terminal_capture = latest_stats
-            .clone()
-            .unwrap_or_else(|| current_stats.clone());
         let mut publication = scheduler.finish(
             &backend,
             &terminal_display_state,
-            terminal_capture.step,
-            terminal_capture.time,
-            terminal_capture.dt,
+            terminal_stats.step,
+            terminal_stats.time,
+            terminal_stats.dt,
         );
-        let mut terminal_stats = terminal_capture;
         publication.apply_to_stats(&mut terminal_stats);
+        // Terminal accepted-field fragments are a durable observation stream.
+        // The bounded display scheduler remains useful for its status updates,
+        // but its sampled fields are not mixed into that stream.
+        drop(publication.preview_field.take());
+        drop(publication.cached_preview_fields.take());
         if latest_stats.is_some() {
             latest_stats = Some(terminal_stats.clone());
         }
-        if publish_terminal_update {
-            if let Some(live) = live.as_mut() {
-                let action = (live.on_step)(StepUpdate {
-                    coupled_checkpoint: final_frozen_checkpoint.clone(),
-                    stats: terminal_stats,
-                    grid: live.grid,
-                    fem_mesh_generation_id: None,
-                    magnetization: None,
-                    preview_field: publication.preview_field.take(),
-                    cached_preview_fields: publication.cached_preview_fields.take(),
-                    hysteresis_field_m_t: None,
-                    hysteresis_point_index: None,
-                    hysteresis_settle_step_index: None,
-                    hysteresis_settle_step_kind: None,
-                    hysteresis_settle_step_method: None,
-                    scalar_row_due: false,
-                    terminal_field_snapshot: false,
-                    finished: false,
-                });
-                if action == StepAction::Stop {
-                    cancelled = true;
+    }
+    if let Some(live) = live.as_mut() {
+        let config_revision = live
+            .display_selection
+            .map(|get| get())
+            .map(|selection| selection.revision)
+            .unwrap_or(0);
+        let quantities = field_materialization_quantity_ids();
+        let quantities = active_fdm_preview_quantities(
+            crate::dispatch::FdmEngine::CudaFdm,
+            plan,
+            &quantities,
+        );
+        for quantity in &quantities {
+            terminal_stats
+                .field_materialization_states
+                .retain(|status| status.quantity != *quantity);
+            terminal_stats.field_materialization_states.push(
+                LiveFieldMaterializationStatus {
+                    quantity: (*quantity).to_string(),
+                    source_step: terminal_stats.step,
+                    request_revision: config_revision,
+                    state: LiveFieldMaterializationState::Pending,
+                    error: None,
+                },
+            );
+        }
+        let terminal_magnetization = flatten_vectors(&final_magnetization);
+        for quantity in &quantities {
+            let capture_started = Instant::now();
+            let cached_preview_fields = match capture_one_active_cuda_field(
+                &backend,
+                plan,
+                live.grid,
+                terminal_stats.step,
+                terminal_stats.time,
+                config_revision,
+                &final_magnetization,
+                quantity,
+            ) {
+                Ok(field) => {
+                    mark_full_fields_materialized(
+                        &mut terminal_stats,
+                        std::slice::from_ref(&field),
+                    );
+                    Some(vec![field])
                 }
+                Err(error) => {
+                    eprintln!(
+                        "[fullmag-runner] CUDA FDM terminal observation quantity {}: {}",
+                        quantity, error.message
+                    );
+                    let source_step = terminal_stats.step;
+                    mark_field_materialization_error(
+                        &mut terminal_stats,
+                        quantity,
+                        source_step,
+                        config_revision,
+                        &error.message,
+                    );
+                    None
+                }
+            };
+            let capture_wall_time_ns = capture_started.elapsed().as_nanos() as u64;
+            let field_copy_bytes = cached_preview_fields
+                .as_ref()
+                .and_then(|fields| fields.first())
+                .map_or(0, |field| (field.vector_field_values.len() as u64).saturating_mul(8));
+            let magnetization_bytes = (terminal_magnetization.len() as u64).saturating_mul(8);
+            terminal_stats.field_copy_bytes = terminal_stats
+                .field_copy_bytes
+                .saturating_add(magnetization_bytes)
+                .saturating_add(field_copy_bytes);
+            terminal_stats.field_copy_wall_time_ns = terminal_stats
+                .field_copy_wall_time_ns
+                .saturating_add(capture_wall_time_ns);
+            terminal_stats.cached_preview_wall_time_ns = terminal_stats
+                .cached_preview_wall_time_ns
+                .saturating_add(capture_wall_time_ns);
+
+            let action = (live.on_step)(StepUpdate {
+                coupled_checkpoint: final_frozen_checkpoint.clone(),
+                stats: terminal_stats.clone(),
+                grid: live.grid,
+                fem_mesh_generation_id: None,
+                magnetization: Some(terminal_magnetization.clone()),
+                preview_field: None,
+                cached_preview_fields,
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
+                scalar_row_due: false,
+                terminal_field_snapshot: true,
+                finished: false,
+                magnetization_carrier: None,
+            });
+            if action == StepAction::Stop {
+                cancelled = true;
             }
+        }
+        if latest_stats.is_some() {
+            latest_stats = Some(terminal_stats);
         }
     }
     if let Some(session) = gpu_transport.as_mut() {

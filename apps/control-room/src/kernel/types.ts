@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import type { ControlRoomApi } from "./api/ControlRoomApi";
 import type { RequestDiagnosticsController } from "./api/RequestDiagnosticsController";
 import type { CommandDiagnosticsController } from "./commands/CommandDiagnosticsController";
+import type { CommandFeedbackController } from "./commands/CommandFeedbackController";
 import type { CommandContribution } from "./commands/commandTypes";
 import type { CommandRegistry } from "./commands/CommandRegistry";
 import type { EventBus } from "./events/EventBus";
@@ -80,6 +81,8 @@ export interface KernelApi {
   readonly chartViewportHandoff: ChartViewportHandoffController;
   readonly cameraRegistry: CameraRegistryController;
   readonly commandDiagnostics: CommandDiagnosticsController;
+  /** Foreground command feedback owner; optional for partial test kernels. */
+  readonly commandFeedback?: CommandFeedbackController;
   readonly commands: CommandRegistry;
   readonly diagnostics: RequestDiagnosticsController;
   readonly diagnosticRecorder: DiagnosticRecorderController;

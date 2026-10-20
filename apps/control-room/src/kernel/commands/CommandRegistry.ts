@@ -1,9 +1,11 @@
-import type {
-  CommandCategory,
-  CommandContext,
-  CommandContribution,
-  CommandId,
-  CommandResult,
+import {
+  defaultCommandFeedbackOwner,
+  type CommandCategory,
+  type CommandContext,
+  type CommandContribution,
+  type CommandId,
+  type CommandOutcomeStatus,
+  type CommandResult,
 } from "./commandTypes";
 import type { CommandDiagnosticsController } from "./CommandDiagnosticsController";
 import { SessionCommandCancelledError } from "./commandSessionScope";
@@ -16,6 +18,13 @@ export interface CommandSessionScopeSource {
   subscribe(listener: () => void): () => void;
 }
 
+interface CommandOutcomeDetails {
+  backendCommandId?: string;
+  message?: string | null;
+  observation?: CommandResult["observation"];
+  title?: string;
+}
+
 export class CommandRegistry {
   private readonly commands = new Map<CommandId, CommandContribution>();
   private readonly listeners = new Set<() => void>();
@@ -23,6 +32,7 @@ export class CommandRegistry {
   private bus: EventBus<KernelEventMap> | null = null;
   private diagnostics: CommandDiagnosticsController | null = null;
   private sessionScopeSource: CommandSessionScopeSource | null = null;
+  private invocationSequence = 0;
 
   attachSessionScopeSource(source: CommandSessionScopeSource): void {
     this.sessionScopeSource = source;
@@ -30,6 +40,11 @@ export class CommandRegistry {
 
   getSessionScopeKey(): string | null | undefined {
     return this.sessionScopeSource?.getScopeKey();
+  }
+
+  /** Observe session scope changes; a no-op when no scope source is attached. */
+  subscribeSessionScope(listener: () => void): () => void {
+    return this.sessionScopeSource?.subscribe(listener) ?? (() => {});
   }
 
   /** Attach bus for event emission. Called once during kernel init. */
@@ -97,7 +112,11 @@ export class CommandRegistry {
     return cmd.isActive(context);
   }
 
-  /** Execute a command by id. Emits command:submitted and command:completed events. */
+  /**
+   * Execute a command by id. Runs emit command:submitted/command:completed;
+   * every invocation, admission failures included, emits exactly one
+   * command:outcome so a single feedback owner can present it.
+   */
   async execute(
     id: CommandId,
     context: CommandContext,
@@ -111,16 +130,46 @@ export class CommandRegistry {
     context: CommandContext,
     input?: unknown,
   ): Promise<CommandResult> {
+    const invocationId = `cmd-${++this.invocationSequence}`;
+    const admissionScopeKey =
+      context.sessionScopeKey === undefined
+        ? (this.sessionScopeSource?.getScopeKey() ?? null)
+        : context.sessionScopeKey;
+    const emitOutcome = (
+      status: CommandOutcomeStatus,
+      phase: "admission" | "run",
+      details: CommandOutcomeDetails = {},
+    ) => {
+      this.bus?.emit("command:outcome", {
+        backendCommandId: details.backendCommandId ?? null,
+        commandId: id,
+        feedback: context.feedback ?? defaultCommandFeedbackOwner(context.source),
+        invocationId,
+        message: details.message ?? null,
+        observation: details.observation ?? null,
+        phase,
+        sessionScopeKey: admissionScopeKey,
+        source: context.source,
+        sourceDetail: context.sourceDetail ?? null,
+        status,
+        title: details.title ?? null,
+      });
+    };
+
     const cmd = this.commands.get(id);
     if (!cmd) {
+      const message = `Unknown command: ${id}`;
       this.diagnostics?.record({
         commandId: id,
-        message: `Unknown command: ${id}`,
+        invocationId,
+        message,
+        sessionScopeKey: admissionScopeKey,
         source: context.source,
         sourceDetail: context.sourceDetail,
         status: "missing",
       });
-      return { status: "failed", message: `Unknown command: ${id}` };
+      emitOutcome("missing", "admission", { message });
+      return { status: "failed", message };
     }
     const commandContext =
       input === undefined
@@ -135,10 +184,16 @@ export class CommandRegistry {
       this.diagnostics?.record({
         commandId: id,
         disabledReason,
+        invocationId,
         message: disabledReason,
+        sessionScopeKey: admissionScopeKey,
         source: commandContext.source,
         sourceDetail: commandContext.sourceDetail,
         status: "disabled",
+      });
+      emitOutcome("disabled", "admission", {
+        message: disabledReason,
+        title: cmd.title,
       });
       return {
         status: "failed",
@@ -150,6 +205,8 @@ export class CommandRegistry {
     try {
       this.diagnostics?.record({
         commandId: id,
+        invocationId,
+        sessionScopeKey: admissionScopeKey,
         source: commandContext.source,
         sourceDetail: commandContext.sourceDetail,
         status: "submitted",
@@ -157,8 +214,12 @@ export class CommandRegistry {
       this.bus?.emit("command:submitted", { commandId: id });
       const result = await cmd.run(sessionContext.context);
       this.diagnostics?.record({
+        backendCommandId: result.commandId ?? null,
         commandId: id,
+        invocationId,
         message: result.message,
+        observation: result.observation ?? null,
+        sessionScopeKey: admissionScopeKey,
         source: commandContext.source,
         sourceDetail: commandContext.sourceDetail,
         status: result.status,
@@ -166,6 +227,12 @@ export class CommandRegistry {
       this.bus?.emit("command:completed", {
         commandId: id,
         status: result.status,
+      });
+      emitOutcome(result.status, "run", {
+        backendCommandId: result.commandId,
+        message: result.message ?? null,
+        observation: result.observation,
+        title: cmd.title,
       });
       this.notify();
       return result;
@@ -179,11 +246,14 @@ export class CommandRegistry {
       });
       this.diagnostics?.record({
         commandId: id,
+        invocationId,
         message,
+        sessionScopeKey: admissionScopeKey,
         source: commandContext.source,
         sourceDetail: commandContext.sourceDetail,
         status,
       });
+      emitOutcome(status, "run", { message, title: cmd.title });
       this.notify();
       return { status, message };
     } finally {

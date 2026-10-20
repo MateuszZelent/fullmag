@@ -142,7 +142,7 @@ pub(crate) fn execute_fdm_multilayer<'a>(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    live: Option<(&'a [u32; 3], &'a mut dyn FnMut(StepUpdate) -> StepAction)>,
+    live: Option<(&'a [u32; 3], u64, Option<&'a serde_json::Value>, &'a mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     match engine {

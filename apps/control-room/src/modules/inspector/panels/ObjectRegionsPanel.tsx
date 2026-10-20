@@ -28,7 +28,13 @@ import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectio
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { FormField } from "../primitives/FormField";
+import {
+  QuantityField,
+  QuantityFieldDraftScope,
+  useQuantityFieldDraftScope,
+  type QuantityFieldParseResult,
+} from "../primitives/QuantityField";
+import { quantityFieldDraftBlockReason } from "../primitives/quantityFieldDraftStore";
 import {
   initialInspectorDraftState,
   resolveInspectorDraftState,
@@ -80,52 +86,44 @@ type Feedback =
     }
   | null;
 
+function parsePhysicalScalarText(text: string): QuantityFieldParseResult<number> {
+  const parsed = parseRegionPhysicalScalar(text);
+  return parsed === null
+    ? { message: "Enter a valid SI value", ok: false, status: "invalid" }
+    : { ok: true, value: parsed };
+}
+
+/**
+ * Region scalar editor. Raw text stays in the panel draft scope until it is
+ * committed on blur/Enter, so an invalid entry keeps the Inspector session
+ * dirty and invalid instead of reverting to the previous number (I01).
+ */
 export function PhysicalScalarField({
   disabled,
+  draftKey,
   label,
   unit,
   value,
   onValueChange,
 }: {
   disabled?: boolean;
+  draftKey?: string;
   label: string;
   unit?: string;
   value: number;
   onValueChange: (next: number) => void;
 }) {
-  const formatted = formatRegionPhysicalScalar(value);
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(formatted);
-  const displayValue = editing ? text : formatted;
-  const parsed = parseRegionPhysicalScalar(displayValue);
-  const invalid = editing && parsed === null;
-
   return (
-    <FormField
-      label={label}
-      inputMode="decimal"
-      type="text"
-      unit={unit}
-      value={displayValue}
+    <QuantityField
       disabled={disabled}
-      error={invalid ? "Enter a valid SI value" : undefined}
-      invalid={invalid}
-      onBlur={() => {
-        setEditing(false);
-        setText(formatRegionPhysicalScalar(value));
-      }}
-      onChange={(event) => {
-        const nextText = event.target.value;
-        setText(nextText);
-        const parsed = parseRegionPhysicalScalar(nextText);
-        if (parsed !== null && !Object.is(parsed, value)) {
-          onValueChange(parsed);
-        }
-      }}
-      onFocus={() => {
-        setText(formatted);
-        setEditing(true);
-      }}
+      draftKey={draftKey}
+      format={formatRegionPhysicalScalar}
+      invalidMessage="Enter a valid SI value"
+      label={label}
+      parse={parsePhysicalScalarText}
+      unit={unit}
+      value={value}
+      onCommit={onValueChange}
     />
   );
 }
@@ -186,6 +184,9 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   const baseDraft = useMemo(() => objectRegionDraftFromModel(model), [model]);
   const draftKey = `${sessionScopeKey ?? "no-session"}:${objectRegionDraftKey(model)}`;
   const draftIdentityKey = objectRegionDraftIdentityKey(model);
+  const fieldDrafts = useQuantityFieldDraftScope(
+    `${sessionScopeKey ?? "no-session"}:${draftIdentityKey}`,
+  );
   const [draftState, setDraftState] = useState<
     InspectorDraftState<ObjectRegionDraft>
   >(() =>
@@ -754,6 +755,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   }
 
   const revert = () => {
+    fieldDrafts.store.clear();
     resetRegionAggregateDraft(auxiliaryDraftSessionRef.current, () => {
       setDraftState(initialInspectorDraftState({ baseDraft, baseKey: draftKey, identityKey: draftIdentityKey }));
     });
@@ -778,17 +780,22 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     }
     return applied;
   }
+  const fieldDraftBlockReason = quantityFieldDraftBlockReason(fieldDrafts.summary);
   useRegisterInspectorEditSession(
     canWriteRegion || auxiliaryDraftSession ? "staged" : null,
     pending || draftApplyPending || (auxiliaryDraftSession?.applying ?? false),
-    regionDraftDirty || (auxiliaryDraftSession?.dirty ?? false),
+    // Uncommitted raw field text is a draft change the selection guard must see.
+    regionDraftDirty ||
+      (auxiliaryDraftSession?.dirty ?? false) ||
+      fieldDrafts.summary.pendingCount > 0,
     sessionAvailable &&
       (!canWriteRegion || validationErrors.length === 0) &&
-      (auxiliaryDraftSession?.valid ?? true),
+      (auxiliaryDraftSession?.valid ?? true) &&
+      fieldDrafts.summary.invalidLabels.length === 0,
     undefined,
     applyInspectorDraft,
     revert,
-    { historyMode: "mutation-owned" },
+    { applyBlockReason: fieldDraftBlockReason, historyMode: "mutation-owned" },
   );
 
   const subProps: RegionSubPanelProps = {
@@ -823,7 +830,18 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     reportAuxiliaryDraftSession,
   };
 
-  switch (selection.kind) {
+  return (
+    <QuantityFieldDraftScope store={fieldDrafts.store}>
+      {renderObjectRegionSubPanel(selection.kind, subProps)}
+    </QuantityFieldDraftScope>
+  );
+}
+
+function renderObjectRegionSubPanel(
+  kind: InspectorPanelProps["selection"]["kind"],
+  subProps: RegionSubPanelProps,
+) {
+  switch (kind) {
     case "object.region.geometry":
     case "object.region.shape":
       return <ObjectRegionGeometryPanelImpl {...subProps} />;

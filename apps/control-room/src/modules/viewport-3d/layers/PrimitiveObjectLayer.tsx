@@ -10,6 +10,10 @@ import {
 } from "./viewport3DRenderPolicy";
 
 import {
+  createPrimitiveSurfaceColorAssignments,
+  isFerromagneticPrimitiveRole,
+} from "@/kernel/visualization/primitiveSurfaceColor";
+import {
   DEFAULT_OBJECT_VISUALIZATION,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -59,6 +63,15 @@ export function PrimitiveObjectLayer({
 }) {
   const invalidate = useBatchedInvalidate();
   const primitiveFrameKey = buildViewport3DPrimitiveFrameKey(primitiveModel);
+  const primitiveColorAssignments = useMemo(
+    () =>
+      createPrimitiveSurfaceColorAssignments(
+        primitiveModel?.objects
+          .filter((object) => isFerromagneticPrimitiveRole(object.role))
+          .map((object) => object.objectId) ?? [],
+      ),
+    [primitiveModel?.objects],
+  );
 
   useEffect(() => {
     tracker.recordDirtyFrame("primitive-geometry");
@@ -83,6 +96,7 @@ export function PrimitiveObjectLayer({
             materialProfile={materialProfile}
             object={primitiveModel.draftOverlay}
             onSelectObject={() => undefined}
+            primitiveColorAssignments={primitiveColorAssignments}
             settings={{
               ...DEFAULT_OBJECT_VISUALIZATION,
               primitiveOpacityPercent: 42,
@@ -100,6 +114,7 @@ export function PrimitiveObjectLayer({
           key={object.geometryKey}
           object={object}
           onSelectObject={onSelectObject}
+          primitiveColorAssignments={primitiveColorAssignments}
           materialProfile={materialProfile}
           hasRealizedObjectGeometry={realizedObjectIds?.has(object.objectId) ?? false}
           settings={getObjectSettings(object)}
@@ -116,6 +131,7 @@ function PrimitiveObject({
   materialProfile,
   hasRealizedObjectGeometry,
   onSelectObject,
+  primitiveColorAssignments,
   settings,
   tracker,
 }: {
@@ -124,6 +140,7 @@ function PrimitiveObject({
   materialProfile: Viewport3DMaterialProfile;
   object: Viewport3DPrimitiveObject;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  primitiveColorAssignments: ReadonlyMap<string, number>;
   settings: VisualizationTargetSettings;
   tracker: Viewport3DResourceTracker;
 }) {
@@ -137,6 +154,7 @@ function PrimitiveObject({
       materialProfile={materialProfile}
       object={object}
       onSelectObject={onSelectObject}
+      primitiveColorAssignments={primitiveColorAssignments}
       settings={settings}
       tracker={tracker}
     />
@@ -148,6 +166,7 @@ function RenderablePrimitiveObject({
   object,
   materialProfile,
   onSelectObject,
+  primitiveColorAssignments,
   settings,
   tracker,
 }: {
@@ -155,6 +174,7 @@ function RenderablePrimitiveObject({
   materialProfile: Viewport3DMaterialProfile;
   object: Viewport3DPrimitiveObject;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  primitiveColorAssignments: ReadonlyMap<string, number>;
   settings: VisualizationTargetSettings;
   tracker: Viewport3DResourceTracker;
 }) {
@@ -192,7 +212,12 @@ function RenderablePrimitiveObject({
   // FDM/FEM surface is available.  The inspector's Solid surface control
   // edits `shaderMonoColor`, so prefer that value for the preview whenever
   // Solid is selected instead of retaining the stale primitive preference.
-  const shaderColor = primitiveObjectSurfaceColor(object, renderSettings, colors);
+  const shaderColor = primitiveObjectSurfaceColor(
+    object,
+    renderSettings,
+    colors,
+    primitiveColorAssignments,
+  );
 
   return (
     <group

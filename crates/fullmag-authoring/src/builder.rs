@@ -170,6 +170,10 @@ pub struct ScriptBuilderMeshState {
     pub adaptive_max_passes: u32,
     #[serde(default)]
     pub adaptive_error_tolerance: String,
+    /// Global FEM element order; missing means "not authored" and preserves
+    /// the loaded script value during canonical rewrites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<i64>,
 }
 
 impl Default for ScriptBuilderMeshState {
@@ -213,6 +217,7 @@ impl Default for ScriptBuilderMeshState {
             adaptive_h_max: String::new(),
             adaptive_max_passes: default_adaptive_mesh_max_passes(),
             adaptive_error_tolerance: String::new(),
+            order: None,
         }
     }
 }

@@ -455,15 +455,16 @@ fn compare_float(claimed: f64, actual: f64, name: &str, errors: &mut Vec<String>
     }
 }
 
-/// Compare dimensionless evidence with a small binary64 floor.
+/// Compare the remaining dimensionless evidence with a small binary64 floor.
 ///
 /// The producer and native validator intentionally use different reduction
 /// implementations for the large cell-volume sums (NumPy versus Rust).  A
 /// relative error close to zero therefore cannot use the dimensional
 /// `1.0e-30` floor from `compare_float`: the relative tolerance is multiplied
-/// by the magnitude of the value and becomes effectively zero.  Keep this
-/// tolerance local to dimensionless evidence; dimensional geometry and
-/// volume claims retain their strict SI comparison.
+/// by the magnitude of the value and becomes effectively zero. The magnetic
+/// relative-volume claim is checked against its own claimed dimensional
+/// inputs; dimensional geometry and volume claims retain their strict SI
+/// comparison.
 fn compare_dimensionless_float(
     claimed: f64,
     actual: f64,
@@ -1075,12 +1076,34 @@ pub fn validate_mixed_layer_topology_certificate_v2_against_mesh(
         "expected_magnetic_volume_m3",
         &mut errors,
     );
-    compare_dimensionless_float(
+    // Validate the derived claim against its own strictly checked inputs.
+    // Comparing near-zero residuals of two independent volume reductions
+    // instead amplifies allowed SI-volume roundoff into a false mismatch.
+    let claimed_volume_relative_error = (certificate.magnetic_volume_m3
+        - certificate.expected_magnetic_volume_m3)
+        .abs()
+        / certificate.expected_magnetic_volume_m3.max(1.0e-300);
+    if !float_close(
         certificate.magnetic_relative_volume_error,
-        (magnetic_volume - faceted_magnetic_volume).abs() / faceted_magnetic_volume.max(1.0e-300),
-        "magnetic_relative_volume_error",
-        &mut errors,
-    );
+        claimed_volume_relative_error,
+        1.0e-12,
+        f64::EPSILON * 16.0,
+    ) {
+        errors.push(format!(
+            "mixed v2 certificate magnetic_relative_volume_error claim {:.17e} disagrees with ratio from claimed volumes {:.17e}",
+            certificate.magnetic_relative_volume_error,
+            claimed_volume_relative_error,
+        ));
+    }
+    let mesh_volume_relative_error =
+        (magnetic_volume - faceted_magnetic_volume).abs() / faceted_magnetic_volume.max(1.0e-300);
+    if !mesh_volume_relative_error.is_finite() || !(0.0..=1.0e-8).contains(&mesh_volume_relative_error) {
+        errors.push(format!(
+            "mixed v2 magnetic_relative_volume_error physical limit 1e-8 exceeded: claim {:.17e}, recomputed from mesh {:.17e}",
+            certificate.magnetic_relative_volume_error,
+            mesh_volume_relative_error,
+        ));
+    }
     compare_float(certificate.air_volume_m3, air_volume, "air_volume_m3", &mut errors);
     compare_float(certificate.shared_domain_volume_m3, shared_volume, "shared_domain_volume_m3", &mut errors);
     compare_float(

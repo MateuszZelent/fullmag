@@ -129,8 +129,8 @@ describe("AirboxMeshParametersPanel session fencing", () => {
 
       const apply = findElement(
         container,
-        (element) => element.tagName === "BUTTON" && element.textContent.includes("Apply Universe Policy"),
-        "Apply Universe Policy button",
+        (element) => element.tagName === "BUTTON" && element.textContent.includes("Apply Airbox Policy"),
+        "Apply Airbox Policy button",
       );
       await act(async () => {
         apply.dispatchEvent(new TestEvent("click", { bubbles: true }));
@@ -168,8 +168,8 @@ describe("AirboxMeshParametersPanel session fencing", () => {
       });
       const apply = findElement(
         container,
-        (element) => element.tagName === "BUTTON" && element.textContent.includes("Apply Universe Policy"),
-        "Apply Universe Policy button",
+        (element) => element.tagName === "BUTTON" && element.textContent.includes("Apply Airbox Policy"),
+        "Apply Airbox Policy button",
       );
       await act(async () => {
         apply.dispatchEvent(new TestEvent("click", { bubbles: true }));

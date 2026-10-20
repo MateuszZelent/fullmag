@@ -6,16 +6,22 @@ import { safeViewport3DDomainGenerationId } from "./viewport3DFieldDomainCompati
 import type { Viewport3DFieldResourceRequest } from "./viewport3DFieldDataPlan";
 
 const FDM_MULTILAYER_AIRBOX_SCOPE_ID = "airbox";
-const FDM_MULTILAYER_AIRBOX_QUANTITY_ID = "H_demag";
+const DEFAULT_FDM_MULTILAYER_AIRBOX_QUANTITY_ID = "H_demag" as const;
+const FDM_MULTILAYER_AIRBOX_H_EFF_QUANTITY_ID = "H_eff" as const;
+
+export type FdmMultilayerAirboxQuantityId =
+  | typeof DEFAULT_FDM_MULTILAYER_AIRBOX_QUANTITY_ID
+  | typeof FDM_MULTILAYER_AIRBOX_H_EFF_QUANTITY_ID;
 
 /**
- * The target-only Airbox has exactly one currently published observable.  It
- * must remain a distinct scoped resource rather than falling back to the FDM
- * common transform grid or the single-grid inactive-cell Airbox.
+ * A target-only Airbox quantity remains a distinct scoped resource rather than
+ * falling back to the FDM common transform grid or single-grid inactive-cell Airbox.
  */
 export function buildFdmMultilayerAirboxFieldRequest(
   _domain: FdmMultilayerAirboxRenderDomain,
   maxSamples?: number | null,
+  expectedQuantity: FdmMultilayerAirboxQuantityId =
+    DEFAULT_FDM_MULTILAYER_AIRBOX_QUANTITY_ID,
 ): Viewport3DFieldResourceRequest {
   const query: FdmMultilayerFieldVectorQuery = {
     component: "full",
@@ -28,9 +34,9 @@ export function buildFdmMultilayerAirboxFieldRequest(
   }
   return {
     consumers: ["viewport-3d:fdm-multilayer-airbox"],
-    quantityId: FDM_MULTILAYER_AIRBOX_QUANTITY_ID,
+    quantityId: expectedQuantity,
     query,
-    requestId: `fdm-multilayer-airbox:H_demag${
+    requestId: `fdm-multilayer-airbox:${expectedQuantity}${
       normalizedMaxSamples === null ? "" : `:max_samples=${normalizedMaxSamples}`
     }`,
   };
@@ -41,11 +47,14 @@ export function shouldRequestFdmMultilayerAirboxField(
     import("@/kernel/visualization/ObjectVisualizationController").VisualizationTargetSettings,
     "activeQuantityId" | "shaderVisible" | "vectorsVisible" | "visible"
   >,
+  expectedQuantity: string =
+    DEFAULT_FDM_MULTILAYER_AIRBOX_QUANTITY_ID,
 ): boolean {
   return (
+    isFdmMultilayerAirboxQuantity(expectedQuantity) &&
     settings.visible &&
     (settings.shaderVisible || settings.vectorsVisible) &&
-    settings.activeQuantityId === FDM_MULTILAYER_AIRBOX_QUANTITY_ID
+    settings.activeQuantityId === expectedQuantity
   );
 }
 
@@ -55,8 +64,11 @@ export function resolveFdmMultilayerAirboxFieldVector(
     "carrierFingerprint" | "domainGenerationId" | "shape" | "totalCells"
   >,
   fieldVector: DecodedFieldVector | null | undefined,
+  expectedQuantity: string =
+    DEFAULT_FDM_MULTILAYER_AIRBOX_QUANTITY_ID,
 ): DecodedFieldVector | null {
   if (!fieldVector) return null;
+  if (!isFdmMultilayerAirboxQuantity(expectedQuantity)) return null;
   const fieldGenerationId = safeNonEmptyDomainGenerationId(
     fieldVector.domainGenerationId,
   );
@@ -70,7 +82,7 @@ export function resolveFdmMultilayerAirboxFieldVector(
     fieldVector.grid[2] === 1;
   if (
     fieldVector.formatVersion !== 3 ||
-    fieldVector.quantityId !== FDM_MULTILAYER_AIRBOX_QUANTITY_ID ||
+    fieldVector.quantityId !== expectedQuantity ||
     fieldVector.scopeKind !== "airbox" ||
     fieldVector.scopeId !== FDM_MULTILAYER_AIRBOX_SCOPE_ID ||
     fieldGenerationId === null ||
@@ -115,12 +127,17 @@ function hasValidExplicitCellIndices(
   ) {
     return false;
   }
-  const seen = new Uint8Array(Math.max(0, Math.floor(totalCells)));
+  const seen = new Set<number>();
   for (const index of fieldVector.nodeIndices) {
-    if (!Number.isSafeInteger(index) || index < 0 || index >= totalCells || seen[index]) {
+    if (
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      index >= totalCells ||
+      seen.has(index)
+    ) {
       return false;
     }
-    seen[index] = 1;
+    seen.add(index);
   }
   return true;
 }
@@ -129,4 +146,13 @@ function normalizeSampleLimit(value: number | null | undefined): number | null {
   if (value == null || !Number.isFinite(value)) return null;
   const normalized = Math.floor(value);
   return normalized > 0 ? normalized : null;
+}
+
+function isFdmMultilayerAirboxQuantity(
+  value: string,
+): value is FdmMultilayerAirboxQuantityId {
+  return (
+    value === DEFAULT_FDM_MULTILAYER_AIRBOX_QUANTITY_ID ||
+    value === FDM_MULTILAYER_AIRBOX_H_EFF_QUANTITY_ID
+  );
 }

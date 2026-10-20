@@ -65,7 +65,10 @@ async fn submit_structured_command_impl_with_context(
     validate_optional_request_context(&state, context).await?;
     reject_imported_read_only_command(&state).await?;
     validate_optional_request_context(&state, context).await?;
-    enforce_session_command_admission(&state).await?;
+    let accepted_observations = crate::live_accepted_execution::docker_api_only_runtime()
+        && matches!(&req, StructuredCommandRequest::ComputeFields { .. }
+            | StructuredCommandRequest::ComputeEnergies { .. });
+    enforce_session_command_admission(&state, accepted_observations).await?;
     validate_optional_request_context(&state, context).await?;
     validate_relax_command_controls(&req)?;
     validate_solver_policy_controls(&req)?;
@@ -243,19 +246,31 @@ async fn submit_structured_command_impl_with_context(
             .await;
         }
         if crate::live_accepted_execution::docker_api_only_runtime()
-            && command.kind == "pause"
+            && matches!(command.kind.as_str(), "pause" | "skip")
         {
+            let reason = if command.kind == "pause" {
+                "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published."
+            } else {
+                "accepted_control_unsupported: Docker accepted workers expose durable Stop; Skip is unavailable until a worker stage-skip command is published."
+            };
             return reject_session_command_impl_with_context(
                 Arc::clone(&state),
                 headers,
                 command,
-                "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published.".into(),
+                reason.into(),
                 // The enclosing transition fence is already held. Passing no
                 // context avoids reacquiring that non-reentrant mutex while
                 // retaining the captured request fence above.
                 None,
             )
             .await;
+        }
+        if crate::live_accepted_execution::docker_api_only_runtime()
+            && matches!(command.kind.as_str(), "compute_fields" | "compute_energies")
+        {
+            return publish_materialized_fields_under_transition(
+                Arc::clone(&state), headers, command, context,
+            ).await;
         }
         if matches!(command.kind.as_str(), "run" | "relax" | "solve" | "resume") {
             if let Some(accepted) =
@@ -307,19 +322,40 @@ async fn validate_optional_request_context(
     Ok(())
 }
 
-async fn enforce_session_command_admission(state: &Arc<AppState>) -> Result<(), ApiError> {
-    let terminal_status = {
+async fn enforce_session_command_admission(state: &Arc<AppState>, accepted_observations: bool) -> Result<(), ApiError> {
+    let (terminal_status, run_terminal) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        if snapshot.session.status == "closed" {
+            return Err(ApiError::conflict("session_closed_read_only: closed sessions reject commands"));
+        }
         let effective = effective_runtime_status_code(snapshot);
         let terminal_status = [effective.as_str(), snapshot.session.status.as_str()]
             .into_iter()
             .find(|status| matches!(*status, "completed" | "failed" | "cancelled" | "closed"))
             .map(str::to_string);
-        terminal_status
+        let run_terminal = snapshot.run.as_ref().is_some_and(|run| {
+            matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
+        });
+        (terminal_status, run_terminal)
     };
+    if accepted_observations && !run_terminal {
+        // Same rule as the published readiness: accepted observations are
+        // materialized from a finished run. Reject before ACK instead of
+        // accepting a command whose background task can only fail.
+        return Err(ApiError::conflict_with_code(
+            "accepted_materialization_run_active",
+            "accepted observations require a terminal run",
+        ));
+    }
+    if accepted_observations && terminal_status.as_deref() != Some("closed") {
+        // This route reads immutable accepted-worker results. It needs no
+        // connected solver, and closed/imported sessions stay read-only.
+        // Source ownership and terminal-run checks remain in the adopter.
+        return Ok(());
+    }
     if let Some(status) = terminal_status {
         return Err(ApiError::conflict(format!(
             "session_{status}_read_only: terminal sessions reject all mutating commands"
@@ -372,6 +408,111 @@ async fn fdm_grid_refresh_rejection_reason(
         ));
     }
     Ok(None)
+}
+
+/// Adopt only worker-evaluated immutable fields. The caller holds the existing
+/// session transition fence; there is no legacy queue consumer or HTTP-side
+/// native compute. Every accepted command gets a durable terminal outcome.
+async fn publish_materialized_fields_under_transition(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    mut command: SessionCommand,
+    context: &crate::types::CurrentLiveRequestContext,
+) -> Result<CommandResponse, ApiError> {
+    let key = command_request_key(headers);
+    if let Some(key) = key.as_ref() {
+        if let Some((_, response)) = state.current_command_responses.lock().await.iter()
+            .find(|(cached, _)| cached == key) { return Ok(response.clone()); }
+    }
+    let snapshot = state.current_live_state.read().await.as_ref().cloned()
+        .ok_or_else(|| ApiError::not_found("no current workspace"))?;
+    crate::ensure_current_live_request_context(&snapshot, context,
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
+    if command.kind == "compute_fields" {
+        command.field_materialization_requirements =
+            compute_fields_materialization_requirements(&snapshot);
+    }
+    let energies_only = command.kind == "compute_energies";
+    let requirements = command.field_materialization_requirements.clone();
+    if !energies_only && requirements.is_empty() {
+        return reject_session_command_impl_with_context(state, headers, command,
+            "accepted_materialization_requirements_unavailable: no trusted resolved quantity requirements are published".into(),
+            None).await;
+    }
+    let command_id = command.command_id.clone();
+    let request_id = command_request_id(headers);
+    let mut next_sequence = state.current_control_next_seq.lock().await;
+    let seq = next_sequence.checked_add(1).ok_or_else(|| ApiError::internal("command sequence exhausted"))?;
+    command.seq = seq;
+    crate::live_command_journal::mutate(&state, &snapshot, |ledger| {
+        validate_runtime_command_contract(&snapshot, ledger, &command)?;
+        if ledger.iter().any(is_active_mesh_or_compute_command) {
+            return Err(ApiError::conflict("A runtime or mesh command is already active."));
+        }
+        reserve_command_ledger_entry(ledger)?;
+        ledger.push_back(TrackedCommandRecord { command, request_id: request_id.clone(),
+            status: CommandLifecycleState::Accepted, dispatched_at_unix_ms: None,
+            completed_at_unix_ms: None, completion_status: None, error: None });
+        Ok(((), true))
+    }).await?;
+    *next_sequence = seq;
+    drop(next_sequence);
+    // Adoption may read a large CAS object. Own its completion independently
+    // of the HTTP future, so a client timeout cannot strand an accepted command
+    // or trigger another evaluator. The existing transition fence is reacquired
+    // by the task after this request publishes its ACK and releases the fence.
+    let task_state = Arc::clone(&state);
+    let task_context = context.clone();
+    let task_command_id = command_id.clone();
+    tokio::spawn(async move {
+        let _transition = task_state.current_live_session_transition.lock().await;
+        let result = complete_materialized_fields_under_transition(
+            &task_state, &task_context, &task_command_id, energies_only, &requirements,
+        ).await;
+        if let Err(error) = result {
+            tracing::warn!(command_id = %task_command_id, error = %error,
+                "accepted quantity adoption could not publish its terminal outcome");
+        }
+    });
+    let response = CommandResponse { accepted: true, command_id, request_id, error: None };
+    if let Some(key) = key {
+        let mut responses = state.current_command_responses.lock().await;
+        responses.push_back((key, response.clone()));
+        while responses.len() > 128 { responses.pop_front(); }
+    }
+    Ok(response)
+}
+
+async fn complete_materialized_fields_under_transition(
+    state: &Arc<AppState>,
+    context: &crate::types::CurrentLiveRequestContext,
+    command_id: &str,
+    energies_only: bool,
+    requirements: &[FieldMaterializationRequirement],
+) -> Result<(), ApiError> {
+    crate::validate_current_live_request_context(state, context).await?;
+    let outcome = crate::accepted_field_materialization::adopt_current_bundle(
+        state, energies_only, requirements,
+    ).await;
+    let error = outcome.err().map(|error| error.message);
+    let completed = error.is_none();
+    let snapshot = state.current_live_state.read().await.as_ref().cloned()
+        .ok_or_else(|| ApiError::not_found("no current workspace"))?;
+    crate::ensure_current_live_request_context(&snapshot, context,
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
+    crate::live_command_journal::mutate(state, &snapshot, |ledger| {
+        let record = ledger.iter_mut().find(|record| record.command.command_id == command_id)
+            .ok_or_else(|| ApiError::conflict("materialization command record missing"))?;
+        record.status = if completed { CommandLifecycleState::Completed } else { CommandLifecycleState::Failed };
+        record.completed_at_unix_ms = Some(crate::session::unix_time_millis_now());
+        record.completion_status = Some(if completed { crate::types::CommandCompletionState::Completed }
+            else { crate::types::CommandCompletionState::Failed });
+        record.error = error.clone();
+        Ok(((), true))
+    }).await?;
+    let display_revision = state.current_display_selection.read().await.revision;
+    let realtime = crate::current_live_realtime_state_from_snapshot(state, &snapshot, display_revision).await;
+    crate::publish_current_live_realtime_batch_changed(state, &realtime, completed, 0).await
 }
 
 fn fdm_grid_refresh_targets_active_fdm_lane(snapshot: &SessionStateResponse) -> bool {
@@ -2098,6 +2239,10 @@ async fn publish_accepted_session_command_impl_with_context_under_transition_val
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
         let artifact_dir = snapshot.session.artifact_dir.clone();
+        let previous_run_matches = snapshot
+            .run
+            .as_ref()
+            .is_some_and(|run| run.run_id == accepted_run_id);
         crate::session::apply_current_live_snapshot(
             snapshot,
             CurrentLiveSnapshotRequest {
@@ -2137,6 +2282,18 @@ async fn publish_accepted_session_command_impl_with_context_under_transition_val
                 fem_mesh: None,
             },
         )?;
+        // Keep the stage read model coherent with the journaled accepted
+        // transition. A replaced run must not inherit the previous run's
+        // stage list; the projector publishes the new run's catalog stages.
+        if previous_run_matches {
+            crate::session::set_current_live_stage_runtime_state(
+                snapshot,
+                crate::session::accepted_runtime_lifecycle_state(accepted_session_status),
+            );
+        } else {
+            crate::session::clear_current_live_stage_execution(snapshot);
+        }
+        crate::session::refresh_runtime_status(snapshot);
     }
     let response = CommandResponse {
         accepted: true,
@@ -2202,6 +2359,18 @@ pub(crate) fn apply_accepted_live_study_snapshot(
         ));
     }
     let artifact_dir = snapshot.session.artifact_dir.clone();
+    // A newly bound accepted run publishes its planned stage list at once so
+    // `/simulation/stages/execution` is not empty while the projector waits
+    // for the first durable catalog revision. A re-publication of the same
+    // run keeps the projector-owned stage lifecycle and only moves the
+    // runtime state below.
+    let rebinding_same_run = snapshot
+        .run
+        .as_ref()
+        .is_some_and(|existing| existing.run_id == run_id)
+        && snapshot.stage_execution.is_some();
+    let initial_stage_execution = (!rebinding_same_run)
+        .then(|| crate::session::accepted_initial_stage_execution(step_ids, status));
     crate::session::apply_current_live_snapshot(
         snapshot,
         CurrentLiveSnapshotRequest {
@@ -2210,7 +2379,7 @@ pub(crate) fn apply_accepted_live_study_snapshot(
             session_status: Some(status.to_string()),
             metadata,
             mesh_workspace: None,
-            stage_execution: None,
+            stage_execution: initial_stage_execution,
             simulation_preparation: None,
             run: Some(RunManifest {
                 run_id: run_id.to_string(),
@@ -2241,6 +2410,13 @@ pub(crate) fn apply_accepted_live_study_snapshot(
             fem_mesh: None,
         },
     )?;
+    if rebinding_same_run {
+        crate::session::set_current_live_stage_runtime_state(
+            snapshot,
+            crate::session::accepted_runtime_lifecycle_state(status),
+        );
+        crate::session::refresh_runtime_status(snapshot);
+    }
     Ok(())
 }
 
@@ -2659,19 +2835,18 @@ fn compute_fields_materialization_requirements(
         return Vec::new();
     }
     let is_multilayer = snapshot_is_fdm_multilayer(snapshot);
-    let airbox_demag_supported = is_multilayer
-        && supported_quantity_ids
-            .iter()
-            .any(|quantity_id| *quantity_id == "H_demag");
-    let quantity_ids = if is_multilayer {
-        supported_quantity_ids
-            .iter()
-            .copied()
-            .filter(|quantity_id| *quantity_id != "H_demag")
-            .collect::<Vec<_>>()
-    } else {
-        supported_quantity_ids
-    };
+    let airbox_carriers = ["H_demag", "H_eff"].into_iter().filter_map(|quantity| {
+        if !is_multilayer || !supported_quantity_ids.contains(&quantity) { return None; }
+        let carrier = crate::router_v2::handlers::data::fields::load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, quantity)
+            .ok().flatten()?;
+        if !carrier.published_quantities.contains(quantity)
+            || carrier.unavailable_quantities.contains_key(quantity) { return None; }
+        Some((quantity, carrier.carrier_fingerprint))
+    }).collect::<Vec<_>>();
+    // Layer-native demag is a full magnetic-domain quantity even when a
+    // separate target-only Airbox is configured. An absent Airbox must not
+    // prevent native H_demag/H_eff materialization for an ordinary stack.
+    let quantity_ids = supported_quantity_ids;
     let generation_id = domain_generation_id(snapshot);
     let mut requirements = Vec::new();
     if !quantity_ids.is_empty() {
@@ -2684,18 +2859,13 @@ fn compute_fields_materialization_requirements(
         });
     }
 
-    if airbox_demag_supported {
-        let carrier_fingerprint =
-            crate::router_v2::handlers::data::fields::load_fdm_multilayer_airbox_carrier(snapshot)
-                .ok()
-                .flatten()
-                .map(|carrier| carrier.carrier_fingerprint);
+    for (quantity, carrier_fingerprint) in airbox_carriers {
         requirements.push(FieldMaterializationRequirement {
-            quantity_ids: vec!["H_demag".to_string()],
+            quantity_ids: vec![quantity.to_string()],
             scope_kind: "airbox".to_string(),
             scope_id: Some("airbox".to_string()),
-            generation_id,
-            carrier_fingerprint,
+            generation_id: generation_id.clone(),
+            carrier_fingerprint: Some(carrier_fingerprint),
         });
     }
     requirements

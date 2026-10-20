@@ -1,4 +1,4 @@
-import type { CommandContext, CommandId } from "./commandTypes";
+import type { CommandContext, CommandId, CommandResult } from "./commandTypes";
 
 type CommandDiagnosticStatus =
   | "cancelled"
@@ -9,7 +9,18 @@ type CommandDiagnosticStatus =
   | "missing"
   | "submitted";
 
-export interface CommandDiagnosticEntry {
+/** Correlation fields shared by every record of one execute invocation. */
+interface CommandDiagnosticCorrelation {
+  /** Backend command/intent ID returned by the command, when known. */
+  backendCommandId?: string | null;
+  /** Correlates submitted and terminal records of one execute call. */
+  invocationId?: string | null;
+  observation?: CommandResult["observation"] | null;
+  /** Session scope captured at admission; null outside a session. */
+  sessionScopeKey?: string | null;
+}
+
+export interface CommandDiagnosticEntry extends CommandDiagnosticCorrelation {
   commandId: CommandId;
   disabledReason: string | null;
   id: string;
@@ -20,7 +31,7 @@ export interface CommandDiagnosticEntry {
   timestampMs: number;
 }
 
-export interface CommandDiagnosticRecord {
+export interface CommandDiagnosticRecord extends CommandDiagnosticCorrelation {
   commandId: CommandId;
   disabledReason?: string | null;
   message?: string | null;
@@ -73,10 +84,14 @@ export class CommandDiagnosticsController {
   record(entry: CommandDiagnosticRecord): void {
     const timestampMs = entry.timestampMs ?? Date.now();
     this.entries.push({
+      backendCommandId: entry.backendCommandId ?? null,
       commandId: entry.commandId,
       disabledReason: entry.disabledReason ?? null,
       id: `${timestampMs}-${this.sequence++}`,
+      invocationId: entry.invocationId ?? null,
       message: entry.message ?? null,
+      observation: entry.observation ?? null,
+      sessionScopeKey: entry.sessionScopeKey ?? null,
       source: entry.source,
       sourceDetail: entry.sourceDetail ?? null,
       status: entry.status,

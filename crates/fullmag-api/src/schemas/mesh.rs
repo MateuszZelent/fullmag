@@ -228,6 +228,10 @@ pub struct MeshUniverseConfigResource {
 pub struct MeshUniverseConfigReplaceRequest {
     #[schema(additional_properties)]
     pub config: BTreeMap<String, Value>,
+    /// Resource revision the client edited. A stale value is rejected with
+    /// 409 instead of replacing a newer policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

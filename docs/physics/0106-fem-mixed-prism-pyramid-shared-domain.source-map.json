@@ -919,6 +919,27 @@
       "evidence_status": "implemented_unit_qualified"
     },
     {
+      "id": "mixed-certificate-v2-volume-reduction",
+      "path": "crates/fullmag-ir/src/mixed_certificate_v2.rs",
+      "symbol": "CompensatedSum",
+      "responsibility": "Accumulate v2 shared-domain, magnetic-body, and closed-faceted volume evidence with fixed-order Neumaier-compensated binary64 arithmetic after global-ordinal ordering; independently compare SI volumes, claimed-ratio consistency and the mesh-derived 1e-8 physical volume-error limit.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
+      "id": "mixed-certificate-v2-swept-shell-owner",
+      "path": "crates/fullmag-ir/src/mixed_certificate_v2.rs",
+      "symbol": "exact_swept_body_bounds",
+      "responsibility": "Select the unique magnetic region carrying typed exact_sweep evidence and use its realized body bounds for transition-shell verification while retaining union bounds for the complete magnetic domain.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
+      "id": "mixed-certificate-v2-validation",
+      "path": "crates/fullmag-ir/src/mixed_certificate_v2.rs",
+      "symbol": "validate_mixed_layer_topology_certificate_v2_against_mesh",
+      "responsibility": "Recompute the complete mixed-body v2 topology, ownership, regional shell, quality, and volume evidence from the received typed mesh with fail-closed exact_sweep ownership.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
       "id": "typed-pyo3-certificate-entry",
       "path": "crates/fullmag-py-core/src/mixed_certificate.rs",
       "symbol": "certify_mixed_mesh_arrays",
@@ -1267,27 +1288,6 @@
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "attach_disconnected_mixed_p1_certificate_v2",
       "responsibility": "Producer-side alignment for magnetic cell and independent closed-faceted volume totals; the helper _mixed_v2_closed_faceted_magnetic_volume retains the separate realized-boundary oracle while adopting the native explicit determinant and Neumaier reduction contract.",
-      "evidence_status": "source_implementation_under_review_runtime_not_verified"
-    },
-    {
-      "id": "mixed-certificate-v2-volume-reduction",
-      "path": "crates/fullmag-ir/src/mixed_certificate_v2.rs",
-      "symbol": "CompensatedSum",
-      "responsibility": "Accumulate v2 shared-domain, magnetic-body, and closed-faceted volume evidence with fixed-order Neumaier-compensated binary64 arithmetic after global-ordinal ordering.",
-      "evidence_status": "source_implementation_under_review_runtime_not_verified"
-    },
-    {
-      "id": "mixed-certificate-v2-swept-shell-owner",
-      "path": "crates/fullmag-ir/src/mixed_certificate_v2.rs",
-      "symbol": "exact_swept_body_bounds",
-      "responsibility": "Select the unique magnetic region carrying typed exact_sweep evidence and use its realized body bounds for transition-shell verification while retaining union bounds for the complete magnetic domain.",
-      "evidence_status": "source_implementation_under_review_runtime_not_verified"
-    },
-    {
-      "id": "mixed-certificate-v2-validation",
-      "path": "crates/fullmag-ir/src/mixed_certificate_v2.rs",
-      "symbol": "validate_mixed_layer_topology_certificate_v2_against_mesh",
-      "responsibility": "Recompute the complete mixed-body v2 topology, ownership, regional shell, quality, and volume evidence from the received typed mesh with fail-closed exact_sweep ownership.",
       "evidence_status": "source_implementation_under_review_runtime_not_verified"
     },
     {

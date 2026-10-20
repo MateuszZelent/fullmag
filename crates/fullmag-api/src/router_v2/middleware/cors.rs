@@ -24,6 +24,9 @@ pub fn cors_layer() -> CorsLayer {
             HeaderName::from_static("x-fullmag-scope-id"),
             HeaderName::from_static("x-fullmag-snapshot-id"),
             HeaderName::from_static("x-fullmag-mesh-topology-hash"),
+            HeaderName::from_static("x-fullmag-carrier-id"),
+            HeaderName::from_static("x-fullmag-carrier-revision"),
+            HeaderName::from_static("x-fullmag-carrier-digest"),
             HeaderName::from_static("x-fullmag-field-indexing"),
             HeaderName::from_static("x-fullmag-node-index-count"),
         ]);

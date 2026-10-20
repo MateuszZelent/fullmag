@@ -124,6 +124,7 @@ export async function buildViewport3DFdmVectorsOffMainThread(
         nativeActiveMask: request.nativeActiveMask,
         membershipAdmission: request.membershipAdmission,
       },
+      vectorLengthScale: request.vectorLengthScale,
       vectorScale: request.scale,
       voxelFillRatio: 1,
       voxelMagnitudeThreshold: 0,

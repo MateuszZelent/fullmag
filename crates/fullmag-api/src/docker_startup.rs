@@ -1203,12 +1203,18 @@ fn build_startup_snapshot(
     };
     snapshot.scene_document = Some(loaded.scene.clone());
     snapshot.metadata = Some(json!({
+        // The placeholder carries the complete request identity from its first
+        // publication so an identical replay during preparation can be
+        // recognised as the same activation instead of a source change.
         STARTUP_METADATA_KEY: {
             "request": request,
+            "request_id": request.request_id,
+            "source_sha256": loaded.source.sha256,
             "status": "activating",
             "runtime_metadata": loaded.runtime,
             "output_storage_binding": loaded.output_storage_binding,
             "source_size_bytes": loaded.source.size_bytes,
+            "scene_revision": loaded.scene.revision,
         }
     }));
     snapshot.runtime_status = build_runtime_status_view("activating");
@@ -1265,6 +1271,27 @@ fn replay_or_reject(
     if stored_size != source.size_bytes as u64 {
         return Err(ApiError::conflict(
             "Docker startup source size changed on replay",
+        ));
+    }
+    if record.get("status").and_then(Value::as_str) == Some("activating") {
+        // The same request still owns the temporary placeholder: preparation
+        // has not committed an accepted RunIntent yet. Report a typed,
+        // retryable in-progress state and never start a second activation.
+        // HTTP 409 keeps the host helper on its outcome-unknown path.
+        if existing.session.session_id != startup_session_id(request, source)
+            || existing.run.is_some()
+        {
+            return Err(ApiError::conflict_with_code(
+                "docker_startup_request_conflict",
+                "the activating Docker startup placeholder does not match this request identity",
+            ));
+        }
+        return Err(ApiError::conflict_with_code(
+            "docker_startup_activation_in_progress",
+            format!(
+                "Docker startup request `{}` is still preparing in session `{}`; no second run was started",
+                request.request_id, existing.session.session_id
+            ),
         ));
     }
     let run_id = record
@@ -1485,14 +1512,17 @@ async fn mark_startup_placeholder_failure(
     if snapshot.session.status != "activating" || snapshot.run.is_some() {
         return;
     }
-    let _ = apply_startup_failure_snapshot(
+    if !apply_startup_failure_snapshot(
         snapshot,
         context,
         state.current_live_session_epoch.load(Ordering::Acquire),
         request,
         loaded,
         error,
-    );
+    ) {
+        return;
+    }
+    publish_startup_failure(state, current).await;
 }
 
 async fn mark_startup_failure(
@@ -1506,14 +1536,40 @@ async fn mark_startup_failure(
     let Some(snapshot) = current.as_mut() else {
         return;
     };
-    let _ = apply_startup_failure_snapshot(
+    if !apply_startup_failure_snapshot(
         snapshot,
         context,
         state.current_live_session_epoch.load(Ordering::Acquire),
         request,
         loaded,
         error,
-    );
+    ) {
+        return;
+    }
+    publish_startup_failure(state, current).await;
+}
+
+/// Publish an applied startup failure to current-session subscribers after
+/// the write lock is released, so the workspace refreshes without polling.
+async fn publish_startup_failure(
+    state: &Arc<AppState>,
+    current: tokio::sync::RwLockWriteGuard<'_, Option<crate::types::SessionStateResponse>>,
+) {
+    let Some(snapshot) = current.as_ref() else {
+        return;
+    };
+    let display_revision = state.current_display_selection.read().await.revision;
+    let realtime =
+        crate::current_live_realtime_state_from_snapshot(state, snapshot, display_revision).await;
+    drop(current);
+    if let Err(publication_error) =
+        crate::publish_current_live_realtime_batch_changed(state, &realtime, false, 0).await
+    {
+        tracing::warn!(
+            error = %publication_error,
+            "failed to publish startup failure to current-session subscribers"
+        );
+    }
 }
 
 fn bounded_startup_error(message: &str) -> String {

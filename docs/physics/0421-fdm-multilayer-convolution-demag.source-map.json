@@ -34,6 +34,12 @@
   ],
   "equations": [
     {
+      "id": "eq-fdm-airbox-effective-observation",
+      "symbols": ["H_eff_air", "H_demag_air", "H_ext_air", "x_air", "t_air"],
+      "sources": ["airboxEffectiveComposition"],
+      "publication_anchor": "Source-only exterior observation; no new runtime or scientific qualification"
+    },
+    {
       "id": "eq-multilayer-demag-field",
       "symbols": ["Ncal_ds", "rd", "rs", "M_s", "dVs", "L"],
       "sources": ["continuousTheory"],
@@ -226,6 +232,11 @@
     }
   ],
   "symbols": [
+    {"id": "H_eff_air", "latex": "\\mathbf H_{\\mathrm{eff,air}}", "meaning": "complete exterior effective visualization field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_demag_air", "latex": "\\mathbf H_{\\mathrm{demag,air}}", "meaning": "demagnetizing field at the Airbox target", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_ext_air", "latex": "\\mathbf H_{\\mathrm{ext}}", "meaning": "resolved complete uniform Zeeman source", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "x_air", "latex": "\\mathbf x", "meaning": "target cell centre", "si_unit": "\\mathrm m"},
+    {"id": "t_air", "latex": "t", "meaning": "accepted observation time", "si_unit": "\\mathrm s"},
     {"id":"H_d","latex":"\\mathbf H_d","meaning":"target demagnetizing field","si_unit":"\\mathrm{A\\,m^{-1}}"},
     {"id":"Hprime_kl","latex":"\\mathbf H'_{k,l}","meaning":"discrete field at target cell $(k,l)$","si_unit":"\\mathrm{A\\,m^{-1}}"},
     {"id":"M_s","latex":"\\mathbf M_s","meaning":"source magnetization","si_unit":"\\mathrm{A\\,m^{-1}}"},
@@ -301,6 +312,13 @@
     {"id":"Nyz","latex":"N_{yz}","meaning":"off-diagonal yz component in Table I","si_unit":"1"}
   ],
   "sources": [
+    {
+      "id": "airboxEffectiveComposition",
+      "path": "crates/fullmag-runner/src/fdm/cpu/airbox_observation.rs",
+      "symbol": "compose_airbox_h_eff",
+      "responsibility": "Compose exterior H_demag plus resolved uniform external field after complete-source guards; shared CPU/CUDA artifact builder",
+      "evidence_status": "source-visible only; runtime, browser and scientific qualification NOT VERIFIED"
+    },
     {
       "id": "geometry-mesh-authoring",
       "path": "packages/fullmag-py/src/fullmag/world.py",
@@ -514,6 +532,20 @@
       "symbol": "volume_weighted_transfer_is_adjoint_with_active_mask",
       "responsibility": "checks volume adjointness and inactive-mask zeroing for scratch-to-native transfer",
       "evidence_status": "scoped transfer contract"
+    },
+    {
+      "id": "acceptedCudaAirboxObservation",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs",
+      "symbol": "materialize_airbox_observation_snapshot_gpu",
+      "responsibility": "target-only host volume transfer and native CUDA target-grid demag, preserving source engine identity",
+      "evidence_status": "source-visible only; runtime, parity and convergence NOT VERIFIED"
+    },
+    {
+      "id": "acceptedOriginalContextFields",
+      "path": "crates/fullmag-runner/src/accepted_materialization.rs",
+      "symbol": "materialize_captured_observables",
+      "responsibility": "bind original-context fields and energies to exact final accepted magnetization, layout, clock and lane",
+      "evidence_status": "source-visible only; no test, build or solver run"
     }
   ],
   "public_api": {

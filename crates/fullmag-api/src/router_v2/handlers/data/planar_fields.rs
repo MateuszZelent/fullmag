@@ -23,7 +23,7 @@ use crate::{
     preview::quantity_unit,
     router_v2::handlers::{
         data::fields::{
-            load_fdm_multilayer_airbox_carrier, persisted_hysteresis_magnetization_values,
+            is_fdm_multilayer_snapshot, load_fdm_multilayer_airbox_carrier_for_quantity, persisted_hysteresis_magnetization_values,
             resolved_fdm_multilayer_airbox_field, validate_hysteresis_snapshot_stage_scope,
         },
         data::resolved_spatial_field::{
@@ -586,7 +586,7 @@ async fn build_planar_field_from_source(
                 )
             })?
     } else if query.scope_kind.as_deref() == Some("airbox") {
-        match load_fdm_multilayer_airbox_carrier(snapshot).map_err(|reason| {
+        match load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, quantity_id).map_err(|reason| {
             ApiError::not_found(format!(
                 "multilayer FDM Airbox carrier unavailable: {reason}"
             ))
@@ -595,6 +595,11 @@ async fn build_planar_field_from_source(
                 resolved_fdm_multilayer_airbox_field(snapshot, quantity_id, n_comp, &carrier)?
             }
             None => {
+                if is_fdm_multilayer_snapshot(snapshot) {
+                    return Err(ApiError::not_found(format!(
+                        "quantity_not_materialized: Airbox field '{quantity_id}' is not published"
+                    )));
+                }
                 resolve_current_spatial_field(snapshot, quantity_id, n_comp)?.ok_or_else(|| {
                     ApiError::not_found(format!(
                         "quantity_not_materialized: field '{quantity_id}' is not published"

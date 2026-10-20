@@ -5250,6 +5250,22 @@ def _serve(extra: list[str]) -> int:
         _log_phase("gate", "complete", profile="linux-native-v1")
     else:
         _log_phase("gate", "skipped", reason="storage-profile")
+    from worker_cgroup_gate import wait_for_delegation
+    _log_phase("gate", "start", profile="worker-cgroup")
+    delegation = wait_for_delegation()
+    if delegation.get("state") == "deferred":
+        # A plain restart has no host launcher to delegate the new container
+        # cgroup. Serve the API without a delegated worker root: the runtime
+        # quota probe reports Unavailable and owner-bound admission stays
+        # fail-closed until a launcher run delegates this incarnation.
+        _log_phase(
+            "gate",
+            "deferred",
+            profile="worker-cgroup",
+            reason=str(delegation.get("reason", "restart-without-launcher")),
+        )
+    else:
+        _log_phase("gate", "complete", profile="worker-cgroup")
     environment = dict(os.environ)
     environment.update(
         {

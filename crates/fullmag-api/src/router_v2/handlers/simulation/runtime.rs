@@ -1875,11 +1875,14 @@ pub async fn get_solver_energies_current(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
+    if let Some(observation) = crate::accepted_field_materialization::current_energy_observation(snapshot) {
+        return Ok(Json(observation));
+    }
     let latest_row =
         latest_energy_row(snapshot).ok_or_else(|| ApiError::not_found("no solver energy data"))?;
 
     Ok(Json(SolverEnergyCurrentResource {
-        revision: snapshot.scalar_revision,
+        revision: snapshot.scalar_revision.saturating_add(snapshot.field_revision),
         step: latest_row.step,
         time_seconds: latest_row.time,
         exchange: latest_row.e_ex,
@@ -2190,6 +2193,36 @@ fn runtime_command_disabled_reason(
         return Some("Runtime state is unavailable.".into());
     };
     let state = RuntimeStatus::from_status_code(&effective_runtime_status_code(snapshot));
+    if crate::live_accepted_execution::docker_api_only_runtime() {
+        // Docker API-only accepted runtime: readiness mirrors the accepted
+        // command routing in `commands.rs`, which rejects Pause and routes
+        // Stop to durable task cancellation (including pre-claim states).
+        match kind {
+            "pause" => return Some(ACCEPTED_PAUSE_UNSUPPORTED_REASON.into()),
+            "stop" => return accepted_stop_disabled_reason(snapshot),
+            "compute_fields" | "compute_energies" => {
+                if snapshot.runtime_status.code == "imported_read_only"
+                    || snapshot.session.status == "closed" {
+                    return Some("This session is read-only.".into());
+                }
+                if super::remesh_admission::has_active_mesh_command(ledger) {
+                    return Some("A mesh command is already active.".into());
+                }
+                if has_active_compute_command(ledger) {
+                    return Some("A runtime command is already active.".into());
+                }
+                if !snapshot.run.as_ref().is_some_and(|run|
+                    matches!(run.status.as_str(), "completed" | "failed" | "cancelled")) {
+                    return Some("Accepted observations require a terminal run.".into());
+                }
+                if snapshot.latest_fields.get("m").and_then(|m| m.get("state_object_ref")).is_none() {
+                    return Some("Accepted state projection is pending.".into());
+                }
+                return None;
+            }
+            _ => {}
+        }
+    }
     match kind {
         "pause" => (state != RuntimeStatus::Running).then(|| "Runtime is not running.".into()),
         "resume" => (state != RuntimeStatus::Paused).then(|| "Runtime is not paused.".into()),
@@ -2201,6 +2234,41 @@ fn runtime_command_disabled_reason(
         }
         _ => Some("Unsupported runtime command.".into()),
     }
+}
+
+/// Reason prefix matches the rejection code published by the accepted Pause
+/// route so UI readiness and command admission stay one contract.
+const ACCEPTED_PAUSE_UNSUPPORTED_REASON: &str = "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published.";
+
+/// Accepted Stop is durable task cancellation: any non-terminal accepted run
+/// may be stopped, including waiting_for_compute/waiting_for_solve, FEM
+/// preparation, and queued pre-claim tasks. Mirrors
+/// `validate_accepted_command_admission_against_snapshot`.
+fn accepted_stop_disabled_reason(snapshot: &SessionStateResponse) -> Option<String> {
+    let session_status = snapshot.session.status.as_str();
+    if session_status == "activating" {
+        return Some("Startup activation has not published an accepted run yet.".into());
+    }
+    let effective = effective_runtime_status_code(snapshot);
+    if [effective.as_str(), session_status]
+        .into_iter()
+        .any(|status| matches!(status, "completed" | "failed" | "cancelled" | "closed"))
+    {
+        return Some("Runtime is not active.".into());
+    }
+    let Some(run) = snapshot.run.as_ref() else {
+        return Some("No durable accepted run is available to stop.".into());
+    };
+    if matches!(
+        run.status.as_str(),
+        "completed" | "succeeded" | "failed" | "cancelled" | "stopped"
+    ) {
+        return Some(format!(
+            "Accepted run is already terminal (`{}`).",
+            run.status
+        ));
+    }
+    None
 }
 
 fn runtime_compute_disabled_reason(

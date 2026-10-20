@@ -289,9 +289,21 @@ fn build_project_from_script(
     fs::write(&script_path, &script_bytes).map_err(|error| {
         ApiError::internal(format!("failed to write the private script copy: {error}"))
     })?;
+    // Both evaluations of the original read these accepted bytes, so a script
+    // that rewrites its own file cannot change what the second helper runs.
+    // `--script` stays the logical origin (asset root, `__file__`).
+    let source_snapshot = private_dir.join(".fullmag-source-snapshot.bin");
+    fs::write(&source_snapshot, &script_bytes).map_err(|error| {
+        ApiError::internal(format!("failed to write the private source snapshot: {error}"))
+    })?;
+    let source_snapshot_arg = source_snapshot.display().to_string();
 
     // 1. Export the scene. This executes the script: failure keeps nothing.
-    let export_args = helper_args("export-scene-document", &script_path, &[]);
+    let export_args = helper_args(
+        "export-scene-document",
+        &script_path,
+        &["--source-snapshot", &source_snapshot_arg],
+    );
     let scene_value = match run_script_helper(
         repo_root,
         &private_dir,
@@ -324,7 +336,13 @@ fn build_project_from_script(
         })?;
 
     // 2. Fidelity: a verdict, never an assumption.
-    let mut fidelity = check_round_trip(repo_root, &private_dir, &script_path, &scene_document);
+    let mut fidelity = check_round_trip(
+        repo_root,
+        &private_dir,
+        &script_path,
+        &source_snapshot,
+        &scene_document,
+    );
     if let Err(error) = validate_scene_document_for_authoring(&scene_document) {
         fidelity.notes.push(format!(
             "the exported scene does not pass authoring validation: {}",
@@ -426,6 +444,7 @@ fn check_round_trip(
     repo_root: &FsPath,
     private_dir: &FsPath,
     script_path: &FsPath,
+    source_snapshot: &FsPath,
     scene_document: &SceneDocument,
 ) -> ScriptFidelityResource {
     let mut fidelity = ScriptFidelityResource {
@@ -433,8 +452,13 @@ fn check_round_trip(
         round_trip: ScriptRoundTripState::NotChecked,
         notes: Vec::new(),
     };
-    let lowered_original = match lower_script(repo_root, private_dir, script_path, "original script")
-    {
+    let lowered_original = match lower_script(
+        repo_root,
+        private_dir,
+        script_path,
+        Some(source_snapshot),
+        "original script",
+    ) {
         Ok(value) => value,
         Err(message) => {
             fidelity.notes.push(format!(
@@ -458,8 +482,13 @@ fn check_round_trip(
         ));
         return fidelity;
     }
-    let lowered_rendered = match lower_script(repo_root, private_dir, &rendered_path, "rendered script")
-    {
+    let lowered_rendered = match lower_script(
+        repo_root,
+        private_dir,
+        &rendered_path,
+        None,
+        "rendered script",
+    ) {
         Ok(value) => value,
         Err(message) => {
             fidelity.round_trip = ScriptRoundTripState::Failed;
@@ -474,7 +503,7 @@ fn check_round_trip(
     if mismatches.is_empty() {
         fidelity.round_trip = ScriptRoundTripState::Verified;
         fidelity.notes.push(
-            "compared with the original script: geometry, materials, FDM grid, study dynamics and stages"
+            "compared with a second evaluation of the original script: geometry, materials, magnets and initial state, regions, FDM grid, FEM mesh policy, runtime request, study dynamics and stages"
                 .to_string(),
         );
     } else {
@@ -488,9 +517,15 @@ fn lower_script(
     repo_root: &FsPath,
     private_dir: &FsPath,
     script: &FsPath,
+    source_snapshot: Option<&FsPath>,
     label: &str,
 ) -> Result<Value, String> {
-    let args = helper_args("export-run-config", script, &["--skip-geometry-assets"]);
+    let snapshot_arg = source_snapshot.map(|path| path.display().to_string());
+    let mut extra = vec!["--skip-geometry-assets"];
+    if let Some(snapshot) = snapshot_arg.as_deref() {
+        extra.extend(["--source-snapshot", snapshot]);
+    }
+    let args = helper_args("export-run-config", script, &extra);
     match run_script_helper(repo_root, private_dir, &args, label) {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(stderr)) => Err(exception_summary(&stderr)),
@@ -601,6 +636,19 @@ fn stage_summary(stage: &Value) -> Value {
     })
 }
 
+/// Requested execution intent: backend, device, mode and precision, with
+/// `auto` kept verbatim.
+fn runtime_request_summary(document: &Value) -> Value {
+    let selection = pointer(document, "/ir/problem_meta/runtime_metadata/runtime_selection");
+    json!({
+        "requested_backend": pointer(document, "/ir/backend_policy/requested_backend"),
+        "execution_precision": pointer(document, "/ir/backend_policy/execution_precision"),
+        "device": selection.get("device"),
+        "device_index": selection.get("device_index"),
+        "execution_mode": selection.get("execution_mode"),
+    })
+}
+
 fn stage_list(document: &Value) -> Vec<Value> {
     pointer(document, "/stages")
         .as_array()
@@ -652,6 +700,40 @@ fn compare_lowered(original: &Value, rendered: &Value) -> Vec<String> {
         &without_zero_zeeman(pointer(original, "/ir/energy_terms")),
         &without_zero_zeeman(pointer(rendered, "/ir/energy_terms")),
         &[],
+    );
+    // Magnets carry the initial magnetization (preset, seed, parameters);
+    // names and generated references are compared through geometry/materials.
+    check(
+        "magnets and initial state",
+        pointer(original, "/ir/magnets"),
+        pointer(rendered, "/ir/magnets"),
+        &["name", "object_id", "region", "material"],
+    );
+    check(
+        "regions",
+        pointer(original, "/ir/regions"),
+        pointer(rendered, "/ir/regions"),
+        NAME_KEYS,
+    );
+    check(
+        "object regions",
+        pointer(original, "/ir/object_regions"),
+        pointer(rendered, "/ir/object_regions"),
+        NAME_KEYS,
+    );
+    check(
+        "runtime request",
+        &runtime_request_summary(original),
+        &runtime_request_summary(rendered),
+        &[],
+    );
+    // The FEM mesh source path is private to each evaluation; order, size and
+    // demag solver policy are the authored mesh policy.
+    check(
+        "FEM mesh policy",
+        pointer(original, "/ir/backend_policy/discretization_hints/fem"),
+        pointer(rendered, "/ir/backend_policy/discretization_hints/fem"),
+        &["mesh"],
     );
     if !legacy_single_stage {
         check(

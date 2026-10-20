@@ -1,4 +1,9 @@
-export type QuantityDimension = "length" | "angle" | "dimensionless";
+export type QuantityDimension =
+  | "angle"
+  | "dimensionless"
+  | "frequency"
+  | "length"
+  | "time";
 
 export type QuantityUnit =
   | "m"
@@ -10,6 +15,19 @@ export type QuantityUnit =
   | "deg"
   | "°"
   | "rad"
+  | "s"
+  | "ms"
+  | "us"
+  | "µs"
+  | "μs"
+  | "ns"
+  | "ps"
+  | "fs"
+  | "Hz"
+  | "kHz"
+  | "MHz"
+  | "GHz"
+  | "THz"
   | "1";
 
 export type QuantityParseStatus = "empty" | "incomplete" | "invalid" | "valid";
@@ -47,9 +65,35 @@ const UNIT_DEFINITIONS: Record<QuantityUnit, UnitDefinition> = {
   um: { dimension: "length", factorToSI: 1e-6 },
   "µm": { dimension: "length", factorToSI: 1e-6 },
   "μm": { dimension: "length", factorToSI: 1e-6 },
+  s: { dimension: "time", factorToSI: 1 },
+  ms: { dimension: "time", factorToSI: 1e-3 },
+  us: { dimension: "time", factorToSI: 1e-6 },
+  "µs": { dimension: "time", factorToSI: 1e-6 },
+  "μs": { dimension: "time", factorToSI: 1e-6 },
+  ns: { dimension: "time", factorToSI: 1e-9 },
+  ps: { dimension: "time", factorToSI: 1e-12 },
+  fs: { dimension: "time", factorToSI: 1e-15 },
+  Hz: { dimension: "frequency", factorToSI: 1 },
+  kHz: { dimension: "frequency", factorToSI: 1e3 },
+  MHz: { dimension: "frequency", factorToSI: 1e6 },
+  GHz: { dimension: "frequency", factorToSI: 1e9 },
+  THz: { dimension: "frequency", factorToSI: 1e12 },
 };
 
+// Longer suffixes first so "ms"/"ns" never match as "s" and "GHz" never as "Hz".
 const UNIT_SUFFIXES: readonly QuantityUnit[] = [
+  "THz",
+  "GHz",
+  "MHz",
+  "kHz",
+  "Hz",
+  "µs",
+  "μs",
+  "ms",
+  "us",
+  "ns",
+  "ps",
+  "fs",
   "µm",
   "μm",
   "deg",
@@ -59,6 +103,7 @@ const UNIT_SUFFIXES: readonly QuantityUnit[] = [
   "rad",
   "m",
   "°",
+  "s",
 ];
 
 const COMPLETE_NUMBER = /^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+-]?\d+)?$/;
@@ -68,6 +113,8 @@ const INCOMPLETE_EXPONENT =
 export function defaultQuantityUnit(dimension: QuantityDimension): QuantityUnit {
   if (dimension === "angle") return "rad";
   if (dimension === "dimensionless") return "1";
+  if (dimension === "time") return "s";
+  if (dimension === "frequency") return "Hz";
   return "m";
 }
 

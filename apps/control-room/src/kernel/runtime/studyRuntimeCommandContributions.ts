@@ -276,6 +276,17 @@ const ACTIVE_RUNTIME_COMMAND_STATUSES = new Set([
   "running",
 ]);
 
+// Runtime states in which no durable run can be stopped any more.
+const TERMINAL_RUNTIME_STATES: ReadonlySet<string> = new Set([
+  "cancelled",
+  "closed",
+  "closing",
+  "completed",
+  "failed",
+  "stopped",
+  "succeeded",
+]);
+
 function disabledWithoutApi(context: CommandContext): string | null {
   return context.api ? null : "Control-room API is unavailable.";
 }
@@ -331,6 +342,37 @@ function runtimeCommandDisabledReason(
     )
   ) {
     return "A runtime command is already active.";
+  }
+  // Accepted runtimes (Docker API-only) stop a durable run through task
+  // cancellation, which is legal before the solver runs: waiting for
+  // Compute/Solve, awaiting a command, or still preparing. The backend
+  // readiness is the single source of truth for that lifecycle, so a fresh
+  // enabled Stop control is honoured for any non-terminal local state.
+  if (
+    kind === "stop" &&
+    backendControl?.enabled === true &&
+    !staleQueue &&
+    !TERMINAL_RUNTIME_STATES.has(state)
+  ) {
+    return null;
+  }
+  // Accepted Docker runs expose these two postprocessing commands after a
+  // terminal result, even though the general command queue is no longer
+  // accepting commands. Honor only a fresh, explicit backend readiness entry;
+  // this does not enable Solve or any other mutation. Keep the field-data
+  // capability check because it describes whether the browser can consume it.
+  if (
+    (kind === "compute_fields" || kind === "compute_energies") &&
+    TERMINAL_RUNTIME_STATES.has(state) &&
+    state !== "closed" &&
+    state !== "closing" &&
+    backendControl?.enabled === true &&
+    !staleQueue &&
+    (kind !== "compute_fields" ||
+      resourceData<LiveStatusResource>(context, SESSION_STATUS_RESOURCE_KEY)
+        ?.capabilities.binary_fields === true)
+  ) {
+    return null;
   }
   const stateReason = runtimeCommandStateDisabledReason(context, kind, state);
   if (backendControl && !backendControl.enabled) {

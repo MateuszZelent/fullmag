@@ -854,6 +854,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 scalar_row_due: true,
                 terminal_field_snapshot: false,
                 finished: point_idx == sweep_values_mT.len() - 1,
+                magnetization_carrier: None,
             });
         }
     }
@@ -3276,6 +3277,7 @@ fn hysteresis_progress_update(
         scalar_row_due: false,
         terminal_field_snapshot: false,
         finished: false,
+        magnetization_carrier: None,
     }
 }
 
@@ -6356,6 +6358,7 @@ mod tests {
             scalar_row_due: false,
             terminal_field_snapshot: false,
             finished: false,
+            magnetization_carrier: None,
         };
 
         let annotated =

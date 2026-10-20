@@ -6,8 +6,10 @@ use fullmag_authoring::{
 use fullmag_ir::ExecutionPlanIR;
 use fullmag_runner::{
     AcceptedStateGeneration, AcceptedStateId, AcceptedStateRef, FdmCpuAcceptedStateSnapshotV1,
-    FdmGpuAcceptedStateSnapshotV1, RunResult, RunStatus, StepAction,
+    FdmGpuAcceptedStateSnapshotV1, FdmMultilayerObservationLane,
+    FdmMultilayerObservationSnapshotV1, RunResult, RunStatus, StepAction,
     FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE,
+    FDM_MULTILAYER_OBSERVATION_SNAPSHOT_FILE,
 };
 use fullmag_runtime_control::{AcceptedWorkerStep, ObservationSourcePayload, StudyOutputPayload};
 use fullmag_session::SessionStore;
@@ -27,6 +29,773 @@ const WORKER_EXECUTION_STARTED_RECEIPT: &str = "worker_execution_started.v1.json
 const WORKER_PRELAUNCH_FAILED_RECEIPT: &str = "worker_prelaunch_failed.v1.json";
 const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.json";
 const WORKER_EXECUTION_RECEIPT_SCHEMA: &str = "fullmag.accepted_worker_execution.v1";
+
+// Live observation channel (accepted worker -> current-live projector).
+//
+// The accepted worker is a separate process. It publishes a bounded,
+// overwritten observation sidecar in its private attempt directory; the API
+// projector reads that sidecar for a `Running` task and turns it into the
+// ordinary current-live resource revisions. The sidecar is not a durable
+// output: it is not CAS-pinned, never replaces the final accepted state, and is
+// removed when the solver returns. Transfer cost is bounded twice: the runner
+// copies magnetization from the device only every
+// `ACCEPTED_LIVE_FIELD_EVERY_N` steps, and the worker writes at most one
+// scalar header per `ACCEPTED_LIVE_SCALAR_MIN_INTERVAL` and one magnetization
+// payload per `ACCEPTED_LIVE_FIELD_MIN_INTERVAL`.
+pub(crate) const ACCEPTED_LIVE_OBSERVATION_FILE: &str = "live_observation.v1.json";
+pub(crate) const ACCEPTED_LIVE_OBSERVATION_SCHEMA: &str = "fullmag.accepted_live_observation.v1";
+const ACCEPTED_LIVE_MAGNETIZATION_PREFIX: &str = "live_observation_m.";
+const ACCEPTED_LIVE_MAGNETIZATION_SUFFIX: &str = ".f64le";
+pub(crate) const ACCEPTED_LIVE_FIELD_EVERY_N: u64 = 1;
+const ACCEPTED_LIVE_SCALAR_MIN_INTERVAL: Duration = Duration::from_millis(500);
+const ACCEPTED_LIVE_FIELD_MIN_INTERVAL: Duration = Duration::ZERO;
+pub(crate) const ACCEPTED_OBSERVABLE_CAPTURE_FILE: &str = "accepted_observables_capture.v1.json";
+const ACCEPTED_LIVE_MAX_FIELD_BYTES: u64 = 128 * 1024 * 1024;
+/// Upper bound for one live magnetization payload (2^21 samples = 48 MiB).
+pub(crate) const ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES: usize = 1 << 21;
+const ACCEPTED_LIVE_HEADER_MAX_BYTES: u64 = 256 * 1024;
+const ACCEPTED_LIVE_RECENT_CLOCK_SAMPLES: usize = 256;
+
+/// Bounded live observation header written by an accepted worker attempt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AcceptedLiveObservationHeader {
+    pub(crate) schema_version: String,
+    pub(crate) run_id: String,
+    pub(crate) task_id: String,
+    pub(crate) step_id: String,
+    pub(crate) attempt_id: String,
+    pub(crate) ownership_epoch: u64,
+    /// Requested realization lane, e.g. `fdm_gpu` or `fem_cpu`.
+    pub(crate) realization: String,
+    pub(crate) sequence: u64,
+    pub(crate) written_at_unix_ms: u64,
+    /// Bounded scalar runner statistics of the latest accepted step.
+    pub(crate) stats: fullmag_runner::StepStats,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) magnetization: Option<AcceptedLiveMagnetizationRef>,
+}
+
+/// Reference to the latest bounded live magnetization payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AcceptedLiveMagnetizationRef {
+    pub(crate) sequence: u64,
+    pub(crate) source_step: u64,
+    pub(crate) source_time_s: f64,
+    pub(crate) solver_dt_s: f64,
+    pub(crate) sample_count: u64,
+    pub(crate) file_name: String,
+    pub(crate) content_sha256: String,
+    /// Exact study layout of the pinned execution plan.
+    pub(crate) layout: serde_json::Value,
+    pub(crate) space_fingerprint: String,
+    /// Present only for native FEM local-node AoS payloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) fem_local_node_map: Option<fullmag_runner::LiveFemLocalNodeMapIdentity>,
+    /// Other complete quantities in the same binary payload and source frame.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) fields: Vec<AcceptedLiveFieldRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AcceptedLiveFieldRef {
+    pub(crate) quantity_id: String,
+    pub(crate) n_comp: usize,
+    /// Offset in f64 values, after the complete magnetization payload.
+    pub(crate) value_offset: u64,
+    pub(crate) value_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) spatial_kind: Option<String>,
+}
+
+/// Decoded live observation for one running accepted task attempt.
+#[derive(Debug, Clone)]
+pub(crate) struct AcceptedLiveObservation {
+    pub(crate) header: AcceptedLiveObservationHeader,
+    /// Present only when the payload referenced by the header was read and
+    /// verified in this poll.
+    pub(crate) magnetization_values: Option<Vec<[f64; 3]>>,
+    pub(crate) fields: Vec<fullmag_runner::AcceptedMaterializedField>,
+}
+
+struct AcceptedLiveMagnetizationDomain {
+    layout: serde_json::Value,
+    space_fingerprint: String,
+    sample_count: usize,
+    full_generation_bytes: u64,
+}
+
+/// Worker-side writer of the bounded live observation sidecar. Every failure
+/// is logged and swallowed: live observation never changes solver control,
+/// the durable Start/Stop protocol, or the final accepted outputs.
+pub(crate) struct AcceptedLiveObservationWriter {
+    attempt_output_dir: PathBuf,
+    run_id: String,
+    task_id: String,
+    step_id: String,
+    attempt_id: String,
+    ownership_epoch: u64,
+    realization: String,
+    magnetization_domain: Option<AcceptedLiveMagnetizationDomain>,
+    max_magnetization_bytes: u64,
+    sequence: u64,
+    magnetization_sequence: u64,
+    last_scalar_write: Option<Instant>,
+    last_field_write: Option<Instant>,
+    current_magnetization: Option<AcceptedLiveMagnetizationRef>,
+    recent_clock: std::collections::VecDeque<(u64, f64, f64)>,
+    reported_failure: bool,
+    terminal_spool: Option<crate::accepted_observation_spool::TerminalObservationSpool>,
+    terminal_storage_budget: u64,
+    terminal_field_budget: u64,
+}
+
+impl AcceptedLiveObservationWriter {
+    pub(crate) fn new(
+        attempt_output_dir: &Path,
+        accepted_step: &AcceptedWorkerStep,
+        execution_plan: &ExecutionPlanIR,
+        realization: String,
+    ) -> Self {
+        let mut magnetization_domain = accepted_live_magnetization_domain(execution_plan);
+        if let Some(domain) = magnetization_domain.as_mut() {
+            let lane = match realization.as_str() {
+                "fdm_cpu" => Some(fullmag_runner::AcceptedMaterializationLane::FdmCpu),
+                "fdm_gpu" => Some(fullmag_runner::AcceptedMaterializationLane::FdmGpu),
+                "fem_cpu" => Some(fullmag_runner::AcceptedMaterializationLane::FemCpu),
+                "fem_gpu" => Some(fullmag_runner::AcceptedMaterializationLane::FemGpu),
+                _ => None,
+            };
+            let components = lane.and_then(|lane| fullmag_runner::accepted_observation_quantity_ids(execution_plan, lane).ok())
+                .map(|ids| ids.iter().filter_map(|id| fullmag_quantities::quantity_spec(id))
+                    .map(|spec| u64::from(spec.n_comp)).sum::<u64>())
+                .unwrap_or(u64::MAX);
+            // Include the explicit m payload beside the full field generation.
+            domain.full_generation_bytes = (domain.sample_count as u64)
+                .saturating_mul(components.saturating_add(3)).saturating_mul(8);
+        }
+        Self {
+            attempt_output_dir: attempt_output_dir.to_path_buf(),
+            run_id: accepted_step.claim.run_id.as_str().to_owned(),
+            task_id: accepted_step.claim.task_id.as_str().to_owned(),
+            step_id: accepted_step.step_id.clone(),
+            attempt_id: accepted_step.claim.attempt_id.as_str().to_owned(),
+            ownership_epoch: accepted_step.claim.ownership_epoch.value(),
+            realization,
+            magnetization_domain,
+            // Two live payloads may coexist during replacement; keep both well
+            // inside the attempt storage budget reserved for real outputs.
+            max_magnetization_bytes: (accepted_step.claim.lease.budget.storage_bytes / 8)
+                .min(accepted_step.claim.lease.budget.memory_bytes / 8)
+                .min(ACCEPTED_LIVE_MAX_FIELD_BYTES),
+            sequence: 0,
+            magnetization_sequence: 0,
+            last_scalar_write: None,
+            last_field_write: None,
+            current_magnetization: None,
+            recent_clock: std::collections::VecDeque::new(),
+            reported_failure: false,
+            terminal_spool: None,
+            terminal_storage_budget: accepted_step.claim.lease.budget.storage_bytes / 4,
+            terminal_field_budget: accepted_step.claim.lease.budget.memory_bytes / 16,
+        }
+    }
+
+    /// Avoid requesting costly device-to-host snapshots when the bounded
+    /// observation writer cannot publish this plan's magnetization domain.
+    /// Scalar headers remain enabled independently of this cadence.
+    pub(crate) fn field_sampling_interval(&self) -> u64 {
+        let publishable = self.magnetization_domain.as_ref().is_some_and(|domain| {
+            domain.sample_count > 0
+                && domain.sample_count <= ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES
+                && u64::try_from(domain.sample_count.saturating_mul(3).saturating_mul(8))
+                    .is_ok_and(|bytes| bytes <= self.max_magnetization_bytes)
+        });
+        if publishable {
+            if self.magnetization_domain.as_ref().is_some_and(|domain| {
+                domain.full_generation_bytes <= self.max_magnetization_bytes
+            }) {
+                ACCEPTED_LIVE_FIELD_EVERY_N
+            } else {
+                // Keep the pre-existing bounded m/preview path for domains
+                // whose complete generation exceeds the admitted live budget.
+                100
+            }
+        } else {
+            u64::MAX
+        }
+    }
+
+    /// Observe one runner update. Always returns without blocking the solver
+    /// on a failed write.
+    pub(crate) fn observe(&mut self, update: &fullmag_runner::StepUpdate) {
+        if update.terminal_field_snapshot {
+            // Keep the original-context endpoint for recovery and later CAS
+            // binding. It is validated against m_final, never used as state.
+            if let Err(error) = self.write_terminal_capture(update) {
+                self.report_failure(&error);
+            }
+            // Fragments belong to the durable terminal channel. Publishing
+            // each fragment as a live generation would expose partial fields
+            // and duplicate expensive m writes after the integrator stopped.
+            return;
+        }
+        if update.finished {
+            // The final state is committed through the durable output path.
+            return;
+        }
+        let stats = &update.stats;
+        self.recent_clock.push_back((stats.step, stats.time, stats.dt));
+        while self.recent_clock.len() > ACCEPTED_LIVE_RECENT_CLOCK_SAMPLES {
+            self.recent_clock.pop_front();
+        }
+        let now = Instant::now();
+        let field_due = update.magnetization.is_some()
+            && self
+                .last_field_write
+                .is_none_or(|last| now.duration_since(last) >= ACCEPTED_LIVE_FIELD_MIN_INTERVAL);
+        let scalar_due = self
+            .last_scalar_write
+            .is_none_or(|last| now.duration_since(last) >= ACCEPTED_LIVE_SCALAR_MIN_INTERVAL);
+        if !field_due && !scalar_due {
+            return;
+        }
+        let mut staged_magnetization = None;
+        if field_due {
+            match self.write_magnetization(update) {
+                Ok(Some(reference)) => staged_magnetization = Some(reference),
+                Ok(None) => {}
+                Err(error) => self.report_failure(&error),
+            }
+        }
+        let previous_magnetization = staged_magnetization
+            .as_ref()
+            .and_then(|reference| self.current_magnetization.replace(reference.clone()));
+        if let Err(error) = self.write_header(stats) {
+            if let Some(staged) = staged_magnetization.as_ref() {
+                self.current_magnetization = previous_magnetization;
+                let _ = fs::remove_file(self.attempt_output_dir.join(&staged.file_name));
+            }
+            self.report_failure(&error);
+            return;
+        }
+        self.last_scalar_write = Some(now);
+        if staged_magnetization.is_some() {
+            self.last_field_write = Some(now);
+        }
+        if let Some(previous) = previous_magnetization {
+            // Best effort: the header no longer references this payload.
+            let _ = fs::remove_file(self.attempt_output_dir.join(previous.file_name));
+        }
+    }
+
+    /// Remove the live sidecar after the solver returned. The durable output
+    /// manifest is the only source of the final accepted state.
+    pub(crate) fn finish(self) {
+        let _ = fs::remove_file(self.attempt_output_dir.join(ACCEPTED_LIVE_OBSERVATION_FILE));
+        if let Some(reference) = self.current_magnetization {
+            let _ = fs::remove_file(self.attempt_output_dir.join(reference.file_name));
+        }
+    }
+
+    fn write_terminal_capture(&mut self, update: &fullmag_runner::StepUpdate) -> Result<()> {
+        crate::accepted_observation_spool::write_fragment(
+            &self.attempt_output_dir, &mut self.terminal_spool, update,
+            self.terminal_storage_budget, self.terminal_field_budget,
+        )
+    }
+
+    fn write_magnetization(
+        &mut self,
+        update: &fullmag_runner::StepUpdate,
+    ) -> Result<Option<AcceptedLiveMagnetizationRef>> {
+        let (Some(domain), Some(values)) =
+            (self.magnetization_domain.as_ref(), update.magnetization.as_ref())
+        else {
+            return Ok(None);
+        };
+        let Some(carrier) = update.magnetization_carrier.as_ref() else {
+            return Ok(None);
+        };
+        let source_clock = carrier.source_clock;
+        let source_step = source_clock.accepted_step;
+        let fem_local_node_map = match self.realization.as_str() {
+            "fem_cpu" | "fem_gpu" => {
+                let Some(map) = carrier.fem_local_node_map.as_ref() else {
+                    return Ok(None);
+                };
+                if map.mesh_generation_id.is_empty()
+                    || map.local_node_index_map_sha256.is_empty()
+                    || map.node_count != domain.sample_count
+                    || update.fem_mesh_generation_id.as_deref()
+                        != Some(map.mesh_generation_id.as_str())
+                {
+                    return Ok(None);
+                }
+                Some(map.clone())
+            }
+            "fdm_cpu" | "fdm_gpu" if carrier.fem_local_node_map.is_none() => None,
+            _ => return Ok(None),
+        };
+        if carrier.layout != domain.layout {
+            return Ok(None);
+        }
+        if domain.sample_count == 0
+            || domain.sample_count > ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES
+            || values.len() != domain.sample_count.saturating_mul(3)
+            || values.iter().any(|value| !value.is_finite())
+        {
+            // A live payload that does not exactly match the pinned study
+            // domain is not published; there is no interpolation or remap.
+            return Ok(None);
+        }
+        let byte_count = u64::try_from(values.len().saturating_mul(8)).unwrap_or(u64::MAX);
+        if byte_count > self.max_magnetization_bytes {
+            return Ok(None);
+        }
+        // An asynchronous native handoff may deliver magnetization from an
+        // earlier accepted step. Bind it to that step's own clock, or skip it.
+        if update
+            .stats
+            .magnetization_source_step
+            .is_some_and(|step| step != source_step)
+        {
+            return Ok(None);
+        }
+        let Some(&(_, source_time_s, solver_dt_s)) = self
+            .recent_clock
+            .iter()
+            .rev()
+            .find(|(step, _, _)| *step == source_step)
+        else {
+            return Ok(None);
+        };
+        let expected_dt = (solver_dt_s > 0.0).then_some(solver_dt_s);
+        if !source_time_s.is_finite()
+            || source_time_s < 0.0
+            || source_clock.time_seconds.to_bits() != source_time_s.to_bits()
+            || source_clock.dt_seconds != expected_dt
+            || source_clock.validate().is_err()
+        {
+            return Ok(None);
+        }
+        let capture = fullmag_runner::capture_solver_observables(update)
+            .map_err(anyhow::Error::msg)?;
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut fields = Vec::new();
+        if let Some(capture) = capture {
+            for field in capture.fields {
+                if field.quantity_id == "m" { continue; }
+                let field_bytes = (field.values.len() as u64).saturating_mul(8);
+                if (bytes.len() as u64).saturating_add(field_bytes) > self.max_magnetization_bytes {
+                    // A complete quantity is either present or absent. Never
+                    // truncate its samples to satisfy the observation budget.
+                    continue;
+                }
+                fields.push(AcceptedLiveFieldRef {
+                    quantity_id: field.quantity_id,
+                    n_comp: field.n_comp,
+                    value_offset: (bytes.len() / 8) as u64,
+                    value_count: field.values.len() as u64,
+                    spatial_kind: field.spatial_kind,
+                });
+                for value in field.values { bytes.extend_from_slice(&value.to_le_bytes()); }
+            }
+        }
+        let sequence = self.magnetization_sequence.saturating_add(1);
+        let file_name = format!(
+            "{ACCEPTED_LIVE_MAGNETIZATION_PREFIX}{sequence}{ACCEPTED_LIVE_MAGNETIZATION_SUFFIX}"
+        );
+        write_live_file_atomically(&self.attempt_output_dir, &file_name, &bytes)?;
+        self.magnetization_sequence = sequence;
+        Ok(Some(AcceptedLiveMagnetizationRef {
+            sequence,
+            source_step,
+            source_time_s,
+            solver_dt_s,
+            sample_count: domain.sample_count as u64,
+            file_name,
+            content_sha256: fullmag_application::study_artifact_content_sha256(&bytes),
+            layout: domain.layout.clone(),
+            space_fingerprint: domain.space_fingerprint.clone(),
+            fem_local_node_map,
+            fields,
+        }))
+    }
+
+    fn write_header(&mut self, stats: &fullmag_runner::StepStats) -> Result<()> {
+        let sequence = self.sequence.saturating_add(1);
+        let header = AcceptedLiveObservationHeader {
+            schema_version: ACCEPTED_LIVE_OBSERVATION_SCHEMA.to_owned(),
+            run_id: self.run_id.clone(),
+            task_id: self.task_id.clone(),
+            step_id: self.step_id.clone(),
+            attempt_id: self.attempt_id.clone(),
+            ownership_epoch: self.ownership_epoch,
+            realization: self.realization.clone(),
+            sequence,
+            written_at_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+                .unwrap_or(0),
+            stats: stats.clone(),
+            magnetization: self.current_magnetization.clone(),
+        };
+        let bytes = serde_json::to_vec(&header).context("serialize live observation header")?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > ACCEPTED_LIVE_HEADER_MAX_BYTES {
+            bail!("live observation header exceeds its bounded size");
+        }
+        write_live_file_atomically(&self.attempt_output_dir, ACCEPTED_LIVE_OBSERVATION_FILE, &bytes)?;
+        self.sequence = sequence;
+        Ok(())
+    }
+
+    fn report_failure(&mut self, error: &anyhow::Error) {
+        if !self.reported_failure {
+            self.reported_failure = true;
+            eprintln!(
+                "accepted worker live observation disabled for this publication: {error:#}"
+            );
+        }
+    }
+}
+
+fn accepted_live_magnetization_domain(
+    execution_plan: &ExecutionPlanIR,
+) -> Option<AcceptedLiveMagnetizationDomain> {
+    let (expected_backend, sample_count) = match &execution_plan.backend_plan {
+        fullmag_ir::BackendPlanIR::Fdm(fdm) => ("fdm", fdm.initial_magnetization.len()),
+        fullmag_ir::BackendPlanIR::FdmMultilayer(multilayer) => {
+            let layout = fullmag_runner::study_magnetization_layout_for_plan(execution_plan).ok()?;
+            let layout_layers = layout.get("layers")?.as_array()?;
+            if layout_layers.len() != multilayer.layers.len() {
+                return None;
+            }
+            let mut expected_offset = 0usize;
+            for (layer, descriptor) in multilayer.layers.iter().zip(layout_layers) {
+                let offset = descriptor.get("value_offset")?.as_u64()?;
+                let count = descriptor.get("value_count")?.as_u64()?;
+                if usize::try_from(offset).ok()? != expected_offset
+                    || usize::try_from(count).ok()? != layer.initial_magnetization.len()
+                    || descriptor.get("layer_id").and_then(serde_json::Value::as_str)
+                        != Some(layer.layer_id.as_str())
+                {
+                    return None;
+                }
+                expected_offset = expected_offset.checked_add(layer.initial_magnetization.len())?;
+            }
+            ("fdm_multilayer", expected_offset)
+        }
+        fullmag_ir::BackendPlanIR::Fem(fem) if fem.fe_order == 1 => {
+            ("fem", fem.mesh.nodes.len())
+        }
+        _ => return None,
+    };
+    let layout = fullmag_runner::study_magnetization_layout_for_plan(execution_plan).ok()?;
+    if layout.get("backend").and_then(serde_json::Value::as_str) != Some(expected_backend) {
+        return None;
+    }
+    let space_fingerprint = fullmag_application::study_state_layout_sha256(&layout).ok()?;
+    Some(AcceptedLiveMagnetizationDomain {
+        layout,
+        space_fingerprint,
+        sample_count,
+        full_generation_bytes: u64::MAX,
+    })
+}
+
+fn validate_accepted_worker_parameters(
+    parameters: &serde_json::Value,
+    accepted_step_id: &str,
+) -> Result<()> {
+    let parameters = parameters
+        .as_object()
+        .context("accepted worker RunSpec parameters must be an object")?;
+    for key in parameters.keys() {
+        if key != "live_workspace" && key != fullmag_session::ACCEPTED_RUN_START_POLICY_KEY {
+            bail!("accepted worker has no binding for RunSpec parameter `{key}`");
+        }
+    }
+
+    if let Some(policy) = parameters.get(fullmag_session::ACCEPTED_RUN_START_POLICY_KEY) {
+        let expected = serde_json::json!({
+            "schema_version": "accepted_run_start_policy.v1",
+            "mode": "manual",
+        });
+        if policy != &expected {
+            bail!("accepted worker received an unsupported run-start policy");
+        }
+    }
+
+    if let Some(live_workspace) = parameters.get("live_workspace") {
+        let live_workspace = live_workspace
+            .as_object()
+            .context("accepted worker live_workspace metadata must be an object")?;
+        const ALLOWED_LIVE_WORKSPACE_KEYS: &[&str] = &[
+            "api_instance_id",
+            "session_id",
+            "session_epoch",
+            "scene_revision",
+            "execution_input",
+            "command_id",
+            "request_idempotency_key",
+            "step_id",
+            "command",
+            "startup_source_sha256",
+        ];
+        if let Some(key) = live_workspace
+            .keys()
+            .find(|key| !ALLOWED_LIVE_WORKSPACE_KEYS.contains(&key.as_str()))
+        {
+            bail!("accepted worker has no binding for live_workspace field `{key}`");
+        }
+        for key in ["api_instance_id", "session_id"] {
+            if live_workspace
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                bail!("accepted worker live_workspace field `{key}` is invalid");
+            }
+        }
+        if live_workspace
+            .get("session_epoch")
+            .and_then(serde_json::Value::as_u64)
+            .is_none()
+            || live_workspace
+                .get("scene_revision")
+                .and_then(serde_json::Value::as_u64)
+                .is_none()
+        {
+            bail!("accepted worker live_workspace revision metadata is invalid");
+        }
+        if let Some(identity) = live_workspace.get("execution_input") {
+            let identity = identity
+                .as_object()
+                .context("accepted worker execution_input metadata must be an object")?;
+            if identity.len() != 2
+                || identity.get("schema_version").and_then(serde_json::Value::as_str)
+                    != Some("fullmag.scene_execution_input.v1")
+                || identity
+                    .get("sha256")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(|digest| {
+                        digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+            {
+                bail!("accepted worker execution_input identity is invalid");
+            }
+        }
+        for key in ["command_id", "request_idempotency_key"] {
+            if let Some(value) = live_workspace.get(key) {
+                if !value.is_null()
+                    && value
+                        .as_str()
+                        .is_none_or(|value| value.trim().is_empty())
+                {
+                    bail!("accepted worker live_workspace field `{key}` is invalid");
+                }
+            }
+        }
+        if let Some(step_id) = live_workspace.get("step_id") {
+            if !step_id.is_null()
+                && step_id.as_str().is_none_or(|step_id| step_id != accepted_step_id)
+            {
+                bail!("accepted worker live_workspace step binding does not match its task");
+            }
+        }
+        if let Some(command) = live_workspace.get("command") {
+            if !command.is_null() && !command.is_object() {
+                bail!("accepted worker live_workspace command metadata is invalid");
+            }
+        }
+        if let Some(source_digest) = live_workspace.get("startup_source_sha256") {
+            if !source_digest.is_null()
+                && source_digest.as_str().is_none_or(|digest| {
+                    digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            {
+                bail!("accepted worker startup source identity is invalid");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn write_live_file_atomically(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<()> {
+    let temporary = dir.join(format!(".{file_name}.tmp"));
+    {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temporary)
+            .with_context(|| format!("open live observation file `{}`", temporary.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("write live observation file `{}`", temporary.display()))?;
+    }
+    fs::rename(&temporary, dir.join(file_name))
+        .with_context(|| format!("publish live observation file `{file_name}`"))
+}
+
+/// Read the live observation of one running accepted task attempt. Returns
+/// `Ok(None)` when the attempt has not published one. The magnetization
+/// payload is read only when its sequence differs from
+/// `known_magnetization_sequence`; a payload that was replaced between the
+/// header and payload reads is treated as not yet available.
+pub(crate) fn read_accepted_live_observation(
+    store_root: &Path,
+    run_id: &str,
+    task_id: &str,
+    step_id: &str,
+    attempt_id: &str,
+    ownership_epoch: u64,
+    known_magnetization_sequence: Option<u64>,
+) -> Result<Option<AcceptedLiveObservation>> {
+    for value in [run_id, task_id, attempt_id] {
+        fullmag_session::repository_path::validate_store_id(value)
+            .context("accepted live observation identity is invalid")?;
+    }
+    let attempt_dir = store_root
+        .join("runs")
+        .join(run_id)
+        .join("worker-attempts")
+        .join(task_id)
+        .join(attempt_id)
+        .join(format!("epoch-{ownership_epoch}"));
+    match fs::symlink_metadata(attempt_dir.join(ACCEPTED_LIVE_OBSERVATION_FILE)) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("inspect accepted live observation"),
+    }
+    let header_bytes = match read_explicit_runner_artifact(
+        &attempt_dir,
+        ACCEPTED_LIVE_OBSERVATION_FILE,
+        ACCEPTED_LIVE_HEADER_MAX_BYTES,
+    ) {
+        Ok(bytes) => bytes,
+        // The worker may have removed the sidecar after the solver returned.
+        Err(_) => return Ok(None),
+    };
+    let header: AcceptedLiveObservationHeader = serde_json::from_slice(&header_bytes)
+        .context("decode accepted live observation header")?;
+    if header.schema_version != ACCEPTED_LIVE_OBSERVATION_SCHEMA
+        || header.run_id != run_id
+        || header.task_id != task_id
+        || header.step_id != step_id
+        || header.attempt_id != attempt_id
+        || header.ownership_epoch != ownership_epoch
+    {
+        bail!("accepted live observation identity differs from its task attempt");
+    }
+    let mut magnetization_values = None;
+    let mut fields = Vec::new();
+    if let Some(reference) = header.magnetization.as_ref() {
+        if known_magnetization_sequence != Some(reference.sequence) {
+            if let Some((values, decoded_fields)) = read_live_magnetization(&attempt_dir, reference)? {
+                magnetization_values = Some(values);
+                fields = decoded_fields;
+            }
+        }
+    }
+    Ok(Some(AcceptedLiveObservation {
+        header,
+        magnetization_values,
+        fields,
+    }))
+}
+
+#[allow(dead_code)]
+fn read_live_magnetization(
+    attempt_dir: &Path,
+    reference: &AcceptedLiveMagnetizationRef,
+) -> Result<Option<(Vec<[f64; 3]>, Vec<fullmag_runner::AcceptedMaterializedField>)>> {
+    if !reference.file_name.starts_with(ACCEPTED_LIVE_MAGNETIZATION_PREFIX)
+        || !reference.file_name.ends_with(ACCEPTED_LIVE_MAGNETIZATION_SUFFIX)
+        || reference.file_name.contains(['/', '\\'])
+    {
+        bail!("accepted live magnetization file name is invalid");
+    }
+    let sample_count = usize::try_from(reference.sample_count)
+        .ok()
+        .filter(|count| *count > 0 && *count <= ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES)
+        .context("accepted live magnetization sample count is outside its bound")?;
+    let mut value_count = sample_count * 3;
+    let mut seen = BTreeSet::new();
+    for field in &reference.fields {
+        let spec = fullmag_quantities::quantity_spec(&field.quantity_id)
+            .context("accepted live field quantity is unknown")?;
+        if field.quantity_id == "m" || !seen.insert(field.quantity_id.as_str())
+            || !matches!(spec.shape, fullmag_quantities::QuantityShape::VectorField | fullmag_quantities::QuantityShape::SpatialScalar)
+            || field.n_comp != spec.n_comp as usize || field.n_comp == 0
+            || usize::try_from(field.value_offset).ok() != Some(value_count)
+            || usize::try_from(field.value_count).ok() != sample_count.checked_mul(field.n_comp)
+        { bail!("accepted live quantity shape or binary offset is invalid"); }
+        value_count = value_count.checked_add(sample_count.checked_mul(field.n_comp)
+            .context("accepted live field value count overflows")?)
+            .context("accepted live binary value count overflows")?;
+    }
+    let expected_bytes = value_count.checked_mul(8).context("accepted live binary size overflows")?;
+    if expected_bytes as u64 > ACCEPTED_LIVE_MAX_FIELD_BYTES {
+        bail!("accepted live fields exceed their binary payload bound");
+    }
+    let bytes = match read_explicit_runner_artifact(
+        attempt_dir,
+        &reference.file_name,
+        expected_bytes as u64,
+    ) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(None),
+    };
+    if bytes.len() != expected_bytes
+        || fullmag_application::study_artifact_content_sha256(&bytes) != reference.content_sha256
+    {
+        // Replaced or truncated between the header and payload reads.
+        return Ok(None);
+    }
+    let mut values = Vec::with_capacity(sample_count);
+    for chunk in bytes[..sample_count * 24].chunks_exact(24) {
+        let component = |offset: usize| {
+            let mut raw = [0u8; 8];
+            raw.copy_from_slice(&chunk[offset..offset + 8]);
+            f64::from_le_bytes(raw)
+        };
+        let value = [component(0), component(8), component(16)];
+        if value.iter().any(|item| !item.is_finite()) {
+            bail!("accepted live magnetization contains a non-finite sample");
+        }
+        values.push(value);
+    }
+    let backend = reference.layout.get("backend").and_then(serde_json::Value::as_str)
+        .context("accepted live field layout has no backend")?;
+    let (carrier_id, role) = match backend {
+        "fdm" => ("fdm:magnetic", "magnetic"),
+        "fdm_multilayer" => ("fdm_multilayer:native_layers", "layer_native"),
+        "fem" => ("fem:local_nodes", "magnetic"),
+        _ => bail!("accepted live field backend is invalid"),
+    };
+    let mut fields = Vec::with_capacity(reference.fields.len());
+    for field in &reference.fields {
+        let start = usize::try_from(field.value_offset)?.checked_mul(8).context("field offset overflows")?;
+        let len = usize::try_from(field.value_count)?.checked_mul(8).context("field length overflows")?;
+        let values = bytes[start..start + len].chunks_exact(8).map(|chunk| {
+            let mut raw = [0u8; 8]; raw.copy_from_slice(chunk); f64::from_le_bytes(raw)
+        }).collect::<Vec<_>>();
+        if values.iter().any(|value| !value.is_finite()) { bail!("accepted live field contains nonfinite values"); }
+        fields.push(fullmag_runner::AcceptedMaterializedField {
+            quantity_id: field.quantity_id.clone(), carrier_id: carrier_id.into(), role: role.into(),
+            n_comp: field.n_comp, values, layout: reference.layout.clone(),
+            spatial_kind: field.spatial_kind.clone(),
+        });
+    }
+    Ok(Some((values, fields)))
+}
 
 // Claim validation is read-only and idempotent, but it can briefly contend
 // with the supervisor heartbeat writer. Keep this retry local to claim
@@ -531,6 +1300,16 @@ fn accepted_state_ref_from_runner_snapshot(
     accepted_step: &AcceptedWorkerStep,
     required_for_supported_lane: bool,
 ) -> Result<Option<AcceptedStateRef>> {
+    if matches!(
+        &accepted_step.execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::FdmMultilayer(_)
+    ) {
+        return accepted_fdm_multilayer_observation_state_ref(
+            attempt_output_dir,
+            accepted_step,
+            required_for_supported_lane,
+        );
+    }
     let fullmag_ir::BackendPlanIR::Fdm(fdm_plan) = &accepted_step.execution_plan.backend_plan
     else {
         return Ok(None);
@@ -629,6 +1408,154 @@ fn accepted_state_ref_from_runner_snapshot(
         .validate()
         .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("validate accepted FDM {requested_device} state reference"))?;
+    Ok(Some(reference))
+}
+
+fn accepted_fdm_multilayer_observation_state_ref(
+    attempt_output_dir: &Path,
+    accepted_step: &AcceptedWorkerStep,
+    required_for_supported_lane: bool,
+) -> Result<Option<AcceptedStateRef>> {
+    let requested_device = accepted_step
+        .resolved_input
+        .requested_execution
+        .device
+        .as_str();
+    let snapshot_path = attempt_output_dir.join(FDM_MULTILAYER_OBSERVATION_SNAPSHOT_FILE);
+    match fs::symlink_metadata(&snapshot_path) {
+        Ok(_) => {}
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound && !required_for_supported_lane =>
+        {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspect FDM multilayer observation snapshot `{}`",
+                    snapshot_path.display()
+                )
+            });
+        }
+    }
+    let snapshot_bytes = read_explicit_runner_artifact(
+        attempt_output_dir,
+        FDM_MULTILAYER_OBSERVATION_SNAPSHOT_FILE,
+        64 * 1024,
+    )
+    .context("read FDM multilayer observation snapshot")?;
+    let snapshot: FdmMultilayerObservationSnapshotV1 =
+        serde_json::from_slice(&snapshot_bytes)
+            .context("decode FDM multilayer observation snapshot")?;
+    snapshot
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .context("validate FDM multilayer observation snapshot")?;
+    let expected_lane = match requested_device {
+        "cpu" => FdmMultilayerObservationLane::Cpu,
+        "gpu" => FdmMultilayerObservationLane::Gpu,
+        _ => return Ok(None),
+    };
+    if snapshot.execution_lane != expected_lane {
+        bail!(
+            "accepted FDM multilayer observation has unsupported requested/resolved lane binding ({requested_device}, {})",
+            snapshot.execution_engine
+        );
+    }
+
+    let canonical_layout = fullmag_runner::study_magnetization_layout_for_plan(
+        &accepted_step.execution_plan,
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))
+    .context("resolve canonical accepted FDM multilayer state layout")?;
+    let state_bytes = read_explicit_runner_artifact(
+        attempt_output_dir,
+        RUNNER_FINAL_STATE_FILE,
+        accepted_step.claim.lease.budget.storage_bytes,
+    )
+    .context("read FDM multilayer terminal magnetization artifact")?;
+    let decoded = fullmag_application::decode_study_artifact_bytes(
+        "state",
+        fullmag_application::STUDY_MAGNETIZATION_CODEC_ID,
+        fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION,
+        &state_bytes,
+    )
+    .context("decode FDM multilayer terminal magnetization artifact")?;
+    let DecodedStudyArtifact::MagnetizationState(state) = decoded else {
+        bail!("FDM multilayer state codec did not produce magnetization");
+    };
+    let state_engine = state
+        .provenance
+        .get("execution_engine")
+        .and_then(serde_json::Value::as_str)
+        .context("FDM multilayer terminal magnetization has no actual execution engine")?;
+    let lossy_fallback = state
+        .provenance
+        .get("lossy_fallback_used")
+        .and_then(serde_json::Value::as_bool);
+    if state_engine != snapshot.execution_engine
+        || state
+            .provenance
+            .get("resolved_fallback")
+            .is_some_and(|value| !value.is_null())
+        || lossy_fallback != Some(false)
+    {
+        bail!("FDM multilayer terminal magnetization has a different or fallback execution identity");
+    }
+    if state.layout != canonical_layout {
+        bail!("FDM multilayer terminal magnetization layout differs from the accepted plan");
+    }
+    fullmag_runner::materialize_study_magnetization_input(
+        &accepted_step.execution_plan,
+        &state.layout,
+        &state.values,
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))
+    .context("validate exact FDM multilayer terminal sample count and layout")?;
+    snapshot
+        .validate_against(&state.layout, &state.values)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .context("bind FDM multilayer observation snapshot to terminal magnetization")?;
+    let state_dt = (state.solver_dt_s > 0.0).then_some(state.solver_dt_s);
+    if snapshot.clock.accepted_step != state.step
+        || snapshot.clock.time_seconds.to_bits() != state.time_s.to_bits()
+        || snapshot.clock.dt_seconds.map(f64::to_bits) != state_dt.map(f64::to_bits)
+    {
+        bail!("FDM multilayer observation clock differs from terminal magnetization artifact");
+    }
+
+    let plan_digest = format!(
+        "sha256:{}",
+        fullmag_session::canonical_json_sha256(&serde_json::json!({
+            "schema_version": "fullmag.accepted-state-plan.v1",
+            "problem": &accepted_step.problem,
+            "execution_plan": &accepted_step.execution_plan,
+            "requested_execution": &accepted_step.resolved_input.requested_execution,
+        }))
+    );
+    let reference = AcceptedStateRef {
+        id: AcceptedStateId {
+            run_id: accepted_step.claim.run_id.as_str().to_string(),
+            stage_id: Some(accepted_step.step_id.clone()),
+            accepted_step: snapshot.clock.accepted_step,
+            clock_digest: snapshot.clock_digest,
+            state_digest: snapshot.state_digest,
+            domain_digest: accepted_step
+                .resolved_input
+                .preparation
+                .plan_fingerprint
+                .clone(),
+            plan_digest,
+        },
+        generation: AcceptedStateGeneration {
+            runtime_epoch: accepted_step.claim.ownership_epoch.value(),
+            accepted_revision: snapshot.clock.accepted_step,
+        },
+    };
+    reference
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .context("validate accepted FDM multilayer observation state reference")?;
     Ok(Some(reference))
 }
 
@@ -1327,6 +2254,9 @@ pub(crate) fn execute_accepted_worker_start(
     if study_step.outputs.iter().any(|port| port.data_kind == StudyPortDataKind::Artifact) {
         bail!("legacy solver steps cannot publish an inspection artifact");
     }
+    // Validate the same bounded RunSpec metadata before backend dispatch;
+    // FEM must not bypass the live-workspace/start-policy binding guard.
+    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id)?;
     if request.backend == "fem" {
         crate::accepted_fem_study_worker::validate_declared_outputs(&study_step.outputs)
             .context("validate accepted FEM output contract before recovery or reservation")?;
@@ -1347,11 +2277,7 @@ pub(crate) fn execute_accepted_worker_start(
     {
         bail!("accepted worker currently supports only FDM CPU/GPU double strict");
     }
-    if !specification
-        .parameters
-        .as_object()
-        .is_some_and(|values| values.is_empty())
-        || !specification.seeds.is_empty()
+    if !specification.seeds.is_empty()
         || !accepted_step.problem.problem_meta.seeds.is_empty()
     {
         bail!("accepted worker has no binding for RunSpec parameters or seeds");
@@ -1382,10 +2308,22 @@ pub(crate) fn execute_accepted_worker_start(
         || accepted_step.execution_plan.common.execution_mode != fullmag_ir::ExecutionMode::Strict
         || !matches!(
             &accepted_step.execution_plan.backend_plan,
-            fullmag_ir::BackendPlanIR::Fdm(_)
+            fullmag_ir::BackendPlanIR::Fdm(_) | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
         )
     {
-        bail!("accepted worker execution plan is outside the FDM CPU/GPU double strict lanes");
+        bail!(
+            "accepted worker execution plan is outside the supported FDM/FDM multilayer CPU/GPU double strict lanes"
+        );
+    }
+    if let fullmag_ir::BackendPlanIR::FdmMultilayer(plan) =
+        &accepted_step.execution_plan.backend_plan
+    {
+        fullmag_runner::validate_accepted_fdm_multilayer_execution_lane(
+            plan,
+            request.device.as_str(),
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .context("validate accepted FDM multilayer lane before attempt reservation")?;
     }
     if let Ok(value) = std::env::var("FULLMAG_FDM_EXECUTION") {
         let normalized = value.replace("cuda", "gpu");
@@ -1488,7 +2426,14 @@ pub(crate) fn execute_accepted_worker_start(
     let storage_attempt_dir = attempt_output_dir.clone();
     let execution: Result<AcceptedRunnerExecution> = (|| {
         let display_selection = fullmag_runner::DisplaySelectionState::default;
-        let result =
+        let mut live_observation = AcceptedLiveObservationWriter::new(
+            &attempt_output_dir,
+            accepted_step,
+            &execution_plan,
+            format!("fdm_{}", request.device),
+        );
+        let field_sampling_interval = live_observation.field_sampling_interval();
+        let runner_result =
         fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
             &problem,
             &execution_plan,
@@ -1496,12 +2441,19 @@ pub(crate) fn execute_accepted_worker_start(
             until_seconds,
             &attempt_output_dir,
             storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
-            u64::MAX,
+            field_sampling_interval,
             &display_selection,
             interrupt_requested,
             false,
-            |_| StepAction::Continue,
-        )
+            |update| {
+                live_observation.observe(&update);
+                StepAction::Continue
+            },
+        );
+        // Keep observation cleanup on both the successful and error return
+        // paths. The sidecar never becomes an accepted output.
+        live_observation.finish();
+        let result = runner_result
         .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("execute accepted FDM {} runner plan", request.device))?;
         if result.status == RunStatus::Cancelled {
@@ -2349,6 +3301,13 @@ fn apply_accepted_start_effect(
         || durable_execution.accepted_state_ref != execution.accepted_state_ref
     {
         bail!("worker receipt recovery differs from the completed runner output");
+    }
+    // Evaluate immutable terminal observables while this process still owns
+    // the solver's resource lease. HTTP handlers only adopt the CAS bundle.
+    if !control.interrupt_requested.load(Ordering::Acquire) {
+        crate::accepted_field_materialization::prepare_and_publish(
+            store, accepted, &accepted_step, &durable_execution,
+        )?;
     }
     if control.interrupt_requested.load(Ordering::Acquire) {
         let control_result = finish_worker_control(store, claim, control)?;

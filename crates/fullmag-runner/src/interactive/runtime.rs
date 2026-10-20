@@ -85,6 +85,7 @@ pub(crate) fn build_atomic_terminal_update(
         scalar_row_due: true,
         terminal_field_snapshot: false,
         finished: true,
+        magnetization_carrier: None,
     }))
 }
 

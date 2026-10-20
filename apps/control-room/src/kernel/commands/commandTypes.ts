@@ -54,10 +54,47 @@ export interface CommandContext {
   isCurrentSessionScope?: () => boolean;
   selection?: SelectionController;
   sourceDetail?: string;
+  /**
+   * Who presents the outcome to the user. `local` means the invoking surface
+   * renders the result inline (e.g. an Inspector status line); `foreground`
+   * routes failures, disabled/missing admissions and pending ACKs to the shell
+   * feedback presenter. When absent it is derived from `source`
+   * (see `defaultCommandFeedbackOwner`).
+   */
+  feedback?: CommandFeedbackOwner;
   visualization?: ObjectVisualizationController;
   visualizationSync?: VisualizationRegistrySyncController;
   /** Canonical target resolved by a UI surface with scene and mesh provenance. */
   visualizationTarget?: VisualizationTargetRef | null;
+}
+
+export type CommandFeedbackOwner = "foreground" | "local";
+
+/** Terminal outcome of one `CommandRegistry.execute` invocation. */
+export type CommandOutcomeStatus =
+  | "cancelled"
+  | "completed"
+  | "disabled"
+  | "failed"
+  | "missing"
+  | "pending";
+
+const LOCALLY_PRESENTED_SOURCES = new Set<CommandContext["source"]>([
+  "analysis-plots",
+  "inspector",
+  "live-charts",
+  "test",
+]);
+
+/**
+ * Surfaces that render command results inline own their presentation; menu,
+ * ribbon, shortcut, palette and explorer invocations have no inline result
+ * surface, so their outcomes are foreground feedback.
+ */
+export function defaultCommandFeedbackOwner(
+  source: CommandContext["source"],
+): CommandFeedbackOwner {
+  return LOCALLY_PRESENTED_SOURCES.has(source) ? "local" : "foreground";
 }
 
 export interface CommandResult {

@@ -79,14 +79,14 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
       <div className="fm-about-inspector">
         {/* Header */}
         <div className="fm-about-inspector__head">
-          <div className="fm-about-hero__logo" style={{ width: 40, height: 40 }}>
+          <div className="fm-about-hero__logo fm-about-hero__logo--compact">
             <Sparkles size={20} />
           </div>
           <div>
-            <h2 style={{ margin: 0, fontSize: "14px", fontWeight: "bold", color: "var(--fm-text-primary)" }}>
+            <h2 className="fm-about-inspector__title">
               FullMag
             </h2>
-            <div style={{ display: "flex", gap: "6px", alignItems: "center", marginTop: "2px" }}>
+            <div className="fm-about-inspector__badges">
               <span className="fm-start-badge">v0.1.0</span>
               <span className="fm-start-badge fm-start-badge--fem">Hybrid</span>
             </div>
@@ -98,11 +98,11 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
           <h3 className="fm-about-inspector__card-title">Quick Actions</h3>
           <div className="fm-about-inspector__btn-group">
             <Button onClick={handleCopyBibtex} size="sm" type="button" variant="secondary">
-              {copiedBibtex ? <Check size={14} style={{ color: "var(--fm-success)" }} /> : <Copy size={14} />}
+              {copiedBibtex ? <Check size={14} className="fm-about-icon--success" /> : <Copy size={14} />}
               {copiedBibtex ? "BibTeX Copied!" : "Copy BibTeX"}
             </Button>
             <Button onClick={handleCopyDiagnostics} size="sm" type="button" variant="secondary">
-              {copiedDiag ? <Check size={14} style={{ color: "var(--fm-success)" }} /> : <Cpu size={14} />}
+              {copiedDiag ? <Check size={14} className="fm-about-icon--success" /> : <Cpu size={14} />}
               {copiedDiag ? "Diagnostics Copied!" : "Copy Diagnostics"}
             </Button>
             <Button
@@ -120,35 +120,35 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
         {/* Compute & Runtime Probe */}
         <div className="fm-about-inspector__card">
           <h3 className="fm-about-inspector__card-title">Runtime Environment</h3>
-          <dl className="fm-about-spec-row" style={{ margin: 0 }}>
+          <dl className="fm-about-spec-row fm-about-flush">
             <dt>Platform Host</dt>
             <dd>{tauriInvoke() ? "Desktop (Tauri)" : "Web Browser"}</dd>
           </dl>
-          <dl className="fm-about-spec-row" style={{ margin: 0 }}>
+          <dl className="fm-about-spec-row fm-about-flush">
             <dt>CPU Threads</dt>
             <dd>{compute ? `${compute.cpuThreads} threads` : "Probing..."}</dd>
           </dl>
-          <dl className="fm-about-spec-row" style={{ margin: 0 }}>
+          <dl className="fm-about-spec-row fm-about-flush">
             <dt>GPU Device</dt>
-            <dd style={{ maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <dd className="fm-about-spec-ellipsis">
               {gpu ? gpu.name : "None (CPU only)"}
             </dd>
           </dl>
           {gpu?.cudaVersion && (
-            <dl className="fm-about-spec-row" style={{ margin: 0 }}>
+            <dl className="fm-about-spec-row fm-about-flush">
               <dt>CUDA Version</dt>
               <dd>CUDA {gpu.cudaVersion}</dd>
             </dl>
           )}
           {build && (
             <>
-              <dl className="fm-about-spec-row" style={{ margin: 0 }}>
+              <dl className="fm-about-spec-row fm-about-flush">
                 <dt>Build Target</dt>
                 <dd>
                   {build.os} / {build.arch} ({build.profile})
                 </dd>
               </dl>
-              <dl className="fm-about-spec-row" style={{ margin: 0 }}>
+              <dl className="fm-about-spec-row fm-about-flush">
                 <dt>Schema Version</dt>
                 <dd>{build.projectSchema}</dd>
               </dl>
@@ -159,14 +159,14 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
         {/* Project Leadership & Coordination */}
         <div className="fm-about-inspector__card">
           <h3 className="fm-about-inspector__card-title">Scientific Project</h3>
-          <div style={{ fontSize: "12px", color: "var(--fm-text-secondary)", lineHeight: 1.45 }}>
-            <p style={{ margin: "0 0 6px" }}>
+          <div className="fm-about-inspector__body">
+            <p className="fm-about-inspector__para">
               <strong>Coordination:</strong> {FULLMAG_COORDINATION}
             </p>
-            <p style={{ margin: "0 0 6px" }}>
+            <p className="fm-about-inspector__para">
               <strong>EU Grant:</strong> MSCA No. {FULLMAG_GRANT_INFO.grantNumber} ({FULLMAG_GRANT_INFO.projectAcronym})
             </p>
-            <p style={{ margin: 0, color: "var(--fm-start-meta)", fontSize: "11px" }}>
+            <p className="fm-about-inspector__fineprint">
               One study model · FDM & FEM engines · Explicit provenance
             </p>
           </div>

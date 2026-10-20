@@ -214,7 +214,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
     native: &NativeStackedCudaPlan,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     let mut backend = NativeFdmBackend::create(&native.combined_plan)?;
@@ -300,7 +300,12 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
             || field_schedules
                 .iter()
                 .any(|schedule| is_due(native_stats.time, schedule.next_time))
-            || live.is_some()
+            || live.as_ref().is_some_and(|(_, field_every_n, _, _)| {
+                crate::types::fdm_multilayer_live_field_due(
+                    native_stats.step,
+                    *field_every_n,
+                )
+            })
             || plan.relaxation.is_some();
         let observables = if need_observables {
             Some(observe_native_stacked_cuda(&backend, native)?)
@@ -331,18 +336,32 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
                 &mut field_schedules,
                 &mut artifacts,
             )?;
-            if let Some((_, on_step)) = live.as_mut() {
+            if let Some((_, field_every_n, layout, on_step)) = live.as_mut() {
+                let magnetization = crate::types::fdm_multilayer_live_field_due(
+                    stats.step,
+                    *field_every_n,
+                )
+                .then(|| flatten_vectors(&observables.magnetization));
+                let magnetization_carrier = magnetization.as_ref().and_then(|_| {
+                    crate::types::fdm_multilayer_live_magnetization_carrier(*layout, &stats)
+                });
                 let action = on_step(StepUpdate {
                     coupled_checkpoint: None,
                     stats: stats.clone(),
                     grid: native.global_grid,
                     fem_mesh_generation_id: None,
-                    magnetization: None,
+                    magnetization,
                     preview_field: None,
                     cached_preview_fields: None,
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
                     scalar_row_due: false,
                     terminal_field_snapshot: false,
                     finished: false,
+                    magnetization_carrier,
                 });
                 match action {
                     StepAction::Continue => {}
@@ -354,7 +373,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
                     }
                 }
             }
-        } else if let Some((_, on_step)) = live.as_mut() {
+        } else if let Some((_, _, _, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
                 coupled_checkpoint: None,
                 stats: stats.clone(),
@@ -363,9 +382,15 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
                 magnetization: None,
                 preview_field: None,
                 cached_preview_fields: None,
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
                 scalar_row_due: false,
                 terminal_field_snapshot: false,
                 finished: false,
+                magnetization_carrier: None,
             });
             match action {
                 StepAction::Continue => {}

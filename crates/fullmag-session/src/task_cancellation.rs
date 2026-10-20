@@ -254,22 +254,47 @@ impl SessionStore {
             }
         };
 
+        // This scan intentionally runs without the session writer: callers
+        // such as runtime reconciliation may already hold it, and the writer
+        // lease is not reentrant. Instead the scan tolerates exactly the
+        // transient states that `atomic_write` legitimately produces in this
+        // directory while a concurrent writer publishes an intent: a
+        // `.<uuid-v4>.part` staging file, and that staging file vanishing
+        // (renamed or removed) between readdir and metadata. Every other
+        // unknown entry is still rejected.
         let mut task_ids = Vec::new();
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
+            let filename = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("non-UTF8 task cancellation intent filename"))?;
+            let staging = is_atomic_write_staging_filename(&filename);
             reject_link(&path)?;
-            let metadata = fs::symlink_metadata(&path)?;
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if staging && error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "reading task cancellation intent entry metadata {}",
+                            path.display()
+                        )
+                    });
+                }
+            };
             if !metadata.is_file() {
                 bail!(
                     "task cancellation intent entry is not a regular file: {}",
                     path.display()
                 );
             }
-            let filename = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| anyhow::anyhow!("non-UTF8 task cancellation intent filename"))?;
+            if staging {
+                // Unpublished staging bytes are never an intent; the final
+                // `<task_id>.json` name is the only publication.
+                continue;
+            }
             let task_id = filename.strip_suffix(".json").with_context(|| {
                 format!("invalid task cancellation intent filename `{filename}`")
             })?;
@@ -525,6 +550,22 @@ fn validate_replay_scope(
 
 fn task_cancellation_intent_relative_path(run_id: &str, task_id: &str) -> String {
     format!("runs/{run_id}/task_cancellation_intents/{task_id}.json")
+}
+
+/// Match only the unique sibling staging name created by
+/// `durability::atomic_write` (`.<hyphenated uuid v4>.part`). Any other
+/// non-`.json` name remains an unknown entry and is rejected by the scanner.
+fn is_atomic_write_staging_filename(filename: &str) -> bool {
+    let Some(stem) = filename
+        .strip_prefix('.')
+        .and_then(|rest| rest.strip_suffix(".part"))
+    else {
+        return false;
+    };
+    stem.len() == 36
+        && uuid::Uuid::parse_str(stem)
+            .map(|uuid| uuid.get_version_num() == 4 && uuid.hyphenated().to_string() == stem)
+            .unwrap_or(false)
 }
 
 fn checked_optional_directory(

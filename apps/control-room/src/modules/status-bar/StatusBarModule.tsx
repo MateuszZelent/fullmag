@@ -14,7 +14,10 @@ import {
 import {
   formatRuntimeStateLabel,
   resolveEffectiveRuntimeState,
+  resolveRuntimeUserSolvePhase,
 } from "@/kernel/runtime/runtimeStateDisplay";
+import { useAwaitingComputeCommand } from "@/kernel/runtime/useAwaitingComputeCommand";
+import { Button } from "@/shared/ui/Button";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 
 import {
@@ -99,10 +102,23 @@ export default function StatusBarModule() {
     detailedRuntimeState: mounted ? solverStatus.data?.runtime_state : null,
     sessionSolverState: mounted ? solverState : null,
   });
+  const userSolvePhase = mounted
+    ? resolveRuntimeUserSolvePhase({
+        detailedRuntimeState: solverStatus.data?.runtime_state,
+        runStatus: currentRun.data?.status,
+        runStatusReason: currentRun.data?.status_reason,
+        sessionSolverState: solverState,
+      })
+    : null;
   const engine = buildStatusBarEngineModel(
     mounted ? currentRun.data : null,
     mounted ? runtimeState : null,
+    userSolvePhase,
   );
+  const compute = useAwaitingComputeCommand({
+    enabled: engine.awaitingCompute,
+    sourceDetail: "status-bar.awaiting-compute",
+  });
   const sessionState = mounted
     ? formatRuntimeStateLabel(runtimeState, sessionResourceStatus)
     : "loading";
@@ -183,6 +199,7 @@ export default function StatusBarModule() {
       <span
         className="fm-status-bar__engine fm-status-bar__engine--clickable"
         data-state={engine.state}
+        data-tone={engine.tone}
         title={engine.title}
         role="button"
         tabIndex={0}
@@ -195,6 +212,19 @@ export default function StatusBarModule() {
         </span>
         <span className="fm-status-bar__engine-detail">{engine.detail}</span>
       </span>
+      {engine.awaitingCompute ? (
+        <Button
+          aria-disabled={compute.disabledReason !== null || compute.pending}
+          className="fm-status-bar__compute-cta"
+          onClick={compute.run}
+          size="sm"
+          title={compute.title}
+          type="button"
+          variant="primary"
+        >
+          {compute.pending ? "Submitting…" : "Compute"}
+        </Button>
+      ) : null}
       <span
         className="fm-status-bar__engine"
         data-state={method.state}

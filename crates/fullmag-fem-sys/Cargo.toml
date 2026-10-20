@@ -1,6 +1,6 @@
 [package]
 name = "fullmag-fem-sys"
-description = "Raw FFI bindings to the native Fullmag FEM GPU backend"
+description = "Raw FFI bindings to the native Fullmag FEM CPU/GPU backend"
 edition.workspace = true
 version.workspace = true
 publish.workspace = true
@@ -10,3 +10,4 @@ links = "fullmag_fem"
 [features]
 default = []
 build-native = []
+cuda = ["build-native"]

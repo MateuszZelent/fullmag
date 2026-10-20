@@ -68,9 +68,11 @@ kompilacja i API pozostają w stałej usłudze `backend`.
 Para jest jedną jednostką cache, z identycznym kluczem i owner tokenem.
 Klucz zależy od checkoutu, profilu i toolchaina; UUID runu, snapshot edytowanych
 źródeł i sama zmiana wrappera runtime nie tworzą nowego Cargo/CMake cache.
-Etykiety wolumenów, markery i hostowy receipt w kanonicznym storage wiążą
-jednostkę z Docker Engine, grupą oraz tożsamością toolchaina. Host sprawdza
-rzeczywiste wolumeny i mounty; nazwa lub prefix nie stanowią dowodu własności.
+Etykiety wolumenów, markery i receipt w control named volume wiążą jednostkę
+z Docker Engine, grupą oraz tożsamością toolchaina. Host sprawdza rzeczywiste
+wolumeny i mounty; nazwa lub prefix nie stanowią dowodu własności. Historyczny
+hostowy receipt v1 jest tylko baseline'em migracji i nie jest autorytetem dla
+bieżącej ścieżki v2.
 Obcy volume, niezgodna para albo niepotwierdzony konsument blokują użycie.
 Kontener aplikacji nie otrzymuje Docker socketa ani uprawnień do zarządzania
 wolumenami. Ograniczone narzędzie inicjalizacji działa w tej samej grupie.
@@ -94,8 +96,9 @@ zostać wycofany dopiero po osobnej kontroli użycia, referencji i rollbacku.
 
 Kompilację chroni blokada per trwały cache wewnątrz backendu, także bez launchera
 na hoście. Odrębne grupy z własnymi cache mogą budować równolegle; nie współdzielą
-mutowalnych katalogów Cargo/CMake. Hostowy heavy lock obejmuje przygotowanie
-obrazów/toolchaina i hostowych receiptów, a kończy się przed uruchomieniem usług.
+mutowalnych katalogów Cargo/CMake. Hostowy heavy-build lease obejmuje przygotowanie
+obrazu, toolchaina, cache i start receipt w control volume, a kończy się przed
+uruchomieniem usług; nie tworzy hostowego receipt buildu.
 Nie traktujemy Win32 lock i Linux flock na bindzie Windows jako wspólnej blokady.
 Wspólny host ledger nadal chroni przydział fizycznych CPU/GPU podczas symulacji.
 
@@ -130,11 +133,19 @@ pozostaje miejscem sesji, wyników, projektów i ustawień. Źródła są nadal
 readonly bindem wybranego checkoutu. Nie zmieniamy ledgeru runtime ani reguł
 rezerwacji GPU z powodu przeniesienia danych kompilacji.
 
-Powyższy opis hostowego receiptu v2 jest opisem etapu bazowego, nie wyjątkiem
-od nowej granicy. Pełne wdrożenie jest **NOT VERIFIED**: bootstrap/launchery
-nadal zapisują konteksty i receipty na hoście, provenance używa writable bind,
-a frontend ma hostowy ext4 backing i log rozwoju. Te miejsca wymagają migracji
-bez osłabienia locków, hashy, storage gates, recovery i provenance.
+Bieżąca ścieżka source-contract v2 rozdziela techniczne namespace'y: `/build`
+przechowuje cień źródeł i cache kompilatorów, control volume przechowuje
+operacje, manifesty, receipty i provenance, package volume przechowuje
+candidate/current/rollback oraz rotację, a BuildKit przechowuje warstwy obrazów.
+Hostowe `storage` nie jest miejscem tych danych. Mały run root na hoście może
+pozostać operacyjnym handoffem sesji; nie stanowi hostowego build stagingu.
+
+Opis hostowego receipt/context, writable provenance bind oraz frontendowego ext4
+backingu/logu dotyczy historycznego baseline'u v1/legacy, a nie aktywnej trasy
+v2. Te profile zachowują własne recepty i nie mogą być używane jako fallback
+daily DEV. Źródłowe kontrakty v2 i migracja markerów mają częściowy dowód,
+ale pełny Docker runtime — cold build, start, restart, HMR, brak hostowego
+zapisu technicznego i retencja po kolejnych buildach — pozostaje **NOT VERIFIED**.
 
 Named volumes nie nakładają automatycznej quota. Odbiór wymaga pomiarów
 fizycznego dysku hosta, systemu plików VM i danych wolumenów oraz dowodów
@@ -246,6 +257,20 @@ powinna sprawdzać zmianę revision, zmianę treści przy tej samej revision ora
 brak trwałego zapisu przed ponowną bramką kontekstu. Pełne sprawdzenie wymaga
 CI/backend runtime z rzeczywistą materializacją Gmsh; patch źródłowy nie jest
 dowodem kwalifikacji GPU ani kompletnego startu aplikacji.
+
+### Prywatne operacje backendu DEV
+
+Backend DEV generuje przy każdym starcie API losowy token operatora w swoim
+namespace control volume: `backend/operator-capability/token`. Katalog ma
+uprawnienia `0700`, plik `0600`; producent i czytnik odrzucają dowiązania,
+niezgodnego właściciela i nieprawidłowy format. Token otrzymuje wyłącznie
+środowisko procesu API. Nie trafia do frontendu, hostowego `.env`, argumentów,
+logów ani receiptów. Profile frozen/release zachowują dotychczasowe zachowanie.
+
+To przygotowanie mechanizmu autoryzacji dla zarządzanych operacji lokalnych,
+a nie dowód wdrożenia zmiany aktywnej symulacji. Token nie zastępuje kontroli
+konkretnej grupy, runu, receiptów i zakończenia pracy; nie izoluje też procesów
+uruchomionych z tym samym UID wewnątrz zaufanego backendu.
 
 ## Wdrożenie i weryfikacja
 

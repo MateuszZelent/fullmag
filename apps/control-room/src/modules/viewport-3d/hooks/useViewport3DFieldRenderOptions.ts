@@ -134,6 +134,7 @@ export function useViewport3DFieldRenderOptions({
     let fullScalarColorMode: string | undefined;
     let fullScalarColorPalette: string | undefined;
     let fullVectorBudget = 0;
+    let fullVectorLengthScale = 1;
     let fullVectorAnchorMode: "center" | "tail" = "center";
     let fullVectorSurfaceOffsetEnabled = false;
     let fullVectorSurfaceOffsetScale = 0;
@@ -194,6 +195,7 @@ export function useViewport3DFieldRenderOptions({
       fullVectorSurfaceOffsetEnabled =
         fallbackSettings.vectorSurfaceOffsetEnabled;
       fullVectorSurfaceOffsetScale = fallbackSettings.vectorSurfaceOffsetScale;
+      fullVectorLengthScale = fallbackSettings.vectorLengthScale;
       if (fallbackVisible) {
         fullVectorBudget = fallbackSettings.vectorBudget;
       }
@@ -231,6 +233,7 @@ export function useViewport3DFieldRenderOptions({
     const next = limitViewport3DFieldRenderVectorBudgets(
       {
         fullVectorBudget,
+        fullVectorLengthScale,
         fullVectorAnchorMode,
         fullScalarColorMode,
         fullScalarColorPalette,
@@ -420,6 +423,8 @@ export function sameViewport3DFieldRenderOptions(
 ): boolean {
   return (
     (left.fullVectorBudget ?? 0) === (right.fullVectorBudget ?? 0) &&
+    (left.fullVectorLengthScale ?? 1) ===
+      (right.fullVectorLengthScale ?? 1) &&
     (left.fullVectorAnchorMode ?? "") === (right.fullVectorAnchorMode ?? "") &&
     Boolean(left.fullVectorSurfaceOffsetEnabled) ===
       Boolean(right.fullVectorSurfaceOffsetEnabled) &&

@@ -1208,6 +1208,50 @@ def _live_untracked_script_output(relative: str) -> bool:
     )
 
 
+def _live_windows_device_component(component: str) -> bool:
+    stem = component.split(".", 1)[0].rstrip(" .").casefold()
+    return (
+        stem in {"con", "prn", "aux", "nul", "conin$", "conout$"}
+        or bool(re.fullmatch(r"(?:com|lpt)(?:[1-9]|[¹²³])", stem))
+    )
+
+
+def _live_included_untracked_from_environment() -> tuple[str, ...]:
+    """Read the one canonical, explicitly pinned live-source allowlist."""
+
+    raw = os.environ.get("FULLMAG_DEV_INCLUDE_UNTRACKED", "[]")
+    try:
+        encoded = raw.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise BackendSourceError("included untracked source allowlist is not UTF-8") from error
+    if len(encoded) > MAX_MANIFEST_BYTES:
+        _live_fail("included untracked source allowlist exceeds its size bound")
+    try:
+        values = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise BackendSourceError("included untracked source allowlist is not valid JSON") from error
+    if not isinstance(values, list) or len(values) > MAX_MEMBERS:
+        _live_fail("included untracked source allowlist must be a bounded JSON array")
+    paths: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            _live_fail("included untracked source allowlist entries must be strings")
+        relative = _live_safe_relative(value, "included untracked source")
+        if any(character in relative for character in "*?[]"):
+            _live_fail(f"included untracked source path cannot contain glob syntax: {relative}")
+        if any(_live_windows_device_component(part) for part in relative.split("/")):
+            _live_fail(f"included untracked source path uses a Windows device name: {relative}")
+        _live_reject_policy(relative)
+        if _live_admin_path(relative) or _live_untracked_script_output(relative):
+            _live_fail(f"included untracked source path is excluded by policy: {relative}")
+        paths.append(relative)
+    if len(paths) != len(set(paths)) or paths != sorted(paths):
+        _live_fail("included untracked source paths must be unique and sorted")
+    if raw != json.dumps(paths, ensure_ascii=False, separators=(",", ":")):
+        _live_fail("included untracked source allowlist is not canonical JSON")
+    return tuple(paths)
+
+
 def _live_untracked_records(raw: bytes) -> tuple[list[str], list[dict[str, object]]]:
     paths: list[str] = []
     records: list[dict[str, object]] = []
@@ -1320,7 +1364,9 @@ def _live_native_identity(
 
 
 def _capture_live_source_once(
-    source_root: Path, git_common_root: Path
+    source_root: Path,
+    git_common_root: Path,
+    included_untracked: tuple[str, ...] = (),
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
     git_dir = _live_git_dir(source_root, git_common_root)
     try:
@@ -1395,20 +1441,72 @@ def _capture_live_source_once(
         maximum=MAX_MANIFEST_BYTES,
     )
     untracked_paths, untracked_records = _live_untracked_records(untracked_raw)
-    exclusions.extend(untracked_paths)
+    included_set = set(included_untracked)
+    available_untracked = set(untracked_paths)
+    already_tracked = {entry["path"] for entry in files}
+    missing_untracked = sorted(included_set - available_untracked - already_tracked)
+    if missing_untracked:
+        _live_fail(
+            "included source paths are neither exact non-ignored untracked files nor present tracked files: "
+            + ", ".join(missing_untracked[:20])
+        )
+    selected_untracked = tuple(
+        relative for relative in included_untracked if relative in available_untracked
+    )
+    selected_files = _live_hash_regular_files(source_root, list(selected_untracked))
+    for relative in selected_untracked:
+        selected = selected_files[relative]
+        if selected is None:
+            _live_fail(f"included untracked source is not a regular file: {relative}")
+            continue
+        mode, size, digest = selected
+        files.append(
+            {
+                "path": relative,
+                "type": "file",
+                "mode": mode,
+                "size": size,
+                "sha256": digest,
+            }
+        )
+    exclusions = [
+        value
+        for value in exclusions
+        if not (isinstance(value, str) and value in included_set)
+    ]
+    exclusions.extend(path for path in untracked_paths if path not in included_set)
     status_records.extend(untracked_records)
     excluded = _live_normalize_excluded(exclusions)
     files.sort(key=lambda entry: entry["path"])
     native = _live_native_identity(
         source_root, git_dir, head, tree_bytes, status_records, native_index, gitlinks
     )
+    manifest_files = {entry["path"]: entry for entry in files}
+    native_dirty_files = {
+        entry["path"]: entry for entry in native["dirty_path_content"]
+    }
+    for relative in selected_untracked:
+        if _live_non_runtime(relative):
+            continue
+        manifest_entry = manifest_files[relative]
+        native_entry = native_dirty_files.get(relative)
+        if (
+            not isinstance(native_entry, dict)
+            or native_entry.get("kind") != "regular_file"
+            or native_entry.get("mode") != manifest_entry["mode"]
+            or native_entry.get("sha256") != manifest_entry["sha256"]
+        ):
+            _live_fail(
+                "native source identity does not bind the included file bytes: "
+                + relative
+            )
     capsule_core = {
         "schema_version": "fullmag.source-capsule.v1",
         "source_mode": "snapshot",
         "resolved_commit": head,
         "files": files,
         "deleted": sorted(deleted),
-        "included_untracked": [],
+        "included_untracked": list(selected_untracked),
         "excluded": excluded,
     }
     source_digest = _live_sha256(_live_canonical(capsule_core))
@@ -1429,7 +1527,7 @@ def _capture_live_source_once(
         "files": files,
         "entries": files,
         "deleted": sorted(deleted),
-        "included_untracked": [],
+        "included_untracked": list(selected_untracked),
         "excluded": excluded,
         "source_digest": source_digest,
         "source_digest_sha256": source_digest,
@@ -1438,12 +1536,15 @@ def _capture_live_source_once(
 
 
 def _capture_live_source_pass(
-    source_root: Path, git_common_root: Path, pass_number: int
+    source_root: Path,
+    git_common_root: Path,
+    pass_number: int,
+    included_untracked: tuple[str, ...] = (),
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
     started = time.monotonic()
     print(f"fullmag-live-source capture_pass={pass_number} phase=start", file=sys.stderr, flush=True)
     try:
-        result = _capture_live_source_once(source_root, git_common_root)
+        result = _capture_live_source_once(source_root, git_common_root, included_untracked)
     except Exception as error:
         elapsed_ms = int((time.monotonic() - started) * 1000)
         print(
@@ -1479,8 +1580,9 @@ def capture_live_source_manifest(
     source_root = Path(source_root)
     git_common_root = Path(git_common_root)
     build_root = Path(build_root)
-    first = _capture_live_source_pass(source_root, git_common_root, 1)
-    second = _capture_live_source_pass(source_root, git_common_root, 2)
+    included_untracked = _live_included_untracked_from_environment()
+    first = _capture_live_source_pass(source_root, git_common_root, 1, included_untracked)
+    second = _capture_live_source_pass(source_root, git_common_root, 2, included_untracked)
     if second != first:
         _live_fail("live source changed while creating its closed manifest")
     capsule, native, git_object_ids = first

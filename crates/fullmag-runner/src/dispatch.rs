@@ -19,40 +19,40 @@ use std::collections::{BTreeSet, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use crate::artifact_pipeline::ArtifactPipelineSender;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::fdm::cpu::reference as cpu_reference;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
 use crate::fem::marker_policy::mixed_v2_body_markers;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::fem::relax::scalars::ensure_fem_object_scalars;
 use crate::fem_baseline;
 use crate::fem_eigen;
 use crate::native_fem;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::native_fem::{
     NativeFemBackend, NativeFemDataResidency, NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
     StageOerstedProvider,
 };
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(feature = "cuda", feature = "fem-gpu", feature = "fem-native"))]
 use crate::quantities::normalized_quantity_name;
 use crate::quantities::{active_fdm_preview_quantities, active_fem_preview_quantities};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::relaxation::apply_energy_minimizer_provenance;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::relaxation::apply_fem_direct_minimizer_policy_provenance;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::relaxation::RelaxationEnergyPlateauWindow;
 use crate::runtime_registry::RuntimeRegistry;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::schedules::{advance_due_schedules, collect_field_schedules, OutputSchedule};
 pub(crate) use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
 use crate::solver_runtime::fem_crossover::resolve_auto_fem_plan_device;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::solver_runtime::selection::all_in_gpu_fem_required;
 pub(crate) use crate::solver_runtime::selection::{
     all_in_gpu_fem_env_requested, effective_fem_device_request,
@@ -64,9 +64,9 @@ pub(crate) use crate::solver_runtime::selection::{
 #[cfg(test)]
 pub(crate) use crate::solvers::fdm::execute::execute_fdm;
 pub(crate) use crate::solvers::fdm::execute::{execute_fdm_in_mode, execute_fdm_multilayer};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::types::FemPoissonDemagProvenance;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::types::FieldSnapshot;
 use crate::types::{
     AuxiliaryArtifact, ExecutedRun, FemStageExecutionContext, LivePreviewRequest, LiveStepConsumer,
@@ -175,9 +175,9 @@ fn take_test_fem_eigen_execution(
     Some(executed)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::types::{ExecutionProvenance, StepStats};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use fullmag_engine::fem::FemBackendId;
 
 /// Which public FEM runtime lane to use.
@@ -278,7 +278,7 @@ fn runtime_info_once(message: &str) {
     runtime_log_once("info", message);
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_gpu_ready_log_message(
     gpu_state: &NativeFemGpuStateInfo,
     device_info: &native_fem::DeviceInfo,
@@ -2134,7 +2134,7 @@ fn snapshot_native_fdm_vector_fields(
     })
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn snapshot_native_fem_preview(
     plan: &FemPlanIR,
     request: &LivePreviewRequest,
@@ -2147,7 +2147,7 @@ fn snapshot_native_fem_preview(
     backend.copy_live_preview_field(request, node_count)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn snapshot_native_fem_vector_fields(
     plan: &FemPlanIR,
     quantities: &[&str],
@@ -2175,17 +2175,17 @@ fn snapshot_native_fem_vector_fields(
     Ok(cached)
 }
 
-#[cfg(not(feature = "fem-gpu"))]
+#[cfg(not(any(feature = "fem-gpu", feature = "fem-native")))]
 fn snapshot_native_fem_preview(
     _plan: &FemPlanIR,
     _request: &LivePreviewRequest,
 ) -> Result<crate::LivePreviewField, RunError> {
     Err(RunError {
-        message: "native FEM preview snapshot requested but fullmag-runner was built without the 'fem-gpu' feature".to_string(),
+        message: "native FEM preview snapshot requested but fullmag-runner was built without the 'fem-native' feature".to_string(),
     })
 }
 
-#[cfg(not(feature = "fem-gpu"))]
+#[cfg(not(any(feature = "fem-gpu", feature = "fem-native")))]
 fn snapshot_native_fem_vector_fields(
     _plan: &FemPlanIR,
     _quantities: &[&str],
@@ -2193,7 +2193,7 @@ fn snapshot_native_fem_vector_fields(
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     Err(RunError {
         message:
-            "native FEM vector-field cache requested but fullmag-runner was built without the 'fem-gpu' feature"
+            "native FEM vector-field cache requested but fullmag-runner was built without the 'fem-native' feature"
                 .to_string(),
     })
 }
@@ -2479,17 +2479,17 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     >,
     execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
-    #[cfg(not(feature = "fem-gpu"))]
+    #[cfg(not(any(feature = "fem-gpu", feature = "fem-native")))]
     let _ = physics_execution_context;
     let mut normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     reject_frozen_spins_fem_plan_execution(&normalized_plan)?;
     reject_unsupported_steady_transport_component_outputs(&normalized_plan, outputs)?;
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     let transport_artifact_writer = artifact_writer.clone();
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     let stage_oersted_callback_requested =
         crate::native_fem::plan_requests_stage_oersted_callback(&normalized_plan);
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     let transport_bundle = if normalized_plan.spin_transport_plans.is_empty()
         && normalized_plan.charge_transport_plans.is_empty()
     {
@@ -2505,7 +2505,7 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
         let spin = crate::native_fem::execute_native_fem_steady_transport_plans(&normalized_plan)?;
         merge_native_fem_transport_bundles(charge, spin)?
     };
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     if let Some(field) = transport_bundle
         .as_ref()
         .and_then(|bundle| bundle.oersted_field_xyz.as_ref())
@@ -2549,7 +2549,7 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
             }
         }
     }
-    #[cfg(not(feature = "fem-gpu"))]
+    #[cfg(not(any(feature = "fem-gpu", feature = "fem-native")))]
     if !normalized_plan.spin_transport_plans.is_empty()
         || !normalized_plan.charge_transport_plans.is_empty()
     {
@@ -2608,13 +2608,13 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
             // Fall through to native execution below.
         }
     }
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     let dynamic_outputs = outputs
         .iter()
         .filter(|output| !steady_transport_output(output))
         .cloned()
         .collect::<Vec<_>>();
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     let runtime_outputs = if normalized_plan.spin_transport_plans.is_empty()
         && normalized_plan.charge_transport_plans.is_empty()
     {
@@ -2622,7 +2622,7 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     } else {
         dynamic_outputs.as_slice()
     };
-    #[cfg(not(feature = "fem-gpu"))]
+    #[cfg(not(any(feature = "fem-gpu", feature = "fem-native")))]
     let runtime_outputs = outputs;
     let executed = match engine {
         FemEngine::CpuNative => {
@@ -2652,9 +2652,9 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
             )
         }
     }?;
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     let mut executed = executed;
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     if let Some(mut bundle) = transport_bundle {
         if let Some(context) = physics_execution_context {
             context.observe_steady_transport(&mut executed.provenance);
@@ -2693,7 +2693,7 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     Ok(executed)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn steady_transport_output(output: &OutputIR) -> bool {
     let quantity = match output {
         OutputIR::Field { name, .. } => name.as_str(),
@@ -2707,7 +2707,7 @@ fn steady_transport_output(output: &OutputIR) -> bool {
     )
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn merge_native_fem_transport_bundles(
     left: Option<crate::native_fem::NativeFemSteadyTransportBundle>,
     right: Option<crate::native_fem::NativeFemSteadyTransportBundle>,
@@ -3097,7 +3097,7 @@ pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff_and_producer_ide
     Ok(executed)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_execution_engine(plan: &FemPlanIR) -> &'static str {
     if crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
         FemBackendId::GpuNative.provenance_name()
@@ -3106,7 +3106,7 @@ fn native_fem_execution_engine(plan: &FemPlanIR) -> &'static str {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_execution_mode(plan: &FemPlanIR) -> &'static str {
     if !crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
         "cpu_native"
@@ -3125,7 +3125,7 @@ fn native_fem_execution_mode(plan: &FemPlanIR) -> &'static str {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_llg_mode(plan: &FemPlanIR) -> &'static str {
     if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
         "pure_damping"
@@ -3134,7 +3134,7 @@ fn native_fem_llg_mode(plan: &FemPlanIR) -> &'static str {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn validate_all_in_gpu_fem_runtime_contract(
     execution_mode: &str,
     gpu_rk_plan: &NativeFemGpuRkPlanInfo,
@@ -3172,7 +3172,7 @@ fn validate_all_in_gpu_fem_runtime_contract(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn validate_native_fem_gpu_engine_runtime_contract(
     engine: FemEngine,
     gpu_rk_plan: &NativeFemGpuRkPlanInfo,
@@ -3192,7 +3192,7 @@ fn validate_native_fem_gpu_engine_runtime_contract(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn validate_strict_native_fem_gpu_execution_mode(
     engine: FemEngine,
     execution_mode: ExecutionMode,
@@ -3214,7 +3214,7 @@ fn validate_strict_native_fem_gpu_execution_mode(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn create_native_fem_backend_after_strict_gpu_mode_preflight<T>(
     engine: FemEngine,
     execution_mode: ExecutionMode,
@@ -3225,7 +3225,7 @@ fn create_native_fem_backend_after_strict_gpu_mode_preflight<T>(
     create_backend()
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn validate_strict_native_fem_gpu_preflight(
     engine: FemEngine,
     execution_mode: ExecutionMode,
@@ -3266,7 +3266,7 @@ fn validate_strict_native_fem_gpu_preflight(
     })
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn strict_native_fem_gpu_stage_preflight(
     engine: FemEngine,
     execution_mode: ExecutionMode,
@@ -3288,7 +3288,7 @@ fn strict_native_fem_gpu_stage_preflight(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn begin_native_fem_stage_after_strict_gpu_preflight(
     preflight: Result<(), RunError>,
     begin_stage: impl FnOnce() -> Result<(), RunError>,
@@ -3297,7 +3297,7 @@ fn begin_native_fem_stage_after_strict_gpu_preflight(
     begin_stage()
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_gpu_rk_plan_is_strict_device_resident(gpu_rk_plan: &NativeFemGpuRkPlanInfo) -> bool {
     gpu_rk_plan.exchange_only_enabled
         && gpu_rk_plan.stage_exchange_device_resident
@@ -3314,8 +3314,8 @@ fn native_fem_gpu_rk_plan_is_strict_device_resident(gpu_rk_plan: &NativeFemGpuRk
         )
 }
 
-#[cfg(feature = "fem-gpu")]
-fn native_fem_gpu_rk_plan_is_device_resident_for_plan(
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+pub(crate) fn native_fem_gpu_rk_plan_is_device_resident_for_plan(
     plan: &FemPlanIR,
     gpu_rk_plan: &NativeFemGpuRkPlanInfo,
 ) -> bool {
@@ -3337,7 +3337,7 @@ fn native_fem_gpu_rk_plan_is_device_resident_for_plan(
     exchange_device_resident && demag_device_resident
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_relaxation_allows_compute_sync(plan: &FemPlanIR) -> bool {
     matches!(
         plan.relaxation.as_ref().map(|control| control.algorithm),
@@ -3349,7 +3349,7 @@ fn native_fem_relaxation_allows_compute_sync(plan: &FemPlanIR) -> bool {
     )
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_hot_loop_sync_allowed_for_plan(plan: &FemPlanIR, stats: &StepStats) -> bool {
     let classified_sync = stats
         .hot_loop_exchange_host_sync_count
@@ -3364,7 +3364,7 @@ fn native_fem_hot_loop_sync_allowed_for_plan(plan: &FemPlanIR, stats: &StepStats
     stats.hot_loop_compute_host_sync_count == 0 || native_fem_relaxation_allows_compute_sync(plan)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_data_residency(
     plan: &FemPlanIR,
     stats: Option<&StepStats>,
@@ -3381,17 +3381,17 @@ fn native_fem_data_residency(
         .unwrap_or(NativeFemDataResidency::HostSourceOfTruth.as_str())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_uses_cuda_kernels(plan: &FemPlanIR) -> bool {
     crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_uses_gpu_poisson(plan: &FemPlanIR) -> bool {
     crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) && plan.enable_demag
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_gpu_qualification_status(
     plan: &FemPlanIR,
     stats: Option<&StepStats>,
@@ -3420,7 +3420,7 @@ fn native_fem_gpu_qualification_status(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn apply_native_fem_runtime_contract(
     provenance: &mut ExecutionProvenance,
     plan: &FemPlanIR,
@@ -3482,7 +3482,7 @@ pub(crate) fn apply_native_fem_runtime_contract(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_requires_initial_snapshot(
     live_present: bool,
     direct_minimization: bool,
@@ -3491,7 +3491,7 @@ fn native_fem_requires_initial_snapshot(
     live_present || direct_minimization || scheduled_fields_present
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn record_native_fem_initial_field_snapshots(
     backend: &mut NativeFemBackend,
     engine: FemEngine,
@@ -3553,7 +3553,7 @@ fn record_native_fem_initial_field_snapshots(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn execute_native_fem(
     engine: FemEngine,
     plan: &FemPlanIR,
@@ -3564,6 +3564,14 @@ fn execute_native_fem(
     artifact_writer: Option<ArtifactPipelineSender>,
     execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
+    #[cfg(not(feature = "fem-gpu"))]
+    if engine == FemEngine::NativeGpu {
+        return Err(RunError {
+            message: "native FEM GPU execution requires a runner built with the 'fem-gpu' feature"
+                .to_string(),
+        });
+    }
+
     let stage_transport_callback_requested =
         crate::native_fem::plan_requests_stage_transport_callback(plan);
     let coupled_stage_provider = crate::native_fem::StageM2CoupledProvider::from_plan(plan)?;
@@ -3600,10 +3608,16 @@ fn execute_native_fem(
         execution_mode,
         native_execution_mode,
         || {
-            NativeFemBackend::create_with_initial_effective_field(
-                plan,
-                eager_initial_effective_field,
-            )
+            match engine {
+                FemEngine::CpuNative => NativeFemBackend::create_cpu_with_initial_effective_field(
+                    plan,
+                    eager_initial_effective_field,
+                ),
+                FemEngine::NativeGpu => NativeFemBackend::create_with_initial_effective_field(
+                    plan,
+                    eager_initial_effective_field,
+                ),
+            }
         },
     )?;
     if engine == FemEngine::NativeGpu {
@@ -3911,7 +3925,7 @@ fn execute_native_fem(
     )
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn fem_poisson_demag_provenance(
     plan: &FemPlanIR,
     stats: Option<&StepStats>,
@@ -3969,7 +3983,7 @@ pub(crate) fn fem_poisson_demag_provenance(
     })
 }
 
-#[cfg(not(feature = "fem-gpu"))]
+#[cfg(not(any(feature = "fem-gpu", feature = "fem-native")))]
 fn execute_native_fem(
     _engine: FemEngine,
     _plan: &FemPlanIR,
@@ -3982,12 +3996,12 @@ fn execute_native_fem(
 ) -> Result<ExecutedRun, RunError> {
     Err(RunError {
         message:
-            "native FEM backend requested but fullmag-runner was built without the 'fem-gpu' feature"
+            "native FEM backend requested but fullmag-runner was built without the 'fem-native' feature"
                 .to_string(),
     })
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn flatten_vectors(values: &[[f64; 3]]) -> Vec<f64> {
     values
         .iter()

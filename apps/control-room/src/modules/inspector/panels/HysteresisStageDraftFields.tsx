@@ -4,6 +4,7 @@ import React from "react";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/shared/ui/Button";
 import { FormField } from "../primitives/FormField";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import { type StudyStageDraft } from "./StudyStageAuthoringModel";
 
 export type HysteresisSettleStepDraft = {
@@ -227,21 +228,7 @@ export function HysteresisStageDraftFields({
       {draft.fieldScheduleMode === "piecewise" ? (
         <HysteresisFieldSegmentsEditor draft={draft} onUpdate={onUpdate} />
       ) : null}
-      <FormField
-        label="Field segments JSON"
-        rows={5}
-        type="textarea"
-        value={draft.fieldSegments}
-        onChange={(event) => onUpdate({ fieldSegments: event.target.value })}
-      />
       <HysteresisDenseWindowsEditor draft={draft} onUpdate={onUpdate} />
-      <FormField
-        label="Dense windows JSON"
-        rows={5}
-        type="textarea"
-        value={draft.denseWindows}
-        onChange={(event) => onUpdate({ denseWindows: event.target.value })}
-      />
       <FormField
         label="Saturation mode"
         type="select"
@@ -286,17 +273,11 @@ export function HysteresisStageDraftFields({
         draft={draft}
         onUpdate={onUpdate}
       />
-      <FormField
-        label="Settle steps"
-        rows={5}
-        type="textarea"
-        value={draft.settleSteps}
-        onChange={(event) => onUpdate({ settleSteps: event.target.value })}
-      />
       {draft.settlePipelineMode === "tree" ? (
         <HysteresisSettleBranchesEditor draft={draft} onUpdate={onUpdate} />
       ) : null}
       <HysteresisMinorLoopsEditor draft={draft} onUpdate={onUpdate} />
+      <HysteresisAdvancedJsonSection draft={draft} onUpdate={onUpdate} />
       <FormField
         label="Storage policy"
         rows={5}
@@ -550,7 +531,7 @@ export function HysteresisMinorLoopsEditor({
           >
             <option value="branch_only">Branch only</option>
             <option value="resume_parent">Resume parent</option>
-            <option value="closed">Closed</option>
+            <option value="replace_parent">Replace parent</option>
           </FormField>
         </div>
       ))}
@@ -1102,8 +1083,9 @@ export function HysteresisSettleAlgorithmsEditor({
               <option value="continue_with_warning">
                 Continue with warning
               </option>
-              <option value="fail_run">Fail stage run</option>
-              <option value="abort_simulation">Abort simulation</option>
+              <option value="stop_stage">Stop stage</option>
+              <option value="run_next_algorithm">Run next algorithm</option>
+              <option value="retry_with_smaller_dt">Retry with smaller timestep</option>
             </FormField>
           </div>
         );
@@ -1463,27 +1445,34 @@ function copyDefinedSettleStepValue(
   }
 }
 
+// Must stay aligned with SUPPORTED_SETTLE_METHODS_BY_KIND in
+// StudyStageAuthoringModel: offering a method the validator rejects makes
+// the structured editor produce an unappliable draft.
 function hysteresisSettleMethodOptions(kind?: string) {
   if (kind === "minimize") {
-    return [
-      "projected_gradient_bb",
-      "conjugate_gradient_pr",
-      "lbfgs_bounded",
-      "newton_cg",
-    ];
+    return ["projected_gradient_bb", "nonlinear_cg", "tangent_plane_implicit"];
   }
   if (kind === "dynamics_settle") {
-    return [
-      "heun_dynamics_settle",
-      "rk4_dynamics_settle",
-      "backward_euler_dynamics_settle",
-    ];
+    return ["heun_dynamics_settle"];
   }
-  return ["llg_overdamped", "llg_critically_damped", "direct_relaxation"];
+  return [
+    "llg_overdamped",
+    "projected_gradient_bb",
+    "nonlinear_cg",
+    "tangent_plane_implicit",
+  ];
 }
 
+const HYSTERESIS_SETTLE_METHOD_LABELS: Record<string, string> = {
+  heun_dynamics_settle: "Heun dynamics settle",
+  llg_overdamped: "LLG overdamped",
+  nonlinear_cg: "Nonlinear conjugate gradient",
+  projected_gradient_bb: "Projected gradient BB",
+  tangent_plane_implicit: "Tangent-plane implicit",
+};
+
 function hysteresisSettleMethodLabel(method: string): string {
-  return method === "projected_gradient_bb" ? "Projected gradient BB" : method;
+  return HYSTERESIS_SETTLE_METHOD_LABELS[method] ?? method;
 }
 
 function formatHysteresisSettleJsonishValue(value: unknown): string {
@@ -1496,4 +1485,48 @@ function parseHysteresisSettleJsonishValue(value: string): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Raw JSON for lists that also have structured editors above. Both surfaces
+ * edit the same draft string; the structured editors are the primary path, so
+ * the JSON stays collapsed and only shows fields relevant to the current mode.
+ */
+function HysteresisAdvancedJsonSection({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  return (
+    <InspectorGroup title="Advanced JSON" collapsible defaultOpen={false}>
+      {draft.fieldScheduleMode === "piecewise" ? (
+        <FormField
+          hint="Same data as the field segment editor above."
+          label="Field segments JSON"
+          rows={5}
+          type="textarea"
+          value={draft.fieldSegments}
+          onChange={(event) => onUpdate({ fieldSegments: event.target.value })}
+        />
+      ) : null}
+      <FormField
+        hint="Same data as the dense window editor above."
+        label="Dense windows JSON"
+        rows={5}
+        type="textarea"
+        value={draft.denseWindows}
+        onChange={(event) => onUpdate({ denseWindows: event.target.value })}
+      />
+      <FormField
+        hint="Same data as the settle algorithm editor above."
+        label="Settle steps JSON"
+        rows={5}
+        type="textarea"
+        value={draft.settleSteps}
+        onChange={(event) => onUpdate({ settleSteps: event.target.value })}
+      />
+    </InspectorGroup>
+  );
 }

@@ -193,6 +193,11 @@ permutations provide the remaining tensor components following Newell et al.
 |---|---|---|
 | $\mathbf H$ | magnetostatic field in the continuous model | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf H_d$ | target demagnetizing field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{eff,air}}$ | complete exterior effective visualization field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{demag,air}}$ | demagnetizing field at the Airbox target | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{ext}}$ | resolved complete uniform Zeeman source | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf x$ | target cell centre | $\mathrm m$ |
+| $t$ | accepted observation time | $\mathrm s$ |
 | $\mathbf H'_{k,l}$ | discrete field at target cell $(k,l)$ | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf H_{d,c}$ | demagnetizing field at active target cell $c$ | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf H_c$ | field on the convolution grid | $\mathrm{A\,m^{-1}}$ |
@@ -478,6 +483,7 @@ remain migration adapters but are not canonical tutorial syntax.
 
 | Parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR | Qualification |
 |---|---|---|---|---|---|---|---|
+| Exterior effective observation | crates/fullmag-runner/src/fdm/cpu/airbox_observation.rs | compose_airbox_h_eff | Complete-source uniform Zeeman plus target demag; shared CPU/CUDA composition | FDM CPU/GPU | not executed in this change | source-only, runtime/science NOT VERIFIED | working-tree hashes in mx3-large-domains-airbox-heff manifest |
 | FDM.cell | Sequence[float] or None | None | $\mathrm m$ | exclusive with default_cell; three positive values when present | legacy/default native cell size | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.cell | implemented authoring |
 | FDM.default_cell | Sequence[float] or None | None | $\mathrm m$ | three positive values when present; needed when per_magnet is incomplete and for the current common-scratch policy | default native cell size | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.default_cell | implemented authoring |
 | FDM.per_magnet | dict[str, FDMGrid] or None | None | $1$ | non-empty names and FDMGrid values | per-object native grid overrides | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.per_magnet | implemented authoring |
@@ -559,6 +565,72 @@ end planning with an error.
 | FDM | GPU | implemented; executable contract partial; runtime-verified no; physically-validated no; production-qualified no | CUDA exists, but the current managed gate is `not_qualified`; the assisted heterogeneous operator must fail closed or be unified with the CPU descriptor path |
 | FEM | CPU | not-applicable | this note covers FDM FFT/Newell, not FEM magnetostatics |
 | FEM | GPU | not-applicable | this note covers FDM FFT/Newell, not FEM magnetostatics |
+
+### Accepted-state observations and the CUDA Airbox observer (20 October 2026)
+
+This addition is **source-visible and unvalidated**. No build, solver run,
+device parity, or browser result has been produced for it. It does not promote
+the GPU row above or broaden the qualified CPU workloads.
+
+The target-only observer retains the existing volume-weighted open-boundary
+transfer: each active native source contributes its physical magnetization in
+ampere per metre to the target grid. The CUDA realization sums those projected
+sources on the host and evaluates the target grid's zero-shift Newell
+self-convolution on the native CUDA backend. Superposition uses the same target
+kernel as the CPU source-to-target pair sum. The host projection remains
+explicit; a CUDA field evaluation does not imply device-resident transfer or
+time integration. Source evidence is `VolumeWeightedTransfer::push_m_into`,
+`materialize_airbox_observation_snapshot_gpu`, and the existing native CUDA
+magnetization upload and demag refresh. Numerical equivalence still needs its
+own FP64 source-bound CPU/CUDA field and convergence evidence.
+
+The observer never advances LLG. Its target vectors are physical magnetization
+values with unit saturation coefficient; their magnitudes, including zero,
+must remain unchanged by upload. Target shape, spacing, origin, source masks,
+and native-to-target transfer fingerprints belong to the observation manifest.
+The magnetic layers and common FFT scratch retain their separate identities.
+The target observer publishes `H_demag` in ampere per metre. The following
+extension is source-only work, without numerical/runtime qualification: for a
+legal multilayer plan with complete uniform external field, its exterior
+visualization field is
+
+```{math}
+:label: eq-fdm-airbox-effective-observation
+\mathbf H_{\mathrm{eff,air}}(\mathbf x,t)
+=\mathbf H_{\mathrm{demag,air}}(\mathbf x,t)+\mathbf H_{\mathrm{ext}}(t).
+```
+
+Here $\mathbf x$ is a target cell centre in $\mathrm{m}$, $t$ is the exact
+accepted observation time in $\mathrm{s}$, and all three fields have unit
+$\mathrm{A}\,\mathrm{m}^{-1}$. This is an exterior visualization observable;
+there is no LLG degree of freedom or magnetic material in the Airbox. Exchange,
+anisotropy, DMI and thermal fields are not extended into air. The legal
+multilayer plan carries only a uniform `external_field`; absent external
+field contributes zero. An unrepresented dynamic drive, antenna or current
+source cannot be inferred from a magnetic-grid sample and must retain an
+explicit quantity-specific refusal. CPU and CUDA share this composition and
+its source checks. Each published target quantity has its own immutable field
+artifact, hash and field generation. Both quantities share the target/source
+topology fingerprint and carrier revision; publishing H_eff never overwrites
+magnetic-layer H_eff. No Python/IR meaning or solver equation changes here.
+
+`cuda_assisted_multilayer` remains a distinct host-assisted execution engine.
+Its field snapshots use the original per-layer CUDA contexts and resolved
+demag route; they are never relabelled as native device-resident convolution.
+Forced GPU does not execute a substitute CPU time-domain solver. The CPU,
+native convolution, native stacked, and assisted field realizations require
+separate qualification. No Python constructor, `ProblemIR` field, or public
+authoring vocabulary is introduced here; this is the materialization of the
+already accepted plan and state through the existing field resources.
+
+History-dependent terminal observations are captured on the original solver
+context before it releases its drive, transport, constraint, and thermal
+inputs. The worker binds their layout, source clock, native magnetization
+digest, and actual engine to the final accepted state before CAS publication.
+Reconstruction from magnetization alone remains illegal when these primary
+inputs were not retained. Historical outputs without that observation capture
+therefore do not acquire invented dynamic fields. Global energy stays in
+joules; spatial density stays in joules per cubic metre.
 
 CPU FP64 is the reference execution lane, not an independent oracle for kernel
 mathematics. In 2D lanes (`n_z=1`), production `newell.rs` computes the volume
@@ -652,8 +724,11 @@ $1\,\mathrm{nm}$ gap under a $20\,\mathrm{kA\,m^{-1}}$ field at $5^\circ$,
 followed by Co skyrmion disks of diameter $512\,\mathrm{nm}$, thickness
 $1\,\mathrm{nm}$, and spacer $3\,\mathrm{nm}$. This lane provides traceability,
 not a replacement for the oracle or SP4 qualification. The Airbox is a
-target-only observation carrier: the first promotion publishes $H_{demag}$;
-$H_{eff}$ outside the magnetic domain has a versioned unavailable reason. CPU
+target-only observation carrier: $H_{demag}$ is published independently, while
+$H_{eff}$ uses the complete-source uniform-Zeeman composition above or a
+quantity-specific unavailable reason. Manifest v2 shares the geometry/source
+carrier fingerprint between the two quantities and retains separate field
+generations; readers retain compatibility with historical manifest v1. CPU
 FP64, CUDA FP64, and CUDA FP32 require separate runtime, device, and tolerance
 artifacts.
 
@@ -738,3 +813,6 @@ the qualification status.
 | Python fail-closed validation | packages/fullmag-py/tests/test_fdm_multilayer_contract.py | test_demag_rejects_incompatible_common_grid_combinations | rejects contradictory `common_cells`, `common_cells_xy` and mode combinations | Python authoring | pytest FDM contract tests | executable API contract | current master source snapshot |
 | Transfer moment test | crates/fullmag-fdm-demag/src/transfer.rs | volume_weighted_transfer_preserves_2d_moment_through_z_average | verifies Z averaging preserves the volume-weighted moment | FDM CPU transfer | cargo test `fullmag-fdm-demag` | scoped transfer contract | current master source snapshot |
 | Transfer adjoint test | crates/fullmag-fdm-demag/src/transfer.rs | volume_weighted_transfer_is_adjoint_with_active_mask | verifies volume adjointness and inactive-mask zeroing | FDM CPU transfer | cargo test `fullmag-fdm-demag` | scoped transfer contract | current master source snapshot |
+
+| Accepted CUDA Airbox observer | crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs | materialize_airbox_observation_snapshot_gpu | target-only host volume transfer plus native CUDA target-grid demag | FDM GPU | no new executable evidence | source-visible; runtime/parity NOT VERIFIED | uncommitted master snapshot, see mx3 continuation manifest |
+| Accepted original-context field binding | crates/fullmag-runner/src/accepted_materialization.rs | materialize_captured_observables | bind fields/energies to exact final M, clock, layout and lane | FDM CPU/GPU | no new executable evidence | source-visible; runtime NOT VERIFIED | uncommitted master snapshot, see mx3 continuation manifest |

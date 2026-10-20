@@ -3,6 +3,7 @@
 import type { ErrorInfo, ReactNode } from "react";
 import { Component } from "react";
 
+import { Button } from "@/shared/ui/Button";
 import type { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import type { DiagnosticConsoleRecord } from "@/kernel/performance/diagnostic-recorder/diagnosticRecorderTypes";
 
@@ -81,11 +82,11 @@ export class Viewport3DErrorBoundary extends Component<
     if (!this.state.error) return this.props.children;
     return (
       <div className="fm-viewport-3d__error-boundary" role="alert">
-        <strong>3D viewport failed before the canvas became ready</strong>
+        <strong>3D viewport stopped rendering because of an error</strong>
         <span>{this.state.error.message}</span>
-        <button onClick={this.retry} type="button">
+        <Button onClick={this.retry} size="sm" type="button" variant="secondary">
           Retry viewport
-        </button>
+        </Button>
       </div>
     );
   }

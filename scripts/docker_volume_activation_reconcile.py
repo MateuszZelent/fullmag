@@ -776,8 +776,11 @@ def assert_no_unresolved_activation(
     source_root: str | None = None,
     image_id: str | None = None,
     backend_container: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     """Block every new activation while one prior activation is unknown."""
+    from docker_control_namespace import assert_namespace_activation
+    assert_namespace_activation(control, request_id)
     record = _read_json(control, "activation/unresolved.json", optional=True)
     if record is None:
         return

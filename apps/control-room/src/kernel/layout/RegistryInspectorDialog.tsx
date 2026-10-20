@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 // ── Primitive JSON tree renderer ──────────────────────────────────────────────
 
@@ -139,8 +140,9 @@ export function RegistryInspectorDialog({
 }: RegistryInspectorDialogProps) {
   const [tab, setTab] = useState<"local" | "backend">("backend");
 
-  const handleTabLocal = useCallback(() => setTab("local"), []);
-  const handleTabBackend = useCallback(() => setTab("backend"), []);
+  const handleTabChange = useCallback((value: string) => {
+    if (value === "local" || value === "backend") setTab(value);
+  }, []);
 
   const localData: JsonValue = {
     version: snapshot.version,
@@ -185,27 +187,22 @@ export function RegistryInspectorDialog({
           </DialogClose>
         </DialogHeader>
 
-        <div className="fm-registry-inspector__tabs" role="tablist">
-          <button
-            aria-selected={tab === "local"}
+        <Tabs value={tab} onValueChange={handleTabChange}>
+        <TabsList aria-label="Registry view" className="fm-registry-inspector__tabs">
+          <TabsTrigger
             className="fm-registry-inspector__tab"
             data-active={tab === "local"}
-            role="tab"
-            type="button"
-            onClick={handleTabLocal}
+            value="local"
           >
             Local pending
             <span className="fm-registry-inspector__tab-badge">
               v{snapshot.version}
             </span>
-          </button>
-          <button
-            aria-selected={tab === "backend"}
+          </TabsTrigger>
+          <TabsTrigger
             className="fm-registry-inspector__tab"
             data-active={tab === "backend"}
-            role="tab"
-            type="button"
-            onClick={handleTabBackend}
+            value="backend"
           >
             Effective registry
             {visualizationState?.revision !== undefined && (
@@ -213,8 +210,8 @@ export function RegistryInspectorDialog({
                 r{visualizationState.revision}
               </span>
             )}
-          </button>
-        </div>
+          </TabsTrigger>
+        </TabsList>
 
         <div className="fm-registry-inspector__body">
           {syncSnapshot.mutation?.status === "rejected" ? (
@@ -230,24 +227,24 @@ export function RegistryInspectorDialog({
               </button>
             </div>
           ) : null}
-          <div className="fm-registry-tree" role="tabpanel">
-            {tab === "local" ? (
-              <JsonNode
-                defaultOpen
-                depth={0}
-                label="snapshot"
-                value={localData}
-              />
-            ) : (
-              <JsonNode
-                defaultOpen
-                depth={0}
-                label="visualizationState"
-                value={backendData}
-              />
-            )}
-          </div>
+          <TabsContent className="fm-registry-tree" value="local">
+            <JsonNode
+              defaultOpen
+              depth={0}
+              label="snapshot"
+              value={localData}
+            />
+          </TabsContent>
+          <TabsContent className="fm-registry-tree" value="backend">
+            <JsonNode
+              defaultOpen
+              depth={0}
+              label="visualizationState"
+              value={backendData}
+            />
+          </TabsContent>
         </div>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );

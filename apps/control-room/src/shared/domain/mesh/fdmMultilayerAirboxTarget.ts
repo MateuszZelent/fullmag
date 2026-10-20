@@ -68,7 +68,7 @@ export function resolveFdmMultilayerAirboxTarget(
     !carrierFingerprint ||
     airbox.target_only !== true ||
     airbox.h_demag_available !== true ||
-    airbox.h_eff_available !== false ||
+    typeof airbox.h_eff_available !== "boolean" ||
     !Number.isSafeInteger(sampleCount) ||
     sampleCount !== totalCells ||
     !Number.isSafeInteger(valueCount) ||

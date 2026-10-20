@@ -3465,6 +3465,7 @@ impl SessionStore {
                     || matches!(
                         entry.artifact_type.as_str(),
                         "study_output_manifest"
+                            | "accepted_quantity_bundle"
                             | FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE
                             | FMS_OBSERVATION_STATE_ARTIFACT_TYPE
                     );

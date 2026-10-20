@@ -557,7 +557,9 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(current_module_lines)
 
-    antenna_port_lines = _render_antenna_port_modes(base_problem, surface=surface)
+    antenna_port_lines = _render_antenna_port_modes(
+        base_problem, surface=surface, overrides=overrides
+    )
     if antenna_port_lines:
         lines.append("")
         lines.extend(antenna_port_lines)
@@ -1077,6 +1079,12 @@ def _render_scene_document_bootstrap(
         lines.append(f"study.parallel_execution({_python_keyword_args(dict(parallel_policy))})")
     if resources is not None:
         lines.append(_render_compute_resources_call(resources))
+    demag_policy = _fem_demag_solver_policy_from_value(
+        builder.get("fem_demag_solver_policy"),
+        context="builder.fem_demag_solver_policy",
+    )
+    if demag_policy is not None:
+        lines.append(_render_fem_demag_solver_call(demag_policy, surface="study"))
     lines.extend(_render_output_storage(builder.get("output_storage"), surface="study"))
 
     solver = builder.get("solver")
@@ -1259,24 +1267,7 @@ def _render_scene_document_bootstrap(
     for module in builder.get("current_modules") or []:
         lines.append(_render_current_module_override(module, surface="study"))
     for mode in builder.get("antenna_port_modes") or []:
-        if not isinstance(mode, Mapping):
-            raise ValueError("antenna_port_modes must contain objects")
-        kwargs = dict(mode)
-        schema = kwargs.pop("schema_version", None)
-        if schema not in {ANTENNA_PORT_MODE_SCHEMA_VERSION, "antenna_port_mode.v3"}:
-            raise ValueError("unsupported antenna port mode schema_version")
-        normalization = kwargs.pop("normalization", None)
-        normalization_expr = ""
-        if schema == "antenna_port_mode.v3":
-            kwargs["schema_version"] = schema
-            normalization_expr = f", normalization={_render_source_cut_normalization(normalization)}"
-        elif normalization is not None:
-            raise ValueError("antenna port mode v2 cannot use source-cut normalization")
-        branches = kwargs.pop("branches", None)
-        if not isinstance(branches, list):
-            raise ValueError("antenna port mode branches must be a list")
-        expression = "[" + ", ".join(f"fm.AntennaPortBranch(**{_py_literal(branch)})" for branch in branches) + "]"
-        lines.append(f"study.add_antenna_port_mode(port_mode=fm.AntennaPortMode(**{_py_literal(kwargs)}, branches={expression}{normalization_expr}))")
+        lines.append(_render_antenna_port_mode_payload_line(mode))
 
     authored_stages = []
     raw_stages = builder.get("stages") or []
@@ -3264,11 +3255,25 @@ def _render_runtime(
 ) -> list[str]:
     runtime = problem.runtime
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
+    # Execution profile/layers are emitted at the top level of the overrides.
+    # Presence of either key means the SceneDocument owns the declaration.
+    profile_source: Mapping[str, object] = runtime_metadata
+    profile_context = "runtime_metadata"
+    if "execution_profile" in overrides or "execution_layers" in overrides:
+        profile_source = {
+            key: overrides[key]
+            for key in ("execution_profile", "execution_layers")
+            if key in overrides and overrides[key] is not None
+        }
+        profile_context = "overrides"
     profile, layers = _execution_profile_values(
-        runtime_metadata,
-        context="runtime_metadata",
+        profile_source,
+        context=profile_context,
     )
     runtime_override = _normalize_mapping(overrides.get("runtime_selection"))
+    backend_value = _runtime_override_backend(runtime_override, runtime)
+    device_spec = _runtime_override_device_spec(runtime_override, runtime)
+    precision_value = _runtime_override_precision(runtime_override, runtime)
     requested_mode = overrides.get("requested_mode")
     override_mode = (
         requested_mode
@@ -3299,15 +3304,14 @@ def _render_runtime(
         if surface == "flat" and problem.name != "fullmag_sim":
             lines.append(f"fm.name({_py_repr(problem.name)})")
         lines.append(
-            f"{_surface_call(surface, 'engine')}({_py_repr(runtime.backend_target.value)})"
+            f"{_surface_call(surface, 'engine')}({_py_repr(backend_value)})"
         )
         if execution_mode != "strict":
             lines.append(f"{_surface_call(surface, 'mode')}({_py_repr(execution_mode)})")
 
-        device_spec = _runtime_device_spec(runtime)
-        if device_spec == "auto" and runtime.execution_precision.value == "double":
+        if device_spec == "auto" and precision_value == "double":
             pass
-        elif runtime.execution_precision.value == "double":
+        elif precision_value == "double":
             if device_spec == "cpu":
                 lines.append(
                     f'{_surface_call(surface, "device")}("cpu", precision="double")'
@@ -3316,7 +3320,7 @@ def _render_runtime(
                 lines.append(
                     f'{_surface_call(surface, "device")}({_py_repr(device_spec)}, precision="double")'
                 )
-        elif runtime.execution_precision.value == "single":
+        elif precision_value == "single":
             lines.append(
                 f'{_surface_call(surface, "device")}({_py_repr(device_spec)}, precision="single")'
             )
@@ -3331,12 +3335,26 @@ def _render_runtime(
         if runtime_override and "parallel_execution" in runtime_override
         else runtime.parallel_execution
     )
-    parallel_policy.validate_for_runtime(*_parallel_execution_lane(runtime_metadata, runtime.backend_target, runtime.device_target))
+    parallel_policy.validate_for_runtime(
+        *_parallel_execution_lane(
+            profile_source,
+            backend_value,
+            device_spec.split(":", 1)[0],
+        )
+    )
     lines.append(
         f"{_surface_call(surface, 'parallel_execution')}({_python_keyword_args(parallel_policy.to_ir())})"
     )
 
-    resources = _compute_resources_values(runtime_metadata, context="runtime_metadata")
+    # Presence is significant: an explicit null clears loaded resources.
+    if "compute_resources" in overrides:
+        resources = (
+            None
+            if overrides["compute_resources"] is None
+            else _compute_resources_values(overrides, context="overrides")
+        )
+    else:
+        resources = _compute_resources_values(runtime_metadata, context="runtime_metadata")
     if resources is not None:
         if surface != "study":
             raise ValueError("compute_resources requires the canonical study API surface")
@@ -3372,17 +3390,13 @@ def _render_runtime(
             pbc_kwargs.append(f"images={_py_tuple3(tuple(image_counts))}")
         lines.append(f"{_surface_call(surface, 'pbc')}({', '.join(pbc_kwargs)})")
 
-    fem = problem.discretization.fem if problem.discretization is not None else None
-    if isinstance(fem, FEM) and fem.demag_solver_policy is not None:
-        lines.append(
-            f"{_surface_call(surface, 'fem_demag_solver')}("
-            f"solver={_py_repr(fem.demag_solver_policy.solver)}, "
-            f"preconditioner={_py_repr(fem.demag_solver_policy.preconditioner)}, "
-            f"rtol={_py_number(fem.demag_solver_policy.rtol)}, "
-            f"atol={_py_literal(fem.demag_solver_policy.atol)}, "
-            f"max_iterations={fem.demag_solver_policy.max_iterations}, "
-            f"print_level={fem.demag_solver_policy.print_level})"
-        )
+    demag_policy = _fem_demag_solver_policy_with_overrides(
+        problem,
+        overrides=overrides,
+        runtime_override=runtime_override,
+    )
+    if demag_policy is not None:
+        lines.append(_render_fem_demag_solver_call(demag_policy, surface=surface))
 
     fdm = _fdm_from_overrides(problem, overrides)
     if isinstance(fdm, FDM):
@@ -3573,6 +3587,75 @@ def _render_runtime(
         elif enabled is not True:
             lines.append(f"{_surface_call(surface, 'adaptive_mesh')}({str(enabled)})")
     return lines
+
+
+def _fem_demag_solver_policy_from_value(
+    value: object,
+    *,
+    context: str,
+) -> FemLinearSolverPolicy | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{context} must be an object or null")
+    allowed = {"solver", "preconditioner", "rtol", "atol", "max_iterations", "print_level"}
+    unknown = sorted(str(key) for key in value if key not in allowed)
+    if unknown:
+        raise ValueError(f"{context} has unsupported keys: {', '.join(unknown)}")
+    kwargs: dict[str, object] = {}
+    for key in ("solver", "preconditioner"):
+        if value.get(key) is not None:
+            kwargs[key] = str(value[key])
+    for key in ("rtol", "atol"):
+        if value.get(key) is not None:
+            kwargs[key] = float(cast(float, value[key]))
+    for key in ("max_iterations", "print_level"):
+        if value.get(key) is not None:
+            raw = value[key]
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)) or int(raw) != raw:
+                raise ValueError(f"{context}.{key} must be an integer")
+            kwargs[key] = int(raw)
+    return FemLinearSolverPolicy(**kwargs)  # type: ignore[arg-type]
+
+
+def _fem_demag_solver_policy_with_overrides(
+    problem: Problem,
+    *,
+    overrides: Mapping[str, object],
+    runtime_override: Mapping[str, object],
+) -> FemLinearSolverPolicy | None:
+    """Return the FEM demag policy requested by the scene, else the loaded one.
+
+    The Rust SceneDocument adapter emits the policy inside
+    ``runtime_selection``; the Python SceneDocument adapter emits it at the
+    top level.  Key presence is authoritative: null clears a loaded policy.
+    """
+    if "fem_demag_solver_policy" in runtime_override:
+        return _fem_demag_solver_policy_from_value(
+            runtime_override["fem_demag_solver_policy"],
+            context="overrides.runtime_selection.fem_demag_solver_policy",
+        )
+    if "fem_demag_solver_policy" in overrides:
+        return _fem_demag_solver_policy_from_value(
+            overrides["fem_demag_solver_policy"],
+            context="overrides.fem_demag_solver_policy",
+        )
+    fem = problem.discretization.fem if problem.discretization is not None else None
+    if isinstance(fem, FEM):
+        return fem.demag_solver_policy
+    return None
+
+
+def _render_fem_demag_solver_call(policy: FemLinearSolverPolicy, *, surface: str) -> str:
+    return (
+        f"{_surface_call(surface, 'fem_demag_solver')}("
+        f"solver={_py_repr(policy.solver)}, "
+        f"preconditioner={_py_repr(policy.preconditioner)}, "
+        f"rtol={_py_number(policy.rtol)}, "
+        f"atol={_py_literal(policy.atol)}, "
+        f"max_iterations={policy.max_iterations}, "
+        f"print_level={policy.print_level})"
+    )
 
 
 def _export_fem_demag_solver_policy(problem: Problem) -> dict[str, object] | None:
@@ -5270,7 +5353,48 @@ def _render_source_cut_normalization(value: object) -> str:
             f"orientation={_py_repr(normalization.orientation)})")
 
 
-def _render_antenna_port_modes(problem: Problem, *, surface: str) -> list[str]:
+def _render_antenna_port_mode_payload_line(mode: object) -> str:
+    if not isinstance(mode, Mapping):
+        raise ValueError("antenna_port_modes must contain objects")
+    kwargs = dict(mode)
+    schema = kwargs.pop("schema_version", None)
+    if schema not in {ANTENNA_PORT_MODE_SCHEMA_VERSION, "antenna_port_mode.v3"}:
+        raise ValueError("unsupported antenna port mode schema_version")
+    normalization = kwargs.pop("normalization", None)
+    normalization_expr = ""
+    if schema == "antenna_port_mode.v3":
+        kwargs["schema_version"] = schema
+        normalization_expr = f", normalization={_render_source_cut_normalization(normalization)}"
+    elif normalization is not None:
+        raise ValueError("antenna port mode v2 cannot use source-cut normalization")
+    branches = kwargs.pop("branches", None)
+    if not isinstance(branches, list):
+        raise ValueError("antenna port mode branches must be a list")
+    expression = "[" + ", ".join(f"fm.AntennaPortBranch(**{_py_literal(branch)})" for branch in branches) + "]"
+    return f"study.add_antenna_port_mode(port_mode=fm.AntennaPortMode(**{_py_literal(kwargs)}, branches={expression}{normalization_expr}))"
+
+
+def _render_antenna_port_modes(
+    problem: Problem,
+    *,
+    surface: str,
+    overrides: Mapping[str, object] | None = None,
+) -> list[str]:
+    override_payload = overrides or {}
+    if "antenna_port_modes" in override_payload:
+        # Presence is authoritative: the scene owns the complete inventory.
+        raw_modes = override_payload["antenna_port_modes"]
+        if raw_modes is None:
+            raw_modes = []
+        if not isinstance(raw_modes, list):
+            raise ValueError("antenna_port_modes override must be a list")
+        if not raw_modes:
+            return []
+        if surface != "study":
+            raise ValueError("antenna port modes require the study API surface")
+        return ["# Antenna port modes"] + [
+            _render_antenna_port_mode_payload_line(mode) for mode in raw_modes
+        ]
     if not problem.antenna_port_modes:
         return []
     if surface != "study":
@@ -7160,6 +7284,10 @@ def _study_global_mesh_config(problem: Problem, overrides: dict[str, object]) ->
         for key, value in mesh_override.items():
             if key == "adaptive_mesh":
                 continue
+            if key == "order" and value is None:
+                # A missing scene order is not an authored reset; keep the
+                # loaded FEM element order instead of dropping it.
+                continue
             config[key] = value
 
     return config
@@ -8465,8 +8593,9 @@ def _render_stages(
                     if table.table_id != "default":
                         table_parts.append(f"table_id={_py_repr(table.table_id)}")
                     relax_call += f".tableautosave({', '.join(table_parts)})"
-                if stage.autosave is not None:
-                    relax_call += _render_stage_autosave(stage.autosave)
+                relax_autosave = _stage_autosave_with_override(stage_override, stage.autosave)
+                if relax_autosave is not None:
+                    relax_call += _render_stage_autosave(relax_autosave)
                 lines.append(relax_call)
             else:
                 lines.append(f"{_surface_call(surface, 'relax')}({', '.join(call_parts)})")
@@ -8492,12 +8621,23 @@ def _render_stages(
                 run_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
             run_parts.append(f"until={_py_number(until_seconds)}")
             run_call = f"study.stages.add_run({', '.join(run_parts)})"
-            if stage.autosave is not None:
-                run_call += _render_stage_autosave(stage.autosave)
+            run_autosave = _stage_autosave_with_override(stage_override, stage.autosave)
+            if run_autosave is not None:
+                run_call += _render_stage_autosave(run_autosave)
             lines.append(run_call)
         else:
             lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
     return lines
+
+
+def _stage_autosave_with_override(
+    stage_override: Mapping[str, object],
+    loaded: StageAutosave | None,
+) -> StageAutosave | None:
+    """Scene stage autosave wins when present; explicit null clears it."""
+    if "autosave" in stage_override:
+        return _scene_stage_autosave(stage_override["autosave"])
+    return loaded
 
 
 def _render_stage_autosave(policy: StageAutosave) -> str:
@@ -10446,6 +10586,62 @@ def _runtime_device_spec(runtime) -> str:
             return f"cuda:{runtime.device_index}"
         return "gpu"
     return device
+
+
+_RUNTIME_OVERRIDE_BACKENDS = frozenset({"auto", "fdm", "fem", "hybrid"})
+_RUNTIME_OVERRIDE_PRECISIONS = frozenset({"single", "double"})
+_RUNTIME_OVERRIDE_DEVICE_RE = re.compile(r"^(auto|cpu|gpu|cuda)(:\d+)?$")
+
+
+def _runtime_override_backend(runtime_override: Mapping[str, object], runtime) -> str:
+    """Requested backend from the scene, preserving ``auto`` verbatim."""
+    raw = runtime_override.get("backend")
+    if raw is None:
+        return runtime.backend_target.value
+    value = str(raw).strip().lower()
+    if value not in _RUNTIME_OVERRIDE_BACKENDS:
+        raise ValueError(
+            f"overrides.runtime_selection.backend must be one of "
+            f"{sorted(_RUNTIME_OVERRIDE_BACKENDS)!r}, got {raw!r}"
+        )
+    return value
+
+
+def _runtime_override_device_spec(runtime_override: Mapping[str, object], runtime) -> str:
+    """Requested device spec from the scene, preserving ``auto`` verbatim.
+
+    The SceneDocument uses the public ``gpu`` token without an ordinal; a
+    loaded script that pinned ``cuda:N`` keeps its ordinal when the scene still
+    requests a GPU.
+    """
+    loaded_spec = _runtime_device_spec(runtime)
+    raw = runtime_override.get("device")
+    if raw is None:
+        return loaded_spec
+    value = str(raw).strip().lower()
+    if not _RUNTIME_OVERRIDE_DEVICE_RE.match(value):
+        raise ValueError(
+            "overrides.runtime_selection.device must be auto, cpu, gpu, cuda or cuda:N, "
+            f"got {raw!r}"
+        )
+    if value in {"gpu", "cuda"} and loaded_spec.startswith("cuda:"):
+        return loaded_spec
+    if value == "cuda":
+        return "cuda:0"
+    return value
+
+
+def _runtime_override_precision(runtime_override: Mapping[str, object], runtime) -> str:
+    raw = runtime_override.get("precision")
+    if raw is None:
+        return runtime.execution_precision.value
+    value = str(raw).strip().lower()
+    if value not in _RUNTIME_OVERRIDE_PRECISIONS:
+        raise ValueError(
+            "overrides.runtime_selection.precision must be single or double, "
+            f"got {raw!r}"
+        )
+    return value
 
 
 def _magnet_variable_names(

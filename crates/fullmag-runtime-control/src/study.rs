@@ -1863,6 +1863,50 @@ pub fn validate_study_task_completion(store: &SessionStore, claim: &TaskClaim) -
             bail!("study completion found an output artifact outside its manifest allow-list");
         }
     }
+    // Reserved terminal observables are evaluated by the admitted worker,
+    // not a declared Study port. They must still bind to this exact manifest
+    // state before the task can cross its completion barrier.
+    let mut quantity_bundles = artifact_catalog.entries.iter().filter(|entry| {
+        entry.task_id == task_id && entry.attempt_id == attempt_id
+            && entry.ownership_epoch == ownership_epoch
+            && entry.artifact_type == "accepted_quantity_bundle"
+    });
+    if let Some(artifact) = quantity_bundles.next() {
+        if quantity_bundles.next().is_some() || artifact.study_output.is_some()
+            || artifact.status != fullmag_session::FmsArtifactStatus::Published
+            || artifact.object_ref.as_deref() != Some(artifact.content_sha256.as_str()) {
+            bail!("accepted quantity bundle artifact is ambiguous or unbound");
+        }
+        let bytes = store.cas().get(&artifact.content_sha256)?
+            .context("accepted quantity bundle is missing from CAS")?;
+        if fullmag_application::study_artifact_content_sha256(&bytes) != artifact.content_sha256 {
+            bail!("accepted quantity bundle CAS digest differs");
+        }
+        let record: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let source: fullmag_quantities::AcceptedStateRef = serde_json::from_value(
+            record.get("source").cloned().context("accepted quantity source missing")?)?;
+        source.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if record.get("schema_version").and_then(serde_json::Value::as_str) != Some("accepted_quantity_bundle.v1")
+            || manifest.accepted_state_ref.as_ref() != Some(&source)
+            || !manifest.outputs.iter().any(|output| output.data_kind == "state"
+                && Some(output.object_ref.as_str()) == record.get("state_object_ref").and_then(serde_json::Value::as_str)) {
+            bail!("accepted quantity bundle differs from its manifest state");
+        }
+        let has_batch = record.get("batch").is_some_and(|value| !value.is_null());
+        let has_error = record.get("error").and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty());
+        if has_batch == has_error { bail!("accepted quantity bundle outcome invalid"); }
+        if has_batch {
+            let batch: fullmag_runner::AcceptedMaterializationBatch = serde_json::from_value(record["batch"].clone())?;
+            batch.clock.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            if batch.source != source || batch.clock.accepted_step != source.id.accepted_step
+                || batch.clock.digest().map_err(|error| anyhow::anyhow!(error.to_string()))? != source.id.clock_digest
+                || Some(batch.magnetization_content_sha256.as_str()) != record.get("state_object_ref").and_then(serde_json::Value::as_str)
+                || batch.plan_sha256.trim_start_matches("sha256:") != source.id.plan_digest.trim_start_matches("sha256:") {
+                bail!("accepted quantity result source differs");
+            }
+        }
+    }
     for artifact in artifact_catalog.entries.iter().filter(|entry| {
         entry.task_id == task_id
             && entry.attempt_id == attempt_id

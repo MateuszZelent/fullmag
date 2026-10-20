@@ -267,9 +267,7 @@ pub(crate) fn build_live_status(
         .and_then(solver_completion_record);
 
     let solver = SolverSummary {
-        state: ls
-            .map(|l| l.status.clone())
-            .unwrap_or_else(|| "idle".into()),
+        state: solver_lifecycle.clone(),
         algorithm: None,
         relaxation_algorithm: relaxation_algorithm_from_metadata(snapshot.metadata.as_ref()),
         dt: latest.map(|s| s.dt),
@@ -1162,6 +1160,12 @@ pub(crate) fn is_fem_snapshot(snapshot: &SessionStateResponse) -> bool {
     });
     metadata_backend
         .or(snapshot.session.resolved_backend.as_deref())
+        // Before materialization there is no executable mesh yet. Preserve
+        // an explicit authored FEM domain instead of advertising FDM grid 0;
+        // this classifies representation and does not resolve an engine.
+        .or_else(|| (snapshot.fem_mesh.is_none()
+            && snapshot.session.requested_backend.eq_ignore_ascii_case("fem"))
+            .then_some("fem"))
         .is_some_and(|backend| backend.to_ascii_lowercase().contains("fem"))
 }
 

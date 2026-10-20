@@ -18,7 +18,8 @@ export function resolveViewport3DAdaptiveVectorGlyphLength({
   const dimensions = boundsSize
     .filter((value) => Number.isFinite(value) && value > 0)
     .sort((left, right) => right - left);
-  const count = Math.max(1, Math.floor(Number.isFinite(glyphCount) ? glyphCount : 0));
+  const count = Math.floor(Number.isFinite(glyphCount) ? glyphCount : 0);
+  if (count <= 0) return 0;
   const multiplier = Math.max(0, Number.isFinite(lengthScale) ? lengthScale : 1);
   if (dimensions.length === 0 || multiplier === 0) return MIN_VECTOR_GLYPH_LENGTH;
   const dimensionality = scope === "surface"

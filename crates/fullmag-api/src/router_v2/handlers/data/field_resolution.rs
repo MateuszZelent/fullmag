@@ -3,7 +3,10 @@ use crate::router_v2::handlers::data::resolved_spatial_field::{
     resolve_fem_node_mapping, EntityMapping,
 };
 use crate::router_v2::handlers::sessions::status::{fdm_grid_geometry, fdm_grid_shape};
-use crate::session::{resolved_current_field_source, ResolvedCurrentFieldSource};
+use crate::error::ApiError;
+use crate::session::{
+    latest_field_source_is_qualified, resolved_current_field_source, ResolvedCurrentFieldSource,
+};
 use crate::types::SessionStateResponse;
 use fullmag_quantities::{quantity_spec, QuantityLocation};
 use fullmag_runner::FemMeshPayload;
@@ -109,6 +112,24 @@ pub(crate) fn fem_nodal_visualization_projection_allowed(
             .is_some_and(|spec| spec.location == QuantityLocation::Cell && spec.unit == "J/m³")
 }
 
+/// Read projection semantics from the selected qualified payload, including
+/// accepted-worker fields. A count alone cannot distinguish nodes/elements
+/// on a mesh where those two cardinalities happen to be equal.
+pub(crate) fn current_fem_nodal_projection_kind<'a>(
+    snapshot: &'a SessionStateResponse, quantity_id: &str,
+) -> Option<&'a str> {
+    if is_fdm_snapshot(snapshot) { return None; }
+    let spec = quantity_spec(quantity_id)?;
+    if spec.location != QuantityLocation::Cell || spec.unit != "J/m³" { return None; }
+    let kind = match resolved_current_field_source(snapshot, quantity_id, spec.n_comp as usize)? {
+        ResolvedCurrentFieldSource::Latest(value) => value.get("spatial_kind")?.as_str()?,
+        ResolvedCurrentFieldSource::Preview(field) => field.spatial_kind.as_str(),
+        ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. } => return None,
+    };
+    matches!(kind, "fem_nodal_conservative_tetra_projection" | "fem_nodal_visualization_projection")
+        .then_some(kind)
+}
+
 fn multilayer_native_point_count(snapshot: &SessionStateResponse) -> Option<usize> {
     let layout = snapshot.metadata.as_ref()?.get("artifact_layout")?;
     if layout.get("backend")?.as_str()? != "fdm_multilayer" {
@@ -209,7 +230,58 @@ pub(crate) fn flatten_json_field_values(raw: &serde_json::Value) -> Vec<f64> {
     values
 }
 
+/// Read the selected latest field from its registered typed CAS reader, or
+/// preserve the legacy inline JSON representation. Binary descriptors are
+/// accepted only when the current session still qualifies their source frame.
+pub(crate) fn flatten_current_field_values(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    raw: &serde_json::Value,
+) -> Result<Vec<f64>, ApiError> {
+    if raw.get("accepted_binary_field").is_none() {
+        return Ok(flatten_json_field_values(raw));
+    }
+    if !latest_field_source_is_qualified(snapshot, quantity_id, raw) {
+        return Err(ApiError::conflict(format!(
+            "binary field '{quantity_id}' is not qualified for the current session"
+        )));
+    }
+    let reader = snapshot
+        .latest_fields
+        .binary_reader(quantity_id)
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "binary field '{quantity_id}' has no registered reader"
+            ))
+        })?;
+    let reference = crate::accepted_field_binary::binary_field_ref_from_metadata(raw)
+        .ok_or_else(|| ApiError::conflict("binary field descriptor is invalid"))?;
+    if reference != *reader.reference() {
+        return Err(ApiError::conflict(format!(
+            "binary field '{quantity_id}' reader does not match its current metadata"
+        )));
+    }
+    if let Some(spec) = quantity_spec(quantity_id) {
+        if !json_field_matches_current_domain(
+            snapshot,
+            quantity_id,
+            usize::from(spec.n_comp),
+            raw,
+        ) {
+            return Err(ApiError::conflict(format!(
+                "binary field '{quantity_id}' does not match the current domain"
+            )));
+        }
+    }
+    reader.read_values()
+}
+
 pub(crate) fn json_field_value_count(raw: &serde_json::Value) -> usize {
+    if raw.get("accepted_binary_field").is_some() {
+        return crate::accepted_field_binary::binary_field_ref_from_metadata(raw)
+            .map(|reference| reference.value_count)
+            .unwrap_or(0);
+    }
     visit_json_field_values(raw, |_| {})
 }
 
@@ -225,6 +297,15 @@ pub(crate) fn field_values_hash(values: &[f64]) -> u64 {
 }
 
 pub(crate) fn json_field_payload_signature(raw: &serde_json::Value) -> (usize, u64) {
+    if raw.get("accepted_binary_field").is_some() {
+        let Some(reference) =
+            crate::accepted_field_binary::binary_field_ref_from_metadata(raw)
+        else {
+            return (0, 0);
+        };
+        let payload_hash = u64::from_str_radix(&reference.values_sha256[..16], 16).unwrap_or(0);
+        return (reference.value_count, payload_hash);
+    }
     let mut hash = 1469598103934665603_u64;
     let count = visit_json_field_values(raw, |value| hash = hash_field_value(hash, value));
     (count, hash)
@@ -413,7 +494,7 @@ pub(super) fn extract_fdm_field(
 ) -> Option<FdmField> {
     let (values, grid) = match resolved_current_field_source(snapshot, quantity_id, n_comp)? {
         ResolvedCurrentFieldSource::Latest(raw) => {
-            let values = flatten_json_field_values(raw);
+            let values = flatten_current_field_values(snapshot, quantity_id, raw).ok()?;
             let point_count = values.len().checked_div(n_comp.max(1))?;
             (
                 values,
@@ -473,7 +554,9 @@ fn extract_raw_field_values(
     n_comp: usize,
 ) -> Option<Vec<f64>> {
     match resolved_current_field_source(snapshot, quantity_id, n_comp)? {
-        ResolvedCurrentFieldSource::Latest(raw) => Some(flatten_json_field_values(raw)),
+        ResolvedCurrentFieldSource::Latest(raw) => {
+            flatten_current_field_values(snapshot, quantity_id, raw).ok()
+        }
         ResolvedCurrentFieldSource::Preview(field) => Some(field.vector_field_values.clone()),
         ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, .. } => Some(values.to_vec()),
     }

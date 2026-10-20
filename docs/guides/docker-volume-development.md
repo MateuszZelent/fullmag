@@ -46,8 +46,30 @@ błędem. Toolchain, obrazy pomocnicze i aplikacja stosują ten sam wybór źró
 Aktywacja kolejnego skryptu odczytuje rzeczywisty port działającej grupy, więc
 nie wymaga ponownego podawania wcześniejszego nadpisania portu.
 
-Zakończ edycje i staging przed startem; nie zmieniaj źródeł do zakończenia
-próby. Migawka odczytuje checkout dwukrotnie i odrzuca niespójne wejście.
+Zakończ edycje przed startem; nie zmieniaj źródeł do zakończenia próby.
+Migawka odczytuje checkout dwukrotnie i odrzuca niespójne wejście.
+
+Nowe, jeszcze nieśledzone pliki można jawnie dodać do migawki bez `git add`:
+
+```powershell
+python -B scripts/docker_dev.py --repo-root $source up --source-root $source --port 3197 `
+  --include-untracked apps/control-room/src/new-module.ts `
+  --include-untracked examples/new-fixture.json
+```
+
+Każda opcja wskazuje dokładną ścieżkę względną do jednego regularnego pliku,
+który w chwili przechwycenia zwraca `git ls-files --others --exclude-standard`.
+Dozwolone są powtórzone opcje; globs, katalogi, ścieżki absolutne, traversal,
+sekrety i pliki administracyjne są odrzucane. Pozostałe nieśledzone pliki nadal
+pozostają wykluczone. Lista z CLI jest zapisywana jako kanoniczne JSON w
+środowisku backendu i wchodzi do digestu Compose; zmiana listy istniejącej grupy
+przechodzi przez zarządzane odtworzenie z wymaganym bezpiecznym drainem. Brak
+opcji przy uzgadnianiu istniejącej grupy zachowuje przypiętą listę; nowa grupa
+bez opcji zaczyna z pustą listą. Jeżeli wybrany plik zostanie później dodany do
+indeksu Git, capture akceptuje go jako już obecny w `files` i nie dubluje go w
+`included_untracked`.
+Programowe przekazanie `[]` jawnie czyści listę; hostowa zmienna środowiskowa
+`FULLMAG_DEV_INCLUDE_UNTRACKED` nie ustala jej wartości.
 
 Port musi być wolny. Wybierz wolny port, jeśli inna instancja już działa.
 `docker-dev-images` przygotowuje wyłącznie obrazy helperów; `docker-dev-build`
@@ -255,10 +277,24 @@ katalogi metadanych, bez rekurencyjnej zmiany właścicieli. Kanoniczny helper
 bootstrap otrzymuje `DAC_OVERRIDE` tylko dla operacji na tym samym wolumenie,
 aby zachować odczyt i atomowy zapis rekordów należących do UID backendu.
 
-Przed operacją launcher mierzy wolne miejsce w VM oraz na fizycznym wolumenie
-Windows pod rozwiązanym katalogiem danych Docker Desktop. Obecny próg odmowy
-wynosi 32 GiB; jest rezerwą operacyjną, nie quota ani gwarancją rozmiaru zimnego
-buildu. Pakietowy preflight dodatkowo szacuje miejsce na kandydata i rollback.
+Launcher mierzy wolne miejsce w VM oraz na fizycznym wolumenie Windows pod
+rozwiązanym katalogiem danych Docker Desktop. Rzeczywisty BuildKit build
+oraz operacja budowania i startu aplikacji wymagają 32 GiB wolnego miejsca.
+Pakietowy preflight dodatkowo szacuje miejsce na kandydata i rollback.
+To rezerwa operacyjna, nie quota ani gwarancja rozmiaru zimnego buildu.
+
+Sprawdzenie i ponowne użycie istniejących obrazów toolchaina oraz wrapperów
+może użyć niższego budżetu kontrolnego: 1280 MiB, wyprowadzonego z limitów
+logów i dokumentów. Wymaga zgodnego digestu wejść, grupy, control volume oraz
+lokalnego immutable image ID; wrapper sprawdza także przypiętego rodzica
+oraz etykiety obrazu. Brak zgodnego cache powoduje świeży pomiar i wymaga
+pełnych 32 GiB przed BuildKit. Niższy budżet nie dotyczy operacji development.
+
+Na zimnym hoście brakujący obraz helpera jest pobierany przed uruchomieniem
+helpera control volume. Windows sprawdza przed pobraniem fizyczny backing
+volume; Linux/WSL nie ma jeszcze w tym momencie obrazu pozwalającego zmierzyć
+system plików Docker VM. Po pobraniu pełny pomiar poprzedza budowę. Ta granica
+pre-pull pozostaje jawna; nie jest dowodem miejsca w VM przed pierwszym pull.
 
 Log Make i next.log mają limit 64 MiB; nadmiar trafia do ograniczonego drivera
 Docker `local` (3 pliki po 10 MB na usługę). Pełny next.log wymaga jawnego

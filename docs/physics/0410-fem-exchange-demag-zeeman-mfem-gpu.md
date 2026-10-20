@@ -267,6 +267,44 @@ visual `H_demag`. The material-masked device `H_demag` remains the only field
 consumed by LLG. Snapshot readback must never overwrite the unmasked visual
 product with that masked solver field.
 
+#### Accepted-context observation binding (20 October 2026)
+
+The time-domain observation adapter now has a source-visible path that copies
+the active field catalog from the original native FEM context. The capture is
+bound to the final accepted magnetization digest, exact observation clock,
+local-node map digest, and `fem_plan_mesh_generation_id(plan)`. The node-map
+digest alone does not identify mesh geometry or connectivity. Full local-node
+arrays use `[node_count,1,1]` with `original_grid=[0,0,0]`; this is not a sampled
+FDM grid. Nodal energy-density arrays preserve their explicit
+`fem_nodal_conservative_tetra_projection` or
+`fem_nodal_visualization_projection` marker, even when the mesh happens to
+have equal numbers of nodes and elements. They do not acquire DG0 semantics
+from a matching count.
+
+Source owners are
+`crates/fullmag-runner/src/fem/relax/preview.rs::capture_native_fem_observables`,
+`crates/fullmag-runner/src/accepted_materialization.rs::materialize_captured_observables`,
+and `crates/fullmag-api/src/accepted_field_materialization.rs::adopt_terminal_bundle`.
+The shared CPU time-domain wrapper is available under `fem-native`; GPU
+execution still requires `fem-gpu` and its actual device/operator checks.
+No observation advances the integrator or manufactures a fresh accepted step.
+
+Static modal-equilibrium certification remains narrower than legal
+time-domain execution. When
+`fem/equilibrium_identity.rs::validate_supported_relax_source` rejects that
+certification scope, `fem/relax/finalize.rs` records
+`equilibrium/certification_unavailable.v1.json` and still requires the final
+native state/map/representation receipts. It does not emit a substitute modal
+certificate or weaken eigensolver admission. Historical dynamic results that
+lack an original-context capture cannot reconstruct missing thermal, transport
+or activation inputs from magnetization alone.
+
+These are source contracts, not execution or numerical qualification. Feature
+compile/link, all four runtime lanes, UI/WebGL, observer accuracy and scientific
+parity remain **NOT VERIFIED** for this change; no tests, build or simulation
+were run. The scoped implementation/evidence record is
+`../reports/2026-10-20/mx3-materialization-live-continuation.md`.
+
 ## 3. Numerical interpretation
 
 ### 3.1 FDM
@@ -588,7 +626,9 @@ The planner should own:
 
 The capability matrix should continue to distinguish clearly between shared semantics and real
 FEM executability.
-At present, these interactions are still semantic/planned on the FEM side.
+Current lane-specific execution and qualification are tracked in
+`../specs/capability-matrix-v0.md`; the observation change above does not promote
+any solver lane or interaction combination.
 
 ## 5. Validation strategy
 
@@ -646,16 +686,18 @@ At present, these interactions are still semantic/planned on the FEM side.
 
 ## 7. Known limits and deferred work
 
-- The current public product path does not yet execute FEM problems.
+- Executable scope and scientific qualification are separate; use the current
+  lane/workload entries in `../specs/capability-matrix-v0.md`. The accepted
+  observation change above has no managed execution or numerical evidence.
 - The first FEM backend does not need to start with the final perfect constrained formulation.
 - A truncated air-box demag solve may be useful as a bootstrap, but must not be mistaken for the
   final open-boundary solution strategy.
-- Full FEM-BEM or transformed-domain demag is deferred.
+- Broader FEM-BEM and transformed-domain coverage and qualification remain
+  governed by their own method notes and capability entries.
 - High-order spaces and adaptive mesh refinement are deferred.
-- Public mixed precision and detailed GPU precision policy for FEM are deferred until the backend
-  exists.
-- Eigenmode support is future work, but the interaction operators should already be designed so it
-  can be added without architectural surgery.
+- Broader FEM precision combinations are not qualified by the observation path.
+- Eigenmode execution has independent equilibrium and linearization gates;
+  publishing time-domain fields does not certify a modal input.
 
 ## 8. References
 

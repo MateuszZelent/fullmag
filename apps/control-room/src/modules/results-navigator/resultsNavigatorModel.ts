@@ -468,8 +468,13 @@ function buildFrequencyDomainTree(
     label: "Overview",
     parentId: frequencyId,
     resourceKey: "analysis:frequency-domain:manifest",
-    status: input.manifestState ?? (input.identity && input.manifest ? manifestStatus : "missing"),
-    ...(!input.identity ? { statusReason: "No current run/stage identity is published." } : {}),
+    status: input.manifestState ??
+      (input.identity && input.manifest
+        ? manifestStatus
+        : !input.identity && input.stageExecutionUnpublished
+          ? "unsupported"
+          : "missing"),
+    ...(!input.identity ? { statusReason: missingIdentityReason(input) } : {}),
   });
 
   const modalId = nodePath(frequencyId, "modal-eigen");
@@ -668,7 +673,7 @@ function buildFrequencyDomainTree(
         ? {
             statusReason: input.identity
               ? "Published response point is missing stable pointId."
-              : "No current run/stage identity is published.",
+              : missingIdentityReason(input),
           }
         : point.stableIdentityAvailable === false
           ? { statusReason: "Published response point is missing stable pointId." }
@@ -1033,3 +1038,12 @@ export {
   navigatorResponseFromResource,
   navigatorSpectrumFromResource,
 } from "./resultsNavigatorTypes";
+
+export const STAGE_PROGRESS_NOT_PUBLISHED_REASON =
+  "Stage progress not published by this runtime.";
+
+function missingIdentityReason(input: FrequencyDomainNavigatorInput): string {
+  return input.stageExecutionUnpublished
+    ? STAGE_PROGRESS_NOT_PUBLISHED_REASON
+    : "No current run/stage identity is published.";
+}

@@ -702,7 +702,7 @@ abs(claimed - recomputed)
          16 * f64::EPSILON)
 ```
 
-only for dimensionless `scaled_jacobian_minima_by_family`,
+for dimensionless `scaled_jacobian_minima_by_family`,
 `scaled_jacobian_p05_by_family`, `magnetic_relative_volume_error`, and
 `shared_domain_relative_volume_error`. This bound applies after the producer
 and consumer use the same explicit determinant operation and fixed-order
@@ -712,7 +712,16 @@ algorithm that differs from the native contract. No other certificate field
 inherits the `16 * f64::EPSILON` absolute allowance: dimensional Jacobians,
 volumes, and related scalar evidence retain `1e-12` relative plus `1e-30`
 absolute comparison, while bounds, plane coordinates, counts, markers, and
-identities retain their field-specific fail-closed checks.
+identities retain their field-specific fail-closed checks. For v2 magnetic
+relative volume error specifically, this comparison checks the claimed metric
+against the ratio computed from the certificate's own claimed volumes. Those
+two SI-volume claims independently retain their strict comparisons against
+mesh-derived cell and closed-faceted volumes. The mesh-derived relative error
+is separately required to be finite and at most `1e-8`, just like the claimed
+metric. The validator does not compare the two near-zero residuals directly:
+allowed differences between independently reduced SI volumes can otherwise
+be amplified by cancellation. Neither the physical limit nor dimensional
+evidence checks are relaxed. Failure diagnostics retain both numbers.
 
 The v2 native engine uses a fixed-order Neumaier-compensated binary64
 accumulator for shared-domain, per-body magnetic, and closed-faceted volume
@@ -720,8 +729,9 @@ totals after sorting records by global cell ordinal. This is required for
 large meshes where a plain sequential sum can move a near-zero derived volume
 error by many ulps. It improves cross-language reproducibility without
 changing the physical volume limit or widening dimensional evidence checks;
-the small dimensionless allowance above remains the only tolerance for the
-derived relative-error fields.
+the small dimensionless allowance above still checks internal claimed-ratio
+consistency, while the independent mesh-relative physical limit remains
+mandatory. This source change has no new runtime or scientific qualification.
 
 This certificate rule is distinct from the final-artifact magnetization
 norm-defect rule in Section 4.6. The norm-defect check uses only an absolute

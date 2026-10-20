@@ -524,11 +524,10 @@ export function chartRenderModelToEChartsOption(
             : "—";
           lines.push(`  ${sanitizeLabelText(p.seriesName ?? "")}: ${yVal}`);
         }
-        const rowId = Array.isArray(first.data) ? first.data[2] : undefined;
-        if (typeof rowId === "number" || typeof rowId === "string") {
-          lines.push(`row id: ${sanitizeLabelText(rowId)}`);
-        }
-        return lines.join("\n");
+        // Row identity stays in the series data for selection; it is an
+        // internal key, not a value users read in the tooltip. The HTML
+        // tooltip collapses "\n"; label text is already tag-stripped.
+        return lines.join("<br/>");
       },
       padding: [6, 10],
       textStyle: {

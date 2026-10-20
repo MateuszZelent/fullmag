@@ -1417,6 +1417,19 @@ export function useSolverEnergyCurrentResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
   const { api } = useKernel();
+  const statusRevision = useSessionStatusSelector(
+    (status) => {
+      const current = status.data;
+      if (!current) return null;
+      return [
+        current.session.session_id,
+        current.session.session_epoch,
+        current.resources.scalars_revision,
+        current.resources.fields_revision,
+      ].join(":");
+    },
+    { enabled },
+  );
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation.solver.energies
@@ -1425,12 +1438,22 @@ export function useSolverEnergyCurrentResource({
     [api],
   );
 
-  return useSessionScopedResource<SolverEnergyCurrentResource | null>({
+  const resource = useSessionScopedResource<SolverEnergyCurrentResource | null>({
     enabled,
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey: SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   });
+  const lastStatusRevision = useRef<string | null>(null);
+  useEffect(() => {
+    if (!enabled || statusRevision === null) return;
+    const previous = lastStatusRevision.current;
+    lastStatusRevision.current = statusRevision;
+    if (previous !== null && previous !== statusRevision) {
+      resource.refetch();
+    }
+  }, [enabled, resource.refetch, statusRevision]);
+  return resource;
 }
 
 export function useSolverEnergyHistoryResource(

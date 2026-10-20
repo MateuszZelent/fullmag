@@ -9,6 +9,7 @@ import {
   buildFdmFieldIndexResolver,
   type FdmFieldIndexingResult,
 } from "../model/fdmFieldIndexing";
+import { resolveViewport3DAdaptiveVectorGlyphLength } from "../model/viewport3DVectorGlyphScale";
 import {
   sampleFdmDisplayCellIndices,
   sampleFdmSpatialCellIndices,
@@ -112,6 +113,8 @@ export interface FdmCuboidBuildRequest {
   /** Admission hint; exact is accepted only with attached membership evidence. */
   membershipAdmission?: "exact" | "full-domain";
   vectorGeometryScope?: "full" | "surface";
+  /** Raw user multiplier; the builder applies it to the selected target bounds and rendered count. */
+  vectorLengthScale?: number;
   vectorScale: number;
   vectorSurfaceOffsetEnabled?: boolean;
   vectorSurfaceOffsetScale?: number;
@@ -358,6 +361,7 @@ export function buildViewport3DFdmCuboid(
         request.vectorOnly.membershipAdmission ?? request.membershipAdmission,
       realizedRegionIds: request.realizedRegionIds,
       scale: request.vectorScale,
+      vectorLengthScale: request.vectorLengthScale,
       surfaceOffsetEnabled: request.vectorSurfaceOffsetEnabled,
       surfaceOffsetScale: request.vectorSurfaceOffsetScale,
     });
@@ -391,6 +395,7 @@ export function buildViewport3DFdmCuboid(
       geometryScope: request.vectorGeometryScope ?? "full",
       cellSelection: request.cellSelection,
       realizedRegionIds: request.realizedRegionIds,
+      vectorLengthScale: request.vectorLengthScale,
       surfaceOffsetEnabled: request.vectorSurfaceOffsetEnabled,
       surfaceOffsetScale: request.vectorSurfaceOffsetScale,
     },
@@ -404,7 +409,11 @@ export function buildViewport3DFdmCuboid(
     request.realizedRegionIds,
     request.cellSelection,
   );
-  return { model, vectorCellIndices, vectorSegments };
+  return {
+    model,
+    vectorCellIndices: vectorSegments ? vectorCellIndices : null,
+    vectorSegments,
+  };
 }
 
 export interface FdmVectorOnlyBuildRequest extends FdmVectorOnlyBuildInput {
@@ -415,6 +424,7 @@ export interface FdmVectorOnlyBuildRequest extends FdmVectorOnlyBuildInput {
   maxVectors: number;
   realizedRegionIds?: Uint32Array | null;
   scale: number;
+  vectorLengthScale?: number;
   surfaceOffsetEnabled?: boolean;
   surfaceOffsetScale?: number;
 }
@@ -509,28 +519,43 @@ export function buildFdmVectorSegmentsFromAnchors(
   );
   if (!selected) return null;
   const count = selected.length;
+  if (count <= 0) return null;
 
   let maxMagnitude = 0;
+  let renderedGlyphCount = 0;
   for (const ordinal of selected) {
     const fieldIndex = indexing.resolve(cellIndices[ordinal] ?? -1);
     if (fieldIndex === null) continue;
     const offset = fieldIndex * fieldVector.nComp;
-    maxMagnitude = Math.max(
-      maxMagnitude,
-      Math.hypot(
-        fieldVector.values[offset] ?? 0,
-        fieldVector.values[offset + 1] ?? 0,
-        fieldVector.values[offset + 2] ?? 0,
-      ),
+    const magnitude = Math.hypot(
+      fieldVector.values[offset] ?? 0,
+      fieldVector.values[offset + 1] ?? 0,
+      fieldVector.values[offset + 2] ?? 0,
     );
+    maxMagnitude = Math.max(maxMagnitude, magnitude);
+    if (magnitude > 0) renderedGlyphCount += 1;
   }
+  if (renderedGlyphCount <= 0) return null;
   const segments = new Float32Array(count * FDM_VECTOR_SEGMENT_STRIDE);
+  const geometryScope = request.geometryScope ?? "full";
+  const scopedCarrierCount = scoped.length;
+  const requestedScale = request.vectorLengthScale === undefined
+    ? request.scale
+    : resolveViewport3DAdaptiveVectorGlyphLength({
+        boundsSize: resolveFdmVectorOnlyTargetBoundsSize(
+          request,
+          scoped,
+        ),
+        glyphCount: renderedGlyphCount,
+        lengthScale: request.vectorLengthScale,
+        scope: geometryScope,
+      });
   const safeScale = resolveFdmVectorGlyphScaleForCellSize(
     request.cellSize,
-    request.scale,
+    requestedScale,
     resolveFdmVectorGlyphSamplingSpacingScale(
-      request.gridShape[0] * request.gridShape[1] * request.gridShape[2],
-      count,
+      scopedCarrierCount,
+      renderedGlyphCount,
     ),
   );
   const halfScale = safeScale / 2;
@@ -1207,6 +1232,69 @@ export function resolveFdmGeometryScopeInstanceOrdinals(
   return fallback === undefined ? new Uint32Array() : Uint32Array.of(fallback);
 }
 
+function resolveFdmInstanceBoundsSize(
+  model: FdmCuboidInstanceModel,
+  instanceOrdinals: ArrayLike<number>,
+): [number, number, number] {
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (let index = 0; index < instanceOrdinals.length; index += 1) {
+    const instance = Number(instanceOrdinals[index]);
+    if (!Number.isInteger(instance) || instance < 0 || instance >= model.count) {
+      continue;
+    }
+    const offset = instance * 3;
+    for (let axis = 0; axis < 3; axis += 1) {
+      const center = model.centers[offset + axis];
+      const cellSize = model.cellSize[axis];
+      if (
+        typeof center !== "number" ||
+        !Number.isFinite(center) ||
+        !Number.isFinite(cellSize) ||
+        cellSize < 0
+      ) {
+        continue;
+      }
+      min[axis] = Math.min(min[axis], center - cellSize / 2);
+      max[axis] = Math.max(max[axis], center + cellSize / 2);
+    }
+  }
+  return min.map((value, axis) =>
+    Number.isFinite(value) && Number.isFinite(max[axis])
+      ? Math.max(0, max[axis] - value)
+      : 0,
+  ) as [number, number, number];
+}
+
+function resolveFdmVectorOnlyTargetBoundsSize(
+  request: FdmVectorOnlyBuildRequest,
+  candidateOrdinals: ArrayLike<number>,
+): [number, number, number] {
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  const cellSize = request.cellSize ?? [0, 0, 0];
+  for (let index = 0; index < candidateOrdinals.length; index += 1) {
+    const ordinal = Number(candidateOrdinals[index]);
+    if (!Number.isInteger(ordinal) || ordinal < 0) continue;
+    const anchorOffset = ordinal * 3;
+    if (anchorOffset + 2 >= request.anchors.length) continue;
+    for (let axis = 0; axis < 3; axis += 1) {
+      const center = request.anchors[anchorOffset + axis];
+      const cellExtent = cellSize[axis] ?? 0;
+      const halfCell =
+        Number.isFinite(cellExtent) && cellExtent > 0 ? cellExtent / 2 : 0;
+      if (typeof center !== "number" || !Number.isFinite(center)) continue;
+      min[axis] = Math.min(min[axis], center - halfCell);
+      max[axis] = Math.max(max[axis], center + halfCell);
+    }
+  }
+  return min.map((value, axis) =>
+    Number.isFinite(value) && Number.isFinite(max[axis])
+      ? Math.max(0, max[axis] - value)
+      : 0,
+  ) as [number, number, number];
+}
+
 function isFdmTargetSurfaceCell(
   cellIndex: number,
   [nx, ny, nz]: readonly [number, number, number],
@@ -1241,6 +1329,7 @@ export function buildFdmVectorSegmentsUncached(
     geometryScope?: "surface" | "full";
     instanceOrdinals?: Uint32Array | null;
     realizedRegionIds?: Uint32Array | null;
+    vectorLengthScale?: number;
     surfaceOffsetEnabled?: boolean;
     surfaceOffsetScale?: number;
   } = {},
@@ -1266,8 +1355,16 @@ export function buildFdmVectorSegmentsUncached(
   );
   if (!sampledInstances) return null;
   const vectorCount = sampledInstances.length;
-  const anchorMode = options.anchorMode ?? "center";
   if (vectorCount <= 0) return null;
+  const geometryScope = options.geometryScope ?? "full";
+  const scopedInstances = resolveFdmGeometryScopeInstanceOrdinals(
+    model,
+    geometryScope,
+    options.instanceOrdinals,
+    options.realizedRegionIds,
+    options.cellSelection,
+  );
+  const anchorMode = options.anchorMode ?? "center";
   const fieldIndexing = buildFdmFieldIndexResolver(
     fieldVector,
     model.gridShape[0] * model.gridShape[1] * model.gridShape[2],
@@ -1275,6 +1372,7 @@ export function buildFdmVectorSegmentsUncached(
   if (fieldIndexing.status !== "compatible") return null;
 
   let maxMagnitude = 0;
+  let renderedGlyphCount = 0;
   for (let vector = 0; vector < vectorCount; vector += 1) {
     const instance = sampledInstances[vector] ?? 0;
     const cellOrdinal = model.cellIndices[instance] ?? -1;
@@ -1287,10 +1385,31 @@ export function buildFdmVectorSegmentsUncached(
       fieldVector.values[offset + 2] ?? 0,
     );
     maxMagnitude = Math.max(maxMagnitude, magnitude);
+    if (magnitude > 0) renderedGlyphCount += 1;
   }
+  if (renderedGlyphCount <= 0) return null;
+
+  const requestedScale = options.vectorLengthScale === undefined
+    ? scale
+    : resolveViewport3DAdaptiveVectorGlyphLength({
+        boundsSize: resolveFdmInstanceBoundsSize(model, scopedInstances),
+        glyphCount: renderedGlyphCount,
+        lengthScale: options.vectorLengthScale,
+        scope: geometryScope,
+      });
+  const effectiveScale = options.vectorLengthScale === undefined
+    ? scale
+    : resolveFdmVectorGlyphScaleForCellSize(
+        model.cellSize,
+        requestedScale,
+        resolveFdmVectorGlyphSamplingSpacingScale(
+          scopedInstances.length,
+          renderedGlyphCount,
+        ),
+      );
 
   const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
-  const halfScale = scale / 2;
+  const halfScale = effectiveScale / 2;
   const segments = new Float32Array(vectorCount * FDM_VECTOR_SEGMENT_STRIDE);
   const surfaceTargetCells =
     options.geometryScope === "surface"
@@ -1302,7 +1421,7 @@ export function buildFdmVectorSegmentsUncached(
         )
       : null;
   const surfaceOffsetDistance = resolveFdmSurfaceOffsetDistance(
-    scale,
+    effectiveScale,
     anchorMode,
     options.surfaceOffsetEnabled === true && options.geometryScope === "surface",
     options.surfaceOffsetScale ?? 0,
@@ -1340,9 +1459,9 @@ export function buildFdmVectorSegmentsUncached(
       segments[target] = x;
       segments[target + 1] = y;
       segments[target + 2] = z;
-      segments[target + 3] = x + ux * scale;
-      segments[target + 4] = y + uy * scale;
-      segments[target + 5] = z + uz * scale;
+      segments[target + 3] = x + ux * effectiveScale;
+      segments[target + 4] = y + uy * effectiveScale;
+      segments[target + 5] = z + uz * effectiveScale;
     } else {
       segments[target] = x - ux * halfScale;
       segments[target + 1] = y - uy * halfScale;

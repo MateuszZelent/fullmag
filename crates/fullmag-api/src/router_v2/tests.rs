@@ -120,6 +120,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
             adaptive_h_max: String::new(),
             adaptive_max_passes: 5,
             adaptive_error_tolerance: String::new(),
+            order: None,
         },
         universe: None,
         domain_frame: None,

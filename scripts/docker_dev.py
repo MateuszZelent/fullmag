@@ -76,6 +76,7 @@ RUNTIME_IMAGE_CONTEXT_FILES = (
     ("Dockerfile.backend", "docker/all-in-one/Dockerfile.backend"),
     ("backend_dev.py", "docker/all-in-one/backend_dev.py"),
     ("backend_source.py", "docker/all-in-one/backend_source.py"),
+    ("worker_cgroup_gate.py", "docker/all-in-one/worker_cgroup_gate.py"),
     (
         "backend_volume_cache_maintenance.py",
         "docker/all-in-one/backend_volume_cache_maintenance.py",
@@ -2123,8 +2124,7 @@ def _backend_start_inputs(
         )
     if getattr(args, "include_untracked", None):
         raise _fail(
-            "--include-untracked is unsupported by docker-dev's live source service; "
-            "add new source files to the selected Git index before starting the service"
+            "--include-untracked is unsupported by the retired host-receipt direct-development route"
         )
     cargo_profile = _cargo_profile_for_build(build_profile)
     repo = Path(args.repo_root).resolve(strict=True)
@@ -2559,7 +2559,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     recreate_volume.add_argument("--fresh-state", action="store_true", help="Preserve the old host storage root and create a fresh one")
     recreate_volume.set_defaults(profile="dev", image=None, toolchain_image=None, source_manifest=None,
-                                 include_untracked=[], script=None)
+                                 include_untracked=None, script=None)
 
     for name in ("build", "up"):
         command = subparsers.add_parser(name, help=(
@@ -2582,8 +2582,15 @@ def _parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--source-manifest", type=Path,
                              help="unsupported compatibility flag: live docker-dev does not consume frozen source manifests")
-        command.add_argument("--include-untracked", action="append", default=[],
-                             help="unsupported compatibility flag: add new source files to the selected Git index instead")
+        command.add_argument(
+            "--include-untracked",
+            action="append",
+            default=None,
+            help=(
+                "include this exact relative, regular untracked file in live source; "
+                "repeat for additional files"
+            ),
+        )
         command.add_argument("--port", type=int, default=None,
                              help="loopback frontend port (up only)")
         command.add_argument("--script", "--startup-script", dest="script", type=Path,

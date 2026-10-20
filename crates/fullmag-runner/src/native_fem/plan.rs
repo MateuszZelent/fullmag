@@ -1,4 +1,4 @@
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(super) fn preserve_mixed_body_markers_for_runtime(plan: &fullmag_ir::FemPlanIR) -> bool {
     plan.mesh_build_report
         .as_ref()
@@ -6,13 +6,13 @@ pub(super) fn preserve_mixed_body_markers_for_runtime(plan: &fullmag_ir::FemPlan
         .is_some()
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use fullmag_fem_sys as ffi;
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(super) fn has_slonczewski_stt(plan: &fullmag_ir::FemPlanIR) -> bool {
     plan.current_density.is_some()
         && plan.stt_degree.is_some()
@@ -20,17 +20,17 @@ pub(super) fn has_slonczewski_stt(plan: &fullmag_ir::FemPlanIR) -> bool {
         && plan.stt_lambda.is_some()
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(super) fn has_zhang_li_stt(plan: &fullmag_ir::FemPlanIR) -> bool {
     plan.current_density.is_some() && plan.stt_degree.is_some() && !has_slonczewski_stt(plan)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(super) fn native_fem_precession_enabled(plan: &fullmag_ir::FemPlanIR) -> bool {
     !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(super) fn single_precision_rejection(plan: &fullmag_ir::FemPlanIR) -> &'static str {
     if !native_fem_plan_requests_gpu_mfem_device(plan) {
         "MFEM/libCEED/hypre CPU FEM backend currently supports only double precision; single precision is not implemented"
@@ -39,7 +39,7 @@ pub(super) fn single_precision_rejection(plan: &fullmag_ir::FemPlanIR) -> &'stat
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(super) fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
     if !native_fem_plan_requests_gpu_mfem_device(plan) || !plan.enable_demag {
         return ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED as i32;
@@ -59,7 +59,7 @@ pub(super) fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn resolved_native_fem_demag_solver_policy(
     plan: &fullmag_ir::FemPlanIR,
 ) -> fullmag_ir::FemLinearSolverPolicy {

@@ -639,12 +639,18 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         metadataAck = await runAuthoringMutationWithHistory(
           historyContext,
           "Edit metadata " + submittedDraft.name,
+          // Send only edited fields: resending unchanged material/region
+          // references would invalidate the realized mesh for a rename.
           () => patchObjectTransaction(api, operation.identity.objectId, {
             base_revision: submittedBaseRevision,
-            name: submittedDraft.name,
-            notes: submittedDraft.notes,
-            material_ref: optionalRef(submittedDraft.material) ?? null,
-            region_name: optionalRef(submittedDraft.region) ?? null,
+            ...(submittedDraft.name !== baseDraft.name ? { name: submittedDraft.name } : {}),
+            ...(submittedDraft.notes !== baseDraft.notes ? { notes: submittedDraft.notes } : {}),
+            ...(optionalRef(submittedDraft.material) !== optionalRef(baseDraft.material)
+              ? { material_ref: optionalRef(submittedDraft.material) ?? null }
+              : {}),
+            ...(optionalRef(submittedDraft.region) !== optionalRef(baseDraft.region)
+              ? { region_name: optionalRef(submittedDraft.region) ?? null }
+              : {}),
           }, requestOptions),
           undefined,
           { onHistoryDegraded: () => { historyDegraded = true; } },

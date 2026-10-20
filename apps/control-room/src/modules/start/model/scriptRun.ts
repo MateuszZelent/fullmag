@@ -80,23 +80,53 @@ export interface ScriptPreflight {
   readonly warning: string | null;
 }
 
-export type RunState = "starting" | "materializing" | "waiting_for_solve" | "running" | "exited";
+export type KnownRunState = "starting" | "materializing" | "waiting_for_solve" | "running" | "exited";
+
+/**
+ * `unknown` is a state token this client does not recognise. It is kept
+ * visible (`ScriptRunStatus.unknownState`) instead of failing the parse, and
+ * the run stays active: no finished/ready transition and no new run.
+ */
+export type RunState = KnownRunState | "unknown";
 
 export type ReceiptOutcome = "completed" | "failed" | "cancelled" | "not_started";
+
+export interface ReceiptFallback {
+  readonly occurred: boolean;
+  readonly originalEngine: string | null;
+  readonly fallbackEngine: string | null;
+  readonly reason: string | null;
+}
 
 export interface ReceiptSummary {
   readonly outcome: ReceiptOutcome;
   readonly exitCode: number | null;
   readonly durationSeconds: number | null;
   readonly error: string | null;
+  /** Literal host request (`as_authored` / `auto` stay literal). */
   readonly requestedDevice: string | null;
+  readonly requestedBackend?: string | null;
+  readonly requestedPrecision?: string | null;
+  /** Effective request after script authoring (`resolved.requested_effective`). */
+  readonly requestedEffectiveDevice?: string | null;
+  /** False when the receipt carries no `resolved` record at all. */
+  readonly resolvedKnown?: boolean;
   readonly resolvedDevice: string | null;
+  readonly resolvedBackend?: string | null;
+  readonly resolvedPrecision?: string | null;
+  readonly resolvedEngineId?: string | null;
+  /** `null` when the receipt publishes no fallback record. */
+  readonly fallback?: ReceiptFallback | null;
   readonly resultsDir: string | null;
 }
 
 export interface ScriptRunStatus {
   readonly runHandle: string;
   readonly state: RunState;
+  /** Raw token when `state` is `unknown`. */
+  readonly unknownState?: string | null;
+  /** Optional producer-supplied phase detail; never synthesised here. */
+  readonly phaseDetail?: string | null;
   readonly exitCode: number | null;
   readonly receipt: ReceiptSummary | null;
   readonly windowOpen: boolean;
@@ -158,7 +188,7 @@ const REFUSAL_CODES: readonly RefusalCode[] = [
   "confirm_required",
   "storage",
 ];
-const RUN_STATES: readonly RunState[] = [
+const RUN_STATES: readonly KnownRunState[] = [
   "starting",
   "materializing",
   "waiting_for_solve",
@@ -299,6 +329,8 @@ function parseReceipt(raw: unknown): ReceiptSummary | null {
   if (!outcome) return null;
   const requested = isRecord(raw.requested) ? raw.requested : null;
   const resolved = isRecord(raw.resolved) ? raw.resolved : null;
+  const requestedEffective =
+    resolved && isRecord(resolved.requested_effective) ? resolved.requested_effective : null;
   const results = isRecord(raw.results) ? raw.results : null;
   return {
     outcome,
@@ -306,19 +338,42 @@ function parseReceipt(raw: unknown): ReceiptSummary | null {
     durationSeconds: num(result.duration_seconds),
     error: str(result.error),
     requestedDevice: requested ? str(requested.device) : null,
+    requestedBackend: requested ? str(requested.backend) : null,
+    requestedPrecision: requested ? str(requested.precision) : null,
+    requestedEffectiveDevice: requestedEffective ? str(requestedEffective.device) : null,
+    resolvedKnown: resolved !== null,
     resolvedDevice: resolved ? str(resolved.device) : null,
+    resolvedBackend: resolved ? str(resolved.backend) : null,
+    resolvedPrecision: resolved ? str(resolved.precision) : null,
+    resolvedEngineId: resolved ? str(resolved.engine_id) : null,
+    fallback: resolved ? parseReceiptFallback(resolved.fallback) : null,
     resultsDir: results ? str(results.dir) : null,
+  };
+}
+
+function parseReceiptFallback(raw: unknown): ReceiptFallback | null {
+  if (!isRecord(raw)) return null;
+  return {
+    occurred: raw.occurred === true,
+    originalEngine: str(raw.original_engine),
+    fallbackEngine: str(raw.fallback_engine),
+    reason: str(raw.reason) ?? str(raw.message),
   };
 }
 
 export function parseScriptRunStatus(raw: unknown): ScriptRunStatus {
   if (!isRecord(raw)) throw invalid("run status");
   const runHandle = str(raw.run_handle);
-  const state = RUN_STATES.find((entry) => entry === raw.state);
-  if (!runHandle || !state) throw invalid("run status");
+  const rawState = str(raw.state)?.trim() ?? "";
+  if (!runHandle || !rawState) throw invalid("run status");
+  // A newer host may publish a state this client does not know. Keep it
+  // visible as `unknown` instead of dropping the whole status update.
+  const knownState = RUN_STATES.find((entry) => entry === rawState);
   return {
     runHandle,
-    state,
+    state: knownState ?? "unknown",
+    unknownState: knownState ? null : rawState,
+    phaseDetail: str(raw.phase_detail),
     exitCode: num(raw.exit_code),
     receipt: parseReceipt(raw.receipt),
     windowOpen: raw.window_open === true,
@@ -352,9 +407,11 @@ const STATE_LABEL: Readonly<Record<RunState, string>> = {
   waiting_for_solve: "Model ready, waiting for COMPUTE",
   running: "Computing",
   exited: "Finished",
+  unknown: "Unknown state",
 };
 
-export const stateLabel = (state: RunState): string => STATE_LABEL[state];
+export const stateLabel = (state: RunState, unknownState?: string | null): string =>
+  state === "unknown" && unknownState ? `Unknown state ${unknownState}` : STATE_LABEL[state];
 
 export function refusalMessage(code: RefusalCode, detail: string): string {
   const tail = detail ? ` ${detail}` : "";
@@ -441,23 +498,81 @@ export function preflightLines(facts: PreflightFacts): readonly FactLine[] {
   return lines;
 }
 
+/** Exit code 14: the requested runtime was unavailable and no fallback was attempted. */
+const EXIT_RUNTIME_UNAVAILABLE = 14;
+
+const lower = (value: string | null | undefined): string | null =>
+  value ? value.trim().toLowerCase() || null : null;
+
+function executionLabel(
+  backend: string | null | undefined,
+  device: string | null | undefined,
+  precision: string | null | undefined,
+): string | null {
+  const parts = [backend, device]
+    .map(lower)
+    .filter((part): part is string => part !== null && part !== "as_authored")
+    .map((part) => part.toUpperCase());
+  const precisionToken = lower(precision);
+  if (precisionToken && precisionToken !== "as_authored") parts.push(precisionToken);
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
+/**
+ * Requested → resolved execution sentence. Claims only what the receipt
+ * proves: an unknown resolution is reported as unknown, never as "no
+ * fallback"; a forced GPU resolved elsewhere is a violation, not a success.
+ */
+export function receiptExecutionText(receipt: ReceiptSummary): string {
+  const requestedDevice = lower(receipt.requestedDevice);
+  const effectiveDevice = lower(receipt.requestedEffectiveDevice);
+  const forcedGpu = requestedDevice === "gpu" || effectiveDevice === "gpu";
+  const resolvedKnown = receipt.resolvedKnown ?? receipt.resolvedDevice !== null;
+  const resolvedDevice = lower(receipt.resolvedDevice);
+  const requested =
+    executionLabel(receipt.requestedBackend, receipt.requestedDevice, receipt.requestedPrecision) ??
+    "as authored";
+  const resolved = executionLabel(
+    receipt.resolvedBackend,
+    receipt.resolvedDevice,
+    receipt.resolvedPrecision,
+  );
+  const fallback = receipt.fallback ?? null;
+
+  if (!resolvedKnown || !resolvedDevice) {
+    const unknown = `Requested ${requested}; resolved execution unknown.`;
+    if (forcedGpu && receipt.exitCode === EXIT_RUNTIME_UNAVAILABLE) {
+      return `${unknown} The requested GPU runtime was unavailable and no CPU fallback was attempted (exit ${EXIT_RUNTIME_UNAVAILABLE}).`;
+    }
+    return unknown;
+  }
+
+  const sentence = `Requested ${requested} → resolved ${resolved ?? resolvedDevice.toUpperCase()}.`;
+  if (fallback?.occurred) {
+    const route = [fallback.originalEngine, fallback.fallbackEngine]
+      .filter((part): part is string => Boolean(part))
+      .join(" → ");
+    const reason = fallback.reason ? ` (${fallback.reason})` : "";
+    return `${sentence} Fallback recorded${route ? `: ${route}` : ""}${reason}.`;
+  }
+  if (forcedGpu && resolvedDevice !== "gpu") {
+    return `${sentence} GPU was requested but the run resolved to ${resolvedDevice.toUpperCase()}: forced-GPU violation, not a GPU result.`;
+  }
+  return sentence;
+}
+
 export function receiptText(receipt: ReceiptSummary): string {
   const seconds =
     receipt.durationSeconds === null ? "" : ` after ${receipt.durationSeconds.toFixed(1)} s`;
   switch (receipt.outcome) {
     case "completed":
-      return `Finished${seconds}.`;
+      return `Finished${seconds}. ${receiptExecutionText(receipt)}`;
     case "cancelled":
       return `Stopped${seconds}.`;
     case "not_started":
       return `Not started: ${receipt.error ?? "the run was refused before it began"}.`;
-    case "failed": {
-      const fallback =
-        receipt.requestedDevice === "gpu" && receipt.resolvedDevice !== "gpu"
-          ? " GPU was requested and no CPU fallback was used."
-          : "";
-      return `Failed${seconds}: ${receipt.error ?? "see the run window for the log"}.${fallback}`;
-    }
+    case "failed":
+      return `Failed${seconds}: ${receipt.error ?? "see the run window for the log"}. ${receiptExecutionText(receipt)}`;
   }
 }
 
@@ -520,6 +635,7 @@ export function reduceRun(phase: RunPhase, event: RunEvent): RunPhase {
     case "status": {
       if (phase.kind !== "active") return phase;
       if (event.status.runHandle !== phase.status.runHandle) return phase;
+      // `unknown` stays active: it never counts as finished or ready.
       return event.status.state === "exited"
         ? { kind: "finished", handle: phase.handle, status: event.status }
         : { ...phase, status: event.status };

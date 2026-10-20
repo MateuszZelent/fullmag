@@ -94,18 +94,29 @@ function serverHydratedSnapshot(): boolean {
 
 function noopRefetch(): void {}
 
+type CommandDisabledReasonResolver = (commandId: string) => string | null;
+
+function MenuDisabledReason({ reason }: { readonly reason: string | null }) {
+  return reason ? <span className="fm-dropdown-reason">{reason}</span> : null;
+}
+
 function MenuNode({
+  commandDisabledReason,
   isCommandActive,
   isCommandDisabled,
   node,
   onCommand,
 }: {
+  commandDisabledReason: CommandDisabledReasonResolver;
   isCommandActive: (commandId: string) => boolean;
   isCommandDisabled: (commandId: string) => boolean;
   node: AppMenuNode;
   onCommand: (commandId: string, input?: unknown) => void;
 }) {
-  const disabled = node.disabled || isCommandDisabled(node.id);
+  const commandDisabled = isCommandDisabled(node.id);
+  const disabled = node.disabled || commandDisabled;
+  // The registry reason takes precedence over the static label.
+  const reason = commandDisabled ? commandDisabledReason(node.id) : null;
   if (node.children?.length) {
     return (
       <DropdownMenuSub>
@@ -117,6 +128,7 @@ function MenuNode({
           {node.children.map((child) => (
             <MenuNode
               key={child.id}
+              commandDisabledReason={commandDisabledReason}
               isCommandActive={isCommandActive}
               isCommandDisabled={isCommandDisabled}
               node={child}
@@ -140,6 +152,7 @@ function MenuNode({
         {node.shortcut ? (
           <span className="fm-dropdown-shortcut">{node.shortcut}</span>
         ) : null}
+        <MenuDisabledReason reason={reason} />
       </DropdownMenuCheckboxItem>
     );
   }
@@ -154,16 +167,19 @@ function MenuNode({
       {node.shortcut ? (
         <span className="fm-dropdown-shortcut">{node.shortcut}</span>
       ) : null}
+      <MenuDisabledReason reason={reason} />
     </DropdownMenuItem>
   );
 }
 
 function HeaderDropdown({
+  commandDisabledReason,
   isCommandActive,
   isCommandDisabled,
   menu,
   onCommand,
 }: {
+  commandDisabledReason: CommandDisabledReasonResolver;
   isCommandActive: (commandId: string) => boolean;
   isCommandDisabled: (commandId: string) => boolean;
   menu: AppMenuNode;
@@ -193,6 +209,7 @@ function HeaderDropdown({
         {menu.children?.map((node) => (
           <MenuNode
             key={node.id}
+            commandDisabledReason={commandDisabledReason}
             isCommandActive={isCommandActive}
             isCommandDisabled={isCommandDisabled}
             node={node}
@@ -248,19 +265,23 @@ function StartNavItem({
 function QuickActionButton({
   action,
   disabled,
+  disabledReason,
   onCommand,
 }: {
   action: HeaderQuickAction;
   disabled: boolean;
+  disabledReason: string | null;
   onCommand: (commandId: string, input?: unknown) => void;
 }) {
+  const reason = disabled ? disabledReason : null;
   return (
     <Button
       aria-label={action.label}
       className="fm-header__quick-action"
       disabled={action.disabled || disabled}
+      disabledReason={reason}
       size="sm"
-      title={action.label}
+      title={reason ? undefined : action.label}
       type="button"
       variant="ghost"
       onClick={() => onCommand(action.id)}
@@ -462,6 +483,17 @@ function NoSessionAppMenuBar({
       void kernel.commands.execute(commandId, commandContext, input);
     }
   };
+  const commandDisabledReason = (commandId: string): string | null => {
+    if (!isProjectWorkspaceCommand(commandId)) {
+      return "Open or create a simulation to use this action.";
+    }
+    if (commandId === "workspace.new-problem" && state !== "no-session") {
+      return "Waiting for session services.";
+    }
+    const command = kernel.commands.get(commandId);
+    if (!command || kernel.commands.isEnabled(commandId, commandContext)) return null;
+    return command.disabledReason?.(commandContext) ?? null;
+  };
   const isCommandDisabled = (commandId: string) => {
     if (!isProjectWorkspaceCommand(commandId)) return true;
     if (commandId === "workspace.new-problem" && state !== "no-session") {
@@ -489,6 +521,7 @@ function NoSessionAppMenuBar({
         {MAIN_MENUS.map((menu) => (
           <HeaderDropdown
             key={menu.id}
+            commandDisabledReason={commandDisabledReason}
             isCommandActive={(commandId) => kernel.commands.isActive(commandId, commandContext)}
             isCommandDisabled={isCommandDisabled}
             menu={menu}
@@ -515,9 +548,10 @@ function NoSessionAppMenuBar({
             className="fm-header__run-btn"
             data-run-control={action.id}
             disabled={(action.disabled || isCommandDisabled(action.id)) || undefined}
+            disabledReason={commandDisabledReason(action.id)}
             aria-label={action.label}
             size="icon"
-            title={action.label}
+            title={commandDisabledReason(action.id) ? undefined : action.label}
             type="button"
             variant="ghost"
             onClick={() => runCommand(action.id)}
@@ -646,6 +680,11 @@ function SessionAppMenuBar() {
     const command = kernel.commands.get(commandId);
     return command ? !kernel.commands.isEnabled(commandId, commandContext) : false;
   };
+  const commandDisabledReason = (commandId: string): string | null => {
+    const command = kernel.commands.get(commandId);
+    if (!command || kernel.commands.isEnabled(commandId, commandContext)) return null;
+    return command.disabledReason?.(commandContext) ?? null;
+  };
   const isCommandActive = (commandId: string): boolean =>
     kernel.commands.isActive(commandId, commandContext);
 
@@ -659,6 +698,7 @@ function SessionAppMenuBar() {
         {MAIN_MENUS.map((menu) => (
           <HeaderDropdown
             key={menu.id}
+            commandDisabledReason={commandDisabledReason}
             isCommandActive={isCommandActive}
             isCommandDisabled={isCommandDisabled}
             menu={menu}
@@ -673,6 +713,7 @@ function SessionAppMenuBar() {
             key={action.id}
             action={action}
             disabled={isCommandDisabled(action.id)}
+            disabledReason={commandDisabledReason(action.id)}
             onCommand={runCommand}
           />
         ))}
@@ -768,9 +809,10 @@ function SessionAppMenuBar() {
             disabled={
               (action.disabled || isCommandDisabled(action.id)) || undefined
             }
+            disabledReason={commandDisabledReason(action.id)}
             aria-label={action.label}
             size="icon"
-            title={action.label}
+            title={commandDisabledReason(action.id) ? undefined : action.label}
             type="button"
             variant="ghost"
             onClick={() => runCommand(action.id)}

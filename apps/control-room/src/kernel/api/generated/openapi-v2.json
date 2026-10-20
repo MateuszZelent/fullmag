@@ -60069,7 +60069,7 @@
                 }
               },
               "x-fullmag-carrier-revision": {
-                "description": "Lossless decimal u64 artifact carrier revision; present for FMVP v6",
+                "description": "Lossless decimal u64 carrier revision used by expected_carrier_revision; present for live carriers when available and artifact inspection FMVP v6",
                 "schema": {
                   "type": "string"
                 }

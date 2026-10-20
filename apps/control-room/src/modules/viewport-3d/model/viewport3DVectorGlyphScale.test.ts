@@ -57,6 +57,6 @@ describe("adaptive viewport vector glyph length", () => {
   it("stays finite for degenerate carriers", () => {
     expect(resolveViewport3DAdaptiveVectorGlyphLength({
       boundsSize: [0, 0, 0], glyphCount: 0, lengthScale: 1, scope: "full",
-    })).toBe(1e-12);
+    })).toBe(0);
   });
 });

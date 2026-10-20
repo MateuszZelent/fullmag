@@ -16,22 +16,22 @@ pub(crate) mod accepted_external_lead;
 // The owned charge ABI is a prerequisite, not yet a closed Oersted producer.
 #[allow(dead_code)]
 pub(crate) mod accepted_terminal_charge;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 mod charge_transport;
 mod eigen;
 mod frequency_domain;
 mod plan;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 mod indexed_geometry;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 mod runtime_info;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 mod stage_coupled;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 mod stage_oersted;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 mod stage_transport;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 mod steady_transport;
 #[allow(unused_imports)]
 pub(crate) use availability::{
@@ -40,7 +40,7 @@ pub(crate) use availability::{
     FrequencyDomainPhaseConvention, FrequencyDomainStudyKind, FrequencyDomainSweepProgress,
     GpuAvailability,
 };
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use charge_transport::{
     execute_native_fem_antenna_field_solve_plan_interruptible,
     execute_native_fem_charge_transport_plans,
@@ -69,28 +69,28 @@ pub(crate) use frequency_domain::{
     NativeModalExecutionTarget, NativeModalGpuAttestation,
 };
 #[allow(unused_imports)]
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use plan::resolved_native_fem_demag_solver_policy;
 #[allow(unused_imports)]
 pub(crate) use plan::{
     native_fem_mfem_device_string_requests_gpu, native_fem_plan_requests_gpu_mfem_device,
 };
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
     strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
     NativeFemGpuStateInfo,
 };
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use stage_coupled::StageM2CoupledProvider;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use stage_oersted::{plan_requests_stage_oersted_callback, StageOerstedProvider};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use stage_transport::{plan_requests_stage_transport_callback, StageTransportProvider};
 #[cfg(all(test, feature = "fem-gpu"))]
 pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_transport_plan;
 #[allow(unused_imports)]
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use steady_transport::{
     execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
     solve_native_fem_steady_transport_rt0, solve_native_fem_prepared_closed_loop,
@@ -101,46 +101,46 @@ pub(crate) use steady_transport::{
     NativeFemSteadyTransportResult, NativeFemSteadyTransportRt0Result,
 };
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::preview::{
     build_mesh_preview_field_with_active_mask, build_mesh_scalar_preview_field_with_active_mask,
     mesh_quantity_active_mask,
 };
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::quantities::normalize_quantity_id;
 use crate::quantities::QuantityId;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use crate::types::{
     FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, LivePreviewField,
     LivePreviewRequest, RunError, SolverAttemptRecord, StepStats,
 };
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use fullmag_engine::{dot, MU0};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use fullmag_ir::StageCompletionIR;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use plan::{
     has_slonczewski_stt, has_zhang_li_stt, native_fem_gpu_demag_mode,
     native_fem_precession_enabled, preserve_mixed_body_markers_for_runtime, single_precision_rejection,
 };
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use sha2::{Digest, Sha256};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::collections::{BTreeSet, HashMap};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::ffi::c_void;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::ffi::CStr;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::io::Write;
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::path::{Path, PathBuf};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::ptr;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::sync::Arc;
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -148,7 +148,7 @@ mod mesh_preparation;
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub use mesh_preparation::prepare_fem_mesh_space;
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn checked_native_finite(label: &str, value: f64) -> Result<f64, RunError> {
     if value.is_finite() {
         Ok(value)
@@ -159,7 +159,7 @@ fn checked_native_finite(label: &str, value: f64) -> Result<f64, RunError> {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn checked_native_nonnegative(label: &str, value: f64) -> Result<f64, RunError> {
     let value = checked_native_finite(label, value)?;
     if value >= 0.0 {
@@ -171,7 +171,7 @@ fn checked_native_nonnegative(label: &str, value: f64) -> Result<f64, RunError> 
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn copy_demag_diagnostics(step_stats: &mut StepStats, ffi_stats: &ffi::fullmag_fem_step_stats) {
     step_stats.demag_potential_order = ffi_stats.demag_potential_order;
     step_stats.demag_potential_true_dof_count = ffi_stats.demag_potential_true_dof_count;
@@ -179,7 +179,7 @@ fn copy_demag_diagnostics(step_stats: &mut StepStats, ffi_stats: &ffi::fullmag_f
     step_stats.demag_recovered_field_energy_joules = ffi_stats.demag_recovered_field_energy_joules;
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn solver_attempt_decision(value: u32) -> Result<&'static str, RunError> {
     match value {
         1 => Ok("accepted"),
@@ -191,7 +191,7 @@ fn solver_attempt_decision(value: u32) -> Result<&'static str, RunError> {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn solver_attempt_reason(value: u32) -> Result<&'static str, RunError> {
     const REASONS: [&str; 9] = [
         "within_tolerance",
@@ -212,7 +212,7 @@ fn solver_attempt_reason(value: u32) -> Result<&'static str, RunError> {
         })
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn solver_attempt_error_norm_type(value: u32) -> Result<Option<&'static str>, RunError> {
     match value {
         ffi::FULLMAG_FEM_SOLVER_ERROR_NORM_NONE => Ok(None),
@@ -224,7 +224,7 @@ fn solver_attempt_error_norm_type(value: u32) -> Result<Option<&'static str>, Ru
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn endpoint_cache_refresh_reason(value: u32) -> Result<&'static str, RunError> {
     match value {
         ffi::FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT => Ok("cache_hit"),
@@ -245,7 +245,7 @@ fn endpoint_cache_refresh_reason(value: u32) -> Result<&'static str, RunError> {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn endpoint_cache_flag(label: &str, value: u32) -> Result<bool, RunError> {
     match value {
         0 => Ok(false),
@@ -256,7 +256,7 @@ fn endpoint_cache_flag(label: &str, value: u32) -> Result<bool, RunError> {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn endpoint_cache_telemetry_from_ffi(
     raw: &ffi::fullmag_fem_endpoint_cache_telemetry_v1,
 ) -> Result<Option<fullmag_quantities::EndpointCacheTelemetry>, RunError> {
@@ -305,7 +305,7 @@ fn endpoint_cache_telemetry_from_ffi(
     }))
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn representation_material_location_from_ffi(
     label: &str,
     value: u32,
@@ -320,7 +320,7 @@ fn representation_material_location_from_ffi(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn representation_receipt_from_ffi(
     raw: &ffi::fullmag_fem_representation_receipt_v1,
 ) -> Result<FemRepresentationReceipt, RunError> {
@@ -378,7 +378,7 @@ fn representation_receipt_from_ffi(
     })
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn validate_native_step_stats(stats: &ffi::fullmag_fem_step_stats) -> Result<f64, RunError> {
     for (label, value) in [
         ("exchange_energy_joules", stats.exchange_energy_joules),
@@ -442,13 +442,13 @@ fn validate_native_step_stats(stats: &ffi::fullmag_fem_step_stats) -> Result<f64
     checked_native_nonnegative("max_torque_Apm", stats.max_torque_Apm)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // ── Fallback defaults when air_box_config is absent (FEM-040) ────────────
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 const FALLBACK_POISSON_BOUNDARY_MARKER: i32 = 99;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 const FALLBACK_ROBIN_BETA_FACTOR: f64 = 2.0;
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -567,7 +567,7 @@ impl PackedNativeMesh {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 struct PackedNativeMixedBodyCertificate {
     body_markers: Vec<u32>,
     body_node_offsets: Vec<u64>,
@@ -578,7 +578,7 @@ struct PackedNativeMixedBodyCertificate {
     pair_contact_state: Vec<u32>,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl PackedNativeMixedBodyCertificate {
     fn descriptor(&self) -> ffi::fullmag_fem_mixed_body_certificate_v2 {
         ffi::fullmag_fem_mixed_body_certificate_v2 {
@@ -599,7 +599,7 @@ impl PackedNativeMixedBodyCertificate {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn pack_native_mixed_body_certificate(
     plan: &fullmag_ir::FemPlanIR,
 ) -> Result<Option<PackedNativeMixedBodyCertificate>, RunError> {
@@ -705,7 +705,7 @@ fn pack_native_mixed_body_certificate(
     }))
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn resolve_native_fem_plan_dt_seconds(plan: &fullmag_ir::FemPlanIR) -> Result<f64, RunError> {
     if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
         return Ok(crate::NON_LLG_RELAXATION_ABI_DT_PLACEHOLDER);
@@ -723,7 +723,7 @@ fn resolve_native_fem_plan_dt_seconds(plan: &fullmag_ir::FemPlanIR) -> Result<f6
     .map(|policy| policy.initial_dt())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn assign_runtime_marker_range(
     markers: &mut [Option<u32>],
     start: usize,
@@ -769,7 +769,7 @@ fn assign_runtime_marker_range(
     Ok(newly_assigned)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn infer_native_runtime_element_markers(
     plan: &fullmag_ir::FemPlanIR,
 ) -> Result<Option<Vec<u32>>, RunError> {
@@ -857,7 +857,7 @@ fn infer_native_runtime_element_markers(
     ))
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_markers_from_element_selector(
     selector: &fullmag_ir::FemMeshPartSelector,
     mesh_element_markers: &[u32],
@@ -886,7 +886,7 @@ fn native_markers_from_element_selector(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_magnetic_markers_from_object_segments(plan: &fullmag_ir::FemPlanIR) -> BTreeSet<u32> {
     if plan.mesh.element_markers.is_empty() {
         return BTreeSet::new();
@@ -913,7 +913,7 @@ fn native_magnetic_markers_from_object_segments(plan: &fullmag_ir::FemPlanIR) ->
     markers
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_magnetic_markers_from_mesh_parts(plan: &fullmag_ir::FemPlanIR) -> BTreeSet<u32> {
     if plan.mesh.element_markers.is_empty() {
         return BTreeSet::new();
@@ -931,7 +931,7 @@ fn native_magnetic_markers_from_mesh_parts(plan: &fullmag_ir::FemPlanIR) -> BTre
     markers
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn normalized_native_runtime_element_markers(
     plan: &fullmag_ir::FemPlanIR,
 ) -> Result<Option<Vec<u32>>, RunError> {
@@ -1073,7 +1073,7 @@ impl NativeFemPreviewObservable {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable, RunError> {
     let id = normalize_quantity_id(quantity)?;
     let observable = NativeFemPreviewObservable::from_quantity(id).ok_or_else(|| RunError {
@@ -1125,7 +1125,7 @@ fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable,
     })
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
     stage_oersted_provider: Option<Box<StageOerstedProvider>>,
@@ -1145,7 +1145,7 @@ pub(crate) struct NativeFemBackend {
     rotated_dmi_only: bool,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 #[derive(Debug)]
 struct Dg0EnergyProjection {
     nodes: Arc<[[f64; 3]]>,
@@ -1154,7 +1154,7 @@ struct Dg0EnergyProjection {
     saturation_magnetisation_by_element: Arc<[f64]>,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn resolved_drive_target_markers(
     plan: &fullmag_ir::FemPlanIR,
     target: &fullmag_ir::FieldTargetIR,
@@ -1221,7 +1221,7 @@ fn resolved_drive_target_markers(
     Ok(markers.into_iter().collect())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn flatten_native_geometry_mask(
     geometry: &fullmag_ir::GeometryEntryIR,
     nodes: &mut Vec<ffi::fullmag_fem_geometry_mask_node>,
@@ -1273,7 +1273,7 @@ fn flatten_native_geometry_mask(
     Ok(index)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn pack_native_sot_envelope(
     plan: &fullmag_ir::FemPlanIR,
 ) -> Result<
@@ -1373,7 +1373,7 @@ fn pack_native_sot_envelope(
     Ok((descriptor, points))
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn append_native_preprojected_drive_descriptor(
     descriptors: &mut Vec<ffi::fullmag_fem_regional_field_drive_desc>,
     point_storage: &mut Vec<Vec<ffi::fullmag_fem_time_point>>,
@@ -1527,7 +1527,7 @@ fn append_native_preprojected_drive_descriptor(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn pack_native_regional_field_drives(
     plan: &fullmag_ir::FemPlanIR,
 ) -> Result<
@@ -2008,7 +2008,7 @@ fn pack_native_regional_field_drives(
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "fem-gpu", feature = "fem-native")), allow(dead_code))]
 struct NativeFemEnergyDensityTerms {
     exchange: bool,
     demag: bool,
@@ -2085,7 +2085,7 @@ impl NativeFemEnergyDensityTerms {
         Some(terms)
     }
 
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     fn includes_cubic(&self, quantity: &str) -> bool {
         self.cubic_anisotropy && matches!(quantity, "eden_ani" | "eden_total")
     }
@@ -2255,7 +2255,7 @@ mod energy_density_terms_tests {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 #[derive(Debug)]
 struct NativeFemCubicEnergyDensity {
     kc1_by_node: Arc<[f64]>,
@@ -2265,7 +2265,7 @@ struct NativeFemCubicEnergyDensity {
     axis2: [f64; 3],
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn resolved_nodal_material_coefficient(
     name: &str,
     uniform: f64,
@@ -2292,7 +2292,7 @@ fn resolved_nodal_material_coefficient(
     Ok(values.into())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn resolved_cubic_energy_density(
     plan: &fullmag_ir::FemPlanIR,
 ) -> Result<Option<Arc<NativeFemCubicEnergyDensity>>, RunError> {
@@ -2366,7 +2366,7 @@ fn native_fem_plan_has_cubic_anisotropy(plan: &fullmag_ir::FemPlanIR) -> bool {
             .is_some_and(|values| !values.is_empty())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn project_element_scalars_to_nodes(
     mesh: &fullmag_ir::MeshIR,
     element_values: &[f64],
@@ -2452,7 +2452,7 @@ fn project_element_scalars_to_nodes(
         .collect())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn resolved_saturation_magnetisation_by_node(
     plan: &fullmag_ir::FemPlanIR,
 ) -> Result<Vec<f64>, RunError> {
@@ -2484,7 +2484,7 @@ fn resolved_saturation_magnetisation_by_node(
     Ok(values)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn build_native_fem_energy_density_preview_field(
     request: &LivePreviewRequest,
     values: &[f64],
@@ -2501,7 +2501,7 @@ fn build_native_fem_energy_density_preview_field(
     field
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn build_native_fem_frozen_spins_preview_field(
     request: &LivePreviewRequest,
     frozen_mask: &[bool],
@@ -2527,7 +2527,7 @@ fn build_native_fem_frozen_spins_preview_field(
     ))
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 #[derive(Debug)]
 pub(crate) struct NativeFemPreviewSnapshot {
     handle: *mut ffi::fullmag_fem_preview_snapshot,
@@ -2536,10 +2536,10 @@ pub(crate) struct NativeFemPreviewSnapshot {
     host_frozen_mask: Option<Arc<[bool]>>,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 unsafe impl Send for NativeFemPreviewSnapshot {}
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 #[derive(Debug)]
 pub(crate) struct NativeFemFieldSnapshot {
     handle: *mut ffi::fullmag_fem_field_snapshot,
@@ -2549,10 +2549,10 @@ pub(crate) struct NativeFemFieldSnapshot {
     pub(crate) solver_dt: f64,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 unsafe impl Send for NativeFemFieldSnapshot {}
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 #[derive(Debug)]
 pub(crate) struct NativeFemEnergyDensitySnapshot {
     request: LivePreviewRequest,
@@ -2565,10 +2565,10 @@ pub(crate) struct NativeFemEnergyDensitySnapshot {
     node_count: usize,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 unsafe impl Send for NativeFemEnergyDensitySnapshot {}
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NativeFemFieldSnapshotInfo {
     pub node_count: usize,
@@ -2576,7 +2576,7 @@ pub(crate) struct NativeFemFieldSnapshotInfo {
     pub scalar_bytes: usize,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_segment_weight(
     plan: &fullmag_ir::FemPlanIR,
     segment: &fullmag_ir::FemObjectSegmentIR,
@@ -2614,7 +2614,7 @@ fn native_fem_segment_weight(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_matching_object_part<'a>(
     plan: &'a fullmag_ir::FemPlanIR,
     segment: &fullmag_ir::FemObjectSegmentIR,
@@ -2636,7 +2636,7 @@ fn native_fem_matching_object_part<'a>(
     })
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_segment_node_indices(
     plan: &fullmag_ir::FemPlanIR,
     segment: &fullmag_ir::FemObjectSegmentIR,
@@ -2672,7 +2672,7 @@ fn native_fem_segment_node_indices(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_object_node_indices(plan: &fullmag_ir::FemPlanIR) -> Vec<(String, Vec<u32>)> {
     if plan.object_segments.is_empty() {
         return vec![(
@@ -2712,7 +2712,7 @@ fn native_fem_object_node_indices(plan: &fullmag_ir::FemPlanIR) -> Vec<(String, 
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn native_fem_object_ids_match(a: &str, b: &str) -> bool {
     if a == b {
         return true;
@@ -2823,7 +2823,7 @@ fn configure_managed_openmpi_environment() {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl NativeFemBackend {
     pub(crate) fn install_stage_oersted_provider(
         &mut self,
@@ -2916,6 +2916,39 @@ impl NativeFemBackend {
     }
 
     pub fn create_with_initial_effective_field(
+        plan: &fullmag_ir::FemPlanIR,
+        eager_initial_effective_field: bool,
+    ) -> Result<Self, RunError> {
+        #[cfg(feature = "fem-gpu")]
+        {
+            Self::create_backend_with_initial_effective_field(plan, eager_initial_effective_field)
+        }
+        #[cfg(not(feature = "fem-gpu"))]
+        {
+            Self::create_cpu_with_initial_effective_field(plan, eager_initial_effective_field)
+        }
+    }
+
+    pub(crate) fn create_cpu_with_initial_effective_field(
+        plan: &fullmag_ir::FemPlanIR,
+        eager_initial_effective_field: bool,
+    ) -> Result<Self, RunError> {
+        if native_fem_plan_requests_gpu_mfem_device(plan) {
+            return Err(RunError {
+                message: "native FEM CPU execution cannot satisfy an explicit GPU device request; select the fem-gpu feature and GPU engine"
+                    .to_string(),
+            });
+        }
+
+        let mut cpu_plan = plan.clone();
+        cpu_plan.mfem_device_string = Some("cpu".to_string());
+        Self::create_backend_with_initial_effective_field(
+            &cpu_plan,
+            eager_initial_effective_field,
+        )
+    }
+
+    fn create_backend_with_initial_effective_field(
         plan: &fullmag_ir::FemPlanIR,
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
@@ -5332,7 +5365,27 @@ impl NativeFemBackend {
                 conservative_dg0_energy,
             ));
         }
-        let values = self.copy_field(fem_preview_observable(&request.quantity)?, node_count)?;
+        let quantity = crate::quantities::normalized_quantity_name(&request.quantity)?;
+        let values = if matches!(quantity, "H_demag" | "H_eff") {
+            // The direct device cache is magnetic-domain data. The snapshot
+            // path recovers full-domain demag and composes H_eff for Airbox.
+            let values = self
+                .begin_field_snapshot(quantity, 0, 0.0, 0.0)?
+                .into_vector_field()?;
+            if values.len() != node_count {
+                return Err(RunError {
+                    message: format!(
+                        "native FEM preview '{}' returned {} nodes, expected {}",
+                        quantity,
+                        values.len(),
+                        node_count
+                    ),
+                });
+            }
+            values
+        } else {
+            self.copy_field(fem_preview_observable(quantity)?, node_count)?
+        };
         let active_mask = (crate::quantities::quantity_spatial_domain(&request.quantity)
             == "magnetic_only")
             .then(|| self.magnetic_node_mask.as_ref().to_vec());
@@ -5463,7 +5516,7 @@ impl NativeFemBackend {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl NativeFemPreviewSnapshot {
     pub fn into_live_preview_field(mut self) -> Result<LivePreviewField, RunError> {
         if let Some(frozen_mask) = self.host_frozen_mask.take() {
@@ -5524,7 +5577,7 @@ impl NativeFemPreviewSnapshot {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn accumulate_energy_density_term(
     values: &mut [f64],
     magnetization: &[[f64; 3]],
@@ -5555,7 +5608,7 @@ fn accumulate_energy_density_term(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn tetrahedron_volume(nodes: &[[f64; 3]], element: [u32; 4]) -> Result<f64, RunError> {
     let [a, b, c, d] = element.map(|index| {
         nodes.get(index as usize).copied().ok_or_else(|| RunError {
@@ -5637,7 +5690,7 @@ fn tetra_dg0_p1_dot_integral(
     Ok(integral)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn conservative_dg0_p1_dot_projection(
     nodes: &[[f64; 3]],
     elements: &[[u32; 4]],
@@ -5701,7 +5754,7 @@ fn conservative_dg0_p1_dot_projection(
         .collect())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn accumulate_dg0_field_dot_energy_density(
     values: &mut [f64],
     magnetization: &[[f64; 3]],
@@ -5755,7 +5808,7 @@ fn tetra_p1_scalar_integral(
     Ok(integral)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn accumulate_cubic_energy_density(
     values: &mut [f64],
     magnetization: &[[f64; 3]],
@@ -5797,7 +5850,7 @@ fn accumulate_cubic_energy_density(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl NativeFemEnergyDensitySnapshot {
     pub fn into_live_preview_field(self) -> Result<LivePreviewField, RunError> {
         let magnetization = self.magnetization.into_vector_field()?;
@@ -6068,7 +6121,7 @@ mod task5_energy_density_tests {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl NativeFemFieldSnapshot {
     fn wait_payload(
         &mut self,
@@ -6192,7 +6245,7 @@ impl NativeFemFieldSnapshot {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn write_fem_aos_f64_as_component_major(
     values: &[f64],
     node_count: usize,
@@ -6206,7 +6259,7 @@ fn write_fem_aos_f64_as_component_major(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl Drop for NativeFemPreviewSnapshot {
     fn drop(&mut self) {
         if !self.handle.is_null() {
@@ -6216,7 +6269,7 @@ impl Drop for NativeFemPreviewSnapshot {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl Drop for NativeFemFieldSnapshot {
     fn drop(&mut self) {
         if !self.handle.is_null() {
@@ -6226,7 +6279,7 @@ impl Drop for NativeFemFieldSnapshot {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn relaxation_driver_subphase_wall_time_ns(stats: &ffi::fullmag_fem_step_stats) -> u64 {
     stats
         .relaxation_state_copy_wall_time_ns
@@ -6238,7 +6291,7 @@ fn relaxation_driver_subphase_wall_time_ns(stats: &ffi::fullmag_fem_step_stats) 
         .saturating_add(stats.relaxation_update_wall_time_ns)
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl Drop for NativeFemBackend {
     fn drop(&mut self) {
         if !self.handle.is_null() {
@@ -6264,7 +6317,7 @@ impl Drop for NativeFemBackend {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn last_global_error_or(fallback: &str) -> String {
     let err = unsafe { ffi::fullmag_fem_backend_last_error(std::ptr::null_mut()) };
     if !err.is_null() {

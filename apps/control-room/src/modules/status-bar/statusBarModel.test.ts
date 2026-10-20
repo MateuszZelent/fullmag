@@ -111,8 +111,9 @@ describe("statusBarModel", () => {
 
     expect(model).toMatchObject({
       detail: "fallback to native MFEM/hypre",
-      label: "FEM CPU",
+      label: "FEM GPU → FEM CPU",
       state: "resolved",
+      tone: "warning",
     });
     expect(model.title).toContain("requested_device=gpu");
     expect(model.title).toContain("resolved_device=cpu");

@@ -2261,12 +2261,26 @@ fn material_field_resource(
         let mut raw_val = None;
         for key in lookup_keys {
             if let Some(val) = fields.get(*key) {
-                raw_val = Some(val);
+                raw_val = Some((*key, val));
                 break;
             }
         }
 
-        if let Some(raw_val) = raw_val {
+        if let Some((key, raw_val)) = raw_val {
+            // The worker records these statistics while publishing one field.
+            // Listing authored materials must not hydrate every CAS array.
+            if fields.binary_source_is_registered(key, raw_val)
+                && raw_val.get("accepted_binary_field").is_some() {
+                if let Some(summary) = raw_val.pointer("/layout/accepted_value_summary") {
+                    sample_count = summary.get("sample_count").and_then(Value::as_u64);
+                    min = summary.get("min").and_then(Value::as_f64);
+                    max = summary.get("max").and_then(Value::as_f64);
+                    mean = summary.get("mean").and_then(Value::as_f64);
+                    if sample_count.is_some_and(|count| count > 0) {
+                        realization_status = Some("realized".to_string());
+                    }
+                }
+            }
             let values = flatten_json_field_values(raw_val);
             if !values.is_empty() {
                 realization_status = Some("realized".to_string());
@@ -4313,6 +4327,7 @@ fn apply_patch_object_region_transaction(
         .iter_mut()
         .find(|r| r.region_id == region_id)
         .ok_or_else(|| ApiError::not_found(format!("object region not found: {region_id}")))?;
+    let before = region.clone();
 
     if let Some(name) = patch.name {
         region.name = name;
@@ -4347,7 +4362,18 @@ fn apply_patch_object_region_transaction(
     }
 
     clamp_object_region_shape_to_owner_bounds(owner_bounds, region);
-    mark_object_mesh_dirty(object);
+    // Only realization-relevant fields invalidate the current mesh. Names,
+    // material coefficients, textures and transitions keep the topology and
+    // are tracked by their own coefficient/initial-state revisions.
+    let realization_changed = region.enabled != before.enabled
+        || region.shape != before.shape
+        || region.frame != before.frame
+        || region.mesh_policy != before.mesh_policy
+        || region.realization_policy != before.realization_policy
+        || region.priority != before.priority;
+    if realization_changed {
+        mark_object_mesh_dirty(object);
+    }
     Ok(())
 }
 
@@ -4674,17 +4700,24 @@ fn apply_object_patch(
         object.visible = visible;
     }
     if let Some(material_ref) = req.material_ref {
-        object.material_ref = material_ref;
-        mesh_dirty = true;
+        // Clients may resend unchanged references with metadata edits; only a
+        // real change affects the realized domain.
+        if object.material_ref != material_ref {
+            object.material_ref = material_ref;
+            mesh_dirty = true;
+        }
     }
     if let Some(region_name) = req.region_name {
         let region_name = region_name.trim();
-        object.region_name = if region_name.is_empty() {
+        let next_region_name = if region_name.is_empty() {
             None
         } else {
             Some(region_name.to_string())
         };
-        mesh_dirty = true;
+        if object.region_name != next_region_name {
+            object.region_name = next_region_name;
+            mesh_dirty = true;
+        }
     }
     if let Some(magnetization_ref) = req.magnetization_ref {
         object.magnetization_ref = if magnetization_ref.trim().is_empty() {

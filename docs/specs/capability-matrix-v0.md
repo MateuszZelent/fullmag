@@ -59,6 +59,50 @@ worker i ograniczenia capability; wspólny profil zasobów nie jest dowodem
 wykonania ani parytetu fizyki. Requested `auto` jest zachowane osobno od
 resolved execution i rzeczywistego UUID.
 
+### Accepted Workspace — obserwacje końcowe i carrier live (20.10.2026)
+
+Stan tej poprawki: `source_visible`, `validation_state=unvalidated`,
+`validated_workloads=[]`; kompilacja i runtime **NOT VERIFIED**. Nie promuje
+ona wykonania solvera, strategii demag ani kwalifikacji czterech lane.
+Dotyczy obserwabli i transportu, nie zmiany równań. Kontrakty metod pozostają
+w `docs/physics/0400-fdm-exchange-demag-zeeman.md` i
+`docs/physics/0410-fem-exchange-demag-zeeman-mfem-gpu.md`;
+szczegóły adaptera i ograniczenia zapisano w
+`docs/reports/2026-10-20/mx3-materialization-live-checkpoint.md` (pierwszy etap)
+oraz `docs/reports/2026-10-20/mx3-materialization-live-continuation.md`
+(usunięcie ograniczeń w źródłach, bez dowodu wykonania).
+
+Accepted-worker materializuje H_demag/H_eff i dostępne gęstości energii dla
+dokładnego końcowego m pod swoim lease. CAS bundle wiąże accepted state,
+oryginalny plan, zegar, SHA state output i osobną tożsamość buildu ewaluatora.
+Terminalny projektor oraz API compute_fields/compute_energies jedynie adoptują
+tę paczkę. Nowe runy mogą przekazać obserwacje z oryginalnego kontekstu solvera,
+bez rekonstrukcji RNG, transportu i dynamicznych wejść z samego m. Capture jest
+wiązany z dokładnym końcowym m, layoutem, zegarem i mapą węzłów przed CAS.
+Obecny, ale niezgodny capture powoduje odmowę; nie jest zastępowany ewaluacją
+od czasu zero. Globalne
+energie w J korzystają z istniejącego current-energy resource; nie stanowią
+pola komórkowego ani syntetycznej historii. Terminalny postprocessing ma
+osobne readiness; nie otwiera pozostałych mutacji ani sesji closed/imported.
+
+| Lane | Zakres adaptera widoczny w źródłach | Jawne ograniczenia |
+|---|---|---|
+| FDM CPU | Single-grid i multilayer, native layer order; original-context capture oraz bezpieczna rekonstrukcja statyczna. CPU target-only Airbox według istniejącego ewaluatora. | Historyczny wynik bez capture nadal nie odtwarza brakujących realizacji thermal, Frozen Spins i transportu. Capture single-grid uwzględnia zaakceptowaną realizację termiczną i pole Oersteda sprzężonego transportu. |
+| FDM GPU | Single-grid CUDA, native multilayer convolution/stacked oraz legalny `cuda_assisted_multilayer`. Target-only H_demag Airbox ma osobny kontekst CUDA i jawny hostowy transfer fizycznego M. | Assisted zachowuje własny engine i udział hosta. Target ma własny certyfikat grida; nie zastępuje warstw ani FFT scratch. Historyczne dynamiczne wyniki bez capture nadal odmawiają nieodtwarzalnych pól. Target-only H_eff wymaga dodatkowych kompletnych primary carriers. |
+| FEM CPU | Native H1/P1, rzeczywista mapa local nodes i representation receipt; wspólna ścieżka CPU ma granicę feature `fem-native`. Oryginalny kontekst dostarcza obserwacje bez nowego kroku. | Feature-only compile/link pozostaje NOT VERIFIED. Jawny konstruktor CPU odrzuca GPU intent. Nodalne gęstości zachowują nazwany rodzaj projekcji; liczba próbek nie zmienia ich na DG0. |
+| FEM GPU | Native H1/P1, exact local-node map, urządzenie i konfiguracja operatorów; original-context capture, bez reference/CPU fallback. | Nadal wymaga `fem-gpu`; nie fabrykuje się kroku RK dla obserwacji. Historyczne dynamiczne wyniki bez capture odmawiają nieodtwarzalnych pól. Statyczna certyfikacja modalna pozostaje osobną, węższą bramką niż accepted time-domain state. |
+
+Live m/scalars/pola mają wspólny zegar generacji: FEM przenosi native node-map
+digest i mesh generation; FDM multilayer kanoniczną kolejność/offsety warstw.
+Pełny aktywny katalog H i gęstości może być przechwytywany przy każdym
+zaakceptowanym kroku, jeżeli cała generacja mieści się w minimum 128 MiB,
+1/8 storage lease i 1/8 memory lease. W większych domenach pozostaje bounded
+m/preview z kadencją 100; maksymalny live m to 2²¹ próbek. UI odczytuje
+najnowszą generację i nie gwarantuje renderu każdego kroku. Terminalny capture
+i CAS również podlegają limitom lease. Nie ustanawia to exact restartu.
+Zakres accepted przyjęcia pozostaje double/strict; nie dodaje się tu nowej
+legalności extended/hybrid, publicznego Python/IR słownika ani schematu OpenAPI.
+
 ### Fixed-step ABM3 capability
 
 `time_integrator.abm3.fixed.v1` is `reference_executable` only for the FDM CPU
@@ -764,6 +808,29 @@ be used as acceptance criteria.
 - **Reproducibility**: Comparison scripts must be deterministic and checked into the repository.
 
 ## Persistent observation runtime evidence model
+
+### Checkpoint źródłowy 20.10.2026 — terminalne pola dużych domen
+
+To rozszerzenie źródłowe nie promuje poniższych osi kwalifikacji. Terminalne
+obserwacje FDM CPU/GPU (single-grid i multilayer) oraz FEM CPU/GPU używają
+pojedynczych pól na callback, prywatnego spoolu F64LE, kompletności katalogu
+i chunków CAS. Końcowy capture jest niezależny od cadence live. Nadal obowiązuje
+lease: jedno pole do `memory_bytes / 16`, spool do `storage_bytes / 4`, publikacja
+do połowy storage pozostałego po declared outputs i rezerwie spoolu, z osobną
+rezerwą na mały manifest.
+Nie jest to solver out-of-core; wybrane pole i końcowy stan M nadal wymagają RAM.
+Katalogi i readiness nie hydratyzują wszystkich nowych pól binarnych.
+
+FDM multilayer Airbox pozostaje target-only: H_eff = H_demag + kompletny uniform
+Zeeman w A/m. CPU/CUDA współdzielą guardy i serializer; źródła nieprzeniesione
+do planu (drives, antenna, current/Oersted itd.) zachowują jawny powód odmowy
+H_eff, bez odebrania H_demag. Manifest v2 ma wspólny carrier topologii i osobne
+generacje obu pól; czytnik zachowuje v1. FEM zachowuje własne natywne mapy oraz
+metody demag; ta kompozycja FDM nie rozszerza capability FEM.
+
+Dowód: analiza źródeł, bez buildów/testów/symulacji/browser. Runtime/UI/WebGL,
+parytet CPU/GPU i kwalifikacja naukowa: **NOT VERIFIED**. Szczegóły i hashe:
+[checkpoint dużych domen](../reports/2026-10-20/mx3-large-domains-airbox-heff.md).
 
 Trwała obserwacja składa się z czterech niezależnie promowanych capability:
 `runtime.live_residency`, `runtime.historical_observation`,

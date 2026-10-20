@@ -151,12 +151,16 @@ export function resolveObjectVisualizationDataState({
     if (backendState === "supported") {
       return "Supported";
     }
+    if (backendState === "ready" && !fieldCatalog) {
+      // The backend reports the quantity, but its field payload has not
+      // reached the inspector yet: that is loading, not ready data.
+      return fieldCatalogStatus === "error" ? "Ready" : "Loading";
+    }
     if (
       backendState === "ready" &&
-      (fieldCatalogStatus === "loading" ||
-        fieldCatalogStatus === "idle" ||
-        !fieldCatalog)
+      (fieldCatalogStatus === "loading" || fieldCatalogStatus === "idle")
     ) {
+      // A refresh of an already loaded catalog keeps the ready state stable.
       return "Ready";
     }
   }

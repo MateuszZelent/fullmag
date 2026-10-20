@@ -46,6 +46,7 @@ import {
   type Viewport3DTargetFieldBuffer,
 } from "./model/viewport3DTargetFieldBuffer";
 import { resolveViewport3DFieldDomainCompatibility } from "./model/viewport3DFieldDomainCompatibility";
+import { resolveViewport3DAdaptiveVectorGlyphLength } from "./model/viewport3DVectorGlyphScale";
 import {
   buildPartSurfaceIndices as buildPartSurfaceIndicesUncached,
   buildPartSurfaceIndicesWithSupplemental as buildPartSurfaceIndicesWithSupplementalUncached,
@@ -263,6 +264,7 @@ export interface Viewport3DFieldRenderOptions {
   fullScalarColorPalette?: string;
   fullVectorBudget?: number;
   fullVectorAnchorMode?: Viewport3DVectorAnchorMode;
+  fullVectorLengthScale?: number;
   fullVectorSurfaceOffsetEnabled?: boolean;
   fullVectorSurfaceOffsetScale?: number;
   complexFieldVector?: DecodedComplexFieldVector | null;
@@ -302,6 +304,8 @@ export type Viewport3DVectorAnchorMode = "center" | "tail";
 
 export interface Viewport3DVectorSegmentOptions {
   anchorMode?: Viewport3DVectorAnchorMode;
+  vectorGlyphLengthScale?: number;
+  vectorGlyphScope?: "surface" | "full";
   surfaceOffsetEnabled?: boolean;
   surfaceOffsetScale?: number;
   surfaceTriangleIndices?: ArrayLike<number> | null;
@@ -1131,6 +1135,8 @@ export function buildViewport3DFieldRenderModel(
             partBudget,
             {
               anchorMode,
+              vectorGlyphLengthScale: partScale,
+              vectorGlyphScope: vectorScope,
               surfaceOffsetEnabled,
               surfaceOffsetScale,
               surfaceTriangleIndices:
@@ -1198,6 +1204,7 @@ export function buildViewport3DFieldRenderModel(
   const fullVectorBudget =
     options.fullVectorBudget ?? DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
   const fullVectorAnchorMode = options.fullVectorAnchorMode ?? "center";
+  const fullVectorLengthScale = options.fullVectorLengthScale ?? 1;
   const fullVectorSurfaceOffsetEnabled =
     options.fullVectorSurfaceOffsetEnabled ?? false;
   const fullVectorSurfaceOffsetScale =
@@ -1209,6 +1216,8 @@ export function buildViewport3DFieldRenderModel(
     fullVectorBudget,
     {
       anchorMode: fullVectorAnchorMode,
+      vectorGlyphLengthScale: fullVectorLengthScale,
+      vectorGlyphScope: "full",
       surfaceOffsetEnabled: fullVectorSurfaceOffsetEnabled,
       surfaceOffsetScale: fullVectorSurfaceOffsetScale,
       surfaceTriangleIndices:
@@ -1221,7 +1230,7 @@ export function buildViewport3DFieldRenderModel(
     budget: fullVectorBudget,
     fieldVector: fullFieldVector,
     options,
-    scale,
+    scale: scale * fullVectorLengthScale,
     scopeId: "full",
     scopeKind: "full",
     segments: fullVectorSegments,
@@ -2142,7 +2151,7 @@ function buildCachedFullVectorSegments(
     fullVectorSegmentCache,
     topology,
     fieldVector,
-    `${scale}:${budget}:${anchorMode}:${surfaceOffsetEnabled}:${surfaceOffsetScale}`,
+    `${scale}:${budget}:${vectorOptions.vectorGlyphLengthScale ?? "scale"}:${vectorOptions.vectorGlyphScope ?? "full"}:${anchorMode}:${surfaceOffsetEnabled}:${surfaceOffsetScale}`,
     () =>
       buildVectorLineSegmentsFromPositions(
         topology,
@@ -2176,7 +2185,7 @@ function buildCachedPartVectorSegments(
     partVectorSegmentCache,
     partModel,
     fieldVector,
-    `${vectorScope}:${fieldValueMode}:${scale}:${budget}:${anchorMode}:${surfaceOffsetEnabled}:${surfaceOffsetScale}`,
+    `${vectorScope}:${fieldValueMode}:${scale}:${budget}:${vectorOptions.vectorGlyphLengthScale ?? "scale"}:${vectorOptions.vectorGlyphScope ?? vectorScope}:${anchorMode}:${surfaceOffsetEnabled}:${surfaceOffsetScale}`,
     () =>
       buildVectorLineSegmentsForNodeSelectionFromPositions(
         topology,
@@ -2787,6 +2796,7 @@ function buildVectorLineSegmentsFromPositions(
 
   // First pass: compute maximum magnitude for relative-magnitude channel.
   let maxMag = 0;
+  let renderedGlyphCount = 0;
   for (let vector = 0; vector < vectorCount; vector += 1) {
     const valueOffset = vector * stride * fieldVector.nComp;
     const vx = fieldVector.values[valueOffset] ?? 0;
@@ -2794,9 +2804,21 @@ function buildVectorLineSegmentsFromPositions(
     const vz = fieldVector.values[valueOffset + 2] ?? 0;
     const mag = Math.hypot(vx, vy, vz);
     if (mag > maxMag) maxMag = mag;
+    if (mag > 0) renderedGlyphCount += 1;
   }
+  if (renderedGlyphCount === 0) return null;
   const scaleMag = Math.max(maxMag, 1e-12);
-  const effectiveScale = resolveViewport3DVectorSegmentScale(topology, scale);
+  const requestedScale = options.vectorGlyphLengthScale === undefined
+    ? scale
+    : resolveViewport3DAdaptiveVectorGlyphLength({
+        boundsSize: resolveNodeSelectionBoundsSize(null, topology),
+        glyphCount: renderedGlyphCount,
+        lengthScale: options.vectorGlyphLengthScale,
+        scope: options.vectorGlyphScope ?? "full",
+      });
+  const effectiveScale = options.vectorGlyphLengthScale === undefined
+    ? resolveViewport3DVectorSegmentScale(topology, requestedScale)
+    : Math.max(requestedScale, 1e-12);
   const anchorMode = options.anchorMode ?? "center";
   const surfaceOffsetEnabled = options.surfaceOffsetEnabled === true;
   const surfaceOffsetScale = Math.max(options.surfaceOffsetScale ?? 0, 0);
@@ -2947,6 +2969,7 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
 
   // First pass: compute maximum magnitude for relative-magnitude channel.
   let maxMag = 0;
+  let renderedGlyphCount = 0;
   for (const sample of samples) {
     const valueOffset = sample.valuePointIndex * fieldVector.nComp;
     const vx = fieldVector.values[valueOffset] ?? 0;
@@ -2954,13 +2977,25 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
     const vz = fieldVector.values[valueOffset + 2] ?? 0;
     const mag = Math.hypot(vx, vy, vz);
     if (mag > maxMag) maxMag = mag;
+    if (mag > 0) renderedGlyphCount += 1;
   }
+  if (renderedGlyphCount === 0) return null;
   const scaleMag = Math.max(maxMag, 1e-12);
-  const effectiveScale = resolveViewport3DVectorSegmentScale(
-    topology,
-    scale,
-    nodeSelection,
-  );
+  const requestedScale = options.vectorGlyphLengthScale === undefined
+    ? scale
+    : resolveViewport3DAdaptiveVectorGlyphLength({
+        boundsSize: resolveNodeSelectionBoundsSize(nodeSelection, topology),
+        glyphCount: renderedGlyphCount,
+        lengthScale: options.vectorGlyphLengthScale,
+        scope: options.vectorGlyphScope ?? "full",
+      });
+  const effectiveScale = options.vectorGlyphLengthScale === undefined
+    ? resolveViewport3DVectorSegmentScale(
+        topology,
+        requestedScale,
+        nodeSelection,
+      )
+    : Math.max(requestedScale, 1e-12);
   const anchorMode = options.anchorMode ?? "center";
   const surfaceOffsetEnabled = options.surfaceOffsetEnabled === true;
   const surfaceOffsetScale = Math.max(options.surfaceOffsetScale ?? 0, 0);
@@ -3278,4 +3313,36 @@ export function resolveNodeSelectionIndex(
   }
 
   return (selection?.nodeStart ?? selection?.node_start ?? 0) + offset;
+}
+
+function resolveNodeSelectionBoundsSize(
+  selection: Viewport3DNodeSelection | null | undefined,
+  topology: Pick<Viewport3DPositionSource, "nodeCount" | "positions">,
+): [number, number, number] {
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  const selectedNodeCount = resolveNodeSelectionCount(selection, topology);
+  for (let offset = 0; offset < selectedNodeCount; offset += 1) {
+    const nodeIndex = resolveNodeSelectionIndex(selection, offset);
+    if (
+      nodeIndex === null ||
+      !Number.isInteger(nodeIndex) ||
+      nodeIndex < 0 ||
+      nodeIndex >= topology.nodeCount
+    ) {
+      continue;
+    }
+    const positionOffset = nodeIndex * 3;
+    for (let axis = 0; axis < 3; axis += 1) {
+      const value = topology.positions[positionOffset + axis];
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      min[axis] = Math.min(min[axis], value);
+      max[axis] = Math.max(max[axis], value);
+    }
+  }
+  return min.map((value, axis) =>
+    Number.isFinite(value) && Number.isFinite(max[axis])
+      ? Math.max(0, max[axis] - value)
+      : 0,
+  ) as [number, number, number];
 }

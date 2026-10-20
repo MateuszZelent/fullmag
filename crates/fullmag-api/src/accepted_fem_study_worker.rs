@@ -141,20 +141,34 @@ pub(crate) fn execute_accepted_fem_attempt(
     interrupt_requested: Option<&AtomicBool>,
 ) -> Result<AcceptedFemExecutionOutcome> {
     let display_selection = fullmag_runner::DisplaySelectionState::default;
-    let result = fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
+    let mut live_observation = crate::accepted_study_worker::AcceptedLiveObservationWriter::new(
+        attempt_output_dir,
+        accepted_step,
+        &prepared.execution_plan,
+        format!("fem_{}", prepared.resolved_device),
+    );
+    let field_sampling_interval = live_observation.field_sampling_interval();
+    let runner_result = fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
         &prepared.problem,
         &prepared.execution_plan,
         Some(&prepared.stage_mesh.identity),
         prepared.until_seconds,
         attempt_output_dir,
         autosave_root,
-        u64::MAX,
+        field_sampling_interval,
         &display_selection,
         interrupt_requested,
         false,
-        |_| StepAction::Continue,
-    )
-    .map_err(|error| anyhow::anyhow!(error.to_string()))
+        |update| {
+            live_observation.observe(&update);
+            StepAction::Continue
+        },
+    );
+    // Scalar and mapped live fields share the bounded sidecar; final state is
+    // still committed only through the durable output path.
+    live_observation.finish();
+    let result = runner_result
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("execute accepted native FEM {} runner plan", prepared.resolved_device))?;
     if result.status == RunStatus::Cancelled {
         return Ok(AcceptedFemExecutionOutcome::Cancelled {

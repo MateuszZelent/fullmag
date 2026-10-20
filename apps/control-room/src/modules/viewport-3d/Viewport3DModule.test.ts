@@ -2098,7 +2098,8 @@ describe("Viewport3DModule scene wiring", () => {
 
     expect(source).toContain("Viewport3DResourceIssueDialog");
     expect(source).toContain("fieldDataIssue");
-    expect(source).toContain("Magnetic field data unavailable");
+    expect(source).toContain("data unavailable");
+    expect(source).toContain("fm-viewport-3d__issue-banner");
   });
 
   it("gates the temporary azimuth and polar controls behind an explicit browser debug flag", () => {

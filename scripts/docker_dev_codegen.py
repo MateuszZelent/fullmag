@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 from pathlib import Path
 import re
 import stat
@@ -35,6 +36,7 @@ MAX_TOOL_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_GENERATED_BYTES = 64 * 1024 * 1024
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+CONTROL_NAMESPACE_RE = re.compile(r"^namespaces/[0-9a-f]{32}$")
 DIRECT_CODEGEN_SCHEMA = "fullmag.direct-compose-openapi-codegen.v1"
 FAILURE_RECEIPT_PATH = "/opt/fullmag/control/backend/codegen/openapi-v2/last-failure.json"
 
@@ -466,7 +468,30 @@ def _environment(document: Mapping[str, Any]) -> dict[str, str]:
     return result
 
 
-def _validate_mounts(document: Mapping[str, Any], service: str) -> None:
+def _control_namespace(value: object) -> str:
+    if not isinstance(value, str) or (value and CONTROL_NAMESPACE_RE.fullmatch(value) is None):
+        raise CodegenError("backend control namespace is not canonical")
+    return value
+
+
+def _control_subpath(namespace: str, relative: str = "") -> str:
+    namespace = _control_namespace(namespace)
+    if not relative:
+        return namespace
+    if relative.startswith("/") or "\\" in relative or any(
+        part in {"", ".", ".."} for part in relative.split("/")
+    ):
+        raise CodegenError("control mount relative path is not canonical")
+    return f"{namespace}/{relative}" if namespace else relative
+
+
+def _backend_control_namespace(document: Mapping[str, Any]) -> str:
+    return _control_namespace(_environment(document).get("FULLMAG_CONTROL_NAMESPACE", ""))
+
+
+def _validate_mounts(
+    document: Mapping[str, Any], service: str, control_namespace: str | None = None
+) -> None:
     mounts = document.get("Mounts")
     if not isinstance(mounts, list):
         raise CodegenError(f"{service} service has no inspected mounts")
@@ -497,8 +522,24 @@ def _validate_mounts(document: Mapping[str, Any], service: str) -> None:
             access = "writable" if writable else "readonly"
             raise CodegenError(f"{service} technical mount is not a {access} named volume: {target}")
 
+    environment = _environment(document)
+    if service == "backend":
+        observed_namespace = _backend_control_namespace(document)
+        if control_namespace is not None and observed_namespace != control_namespace:
+            raise CodegenError("backend control namespace differs from its verified environment")
+    elif control_namespace is not None:
+        frontend_namespace = environment.get("FULLMAG_CONTROL_NAMESPACE")
+        if frontend_namespace is not None and _control_namespace(frontend_namespace) != control_namespace:
+            raise CodegenError("frontend control namespace differs from the backend environment")
 
-def _running_service(project: str, service: str, identity: Mapping[str, str], selected: Path) -> tuple[str, dict[str, Any]]:
+
+def _running_service(
+    project: str,
+    service: str,
+    identity: Mapping[str, str],
+    selected: Path,
+    control_namespace: str | None = None,
+) -> tuple[str, dict[str, Any]]:
     stdout, _ = _capture((
         "ps", "--quiet", "--filter", "status=running",
         "--filter", f"label=com.docker.compose.project={project}",
@@ -523,8 +564,15 @@ def _running_service(project: str, service: str, identity: Mapping[str, str], se
     }
     if any(labels.get(key) != value for key, value in expected_labels.items()):
         raise CodegenError(f"{service} service labels do not match selected checkout")
-    _validate_mounts(document, service)
     environment = _environment(document)
+    if service == "backend":
+        observed_namespace = _backend_control_namespace(document)
+        if control_namespace is not None and observed_namespace != control_namespace:
+            raise CodegenError("backend control namespace changed during service selection")
+        control_namespace = observed_namespace
+    elif control_namespace is not None:
+        control_namespace = _control_namespace(control_namespace)
+    _validate_mounts(document, service, control_namespace)
     source_env_name = "FULLMAG_SOURCE_HOST_ROOT" if service == "backend" else "FULLMAG_SOURCE_ROOT"
     source_root = environment.get(source_env_name)
     if not source_root or _path_identity(source_root) != _path_identity(str(selected)):
@@ -564,35 +612,51 @@ def _mount_subpath(
     subpath is retained in ``.HostConfig.Mounts`` and must be correlated to
     the same target and named volume before it is accepted.
     """
-    for key in ("Subpath", "subpath"):
+    values: list[str] = []
+    for key in ("SubPath", "Subpath", "subpath"):
         value = mount.get(key)
         if value is not None:
-            return str(value)
+            if not isinstance(value, str):
+                raise CodegenError("inspected volume subpath is malformed")
+            values.append(value)
     for key in ("VolumeOptions", "volume_options", "volume"):
         value = mount.get(key)
         if isinstance(value, Mapping):
-            for nested in ("Subpath", "subpath"):
-                if value.get(nested) is not None:
-                    return str(value[nested])
+            for nested in ("SubPath", "Subpath", "subpath"):
+                nested_value = value.get(nested)
+                if nested_value is not None:
+                    if not isinstance(nested_value, str):
+                        raise CodegenError("inspected volume subpath is malformed")
+                    values.append(nested_value)
 
     host_config = document.get("HostConfig")
     host_mounts = host_config.get("Mounts") if isinstance(host_config, Mapping) else None
     if not isinstance(host_mounts, list):
-        return None
+        if values and any(value != values[0] for value in values[1:]):
+            raise CodegenError("inspected volume subpath observations disagree")
+        return values[0] if values else None
     matches = [
         item for item in host_mounts
         if isinstance(item, Mapping) and item.get("Target") == target
     ]
-    if len(matches) != 1:
-        return None
-    host_mount = matches[0]
-    if host_mount.get("Type") != "volume" or host_mount.get("Source") != mount.get("Name"):
-        return None
-    volume_options = host_mount.get("VolumeOptions")
-    if not isinstance(volume_options, Mapping):
-        return None
-    value = volume_options.get("Subpath")
-    return str(value) if isinstance(value, str) and value else None
+    if len(matches) > 1:
+        raise CodegenError("inspected volume has ambiguous HostConfig mounts")
+    if matches:
+        host_mount = matches[0]
+        if host_mount.get("Type") != "volume" or host_mount.get("Source") != mount.get("Name"):
+            raise CodegenError("inspected HostConfig volume identity differs")
+        volume_options = host_mount.get("VolumeOptions")
+        if volume_options is not None and not isinstance(volume_options, Mapping):
+            raise CodegenError("inspected HostConfig volume options are malformed")
+        if isinstance(volume_options, Mapping):
+            value = volume_options.get("Subpath", volume_options.get("SubPath", volume_options.get("subpath")))
+            if value is not None:
+                if not isinstance(value, str):
+                    raise CodegenError("inspected HostConfig volume subpath is malformed")
+                values.append(value)
+    if values and any(value != values[0] for value in values[1:]):
+        raise CodegenError("inspected volume subpath observations disagree")
+    return values[0] if values else None
 
 
 def _volume_name(mount: Mapping[str, Any], service: str, target: str) -> str:
@@ -600,6 +664,34 @@ def _volume_name(mount: Mapping[str, Any], service: str, target: str) -> str:
     if not isinstance(value, str) or not value:
         raise CodegenError(f"{service} volume mount has no named-volume identity: {target}")
     return value
+
+
+def _validate_control_mount_subpath(
+    document: Mapping[str, Any],
+    mount: Mapping[str, Any],
+    target: str,
+    volume_document: Mapping[str, Any],
+    expected_subpath: str,
+) -> str:
+    observed = _mount_subpath(document, mount, target)
+    source = mount.get("Source")
+    mountpoint = volume_document.get("Mountpoint")
+    if not isinstance(mountpoint, str) or not mountpoint.startswith("/"):
+        raise CodegenError("control volume inspect has no usable root mountpoint")
+    root = posixpath.normpath(mountpoint)
+    expected_source = posixpath.normpath(
+        posixpath.join(mountpoint, expected_subpath) if expected_subpath else mountpoint
+    )
+    if observed is not None:
+        if observed != expected_subpath:
+            raise CodegenError(f"control mount has the wrong volume subpath: {target}")
+        if source is not None:
+            if not isinstance(source, str) or posixpath.normpath(source) not in {root, expected_source}:
+                raise CodegenError(f"control mount source disagrees with its subpath: {target}")
+        return expected_subpath
+    if not isinstance(source, str) or posixpath.normpath(source) != expected_source:
+        raise CodegenError(f"control mount source does not prove its exact subpath: {target}")
+    return expected_subpath
 
 
 def _inspect_named_volume(name: str) -> dict[str, Any]:
@@ -622,9 +714,20 @@ def _inspect_named_volume(name: str) -> dict[str, Any]:
 
 
 def _inspect_technical_volumes(
-    project: str, backend: Mapping[str, Any], frontend: Mapping[str, Any]
+    project: str,
+    backend: Mapping[str, Any],
+    frontend: Mapping[str, Any],
+    control_namespace: str | None = None,
 ) -> dict[str, Any]:
     from bootstrap_docker_toolchain import control_volume_name
+
+    backend_namespace = _backend_control_namespace(backend)
+    if control_namespace is None:
+        control_namespace = backend_namespace
+    else:
+        control_namespace = _control_namespace(control_namespace)
+        if control_namespace != backend_namespace:
+            raise CodegenError("backend control namespace differs from the selected codegen namespace")
 
     services = (("backend", backend, ("/build", "/opt/fullmag/package", "/opt/fullmag/control")),
                 ("frontend", frontend, ("/state/development", "/opt/fullmag/control")))
@@ -640,16 +743,12 @@ def _inspect_technical_volumes(
                 volume_documents[name] = _inspect_named_volume(name)
             descriptor = volume_documents[name]
             subpath = _mount_subpath(document, mount, target)
-            if service == "frontend" and target == "/opt/fullmag/control":
-                source = mount.get("Source")
-                mountpoint = descriptor.get("Mountpoint")
-                inferred = (
-                    isinstance(source, str) and isinstance(mountpoint, str)
-                    and source.rstrip("/") == mountpoint.rstrip("/") + "/frontend"
+            if target == "/opt/fullmag/control":
+                relative = "" if service == "backend" else "frontend"
+                expected_subpath = _control_subpath(control_namespace, relative)
+                subpath = _validate_control_mount_subpath(
+                    document, mount, target, descriptor, expected_subpath
                 )
-                if subpath != "frontend" and not inferred:
-                    raise CodegenError("frontend control mount does not prove volume subpath frontend")
-                subpath = "frontend"
             service_mounts[target] = {"name": name, "subpath": subpath or ""}
             if target == "/opt/fullmag/control":
                 control_names[service] = name
@@ -943,13 +1042,18 @@ def run(repo_root: Path, source_root: Path | None) -> int:
     published: dict[str, str] | None = None
     try:
         backend_id, backend_document = _running_service(project, "backend", identity, selected)
-        frontend_id, frontend_document = _running_service(project, "frontend", identity, selected)
+        control_namespace = _backend_control_namespace(backend_document)
+        frontend_id, frontend_document = _running_service(
+            project, "frontend", identity, selected, control_namespace
+        )
         service_identities = {
             "backend": _service_identity(backend_id, backend_document),
             "frontend": _service_identity(frontend_id, frontend_document),
         }
         phase = "technical-volume-inspection"
-        technical_volumes_before = _inspect_technical_volumes(project, backend_document, frontend_document)
+        technical_volumes_before = _inspect_technical_volumes(
+            project, backend_document, frontend_document, control_namespace
+        )
         frontend_input_digest, frontend_inputs = _frontend_source_digest(selected)
         output_names = ("openapi-v2.json", "openapi-v2-types.ts", "openapi-v2-client.ts", "openapi-v2-paths.ts")
         baseline = _output_baseline(selected, output_names)
@@ -1033,15 +1137,21 @@ def run(repo_root: Path, source_root: Path | None) -> int:
         stage_ready = False
         cleanup_state = "confirmed"
         phase = "final-service-and-volume-revalidation"
-        backend_after_id, backend_after_document = _running_service(project, "backend", identity, selected)
-        frontend_after_id, frontend_after_document = _running_service(project, "frontend", identity, selected)
+        backend_after_id, backend_after_document = _running_service(
+            project, "backend", identity, selected, control_namespace
+        )
+        frontend_after_id, frontend_after_document = _running_service(
+            project, "frontend", identity, selected, control_namespace
+        )
         final_service_identities = {
             "backend": _service_identity(backend_after_id, backend_after_document),
             "frontend": _service_identity(frontend_after_id, frontend_after_document),
         }
         if final_service_identities != service_identities:
             raise CodegenError("service or image identity changed before publication")
-        technical_volumes_after = _inspect_technical_volumes(project, backend_after_document, frontend_after_document)
+        technical_volumes_after = _inspect_technical_volumes(
+            project, backend_after_document, frontend_after_document, control_namespace
+        )
         if technical_volumes_after != technical_volumes_before:
             raise CodegenError("technical volume identity changed before publication")
         phase = "source-publication"

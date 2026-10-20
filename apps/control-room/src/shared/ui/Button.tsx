@@ -4,6 +4,8 @@ import type { ComponentPropsWithoutRef } from "react";
 
 import { cn } from "@/shared/utils/className";
 
+import { DisabledReason } from "./DisabledReason";
+
 const buttonVariants = cva(
   [
     "fm-button inline-flex min-w-0 items-center justify-center border",
@@ -43,22 +45,30 @@ export interface ButtonProps
   extends ComponentPropsWithoutRef<"button">,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean;
+  /**
+   * User-facing reason shown on hover and keyboard focus while `disabled`.
+   * Ignored when the button is enabled.
+   */
+  disabledReason?: string | null;
 }
 
 export function Button({
   asChild = false,
   className,
+  disabledReason,
   size,
   variant,
   ...props
 }: ButtonProps) {
   const Component = asChild ? Slot : "button";
-
-  return (
+  const button = (
     <Component
       className={cn(buttonVariants({ size, variant }), className)}
       data-slot="button"
       {...props}
     />
   );
+
+  const reason = props.disabled ? disabledReason?.trim() : undefined;
+  return reason ? <DisabledReason reason={reason}>{button}</DisabledReason> : button;
 }

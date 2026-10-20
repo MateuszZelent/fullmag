@@ -14,17 +14,17 @@ use sha2::{Digest, Sha256};
 
 use super::fdm_region_membership::load_resolved_fdm_membership;
 use super::field_resolution::{
-    extract_fdm_field, extract_fem_field, field_values_match_current_domain,
-    flatten_json_field_values, is_fdm_snapshot, json_field_grid, json_field_matches_current_domain,
+    current_fem_nodal_projection_kind, extract_fdm_field, extract_fem_field, field_values_match_current_domain,
+    flatten_json_field_values, is_fdm_snapshot, json_field_grid, json_field_matches_current_domain, json_field_value_count,
     live_magnetization_available, strict_flat_json_field_values,
 };
 use super::multilayer_identity::correlate_multilayer_layers;
 use super::quantities::{current_field_carriers, resolved_quantity_capability_for_snapshot};
 use super::resolved_spatial_field::{
-    full_field_publication_carrier_identity, resolve_current_spatial_field,
+    full_field_publication_carrier_identity, resolve_current_spatial_field, resolve_current_spatial_field_metadata,
     resolve_fdm_object_indices, resolve_fem_node_mapping, resolve_spatial_field_from_values,
-    FdmCellMembership, ResolvedSpatialField, SpatialFieldCarrier, SpatialFieldProvenance,
-    SpatialFieldSourceKind,
+    EntityMapping, FdmCellMembership, ResolvedSpatialField, SpatialFieldCarrier,
+    SpatialFieldProvenance, SpatialFieldSourceKind,
 };
 use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
@@ -94,6 +94,7 @@ const HYSTERESIS_ZARR_STORE: &str = "hysteresis.zarr";
 const HYSTERESIS_ZARR_M_FIELD: &str = "fields/m";
 const FDM_MULTILAYER_AIRBOX_MANIFEST: &str = "fields/H_demag/airbox/manifest.json";
 const FDM_MULTILAYER_AIRBOX_SCHEMA: &str = "fdm_multilayer_observation.v1";
+const FDM_MULTILAYER_AIRBOX_SCHEMA_V2: &str = "fdm_multilayer_observation.v2";
 const FDM_MULTILAYER_AIRBOX_FIELD_SCHEMA: &str = "fdm_multilayer_observation_field.v1";
 const FIELD_VECTOR_PENDING_RETRY_AFTER_MS: u64 = 250;
 const STEADY_TRANSPORT_FIELDS: [&str; 5] = [
@@ -126,7 +127,7 @@ pub(crate) struct FdmMultilayerAirboxCarrier {
     pub source_runtime_identity: serde_json::Value,
 }
 
-fn is_fdm_multilayer_snapshot(snapshot: &SessionStateResponse) -> bool {
+pub(crate) fn is_fdm_multilayer_snapshot(snapshot: &SessionStateResponse) -> bool {
     snapshot
         .metadata
         .as_ref()
@@ -263,19 +264,50 @@ fn read_required_string<'a>(
 pub(crate) fn load_fdm_multilayer_airbox_carrier(
     snapshot: &SessionStateResponse,
 ) -> Result<Option<FdmMultilayerAirboxCarrier>, String> {
+    load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, "H_demag")
+}
+
+pub(crate) fn load_fdm_multilayer_airbox_carrier_for_quantity(
+    snapshot: &SessionStateResponse, quantity: &str,
+) -> Result<Option<FdmMultilayerAirboxCarrier>, String> {
+    load_fdm_multilayer_airbox_carrier_values(snapshot, quantity, false)
+}
+
+fn load_fdm_multilayer_airbox_carrier_values(
+    snapshot: &SessionStateResponse, requested_quantity: &str, include_values: bool,
+) -> Result<Option<FdmMultilayerAirboxCarrier>, String> {
+    if !matches!(requested_quantity, "H_demag" | "H_eff") { return Ok(None); }
     if !is_fdm_multilayer_snapshot(snapshot) {
         return Ok(None);
     }
-    let Some(artifact_dir) = current_artifact_dir(snapshot) else {
-        return Ok(None);
+    // Accepted workers publish the same target-only manifest in CAS. Keep its
+    // validation identical to persisted runner artifacts, without requiring an
+    // API process to expose a worker-private attempt directory as live storage.
+    let inline = snapshot.latest_fields.get(requested_quantity)
+        .filter(|raw| latest_field_source_is_qualified(snapshot, requested_quantity, raw))
+        .and_then(|raw| raw.get("accepted_airbox"));
+    if inline.is_none() {
+        if let Some(reason) = snapshot.latest_fields.get(requested_quantity)
+            .filter(|raw| latest_field_source_is_qualified(snapshot, requested_quantity, raw))
+            .and_then(|raw| raw.get("unavailable_scopes")?.get(format!("airbox:{requested_quantity}")))
+            .and_then(serde_json::Value::as_str)
+        {
+            return Err(format!("accepted Airbox {requested_quantity} is unsupported: {reason}"));
+        }
+    }
+    let artifact_dir = current_artifact_dir(snapshot);
+    let manifest = if let Some(inline) = inline {
+        inline.get("manifest").cloned().ok_or_else(|| "accepted Airbox manifest missing".to_string())?
+    } else {
+        let Some(artifact_dir) = artifact_dir.as_ref() else { return Ok(None); };
+        let manifest_path = format!("fields/{requested_quantity}/airbox/manifest.json");
+        if try_resolve_artifact_path(artifact_dir, &manifest_path)
+            .map_err(|error| format!("failed to resolve Airbox manifest: {error}"))?.is_none() {
+            return Ok(None);
+        }
+        read_json_artifact_value(artifact_dir, &manifest_path)
+            .map_err(|error| format!("failed to read Airbox manifest: {error}"))?
     };
-    let manifest_path = try_resolve_artifact_path(&artifact_dir, FDM_MULTILAYER_AIRBOX_MANIFEST)
-        .map_err(|error| format!("failed to resolve Airbox manifest: {error}"))?;
-    let Some(_) = manifest_path else {
-        return Ok(None);
-    };
-    let manifest = read_json_artifact_value(&artifact_dir, FDM_MULTILAYER_AIRBOX_MANIFEST)
-        .map_err(|error| format!("failed to read Airbox manifest: {error}"))?;
     let quantity_id = read_required_string(&manifest, "quantity_id", "Airbox manifest")?;
     let unit = read_required_string(&manifest, "unit", "Airbox manifest")?;
     let quantity = quantity_spec(quantity_id)
@@ -303,8 +335,9 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         })
         .collect::<Option<BTreeMap<_, _>>>()
         .ok_or_else(|| "Airbox manifest unavailable_quantities is malformed".to_string())?;
-    if read_required_string(&manifest, "schema_version", "Airbox manifest")?
-        != FDM_MULTILAYER_AIRBOX_SCHEMA
+    let schema = read_required_string(&manifest, "schema_version", "Airbox manifest")?;
+    if !matches!(schema, FDM_MULTILAYER_AIRBOX_SCHEMA | FDM_MULTILAYER_AIRBOX_SCHEMA_V2)
+        || quantity_id != requested_quantity
         || read_required_string(&manifest, "scope_kind", "Airbox manifest")? != "airbox"
         || quantity.unit != unit
         || read_required_string(&manifest, "source_policy", "Airbox manifest")? != "target_only"
@@ -438,11 +471,54 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
             "Airbox manifest field_artifact_sha256 must be canonical raw sha256 hex".into(),
         );
     }
-    let field_path = try_resolve_artifact_path(&artifact_dir, &relative_field_path)
-        .map_err(|error| format!("failed to resolve Airbox field artifact: {error}"))?
-        .ok_or_else(|| "Airbox field artifact is missing".to_string())?;
-    let field_bytes = std::fs::read(&field_path)
-        .map_err(|error| format!("failed to read Airbox field artifact: {error}"))?;
+    let sample_count = manifest.get("sample_count").and_then(serde_json::Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok()).filter(|count| *count > 0)
+        .ok_or_else(|| "Airbox sample count missing".to_string())?;
+    if cells.iter().try_fold(1usize, |count, axis| count.checked_mul(*axis as usize)) != Some(sample_count) {
+        return Err("Airbox metadata sample count differs from its grid".into());
+    }
+    let value_count = sample_count.checked_mul(3).ok_or_else(|| "Airbox value count overflows usize".to_string())?;
+    if inline.is_none() && artifact_dir.as_ref().is_some_and(|root|
+        try_resolve_artifact_path(root, &relative_field_path).ok().flatten().is_none()) {
+        return Err("Airbox field artifact is missing".into());
+    }
+    let binary_reference = inline.and_then(|layout| layout.get("accepted_binary_field"))
+        .map(|value| serde_json::from_value::<crate::accepted_field_binary::BinaryFieldRef>(value.clone()))
+        .transpose().map_err(|error| format!("invalid Airbox binary reference: {error}"))?;
+    if let Some(reference) = binary_reference.as_ref() {
+        reference.validate().map_err(|error| error.to_string())?;
+        if reference.value_count != value_count { return Err("Airbox binary value count differs from its grid".into()); }
+        let layout = inline.ok_or_else(|| "Airbox binary proof missing".to_string())?;
+        if layout.get("validated_field_artifact_sha256").and_then(serde_json::Value::as_str) != Some(expected_field_hash)
+            || layout.get("field_artifact_object_ref").and_then(serde_json::Value::as_str) != Some(expected_field_hash)
+            || layout.get("validated_field_values_sha256").and_then(serde_json::Value::as_str) != Some(reference.values_sha256.as_str()) {
+            return Err("Airbox binary values lack their exact validated JSON artifact binding".into());
+        }
+    }
+    let values = if include_values && binary_reference.is_some() {
+        let reader = snapshot.latest_fields.binary_reader(requested_quantity)
+            .ok_or_else(|| "Airbox binary field has no trusted runtime owner".to_string())?;
+        reader.read_referenced_values(binary_reference.as_ref().unwrap()).map_err(|error| error.to_string())?
+    } else if include_values {
+    let field_bytes = if let Some(inline) = inline {
+        if let Some(raw) = inline.get("field_artifact_json").and_then(serde_json::Value::as_str) {
+            raw.as_bytes().to_vec()
+        } else {
+            let hash = inline.get("field_artifact_object_ref").and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "accepted Airbox exact artifact reference missing".to_string())?;
+            if hash != expected_field_hash { return Err("Airbox CAS reference differs from artifact identity".into()); }
+            let reader = snapshot.latest_fields.binary_reader(requested_quantity)
+                .ok_or_else(|| "Airbox CAS field has no trusted runtime owner".to_string())?;
+            let limit = (sample_count as u64).saturating_mul(3).saturating_mul(48).saturating_add(16 * 1024);
+            reader.read_artifact_bytes(hash, limit).map_err(|error| error.to_string())?
+        }
+    } else {
+        let artifact_dir = artifact_dir.as_ref().ok_or_else(|| "Airbox artifact directory missing".to_string())?;
+        let field_path = try_resolve_artifact_path(artifact_dir, &relative_field_path)
+            .map_err(|error| format!("failed to resolve Airbox field artifact: {error}"))?
+            .ok_or_else(|| "Airbox field artifact is missing".to_string())?;
+        std::fs::read(&field_path).map_err(|error| format!("failed to read Airbox field artifact: {error}"))?
+    };
     let actual_field_hash = format!("{:x}", Sha256::digest(&field_bytes));
     if actual_field_hash != expected_field_hash {
         return Err("Airbox field artifact sha256 does not match manifest".into());
@@ -497,18 +573,40 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         .ok_or_else(|| "Airbox target grid cell count overflows usize".to_string())?;
     if sample_count != vectors.len()
         || sample_count != grid_count
-        || values.len() != sample_count * 3
+        || values.len() != value_count
     {
         return Err("Airbox sample_count, target grid, and vector value count disagree".into());
     }
-    let expected_carrier_fingerprint = fdm_multilayer_airbox_carrier_fingerprint(
+    values
+    } else { Vec::new() };
+    let expected_carrier_fingerprint = if schema == FDM_MULTILAYER_AIRBOX_SCHEMA {
+        fdm_multilayer_airbox_carrier_fingerprint(
         quantity_id,
         manifest_grid,
         &serde_json::Value::Array(source_grid_fingerprints_value.clone()),
         source_common_grid,
         &source_runtime_identity,
         expected_field_hash,
-    )?;
+        )?
+    } else {
+        let field_seed = serde_json::json!({
+            "schema_version": schema, "scope_kind": "airbox", "quantity_id": quantity_id,
+            "source_policy": "target_only", "grid": manifest_grid,
+            "source_grid_fingerprints": source_grid_fingerprints_value,
+            "source_common_grid": source_common_grid,
+            "source_runtime_identity": source_runtime_identity,
+            "field_artifact_sha256": expected_field_hash,
+        });
+        let field_hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&field_seed).map_err(|error| error.to_string())?));
+        if field_generation != format!("airbox:sha256:{field_hash}") {
+            return Err("Airbox field generation differs from its quantity content".into());
+        }
+        let mut carrier_seed = field_seed;
+        if let Some(seed) = carrier_seed.as_object_mut() {
+            seed.remove("quantity_id"); seed.remove("field_artifact_sha256");
+        }
+        format!("{:x}", Sha256::digest(serde_json::to_vec(&carrier_seed).map_err(|error| error.to_string())?))
+    };
     if carrier_fingerprint != expected_carrier_fingerprint {
         return Err(
             "Airbox manifest carrier_fingerprint does not match runner carrier seed".into(),
@@ -559,15 +657,13 @@ fn requested_fdm_multilayer_airbox_carrier(
     {
         return Err(ApiError::not_found("multilayer FDM Airbox scope not found"));
     }
-    let Some(carrier) = load_fdm_multilayer_airbox_carrier(snapshot).map_err(|reason| {
-        ApiError::conflict(format!(
-            "multilayer FDM Airbox carrier is malformed or stale: {reason}"
-        ))
-    })?
-    else {
-        // A carrier may not have been published yet while the solver is still
-        // producing the observation artifact. The caller distinguishes this
-        // from an invalid carrier and reports either 202 or 204.
+    let candidate = load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, quantity_id)
+        .map_err(|reason| ApiError::conflict(format!("multilayer FDM Airbox carrier is malformed: {reason}")))?;
+    let candidate = match candidate {
+        Some(carrier) => Some(carrier),
+        None => load_fdm_multilayer_airbox_carrier(snapshot).map_err(ApiError::conflict)?,
+    };
+    let Some(carrier) = candidate else {
         return Ok(None);
     };
     if let Some(reason) = carrier.unavailable_quantities.get(quantity_id) {
@@ -584,11 +680,18 @@ fn requested_fdm_multilayer_airbox_carrier(
 }
 
 pub(crate) fn resolved_fdm_multilayer_airbox_field(
-    _snapshot: &SessionStateResponse,
+    snapshot: &SessionStateResponse,
     quantity_id: &str,
     component_count: usize,
     carrier: &FdmMultilayerAirboxCarrier,
 ) -> Result<ResolvedSpatialField<'static>, ApiError> {
+    let hydrated;
+    let carrier = if carrier.quantity_id != quantity_id || carrier.values.is_empty() {
+        hydrated = load_fdm_multilayer_airbox_carrier_values(snapshot, quantity_id, true)
+            .map_err(ApiError::conflict)?
+            .ok_or_else(|| ApiError::not_found("requested Airbox quantity is not published"))?;
+        &hydrated
+    } else { carrier };
     let mut field = ResolvedSpatialField::from_airbox(
         quantity_id,
         &carrier.quantity_id,
@@ -1350,6 +1453,20 @@ fn insert_field_vector_binary_headers(
     }
 }
 
+fn insert_field_vector_carrier_revision_header(
+    resp: &mut axum::response::Response,
+    carrier_revision: Option<u64>,
+) {
+    if let Some(revision) = carrier_revision {
+        if let Ok(value) = HeaderValue::from_str(&revision.to_string()) {
+            resp.headers_mut().insert(
+                HeaderName::from_static("x-fullmag-carrier-revision"),
+                value,
+            );
+        }
+    }
+}
+
 fn field_vector_binary_header_counts(binary: &[u8]) -> (u8, usize, usize) {
     if binary.len() < 16 || &binary[0..4] != b"FMVP" {
         return (0, 0, 0);
@@ -2011,15 +2128,25 @@ pub async fn get_field_catalog(
         let n_comp = quantity_spec(qid)
             .map(|spec| spec.n_comp as usize)
             .unwrap_or(3);
+        if let Some(reader) = snapshot.latest_fields.binary_reader(qid) {
+            let Some(resolved) = resolve_current_spatial_field_metadata(snapshot, qid, n_comp)? else { continue; };
+            remember_materialized_carrier_metadata(&mut materialized_carriers, &resolved);
+            push_field_descriptor(&mut quantities, qid, &resolved.canonical_unit,
+                value.get("spatial_kind").and_then(serde_json::Value::as_str)
+                    .filter(|kind| kind.starts_with("fem_")),
+                resolved.quantity_revision, &gen_id, latest_json_field_freshness(snapshot, value, qid),
+                reader.reference().value_count > 0);
+            continue;
+        }
         let resolved = if let Some(field) = resolve_transport_spatial_field(snapshot, qid)? {
             field
         } else {
-            let Some(field) = resolve_current_spatial_field(snapshot, qid, n_comp)? else {
+            let Some(field) = resolve_current_spatial_field_metadata(snapshot, qid, n_comp)? else {
                 continue;
             };
             field
         };
-        remember_materialized_carrier(&mut materialized_carriers, &resolved);
+        remember_materialized_carrier_metadata(&mut materialized_carriers, &resolved);
         let freshness = latest_json_field_freshness(snapshot, value, qid);
         let freshness = if qid == "m" {
             freshness_from_selected_observation_frame(snapshot, qid, freshness)
@@ -2030,11 +2157,12 @@ pub async fn get_field_catalog(
             &mut quantities,
             qid,
             &resolved.canonical_unit,
-            None,
+            value.get("spatial_kind").and_then(serde_json::Value::as_str)
+                .filter(|kind| kind.starts_with("fem_")),
             resolved.quantity_revision,
             &gen_id,
             freshness,
-            !resolved.values.is_empty(),
+            json_field_value_count(value) > 0 || !resolved.values.is_empty(),
         );
     }
 
@@ -2048,10 +2176,10 @@ pub async fn get_field_catalog(
         let n_comp = quantity_spec(qid)
             .map(|spec| spec.n_comp as usize)
             .unwrap_or(3);
-        let Some(resolved) = resolve_current_spatial_field(snapshot, qid, n_comp)? else {
+        let Some(resolved) = resolve_current_spatial_field_metadata(snapshot, qid, n_comp)? else {
             continue;
         };
-        remember_materialized_carrier(&mut materialized_carriers, &resolved);
+        remember_materialized_carrier_metadata(&mut materialized_carriers, &resolved);
         let freshness = preview_field_freshness(snapshot, field);
         let freshness = if qid == "m" {
             freshness_from_selected_observation_frame(snapshot, qid, freshness)
@@ -2069,14 +2197,15 @@ pub async fn get_field_catalog(
             resolved.quantity_revision,
             &gen_id,
             freshness,
-            !resolved.values.is_empty(),
+            !field.vector_field_values.is_empty(),
         );
     }
 
     // A multilayer Airbox is a separately materialized observation carrier.
     // It is intentionally not tested against the current magnetic-domain
     // cardinality and is advertised only after its manifest and payload agree.
-    if let Ok(Some(carrier)) = load_fdm_multilayer_airbox_carrier(snapshot) {
+    for quantity in ["H_demag", "H_eff"] {
+    if let Ok(Some(carrier)) = load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, quantity) {
         let quantity_id = carrier.quantity_id.clone();
         let component_count = quantity_spec(&quantity_id)
             .map(|spec| usize::from(spec.n_comp))
@@ -2086,31 +2215,28 @@ pub async fn get_field_catalog(
                 .iter()
                 .any(|quantity| quantity.quantity_id == quantity_id)
         {
-            if let Ok(field) = resolved_fdm_multilayer_airbox_field(
-                snapshot,
-                &quantity_id,
-                component_count,
-                &carrier,
-            ) {
-                remember_materialized_carrier(&mut materialized_carriers, &field);
+                materialized_carriers.insert(quantity_id.clone(), (
+                    "airbox".into(), Some("airbox".into()),
+                    format!("sha256:{}", carrier.carrier_fingerprint), carrier.carrier_fingerprint.clone(),
+                ));
                 push_field_descriptor(
                     &mut quantities,
-                    &field.quantity_id,
-                    &field.canonical_unit,
+                    &quantity_id,
+                    &carrier.unit,
                     Some("airbox_only"),
-                    field.quantity_revision,
+                    carrier.quantity_revision,
                     &gen_id,
                     completed_field_freshness(
                         current_source_step(snapshot),
                         current_source_step(snapshot),
-                        field.quantity_revision,
+                        carrier.quantity_revision,
                         0,
                         0,
                     ),
                     carrier.sample_count > 0,
                 );
-            }
         }
+    }
     }
 
     let mut catalog_revision = current_field_catalog_revision(snapshot);
@@ -2488,7 +2614,12 @@ pub(crate) fn resolve_target_field_availability(
     // The multilayer Airbox is an independent immutable carrier. Do not
     // advertise the common-grid field as a substitute for it.
     if is_fdm_multilayer_snapshot(snapshot) && scope_kind == "airbox" {
-        match load_fdm_multilayer_airbox_carrier(snapshot) {
+        let selected_carrier = load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, &quantity_id)
+            .and_then(|carrier| match carrier {
+                Some(carrier) => Ok(Some(carrier)),
+                None => load_fdm_multilayer_airbox_carrier(snapshot),
+            });
+        match selected_carrier {
             Ok(Some(carrier)) => {
                 let carrier_id = Some(format!("sha256:{}", carrier.carrier_fingerprint));
                 let carrier_generation = carrier.field_generation.clone();
@@ -2507,10 +2638,7 @@ pub(crate) fn resolve_target_field_availability(
                     result.reason_code = Some("target_carrier_quantity_unpublished".into());
                     return Ok(result);
                 }
-                let n_comp = usize::from(spec.n_comp);
-                let field =
-                    resolved_fdm_multilayer_airbox_field(snapshot, &quantity_id, n_comp, &carrier)?;
-                let materialized = !field.values.is_empty();
+                let materialized = carrier.sample_count > 0 && carrier.quantity_id == quantity_id;
                 result = availability_resource(
                     &quantity_id,
                     &target_id,
@@ -2525,8 +2653,10 @@ pub(crate) fn resolve_target_field_availability(
                         } else {
                             TargetFieldAvailabilityState::Materializing
                         }
-                    } else {
+                    } else if materialized {
                         TargetFieldAvailabilityState::Ready
+                    } else {
+                        TargetFieldAvailabilityState::Supported
                     },
                     materialized.then_some(carrier_id).flatten(),
                     carrier_generation,
@@ -2553,7 +2683,7 @@ pub(crate) fn resolve_target_field_availability(
             Err(_) => {
                 result.supported = supported;
                 result.pending = false;
-                result.reason_code = Some("target_carrier_invalid".to_string());
+                result.reason_code = Some("target_carrier_invalid".into());
                 return Ok(result);
             }
         }
@@ -2564,7 +2694,7 @@ pub(crate) fn resolve_target_field_availability(
             |transport| match transport {
                 Some(field) => Ok(Some(field)),
                 None => {
-                    resolve_current_spatial_field(snapshot, &quantity_id, usize::from(spec.n_comp))
+                    resolve_current_spatial_field_metadata(snapshot, &quantity_id, usize::from(spec.n_comp))
                 }
             },
         );
@@ -2593,7 +2723,13 @@ pub(crate) fn resolve_target_field_availability(
         return Ok(result);
     };
 
-    let raw_point_count = field.values.len() / usize::from(spec.n_comp).max(1);
+    let value_count = match resolved_current_field_source(snapshot, &quantity_id, usize::from(spec.n_comp)) {
+        Some(ResolvedCurrentFieldSource::Latest(value)) => json_field_value_count(value),
+        Some(ResolvedCurrentFieldSource::Preview(field)) => field.vector_field_values.len(),
+        Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, .. }) => values.len(),
+        None => field.values.len(),
+    };
+    let raw_point_count = value_count / usize::from(spec.n_comp).max(1);
     let scope = if scope_kind == "full" {
         None
     } else {
@@ -2634,7 +2770,7 @@ pub(crate) fn resolve_target_field_availability(
     let materialized = scope
         .as_ref()
         .map(|scope| !scope.value_indices.is_empty() || !scope.node_indices.is_empty())
-        .unwrap_or_else(|| !field.values.is_empty());
+        .unwrap_or(raw_point_count > 0);
     let carrier_id = materialized.then(|| target_carrier_id(&field, scope.as_ref(), &generation));
     let field_generation = field
         .field_generation
@@ -2730,6 +2866,9 @@ fn target_quantity_support(
 ) -> (bool, Option<&'static str>) {
     if !spec.ui_exposed || !spec.supports_preview_3d {
         return (false, Some("quantity_not_spatial"));
+    }
+    if capability_supports_quantity(snapshot, spec.id.as_str()) == Some(false) {
+        return (false, Some("quantity_not_supported"));
     }
     if scope_kind == "airbox" && spec.domain.as_str() == "magnetic_only" {
         return (false, Some("quantity_domain_mismatch"));
@@ -2913,12 +3052,12 @@ pub async fn get_field_meta(
             "unsupported_scope: field '{quantity_id}' is not available on airbox scope"
         )));
     }
-    let location = snapshot
+    let location = current_fem_nodal_projection_kind(snapshot, quantity_id).map(str::to_string).or_else(|| snapshot
         .preview_cache
         .get(quantity_id)
         .filter(|field| preview_field_source_is_qualified(snapshot, field))
         .filter(|field| field.spatial_kind.starts_with("fem_"))
-        .map(|field| field.spatial_kind.clone())
+        .map(|field| field.spatial_kind.clone()))
         .unwrap_or_else(|| quantity_spatial_domain(quantity_id).to_string());
     let component =
         parse_field_component(quantity_id, query.component.as_deref(), n_comp as usize)?;
@@ -3460,6 +3599,13 @@ fn remember_materialized_carrier(
     if field.values.is_empty() {
         return;
     }
+    remember_materialized_carrier_metadata(carriers, field);
+}
+
+fn remember_materialized_carrier_metadata(
+    carriers: &mut BTreeMap<String, (String, Option<String>, String, String)>,
+    field: &ResolvedSpatialField<'_>,
+) {
     let Some(identity) = full_field_publication_carrier_identity(field) else {
         return;
     };
@@ -4733,7 +4879,7 @@ fn sample_unscoped_field_values(
             ("x-fullmag-component" = String, description = "Resolved component projection"),
             ("x-fullmag-encoding" = String, description = "FMVP encoding and version, including FMVP;version=6 for immutable artifact inspections"),
             ("x-fullmag-carrier-id" = String, description = "Immutable artifact carrier ID; present for FMVP v6"),
-            ("x-fullmag-carrier-revision" = String, description = "Lossless decimal u64 artifact carrier revision; present for FMVP v6"),
+            ("x-fullmag-carrier-revision" = String, description = "Lossless decimal u64 carrier revision used by expected_carrier_revision; present for live carriers when available and artifact inspection FMVP v6"),
             ("x-fullmag-carrier-digest" = String, description = "Bare lowercase SHA256 artifact carrier digest; present for FMVP v6"),
             ("x-fullmag-point-count" = usize, description = "Decoded point count"),
             ("x-fullmag-value-count" = usize, description = "Scalar value count"),
@@ -5045,10 +5191,9 @@ async fn get_field_vector_unfenced(
         quantity_id,
         resolved_field.as_ref(),
     )?;
-    validate_field_vector_carrier_precondition(
-        &query,
-        field_vector_carrier_revision(snapshot, resolved_scope.as_ref(), airbox_field.as_ref()),
-    )?;
+    let carrier_revision =
+        field_vector_carrier_revision(snapshot, resolved_scope.as_ref(), airbox_field.as_ref());
+    validate_field_vector_carrier_precondition(&query, carrier_revision)?;
     let sample_limit = resolve_field_vector_sample_limit(
         &query,
         resolved_scope.as_ref(),
@@ -5106,6 +5251,17 @@ async fn get_field_vector_unfenced(
     let scoped_node_indices = resolved_scope
         .as_ref()
         .map(|scope| scope.node_indices.clone());
+    let unscoped_node_mapping = if resolved_scope.is_none() {
+        match resolved_field.as_ref().map(|field| &field.carrier) {
+            Some(SpatialFieldCarrier::FemNodes {
+                mapping: EntityMapping::ExplicitLocalToGlobal(indices),
+                ..
+            }) => Some(indices.clone()),
+            _ => None,
+        }
+    } else {
+        None
+    };
 
     drop(guard);
 
@@ -5155,7 +5311,25 @@ async fn get_field_vector_unfenced(
     } else {
         sample_unscoped_field_values(raw_values, scoped_grid, n_comp, sample_limit)
     };
-    let field_node_indices = scoped_node_indices.or(sampled_node_indices);
+    // Sampling addresses the compact value array. FMVP identities must still
+    // address the global mesh, including when the whole compact field is read.
+    let field_node_indices = match unscoped_node_mapping {
+        Some(mapping) => Some(match sampled_node_indices {
+            Some(indices) => indices
+                .into_iter()
+                .map(|index| {
+                    mapping
+                        .get(index)
+                        .map(|global| *global as usize)
+                        .ok_or_else(|| {
+                            ApiError::conflict("sampled field index exceeds its FEM node mapping")
+                        })
+                })
+                .collect::<Result<Vec<_>, ApiError>>()?,
+            None => mapping.into_iter().map(|index| index as usize).collect(),
+        }),
+        None => scoped_node_indices.or(sampled_node_indices),
+    };
     let field_node_indices_u32 = field_node_indices
         .as_ref()
         .map(|node_indices| {
@@ -5190,7 +5364,7 @@ async fn get_field_vector_unfenced(
         .as_ref()
         .map(|hash| {
             format!(
-                ":topology_hash={hash}:node_indices={}",
+                ":topology_revision={topology_revision}:topology_hash={hash}:node_indices={}",
                 field_node_indices_cache_token(field_node_indices_u32.as_deref())
             )
         })
@@ -5239,6 +5413,7 @@ async fn get_field_vector_unfenced(
                 field_indexing,
                 field_node_indices_u32.as_ref().map(Vec::len),
             );
+            insert_field_vector_carrier_revision_header(&mut resp, carrier_revision);
             insert_scope_headers(&mut resp, resolved_scope.as_ref());
             insert_snapshot_header(&mut resp, requested_snapshot_id);
             return Ok(resp);
@@ -5315,6 +5490,7 @@ async fn get_field_vector_unfenced(
         field_indexing,
         field_node_indices_u32.as_ref().map(Vec::len),
     );
+    insert_field_vector_carrier_revision_header(&mut resp, carrier_revision);
     insert_scope_headers(&mut resp, resolved_scope.as_ref());
     insert_snapshot_header(&mut resp, requested_snapshot_id);
 

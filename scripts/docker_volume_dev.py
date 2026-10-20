@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import sys
 import time
@@ -18,6 +18,11 @@ from docker_build_control import (BuildControl, BuildControlError, canonical, co
                                   mirror_console)
 from docker_dev_host import docker_argv, require_host, local_volume, validate_host_path
 
+INCLUDE_UNTRACKED_ENV = "FULLMAG_DEV_INCLUDE_UNTRACKED"
+_MAX_INCLUDE_UNTRACKED_FILES = 10000
+_MAX_INCLUDE_UNTRACKED_BYTES = 64 * 1024
+_CONTROL_NAMESPACE = re.compile(r"^namespaces/[0-9a-f]{32}$")
+
 
 def _session_host():
     if os.name == "nt":
@@ -25,6 +30,79 @@ def _session_host():
     else:
         import linux_native_host as host
     return host
+
+
+def normalize_include_untracked_paths(values):
+    """Validate and sort exact relative paths supplied through the CLI."""
+
+    if values is None:
+        values = []
+    if not isinstance(values, (list, tuple)) or len(values) > _MAX_INCLUDE_UNTRACKED_FILES:
+        raise BuildControlError("--include-untracked requires a bounded list of exact file paths")
+    paths = []
+    seen = set()
+    for value in values:
+        if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
+            raise BuildControlError("--include-untracked paths must be non-empty POSIX-relative paths")
+        posix = PurePosixPath(value)
+        windows = PureWindowsPath(value)
+        if (
+            posix.is_absolute()
+            or windows.is_absolute()
+            or windows.anchor
+            or value != posix.as_posix()
+            or any(part in {"", ".", ".."} for part in posix.parts)
+        ):
+            raise BuildControlError("--include-untracked path escapes or is not canonical: " + value)
+        if any(character in value for character in "*?[]"):
+            raise BuildControlError("--include-untracked does not accept glob syntax: " + value)
+        for component in posix.parts:
+            stem = component.split(".", 1)[0].rstrip(" .").casefold()
+            if (
+                stem in {"con", "prn", "aux", "nul", "conin$", "conout$"}
+                or re.fullmatch(r"(?:com|lpt)(?:[1-9]|[¹²³])", stem)
+            ):
+                raise BuildControlError("--include-untracked path uses a Windows device name: " + value)
+        if value in seen:
+            raise BuildControlError("--include-untracked paths must be unique: " + value)
+        seen.add(value)
+        paths.append(value)
+    paths.sort()
+    encoded = json.dumps(paths, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > _MAX_INCLUDE_UNTRACKED_BYTES:
+        raise BuildControlError("--include-untracked allowlist exceeds its size bound")
+    return paths
+
+
+def parse_include_untracked_json(value):
+    """Validate the canonical allowlist pinned in a backend environment."""
+
+    if not isinstance(value, str):
+        raise BuildControlError("Pinned live-source allowlist is missing or is not a string")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise BuildControlError("Pinned live-source allowlist is not UTF-8") from error
+    if len(encoded) > _MAX_INCLUDE_UNTRACKED_BYTES:
+        raise BuildControlError("Pinned live-source allowlist exceeds its size bound")
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise BuildControlError("Pinned live-source allowlist is not valid JSON") from error
+    paths = normalize_include_untracked_paths(decoded)
+    canonical_value = json.dumps(paths, ensure_ascii=False, separators=(",", ":"))
+    if value != canonical_value:
+        raise BuildControlError("Pinned live-source allowlist is not canonical JSON")
+    return paths
+
+
+def include_untracked_from_compose(document):
+    services = document.get("services") if isinstance(document, Mapping) else None
+    backend = services.get("backend") if isinstance(services, Mapping) else None
+    environment = backend.get("environment") if isinstance(backend, Mapping) else None
+    if not isinstance(environment, Mapping):
+        raise BuildControlError("Retained Compose backend environment is missing")
+    return parse_include_untracked_json(environment.get(INCLUDE_UNTRACKED_ENV, "[]"))
 
 
 def _certificate_path(state):
@@ -447,7 +525,7 @@ def _backend_cache(control, operation, layout, selected, image, toolchain):
     layout = {**layout, "compose_project": control.project}
     profile = cache.prepare(layout, selected, image, layout["storage_root"], volume_docker,
         source_root=selected, toolchain_image=toolchain, active_consumers=consumers,
-        control_volume_name=control.volume)
+        control_volume_name=control.volume, control_namespace=control.namespace)
     overlay = cache.maintenance_overlay(profile)
     overlay["name"] = control.project
     control.write(operation["root"] + "/cache-maintenance-compose.json", overlay)
@@ -540,8 +618,12 @@ def _host_ledger(control, operation, layout, selected, image):
     service = rendered["services"]["host-ledger-maintenance"]
     service["volumes"] = [mount for mount in service["volumes"]
                           if mount["target"] != "/usr/local/sbin/docker_host_ledger.sh"]
+    control_options = {"nocopy": True}
+    control_subpath = _resolved_control_subpath(control)
+    if control_subpath:
+        control_options["subpath"] = control_subpath
     service["volumes"].append({"type": "volume", "source": "build-control",
-        "target": "/fullmag-build-control", "read_only": True, "volume": {"nocopy": True}})
+        "target": "/fullmag-build-control", "read_only": True, "volume": control_options})
     service["entrypoint"] = ["/bin/bash", "/fullmag-build-control/" + helper_relative]
     spec = {"name": control.project, "services": {"host-ledger-maintenance": service},
             "volumes": {"build-control": {"name": control.volume, "external": True}}}
@@ -676,6 +758,9 @@ def _operator_probe_record_from_retained(previous, document):
         raise BuildControlError("retained backend development-inputs path differs from its full control volume")
     frontend = document.get("services", {}).get("frontend", {})
     frontend_environment = frontend.get("environment", {})
+    control_namespace = _control_namespace_from_document(document)
+    if environment.get("FULLMAG_CONTROL_NAMESPACE", "") != control_namespace:
+        raise BuildControlError("retained backend control namespace differs from its Compose marker")
     if frontend_environment.get("FULLMAG_DEVELOPMENT_INPUTS_PATH") != (
         "/opt/fullmag/control/development-inputs.json"
     ):
@@ -685,8 +770,9 @@ def _operator_probe_record_from_retained(previous, document):
         if mount.get("source") == "build-control"
         and mount.get("target") == "/opt/fullmag/control"
     ]
+    expected_frontend_subpath = _control_mount_subpath(control_namespace, "frontend")
     if (len(frontend_control_mounts) != 1
-            or frontend_control_mounts[0].get("volume", {}).get("subpath") != "frontend"):
+            or frontend_control_mounts[0].get("volume", {}).get("subpath") != expected_frontend_subpath):
         raise BuildControlError("retained frontend does not use the restricted control-volume subpath")
     return record
 
@@ -722,6 +808,62 @@ def _reassert_operator_probe_environment(document, record):
     frontend_environment["FULLMAG_DEVELOPMENT_INPUTS_PATH"] = (
         "/opt/fullmag/control/development-inputs.json"
     )
+
+
+def _control_mount_subpath(namespace, relative=""):
+    if not isinstance(namespace, str) or (namespace and _CONTROL_NAMESPACE.fullmatch(namespace) is None):
+        raise BuildControlError("control namespace must be empty or namespaces/<32 lowercase hexadecimal characters>")
+    if not relative:
+        return namespace
+    if (not isinstance(relative, str) or relative.startswith("/") or "\\" in relative
+            or any(part in {"", ".", ".."} for part in relative.split("/"))):
+        raise BuildControlError("control mount relative path is not canonical")
+    return f"{namespace}/{relative}" if namespace else relative
+
+
+def _resolved_control_subpath(control, relative=""):
+    expected = _control_mount_subpath(control.namespace, relative)
+    actual = control.subpath(relative)
+    if not relative and not expected and actual in {None, ""}:
+        return ""
+    if actual != expected:
+        raise BuildControlError("control namespace subpath resolver returned a different path")
+    return actual
+
+
+def _control_namespace_from_document(document):
+    if not isinstance(document, Mapping):
+        raise BuildControlError("retained Compose document is malformed")
+    if "x-fullmag-control-namespace" not in document:
+        namespace = ""
+    else:
+        namespace = document.get("x-fullmag-control-namespace")
+    if not isinstance(namespace, str) or (namespace and _CONTROL_NAMESPACE.fullmatch(namespace) is None):
+        raise BuildControlError("retained Compose control namespace is malformed")
+    return namespace
+
+
+def _prefix_runtime_control_mounts(control, backend):
+    targets = {
+        "/opt/fullmag/runtime-control": "runtime-control",
+        "/state/runs/docker-all/session-store/runtime-services": "runtime-control/runtime-services",
+    }
+    for target, relative in targets.items():
+        matches = [mount for mount in backend.get("volumes", [])
+                   if isinstance(mount, Mapping) and mount.get("target") == target]
+        if len(matches) != 1:
+            raise BuildControlError("backend control namespace mount is missing or ambiguous: " + target)
+        mount = matches[0]
+        if mount.get("type") != "volume":
+            raise BuildControlError("backend control namespace mount is not a named volume: " + target)
+        volume = mount.get("volume")
+        if not isinstance(volume, dict):
+            raise BuildControlError("backend control namespace volume options are malformed: " + target)
+        subpath = _resolved_control_subpath(control, relative)
+        if subpath:
+            volume["subpath"] = subpath
+        else:
+            volume.pop("subpath", None)
 
 
 def _start_compose_services(control, operation, document):
@@ -878,7 +1020,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     runtime.assert_loopback_port_available(args.port, identity["project_name"])
     if args.profile != "dev":
         raise BuildControlError("Volume DEV supports backend-dev; release uses its explicit managed recipe")
-    if args.image or args.toolchain_image or args.source_manifest or args.include_untracked:
+    include_untracked = normalize_include_untracked_paths(
+        getattr(args, "include_untracked", None)
+    )
+    if args.image or args.toolchain_image or args.source_manifest:
         raise BuildControlError("Volume DEV requires its attested dependency/image route; explicit overrides are not qualified")
     # Freeze the bounded operator controls before any toolchain/image/cache
     # preparation.  A service recreation reuses the exact prior record rather
@@ -1002,13 +1147,17 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                                                          development_build=delegation)
         startup = None
         if args.script is not None:
+            from docker_volume_activate import _managed_activation_receipt_contract
             startup_helper, startup_hashes = _startup_helper(control, selected, image)
             authorization = startup_helper.prepare(selected, args.script,
                 request_id="docker-volume-" + token, source_commit=storage.git(selected, "rev-parse", "HEAD"))
+            receipt_key, receipt_path = _managed_activation_receipt_contract(
+                startup_helper, authorization.request_id)
             startup_path = state / "startup-provenance.json"
             startup_digest = startup_helper.write_provenance(startup_path, authorization)
             startup = {"authorization": authorization.as_dict(), "path": str(startup_path),
-                       "provenance_sha256": startup_digest, "helper_hashes": startup_hashes}
+                       "provenance_sha256": startup_digest, "helper_hashes": startup_hashes,
+                       "receipt_key": receipt_key, "receipt_path": receipt_path}
         user_data = _workspace_state_root(layout, control.project)
         if os.name != "nt":
             host.admit_runtime_uid(user_data)
@@ -1030,6 +1179,9 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             "FULLMAG_SOURCE_PROJECT_ID": identity["project_id"],
             "FULLMAG_SOURCE_WORKTREE_ID": identity["worktree_id"],
             "FULLMAG_SOURCE_CHECKOUT_KIND": identity["checkout_kind"]}
+        # Compose interpolation cannot inherit an operator's unrelated host
+        # value; only the explicit CLI list is pinned into the backend below.
+        environment.pop(INCLUDE_UNTRACKED_ENV, None)
         # Only the two validated controls are carried into Compose.  The
         # digest is explicit so later cache/ledger overlays cannot silently
         # replace the operator's requested probe mode.
@@ -1046,6 +1198,11 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         if device_access == "gpu":
             document["services"]["backend"]["gpus"] = [{"count": "all"}]
         backend, frontend = (document["services"][name] for name in ("backend", "frontend"))
+        control_namespace = _control_namespace_from_document({
+            "x-fullmag-control-namespace": control.namespace,
+        })
+        document["x-fullmag-control-namespace"] = control_namespace
+        _prefix_runtime_control_mounts(control, backend)
         backend["environment"]["FULLMAG_SESSION_STORAGE_PROFILE"] = certificate["storage_profile"]
         for mount in backend["volumes"]:
             if mount["target"] == "/run/fullmag/windows-folder-host.json":
@@ -1053,6 +1210,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         backend.pop("build", None)
         backend["environment"].update(cache["environment"])
         backend["environment"].update(ledger_backend["environment"])
+        if control_namespace:
+            backend["environment"]["FULLMAG_CONTROL_NAMESPACE"] = control_namespace
+        else:
+            backend["environment"].pop("FULLMAG_CONTROL_NAMESPACE", None)
         backend["environment"]["FULLMAG_PACKAGE_PROVENANCE"] = runtime.BACKEND_PROVENANCE_PATH
         backend["environment"]["FULLMAG_RUNTIME_PROVENANCE"] = runtime.BACKEND_PROVENANCE_PATH
         backend["environment"]["CUDA_CACHE_PATH"] = "/build/cuda-cache"
@@ -1071,6 +1232,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                 FULLMAG_STARTUP_PROVENANCE="/run/fullmag/startup-provenance.json",
                 FULLMAG_STARTUP_PROVENANCE_SHA256=startup["provenance_sha256"],
                 FULLMAG_STARTUP_HELPER_SHA256=startup["helper_hashes"]["docker_startup_script.py"],
+                FULLMAG_STARTUP_RECEIPT_KEY=startup["receipt_key"],
                 FULLMAG_STARTUP_API="http://127.0.0.1:8081")
             backend["volumes"].append({"type": "bind", "source": startup["path"],
                 "target": "/run/fullmag/startup-provenance.json", "read_only": True,
@@ -1084,7 +1246,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         frontend["volumes"] += [
             {"type": "volume", "source": "frontend-build", "target": "/state/development", "volume": {"nocopy": True}},
             {"type": "volume", "source": "build-control", "target": "/opt/fullmag/control", "read_only": True,
-             "volume": {"nocopy": True, "subpath": "frontend"}}]
+             "volume": {"nocopy": True, "subpath": _resolved_control_subpath(control, "frontend")}}]
         owner_tmpfs = "/run/fullmag/frontend-owner:rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
         existing_tmpfs = [
             value for value in frontend.get("tmpfs", [])
@@ -1114,6 +1276,11 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             for mount in service["volumes"]:
                 if mount["type"] == "bind" and not mount.get("read_only") and mount["target"] not in ({"/state", "/user-data", "/host-ledger"} | ({"/opt/fullmag/script-output"} if service is backend else set())):
                     raise BuildControlError("Unexpected writable host bind: " + mount["target"])
+        import docker_worker_cgroup
+        docker_worker_cgroup.configure_backend(document)
+        backend["environment"][INCLUDE_UNTRACKED_ENV] = json.dumps(
+            include_untracked, ensure_ascii=False, separators=(",", ":")
+        )
         control.write(operation["root"] + "/compose.json", document)
         operation["receipt"].update(state="starting-services", state_root=str(state),
             frontend_volume=frontend_volume, backend_volumes=cache["volume_names"])
@@ -1214,6 +1381,8 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
         host = _session_host()
         host.write_bound_evidence(certificate_path, certificate)
         host.publish_evidence(state / host.OWNER_NAME, certificate)
+    import docker_worker_cgroup
+    docker_worker_cgroup.ensure_delegation(control, operation, document, backend_id, image, selected)
     log_writer = lambda output: control.write(operation["root"] + "/storage-probe-log.json", {"log": output})
     if os.name == "nt":
         runtime._complete_backend_storage_preflight(docker_text, backend_id, state, certificate_path, certificate, None,
@@ -1280,7 +1449,9 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
         helper, hashes = _startup_helper(control, selected, image)
         if hashes["docker_startup_script.py"] != startup_environment["FULLMAG_STARTUP_HELPER_SHA256"]:
             raise BuildControlError("Startup helper differs from retained service")
-        operation["receipt"]["startup"] = runtime._wait_for_startup_ready(state, authorization, startup_helper=helper)
+        operation["receipt"]["startup"] = runtime._wait_for_startup_ready(
+            state, authorization, startup_helper=helper,
+            receipt_reader=lambda: (read_process_receipt(), None))
     operation["receipt"].update(state="succeeded", backend_container=backend_id,
         frontend_container=frontend_id, url="http://127.0.0.1:" + str(port),
         source_commit=provenance["commit"], source_digest=provenance["source_digest"],
@@ -2270,6 +2441,12 @@ def _retained_operation(args, *, recreate_services, restart_idle_service=False, 
     if previous["inputs"]["source_root"] != str(selected):
         raise BuildControlError("Resume source selection differs")
     if recreate_services:
+        requested_allowlist = getattr(args, "include_untracked", None)
+        args.include_untracked = (
+            include_untracked_from_compose(document)
+            if requested_allowlist is None
+            else normalize_include_untracked_paths(requested_allowlist)
+        )
         policy = previous["inputs"].get("gpu_access_requested")
         if policy not in {"auto", "required", "disabled"}:
             raise BuildControlError("Recreation requires the retained GPU access intent")
@@ -2413,8 +2590,24 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
     if recreate_services:
         if actual["backend"]["State"]["Running"]:
             raise BuildControlError("Recreation requires the backend stopped; an active build/runtime is never interrupted")
+        pre_activation_stop = None
         if document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") == "1":
-            raise BuildControlError("Retained startup activation requires its dedicated recovery; recreation will not repeat Solve")
+            stop_path = "verification/stop-failed-" + ids["backend"] + ".json"
+            stop = control.read(stop_path)
+            failure = stop.get("failure_receipt", {}).get("receipt", {})
+            drained = control.read("runtime-control/runtime-service/process-tree.json")
+            if (stop.get("state") != "stopped-confirmed"
+                    or stop.get("container_id") != ids["backend"]
+                    or stop.get("image_id") != image
+                    or failure.get("error") != "startup activation state parent is unavailable: /state/.fullmag"
+                    or drained.get("state") != "drained"
+                    or drained != stop.get("drained_process_receipt")
+                    or "startup_activation" in drained
+                    or getattr(args, "script", None) is not None):
+                raise BuildControlError("Retained startup activation requires its dedicated recovery; recreation will not repeat Solve")
+            # This authenticated failure preceded the exclusive activation
+            # marker and POST. Recreate an empty workspace; never replay it.
+            pre_activation_stop = stop_path
         state = storage.validate_path(Path(previous["state_root"]), layout["runtime_root"], "retained Windows sessions")
         certificate_path = _certificate_path(state)
         certificate = _retained_certificate(state, document)
@@ -2504,6 +2697,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     "accepted_reattach_metadata"
                 ]
             control.write(operation["root"] + "/retained-containers.json", actual)
+            if pre_activation_stop is not None:
+                operation["receipt"]["pre_activation_stop_receipt"] = pre_activation_stop
             operation["receipt"].update(state="stopping-owned-frontend", previous_state_root=str(state),
                                         fresh_state=fresh_state)
             operation["daemon_pending"] = True

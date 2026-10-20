@@ -10,10 +10,11 @@ use crate::router_v2::handlers::data::field_resolution::{
     live_magnetization_values_ref,
 };
 use crate::router_v2::handlers::data::fields::{
-    load_fdm_multilayer_airbox_carrier, resolved_fdm_multilayer_airbox_field,
+    load_fdm_multilayer_airbox_carrier_for_quantity,
 };
 use crate::router_v2::handlers::data::resolved_spatial_field::{
-    full_field_publication_carrier_identity, resolve_current_spatial_field, ResolvedSpatialField,
+    full_field_publication_carrier_identity, resolve_current_spatial_field_metadata,
+    ResolvedSpatialField,
 };
 use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::types::*;
@@ -214,6 +215,16 @@ pub(crate) fn command_ledger_revisions(
 }
 
 pub(crate) fn effective_runtime_status_code(snapshot: &SessionStateResponse) -> String {
+    // Older CLI publishers may retain their bootstrap solver status after a
+    // terminal preparation failure. Reconcile that precise stale state from
+    // the authoritative preparation resource without masking a running stage.
+    if snapshot.stage_execution.is_none()
+        && snapshot.simulation_preparation.as_ref().is_some_and(|preparation| preparation.status == "failed")
+        && (matches!(snapshot.session.status.as_str(), "bootstrapping" | "materializing_script" | "failed")
+            || snapshot.live_state.as_ref().is_some_and(|live|
+                matches!(live.status.as_str(), "bootstrapping" | "materializing_script"))) {
+        return "failed".to_string();
+    }
     if snapshot.session.status == "waiting_for_compute" {
         return snapshot.session.status.clone();
     }
@@ -256,6 +267,174 @@ pub(crate) fn reconcile_command_ledger_from_stage_execution(
         changed |= reconcile_command_record_from_stage(record, stage, completed_at_unix_ms);
     }
     changed
+}
+
+/// Map an accepted-runtime run/session status to the public runtime lifecycle.
+/// `waiting_for_solve` is the durable run-level gate; its public lifecycle is
+/// `awaiting_command`, matching the current-live session status projection.
+pub(crate) fn accepted_runtime_lifecycle_state(status: &str) -> RuntimeLifecycleState {
+    match status {
+        "waiting_for_solve" | "awaiting_command" => RuntimeLifecycleState::AwaitingCommand,
+        "waiting_for_compute" => RuntimeLifecycleState::WaitingForCompute,
+        "running" => RuntimeLifecycleState::Running,
+        "stopping" | "breaking" => RuntimeLifecycleState::Breaking,
+        "completed" | "succeeded" => RuntimeLifecycleState::Completed,
+        "failed" => RuntimeLifecycleState::Failed,
+        "cancelled" | "stopped" => RuntimeLifecycleState::Cancelled,
+        _ => RuntimeLifecycleState::Unknown,
+    }
+}
+
+/// One accepted Study stage record with only the identity and lifecycle that
+/// the durable accepted catalogs actually establish. Progress, metric and stop
+/// reason remain empty unless a producer publishes them.
+pub(crate) fn accepted_stage_record(
+    stage_id: &str,
+    kind: Option<String>,
+    status: StageLifecycleState,
+) -> StageExecutionRecord {
+    StageExecutionRecord {
+        stage_id: Some(stage_id.to_string()),
+        antenna_solve_stage_id: None,
+        kind,
+        status,
+        // Accepted stages are not linked to a journal command: the whole-run
+        // command is completed from the durable run status, never from the
+        // first finished stage.
+        command_id: None,
+        mesh_generation_id: None,
+        mesh_topology_fingerprint: None,
+        mesh_revision: None,
+        started_at_unix_ms: None,
+        applied_step: None,
+        completed_step: None,
+        applied_time_seconds: None,
+        segment_id: None,
+        completed_at_unix_ms: None,
+        reason: None,
+        converged: false,
+        artifact_refs: Vec::new(),
+        checkpoint_ref: None,
+        loaded_state_ref: None,
+        resume_from_checkpoint_ref: None,
+        state_transition: None,
+        state_transition_kind: None,
+        state_transition_reason: None,
+        state_transfer_operator_kind: None,
+        state_transition_ui_presentation: None,
+        metric: None,
+        metric_name: None,
+        metric_value: None,
+        threshold: None,
+        progress_percent: None,
+        progress_label: None,
+        progress_detail: None,
+        last_progress_unix_ms: None,
+        current_field_m_t: None,
+        current_point_index: None,
+        current_settle_step_index: None,
+        current_settle_step_kind: None,
+        current_settle_step_method: None,
+        parallel_execution: None,
+    }
+}
+
+/// Build the stage-execution read model from accepted stage records. A
+/// terminal runtime never reports an active stage.
+pub(crate) fn accepted_stage_execution_state(
+    stages: Vec<StageExecutionRecord>,
+    runtime_state: RuntimeLifecycleState,
+) -> StageExecutionState {
+    let terminal = matches!(
+        runtime_state,
+        RuntimeLifecycleState::Completed
+            | RuntimeLifecycleState::Failed
+            | RuntimeLifecycleState::Cancelled
+    );
+    let active_stage_index = (!terminal)
+        .then(|| {
+            stages
+                .iter()
+                .position(|stage| stage.status == StageLifecycleState::Running)
+        })
+        .flatten();
+    StageExecutionState {
+        total_stages: stages.len(),
+        completed_stage_indexes: stages
+            .iter()
+            .enumerate()
+            .filter(|(_, stage)| {
+                matches!(
+                    stage.status,
+                    StageLifecycleState::Completed | StageLifecycleState::Skipped
+                )
+            })
+            .map(|(index, _)| index)
+            .collect(),
+        stage_statuses: stages.iter().map(|stage| stage.status).collect(),
+        active_stage_kind: active_stage_index.and_then(|index| stages[index].kind.clone()),
+        active_stage_index,
+        stages,
+        runtime_state,
+    }
+}
+
+/// Initial accepted stage list for a newly bound accepted run: every planned
+/// step is pending until the projector reads the durable task catalog.
+pub(crate) fn accepted_initial_stage_execution(
+    step_ids: &[String],
+    status: &str,
+) -> StageExecutionState {
+    accepted_stage_execution_state(
+        step_ids
+            .iter()
+            .map(|step_id| accepted_stage_record(step_id, None, StageLifecycleState::Pending))
+            .collect(),
+        accepted_runtime_lifecycle_state(status),
+    )
+}
+
+/// Replace the current stage-execution read model and bump its resource
+/// revision only when the published content changed.
+pub(crate) fn replace_current_live_stage_execution(
+    current: &mut SessionStateResponse,
+    next: StageExecutionState,
+) -> bool {
+    let changed = stage_execution_changed(current.stage_execution.as_ref(), Some(&next));
+    current.stage_execution = Some(next);
+    if changed {
+        bump_stage_execution_revision(current);
+    }
+    changed
+}
+
+/// Drop a stage-execution read model that belongs to a replaced run.
+pub(crate) fn clear_current_live_stage_execution(current: &mut SessionStateResponse) -> bool {
+    if current.stage_execution.take().is_none() {
+        return false;
+    }
+    bump_stage_execution_revision(current);
+    true
+}
+
+/// Move an existing accepted stage-execution read model to a new runtime
+/// lifecycle, for example when an accepted Stop or Compute release is
+/// journaled before the projector observes the durable catalog change.
+pub(crate) fn set_current_live_stage_runtime_state(
+    current: &mut SessionStateResponse,
+    runtime_state: RuntimeLifecycleState,
+) -> bool {
+    let Some(existing) = current.stage_execution.as_ref() else {
+        return false;
+    };
+    if existing.runtime_state == runtime_state {
+        return false;
+    }
+    let stages = existing.stages.clone();
+    replace_current_live_stage_execution(
+        current,
+        accepted_stage_execution_state(stages, runtime_state),
+    )
 }
 
 pub(crate) fn reconcile_dispatched_command_ledger_from_snapshot(
@@ -444,7 +623,7 @@ pub(crate) fn command_readiness_matches_requirements(
                                 .to_string(),
                         );
                     }
-                    let resolved = resolve_current_spatial_field(
+                    let resolved = resolve_current_spatial_field_metadata(
                         snapshot,
                         quantity_id,
                         quantity.n_comp as usize,
@@ -464,12 +643,16 @@ pub(crate) fn command_readiness_matches_requirements(
                                 .to_string(),
                         );
                     }
-                    let Some(carrier) = load_fdm_multilayer_airbox_carrier(snapshot)
+                    let Some(carrier) = load_fdm_multilayer_airbox_carrier_for_quantity(
+                        snapshot,
+                        quantity_id,
+                    )
                         .map_err(|error| format!("Airbox carrier resolution failed: {error}"))?
                     else {
                         return Ok(false);
                     };
-                    if !carrier.published_quantities.contains(quantity_id)
+                    if carrier.sample_count == 0
+                        || !carrier.published_quantities.contains(quantity_id)
                         || carrier.unavailable_quantities.contains_key(quantity_id)
                     {
                         return Ok(false);
@@ -481,13 +664,6 @@ pub(crate) fn command_readiness_matches_requirements(
                     {
                         return Ok(false);
                     }
-                    resolved_fdm_multilayer_airbox_field(
-                        snapshot,
-                        quantity_id,
-                        quantity.n_comp as usize,
-                        &carrier,
-                    )
-                    .map_err(|error| error.to_string())?;
                 }
                 other => {
                     return Err(format!("unsupported field materialization scope '{other}'"));
@@ -1882,6 +2058,12 @@ fn expand_uniform_material_latest_fields(latest_fields: &mut LatestFields, sampl
         let Some(value) = latest_fields.get(quantity) else {
             continue;
         };
+        // A binary accepted field is immutable and its descriptor must remain
+        // paired with its registered reader. Uniform expansion is reserved
+        // for the legacy inline scalar representation.
+        if value.get("accepted_binary_field").is_some() {
+            continue;
+        }
         let values = flatten_json_field_values(value);
         if values.len() != 1 {
             continue;
@@ -2998,9 +3180,7 @@ pub(crate) fn upsert_scalar_row(rows: &mut Vec<ScalarRow>, row: ScalarRow) -> bo
 }
 
 pub(crate) fn merge_latest_fields(current: &mut LatestFields, incoming: LatestFields) {
-    for (quantity, value) in incoming.into_inner() {
-        current.insert(quantity, value);
-    }
+    current.merge_from(incoming);
 }
 
 pub(crate) fn accepted_observation_frame_ref(
@@ -3166,6 +3346,9 @@ fn authored_material_field_matches(
     quantity_id: &str,
     raw: &Value,
 ) -> bool {
+    if raw.get("accepted_binary_field").is_some() {
+        return false;
+    }
     let Some(expected) = authored_material_field_values(current, quantity_id) else {
         return false;
     };
@@ -3182,6 +3365,12 @@ pub(crate) fn latest_field_source_is_qualified(
     quantity_id: &str,
     raw: &Value,
 ) -> bool {
+    if !current
+        .latest_fields
+        .binary_source_is_registered(quantity_id, raw)
+    {
+        return false;
+    }
     if quantity_id != "m" && authored_material_field_matches(current, quantity_id, raw) {
         return true;
     }
@@ -3660,6 +3849,12 @@ fn refresh_accepted_field_publication_bundles(
         let Some(spec) = fullmag_quantities::quantity_spec(quantity_id) else {
             continue;
         };
+        // Global observations have no spatial topology publication bundle.
+        // In particular a total energy in J must never be resolved as a
+        // one-cell FEM/FDM field merely because it lives in latest_fields.
+        if spec.location == fullmag_quantities::QuantityLocation::Global {
+            continue;
+        }
         let observation_frame = if quantity_id == "m" {
             let Some(frame) = resolved_current_field_observation_frame(
                 current,
@@ -3697,7 +3892,7 @@ fn refresh_accepted_field_publication_bundles(
             continue;
         }
         let Some(field) =
-            resolve_current_spatial_field(current, quantity_id, usize::from(spec.n_comp))?
+            resolve_current_spatial_field_metadata(current, quantity_id, usize::from(spec.n_comp))?
         else {
             continue;
         };

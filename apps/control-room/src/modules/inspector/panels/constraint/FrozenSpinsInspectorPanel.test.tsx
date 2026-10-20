@@ -287,7 +287,8 @@ describe("FrozenSpinsInspectorPanel", () => {
     expect(markup).toContain("25.00%");
     expect(markup).toContain("sha256:mask");
     expect(markup).toContain("current");
-    expect(markup).toContain("bounded: Preview is bounded.");
+    expect(markup).toContain("Preview is bounded.");
+    expect(markup).toContain("Code: bounded");
   });
 
   it("confirms solver ownership only when the runtime certificate matches every activation identity", () => {

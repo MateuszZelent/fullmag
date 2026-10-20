@@ -25,6 +25,7 @@ import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import {
+  useCurrentRunResource,
   useFrequencyDomainResponseProgressResource,
   useFrequencyDomainResponseSweepResource,
   useObjectMetricsResource,
@@ -34,10 +35,15 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   formatRuntimeStateLabel,
+  formatRuntimeUserSolvePhaseLabel,
   isRuntimeStateActive,
   isRuntimeStateWaitingForCompute,
   resolveEffectiveRuntimeState,
+  resolveRuntimeUserSolvePhase,
+  type RuntimeUserSolvePhase,
 } from "@/kernel/runtime/runtimeStateDisplay";
+import { useAwaitingComputeCommand } from "@/kernel/runtime/useAwaitingComputeCommand";
+import { Button } from "@/shared/ui/Button";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
@@ -51,6 +57,9 @@ const COMPACT_DECIMAL_FORMAT = new Intl.NumberFormat("en-US", {
 });
 
 type FooterLiveScalarSample = KernelEventMap["telemetry:scalar-sample"];
+
+export const STAGE_PROGRESS_NOT_PUBLISHED_LABEL =
+  "Stage progress not published by this runtime";
 type FooterScalarResourceSample = {
   revision: number;
   row: Record<string, number>;
@@ -103,6 +112,24 @@ export function FooterTelemetry({
   const responseSweep = useFrequencyDomainResponseSweepResource({
     enabled: Boolean(status),
   });
+  const currentRun = useCurrentRunResource({ enabled: Boolean(status) });
+  const userSolvePhase = status
+    ? resolveRuntimeUserSolvePhase({
+        detailedRuntimeState: solverStatus.data?.runtime_state,
+        runStatus: currentRun.data?.status,
+        runStatusReason: currentRun.data?.status_reason,
+        sessionSolverState: status.solver.state,
+      })
+    : null;
+  // 204/null from `/simulation/stages/execution` means this runtime does not
+  // publish stage execution; it is not an error and not a missing identity.
+  const stageExecutionUnpublished =
+    stageExecution.data === null &&
+    (stageExecution.status === "ready" || stageExecution.status === "idle");
+  const compute = useAwaitingComputeCommand({
+    enabled: userSolvePhase === "awaiting_user_solve",
+    sourceDetail: "footer.awaiting-compute",
+  });
   const telemetry = buildFooterTelemetryModel(
     status,
     objectId && objectMetrics.data?.object_id === objectId ? objectMetrics.data : null,
@@ -112,6 +139,7 @@ export function FooterTelemetry({
     responseProgress.data,
     responseSweep.data,
     scalarResourceSample,
+    { stageExecutionUnpublished, userSolvePhase },
   );
 
   return (
@@ -129,10 +157,34 @@ export function FooterTelemetry({
         <span className="text-fm-xs text-fm-secondary whitespace-nowrap truncate">
           {telemetry.onlineTitle}
         </span>
+        {telemetry.awaitingCompute ? (
+          <Button
+            aria-disabled={compute.disabledReason !== null || compute.pending}
+            className="fm-footer-telemetry__compute-cta flex-shrink-0"
+            onClick={compute.run}
+            size="sm"
+            title={compute.title}
+            type="button"
+            variant="primary"
+          >
+            {compute.pending ? "Submitting…" : "Compute"}
+          </Button>
+        ) : null}
         {telemetry.frequencyDomainProgress ? (
           <>
             <span className="w-px h-3 bg-fm-subtle flex-shrink-0 mx-fm-1" aria-hidden="true" />
             <FrequencyDomainProgressStrip progress={telemetry.frequencyDomainProgress} />
+          </>
+        ) : telemetry.stageProgressNotice ? (
+          <>
+            <span className="w-px h-3 bg-fm-subtle flex-shrink-0 mx-fm-1" aria-hidden="true" />
+            <span
+              className="text-fm-2xs text-fm-muted whitespace-nowrap truncate"
+              data-state="unpublished"
+              title="The runtime returned no stage execution projection (HTTP 204). Run status above remains authoritative."
+            >
+              {telemetry.stageProgressNotice}
+            </span>
           </>
         ) : null}
       </div>
@@ -319,6 +371,10 @@ export function buildFooterTelemetryModel(
   responseProgress?: FrequencyDomainSweepProgressResource | null,
   responseSweep?: unknown,
   scalarResourceSample?: FooterScalarResourceSample | null,
+  runtimePhase?: {
+    stageExecutionUnpublished?: boolean;
+    userSolvePhase?: RuntimeUserSolvePhase | null;
+  },
 ) {
   const liveSampleForStatus = resolveLiveSampleForStatus(status, liveSample);
   const scalarSample = selectLatestFooterScalarSample(
@@ -387,9 +443,14 @@ export function buildFooterTelemetryModel(
   const magnetizationMagnitude = magnetization
     ? Math.hypot(magnetization.mx, magnetization.my, magnetization.mz)
     : null;
-  const statusTitle = `System Status: ${runtimeStateLabel}`;
+  const userSolvePhase = runtimePhase?.userSolvePhase ?? null;
+  const statusTitle = userSolvePhase
+    ? `System Status: ${formatRuntimeUserSolvePhaseLabel(userSolvePhase)}`
+    : `System Status: ${runtimeStateLabel}`;
   const active = isRuntimeStateActive(runtimeState);
-  const waitingForCompute = isRuntimeStateWaitingForCompute(runtimeState);
+  const waitingForCompute =
+    userSolvePhase === "awaiting_user_solve" ||
+    isRuntimeStateWaitingForCompute(runtimeState);
   const liveSampleSource = scalarSample
     ? scalarSample === liveSampleForStatus
       ? "Live scalar sample"
@@ -428,8 +489,17 @@ export function buildFooterTelemetryModel(
     stageExecution,
   });
 
+  const stageProgressNotice =
+    !frequencyDomainProgress &&
+    runtimePhase?.stageExecutionUnpublished === true &&
+    (active || runtimeState === "paused")
+      ? STAGE_PROGRESS_NOT_PUBLISHED_LABEL
+      : null;
+
   return {
+    awaitingCompute: userSolvePhase === "awaiting_user_solve",
     frequencyDomainProgress,
+    stageProgressNotice,
     metrics: [
       {
         detail: usesPseudoTime
@@ -568,7 +638,9 @@ export function buildFooterTelemetryModel(
       energyMetric("dmi", "DMI", "DMI"),
     ] satisfies FooterTelemetryMetric[],
     onlineDetail: status ? "Live session channel" : "Awaiting session",
-    onlineTitle: waitingForCompute
+    onlineTitle: userSolvePhase === "preparing_model"
+      ? "Online / Preparing"
+      : waitingForCompute
       ? "Online / Waiting"
       : active
         ? "Online / Active"

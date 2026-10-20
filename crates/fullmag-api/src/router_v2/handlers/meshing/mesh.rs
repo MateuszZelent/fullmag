@@ -583,6 +583,7 @@ pub async fn get_mesh_universe_config(
         (status = 200, description = "Committed universe mesh config", body = MeshUniverseConfigResource),
         (status = 400, description = "Invalid universe mesh config payload"),
         (status = 404, description = "No active workspace"),
+        (status = 409, description = "Universe mesh config changed since the expected revision"),
     ),
     tag = "meshing"
 )]
@@ -598,6 +599,17 @@ pub async fn replace_mesh_universe_config(
         .map_err(|error| {
             ApiError::bad_request(format!("invalid universe mesh config payload: {error}"))
         })?;
+    if let Some(expected_revision) = req.expected_revision {
+        let current_revision = current_snapshot_with_context(&state).await?.0.mesh_revision;
+        if current_revision != expected_revision {
+            return Err(ApiError::conflict_with_code(
+                "universe_mesh_policy_stale_revision",
+                format!(
+                    "universe mesh policy changed since revision {expected_revision} (current {current_revision}); refresh before applying"
+                ),
+            ));
+        }
+    }
     let mut scene =
         crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
             .await?;

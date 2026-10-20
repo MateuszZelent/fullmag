@@ -19,6 +19,8 @@ COPY ${FULLMAG_DOCKER_HELPERS}backend_dev.py /opt/fullmag/backend_dev.py
 # Keep it image-owned and immutable; backend_dev.py remains the command
 # boundary and never executes source-controlled commands.
 COPY ${FULLMAG_DOCKER_HELPERS}backend_source.py /opt/fullmag/backend_source.py
+COPY ${FULLMAG_DOCKER_HELPERS}worker_cgroup_gate.py /opt/fullmag/worker_cgroup_gate.py
+RUN mkdir -p /opt/fullmag/worker-cgroup && chmod 0755 /opt/fullmag/worker-cgroup
 # This fixed image-owned helper is used only by the isolated, networkless
 # CAP_CHOWN maintenance service before the unprivileged backend starts.
 COPY ${FULLMAG_DOCKER_HELPERS}backend_volume_cache_maintenance.py /opt/fullmag/backend_volume_cache_maintenance.py

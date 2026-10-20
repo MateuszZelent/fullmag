@@ -1,10 +1,16 @@
 import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
+import {
+  formatRuntimeUserSolvePhaseLabel,
+  type RuntimeUserSolvePhase,
+} from "@/kernel/runtime/runtimeStateDisplay";
 
 export interface StatusBarRunReadback {
   requested_backend?: string | null;
   requested_device?: string | null;
+  requested_precision?: string | null;
   resolved_backend?: string | null;
   resolved_device?: string | null;
+  resolved_precision?: string | null;
   resolved_engine_id?: string | null;
   resolved_runtime_family?: string | null;
   resolved_fallback?: {
@@ -75,10 +81,14 @@ export function buildStatusBarMethodModel(
 }
 
 export interface StatusBarEngineModel {
+  /** True when the runtime holds a prepared model and waits for an explicit Compute. */
+  awaitingCompute: boolean;
   detail: string;
   label: string;
   state: "active" | "pending" | "resolved";
   title: string;
+  /** `warning` when the resolved execution does not honour the requested intent. */
+  tone: "neutral" | "warning";
 }
 
 export interface StatusBarMeshModelInput {
@@ -159,46 +169,80 @@ export function buildStatusBarMeshModel(
 export function buildStatusBarEngineModel(
   run: StatusBarRunReadback | null | undefined,
   solverState?: string | null,
+  userSolvePhase?: RuntimeUserSolvePhase | null,
 ): StatusBarEngineModel {
+  const phase = userSolvePhase ?? null;
+  const awaitingCompute = phase === "awaiting_user_solve";
   if (!run) {
+    if (phase) {
+      return {
+        awaitingCompute,
+        detail: phase === "preparing_model"
+          ? "Compute held until preparation is published"
+          : "explicit Compute required",
+        label: formatRuntimeUserSolvePhaseLabel(phase),
+        state: "pending",
+        title: phase === "preparing_model"
+          ? "The runtime reported accepted_preparation_pending. Compute stays held until the prepared model is published."
+          : "The model is materialized and the runtime waits for an explicit Compute. Nothing is solved automatically.",
+        tone: "neutral",
+      };
+    }
     const state = solverState?.trim().toLowerCase();
     if (state && !["idle", "awaiting_command", "ready", "loading"].includes(state)) {
       return {
+        awaitingCompute: false,
         detail: state === "running" ? "run in progress" : "run metadata unavailable",
         label: "Engine metadata pending",
         state: "pending",
         title: `Solver state: ${state}. Engine metadata has not been received; the method selection is shown separately.`,
+        tone: "neutral",
       };
     }
     return {
+      awaitingCompute: false,
       detail: "no active run",
       label: "Engine not started",
       state: "pending",
       title: "The simulation method is selected separately. No active engine run has started.",
+      tone: "neutral",
     };
   }
 
   const engineId = normalizeToken(run.resolved_engine_id);
   const resolvedBackend = normalizeToken(run.resolved_backend);
   const resolvedDevice = normalizeToken(run.resolved_device);
+  const resolvedPrecision = normalizeToken(run.resolved_precision);
   const requestedBackend = normalizeToken(run.requested_backend);
   const requestedDevice = normalizeToken(run.requested_device);
-  const backend = resolvedBackend ?? requestedBackend;
-  const device = resolvedDevice ?? requestedDevice;
-  const heading = formatBackendDevice(backend, device);
+  const requestedPrecision = normalizeToken(run.requested_precision);
   const engine = engineId ? describeEngine(engineId) : null;
   const family = normalizeToken(run.resolved_runtime_family);
   const fallback = normalizeFallback(run.resolved_fallback);
   const hasResolvedRuntime =
     Boolean(engineId) || Boolean(family) || Boolean(resolvedBackend) || Boolean(resolvedDevice);
-  const detail =
+  const tokens: ExecutionIntentTokens = {
+    requestedBackend,
+    requestedDevice,
+    requestedPrecision,
+    resolvedBackend,
+    resolvedDevice,
+    resolvedPrecision,
+  };
+  const mismatch = describeExecutionMismatch(tokens);
+  const label = formatRequestedResolvedLabel(tokens, hasResolvedRuntime);
+  const executionDetail =
     fallback?.detail ??
+    mismatch?.detail ??
     engine?.detail ??
     (family
       ? humanizeToken(family)
       : hasResolvedRuntime
         ? "runtime resolved"
         : pendingRuntimeDetail(requestedBackend, requestedDevice));
+  const detail = phase
+    ? `${formatRuntimeUserSolvePhaseLabel(phase)} · ${executionDetail}`
+    : executionDetail;
   const state =
     hasResolvedRuntime && solverState?.toLowerCase() === "running"
       ? "active"
@@ -207,19 +251,129 @@ export function buildStatusBarEngineModel(
         : "pending";
 
   return {
+    awaitingCompute,
     detail,
-    label: heading,
+    label,
     state,
     title: [
       `requested_backend=${requestedBackend ?? "unresolved"}`,
       `requested_device=${requestedDevice ?? "unresolved"}`,
+      `requested_precision=${requestedPrecision ?? "unpublished"}`,
       `resolved_backend=${resolvedBackend ?? "unresolved"}`,
       `resolved_device=${resolvedDevice ?? "unresolved"}`,
+      `resolved_precision=${resolvedPrecision ?? "unpublished"}`,
       `resolved_engine_id=${engineId ?? "unresolved"}`,
       `resolved_runtime_family=${family ?? "unresolved"}`,
       `resolved_fallback=${fallback?.title ?? "none"}`,
+      ...(mismatch ? [`execution_mismatch=${mismatch.title}`] : []),
+      ...(phase ? [`user_solve_phase=${phase}`] : []),
     ].join("\n"),
+    tone: mismatch || fallback ? "warning" : "neutral",
   };
+}
+
+interface ExecutionIntentTokens {
+  requestedBackend: string | null;
+  requestedDevice: string | null;
+  requestedPrecision: string | null;
+  resolvedBackend: string | null;
+  resolvedDevice: string | null;
+  resolvedPrecision: string | null;
+}
+
+/**
+ * Requested → resolved label. The requested side stays visible whenever it
+ * differs from the resolved side, including `auto` (e.g. "auto → FEM GPU"),
+ * so a resolved execution never hides the user's intent. Precision is shown
+ * only when the readback publishes it.
+ */
+function formatRequestedResolvedLabel(
+  tokens: ExecutionIntentTokens,
+  hasResolvedRuntime: boolean,
+): string {
+  const requestedLabel = formatExecutionSide(
+    tokens.requestedBackend,
+    tokens.requestedDevice,
+    tokens.requestedPrecision,
+  );
+  if (!hasResolvedRuntime) return requestedLabel;
+  const resolvedLabel = formatExecutionSide(
+    tokens.resolvedBackend ?? concreteToken(tokens.requestedBackend),
+    tokens.resolvedDevice ?? concreteToken(tokens.requestedDevice),
+    tokens.resolvedPrecision,
+  );
+  const requestedIsAuto =
+    isAutoToken(tokens.requestedBackend) || isAutoToken(tokens.requestedDevice);
+  const differs =
+    requestedIsAuto ||
+    (tokens.resolvedBackend !== null &&
+      !sameToken(tokens.requestedBackend, tokens.resolvedBackend)) ||
+    (tokens.resolvedDevice !== null &&
+      !sameToken(tokens.requestedDevice, tokens.resolvedDevice)) ||
+    (tokens.resolvedPrecision !== null &&
+      tokens.requestedPrecision !== null &&
+      !sameToken(tokens.requestedPrecision, tokens.resolvedPrecision));
+  if (!differs) return resolvedLabel;
+  const intent =
+    isAutoToken(tokens.requestedBackend) && isAutoToken(tokens.requestedDevice)
+      ? "auto"
+      : requestedLabel;
+  return `${intent} → ${resolvedLabel}`;
+}
+
+function formatExecutionSide(
+  backend: string | null,
+  device: string | null,
+  precision: string | null,
+): string {
+  const heading = formatBackendDevice(backend, device);
+  return precision ? `${heading} ${precision.toLowerCase()}` : heading;
+}
+
+/**
+ * A concrete requested backend/device/precision that resolved to something
+ * else is a mismatch even when no `resolved_fallback` record is published.
+ * Requested GPU resolved elsewhere violates forced-GPU intent; it is not a
+ * neutral "resolved" state.
+ */
+function describeExecutionMismatch(
+  tokens: ExecutionIntentTokens,
+): { detail: string; title: string } | null {
+  const parts: string[] = [];
+  let detail: string | null = null;
+  const requestedDevice = lowerConcrete(tokens.requestedDevice);
+  const resolvedDevice = lowerConcrete(tokens.resolvedDevice);
+  if (requestedDevice && resolvedDevice && requestedDevice !== resolvedDevice) {
+    parts.push(`device ${requestedDevice}->${resolvedDevice}`);
+    detail = requestedDevice === "gpu"
+      ? `requested GPU not honoured (resolved ${resolvedDevice.toUpperCase()})`
+      : `requested ${requestedDevice.toUpperCase()}, resolved ${resolvedDevice.toUpperCase()}`;
+  }
+  const requestedBackend = lowerConcrete(tokens.requestedBackend);
+  const resolvedBackend = lowerConcrete(tokens.resolvedBackend);
+  if (requestedBackend && resolvedBackend && requestedBackend !== resolvedBackend) {
+    parts.push(`backend ${requestedBackend}->${resolvedBackend}`);
+    detail ??= `requested ${requestedBackend.toUpperCase()}, resolved ${resolvedBackend.toUpperCase()}`;
+  }
+  const requestedPrecision = lowerConcrete(tokens.requestedPrecision);
+  const resolvedPrecision = lowerConcrete(tokens.resolvedPrecision);
+  if (requestedPrecision && resolvedPrecision && requestedPrecision !== resolvedPrecision) {
+    parts.push(`precision ${requestedPrecision}->${resolvedPrecision}`);
+    detail ??= `requested ${requestedPrecision}, resolved ${resolvedPrecision}`;
+  }
+  return detail ? { detail, title: parts.join("; ") } : null;
+}
+
+function concreteToken(value: string | null): string | null {
+  return value && !isAutoToken(value) ? value : null;
+}
+
+function lowerConcrete(value: string | null): string | null {
+  return concreteToken(value)?.toLowerCase() ?? null;
+}
+
+function sameToken(left: string | null, right: string | null): boolean {
+  return (left?.toLowerCase() ?? null) === (right?.toLowerCase() ?? null);
 }
 
 export function formatRuntimeBundleVersionLabel(value: string): string {

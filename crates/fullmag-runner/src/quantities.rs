@@ -130,7 +130,13 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::HExt => has_nonzero_external_field(plan.external_field),
         QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
-        QuantityId::HOe => plan.has_oersted_cylinder || plan.oersted_field_xyz.is_some(),
+        QuantityId::HOe => plan.has_oersted_cylinder || plan.oersted_field_xyz.is_some()
+            || plan.spin_transport_plans.iter().any(|transport| {
+                transport.fdm_cpu_double.as_ref().is_some_and(|descriptor| descriptor.oersted_source_bound)
+                    || transport.fdm_gpu_double.as_ref().is_some_and(|descriptor| descriptor.oersted_source_bound)
+                    || transport.fdm_cpu_double_reciprocal.as_ref().is_some_and(|descriptor| descriptor.oersted_source_bound)
+                    || transport.fdm_cpu_double_transient.as_ref().is_some_and(|descriptor| descriptor.steady_operator.oersted_source_bound)
+            }),
         QuantityId::HAni => fdm_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => fdm_has_cubic_anisotropy(&plan.material),
         QuantityId::HDmi => plan.interfacial_dmi.is_some(),

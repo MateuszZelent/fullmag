@@ -331,7 +331,7 @@ export function adaptFdmMultilayerAirboxDomain(
     !carrierFingerprint ||
     airbox.target_only !== true ||
     airbox.h_demag_available !== true ||
-    airbox.h_eff_available !== false ||
+    typeof airbox.h_eff_available !== "boolean" ||
     !Number.isSafeInteger(airbox.sample_count) ||
     airbox.sample_count !== totalCells ||
     !Number.isSafeInteger(airbox.value_count) ||

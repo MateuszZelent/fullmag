@@ -54,6 +54,8 @@ export interface AirboxMeshPolicyDraft {
   airboxCenterX: string;
   airboxCenterY: string;
   airboxCenterZ: string;
+  /** Resource revision the draft was edited from; sent as expected_revision. */
+  baseRevision?: number;
 }
 
 export function defaultUniverseMeshPolicyResource(): MeshUniverseConfigResource {
@@ -77,6 +79,7 @@ export function draftFromUniverseMeshPolicyResource(
   const config = resource.config ?? {};
 
   return {
+    baseRevision: resource.revision,
     authoredConfigPresent: resource.config !== null && resource.config !== undefined,
     airboxGradingAuthored: Object.hasOwn(config, "airbox_grading"),
     airboxGrading: readAirboxGrading(config.airbox_grading),
@@ -139,7 +142,7 @@ export function airboxMeshPolicyDraftDirty(
 function normalizeLengthDraftForComparison(
   draft: AirboxMeshPolicyDraft,
 ): AirboxMeshPolicyDraft {
-  const normalized = { ...draft, quantityUnits: undefined };
+  const normalized = { ...draft, quantityUnits: undefined, baseRevision: undefined };
   for (const field of AIRBOX_LENGTH_FIELDS) {
     const input = parseQuantityInput(
       draft[field],
@@ -169,7 +172,7 @@ function synchronizeAirboxMeshPolicyJson(draft: AirboxMeshPolicyDraft): AirboxMe
   const changes: Partial<AirboxMeshPolicyDraft> = {};
   const resetUnits: Partial<Record<AirboxLengthPolicyField, AirboxLengthUnit>> = {};
   for (const key of Object.keys(nextFields) as (keyof AirboxMeshPolicyDraft)[]) {
-    if (["configText", "syncedConfigText", "configSynchronized", "authoredConfigPresent", "quantityUnits"].includes(key)) continue;
+    if (["baseRevision", "configText", "syncedConfigText", "configSynchronized", "authoredConfigPresent", "quantityUnits"].includes(key)) continue;
     if (!Object.is(previousFields[key], nextFields[key])) {
       let value = nextFields[key];
       if (isAirboxLengthPolicyField(key) && typeof value === "string") {
@@ -281,7 +284,7 @@ export function buildAirboxMeshPolicyReplaceRequest(
     }
   }
   if (options.lane === "fdm") for (const key of FEM_ONLY_POLICY_KEYS) delete config[key];
-  return { request: { config } };
+  return { request: { config, expected_revision: draft.baseRevision } };
 }
 
 function buildAirboxMeshPolicyFormRequest(
@@ -398,7 +401,7 @@ function buildAirboxMeshPolicyFormRequest(
     delete config.center;
   }
 
-  return { request: { config } };
+  return { request: { config, expected_revision: draft.baseRevision } };
 }
 
 const FEM_ONLY_POLICY_KEYS = [

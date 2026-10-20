@@ -30,6 +30,8 @@ import {
   dispatchShortcutCommand,
 } from "./commands/commandShortcuts";
 import { CommandDiagnosticsController } from "./commands/CommandDiagnosticsController";
+import { CommandFeedbackController } from "./commands/CommandFeedbackController";
+import { isMeshBuildConfirmCommandId } from "./authoring/meshBuildConfirmation";
 import { EventBus } from "./events/EventBus";
 import type { KernelEventMap } from "./events/eventTypes";
 import {
@@ -136,6 +138,12 @@ function createKernel(): KernelApi {
   );
   commands.attach(bus);
   commands.attachDiagnostics(commandDiagnostics);
+  const commandFeedback = new CommandFeedbackController(bus, {
+    getSessionScopeKey: () => commands.getSessionScopeKey(),
+    // The mesh build dialog observes and presents mesh run outcomes itself.
+    isRunOutcomeSelfPresented: isMeshBuildConfirmCommandId,
+    subscribeSessionScope: (listener) => commands.subscribeSessionScope(listener),
+  });
 
   const modules = new ModuleRegistry();
   const resources = new ResourceInvalidationController(bus);
@@ -236,6 +244,7 @@ function createKernel(): KernelApi {
     chartViewportHandoff,
     cameraRegistry,
     commandDiagnostics,
+    commandFeedback,
     commands,
     diagnostics,
     diagnosticRecorder,

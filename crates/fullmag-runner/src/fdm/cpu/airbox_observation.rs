@@ -24,10 +24,29 @@ use crate::{
     types::{AuxiliaryArtifact, ExecutedRun},
 };
 
-const OBSERVATION_SCHEMA: &str = "fdm_multilayer_observation.v1";
+const OBSERVATION_SCHEMA: &str = "fdm_multilayer_observation.v2";
 const OBSERVATION_FIELD_SCHEMA: &str = "fdm_multilayer_observation_field.v1";
-const FIELD_ARTIFACT: &str = "H_demag.samples.v1.json";
-const H_EFF_UNAVAILABLE_REASON: &str = "fdm_multilayer_airbox_h_eff_unavailable.v1";
+const H_DEMAG_FIELD_ARTIFACT: &str = "H_demag.samples.v1.json";
+const H_EFF_FIELD_ARTIFACT: &str = "H_eff.samples.v1.json";
+const H_EFF_UNAVAILABLE_STATIC_FIELD_MAP: &str =
+    "fdm_multilayer_airbox_h_eff_static_field_map_unrepresented.v1";
+const H_EFF_UNAVAILABLE_OERSTED: &str =
+    "fdm_multilayer_airbox_h_eff_oersted_source_unrepresented.v1";
+const H_EFF_UNAVAILABLE_FIELD_DRIVE: &str =
+    "fdm_multilayer_airbox_h_eff_regional_field_drive_unrepresented.v1";
+const H_EFF_UNAVAILABLE_CURRENT_SOURCE: &str =
+    "fdm_multilayer_airbox_h_eff_current_source_graph_unrepresented.v1";
+const H_EFF_UNAVAILABLE_ANTENNA_SOURCE: &str =
+    "fdm_multilayer_airbox_h_eff_antenna_source_graph_unrepresented.v1";
+const H_EFF_UNAVAILABLE_DYNAMIC_FIELD: &str =
+    "fdm_multilayer_airbox_h_eff_dynamic_field_schedule_unrepresented.v1";
+const H_EFF_UNAVAILABLE_COUPLING: &str =
+    "fdm_multilayer_airbox_h_eff_active_coupling_unrepresented.v1";
+const H_EFF_UNAVAILABLE_ENERGY_TERM: &str =
+    "fdm_multilayer_airbox_h_eff_energy_term_unrepresented.v1";
+const H_EFF_UNAVAILABLE_PLAN_MISMATCH: &str =
+    "fdm_multilayer_airbox_h_eff_uniform_zeeman_plan_mismatch.v1";
+const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AirboxObservationTarget {
@@ -72,7 +91,7 @@ impl AirboxObservationTarget {
         })
     }
 
-    fn from_runtime_metadata(value: &Value) -> Result<Self, String> {
+    pub(crate) fn from_runtime_metadata(value: &Value) -> Result<Self, String> {
         let object = value
             .as_object()
             .ok_or_else(|| "runtime_metadata.airbox_observation must be an object".to_string())?;
@@ -82,25 +101,6 @@ impl AirboxObservationTarget {
         if object.get("scope_kind").and_then(Value::as_str) != Some("airbox") {
             return Err("Airbox observation requires scope_kind=airbox".to_string());
         }
-        let published = object
-            .get("published_quantities")
-            .and_then(Value::as_array)
-            .ok_or_else(|| "Airbox observation must declare published_quantities".to_string())?;
-        if published.len() != 1 || published.first().and_then(Value::as_str) != Some("H_demag") {
-            return Err("Airbox observation may publish only H_demag".to_string());
-        }
-        if object
-            .get("unavailable_quantities")
-            .and_then(Value::as_object)
-            .and_then(|quantities| quantities.get("H_eff"))
-            .and_then(Value::as_str)
-            != Some(H_EFF_UNAVAILABLE_REASON)
-        {
-            return Err(format!(
-                "Airbox observation must declare H_eff unavailable with reason {H_EFF_UNAVAILABLE_REASON}"
-            ));
-        }
-
         let shape = parse_usize3(object.get("cells"), "cells")?;
         let spacing_m = parse_finite3(object.get("spacing_m"), "spacing_m", true)?;
         let origin_m = parse_finite3(object.get("origin_m"), "origin_m", false)?;
@@ -130,11 +130,7 @@ pub(crate) fn materialize_airbox_observation(
     plan: &FdmMultilayerPlanIR,
     executed: &ExecutedRun,
 ) -> Result<Vec<AuxiliaryArtifact>, String> {
-    let Some(metadata) = problem
-        .problem_meta
-        .runtime_metadata
-        .get("airbox_observation")
-    else {
+    let Some(target) = airbox_observation_target(problem, plan)? else {
         return Ok(Vec::new());
     };
     if !executed
@@ -150,18 +146,7 @@ pub(crate) fn materialize_airbox_observation(
     if !plan.enable_demag {
         return Err("Airbox observation requires demagnetization enabled".to_string());
     }
-    let mut target = AirboxObservationTarget::from_runtime_metadata(metadata)?;
-    let (source_shape, source_spacing) = source_grid_summary(plan)?;
-    target.source_shape = source_shape;
-    target.source_spacing_m = source_spacing;
-    validate_grid("target", target.shape, target.spacing_m, target.origin_m)?;
     let field = compute_target_field(plan, &target, &executed.result.final_magnetization)?;
-
-    let source_grid_fingerprints = plan
-        .layers
-        .iter()
-        .map(source_grid_fingerprint)
-        .collect::<Result<Vec<_>, _>>()?;
     let build_identity = build_identity_json();
     let source_runtime_identity = json!({
         "execution_engine": executed.provenance.execution_engine,
@@ -172,24 +157,83 @@ pub(crate) fn materialize_airbox_observation(
         "run_status": executed.result.status,
         "build_identity": build_identity,
     });
+    build_airbox_observation_artifacts(problem, plan, &target, &field, source_runtime_identity)
+}
+
+/// Resolve the immutable target-only Airbox descriptor shared by CPU and GPU
+/// materializers.  The source support summary is retained for manifest
+/// provenance; it does not alter the configured target grid.
+pub(crate) fn airbox_observation_target(
+    problem: &ProblemIR,
+    plan: &FdmMultilayerPlanIR,
+) -> Result<Option<AirboxObservationTarget>, String> {
+    let Some(metadata) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("airbox_observation")
+    else {
+        return Ok(None);
+    };
+    let mut target = AirboxObservationTarget::from_runtime_metadata(metadata)?;
+    let (source_shape, source_spacing) = source_grid_summary(plan)?;
+    target.source_shape = source_shape;
+    target.source_spacing_m = source_spacing;
+    validate_grid("target", target.shape, target.spacing_m, target.origin_m)?;
+    Ok(Some(target))
+}
+
+/// Encode target-only fields and per-quantity manifests after either a CPU or
+/// native GPU field evaluator has produced exact target-grid samples. This
+/// keeps source mappings, hashes, artifact paths, and unavailable-scope
+/// semantics identical between execution engines.
+pub(crate) fn build_airbox_observation_artifacts(
+    problem: &ProblemIR,
+    plan: &FdmMultilayerPlanIR,
+    target: &AirboxObservationTarget,
+    h_demag: &[[f64; 3]],
+    mut source_runtime_identity: Value,
+) -> Result<Vec<AuxiliaryArtifact>, String> {
+    validate_grid("target", target.shape, target.spacing_m, target.origin_m)?;
+    let expected_samples = target
+        .shape
+        .iter()
+        .try_fold(1usize, |count, value| count.checked_mul(*value))
+        .ok_or_else(|| "Airbox target cell count overflows usize".to_string())?;
+    if h_demag.len() != expected_samples {
+        return Err(format!(
+            "Airbox target H_demag has {} samples, expected {expected_samples}",
+            h_demag.len()
+        ));
+    }
+    if h_demag.iter().flatten().any(|value| !value.is_finite()) {
+        return Err("Airbox target H_demag contains nonfinite values".to_string());
+    }
+    let identity = source_runtime_identity.as_object_mut()
+        .ok_or_else(|| "Airbox runtime identity must be an object".to_string())?;
+    if identity.get("problem_source_hash").and_then(Value::as_str)
+        .is_none_or(|value| value.is_empty()) {
+        // UI-authored problems need not originate from a Python file. Bind
+        // their actual IR instead of emitting null or an invented script hash.
+        let problem_value = serde_json::to_value(problem)
+            .map_err(|error| format!("Airbox ProblemIR identity serialization failed: {error}"))?;
+        identity.insert("problem_source_hash".into(), json!(format!("sha256:{}",
+            fullmag_session::canonical_json_sha256(&problem_value))));
+        identity.insert("problem_source_hash_origin".into(), json!("canonical_problem_ir"));
+    } else {
+        identity.insert("problem_source_hash_origin".into(), json!("authored_source"));
+    }
+    identity.insert("observation_boundary_policy".into(), json!("open"));
+    let source_grid_fingerprints = plan
+        .layers
+        .iter()
+        .map(source_grid_fingerprint)
+        .collect::<Result<Vec<_>, _>>()?;
+    let build_identity = build_identity_json();
     let target_grid = json!({
         "cells": target.shape,
         "origin_m": target.origin_m,
         "cell_size_m": target.spacing_m,
     });
-    let field_payload = json!({
-        "schema_version": OBSERVATION_FIELD_SCHEMA,
-        "observable": "H_demag",
-        "quantity_id": "H_demag",
-        "unit": "A/m",
-        "scope_kind": "airbox",
-        "build_identity": build_identity,
-        "grid": target_grid,
-        "values": field,
-    });
-    let field_bytes = serde_json::to_vec_pretty(&field_payload)
-        .map_err(|error| format!("Airbox field serialization failed: {error}"))?;
-    let field_hash = sha256_hex(&field_bytes);
     let source_common_grid = plan.layers.first().map(|layer| {
         json!({
             "cells": plan.common_cells,
@@ -197,68 +241,230 @@ pub(crate) fn materialize_airbox_observation(
             "origin_m": layer.convolution_origin,
         })
     });
-    let fingerprint_seed = json!({
+    let carrier_seed = json!({
         "schema_version": OBSERVATION_SCHEMA,
         "scope_kind": "airbox",
-        "quantity_id": "H_demag",
         "source_policy": "target_only",
         "grid": target_grid,
         "source_grid_fingerprints": source_grid_fingerprints,
         "source_common_grid": source_common_grid,
         "source_runtime_identity": source_runtime_identity,
-        "field_artifact_sha256": field_hash,
     });
-    let fingerprint_bytes = serde_json::to_vec(&fingerprint_seed)
-        .map_err(|error| format!("Airbox fingerprint serialization failed: {error}"))?;
-    let carrier_fingerprint = sha256_hex(&fingerprint_bytes);
-    // The carrier is one immutable per-quantity materialization inside this
-    // run artifact.  Its revision is therefore local to the carrier, while
-    // its generation identity is the exact content-addressed carrier source.
-    let quantity_revision = 1u64;
-    let field_generation = format!("airbox:sha256:{carrier_fingerprint}");
-    let grid_revision = content_revision(
-        &serde_json::to_vec(&target_grid)
-            .map_err(|error| format!("Airbox grid revision serialization failed: {error}"))?,
-    );
+    let carrier_seed_bytes = serde_json::to_vec(&carrier_seed)
+        .map_err(|error| format!("Airbox carrier fingerprint serialization failed: {error}"))?;
+    let carrier_fingerprint = sha256_hex(&carrier_seed_bytes);
     let carrier_revision = sha256_hex_revision(&carrier_fingerprint)?;
-    let manifest = json!({
-        "schema_version": OBSERVATION_SCHEMA,
-        "scope_kind": "airbox",
-        "quantity_id": "H_demag",
-        "unit": "A/m",
-        "build_identity": build_identity,
-        "source_policy": "target_only",
-        "target_only": true,
-        "grid": target_grid,
-        "padding_cells_above_below": target.padding_cells_above_below,
-        "carrier_fingerprint": carrier_fingerprint,
-        "source_grid_fingerprints": source_grid_fingerprints,
-        "source_common_grid": source_common_grid,
-        "source_runtime_identity": source_runtime_identity,
-        "quantity_revision": quantity_revision,
-        "grid_revision": grid_revision,
-        "carrier_revision": carrier_revision,
-        "field_generation": field_generation,
-        "field_artifact": FIELD_ARTIFACT,
-        "field_artifact_sha256": field_hash,
-        "sample_count": field.len(),
-        "published_quantities": ["H_demag"],
-        "unavailable_quantities": {
-            "H_eff": H_EFF_UNAVAILABLE_REASON,
-        },
-    });
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest)
-        .map_err(|error| format!("Airbox manifest serialization failed: {error}"))?;
-    Ok(vec![
-        AuxiliaryArtifact {
-            relative_path: "fields/H_demag/airbox/manifest.json".to_string(),
+    let h_eff_unavailable = airbox_h_eff_unavailable_reason(problem, plan);
+    let h_eff = if h_eff_unavailable.is_none() {
+        Some(compose_airbox_h_eff(plan, h_demag)?)
+    } else {
+        None
+    };
+    let published_quantities = if h_eff.is_some() {
+        vec!["H_demag", "H_eff"]
+    } else {
+        vec!["H_demag"]
+    };
+    let unavailable_quantities = h_eff_unavailable
+        .map(|reason| json!({ "H_eff": reason }))
+        .unwrap_or_else(|| json!({}));
+    let mut quantity_fields = vec![("H_demag", H_DEMAG_FIELD_ARTIFACT, h_demag)];
+    if let Some(h_eff) = h_eff.as_deref() {
+        quantity_fields.push(("H_eff", H_EFF_FIELD_ARTIFACT, h_eff));
+    }
+
+    let mut artifacts = Vec::with_capacity(quantity_fields.len() * 2);
+    for (quantity_id, field_artifact, values) in quantity_fields {
+        let field_payload = json!({
+            "schema_version": OBSERVATION_FIELD_SCHEMA,
+            "observable": quantity_id,
+            "quantity_id": quantity_id,
+            "unit": "A/m",
+            "scope_kind": "airbox",
+            "build_identity": build_identity,
+            "grid": target_grid,
+            "values": values,
+        });
+        let field_bytes = serde_json::to_vec_pretty(&field_payload)
+            .map_err(|error| format!("Airbox {quantity_id} field serialization failed: {error}"))?;
+        let field_hash = sha256_hex(&field_bytes);
+        let field_generation_seed = json!({
+            "schema_version": OBSERVATION_SCHEMA,
+            "scope_kind": "airbox",
+            "quantity_id": quantity_id,
+            "source_policy": "target_only",
+            "grid": target_grid,
+            "source_grid_fingerprints": source_grid_fingerprints,
+            "source_common_grid": source_common_grid,
+            "source_runtime_identity": source_runtime_identity,
+            "field_artifact_sha256": field_hash,
+        });
+        let field_generation_bytes = serde_json::to_vec(&field_generation_seed)
+            .map_err(|error| format!("Airbox {quantity_id} field-generation serialization failed: {error}"))?;
+        let field_generation_fingerprint = sha256_hex(&field_generation_bytes);
+        // Both quantities share one target/source topology carrier. Each
+        // field generation remains content-addressed to its own values.
+        let quantity_revision = 1u64;
+        let field_generation = format!("airbox:sha256:{field_generation_fingerprint}");
+        let grid_revision = content_revision(
+            &serde_json::to_vec(&target_grid)
+                .map_err(|error| format!("Airbox grid revision serialization failed: {error}"))?,
+        );
+        let manifest = json!({
+            "schema_version": OBSERVATION_SCHEMA,
+            "scope_kind": "airbox",
+            "quantity_id": quantity_id,
+            "unit": "A/m",
+            "build_identity": build_identity,
+            "source_policy": "target_only",
+            "target_only": true,
+            "grid": target_grid,
+            "padding_cells_above_below": target.padding_cells_above_below,
+            "carrier_fingerprint": carrier_fingerprint,
+            "source_grid_fingerprints": source_grid_fingerprints,
+            "source_common_grid": source_common_grid,
+            "source_runtime_identity": source_runtime_identity,
+            "quantity_revision": quantity_revision,
+            "grid_revision": grid_revision,
+            "carrier_revision": carrier_revision,
+            "field_generation": field_generation,
+            "field_artifact": field_artifact,
+            "field_artifact_sha256": field_hash,
+            "sample_count": values.len(),
+            "published_quantities": published_quantities,
+            "unavailable_quantities": unavailable_quantities,
+        });
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest)
+            .map_err(|error| format!("Airbox {quantity_id} manifest serialization failed: {error}"))?;
+        artifacts.push(AuxiliaryArtifact {
+            relative_path: format!("fields/{quantity_id}/airbox/manifest.json"),
             bytes: manifest_bytes,
-        },
-        AuxiliaryArtifact {
-            relative_path: format!("fields/H_demag/airbox/{FIELD_ARTIFACT}"),
+        });
+        artifacts.push(AuxiliaryArtifact {
+            relative_path: format!("fields/{quantity_id}/airbox/{field_artifact}"),
             bytes: field_bytes,
-        },
-    ])
+        });
+    }
+    Ok(artifacts)
+}
+
+/// Airbox H_eff is the demagnetizing field plus the resolved uniform Zeeman
+/// field. Interactions confined to magnetic support do not contribute to this
+/// exterior visualization. Refuse composition when ProblemIR declares an
+/// additional field source that FdmMultilayerPlanIR cannot represent.
+fn airbox_h_eff_unavailable_reason(
+    problem: &ProblemIR,
+    plan: &FdmMultilayerPlanIR,
+) -> Option<&'static str> {
+    use fullmag_ir::EnergyTermIR;
+
+    if !problem.field_drives.is_empty() {
+        return Some(H_EFF_UNAVAILABLE_FIELD_DRIVE);
+    }
+    if problem
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, EnergyTermIR::StaticFieldMap { .. }))
+    {
+        return Some(H_EFF_UNAVAILABLE_STATIC_FIELD_MAP);
+    }
+    if problem.energy_terms.iter().any(|term| {
+        matches!(
+            term,
+            EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. }
+        )
+    }) {
+        return Some(H_EFF_UNAVAILABLE_OERSTED);
+    }
+    if !problem.antenna_port_modes.is_empty()
+        || !problem.antenna_field_solve_stages.is_empty()
+        || !problem.antenna_target_projections.is_empty()
+        || !problem.solved_antenna_drives.is_empty()
+        || !problem.antenna_spectrum_requests.is_empty()
+        || problem.excitation_analysis.is_some()
+        || matches!(&problem.study, fullmag_ir::StudyIR::AntennaFieldSolve { .. })
+    {
+        return Some(H_EFF_UNAVAILABLE_ANTENNA_SOURCE);
+    }
+    if !problem.current_modules.is_empty()
+        || !problem.spin_transport_modules.is_empty()
+        || !problem.spin_torque_modules.is_empty()
+        || problem.current_density.is_some()
+        || problem.stt_degree.is_some()
+        || problem.stt_beta.is_some()
+        || problem.stt_spin_polarization.is_some()
+        || problem.stt_lambda.is_some()
+        || problem.stt_epsilon_prime.is_some()
+        || problem.stt_thickness.is_some()
+        || problem.stt_fixed_layer_position.is_some()
+    {
+        return Some(H_EFF_UNAVAILABLE_CURRENT_SOURCE);
+    }
+    if problem.couplings.iter().any(|coupling| coupling.enabled) {
+        return Some(H_EFF_UNAVAILABLE_COUPLING);
+    }
+    if matches!(
+        &problem.study,
+        fullmag_ir::StudyIR::Hysteresis { .. }
+            | fullmag_ir::StudyIR::Eigenmodes { .. }
+            | fullmag_ir::StudyIR::FrequencyResponse { .. }
+    ) {
+        return Some(H_EFF_UNAVAILABLE_DYNAMIC_FIELD);
+    }
+
+    let mut authored_zeeman = None;
+    for term in &problem.energy_terms {
+        match term {
+            EnergyTermIR::Exchange
+            | EnergyTermIR::ThermalNoise { .. }
+            | EnergyTermIR::Demag { .. }
+            | EnergyTermIR::InterfacialDmi { .. }
+            | EnergyTermIR::RotatedInterfacialDmi { .. }
+            | EnergyTermIR::BulkDmi { .. } => {}
+            EnergyTermIR::Zeeman { b } => {
+                if authored_zeeman.replace(*b).is_some() {
+                    return Some(H_EFF_UNAVAILABLE_PLAN_MISMATCH);
+                }
+            }
+            EnergyTermIR::StaticFieldMap { .. } => {
+                return Some(H_EFF_UNAVAILABLE_STATIC_FIELD_MAP);
+            }
+            EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. } => {
+                return Some(H_EFF_UNAVAILABLE_OERSTED);
+            }
+            _ => return Some(H_EFF_UNAVAILABLE_ENERGY_TERM),
+        }
+    }
+    let authored_external_field = authored_zeeman.map(|b| b.map(|component| component / MU0));
+    if authored_external_field != plan.external_field
+        || plan
+            .external_field
+            .is_some_and(|field| field.iter().any(|component| !component.is_finite()))
+    {
+        return Some(H_EFF_UNAVAILABLE_PLAN_MISMATCH);
+    }
+    None
+}
+
+fn compose_airbox_h_eff(
+    plan: &FdmMultilayerPlanIR,
+    h_demag: &[[f64; 3]],
+) -> Result<Vec<[f64; 3]>, String> {
+    let external_field = plan.external_field.unwrap_or([0.0; 3]);
+    let h_eff = h_demag
+        .iter()
+        .map(|field| {
+            [
+                field[0] + external_field[0],
+                field[1] + external_field[1],
+                field[2] + external_field[2],
+            ]
+        })
+        .collect::<Vec<_>>();
+    if h_eff.iter().flatten().any(|value| !value.is_finite()) {
+        return Err("Airbox target H_eff contains nonfinite values".to_string());
+    }
+    Ok(h_eff)
 }
 
 /// Materialize an on-demand Airbox carrier from the current planned
@@ -470,7 +676,9 @@ fn compute_target_field(
         .h_demag)
 }
 
-fn source_grid_summary(plan: &FdmMultilayerPlanIR) -> Result<([usize; 3], [f64; 3]), String> {
+pub(crate) fn source_grid_summary(
+    plan: &FdmMultilayerPlanIR,
+) -> Result<([usize; 3], [f64; 3]), String> {
     let Some(first) = plan.layers.first() else {
         return Err("Airbox observation requires at least one source layer".to_string());
     };
@@ -480,7 +688,9 @@ fn source_grid_summary(plan: &FdmMultilayerPlanIR) -> Result<([usize; 3], [f64; 
     ))
 }
 
-fn source_grid_fingerprint(layer: &fullmag_ir::FdmLayerPlanIR) -> Result<String, String> {
+pub(crate) fn source_grid_fingerprint(
+    layer: &fullmag_ir::FdmLayerPlanIR,
+) -> Result<String, String> {
     let payload = serde_json::to_vec(&json!({
         "layer_id": layer.layer_id,
         "object_id": layer.object_id,
@@ -604,7 +814,8 @@ mod tests {
     use super::{
         compute_target_field, content_revision, materialize_airbox_observation,
         materialize_airbox_observation_snapshot, sha256_hex, sha256_hex_revision,
-        AirboxObservationTarget, FIELD_ARTIFACT, H_EFF_UNAVAILABLE_REASON,
+        AirboxObservationTarget, H_DEMAG_FIELD_ARTIFACT, H_EFF_FIELD_ARTIFACT,
+        H_EFF_UNAVAILABLE_STATIC_FIELD_MAP,
     };
     use crate::{
         types::{ExecutedRun, ExecutionProvenance, RunResult, RunStatus},
@@ -768,22 +979,43 @@ mod tests {
 
         let artifacts = materialize_airbox_observation(&problem, &plan, &executed)
             .expect("target-only observation should materialize");
-        assert_eq!(artifacts.len(), 2);
+        assert_eq!(artifacts.len(), 4);
         let manifest = artifacts
             .iter()
-            .find(|artifact| artifact.relative_path.ends_with("manifest.json"))
-            .expect("manifest artifact");
+            .find(|artifact| artifact.relative_path == "fields/H_demag/airbox/manifest.json")
+            .expect("H_demag manifest artifact");
         let field = artifacts
             .iter()
-            .find(|artifact| artifact.relative_path.ends_with("H_demag.samples.v1.json"))
-            .expect("field artifact");
+            .find(|artifact| artifact.relative_path.ends_with(H_DEMAG_FIELD_ARTIFACT))
+            .expect("H_demag field artifact");
+        let h_eff_manifest = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "fields/H_eff/airbox/manifest.json")
+            .expect("H_eff manifest artifact");
+        let h_eff_field = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path.ends_with(H_EFF_FIELD_ARTIFACT))
+            .expect("H_eff field artifact");
         let manifest_json: serde_json::Value = serde_json::from_slice(&manifest.bytes).unwrap();
+        let h_eff_manifest_json: serde_json::Value =
+            serde_json::from_slice(&h_eff_manifest.bytes).unwrap();
         assert_eq!(
             manifest_json["schema_version"],
-            "fdm_multilayer_observation.v1"
+            "fdm_multilayer_observation.v2"
         );
         assert_eq!(manifest_json["scope_kind"], "airbox");
         assert_eq!(manifest_json["quantity_id"], "H_demag");
+        assert_eq!(h_eff_manifest_json["quantity_id"], "H_eff");
+        assert_eq!(
+            manifest_json["published_quantities"],
+            json!(["H_demag", "H_eff"])
+        );
+        assert_eq!(
+            h_eff_manifest_json["published_quantities"],
+            json!(["H_demag", "H_eff"])
+        );
+        assert_eq!(manifest_json["unavailable_quantities"], json!({}));
+        assert_eq!(h_eff_manifest_json["unavailable_quantities"], json!({}));
         assert_eq!(manifest_json["source_policy"], "target_only");
         assert!(manifest_json["carrier_fingerprint"].as_str().unwrap().len() == 64);
         let build_identity = fullmag_build_info::identity();
@@ -818,18 +1050,114 @@ mod tests {
             )
         );
         assert_eq!(
+            manifest_json["carrier_fingerprint"],
+            h_eff_manifest_json["carrier_fingerprint"]
+        );
+        assert_eq!(
+            manifest_json["carrier_revision"],
+            h_eff_manifest_json["carrier_revision"]
+        );
+        assert!(manifest_json["field_generation"]
+            .as_str()
+            .unwrap()
+            .starts_with("airbox:sha256:"));
+        assert!(h_eff_manifest_json["field_generation"]
+            .as_str()
+            .unwrap()
+            .starts_with("airbox:sha256:"));
+        assert_ne!(
             manifest_json["field_generation"],
-            format!(
-                "airbox:sha256:{}",
-                manifest_json["carrier_fingerprint"].as_str().unwrap()
-            )
+            h_eff_manifest_json["field_generation"]
         );
         let field_json: serde_json::Value = serde_json::from_slice(&field.bytes).unwrap();
+        let h_eff_json: serde_json::Value = serde_json::from_slice(&h_eff_field.bytes).unwrap();
         assert_eq!(field_json["observable"], "H_demag");
+        assert_eq!(h_eff_json["observable"], "H_eff");
         assert_eq!(field_json["unit"], "A/m");
+        assert_eq!(h_eff_json["unit"], "A/m");
         assert_eq!(field_json["build_identity"], expected_build_identity);
+        assert_eq!(h_eff_json["build_identity"], expected_build_identity);
         assert_eq!(field_json["values"].as_array().unwrap().len(), 48);
-        assert!(field_json["H_eff"].is_null());
+        assert_eq!(field_json["values"], h_eff_json["values"]);
+    }
+
+    #[test]
+    fn airbox_h_eff_adds_the_resolved_uniform_zeeman_field() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "airbox_observation".to_string(),
+            json!({
+                "cells": [4, 4, 3],
+                "spacing_m": [0.5e-9, 0.5e-9, 1.0e-9],
+                "origin_m": [-0.5e-9, -0.5e-9, -1.0e-9],
+                "padding_cells_above_below": [1, 1],
+                "target_only": true,
+                "scope_kind": "airbox",
+                "published_quantities": ["H_demag"]
+            }),
+        );
+        let mut plan = tiny_plan();
+        let zeeman_b = [1.25e-2, -3.0e-3, 8.0e-4];
+        plan.external_field = Some(zeeman_b.map(|component| component / super::MU0));
+        problem
+            .energy_terms
+            .push(fullmag_ir::EnergyTermIR::Zeeman { b: zeeman_b });
+
+        let artifacts = materialize_airbox_observation_snapshot(&problem, &plan)
+            .expect("uniform Zeeman field should compose with Airbox H_demag");
+        let payload = |artifact_name: &str| {
+            let artifact = artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path.ends_with(artifact_name))
+                .expect("Airbox quantity payload");
+            serde_json::from_slice::<serde_json::Value>(&artifact.bytes).unwrap()
+        };
+        let h_demag = payload(H_DEMAG_FIELD_ARTIFACT);
+        let h_eff = payload(H_EFF_FIELD_ARTIFACT);
+        let demag_values = h_demag["values"].as_array().unwrap();
+        let effective_values = h_eff["values"].as_array().unwrap();
+        for (demag, effective) in demag_values.iter().zip(effective_values) {
+            for axis in 0..3 {
+                assert_eq!(
+                    effective[axis].as_f64().unwrap(),
+                    demag[axis].as_f64().unwrap() + plan.external_field.unwrap()[axis]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn airbox_h_eff_declares_an_unrepresented_static_field_map() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "airbox_observation".to_string(),
+            json!({
+                "cells": [4, 4, 3],
+                "spacing_m": [0.5e-9, 0.5e-9, 1.0e-9],
+                "origin_m": [-0.5e-9, -0.5e-9, -1.0e-9],
+                "padding_cells_above_below": [1, 1],
+                "target_only": true,
+                "scope_kind": "airbox"
+            }),
+        );
+        problem.energy_terms.push(fullmag_ir::EnergyTermIR::StaticFieldMap {
+            id: "bias-map".to_string(),
+            field_b_t: vec![[1.0e-3, 0.0, 0.0]; 4],
+        });
+
+        let artifacts = materialize_airbox_observation_snapshot(&problem, &tiny_plan())
+            .expect("unrepresented H_eff source should not block H_demag");
+        assert_eq!(artifacts.len(), 2);
+        let manifest = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "fields/H_demag/airbox/manifest.json")
+            .expect("H_demag manifest artifact");
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest.bytes).unwrap();
+        assert_eq!(manifest["published_quantities"], json!(["H_demag"]));
+        assert_eq!(
+            manifest["unavailable_quantities"]["H_eff"],
+            H_EFF_UNAVAILABLE_STATIC_FIELD_MAP
+        );
     }
 
     #[test]
@@ -844,11 +1172,7 @@ mod tests {
                 "origin_m": [-0.5e-9, -0.5e-9, -1.0e-9],
                 "padding_cells_above_below": [1, 1],
                 "target_only": true,
-                "scope_kind": "airbox",
-                "published_quantities": ["H_demag"],
-                "unavailable_quantities": {
-                    "H_eff": H_EFF_UNAVAILABLE_REASON
-                }
+                "scope_kind": "airbox"
             }),
         );
         let plan_x = tiny_plan();
@@ -862,7 +1186,7 @@ mod tests {
         let payload = |artifacts: &[AuxiliaryArtifact]| {
             let artifact = artifacts
                 .iter()
-                .find(|artifact| artifact.relative_path.ends_with(FIELD_ARTIFACT))
+                .find(|artifact| artifact.relative_path.ends_with(H_DEMAG_FIELD_ARTIFACT))
                 .expect("Airbox samples artifact");
             serde_json::from_slice::<serde_json::Value>(&artifact.bytes).unwrap()
         };

@@ -94,6 +94,54 @@ mod dispatch;
 pub use dispatch::{stage_step_time_frame, StageStepTimeFrame};
 pub mod eigen;
 mod fdm;
+mod accepted_materialization;
+pub use accepted_materialization::{
+    accepted_observation_quantity_ids, capture_solver_observables,
+    materialize_captured_observables, CapturedSolverObservables,
+    materialize_accepted_observables, AcceptedMagnetizationInput,
+    AcceptedMaterializationBatch, AcceptedMaterializationLane,
+    AcceptedMaterializationRequest, AcceptedMaterializedField,
+};
+
+/// Validate which current FDM multilayer execution realization an accepted
+/// plan selects without probing hardware or creating a native backend/context.
+/// Native-stacked eligibility may construct host-side plan data.
+pub fn validate_accepted_fdm_multilayer_execution_lane(
+    plan: &FdmMultilayerPlanIR,
+    device: &str,
+) -> Result<(), RunError> {
+    match device {
+        "cpu" => {
+            crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+            crate::fdm::validate_multilayer_grid_budget(
+                plan,
+                fullmag_fdm_demag::KernelAdmissionModel::CpuFp64Catalog,
+            )?;
+            if plan.precision != fullmag_ir::ExecutionPrecision::Double {
+                return Err(RunError {
+                    message: "accepted FDM multilayer CPU execution requires double precision".into(),
+                });
+            }
+            Ok(())
+        }
+        "gpu" => {
+            #[cfg(feature = "cuda")]
+            {
+                crate::fdm::gpu::cuda::multilayer::validate_accepted_fdm_multilayer_cuda_lane(plan)
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                Err(RunError {
+                    message: "accepted FDM multilayer GPU execution requires the CUDA feature".into(),
+                })
+            }
+        }
+        other => Err(RunError {
+            message: format!("unsupported accepted FDM multilayer device '{other}'; expected 'cpu' or 'gpu'"),
+        }),
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) mod fem;
 #[path = "fem_reference.rs"]
@@ -118,9 +166,11 @@ pub use observation::{
     accepted_state_digests, observation_provider_policy, AcceptedPrimaryCarrier,
     AcceptedStateDigests, AcceptedStateGeneration, AcceptedStateId, AcceptedStateIdentityError,
     AcceptedStateRef, FdmCpuAcceptedStateSnapshotV1, FdmGpuAcceptedStateSnapshotV1,
+    FdmMultilayerObservationLane, FdmMultilayerObservationSnapshotV1,
     ObservationClock, ObservationLane, ObservationProviderPolicy, ObservationProviderResolver,
     FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
     FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_GPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
+    FDM_MULTILAYER_OBSERVATION_SNAPSHOT_FILE, FDM_MULTILAYER_OBSERVATION_SNAPSHOT_SCHEMA,
 };
 pub use observation_runtime::{
     ObservationFrame, ObservationPrimaryCarrier, ObservationQuantityBatch, ObservationRuntime,
@@ -601,6 +651,7 @@ pub use types::{
     InitialTimestepReason, LegacyDtPolicy,
     LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
     LiveParallelExecutionTelemetry, LivePreviewRequest, LiveVectorFieldSnapshot,
+    LiveFemLocalNodeMapIdentity, LiveMagnetizationCarrier,
     LlgTimestepCapabilityId,
     LlgTimestepQualificationId, RecomputedFemLinearizationCertificateV1, RequestedTimestepPolicy,
     ResolvedFallback, ResolvedTimestepPolicy, RunError, RunResult, RunStatus, RuntimeEngineInfo,
@@ -2999,6 +3050,59 @@ fn append_parallel_execution_provenance(
     Ok(())
 }
 
+fn append_fdm_multilayer_observation_snapshot(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    executed: &mut types::ExecutedRun,
+) -> Result<(), RunError> {
+    if !matches!(plan.backend_plan, BackendPlanIR::FdmMultilayer(_)) {
+        return Ok(());
+    }
+    if executed.result.status != RunStatus::Completed {
+        return Ok(());
+    }
+    let execution_engine = executed.provenance.execution_engine.as_str();
+    let lane = match execution_engine {
+        "cpu_reference_multilayer" => FdmMultilayerObservationLane::Cpu,
+        "cuda_assisted_multilayer"
+        | "cuda_native_multilayer_convolution"
+        | "cuda_native_multilayer_single_grid" => FdmMultilayerObservationLane::Gpu,
+        other => {
+            return Err(RunError {
+                message: format!(
+                    "FDM multilayer observation snapshot does not support execution engine '{other}'"
+                ),
+            });
+        }
+    };
+    let final_stats = executed.result.steps.last().ok_or_else(|| RunError {
+        message: "FDM multilayer observation snapshot requires a terminal solver clock".into(),
+    })?;
+    let clock = ObservationClock {
+        accepted_step: final_stats.step,
+        time_seconds: final_stats.time,
+        dt_seconds: (final_stats.dt > 0.0).then_some(final_stats.dt),
+    };
+    let layout = study_magnetization_layout_for_plan(plan)?;
+    let snapshot = FdmMultilayerObservationSnapshotV1::from_final_magnetization(
+        clock,
+        lane,
+        execution_engine,
+        &layout,
+        &executed.result.final_magnetization,
+    )
+    .map_err(|error| RunError {
+        message: format!("materializing FDM multilayer observation snapshot: {error}"),
+    })?;
+    let bytes = serde_json::to_vec_pretty(&snapshot).map_err(|error| RunError {
+        message: format!("serializing FDM multilayer observation snapshot: {error}"),
+    })?;
+    executed.auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path: FDM_MULTILAYER_OBSERVATION_SNAPSHOT_FILE.to_string(),
+        bytes,
+    });
+    Ok(())
+}
+
 /// Return the runner's canonical layout identity for supported study state
 /// inputs. The exact artifact layout is the contract; the worker must never
 /// infer compatibility from vector length alone.
@@ -3008,7 +3112,7 @@ pub fn study_magnetization_layout_for_plan(
     if matches!(plan.backend_plan, BackendPlanIR::AntennaFieldOnly(_)) {
         return Err(field_only_plan_not_executable_as_llg());
     }
-    let layout = artifacts::field_layout(plan);
+    let mut layout = artifacts::field_layout(plan);
     let backend = layout
         .get("backend")
         .and_then(serde_json::Value::as_str)
@@ -3023,7 +3127,79 @@ pub fn study_magnetization_layout_for_plan(
             ),
         });
     }
+    // The final native M artifact carries this canonical H1/P1 support
+    // envelope in its layout. Compare the same layout at the input/live
+    // boundary instead of rejecting every real FEM output for an extra key.
+    if let Some(semantics) = artifacts::fem_p1_magnetization_field_semantics(plan)
+        .map_err(|message| RunError { message })?
+    {
+        layout["field_semantics"] = serde_json::to_value(semantics).map_err(|error| RunError {
+            message: format!("serialize canonical FEM magnetization semantics: {error}"),
+        })?;
+    }
     Ok(layout)
+}
+
+fn bind_live_magnetization_layout(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    mut downstream: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> impl FnMut(StepUpdate) -> StepAction + Send {
+    let layout = study_magnetization_layout_for_plan(plan).ok();
+    let expected_sample_count = layout
+        .as_ref()
+        .and_then(|layout| study_plan_state_sample_count(plan, layout).ok());
+    let expected_fdm_grid = match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => Some(fdm.grid.cells),
+        _ => None,
+    };
+    move |mut update| {
+        if let (Some(carrier), Some(layout)) =
+            (update.magnetization_carrier.as_mut(), layout.as_ref())
+        {
+            carrier.layout = layout.clone();
+        } else if let Some(expected_grid) = expected_fdm_grid {
+            // A synchronous full-field generation is authoritative over an
+            // older asynchronous preview/m callback. Use its own complete m
+            // so no H field is paired with a delayed magnetization payload.
+            if let Some(field) = update.cached_preview_fields.as_ref().and_then(|fields| {
+                fields.iter().find(|field| field.quantity == "m"
+                    && field.original_grid == expected_grid && field.preview_grid == expected_grid
+                    && !field.auto_downscaled && field.applied_layer_stride <= 1
+                    && field.source_step == update.stats.step
+                    && field.source_time_seconds.map(f64::to_bits) == Some(update.stats.time.to_bits())
+                    && expected_sample_count.is_some_and(|count| field.vector_field_values.len() == count.saturating_mul(3)))
+            }) {
+                update.magnetization = Some(field.vector_field_values.clone());
+                update.stats.magnetization_source_step = Some(update.stats.step);
+            }
+            let source_step = update
+                .stats
+                .magnetization_source_step
+                .unwrap_or(update.stats.step);
+            let exact_native_payload = expected_sample_count.is_some_and(|sample_count| {
+                update.magnetization.as_ref().is_some_and(|values| {
+                    values.len() == sample_count.saturating_mul(3)
+                })
+            });
+            if source_step == update.stats.step
+                && update.grid == expected_grid
+                && exact_native_payload
+            {
+                if let Some(layout) = layout.as_ref() {
+                    update.magnetization_carrier = Some(types::LiveMagnetizationCarrier {
+                        layout: layout.clone(),
+                        source_clock: ObservationClock {
+                            accepted_step: update.stats.step,
+                            time_seconds: update.stats.time,
+                            dt_seconds: (update.stats.dt > 0.0).then_some(update.stats.dt),
+                        },
+                        fem_local_node_map: None,
+                    });
+                }
+            }
+        }
+        downstream(update)
+    }
 }
 
 /// Apply an immutable, decoded study magnetization to a copy of the accepted
@@ -3361,6 +3537,7 @@ fn run_planned_problem_with_artifact_context(
             problem, plan, output_dir,
         )?);
     append_parallel_execution_provenance(&mut executed, &parallel_execution)?;
+    append_fdm_multilayer_observation_snapshot(plan, &mut executed)?;
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -3631,6 +3808,7 @@ fn fem_eigen_progress_update(
         grid: [0, 0, 0],
         fem_mesh_generation_id,
         magnetization: None,
+        magnetization_carrier: None,
         preview_field: None,
         cached_preview_fields: None,
         hysteresis_field_m_t: None,
@@ -3768,9 +3946,11 @@ fn run_planned_problem_with_callback_artifact_context(
     output_dir: &Path,
     field_every_n: u64,
     relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
-    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
 ) -> Result<RunResult, RunError> {
+    let mut on_step = bind_live_magnetization_layout(plan, on_step);
+    let live_layout = study_magnetization_layout_for_plan(plan).ok();
     require_magnetic_execution_plan(plan)?;
     require_frequency_response_artifact_identity(plan, artifact_identity)?;
     let execution_problem = bind_fem_execution_stage_identity(problem, plan)?;
@@ -3844,6 +4024,8 @@ fn run_planned_problem_with_callback_artifact_context(
                 &runtime_outputs,
                 Some((
                     &fdm.common_cells,
+                    field_every_n,
+                    live_layout.as_ref(),
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
                 artifact_writer.clone(),
@@ -3974,6 +4156,7 @@ fn run_planned_problem_with_callback_artifact_context(
             problem, plan, output_dir,
         )?);
     append_parallel_execution_provenance(&mut executed, &parallel_execution)?;
+    append_fdm_multilayer_observation_snapshot(plan, &mut executed)?;
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -4036,6 +4219,7 @@ fn run_planned_problem_with_callback_artifact_context(
             .as_ref()
             .and_then(|context| context.generation_id()),
         magnetization: final_m,
+        magnetization_carrier: None,
         preview_field: None,
         cached_preview_fields: None,
         hysteresis_field_m_t: None,
@@ -4322,9 +4506,11 @@ fn run_planned_problem_with_live_preview_artifact_context(
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
-    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
 ) -> Result<RunResult, RunError> {
+    let mut on_step = bind_live_magnetization_layout(plan, on_step);
+    let live_layout = study_magnetization_layout_for_plan(plan).ok();
     require_magnetic_execution_plan(plan)?;
     require_frequency_response_artifact_identity(plan, artifact_identity)?;
     let execution_problem = bind_fem_execution_stage_identity(problem, plan)?;
@@ -4410,6 +4596,8 @@ fn run_planned_problem_with_live_preview_artifact_context(
                 &runtime_outputs,
                 Some((
                     &fdm.common_cells,
+                    field_every_n,
+                    live_layout.as_ref(),
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
                 artifact_writer.clone(),
@@ -4533,6 +4721,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
             problem, plan, output_dir,
         )?);
     append_parallel_execution_provenance(&mut executed, &parallel_execution)?;
+    append_fdm_multilayer_observation_snapshot(plan, &mut executed)?;
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -4615,6 +4804,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
             .as_ref()
             .and_then(|context| context.generation_id()),
         magnetization: final_m,
+        magnetization_carrier: None,
         preview_field: None,
         cached_preview_fields,
         hysteresis_field_m_t: None,
@@ -4962,6 +5152,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
                 .flat_map(|vector| vector.iter().copied())
                 .collect(),
         ),
+        magnetization_carrier: None,
         preview_field: None,
         cached_preview_fields: None,
         hysteresis_field_m_t: None,

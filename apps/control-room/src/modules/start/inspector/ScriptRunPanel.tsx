@@ -272,9 +272,19 @@ function PhaseBody({
       return (
         <>
           <p className="fm-start-run-state" role="status">
-            <strong>{stateLabel(phase.status.state)}</strong>
+            <strong>{stateLabel(phase.status.state, phase.status.unknownState)}</strong>
+            {phase.status.phaseDetail ? ` · ${phase.status.phaseDetail}` : null}
             {phase.status.windowOpen ? " · opened in its own window" : " · its window opens when the model is ready"}
           </p>
+          {phase.status.state === "unknown" ? (
+            <div className="fm-start-banner fm-start-banner--warning" role="status">
+              <div className="fm-start-banner__copy">
+                The app reported a run state this panel does not recognise
+                {phase.status.unknownState ? ` (${phase.status.unknownState})` : ""}. The run is treated
+                as still active: no new run can start here until it reports a known state. Stop remains available.
+              </div>
+            </div>
+          ) : null}
           {phase.warning ? (
             <div className="fm-start-banner fm-start-banner--warning" role="status">
               <div className="fm-start-banner__copy">{phase.warning}</div>

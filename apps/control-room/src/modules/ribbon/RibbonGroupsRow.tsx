@@ -7,6 +7,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -205,7 +206,13 @@ function RibbonActionButton({
       </DropdownMenuContent>
     </DropdownMenu>
   );
-  const wrappedContent = (
+  // A disabled action keeps a focusable, described shell so the reason is
+  // reachable by keyboard and assistive technology, not only by hover.
+  const wrappedContent = triggerState.disabled && tooltipText ? (
+    <DisabledReason className="fm-ribbon-action-shell" reason={tooltipText}>
+      {content}
+    </DisabledReason>
+  ) : (
     <span className="fm-ribbon-action-shell" title={tooltipText}>
       {content}
     </span>

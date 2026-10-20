@@ -295,6 +295,7 @@ export function buildFdmVectorSegments(
     geometryScope?: "surface" | "full";
     instanceOrdinals?: Uint32Array | null;
     realizedRegionIds?: Uint32Array | null;
+    vectorLengthScale?: number;
     surfaceOffsetEnabled?: boolean;
     surfaceOffsetScale?: number;
   } = {},
@@ -310,7 +311,7 @@ export function buildFdmVectorSegments(
     );
   }
   const anchorMode = options.anchorMode ?? "center";
-  const cacheKey = `${scale}:${maxVectors}:${anchorMode}:${options.geometryScope ?? "full"}:${options.surfaceOffsetEnabled === true}:${options.surfaceOffsetScale ?? 0}`;
+  const cacheKey = `${scale}:${maxVectors}:${options.vectorLengthScale ?? "scale"}:${anchorMode}:${options.geometryScope ?? "full"}:${options.surfaceOffsetEnabled === true}:${options.surfaceOffsetScale ?? 0}`;
   const cachedSegments = cachedFdmVectorSegments(model, fieldVector, cacheKey);
   if (cachedSegments !== undefined) return cachedSegments;
 
@@ -650,6 +651,7 @@ export interface FdmCuboidAsyncBuildInput {
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
   vectorGeometryScope?: "full" | "surface";
+  vectorLengthScale?: number;
   vectorScale: number;
   vectorSurfaceOffsetEnabled?: boolean;
   vectorSurfaceOffsetScale?: number;
@@ -804,6 +806,7 @@ export function createFdmCuboidBatchBuildController(
         vectorAnchorMode: entry.vectorAnchorMode,
         vectorField: entry.vectorField,
         vectorGeometryScope: entry.vectorGeometryScope,
+        vectorLengthScale: entry.vectorLengthScale,
         vectorOnly: entry.vectorOnly,
         vectorScale: entry.vectorScale,
         vectorSurfaceOffsetEnabled: entry.vectorSurfaceOffsetEnabled,

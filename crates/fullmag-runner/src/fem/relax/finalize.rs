@@ -10,6 +10,7 @@ use crate::artifact_pipeline::ArtifactRecorder;
 use crate::dispatch::{apply_native_fem_runtime_contract, fem_poisson_demag_provenance, FemEngine};
 use crate::fem::execution_receipt::validate_strict_fem_gpu_execution_receipt;
 use crate::native_fem::NativeFemBackend;
+use crate::quantities::{active_fem_preview_quantities, field_materialization_quantity_ids};
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
 use crate::schedules::{same_time, OutputSchedule};
 use crate::types::{
@@ -365,8 +366,11 @@ pub(crate) fn finalize_native_fem_relaxation(
     mut steps: Vec<StepStats>,
     finalization: NativeFemRelaxationFinalization,
 ) -> Result<ExecutedRun, RunError> {
-    // Reject unsupported field contributions before capturing/publishing a certificate.
-    crate::fem::equilibrium_identity::validate_supported_relax_source(plan)?;
+    // Modal certification covers a narrower static physics contract than
+    // time-domain execution. Keep that gate on the certificate itself; a
+    // legal driven/current/thermal run must still publish its accepted state.
+    let certification_unavailable = crate::fem::equilibrium_identity::validate_supported_relax_source(plan)
+        .err().map(|error| error.message);
     let mut artifacts = artifacts;
     let mut final_stats = finalization.latest_stats.unwrap_or(StepStats {
         step: 0,
@@ -447,8 +451,10 @@ pub(crate) fn finalize_native_fem_relaxation(
     // Preserve the accepted endpoint evaluation before the mandatory fresh
     // snapshot. The post-refresh evaluation below is compared against this
     // value and bound into a linearization certificate.
-    let accepted_native_equilibrium =
-        copy_native_equilibrium_evaluation(backend, node_count, plan.enable_demag, plan.material.uniaxial_anisotropy.is_some())?;
+    let accepted_native_equilibrium = if certification_unavailable.is_none() {
+        Some(copy_native_equilibrium_evaluation(backend, node_count, plan.enable_demag,
+            plan.material.uniaxial_anisotropy.is_some())?)
+    } else { None };
 
     // Refresh device-resident component fields at the accepted final state
     // before any synchronous or asynchronous field snapshot selects H_eff.
@@ -456,67 +462,218 @@ pub(crate) fn finalize_native_fem_relaxation(
     let _refreshed_final_snapshot_stats = backend.snapshot_step_stats(node_count)?;
 
     if let Some(live) = live.as_mut() {
-        if let Some(display_selection) = live.display_selection.map(|get| get()) {
-            let publication = if pending_preview_completed {
-                preview_handoff.finalize_terminal_cache(
-                    backend,
-                    engine,
-                    &display_selection,
-                    plan,
-                    node_count,
-                    final_stats.step,
-                    final_stats.time,
-                    final_stats.dt,
-                    terminal_preview_deadline,
-                )
-            } else {
-                preview_handoff.take_terminal_publication(elapsed_ns(terminal_preview_started))
-            };
-            let mut live_stats = final_stats.clone();
-            live_stats.cached_preview_wall_time_ns = publication.wall_time_ns;
-            live_stats.field_materialization_states = publication.materialization_states;
-            live_stats.wall_time_ns = live_stats
-                .wall_time_ns
-                .saturating_add(publication.wall_time_ns);
-            let magnetization = publication.magnetization.map(|payload| {
-                live_stats.magnetization_source_step = Some(payload.source_step);
-                live_stats.magnetization_source_revision = Some(payload.source_revision);
-                live_stats.magnetization_materialized_at_unix_ms =
-                    Some(payload.materialized_at_unix_ms);
-                live_stats.magnetization_materialization_wall_time_ns =
-                    Some(payload.materialization_wall_time_ns);
-                live_stats.field_copy_wall_time_ns = live_stats
-                    .field_copy_wall_time_ns
-                    .saturating_add(payload.materialization_wall_time_ns);
-                live_stats.field_copy_bytes = live_stats
-                    .field_copy_bytes
-                    .saturating_add(payload.field_copy_bytes);
-                payload.values
-            });
-            eprintln!(
-                "[fullmag-runner] native-fem terminal preview phase: phase=publication cached_fields={} magnetization={} states={} wall_time_ns={} deadline_remaining_ms={}",
-                publication
-                    .cached_fields
-                    .as_ref()
-                    .map_or(0, |fields| fields.len()),
-                magnetization.is_some(),
-                live_stats.field_materialization_states.len(),
-                publication.wall_time_ns,
-                terminal_preview_deadline
-                    .saturating_duration_since(std::time::Instant::now())
-                    .as_millis(),
+        let mut publication =
+            preview_handoff.take_terminal_publication(elapsed_ns(terminal_preview_started));
+        let mut terminal_stats = final_stats.clone();
+        terminal_stats.cached_preview_wall_time_ns = publication.wall_time_ns;
+        terminal_stats.field_materialization_states = publication.materialization_states;
+        terminal_stats.wall_time_ns = terminal_stats
+            .wall_time_ns
+            .saturating_add(publication.wall_time_ns);
+
+        // Existing asynchronous previews remain bounded by their display
+        // demand. Release their ready field buffers before the accepted
+        // endpoint is copied quantity by quantity below.
+        let asynchronous_magnetization = publication.magnetization.take();
+        let cached_field_count = publication
+            .cached_fields
+            .as_ref()
+            .map_or(0, |fields| fields.len());
+        drop(publication.cached_fields.take());
+        eprintln!(
+            "[fullmag-runner] native-fem terminal preview phase: phase=publication cached_fields={} magnetization={} states={} wall_time_ns={} deadline_remaining_ms={}",
+            cached_field_count,
+            asynchronous_magnetization.is_some(),
+            terminal_stats.field_materialization_states.len(),
+            publication.wall_time_ns,
+            terminal_preview_deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis(),
+        );
+        drop(preview_handoff);
+
+        let clock = crate::ObservationClock {
+            accepted_step: final_stats.step,
+            time_seconds: final_stats.time,
+            dt_seconds: (final_stats.dt > 0.0).then_some(final_stats.dt),
+        };
+        let node_map = super::preview::native_local_node_map_identity(
+            backend,
+            fem_mesh_generation_id.as_deref(),
+            node_count,
+        );
+        let quantity_ids = field_materialization_quantity_ids();
+        let quantities = active_fem_preview_quantities(engine, plan, &quantity_ids);
+        terminal_stats.field_materialization_states.clear();
+        for quantity in &quantities {
+            terminal_stats.field_materialization_states.push(
+                crate::types::LiveFieldMaterializationStatus {
+                    quantity: (*quantity).to_string(),
+                    source_step: clock.accepted_step,
+                    request_revision: clock.accepted_step,
+                    state: crate::types::LiveFieldMaterializationState::Pending,
+                    error: None,
+                },
             );
-            if let Some(last_step) = steps.last_mut() {
-                *last_step = live_stats.clone();
-            }
+        }
+
+        let asynchronous_magnetization = asynchronous_magnetization.filter(|payload| {
+            payload.source_step == clock.accepted_step
+                && payload.source_clock == clock
+                && node_map.as_ref().is_some_and(|map| {
+                    payload.fem_local_node_map == *map
+                        && payload.values.len() == node_count.saturating_mul(3)
+                        && payload.values.iter().all(|value| value.is_finite())
+                })
+        });
+        let mut fallback_terminal_magnetization = None;
+        let mut magnetization_field = if quantities.contains(&"m") {
+            Some(match super::preview::capture_native_fem_observable_field(
+                backend, engine, plan, clock, "m",
+            ) {
+                Ok(field) => Ok(field),
+                Err(copy_error) => {
+                    eprintln!(
+                        "[fullmag-runner] native FEM terminal magnetization field copy failed; trying the exact accepted payload: {}",
+                        copy_error.message
+                    );
+                    let flat_values = asynchronous_magnetization
+                        .as_ref()
+                        .map(|payload| payload.values.clone())
+                        .or_else(|| {
+                            accepted_native_equilibrium
+                                .as_ref()
+                                .map(|accepted| crate::dispatch::flatten_vectors(&accepted.magnetization))
+                        })
+                        .or_else(|| match backend.copy_m(node_count) {
+                            Ok(values) => Some(crate::dispatch::flatten_vectors(&values)),
+                            Err(error) => {
+                                eprintln!(
+                                    "[fullmag-runner] native FEM terminal magnetization fallback copy failed: {}",
+                                    error.message
+                                );
+                                None
+                            }
+                        });
+                    if let Some(flat_values) = flat_values {
+                        let vectors = flat_values
+                            .chunks_exact(3)
+                            .map(|values| [values[0], values[1], values[2]])
+                            .collect::<Vec<_>>();
+                        fallback_terminal_magnetization = Some(flat_values);
+                        super::preview::build_native_fem_magnetization_field_from_values(
+                            plan, clock, &vectors,
+                        )
+                    } else {
+                        Err(copy_error)
+                    }
+                }
+            })
+        } else {
+            None
+        };
+        let magnetization_carrier = asynchronous_magnetization
+            .as_ref()
+            .map(super::preview::live_magnetization_carrier)
+            .or_else(|| {
+                node_map.clone().map(|fem_local_node_map| {
+                    crate::types::LiveMagnetizationCarrier {
+                        // The outer plan binder replaces this placeholder with
+                        // the exact canonical FEM layout before the callback.
+                        layout: serde_json::Value::Null,
+                        source_clock: clock,
+                        fem_local_node_map: Some(fem_local_node_map),
+                    }
+                })
+            });
+        let terminal_magnetization = magnetization_field
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .map(|field| field.vector_field_values.clone())
+            .or(fallback_terminal_magnetization)
+            .or_else(|| asynchronous_magnetization.as_ref().map(|payload| payload.values.clone()))
+            .or_else(|| {
+                accepted_native_equilibrium
+                    .as_ref()
+                    .map(|accepted| crate::dispatch::flatten_vectors(&accepted.magnetization))
+            });
+        if terminal_magnetization.is_some() {
+            terminal_stats.magnetization_source_step = Some(clock.accepted_step);
+        }
+
+        for quantity in &quantities {
+            let capture_started = std::time::Instant::now();
+            let capture_result = if *quantity == "m" {
+                magnetization_field.take().unwrap_or_else(|| {
+                    Err(RunError {
+                        message: "native FEM terminal observation omitted m".into(),
+                    })
+                })
+            } else {
+                super::preview::capture_native_fem_observable_field(
+                    backend, engine, plan, clock, quantity,
+                )
+            };
+            let cached_preview_fields = match capture_result {
+                Ok(field) => {
+                    terminal_stats
+                        .field_materialization_states
+                        .retain(|status| status.quantity != *quantity);
+                    terminal_stats.field_materialization_states.push(
+                        crate::types::LiveFieldMaterializationStatus {
+                            quantity: (*quantity).to_string(),
+                            source_step: clock.accepted_step,
+                            request_revision: clock.accepted_step,
+                            state: crate::types::LiveFieldMaterializationState::Complete,
+                            error: None,
+                        },
+                    );
+                    Some(vec![field])
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[fullmag-runner] native FEM terminal observation quantity {}: {}",
+                        quantity, error.message
+                    );
+                    terminal_stats
+                        .field_materialization_states
+                        .retain(|status| status.quantity != *quantity);
+                    terminal_stats.field_materialization_states.push(
+                        crate::types::LiveFieldMaterializationStatus {
+                            quantity: (*quantity).to_string(),
+                            source_step: clock.accepted_step,
+                            request_revision: clock.accepted_step,
+                            state: crate::types::LiveFieldMaterializationState::Error,
+                            error: Some(error.message),
+                        },
+                    );
+                    None
+                }
+            };
+            let copy_wall_time_ns = capture_started.elapsed().as_nanos() as u64;
+            let field_copy_bytes = cached_preview_fields
+                .as_ref()
+                .and_then(|fields| fields.first())
+                .map_or(0, |field| (field.vector_field_values.len() as u64).saturating_mul(8));
+            let magnetization_bytes = terminal_magnetization
+                .as_ref()
+                .map_or(0, |values| (values.len() as u64).saturating_mul(8));
+            terminal_stats.field_copy_bytes = terminal_stats
+                .field_copy_bytes
+                .saturating_add(field_copy_bytes)
+                .saturating_add(magnetization_bytes);
+            terminal_stats.field_copy_wall_time_ns = terminal_stats
+                .field_copy_wall_time_ns
+                .saturating_add(copy_wall_time_ns);
+
             let _ = (live.on_step)(StepUpdate {
                 coupled_checkpoint: None,
-                stats: live_stats,
+                stats: terminal_stats.clone(),
                 grid: live.grid,
                 fem_mesh_generation_id: fem_mesh_generation_id.clone(),
-                magnetization,
+                magnetization: terminal_magnetization.clone(),
                 preview_field: None,
-                cached_preview_fields: publication.cached_fields,
+                cached_preview_fields,
                 hysteresis_field_m_t: None,
                 hysteresis_point_index: None,
                 hysteresis_settle_step_index: None,
@@ -525,10 +682,15 @@ pub(crate) fn finalize_native_fem_relaxation(
                 scalar_row_due: false,
                 terminal_field_snapshot: true,
                 finished: false,
+                magnetization_carrier: magnetization_carrier.clone(),
             });
         }
+        if let Some(last_step) = steps.last_mut() {
+            *last_step = terminal_stats;
+        }
+    } else {
+        drop(preview_handoff);
     }
-    drop(preview_handoff);
 
     if !pending_preview_completed {
         let _refreshed_final_snapshot_stats = backend.snapshot_step_stats(node_count)?;
@@ -649,20 +811,39 @@ pub(crate) fn finalize_native_fem_relaxation(
     }
 
     let copy_start = std::time::Instant::now();
-    let recomputed_native_equilibrium =
-        copy_native_equilibrium_evaluation(backend, node_count, plan.enable_demag, plan.material.uniaxial_anisotropy.is_some())?;
-    let recomputed_linearization_certificate = certify_native_linearization_recompute(
-        plan,
-        &accepted_native_equilibrium,
-        &recomputed_native_equilibrium,
-    )?;
-    // Preserve the exact endpoint snapshot used as the independent replay
-    // baseline.  The recomputed fields below are a fresh native copy after
-    // the mandatory refresh and must never replace this payload.
-    let accepted_fem_equilibrium_fields = accepted_native_equilibrium.fields.clone();
-let final_node_map = backend.local_node_index_map()?;
+    let mut equilibrium_artifacts = Vec::new();
+    let (final_magnetization, final_representation) = if let Some(accepted) = accepted_native_equilibrium {
+        let recomputed = copy_native_equilibrium_evaluation(backend, node_count,
+            plan.enable_demag, plan.material.uniaxial_anisotropy.is_some())?;
+        let certificate = certify_native_linearization_recompute(plan, &accepted, &recomputed)?;
+        let accepted_path = CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(&plan.material);
+        let (fields_path, refresh_path) = CertifiedFemEquilibriumFields::artifact_paths_for_material(&plan.material);
+        for (relative_path, bytes) in [
+            (accepted_path, serde_json::to_vec_pretty(&accepted.fields)),
+            (fields_path, serde_json::to_vec_pretty(&recomputed.fields)),
+            (refresh_path, serde_json::to_vec_pretty(&certificate)),
+        ] {
+            equilibrium_artifacts.push(AuxiliaryArtifact {
+                relative_path: relative_path.into(),
+                bytes: bytes.map_err(|error| RunError { message: format!("encode native FEM certificate: {error}") })?,
+            });
+        }
+        (recomputed.magnetization, recomputed.representation)
+    } else {
+        equilibrium_artifacts.push(AuxiliaryArtifact {
+            relative_path: "equilibrium/certification_unavailable.v1.json".into(),
+            bytes: serde_json::to_vec(&serde_json::json!({
+                "schema_version": "fullmag.fem_equilibrium_certification_unavailable.v1",
+                "reason": certification_unavailable,
+                "accepted_step": final_stats.step, "time_seconds": final_stats.time,
+                "state_role": "time_domain_observation_only",
+            })).map_err(|error| RunError { message: format!("encode FEM certification availability: {error}") })?,
+        });
+        (backend.copy_m(node_count)?, backend.representation_receipt()?)
+    };
+    let final_node_map = backend.local_node_index_map()?;
     final_node_map
-        .validate_representation(&recomputed_native_equilibrium.representation)
+        .validate_representation(&final_representation)
         .map_err(|message| RunError { message })?;
     let native_indexed_geometry = backend
         .indexed_geometry_sha256(plan.mesh.nodes.len() as u64, plan.mesh.cells.len() as u64)?;
@@ -683,8 +864,8 @@ let final_node_map = backend.local_node_index_map()?;
             final_stats.step,
             final_stats.time,
             final_stats.dt,
-            &recomputed_native_equilibrium.magnetization,
-            recomputed_native_equilibrium.representation,
+            &final_magnetization,
+            final_representation,
         )
         .map_err(|message| RunError { message })?;
     final_snapshot_receipt.native_node_map_sha256 = Some(
@@ -693,8 +874,6 @@ let final_node_map = backend.local_node_index_map()?;
             .map_err(|message| RunError { message })?,
     );
     final_snapshot_receipt.native_indexed_geometry_sha256 = Some(native_indexed_geometry);
-    let final_magnetization = recomputed_native_equilibrium.magnetization;
-    let certified_fem_equilibrium_fields = recomputed_native_equilibrium.fields;
     finalization_field_copy_wall_time_ns =
         finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
     finalization_field_copy_bytes =
@@ -702,8 +881,6 @@ let final_node_map = backend.local_node_index_map()?;
     let mut diagnostic_steps = artifacts.take_solver_steps();
     let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut auxiliary_artifacts = Vec::new();
-    let accepted_fields_path = CertifiedFemEquilibriumFields::accepted_artifact_path_for_material(&plan.material);
-    let (fields_path, refresh_path) = CertifiedFemEquilibriumFields::artifact_paths_for_material(&plan.material);
     let node_map_bytes = serde_json::to_vec(&final_node_map).map_err(|error| RunError {
         message: format!("failed to encode final FEM local-node map: {error}"),
     })?;
@@ -724,32 +901,7 @@ let final_node_map = backend.local_node_index_map()?;
             message: format!("failed to encode final FEM state representation: {error}"),
         })?,
     });
-    auxiliary_artifacts.push(AuxiliaryArtifact {
-        relative_path: accepted_fields_path.to_string(),
-        bytes: serde_json::to_vec_pretty(&accepted_fem_equilibrium_fields).map_err(|error| {
-            RunError {
-                message: format!("failed to encode accepted FEM equilibrium fields: {error}"),
-            }
-        })?,
-    });
-    auxiliary_artifacts.push(AuxiliaryArtifact {
-        relative_path: fields_path.to_string(),
-        bytes: serde_json::to_vec_pretty(&certified_fem_equilibrium_fields).map_err(|error| {
-            RunError {
-                message: format!("failed to encode certified FEM equilibrium fields: {error}"),
-            }
-        })?,
-    });
-    auxiliary_artifacts.push(AuxiliaryArtifact {
-        relative_path: refresh_path.to_string(),
-        bytes: serde_json::to_vec_pretty(&recomputed_linearization_certificate).map_err(
-            |error| RunError {
-                message: format!(
-                    "failed to encode recomputed FEM linearization certificate: {error}"
-                ),
-            },
-        )?,
-    });
+    auxiliary_artifacts.extend(equilibrium_artifacts);
     if let Some(telemetry) = backend.stage_oersted_telemetry() {
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "transport/fem_stage_oersted_callback.v1.json".into(),
