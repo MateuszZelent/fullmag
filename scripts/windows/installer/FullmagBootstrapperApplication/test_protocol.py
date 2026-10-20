@@ -185,6 +185,19 @@ class BootstrapperApplicationSourceContract(unittest.TestCase):
         self.assertLess(start_install.index("PrepareSourceFirstBurnVariables"),
                         start_install.index("engine_->Plan(BOOTSTRAPPER_ACTION_INSTALL)"))
 
+    def test_broker_rejects_mutations_while_locked_and_control_commands_never_apply_inputs(self) -> None:
+        dispatch = CPP[CPP.index("        BrokerCommand command;"):
+                       CPP.index("        const std::vector<std::wstring> supported =")]
+        guard = dispatch.index("application->environmentMutationLocked_ && !controlOperation")
+        apply = dispatch.index("ApplyBrokerInputs(application")
+        self.assertLess(guard, apply)
+        self.assertIn('command.operation == L"status" ||', dispatch)
+        self.assertIn('command.operation == L"cancel" || command.operation == L"shutdown"', dispatch)
+        self.assertIn("if (!controlOperation &&\n            !ApplyBrokerInputs", dispatch)
+        blocked = dispatch[guard:dispatch.index("const std::wstring requestedLane", guard)]
+        self.assertIn('SendBrokerReply(application, command, false, L"blocked"', blocked)
+        self.assertIn("return 0;", blocked)
+
     def test_bound_prerequisite_public_session_preserves_requested_lane(self) -> None:
         protocol = "".join(_extract_protocol_chunks(CPP))
         prerequisites_start = protocol.index("      'bootstrap_prerequisites' {")

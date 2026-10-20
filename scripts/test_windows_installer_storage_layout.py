@@ -275,6 +275,67 @@ Require (-not (Test-Path -LiteralPath (Join-Path $storage 'alternate'))) 'mismat
                 self.assertTrue(json.loads([line for line in verified.stdout.splitlines() if line.strip()][-1])["marker"])
             finally:
                 self._remove_windows_path(powershell, verify_path)
+
+            mutation_script = f"""
+$ErrorActionPreference = 'Stop'
+function Require([bool]$Condition, [string]$Message) {{ if (-not $Condition) {{ throw $Message }} }}
+. {_ps_literal(module)}
+$repo = {_ps_literal(repo)}
+$storage = {_ps_literal(storage)}
+$python = {_ps_literal(str(fixture["python"]))}
+$session = Get-FullmagInstallerEnvSession -CheckoutPath $repo -PythonCommand $python
+$committed = Commit-FullmagInstallerEnvProposal -Session $session -Values @{{}}
+Require ($committed.state -eq 'unchanged' -and $committed.valid) 'fixture environment was not committed unchanged'
+$session.environment_committed = $true
+$session.committed_environment_hash = [string]$committed.proposed_hash
+$session.session_signature = Get-FullmagInstallerEnvSessionSignature -Session $session
+$envPath = [string]$session.env_path
+$beforeHash = Get-FullmagInstallerEnvSha256 -Bytes ([System.IO.File]::ReadAllBytes($envPath))
+$script:FullmagInstallerEnvBeforeStorageResolveHook = {{
+  param($path)
+  $lockPath = [string]$path + '.fullmag-installer.lock'
+  Require (Test-Path -LiteralPath $lockPath -PathType Leaf) 'storage layout did not hold the .env lock'
+  $text = [System.IO.File]::ReadAllText($path)
+  $text = [regex]::Replace($text, '(?m)^RUST_LOG=.*$', 'RUST_LOG=mutated')
+  [System.IO.File]::WriteAllText($path, $text, [System.Text.UTF8Encoding]::new($false))
+}}
+$failed = $false
+$message = ''
+try {{
+  Prepare-FullmagInstallerStorageLayout -Session $session -StorageRoot $storage `
+    -ExpectedEnvironmentHash ([string]$committed.proposed_hash) -ExpectedStorageProfile 'windows-setup' | Out-Null
+}}
+catch {{ $failed = $true; $message = [string]$_.Exception.Message }}
+finally {{ Remove-Variable -Name FullmagInstallerEnvBeforeStorageResolveHook -Scope Script -ErrorAction SilentlyContinue }}
+$afterBytes = [System.IO.File]::ReadAllBytes($envPath)
+$afterText = [System.Text.UTF8Encoding]::new($false).GetString($afterBytes)
+$afterHash = Get-FullmagInstallerEnvSha256 -Bytes $afterBytes
+Require $failed 'storage layout accepted a .env mutation between preview and create'
+Require ($message -match '\\.env changed') ('TOCTOU rejection was not reported: ' + $message)
+Require ($afterText -match '(?m)^RUST_LOG=mutated$') 'TOCTOU mutation was overwritten'
+Require ($afterHash -ne $beforeHash) 'TOCTOU mutation did not reach the fixture'
+[ordered]@{{ lock_held = $true; mutation_rejected = $failed; env_preserved = ($afterText -match '(?m)^RUST_LOG=mutated$'); before_hash = $beforeHash; after_hash = $afterHash }} | ConvertTo-Json -Compress
+"""
+            mutation_path = self._write_windows_temp_script(powershell, mutation_script)
+            try:
+                mutated = subprocess.run(
+                    [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", mutation_path],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                self.assertEqual(mutated.returncode, 0, mutated.stderr or mutated.stdout)
+                mutation_result = json.loads(
+                    [line for line in mutated.stdout.splitlines() if line.strip()][-1]
+                )
+                self.assertTrue(mutation_result["lock_held"])
+                self.assertTrue(mutation_result["mutation_rejected"])
+                self.assertTrue(mutation_result["env_preserved"])
+                self.assertNotEqual(mutation_result["before_hash"], mutation_result["after_hash"])
+            finally:
+                self._remove_windows_path(powershell, mutation_path)
         finally:
             if helper is not None:
                 if helper.stdin is not None:

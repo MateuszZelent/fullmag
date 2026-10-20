@@ -2738,8 +2738,15 @@ LRESULT CALLBACK FullmagBootstrapperApplication::WindowProc(HWND window, UINT me
                             L"The UI command generation or revision is stale.");
             return 0;
         }
+        const bool controlOperation = command.operation == L"status" ||
+            command.operation == L"cancel" || command.operation == L"shutdown";
+        if (application->environmentMutationLocked_ && !controlOperation) {
+            SendBrokerReply(application, command, false, L"blocked",
+                            L"Configuration is locked while an installer operation is running.");
+            return 0;
+        }
         const std::wstring requestedLane = Lower(command.args.String(L"lane"));
-        if (!requestedLane.empty() && requestedLane != L"all") {
+        if (!controlOperation && !requestedLane.empty() && requestedLane != L"all") {
             SendBrokerReply(application, command, false, L"blocked", L"The installer scope must be all.");
             return 0;
         }
@@ -2752,7 +2759,8 @@ LRESULT CALLBACK FullmagBootstrapperApplication::WindowProc(HWND window, UINT me
         bool storageChanged = false;
         bool valuesChanged = false;
         bool laneChanged = false;
-        if (!ApplyBrokerInputs(application, command.args, &checkoutChanged, &storageChanged,
+        if (!controlOperation &&
+            !ApplyBrokerInputs(application, command.args, &checkoutChanged, &storageChanged,
                                &valuesChanged, &laneChanged)) {
             SendBrokerReply(application, command, false, L"blocked",
                             L"The UI command contains invalid input types.");
@@ -3736,7 +3744,7 @@ void FullmagBootstrapperApplication::PrepareCommittedStorageLayoutAsync(
                 if (completion) completion(false);
                 return;
             }
-            const auto reject = [this, &completion](const std::wstring& message) mutable {
+            const auto reject = [this, &completion](const std::wstring& message) {
                 InvalidateEnvironmentAdmission(true, false);
                 SetStatus(message, true);
                 if (completion) completion(false);
