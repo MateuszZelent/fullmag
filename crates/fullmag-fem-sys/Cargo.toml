@@ -4,6 +4,7 @@ description = "Raw FFI bindings to the native Fullmag FEM CPU/GPU backend"
 edition.workspace = true
 version.workspace = true
 publish.workspace = true
+license.workspace = true
 links = "fullmag_fem"
 
 [features]

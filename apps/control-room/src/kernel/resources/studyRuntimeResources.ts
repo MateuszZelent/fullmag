@@ -1444,15 +1444,16 @@ export function useSolverEnergyCurrentResource({
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey: SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   });
+  const { refetch } = resource;
   const lastStatusRevision = useRef<string | null>(null);
   useEffect(() => {
     if (!enabled || statusRevision === null) return;
     const previous = lastStatusRevision.current;
     lastStatusRevision.current = statusRevision;
     if (previous !== null && previous !== statusRevision) {
-      resource.refetch();
+      refetch();
     }
-  }, [enabled, resource.refetch, statusRevision]);
+  }, [enabled, refetch, statusRevision]);
   return resource;
 }
 

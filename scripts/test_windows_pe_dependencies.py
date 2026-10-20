@@ -97,6 +97,16 @@ def test_external_build_machine_dlls_do_not_qualify_bundle(tmp_path, monkeypatch
         pe.audit_bin(tmp_path, Path('unused'))
 
 
+@pytest.mark.parametrize('dependency', ['authz.dll', 'mswsock.dll', 'ntdsapi.dll'])
+def test_registered_msmpi_os_dependencies_are_external(tmp_path, monkeypatch, dependency):
+    image(tmp_path / 'app.exe')
+    monkeypatch.setattr(pe, 'dump_imports', lambda path, tool: [dependency])
+
+    report = pe.audit_bin(tmp_path, Path('unused'))
+
+    assert report['images'][0]['imports'][0]['resolution'] == 'windows_component'
+
+
 def test_cuda_driver_exception_is_explicit(tmp_path, monkeypatch):
     image(tmp_path / 'app.exe')
     monkeypatch.setattr(pe, 'dump_imports', lambda path, tool: ['nvcuda.dll'])

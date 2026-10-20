@@ -65,7 +65,7 @@ pub(crate) fn prepare_and_publish(
     let legacy_budget = storage_budget.min(MAX_BUNDLE_BYTES / 2)
         .min(step.claim.lease.budget.memory_bytes / 16);
     if budget < 4096 {
-        tracing::warn!(task_id = %step.claim.task_id,
+        tracing::warn!(task_id = %step.claim.task_id.as_str(),
             "accepted quantities omitted: no observation storage budget after declared outputs");
         return Ok(());
     }
@@ -191,7 +191,7 @@ pub(crate) fn prepare_and_publish(
         bytes = serde_json::to_vec(&record)?;
     }
     if bytes.len() as u64 > budget {
-        tracing::warn!(task_id = %step.claim.task_id,
+        tracing::warn!(task_id = %step.claim.task_id.as_str(),
             "accepted quantity receipt omitted: observation storage budget exhausted");
         return Ok(());
     }
@@ -204,7 +204,7 @@ pub(crate) fn prepare_and_publish(
         attempt_id: step.claim.attempt_id.as_str().into(),
         ownership_epoch: step.claim.ownership_epoch.value(),
         logical_path: format!("outputs/{}/{}/accepted-quantities.v1.json",
-            step.claim.task_id, step.claim.attempt_id),
+            step.claim.task_id.as_str(), step.claim.attempt_id.as_str()),
         artifact_type: ARTIFACT_TYPE.into(), content_sha256: object_ref.clone(),
         object_ref: Some(object_ref), status: FmsArtifactStatus::Published,
         required: false, study_output: None,
@@ -334,7 +334,7 @@ fn publish_observation_object(
                 &json!({"bundle": bundle_id, "content": hash}))),
             task_id: step.claim.task_id.as_str().into(), attempt_id: step.claim.attempt_id.as_str().into(),
             ownership_epoch: step.claim.ownership_epoch.value(),
-            logical_path: format!("outputs/{}/{}/observations/{hash}.bin", step.claim.task_id, step.claim.attempt_id),
+            logical_path: format!("outputs/{}/{}/observations/{hash}.bin", step.claim.task_id.as_str(), step.claim.attempt_id.as_str()),
             artifact_type: "accepted_quantity_payload".into(), content_sha256: hash.clone(),
             object_ref: Some(hash.clone()), status: FmsArtifactStatus::Published,
             required: false, study_output: None,
@@ -783,7 +783,7 @@ pub(crate) fn current_energy_observation(
         values[0].as_f64().filter(|value| value.is_finite())
     };
     Some(crate::schemas::runtime::SolverEnergyCurrentResource {
-        revision: current.scalar_revision.saturating_add(current.field_revision),
+        revision: current.scalar_revision.saturating_add(crate::router_v2::handlers::sessions::status::field_revision(current)),
         step: raw.get("source_step")?.as_u64()?,
         time_seconds: raw.get("source_time_seconds")?.as_f64()?,
         exchange: component("E_ex")?, demag: component("E_demag")?,

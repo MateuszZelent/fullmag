@@ -321,6 +321,22 @@ case "${recipe}" in
     # and terminal source-bound receipt. No arbitrary command is forwarded.
     exec "${python_cmd}" "${script_dir}/verify_antenna_field_reader.py" --repo-root "${repo_root}"
     ;;
+  *"scripts/windows/build_installer_from_source.ps1"*)
+    installer_pattern='^powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[^"]+/scripts/windows/build_installer_from_source.ps1"( -BootstrapMode "(initial-build|setup-only)")?$'
+    if [[ "${recipe}" =~ ${installer_pattern} ]]; then
+      installer_bootstrap_mode="${BASH_REMATCH[2]:-initial-build}"
+    else
+      echo "[fullmag just] invalid native installer producer recipe" >&2
+      exit 2
+    fi
+    if ! is_windows_shell; then
+      echo "[fullmag just] native installer producer requires Windows" >&2
+      exit 2
+    fi
+    # The producer owns minimal check, the closed storage action and receipts.
+    # Always dispatch this checkout's script, never evaluate supplied shell text.
+    exec powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${repo_root}/scripts/windows/build_installer_from_source.ps1" -BootstrapMode "${installer_bootstrap_mode}"
+    ;;
   *"scripts/windows/recover_runtime.py"*)
     runtime_recovery_pattern='^[^[:space:]]+ "[^"]+/scripts/windows/recover_runtime.py" --repo-root "[^"]+" --web-port "([1-9][0-9]{0,4})"$'
     if [[ ! "${recipe}" =~ ${runtime_recovery_pattern} ]]; then
@@ -336,13 +352,73 @@ case "${recipe}" in
     # inspection and the exact-status archive/receipt transition.
     exec "${python_cmd}" "${script_dir}/windows/recover_runtime.py" --repo-root "${repo_root}" --web-port "${web_port}"
     ;;
+  *"scripts/windows/run_fullmag_fem.ps1"*" -Browser"*)
+    fem_browser_pattern='^powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[^"]+/scripts/windows/run_fullmag_fem.ps1" -BuildMode "(true|false)" -Frontend "(static|dev)" -Backend fem -Device "(auto|cpu|gpu)" -RunMode workspace -WebPort "([0-9]+)"( -BuildOnly)? -Browser( -ExpectedBuildId "([0-9a-f]{64})")?$'
+    if [[ ! "${recipe}" =~ ${fem_browser_pattern} ]]; then
+      echo "[fullmag just] invalid native FEM browser workspace recipe" >&2
+      exit 2
+    fi
+    fem_build_mode="${BASH_REMATCH[1]}"; fem_frontend="${BASH_REMATCH[2]}"; fem_device="${BASH_REMATCH[3]}"; fem_web_port="${BASH_REMATCH[4]}"; fem_build_only="${BASH_REMATCH[5]}"; fem_expected_build_id="${BASH_REMATCH[7]}"
+    if ! is_windows_shell || (( 10#${fem_web_port} > 65535 )); then
+      echo "[fullmag just] native FEM browser workspace requires Windows and a port from 0 to 65535" >&2
+      exit 2
+    fi
+    if [[ -n "${fem_build_only}" && "${fem_build_mode}" != "true" ]]; then
+      echo "[fullmag just] native FEM browser build-only requires BuildMode true" >&2
+      exit 2
+    fi
+    if [[ -n "${fem_build_only}" && -n "${fem_expected_build_id}" ]]; then
+      echo "[fullmag just] ExpectedBuildId is only valid for the runtime half" >&2
+      exit 2
+    fi
+    # The FEM wrapper enters the closed storage operation itself; do not wrap
+    # this runtime in the FDM workspace lease or run_sealed_runtime path.
+    fem_launcher_arguments=(-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${repo_root}/scripts/windows/run_fullmag_fem.ps1" -BuildMode "${fem_build_mode}" -Frontend "${fem_frontend}" -Backend fem -Device "${fem_device}" -RunMode workspace -WebPort "${fem_web_port}" -Browser)
+    if [[ -n "${fem_build_only}" ]]; then fem_launcher_arguments+=(-BuildOnly); fi
+    if [[ -n "${fem_expected_build_id}" ]]; then fem_launcher_arguments+=(-ExpectedBuildId "${fem_expected_build_id}"); fi
+    exec powershell.exe "${fem_launcher_arguments[@]}"
+    ;;
+  *"scripts/windows/run_fullmag.ps1"*" -AllBackends"*)
+    full_workspace_pattern='^powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[^"]+/scripts/windows/run_fullmag.ps1" -BuildMode "(true|false)" -Frontend "(static)" -BackendProfile "release" -Backend "auto" -Device "auto" -RunMode workspace -WebPort "([0-9]+)" -Browser -AllBackends( -BuildOnly)?( -ExpectedBuildId "([0-9a-f]{64})")?$'
+    if [[ ! "${recipe}" =~ ${full_workspace_pattern} ]]; then
+      echo "[fullmag just] invalid native full workspace recipe" >&2
+      exit 2
+    fi
+    full_build_mode="${BASH_REMATCH[1]}"; full_frontend="${BASH_REMATCH[2]}"; full_web_port="${BASH_REMATCH[3]}"; full_build_only="${BASH_REMATCH[4]}"; full_expected_build_id="${BASH_REMATCH[6]:-}"
+    if ! is_windows_shell || (( 10#${full_web_port} > 65535 )); then
+      echo "[fullmag just] native full workspace requires Windows and a port from 0 to 65535" >&2
+      exit 2
+    fi
+    if [[ -n "${full_build_only}" && "${full_build_mode}" != "true" ]]; then
+      echo "[fullmag just] native full workspace build-only requires BuildMode true" >&2
+      exit 2
+    fi
+    if [[ -n "${full_build_only}" && -n "${full_expected_build_id}" ]]; then
+      echo "[fullmag just] ExpectedBuildId is only valid for the full workspace runtime" >&2
+      exit 2
+    fi
+    if [[ -z "${full_build_only}" && "${full_build_mode}" != "false" ]]; then
+      echo "[fullmag just] full workspace runtime requires BuildMode false" >&2
+      exit 2
+    fi
+    if [[ -n "${full_build_only}" ]]; then
+      full_action="run-windows-full-workspace-build"
+    else
+      full_action="run-windows-full-workspace"
+    fi
+    full_arguments=("${full_action}" --repo-root "${repo_root}" --profile "windows-native-fem-gpu" --full-frontend "${full_frontend}" --full-web-port "${full_web_port}" --full-build-mode "${full_build_mode}")
+    if [[ -n "${full_expected_build_id}" ]]; then
+      full_arguments+=(--full-expected-build-id "${full_expected_build_id}")
+    fi
+    exec "${python_cmd}" "${script_dir}/fullmag_storage.py" "${full_arguments[@]}"
+    ;;
   *"scripts/windows/run_fullmag.ps1"*" -RunMode workspace "*)
-    windows_ui_pattern='^powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "[^"]+/scripts/windows/run_fullmag.ps1" -BuildMode "(auto|true|false)" -Frontend "(static|dev)" -BackendProfile "(auto|dev|release)" -RunMode workspace -WebPort "([1-9][0-9]{0,4})"( -BuildOnly)?$'
+    windows_ui_pattern='^powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "[^"]+/scripts/windows/run_fullmag.ps1" -BuildMode "(auto|true|false)" -Frontend "(static|dev)" -BackendProfile "(auto|dev|release)" -RunMode workspace -WebPort "([1-9][0-9]{0,4})"( -BuildOnly)?( -ExpectedBuildId "([0-9a-f]{64})")?$'
     if [[ ! "${recipe}" =~ ${windows_ui_pattern} ]]; then
       echo "[fullmag just] invalid native Windows workspace recipe" >&2
       exit 2
     fi
-    build_mode="${BASH_REMATCH[1]}"; frontend="${BASH_REMATCH[2]}"; backend_profile="${BASH_REMATCH[3]}"; web_port="${BASH_REMATCH[4]}"; build_only="${BASH_REMATCH[5]}"
+    build_mode="${BASH_REMATCH[1]}"; frontend="${BASH_REMATCH[2]}"; backend_profile="${BASH_REMATCH[3]}"; web_port="${BASH_REMATCH[4]}"; build_only="${BASH_REMATCH[5]}"; expected_build_id="${BASH_REMATCH[7]}"
     if ! is_windows_shell || (( web_port > 65535 )); then
       echo "[fullmag just] native Windows workspace requires Windows and a port from 1 to 65535" >&2
       exit 2
@@ -351,10 +427,15 @@ case "${recipe}" in
       echo "[fullmag just] build-only requires build=auto|true and backend_profile=dev|release" >&2
       exit 2
     fi
+    if [[ -n "${build_only}" && -n "${expected_build_id}" ]]; then
+      echo "[fullmag just] ExpectedBuildId is only valid for the runtime half" >&2
+      exit 2
+    fi
     # The native launcher owns storage preflight, locking and terminal receipts.
     # Dispatch only this checkout's launcher; never evaluate the recipe text.
     launcher_arguments=(-NoLogo -NoProfile -ExecutionPolicy Bypass -File "${repo_root}/scripts/windows/run_fullmag.ps1" -BuildMode "${build_mode}" -Frontend "${frontend}" -BackendProfile "${backend_profile}" -RunMode workspace -WebPort "${web_port}")
     if [[ -n "${build_only}" ]]; then launcher_arguments+=(-BuildOnly); fi
+    if [[ -n "${expected_build_id}" ]]; then launcher_arguments+=(-ExpectedBuildId "${expected_build_id}"); fi
     exec powershell.exe "${launcher_arguments[@]}"
     ;;
   *"scripts/verify_control_room_sources.py"*)
@@ -912,11 +993,64 @@ case "${recipe}" in
     ;;
 esac
 
+# The fullmag and windows-build recipes carry a complete shell body.  Validate
+# the body against the canonical just dry-run and enter the closed native FEM
+# resolver; never evaluate the supplied shell text here.  A valid non-FEM body
+# returns classification 3 and continues through the normal path below.
+native_fem_recipe_candidate=false
+case "${recipe}" in
+  "bash -euo pipefail -c '"*)
+    if [[ "${recipe}" == *"for raw in "* ]]; then
+      native_fem_recipe_candidate=true
+    fi
+    ;;
+  backend=\"*)
+    if [[ "${recipe}" == *"skip_local_changes_args"* ]]; then
+      native_fem_recipe_candidate=true
+    fi
+    ;;
+  "bash scripts/run_fullmag.sh "*)
+    # The inline fullmag body is too large for the native Windows process
+    # command line.  The compact public parser keeps the same fixed option
+    # vector while leaving the canonical dispatcher in this boundary.
+    native_fem_recipe_candidate=true
+    ;;
+esac
+if [ "${native_fem_recipe_candidate}" = true ]; then
+  run_native_fem_dispatcher() {
+    # Keep the large recipe body out of argv: Git Bash/MSYS converts slash
+    # prefixed fragments when launching native Python on Windows.
+    printf '%s' "${recipe}" | "${python_cmd}" "${script_dir}/windows/dispatch_native_fem_recipe.py" \
+      --repo-root "${repo_root}" --recipe-stdin "$@"
+  }
+  set +e
+  run_native_fem_dispatcher --probe
+  native_fem_probe_status=$?
+  set -e
+  case "${native_fem_probe_status}" in
+    0)
+      set +e
+      run_native_fem_dispatcher
+      native_fem_dispatch_status=$?
+      set -e
+      exit "${native_fem_dispatch_status}"
+      ;;
+    3) ;; # Canonical FDM/other backend: retain its existing route.
+    *) exit 2 ;;
+  esac
+fi
+
 # The Windows PowerShell launchers select their own storage profile and hold
 # the core lock through the managed entrypoint.  Letting the generic Linux /
 # Windows-native preflight create links first would select the wrong profile.
 if is_windows_shell; then
   case "${recipe}" in
+    "bash scripts/run_fullmag.sh "*)
+      # The probe above has already checked this exact compact body against
+      # the current justfile and classified non-FEM requests.  Execute the
+      # public parser only on Windows so FDM keeps its existing native route.
+      exec bash -euo pipefail -c "${recipe}"
+      ;;
     *"scripts/windows/run_fullmag.ps1"*|*"scripts/windows/run_fullmag_fem.ps1"*|*"scripts/windows/run_fullmag_wsl.ps1"*|*"scripts/windows/setup_fullmag.ps1"*|*"scripts/windows/verify_fem_frequency_domain_native_contract.ps1"*|*"scripts/windows/build_windows_msi.ps1"*)
       exec "${bash_executable}" -euo pipefail -c "${recipe}"
       ;;

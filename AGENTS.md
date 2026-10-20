@@ -162,6 +162,22 @@ nie spełnia go i nie ma dowodu runtime, oznacz ją `NOT VERIFIED`.
 Szczegóły: [Docker development architecture](docs/guides/docker-development-architecture.md) oraz
 [budowanie, zapis danych i retencja](docs/guides/docker-build-storage-lifecycle.md).
 
+### Natywny Windows — kwalifikacja instalatora i pakietu FEM
+
+Codzienny DEV zachowuje wyłączną trasę Docker Compose opisaną powyżej.
+Jawnie zlecone budowanie instalatora `fullmag.exe` oraz kwalifikacja natywnego
+pakietu Windows FEM CPU/GPU korzystają z odrębnej zarządzanej trasy release
+z [ADR 0053](docs/adr/0053-native-windows-fem-build-environment.md).
+`just windows-installer-build`, `just windows-full-workspace-build` i
+`just windows-full-workspace` używają resolvera, przypiętych źródeł, blokady
+ciężkich prac i terminalnych receiptów. Native FEM launcher
+`scripts/windows/run_fullmag_fem.ps1` nie przechodzi cicho do Docker ani WSL.
+Ta kwalifikacja nie jest alternatywną trasą codziennego DEV ani zgodą na ręczne
+`cargo`/`cmake`. Jej dane buildu pozostają w osobnym profilu release wskazanym
+przez resolver; nie zmienia to granicy named volumes dla Docker DEV.
+Build, installed support czterech realizacji, uruchomienie GPU, poprawność
+fizyki i gotowość instalatora wymagają osobnych dowodów.
+
 ## Sprzątanie danych po etapie deweloperskim
 
 - Po zakończeniu etapu (także błędem lub anulowaniem) i przed kolejnym ciężkim buildem oceń dane wygenerowane przez ten etap. Użyj skilla `fullmag-build-stage-cleanup`; jeżeli nie jest dostępny, zastosuj reguły retencji z build-storage governance i zgłoś brak skilla.

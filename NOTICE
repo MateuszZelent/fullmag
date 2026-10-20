@@ -1,0 +1,15 @@
+Fullmag
+Copyright 2026 Fullmag contributors.
+
+The Fullmag-owned source in this repository is licensed under the Apache
+License, Version 2.0. See LICENSE.
+
+Existing project attribution:
+
+M. Zelent, M. Gołebiewski, and P. Pirro, FullMag: a computational framework
+for reproducible finite-difference and finite-element micromagnetics, research
+software, 2026.
+
+The external solvers, vendored files, runtimes, containers, data, and other
+third-party components in a distribution retain their own terms. See the
+repository's third-party license inventory before redistribution.

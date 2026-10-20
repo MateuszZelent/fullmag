@@ -15,5 +15,5 @@ export interface PlanarColorizeResponse {
   contours: readonly (readonly [number, number, number, number])[];
   id: number;
   kind: "colorized";
-  pixels: Uint8ClampedArray;
+  pixels: Uint8ClampedArray<ArrayBuffer>;
 }

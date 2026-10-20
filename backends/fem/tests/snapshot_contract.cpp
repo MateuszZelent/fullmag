@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -18,6 +19,9 @@
 #include <cuda_runtime.h>
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 #endif
 
 namespace {
@@ -28,6 +32,25 @@ void check(bool condition, const char *msg) {
         std::exit(1);
     }
 }
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+/*
+ * The contract executable reads the same plain counter as the runtime pool.
+ * MSVC has no GCC __atomic builtins; its interlocked operation is a full
+ * barrier, which is stronger than the acquire ordering needed for this read.
+ */
+std::uint32_t snapshot_pool_counter_load(const std::uint32_t *value) noexcept {
+#if defined(_MSC_VER)
+    static_assert(sizeof(long) == sizeof(std::uint32_t));
+    return static_cast<std::uint32_t>(_InterlockedCompareExchange(
+        reinterpret_cast<volatile long *>(const_cast<std::uint32_t *>(value)),
+        0L,
+        0L));
+#else
+    return __atomic_load_n(value, __ATOMIC_ACQUIRE);
+#endif
+}
+#endif
 
 std::string read_text_file(const std::filesystem::path &path) {
     std::ifstream in(path);
@@ -351,9 +374,8 @@ void gpu_snapshot_pool_is_bounded_exact_and_reusable() {
     }
 
     check(
-        __atomic_load_n(
-            &ctx.gpu_state.cuda.snapshot_pool->leased_slots,
-            __ATOMIC_ACQUIRE) == 0,
+        snapshot_pool_counter_load(
+            &ctx.gpu_state.cuda.snapshot_pool->leased_slots) == 0,
         "all pooled GPU snapshot slots must be released");
 
     auto *lifetime_snapshot = fullmag_fem_backend_begin_preview_snapshot(

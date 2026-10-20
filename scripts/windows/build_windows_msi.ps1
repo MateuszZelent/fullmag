@@ -835,7 +835,6 @@ $femDirectoryXml
 
     <DirectoryRef Id="INSTALLDIR">
       <Component Id="PathComponent" Guid="3A8E48A0-6C63-4F89-9D6C-C6B1F77C1201">
-        <Environment Id="AddFullmagBinToPath" Name="PATH" Action="set" Part="last" System="yes" Value="[INSTALLDIR]bin" />
         <RegistryValue Root="HKLM" Key="Software\Fullmag" Name="InstallPath" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
       </Component>
     </DirectoryRef>

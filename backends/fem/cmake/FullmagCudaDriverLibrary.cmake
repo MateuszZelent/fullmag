@@ -9,6 +9,16 @@ endfunction()
 
 function(fullmag_find_cuda_driver_library output_variable)
     set(_candidate "${${output_variable}}")
+    if((NOT _candidate OR _candidate MATCHES "-NOTFOUND$") AND
+       WIN32 AND TARGET CUDA::cuda_driver)
+        # Windows links the toolkit's cuda.lib import library; the installed
+        # NVIDIA driver supplies nvcuda.dll at runtime. FindCUDAToolkit owns
+        # the selected toolkit and exposes its exact library on this target.
+        get_target_property(_candidate CUDA::cuda_driver IMPORTED_IMPLIB)
+        if(NOT _candidate OR _candidate MATCHES "-NOTFOUND$")
+            get_target_property(_candidate CUDA::cuda_driver IMPORTED_LOCATION)
+        endif()
+    endif()
     if(NOT _candidate OR _candidate MATCHES "-NOTFOUND$")
         set(_compat_hints)
         if(CMAKE_CUDA_COMPILER_TOOLKIT_ROOT)

@@ -80,7 +80,7 @@ const MATERIAL_FIELD_DRAFT_PARTS = [
   "Center Z",
 ] as const;
 
-function materialFieldDraftKey(index: number, part: string): string {
+function materialFieldQuantityDraftKey(index: number, part: string): string {
   return `material-field:${index}:${part}`;
 }
 
@@ -231,7 +231,7 @@ function useObjectRegionMagneticParametersPanelView({
   // blocks Apply, and Revert discards it together with the numeric draft.
   const materialFieldTextDrafts = useQuantityFieldDraftKeys(
     fieldDrafts.flatMap((_, index) =>
-      MATERIAL_FIELD_DRAFT_PARTS.map((part) => materialFieldDraftKey(index, part)),
+      MATERIAL_FIELD_DRAFT_PARTS.map((part) => materialFieldQuantityDraftKey(index, part)),
     ),
   );
   const materialFieldTextBlockReason = materialFieldTextDrafts.invalidLabels.length > 0
@@ -657,7 +657,7 @@ function useObjectRegionMagneticParametersPanelView({
             )}
             {field.kind === "constant" ? (
               <PhysicalScalarField
-                draftKey={materialFieldDraftKey(index, "Value")}
+                draftKey={materialFieldQuantityDraftKey(index, "Value")}
                 label="Value"
                 unit={field.unit}
                 value={field.scalar}
@@ -667,28 +667,28 @@ function useObjectRegionMagneticParametersPanelView({
             {field.kind === "linear" ? (
               <>
                 <PhysicalScalarField
-                  draftKey={materialFieldDraftKey(index, "Base")}
+                  draftKey={materialFieldQuantityDraftKey(index, "Base")}
                   label="Base"
                   unit={field.unit}
                   value={field.base}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { base: next })}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldDraftKey(index, "Gradient X")}
+                  draftKey={materialFieldQuantityDraftKey(index, "Gradient X")}
                   label="Gradient X"
                   unit={`${field.unit}/m`}
                   value={field.gradient[0]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "gradient", 0, next)}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldDraftKey(index, "Gradient Y")}
+                  draftKey={materialFieldQuantityDraftKey(index, "Gradient Y")}
                   label="Gradient Y"
                   unit={`${field.unit}/m`}
                   value={field.gradient[1]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "gradient", 1, next)}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldDraftKey(index, "Gradient Z")}
+                  draftKey={materialFieldQuantityDraftKey(index, "Gradient Z")}
                   label="Gradient Z"
                   unit={`${field.unit}/m`}
                   value={field.gradient[2]}
@@ -699,42 +699,42 @@ function useObjectRegionMagneticParametersPanelView({
             {field.kind === "radial" ? (
               <>
                 <PhysicalScalarField
-                  draftKey={materialFieldDraftKey(index, "Inside")}
+                  draftKey={materialFieldQuantityDraftKey(index, "Inside")}
                   label="Inside"
                   unit={field.unit}
                   value={field.inside}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { inside: next })}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldDraftKey(index, "Outside")}
+                  draftKey={materialFieldQuantityDraftKey(index, "Outside")}
                   label="Outside"
                   unit={field.unit}
                   value={field.outside}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { outside: next })}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldDraftKey(index, "Radius")}
+                  draftKey={materialFieldQuantityDraftKey(index, "Radius")}
                   label="Radius"
                   unit="m"
                   value={field.radius}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { radius: next })}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldDraftKey(index, "Center X")}
+                  draftKey={materialFieldQuantityDraftKey(index, "Center X")}
                   label="Center X"
                   unit="m"
                   value={field.center[0]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "center", 0, next)}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldDraftKey(index, "Center Y")}
+                  draftKey={materialFieldQuantityDraftKey(index, "Center Y")}
                   label="Center Y"
                   unit="m"
                   value={field.center[1]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "center", 1, next)}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldDraftKey(index, "Center Z")}
+                  draftKey={materialFieldQuantityDraftKey(index, "Center Z")}
                   label="Center Z"
                   unit="m"
                   value={field.center[2]}

@@ -247,6 +247,11 @@ if(FULLMAG_USE_MFEM_STACK)
         fullmag_find_windows_modal()
     endif()
     include("${CMAKE_SOURCE_DIR}/cmake/FindFullmagMfem.cmake")
+    if(WIN32 AND NOT FULLMAG_FEM_WITH_SLEPC)
+        # The ordinary MFEM route still loads MFEMConfig.cmake, whose
+        # find_dependency(MPI) must use the selected Microsoft MPI SDK.
+        fullmag_pin_windows_mpi()
+    endif()
     fullmag_find_mfem()
     if(FULLMAG_FEM_WITH_SLEPC)
         if(WIN32)
@@ -405,6 +410,15 @@ endfunction()
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
 fullmag_configure_runtime_source_snapshot(fullmag_fem)
 target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_BUILD_SHARED=1)
+if(MSVC)
+    target_compile_definitions(fullmag_fem PRIVATE _USE_MATH_DEFINES)
+    # CUDA 13's CCCL requires the conforming MSVC preprocessor.  NVCC passes
+    # host compiler options separately, so spell out both language paths.
+    target_compile_options(fullmag_fem PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>
+    )
+endif()
 
 if(FULLMAG_ENABLE_NVTX)
     target_compile_definitions(fullmag_fem PRIVATE FULLMAG_ENABLE_NVTX=1)
@@ -425,6 +439,28 @@ target_include_directories(fullmag_fem
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+if(FULLMAG_USE_MFEM_STACK AND WIN32)
+    # Exact integer/rational FEM paths use Boost.Multiprecision headers.  The
+    # provider is published as one immutable, hash-suffixed directory so an
+    # older or mismatching include\boost tree is never merged in place.
+    set(_fullmag_boost_include_dir
+        "${FULLMAG_FEM_DEPENDENCY_PREFIX}/providers/b-77bee48e32ca/include")
+    if(NOT EXISTS "${_fullmag_boost_include_dir}/boost/multiprecision/cpp_int.hpp" OR
+       IS_DIRECTORY "${_fullmag_boost_include_dir}/boost/multiprecision/cpp_int.hpp" OR
+       NOT EXISTS "${_fullmag_boost_include_dir}/boost/rational.hpp" OR
+       IS_DIRECTORY "${_fullmag_boost_include_dir}/boost/rational.hpp")
+        message(FATAL_ERROR
+            "Native Windows FEM requires the managed Boost header provider with "
+            "cpp_int.hpp and rational.hpp: ${_fullmag_boost_include_dir}")
+    endif()
+    get_filename_component(_fullmag_boost_include_dir
+        "${_fullmag_boost_include_dir}" REALPATH)
+    add_library(fullmag_fem_boost_headers INTERFACE)
+    target_include_directories(fullmag_fem_boost_headers SYSTEM INTERFACE
+        "${_fullmag_boost_include_dir}")
+    target_link_libraries(fullmag_fem PUBLIC fullmag_fem_boost_headers)
+endif()
 
 if(FULLMAG_USE_MFEM_STACK)
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_MFEM_STACK=1)
@@ -485,7 +521,19 @@ set_target_properties(fullmag_fem PROPERTIES
 )
 
 # Record the exact target selected by this configure, including its SONAME links.
-file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path.txt"
+# Multi-configuration generators (Visual Studio and Ninja Multi-Config) expand
+# the target path once per configuration.  A single shared output would make
+# CMake reject generation because Debug and Release produce different content.
+# Keep the flat name for single-configuration generators because the managed
+# Unix build and older consumers use that path deliberately.
+if(CMAKE_CONFIGURATION_TYPES)
+    set(FULLMAG_FEM_LIBRARY_PATH_METADATA
+        "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path-$<CONFIG>.txt")
+else()
+    set(FULLMAG_FEM_LIBRARY_PATH_METADATA
+        "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path.txt")
+endif()
+file(GENERATE OUTPUT "${FULLMAG_FEM_LIBRARY_PATH_METADATA}"
     CONTENT "$<TARGET_FILE:fullmag_fem>\n")
 
 # ── Tests ──
@@ -557,6 +605,10 @@ if(FULLMAG_USE_MFEM_STACK)
     target_compile_definitions(
         fem_conservative_constraint_rank_contract PRIVATE
         FULLMAG_CONSTRAINT_RANK_TESTING=1)
+    if(TARGET fullmag_fem_boost_headers)
+        target_link_libraries(fem_conservative_constraint_rank_contract PRIVATE
+            fullmag_fem_boost_headers)
+    endif()
     add_test(
         NAME fem_conservative_constraint_rank_contract
         COMMAND fem_conservative_constraint_rank_contract)
@@ -636,6 +688,10 @@ if(FULLMAG_USE_MFEM_STACK)
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
+    if(TARGET fullmag_fem_boost_headers)
+        target_link_libraries(fem_conservative_current_view_contract PRIVATE
+            fullmag_fem_boost_headers)
+    endif()
     if(FULLMAG_OET0_TSAN)
         target_compile_definitions(fem_conservative_current_view_contract PRIVATE
             FULLMAG_OET0_DISABLE_MPI=1)

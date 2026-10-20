@@ -137,6 +137,36 @@ class CudaDriverSelectionTests(unittest.TestCase):
 
             self._assert_selected(result, import_library)
 
+    def test_windows_toolkit_driver_target_is_accepted(self):
+        with tempfile.TemporaryDirectory(prefix="fullmag-cuda-windows-target-") as directory:
+            root = Path(directory)
+            driver = root / "CUDA Toolkit" / "lib" / "x64" / "cuda.lib"
+            driver.parent.mkdir(parents=True)
+            driver.write_bytes(b"Windows import library")
+            for property_name in ("IMPORTED_IMPLIB", "IMPORTED_LOCATION"):
+                with self.subTest(property_name=property_name):
+                    case = root / property_name
+                    case.mkdir()
+                    result = self._configure(case, setup_lines=(
+                        "set(WIN32 TRUE)",
+                        "add_library(CUDA::cuda_driver UNKNOWN IMPORTED)",
+                        f'set_target_properties(CUDA::cuda_driver PROPERTIES {property_name} "{driver.as_posix()}")',
+                    ))
+                    self._assert_selected(result, driver)
+
+    def test_windows_toolkit_target_does_not_allow_stubs(self):
+        with tempfile.TemporaryDirectory(prefix="fullmag-cuda-windows-target-stub-") as directory:
+            root = Path(directory)
+            driver = root / "stubs" / "cuda.lib"
+            driver.parent.mkdir()
+            driver.write_bytes(b"stub")
+            result = self._configure(root, setup_lines=(
+                "set(WIN32 TRUE)",
+                "add_library(CUDA::cuda_driver UNKNOWN IMPORTED)",
+                f'set_target_properties(CUDA::cuda_driver PROPERTIES IMPORTED_IMPLIB "{driver.as_posix()}")',
+            ))
+            self._assert_rejected(result, "CUDA toolkit stub library")
+
     def test_relative_cached_path_is_rejected(self):
         with tempfile.TemporaryDirectory(prefix="fullmag-cuda-relative-cache-") as directory:
             result = self._configure(
@@ -153,7 +183,7 @@ class CudaDriverSelectionTests(unittest.TestCase):
 
             self._assert_rejected(result, "CUDA driver or compatibility library")
 
-    def _configure(self, root, *arguments):
+    def _configure(self, root, *arguments, setup_lines=()):
         source = root / "project"
         source.mkdir()
         cmake_lists = "\n".join(
@@ -166,6 +196,7 @@ class CudaDriverSelectionTests(unittest.TestCase):
                 "set(CMAKE_FIND_USE_CMAKE_SYSTEM_PATH FALSE)",
                 "set(CMAKE_FIND_USE_INSTALL_PREFIX FALSE)",
                 f'list(PREPEND CMAKE_MODULE_PATH "{CUDA_DRIVER_MODULE.as_posix()}")',
+                *setup_lines,
                 "include(FullmagCudaDriverLibrary)",
                 "fullmag_find_cuda_driver_library(FULLMAG_CUDA_DRIVER_LIBRARY)",
                 "add_library(fem_cuda_driver_selection_target INTERFACE)",
@@ -203,14 +234,14 @@ class CudaDriverSelectionTests(unittest.TestCase):
         self.assertIn(expected_message, " ".join(output.split()), output)
 
     def _assert_selected(self, result, expected_path):
-        output = result.stdout + result.stderr
+        output = (result.stdout + result.stderr).replace("\\", "/")
         self.assertEqual(result.returncode, 0, output)
         self.assertIn(
-            f"FULLMAG_TEST_SELECTED_CUDA_DRIVER_LIBRARY={expected_path.resolve()}",
+            f"FULLMAG_TEST_SELECTED_CUDA_DRIVER_LIBRARY={expected_path.resolve().as_posix()}",
             output,
         )
         self.assertIn(
-            f"FULLMAG_TEST_CUDA_DRIVER_INTERFACE_LINK={expected_path.resolve()}",
+            f"FULLMAG_TEST_CUDA_DRIVER_INTERFACE_LINK={expected_path.resolve().as_posix()}",
             output,
         )
 

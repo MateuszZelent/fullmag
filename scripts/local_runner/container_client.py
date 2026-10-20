@@ -70,13 +70,17 @@ SLEPC_MODAL_PROFILES = (
     "fem-cpu-slepc-runtime-v1",
     "fem-cpu-slepc-runtime-v2",
 )
+# The deployed coordinator catalogue is also the bounded compatibility list.
+# Keep the master catalogue when recognizing existing runner configuration.
+DEPLOYED_RUNTIME_PROFILES = SLEPC_MODAL_PROFILES
 BORIS_CPU_PROFILE = "boris-cpu-v1"
-CATALOG_PROFILES = (*SLEPC_MODAL_PROFILES, BORIS_CPU_PROFILE)
+CATALOG_PROFILES = (*DEPLOYED_RUNTIME_PROFILES, BORIS_CPU_PROFILE)
 _PROFILE_LISTS = (
     ALLOWED_PROFILES,
     CPU_CONTRACT_PROFILES,
     CURRENT_CONTRACT_PROFILES,
     SLEPC_MODAL_PROFILES,
+    DEPLOYED_RUNTIME_PROFILES,
 )
 STARTUP_HEALTH_ATTEMPTS = 60
 STARTUP_HEALTH_RETRY_SECONDS = 1.0

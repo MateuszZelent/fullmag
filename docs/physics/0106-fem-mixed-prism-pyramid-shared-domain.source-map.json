@@ -151,6 +151,68 @@
       ]
     },
     {
+      "id": "eq-mixed-p1-volume-node-support-weights",
+      "symbols": [
+        "stateNodeSet",
+        "domainNodeSet",
+        "magneticNodeSet",
+        "airNodeSet",
+        "volumeCells",
+        "magneticCells",
+        "stateIndex",
+        "volumeCell",
+        "basisNi",
+        "visualWeight",
+        "nodalWeight"
+      ],
+      "sources": [
+        "mixed-volume-node-compaction",
+        "node-volumes",
+        "demag-recovery",
+        "demag-gpu-recovery-node-support"
+      ]
+    },
+    {
+      "id": "eq-mixed-p1-volume-node-support-invariants",
+      "symbols": [
+        "stateNodeSet",
+        "domainNodeSet",
+        "magneticNodeSet",
+        "airNodeSet",
+        "stateIndex",
+        "visualWeight",
+        "nodalWeight",
+        "domainD",
+        "OmegaM"
+      ],
+      "sources": [
+        "mixed-volume-node-compaction",
+        "node-volumes",
+        "demag-recovery",
+        "demag-gpu-recovery-node-support"
+      ]
+    },
+    {
+      "id": "eq-mixed-p1-canonical-0410-recovery",
+      "symbols": [
+        "visualRecoveryField",
+        "magneticRecoveryField",
+        "volumeCells",
+        "magneticCells",
+        "basisNi",
+        "phi",
+        "visualWeight",
+        "nodalWeight",
+        "stateIndex",
+        "domainNodeSet",
+        "magneticNodeSet"
+      ],
+      "sources": [
+        "demag-recovery",
+        "demag-gpu-recovery-node-support"
+      ]
+    },
+    {
       "id": "eq-mixed-p1-average-magnetization",
       "symbols": [
         "m",
@@ -170,6 +232,100 @@
       "sources": [
         "certificate"
       ]
+    },
+    {
+      "id": "eq-mixed-p1-disjoint-bodies",
+      "symbols": [
+        "OmegaM",
+        "OmegaLayer",
+        "OmegaRing",
+        "OmegaAir",
+        "distanceLR"
+      ],
+      "sources": [
+        "python-csg-geometry",
+        "planner",
+        "certificate"
+      ],
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "eq-mixed-p1-regional-fields",
+      "symbols": [
+        "basisNra",
+        "MsRa",
+        "KuRa",
+        "Ku2Ra",
+        "alphaRa",
+        "pSelector",
+        "regionIndex",
+        "nodeIndex",
+        "regionNodeSet",
+        "uTildeRaa",
+        "uRaa"
+      ],
+      "sources": [
+        "python-material-fields",
+        "fem-region-material-fields"
+      ],
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "eq-mixed-p1-constant-exchange",
+      "symbols": [
+        "Aex0",
+        "m",
+        "OmegaM",
+        "OmegaLayer",
+        "OmegaRing",
+        "regionIndex"
+      ],
+      "sources": [
+        "fem-region-material-fields",
+        "exchange-operator"
+      ],
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "eq-mixed-p1-multibody-energy",
+      "symbols": [
+        "KuRa",
+        "Ku2Ra",
+        "weightRa",
+        "m",
+        "uRaa",
+        "OmegaLayer",
+        "OmegaRing",
+        "regionIndex",
+        "nodeIndex"
+      ],
+      "sources": [
+        "python-material-fields",
+        "fem-region-material-fields",
+        "uniaxial-cpu",
+        "uniaxial-gpu"
+      ],
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "eq-mixed-p1-pgbb-projection",
+      "symbols": [
+        "Pmi",
+        "gRa",
+        "Heff",
+        "m",
+        "eta",
+        "identityI",
+        "iterationK",
+        "retrS2",
+        "regionIndex",
+        "nodeIndex"
+      ],
+      "sources": [
+        "cpu-relaxation-math",
+        "gpu-pgbb-kernels"
+      ],
+      "evidence_status": "planned_contract"
     },
     {
       "id": "eq-mixed-p1-disconnected-body-partition",
@@ -296,6 +452,54 @@
       "si_unit": "\\mathrm{m^3}"
     },
     {
+      "id": "volumeCells",
+      "latex": "\\mathcal T_D",
+      "meaning": "volume-cell index set of the shared domain $D$",
+      "si_unit": "1"
+    },
+    {
+      "id": "magneticCells",
+      "latex": "\\mathcal T_m",
+      "meaning": "volume-cell index set carrying the magnetic material marker",
+      "si_unit": "1"
+    },
+    {
+      "id": "stateNodeSet",
+      "latex": "\\mathcal I_{\\mathrm{state}}",
+      "meaning": "canonical P1 state-node index set after volume compaction",
+      "si_unit": "1"
+    },
+    {
+      "id": "domainNodeSet",
+      "latex": "\\mathcal I_D",
+      "meaning": "global P1 nodes incident to at least one cell in $\\mathcal T_D$",
+      "si_unit": "1"
+    },
+    {
+      "id": "magneticNodeSet",
+      "latex": "\\mathcal I_m",
+      "meaning": "global P1 nodes incident to at least one magnetic cell in $\\mathcal T_m$",
+      "si_unit": "1"
+    },
+    {
+      "id": "airNodeSet",
+      "latex": "\\mathcal I_{\\mathrm{air}}",
+      "meaning": "volume-supported nodes in $\\mathcal I_D\\setminus\\mathcal I_m$",
+      "si_unit": "1"
+    },
+    {
+      "id": "stateIndex",
+      "latex": "i",
+      "meaning": "global P1 state-node index",
+      "si_unit": "1"
+    },
+    {
+      "id": "volumeCell",
+      "latex": "K",
+      "meaning": "volume-cell index",
+      "si_unit": "1"
+    },
+    {
       "id": "testV",
       "latex": "v",
       "meaning": "scalar H1 test function",
@@ -399,9 +603,171 @@
     },
     {
       "id": "nodalWeight",
-      "latex": "w_i",
-      "meaning": "magnetic nodal volume weight",
+      "latex": "w_i^{\\mathrm{mag}}",
+      "meaning": "magnetic-cell nodal volume/recovery weight",
       "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "visualWeight",
+      "latex": "w_i^{\\mathrm{vis}}",
+      "meaning": "full shared-domain visual-recovery nodal volume weight",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "visualRecoveryField",
+      "latex": "\\mathbf H_{\\mathrm{demag},i}^{\\mathrm{vis}}",
+      "meaning": "unmasked full-domain visual demagnetizing field recovered at state node $i$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "magneticRecoveryField",
+      "latex": "\\mathbf H_{\\mathrm{demag},i}^{\\mathrm{mag}}",
+      "meaning": "magnetic-only physical demagnetizing field recovered at state node $i$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "OmegaLayer",
+      "latex": "\\Omega_\\ell",
+      "meaning": "magnetic layer region",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "OmegaRing",
+      "latex": "\\Omega_r",
+      "meaning": "magnetic ring region",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "basisNra",
+      "latex": "N_a^{(r)}",
+      "meaning": "regional scalar P1 nodal basis function",
+      "si_unit": "1"
+    },
+    {
+      "id": "MsRa",
+      "latex": "M_{s,r,a}",
+      "meaning": "regional nodal saturation magnetization",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "KuRa",
+      "latex": "K_{u1,r,a}",
+      "meaning": "regional nodal first-order uniaxial anisotropy constant",
+      "si_unit": "\\mathrm{J\\,m^{-3}}"
+    },
+    {
+      "id": "alphaRa",
+      "latex": "\\alpha_{r,a}",
+      "meaning": "regional nodal damping parameter",
+      "si_unit": "1"
+    },
+    {
+      "id": "uRaa",
+      "latex": "\\mathbf u_{r,a}",
+      "meaning": "planner-normalized regional nodal axis at node a in region r; future V2 unit-boundary invariant",
+      "si_unit": "1"
+    },
+    {
+      "id": "Aex0",
+      "latex": "A_{\\mathrm{ex},0}",
+      "meaning": "shared positive constant exchange stiffness",
+      "si_unit": "\\mathrm{J\\,m^{-1}}"
+    },
+    {
+      "id": "Pmi",
+      "latex": "\\mathbf P_{m,i}",
+      "meaning": "nodal tangent-plane projector",
+      "si_unit": "1"
+    },
+    {
+      "id": "gRa",
+      "latex": "\\mathbf g_{r,a}",
+      "meaning": "regional nodal field-like tangent gradient",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "eta",
+      "latex": "\\eta_k",
+      "meaning": "projected-gradient step size",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "Ku2Ra",
+      "latex": "K_{u2,r,a}",
+      "meaning": "regional nodal second-order uniaxial anisotropy constant",
+      "si_unit": "\\mathrm{J\\,m^{-3}}"
+    },
+    {
+      "id": "Heff",
+      "latex": "\\mathbf H_{\\mathrm{eff}}",
+      "meaning": "effective magnetic field used by native relaxation",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "weightRa",
+      "latex": "w_{r,a}",
+      "meaning": "regional magnetic nodal lumped-mass weight",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "pSelector",
+      "latex": "p",
+      "meaning": "regional material-field selector",
+      "si_unit": "1"
+    },
+    {
+      "id": "regionIndex",
+      "latex": "r",
+      "meaning": "magnetic-region index",
+      "si_unit": "1"
+    },
+    {
+      "id": "nodeIndex",
+      "latex": "a",
+      "meaning": "regional node index",
+      "si_unit": "1"
+    },
+    {
+      "id": "regionNodeSet",
+      "latex": "\\mathcal N_r",
+      "meaning": "node-index set for region r",
+      "si_unit": "1"
+    },
+    {
+      "id": "layerLabel",
+      "latex": "\\ell",
+      "meaning": "layer-region label",
+      "si_unit": "1"
+    },
+    {
+      "id": "distanceLR",
+      "latex": "\\operatorname{dist}(\\Omega_\\ell,\\Omega_r)",
+      "meaning": "distance between magnetic closures",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "uTildeRaa",
+      "latex": "\\tilde{\\mathbf u}_{r,a}",
+      "meaning": "authored regional nodal axis input before planner normalization",
+      "si_unit": "1"
+    },
+    {
+      "id": "identityI",
+      "latex": "I",
+      "meaning": "tangent-space identity operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "iterationK",
+      "latex": "k",
+      "meaning": "PG-BB iteration index",
+      "si_unit": "1"
+    },
+    {
+      "id": "retrS2",
+      "latex": "\\operatorname{Retr}_{\\mathbb S^2}",
+      "meaning": "unit-sphere retraction",
+      "si_unit": "1"
     },
     {
       "id": "OmegaBodies",
@@ -535,7 +901,7 @@
       "id": "mixed-certificate-canonical-schema",
       "path": "crates/fullmag-ir/src/mesh_assets.rs",
       "symbol": "MixedLayerTopologyCertificateV1IR",
-      "responsibility": "Own the complete typed mixed-certificate field set and reject unknown fields before bridge digest or canonical validation.",
+      "responsibility": "Own the current V1 typed mixed-certificate field set and reject unknown fields before bridge digest or canonical validation; a future regional extension must use a separately dispatched V2 schema in this certificate family without changing V1 meaning.",
       "evidence_status": "implemented_unit_qualified"
     },
     {
@@ -626,7 +992,7 @@
       "id": "mixed-artifact-semantic-manifest-digest",
       "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py",
       "symbol": "_semantic_manifest_sha256",
-      "responsibility": "Hash the normalized geometry/object region names and marker values plus sorted boundary meanings without timestamp, provenance, or member descriptors.",
+      "responsibility": "Hash the normalized geometry/object region names and marker values plus sorted boundary meanings without timestamp, provenance, or member descriptors; this existing digest does not cover proposed V2 regional fields and cannot authorize a V2 payload by itself.",
       "evidence_status": "implemented_host_extension_qualified"
     },
     {
@@ -776,7 +1142,7 @@
       "id": "demag-recovery",
       "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp",
       "symbol": "recover_demag_poisson_field",
-      "responsibility": "Recover the demagnetizing field on magnetic cells."
+      "responsibility": "Recover the physical magnetic demagnetizing field on magnetic cells and the unmasked full-domain visual demagnetizing field with separate support and weight vectors."
     },
     {
       "id": "demag-energy",
@@ -833,6 +1199,98 @@
       "responsibility": "Admit the bounded mixed-P1 CPU/GPU anisotropy scopes and reject GPU DMI fail-closed with gpu_dmi_kernel_not_mixed_p1 before native startup."
     },
     {
+      "id": "fmmq-v1-writer",
+      "path": "packages/fullmag-py/src/fullmag/meshing/remesh_cli.py",
+      "symbol": "_write_quality_data_artifact_if_available",
+      "responsibility": "Write parallel FMMQ v1 metric arrays without topology identity; mixed-derived arrays may be emitted but cannot qualify a mixed mesh."
+    },
+    {
+      "id": "fmmq-v1-decoder",
+      "path": "apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts",
+      "symbol": "decodeMeshQualityData",
+      "responsibility": "Decode the current FMMQ v1 layout."
+    },
+    {
+      "id": "fmmq-v2-contract",
+      "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md",
+      "symbol": "DOC-ANCHOR:fmmq-v2-contract",
+      "responsibility": "Define planned topology-aware FMMQ v2 and v1 exit gates.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "python-csg-geometry",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class Difference",
+      "responsibility": "Own the typed CSG difference operand tree used to preserve layer/ring geometry identity."
+    },
+    {
+      "id": "python-material-fields",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class MaterialParameterField",
+      "responsibility": "Carry typed material-field payloads that the extension must lower to regional nodal values."
+    },
+    {
+      "id": "python-material-assignment",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class MaterialParameterAssignment",
+      "responsibility": "Preserve authored parameter-to-region assignment identity before ProblemIR lowering."
+    },
+    {
+      "id": "python-material-api",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "set_material_field",
+      "responsibility": "Expose the existing field-authoring path reused by the proposed extension; no new ring-specific API is introduced."
+    },
+    {
+      "id": "python-problem-lowering",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class Problem",
+      "responsibility": "Lower authored CSG and material fields to backend-neutral ProblemIR while retaining requested execution provenance."
+    },
+    {
+      "id": "mesh-difference-generator",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py",
+      "symbol": "generate_difference_mesh",
+      "responsibility": "Produce the CSG difference mesh input that must be bound to deterministic region markers."
+    },
+    {
+      "id": "fem-region-materials",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "build_region_materials",
+      "responsibility": "Build ordered region-material entries consumed by the existing FEM plan."
+    },
+    {
+      "id": "fem-region-material-fields",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "build_region_material_fields",
+      "responsibility": "Build regional material fields and axis mappings; the extension must replace any last-writer-wins ambiguity with a certificate-bound map."
+    },
+    {
+      "id": "gpu-runtime-coefficients",
+      "path": "backends/fem/gpu/cuda/state/runtime_coefficients_upload.cpp",
+      "symbol": "gpu_runtime_coefficients_upload",
+      "responsibility": "Own the GPU coefficient upload boundary where regional nodal material arrays must become device-resident."
+    },
+    {
+      "id": "gpu-pgbb-kernels",
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb_kernels.hpp",
+      "symbol": "fullmag_cuda_relax_tangent_gradient_and_norm_blocks",
+      "responsibility": "Own the CUDA PG-BB tangent-gradient kernel contract for strict GPU execution."
+    },
+    {
+      "id": "cpu-relaxation-math",
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.hpp",
+      "symbol": "tangent_gradient_from_field",
+      "responsibility": "Provide the CPU reference tangent-gradient operation used for derivative and parity gates."
+    },
+    {
+      "id": "mixed-certificate-v2-python-volume-reduction",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "attach_disconnected_mixed_p1_certificate_v2",
+      "responsibility": "Producer-side alignment for magnetic cell and independent closed-faceted volume totals; the helper _mixed_v2_closed_faceted_magnetic_volume retains the separate realized-boundary oracle while adopting the native explicit determinant and Neumaier reduction contract.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
       "id": "exact-rings-source",
       "path": "examples/permalloy_layer_cofeb_rings_relax_300nm.py",
       "symbol": "study",
@@ -875,25 +1333,6 @@
       "evidence_status": "source_implementation_under_review_runtime_not_verified"
     },
     {
-      "id": "fmmq-v1-writer",
-      "path": "packages/fullmag-py/src/fullmag/meshing/remesh_cli.py",
-      "symbol": "_write_quality_data_artifact_if_available",
-      "responsibility": "Write parallel FMMQ v1 metric arrays without topology identity; mixed-derived arrays may be emitted but cannot qualify a mixed mesh."
-    },
-    {
-      "id": "fmmq-v1-decoder",
-      "path": "apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts",
-      "symbol": "decodeMeshQualityData",
-      "responsibility": "Decode the current FMMQ v1 layout."
-    },
-    {
-      "id": "fmmq-v2-contract",
-      "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md",
-      "symbol": "DOC-ANCHOR:fmmq-v2-contract",
-      "responsibility": "Define planned topology-aware FMMQ v2 and v1 exit gates.",
-      "evidence_status": "planned_contract"
-    },
-    {
       "id": "cpu-llg-magnetic-mask",
       "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp",
       "symbol": "llg_rhs_aos",
@@ -906,6 +1345,18 @@
       "symbol": "llg_rhs_fused_kernel",
       "responsibility": "Zero LLG RHS on nonmagnetic nodes and exclude them from RHS maxima while retaining body-local damping on active nodes.",
       "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
+      "id": "mixed-volume-node-compaction",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py",
+      "symbol": "_compact_volume_node_space",
+      "responsibility": "Canonicalize volume-supported state nodes and remap retained topology and identity references before certificate and cache publication."
+    },
+    {
+      "id": "demag-gpu-recovery-node-support",
+      "path": "backends/fem/gpu/cuda/demag_poisson/operators.cpp",
+      "symbol": "build_p1_demag_operators",
+      "responsibility": "Keep full-domain positive visual recovery support distinct from magnetic-only recovery support and reject orphan P1 state nodes."
     }
   ],
   "public_api": {

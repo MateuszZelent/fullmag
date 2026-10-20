@@ -69,15 +69,17 @@ struct OwnerRecord {
 // Owns only a successfully acquired native lock, including admission failures.
 struct NativeLock {
     file: File,
-    locked: bool,
+    unlocked: bool,
 }
 
 impl NativeLock {
-    fn unlock(&mut self) -> std::io::Result<()> {
-        if self.locked {
-            self.file.unlock()?;
-            self.locked = false;
+    fn unlock(&mut self) -> Result<()> {
+        if self.unlocked {
+            return Ok(());
         }
+        // dup/fork may keep the open file description alive after our close.
+        File::unlock(&self.file)?;
+        self.unlocked = true;
         Ok(())
     }
 }
@@ -250,7 +252,10 @@ fn open_lock_descriptor(root: &Path) -> Result<NativeLock> {
         }
     }
 
-    let mut lock = NativeLock { file, locked: true };
+    let mut lock = NativeLock {
+        file,
+        unlocked: false,
+    };
     let mut descriptor = Vec::new();
     lock.file.read_to_end(&mut descriptor)?;
     if descriptor.is_empty() {
@@ -441,6 +446,18 @@ mod tests {
             std::fs::read(root.join(LOCK_DESCRIPTOR_PATH)).unwrap(),
             LOCK_DESCRIPTOR
         );
+    }
+
+    #[test]
+    fn native_lock_release_is_idempotent() {
+        let directory = tempfile::tempdir().unwrap();
+        let lock = open_lock_descriptor(directory.path()).unwrap();
+        let mut lock = lock;
+
+        lock.unlock().unwrap();
+        // Windows reports ERROR_NOT_LOCKED (158) when UnlockFileEx is called
+        // for the same region twice. A second release must be a no-op.
+        lock.unlock().unwrap();
     }
 
     #[cfg(target_os = "linux")]

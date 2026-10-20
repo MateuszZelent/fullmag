@@ -147,6 +147,45 @@ class StorageTests(unittest.TestCase):
         with self.assertRaises(storage.StorageError):
             self.resolve()
 
+    def test_dotenv_rejects_reparse_file_and_parent_before_read(self):
+        outside = self.project / "outside.env"
+        outside.write_text("FULLMAG_PROJECT_STORAGE_ROOT=redirected\n", encoding="utf-8")
+        dotenv = self.repo / ".env"
+        try:
+            dotenv.symlink_to(outside)
+        except OSError as error:
+            if os.name != "nt":
+                raise
+        else:
+            try:
+                with self.assertRaisesRegex(storage.StorageError, "symlink/junction"):
+                    storage.storage_dotenv(self.repo)
+            finally:
+                dotenv.unlink()
+
+        dotenv.write_text("FULLMAG_PROJECT_STORAGE_ROOT=redirected\n", encoding="utf-8")
+        alias = self.project / "repo-link"
+        try:
+            alias.symlink_to(self.repo, target_is_directory=True)
+        except OSError as error:
+            if os.name != "nt":
+                raise
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(alias), str(self.repo)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode:
+                self.skipTest(f"Host cannot create a symlink/junction: {error}")
+        try:
+            with self.assertRaisesRegex(storage.StorageError, "symlink/junction"):
+                storage.storage_dotenv(alias)
+        finally:
+            try:
+                alias.unlink()
+            except (IsADirectoryError, PermissionError):
+                alias.rmdir()
+
     def test_dotenv_rejects_duplicate_managed_keys_and_reparse_points(self):
         dotenv = self.repo / ".env"
         dotenv.write_text(
@@ -435,6 +474,7 @@ class StorageTests(unittest.TestCase):
             yield
 
         calls = []
+        manifest = Path(layout["build_root"]) / "windows-runtime" / "build-manifest.json"
 
         def fake_git(_repo, *args):
             if args == ("rev-parse", "HEAD"):
@@ -445,6 +485,9 @@ class StorageTests(unittest.TestCase):
 
         def fake_run(command, *_args, **_kwargs):
             calls.append(command)
+            if isinstance(command, (list, tuple)) and "-BuildOnly" in command:
+                manifest.parent.mkdir(parents=True, exist_ok=True)
+                manifest.write_bytes(b'{"workspace":"release-static"}\n')
             return subprocess.CompletedProcess(command, 0)
 
         def fake_runtime(runtime_layout, command, env, profile):
@@ -497,6 +540,79 @@ class StorageTests(unittest.TestCase):
         self.assertNotIn("-BuildOnly", calls[1])
         self.assertEqual(calls[1][calls[1].index("-BuildMode") + 1], "false")
         self.assertEqual(calls[1][calls[1].index("-RunMode") + 1], "workspace")
+        self.assertEqual(
+            calls[1][calls[1].index("-ExpectedBuildId") + 1],
+            hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        )
+
+        calls.clear()
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "file_lock", unlocked), \
+             patch.object(storage, "git", side_effect=fake_git), \
+             patch.object(storage.subprocess, "run", side_effect=fake_run), \
+             patch.object(storage, "_run_logged_command", side_effect=fake_run), \
+             patch("windows.runtime_lease.run_sealed_runtime", side_effect=fake_runtime):
+            result = storage.run_windows_workspace(
+                layout, "static", 3197, build_mode="auto", skip_local_changes=True,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("-SkipLocalChanges", calls[0])
+        self.assertIn("-SkipLocalChanges", calls[1])
+        self.assertEqual(
+            calls[1][calls[1].index("-ExpectedBuildId") + 1],
+            hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        )
+
+    def test_native_fem_script_accepts_registered_main_checkout_with_hash_guard(self):
+        subprocess.run([
+            "git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
+            "user.email=test@example.invalid", "config", "core.autocrlf", "false",
+        ], check=True)
+        main_script = self.repo / "examples" / "main-authored.py"
+        main_script.parent.mkdir(parents=True)
+        main_script.write_bytes(b"# main authored input\n")
+        subprocess.run(["git", "-C", str(self.repo), "add", "examples/main-authored.py"], check=True)
+        subprocess.run([
+            "git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
+            "user.email=test@example.invalid", "commit", "--quiet", "-m", "fixture",
+        ], check=True)
+        task = self.project / "worktrees" / "native-fem-task"
+        subprocess.run([
+            "git", "-C", str(self.repo), "worktree", "add", "--quiet", "--detach", str(task),
+        ], check=True)
+        self.addCleanup(lambda: subprocess.run(
+            ["git", "-C", str(self.repo), "worktree", "remove", "--force", str(task)],
+            capture_output=True, check=False,
+        ))
+
+        layout = storage.resolve_layout(task, profile="windows-native-fem-gpu", environ=self.env)
+        admitted, digest = storage._native_fem_authored_script(layout, main_script)
+        self.assertEqual(admitted, main_script.resolve())
+        self.assertEqual(digest, hashlib.sha256(main_script.read_bytes()).hexdigest())
+
+        outside = self.project / "outside-authored.py"
+        outside.write_bytes(b"# outside\n")
+        with self.assertRaisesRegex(storage.StorageError, "approved checkout"):
+            storage._native_fem_authored_script(layout, outside)
+
+        linked = task / "linked-authored.py"
+        try:
+            linked.symlink_to(outside)
+        except OSError:
+            self.skipTest("symlink support is unavailable")
+        with self.assertRaisesRegex(storage.StorageError, "symlink/junction"):
+            storage._native_fem_authored_script(layout, linked)
+
+        main_script.unlink()
+        main_script.symlink_to(outside)
+        with self.assertRaisesRegex(storage.StorageError, "Cannot re-hash"):
+            storage._verify_native_fem_script_unchanged(admitted, digest)
+        main_script.unlink()
+        main_script.write_bytes(b"# changed after admission\n")
+        with self.assertRaisesRegex(storage.StorageError, "changed after admission"):
+            storage._verify_native_fem_script_unchanged(admitted, digest)
 
     def test_workspace_auto_profile_and_canonical_storage_are_separate(self):
         self.assertEqual(storage.resolve_windows_workspace_backend_profile("dev", "auto"), "dev")
@@ -513,6 +629,337 @@ class StorageTests(unittest.TestCase):
         self.assertNotEqual(release["env"]["CARGO_TARGET_DIR"], dev["env"]["CARGO_TARGET_DIR"])
         self.assertTrue(release["build_root"].endswith("windows-native-fdm-cpu"))
         self.assertTrue(dev["build_root"].endswith("windows-native-fdm-cpu-dev"))
+
+    def test_native_fem_runtime_expected_build_id_reaches_launcher_and_cli(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        launcher = self.repo / "scripts" / "windows" / "run_fullmag.ps1"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("# native FEM fixture\n", encoding="utf-8")
+        script = self.repo / "examples" / "fixture.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("# FEM fixture\n", encoding="utf-8")
+        manifest_raw = b'{"native_fem":"fixture"}\n'
+        expected = hashlib.sha256(manifest_raw).hexdigest()
+        calls = []
+
+        def fake_managed(_layout, command, **kwargs):
+            calls.append((command, kwargs))
+            return 0
+
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "_run_managed_command", side_effect=fake_managed):
+            result = storage.run_windows_fem(
+                layout, "static", "gpu", "headless", script_path=script,
+                expected_build_id=expected,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 1)
+        command, options = calls[0]
+        self.assertEqual(command[command.index("-ExpectedBuildId") + 1], expected)
+        self.assertEqual(options["execution_mode"], "windows-fem")
+        self.assertTrue(options["native_fem_paths"])
+
+        manifest = Path(layout["build_root"]) / "windows-fem-runtime" / "build-manifest.json"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_bytes(manifest_raw)
+        storage._validate_expected_build_handoff(
+            layout, command, native_workspace_paths=False, native_fem_paths=True,
+            native_full_workspace_paths=False,
+            native_manifest_relative="windows-fem-runtime/build-manifest.json",
+            execution_mode="windows-fem",
+        )
+        manifest.write_bytes(b'{"native_fem":"replaced"}\n')
+        with self.assertRaisesRegex(storage.StorageError, "does not match"):
+            storage._validate_expected_build_handoff(
+                layout, command, native_workspace_paths=False, native_fem_paths=True,
+                native_full_workspace_paths=False,
+                native_manifest_relative="windows-fem-runtime/build-manifest.json",
+                execution_mode="windows-fem",
+            )
+
+        with patch.object(storage, "_is_native_windows", return_value=True):
+            with self.assertRaisesRegex(storage.StorageError, "lowercase manifest SHA256"):
+                storage.run_windows_fem(
+                    layout, "static", "gpu", "headless", script_path=script,
+                    expected_build_id="A" * 64,
+                )
+            with self.assertRaisesRegex(storage.StorageError, "only valid for runtime"):
+                storage.run_windows_fem(
+                    layout, "static", "gpu", "headless", script_path=script,
+                    build_mode="true", expected_build_id=expected,
+                )
+
+        cli_calls = []
+        with patch.object(storage, "resolve_layout", return_value=layout), \
+             patch.object(storage, "run_windows_fem", side_effect=lambda *args: cli_calls.append(args) or 0):
+            result = storage.main([
+                "run-windows-fem", "--repo-root", str(self.repo),
+                "--fem-frontend", "static", "--fem-device", "gpu",
+                "--fem-run-mode", "headless", "--fem-script", str(script),
+                "--fem-expected-build-id", expected,
+            ])
+        self.assertEqual(result, 0)
+        self.assertEqual(cli_calls[-1][-1], expected)
+
+    def _write_native_fem_origin_for_superset_test(self, layout, *, requested_device):
+        origin_path = Path(layout["build_root"]) / "windows-fem-runtime" / "build-manifest.json"
+        origin_path.parent.mkdir(parents=True, exist_ok=True)
+        origin_path.write_text(json.dumps({
+            "schema_version": 1,
+            "state": "completed",
+            "backend": "fem",
+            "cuda": True,
+            "native_fem": {
+                "device": "gpu",
+                "requested_device": requested_device,
+                "strict_gpu": True,
+            },
+            "native_fem_attempt_id": "a" * 32,
+        }), encoding="utf-8")
+        aggregate_path = Path(layout["build_root"]) / "windows-full-runtime" / "build-manifest.json"
+        aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+        aggregate_path.write_bytes(b"aggregate manifest fixture\n")
+        return origin_path, aggregate_path
+
+    def test_explicit_gpu_reuses_verified_auto_origin_full_superset(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        origin_path, aggregate_path = self._write_native_fem_origin_for_superset_test(
+            layout, requested_device="auto",
+        )
+        origin_sha256 = hashlib.sha256(origin_path.read_bytes()).hexdigest()
+        aggregate_sha256 = hashlib.sha256(aggregate_path.read_bytes()).hexdigest()
+        with patch.object(
+            storage, "validate_full_workspace_handoff", return_value={
+                "requested_backend": "auto",
+                "requested_device": "auto",
+                "origin_manifest_path": str(origin_path),
+                "origin_manifest_sha256": origin_sha256,
+            },
+        ) as validate_handoff:
+            identity = storage._native_fem_full_workspace_runtime_identity(
+                layout, resolved_device="gpu", requested_device="gpu",
+            )
+
+        validate_handoff.assert_called_once_with(layout, aggregate_sha256)
+        self.assertEqual(identity["full_workspace_build_id"], aggregate_sha256)
+        self.assertEqual(identity["origin_manifest_sha256"], origin_sha256)
+        self.assertEqual(identity["origin_requested_device"], "auto")
+        self.assertEqual(identity["runtime_requested_device"], "gpu")
+
+    def test_explicit_gpu_preserves_existing_single_lane_gpu_origin(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        self._write_native_fem_origin_for_superset_test(layout, requested_device="gpu")
+        with patch.object(storage, "validate_full_workspace_handoff") as validate_handoff:
+            identity = storage._native_fem_full_workspace_runtime_identity(
+                layout, resolved_device="gpu", requested_device="gpu",
+            )
+        self.assertIsNone(identity)
+        validate_handoff.assert_not_called()
+
+    def test_explicit_gpu_rejects_auto_to_single_lane_origin_drift(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        origin_path, _ = self._write_native_fem_origin_for_superset_test(
+            layout, requested_device="auto",
+        )
+        origin_sha256 = hashlib.sha256(origin_path.read_bytes()).hexdigest()
+        with patch.object(
+            storage, "validate_full_workspace_handoff", return_value={
+                "requested_backend": "auto",
+                "requested_device": "auto",
+                "origin_manifest_path": str(origin_path),
+                "origin_manifest_sha256": origin_sha256,
+            },
+        ):
+            identity = storage._native_fem_full_workspace_runtime_identity(
+                layout, resolved_device="gpu", requested_device="gpu",
+            )
+        origin = json.loads(origin_path.read_text(encoding="utf-8"))
+        origin["native_fem"]["requested_device"] = "gpu"
+        origin_path.write_text(json.dumps(origin), encoding="utf-8")
+        with self.assertRaisesRegex(storage.StorageError, "identity changed"):
+            storage._native_fem_full_workspace_runtime_identity(
+                layout,
+                resolved_device="gpu",
+                requested_device="gpu",
+                expected_identity=identity,
+            )
+
+    def test_explicit_gpu_rejects_non_gpu_single_lane_origin(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        self._write_native_fem_origin_for_superset_test(layout, requested_device="cpu")
+        with self.assertRaisesRegex(storage.StorageError, "requested_device=auto"):
+            storage._native_fem_full_workspace_runtime_identity(
+                layout, resolved_device="gpu", requested_device="gpu",
+            )
+
+    def test_explicit_gpu_rejects_tampered_full_superset_proof(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        self._write_native_fem_origin_for_superset_test(layout, requested_device="auto")
+        with patch.object(
+            storage, "validate_full_workspace_handoff",
+            side_effect=storage.StorageError("tampered component proof"),
+        ):
+            with self.assertRaisesRegex(storage.StorageError, "tampered component proof"):
+                storage._native_fem_full_workspace_runtime_identity(
+                    layout, resolved_device="gpu", requested_device="gpu",
+                )
+
+    def test_explicit_gpu_script_passes_verified_superset_identity_to_managed_runtime(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        origin_path, aggregate_path = self._write_native_fem_origin_for_superset_test(
+            layout, requested_device="auto",
+        )
+        origin_sha256 = hashlib.sha256(origin_path.read_bytes()).hexdigest()
+        aggregate_sha256 = hashlib.sha256(aggregate_path.read_bytes()).hexdigest()
+        launcher = self.repo / "scripts" / "windows" / "run_fullmag.ps1"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("# native FEM fixture\n", encoding="utf-8")
+        script = self.repo / "examples" / "fixture.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("# FEM fixture\n", encoding="utf-8")
+        calls = []
+
+        def fake_managed(_layout, command, **kwargs):
+            calls.append((command, kwargs))
+            return 0
+
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "_native_fem_authored_script", return_value=(
+                 script, hashlib.sha256(script.read_bytes()).hexdigest(),
+             )), \
+             patch.object(storage, "validate_full_workspace_handoff", return_value={
+                 "requested_backend": "auto",
+                 "requested_device": "auto",
+                 "origin_manifest_path": str(origin_path),
+                 "origin_manifest_sha256": origin_sha256,
+             }), \
+             patch.object(storage, "_run_managed_command", side_effect=fake_managed):
+            result = storage.run_windows_fem(
+                layout, "static", "gpu", "headless", script_path=script,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 1)
+        command, options = calls[0]
+        self.assertEqual(command[command.index("-Device") + 1], "gpu")
+        self.assertNotIn("-BuildOnly", command)
+        self.assertEqual(options["fem_full_workspace_identity"], {
+            "full_workspace_build_id": aggregate_sha256,
+            "origin_manifest_path": str(origin_path),
+            "origin_manifest_sha256": origin_sha256,
+            "origin_requested_device": "auto",
+            "runtime_requested_device": "gpu",
+        })
+
+    def test_managed_explicit_gpu_runtime_sets_superset_flags_and_validates_auto_terminal(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        origin_path, aggregate_path = self._write_native_fem_origin_for_superset_test(
+            layout, requested_device="auto",
+        )
+        identity = {
+            "full_workspace_build_id": hashlib.sha256(aggregate_path.read_bytes()).hexdigest(),
+            "origin_manifest_path": str(origin_path),
+            "origin_manifest_sha256": hashlib.sha256(origin_path.read_bytes()).hexdigest(),
+            "origin_requested_device": "auto",
+            "runtime_requested_device": "gpu",
+        }
+        captured_env = []
+
+        def fake_git(_repo, *args):
+            if args == ("rev-parse", "HEAD"):
+                return "0" * 40
+            if args == ("status", "--porcelain", "--untracked-files=normal"):
+                return ""
+            raise AssertionError(args)
+
+        def fake_logged(command, _repo, child_env, _log_path, *, cancelled=None):
+            captured_env.append(dict(child_env))
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "git", side_effect=fake_git), \
+             patch.object(storage, "_native_fem_full_workspace_runtime_identity", return_value=identity), \
+             patch.object(storage, "_run_logged_command", side_effect=fake_logged), \
+             patch.object(storage, "validate_fem_terminal_manifest") as validate_terminal:
+            result = storage._run_managed_command(
+                layout,
+                ["powershell.exe", "-File", "run_fullmag.ps1"],
+                acquire_heavy_slot=False,
+                native_fem_paths=True,
+                fem_device="gpu",
+                fem_requested_device="gpu",
+                fem_frontend="static",
+                execution_mode="windows-fem",
+                native_manifest_relative="windows-fem-runtime/build-manifest.json",
+                fem_full_workspace_identity=identity,
+                attempt_id="b" * 32,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(captured_env), 1)
+        self.assertEqual(captured_env[0]["FULLMAG_FEM_REQUESTED_DEVICE"], "gpu")
+        self.assertEqual(captured_env[0]["FULLMAG_FEM_FULL_SUPERSET_RUNTIME"], "1")
+        self.assertEqual(captured_env[0]["FULLMAG_FEM_FULL_SUPERSET_BUILD_ID"], identity["full_workspace_build_id"])
+        self.assertEqual(captured_env[0]["FULLMAG_FEM_FULL_SUPERSET_ORIGIN_SHA256"], identity["origin_manifest_sha256"])
+        self.assertEqual(validate_terminal.call_args.args[3], "auto")
+
+    def test_managed_gpu_post_runtime_identity_failure_is_failed_not_interrupted(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        origin_path, aggregate_path = self._write_native_fem_origin_for_superset_test(
+            layout, requested_device="auto",
+        )
+        identity = {
+            "full_workspace_build_id": hashlib.sha256(aggregate_path.read_bytes()).hexdigest(),
+            "origin_manifest_path": str(origin_path),
+            "origin_manifest_sha256": hashlib.sha256(origin_path.read_bytes()).hexdigest(),
+            "origin_requested_device": "auto",
+            "runtime_requested_device": "gpu",
+        }
+        helper_calls = []
+        result_record = {}
+
+        def fake_git(_repo, *args):
+            if args == ("rev-parse", "HEAD"):
+                return "0" * 40
+            if args == ("status", "--porcelain", "--untracked-files=normal"):
+                return ""
+            raise AssertionError(args)
+
+        def fake_identity(*_args, **_kwargs):
+            helper_calls.append(True)
+            if len(helper_calls) == 1:
+                return identity
+            raise storage.StorageError("post-runtime compatibility drift")
+
+        def fake_logged(command, _repo, _child_env, _log_path, *, cancelled=None):
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "git", side_effect=fake_git), \
+             patch.object(storage, "_native_fem_full_workspace_runtime_identity", side_effect=fake_identity), \
+             patch.object(storage, "_run_logged_command", side_effect=fake_logged), \
+             patch.object(storage, "validate_fem_terminal_manifest") as validate_terminal:
+            result = storage._run_managed_command(
+                layout,
+                ["powershell.exe", "-File", "run_fullmag.ps1"],
+                acquire_heavy_slot=False,
+                native_fem_paths=True,
+                fem_device="gpu",
+                fem_requested_device="gpu",
+                fem_frontend="static",
+                execution_mode="windows-fem",
+                native_manifest_relative="windows-fem-runtime/build-manifest.json",
+                fem_full_workspace_identity=identity,
+                result_record=result_record,
+                attempt_id="c" * 32,
+            )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(len(helper_calls), 2)
+        self.assertEqual(result_record["state"], "failed")
+        self.assertEqual(result_record["exit_code"], 1)
+        validate_terminal.assert_not_called()
 
     def test_workspace_build_only_uses_closed_profile_lock_and_terminal_receipt(self):
         layout = self.resolve(profile="windows-native-fdm-cpu-dev")
@@ -651,6 +1098,38 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result.returncode, 101)
         self.assertIn(b"build started", log.read_bytes())
         self.assertIn(b"error[E0505]: borrowed value", log.read_bytes())
+
+    def test_native_log_tolerates_non_utf8_on_cp1250_console(self):
+        import io
+
+        log = self.project / "non-utf8-compiler.log"
+        raw_output = bytes((0x81, 0xFF, 0x0A))
+        console_bytes = io.BytesIO()
+
+        class Cp1250Console:
+            encoding = "cp1250"
+
+            def __init__(self, buffer):
+                self.buffer = buffer
+
+            def write(self, text):
+                # The old text-only path raised here for U+FFFD.
+                return len(text.encode(self.encoding))
+
+            def flush(self):
+                pass
+
+        console = Cp1250Console(console_bytes)
+        result = None
+        with patch.object(storage.sys, "stdout", console):
+            result = storage._run_logged_command(
+                [sys.executable, "-B", "-c",
+                 "import sys; sys.stdout.buffer.write(bytes((129, 255, 10))); sys.stdout.buffer.flush(); sys.exit(23)"],
+                str(self.repo), dict(os.environ), log,
+            )
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(log.read_bytes(), raw_output)
+        self.assertEqual(console_bytes.getvalue(), raw_output)
 
     def test_workspace_build_admission_rejects_wrong_profile_and_generic_bypass_before_write(self):
         release = self.resolve(profile="windows-native-fdm-cpu")

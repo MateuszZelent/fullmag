@@ -1658,7 +1658,7 @@ async fn apply_projection(
                 "observation_frame": frame, "provenance": provenance,
             }));
         }
-        let field_revision = next.field_revision;
+        let field_revision = crate::router_v2::handlers::sessions::status::field_revision(&next);
         let generation = next
             .terminal_field_generations
             .get(&context.run_id)
@@ -1680,7 +1680,7 @@ async fn apply_projection(
             },
             frame,
         )?;
-        changed |= next.field_revision != field_revision;
+        changed |= crate::router_v2::handlers::sessions::status::field_revision(&next) != field_revision;
     } else if live_stage_is_newer {
         let active_identity = projection.live_observation_identity.as_deref();
         let displayed_identity = next
@@ -1711,7 +1711,7 @@ async fn apply_projection(
                 value.pointer("/provenance/source").and_then(Value::as_str) == Some("accepted_live_observation")
             }).map(|(id, _)| id.clone()).collect::<Vec<_>>();
             for id in stale { fields.remove(&id); }
-            let field_revision = next.field_revision;
+            let field_revision = crate::router_v2::handlers::sessions::status::field_revision(&next);
             let generation = next
                 .terminal_field_generations
                 .get(&context.run_id)
@@ -1732,7 +1732,7 @@ async fn apply_projection(
                     clear_preview_cache: true,
                 },
             )?;
-            changed |= next.field_revision != field_revision;
+            changed |= crate::router_v2::handlers::sessions::status::field_revision(&next) != field_revision;
         }
     } else {
         if let Some(output) = projection.latest_state.as_ref() {

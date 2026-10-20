@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX 3 Burn authoring for the public fullmag.exe bootstrapper.
+
+  The build wrapper must provide every preprocessor variable below.  Keeping
+  the inputs mandatory prevents an unlicensed or BA-less bundle from being
+  produced accidentally.  The BootstrapperApplication DLL is supplied by the
+  managed installer build; this repository does not provide a placeholder BA.
+  Source-first and release are separate compiled routes. Source-first carries
+  a real environment helper ExePackage and does not require an MSI payload.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Bundle
+    Name="Fullmag"
+    Version="$(var.ProductVersion)"
+    Manufacturer="Fullmag"
+    UpgradeCode="$(var.BundleUpgradeCode)">
+    <Variable Name="FullmagSourceCheckout" Type="string" Value="" Persisted="yes" />
+    <Variable Name="FullmagStorageRoot" Type="string" Value="" Persisted="yes" />
+    <Variable Name="FullmagStorageProfile" Type="string" Value="" Persisted="yes" />
+    <Variable Name="FullmagBootstrapMode" Type="string" Value="" Persisted="yes" />
+    <Variable Name="FullmagReceiptPath" Type="string" Value="" Persisted="yes" />
+    <Variable Name="FullmagSourceAdmissionPath" Type="string" Value="" Persisted="yes" />
+    <Variable Name="FullmagSourceAdmissionSha256" Type="string" Value="" Persisted="yes" />
+
+    <BootstrapperApplication SourceFile="$(var.BootstrapperApplicationDll)">
+      <Payload SourceFile="$(var.LicenseFile)" Name="$(var.LicenseFileName)" />
+      <Payload SourceFile="$(var.ProductNoticeFile)" Name="NOTICE" />
+      <Payload SourceFile="$(var.ThirdPartyNoticesFile)" Name="THIRD_PARTY_NOTICES" />
+      <Payload SourceFile="$(var.ThirdPartyInventoryFile)" Name="THIRD_PARTY_NOTICES.json" />
+      <Payload SourceFile="$(var.InstallerEnvModule)" Name="installer_env.ps1" />
+      <Payload SourceFile="$(var.SetupBuildEnvironmentScript)" Name="scripts\windows\setup_build_environment.ps1" />
+      <Payload SourceFile="$(var.BuildRequirementsManifest)" Name="windows_build_requirements.json" />
+      <Payload SourceFile="$(var.WixLicenseFile)" Name="WiX-3.14.1-LICENSE.TXT" />
+      <Payload SourceFile="$(var.InstallerProvenancePath)" Name="fullmag-installer-provenance.json" />
+      <!-- The modern x64 Avalonia UI is a private BA payload. It is not a
+           chain package and is launched only by the hash-bound broker. -->
+      <Payload SourceFile="$(var.FullmagSetupUiPayload)" Name="FullmagInstallerUi.exe" />
+<?if $(var.SourceFirst) = 1 ?>
+      <Payload SourceFile="$(var.EnvironmentBootstrapExe)" Name="fullmag-installer-environment.exe" />
+<?else ?>
+      <Payload SourceFile="$(var.StageManifestPath)" Name="fullmag-msi-stage-manifest.json" />
+<?endif ?>
+    </BootstrapperApplication>
+
+    <Chain>
+<?if $(var.SourceFirst) = 1 ?>
+      <!-- A source-first package performs the admitted setup/build action. -->
+      <ExePackage
+        Id="FullmagEnvironmentBootstrap"
+        DisplayName="Fullmag environment and initial build"
+        SourceFile="$(var.EnvironmentBootstrapExe)"
+        Compressed="yes"
+        PerMachine="no"
+        Permanent="yes"
+        Vital="yes"
+        InstallCommand="--checkout &quot;[FullmagSourceCheckout]&quot; --storage-root &quot;[FullmagStorageRoot]&quot; --profile &quot;[FullmagStorageProfile]&quot; --mode &quot;[FullmagBootstrapMode]&quot; --receipt &quot;[FullmagReceiptPath]&quot; --admission-path &quot;[FullmagSourceAdmissionPath]&quot; --admission-sha256 &quot;[FullmagSourceAdmissionSha256]&quot;" />
+<?else ?>
+      <!-- The existing WiX 3 MSI remains the only product payload. -->
+      <MsiPackage
+        Id="FullmagMsi"
+        SourceFile="$(var.MsiPath)"
+        Vital="yes"
+        DisplayInternalUI="no" />
+<?endif ?>
+    </Chain>
+  </Bundle>
+</Wix>

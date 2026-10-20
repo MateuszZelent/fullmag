@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-    "setuptools>=69",
+    "setuptools>=77.0.3",
     "tomli>=2; python_version < '3.11'",
 ]
 build-backend = "setuptools.build_meta"
@@ -9,6 +9,7 @@ build-backend = "setuptools.build_meta"
 name = "fullmag"
 dynamic = ["version"]
 description = "Embedded Python DSL for the Fullmag micromagnetics platform."
+license = "Apache-2.0"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24,<3",

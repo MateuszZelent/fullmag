@@ -53,6 +53,12 @@ EXCLUDED = EXCLUDED_COMMITTED_SOURCE_PATHS | {
     ".git", "storage", "worktrees", "node_modules", "target", "Codex-Usage",
     ".fullmag-build", ".fullmag-cache", ".fullmag-cargo", ".fullmag-rustup", ".impl-racetrack",
 }
+# Git's ``node_modules/`` ignore rule applies at every directory depth.  The
+# native frontend dependency install can materialize a package junction in a
+# frozen source tree after its initial verification, so later verification
+# must prune this generated subtree before inspecting its reparse entries.
+# Source paths outside this generated directory remain fail-closed.
+IGNORED_GENERATED_DIRECTORY_NAMES = frozenset({"node_modules"})
 CORE_FIELDS = {"schema", "origin_repo_root", "origin_worktree_id", "source_identity",
                "backend_source_sha256", "dependency_source_sha256", "inventory_sha256",
                "inventory", "backend_input_paths", "dependency_input_paths", "generated_output_policy"}
@@ -188,6 +194,18 @@ def _gitlinks(repo):
 
 def _excluded(relative, links):
     return any(relative == item or relative.startswith(item + "/") for item in EXCLUDED | links)
+
+
+def _is_ignored_generated_path(relative):
+    """Return whether a path is below a generated directory ignored by Git."""
+    # The Tauri output directory has its own strict boundary: it may contain
+    # only the bounded generated JSON files, so a nested node_modules entry
+    # must still be inspected and rejected as an unexpected subdirectory.
+    if (relative == TAURI_OUTPUT_DIRECTORY
+            or relative.startswith(TAURI_OUTPUT_DIRECTORY + "/")):
+        return False
+    return any(part in IGNORED_GENERATED_DIRECTORY_NAMES
+               for part in PurePosixPath(relative).parts)
 
 
 def _reject_output_inputs(paths):
@@ -339,9 +357,22 @@ def _verify_snapshot_full(record, build_root):
     actual_paths = []
     def walk_error(error):
         raise SnapshotError("Frozen source directory cannot be fully inventoried") from error
-    for directory, folders, files in os.walk(source, followlinks=False, onerror=walk_error):
+    for directory, folders, files in os.walk(source, topdown=True, followlinks=False, onerror=walk_error):
         for name in folders + files:
+            relative = (Path(directory) / name).relative_to(source).as_posix()
+            if _is_ignored_generated_path(relative):
+                continue
             _no_link(Path(directory) / name)
+        # Prune ignored generated directories before os.walk can descend into
+        # a pnpm junction/package tree.  Inspecting the junction itself would
+        # incorrectly reject a snapshot that has only gained generated
+        # dependencies since its immutable source inventory was sealed.
+        folders[:] = [
+            name for name in folders
+            if not _is_ignored_generated_path(
+                (Path(directory) / name).relative_to(source).as_posix()
+            )
+        ]
         for name in folders:
             relative = (Path(directory) / name).relative_to(source).as_posix()
             if relative.startswith(TAURI_OUTPUT_DIRECTORY + "/"):

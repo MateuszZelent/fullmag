@@ -393,6 +393,7 @@ describe("StudyInspectorPanelModel", () => {
       runtime_state: "running",
       session_epoch: "session-1@1",
       session_id: "session-1",
+      request_scope_epoch: "api-instance:1",
       stage_statuses: ["running"],
       stages: [
         {

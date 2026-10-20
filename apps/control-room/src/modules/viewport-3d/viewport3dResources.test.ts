@@ -708,6 +708,7 @@ describe("viewport3dResources", () => {
       responseMetadata: fieldResponseMetadata({
         component: "full",
         domainGenerationId: "gen-1",
+        carrierRevision: "top-1",
         meshTopologyHash: "top-1",
         phaseRad: 0,
         quantityId: "m",
@@ -903,6 +904,7 @@ describe("viewport3dResources", () => {
       responseMetadata: fieldResponseMetadata({
         component: "full",
         domainGenerationId: "gen-1",
+        carrierRevision: "top-1",
         meshTopologyHash: "top-1",
         quantityId: "m",
       }),
@@ -918,6 +920,7 @@ describe("viewport3dResources", () => {
       responseMetadata: fieldResponseMetadata({
         component: "full",
         domainGenerationId: "gen-1",
+        carrierRevision: "top-1",
         meshTopologyHash: "top-1",
         quantityId: "H_demag",
       }),

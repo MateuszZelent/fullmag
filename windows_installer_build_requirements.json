@@ -1,0 +1,223 @@
+{
+  "schema": "fullmag.windows-installer-build-requirements.v1",
+  "kind": "source-producer-bootstrap",
+  "description": "Minimal managed prerequisites for producing the WiX 3 MSI/Burn fullmag.exe artifacts from a Git checkout.",
+  "tools": {
+    "git": {
+      "kind": "system",
+      "command": "git.exe",
+      "minimum": "2.40.0",
+      "install": {
+        "method": "winget",
+        "id": "Git.Git",
+        "source": "winget",
+        "official_url": "https://git-scm.com/download/win"
+      }
+    },
+    "python": {
+      "kind": "system",
+      "command": "python.exe",
+      "minimum": "3.12.0",
+      "install": {
+        "method": "winget",
+        "id": "Python.Python.3.12",
+        "source": "winget",
+        "official_url": "https://www.python.org/downloads/windows/"
+      },
+      "resolver_role": "scripts/fullmag_storage.py and scripts/windows/installer_env.ps1"
+    },
+    "msvc_x86": {
+      "kind": "system",
+      "provider": "visual_studio_build_tools",
+      "workload": "Microsoft.VisualStudio.Workload.VCTools",
+      "components": [
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.Windows10SDK.19041"
+      ],
+      "validation": [
+        "VC\\Auxiliary\\Build\\vcvars64.bat",
+        "VC\\Tools\\MSVC\\*\\bin\\Hostx64\\x86\\cl.exe",
+        "VC\\Tools\\MSVC\\*\\bin\\Hostx64\\x86\\link.exe"
+      ],
+      "install": {
+        "method": "winget",
+        "id": "Microsoft.VisualStudio.2022.BuildTools",
+        "source": "winget",
+        "official_url": "https://visualstudio.microsoft.com/downloads/",
+        "override": "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows10SDK.19041 --includeRecommended"
+      }
+    },
+    "windows_sdk": {
+      "kind": "system_component",
+      "provider": "visual_studio_build_tools",
+      "validation": "Windows Kits\\10\\bin\\<version>\\x64\\rc.exe",
+      "official_url": "https://learn.microsoft.com/en-us/windows/uwp/packaging/packaging-uwp-apps",
+      "install_via": "msvc_x86"
+    },
+    "cmake": {
+      "kind": "system",
+      "command": "cmake.exe",
+      "minimum": "3.25.0",
+      "install": {
+        "method": "winget",
+        "id": "Kitware.CMake",
+        "source": "winget",
+        "official_url": "https://cmake.org/download/"
+      }
+    },
+    "dotnet_sdk": {
+      "kind": "project_managed_toolchain",
+      "command": "dotnet.exe",
+      "version": "10.0.402",
+      "architecture": "x86_64",
+      "runtime_identifier": "win-x64",
+      "storage_path": "{build_root}\\installer-tools\\dotnet-sdk-10.0.402",
+      "archive_name": "dotnet-sdk-10.0.402-win-x64.zip",
+      "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.402/dotnet-sdk-10.0.402-win-x64.zip",
+      "sha512": "ae4fd528cb7e9f6af6aaf7de36715a69f761f183744f1bb3025d19f5a92447090ec561410e46266c1d10a63781ed6f3de771760bc76c876d87daabc367b898cd",
+      "official_url": "https://dotnet.microsoft.com/download/dotnet/10.0",
+      "checksum_url": "https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json",
+      "archive_receipt": ".dotnet-sdk-source.zip",
+      "receipt_name": ".dotnet-sdk-receipt.json",
+      "tree_manifest_name": ".dotnet-sdk-tree.json",
+      "scope": "installer-only-process",
+      "consumer_runtime": false
+    },
+    "wix3": {
+      "kind": "project_managed_toolset",
+      "version": "3.14.1",
+      "storage_path": "{build_root}\\installer-tools\\wix-3.14.1",
+      "archive_name": "wix314-binaries.zip",
+      "url": "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip",
+      "sha256": "6ac824e1642d6f7277d0ed7ea09411a508f6116ba6fae0aa5f2c7daa2ff43d31",
+      "sha256_note": "Locally computed archive digest; verify the release asset independently before publishing.",
+      "official_url": "https://github.com/wixtoolset/wix3/releases/tag/wix3141rtm",
+      "binaries": [
+        {
+          "id": "candle",
+          "path": "candle.exe"
+        },
+        {
+          "id": "light",
+          "path": "light.exe"
+        },
+        {
+          "id": "heat",
+          "path": "heat.exe"
+        }
+      ],
+      "extensions": [
+        {
+          "id": "bal",
+          "path": "WixBalExtension.dll"
+        },
+        {
+          "id": "ui",
+          "path": "WixUIExtension.dll"
+        }
+      ],
+      "archive_receipt": ".wix3-source.zip",
+      "receipt_name": ".wix3-receipt.json"
+    }
+  },
+  "order": [
+    "git",
+    "python",
+    "storage_session",
+    "msvc_x86",
+    "windows_sdk",
+    "cmake",
+    "dotnet_sdk",
+    "wix3"
+  ],
+  "storage": {
+    "env_key": "FULLMAG_PROJECT_STORAGE_ROOT",
+    "resolver": "scripts/fullmag_storage.py",
+    "session_helper": "scripts/windows/installer_env.ps1",
+    "profile": "windows-setup",
+    "require_argument_when_missing": true,
+    "preserve_existing_dotenv": true,
+    "reject_unc_paths": true,
+    "portable_tool_root": "{build_root}\\installer-tools"
+  },
+  "excluded_from_this_bootstrap": [
+    "rust_msvc",
+    "node",
+    "pnpm",
+    "uv",
+    "just",
+    "cuda",
+    "msmpi_runtime",
+    "msmpi_sdk",
+    "ninja",
+    "clang_cl",
+    "mfem",
+    "hypre",
+    "libceed"
+  ],
+  "notes": [
+    "This manifest qualifies the producer toolchain only; it does not install or qualify Fullmag runtime or FEM providers.",
+    "The existing MSI remains WiX 3 candle/light/heat authoring; wix.exe/WiX 4 is not a substitute.",
+    "The GitHub asset digest above is local evidence, not a publisher signature.",
+    "The .NET SDK archive and SHA-512 are pinned from the official dotnet/core release metadata; it is extracted only under project storage and never installed globally.",
+    "The Avalonia setup UI is published self-contained for win-x64 as a private Burn payload; consumers do not need a preinstalled .NET runtime."
+  ],
+  "gui": {
+    "kind": "avalonia",
+    "project_path": "scripts/windows/installer/Fullmag.Setup.UI/Fullmag.Setup.UI.csproj",
+    "assembly_name": "FullmagInstallerUi",
+    "payload_name": "FullmagInstallerUi.exe",
+    "sdk_version": "10.0.402",
+    "target_framework": "net10.0",
+    "avalonia_version": "12.1.4",
+    "runtime_identifier": "win-x64",
+    "self_contained": true,
+    "single_file": true,
+    "private_burn_payload": true
+  },
+  "nuget": {
+    "schema": "fullmag.windows-installer-nuget-provenance.v1",
+    "source": "https://api.nuget.org/v3/index.json",
+    "lock_mode": "locked",
+    "assets_relative_path": "obj/project.assets.json",
+    "lock_relative_path": "packages.lock.json",
+    "package_cache": "{cache_root}\\installer-dotnet-nuget",
+    "runtime_pack_inventory": {
+      "schema": "fullmag.windows-installer-runtime-pack-provenance.v1",
+      "source": "sdk-download-dependencies",
+      "target_framework": "net10.0",
+      "runtime_identifier": "win-x64",
+      "sdk_version": "10.0.402",
+      "bundled_versions_props_relative_path": "sdk\\10.0.402\\Microsoft.NETCoreSdk.BundledVersions.props",
+      "bundled_versions_props_sha256": "41630e11d6384b52e4abccbb2f8fbcb4023099ba987d5886d183790986eed201",
+      "packages": [
+        {
+          "id": "Microsoft.AspNetCore.App.Runtime.win-x64",
+          "version": "10.0.13"
+        },
+        {
+          "id": "Microsoft.NETCore.App.Runtime.win-x64",
+          "version": "10.0.13"
+        },
+        {
+          "id": "Microsoft.WindowsDesktop.App.Runtime.win-x64",
+          "version": "10.0.13"
+        }
+      ]
+    },
+    "direct_packages": [
+      {
+        "id": "Avalonia",
+        "version": "12.1.4"
+      },
+      {
+        "id": "Avalonia.Desktop",
+        "version": "12.1.4"
+      },
+      {
+        "id": "Avalonia.Themes.Fluent",
+        "version": "12.1.4"
+      }
+    ]
+  }
+}

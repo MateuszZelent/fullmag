@@ -130,6 +130,30 @@ function asVec3(value: unknown): [number, number, number] | null {
   return null;
 }
 
+type CardinalAxisIndex = 0 | 1 | 2;
+
+function cardinalAxisIndex(axis: readonly [number, number, number]): CardinalAxisIndex | null {
+  if (!axis.every((value) => Number.isFinite(value))) return null;
+  const abs = axis.map((value) => Math.abs(value)) as [number, number, number];
+  const max = Math.max(...abs);
+  if (max <= 1e-12) return null;
+  const index = abs.indexOf(max) as CardinalAxisIndex;
+  for (let entryIndex = 0; entryIndex < abs.length; entryIndex += 1) {
+    if (entryIndex !== index && abs[entryIndex] / max > 1e-9) {
+      return null;
+    }
+  }
+  return index;
+}
+
+function planeAxesForCardinalAxis(
+  axisIndex: CardinalAxisIndex,
+): [CardinalAxisIndex, CardinalAxisIndex] {
+  if (axisIndex === 0) return [1, 2];
+  if (axisIndex === 1) return [0, 2];
+  return [0, 1];
+}
+
 function lowerGeometryKind(value: unknown): Viewport3DPrimitiveKind {
   const kind = asString(value)?.toLowerCase() ?? "";
   if (kind.includes("box") || kind.includes("film") || kind.includes("cuboid")) {

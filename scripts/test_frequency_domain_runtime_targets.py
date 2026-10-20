@@ -107,6 +107,15 @@ def test_production_cpu_frequency_response_defaults_are_not_low_iteration_debug_
     assert "std::uint64_t restart_iterations = 8192;" in header
 
 
+def test_frequency_response_artifact_directory_creation_is_msvc_portable() -> None:
+    source = DRIVEN_RESPONSE_SOLVER.read_text(encoding="utf-8")
+
+    assert "#if defined(_WIN32)\n#include <direct.h>" in source
+    assert "const int create_result = _mkdir(path);" in source
+    assert "const int create_result = mkdir(path, 0777);" in source
+    assert source.count("mkdir(path, 0777)") == 1
+
+
 def test_frequency_response_preflight_serializes_periodic_certificate_hashes() -> None:
     source = RUNNER_FREQUENCY_RESPONSE.read_text(encoding="utf-8")
 

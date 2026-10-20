@@ -535,3 +535,23 @@ describe("FMRM codec", () => {
     ).resolves.toMatchObject({ reason: "duplicate-legend-identity", status: "incompatible" });
   });
 });
+
+describe("WebCrypto buffer ownership", () => {
+  it.each([false, true])("hashes only the requested byte view (shared=%s)", async (shared) => {
+    const buffer = shared ? new SharedArrayBuffer(5) : new ArrayBuffer(5);
+    const bytes = new Uint8Array(buffer);
+    bytes.set([99, 1, 2, 3, 99]);
+    const digest = vi.fn(async (_algorithm: string, data: Uint8Array<ArrayBuffer>) => {
+      expect(data.buffer).toBeInstanceOf(ArrayBuffer);
+      expect([...data]).toEqual([1, 2, 3]);
+      return new Uint8Array(32).buffer;
+    });
+    vi.stubGlobal("crypto", { subtle: { digest } });
+    try {
+      await expect(sha256HexBytes(bytes.subarray(1, 4))).resolves.toBe("0".repeat(64));
+      expect(digest).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

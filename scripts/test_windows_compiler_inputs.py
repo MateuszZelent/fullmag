@@ -84,6 +84,27 @@ class CompilerInputsChecks(unittest.TestCase):
             if path.is_file() and not path.is_symlink():
                 path.chmod(0o600)
 
+    def test_untracked_native_fem_ceed_and_bootstrap_inputs_are_frozen(self):
+        inputs = {
+            "scripts/windows/native_ceed/CMakeLists.txt": b"cmake_minimum_required(VERSION 3.25)\n",
+            "scripts/windows/native_ceed/ceed_jit_source_root_install.c.in": b"@FULLMAG_CEED_SOURCE_ROOT@\n",
+            "scripts/windows/native_ceed/ceed_windows_compat.c": b"int ceed_windows_compat(void) { return 0; }\n",
+            "scripts/windows/native_fem_dependencies.ps1": b"# pinned native FEM providers\n",
+        }
+        for relative, content in inputs.items():
+            destination = self.repo / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(content)
+
+        metadata = self.make()
+        record = json.loads(Path(metadata["record_path"]).read_text())
+        inventory = {entry["path"]: entry for entry in record["inventory"]}
+        self.assertTrue(set(inputs).issubset(inventory))
+        result = self.materialize(metadata)
+        mirror = Path(result["source_root"])
+        for relative, content in inputs.items():
+            self.assertEqual((mirror / relative).read_bytes(), content)
+
     def test_docs_snapshot_update_keeps_root_and_unchanged_rust_mtime(self):
         timestamp = 1_600_000_000_123_456_700
         os.utime(self.rust, ns=(timestamp, timestamp))

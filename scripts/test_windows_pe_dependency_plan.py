@@ -23,6 +23,22 @@ def imports(monkeypatch, dependencies):
     monkeypatch.setattr(planner, 'dump_imports', lambda path, tool: dependencies[path.name.lower()])
 
 
+def mock_system32_probe(monkeypatch, system_root):
+    """Use the real native API seam while keeping fixture paths isolated."""
+    monkeypatch.setenv('SystemRoot', str(system_root))
+    if planner.os.name == 'nt':
+        import ctypes
+
+        def get_system_directory(buffer, length):
+            value = str(system_root / 'System32')
+            if len(value) + 1 > length:
+                return len(value) + 1
+            buffer.value = value
+            return len(value)
+
+        monkeypatch.setattr(ctypes.windll.kernel32, 'GetSystemDirectoryW', get_system_directory)
+
+
 def test_python_pyd_imports_participate_in_closure(tmp_path, monkeypatch):
     stage, sdk = setup(tmp_path)
     image(stage / '_socket.pyd')
@@ -74,6 +90,96 @@ def test_nested_driver_cannot_be_sourced(tmp_path, monkeypatch):
         planner.plan_dependencies(stage,Path('unused'),[sdk],True)
 
 
+def test_system32_named_sdk_root_still_rejects_driver(tmp_path, monkeypatch):
+    stage, _ = setup(tmp_path)
+    fake_system_root = tmp_path / 'FakeWindows'
+    fake_system32 = fake_system_root / 'System32'
+    fake_system32.mkdir(parents=True)
+    actual_system_root = tmp_path / 'ActualWindows'
+    (actual_system_root / 'System32').mkdir(parents=True)
+    image(fake_system32 / 'nvcuda.dll')
+    mock_system32_probe(monkeypatch, actual_system_root)
+    imports(monkeypatch, {'app.exe': []})
+
+    with pytest.raises(ValueError, match='NVIDIA driver'):
+        planner.plan_dependencies(stage, Path('unused'), [fake_system32], True)
+
+
+def test_unrelated_system32_driver_is_ignored(tmp_path, monkeypatch):
+    stage, _ = setup(tmp_path)
+    system_root = tmp_path / 'Windows'
+    system32 = system_root / 'System32'
+    system32.mkdir(parents=True)
+    image(system32 / 'nvcuda.dll')
+    mock_system32_probe(monkeypatch, system_root)
+    imports(monkeypatch, {'app.exe': []})
+
+    plan = planner.plan_dependencies(stage, Path('unused'), [system32], True)
+
+    assert plan['sources'] == []
+
+
+@pytest.mark.parametrize('allow_cuda_driver', [True, False])
+def test_system32_driver_is_never_sourced(tmp_path, monkeypatch, allow_cuda_driver):
+    stage, _ = setup(tmp_path)
+    system_root = tmp_path / 'Windows'
+    system32 = system_root / 'System32'
+    system32.mkdir(parents=True)
+    image(system32 / 'nvcuda.dll')
+    mock_system32_probe(monkeypatch, system_root)
+    imports(monkeypatch, {'app.exe': ['nvcuda.dll']})
+
+    if allow_cuda_driver:
+        assert planner.plan_dependencies(stage, Path('unused'), [system32], True)['sources'] == []
+    else:
+        with pytest.raises(ValueError, match='Missing SDK dependency'):
+            planner.plan_dependencies(stage, Path('unused'), [system32], False)
+
+
+def test_system32_msmpi_is_the_only_runtime_candidate(tmp_path, monkeypatch):
+    stage, _ = setup(tmp_path)
+    system_root = tmp_path / 'Windows'
+    system32 = system_root / 'System32'
+    system32.mkdir(parents=True)
+    image(system32 / 'msmpi.dll')
+    mock_system32_probe(monkeypatch, system_root)
+    imports(monkeypatch, {'app.exe': ['msmpi.dll'], 'msmpi.dll': []})
+
+    plan = planner.plan_dependencies(stage, Path('unused'), [system32])
+
+    assert [entry['name'] for entry in plan['sources']] == ['msmpi.dll']
+
+
+def test_system32_non_mpi_dll_does_not_compete_with_redist(tmp_path, monkeypatch):
+    stage, sdk = setup(tmp_path)
+    system_root = tmp_path / 'Windows'
+    system32 = system_root / 'System32'
+    system32.mkdir(parents=True)
+    image(system32 / 'msvcp140.dll')
+    image(sdk / 'msvcp140.dll')
+    mock_system32_probe(monkeypatch, system_root)
+    imports(monkeypatch, {'app.exe': ['msvcp140.dll'], 'msvcp140.dll': []})
+
+    plan = planner.plan_dependencies(stage, Path('unused'), [system32, sdk])
+
+    assert [entry['name'] for entry in plan['sources']] == ['msvcp140.dll']
+    assert Path(plan['sources'][0]['source']) == sdk / 'msvcp140.dll'
+
+
+def test_nested_system32_msmpi_does_not_compete(tmp_path, monkeypatch):
+    stage, _ = setup(tmp_path)
+    system_root = tmp_path / 'Windows'
+    system32 = system_root / 'System32'
+    nested = system32 / 'DriverStore' / 'FileRepository' / 'mpi'
+    nested.mkdir(parents=True)
+    image(nested / 'msmpi.dll')
+    mock_system32_probe(monkeypatch, system_root)
+    imports(monkeypatch, {'app.exe': ['msmpi.dll']})
+
+    with pytest.raises(ValueError, match='Missing SDK dependency'):
+        planner.plan_dependencies(stage, Path('unused'), [system32])
+
+
 def test_cycle_is_bounded(tmp_path, monkeypatch):
     stage, sdk = setup(tmp_path)
     image(sdk / 'a.dll'); image(sdk / 'b.dll')
@@ -112,6 +218,16 @@ def test_wrong_architecture_source_rejected(tmp_path, monkeypatch):
     imports(monkeypatch, {'app.exe':['solver.dll']})
     with pytest.raises(ValueError, match='AMD64'):
         planner.plan_dependencies(stage, Path('unused'), [sdk])
+
+
+def test_wrong_architecture_error_keeps_path_and_machine_details(tmp_path):
+    path = image(tmp_path / 'wrong.dll', 0x14c, 0x10b)
+    with pytest.raises(ValueError) as error:
+        planner.require_x64_pe(path)
+    message = str(error.value)
+    assert str(path) in message
+    assert 'machine=0x014c' in message
+    assert 'magic=0x010b' in message
 
 
 def test_source_changes_during_analysis_rejected(tmp_path, monkeypatch):

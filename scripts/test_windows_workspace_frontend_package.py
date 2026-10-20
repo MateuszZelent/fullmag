@@ -50,6 +50,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "checkout"
     build_root = tmp_path / "storage" / "builds" / "worktree" / "windows-native-fdm-cpu"
     build_root.mkdir(parents=True)
+    _write(repo / ".gitignore", "node_modules/\n")
     _write(repo / "package.json", '{"name":"fullmag","private":true}\n')
     _write(repo / "pnpm-workspace.yaml", "packages:\n  - apps/*\n")
     _write(

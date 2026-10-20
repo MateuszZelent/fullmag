@@ -12,7 +12,9 @@ function Get-FullmagMsiBuildPlan {
         -not (Test-Path -LiteralPath $DependencyPrefix -PathType Container)) {
       throw "FEM packaging requires an absolute existing FULLMAG_FEM_DEPENDENCY_PREFIX"
     }
-    $prefix = (Resolve-Path -LiteralPath $DependencyPrefix).Path
+    # Provider-qualified paths (for example, FileSystem::\\wsl.localhost\...) are
+    # not valid filesystem arguments for .NET or CMake. Keep the provider path.
+    $prefix = (Resolve-Path -LiteralPath $DependencyPrefix).ProviderPath
   }
   $features = @()
   if ($Cuda) { $features += "cuda" }
@@ -103,6 +105,23 @@ function Assert-FullmagMsiModalProviderInventory {
   }
 }
 
+function Get-FullmagMsiFemSourceSnapshotSha256 {
+  # The managed launcher supplies the stable source-snapshot identity.  Keep
+  # the older generic variable as a compatibility input for direct package
+  # callers, but never pass an unchecked value into CMake.
+  $value = if ($env:FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256) {
+    [string]$env:FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256
+  }
+  elseif ($env:FULLMAG_SOURCE_SNAPSHOT_SHA256) {
+    [string]$env:FULLMAG_SOURCE_SNAPSHOT_SHA256
+  }
+  else { "" }
+  if ($value -and $value -notmatch '^[0-9a-f]{64}$') {
+    throw "FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 must be a lowercase SHA-256"
+  }
+  return $value.ToLowerInvariant()
+}
+
 function Invoke-FullmagMsiFemBuild {
   param([object]$Plan, [string]$RepoRoot, [string]$BuildRoot)
   if (-not $Plan.fem_enabled) { return }
@@ -110,17 +129,19 @@ function Invoke-FullmagMsiFemBuild {
   $cudaFlag = if ($Plan.fem_cuda) { "ON" } else { "OFF" }
   # Preserve the build-script modal defaults and explicit operator overrides.
   $slepc = if ($env:FULLMAG_FEM_WITH_SLEPC) { $env:FULLMAG_FEM_WITH_SLEPC } else { $cudaFlag }
+  $sourceSnapshotSha256 = Get-FullmagMsiFemSourceSnapshotSha256
   $configure = @("-S", (Join-Path $RepoRoot "native"), "-B", $BuildRoot,
     "-DCMAKE_BUILD_TYPE=Release", "-DFULLMAG_USE_MFEM_STACK=ON",
     "-DFULLMAG_ENABLE_CUDA=$cudaFlag", "-DFULLMAG_ENABLE_FEM_GPU=$cudaFlag",
     "-DFULLMAG_FEM_REQUIRE_GPU=$cudaFlag", "-DFULLMAG_FEM_WITH_SLEPC=$slepc",
     "-DFULLMAG_FEM_DEPENDENCY_PREFIX=$($Plan.dependency_prefix)",
-    "-DCMAKE_PREFIX_PATH=$($Plan.dependency_prefix)")
+    "-DCMAKE_PREFIX_PATH=$($Plan.dependency_prefix)",
+    "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256=$sourceSnapshotSha256")
   if ($env:FULLMAG_CUDA_ARCHITECTURES) { $configure += "-DCMAKE_CUDA_ARCHITECTURES=$env:FULLMAG_CUDA_ARCHITECTURES" }
   $configs = @(@("MFEMConfig.cmake", "lib/cmake/mfem/MFEMConfig.cmake", "lib/cmake/MFEM/MFEMConfig.cmake",
       "share/mfem/MFEMConfig.cmake", "share/cmake/mfem/MFEMConfig.cmake") | ForEach-Object {
     $candidate = Join-Path $Plan.dependency_prefix $_
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) { (Resolve-Path -LiteralPath $candidate).Path }
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { (Resolve-Path -LiteralPath $candidate).ProviderPath }
   } | Sort-Object -Unique)
   if ($configs.Count -ne 1) { throw "Expected exactly one MFEM provider config before build" }
   $configHash = (Get-FileHash -LiteralPath $configs[0] -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -137,18 +158,181 @@ function Invoke-FullmagMsiFemBuild {
   }
   Assert-FullmagMsiModalProviderInventory -Inventory $modalInventory
   $output = Find-FullmagMsiFemOutput -BuildRoot $BuildRoot
-  $output | Add-Member -NotePropertyMembers @{ configure_arguments=$configure; provider_config=$configs[0];
+  $output | Add-Member -NotePropertyMembers @{ configure_arguments=$configure; source_snapshot_sha256=$sourceSnapshotSha256; provider_config=$configs[0];
     modal_provider=$modalInventory;
     provider_config_sha256=$configHash; import_library_sha256=(Get-FileHash -LiteralPath $output.import_library -Algorithm SHA256).Hash.ToLowerInvariant();
     dll_sha256=(Get-FileHash -LiteralPath $output.dll -Algorithm SHA256).Hash.ToLowerInvariant() }
   $output
 }
 
+function Test-FullmagMsiPathWithin {
+  param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Base)
+  $candidate = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]'\/') + [System.IO.Path]::DirectorySeparatorChar
+  $root = [System.IO.Path]::GetFullPath($Base).TrimEnd([char[]]'\/') + [System.IO.Path]::DirectorySeparatorChar
+  return $candidate.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-FullmagMsiPathChain {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Base,
+    [Parameter(Mandatory = $true)][string]$Label,
+    [switch]$Leaf
+  )
+  $resolved = [System.IO.Path]::GetFullPath($Path)
+  $root = [System.IO.Path]::GetFullPath($Base)
+  if (-not (Test-FullmagMsiPathWithin -Path $resolved -Base $root)) {
+    throw "$Label escapes its canonical root: $resolved"
+  }
+  $pathType = if ($Leaf) { "Leaf" } else { "Container" }
+  if (-not (Test-Path -LiteralPath $resolved -PathType $pathType)) {
+    throw "$Label is missing: $resolved"
+  }
+  $cursor = $resolved
+  while ($true) {
+    $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
+        ($item.PSObject.Properties.Name -contains "LinkType" -and $item.LinkType)) {
+      throw "$Label contains a junction or symlink: $cursor"
+    }
+    if ([string]::Equals($cursor, $root, [System.StringComparison]::OrdinalIgnoreCase)) { break }
+    $parent = Split-Path -Parent $cursor
+    if (-not $parent -or [string]::Equals($parent, $cursor, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "$Label has no safe canonical ancestor: $resolved"
+    }
+    $cursor = $parent
+  }
+  return $resolved
+}
+
+function Assert-FullmagMsiReceiptMpiInventory {
+  param(
+    [Parameter(Mandatory = $true)][object]$Receipt,
+    [Parameter(Mandatory = $true)][string]$ProviderRoot
+  )
+  if ([string]::IsNullOrWhiteSpace([string]$Receipt.mpi_include) -or
+      [string]::IsNullOrWhiteSpace([string]$Receipt.mpi_library)) {
+    throw "Native FEM provider receipt does not bind both MSMPI include and library paths"
+  }
+  $mpiInclude = Assert-FullmagMsiPathChain -Path ([string]$Receipt.mpi_include) -Base $ProviderRoot `
+    -Label "Native FEM provider MSMPI include directory"
+  $mpiLibrary = Assert-FullmagMsiPathChain -Path ([string]$Receipt.mpi_library) -Base $ProviderRoot `
+    -Label "Native FEM provider MSMPI import library" -Leaf
+  if ([System.IO.Path]::GetFileName($mpiLibrary) -ine "msmpi.lib") {
+    throw "Native FEM provider receipt MSMPI library has the wrong filename: $mpiLibrary"
+  }
+  $mpiHeader = Assert-FullmagMsiPathChain -Path (Join-Path $mpiInclude "mpi.h") -Base $ProviderRoot `
+    -Label "Native FEM provider MSMPI header" -Leaf
+  $libraryTools = @($Receipt.tools | Where-Object {
+    [string]::Equals(
+      [System.IO.Path]::GetFullPath([string]$_.path),
+      $mpiLibrary,
+      [System.StringComparison]::OrdinalIgnoreCase
+    )
+  })
+  $headerTools = @($Receipt.tools | Where-Object {
+    [string]::Equals(
+      [System.IO.Path]::GetFullPath([string]$_.path),
+      $mpiHeader,
+      [System.StringComparison]::OrdinalIgnoreCase
+    )
+  })
+  if ($libraryTools.Count -ne 1 -or $headerTools.Count -ne 1) {
+    throw "Native FEM provider receipt MSMPI paths are not bound to the hashed tools inventory"
+  }
+  [pscustomobject]@{ include = $mpiInclude; header = $mpiHeader; library = $mpiLibrary }
+}
+
+function Get-FullmagMsiMpiRuntimeRoot {
+  param([Parameter(Mandatory = $true)][object]$Plan)
+  if (-not $Plan.fem_enabled) { return }
+
+  $prefix = [System.IO.Path]::GetFullPath([string]$Plan.dependency_prefix).TrimEnd([char[]]'\/')
+  $providerRoot = Split-Path -Parent $prefix
+  $receiptPath = Join-Path $providerRoot "provider-receipt.json"
+  $receiptPath = Assert-FullmagMsiPathChain -Path $receiptPath -Base $providerRoot `
+    -Label "Native FEM managed provider receipt" -Leaf
+  try {
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    throw "Native FEM provider receipt is invalid while resolving MSMPI runtime: $receiptPath ($($_.Exception.Message))"
+  }
+  if ([string]$receipt.schema -ne "fullmag.windows.fem-providers.v1" -or
+      $null -eq $receipt.plan -or [string]::IsNullOrWhiteSpace([string]$receipt.mpi_library)) {
+    throw "Native FEM provider receipt does not bind an MSMPI library: $receiptPath"
+  }
+  $receiptRoot = [System.IO.Path]::GetFullPath([string]$receipt.plan.root).TrimEnd([char[]]'\/')
+  if (-not $receiptRoot.Equals($providerRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Native FEM provider receipt root does not match its managed prefix: $receiptPath"
+  }
+  $mpiBinding = Assert-FullmagMsiReceiptMpiInventory -Receipt $receipt -ProviderRoot $providerRoot
+  $receiptLibrary = [string]$mpiBinding.library
+  if (-not (Test-Path -LiteralPath "HKLM:\SOFTWARE\Microsoft\MPI")) {
+    throw "Native FEM MSMPI runtime registration is missing: HKLM:\SOFTWARE\Microsoft\MPI"
+  }
+  $registration = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\MPI" -ErrorAction Stop
+  $installRoot = [string]$registration.InstallRoot
+  $runtimeDll = [string]$registration.MSPMSProvider
+  $registeredVersion = [string]$registration.Version
+  if ([string]::IsNullOrWhiteSpace($installRoot) -or [string]::IsNullOrWhiteSpace($runtimeDll) -or
+      [string]::IsNullOrWhiteSpace($registeredVersion) -or
+      -not [System.IO.Path]::IsPathRooted($installRoot) -or
+      -not [System.IO.Path]::IsPathRooted($runtimeDll)) {
+    throw "Native FEM MSMPI registration is incomplete: HKLM:\SOFTWARE\Microsoft\MPI"
+  }
+  $installRoot = [System.IO.Path]::GetFullPath($installRoot).TrimEnd([char[]]'\/')
+  $runtimeDll = [System.IO.Path]::GetFullPath($runtimeDll)
+  if (-not (Test-Path -LiteralPath $runtimeDll -PathType Leaf) -or
+      [System.IO.Path]::GetFileName($runtimeDll) -ine "msmpi.dll") {
+    throw "Native FEM MSMPI registered runtime DLL is missing or invalid: $runtimeDll"
+  }
+  $runtimeItem = Get-Item -LiteralPath $runtimeDll -Force
+  if (($runtimeItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
+      ($runtimeItem.PSObject.Properties.Name -contains "LinkType" -and $runtimeItem.LinkType)) {
+    throw "Native FEM MSMPI registered runtime DLL is a reparse point: $runtimeDll"
+  }
+  $runtimeVersion = [string]$runtimeItem.VersionInfo.FileVersion
+  if ($runtimeVersion -ne $registeredVersion) {
+    throw "Native FEM MSMPI runtime version does not match its registration: $runtimeVersion vs $registeredVersion"
+  }
+  $binCandidates = @()
+  if ($env:MSMPI_BIN) { $binCandidates += [System.IO.Path]::GetFullPath([string]$env:MSMPI_BIN) }
+  $binCandidates += Join-Path $installRoot "Bin"
+  $binCandidates = @($binCandidates | Where-Object { $_ } | ForEach-Object {
+    [System.IO.Path]::GetFullPath($_).TrimEnd([char[]]'\/')
+  } | Sort-Object -Unique)
+  $validBins = @()
+  foreach ($bin in $binCandidates) {
+    if (-not (Test-FullmagMsiPathWithin -Path $bin -Base $installRoot)) {
+      throw "Native FEM MSMPI bin directory escapes its registered installation: $bin"
+    }
+    $mpiexec = Join-Path $bin "mpiexec.exe"
+    if (Test-Path -LiteralPath $mpiexec -PathType Leaf) {
+      $mpiexecVersion = [string](Get-Item -LiteralPath $mpiexec).VersionInfo.FileVersion
+      if ($mpiexecVersion -ne $registeredVersion) {
+        throw "Native FEM MSMPI mpiexec version does not match its registration: $mpiexecVersion vs $registeredVersion"
+      }
+      $validBins += $bin
+    }
+  }
+  if ($validBins.Count -ne 1) {
+    throw "Native FEM MSMPI installation must expose exactly one registered x64 mpiexec bin: $installRoot"
+  }
+  Split-Path -Parent $runtimeDll
+}
+
 function Get-FullmagMsiFemDependencyRoots {
   param([object]$Plan)
   if (-not $Plan.fem_enabled) { return }
-  @($Plan.dependency_prefix, (Join-Path $Plan.dependency_prefix "bin"), (Join-Path $Plan.dependency_prefix "lib")) |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+  $roots = @(
+    $Plan.dependency_prefix,
+    (Join-Path $Plan.dependency_prefix "bin"),
+    (Join-Path $Plan.dependency_prefix "lib"),
+    (Get-FullmagMsiMpiRuntimeRoot -Plan $Plan)
+  )
+  $roots | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) } |
+    ForEach-Object { [System.IO.Path]::GetFullPath($_) } | Sort-Object -Unique
 }
 
 function Assert-FullmagMsiFemAvailability {

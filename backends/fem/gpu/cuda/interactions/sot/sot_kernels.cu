@@ -5,6 +5,8 @@
 
 #include <cub/cub.cuh>
 
+#include "gpu/cuda/runtime/cccl_extrema.hpp"
+
 namespace fullmag::fem {
 
 namespace {
@@ -83,7 +85,8 @@ __global__ void prescribed_sot_rhs_kernel(
 
     typedef cub::BlockReduce<double, kBlockSize> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
-    const double block_max = BlockReduce(temp_storage).Reduce(rhs_norm, cub::Max());
+    const double block_max = BlockReduce(temp_storage).Reduce(
+        rhs_norm, cuda_compat::legacy_maximum{});
     if (threadIdx.x == 0 && block_max_rhs != nullptr) {
         block_max_rhs[blockIdx.x] = block_max;
     }

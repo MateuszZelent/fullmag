@@ -35,8 +35,8 @@ Windows is the host build and orchestration environment. The current development
 |---|---|
 | Rust, Python, Control Room, FDM CPU | native Windows/MSVC |
 | FDM GPU | native Windows/MSVC + CUDA Toolkit |
-| FEM CPU | Docker Desktop Linux container |
-| FEM GPU | Docker Desktop Linux/CUDA container |
+| FEM CPU | native Windows/MSVC + managed MFEM/hypre/libCEED |
+| FEM GPU | native Windows/MSVC + CUDA + managed MFEM/hypre/libCEED |
 
 ## Docelowy produkt Windows — doprecyzowanie 02.10.2026
 
@@ -135,11 +135,35 @@ a launcher sprawdza ten hash przed użyciem istniejącego pakietu.
 Starszy manifest bez hasha UI wymaga przebudowy; samo kopiowanie dowolnego
 `fullmag-ui.exe` nie jest dopuszczonym naprawieniem pakietu.
 
-The canonical FEM entry point is `scripts/windows/run_fullmag_fem.ps1`. It does
-not invoke `wsl.exe`: Docker Desktop may use WSL2 internally, but Fullmag does
-not depend on an interactive WSL distribution or a WSL checkout. The historical
-`run_fullmag_wsl.ps1` filename remains only as a compatibility implementation
-for older callers.
+Kanonicznym wejściem FEM jest `scripts/windows/run_fullmag_fem.ps1`. Domyślna
+trasa jest zarządzana natywnie przez resolver storage i używa stałych profili
+`windows-native-fem-cpu` albo `windows-native-fem-gpu`; wybór GPU nie przechodzi
+po cichu na CPU. Przygotowanie narzędzi i pinów opisuje
+[Windows build environment](windows-build-environment.md), a właściwy launcher
+potwierdza profil, blokadę ciężkich prac, snapshot źródeł i receipt.
+
+Historyczna trasa Docker Desktop pozostaje wyłącznie jawną zgodnością:
+ustawienie `FULLMAG_FORCE_WINDOWS_FEM_DOCKER=1` przekazuje wykonanie do
+`scripts/windows/run_fullmag_wsl.ps1`. Bez tej zmiennej launcher nie używa WSL,
+Docker Desktop ani checkoutu WSL. To, że Docker Desktop może wewnętrznie
+korzystać z WSL2, nie zmienia tej granicy. Build/runtime i kwalifikacja naukowa
+pozostają **NOT VERIFIED** do czasu uzyskania rzeczywistego natywnego receipt.
+
+`build=True` tworzy zamknięty pakiet dla wybranego profilu, a `build=False`
+korzysta tylko ze zgodnego, zachowanego pakietu tej samej trasy; brak lub
+niezgodność pakietu jest błędem. Tryb `dev` nadal uruchamia frontend
+deweloperski.
+
+Przykład z PowerShell, z katalogu repozytorium:
+
+```powershell
+just fullmag windows=True build=True dev fem gpu ./examples/permalloy_layer_cofeb_rings_relax_300nm.py
+```
+
+Build korzysta z niezmiennej kapsuły źródeł. Późniejsze zapisy checkoutu
+nie zmieniają uruchamianego pakietu. Receipt symulacji zachowuje job ID,
+źródła, obraz, urządzenie oraz wynik procesu. Sukces kompilacji nie oznacza
+ukończenia ani naukowej kwalifikacji symulacji.
 
 The storage and worktree contract for both platform modes is defined in
 [Fullmag build-storage governance](fullmag-build-storage-governance.md). This

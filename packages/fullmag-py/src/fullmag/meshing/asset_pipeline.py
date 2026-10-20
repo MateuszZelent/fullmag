@@ -136,6 +136,11 @@ from ._size_field_plan import (
     _resolve_per_object_mesh_options as _resolve_per_object_mesh_options,
 )
 
+# This producer contract is part of every FEM cache identity. Bumping it is
+# required whenever extraction changes the global P1 node space; old artifacts
+# remain on disk but cannot be admitted as meshes for the new producer.
+FEM_VOLUME_NODE_SPACE_CONTRACT = "fullmag.fem.volume-node-space.compaction.v1"
+
 _DEFAULT_AIRBOX_GROWTH_RATE = 1.3
 _DEFAULT_AIRBOX_GRADING = "geometric"
 _SIZE_DISTRIBUTION_HISTOGRAM_BINS = 30
@@ -785,6 +790,58 @@ def _validate_domain_mesh_workflow(
         )
     return _load_frozen_magnetic_submesh_source(
         mesh_workflow.get("frozen_magnetic_submesh_source")
+    )
+
+
+def _mixed_v2_direct_route_selected(
+    geometries: Sequence[Geometry],
+    hints: FEM,
+    *,
+    airbox: AirboxOptions | None,
+    surface_mesh_options: MeshOptions,
+    frozen_payload: FrozenMagneticSubmeshPayload | None,
+    conformal_object_regions: Sequence[Mapping[str, object]],
+    mesh_workflow: Mapping[str, object] | None,
+) -> bool:
+    """Return whether the producer will use the certified mixed-v2 route.
+
+    Keep this predicate in the asset pipeline so cache admission and mesh
+    production cannot silently disagree about which arithmetic contract is
+    selected.  The policy checks that follow this predicate still belong to
+    the producer and may reject an otherwise selected request.
+    """
+    mixed_v2_components = _disconnected_mixed_p1_pair(geometries)
+    if mixed_v2_components is None:
+        return False
+
+    box_requests_sweep = surface_mesh_options.mesh_strategy == "swept_prism"
+    if not box_requests_sweep:
+        mixed_box, mixed_ring, _mixed_outer, _mixed_inner, _mixed_offset = (
+            mixed_v2_components
+        )
+        resolved_mixed_overrides = _resolve_per_geometry_overrides(
+            mesh_workflow.get("per_geometry")
+            if isinstance(mesh_workflow, Mapping)
+            else None,
+            geometries=[mixed_box, mixed_ring],
+            owner_geometry_names=(
+                mixed_box.geometry_name,
+                mixed_ring.geometry_name,
+            ),
+            missing_error_code="mesh_geometry_owner_binding_missing",
+        )
+        box_override = resolved_mixed_overrides.get(mixed_box.geometry_name)
+        box_requests_sweep = bool(
+            isinstance(box_override, Mapping)
+            and box_override.get("mesh_strategy") == "swept_prism"
+        )
+
+    return bool(
+        airbox is not None
+        and box_requests_sweep
+        and frozen_payload is None
+        and not conformal_object_regions
+        and hints.order == 1
     )
 
 
@@ -2697,36 +2754,14 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
     )
     mixed_v2_components = _disconnected_mixed_p1_pair(geometries)
     mixed_v2_candidate = mixed_v2_components is not None
-    mixed_v2_box_requests_sweep = (
-        surface_mesh_options.mesh_strategy == "swept_prism"
-    )
-    if mixed_v2_components is not None and not mixed_v2_box_requests_sweep:
-        mixed_box, mixed_ring, _mixed_outer, _mixed_inner, _mixed_offset = (
-            mixed_v2_components
-        )
-        resolved_mixed_overrides = _resolve_per_geometry_overrides(
-            mesh_workflow.get("per_geometry")
-            if isinstance(mesh_workflow, Mapping)
-            else None,
-            geometries=[mixed_box, mixed_ring],
-            owner_geometry_names=(
-                mixed_box.geometry_name,
-                mixed_ring.geometry_name,
-            ),
-            missing_error_code="mesh_geometry_owner_binding_missing",
-        )
-        box_override = resolved_mixed_overrides.get(mixed_box.geometry_name)
-        mixed_v2_box_requests_sweep = bool(
-            isinstance(box_override, Mapping)
-            and box_override.get("mesh_strategy") == "swept_prism"
-        )
-    mixed_v2_direct = (
-        mixed_v2_components is not None
-        and airbox is not None
-        and mixed_v2_box_requests_sweep
-        and frozen_payload is None
-        and not conformal_object_regions
-        and hints.order == 1
+    mixed_v2_direct = _mixed_v2_direct_route_selected(
+        geometries,
+        hints,
+        airbox=airbox,
+        surface_mesh_options=surface_mesh_options,
+        frozen_payload=frozen_payload,
+        conformal_object_regions=conformal_object_regions,
+        mesh_workflow=mesh_workflow,
     )
     mixed_v2_hmaxes: tuple[float, float] | None = None
     mixed_v2_layers: int | None = None

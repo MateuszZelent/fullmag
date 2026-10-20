@@ -320,6 +320,15 @@ Treat the new lifecycle as `NOT VERIFIED` until actual runtime evidence exists.
 
 ### Canonical managed entrypoints outside daily Docker development
 
+The explicitly requested native Windows installer/FEM release qualification is
+separate from daily Docker development. Its scoped authority is
+[ADR 0053](../../docs/adr/0053-native-windows-fem-build-environment.md): use the
+closed `windows-installer-build`, `windows-full-workspace-build` and
+`windows-full-workspace` recipes with the resolver, native heavy slot and
+terminal receipts. The container-backed defaults in this section continue to
+apply to Linux and to other managed profiles. This exception does not authorize
+host compiler commands or restore native daily DEV as an alternative.
+
 For release and other non-development builds outside the Docker development
 workspace, a host enrolled with `Fullmag_build_runner` uses the single managed
 queue (`local-build-runner` skill). This precedence applies only to that
@@ -350,6 +359,7 @@ and similar commands are debugging tools, not default user guidance.
 
 - Obowiązującym kontraktem ścieżek worktree, buildów, cache, runtime’ów i runów jest [Fullmag build-storage governance](../../docs/guides/fullmag-build-storage-governance.md). Project root wyprowadza się ze wspólnego katalogu Git głównego checkoutu; `storage` i `worktrees` są jego rodzeństwem. Nie używaj `cwd.parent` ani nazwy worktree jako substytutu resolvera. Rejestr własności i stan końcowy zasobu są obowiązkowe.
 - Windows używa FULLMAG_PROJECT_STORAGE_ROOT z pliku .env głównego checkoutu przez resolver. Codzienny development korzysta ze ścieżki Docker dev opisanej w `AGENTS.md`; natywna trasa pozostaje legacy/non-development: `just fullmag ...` używa `scripts/windows/run_fullmag.ps1`, a FEM CPU/GPU `scripts/windows/run_fullmag_fem.ps1` i Docker Desktop. `CARGO_TARGET_DIR`, store pnpm/npm, cache narzędzi, TEMP/TMP, CUDA i Playwright muszą pochodzić z zaakceptowanego profilu pod `storage`; `FULLMAG_WINDOWS_*_ROOT` jest tylko zwalidowanym adapterem zgodności i żadna Windowsowa trasa nie używa `wsl.exe` jako ukrytego fallbacku.
+- Jawna kwalifikacja wydania instalatora i natywnego pakietu FEM Windows jest odrębną trasą z [ADR 0053](../../docs/adr/0053-native-windows-fem-build-environment.md): `just windows-installer-build`, `just windows-full-workspace-build` oraz `just windows-full-workspace`. Natywny `scripts/windows/run_fullmag_fem.ps1` obsługuje FEM CPU/GPU z resolverem, heavy slotem i terminalnym receiptem; Docker wymaga jawnego wyboru zgodności. Ta trasa nie zastępuje codziennego Docker DEV ani nie dopuszcza ręcznych kompilatorów.
 - Wyjątek zatwierdzony 05.10.2026: `FULLMAG_WINDOWS_VOLATILE_ROOT` w lokalnym `.env` głównego checkoutu może kierować wyłącznie odtwarzalną kopię wejść kompilatora oraz jego `TEMP`/`TMP`/`TMPDIR` na lokalny RAM-disk. Natywny launcher sprawdza oznaczenie projektu/worktree/profilu i przywraca zmienne po Cargo. Kopia źródeł na RAM-disku wymaga obsługi Windows `GetFinalPathNameByHandleW`; przy `ERROR_INVALID_FUNCTION` launcher jawnie zachowuje jedną trwałą kopię źródeł dla backendu i desktopu, pozostawiając TEMP na RAM-disku. Trwałe snapshoty, target/cache Cargo, pakiety, logi, receipts i sesje pozostają w kanonicznym storage. Brak skonfigurowanego dysku blokuje nowy build; nie blokuje uruchomienia istniejącego zgodnego pakietu z `build=false`. Wyjątek nie dotyczy Linuxa ani kontenerowego FEM. Szczegóły: [Windows-first development](../../docs/guides/windows-first-development.md#ulotne-dane-kompilacji-na-ram-disku).
 - Linux używa trwałego `storage` projektu oraz container-backed `just` dla ciężkich FEM/MFEM/CUDA/hypre/libCEED. Ochrona ext4/mount pozostaje wymagana; bezpośredni duży zapis na CIFS jest odrzucany. Backing images nowych wdrożeń kieruje się do `storage/build-volumes`; aktywnych istniejących obrazów nie przenosi się w ramach tej polityki. Zatwierdzony mount view nie jest storage rootem, a `/tmp` służy wyłącznie małemu stagingowi.
 - Każda recepta `just`, także ręcznie uruchomiona, musi wykonać resolver/preflight przed pierwszym zapisem, używać przypisanego profilu i zapisać stan końcowy. Brak podpięcia danej recepty oznacz `NOT VERIFIED`; hostowy `cargo`/`cmake`/Docker pozostaje diagnostyką, gdy istnieje zarządzana recepta. Nie wykonuj automatycznego `fetch`/`pull`/bootstrapu ani nie twórz nowych płaskich rootów po odmowie ścieżki.

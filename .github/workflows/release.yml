@@ -343,8 +343,280 @@ jobs:
           name: fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64
           path: fullmag-*-windows-x86_64.zip
 
+  build-windows-installer-source:
+    needs: prepare-release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Build source-first public installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\', '/')
+          $project = [IO.Path]::GetFullPath((Split-Path -Parent $repo)).TrimEnd('\', '/')
+          $storage = [IO.Path]::GetFullPath((Join-Path $project 'storage')).TrimEnd('\', '/')
+          if (-not [string]::Equals((Split-Path -Parent $storage), $project, [StringComparison]::OrdinalIgnoreCase) -or
+              [string]::Equals($storage, $repo, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "The release storage path is not the canonical sibling storage directory: $storage"
+          }
+          foreach ($candidate in @($repo, $project, $storage)) {
+            $probe = $candidate
+            while ($probe) {
+              if (Test-Path -LiteralPath $probe) {
+                $item = Get-Item -LiteralPath $probe -Force
+                if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                  throw "The release path traverses a reparse point: $probe"
+                }
+              }
+              $parent = Split-Path -Parent $probe
+              if (-not $parent -or [string]::Equals($parent, $probe, [StringComparison]::OrdinalIgnoreCase)) { break }
+              $probe = $parent
+            }
+          }
+          if (Test-Path -LiteralPath $storage -PathType Leaf) {
+            throw "The canonical sibling storage path is a file: $storage"
+          }
+          $env:FULLMAG_PROJECT_STORAGE_ROOT = $storage
+          "FULLMAG_PROJECT_STORAGE_ROOT=$storage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $producer = Join-Path $repo 'scripts\windows\build_installer_from_source.ps1'
+          if (-not (Test-Path -LiteralPath $producer -PathType Leaf)) {
+            throw "The source-first installer producer is missing: $producer"
+          }
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File $producer -InstallMissing -StorageRoot $storage
+          if ($LASTEXITCODE -ne 0) {
+            throw "The source-first installer producer failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Verify terminal source-first manifest and stage release assets
+        shell: powershell
+        env:
+          FULLMAG_RELEASE_TAG: ${{ needs.prepare-release.outputs.tag_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Get-FullPath {
+            param([Parameter(Mandatory = $true)][string]$Path)
+            return [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+          }
+
+          function Test-ReparseItem {
+            param([Parameter(Mandatory = $true)]$Item)
+            return (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
+              ($Item.PSObject.Properties.Name -contains 'LinkType' -and
+                -not [string]::IsNullOrWhiteSpace([string]$Item.LinkType))
+          }
+
+          function Assert-RegularFile {
+            param(
+              [Parameter(Mandatory = $true)][string]$Path,
+              [Parameter(Mandatory = $true)][string]$Label
+            )
+            $full = Get-FullPath $Path
+            if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+              throw "$Label is missing or is not a file: $full"
+            }
+            $item = Get-Item -LiteralPath $full -Force
+            if (Test-ReparseItem $item) { throw "$Label is a reparse point: $full" }
+            $probe = $full
+            while ($probe) {
+              if (Test-Path -LiteralPath $probe) {
+                if (Test-ReparseItem (Get-Item -LiteralPath $probe -Force)) {
+                  throw "$Label traverses a reparse point: $probe"
+                }
+              }
+              $parent = Split-Path -Parent $probe
+              if (-not $parent -or [string]::Equals($parent, $probe, [StringComparison]::OrdinalIgnoreCase)) { break }
+              $probe = $parent
+            }
+            if ($item.Length -le 0) { throw "$Label is empty: $full" }
+            return $full
+          }
+
+          function Assert-Contained {
+            param(
+              [Parameter(Mandatory = $true)][string]$Path,
+              [Parameter(Mandatory = $true)][string]$Root,
+              [Parameter(Mandatory = $true)][string]$Label
+            )
+            $candidate = Get-FullPath $Path
+            $base = Get-FullPath $Root
+            if (-not ([string]::Equals($candidate, $base, [StringComparison]::OrdinalIgnoreCase) -or
+                $candidate.StartsWith($base + '\', [StringComparison]::OrdinalIgnoreCase))) {
+              throw "$Label escapes its admitted root: $candidate"
+            }
+            return $candidate
+          }
+
+          function Get-Sha256 {
+            param([Parameter(Mandatory = $true)][string]$Path)
+            return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+
+          $repo = Get-FullPath $env:GITHUB_WORKSPACE
+          $storage = Get-FullPath $env:FULLMAG_PROJECT_STORAGE_ROOT
+          $rawLayout = (& python.exe -B (Join-Path $repo 'scripts\fullmag_storage.py') resolve `
+            --repo-root $repo --profile windows-installer-source --format json 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Storage resolver failed: $rawLayout" }
+          try { $layout = $rawLayout | ConvertFrom-Json -ErrorAction Stop }
+          catch { throw "Storage resolver returned invalid JSON: $rawLayout" }
+          foreach ($field in @('storage_root', 'build_root', 'runs_root', 'profile')) {
+            if ([string]::IsNullOrWhiteSpace([string]$layout.$field)) {
+              throw "Storage layout omitted required field: $field"
+            }
+          }
+          if ([string]$layout.profile -cne 'windows-installer-source') {
+            throw "Storage resolver returned an unexpected profile: $($layout.profile)"
+          }
+          $resolvedStorage = Get-FullPath ([string]$layout.storage_root)
+          if (-not [string]::Equals($resolvedStorage, $storage, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Storage resolver changed the explicitly selected sibling storage root"
+          }
+          $buildRoot = Assert-Contained ([string]$layout.build_root) $resolvedStorage 'installer build root'
+          $runsRoot = Assert-Contained ([string]$layout.runs_root) $resolvedStorage 'installer runs root'
+          $manifestPath = Assert-RegularFile (Join-Path $buildRoot 'installer-source\build-manifest.json') 'terminal installer manifest'
+          $manifestHash = Get-Sha256 $manifestPath
+          $manifestRaw = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8
+          try { $manifest = $manifestRaw | ConvertFrom-Json -ErrorAction Stop }
+          catch { throw "Terminal installer manifest is invalid JSON: $manifestPath" }
+          if ([string]$manifest.schema -cne 'fullmag.windows-installer-source-build.v1' -or
+              [string]$manifest.state -cne 'completed' -or
+              [string]$manifest.profile -cne 'windows-installer-source') {
+            throw 'Terminal installer manifest failed schema/state/profile admission'
+          }
+          if ($manifest.source_snapshot -eq $null -or $manifest.source_snapshot.source_identity -eq $null) {
+            throw 'Terminal installer manifest has no source snapshot identity'
+          }
+          $identity = $manifest.source_snapshot.source_identity
+          if ([string]$identity.head_commit_full -notmatch '^[0-9a-fA-F]{40}$' -or
+              [string]$identity.source_snapshot_sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+            throw 'Terminal installer manifest has an invalid source identity'
+          }
+          $manifestAttemptId = [string]$manifest.attempt_id
+          if ($manifestAttemptId -notmatch '^[0-9a-fA-F]{32}$') {
+            throw 'Terminal installer manifest has no valid managed attempt identity'
+          }
+          $statusPath = Assert-RegularFile (Join-Path $buildRoot 'build-status.json') 'terminal build status'
+          try { $status = (Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop) }
+          catch { throw "Terminal build status is invalid JSON: $statusPath" }
+          if ([string]$status.state -cne 'completed' -or $null -eq $status.exit_code -or [int]$status.exit_code -ne 0 -or
+              [string]$status.profile -cne 'windows-installer-source' -or
+              [string]$status.execution_mode -cne 'windows-installer-source-build' -or
+              [string]$status.attempt_id -notmatch '^[0-9a-fA-F]{32}$' -or
+              [string]$status.attempt_id -ine $manifestAttemptId -or
+              [string]$status.build_manifest_sha256 -cne $manifestHash) {
+            throw 'Terminal build status does not pin the exact completed source-first manifest'
+          }
+          $artifactCandidate = Assert-Contained ([string]$manifest.artifact) $runsRoot 'source-first public installer'
+          $artifactDir = Get-FullPath (Split-Path -Parent $artifactCandidate)
+          if ([string]::Equals($artifactDir, $runsRoot, [StringComparison]::OrdinalIgnoreCase) -or
+              -not [string]::Equals((Split-Path -Parent $artifactDir), $runsRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The public installer must be directly inside one source-first run directory'
+          }
+          $artifact = Assert-RegularFile $artifactCandidate 'source-first public installer'
+          if ([IO.Path]::GetFileName($artifact) -cne 'fullmag.exe') { throw 'The public installer must be named fullmag.exe' }
+          if ([string]$manifest.artifact_sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+              [string]$manifest.artifact_sha256 -ine (Get-Sha256 $artifact)) {
+            throw 'Source-first installer hash does not match the terminal manifest'
+          }
+          $receipt = Assert-RegularFile (Join-Path $artifactDir 'fullmag-installer-receipt.json') 'source-first installer receipt'
+          $provenance = Assert-RegularFile (Join-Path $artifactDir 'fullmag-installer-provenance.json') 'source-first installer provenance'
+          $receiptRaw = Get-Content -LiteralPath $receipt -Raw -Encoding UTF8
+          $provenanceRaw = Get-Content -LiteralPath $provenance -Raw -Encoding UTF8
+          try { $receiptJson = $receiptRaw | ConvertFrom-Json -ErrorAction Stop; $provenanceJson = $provenanceRaw | ConvertFrom-Json -ErrorAction Stop }
+          catch { throw 'Source-first receipt or provenance is invalid JSON' }
+          $artifactHash = Get-Sha256 $artifact
+          $provenanceHash = Get-Sha256 $provenance
+          if ([string]$receiptJson.schema -cne 'fullmag.windows-installer-receipt.v1' -or
+              [string]$receiptJson.artifact -cne 'fullmag-windows-x86_64-burn' -or
+              [string]$receiptJson.route -cne 'source-first' -or
+              [string]$receiptJson.public_filename -cne 'fullmag.exe' -or
+              [string]$receiptJson.output_sha256 -ine $artifactHash -or
+              [string]$receiptJson.provenance_sha256 -ine $provenanceHash) {
+            throw 'Source-first installer receipt does not match the exact output/provenance bytes'
+          }
+          if ([string]$provenanceJson.schema -cne 'fullmag.windows-installer-provenance.v1' -or
+              [string]$provenanceJson.artifact -cne 'fullmag-windows-x86_64-burn' -or
+              [string]$provenanceJson.route -cne 'source-first' -or
+              [string]$provenanceJson.public_filename -cne 'fullmag.exe' -or
+              [string]$provenanceJson.source.head_commit_full -cne [string]$identity.head_commit_full -or
+              [string]$provenanceJson.source.source_snapshot_sha256 -ine [string]$identity.source_snapshot_sha256) {
+            throw 'Source-first installer provenance does not match the terminal source identity'
+          }
+
+          $assetDir = Join-Path $env:RUNNER_TEMP ('fullmag-release-source-first-' + $env:GITHUB_RUN_ID)
+          if (Test-Path -LiteralPath $assetDir) { throw "Refusing to reuse release staging directory: $assetDir" }
+          [IO.Directory]::CreateDirectory($assetDir) | Out-Null
+          $tag = [string]$env:FULLMAG_RELEASE_TAG
+          $prefix = "fullmag-$tag-windows-x86_64-source-first"
+          $terminalBindingPath = Join-Path $assetDir ($prefix + '-terminal-binding.json')
+          $terminalBinding = [ordered]@{
+            schema = 'fullmag.windows-installer-terminal-binding.v1'
+            terminal_state = [string]$status.state
+            exit_code = [int]$status.exit_code
+            attempt_id = $manifestAttemptId.ToLowerInvariant()
+            build_manifest_sha256 = $manifestHash
+            source_identity = [ordered]@{
+              head_commit_full = ([string]$identity.head_commit_full).ToLowerInvariant()
+              source_snapshot_sha256 = ([string]$identity.source_snapshot_sha256).ToLowerInvariant()
+            }
+            public_filename = 'fullmag.exe'
+            output_sha256 = $artifactHash
+          }
+          $terminalBinding | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $terminalBindingPath -Encoding UTF8
+          $terminalBindingFile = Assert-RegularFile $terminalBindingPath 'terminal source-first binding'
+          try { $terminalBindingJson = Get-Content -LiteralPath $terminalBindingFile -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop }
+          catch { throw 'Terminal source-first binding is invalid JSON' }
+          if ([string]$terminalBindingJson.schema -cne 'fullmag.windows-installer-terminal-binding.v1' -or
+              [string]$terminalBindingJson.terminal_state -cne 'completed' -or
+              $null -eq $terminalBindingJson.exit_code -or [int]$terminalBindingJson.exit_code -ne 0 -or
+              [string]$terminalBindingJson.attempt_id -ine $manifestAttemptId -or
+              [string]$terminalBindingJson.build_manifest_sha256 -cne $manifestHash -or
+              $terminalBindingJson.source_identity -eq $null -or
+              [string]$terminalBindingJson.source_identity.head_commit_full -ine [string]$identity.head_commit_full -or
+              [string]$terminalBindingJson.source_identity.source_snapshot_sha256 -ine [string]$identity.source_snapshot_sha256 -or
+              [string]$terminalBindingJson.public_filename -cne 'fullmag.exe' -or
+              [string]$terminalBindingJson.output_sha256 -ine $artifactHash) {
+            throw 'Terminal source-first binding does not match the admitted terminal build'
+          }
+          $terminalBindingHash = Get-Sha256 $terminalBindingFile
+          $copies = @(
+            @{ source = $artifact; destination = Join-Path $assetDir 'fullmag.exe'; hash = $artifactHash },
+            @{ source = $receipt; destination = Join-Path $assetDir ($prefix + '-installer-receipt.json'); hash = Get-Sha256 $receipt },
+            @{ source = $provenance; destination = Join-Path $assetDir ($prefix + '-installer-provenance.json'); hash = $provenanceHash }
+          )
+          foreach ($copy in $copies) {
+            Copy-Item -LiteralPath $copy.source -Destination $copy.destination
+            if ((Get-Sha256 $copy.destination) -ine [string]$copy.hash) {
+              throw "Staged release asset hash changed: $($copy.destination)"
+            }
+          }
+          if ((Get-Sha256 $terminalBindingPath) -ine $terminalBindingHash) {
+            throw "Staged release asset hash changed: $terminalBindingPath"
+          }
+          "FULLMAG_SOURCE_FIRST_MANIFEST_SHA256=$manifestHash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FULLMAG_SOURCE_FIRST_ARTIFACT_SHA256=$artifactHash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FULLMAG_SOURCE_FIRST_TERMINAL_BINDING_SHA256=$terminalBindingHash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Terminal source-first manifest SHA-256: $manifestHash"
+          Write-Host "Source-first public installer SHA-256: $artifactHash"
+          Write-Host "Source-first terminal binding SHA-256: $terminalBindingHash"
+
+      - name: Upload source-first installer assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64-source-first
+          path: ${{ runner.temp }}/fullmag-release-source-first-${{ github.run_id }}
+          if-no-files-found: error
+
   publish-release:
-    needs: [prepare-release, build-linux, build-windows]
+    needs: [prepare-release, build-linux, build-windows, build-windows-installer-source]
     runs-on: ubuntu-latest
     steps:
       - name: Download all build artifacts
@@ -373,6 +645,10 @@ jobs:
             ### Package Assets
             - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-linux-x86_64.tar.gz`
             - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64.zip`
+            - `fullmag.exe`
+            - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64-source-first-installer-receipt.json`
+            - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64-source-first-installer-provenance.json`
+            - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64-source-first-terminal-binding.json`
           prerelease: ${{ needs.prepare-release.outputs.is_prerelease == 'true' }}
           files: release-artifacts/*
           token: ${{ secrets.GITHUB_TOKEN }}

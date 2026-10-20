@@ -14,7 +14,105 @@
 
 #include <limits>
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 namespace fullmag::fem {
+
+namespace {
+
+/*
+ * Keep the pool counters as plain uint32_t fields so the internal state
+ * layout remains unchanged.  MSVC does not provide GCC's __atomic builtins;
+ * its interlocked operations are full barriers, which is stronger than the
+ * acquire/release ordering required by the pool protocol.
+ */
+#if defined(_MSC_VER)
+static_assert(sizeof(long) == sizeof(uint32_t));
+
+volatile long *interlocked_address(uint32_t *value) noexcept
+{
+    return reinterpret_cast<volatile long *>(value);
+}
+
+uint32_t atomic_load_u32(const uint32_t *value) noexcept
+{
+    return static_cast<uint32_t>(_InterlockedCompareExchange(
+        interlocked_address(const_cast<uint32_t *>(value)), 0L, 0L));
+}
+
+void atomic_store_u32(uint32_t *value, uint32_t desired) noexcept
+{
+    (void)_InterlockedExchange(
+        interlocked_address(value), static_cast<long>(desired));
+}
+
+bool atomic_compare_exchange_u32(
+    uint32_t *value,
+    uint32_t &expected,
+    uint32_t desired,
+    bool weak) noexcept
+{
+    (void)weak;
+    const uint32_t previous = static_cast<uint32_t>(_InterlockedCompareExchange(
+        interlocked_address(value),
+        static_cast<long>(desired),
+        static_cast<long>(expected)));
+    if (previous == expected) {
+        return true;
+    }
+    expected = previous;
+    return false;
+}
+
+void atomic_fetch_and_u32(uint32_t *value, uint32_t mask) noexcept
+{
+    (void)_InterlockedAnd(interlocked_address(value), static_cast<long>(mask));
+}
+
+void atomic_fetch_or_u32(uint32_t *value, uint32_t mask) noexcept
+{
+    (void)_InterlockedOr(interlocked_address(value), static_cast<long>(mask));
+}
+#else
+uint32_t atomic_load_u32(const uint32_t *value) noexcept
+{
+    return __atomic_load_n(value, __ATOMIC_ACQUIRE);
+}
+
+void atomic_store_u32(uint32_t *value, uint32_t desired) noexcept
+{
+    __atomic_store_n(value, desired, __ATOMIC_RELEASE);
+}
+
+bool atomic_compare_exchange_u32(
+    uint32_t *value,
+    uint32_t &expected,
+    uint32_t desired,
+    bool weak) noexcept
+{
+    return __atomic_compare_exchange_n(
+        value,
+        &expected,
+        desired,
+        weak,
+        __ATOMIC_ACQ_REL,
+        __ATOMIC_ACQUIRE);
+}
+
+void atomic_fetch_and_u32(uint32_t *value, uint32_t mask) noexcept
+{
+    (void)__atomic_fetch_and(value, mask, __ATOMIC_ACQ_REL);
+}
+
+void atomic_fetch_or_u32(uint32_t *value, uint32_t mask) noexcept
+{
+    (void)__atomic_fetch_or(value, mask, __ATOMIC_ACQ_REL);
+}
+#endif
+
+} // namespace
 
 FemGpuSnapshotPoolState::~FemGpuSnapshotPoolState()
 {
@@ -57,8 +155,8 @@ void destroy_gpu_snapshot_pool(FemGpuSnapshotPoolState &pool)
 #endif
     pool.component_bytes = 0;
     pool.host_aos_bytes = 0;
-    __atomic_store_n(&pool.leased_slots, 0, __ATOMIC_RELEASE);
-    __atomic_store_n(&pool.retired_slots, 0, __ATOMIC_RELEASE);
+    atomic_store_u32(&pool.leased_slots, 0);
+    atomic_store_u32(&pool.retired_slots, 0);
     pool.initialized = false;
 }
 
@@ -116,8 +214,8 @@ bool initialize_gpu_snapshot_pool(
         }
         slot.done_event = reinterpret_cast<void *>(done_event);
     }
-    __atomic_store_n(&pool.leased_slots, 0, __ATOMIC_RELEASE);
-    __atomic_store_n(&pool.retired_slots, 0, __ATOMIC_RELEASE);
+    atomic_store_u32(&pool.leased_slots, 0);
+    atomic_store_u32(&pool.retired_slots, 0);
     pool.initialized = true;
     return true;
 #else
@@ -137,7 +235,7 @@ bool gpu_snapshot_pool_acquire(
         error = "FEM GPU snapshot pool is not initialized";
         return false;
     }
-    uint32_t observed = __atomic_load_n(&pool.leased_slots, __ATOMIC_ACQUIRE);
+    uint32_t observed = atomic_load_u32(&pool.leased_slots);
     for (;;) {
         std::size_t slot_index = kFemGpuSnapshotPoolCapacity;
         for (std::size_t candidate = 0; candidate < kFemGpuSnapshotPoolCapacity; ++candidate) {
@@ -147,18 +245,16 @@ bool gpu_snapshot_pool_acquire(
                 break;
             }
 #if FULLMAG_HAS_CUDA_RUNTIME
-            uint32_t retired = __atomic_load_n(&pool.retired_slots, __ATOMIC_ACQUIRE);
+            uint32_t retired = atomic_load_u32(&pool.retired_slots);
             const uint32_t desired_retired = retired & ~bit;
             if ((retired & bit) != 0 &&
                 cudaEventQuery(reinterpret_cast<cudaEvent_t>(pool.slots[candidate].done_event)) ==
                     cudaSuccess &&
-                __atomic_compare_exchange_n(
+                atomic_compare_exchange_u32(
                     &pool.retired_slots,
-                    &retired,
+                    retired,
                     desired_retired,
-                    false,
-                    __ATOMIC_ACQ_REL,
-                    __ATOMIC_ACQUIRE)) {
+                    false)) {
                 const auto &slot = pool.slots[candidate];
                 lease.slot_index = candidate;
                 lease.host_aos = slot.host_aos;
@@ -175,13 +271,11 @@ bool gpu_snapshot_pool_acquire(
             return false;
         }
         const uint32_t desired = observed | (uint32_t{1} << slot_index);
-        if (__atomic_compare_exchange_n(
+        if (atomic_compare_exchange_u32(
                 &pool.leased_slots,
-                &observed,
+                observed,
                 desired,
-                true,
-                __ATOMIC_ACQ_REL,
-                __ATOMIC_ACQUIRE)) {
+                true)) {
             const auto &slot = pool.slots[slot_index];
             lease.slot_index = slot_index;
             lease.host_aos = slot.host_aos;
@@ -204,10 +298,10 @@ void gpu_snapshot_pool_release(
     }
     const uint32_t bit = uint32_t{1} << slot_index;
     if (work_complete) {
-        __atomic_fetch_and(&pool.retired_slots, ~bit, __ATOMIC_ACQ_REL);
-        __atomic_fetch_and(&pool.leased_slots, ~bit, __ATOMIC_ACQ_REL);
+        atomic_fetch_and_u32(&pool.retired_slots, ~bit);
+        atomic_fetch_and_u32(&pool.leased_slots, ~bit);
     } else {
-        __atomic_fetch_or(&pool.retired_slots, bit, __ATOMIC_ACQ_REL);
+        atomic_fetch_or_u32(&pool.retired_slots, bit);
     }
 }
 

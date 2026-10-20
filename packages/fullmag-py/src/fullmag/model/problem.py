@@ -97,8 +97,14 @@ _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 # v8 invalidated v7 source-face corner targets. v9 invalidates meshes generated
 # with alias-shadowed per-geometry hmax policies; reusing them could retain a
 # neighboring geometry's size field after canonical owner binding changes.
-_FEM_MESH_CACHE_VERSION = "v10"
+# v11 invalidates every FEM artifact produced before volume-node compaction;
+# the producer can otherwise leave a P1 row for a Gmsh construction point that
+# has no volume support.
+_FEM_MESH_CACHE_VERSION = "v11"
 _FEM_SHARED_DOMAIN_CACHE_SCHEMA = "fullmag.fem.shared-domain-cache.v1"
+_FEM_MIXED_V2_VOLUME_REDUCTION_CONTRACT = (
+    "fullmag.mixed-certificate-v2.volume.det3-neumaier.v1"
+)
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -189,6 +195,7 @@ def _fem_cache_contract_identity(
         MIXED_REPAIR_ALGORITHM,
     )
     from fullmag.meshing._gmsh_types import MIXED_SHARED_GMSH_VERSION
+    from fullmag.meshing.asset_pipeline import FEM_VOLUME_NODE_SPACE_CONTRACT
 
     identity: dict[str, object] = {
         "source_snapshot_sha256": _fem_verified_source_snapshot_sha256(),
@@ -204,6 +211,7 @@ def _fem_cache_contract_identity(
         ),
         "artifact_schema": ARTIFACT_SCHEMA_V2,
         "topology_fingerprint_versions": ["v2", "v3"],
+        "volume_node_space_contract": FEM_VOLUME_NODE_SPACE_CONTRACT,
     }
     if resolved_policy_sha256 is not None:
         identity["resolved_policy_sha256"] = resolved_policy_sha256
@@ -745,6 +753,56 @@ def _fem_mesh_cache_key(
     ).hexdigest()
 
 
+def _mixed_v2_volume_reduction_contract_for_request(
+    geometries: Sequence[object],
+    hints: FEM,
+    *,
+    study_universe: Mapping[str, object] | None,
+    mesh_workflow: Mapping[str, object] | None,
+    object_regions: Sequence[Mapping[str, object]] | None,
+) -> str | None:
+    """Return the mixed-v2 cache contract only for the producer's direct route."""
+    from fullmag.meshing._gmsh_occ import _region_uses_conformal_occ_realization
+    from fullmag.meshing._gmsh_swept import _disconnected_mixed_p1_pair
+    from fullmag.meshing.asset_pipeline import (
+        _mesh_options_from_runtime_metadata,
+        _mixed_v2_direct_route_selected,
+        _study_universe_airbox_options,
+        _validate_domain_mesh_workflow,
+    )
+
+    geometry_list = list(geometries)
+    if _disconnected_mixed_p1_pair(geometry_list) is None:
+        return None
+
+    frozen_payload = _validate_domain_mesh_workflow(mesh_workflow)
+    airbox = _study_universe_airbox_options(geometry_list, study_universe)
+    surface_mesh_options = _mesh_options_from_runtime_metadata(
+        mesh_workflow,
+        geometries=geometry_list,
+        default_hmax=float(hints.hmax),
+        bounds_by_name=None,
+        include_size_fields=False,
+    )
+    conformal_object_regions = [
+        region
+        for region in (object_regions or [])
+        if region.get("enabled", True)
+        and _region_uses_conformal_occ_realization(region)
+    ]
+    if _mixed_v2_direct_route_selected(
+        geometry_list,
+        hints,
+        airbox=airbox,
+        surface_mesh_options=surface_mesh_options,
+        frozen_payload=frozen_payload,
+        conformal_object_regions=conformal_object_regions,
+        mesh_workflow=mesh_workflow,
+    ):
+        return _FEM_MIXED_V2_VOLUME_REDUCTION_CONTRACT
+    return None
+
+
 def _fem_shared_domain_cache_document(
     geometries: Sequence[object],
     hints: FEM,
@@ -754,13 +812,17 @@ def _fem_shared_domain_cache_document(
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None,
     object_regions: Sequence[dict[str, object]] | None,
     cache_identity: Mapping[str, object] | None = None,
+    mixed_v2_volume_reduction_contract: str | None = None,
 ) -> tuple[str, dict[str, object]]:
     """Return the persistent identity for a generated shared FEM domain.
 
     The cache is deliberately keyed from the resolved source geometry
     fingerprints (including imported-file stat data), not only from object
     names.  This keeps a stale cache from surviving an STL/STEP replacement
-    while avoiding a repository-wide source scan on every run.
+    while avoiding a repository-wide source scan on every run.  The mixed-v2
+    volume-reduction contract is included only for the canonical disconnected
+    Box-plus-annulus route, so its producer arithmetic refresh does not
+    invalidate unrelated FEM assets.
     """
     document: dict[str, object] = {
         "schema": _FEM_SHARED_DOMAIN_CACHE_SCHEMA,
@@ -779,6 +841,10 @@ def _fem_shared_domain_cache_document(
     }
     if cache_identity is not None:
         document["cache_identity"] = dict(cache_identity)
+    if mixed_v2_volume_reduction_contract is not None:
+        document["mixed_v2_volume_reduction_contract"] = (
+            mixed_v2_volume_reduction_contract
+        )
     encoded = json.dumps(
         document,
         sort_keys=True,
@@ -1211,6 +1277,13 @@ def build_geometry_assets_for_request(
                 }
         elif study_universe is not None:
             authored_regions = list(object_regions or [])
+            mixed_v2_volume_reduction_contract = _mixed_v2_volume_reduction_contract_for_request(
+                geometries,
+                discretization.fem,
+                study_universe=study_universe,
+                mesh_workflow=mesh_workflow,
+                object_regions=authored_regions,
+            )
 
             # A generated shared-domain mesh is much more expensive than the
             # surrounding Python model assembly. Reuse a certified native
@@ -1278,6 +1351,9 @@ def build_geometry_assets_for_request(
                     per_object_recipes=per_object_recipes,
                     object_regions=authored_regions,
                     cache_identity=cache_identity,
+                    mixed_v2_volume_reduction_contract=(
+                        mixed_v2_volume_reduction_contract
+                    ),
                 )
                 shared_cache_dir = fem_mesh_cache_dir / (
                     "shared_domains-v2" if v2_cache_enabled else "shared_domains"

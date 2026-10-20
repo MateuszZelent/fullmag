@@ -95,6 +95,85 @@ fn emit_unix_runtime_rpath(path: &str) {
     }
 }
 
+fn cmake_uses_multiple_configurations(build_dir: &std::path::Path) -> bool {
+    let cache_path = build_dir.join("CMakeCache.txt");
+    let cache = std::fs::read_to_string(&cache_path).unwrap_or_else(|error| {
+        panic!(
+            "CMake configure did not leave a readable cache at {}: {error}",
+            cache_path.display()
+        )
+    });
+    cache.lines().any(|line| {
+        line.strip_prefix("CMAKE_CONFIGURATION_TYPES:")
+            .and_then(|entry| entry.split_once('='))
+            .is_some_and(|(_, configurations)| !configurations.trim().is_empty())
+    })
+}
+
+fn resolve_generated_native_library_dir(
+    build_dir: &std::path::Path,
+    cmake_build_type: &str,
+) -> std::path::PathBuf {
+    let native_lib_root = build_dir.join("backends/fem");
+    let metadata_name = if cmake_uses_multiple_configurations(build_dir) {
+        format!("fullmag-fem-library-path-{cmake_build_type}.txt")
+    } else {
+        "fullmag-fem-library-path.txt".to_string()
+    };
+    let metadata_path = native_lib_root.join(metadata_name);
+    let target_path_text = std::fs::read_to_string(&metadata_path).unwrap_or_else(|error| {
+        panic!(
+            "native FEM CMake configure did not produce the selected library metadata {}: {error}",
+            metadata_path.display()
+        )
+    });
+    let target_path = std::path::PathBuf::from(target_path_text.trim());
+    if !target_path.is_absolute() {
+        panic!(
+            "native FEM library metadata must contain an absolute target path: {}",
+            target_path.display()
+        );
+    }
+    let canonical_native_lib_root = native_lib_root.canonicalize().unwrap_or_else(|error| {
+        panic!(
+            "native FEM CMake output directory could not be canonicalized {}: {error}",
+            native_lib_root.display()
+        )
+    });
+    let canonical_target_path = target_path.canonicalize().unwrap_or_else(|error| {
+        panic!(
+            "native FEM metadata target could not be canonicalized {}: {error}",
+            target_path.display()
+        )
+    });
+    if !canonical_target_path.starts_with(&canonical_native_lib_root) {
+        panic!(
+            "native FEM library metadata escaped its canonical CMake output directory: {}",
+            canonical_target_path.display()
+        );
+    }
+    if !target_path.is_file() {
+        panic!(
+            "native FEM library metadata points to a missing target file: {}",
+            target_path.display()
+        );
+    }
+    let native_lib_dir = canonical_target_path
+        .parent()
+        .expect("native FEM target metadata path should have a parent")
+        .to_path_buf();
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+        && !native_lib_dir.join("fullmag_fem.lib").is_file()
+    {
+        panic!(
+            "native FEM metadata target directory is missing the MSVC import library: {}",
+            native_lib_dir.display()
+        );
+    }
+    native_lib_dir
+}
+
 fn main() {
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     generate_gpu_execution_receipt_abi_assertions(&out_dir);
@@ -298,22 +377,7 @@ fn main() {
         panic!("cmake build for fullmag_fem failed");
     }
 
-    let native_lib_root = build_dir.join("backends/fem");
-    let native_lib_dir = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
-        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
-    {
-        let configured = native_lib_root.join(cmake_build_type);
-        if configured.join("fullmag_fem.lib").is_file() {
-            configured
-        } else if native_lib_root.join("fullmag_fem.lib").is_file() {
-            // Single-configuration generators such as Ninja use the flat path.
-            native_lib_root
-        } else {
-            panic!("native FEM build did not produce the MSVC fullmag_fem.lib import library");
-        }
-    } else {
-        native_lib_root
-    };
+    let native_lib_dir = resolve_generated_native_library_dir(&build_dir, cmake_build_type);
     println!(
         "cargo:rustc-link-search=native={}",
         native_lib_dir.display()

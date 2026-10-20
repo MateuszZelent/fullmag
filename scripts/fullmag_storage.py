@@ -35,9 +35,30 @@ WINDOWS_WORKSPACE_BUILD_REQUEST_RECEIPT_FIELDS = frozenset({
     "state", "exit_code", "build_manifest_sha256", "started_at", "finished_at",
 })
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MAX_INSTALLER_SIDECAR_BYTES = 16 * 1024 * 1024
 WINDOWS_WORKSPACE_STORAGE_PROFILES = {
     "release": "windows-native-fdm-cpu",
     "dev": "windows-native-fdm-cpu-dev",
+}
+# Native FEM is an explicitly bounded operation.  Keep these profiles separate
+# from both the legacy Docker lane and the native FDM workspace profiles so a
+# generic Windows command cannot acquire the native FEM heavy slot by accident.
+WINDOWS_NATIVE_FEM_STORAGE_PROFILES = {
+    "cpu": "windows-native-fem-cpu",
+    "gpu": "windows-native-fem-gpu",
+}
+WINDOWS_FULL_WORKSPACE_STORAGE_PROFILE = "windows-native-fem-gpu"
+WINDOWS_INSTALLER_SOURCE_PROFILE = "windows-installer-source"
+WINDOWS_NATIVE_BUILD_PROFILES = frozenset(WINDOWS_WORKSPACE_STORAGE_PROFILES.values()) | frozenset(
+    WINDOWS_NATIVE_FEM_STORAGE_PROFILES.values()
+) | frozenset({WINDOWS_INSTALLER_SOURCE_PROFILE})
+WINDOWS_NATIVE_FEM_RECEIPT_SCHEMA = "fullmag.windows-native-fem-receipt.v1"
+WINDOWS_FULL_WORKSPACE_RECEIPT_SCHEMA = "fullmag.windows-full-workspace-receipt.v1"
+WINDOWS_FULL_WORKSPACE_COMPONENTS = {
+    "fdm_cpu": ("fdm", "cpu", False, "native_fdm_dll"),
+    "fdm_gpu": ("fdm", "gpu", True, "native_fdm_dll"),
+    "fem_cpu": ("fem", "cpu", False, "native_fem_dll"),
+    "fem_gpu": ("fem", "gpu", True, "native_fem_dll"),
 }
 HOST_LEDGER_PROFILE = "host-ledger-v1"
 HOST_LEDGER_IMAGE_NAME = "fullmag-host-ledger-v1.ext4"
@@ -88,6 +109,41 @@ class StorageError(RuntimeError):
 
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _sha256_file(path):
+    """Hash a file on both the managed Python 3.10 and 3.12 interpreters."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _directory_sha256(root):
+    """Hash a static tree using the native Windows manifest algorithm.
+
+    PowerShell hashes ``relative-posix-path|file-sha256`` records sorted by
+    absolute path, with one trailing newline. Rejecting links while walking
+    keeps a managed frontend tree from changing its meaning between the
+    terminal build receipt and runtime admission.
+    """
+    root = Path(root)
+    if is_link(root) or not root.is_dir():
+        raise StorageError(f"Static frontend tree is not a regular directory: {root}")
+    records = []
+    for path in root.rglob("*"):
+        if is_link(path):
+            raise StorageError(f"Static frontend tree contains a symlink or junction: {path}")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise StorageError(f"Static frontend tree contains a non-file entry: {path}")
+        relative = path.relative_to(root).as_posix()
+        records.append((str(path), f"{relative}|{_sha256_file(path)}"))
+    records.sort(key=lambda item: item[0].casefold())
+    payload = ("".join(record + "\n" for _, record in records)).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def git(repo, *args):
@@ -272,9 +328,23 @@ def validate_managed_view(layout):
         raise StorageError(f"Wrong managed backing image: expected {layout['native_backing_image']}, observed {observed}")
 
 
+def _assert_no_storage_dotenv_reparse(path):
+    """Reject a dotenv file or parent that redirects before inspecting it."""
+    for ancestor in (path, *path.parents):
+        try:
+            redirected = is_link(ancestor)
+        except OSError as error:
+            raise StorageError(f"Cannot safely inspect storage settings path: {path}") from error
+        if redirected:
+            raise StorageError(
+                f"Storage settings file must not traverse a symlink/junction: {path} (at {ancestor})"
+            )
+
+
 def storage_dotenv(main_repo):
     """Read only storage settings; never execute or interpolate dotenv values."""
     path = absolute(Path(main_repo) / ".env", "storage dotenv")
+    _assert_no_storage_dotenv_reparse(path)
     if not path.exists():
         return {}
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
@@ -529,6 +599,229 @@ def worktree_records(repo):
     if not records or "worktree" not in records[0]:
         raise StorageError("Git returned no registered main checkout")
     return records
+
+
+def _native_fem_authored_script(layout, script_path):
+    """Admit authored FEM input from this checkout or Git's main checkout.
+
+    Compiler inputs come from the managed worktree snapshot, but a simulation
+    script remains user-authored input.  Git's first registered worktree is
+    the only additional checkout accepted here; arbitrary paths and reparse
+    redirects remain rejected by ``absolute``.
+    """
+    candidate = Path(script_path)
+    if not candidate.is_absolute():
+        candidate = Path(layout["repo_root"]) / candidate
+    candidate = absolute(str(candidate), "native FEM script")
+    current_root = absolute(layout["repo_root"], "native FEM checkout")
+    try:
+        registrations = worktree_records(current_root)
+    except (OSError, StorageError, ValueError, TypeError) as error:
+        raise StorageError(
+            "Cannot verify the registered main checkout for native FEM script admission"
+        ) from error
+    if not registrations or not isinstance(registrations[0].get("worktree"), str):
+        raise StorageError("Git returned no registered main checkout for native FEM script admission")
+    try:
+        main_root = absolute(registrations[0]["worktree"], "registered main checkout")
+    except StorageError as error:
+        raise StorageError("Registered main checkout failed the canonical path guard") from error
+    if not main_root.is_dir() or not (main_root / ".git").exists():
+        raise StorageError(f"Registered main checkout is not an available Git checkout: {main_root}")
+    try:
+        verified_root = absolute(
+            git(main_root, "rev-parse", "--show-toplevel"),
+            "registered main checkout Git root",
+        )
+    except (OSError, StorageError) as error:
+        raise StorageError("Cannot verify the registered main checkout through Git") from error
+    if verified_root != main_root:
+        raise StorageError("Registered main checkout Git root does not match its worktree record")
+    allowed_roots = (current_root,) if current_root == main_root else (current_root, main_root)
+    if not candidate.is_file() or not any(inside(candidate, root) for root in allowed_roots):
+        roots = " or ".join(str(root) for root in allowed_roots)
+        raise StorageError(
+            f"Native FEM script must be an existing file inside an approved checkout ({roots}): {candidate}"
+        )
+    try:
+        script_sha256 = _sha256_file(candidate)
+    except OSError as error:
+        raise StorageError(f"Cannot hash the admitted native FEM script: {candidate}") from error
+    if not SHA256_RE.fullmatch(script_sha256):
+        raise StorageError("Admitted native FEM script did not produce a SHA256 digest")
+    return candidate, script_sha256
+
+
+def _verify_native_fem_script_unchanged(path, expected_sha256):
+    """Reject an authored input changed after admission and before launch."""
+    if path is None:
+        return
+    try:
+        guarded_path = absolute(str(path), "native FEM script")
+        if guarded_path != Path(path):
+            raise StorageError("Native FEM script path changed after admission")
+        actual = _sha256_file(guarded_path)
+    except (OSError, StorageError) as error:
+        raise StorageError(f"Cannot re-hash the admitted native FEM script: {path}") from error
+    if actual != expected_sha256:
+        raise StorageError(
+            f"Native FEM script changed after admission: expected {expected_sha256}, found {actual}"
+        )
+
+
+def _native_fem_interactive_frontend_reuse(layout, web_port, expected_build_id):
+    """Admit one existing FEM dev stage for a separate interactive launch.
+
+    Development Next output is keyed by the listener port.  A fresh ephemeral
+    port therefore cannot reuse a stage made for another port: the managed
+    ``.next-control-room-<port>`` link would be absent.  Read and verify the
+    sealed pair before creating a run directory, then return the exact port and
+    manifest digest to pin on the managed child command.
+    """
+    build_root = validate_path(
+        Path(layout["build_root"]), layout["build_storage_root"],
+        "native FEM build root",
+    )
+    manifest_path = validate_path(
+        build_root / "windows-fem-runtime" / "build-manifest.json",
+        build_root,
+        "native FEM build manifest",
+    )
+    if is_link(manifest_path) or not manifest_path.is_file():
+        raise StorageError(
+            "Native FEM dev reuse requires an existing regular build manifest; rerun with build=True"
+        )
+    manifest_sha256 = _sha256_file(manifest_path)
+    if expected_build_id is not None and expected_build_id != manifest_sha256:
+        raise StorageError(
+            "ExpectedBuildId does not match the pinned native FEM build manifest; rerun with build=True"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Pinned native FEM build manifest is unreadable; rerun with build=True") from error
+    if (not isinstance(manifest, dict)
+            or manifest.get("schema_version") != 1
+            or manifest.get("state") != "completed"
+            or manifest.get("backend") != "fem"
+            or manifest.get("frontend_mode") != "dev"):
+        raise StorageError(
+            "Pinned native FEM build manifest has no completed dev frontend stage; rerun with build=True"
+        )
+
+    frozen = manifest.get("build_source_snapshot")
+    if not isinstance(frozen, dict) or set(frozen) != {"record_path", "inventory_sha256", "source_root"}:
+        raise StorageError("Pinned native FEM build manifest has no complete frozen source binding")
+    if not isinstance(frozen.get("inventory_sha256"), str) or not SHA256_RE.fullmatch(frozen["inventory_sha256"]):
+        raise StorageError("Pinned native FEM frozen source inventory is malformed; rerun with build=True")
+    snapshot_record = validate_path(
+        frozen["record_path"], build_root, "native FEM frozen source record",
+    )
+    snapshot_root = validate_path(
+        frozen["source_root"], build_root, "native FEM frozen source root",
+    )
+    if (is_link(snapshot_record) or not snapshot_record.is_file()
+            or is_link(snapshot_root) or not snapshot_root.is_dir()):
+        raise StorageError("Pinned native FEM frozen source binding is unavailable; rerun with build=True")
+    try:
+        from windows.build_snapshot import verify_snapshot
+
+        verified_snapshot = verify_snapshot(str(snapshot_record), str(build_root))
+    except (ImportError, OSError, ValueError, TypeError, RuntimeError) as error:
+        raise StorageError("Pinned native FEM frozen source binding is stale; rerun with build=True") from error
+    if (not isinstance(verified_snapshot, dict)
+            or verified_snapshot.get("inventory_sha256") != frozen["inventory_sha256"]
+            or not _same_path(verified_snapshot.get("source_root"), snapshot_root)):
+        raise StorageError("Pinned native FEM frozen source binding does not match its record; rerun with build=True")
+
+    source_manifest_value = manifest.get("frontend_source_manifest")
+    if not isinstance(source_manifest_value, str) or not source_manifest_value:
+        raise StorageError("Pinned native FEM frontend source manifest path is missing; rerun with build=True")
+    source_manifest = validate_path(
+        source_manifest_value, build_root, "native FEM frontend source manifest",
+    )
+    source_manifest_sha256 = manifest.get("frontend_source_manifest_sha256")
+    if (is_link(source_manifest) or not source_manifest.is_file()
+            or not isinstance(source_manifest_sha256, str)
+            or not SHA256_RE.fullmatch(source_manifest_sha256)
+            or _sha256_file(source_manifest) != source_manifest_sha256):
+        raise StorageError("Native FEM frontend source manifest hash is stale; rerun with build=True")
+    try:
+        stage = json.loads(source_manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Native FEM frontend source manifest is unreadable; rerun with build=True") from error
+    if (not isinstance(stage, dict)
+            or stage.get("schema") != "fullmag.native-workspace-frontend-source.v1"
+            or stage.get("mode") != "dev"):
+        raise StorageError("Native FEM frontend stage schema or mode is incompatible; rerun with build=True")
+    stage_build_root = validate_path(
+        stage.get("build_root", ""), build_root, "native FEM frontend stage build root",
+    )
+    stage_source_root = validate_path(
+        stage.get("source_root", ""), build_root, "native FEM frontend stage source root",
+    )
+    stage_workspace_root = validate_path(
+        stage.get("workspace_root", ""), build_root, "native FEM frontend workspace",
+    )
+    stage_cache_root = validate_path(
+        stage.get("frontend_cache_root", ""), build_root, "native FEM frontend cache",
+    )
+    for label, path, kind in (
+        ("native FEM frontend stage build root", stage_build_root, "dir"),
+        ("native FEM frontend stage source root", stage_source_root, "dir"),
+        ("native FEM frontend workspace", stage_workspace_root, "dir"),
+        ("native FEM frontend cache", stage_cache_root, "dir"),
+    ):
+        if is_link(path) or not getattr(path, f"is_{kind}")():
+            raise StorageError(f"{label} is missing or redirects outside storage; rerun with build=True")
+    if (not _same_path(stage_build_root, build_root)
+            or not _same_path(stage_source_root, snapshot_root)
+            or not _same_path(stage_workspace_root, manifest.get("frontend_workspace_root", ""))
+            or not _same_path(stage_cache_root, manifest.get("frontend_cache_root", ""))):
+        raise StorageError("Native FEM frontend stage is bound to different build inputs; rerun with build=True")
+    stage_inventory = stage.get("source_inventory_sha256")
+    if (not isinstance(stage_inventory, str) or not SHA256_RE.fullmatch(stage_inventory)
+            or manifest.get("frontend_source_sha256") != stage_inventory):
+        raise StorageError("Native FEM frontend source inventory is not pinned by the build manifest; rerun with build=True")
+    stage_frozen = stage.get("build_source_snapshot")
+    if (not isinstance(stage_frozen, dict)
+            or set(stage_frozen) != {"record_path", "inventory_sha256", "source_root"}
+            or stage_frozen != frozen):
+        raise StorageError("Native FEM frontend stage is bound to a different source snapshot; rerun with build=True")
+    stage_port = stage.get("web_port")
+    if type(stage_port) is not int or not 1 <= stage_port <= 65535:
+        raise StorageError("Native FEM dev frontend stage has no valid saved web port; rerun with build=True")
+    app_root = validate_path(
+        stage_workspace_root / "apps" / "control-room",
+        stage_workspace_root,
+        "native FEM frontend application",
+    )
+    dev_link = app_root / f".next-control-room-{stage_port}"
+    dev_next_root = validate_path(
+        stage_cache_root / "next", stage_cache_root, "native FEM dev frontend cache root",
+    )
+    if is_link(dev_next_root) or not dev_next_root.is_dir():
+        raise StorageError("Native FEM dev frontend cache root is missing or redirects outside storage; rerun with build=True")
+    dev_target = validate_path(
+        dev_next_root / f"dev-{stage_port}", dev_next_root, "native FEM dev frontend port cache",
+    )
+    if (not is_link(dev_link) or is_link(dev_target)
+            or not dev_target.is_dir()
+            or not _same_path(dev_link.resolve(), dev_target.resolve())):
+        raise StorageError("Native FEM dev frontend stage has no valid saved port link; rerun with build=True")
+    if web_port not in (0, stage_port):
+        raise StorageError(
+            f"Requested web port {web_port} differs from the pinned frontend stage port {stage_port}; "
+            "rerun with build=True for a different port"
+        )
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("127.0.0.1", stage_port))
+        except OSError as error:
+            raise StorageError(
+                f"Pinned native FEM frontend port {stage_port} is occupied; refusing to kill or rebuild"
+            ) from error
+    return manifest_sha256, stage_port
 
 
 def atomic_json(path, data, *, retry_windows_replace=False):
@@ -945,6 +1238,132 @@ def _validate_windows_workspace_profile(layout, backend_profile):
         )
 
 
+def _resolve_windows_fem_device(requested):
+    if requested in ("cpu", "gpu"):
+        return requested
+    if requested != "auto":
+        raise StorageError("Native FEM device must be auto, cpu or gpu")
+    if not _is_native_windows():
+        raise StorageError("Native FEM auto device resolution requires native Windows")
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "-L"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return "cpu"
+    return "gpu" if result.returncode == 0 else "cpu"
+
+
+def _validate_windows_fem_profile(layout, device):
+    expected = WINDOWS_NATIVE_FEM_STORAGE_PROFILES.get(device)
+    if expected is None or layout.get("profile") != expected:
+        raise StorageError(
+            "Native Windows FEM storage profile must match the resolved device "
+            f"({device!r} requires {expected!r})"
+        )
+
+
+def _native_fem_receipt_path(layout):
+    return validate_path(
+        Path(layout["runtime_root"]) / "native-fem-receipt.json",
+        layout["runtime_root"],
+        "native FEM receipt",
+    )
+
+
+def _native_fem_receipt_attempt_path(layout, attempt_id):
+    """Keep an immutable-per-attempt copy beside the compatibility alias."""
+    if not isinstance(attempt_id, str) or not re.fullmatch(r"[0-9a-f]{32}", attempt_id):
+        raise StorageError("Native FEM receipt attempt id is invalid")
+    return validate_path(
+        Path(layout["runtime_root"]) / f"native-fem-receipt-{attempt_id}.json",
+        layout["runtime_root"],
+        "native FEM per-attempt receipt",
+    )
+
+
+def _persist_native_fem_attempt_receipt(layout, attempt_id, receipt):
+    """Keep one attempt receipt immutable while allowing idempotent replay."""
+    path = _native_fem_receipt_attempt_path(layout, attempt_id)
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as error:
+            raise StorageError("Native FEM per-attempt receipt is unreadable") from error
+        if existing != receipt:
+            raise StorageError("Native FEM per-attempt receipt differs for the same attempt")
+        return path
+    atomic_json(path, receipt)
+    return path
+
+
+def _native_fem_receipt_status_matches(layout, status, receipt):
+    """Only the terminal status for this attempt may advance the alias."""
+    return (
+        isinstance(status, dict)
+        and status.get("schema") == SCHEMA
+        and status.get("worktree_id") == layout["worktree_id"]
+        and status.get("profile") == layout["profile"]
+        and _same_path(status.get("repo_root"), layout["repo_root"])
+        and status.get("attempt_id") == receipt.get("attempt_id")
+        and status.get("execution_mode") == receipt.get("execution_mode")
+        and status.get("state") == receipt.get("state")
+        and status.get("exit_code") == receipt.get("exit_code")
+        and status.get("build_manifest_sha256") == receipt.get("build_manifest_sha256")
+        and status.get("execution_mode") in {
+            "windows-fem", "windows-fem-build",
+            "windows-fem-workspace", "windows-fem-workspace-build",
+        }
+        and status.get("state") in {"completed", "failed", "interrupted"}
+    )
+
+
+def _publish_native_fem_receipt(layout, receipt):
+    """Persist every attempt and publish the shared alias under the build lock.
+
+    The build status is the authoritative ordering record.  An older
+    operation can reach its outer ``finally`` after a newer operation has
+    released the lock; it keeps its own evidence but cannot regress the
+    compatibility alias.
+    """
+    if not isinstance(receipt, dict) or receipt.get("schema") != WINDOWS_NATIVE_FEM_RECEIPT_SCHEMA:
+        raise StorageError("Native FEM receipt schema is invalid")
+    attempt_id = receipt.get("attempt_id")
+    if (not isinstance(attempt_id, str) or not re.fullmatch(r"[0-9a-f]{32}", attempt_id)
+            or receipt.get("worktree_id") != layout["worktree_id"]
+            or receipt.get("profile") != layout["profile"]):
+        raise StorageError("Native FEM receipt belongs to another worktree or attempt")
+    initialize(layout)
+    # This path is unique to the attempt, so evidence survives even when
+    # the shared alias has already advanced to a newer operation.
+    _persist_native_fem_attempt_receipt(layout, attempt_id, receipt)
+    try:
+        with build_lock(layout):
+            status_path = validate_path(
+                Path(layout["build_root"]) / "build-status.json",
+                layout["build_storage_root"],
+                "native FEM build status",
+            )
+            try:
+                status = json.loads(status_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                return False
+            if not _native_fem_receipt_status_matches(layout, status, receipt):
+                return False
+            atomic_json(_native_fem_receipt_path(layout), receipt)
+            return True
+    except StorageError as error:
+        # A newer managed operation may currently hold the same lock.
+        # Its own terminal publication will advance the alias; never turn
+        # an otherwise successful attempt into a stale-receipt failure.
+        if str(error).startswith("Storage is busy:"):
+            return False
+        raise
+
+
 def _native_build_cancellation(layout, active):
     """Bind a background build's admission to its already-verified UI owner."""
     if active is None:
@@ -980,9 +1399,9 @@ container keeps its durable queue lease even after the host file lock closes.
 """
     if native_user_build and (
         not _is_native_windows()
-        or layout.get("profile") not in WINDOWS_WORKSPACE_STORAGE_PROFILES.values()
+        or layout.get("profile") not in WINDOWS_NATIVE_BUILD_PROFILES
     ):
-        raise StorageError("Native user build requires one of the fixed Windows workspace profiles")
+        raise StorageError("Native user build requires one of the fixed Windows native profiles")
     if native_user_build:
         # User-requested native Windows builds are independent of the Linux
         # queue. Serialize only other native builds using this host toolchain.
@@ -1016,6 +1435,35 @@ container keeps its durable queue lease even after the host file lock closes.
 
 def _run_logged_command(command, repo_root, child_env, log_path, *, cancelled=None):
     """Keep complete compiler diagnostics, including stderr and nonzero exits."""
+    def write_console(raw):
+        stream = sys.stdout
+        binary = getattr(stream, "buffer", None)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            if binary is not None:
+                try:
+                    # Native compiler code-page output stays byte tolerant;
+                    # the binary file log is authoritative in either case.
+                    binary.write(raw)
+                    binary.flush()
+                    return
+                except (OSError, UnicodeError, ValueError):
+                    pass
+            text = raw.decode("utf-8", errors="replace")
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        try:
+            # Re-encode through the console codec so replacement characters
+            # cannot trigger UnicodeEncodeError on ASCII/cp1250 streams.
+            safe = text.encode(encoding, errors="backslashreplace").decode(encoding, errors="replace")
+        except (LookupError, UnicodeError):
+            safe = text.encode("ascii", errors="replace").decode("ascii")
+        try:
+            stream.write(safe)
+        except UnicodeEncodeError:
+            stream.write(safe.encode("ascii", errors="replace").decode("ascii"))
+        stream.flush()
+
     with log_path.open("xb") as log:
         if cancelled is not None and cancelled():
             raise StorageError("Native build cancelled before command launch")
@@ -1024,14 +1472,51 @@ def _run_logged_command(command, repo_root, child_env, log_path, *, cancelled=No
             for line in iter(child.stdout.readline, b""):
                 log.write(line)
                 log.flush()
-                console_line = line.decode("utf-8", errors="replace")
-                encoding = getattr(sys.stdout, "encoding", None)
-                if encoding:
-                    # The binary log is authoritative. A legacy Windows console
-                    # must not interrupt the child merely to display Unicode.
-                    console_line = console_line.encode(encoding, errors="backslashreplace").decode(encoding)
-                print(console_line, end="", flush=True)
+                write_console(line)
             return subprocess.CompletedProcess(command, child.wait())
+
+
+def _validate_expected_build_handoff(
+    layout,
+    command,
+    *,
+    native_workspace_paths,
+    native_fem_paths,
+    native_full_workspace_paths,
+    native_manifest_relative,
+    execution_mode,
+):
+    """Admit an ExpectedBuildId only when it pins this operation's manifest."""
+    positions = [index for index, value in enumerate(command) if value == "-ExpectedBuildId"]
+    if not positions:
+        return
+    if len(positions) != 1 or positions[0] + 1 >= len(command):
+        raise StorageError("ExpectedBuildId must appear once with a manifest SHA256 value")
+    expected = command[positions[0] + 1]
+    if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected):
+        raise StorageError("ExpectedBuildId must be a lowercase manifest SHA256")
+    if native_workspace_paths and execution_mode != "windows-workspace":
+        raise StorageError("ExpectedBuildId is only valid for native workspace runtime")
+    if native_fem_paths and execution_mode not in ("windows-fem", "windows-fem-workspace"):
+        raise StorageError("ExpectedBuildId is only valid for native FEM runtime")
+    if native_full_workspace_paths and execution_mode != "windows-full-workspace":
+        raise StorageError("ExpectedBuildId is only valid for full workspace runtime")
+    if sum(bool(value) for value in (
+        native_workspace_paths, native_fem_paths, native_full_workspace_paths
+    )) != 1:
+        raise StorageError("ExpectedBuildId requires one closed native runtime lane")
+    if native_full_workspace_paths:
+        validate_full_workspace_handoff(layout, expected)
+        return
+    manifest = validate_path(
+        Path(layout["build_root"]) / (native_manifest_relative or "windows-runtime/build-manifest.json"),
+        layout["build_root"],
+        "native build manifest",
+    )
+    if not manifest.is_file():
+        raise StorageError("ExpectedBuildId refers to a missing native build manifest")
+    if _sha256_file(manifest) != expected:
+        raise StorageError("ExpectedBuildId does not match the native build manifest")
 
 
 def _run_managed_command(
@@ -1041,11 +1526,27 @@ def _run_managed_command(
     acquire_heavy_slot=True,
     native_user_build=False,
     native_workspace_paths=False,
+    native_fem_paths=False,
+    native_full_workspace_paths=False,
+    fem_browser_workspace=False,
+    native_installer_paths=False,
     workspace_backend_profile=None,
+    fem_device=None,
+    fem_requested_device=None,
     execution_mode="managed",
     result_record=None,
     workspace_request_id=None,
+    native_manifest_relative=None,
+    attempt_id=None,
+    fem_frontend=None,
+    full_origin_attempt_id=None,
+    installer_bootstrap_mode=None,
+    fem_full_workspace_identity=None,
 ):
+    if attempt_id is None:
+        attempt_id = uuid.uuid4().hex
+    elif not isinstance(attempt_id, str) or not re.fullmatch(r"[0-9a-f]{32}", attempt_id):
+        raise StorageError("Managed command attempt id must be a 32-character lowercase hex value")
     if workspace_request_id is not None:
         workspace_request_id = validate_workspace_request_id(workspace_request_id)
         if not (
@@ -1054,19 +1555,84 @@ def _run_managed_command(
             and execution_mode == "windows-workspace-build"
         ):
             raise StorageError("Workspace request ids are only valid for the closed Windows workspace build operation")
-    if native_user_build or native_workspace_paths:
+    if native_workspace_paths:
         _validate_windows_workspace_profile(layout, workspace_backend_profile)
         if not _is_native_windows() or execution_mode not in (
             "windows-workspace",
             "windows-workspace-build",
         ):
             raise StorageError("Native workspace paths require the fixed Windows workspace operation")
-        if native_user_build and (
-            not native_workspace_paths or execution_mode != "windows-workspace-build"
-        ):
+        if native_user_build and execution_mode != "windows-workspace-build":
             raise StorageError("Native user builds require the closed Windows workspace build operation")
+    if native_fem_paths:
+        if not _is_native_windows() or execution_mode not in (
+            "windows-fem",
+            "windows-fem-build",
+            "windows-fem-workspace",
+            "windows-fem-workspace-build",
+        ):
+            raise StorageError("Native FEM paths require the fixed Windows FEM operation")
+        if fem_device not in WINDOWS_NATIVE_FEM_STORAGE_PROFILES:
+            raise StorageError("Native FEM operation requires a resolved cpu or gpu device")
+        _validate_windows_fem_profile(layout, fem_device)
+        if native_user_build and execution_mode not in (
+            "windows-fem", "windows-fem-build", "windows-fem-workspace-build"
+        ):
+            raise StorageError("Native FEM builds require the closed Windows FEM operation")
+        if fem_full_workspace_identity is not None and (
+            native_user_build or execution_mode != "windows-fem"
+            or fem_device != "gpu" or fem_requested_device != "gpu"
+            or fem_frontend != "static"
+        ):
+            raise StorageError("Full workspace compatibility is only valid for explicit FEM GPU runtime")
+    elif fem_full_workspace_identity is not None:
+        raise StorageError("Full workspace compatibility requires the native FEM runtime")
+    if native_full_workspace_paths:
+        if (
+            not _is_native_windows()
+            or execution_mode not in ("windows-full-workspace", "windows-full-workspace-build")
+            or layout.get("profile") != WINDOWS_FULL_WORKSPACE_STORAGE_PROFILE
+            or "-AllBackends" not in command
+            or "-Browser" not in command
+        ):
+            raise StorageError("Full workspace paths require the closed all-realizations browser operation")
+        if native_user_build and execution_mode != "windows-full-workspace-build":
+            raise StorageError("Full workspace builds require the closed build operation")
+        if full_origin_attempt_id is not None and not re.fullmatch(r"[0-9a-f]{32}", full_origin_attempt_id):
+            raise StorageError("Full workspace origin attempt identity is malformed")
+    if fem_browser_workspace:
+        if (not native_fem_paths
+                or execution_mode not in ("windows-fem-workspace", "windows-fem-workspace-build")
+                or "-Browser" not in command):
+            raise StorageError("FEM browser workspace requires the closed browser operation")
+    if native_installer_paths:
+        if installer_bootstrap_mode is None:
+            installer_bootstrap_mode = "initial-build"
+        if installer_bootstrap_mode not in ("initial-build", "setup-only"):
+            raise StorageError("Installer bootstrap mode must be initial-build or setup-only")
+        if (not _is_native_windows()
+                or execution_mode != "windows-installer-source-build"
+                or layout.get("profile") != WINDOWS_INSTALLER_SOURCE_PROFILE
+                or not native_user_build
+                or native_workspace_paths or native_fem_paths):
+            raise StorageError("Installer source builds require the closed native Windows installer operation")
+    elif installer_bootstrap_mode is not None:
+        raise StorageError("Installer bootstrap mode is only valid for the closed installer operation")
+    if native_user_build and not (
+        native_workspace_paths or native_fem_paths or native_full_workspace_paths or native_installer_paths
+    ):
+        raise StorageError("Native user builds require a closed native Windows operation")
     if not command:
         raise StorageError("A command is required after --")
+    _validate_expected_build_handoff(
+        layout,
+        command,
+        native_workspace_paths=native_workspace_paths,
+        native_fem_paths=native_fem_paths,
+        native_full_workspace_paths=native_full_workspace_paths,
+        native_manifest_relative=native_manifest_relative,
+        execution_mode=execution_mode,
+    )
     cancel_check = None
     if native_workspace_paths:
         from windows.runtime_lease import active_runtime, assert_no_independent_service
@@ -1087,6 +1653,19 @@ def _run_managed_command(
         return run_sealed_runtime(layout, command, {**os.environ, **layout["env"]}, workspace_backend_profile)
     with heavy_lock, build_lock(layout, wait_timeout_seconds=NATIVE_BUILD_LOCK_WAIT_SECONDS if native_user_build else 0,
                                 cancelled=cancel_check):
+        # Recheck the full handoff after acquiring the build lock.  The early
+        # admission check rejects stale input quickly; this check closes the
+        # cooperative writer window before the child process is spawned.
+        if native_full_workspace_paths:
+            _validate_expected_build_handoff(
+                layout,
+                command,
+                native_workspace_paths=native_workspace_paths,
+                native_fem_paths=native_fem_paths,
+                native_full_workspace_paths=native_full_workspace_paths,
+                native_manifest_relative=native_manifest_relative,
+                execution_mode=execution_mode,
+            )
         request_receipt_path = None
         if workspace_request_id is not None:
             request_receipt_path = _workspace_build_request_receipt_path(
@@ -1095,6 +1674,44 @@ def _run_managed_command(
             if os.path.lexists(request_receipt_path):
                 raise StorageError("Workspace build request id already has a receipt; request ids cannot be replayed")
         child_env = {**os.environ, **layout["env"]}
+        if native_installer_paths:
+            child_env["FULLMAG_INSTALLER_ATTEMPT_ID"] = attempt_id
+        if native_fem_paths:
+            requested_device = fem_requested_device or fem_device
+            if requested_device not in ("auto", "cpu", "gpu"):
+                raise StorageError("Native FEM requested device must be auto, cpu or gpu")
+            child_env["FULLMAG_FEM_REQUESTED_DEVICE"] = requested_device
+            child_env["FULLMAG_NATIVE_FEM_ATTEMPT_ID"] = attempt_id
+            child_env.pop("FULLMAG_FEM_FULL_SUPERSET_RUNTIME", None)
+            child_env.pop("FULLMAG_FEM_FULL_SUPERSET_BUILD_ID", None)
+            child_env.pop("FULLMAG_FEM_FULL_SUPERSET_ORIGIN_SHA256", None)
+            if (
+                not native_user_build
+                and execution_mode == "windows-fem"
+                and fem_device == "gpu"
+                and requested_device == "gpu"
+                and fem_frontend == "static"
+            ):
+                fem_full_workspace_identity = _native_fem_full_workspace_runtime_identity(
+                    layout,
+                    resolved_device=fem_device,
+                    requested_device=requested_device,
+                    frontend=fem_frontend,
+                    expected_identity=fem_full_workspace_identity,
+                )
+                if fem_full_workspace_identity is not None:
+                    child_env["FULLMAG_FEM_FULL_SUPERSET_RUNTIME"] = "1"
+                    child_env["FULLMAG_FEM_FULL_SUPERSET_BUILD_ID"] = fem_full_workspace_identity["full_workspace_build_id"]
+                    child_env["FULLMAG_FEM_FULL_SUPERSET_ORIGIN_SHA256"] = fem_full_workspace_identity["origin_manifest_sha256"]
+        if native_full_workspace_paths:
+            child_env["FULLMAG_FEM_REQUESTED_DEVICE"] = "auto"
+            child_env["FULLMAG_NATIVE_FEM_ATTEMPT_ID"] = full_origin_attempt_id or attempt_id
+        if native_user_build or native_fem_paths or native_full_workspace_paths:
+            # The PowerShell child is entered only from this closed operation;
+            # the storage token below is installed by build_lock before spawn.
+            # Keep the managed sentinel out of the caller environment so an
+            # unleased direct launcher cannot impersonate this boundary.
+            child_env["FULLMAG_STORAGE_MANAGED_ENTRY"] = "1"
         if execution_mode == "windows-workspace-build" and native_user_build:
             from windows.runtime_lease import active_runtime, assert_frozen_dependencies, assert_no_independent_service
             assert_no_independent_service(layout, child_env)
@@ -1109,23 +1726,29 @@ def _run_managed_command(
         # `prepare-links` may have run in a separate shell and lock scope.  A
         # different lane can therefore have rebound the shared target link in
         # between; never execute a command against that stale profile.
-        if not native_workspace_paths:
+        # Manifest-bound native routes use explicit runtime paths; compatibility
+        # links may still belong to another lane in this checkout.
+        if not (native_workspace_paths or native_installer_paths
+                or native_fem_paths or native_full_workspace_paths):
             validate_prepared_links_for_run(layout)
         record = validate_path(Path(layout["build_root"]) / "build-status.json", layout["build_storage_root"], "build status")
         validate_existing_build_status(record, layout)
         state = {"schema": SCHEMA, "worktree_id": layout["worktree_id"], "profile": layout["profile"],
                  "repo_root": layout["repo_root"], "head": git(layout["repo_root"], "rev-parse", "HEAD"),
                  "source_dirty": bool(git(layout["repo_root"], "status", "--porcelain", "--untracked-files=normal")),
-                 "pid": os.getpid(), "host": socket.gethostname(), "started_at": now(),
+                 "pid": os.getpid(), "host": socket.gethostname(), "attempt_id": attempt_id,
+                 "started_at": now(),
                  "state": "running", "executable": Path(command[0]).name,
                  "build_root": layout["build_root"], "frontend_root": layout["frontend_root"],
                  "runtime_root": layout["runtime_root"], "qualification": "not_assessed",
                  "execution_mode": execution_mode}
+        if native_installer_paths:
+            state["bootstrap_mode"] = installer_bootstrap_mode
         atomic_json(record, state)
         try:
             if cancel_check is not None and cancel_check():
                 raise StorageError("Native build cancelled before command launch")
-            if native_user_build:
+            if native_user_build or native_fem_paths or native_full_workspace_paths:
                 log_path = validate_path(Path(layout["build_root"]) / "logs" /
                                          ("native-build-" + uuid.uuid4().hex + ".log"),
                                          layout["build_root"], "native build log")
@@ -1139,18 +1762,95 @@ def _run_managed_command(
                 result = subprocess.run(command, cwd=layout["repo_root"], env=child_env)
             state.update(state="completed" if result.returncode == 0 else "failed", exit_code=result.returncode)
             terminal_returncode = result.returncode
-            if native_user_build and result.returncode == 0:
+            if (native_user_build or native_fem_paths or native_full_workspace_paths) and result.returncode == 0:
+                manifest_relative = native_manifest_relative or (
+                    "windows-runtime/build-manifest.json"
+                )
                 manifest = validate_path(
-                    Path(layout["build_root"]) / "windows-runtime" / "build-manifest.json",
+                    Path(layout["build_root"]) / manifest_relative,
                     layout["build_root"],
-                    "Windows runtime build manifest",
+                    "Windows native build manifest",
                 )
                 if manifest.is_file():
                     raw_manifest = manifest.read_bytes()
-                    state["build_manifest_sha256"] = hashlib.sha256(raw_manifest).hexdigest()
-                elif workspace_request_id is not None:
-                    # A successful compiler exit is not a request-scoped ready
-                    # result unless its exact terminal manifest can be pinned.
+                    if native_full_workspace_paths:
+                        try:
+                            full_manifest = json.loads(raw_manifest)
+                            expected_full_attempt = full_origin_attempt_id or attempt_id
+                            if (
+                                not isinstance(full_manifest, dict)
+                                or full_manifest.get("attempt_id") != expected_full_attempt
+                            ):
+                                raise StorageError(
+                                    "Full workspace manifest belongs to a different managed attempt"
+                                )
+                            expected_full_build_id = None
+                            if execution_mode == "windows-full-workspace":
+                                try:
+                                    expected_position = command.index("-ExpectedBuildId")
+                                except ValueError as error:
+                                    raise StorageError(
+                                        "Full workspace runtime completed without ExpectedBuildId"
+                                    ) from error
+                                expected_full_build_id = command[expected_position + 1]
+                            validate_full_workspace_manifest(
+                                layout,
+                                full_manifest,
+                                expected_build_id=expected_full_build_id,
+                            )
+                            if execution_mode == "windows-full-workspace-build":
+                                receipt_path, receipt_hash = _persist_full_workspace_receipt(
+                                    layout, full_manifest, execution_mode, state
+                                )
+                                state["full_receipt_path"] = str(receipt_path)
+                                state["full_receipt_sha256"] = receipt_hash
+                        except (StorageError, OSError, ValueError, TypeError):
+                            print("[fullmag storage] Full workspace manifest or receipt validation failed", file=sys.stderr)
+                            state.update(state="failed", exit_code=1)
+                            terminal_returncode = 1
+                    elif native_fem_paths:
+                        try:
+                            if (
+                                not native_user_build
+                                and execution_mode == "windows-fem"
+                                and fem_full_workspace_identity is not None
+                            ):
+                                fem_full_workspace_identity = _native_fem_full_workspace_runtime_identity(
+                                    layout,
+                                    resolved_device=fem_device,
+                                    requested_device=fem_requested_device or fem_device,
+                                    frontend=fem_frontend,
+                                    expected_identity=fem_full_workspace_identity,
+                                )
+                            terminal_requested_device = fem_requested_device or fem_device
+                            if fem_full_workspace_identity is not None:
+                                terminal_requested_device = "auto"
+                            validate_fem_terminal_manifest(
+                                layout, json.loads(raw_manifest), fem_device,
+                                terminal_requested_device,
+                                attempt_id if native_user_build else None,
+                                browser_workspace=fem_browser_workspace,
+                                browser_frontend=fem_frontend,
+                            )
+                        except (StorageError, OSError, ValueError, TypeError):
+                            print("[fullmag storage] Native FEM terminal manifest or artifact validation failed", file=sys.stderr)
+                            state.update(state="failed", exit_code=1)
+                            terminal_returncode = 1
+                    if terminal_returncode == 0:
+                        state["build_manifest_sha256"] = hashlib.sha256(raw_manifest).hexdigest()
+                    if native_installer_paths:
+                        try:
+                            validate_installer_terminal_manifest(
+                                layout, json.loads(raw_manifest), attempt_id,
+                                expected_bootstrap_mode=installer_bootstrap_mode,
+                            )
+                        except (StorageError, ValueError, TypeError):
+                            print("[fullmag storage] Installer terminal manifest or artifact validation failed", file=sys.stderr)
+                            state.update(state="failed", exit_code=1)
+                            terminal_returncode = 1
+                elif workspace_request_id is not None or native_fem_paths or native_full_workspace_paths or native_installer_paths:
+                    # A successful compiler/runtime exit is not ready until the
+                    # exact terminal manifest can be pinned to this operation.
                     state.update(state="failed", exit_code=1)
                     terminal_returncode = 1
             return terminal_returncode
@@ -1177,6 +1877,949 @@ def _run_managed_command(
                     "started_at": state.get("started_at"),
                     "finished_at": state.get("finished_at"),
                 })
+
+
+
+def _validate_fem_browser_frontend(layout, manifest, requested_frontend):
+    """Validate the source-first browser surface independently of the solver DLL."""
+    if manifest.get("browser_workspace") is not True:
+        raise StorageError("Native FEM manifest is missing the browser workspace marker")
+    if requested_frontend not in ("static", "dev"):
+        raise StorageError("Native FEM browser validation requires the requested frontend mode")
+    if (manifest.get("ui_host") != "browser"
+            or manifest.get("workspace_mode") != "empty"
+            or manifest.get("desktop_binary") is not None
+            or manifest.get("desktop_binary_sha256") is not None):
+        raise StorageError("Native FEM manifest is not an empty browser workspace build")
+    frontend_mode = manifest.get("frontend_mode")
+    if frontend_mode != requested_frontend:
+        raise StorageError("Native FEM browser manifest frontend does not match the requested frontend mode")
+    build_root = Path(layout["build_root"])
+    workspace = validate_path(
+        manifest.get("frontend_workspace_root", ""), build_root,
+        "native FEM browser frontend workspace",
+    )
+    cache = validate_path(
+        manifest.get("frontend_cache_root", ""), build_root,
+        "native FEM browser frontend cache",
+    )
+    if not workspace.is_dir() or not cache.is_dir():
+        raise StorageError("Native FEM browser frontend roots are missing")
+    source_manifest = validate_path(
+        manifest.get("frontend_source_manifest", ""), build_root,
+        "native FEM browser frontend source manifest",
+    )
+    expected_source_hash = manifest.get("frontend_source_manifest_sha256")
+    if (not source_manifest.is_file() or source_manifest.stat().st_size == 0
+            or not isinstance(expected_source_hash, str)
+            or not SHA256_RE.fullmatch(expected_source_hash)):
+        raise StorageError("Native FEM browser frontend source manifest is missing or unhashed")
+    if _sha256_file(source_manifest) != expected_source_hash:
+        raise StorageError("Native FEM browser frontend source manifest changed")
+    app_root = validate_path(
+        workspace / "apps" / "control-room", workspace,
+        "native FEM browser frontend application",
+    )
+    # The staged app deliberately contains managed links for generated output;
+    # validate the static entry through its already-validated cache root rather
+    # than following an arbitrary reparse point from the source mirror.
+    entry = (cache / "out" / "index.html") if frontend_mode == "static" else (app_root / "dev-server.mjs")
+    entry = validate_path(entry, cache if frontend_mode == "static" else workspace,
+                          "native FEM browser frontend entry")
+    expected_entry_hash = manifest.get("frontend_entry_sha256")
+    if (str(manifest.get("frontend_entry_path", "")) != str(entry)
+            or not entry.is_file() or entry.stat().st_size == 0
+            or not isinstance(expected_entry_hash, str)
+            or not SHA256_RE.fullmatch(expected_entry_hash)):
+        raise StorageError("Native FEM browser frontend entry is missing or unhashed")
+    if _sha256_file(entry) != expected_entry_hash:
+        raise StorageError("Native FEM browser frontend entry changed")
+    if frontend_mode == "static":
+        static_root = validate_path(
+            cache / "out", cache, "native FEM browser static frontend tree",
+        )
+        expected_static_hash = manifest.get("static_web_sha256")
+        if (not isinstance(expected_static_hash, str)
+                or not SHA256_RE.fullmatch(expected_static_hash)):
+            raise StorageError("Native FEM browser static frontend tree is missing or unhashed")
+        if _directory_sha256(static_root) != expected_static_hash:
+            raise StorageError("Native FEM browser static frontend tree changed")
+
+
+def validate_fem_terminal_manifest(
+    layout, manifest, device, requested_device, attempt_id=None, *, browser_workspace=False,
+    browser_frontend=None,
+):
+    """Admit only complete, device-correct native FEM output from this build."""
+    if not isinstance(manifest, dict):
+        raise StorageError("Native FEM manifest must be an object")
+    fem = manifest.get("native_fem")
+    if (manifest.get("schema_version") != 1
+            or manifest.get("state") != "completed"
+            or manifest.get("backend") != "fem"
+            or manifest.get("target_triple") != "x86_64-pc-windows-msvc"
+            or manifest.get("cuda") is not (device == "gpu")
+            or not isinstance(fem, dict)
+            or fem.get("device") != device
+            or fem.get("requested_device") != requested_device
+            or fem.get("strict_gpu") is not (device == "gpu")):
+        raise StorageError("Native FEM manifest has incompatible completion or device provenance")
+    if browser_workspace:
+        _validate_fem_browser_frontend(layout, manifest, browser_frontend)
+    manifest_attempt = manifest.get("native_fem_attempt_id")
+    if (not isinstance(manifest_attempt, str)
+            or not re.fullmatch(r"[0-9a-f]{32}", manifest_attempt)
+            or (attempt_id is not None and manifest_attempt != attempt_id)):
+        raise StorageError("Native FEM manifest belongs to another build attempt")
+    for owner, path_key, hash_key in (
+            (manifest, "binary", "binary_sha256"),
+            (manifest, "api_binary", "api_binary_sha256"),
+            (fem, "runtime_dll", "runtime_dll_sha256"),
+            (fem, "dependency_audit_path", "dependency_audit_sha256"),
+            (fem, "provider_config", "provider_config_sha256"),
+            (fem, "provider_receipt_path", "provider_receipt_sha256")):
+        expected = owner.get(hash_key)
+        if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected):
+            raise StorageError("Native FEM manifest is missing an artifact hash")
+        artifact_root = Path(layout["build_root"])
+        if path_key in ("provider_config", "provider_receipt_path"):
+            artifact_root /= "fem-dependencies"
+            if path_key == "provider_config":
+                artifact_root /= "installed"
+        artifact = validate_path(owner.get(path_key, ""), artifact_root, "Native FEM artifact")
+        if path_key == "provider_receipt_path" and artifact != artifact_root / "provider-receipt.json":
+            raise StorageError("Native FEM provider receipt path is not canonical")
+        if not artifact.is_file() or artifact.stat().st_size == 0:
+            raise StorageError("Native FEM artifact is missing or changed")
+        actual = _sha256_file(artifact)
+        if actual != expected:
+            raise StorageError("Native FEM artifact is missing or changed")
+
+
+def _full_workspace_manifest_path(layout):
+    return validate_path(
+        Path(layout["build_root"]) / "windows-full-runtime" / "build-manifest.json",
+        layout["build_root"],
+        "full workspace manifest",
+    )
+
+
+def _full_workspace_receipt_path(layout, attempt_id):
+    if not isinstance(attempt_id, str) or not re.fullmatch(r"[0-9a-f]{32}", attempt_id):
+        raise StorageError("Full workspace receipt attempt id is invalid")
+    receipt_root = validate_path(
+        Path(layout["build_root"]) / "windows-full-runtime" / "receipts",
+        layout["build_root"],
+        "full workspace receipt root",
+    )
+    return validate_path(
+        receipt_root / f"{attempt_id}.json",
+        layout["build_root"],
+        "full workspace receipt",
+    )
+
+
+def _full_workspace_file(value, root, label, expected_hash=None):
+    if not isinstance(value, str) or not value:
+        raise StorageError(f"{label} path is missing")
+    try:
+        path = validate_path(value, root, label)
+    except (StorageError, TypeError, ValueError) as error:
+        raise StorageError(f"{label} path is invalid") from error
+    if not path.is_file() or is_link(path) or path.stat().st_size <= 0:
+        raise StorageError(f"{label} is missing or is not a regular file")
+    if expected_hash is not None:
+        if not isinstance(expected_hash, str) or not SHA256_RE.fullmatch(expected_hash):
+            raise StorageError(f"{label} hash is missing or malformed")
+        if _sha256_file(path) != expected_hash:
+            raise StorageError(f"{label} hash does not match its manifest")
+    return path
+
+
+def _full_workspace_hash(value, label):
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+        raise StorageError(f"{label} hash is missing or malformed")
+    return value
+
+
+def _full_workspace_artifacts(value, root, expected_paths, label):
+    if not isinstance(value, list) or len(value) != len(expected_paths):
+        raise StorageError(f"{label} artifact inventory is incomplete")
+    observed = []
+    for index, artifact in enumerate(value):
+        if not isinstance(artifact, dict):
+            raise StorageError(f"{label} artifact record is invalid")
+        path = _full_workspace_file(
+            artifact.get("path"), root, f"{label} artifact {index}", artifact.get("sha256")
+        )
+        size = artifact.get("size_bytes")
+        if type(size) is not int or size <= 0 or size != path.stat().st_size:
+            raise StorageError(f"{label} artifact size is invalid")
+        digest = _full_workspace_hash(artifact.get("sha256"), f"{label} artifact {index}")
+        observed.append((path, size, digest))
+    for expected_path, expected_size, expected_digest in expected_paths:
+        matches = [
+            item for item in observed
+            if _same_path(item[0], expected_path)
+            and item[1] == expected_size
+            and item[2] == expected_digest
+        ]
+        if len(matches) != 1:
+            raise StorageError(f"{label} artifact inventory does not match the package")
+    return observed
+
+
+def _full_workspace_directory(value, root, label):
+    """Validate an immutable package directory without traversing reparses."""
+    if not isinstance(value, str) or not value:
+        raise StorageError(f"{label} path is missing")
+    try:
+        path = validate_path(value, root, label)
+    except (StorageError, TypeError, ValueError) as error:
+        raise StorageError(f"{label} path is invalid") from error
+    if not path.is_dir() or is_link(path):
+        raise StorageError(f"{label} is missing or is not a regular directory")
+    return path
+
+
+def _full_workspace_frozen_runtime_names(
+    build_root, source_snapshot, source_snapshot_sha256, browser_workspace,
+):
+    """Read the canonical runtime bundle from the sealed source snapshot.
+
+    The mutable checkout must not be able to change the binary family admitted
+    for an already-built package.  The snapshot record and its inventory bind
+    the source file before its AST is used to derive the expected names.
+    """
+    if not isinstance(source_snapshot, dict) or set(source_snapshot) != {
+        "record_path", "inventory_sha256", "source_root"
+    }:
+        raise StorageError("Full workspace frozen source binding is malformed")
+    inventory_sha256 = _full_workspace_hash(
+        source_snapshot.get("inventory_sha256"),
+        "full workspace frozen source inventory",
+    )
+    record_path = _full_workspace_file(
+        source_snapshot.get("record_path"), build_root,
+        "full workspace frozen source record",
+    )
+    source_root = _full_workspace_directory(
+        source_snapshot.get("source_root"), build_root,
+        "full workspace frozen source root",
+    )
+    if record_path.name != "record.json" or source_root.name != "source":
+        raise StorageError("Full workspace frozen source locations are not canonical")
+    if not _same_path(record_path.parent, source_root.parent):
+        raise StorageError("Full workspace frozen source record and root are not paired")
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Full workspace frozen source record is unreadable") from error
+    if not isinstance(record, dict) or record.get("schema") != "fullmag.windows-build-snapshot.v1":
+        raise StorageError("Full workspace frozen source record has an invalid schema")
+    record_source_root = record.get("source_root")
+    record_path_value = record.get("record_path")
+    if (not isinstance(record_source_root, str)
+            or not _same_path(record_source_root, source_root)
+            or (record_path_value is not None
+                and (not isinstance(record_path_value, str)
+                     or not _same_path(record_path_value, record_path)))):
+        raise StorageError("Full workspace frozen source record location is not bound")
+    source_identity = record.get("source_identity")
+    if (not isinstance(source_identity, dict)
+            or source_identity.get("source_snapshot_sha256") != source_snapshot_sha256):
+        raise StorageError("Full workspace frozen source identity is not bound")
+    recorded_inventory = record.get("inventory")
+    if not isinstance(recorded_inventory, list):
+        raise StorageError("Full workspace frozen source inventory is missing")
+    try:
+        inventory_payload = json.dumps(
+            recorded_inventory, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8") + b"\n"
+    except (TypeError, ValueError) as error:
+        raise StorageError("Full workspace frozen source inventory is not serializable") from error
+    if hashlib.sha256(inventory_payload).hexdigest() != inventory_sha256:
+        raise StorageError("Full workspace frozen source inventory hash changed")
+    runtime_entry = None
+    for entry in recorded_inventory:
+        if not isinstance(entry, dict) or set(entry) != {"path", "size", "sha256"}:
+            raise StorageError("Full workspace frozen source inventory entry is invalid")
+        if entry.get("path") == "scripts/windows/runtime_bundle.py":
+            if runtime_entry is not None:
+                raise StorageError("Full workspace frozen source runtime bundle is duplicated")
+            runtime_entry = entry
+    if runtime_entry is None:
+        raise StorageError("Full workspace frozen source runtime bundle is missing")
+    runtime_path = _full_workspace_file(
+        str(source_root / "scripts" / "windows" / "runtime_bundle.py"),
+        source_root,
+        "full workspace frozen runtime bundle",
+    )
+    if (type(runtime_entry.get("size")) is not int
+            or runtime_entry["size"] != runtime_path.stat().st_size
+            or not isinstance(runtime_entry.get("sha256"), str)
+            or not SHA256_RE.fullmatch(runtime_entry["sha256"])
+            or _sha256_file(runtime_path) != runtime_entry["sha256"]):
+        raise StorageError("Full workspace frozen runtime bundle changed")
+    try:
+        tree = ast.parse(runtime_path.read_text(encoding="utf-8"), filename=str(runtime_path))
+    except (OSError, UnicodeError, SyntaxError) as error:
+        raise StorageError("Full workspace frozen runtime bundle is not valid Python") from error
+    values = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(isinstance(target, ast.Name) and target.id == "BINARY_NAMES" for target in targets):
+                try:
+                    values.append(ast.literal_eval(node.value))
+                except (ValueError, TypeError, SyntaxError) as error:
+                    raise StorageError("Full workspace frozen runtime bundle names are not literals") from error
+    if len(values) != 1 or not isinstance(values[0], (tuple, list)):
+        raise StorageError("Full workspace frozen runtime bundle names are malformed")
+    names = list(values[0])
+    if (not names or any(not isinstance(name, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9.-]*\.exe", name
+        ) for name in names) or len(set(names)) != len(names)):
+        raise StorageError("Full workspace frozen runtime bundle names are malformed")
+    if browser_workspace:
+        names = [name for name in names if name.casefold() != "fullmag-ui.exe"]
+    if not names:
+        raise StorageError("Full workspace frozen runtime bundle is empty")
+    return tuple(names)
+
+
+def _full_workspace_runtime_family_inventory_sha256(records):
+    try:
+        payload = "".join(
+            f"{record['name']}|{record['size_bytes']}|{record['sha256'].lower()}\n"
+            for record in records
+        ).encode("utf-8")
+    except (KeyError, AttributeError, TypeError, ValueError) as error:
+        raise StorageError("Full workspace runtime family inventory is malformed") from error
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_full_workspace_runtime_family(
+    build_root, proof, stage_proof, expected_names, label,
+):
+    """Bind launch and staged PE image sets to the frozen runtime family audit."""
+    if not isinstance(proof, dict) or not isinstance(stage_proof, dict):
+        raise StorageError(f"{label} runtime family proof is missing")
+    required = (
+        "runtime_family_root", "runtime_family", "runtime_family_inventory",
+        "runtime_family_inventory_sha256", "runtime_family_dependency_audit_path",
+        "runtime_family_dependency_audit_sha256",
+    )
+    if any(key not in proof for key in required):
+        raise StorageError(f"{label} runtime family proof is incomplete")
+    family_root = _full_workspace_directory(
+        proof.get("runtime_family_root"), build_root, f"{label} runtime family root",
+    )
+    declared_names = proof.get("runtime_family_inventory")
+    if not isinstance(declared_names, list) or tuple(declared_names) != tuple(expected_names):
+        raise StorageError(f"{label} runtime family inventory is not frozen-source bound")
+    declared_records = proof.get("runtime_family")
+    if not isinstance(declared_records, list) or len(declared_records) != len(expected_names):
+        raise StorageError(f"{label} runtime family records are incomplete")
+    records_by_name = {}
+    observed = []
+    for record in declared_records:
+        if not isinstance(record, dict) or record.get("name") in records_by_name:
+            raise StorageError(f"{label} runtime family record is invalid")
+        name = record.get("name")
+        if name not in expected_names:
+            raise StorageError(f"{label} runtime family contains an unexpected executable")
+        path = _full_workspace_file(
+            record.get("path"), family_root, f"{label} runtime family {name}", record.get("sha256"),
+        )
+        if path != family_root / name:
+            raise StorageError(f"{label} runtime family path is not canonical: {name}")
+        size = record.get("size_bytes")
+        digest = record.get("sha256")
+        if (type(size) is not int or size <= 0 or size != path.stat().st_size
+                or not isinstance(digest, str) or not SHA256_RE.fullmatch(digest)):
+            raise StorageError(f"{label} runtime family artifact identity is invalid: {name}")
+        normalized = {"name": name, "size_bytes": size, "sha256": digest.lower()}
+        records_by_name[name] = normalized
+    if set(records_by_name) != set(expected_names):
+        raise StorageError(f"{label} runtime family is missing a canonical executable")
+    observed = [records_by_name[name] for name in expected_names]
+    inventory_hash = _full_workspace_hash(
+        proof.get("runtime_family_inventory_sha256"),
+        f"{label} runtime family inventory",
+    )
+    if _full_workspace_runtime_family_inventory_sha256(observed) != inventory_hash:
+        raise StorageError(f"{label} runtime family inventory hash does not match its files")
+
+    audit_path = _full_workspace_file(
+        proof.get("runtime_family_dependency_audit_path"), build_root,
+        f"{label} runtime family dependency audit",
+        proof.get("runtime_family_dependency_audit_sha256"),
+    )
+    if (not _same_path(audit_path, stage_proof.get("dependency_audit_path", ""))
+            or proof.get("runtime_family_dependency_audit_sha256")
+            != stage_proof.get("dependency_audit_sha256")):
+        raise StorageError(f"{label} runtime family audit is not bound to the FEM audit")
+    stage_root = _full_workspace_directory(
+        stage_proof.get("runtime_bin"), build_root, f"{label} staged runtime root",
+    )
+    try:
+        audit_data = json.loads(audit_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError(f"{label} runtime family dependency audit is unreadable") from error
+    if (not isinstance(audit_data, dict)
+            or audit_data.get("schema_version") != 1
+            or audit_data.get("target") != "x86_64-pc-windows-msvc"
+            or audit_data.get("scope") != "bin_pe_static_and_delay_imports"
+            or not isinstance(audit_data.get("images"), list)
+            or not audit_data["images"]):
+        raise StorageError(f"{label} runtime family dependency audit schema is invalid")
+    audited = {}
+    for image in audit_data["images"]:
+        if not isinstance(image, dict):
+            raise StorageError(f"{label} runtime family dependency audit image is invalid")
+        relative = image.get("path")
+        digest = image.get("sha256")
+        match = re.fullmatch(r"bin[\\/]([^\\/]+)", relative) if isinstance(relative, str) else None
+        if (match is None or Path(match.group(1)).name != match.group(1)
+                or Path(match.group(1)).suffix.casefold() not in {".exe", ".dll"}
+                or not isinstance(digest, str) or not SHA256_RE.fullmatch(digest)):
+            raise StorageError(f"{label} runtime family dependency audit image is malformed")
+        name = match.group(1)
+        key = name.casefold()
+        if key in audited:
+            raise StorageError(f"{label} runtime family dependency audit contains a duplicate image")
+        audited[key] = (name, digest.lower())
+
+    def image_set(root, root_label):
+        observed_images = {}
+        for path in root.iterdir():
+            if path.suffix.casefold() not in {".exe", ".dll"}:
+                continue
+            artifact = _full_workspace_file(str(path), root, f"{root_label} image")
+            observed_images[path.name.casefold()] = (path.name, _sha256_file(artifact))
+        return observed_images
+
+    stage_images = image_set(stage_root, f"{label} staged runtime")
+    if set(stage_images) != set(audited):
+        raise StorageError(f"{label} staged PE image set differs from its dependency audit")
+    launch_images = image_set(family_root, f"{label} launch runtime")
+    if set(launch_images) != set(audited):
+        raise StorageError(f"{label} launch PE image set differs from its dependency audit")
+    for key, (name, digest) in audited.items():
+        if stage_images[key][1] != digest or launch_images[key][1] != digest:
+            raise StorageError(f"{label} launch or staged PE image changed: {name}")
+    for name in expected_names:
+        key = name.casefold()
+        if key not in audited or records_by_name[name]["sha256"] != audited[key][1]:
+            raise StorageError(f"{label} runtime family executable is not covered by its audit: {name}")
+    audit_alias_path = proof.get("dependency_audit_path", proof.get("runtime_family_dependency_audit_path"))
+    audit_alias_sha256 = proof.get("dependency_audit_sha256", proof.get("runtime_family_dependency_audit_sha256"))
+    if (not isinstance(audit_alias_path, str)
+            or not isinstance(audit_alias_sha256, str)
+            or not _same_path(audit_alias_path, audit_path)
+            or audit_alias_sha256 != proof["runtime_family_dependency_audit_sha256"]):
+        raise StorageError(f"{label} runtime family dependency audit aliases disagree")
+    return observed
+
+
+def validate_full_workspace_manifest(layout, manifest, *, expected_build_id=None):
+    """Validate the four-capability package and its strict FEM GPU origin.
+
+    The aggregate manifest is a capability package, not a FEM receipt.  Every
+    component record, component manifest, component receipt and artifact hash
+    is checked against the same immutable strict FEM GPU origin attempt.
+    """
+    if not isinstance(manifest, dict):
+        raise StorageError("Full workspace manifest must be an object")
+    if (
+        manifest.get("schema") != "fullmag.windows-full-capability-package.v1"
+        or manifest.get("state") != "completed"
+        or manifest.get("profile") != WINDOWS_FULL_WORKSPACE_STORAGE_PROFILE
+        or manifest.get("requested_backend") != "auto"
+        or manifest.get("requested_device") != "auto"
+        or manifest.get("runtime_selection") != "ui"
+    ):
+        raise StorageError("Full workspace manifest has an invalid package identity")
+    if expected_build_id is not None:
+        _full_workspace_hash(expected_build_id, "full workspace manifest")
+
+    attempt_id = manifest.get("attempt_id")
+    if not isinstance(attempt_id, str) or not re.fullmatch(r"[0-9a-f]{32}", attempt_id):
+        raise StorageError("Full workspace manifest attempt identity is malformed")
+    source_identity = manifest.get("source_identity")
+    source_snapshot = manifest.get("source_snapshot_sha256")
+    if (
+        not isinstance(source_identity, dict)
+        or not isinstance(source_identity.get("head_commit_full"), str)
+        or not re.fullmatch(r"[0-9a-f]{40}", source_identity["head_commit_full"])
+        or not isinstance(source_identity.get("source_worktree_state"), str)
+        or not isinstance(source_snapshot, str)
+        or not SHA256_RE.fullmatch(source_snapshot)
+        or source_identity.get("source_snapshot_sha256") != source_snapshot
+    ):
+        raise StorageError("Full workspace source identity is malformed")
+
+    build_root = Path(layout["build_root"])
+    origin_path = _full_workspace_file(
+        manifest.get("origin_manifest_path"), build_root, "full workspace origin manifest",
+        manifest.get("origin_manifest_sha256"),
+    )
+    expected_origin_path = validate_path(
+        build_root / "windows-fem-runtime" / "build-manifest.json",
+        build_root,
+        "full workspace fixed origin manifest",
+    )
+    if not _same_path(origin_path, expected_origin_path):
+        raise StorageError("Full workspace origin manifest is not the canonical FEM build manifest")
+    try:
+        origin = json.loads(origin_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Full workspace origin manifest is unreadable") from error
+    origin_fem = origin.get("native_fem") if isinstance(origin, dict) else None
+    if (
+        not isinstance(origin, dict)
+        or origin.get("schema_version") != 1
+        or origin.get("state") != "completed"
+        or origin.get("backend") != "fem"
+        or origin.get("cuda") is not True
+        or not isinstance(origin_fem, dict)
+        or origin_fem.get("device") != "gpu"
+        or origin_fem.get("requested_device") != "auto"
+        or origin_fem.get("strict_gpu") is not True
+        or origin.get("native_fem_attempt_id") != attempt_id
+        or origin.get("source_commit_after") != source_identity["head_commit_full"]
+        or origin.get("source_worktree_state_after") != source_identity["source_worktree_state"]
+        or origin.get("source_snapshot_sha256_after") != source_snapshot
+    ):
+        raise StorageError("Full workspace origin is not the requested strict FEM GPU attempt")
+    # Reuse the lane-specific validator for the origin's binaries, provider
+    # receipt and browser frontend, but never publish or consume its FEM alias.
+    validate_fem_terminal_manifest(
+        layout,
+        origin,
+        "gpu",
+        "auto",
+        attempt_id,
+        browser_workspace=True,
+        browser_frontend="static",
+    )
+    expected_runtime_names = _full_workspace_frozen_runtime_names(
+        build_root,
+        origin.get("build_source_snapshot"),
+        source_snapshot,
+        bool(origin.get("browser_workspace")),
+    )
+    _validate_full_workspace_runtime_family(
+        build_root,
+        origin_fem,
+        origin_fem,
+        expected_runtime_names,
+        "Full workspace origin",
+    )
+
+    if expected_build_id is not None:
+        manifest_path = _full_workspace_manifest_path(layout)
+        if not manifest_path.is_file() or _sha256_file(manifest_path) != expected_build_id:
+            raise StorageError("ExpectedBuildId does not match the full workspace manifest")
+
+    top_artifacts = {}
+    for field, hash_field, label in (
+        ("binary", "binary_sha256", "full workspace executable"),
+        ("api_binary", "api_binary_sha256", "full workspace API executable"),
+        ("native_fdm_dll", "native_fdm_dll_sha256", "full workspace native FDM DLL"),
+        ("native_fem_dll", "native_fem_dll_sha256", "full workspace native FEM DLL"),
+    ):
+        digest = _full_workspace_hash(manifest.get(hash_field), label)
+        top_artifacts[field] = _full_workspace_file(manifest.get(field), build_root, label, digest)
+    origin_binary = _full_workspace_file(origin.get("binary"), build_root, "full workspace origin executable", origin.get("binary_sha256"))
+    origin_api = _full_workspace_file(origin.get("api_binary"), build_root, "full workspace origin API executable", origin.get("api_binary_sha256"))
+    origin_fem = origin.get("native_fem")
+    origin_fem_dll = _full_workspace_file(
+        origin_fem.get("runtime_dll") if isinstance(origin_fem, dict) else None,
+        build_root,
+        "full workspace origin FEM DLL",
+        origin_fem.get("runtime_dll_sha256") if isinstance(origin_fem, dict) else None,
+    )
+    origin_fdm_dll = _full_workspace_file(
+        origin.get("native_fdm_dll"), build_root, "full workspace origin FDM DLL"
+    )
+    for aggregate_field, origin_artifact_path in (
+        ("binary", origin_binary),
+        ("api_binary", origin_api),
+        ("native_fdm_dll", origin_fdm_dll),
+        ("native_fem_dll", origin_fem_dll),
+    ):
+        if not _same_path(top_artifacts[aggregate_field], origin_artifact_path) or _sha256_file(top_artifacts[aggregate_field]) != _sha256_file(origin_artifact_path):
+            raise StorageError(f"Full workspace aggregate artifact is not bound to its origin: {aggregate_field}")
+    if manifest.get("build_source_snapshot") != origin.get("build_source_snapshot"):
+        raise StorageError("Full workspace aggregate frozen source binding differs from its origin")
+    _validate_full_workspace_runtime_family(
+        build_root,
+        manifest,
+        origin_fem,
+        expected_runtime_names,
+        "Full workspace aggregate",
+    )
+    runtime_environment = manifest.get("runtime_environment")
+    if (
+        not isinstance(runtime_environment, dict)
+        or set(runtime_environment) != {
+            "FULLMAG_FDM_EXECUTION", "FULLMAG_FEM_EXECUTION", "FULLMAG_RELAX_DEVICE"
+        }
+        or any(runtime_environment[name] is not None for name in runtime_environment)
+    ):
+        raise StorageError("Full workspace manifest must leave runtime selection variables unset")
+
+    components = manifest.get("components")
+    if not isinstance(components, dict) or set(components) != set(WINDOWS_FULL_WORKSPACE_COMPONENTS):
+        raise StorageError("Full workspace manifest must contain exactly four components")
+    component_root = validate_path(
+        build_root / "windows-full-runtime" / "components" / attempt_id,
+        build_root,
+        "full workspace component attempt root",
+    )
+    for component, (backend, device, needs_driver, artifact_field) in WINDOWS_FULL_WORKSPACE_COMPONENTS.items():
+        record = components.get(component)
+        if not isinstance(record, dict):
+            raise StorageError(f"Full workspace component record is invalid: {component}")
+        if (
+            record.get("backend") != backend
+            or record.get("device") != device
+            or record.get("installed_support") is not True
+            or record.get("requires_nvidia_driver") is not needs_driver
+        ):
+            raise StorageError(f"Full workspace component identity is invalid: {component}")
+        component_manifest_path = _full_workspace_file(
+            record.get("component_manifest_path"), build_root,
+            f"{component} component manifest", record.get("component_manifest_sha256"),
+        )
+        receipt_path = _full_workspace_file(
+            record.get("receipt_path"), build_root,
+            f"{component} receipt", record.get("receipt_sha256"),
+        )
+        expected_component_manifest_path = component_root / f"{component}.manifest.json"
+        expected_receipt_path = component_root / f"{component}.receipt.json"
+        if (
+            not _same_path(component_manifest_path, expected_component_manifest_path)
+            or not _same_path(receipt_path, expected_receipt_path)
+        ):
+            raise StorageError(f"Full workspace component metadata escapes its immutable attempt directory: {component}")
+        try:
+            component_manifest = json.loads(component_manifest_path.read_text(encoding="utf-8"))
+            component_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError, TypeError) as error:
+            raise StorageError(f"Full workspace component metadata is unreadable: {component}") from error
+        if (
+            not isinstance(component_manifest, dict)
+            or component_manifest.get("schema") != "fullmag.windows-runtime-component.v1"
+            or component_manifest.get("component") != component
+            or component_manifest.get("backend") != backend
+            or component_manifest.get("device") != device
+            or component_manifest.get("installed_support") is not True
+            or component_manifest.get("requires_nvidia_driver") is not needs_driver
+            or not _same_path(component_manifest.get("origin_manifest_path", ""), origin_path)
+            or component_manifest.get("origin_manifest_sha256") != manifest.get("origin_manifest_sha256")
+            or component_manifest.get("source_identity") != source_identity
+            or component_manifest.get("source_snapshot_sha256") != source_snapshot
+            or component_manifest.get("attempt_id") != attempt_id
+            or not _same_path(component_manifest.get("receipt_path", ""), receipt_path)
+        ):
+            raise StorageError(f"Full workspace component manifest is not bound: {component}")
+        if (
+            not isinstance(component_receipt, dict)
+            or component_receipt.get("schema") != "fullmag.windows-runtime-component-receipt.v1"
+            or component_receipt.get("component") != component
+            or component_receipt.get("backend") != backend
+            or component_receipt.get("device") != device
+            or component_receipt.get("installed_support") is not True
+            or component_receipt.get("requires_nvidia_driver") is not needs_driver
+            or not _same_path(component_receipt.get("component_manifest_path", ""), component_manifest_path)
+            or component_receipt.get("component_manifest_sha256") != record.get("component_manifest_sha256")
+            or not _same_path(component_receipt.get("origin_manifest_path", ""), origin_path)
+            or component_receipt.get("origin_manifest_sha256") != manifest.get("origin_manifest_sha256")
+            or component_receipt.get("source_snapshot_sha256") != source_snapshot
+            or component_receipt.get("attempt_id") != attempt_id
+        ):
+            raise StorageError(f"Full workspace component receipt is not bound: {component}")
+        expected_artifacts = []
+        for artifact_path in (top_artifacts["binary"], top_artifacts["api_binary"], top_artifacts[artifact_field]):
+            expected_artifacts.append((artifact_path, artifact_path.stat().st_size, _sha256_file(artifact_path)))
+        manifest_artifacts = _full_workspace_artifacts(
+            component_manifest.get("artifacts"), build_root, expected_artifacts,
+            f"{component} component manifest",
+        )
+        record_artifacts = _full_workspace_artifacts(
+            record.get("artifacts"), build_root, expected_artifacts,
+            f"{component} component record",
+        )
+        if sorted((str(path), size, digest) for path, size, digest in manifest_artifacts) != sorted(
+            (str(path), size, digest) for path, size, digest in record_artifacts
+        ):
+            raise StorageError(f"Full workspace component record differs from its manifest: {component}")
+    return manifest
+
+
+def _persist_full_workspace_receipt(layout, manifest, execution_mode, state):
+    """Write a terminal full-package receipt once for this build attempt."""
+    attempt_id = manifest.get("attempt_id")
+    path = _full_workspace_receipt_path(layout, attempt_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Re-resolve after creating the receipt directory so a newly materialized
+    # ancestor cannot turn the immutable per-attempt namespace into a reparse
+    # point between the preflight and the atomic write.
+    path = _full_workspace_receipt_path(layout, attempt_id)
+    receipt = {
+        "schema": WINDOWS_FULL_WORKSPACE_RECEIPT_SCHEMA,
+        "state": "completed",
+        "exit_code": 0,
+        "worktree_id": layout["worktree_id"],
+        "profile": layout["profile"],
+        "execution_mode": execution_mode,
+        "attempt_id": attempt_id,
+        "manifest_path": str(_full_workspace_manifest_path(layout)),
+        "manifest_sha256": _sha256_file(_full_workspace_manifest_path(layout)),
+        "origin_manifest_path": manifest["origin_manifest_path"],
+        "origin_manifest_sha256": manifest["origin_manifest_sha256"],
+        "source_identity": manifest["source_identity"],
+        "source_snapshot_sha256": manifest["source_snapshot_sha256"],
+        "components": manifest["components"],
+        "started_at": state.get("started_at"),
+        "finished_at": now(),
+    }
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError, TypeError) as error:
+            raise StorageError("Full workspace receipt is unreadable") from error
+        if existing != receipt:
+            raise StorageError("Full workspace receipt differs for the same build attempt")
+    else:
+        atomic_json(path, receipt)
+    return path, _sha256_file(path)
+
+
+def validate_full_workspace_handoff(layout, expected_build_id):
+    """Validate a runtime's manifest and immutable per-attempt receipt."""
+    _full_workspace_hash(expected_build_id, "full workspace ExpectedBuildId")
+    manifest_path = _full_workspace_manifest_path(layout)
+    if not manifest_path.is_file() or _sha256_file(manifest_path) != expected_build_id:
+        raise StorageError("ExpectedBuildId does not match the full workspace manifest")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Full workspace manifest is unreadable") from error
+    validate_full_workspace_manifest(layout, manifest, expected_build_id=expected_build_id)
+    receipt_path = _full_workspace_receipt_path(layout, manifest["attempt_id"])
+    if not receipt_path.is_file():
+        raise StorageError("Full workspace build has no immutable per-attempt receipt")
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Full workspace receipt is unreadable") from error
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schema") != WINDOWS_FULL_WORKSPACE_RECEIPT_SCHEMA
+        or receipt.get("state") != "completed"
+        or receipt.get("exit_code") != 0
+        or receipt.get("worktree_id") != layout["worktree_id"]
+        or receipt.get("profile") != WINDOWS_FULL_WORKSPACE_STORAGE_PROFILE
+        or receipt.get("execution_mode") != "windows-full-workspace-build"
+        or receipt.get("attempt_id") != manifest["attempt_id"]
+        or receipt.get("manifest_sha256") != expected_build_id
+        or not _same_path(receipt.get("manifest_path", ""), manifest_path)
+        or receipt.get("origin_manifest_sha256") != manifest.get("origin_manifest_sha256")
+        or receipt.get("source_identity") != manifest.get("source_identity")
+        or receipt.get("source_snapshot_sha256") != manifest.get("source_snapshot_sha256")
+        or receipt.get("components") != manifest.get("components")
+    ):
+        raise StorageError("Full workspace receipt is stale or not bound to the requested manifest")
+    return manifest
+
+
+def _native_fem_full_workspace_runtime_identity(
+    layout, *, resolved_device, requested_device, frontend=None, expected_identity=None,
+):
+    """Authorize explicit FEM GPU use of a verified all-backends package.
+
+    The physical FEM manifest is deliberately produced with ``requested_device``
+    set to ``auto`` by the all-backends builder.  That provenance is immutable;
+    this helper only adds a narrowly scoped runtime identity for an explicit
+    GPU script run after the complete aggregate handoff has passed its existing
+    origin, component, artifact and receipt validators.
+    """
+    if requested_device != "gpu" or resolved_device != "gpu":
+        return None
+    if frontend is not None and frontend != "static":
+        raise StorageError("Full workspace compatibility requires the pinned static FEM frontend")
+
+    origin_path = validate_path(
+        Path(layout["build_root"]) / "windows-fem-runtime" / "build-manifest.json",
+        layout["build_root"],
+        "native FEM origin manifest",
+    )
+    if is_link(origin_path) or not origin_path.is_file():
+        raise StorageError("Native FEM origin manifest is missing or is not a regular file")
+    try:
+        origin = json.loads(origin_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Native FEM origin manifest is unreadable") from error
+    origin_fem = origin.get("native_fem") if isinstance(origin, dict) else None
+    if (
+        not isinstance(origin, dict)
+        or origin.get("schema_version") != 1
+        or origin.get("state") != "completed"
+        or origin.get("backend") != "fem"
+        or origin.get("cuda") is not True
+        or not isinstance(origin_fem, dict)
+        or origin_fem.get("device") != "gpu"
+        or origin_fem.get("strict_gpu") is not True
+    ):
+        raise StorageError("Native FEM origin is not a completed strict GPU manifest")
+    origin_requested_device = origin_fem.get("requested_device")
+    if origin_requested_device == "gpu":
+        # Preserve the established single-lane GPU runtime.  The aggregate
+        # compatibility handoff is needed only for an all-backends origin
+        # whose immutable build request is explicitly ``auto``.
+        if expected_identity is not None:
+            raise StorageError("Full workspace compatibility identity changed before FEM launch")
+        return None
+    if origin_requested_device != "auto":
+        raise StorageError("Native FEM origin must retain requested_device=auto for aggregate reuse")
+
+    origin_sha256 = _sha256_file(origin_path)
+    aggregate_path = _full_workspace_manifest_path(layout)
+    if is_link(aggregate_path) or not aggregate_path.is_file():
+        raise StorageError("Verified all-backends aggregate manifest is missing")
+    aggregate_build_id = _sha256_file(aggregate_path)
+    aggregate = validate_full_workspace_handoff(layout, aggregate_build_id)
+    if not isinstance(aggregate, dict):
+        raise StorageError("Full workspace handoff validator returned an invalid manifest")
+    if (
+        aggregate.get("requested_backend") != "auto"
+        or aggregate.get("requested_device") != "auto"
+        or not _same_path(aggregate.get("origin_manifest_path", ""), origin_path)
+        or aggregate.get("origin_manifest_sha256") != origin_sha256
+    ):
+        raise StorageError("Full workspace aggregate is not bound to the auto FEM origin")
+    if _sha256_file(origin_path) != origin_sha256:
+        raise StorageError("Native FEM origin changed while validating the full workspace handoff")
+
+    identity = {
+        "full_workspace_build_id": aggregate_build_id,
+        "origin_manifest_path": str(origin_path),
+        "origin_manifest_sha256": origin_sha256,
+        "origin_requested_device": "auto",
+        "runtime_requested_device": "gpu",
+    }
+    if expected_identity is not None:
+        if not isinstance(expected_identity, dict) or any(
+            expected_identity.get(key) != value for key, value in identity.items()
+        ):
+            raise StorageError("Full workspace compatibility identity changed before FEM launch")
+    return identity
+
+
+def _read_installer_sidecar(path, label):
+    """Read one bounded regular installer sidecar without following links."""
+    if is_link(path) or not path.is_file():
+        raise StorageError(f"{label} is missing or is not a regular file")
+    before = path.stat()
+    if before.st_size <= 0 or before.st_size > MAX_INSTALLER_SIDECAR_BYTES:
+        raise StorageError(f"{label} has an invalid bounded size")
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError(f"{label} is unreadable") from error
+    after = path.stat()
+    if ((before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns)
+            or len(raw) != after.st_size or not isinstance(value, dict)):
+        raise StorageError(f"{label} changed while being read or has an invalid schema")
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def validate_installer_terminal_manifest(layout, manifest, attempt_id, expected_bootstrap_mode=None):
+    """Reject stale installer receipts and changed or misplaced public artifacts."""
+    bootstrap_mode = manifest.get("bootstrap_mode")
+    if expected_bootstrap_mode is not None:
+        if (bootstrap_mode not in ("initial-build", "setup-only")
+                or bootstrap_mode != expected_bootstrap_mode):
+            raise StorageError("Installer terminal manifest has an unexpected bootstrap mode")
+    elif bootstrap_mode is not None and bootstrap_mode not in ("initial-build", "setup-only"):
+        raise StorageError("Installer terminal manifest has an invalid bootstrap mode")
+    if (manifest.get("schema") != "fullmag.windows-installer-source-build.v1"
+            or manifest.get("state") != "completed"
+            or manifest.get("profile") != WINDOWS_INSTALLER_SOURCE_PROFILE
+            or manifest.get("attempt_id") != attempt_id):
+        raise StorageError("Installer terminal manifest does not belong to this managed attempt")
+    artifact = validate_path(manifest.get("artifact", ""), layout["runs_root"], "installer artifact")
+    expected_hash = manifest.get("artifact_sha256", "")
+    if (artifact.name != "fullmag.exe" or not artifact.is_file()
+            or not isinstance(expected_hash, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+            or hashlib.sha256(artifact.read_bytes()).hexdigest() != expected_hash):
+        raise StorageError("Installer terminal artifact is missing or its hash differs")
+    if expected_bootstrap_mode is None:
+        return
+    run_id = manifest.get("run_id")
+    if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+        raise StorageError("Installer terminal manifest has an invalid producer run identity")
+    producer_root = validate_path(
+        Path(layout["runs_root"]) / ("windows-installer-source-" + run_id),
+        layout["runs_root"], "installer producer run",
+    )
+    if not _same_path(artifact.parent, producer_root):
+        raise StorageError("Installer artifact does not belong to the declared producer run")
+    artifact_hash = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    sidecar_root = producer_root
+    receipt_path = validate_path(
+        sidecar_root / "fullmag-installer-receipt.json",
+        layout["runs_root"], "installer receipt",
+    )
+    provenance_path = validate_path(
+        sidecar_root / "fullmag-installer-provenance.json",
+        layout["runs_root"], "installer provenance",
+    )
+    receipt, _ = _read_installer_sidecar(receipt_path, "Installer receipt")
+    provenance, provenance_hash = _read_installer_sidecar(provenance_path, "Installer provenance")
+    provenance_source_first = provenance.get("source_first")
+    provenance_mode = (
+        provenance_source_first.get("mode")
+        if isinstance(provenance_source_first, dict)
+        else None
+    )
+    if (receipt.get("schema") != "fullmag.windows-installer-receipt.v1"
+            or receipt.get("source_first_mode") != expected_bootstrap_mode
+            or receipt.get("output_sha256") != artifact_hash
+            or receipt.get("provenance_sha256") != provenance_hash
+            or provenance.get("schema") != "fullmag.windows-installer-provenance.v1"
+            or provenance_mode != expected_bootstrap_mode):
+        raise StorageError("Installer sidecar provenance does not match the requested bootstrap mode")
+
+
+def run_windows_installer_source(layout, bootstrap_mode="initial-build"):
+    """Compile only the fixed installer producer under the native heavy lease."""
+    if bootstrap_mode not in ("initial-build", "setup-only"):
+        raise StorageError("Installer bootstrap mode must be initial-build or setup-only")
+    if not _is_native_windows() or layout.get("profile") != WINDOWS_INSTALLER_SOURCE_PROFILE:
+        raise StorageError("Installer source builds require native Windows and the fixed installer profile")
+    producer = validate_path(
+        Path(layout["repo_root"]) / "scripts" / "windows" / "build_installer_from_source.ps1",
+        layout["repo_root"], "Windows installer source producer",
+    )
+    if not producer.is_file():
+        raise StorageError("Windows installer source producer is missing")
+    return _run_managed_command(
+        layout,
+        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+         "-ExecutionPolicy", "Bypass", "-File", str(producer), "-ManagedBuild",
+         "-BootstrapMode", bootstrap_mode],
+        native_user_build=True, native_installer_paths=True,
+        installer_bootstrap_mode=bootstrap_mode,
+        execution_mode="windows-installer-source-build",
+        native_manifest_relative="installer-source/build-manifest.json",
+    )
 
 
 def run(layout, command):
@@ -1256,13 +2899,13 @@ def run_windows_workspace(
         )
         if build_result != 0:
             return build_result
-        if selected_profile == "dev" and frontend == "dev" and not skip_local_changes:
-            # Launch the verified output of this explicit build request even
-            # if another agent edits the checkout before the launcher starts.
-            identity = build_receipt.get("build_manifest_sha256")
-            if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
-                raise StorageError("Native build completed without a pinned output manifest")
-            runtime_command.extend(["-ExpectedBuildId", identity])
+        # SkipLocalChanges relaxes source-dirty admission only.  It must never
+        # widen the artifact handoff: runtime still receives the exact
+        # manifest identity produced by this build request.
+        identity = build_receipt.get("build_manifest_sha256")
+        if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
+            raise StorageError("Native build completed without a pinned output manifest")
+        runtime_command.extend(["-ExpectedBuildId", identity])
     return _run_managed_command(
         layout,
         runtime_command,
@@ -1304,6 +2947,587 @@ def run_windows_workspace_build(
         workspace_backend_profile=selected_profile,
         execution_mode="windows-workspace-build",
         workspace_request_id=workspace_request_id,
+    )
+
+
+
+def run_windows_fem(
+    layout,
+    frontend,
+    device,
+    run_mode,
+    script_path=None,
+    output_dir=None,
+    web_port=0,
+    build_mode="false",
+    build_only=False,
+    skip_local_changes=False,
+    expected_build_id=None,
+):
+    """Run one native Windows FEM build/solve through a closed operation.
+
+    The resolver owns profile selection, the native heavy slot and the
+    terminal build manifest.  The PowerShell child only receives the bounded
+    arguments below; arbitrary commands remain on ``run`` and are rejected for
+    native Windows profiles by the heavy-slot guard.  When no output override
+    is supplied, the authored-script CLI/core retains its source-adjacent
+    result policy.
+    """
+    if not _is_native_windows():
+        raise StorageError("Native Windows FEM requires native Windows")
+    if frontend not in ("static", "dev"):
+        raise StorageError("Native FEM frontend must be static or dev")
+    if device not in ("auto", "cpu", "gpu"):
+        raise StorageError("Native FEM device must be auto, cpu or gpu")
+    if run_mode not in ("interactive", "headless"):
+        raise StorageError("Native FEM run mode must be interactive or headless")
+    if build_mode not in ("true", "false"):
+        raise StorageError("Native FEM build mode must be true or false")
+    if expected_build_id is not None and not SHA256_RE.fullmatch(expected_build_id):
+        raise StorageError("Native FEM expected build id must be a lowercase manifest SHA256")
+    if expected_build_id is not None and build_mode != "false":
+        raise StorageError("Native FEM expected build id is only valid for runtime")
+    if type(web_port) is not int or not 0 <= web_port <= 65535:
+        raise StorageError("Native FEM web port must be an integer from 0 to 65535")
+    if build_only and not build_mode == "true":
+        raise StorageError("Native FEM build-only requires build mode true")
+    if not build_only and not script_path:
+        raise StorageError("Native FEM simulation requires a script path")
+    resolved_device = _resolve_windows_fem_device(device)
+    profile = WINDOWS_NATIVE_FEM_STORAGE_PROFILES[resolved_device]
+    _validate_windows_fem_profile(layout, resolved_device)
+    launcher = validate_path(
+        Path(layout["repo_root"]) / "scripts" / "windows" / "run_fullmag.ps1",
+        layout["repo_root"],
+        "native FEM launcher",
+    )
+    if not launcher.is_file():
+        raise StorageError(f"Native FEM launcher is missing: {launcher}")
+
+    resolved_script = None
+    resolved_script_sha256 = None
+    if script_path:
+        resolved_script, resolved_script_sha256 = _native_fem_authored_script(layout, script_path)
+    if output_dir:
+        output_candidate = Path(output_dir)
+        output_root = Path(layout["build_storage_root"])
+        if not output_candidate.is_absolute():
+            output_candidate = output_root / output_candidate
+        resolved_output = validate_path(str(output_candidate), output_root, "native FEM output")
+        if resolved_output == output_root:
+            raise StorageError("Native FEM output must be a storage subdirectory")
+    else:
+        # Leave the implicit result location to the authored-script CLI/core
+        # policy.  The managed resolver still owns technical roots and
+        # receipts, but must not replace the user's source-adjacent default
+        # with a canonical UUID run directory.
+        resolved_output = None
+    full_workspace_identity = None
+    origin_probe = Path(layout["build_root"]) / "windows-fem-runtime" / "build-manifest.json"
+    if (build_mode == "false" and not build_only and frontend == "static" and device == "gpu"
+            and resolved_device == "gpu" and origin_probe.is_file() and not is_link(origin_probe)):
+        # Admit an explicit GPU script against an all-backends package only
+        # after the aggregate and its immutable origin have passed the strict
+        # handoff validator.  The managed command repeats this under the build
+        # lock immediately before launch.
+        full_workspace_identity = _native_fem_full_workspace_runtime_identity(
+            layout, resolved_device=resolved_device, requested_device=device,
+            frontend=frontend,
+        )
+    # Initialize the canonical technical storage tree before invoking the
+    # child; no user output is allowed to appear before the managed marker and
+    # layout have passed their final mutation-boundary checks.
+    reuse_manifest_identity = None
+    if build_mode == "false" and frontend == "dev" and run_mode == "interactive":
+        # A separately invoked dev runtime must reuse the port-owned frontend
+        # stage.  Validate the sealed stage before creating any run output and
+        # pin the exact manifest digest into the child handoff.
+        reuse_manifest_identity, web_port = _native_fem_interactive_frontend_reuse(
+            layout, web_port, expected_build_id,
+        )
+        expected_build_id = reuse_manifest_identity
+    initialize(layout)
+    if resolved_output is not None:
+        resolved_output.mkdir(parents=True, exist_ok=True)
+    if web_port == 0 and run_mode == "interactive":
+        # Pick an ephemeral host port for the native UI handoff.  The launcher
+        # receives the concrete port, so it never has to infer one from state.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            web_port = int(probe.getsockname()[1])
+
+    command = [
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+        "-ExecutionPolicy", "Bypass", "-File", str(launcher),
+        "-BuildMode", build_mode, "-Frontend", frontend,
+        "-BackendProfile", "release", "-Backend", "fem",
+        "-Device", resolved_device, "-RunMode", run_mode,
+    ]
+    if resolved_output is not None:
+        command.extend(("-OutputDir", str(resolved_output)))
+    command.extend(("-WebPort", str(web_port)))
+    if resolved_script is not None:
+        command.extend(("-ScriptPath", str(resolved_script)))
+    if build_only:
+        command.append("-BuildOnly")
+    if skip_local_changes:
+        command.append("-SkipLocalChanges")
+    if expected_build_id is not None:
+        command.extend(("-ExpectedBuildId", expected_build_id))
+
+    def run_phase(phase_command, phase_execution_mode, phase_attempt_id, phase_record, *, phase_build):
+        _verify_native_fem_script_unchanged(resolved_script, resolved_script_sha256)
+        return _run_managed_command(
+            layout,
+            phase_command,
+            acquire_heavy_slot=phase_build,
+            native_user_build=phase_build,
+            native_fem_paths=True,
+            fem_device=resolved_device,
+            fem_requested_device=device,
+            fem_frontend=frontend,
+            execution_mode=phase_execution_mode,
+            native_manifest_relative="windows-fem-runtime/build-manifest.json",
+            result_record=phase_record,
+            attempt_id=phase_attempt_id,
+            fem_full_workspace_identity=full_workspace_identity,
+        )
+
+    active_execution_mode = "windows-fem-build" if build_only else "windows-fem"
+    active_attempt_id = uuid.uuid4().hex
+    active_attempt_started_at = now()
+    active_record = {}
+    result = None
+    try:
+        if build_mode == "true" and not build_only:
+            build_command = list(command)
+            build_command.append("-BuildOnly")
+            build_record = {}
+            active_execution_mode = "windows-fem-build"
+            active_attempt_id = uuid.uuid4().hex
+            active_attempt_started_at = now()
+            active_record = build_record
+            result = run_phase(
+                build_command, active_execution_mode, active_attempt_id, build_record,
+                phase_build=True,
+            )
+            if result != 0:
+                return result
+
+            runtime_attempt_id = uuid.uuid4().hex
+            runtime_record = {}
+            active_execution_mode = "windows-fem"
+            active_attempt_id = runtime_attempt_id
+            active_attempt_started_at = now()
+            active_record = runtime_record
+            manifest_identity = build_record.get("build_manifest_sha256")
+            if not isinstance(manifest_identity, str) or not SHA256_RE.fullmatch(manifest_identity):
+                raise StorageError("Native FEM build completed without a pinned output manifest")
+            runtime_command = list(command)
+            runtime_command[runtime_command.index("-BuildMode") + 1] = "false"
+            runtime_command.extend(("-ExpectedBuildId", manifest_identity))
+            result = run_phase(
+                runtime_command, active_execution_mode, active_attempt_id, runtime_record,
+                phase_build=False,
+            )
+        else:
+            active_execution_mode = "windows-fem-build" if build_only else "windows-fem"
+            result = run_phase(
+                command, active_execution_mode, active_attempt_id, active_record,
+                phase_build=build_only,
+            )
+        return result
+    finally:
+        primary_error = sys.exc_info()[1]
+        status = {}
+
+        def matches_active_attempt(candidate):
+            return (
+                isinstance(candidate, dict)
+                and candidate.get("attempt_id") == active_attempt_id
+                and candidate.get("worktree_id") == layout["worktree_id"]
+                and candidate.get("profile") == profile
+                and candidate.get("repo_root") == layout["repo_root"]
+                and candidate.get("execution_mode") == active_execution_mode
+                and candidate.get("state") in {"completed", "failed", "interrupted"}
+            )
+
+        if matches_active_attempt(active_record):
+            status = active_record
+        try:
+            status_path = validate_path(
+                Path(layout["build_root"]) / "build-status.json",
+                layout["build_storage_root"],
+                "native FEM build status",
+            )
+            if not status and status_path.is_file():
+                try:
+                    candidate = json.loads(status_path.read_text(encoding="utf-8"))
+                    if matches_active_attempt(candidate):
+                        status = candidate
+                except (OSError, ValueError):
+                    status = {}
+        except (OSError, StorageError, ValueError):
+            # Preserve the operation's original failure; the receipt still
+            # records interrupted when the terminal build status is absent.
+            status = {}
+        receipt = {
+            "schema": WINDOWS_NATIVE_FEM_RECEIPT_SCHEMA,
+            "worktree_id": layout["worktree_id"],
+            "profile": profile,
+            "requested_device": device,
+            "resolved_device": resolved_device,
+            "frontend": frontend,
+            "run_mode": run_mode,
+            "build_mode": build_mode,
+            "build_only": bool(build_only),
+            "script": str(resolved_script) if resolved_script is not None else None,
+            "script_sha256": resolved_script_sha256,
+            # None means the authored-script CLI/core owns the default result
+            # location; this field must not claim that technical storage is
+            # the user's result directory.
+            "output_dir": str(resolved_output) if resolved_output is not None else None,
+            "output_policy": (
+                "explicit" if resolved_output is not None else "script-adjacent-default"
+            ),
+            "execution_mode": active_execution_mode,
+            "attempt_id": active_attempt_id,
+            "state": status.get("state", "interrupted"),
+            "exit_code": status.get("exit_code"),
+            "build_manifest_sha256": status.get("build_manifest_sha256"),
+            "started_at": status.get("started_at", active_attempt_started_at),
+            "finished_at": status.get("finished_at", now()),
+        }
+        try:
+            _publish_native_fem_receipt(layout, receipt)
+        except BaseException:
+            if primary_error is None:
+                raise
+
+
+def _windows_fem_workspace_request(layout, frontend, device, web_port):
+    if not _is_native_windows():
+        raise StorageError("Native Windows FEM browser workspace requires native Windows")
+    if frontend not in ("static", "dev"):
+        raise StorageError("Native FEM browser frontend must be static or dev")
+    if device not in ("auto", "cpu", "gpu"):
+        raise StorageError("Native FEM browser device must be auto, cpu or gpu")
+    if type(web_port) is not int or not 0 <= web_port <= 65535:
+        raise StorageError("Native FEM browser web port must be an integer from 0 to 65535")
+    resolved_device = _resolve_windows_fem_device(device)
+    profile = WINDOWS_NATIVE_FEM_STORAGE_PROFILES[resolved_device]
+    _validate_windows_fem_profile(layout, resolved_device)
+    launcher = validate_path(
+        Path(layout["repo_root"]) / "scripts" / "windows" / "run_fullmag.ps1",
+        layout["repo_root"],
+        "native FEM browser launcher",
+    )
+    if not launcher.is_file():
+        raise StorageError(f"Native FEM launcher is missing: {launcher}")
+    return resolved_device, profile, launcher
+
+
+def run_windows_fem_workspace(
+    layout,
+    frontend,
+    device,
+    web_port=0,
+    build_mode="false",
+    build_only=False,
+    skip_local_changes=False,
+    expected_build_id=None,
+):
+    """Build or run an empty native FEM workspace in the system browser.
+
+    This operation intentionally uses the native FEM build lock and manifest
+    admission without entering the FDM ``run_sealed_runtime`` lane.  The
+    browser CLI owns its API and free-port selection; a zero web port is kept
+    as an explicit request rather than being bound to another workspace.
+    """
+    if build_mode not in ("true", "false"):
+        raise StorageError("Native FEM browser build mode must be true or false")
+    if build_only and build_mode != "true":
+        raise StorageError("Native FEM browser build-only requires build mode true")
+    if expected_build_id is not None and not SHA256_RE.fullmatch(expected_build_id):
+        raise StorageError("Native FEM browser expected build id must be a lowercase manifest SHA256")
+    if expected_build_id is not None and build_mode != "false":
+        raise StorageError("Native FEM browser expected build id is only valid for runtime")
+    resolved_device, profile, launcher = _windows_fem_workspace_request(
+        layout, frontend, device, web_port
+    )
+    command = [
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+        "-ExecutionPolicy", "Bypass", "-File", str(launcher),
+        "-BuildMode", build_mode, "-Frontend", frontend,
+        "-BackendProfile", "release", "-Backend", "fem",
+        "-Device", resolved_device, "-RunMode", "workspace",
+        "-WebPort", str(web_port), "-Browser",
+    ]
+    if build_only:
+        command.append("-BuildOnly")
+    if skip_local_changes:
+        command.append("-SkipLocalChanges")
+    if expected_build_id is not None:
+        command.extend(("-ExpectedBuildId", expected_build_id))
+
+    def run_phase(phase_command, phase_execution_mode, phase_attempt_id, phase_record, *, phase_build):
+        return _run_managed_command(
+            layout,
+            phase_command,
+            acquire_heavy_slot=phase_build,
+            native_user_build=phase_build,
+            native_fem_paths=True,
+            fem_browser_workspace=True,
+            fem_device=resolved_device,
+            fem_requested_device=device,
+            fem_frontend=frontend,
+            execution_mode=phase_execution_mode,
+            native_manifest_relative="windows-fem-runtime/build-manifest.json",
+            result_record=phase_record,
+            attempt_id=phase_attempt_id,
+        )
+
+    active_execution_mode = "windows-fem-workspace-build" if build_only else "windows-fem-workspace"
+    active_attempt_id = uuid.uuid4().hex
+    active_attempt_started_at = now()
+    active_record = {}
+    result = None
+    try:
+        if build_mode == "true" and not build_only:
+            build_command = list(command)
+            build_command.append("-BuildOnly")
+            build_record = {}
+            active_execution_mode = "windows-fem-workspace-build"
+            active_attempt_id = uuid.uuid4().hex
+            active_attempt_started_at = now()
+            active_record = build_record
+            result = run_phase(
+                build_command, active_execution_mode, active_attempt_id, build_record,
+                phase_build=True,
+            )
+            if result != 0:
+                return result
+            manifest_identity = build_record.get("build_manifest_sha256")
+            if not isinstance(manifest_identity, str) or not SHA256_RE.fullmatch(manifest_identity):
+                raise StorageError("Native FEM browser build completed without a pinned output manifest")
+            runtime_command = list(command)
+            runtime_command[runtime_command.index("-BuildMode") + 1] = "false"
+            runtime_command.extend(("-ExpectedBuildId", manifest_identity))
+            runtime_record = {}
+            active_execution_mode = "windows-fem-workspace"
+            active_attempt_id = uuid.uuid4().hex
+            active_attempt_started_at = now()
+            active_record = runtime_record
+            result = run_phase(
+                runtime_command, active_execution_mode, active_attempt_id, runtime_record,
+                phase_build=False,
+            )
+        else:
+            result = run_phase(
+                command, active_execution_mode, active_attempt_id, active_record,
+                phase_build=build_only,
+            )
+        return result
+    finally:
+        primary_error = sys.exc_info()[1]
+        status = {}
+
+        def matches_active_attempt(candidate):
+            return (
+                isinstance(candidate, dict)
+                and candidate.get("attempt_id") == active_attempt_id
+                and candidate.get("worktree_id") == layout["worktree_id"]
+                and candidate.get("profile") == profile
+                and candidate.get("repo_root") == layout["repo_root"]
+                and candidate.get("execution_mode") == active_execution_mode
+                and candidate.get("state") in {"completed", "failed", "interrupted"}
+            )
+
+        if matches_active_attempt(active_record):
+            status = active_record
+        try:
+            status_path = validate_path(
+                Path(layout["build_root"]) / "build-status.json",
+                layout["build_storage_root"],
+                "native FEM browser build status",
+            )
+            if not status and status_path.is_file():
+                try:
+                    candidate = json.loads(status_path.read_text(encoding="utf-8"))
+                    if matches_active_attempt(candidate):
+                        status = candidate
+                except (OSError, ValueError):
+                    status = {}
+        except (OSError, StorageError, ValueError):
+            status = {}
+        receipt = {
+            "schema": WINDOWS_NATIVE_FEM_RECEIPT_SCHEMA,
+            "worktree_id": layout["worktree_id"],
+            "profile": profile,
+            "requested_device": device,
+            "resolved_device": resolved_device,
+            "frontend": frontend,
+            "ui_host": "browser",
+            "workspace_mode": "empty",
+            "browser_workspace": True,
+            "run_mode": "workspace",
+            "build_mode": build_mode,
+            "build_only": bool(build_only),
+            "script": None,
+            "output_dir": None,
+            "web_port": web_port,
+            "execution_mode": active_execution_mode,
+            "attempt_id": active_attempt_id,
+            "state": status.get("state", "interrupted"),
+            "exit_code": status.get("exit_code"),
+            "build_manifest_sha256": status.get("build_manifest_sha256"),
+            "started_at": status.get("started_at", active_attempt_started_at),
+            "finished_at": status.get("finished_at", now()),
+        }
+        try:
+            _publish_native_fem_receipt(layout, receipt)
+        except BaseException:
+            if primary_error is None:
+                raise
+
+
+def _windows_full_workspace_request(layout, frontend, web_port):
+    if not _is_native_windows():
+        raise StorageError("Full workspace requires native Windows")
+    if layout.get("profile") != WINDOWS_FULL_WORKSPACE_STORAGE_PROFILE:
+        raise StorageError("Full workspace requires the windows-native-fem-gpu storage profile")
+    if frontend != "static":
+        raise StorageError("Full workspace is only available with the pinned static frontend")
+    if type(web_port) is not int or not 0 <= web_port <= 65535:
+        raise StorageError("Full workspace web port must be an integer from 0 to 65535")
+    launcher = validate_path(
+        Path(layout["repo_root"]) / "scripts" / "windows" / "run_fullmag.ps1",
+        layout["repo_root"],
+        "full workspace launcher",
+    )
+    if not launcher.is_file():
+        raise StorageError(f"Full workspace launcher is missing: {launcher}")
+    return launcher
+
+
+def run_windows_full_workspace(
+    layout,
+    frontend="static",
+    web_port=0,
+    build_mode="false",
+    build_only=False,
+    skip_local_changes=False,
+    expected_build_id=None,
+):
+    """Build or run the one all-realizations native workspace route.
+
+    The native producer remains physically FEM GPU backed, while its admitted
+    aggregate manifest exposes the four requested capabilities.  Build and
+    runtime are separate managed phases so a runtime can only consume the
+    immutable aggregate receipt produced by the build phase.
+    """
+    if build_mode not in ("true", "false"):
+        raise StorageError("Full workspace build mode must be true or false")
+    if build_only and build_mode != "true":
+        raise StorageError("Full workspace build-only requires build mode true")
+    if expected_build_id is not None and not SHA256_RE.fullmatch(expected_build_id):
+        raise StorageError("Full workspace expected build id must be a lowercase manifest SHA256")
+    if expected_build_id is not None and build_mode != "false":
+        raise StorageError("Full workspace expected build id is only valid for runtime")
+    launcher = _windows_full_workspace_request(layout, frontend, web_port)
+    command = [
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+        "-ExecutionPolicy", "Bypass", "-File", str(launcher),
+        "-BuildMode", build_mode, "-Frontend", frontend,
+        "-BackendProfile", "release", "-Backend", "auto", "-Device", "auto",
+        "-RunMode", "workspace", "-WebPort", str(web_port), "-Browser", "-AllBackends",
+    ]
+    if build_only:
+        command.append("-BuildOnly")
+    if skip_local_changes:
+        command.append("-SkipLocalChanges")
+    if build_mode == "false" and expected_build_id is None:
+        # The recipe may omit the digest for convenience, but the storage
+        # boundary must choose it under its build lock.  The child still gets
+        # an explicit ExpectedBuildId, so the PowerShell/runtime handoff never
+        # relies on an unpinned mutable alias.
+        initialize(layout)
+        with build_lock(layout):
+            manifest_path = _full_workspace_manifest_path(layout)
+            if not manifest_path.is_file():
+                raise StorageError("Full workspace runtime has no completed build manifest")
+            expected_build_id = _sha256_file(manifest_path)
+            validate_full_workspace_handoff(layout, expected_build_id)
+    if expected_build_id is not None:
+        command.extend(("-ExpectedBuildId", expected_build_id))
+
+    def run_phase(phase_command, phase_execution_mode, phase_attempt_id, phase_record, *, phase_build, origin_attempt):
+        return _run_managed_command(
+            layout,
+            phase_command,
+            acquire_heavy_slot=phase_build,
+            native_user_build=phase_build,
+            native_full_workspace_paths=True,
+            execution_mode=phase_execution_mode,
+            native_manifest_relative="windows-full-runtime/build-manifest.json",
+            result_record=phase_record,
+            attempt_id=phase_attempt_id,
+            full_origin_attempt_id=origin_attempt,
+        )
+
+    if build_mode == "false" and expected_build_id is not None:
+        admitted_manifest = validate_full_workspace_handoff(layout, expected_build_id)
+        origin_attempt = admitted_manifest["attempt_id"]
+    else:
+        origin_attempt = None
+
+    if build_mode == "true":
+        build_command = list(command)
+        if "-BuildOnly" not in build_command:
+            build_command.append("-BuildOnly")
+        build_attempt = uuid.uuid4().hex
+        build_record = {}
+        result = run_phase(
+            build_command,
+            "windows-full-workspace-build",
+            build_attempt,
+            build_record,
+            phase_build=True,
+            origin_attempt=build_attempt,
+        )
+        if result != 0 or build_record.get("state") != "completed":
+            return result
+        manifest_identity = build_record.get("build_manifest_sha256")
+        if not isinstance(manifest_identity, str) or not SHA256_RE.fullmatch(manifest_identity):
+            raise StorageError("Full workspace build completed without a pinned output manifest")
+        admitted_manifest = validate_full_workspace_handoff(layout, manifest_identity)
+        origin_attempt = admitted_manifest["attempt_id"]
+        if build_only:
+            return result
+        command = list(command)
+        command[command.index("-BuildMode") + 1] = "false"
+        command.extend(("-ExpectedBuildId", manifest_identity))
+
+    runtime_attempt = uuid.uuid4().hex
+    runtime_record = {}
+    return run_phase(
+        command,
+        "windows-full-workspace",
+        runtime_attempt,
+        runtime_record,
+        phase_build=False,
+        origin_attempt=origin_attempt,
+    )
+
+
+def run_windows_full_workspace_build(layout, frontend="static", web_port=0, skip_local_changes=False):
+    return run_windows_full_workspace(
+        layout,
+        frontend=frontend,
+        web_port=web_port,
+        build_mode="true",
+        build_only=True,
+        skip_local_changes=skip_local_changes,
     )
 
 
@@ -1360,9 +3584,15 @@ def inventory(layout):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("resolve", "validate", "run", "run-windows-workspace", "run-windows-workspace-build", "register", "finish", "inventory", "prepare-links", "assert-lock"))
+    parser.add_argument("action", choices=("resolve", "validate", "run", "run-windows-workspace", "run-windows-workspace-build", "run-windows-fem", "run-windows-fem-workspace", "run-windows-fem-workspace-build", "run-windows-full-workspace", "run-windows-full-workspace-build", "run-windows-installer-source", "register", "finish", "inventory", "prepare-links", "assert-lock"))
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--profile")
+    parser.add_argument(
+        "--bootstrap-mode", "--installer-bootstrap-mode",
+        dest="installer_bootstrap_mode",
+        choices=("initial-build", "setup-only"),
+        default=None,
+    )
     parser.add_argument("--host-ledger-profile", choices=(HOST_LEDGER_PROFILE,))
     parser.add_argument("--format", choices=("json", "sh"), default="json")
     parser.add_argument("--create", action="store_true")
@@ -1374,6 +3604,22 @@ def main(argv=None):
     parser.add_argument("--workspace-build-mode", choices=("auto", "true", "false"), default="auto")
     parser.add_argument("--workspace-skip-local-changes", action="store_true")
     parser.add_argument("--workspace-request-id")
+    parser.add_argument("--fem-frontend", choices=("static", "dev"))
+    parser.add_argument("--fem-device", choices=("auto", "cpu", "gpu"))
+    parser.add_argument("--fem-run-mode", choices=("interactive", "headless", "workspace"))
+    parser.add_argument("--fem-script")
+    parser.add_argument("--fem-output-dir")
+    parser.add_argument("--fem-web-port", type=int, default=0)
+    parser.add_argument("--fem-build-mode", choices=("true", "false"), default="false")
+    parser.add_argument("--fem-build-only", action="store_true")
+    parser.add_argument("--fem-skip-local-changes", action="store_true")
+    parser.add_argument("--fem-expected-build-id")
+    parser.add_argument("--full-frontend", choices=("static",))
+    parser.add_argument("--full-web-port", type=int, default=0)
+    parser.add_argument("--full-build-mode", choices=("true", "false"), default="false")
+    parser.add_argument("--full-build-only", action="store_true")
+    parser.add_argument("--full-skip-local-changes", action="store_true")
+    parser.add_argument("--full-expected-build-id")
     parser.add_argument("--compat", action="store_true")
     parser.add_argument("--next-dist-dir")
     parser.add_argument("--task-id")
@@ -1387,11 +3633,15 @@ def main(argv=None):
         args_list, command = args_list[:position], args_list[position + 1:]
     args = parser.parse_args(args_list)
     try:
+        if (args.installer_bootstrap_mode is not None
+                and args.action != "run-windows-installer-source"):
+            raise StorageError("--bootstrap-mode is only valid for run-windows-installer-source")
         if args.workspace_request_id is not None:
             validate_workspace_request_id(args.workspace_request_id)
             if args.action != "run-windows-workspace-build":
                 raise StorageError("--workspace-request-id is only valid for run-windows-workspace-build")
         selected_workspace_profile = None
+        selected_fem_device = None
         selected_storage_profile = None
         if args.action == "run-windows-workspace":
             selected_workspace_profile = resolve_windows_workspace_backend_profile(
@@ -1404,10 +3654,43 @@ def main(argv=None):
                 raise StorageError("Windows workspace build requires an explicit dev or release backend profile")
             selected_workspace_profile = args.workspace_backend_profile
             selected_storage_profile = WINDOWS_WORKSPACE_STORAGE_PROFILES[selected_workspace_profile]
+        elif args.action in ("run-windows-fem", "run-windows-fem-workspace", "run-windows-fem-workspace-build"):
+            if args.fem_frontend is None or args.fem_device is None:
+                raise StorageError(f"{args.action} requires --fem-frontend and --fem-device")
+            if args.action == "run-windows-fem" and args.fem_run_mode is None:
+                raise StorageError("run-windows-fem requires --fem-run-mode")
+            if args.action != "run-windows-fem" and args.fem_run_mode not in (None, "workspace"):
+                raise StorageError(f"{args.action} requires workspace run mode")
+            selected_fem_device = _resolve_windows_fem_device(args.fem_device)
+            selected_storage_profile = WINDOWS_NATIVE_FEM_STORAGE_PROFILES[selected_fem_device]
+        elif args.action in ("run-windows-full-workspace", "run-windows-full-workspace-build"):
+            if args.full_frontend is None:
+                raise StorageError(f"{args.action} requires --full-frontend static")
+            if args.action == "run-windows-full-workspace-build":
+                if args.full_build_mode != "true":
+                    raise StorageError("run-windows-full-workspace-build requires --full-build-mode true")
+                if args.full_build_only is False:
+                    args.full_build_only = True
+            elif args.full_build_only:
+                raise StorageError("Full workspace build-only requires the dedicated workspace-build action")
+            selected_storage_profile = WINDOWS_FULL_WORKSPACE_STORAGE_PROFILE
+        if args.action == "run-windows-installer-source":
+            selected_storage_profile = WINDOWS_INSTALLER_SOURCE_PROFILE
         if selected_storage_profile:
             if args.profile and args.profile != selected_storage_profile:
-                raise StorageError("Windows workspace storage profile does not match the selected compiler profile")
-            layout = resolve_layout(args.repo_root, selected_storage_profile, host_ledger_profile=args.host_ledger_profile)
+                expected_kind = (
+                    "native FEM device" if args.action == "run-windows-fem" else
+                    "native FEM browser workspace device" if args.action in ("run-windows-fem-workspace", "run-windows-fem-workspace-build") else
+                    "full workspace" if args.action in ("run-windows-full-workspace", "run-windows-full-workspace-build") else
+                    "Windows installer producer" if args.action == "run-windows-installer-source" else
+                    "Windows workspace compiler profile"
+                )
+                raise StorageError(f"Storage profile does not match the selected {expected_kind}: {selected_storage_profile}")
+            layout = resolve_layout(
+                args.repo_root,
+                selected_storage_profile,
+                host_ledger_profile=args.host_ledger_profile,
+            )
         else:
             layout = resolve_layout(args.repo_root, args.profile, host_ledger_profile=args.host_ledger_profile)
         if args.action == "assert-lock":
@@ -1416,8 +3699,77 @@ def main(argv=None):
             with build_lock(layout):
                 print(json.dumps({"locked": True, "worktree_id": layout["worktree_id"]}))
             return 0
+        if args.action == "run-windows-installer-source":
+            if command:
+                raise StorageError("run-windows-installer-source does not accept an arbitrary command")
+            return run_windows_installer_source(
+                layout, args.installer_bootstrap_mode or "initial-build"
+            )
         if args.action == "run":
             return run(layout, command)
+        if args.action == "run-windows-fem":
+            if command:
+                raise StorageError("run-windows-fem does not accept an arbitrary command")
+            return run_windows_fem(
+                layout,
+                args.fem_frontend,
+                args.fem_device,
+                args.fem_run_mode,
+                args.fem_script,
+                args.fem_output_dir,
+                args.fem_web_port,
+                args.fem_build_mode,
+                args.fem_build_only,
+                args.fem_skip_local_changes,
+                args.fem_expected_build_id,
+            )
+        if args.action in ("run-windows-fem-workspace", "run-windows-fem-workspace-build"):
+            if command:
+                raise StorageError(f"{args.action} does not accept an arbitrary command")
+            if args.fem_frontend is None or args.fem_device is None:
+                raise StorageError(f"{args.action} requires --fem-frontend and --fem-device")
+            if args.fem_build_only and args.action != "run-windows-fem-workspace-build":
+                raise StorageError("FEM browser build-only requires the dedicated workspace-build action")
+            build_only = args.action == "run-windows-fem-workspace-build"
+            if build_only and args.fem_build_mode != "true":
+                raise StorageError("run-windows-fem-workspace-build requires --fem-build-mode true")
+            if args.fem_expected_build_id is not None and args.action != "run-windows-fem-workspace":
+                raise StorageError("FEM browser expected build id is only valid for runtime")
+            return run_windows_fem_workspace(
+                layout,
+                args.fem_frontend,
+                args.fem_device,
+                args.fem_web_port,
+                args.fem_build_mode,
+                build_only,
+                args.fem_skip_local_changes,
+                args.fem_expected_build_id,
+            )
+        if args.action in ("run-windows-full-workspace", "run-windows-full-workspace-build"):
+            if command:
+                raise StorageError(f"{args.action} does not accept an arbitrary command")
+            if args.full_frontend is None:
+                raise StorageError(f"{args.action} requires --full-frontend static")
+            if args.action == "run-windows-full-workspace-build":
+                if args.full_expected_build_id is not None:
+                    raise StorageError("Full workspace build-only does not accept ExpectedBuildId")
+                return run_windows_full_workspace_build(
+                    layout,
+                    args.full_frontend,
+                    args.full_web_port,
+                    args.full_skip_local_changes,
+                )
+            if args.full_build_only:
+                raise StorageError("Full workspace build-only requires the dedicated workspace-build action")
+            return run_windows_full_workspace(
+                layout,
+                args.full_frontend,
+                args.full_web_port,
+                args.full_build_mode,
+                False,
+                args.full_skip_local_changes,
+                args.full_expected_build_id,
+            )
         if args.action in ("run-windows-workspace", "run-windows-workspace-build"):
             if command:
                 raise StorageError(f"{args.action} does not accept an arbitrary command")

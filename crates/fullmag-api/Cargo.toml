@@ -4,6 +4,7 @@ default-run = "fullmag-api"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "fullmag-api"

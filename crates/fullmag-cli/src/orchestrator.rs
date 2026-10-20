@@ -563,6 +563,7 @@ fn own_preparation_boundary_failure<T>(
 fn wait_for_failed_preparation_close(
     workspace: &LocalLiveWorkspace,
     mut next_command: impl FnMut() -> Option<SessionCommand>,
+    mut should_stop: impl FnMut() -> bool,
 ) {
     let is_terminal_failure = workspace
         .snapshot()
@@ -597,7 +598,13 @@ fn wait_for_failed_preparation_close(
         "Simulation preparation failed — Control Room remains available until Close",
     );
     loop {
+        if should_stop() {
+            return;
+        }
         let Some(command) = next_command() else {
+            if should_stop() {
+                return;
+            }
             continue;
         };
         let is_close = command.kind == "close"
@@ -9017,6 +9024,11 @@ fn resolve_rayon_cpu_threads(
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut args = ScriptCli::parse_from(raw_args);
     let ui_plan = crate::script_launch::ui_plan(&args);
+    let _browser_interrupt = if ui_plan == crate::script_launch::UiPlan::Browser {
+        Some(crate::control_room::BrowserInterruptGuard::install()?)
+    } else {
+        None
+    };
     if ui_plan == crate::script_launch::UiPlan::None {
         // `--ui none` is the headless web side.
         args.headless = true;
@@ -9372,10 +9384,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         _control_room_guard = ControlRoomGuard::active(web_port, child, frontend_child);
         let failed_workspace = live_workspace.clone();
         let failure_control = display_selection_handle.clone();
+        let failure_owner_control = failure_control.clone();
         _control_room_guard.retain_terminal_failure_until_close(move || {
-            wait_for_failed_preparation_close(&failed_workspace, || {
-                failure_control.wait_next_command_coalesced(Duration::from_millis(250))
-            });
+            // This callback runs before normal materialization reaches the
+            // later command-polling boundary. Enable the existing poller only
+            // for the terminal failure wait so Close can be received without
+            // changing readiness for other command consumers.
+            failure_control.enable_command_polling();
+            wait_for_failed_preparation_close(
+                &failed_workspace,
+                || failure_control.wait_next_command_coalesced(Duration::from_millis(250)),
+                || {
+                    failure_owner_control.owner_session_lost()
+                        || crate::control_room::browser_exit_requested()
+                },
+            );
         });
     }
 
@@ -10713,6 +10736,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
 
         loop {
+            if crate::control_room::browser_exit_requested() {
+                live_workspace.push_log(
+                    "system",
+                    "Ctrl+C requested browser session shutdown; releasing launcher ownership",
+                );
+                return Ok(());
+            }
             if display_selection_handle.grid_refresh_command_refused() {
                 bail!("grid-only control receiver refused an unpinned command");
             }
@@ -12647,6 +12677,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         // Each completed/skipped stage pops from the front. Break aborts the whole sequence.
         let mut active_sequence: Option<ActiveSequenceState> = None;
         loop {
+            if crate::control_room::browser_exit_requested() {
+                live_workspace.push_log(
+                    "system",
+                    "Ctrl+C requested browser session shutdown; releasing launcher ownership",
+                );
+                break;
+            }
             if display_selection_handle.owner_session_lost() {
                 live_workspace.push_log(
                     "warning",
@@ -16148,16 +16185,20 @@ mod tests {
         let mut commands = vec!["run", "close"].into_iter();
         let mut received = Vec::new();
 
-        wait_for_failed_preparation_close(&workspace, || {
-            let kind = commands.next()?;
-            received.push(kind);
-            serde_json::from_value(serde_json::json!({
-                "command_id": format!("cmd-{kind}"),
-                "kind": kind,
-                "created_at_unix_ms": 0,
-            }))
-            .ok()
-        });
+        wait_for_failed_preparation_close(
+            &workspace,
+            || {
+                let kind = commands.next()?;
+                received.push(kind);
+                serde_json::from_value(serde_json::json!({
+                    "command_id": format!("cmd-{kind}"),
+                    "kind": kind,
+                    "created_at_unix_ms": 0,
+                }))
+                .ok()
+            },
+            || false,
+        );
 
         assert_eq!(received, vec!["run", "close"]);
         let preparation = workspace
@@ -16175,9 +16216,66 @@ mod tests {
     fn successful_preparation_does_not_enter_failure_close_wait() {
         let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
 
-        wait_for_failed_preparation_close(&workspace, || {
-            panic!("nonfailed preparation must not wait for a close command")
-        });
+        wait_for_failed_preparation_close(
+            &workspace,
+            || panic!("nonfailed preparation must not wait for a close command"),
+            || false,
+        );
+    }
+
+    #[test]
+    fn terminal_preparation_failure_returns_when_owner_is_lost_before_close() {
+        let workspace = preparation_workspace(PreparationStageId::Validation);
+        fail_owned_preparation_stage(
+            &workspace,
+            PreparationStageId::Validation,
+            "validation_failed",
+            "Simulation validation failed",
+        )
+        .expect("test preparation should fail");
+        let mut polled = false;
+
+        wait_for_failed_preparation_close(
+            &workspace,
+            || {
+                polled = true;
+                None
+            },
+            || true,
+        );
+
+        assert!(
+            !polled,
+            "owner loss must release terminal failure wait before polling"
+        );
+    }
+
+    #[test]
+    fn terminal_preparation_failure_observes_stop_after_command_timeout() {
+        let workspace = preparation_workspace(PreparationStageId::Validation);
+        fail_owned_preparation_stage(
+            &workspace,
+            PreparationStageId::Validation,
+            "validation_failed",
+            "Simulation validation failed",
+        )
+        .expect("test preparation should fail");
+        let polls = std::cell::Cell::new(0);
+
+        wait_for_failed_preparation_close(
+            &workspace,
+            || {
+                polls.set(polls.get() + 1);
+                None
+            },
+            || polls.get() > 0,
+        );
+
+        assert_eq!(
+            polls.get(),
+            1,
+            "stop must be observed after a timed command wait"
+        );
     }
 
     #[test]
