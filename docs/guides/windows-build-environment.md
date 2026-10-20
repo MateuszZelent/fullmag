@@ -32,8 +32,8 @@ osobno. Wymuszone GPU kończy się jawnym błędem bez CPU fallbacku.
 Po przygotowaniu narzędzi pełna trasa używa rootowych recept:
 
 ```powershell
-just windows-full-workspace-build backend=auto device=auto
-just windows-full-workspace backend=auto device=auto
+just windows-full-workspace-build static 0
+just windows-full-workspace static 0
 ```
 
 Recepty pozostawiają wybór backendu i urządzenia aplikacji dla konkretnego
@@ -202,7 +202,8 @@ Manifest [`windows_installer_build_requirements.json`](../../windows_installer_b
 rozróżnia minimalne narzędzia producenta: Git i Python są wymagane przed
 odkryciem głównego checkoutu oraz ekranu `.env`, MSVC z targetem x86 i Windows
 SDK są wymagane do authoringu BA, CMake pozostaje narzędziem kompilacji pomocniczej,
-na tym etapie instalowany jest project-owned WiX 3.14.1 z przypiętego archiwum
+producent przygotowuje również project-owned .NET SDK 10.0.402 do publikacji
+Avalonia. Na tym etapie instalowany jest project-owned WiX 3.14.1 z przypiętego archiwum
 `candle.exe`, `light.exe`, `heat.exe`, `WixBalExtension.dll` i
 `WixUIExtension.dll`. Hash archiwum w manifeście jest lokalnym dowodem pobranego
 assetu i wymaga niezależnej weryfikacji przed publikacją.
@@ -260,44 +261,45 @@ profil, tryb `setup-only` albo `initial-build` i ścieżkę receipt. Brak helper
 receiptu lub zgodności hashy blokuje authoring. CMake/MSVC nie są dowodem
 wykonania żadnej z tych tras; clean install i runtime pozostają `NOT VERIFIED`.
 
-## Przyszły instalator GUI
+## Kreator Fullmag Setup
 
-Obecny wewnętrzny artefakt pakowania to istniejący MSI z
-[`scripts/windows/build_windows_msi.ps1`](../../scripts/windows/build_windows_msi.ps1),
-który generuje produkt WiX 3. Publicznym artefaktem dystrybucji ma być pojedynczy
-`fullmag.exe` jako bootstrapper GUI. Wewnętrzna implementacja może użyć tego MSI
-wewnątrz łańcucha WiX Burn: najpierw sprawdza wymagania systemowe i uruchamia
-kontrolowane prerequisites, a następnie instaluje pakiet Fullmag. MSI nie staje się
-drugim publicznym artefaktem. Po instalacji kolejne
-przebudowy deweloperskie pozostają zarządzane przez `just windows-build fem gpu` (lub wybraną trasę CPU/FDM) i resolver
-storage. Burn jest opakowaniem istniejącego MSI; nie należy tworzyć równoległego
-produktu ani niejawnie migrować WiX 3 do WiX 4 bez osobnej decyzji architektonicznej.
+Publiczny `fullmag.exe` jest bootstrapperem WiX 3 Burn. Jego interfejs używa
+Avalonia + Fluent, a natywna BA zarządza sesją źródeł, transakcją konfiguracji,
+przygotowaniem środowiska i weryfikacją receiptu. Producent pakuje samodzielny
+payload `FullmagInstallerUi.exe` z własnym runtime .NET. SDK .NET jest
+wymaganiem producenta instalatora. Samodzielny payload nie zastępuje próby
+ładowania natywnych zależności na czystym komputerze.
 
-Zainstalowany desktop Fullmag używa Tauri (`fullmag-ui.exe`), więc instalator GUI
-musi w pierwszym kroku sprawdzić Microsoft Edge WebView2 Runtime. Publiczny
-`fullmag.exe` jest nazwą bootstrappera Burn, a nie binarium Tauri; sam bootstrapper
-C++ nie jest klientem WebView2. Gdy runtime nie jest obecny, kontrakt przyszłego
-`fullmag.exe` powinien uruchomić oficjalny Evergreen Bootstrapper WebView2 albo
-zakończyć się czytelnym blokującym komunikatem przed uruchomieniem zainstalowanego
-UI. Nie wolno uznać samej gotowości kompilatora za zainstalowany produkt desktopowy.
-Bieżący setup środowiska nie instaluje ani nie kwalifikuje WebView2, dlatego jego raport zachowuje
-`runtime: NOT VERIFIED`. Zobacz [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/)
-i [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+Publiczna trasa source-first buduje pełny pakiet FDM/FEM CPU/GPU ze wskazanego
+checkoutu. Po instalacji model wybiera backend i urządzenie. Unified workspace
+tej trasy jest otwierany w przeglądarce. Osobna trasa desktopowa Tauri
+(`fullmag-ui.exe`) ma własne wymaganie WebView2; nie ustanawia ono zależności
+interfejsu Avalonia. Historyczne opakowanie MSI pozostaje odrębną, zablokowaną
+trasą opisaną wyżej.
 
 ### Przebieg kreatora
 
-Planowany kreator `fullmag.exe` prowadzi przez ekran powitalny, licencję,
-wybór checkoutu i konfigurację `.env`, kontrolę zależności, podsumowanie
-planowanych zmian, instalację z postępem oraz wynik weryfikacji. Po sukcesie
-użytkownik może uruchomić Fullmaga. Rebuildy z kodu korzystają później z `just`.
-Ekran licencji musi używać zatwierdzonej treści licencji produktu i udostępniać
-informacje o licencjach dołączanych komponentów. Tekst licencji produktu
-oraz wymagane zgody instalatorów zależności pozostają wejściami kwalifikacji
-wydania; dokumentacja kreatora nie ustanawia nowych warunków licencji.
+Kreator prowadzi przez Welcome, zatwierdzenie licencji i Paths. Następnie
+Requirements przygotowuje minimum Git/Python oraz wiąże sesję checkoutu,
+zanim użytkownik otrzyma edytowalne pola Environment. Review changes pokazuje
+zamaskowany podgląd na Requirements; jawne Continue prowadzi do Progress.
+Install Fullmag zatwierdza transakcję `.env` i uruchamia przygotowanie pełnego
+pakietu. Ready wymaga terminalnego receiptu i czterech component proofs.
+
+Podgląd pozostaje readonly. Po potwierdzonym commit instalator przygotowuje
+layout przez jawne `resolve --create` zarządzanego resolvera, sprawdza dokładne
+rooty, profil, containment i brak reparse points, a następnie planuje Burn.
+Katalogów buildu nie tworzy sam interfejs. Kolejne natywne kwalifikacje pakietu
+korzystają z zarządzanych recept `just`; codzienny Docker DEV zachowuje własną
+trasę Compose.
+
+Licencja pochodzi ze zweryfikowanego payloadu produktu. Wymagane zgody i notices
+komponentów są osobnym wejściem kwalifikacji wydania; dokumentacja kreatora nie
+ustanawia nowych warunków licencji.
 
 ### Ekran konfiguracji `.env`
 
-Planowany `fullmag.exe` ma zawierać ekran konfiguracji `.env` przed rozpoczęciem
+`fullmag.exe` zawiera ekran konfiguracji `.env` przed rozpoczęciem
 instalacji. Ekran pokazuje wyłącznie pola z wersjonowanego
 [`.env.example`](../../.env.example) oraz kontraktu manifestu wymagań; obecny
 template obejmuje parametry `RUST_LOG`, `POSTGRES_PASSWORD`,
@@ -315,7 +317,8 @@ Brak metadanych `.git`, brak rekordu głównego checkoutu albo próba użycia
 worktree-local `.env` blokuje instalację. Instalator nie wykonuje `git init` i nie
 tworzy alternatywnego źródła konfiguracji.
 
-Wybór `FULLMAG_PROJECT_STORAGE_ROOT` odbywa się w jawnym dialogu lokalnej ścieżki.
+Wybór `FULLMAG_PROJECT_STORAGE_ROOT` odbywa się na Paths. Odpowiadające mu
+pole Environment jest readonly i odsyła do Paths.
 Przed pokazaniem możliwości zapisu instalator sprawdza absolutną ścieżkę Windows,
 odrzuca ścieżki względne, drive-relative, UNC i sieciowe, a następnie uruchamia
 wspólny [`fullmag_storage.py`](../../scripts/fullmag_storage.py) dla wybranego
@@ -328,37 +331,37 @@ template i nie staje się drugim rootem storage.
 Przed zatwierdzeniem użytkownik otrzymuje podgląd różnic z zamaskowanymi
 sekretami. Podgląd, komunikaty i logi nie mogą zawierać wartości
 `POSTGRES_PASSWORD` ani `MINIO_ROOT_PASSWORD`. Anulowanie, odrzucenie walidacji
-lub błąd zapisu nie zmienia `.env`. Po zatwierdzeniu instalator wykonuje kopię
+lub błąd zapisu nie zmienia `.env`. Dla rzeczywistej zmiany po zatwierdzeniu instalator wykonuje kopię
 zapasową, zapisuje nową treść przez plik tymczasowy i atomową podmianę, zachowując
 nieznane wpisy, komentarze i pozostałą kolejność konfiguracji. Niepowodzenie
 któregokolwiek kroku pozostawia poprzedni plik jako aktywny i nie uruchamia
 dalszej instalacji. Konfiguracja trafia do projektowego `.env`; GUI nie ustawia
 globalnego User/Machine environment ani globalnego `PATH`.
 
-Status tego ekranu to `NOT VERIFIED` i `planned`. Obecny
-[`setup_build_environment.ps1`](../../scripts/windows/setup_build_environment.ps1)
-pozostaje narzędziem check/install: czyta `.env` głównego checkoutu, a przy
-`-Install -StorageRoot` może dopisać brakującą linię storage. Nie jest edytorem
-GUI i nie dostarcza jeszcze kontraktu podglądu różnic, maskowania sekretów,
-kopii zapasowej ani atomowej transakcji opisanej powyżej.
+Kanonicznie równoważny zapis istniejącej ścieżki storage zachowuje oryginalną
+linię bajt w bajt. Taki no-op ma pusty diff, nie zapisuje pliku i nie tworzy
+backupu. Interpretowana regresja Windows obejmuje również ścieżki ze spacjami,
+warianty slash, sekrety, konflikty, ACL i zachowanie obcych wpisów.
 
-To jest plan integracji, nie gotowy instalator GUI. Nie ma jeszcze zatwierdzonego
-łańcucha Burn, kontraktu upgrade/rollback ani dowodu działania `fullmag.exe`.
-Kontrakt należy utrzymywać w [`ADR 0053`](../adr/0053-native-windows-fem-build-environment.md)
-i obejmuje wersję WiX, identyfikatory pakietów prerequisites, kolejność kontroli,
-ekran konfiguracji `.env` oraz własność MSI. Dokumentacja Burn:
-[WiX Burn](https://docs.firegiant.com/wix/tools/burn/).
+Stan kwalifikacji pozostaje rozdzielony: producent EXE oraz rzeczywiste strony
+Welcome, License, Paths, Environment, readonly storage, preview, Continue i
+Install zostały zaobserwowane. Pełny przebieg na świeżym storage, pozytywny Ready,
+wykonanie oryginalnego FEM GPU i kwalifikacja wydania nadal wymagają dowodów.
+Bieżący checkpoint znajduje się w
+[planie instalatora](../plans/active/windows-installer-all-backends-20261015.md).
+Kontrakt architektury opisuje
+[ADR 0053](../adr/0053-native-windows-fem-build-environment.md).
 
 ## Ścieżka po setupie
 
-Po przejściu kontroli używaj zarządzanych wejść repozytorium. Natywny launcher
-Windows i trasy backendów są opisane w
+Do kolejnej kwalifikacji natywnego pakietu używaj zarządzanych wejść
+repozytorium. Natywny launcher Windows i trasy backendów są opisane w
 [`windows-first-development.md`](windows-first-development.md). Pełna trasa
 używa rootowych recept bez przypięcia backendu:
 
 ```powershell
-just windows-full-workspace-build backend=auto device=auto
-just windows-full-workspace backend=auto device=auto
+just windows-full-workspace-build static 0
+just windows-full-workspace static 0
 ```
 
 Pierwsza recepta weryfikuje lub buduje jeden supersetowy bundle

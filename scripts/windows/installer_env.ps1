@@ -244,6 +244,8 @@ function Get-FullmagInstallerEnvSessionCanonicalIdentity {
       [string]$Session.template_hash
       [string]$Session.manifest_hash
       [string]$Session.resolver_hash
+      [string]$Session.environment_committed
+      [string]$Session.committed_environment_hash
       [string]$Session.git_top
       [string]$Session.git_head
       [string]$Session.git_worktrees_hash
@@ -659,13 +661,14 @@ function Invoke-FullmagInstallerEnvProcess {
 function Invoke-FullmagInstallerStorageResolve {
   param(
     [Parameter(Mandatory = $true)]$Session,
-    [Parameter(Mandatory = $true)][string]$StorageRoot
+    [Parameter(Mandatory = $true)][string]$StorageRoot,
+    [Parameter()][switch]$Create
   )
   $python = [string]$Session.python_command
   if ([string]::IsNullOrWhiteSpace($python)) {
     $command = Get-Command python.exe -ErrorAction SilentlyContinue
     if (-not $command) { $command = Get-Command python -ErrorAction SilentlyContinue }
-    if (-not $command) { throw "Python is required for read-only storage validation" }
+    if (-not $command) { throw "Python is required for storage validation" }
     $python = [string]$command.Source
   }
   $resolver = [string]$Session.resolver_script
@@ -683,12 +686,20 @@ function Invoke-FullmagInstallerStorageResolve {
     "FULLMAG_NATIVE_MOUNT_VIEW", "FULLMAG_STORAGE_USE_MANAGED_EXT4",
     "POSTGRES_PASSWORD", "MINIO_ROOT_PASSWORD"
   ) | Select-Object -Unique
+  $arguments = [System.Collections.Generic.List[string]]::new()
+  foreach ($argument in @($resolver, "resolve", "--repo-root", [string]$Session.requested_checkout,
+      "--profile", [string]$Session.storage_profile, "--format", "json")) {
+    [void]$arguments.Add($argument)
+  }
+  if ($Create) { [void]$arguments.Add("--create") }
   $result = Invoke-FullmagInstallerEnvProcess -FilePath $python -WorkingDirectory ([string]$Session.requested_checkout) `
-    -Arguments @($resolver, "resolve", "--repo-root", [string]$Session.requested_checkout,
-      "--profile", [string]$Session.storage_profile, "--format", "json") `
+    -Arguments $arguments.ToArray() `
     -EnvironmentOverrides @{ FULLMAG_PROJECT_STORAGE_ROOT = $StorageRoot; PYTHONDONTWRITEBYTECODE = "1" } `
     -RemoveEnvironment $removed
-  if ($result.exit_code -ne 0) { throw "Read-only storage resolver rejected the proposed storage configuration" }
+  if ($result.exit_code -ne 0) {
+    if ($Create) { throw "Storage resolver rejected layout preparation" }
+    throw "Read-only storage resolver rejected the proposed storage configuration"
+  }
   try { $layout = $result.stdout | ConvertFrom-Json -ErrorAction Stop }
   catch { throw "Read-only storage resolver returned invalid JSON" }
   if ($null -eq $layout.storage_root -or
@@ -758,6 +769,7 @@ function Get-FullmagInstallerEnvSession {
     template_path = $expectedTemplate; manifest_path = $expectedManifest
     resolver_script = $resolver; python_command = $python; storage_profile = $profile
     original_hash = $snapshot.hash; original_exists = [bool]$snapshot.exists
+    environment_committed = $false; committed_environment_hash = ""
     encoding = $snapshot.encoding_name; newline = $snapshot.newline
     template_hash = $templateSnapshot.hash; manifest_hash = $manifestSnapshot.hash; resolver_hash = (Read-FullmagInstallerEnvFile -Path $resolver -Label "storage resolver").hash
     git_top = $gitIdentity.top; git_head = $gitIdentity.head; git_worktrees_hash = $gitIdentity.worktrees_hash
@@ -1206,6 +1218,76 @@ function Commit-FullmagInstallerEnvProposal {
     if ($lockAcquired -and (Test-Path -LiteralPath $lockPath)) {
       Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
     }
+  }
+}
+
+function Prepare-FullmagInstallerStorageLayout {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory = $true)]$Session,
+    [Parameter(Mandatory = $true)][string]$StorageRoot,
+    [Parameter(Mandatory = $true)][string]$ExpectedEnvironmentHash,
+    [Parameter(Mandatory = $true)][string]$ExpectedStorageProfile
+  )
+  Assert-FullmagInstallerEnvSession -Session $Session | Out-Null
+  if (-not [bool]$Session.environment_committed -or
+      [string]::IsNullOrWhiteSpace([string]$Session.committed_environment_hash)) {
+    throw "Storage layout preparation requires a committed environment session"
+  }
+  if ($ExpectedEnvironmentHash -notmatch '^[0-9a-fA-F]{64}$' -or
+      -not [string]::Equals([string]$Session.committed_environment_hash, $ExpectedEnvironmentHash,
+        [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Storage layout preparation environment hash does not match the committed session"
+  }
+  if (-not [string]::Equals([string]$ExpectedStorageProfile, [string]$Session.storage_profile,
+      [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Storage layout preparation profile does not match the admitted session"
+  }
+  $expectedRoot = ConvertTo-FullmagInstallerEnvFullPath -Path $StorageRoot -Label "storage root"
+  $proposal = Get-FullmagInstallerEnvPreview -Session $Session -Values @{}
+  if (-not [bool]$proposal.valid -or
+      -not [string]::Equals([string]$proposal.proposed_hash, $ExpectedEnvironmentHash,
+        [System.StringComparison]::OrdinalIgnoreCase) -or
+      -not [string]::Equals([string]$proposal.storage_root, $expectedRoot,
+        [System.StringComparison]::OrdinalIgnoreCase) -or
+      -not [string]::Equals([string]$proposal.storage_profile, [string]$Session.storage_profile,
+        [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "The committed environment no longer matches the requested storage layout"
+  }
+
+  $layout = Invoke-FullmagInstallerStorageResolve -Session $Session -StorageRoot $expectedRoot -Create
+  if ($null -eq $layout -or
+      -not [string]::Equals([string]$layout.storage_root, $expectedRoot,
+        [System.StringComparison]::OrdinalIgnoreCase) -or
+      -not [string]::Equals([string]$layout.profile, [string]$ExpectedStorageProfile,
+        [System.StringComparison]::OrdinalIgnoreCase) -or
+      -not [string]::Equals([string]$layout.runs_root, [string]$proposal.runs_root,
+        [System.StringComparison]::OrdinalIgnoreCase) -or
+      [string]::IsNullOrWhiteSpace([string]$layout.runs_root)) {
+    throw "Storage resolver returned an incomplete or mismatched layout"
+  }
+  $runsRoot = ConvertTo-FullmagInstallerEnvFullPath -Path ([string]$layout.runs_root) -Label "runs root"
+  if (-not $runsRoot.StartsWith($expectedRoot + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+      -not (Test-Path -LiteralPath $expectedRoot -PathType Container) -or
+      -not (Test-Path -LiteralPath $runsRoot -PathType Container)) {
+    throw "Storage resolver returned a runs root outside the committed storage root"
+  }
+  Assert-FullmagInstallerEnvNoReparse -Path $expectedRoot -Label "project storage"
+  Assert-FullmagInstallerEnvNoReparse -Path $runsRoot -Label "runs root"
+  return [pscustomobject][ordered]@{
+    schema = "fullmag.windows-installer-storage-layout.v1"
+    state = "complete"
+    session_id = [string]$Session.session_id
+    requested_checkout = [string]$Session.requested_checkout
+    environment_hash = [string]$ExpectedEnvironmentHash
+    storage_root = $expectedRoot
+    storage_profile = [string]$ExpectedStorageProfile
+    runs_root = $runsRoot
+    build_root = [string]$layout.build_root
+    cache_root = [string]$layout.cache_root
+    temp_root = [string]$layout.temp_root
+    runtime_root = [string]$layout.runtime_root
+    frontend_root = [string]$layout.frontend_root
   }
 }
 

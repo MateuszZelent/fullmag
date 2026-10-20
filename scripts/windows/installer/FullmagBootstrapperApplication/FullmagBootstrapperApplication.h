@@ -169,6 +169,7 @@ private:
     void CancelEnvironmentSession(const UiOperationContext& context = {});
     void InvalidateEnvironmentAdmission(bool cancelSession, bool cancelUiOperation = true);
     void RevalidateCommittedEnvironmentAsync(std::function<void(bool)> completion);
+    void PrepareCommittedStorageLayoutAsync(std::function<void(bool)> completion);
     void SendHelperAsync(const std::wstring& request,
                          std::function<void(const std::wstring&, const std::wstring&)> completion);
     void HandleHelperReply(HelperReply* reply);

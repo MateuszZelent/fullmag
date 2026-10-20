@@ -252,6 +252,36 @@ bool IsPathInside(const std::wstring& path, const std::wstring& root) {
     return candidate[base.size()] == L'\\' || candidate[base.size()] == L'/';
 }
 
+bool IsSafeManagedDirectory(const std::wstring& path) {
+    if (path.size() < 3 || path[1] != L':' || path.rfind(L"\\\\", 0) == 0 ||
+        path.rfind(L"//", 0) == 0 || path.find_first_of(L"\r\n") != std::wstring::npos ||
+        path.find(L'\0') != std::wstring::npos) {
+        return false;
+    }
+    for (size_t cursor = 0; cursor < path.size();) {
+        const size_t end = path.find_first_of(L"\\/", cursor);
+        const std::wstring component = path.substr(
+            cursor, end == std::wstring::npos ? std::wstring::npos : end - cursor);
+        if (component == L"..") return false;
+        if (end == std::wstring::npos) break;
+        cursor = end + 1;
+    }
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        return false;
+    }
+    std::wstring cursor = path;
+    while (!cursor.empty()) {
+        if (HasReparsePoint(cursor)) return false;
+        const size_t separator = cursor.find_last_of(L"\\/");
+        if (separator == std::wstring::npos || separator <= 2) break;
+        cursor.resize(separator);
+    }
+    return true;
+}
+
 bool ProtectPrivateFile(const std::wstring& path) {
     HANDLE token = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
@@ -1324,6 +1354,13 @@ function Get-PublicProposal($Proposal, [bool]$Committed, $Session) {
         if ([string]$rebound.original_hash -ne [string]$proposal.proposed_hash) {
           throw 'the .env changed after commit; the environment session was not rebound'
         }
+        # This marker is created only by the server-side commit transition.
+        # It is included in the signed session identity, so a caller cannot
+        # turn a discovered or prerequisite-only session into a layout-creation
+        # session by supplying an equivalent hash.
+        $rebound.environment_committed = $true
+        $rebound.committed_environment_hash = [string]$proposal.proposed_hash
+        $rebound.session_signature = Get-FullmagInstallerEnvSessionSignature -Session $rebound
         $sessions[[string]$rebound.session_id] = $rebound
         Write-Public (Get-PublicProposal $proposal $true $rebound)
       }
@@ -1336,6 +1373,43 @@ function Get-PublicProposal($Proposal, [bool]$Committed, $Session) {
           schema = 'fullmag.windows-installer-env-proposal.v1'; state = 'canceled'; valid = $true
           can_commit = $false; changed_fields = @(); redacted_diff = ''; errors = @(); wrote = $false
         })
+      }
+      'prepare_storage_layout' {
+        $session = $sessions[[string]$request.session_id]
+        if ($null -eq $session) { throw 'invalid session' }
+        Assert-FullmagInstallerEnvSession -Session $session | Out-Null
+        if (-not [bool]$session.environment_committed -or
+            [string]::IsNullOrWhiteSpace([string]$session.committed_environment_hash)) {
+          throw 'storage layout preparation requires a committed environment session'
+        }
+        if (-not [string]::Equals([string]$request.checkout_path, [string]$session.requested_checkout,
+            [System.StringComparison]::OrdinalIgnoreCase) -or
+            -not [string]::Equals([string]$request.source_checkout, [string]$session.requested_checkout,
+            [System.StringComparison]::OrdinalIgnoreCase) -or
+            -not [string]::Equals([string]$request.main_checkout, [string]$session.main_checkout,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+          throw 'storage layout source checkout does not match the admitted session'
+        }
+        foreach ($pair in @(
+            @('source_git_head', $session.requested_git_head),
+            @('source_git_worktrees_hash', $session.requested_git_worktrees_hash),
+            @('main_git_head', $session.git_head),
+            @('main_git_worktrees_hash', $session.git_worktrees_hash),
+            @('template_hash', $session.template_hash),
+            @('manifest_hash', $session.manifest_hash),
+            @('resolver_hash', $session.resolver_hash)
+          )) {
+          if ([string]::IsNullOrWhiteSpace([string]$request.($pair[0])) -or
+              -not [string]::Equals([string]$request.($pair[0]), [string]$pair[1],
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw ('storage layout ' + [string]$pair[0] + ' does not match the admitted source')
+          }
+        }
+        $layout = Prepare-FullmagInstallerStorageLayout -Session $session `
+          -StorageRoot ([string]$request.storage_root) `
+          -ExpectedEnvironmentHash ([string]$request.environment_hash) `
+          -ExpectedStorageProfile ([string]$request.storage_profile)
+        Write-Public $layout
       }
 )PS";
         script += LR"PS(      'setup' {
@@ -3621,6 +3695,85 @@ void FullmagBootstrapperApplication::RevalidateCommittedEnvironmentAsync(
         });
 }
 
+void FullmagBootstrapperApplication::PrepareCommittedStorageLayoutAsync(
+    std::function<void(bool)> completion) {
+    if (!helper_ || sessionId_.empty() || committedEnvironmentHash_.empty() ||
+        committedStorageRoot_.empty() || committedRunsRoot_.empty() ||
+        acceptedStorageProfile_.empty() || acceptedRequestedCheckout_.empty() ||
+        acceptedMainCheckout_.empty()) {
+        SetStatus(L"The committed source and storage admission is incomplete; installation is blocked.", true);
+        if (completion) completion(false);
+        return;
+    }
+    const uint64_t generation = admissionGeneration_;
+    const std::wstring session = sessionId_;
+    const std::wstring checkout = acceptedRequestedCheckout_;
+    const std::wstring mainCheckout = acceptedMainCheckout_;
+    const std::wstring committedHash = committedEnvironmentHash_;
+    const std::wstring storageRoot = committedStorageRoot_;
+    const std::wstring runsRoot = committedRunsRoot_;
+    const std::wstring storageProfile = acceptedStorageProfile_;
+    const std::wstring request = L"{\"op\":\"prepare_storage_layout\",\"session_id\":" +
+        JsonString(session) + L",\"checkout_path\":" + JsonString(checkout) +
+        L",\"source_checkout\":" + JsonString(checkout) +
+        L",\"main_checkout\":" + JsonString(mainCheckout) +
+        L",\"source_git_head\":" + JsonString(acceptedRequestedGitHead_) +
+        L",\"source_git_worktrees_hash\":" + JsonString(acceptedRequestedGitWorktreesHash_) +
+        L",\"main_git_head\":" + JsonString(acceptedMainGitHead_) +
+        L",\"main_git_worktrees_hash\":" + JsonString(acceptedMainGitWorktreesHash_) +
+        L",\"template_hash\":" + JsonString(acceptedTemplateHash_) +
+        L",\"manifest_hash\":" + JsonString(acceptedManifestHash_) +
+        L",\"resolver_hash\":" + JsonString(acceptedResolverHash_) +
+        L",\"environment_hash\":" + JsonString(committedHash) +
+        L",\"storage_root\":" + JsonString(storageRoot) +
+        L",\"storage_profile\":" + JsonString(storageProfile) + L"}";
+    SendHelperAsync(request,
+        [this, generation, session, checkout, committedHash, storageRoot, runsRoot, storageProfile,
+         completion = std::move(completion)](const std::wstring& response,
+                                              const std::wstring& error) mutable {
+            if (generation != admissionGeneration_ || session != sessionId_ ||
+                shuttingDown_.load() || burnCancelRequested_.load()) {
+                if (completion) completion(false);
+                return;
+            }
+            const auto reject = [this, &completion](const std::wstring& message) mutable {
+                InvalidateEnvironmentAdmission(true, false);
+                SetStatus(message, true);
+                if (completion) completion(false);
+            };
+            if (response.empty()) {
+                reject(error.empty() ?
+                    L"The committed storage layout could not be prepared." : error);
+                return;
+            }
+            JsonReader::Value root;
+            if (!JsonReader(response).Parse(&root) || root.kind != JsonReader::Kind::Object) {
+                reject(L"The storage layout helper returned an invalid public report.");
+                return;
+            }
+            const std::wstring responseStorageRoot = root.String(L"storage_root");
+            const std::wstring responseRunsRoot = root.String(L"runs_root");
+            const std::wstring responseSession = root.String(L"session_id");
+            const bool exactIdentity =
+                root.String(L"schema") == L"fullmag.windows-installer-storage-layout.v1" &&
+                root.String(L"state") == L"complete" &&
+                EqualsInsensitive(responseSession, session) &&
+                EqualsInsensitive(root.String(L"requested_checkout"), checkout) &&
+                EqualsInsensitive(root.String(L"environment_hash"), committedHash) &&
+                EqualsInsensitive(root.String(L"storage_profile"), storageProfile) &&
+                EqualsInsensitive(responseStorageRoot, storageRoot) &&
+                EqualsInsensitive(responseRunsRoot, runsRoot) &&
+                IsSafeManagedDirectory(responseStorageRoot) &&
+                IsSafeManagedDirectory(responseRunsRoot) &&
+                IsPathInside(responseRunsRoot, responseStorageRoot);
+            if (!exactIdentity) {
+                reject(L"The prepared storage layout did not match the committed source and storage admission.");
+                return;
+            }
+            if (completion) completion(true);
+        });
+}
+
 std::wstring FullmagBootstrapperApplication::BuildSourceFirstAdmissionJson() const {
     const auto safeText = [](const std::wstring& value) {
         return !value.empty() && value.size() <= 32768 &&
@@ -5090,23 +5243,34 @@ void FullmagBootstrapperApplication::StartInstall(const UiOperationContext& requ
             }
             return;
         }
-        if (!PrepareSourceFirstBurnVariables()) {
-            SetEnvironmentMutationLock(false);
-            SendUiTerminal(this, context, false, L"blocked", L"",
-                           L"The trusted source-first admission could not be prepared.");
-            return;
-        }
-        installRequested_.store(true);
-        SetStatus(sourceFirst_ ? L"Planning the verified source-first environment payload..." :
-                                L"Planning the verified MSI payload...");
-        const HRESULT status = engine_->Plan(BOOTSTRAPPER_ACTION_INSTALL);
-        if (FAILED(status)) {
-            installRequested_.store(false);
-            SetEnvironmentMutationLock(false);
-            SetStatus(L"Burn could not plan the product payload: " + HresultText(status), true);
-            SendUiTerminal(this, context, false, L"blocked", L"",
-                           L"Burn could not plan the product payload: " + HresultText(status));
-        }
+        PrepareCommittedStorageLayoutAsync([this, context](bool layoutReady) {
+            if (!layoutReady || shuttingDown_ || !engine_ || burnCancelRequested_.load()) {
+                SetEnvironmentMutationLock(false);
+                if (layoutReady || !shuttingDown_) {
+                    SendUiTerminal(this, context, false,
+                                   burnCancelRequested_.load() ? L"canceled" : L"blocked", L"",
+                                   L"The committed storage layout could not be prepared; installation is blocked.");
+                }
+                return;
+            }
+            if (!PrepareSourceFirstBurnVariables()) {
+                SetEnvironmentMutationLock(false);
+                SendUiTerminal(this, context, false, L"blocked", L"",
+                               L"The trusted source-first admission could not be prepared.");
+                return;
+            }
+            installRequested_.store(true);
+            SetStatus(sourceFirst_ ? L"Planning the verified source-first environment payload..." :
+                                    L"Planning the verified MSI payload...");
+            const HRESULT status = engine_->Plan(BOOTSTRAPPER_ACTION_INSTALL);
+            if (FAILED(status)) {
+                installRequested_.store(false);
+                SetEnvironmentMutationLock(false);
+                SetStatus(L"Burn could not plan the product payload: " + HresultText(status), true);
+                SendUiTerminal(this, context, false, L"blocked", L"",
+                               L"Burn could not plan the product payload: " + HresultText(status));
+            }
+        });
     });
 }
 

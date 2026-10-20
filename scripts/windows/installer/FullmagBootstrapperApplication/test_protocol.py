@@ -152,6 +152,7 @@ class BootstrapperApplicationSourceContract(unittest.TestCase):
             "preview",
             "commit",
             "cancel",
+            "prepare_storage_layout",
             "setup",
         ]
         positions = [protocol.index(f"'{operation}' {{") for operation in operations]
@@ -162,6 +163,27 @@ class BootstrapperApplicationSourceContract(unittest.TestCase):
         self.assertIn("blockers = @($Blocker)", protocol)
         self.assertIn("admitted_python_path_reparse", protocol)
         self.assertNotIn(")PS\"", protocol)
+
+    def test_committed_storage_layout_is_fail_closed_and_precedes_burn_plan(self) -> None:
+        protocol = "".join(_extract_protocol_chunks(CPP))
+        operation = protocol[protocol.index("      'prepare_storage_layout' {"):
+                             protocol.index("      'setup' {", protocol.index("      'prepare_storage_layout' {"))]
+        for marker in (
+            "environment_committed",
+            "committed_environment_hash",
+            "Prepare-FullmagInstallerStorageLayout",
+            "source_git_worktrees_hash",
+            "resolver_hash",
+        ):
+            self.assertIn(marker, operation, marker)
+        self.assertIn("[switch]$Create", (ROOT.parent.parent / "installer_env.ps1").read_text(encoding="utf-8"))
+        self.assertIn("IsSafeManagedDirectory", CPP)
+        self.assertIn("burnCancelRequested_.load()", CPP)
+        start_install = CPP[CPP.index("void FullmagBootstrapperApplication::StartInstall") :]
+        self.assertLess(start_install.index("PrepareCommittedStorageLayoutAsync"),
+                        start_install.index("PrepareSourceFirstBurnVariables"))
+        self.assertLess(start_install.index("PrepareSourceFirstBurnVariables"),
+                        start_install.index("engine_->Plan(BOOTSTRAPPER_ACTION_INSTALL)"))
 
     def test_bound_prerequisite_public_session_preserves_requested_lane(self) -> None:
         protocol = "".join(_extract_protocol_chunks(CPP))
