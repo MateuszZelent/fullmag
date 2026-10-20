@@ -1161,7 +1161,7 @@ fn execute_cuda_assisted_multilayer_double(
             *field_every_n,
             None,
             None,
-            on_step.as_mut(),
+            &mut **on_step,
         );
     }
 
@@ -1412,7 +1412,7 @@ fn execute_cuda_assisted_multilayer_single(
             *field_every_n,
             None,
             None,
-            on_step.as_mut(),
+            &mut **on_step,
         );
     }
     if !steps
@@ -1764,7 +1764,7 @@ fn execute_native_device_resident_cuda_multilayer(
             *field_every_n,
             magnetization_override,
             terminal_observation_error.as_deref(),
-            on_step.as_mut(),
+            &mut **on_step,
         );
     }
     if !steps
@@ -3877,7 +3877,7 @@ fn execute_native_stacked_cuda_multilayer(
             *field_every_n,
             magnetization_override,
             terminal_observation_error.as_deref(),
-            on_step.as_mut(),
+            &mut **on_step,
         );
     }
     if !steps

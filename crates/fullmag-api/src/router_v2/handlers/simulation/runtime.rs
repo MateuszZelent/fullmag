@@ -1882,7 +1882,7 @@ pub async fn get_solver_energies_current(
         latest_energy_row(snapshot).ok_or_else(|| ApiError::not_found("no solver energy data"))?;
 
     Ok(Json(SolverEnergyCurrentResource {
-        revision: snapshot.scalar_revision.saturating_add(snapshot.field_revision),
+        revision: snapshot.scalar_revision.saturating_add(crate::router_v2::handlers::sessions::status::field_revision(snapshot)),
         step: latest_row.step,
         time_seconds: latest_row.time,
         exchange: latest_row.e_ex,
