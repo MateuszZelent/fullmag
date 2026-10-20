@@ -16,9 +16,10 @@ the backend::
         check(frontend)
         stop(frontend)
 
-All mutable frontend state, logs, receipts, frozen input bytes, and Linux
-dependencies stay below ``/state/development``.  There is no cache pruning or
-unbounded operator supplied path.
+Persistent frontend state, logs, diagnostic receipts, frozen input bytes, and
+Linux dependencies stay below ``/state/development``.  The current process
+owner receipt is deliberately ephemeral at ``/run/fullmag/frontend-owner``;
+there is no cache pruning or unbounded operator supplied path.
 """
 from __future__ import annotations
 
@@ -77,6 +78,7 @@ INPUTS_PATH = Path(
     )
 )
 DEVELOPMENT_ROOT = Path("/state/development")
+OWNER_ROOT = Path("/run/fullmag/frontend-owner")
 WORKSPACE_ROOT = DEVELOPMENT_ROOT / "workspace"
 FRONTEND_ROOT = DEVELOPMENT_ROOT / "cache"
 PNPM_STORE_ROOT = DEVELOPMENT_ROOT / "pnpm-store"
@@ -86,8 +88,13 @@ HOME_ROOT = DEVELOPMENT_ROOT / "home"
 TEMP_ROOT = DEVELOPMENT_ROOT / "tmp"
 FREEZE_ROOT = DEVELOPMENT_ROOT / "frozen-inputs"
 FREEZE_PATH = DEVELOPMENT_ROOT / "inputs-freeze.json"
-RECEIPT_PATH = DEVELOPMENT_ROOT / "frontend-dev-receipt.json"
+# The process-owner receipt is ephemeral per Docker container incarnation. The
+# named-volume copy remains diagnostic/history input only and never authorizes a
+# new process owner after the container has been recreated.
+RECEIPT_PATH = OWNER_ROOT / "receipt.json"
+DIAGNOSTIC_RECEIPT_PATH = DEVELOPMENT_ROOT / "frontend-dev-receipt.json"
 LOG_PATH = DEVELOPMENT_ROOT / "next.log"
+LOG_ROLLBACK_PATH = DEVELOPMENT_ROOT / "next.log.rollback"
 MAX_LOG_BYTES = 64 * 1024 * 1024
 RUNTIME_LOCK_PATH = FRONTEND_ROOT / ".fullmag-frontend-runtime.lock"
 
@@ -804,6 +811,23 @@ def _load_receipt() -> dict[str, Any] | None:
     return receipt
 
 
+def _load_diagnostic_receipt() -> dict[str, Any] | None:
+    """Read the named-volume receipt only as cache/failure history.
+
+    A stale ``unknown`` record in this path is deliberately not an owner
+    authority: the owner path lives on the per-container tmpfs and is empty
+    after a new Docker incarnation.
+    """
+
+    try:
+        receipt = _read_json(DIAGNOSTIC_RECEIPT_PATH, "frontend diagnostic receipt")
+    except FileNotFoundError:
+        return None
+    if receipt.get("schema") != RECEIPT_SCHEMA:
+        _fail("frontend diagnostic receipt has an unsupported schema")
+    return receipt
+
+
 def _generated_gate(receipt: Mapping[str, Any] | None) -> bool:
     return bool(receipt and receipt.get("generated_files_gate") == "next-started-v1")
 
@@ -987,6 +1011,7 @@ def _reject_existing_owner(receipt: Mapping[str, Any] | None) -> None:
 def _prepare_state_directories() -> None:
     for path, name in (
         (DEVELOPMENT_ROOT, "development root"),
+        (OWNER_ROOT, "ephemeral frontend owner root"),
         (FRONTEND_ROOT, "frontend cache root"),
         (PNPM_STORE_ROOT, "pnpm store"),
         (PNPM_HOME, "pnpm home"),
@@ -1372,7 +1397,11 @@ def _receipt_base(
 
 
 def _publish_receipt(receipt: Mapping[str, Any]) -> None:
-    _atomic_json(RECEIPT_PATH, dict(receipt), "frontend development receipt")
+    value = dict(receipt)
+    _atomic_json(RECEIPT_PATH, value, "ephemeral frontend owner receipt")
+    # Keep the last observed lifecycle bytes for generated-file/freeze gates and
+    # diagnostics. This copy is never consulted by _reject_existing_owner.
+    _atomic_json(DIAGNOSTIC_RECEIPT_PATH, value, "frontend diagnostic receipt")
 
 
 def _acquire_runtime_lock() -> Any:
@@ -1420,6 +1449,114 @@ def _release_runtime_lock(lock: Any | None) -> None:
         lock.close()
     except OSError:
         pass
+
+
+def _assert_runtime_lock_for_log_rotation(runtime_lock: Any) -> None:
+    """Require the already-acquired frontend runtime lock for log rotation."""
+
+    if fcntl is None:
+        _fail("frontend log rotation requires the existing runtime lock")
+    _assert_no_links(RUNTIME_LOCK_PATH.parent, "frontend runtime lock parent")
+    try:
+        descriptor = runtime_lock.fileno()
+        lock_metadata = os.fstat(descriptor)
+        path_metadata = os.lstat(RUNTIME_LOCK_PATH)
+    except (AttributeError, OSError, ValueError) as error:
+        _fail(f"frontend log rotation requires the existing runtime lock: {error}")
+    if (
+        not stat.S_ISREG(lock_metadata.st_mode)
+        or lock_metadata.st_nlink != 1
+        or not stat.S_ISREG(path_metadata.st_mode)
+        or path_metadata.st_nlink != 1
+        or (lock_metadata.st_dev, lock_metadata.st_ino)
+        != (path_metadata.st_dev, path_metadata.st_ino)
+    ):
+        _fail("frontend log rotation requires the existing runtime lock")
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        _fail("frontend log rotation requires the existing runtime lock")
+    except OSError as error:
+        _fail(f"frontend log rotation cannot verify the existing runtime lock: {error}")
+
+
+def _regular_log_metadata(path: Path, name: str) -> os.stat_result:
+    """Inspect one exact log path without following links or opening a FIFO."""
+
+    _path_without_parent(path, name)
+    _assert_no_links(path.parent, f"{name} parent")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            _fail(f"{name} is not one regular file")
+        if metadata.st_size > MAX_LOG_BYTES:
+            _fail(f"{name} exceeds its retained size limit; preserve it for explicit review")
+        return metadata
+    except FileNotFoundError:
+        raise
+    except FrontendDevError:
+        raise
+    except OSError as error:
+        _fail(f"cannot inspect {name}: {error}")
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _sync_log_directory(path: Path) -> None:
+    """Make the directory entry for a completed log rename durable."""
+
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        os.fsync(descriptor)
+    except OSError as error:
+        _fail(f"durable frontend log rotation is unknown: {error}")
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _rotate_log_if_needed(runtime_lock: Any) -> None:
+    """Keep one verified previous generation when the current log is full."""
+
+    _assert_runtime_lock_for_log_rotation(runtime_lock)
+    if LOG_PATH.name != "next.log" or LOG_ROLLBACK_PATH.name != "next.log.rollback":
+        _fail("frontend log rotation paths are not canonical")
+    if LOG_PATH.parent != LOG_ROLLBACK_PATH.parent:
+        _fail("frontend log rotation paths must share one parent")
+    try:
+        current = _regular_log_metadata(LOG_PATH, "frontend retained log")
+    except FileNotFoundError:
+        return
+    if current.st_size < MAX_LOG_BYTES:
+        return
+    try:
+        _regular_log_metadata(LOG_ROLLBACK_PATH, "frontend retained log rollback")
+    except FileNotFoundError:
+        pass
+    try:
+        os.replace(LOG_PATH, LOG_ROLLBACK_PATH)
+        _sync_log_directory(LOG_PATH.parent)
+        _write_lifecycle_log("log_rotate", status="complete", bytes=current.st_size,
+                             rollback=str(LOG_ROLLBACK_PATH))
+    except FrontendDevError:
+        raise
+    except OSError as error:
+        _fail(f"durable frontend log rotation is unknown: {error}")
 
 
 class _BoundedLog:
@@ -2234,20 +2371,23 @@ def start(stopping_event: Any) -> FrontendHandle:
     _ensure_inputs_manifest()
     inputs = read_inputs()
     previous = _load_receipt()
+    diagnostic_previous = _load_diagnostic_receipt()
     _reject_existing_owner(previous)
-    allow_generated = _generated_gate(previous)
+    history = previous or diagnostic_previous
+    allow_generated = _generated_gate(history)
     _prepare_state_directories()
     _validate_live_directories(inputs)
     _freeze_inputs(inputs, allow_generated=allow_generated)
     watchpack_polling_ms = _watchpack_polling_ms()
     runtime_lock = _acquire_runtime_lock()
     try:
+        _rotate_log_if_needed(runtime_lock)
         node_modules_target = _prepare_managed_frontend(inputs)
         tool_environment = _safe_environment(
             inputs, watchpack_polling_ms=watchpack_polling_ms
         )
         receipt = _receipt_base(
-            inputs, previous, watchpack_polling_ms=watchpack_polling_ms
+            inputs, history, watchpack_polling_ms=watchpack_polling_ms
         )
         receipt.update(
             state="starting",
@@ -2309,7 +2449,11 @@ def start(stopping_event: Any) -> FrontendHandle:
     log_tailer = _start_log_tailer()
     handle: FrontendHandle | None = None
     try:
-        needs_install = previous is None or previous.get("dependency_install") != "ready"
+        # A fresh Docker incarnation has no owner receipt, but the named-volume
+        # diagnostic copy still records whether this cache was prepared. Use
+        # that history only to avoid reinstalling dependencies; ownership
+        # authorization remains exclusively on the ephemeral receipt above.
+        needs_install = history is None or history.get("dependency_install") != "ready"
         if not needs_install and not _dependency_tree_ready(inputs):
             needs_install = True
             _write_lifecycle_log(

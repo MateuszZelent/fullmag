@@ -5,7 +5,14 @@
 //! through the control-volume receipt.  It does not create a RunIntent, release
 //! the start gate, claim a task, or start Compute.
 
-use std::{io::Read, path::Path, sync::atomic::Ordering, sync::Arc, time::Duration};
+use std::{
+    fs::{self, OpenOptions},
+    io::{Read, Write},
+    path::Path,
+    sync::atomic::Ordering,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{bail, Context, Result};
 use fullmag_application::{ProjectId, RunId, RunSpecification};
@@ -15,7 +22,7 @@ use fullmag_session::runtime_service::{
     RuntimeServiceState,
 };
 use fullmag_session::{FmsTaskLifecycle, FmsTaskReadiness};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::types::{
@@ -34,6 +41,14 @@ const RUNTIME_PROVENANCE_ROOT: &str = "/opt/fullmag/control";
 const RUNTIME_PROVENANCE_RELATIVE: &str = "backend/runtime-provenance.json";
 const INPUT_SCHEMA: &str = "fullmag.development-accepted-run-reattach.v1";
 const PROOF_SCHEMA: &str = "fullmag.development-accepted-run-reattach-proof.v1";
+const RESTORE_ACK_SCHEMA: &str = "fullmag.development-accepted-run-reattach-ack.v1";
+const SUCCESSOR_DRAIN_SCHEMA: &str = "fullmag.docker-accepted-run-reattach-drain.v1";
+const SUCCESSOR_RUNTIME_SCHEMA: &str = "fullmag.docker-accepted-run-reattach-runtime.v1";
+const RESTORE_MODE_HELD: &str = "held_pending_restore";
+const RESTORE_MODE_CONSUMED: &str = "completed_consumed_no_replay";
+const RESTORE_MODE_SUCCESSOR_AUTO: &str = "successor_auto";
+const RESTORE_ACK_PREFIX: &str = "restore-ack-";
+const SUCCESSOR_DRAIN_PREFIX: &str = "successor-drain-";
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_PROOF_BYTES: usize = 256 * 1024;
 const MAX_PROVENANCE_BYTES: usize = 1024 * 1024;
@@ -41,6 +56,8 @@ const MAX_CONTROL_RECORD_BYTES: usize = 8 * 1024 * 1024;
 const ACTIVATION_OPERATION_SCHEMA: &str = "fullmag.docker-build-operation.v1";
 const STOP_VERIFICATION_SCHEMA: &str = "fullmag.stop-failed-admission.v1";
 const NAMESPACE_ATTESTATION_SCHEMA: &str = "fullmag.docker-stopped-namespace-attestation.v1";
+const API_START_FAILURE_MODE: &str = "api-start-failure";
+const API_START_FAILURE_ERROR_PREFIX: &str = "API binding did not become ready:";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,6 +73,83 @@ struct AcceptedRestoreInput {
     config_sha256: String,
     proof_path: String,
     proof_sha256: String,
+    /// Optional fields are the private successor transport.  The legacy
+    /// v1 payload remains strict when all successor fields are absent.
+    #[serde(default)]
+    request_sha256: Option<String>,
+    #[serde(default)]
+    restore_mode: Option<String>,
+    #[serde(default)]
+    previous_ack_path: Option<String>,
+    #[serde(default)]
+    previous_ack_sha256: Option<String>,
+    #[serde(default)]
+    previous_drain_path: Option<String>,
+    #[serde(default)]
+    previous_drain_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AcceptedRestoreAck {
+    schema: String,
+    state: String,
+    restore_mode: String,
+    request_sha256: String,
+    proof_sha256: String,
+    run_id: String,
+    project_id: String,
+    source_request_id: String,
+    source_sha256: String,
+    config_sha256: String,
+    activation_attempt: String,
+    reconciliation_attempt: String,
+    logical_session_id: String,
+    session_epoch: u64,
+    api_instance_id: String,
+    previous_ack_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AcceptedRestoreRuntimeMetadata {
+    schema: String,
+    restore_mode: String,
+    request_sha256: String,
+    proof_sha256: String,
+    run_id: String,
+    project_id: String,
+    source_request_id: String,
+    source_sha256: String,
+    config_sha256: String,
+    ack_relative: String,
+    ack_sha256: String,
+    api_instance_id: String,
+    previous_ack_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AcceptedRestoreSuccessorDrain {
+    schema: String,
+    state: String,
+    request_sha256: String,
+    proof_sha256: String,
+    run_id: String,
+    project_id: String,
+    source_request_id: String,
+    source_sha256: String,
+    config_sha256: String,
+    api_instance_id: String,
+    ack_relative: String,
+    ack_sha256: String,
+    ready_owner_token: String,
+    terminal_process_record_path: String,
+    terminal_process_record_sha256: String,
+    terminal_owner_record_path: String,
+    terminal_owner_record_sha256: String,
+    ready_owner_record_path: String,
+    ready_owner_record_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,8 +222,22 @@ struct LoadedAcceptedRestore {
     source_sha256: String,
     startup_provenance_sha256: String,
     config_sha256: String,
+    request_sha256: Option<String>,
+    restore_mode: Option<String>,
+    previous_ack_sha256: Option<String>,
     proof_sha256: String,
     total_steps: usize,
+    catalog_revision: u64,
+    activation_attempt: String,
+    reconciliation_attempt: String,
+    mode: AcceptedRestoreMode,
+    terminal_outcome: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AcceptedRestoreMode {
+    Held,
+    Consumed,
 }
 
 /// Read and install one explicitly pinned accepted run before the API starts
@@ -151,8 +259,11 @@ pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
         return Err("accepted-run reattach requires the configured accepted store".into());
     };
     let proof_root = configured_runtime_control_root().map_err(|error| error.to_string())?;
+    let proof_root_for_ack = proof_root.clone();
+    let proof_path_for_ack = input.proof_path.clone();
+    let api_instance_id = state.request_scope_instance_id.clone();
     let loaded = tokio::task::spawn_blocking(move || {
-        load_accepted_restore(&store_root, &proof_root, &input)
+        load_accepted_restore(&store_root, &proof_root, &input, &api_instance_id)
     })
     .await
     .map_err(|error| format!("accepted-run reattach validation task failed: {error}"))?
@@ -171,25 +282,27 @@ pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
         .store(loaded.session_epoch, Ordering::Release);
     drop(_transition);
 
-    // Reuse the existing accepted-frontier read-model path. It reads the
-    // already published task/stage receipt and may only replay the exact
-    // immutable anchor; it never releases the run or starts a worker.
-    let context = CurrentLiveRequestContext {
-        session_id: loaded.logical_session_id.clone(),
-        run_id: Some(loaded.run_id.as_str().to_string()),
-        session_epoch: loaded.session_epoch,
-        request_scope_epoch: format!(
-            "{}:{}",
-            state.request_scope_instance_id, loaded.session_epoch
-        ),
-    };
-    crate::live_scene_preparation::publish_accepted_frontier_preparation(
-        state,
-        &context,
-        "accepted_run_reattach",
-    )
-    .await
-    .map_err(|error| format!("accepted-run preparation projection failed: {error}"))?;
+    if loaded.mode == AcceptedRestoreMode::Held {
+        // Reuse the existing accepted-frontier read-model path. It reads the
+        // already published task/stage receipt and may only replay the exact
+        // immutable anchor; it never releases the run or starts a worker.
+        let context = CurrentLiveRequestContext {
+            session_id: loaded.logical_session_id.clone(),
+            run_id: Some(loaded.run_id.as_str().to_string()),
+            session_epoch: loaded.session_epoch,
+            request_scope_epoch: format!(
+                "{}:{}",
+                state.request_scope_instance_id, loaded.session_epoch
+            ),
+        };
+        crate::live_scene_preparation::publish_accepted_frontier_preparation(
+            state,
+            &context,
+            "accepted_run_reattach",
+        )
+        .await
+        .map_err(|error| format!("accepted-run preparation projection failed: {error}"))?;
+    }
 
     // Install the process-local rebind authority only after the immutable
     // preparation projection succeeds.  A failed projection must not leave a
@@ -224,11 +337,27 @@ pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
             "source_sha256": &loaded.source_sha256,
             "startup_provenance_sha256": &loaded.startup_provenance_sha256,
             "config_sha256": &loaded.config_sha256,
+            "request_sha256": &loaded.request_sha256,
+            "restore_mode": &loaded.restore_mode,
+            "previous_ack_sha256": &loaded.previous_ack_sha256,
             "session_epoch": loaded.session_epoch,
             "proof_sha256": &loaded.proof_sha256,
+            "mode": match loaded.mode {
+                AcceptedRestoreMode::Held => "held",
+                AcceptedRestoreMode::Consumed => "consumed",
+            },
         }),
     );
     snapshot.state_version = snapshot.state_version.saturating_add(1);
+    if loaded.request_sha256.is_some() {
+        publish_restore_ack(
+            &proof_root_for_ack,
+            &proof_path_for_ack,
+            &loaded,
+            &state.request_scope_instance_id,
+        )
+        .map_err(|error| format!("publish accepted-run restore ack failed: {error:#}"))?;
+    }
     Ok(())
 }
 
@@ -340,10 +469,17 @@ async fn read_input() -> Result<AcceptedRestoreInput, String> {
         .map_err(|_| "private accepted-run reattach reader disconnected".to_string())?
 }
 
+#[derive(Debug)]
+struct PreviousRestoreAck {
+    sha256: String,
+    restore_mode: String,
+}
+
 fn load_accepted_restore(
     store_root: &Path,
     proof_root: &Path,
     input: &AcceptedRestoreInput,
+    current_api_instance_id: &str,
 ) -> Result<LoadedAcceptedRestore> {
     let store = fullmag_session::SessionStore::open_existing(store_root)
         .context("open accepted control store")?;
@@ -361,7 +497,20 @@ fn load_accepted_restore(
     let proof: AcceptedRestoreProof =
         serde_json::from_slice(&proof_bytes).context("decode accepted-run reattach proof")?;
     validate_proof(&proof, input)?;
-    validate_backing_records(&proof, input, proof_root)?;
+    validate_current_docker_binding(&proof)?;
+
+    let predecessor = if input.previous_ack_path.is_some() {
+        Some(validate_successor_transport(
+            proof_root,
+            input,
+            &proof,
+            current_api_instance_id,
+        )?)
+    } else {
+        validate_initial_transport(input)?;
+        validate_backing_records(&proof, input, proof_root)?;
+        None
+    };
 
     let run_id = RunId::parse(input.run_id.clone()).map_err(anyhow::Error::msg)?;
     let project_id = ProjectId::parse(input.project_id.clone()).map_err(anyhow::Error::msg)?;
@@ -381,67 +530,87 @@ fn load_accepted_restore(
     let catalog = store
         .read_run_catalog(run_id.as_str())?
         .context("accepted run catalog is missing")?;
-    if catalog.tasks.is_empty()
-        || catalog.tasks.iter().any(|task| {
-            task.lifecycle != FmsTaskLifecycle::Accepted
-                || !matches!(&task.readiness, FmsTaskReadiness::Blocked { .. })
+    let start_released = store.accepted_run_start_permitted(run_id.as_str())?;
+    let held = !catalog.tasks.is_empty()
+        && catalog.tasks.iter().all(|task| {
+            task.lifecycle == FmsTaskLifecycle::Accepted
+                && matches!(&task.readiness, FmsTaskReadiness::Blocked { .. })
         })
-    {
-        bail!("accepted run catalog is not the untouched accepted/blocked snapshot");
-    }
-    if store.accepted_run_start_permitted(run_id.as_str())? {
-        bail!("accepted run start gate is already released");
-    }
+        && !start_released;
 
-    let anchor = store
-        .read_preparation_receipt(run_id.as_str())?
-        .context("accepted run preparation anchor is missing")?;
-    anchor.validate()?;
-    let application: fullmag_application::PreparationReceipt =
-        serde_json::from_value(anchor.payload.clone())
-            .context("accepted preparation anchor is not an application receipt")?;
-    application
-        .validate()
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let source = application
-        .accepted_run_source
-        .as_ref()
-        .context("accepted preparation anchor has no accepted-run source")?;
-    if source.run_id != run_id {
-        bail!("accepted preparation anchor source run differs from reattach run");
+    // This read-only guard covers only durable SessionStore leases for this
+    // exact run.  Host-ledger reservations are an independent authority and
+    // are deliberately not claimed or released by an accepted successor.
+    let terminal_local_leases_drained = predecessor.is_some()
+        && input.restore_mode.as_deref() == Some(RESTORE_MODE_SUCCESSOR_AUTO)
+        && start_released
+        && !held;
+    if terminal_local_leases_drained {
+        ensure_terminal_run_has_no_active_leases(&store, run_id.as_str())?;
     }
-    let step_id = source.step_id.clone();
-    let step = accepted
-        .lowered
-        .steps
-        .iter()
-        .find(|step| step.step_id == step_id)
-        .context("accepted preparation anchor references an unknown study step")?;
-    if !matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned) {
-        bail!("accepted preparation anchor does not identify a planned step");
-    }
-    if !fullmag_runtime_control::accepted_run_step_is_scheduler_ready(
-        &store,
-        &run_id,
-        &step_id,
-    )? {
-        bail!("accepted preparation anchor is not scheduler-ready");
-    }
-    let task_id = fullmag_session::task_id_for_study_step(run_id.as_str(), &step_id)?;
-    let task_receipt = store
-        .read_task_preparation_receipt(run_id.as_str(), &task_id)?
-        .context("accepted frontier task preparation receipt is missing")?;
-    if task_receipt.preparation_id != anchor.preparation_id
-        || task_receipt.plan_fingerprint != anchor.plan_fingerprint
-        || task_receipt.payload != anchor.payload
-    {
-        bail!("accepted preparation anchor differs from immutable task receipt");
-    }
-    let stage = store
-        .read_accepted_stage_preparation_receipt(run_id.as_str(), &step_id)?
-        .context("accepted frontier stage receipt is missing")?;
-    if !stage.matches_task_receipt(&task_receipt) {
-        bail!("accepted frontier stage receipt differs from task receipt");
+    let (mode, terminal_outcome, actual_restore_mode) = classify_restore_state(
+        input.restore_mode.as_deref(),
+        predecessor.is_some(),
+        predecessor
+            .as_ref()
+            .map(|item| item.restore_mode.as_str()),
+        held,
+        start_released,
+        terminal_local_leases_drained,
+        &catalog,
+    )?;
+
+    if mode == AcceptedRestoreMode::Held {
+        let anchor = store
+            .read_preparation_receipt(run_id.as_str())?
+            .context("accepted run preparation anchor is missing")?;
+        anchor.validate()?;
+        let application: fullmag_application::PreparationReceipt =
+            serde_json::from_value(anchor.payload.clone())
+                .context("accepted preparation anchor is not an application receipt")?;
+        application
+            .validate()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let source = application
+            .accepted_run_source
+            .as_ref()
+            .context("accepted preparation anchor has no accepted-run source")?;
+        if source.run_id != run_id {
+            bail!("accepted preparation anchor source run differs from reattach run");
+        }
+        let step_id = source.step_id.clone();
+        let step = accepted
+            .lowered
+            .steps
+            .iter()
+            .find(|step| step.step_id == step_id)
+            .context("accepted preparation anchor references an unknown study step")?;
+        if !matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned) {
+            bail!("accepted preparation anchor does not identify a planned step");
+        }
+        if !fullmag_runtime_control::accepted_run_step_is_scheduler_ready(
+            &store,
+            &run_id,
+            &step_id,
+        )? {
+            bail!("accepted preparation anchor is not scheduler-ready");
+        }
+        let task_id = fullmag_session::task_id_for_study_step(run_id.as_str(), &step_id)?;
+        let task_receipt = store
+            .read_task_preparation_receipt(run_id.as_str(), &task_id)?
+            .context("accepted frontier task preparation receipt is missing")?;
+        if task_receipt.preparation_id != anchor.preparation_id
+            || task_receipt.plan_fingerprint != anchor.plan_fingerprint
+            || task_receipt.payload != anchor.payload
+        {
+            bail!("accepted preparation anchor differs from immutable task receipt");
+        }
+        let stage = store
+            .read_accepted_stage_preparation_receipt(run_id.as_str(), &step_id)?
+            .context("accepted frontier stage receipt is missing")?;
+        if !stage.matches_task_receipt(&task_receipt) {
+            bail!("accepted frontier stage receipt differs from task receipt");
+        }
     }
 
     Ok(LoadedAcceptedRestore {
@@ -455,9 +624,759 @@ fn load_accepted_restore(
         source_sha256: input.source_sha256.clone(),
         startup_provenance_sha256: input.startup_provenance_sha256.clone(),
         config_sha256: input.config_sha256.clone(),
+        request_sha256: input.request_sha256.clone(),
+        restore_mode: Some(actual_restore_mode.into()).filter(|_| input.request_sha256.is_some()),
+        previous_ack_sha256: predecessor.as_ref().map(|item| item.sha256.clone()),
         proof_sha256: input.proof_sha256.clone(),
         total_steps: catalog.tasks.len(),
+        catalog_revision: catalog.revision,
+        activation_attempt: proof.activation_attempt.clone(),
+        reconciliation_attempt: proof.reconciliation_attempt.clone(),
+        mode,
+        terminal_outcome,
     })
+}
+
+/// Publish the process-local success marker only after the immutable snapshot
+/// and, for a held run, its preparation projection are installed.  The file
+/// is create-only: a replay with identical bytes is accepted, while a
+/// different payload is a hard conflict.  The control volume remains the
+/// sole authority; no user-store fallback is permitted.
+fn publish_restore_ack(
+    proof_root: &Path,
+    proof_path: &str,
+    loaded: &LoadedAcceptedRestore,
+    api_instance_id: &str,
+) -> Result<String> {
+    let request_sha256 = loaded
+        .request_sha256
+        .as_deref()
+        .context("accepted-run restore ack requires the request digest")?;
+    let restore_mode = loaded
+        .restore_mode
+        .as_deref()
+        .context("accepted-run restore ack requires the restore mode")?;
+    validate_ack_mode(restore_mode)?;
+    validate_api_instance_id(api_instance_id, "current API instance")?;
+    let parent = Path::new(proof_path)
+        .parent()
+        .context("accepted-run restore proof has no parent directory")?;
+    let filename = format!("{RESTORE_ACK_PREFIX}{api_instance_id}.json");
+    let ack_relative = parent.join(&filename);
+    let ack_relative = ack_relative
+        .to_str()
+        .context("accepted-run restore ack path is not portable")?;
+    let expected_api = validate_ack_record_path(ack_relative, proof_path, "ack_path")?;
+    if expected_api != api_instance_id {
+        bail!("accepted-run restore ack path does not bind the current API instance");
+    }
+    let destination = fullmag_session::repository_path::checked_path(proof_root, ack_relative)?;
+    let ack = AcceptedRestoreAck {
+        schema: RESTORE_ACK_SCHEMA.into(),
+        state: "consumed".into(),
+        restore_mode: restore_mode.into(),
+        request_sha256: request_sha256.into(),
+        proof_sha256: loaded.proof_sha256.clone(),
+        run_id: loaded.run_id.as_str().into(),
+        project_id: loaded.project_id.as_str().into(),
+        source_request_id: loaded.source_request_id.clone(),
+        source_sha256: loaded.source_sha256.clone(),
+        config_sha256: loaded.config_sha256.clone(),
+        activation_attempt: loaded.activation_attempt.clone(),
+        reconciliation_attempt: loaded.reconciliation_attempt.clone(),
+        logical_session_id: loaded.logical_session_id.clone(),
+        session_epoch: loaded.session_epoch,
+        api_instance_id: api_instance_id.into(),
+        previous_ack_sha256: loaded.previous_ack_sha256.clone(),
+    };
+    let mut bytes = fullmag_session::canonical_json_bytes(
+        &serde_json::to_value(&ack).context("encode accepted-run restore ack")?,
+    );
+    bytes.push(b'\n');
+    if bytes.len() > MAX_PROOF_BYTES {
+        bail!("accepted-run restore ack exceeds its size bound");
+    }
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+    {
+        Ok(mut file) => {
+            file.write_all(&bytes)
+                .context("write accepted-run restore ack")?;
+            file.sync_all()
+                .context("sync accepted-run restore ack")?;
+            drop(file);
+            fs::File::open(destination.parent().context("restore ack has no parent")?)
+                .context("open accepted-run restore ack directory")?
+                .sync_all()
+                .context("sync accepted-run restore ack directory")?;
+            let published = fullmag_session::repository_path::read_bounded_regular_file(
+                proof_root,
+                ack_relative,
+                MAX_PROOF_BYTES,
+            )?;
+            if published != bytes {
+                bail!("accepted-run restore ack changed during publication");
+            }
+            Ok(fullmag_session::hex_sha256(&published))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(&destination)
+                .context("inspect existing accepted-run restore ack")?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                bail!("accepted-run restore ack destination is not a regular file");
+            }
+            let existing = fullmag_session::repository_path::read_bounded_regular_file(
+                proof_root,
+                ack_relative,
+                MAX_PROOF_BYTES,
+            )?;
+            if existing != bytes {
+                bail!("accepted-run restore ack already exists with different bytes");
+            }
+            Ok(fullmag_session::hex_sha256(&existing))
+        }
+        Err(error) => Err(error).context("create accepted-run restore ack exclusively"),
+    }
+}
+
+/// Validate a successor using the previous native acknowledgement and its
+/// authenticated host drain.  Mutable OWNER/process records are deliberately
+/// not read here: PID 1 may rotate them before this API process starts.
+fn validate_successor_transport(
+    proof_root: &Path,
+    input: &AcceptedRestoreInput,
+    proof: &AcceptedRestoreProof,
+    current_api_instance_id: &str,
+) -> Result<PreviousRestoreAck> {
+    validate_successor_input(input)?;
+    let previous_path = input
+        .previous_ack_path
+        .as_deref()
+        .context("successor accepted-run input has no previous acknowledgement path")?;
+    let previous_sha256 = input
+        .previous_ack_sha256
+        .as_deref()
+        .context("successor accepted-run input has no previous acknowledgement digest")?;
+    let previous_drain_path = input
+        .previous_drain_path
+        .as_deref()
+        .context("successor accepted-run input has no previous drain path")?;
+    let previous_drain_sha256 = input
+        .previous_drain_sha256
+        .as_deref()
+        .context("successor accepted-run input has no previous drain digest")?;
+    let previous_api_instance_id =
+        validate_ack_record_path(previous_path, &input.proof_path, "previous_ack_path")?;
+    validate_digest(previous_sha256, "previous_ack_sha256")?;
+    validate_api_instance_id(current_api_instance_id, "current API instance")?;
+    if previous_api_instance_id == current_api_instance_id {
+        bail!("successor accepted-run restore reused the previous API instance");
+    }
+
+    let (ack_raw, ack_value) =
+        read_proof_record(proof_root, previous_path, "previous accepted-run restore ack")?;
+    if fullmag_session::hex_sha256(&ack_raw) != previous_sha256 {
+        bail!("previous accepted-run restore ack digest differs from its input pin");
+    }
+    let ack: AcceptedRestoreAck =
+        serde_json::from_value(ack_value).context("decode previous accepted-run restore ack")?;
+    validate_restore_ack(
+        &ack,
+        input,
+        proof,
+        &previous_api_instance_id,
+    )?;
+    if ack.restore_mode != RESTORE_MODE_HELD && ack.restore_mode != RESTORE_MODE_CONSUMED {
+        bail!("previous accepted-run restore ack has an unsupported mode");
+    }
+    if ack.restore_mode == RESTORE_MODE_CONSUMED && ack.previous_ack_sha256.is_none() {
+        bail!("consumed accepted-run restore ack has no predecessor digest");
+    }
+
+    let drain_filename = format!("{SUCCESSOR_DRAIN_PREFIX}{previous_api_instance_id}.json");
+    let drain_relative = Path::new(previous_path)
+        .parent()
+        .context("previous accepted-run restore ack has no parent")?
+        .join(&drain_filename);
+    let drain_relative = drain_relative
+        .to_str()
+        .context("successor drain path is not portable")?;
+    if previous_drain_path != drain_relative {
+        bail!("successor drain path differs from the previous API instance");
+    }
+    validate_digest(previous_drain_sha256, "previous_drain_sha256")?;
+    let drain_api = validate_drain_record_path(
+        drain_relative,
+        &input.proof_path,
+        &previous_api_instance_id,
+    )?;
+    if drain_api != previous_api_instance_id {
+        bail!("successor drain does not bind the previous API instance");
+    }
+    let (drain_raw, drain_value) =
+        read_proof_record(proof_root, drain_relative, "accepted-run successor drain")?;
+    if fullmag_session::hex_sha256(&drain_raw) != previous_drain_sha256 {
+        bail!("successor drain digest differs from its input pin");
+    }
+    let drain: AcceptedRestoreSuccessorDrain =
+        serde_json::from_value(drain_value).context("decode accepted-run successor drain")?;
+    validate_successor_drain(
+        proof_root,
+        &drain,
+        &ack,
+        input,
+        previous_path,
+        previous_sha256,
+    )?;
+    Ok(PreviousRestoreAck {
+        sha256: previous_sha256.into(),
+        restore_mode: ack.restore_mode,
+    })
+}
+
+fn validate_initial_transport(input: &AcceptedRestoreInput) -> Result<()> {
+    match (
+        input.request_sha256.as_deref(),
+        input.restore_mode.as_deref(),
+        input.previous_ack_path.as_deref(),
+        input.previous_ack_sha256.as_deref(),
+        input.previous_drain_path.as_deref(),
+        input.previous_drain_sha256.as_deref(),
+    ) {
+        (None, None, None, None, None, None) => Ok(()),
+        (Some(request), Some(mode), None, None, None, None) => {
+            validate_digest(request, "request_sha256")?;
+            if mode != RESTORE_MODE_HELD {
+                bail!("initial accepted-run restore must use held_pending_restore");
+            }
+            Ok(())
+        }
+        _ => bail!("accepted-run reattach transport fields are incomplete"),
+    }
+}
+
+fn validate_successor_input(input: &AcceptedRestoreInput) -> Result<()> {
+    let request_sha256 = input
+        .request_sha256
+        .as_deref()
+        .context("successor accepted-run input has no request digest")?;
+    validate_digest(request_sha256, "request_sha256")?;
+    if input.restore_mode.as_deref() != Some(RESTORE_MODE_SUCCESSOR_AUTO) {
+        bail!("successor accepted-run restore must use successor_auto");
+    }
+    if input.previous_ack_path.is_none()
+        || input.previous_ack_sha256.is_none()
+        || input.previous_drain_path.is_none()
+        || input.previous_drain_sha256.is_none()
+    {
+        bail!("successor accepted-run restore requires the previous acknowledgement and drain");
+    }
+    Ok(())
+}
+
+fn validate_restore_ack(
+    ack: &AcceptedRestoreAck,
+    input: &AcceptedRestoreInput,
+    proof: &AcceptedRestoreProof,
+    expected_api_instance_id: &str,
+) -> Result<()> {
+    if ack.schema != RESTORE_ACK_SCHEMA || ack.state != "consumed" {
+        bail!("accepted-run restore ack is not a consumed native acknowledgement");
+    }
+    validate_ack_mode(&ack.restore_mode)?;
+    validate_digest(&ack.request_sha256, "restore ack request_sha256")?;
+    validate_digest(&ack.proof_sha256, "restore ack proof_sha256")?;
+    validate_digest(&ack.source_sha256, "restore ack source_sha256")?;
+    validate_digest(&ack.config_sha256, "restore ack config_sha256")?;
+    if let Some(previous) = ack.previous_ack_sha256.as_deref() {
+        validate_digest(previous, "restore ack previous_ack_sha256")?;
+    }
+    validate_attempt(&ack.activation_attempt, "restore ack activation_attempt")?;
+    validate_attempt(&ack.reconciliation_attempt, "restore ack reconciliation_attempt")?;
+    validate_non_empty(&ack.run_id, "restore ack run_id")?;
+    validate_non_empty(&ack.project_id, "restore ack project_id")?;
+    validate_non_empty(&ack.source_request_id, "restore ack source_request_id")?;
+    validate_non_empty(&ack.logical_session_id, "restore ack logical_session_id")?;
+    validate_api_instance_id(&ack.api_instance_id, "restore ack api_instance_id")?;
+    if ack.api_instance_id != expected_api_instance_id
+        || ack.request_sha256 != input.request_sha256.as_deref().unwrap_or_default()
+        || ack.proof_sha256 != input.proof_sha256
+        || ack.run_id != input.run_id
+        || ack.project_id != input.project_id
+        || ack.source_request_id != input.source_request_id
+        || ack.source_sha256 != input.source_sha256
+        || ack.config_sha256 != input.config_sha256
+        || ack.activation_attempt != proof.activation_attempt
+        || ack.reconciliation_attempt != proof.reconciliation_attempt
+        || ack.logical_session_id != proof.logical_session_id
+        || ack.session_epoch != proof.session_epoch
+    {
+        bail!("accepted-run restore ack differs from immutable reattach pins");
+    }
+    if ack.session_epoch != proof.session_epoch || ack.session_epoch == 0 {
+        bail!("accepted-run restore ack has an invalid immutable session epoch");
+    }
+    Ok(())
+}
+
+fn validate_successor_drain(
+    proof_root: &Path,
+    drain: &AcceptedRestoreSuccessorDrain,
+    ack: &AcceptedRestoreAck,
+    input: &AcceptedRestoreInput,
+    ack_relative: &str,
+    ack_sha256: &str,
+) -> Result<()> {
+    if drain.schema != SUCCESSOR_DRAIN_SCHEMA || drain.state != "drained" {
+        bail!("accepted-run successor drain is not authenticated");
+    }
+    for (value, field) in [
+        (&drain.request_sha256, "successor drain request_sha256"),
+        (&drain.proof_sha256, "successor drain proof_sha256"),
+        (&drain.source_sha256, "successor drain source_sha256"),
+        (&drain.config_sha256, "successor drain config_sha256"),
+        (&drain.ack_sha256, "successor drain ack_sha256"),
+        (
+            &drain.terminal_process_record_sha256,
+            "successor drain terminal_process_record_sha256",
+        ),
+        (
+            &drain.terminal_owner_record_sha256,
+            "successor drain terminal_owner_record_sha256",
+        ),
+        (
+            &drain.ready_owner_record_sha256,
+            "successor drain ready_owner_record_sha256",
+        ),
+    ] {
+        validate_digest(value, field)?;
+    }
+    validate_api_instance_id(&drain.api_instance_id, "successor drain api_instance_id")?;
+    validate_bounded_text(&drain.ready_owner_token, "successor drain ready_owner_token")?;
+    if drain.request_sha256 != input.request_sha256.as_deref().unwrap_or_default()
+        || drain.proof_sha256 != input.proof_sha256
+        || drain.run_id != input.run_id
+        || drain.project_id != input.project_id
+        || drain.source_request_id != input.source_request_id
+        || drain.source_sha256 != input.source_sha256
+        || drain.config_sha256 != input.config_sha256
+        || drain.api_instance_id != ack.api_instance_id
+        || drain.ack_relative != ack_relative
+        || drain.ack_sha256 != ack_sha256
+    {
+        bail!("accepted-run successor drain differs from its predecessor acknowledgement");
+    }
+    let (_, process_record) = read_successor_archive_record(
+        proof_root,
+        &drain.terminal_process_record_path,
+        &drain.terminal_process_record_sha256,
+        input,
+        &ack.api_instance_id,
+        "successor-terminal-process-",
+        "terminal process record",
+    )?;
+    validate_successor_process_record(&process_record, ack, input, ack_relative, ack_sha256)?;
+    let (_, terminal_owner_record) = read_successor_archive_record(
+        proof_root,
+        &drain.terminal_owner_record_path,
+        &drain.terminal_owner_record_sha256,
+        input,
+        &ack.api_instance_id,
+        "successor-terminal-owner-",
+        "terminal owner record",
+    )?;
+    let terminal_owner = validate_native_owner(
+        &terminal_owner_record,
+        "successor terminal owner",
+        RuntimeServiceState::Drained,
+        &["exited_success"],
+    )?;
+    let (_, ready_owner_record) = read_successor_archive_record(
+        proof_root,
+        &drain.ready_owner_record_path,
+        &drain.ready_owner_record_sha256,
+        input,
+        &ack.api_instance_id,
+        "successor-ready-owner-",
+        "ready owner record",
+    )?;
+    let ready_owner = validate_native_owner(
+        &ready_owner_record,
+        "successor ready owner",
+        RuntimeServiceState::Ready,
+        &["running"],
+    )?;
+    if owner_identity_key(&terminal_owner) != owner_identity_key(&ready_owner) {
+        bail!("successor terminal and ready owner records differ in identity");
+    }
+    let process_terminal_owner = process_record
+        .get("terminal_service_owner")
+        .context("successor process record has no terminal service owner")?;
+    let process_terminal_owner = validate_native_owner(
+        process_terminal_owner,
+        "successor process terminal owner",
+        RuntimeServiceState::Drained,
+        &["exited_success"],
+    )?;
+    if owner_identity_key(&process_terminal_owner) != owner_identity_key(&terminal_owner) {
+        bail!("successor process terminal owner differs from the terminal owner archive");
+    }
+    match process_record.get("service_owner") {
+        Some(process_ready_owner) => {
+            let process_ready_owner = validate_native_owner(
+                process_ready_owner,
+                "successor process ready owner",
+                RuntimeServiceState::Ready,
+                &["running"],
+            )?;
+            if owner_identity_key(&process_ready_owner) != owner_identity_key(&ready_owner) {
+                bail!("successor process ready owner differs from the ready owner archive");
+            }
+        }
+        None if owner_identity_key(&terminal_owner) == owner_identity_key(&ready_owner) => {}
+        None => bail!("successor ready owner archive differs from the terminal owner"),
+    }
+    if drain.ready_owner_token != ready_owner_record
+        .get("owner_token")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
+        bail!("successor drain ready owner token differs from its archive");
+    }
+    Ok(())
+}
+
+fn read_successor_archive_record(
+    proof_root: &Path,
+    path: &str,
+    digest: &str,
+    input: &AcceptedRestoreInput,
+    api_instance_id: &str,
+    filename_prefix: &str,
+    label: &str,
+) -> Result<(Vec<u8>, Value)> {
+    validate_successor_archive_path(
+        path,
+        &input.proof_path,
+        api_instance_id,
+        filename_prefix,
+        label,
+    )?;
+    let (raw, value) = read_proof_record(proof_root, path, label)?;
+    if fullmag_session::hex_sha256(&raw) != digest {
+        bail!("{label} digest differs from its immutable archive pin");
+    }
+    Ok((raw, value))
+}
+
+fn validate_successor_archive_path(
+    path: &str,
+    proof_path: &str,
+    api_instance_id: &str,
+    filename_prefix: &str,
+    label: &str,
+) -> Result<()> {
+    fullmag_session::repository_path::validate_relative_path(path)
+        .with_context(|| format!("{label} path is unsafe"))?;
+    if Path::new(path).parent() != Path::new(proof_path).parent() {
+        bail!("{label} must share the accepted proof directory");
+    }
+    let filename = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .with_context(|| format!("{label} has no filename"))?;
+    let expected = format!("{filename_prefix}{api_instance_id}.json");
+    if filename != expected {
+        bail!("{label} must name {expected}");
+    }
+    Ok(())
+}
+
+fn validate_successor_process_record(
+    record: &Value,
+    ack: &AcceptedRestoreAck,
+    input: &AcceptedRestoreInput,
+    ack_relative: &str,
+    ack_sha256: &str,
+) -> Result<()> {
+    require_equal_string(record, "schema", "fullmag.docker-process-tree.v1")?;
+    require_equal_string(record, "state", "drained")?;
+    require_json_integer(record, "api_exit_code", "successor process record")?;
+    if record.get("runtime_pid").is_some_and(|value| !value.is_null()) {
+        bail!("successor process record retains a runtime pid");
+    }
+    let metadata: AcceptedRestoreRuntimeMetadata = serde_json::from_value(
+        record
+            .get("accepted_reattach")
+            .cloned()
+            .context("successor process record has no accepted-run metadata")?,
+    )
+    .context("successor process record metadata is invalid")?;
+    if metadata.schema != SUCCESSOR_RUNTIME_SCHEMA
+        || metadata.restore_mode != ack.restore_mode
+        || metadata.request_sha256 != ack.request_sha256
+        || metadata.proof_sha256 != ack.proof_sha256
+        || metadata.run_id != ack.run_id
+        || metadata.project_id != ack.project_id
+        || metadata.source_request_id != ack.source_request_id
+        || metadata.source_sha256 != ack.source_sha256
+        || metadata.config_sha256 != ack.config_sha256
+        || metadata.api_instance_id != ack.api_instance_id
+        || metadata.previous_ack_sha256 != ack.previous_ack_sha256
+        || metadata.ack_relative != ack_relative
+        || metadata.ack_sha256 != ack_sha256
+    {
+        bail!("successor process record metadata differs from the native acknowledgement");
+    }
+    if metadata.request_sha256 != input.request_sha256.as_deref().unwrap_or_default()
+        || metadata.proof_sha256 != input.proof_sha256
+    {
+        bail!("successor process record metadata differs from the input pins");
+    }
+    Ok(())
+}
+
+/// A terminal successor may be acknowledged only after every durable lease
+/// belonging to this exact run is explicitly released.  This is a read-only
+/// check: it never releases another run's resource and does not use a global
+/// idle/GPU shortcut.  The preparation lease listing is the canonical session
+/// reader; solver leases are scanned independently because the store's
+/// task-scoped orphan helper is intentionally crate-private.
+fn ensure_terminal_run_has_no_active_leases(
+    store: &fullmag_session::SessionStore,
+    run_id: &str,
+) -> Result<()> {
+    let active_preparation = store.list_active_preparation_resource_leases()?;
+    if active_preparation
+        .iter()
+        .any(|lease| lease.run_id == run_id)
+    {
+        bail!("accepted-run terminal successor has an active preparation lease")
+    }
+
+    let relative_root = format!("runs/{run_id}/resource_leases");
+    let root = fullmag_session::repository_path::checked_path(store.root(), &relative_root)?;
+    let metadata = match fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("read exact-run solver lease directory metadata"),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("exact-run solver lease directory is not a regular directory")
+    }
+    for resource_entry in fs::read_dir(&root)? {
+        let resource_entry = resource_entry?;
+        let resource_path = resource_entry.path();
+        let resource_metadata = fs::symlink_metadata(&resource_path)?;
+        if resource_metadata.file_type().is_symlink() || !resource_metadata.is_dir() {
+            bail!("exact-run solver resource entry is not a regular directory")
+        }
+        let resource_id = resource_entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("exact-run solver resource identifier is not UTF-8"))?;
+        fullmag_session::repository_path::validate_store_id(&resource_id)?;
+        for lease_entry in fs::read_dir(&resource_path)? {
+            let lease_entry = lease_entry?;
+            let lease_path = lease_entry.path();
+            let lease_metadata = fs::symlink_metadata(&lease_path)?;
+            if lease_metadata.file_type().is_symlink() || !lease_metadata.is_file() {
+                bail!("exact-run solver lease entry is not a regular file")
+            }
+            let filename = lease_entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("exact-run solver lease filename is not UTF-8"))?;
+            let lease_token = filename
+                .strip_suffix(".json")
+                .context("exact-run solver lease filename must end in .json")?;
+            fullmag_session::repository_path::validate_store_id(lease_token)?;
+            let relative = format!("{relative_root}/{resource_id}/{filename}");
+            let bytes = fullmag_session::repository_path::read_bounded_regular_file(
+                store.root(),
+                &relative,
+                MAX_CONTROL_RECORD_BYTES,
+            )?;
+            let lease: fullmag_session::FmsResourceLease = serde_json::from_slice(&bytes)
+                .context("decode exact-run solver resource lease")?;
+            lease.validate()?;
+            if lease.run_id != run_id
+                || lease.resource_id != resource_id
+                || lease.lease_token != lease_token
+            {
+                bail!("exact-run solver lease identity does not match its path")
+            }
+            if lease.state == fullmag_session::FmsResourceLeaseState::Active {
+                bail!("accepted-run terminal successor has an active solver lease")
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Classify a pinned restore from the native durable run state.  The
+/// successor's `successor_auto` value is only an intent: the catalog and the
+/// accepted-run start release decide whether this API instance restores a
+/// held frontier or records a terminal no-replay acknowledgement.
+fn classify_restore_state(
+    requested_mode: Option<&str>,
+    has_predecessor: bool,
+    predecessor_restore_mode: Option<&str>,
+    held: bool,
+    start_released: bool,
+    terminal_local_leases_drained: bool,
+    catalog: &fullmag_session::FmsRunCatalog,
+) -> Result<(AcceptedRestoreMode, Option<String>, &'static str)> {
+    if requested_mode == Some(RESTORE_MODE_SUCCESSOR_AUTO)
+        && predecessor_restore_mode == Some(RESTORE_MODE_CONSUMED)
+        && held
+    {
+        bail!("consumed accepted-run restore cannot return to a held state");
+    }
+    match (requested_mode, has_predecessor, held, start_released) {
+        (None, false, true, false) | (Some(RESTORE_MODE_HELD), false, true, false) => {
+            Ok((AcceptedRestoreMode::Held, None, RESTORE_MODE_HELD))
+        }
+        (Some(RESTORE_MODE_SUCCESSOR_AUTO), true, true, false) => {
+            Ok((AcceptedRestoreMode::Held, None, RESTORE_MODE_HELD))
+        }
+        (Some(RESTORE_MODE_SUCCESSOR_AUTO), true, false, true) => {
+            if !terminal_local_leases_drained {
+                bail!("accepted-run terminal successor lacks an exact-run local lease proof")
+            }
+            let outcome = terminal_catalog_outcome(catalog)?;
+            Ok((
+                AcceptedRestoreMode::Consumed,
+                Some(outcome.to_string()),
+                RESTORE_MODE_CONSUMED,
+            ))
+        }
+        (Some(RESTORE_MODE_SUCCESSOR_AUTO), true, true, true) => {
+            bail!("accepted-run successor state has a start release while its catalog remains held")
+        }
+        (Some(RESTORE_MODE_SUCCESSOR_AUTO), true, false, false) => {
+            bail!("accepted-run successor state is neither held nor terminally released")
+        }
+        (Some(RESTORE_MODE_HELD), true, _, _) => {
+            bail!("held restore mode cannot carry a predecessor acknowledgement")
+        }
+        (Some(RESTORE_MODE_CONSUMED), _, _, _) => {
+            bail!("completed_consumed_no_replay is a native acknowledgement, not an input intent")
+        }
+        (Some(_), _, _, _) => bail!("accepted-run restore mode is unsupported"),
+        (None, true, _, _) => bail!("successor accepted-run input has no restore mode"),
+        (None, false, _, _) => {
+            bail!("initial accepted-run input does not identify a held accepted run")
+        }
+    }
+}
+
+fn terminal_catalog_outcome(catalog: &fullmag_session::FmsRunCatalog) -> Result<&'static str> {
+    if catalog.tasks.is_empty()
+        || catalog.tasks.iter().any(|task| {
+            !matches!(
+                task.lifecycle,
+                FmsTaskLifecycle::Succeeded
+                    | FmsTaskLifecycle::Failed
+                    | FmsTaskLifecycle::Cancelled
+                    | FmsTaskLifecycle::Interrupted
+            )
+        })
+    {
+        bail!("accepted run catalog is not terminal");
+    }
+    if catalog
+        .tasks
+        .iter()
+        .any(|task| task.lifecycle == FmsTaskLifecycle::Failed)
+    {
+        Ok("failed")
+    } else if catalog
+        .tasks
+        .iter()
+        .any(|task| task.lifecycle == FmsTaskLifecycle::Interrupted)
+    {
+        Ok("interrupted")
+    } else if catalog
+        .tasks
+        .iter()
+        .any(|task| task.lifecycle == FmsTaskLifecycle::Cancelled)
+    {
+        Ok("cancelled")
+    } else {
+        Ok("completed")
+    }
+}
+
+fn validate_restore_mode(value: &str) -> Result<()> {
+    if value != RESTORE_MODE_HELD
+        && value != RESTORE_MODE_CONSUMED
+        && value != RESTORE_MODE_SUCCESSOR_AUTO
+    {
+        bail!("accepted-run restore mode is unsupported");
+    }
+    Ok(())
+}
+
+fn validate_ack_mode(value: &str) -> Result<()> {
+    if value != RESTORE_MODE_HELD && value != RESTORE_MODE_CONSUMED {
+        bail!("accepted-run restore acknowledgement has an unsupported mode");
+    }
+    Ok(())
+}
+
+fn validate_api_instance_id(value: &str, field: &str) -> Result<()> {
+    let parsed = uuid::Uuid::parse_str(value)
+        .with_context(|| format!("{field} is not a canonical UUID"))?;
+    if parsed.to_string() != value {
+        bail!("{field} must use the canonical lowercase UUID spelling");
+    }
+    Ok(())
+}
+
+fn validate_ack_record_path(path: &str, proof_path: &str, field: &str) -> Result<String> {
+    fullmag_session::repository_path::validate_relative_path(path)
+        .with_context(|| format!("{field} is unsafe"))?;
+    if Path::new(path).parent() != Path::new(proof_path).parent() {
+        bail!("{field} must share the accepted proof directory");
+    }
+    let filename = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .with_context(|| format!("{field} has no filename"))?;
+    let api_id = filename
+        .strip_prefix(RESTORE_ACK_PREFIX)
+        .and_then(|value| value.strip_suffix(".json"))
+        .context("{field} must name restore-ack-<api_instance_id>.json")?;
+    validate_api_instance_id(api_id, field)?;
+    Ok(api_id.into())
+}
+
+fn validate_drain_record_path(
+    path: &str,
+    proof_path: &str,
+    expected_api_instance_id: &str,
+) -> Result<String> {
+    fullmag_session::repository_path::validate_relative_path(path)
+        .context("successor drain path is unsafe")?;
+    if Path::new(path).parent() != Path::new(proof_path).parent() {
+        bail!("successor drain must share the accepted proof directory");
+    }
+    let filename = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("successor drain has no filename")?;
+    let api_id = filename
+        .strip_prefix(SUCCESSOR_DRAIN_PREFIX)
+        .and_then(|value| value.strip_suffix(".json"))
+        .context("successor drain must name successor-drain-<api_instance_id>.json")?;
+    validate_api_instance_id(api_id, "successor drain api_instance_id")?;
+    if api_id != expected_api_instance_id {
+        bail!("successor drain path does not bind the previous API instance");
+    }
+    Ok(api_id.into())
 }
 
 fn configured_runtime_control_root() -> Result<std::path::PathBuf> {
@@ -757,6 +1676,12 @@ fn validate_backing_records(
         "native-after-ready-failure" => true,
         _ => bail!("stopped-backend journal has an unsupported native failure kind"),
     };
+    let api_start_failure = match verification.get("failure_mode") {
+        None => false,
+        Some(value) if value.is_null() => false,
+        Some(value) if !after_ready && value.as_str() == Some(API_START_FAILURE_MODE) => true,
+        Some(_) => bail!("stopped-backend journal has an unsupported failure mode"),
+    };
     let failure_envelope = verification
         .get("failure_receipt")
         .and_then(Value::as_object)
@@ -773,17 +1698,18 @@ fn validate_backing_records(
     let failure_receipt = failure_envelope
         .get("receipt")
         .context("stopped-backend journal has no wrapped process receipt")?;
-    validate_native_process_receipt(failure_receipt, after_ready)?;
+    validate_native_process_receipt_mode(failure_receipt, after_ready, api_start_failure)?;
     let probe = verification
         .get("native_failure_probe")
         .and_then(Value::as_object)
         .context("stopped-backend journal has no native failure probe")?;
     let probe = Value::Object(probe.clone());
-    let failed_owner = validate_native_failure_probe(
+    let failed_owner = validate_native_failure_probe_mode(
         &probe,
         process_receipt_sha256,
         failure_receipt,
         after_ready,
+        api_start_failure,
     )?;
     require_all_released(&probe, "reservation_states")?;
     require_all_released(&probe, "lease_states")?;
@@ -922,6 +1848,29 @@ fn validate_namespace_attestation(
     failed_owner: &Value,
     after_ready: bool,
 ) -> Result<()> {
+    let api_start_failure = match verification.get("failure_mode") {
+        None => false,
+        Some(value) if value.is_null() => false,
+        Some(value) if !after_ready && value.as_str() == Some(API_START_FAILURE_MODE) => true,
+        Some(_) => bail!("stopped-backend journal has an unsupported failure mode"),
+    };
+    validate_namespace_attestation_mode(
+        attestation, proof, verification, terminal_process, terminal_failed_owner,
+        probe, failed_owner, after_ready, api_start_failure,
+    )
+}
+
+fn validate_namespace_attestation_mode(
+    attestation: &Value,
+    proof: &AcceptedRestoreProof,
+    verification: &Value,
+    terminal_process: &Value,
+    terminal_failed_owner: &Value,
+    probe: &Value,
+    failed_owner: &Value,
+    after_ready: bool,
+    api_start_failure: bool,
+) -> Result<()> {
     let expected_stop_path = format!(
         "verification/stop-failed-{}.json",
         proof.backend_container
@@ -948,6 +1897,12 @@ fn validate_namespace_attestation(
     }
     let failure_kind = require_string(verification, "failure_kind")?;
     require_equal_string(attestation, "failure_kind", failure_kind)?;
+    if attestation.get("failure_mode") != verification.get("failure_mode") {
+        bail!("stopped namespace attestation failure mode differs from journal");
+    }
+    if api_start_failure && failure_kind != "native-start-failure" {
+        bail!("API-start failure mode is attached to an after-ready journal");
+    }
 
     let container_state = attestation
         .get("container_state")
@@ -1099,20 +2054,35 @@ fn validate_reconciled_helper(
     Ok(())
 }
 
-fn validate_current_docker_binding(proof: &AcceptedRestoreProof) -> Result<()> {
-    for (name, expected) in [
-        (CURRENT_COMPOSE_PROJECT_ENV, proof.compose_project.as_str()),
-        (CURRENT_SOURCE_ROOT_ENV, proof.source_root.as_str()),
-        (CURRENT_CONTROL_VOLUME_ENV, proof.control_volume.as_str()),
+fn validate_docker_binding_values(
+    proof: &AcceptedRestoreProof,
+    compose_project: &str,
+    source_root: &str,
+    control_volume: &str,
+) -> Result<()> {
+    for (name, value, expected) in [
+        (CURRENT_COMPOSE_PROJECT_ENV, compose_project, proof.compose_project.as_str()),
+        (CURRENT_SOURCE_ROOT_ENV, source_root, proof.source_root.as_str()),
+        (CURRENT_CONTROL_VOLUME_ENV, control_volume, proof.control_volume.as_str()),
     ] {
-        let value = std::env::var(name).with_context(|| {
-            format!("accepted-run reattach requires current Docker environment {name}")
-        })?;
         if value != expected {
             bail!("current Docker environment {name} differs from the reattach proof");
         }
     }
     Ok(())
+}
+
+fn validate_current_docker_binding(proof: &AcceptedRestoreProof) -> Result<()> {
+    let compose_project = std::env::var(CURRENT_COMPOSE_PROJECT_ENV).with_context(|| {
+        format!("accepted-run reattach requires current Docker environment {CURRENT_COMPOSE_PROJECT_ENV}")
+    })?;
+    let source_root = std::env::var(CURRENT_SOURCE_ROOT_ENV).with_context(|| {
+        format!("accepted-run reattach requires current Docker environment {CURRENT_SOURCE_ROOT_ENV}")
+    })?;
+    let control_volume = std::env::var(CURRENT_CONTROL_VOLUME_ENV).with_context(|| {
+        format!("accepted-run reattach requires current Docker environment {CURRENT_CONTROL_VOLUME_ENV}")
+    })?;
+    validate_docker_binding_values(proof, &compose_project, &source_root, &control_volume)
 }
 
 fn validate_startup_provenance_record(
@@ -1140,10 +2110,21 @@ fn validate_startup_provenance_record(
 }
 
 fn validate_native_process_receipt(receipt: &Value, after_ready: bool) -> Result<()> {
+    validate_native_process_receipt_mode(receipt, after_ready, false)
+}
+
+fn validate_native_process_receipt_mode(
+    receipt: &Value,
+    after_ready: bool,
+    api_start_failure: bool,
+) -> Result<()> {
     require_equal_string(receipt, "schema", "fullmag.docker-process-tree.v1")?;
     require_equal_string(receipt, "state", "failed_outcome_retained")?;
     require_json_integer(receipt, "api_exit_code", "failed process receipt")?;
-    require_string(receipt, "error")?;
+    let error = require_string(receipt, "error")?;
+    if api_start_failure && !error.starts_with(API_START_FAILURE_ERROR_PREFIX) {
+        bail!("API-start failure receipt has no API binding error prefix");
+    }
     if receipt.get("runtime_pid").is_some_and(|value| !value.is_null()) {
         bail!("failed process receipt retains a runtime pid");
     }
@@ -1176,6 +2157,18 @@ fn validate_native_failure_probe(
     process_receipt: &Value,
     after_ready: bool,
 ) -> Result<Value> {
+    validate_native_failure_probe_mode(
+        probe, process_receipt_sha256, process_receipt, after_ready, false,
+    )
+}
+
+fn validate_native_failure_probe_mode(
+    probe: &Value,
+    process_receipt_sha256: &str,
+    process_receipt: &Value,
+    after_ready: bool,
+    api_start_failure: bool,
+) -> Result<Value> {
     let expected_schema = if after_ready {
         "fullmag.docker-native-after-ready-failure-stop-probe.v1"
     } else {
@@ -1183,6 +2176,11 @@ fn validate_native_failure_probe(
     };
     require_equal_string(probe, "schema", expected_schema)?;
     require_equal_string(probe, "process_receipt_sha256", process_receipt_sha256)?;
+    if api_start_failure {
+        require_equal_string(probe, "failure_mode", API_START_FAILURE_MODE)?;
+    } else if probe.get("failure_mode").is_some_and(|value| !value.is_null()) {
+        bail!("native failure probe has an unexpected failure mode");
+    }
     if probe.get("process_receipt") != Some(process_receipt) {
         bail!("native failure probe process receipt differs from its journal");
     }
@@ -1216,7 +2214,7 @@ fn validate_native_failure_probe(
         failed_owner,
         "failed owner",
         RuntimeServiceState::Failed,
-        if after_ready {
+        if after_ready || api_start_failure {
             &["exited_success", "exited_failure"]
         } else {
             &["exited_success"]
@@ -1572,6 +2570,41 @@ fn validate_input_digests(input: &AcceptedRestoreInput) -> Result<()> {
     if input.schema != INPUT_SCHEMA {
         bail!("invalid private accepted-run reattach input schema");
     }
+    let has_restart_fields = input.request_sha256.is_some()
+        || input.restore_mode.is_some()
+        || input.previous_ack_path.is_some()
+        || input.previous_ack_sha256.is_some()
+        || input.previous_drain_path.is_some()
+        || input.previous_drain_sha256.is_some();
+    if has_restart_fields {
+        let request_sha256 = input
+            .request_sha256
+            .as_deref()
+            .context("accepted-run successor input has no request digest")?;
+        validate_digest(request_sha256, "request_sha256")?;
+        let mode = input
+            .restore_mode
+            .as_deref()
+            .context("accepted-run reattach input has no restore mode")?;
+        validate_restore_mode(mode)?;
+        match (
+            input.previous_ack_path.as_deref(),
+            input.previous_ack_sha256.as_deref(),
+            input.previous_drain_path.as_deref(),
+            input.previous_drain_sha256.as_deref(),
+        ) {
+            (None, None, None, None) if mode == RESTORE_MODE_HELD => {}
+            (Some(path), Some(digest), Some(drain_path), Some(drain_digest))
+                if mode == RESTORE_MODE_SUCCESSOR_AUTO =>
+            {
+                validate_non_empty(path, "previous_ack_path")?;
+                validate_digest(digest, "previous_ack_sha256")?;
+                validate_non_empty(drain_path, "previous_drain_path")?;
+                validate_digest(drain_digest, "previous_drain_sha256")?;
+            }
+            _ => bail!("accepted-run reattach successor fields are incomplete"),
+        }
+    }
     for (value, field) in [
         (&input.target_build_id, "target_build_id"),
         (&input.run_id, "run_id"),
@@ -1584,10 +2617,7 @@ fn validate_input_digests(input: &AcceptedRestoreInput) -> Result<()> {
     for (value, field) in [
         (&input.target_source_sha256, "target_source_sha256"),
         (&input.source_sha256, "source_sha256"),
-        (
-            &input.startup_provenance_sha256,
-            "startup_provenance_sha256",
-        ),
+        (&input.startup_provenance_sha256, "startup_provenance_sha256"),
         (&input.config_sha256, "config_sha256"),
         (&input.proof_sha256, "proof_sha256"),
     ] {
@@ -1676,6 +2706,17 @@ fn build_snapshot(
     let requested = &loaded.specification.requested_execution;
     let session_id = loaded.logical_session_id.clone();
     let run_id = loaded.run_id.as_str().to_string();
+    let terminal_status = match loaded.terminal_outcome.as_deref() {
+        Some("interrupted") => "failed",
+        Some(outcome) => outcome,
+        None => "awaiting_command",
+    };
+    let session_status = terminal_status.to_string();
+    let run_status = if loaded.terminal_outcome.is_some() {
+        terminal_status.to_string()
+    } else {
+        "waiting_for_compute".into()
+    };
     let artifact_dir = state
         .current_workspace_root
         .join("runs")
@@ -1686,7 +2727,7 @@ fn build_snapshot(
     let session = SessionManifest {
         session_id: session_id.clone(),
         run_id: run_id.clone(),
-        status: "awaiting_command".into(),
+        status: session_status.clone(),
         interactive_session_requested: true,
         script_path: String::new(),
         problem_name: loaded.scene.scene.name.clone(),
@@ -1745,7 +2786,7 @@ fn build_snapshot(
     let mut snapshot = crate::session::default_current_live_state(&CurrentLiveSnapshotRequest {
         session_id,
         session: Some(session),
-        session_status: Some("awaiting_command".into()),
+        session_status: Some(session_status.clone()),
         metadata: Some(json!({
             "accepted_run_reattach": {
                 "schema": INPUT_SCHEMA,
@@ -1757,12 +2798,16 @@ fn build_snapshot(
                 "config_sha256": &loaded.config_sha256,
                 "session_epoch": loaded.session_epoch,
                 "proof_sha256": &loaded.proof_sha256,
+                "terminal_outcome": &loaded.terminal_outcome,
             }
         })),
         mesh_workspace: None,
         stage_execution: None,
         simulation_preparation: None,
-        run: Some(run),
+        run: Some(RunManifest {
+            status: run_status,
+            ..run
+        }),
         live_state: None,
         frozen_spins_runtime_status: None,
         coupled_checkpoint: None,
@@ -1777,7 +2822,7 @@ fn build_snapshot(
         fem_mesh: None,
     });
     snapshot.scene_document = Some(loaded.scene.clone());
-    snapshot.runtime_status = crate::session::build_runtime_status_view("awaiting_command");
+    snapshot.runtime_status = crate::session::build_runtime_status_view(&session_status);
     snapshot.state_version = 1;
     Ok(snapshot)
 }
@@ -1789,7 +2834,7 @@ mod tests {
     fn input() -> AcceptedRestoreInput {
         AcceptedRestoreInput {
             schema: INPUT_SCHEMA.into(),
-            target_build_id: "build".into(),
+            target_build_id: "b".repeat(40),
             target_source_sha256: "a".repeat(64),
             run_id: "run-1".into(),
             project_id: "project-1".into(),
@@ -1799,7 +2844,465 @@ mod tests {
             config_sha256: "d".repeat(64),
             proof_path: "accepted-run-reattach/proof/proof.json".into(),
             proof_sha256: "e".repeat(64),
+            request_sha256: None,
+            restore_mode: None,
+            previous_ack_path: None,
+            previous_ack_sha256: None,
+            previous_drain_path: None,
+            previous_drain_sha256: None,
         }
+    }
+
+    fn proof(input: &AcceptedRestoreInput) -> AcceptedRestoreProof {
+        AcceptedRestoreProof {
+            schema: PROOF_SCHEMA.into(),
+            run_id: input.run_id.clone(),
+            project_id: input.project_id.clone(),
+            source_request_id: input.source_request_id.clone(),
+            source_sha256: input.source_sha256.clone(),
+            startup_provenance_sha256: input.startup_provenance_sha256.clone(),
+            activation_receipt_sha256: "f".repeat(64),
+            stop_reconcile_proof_sha256: "1".repeat(64),
+            stop_verification_sha256: "2".repeat(64),
+            terminal_owner_record_path: "accepted-run-reattach/proof/terminal-owner.json".into(),
+            terminal_owner_record_sha256: "4".repeat(64),
+            terminal_process_record_path: "accepted-run-reattach/proof/terminal-process.json".into(),
+            terminal_process_record_sha256: "5".repeat(64),
+            namespace_attestation_path: None,
+            namespace_attestation_sha256: None,
+            activation_attempt: "3".repeat(32),
+            reconciliation_attempt: "4".repeat(32),
+            backend_container: "5".repeat(64),
+            image_id: format!("sha256:{}", "6".repeat(64)),
+            source_root: "C:/git/fullmag".into(),
+            compose_project: "fullmag-worktree-test".into(),
+            control_volume: "fullmag-worktree-test-control".into(),
+            development_attempt: "7".repeat(32),
+            config_sha256: input.config_sha256.clone(),
+            logical_session_id: "session-1".into(),
+            session_epoch: 3,
+        }
+    }
+
+    fn successor_input() -> AcceptedRestoreInput {
+        let mut input = input();
+        input.request_sha256 = Some("8".repeat(64));
+        input.restore_mode = Some(RESTORE_MODE_SUCCESSOR_AUTO.into());
+        input.previous_ack_path = Some(
+            "accepted-run-reattach/proof/restore-ack-11111111-1111-4111-8111-111111111111.json"
+                .into(),
+        );
+        input.previous_ack_sha256 = Some("9".repeat(64));
+        input.previous_drain_path = Some(
+            "accepted-run-reattach/proof/successor-drain-11111111-1111-4111-8111-111111111111.json"
+                .into(),
+        );
+        input.previous_drain_sha256 = Some("a".repeat(64));
+        input
+    }
+
+    fn ack(
+        input: &AcceptedRestoreInput,
+        proof: &AcceptedRestoreProof,
+        api_instance_id: &str,
+        previous_ack_sha256: Option<&str>,
+        restore_mode: &str,
+    ) -> AcceptedRestoreAck {
+        AcceptedRestoreAck {
+            schema: RESTORE_ACK_SCHEMA.into(),
+            state: "consumed".into(),
+            restore_mode: restore_mode.into(),
+            request_sha256: input.request_sha256.clone().unwrap(),
+            proof_sha256: input.proof_sha256.clone(),
+            run_id: input.run_id.clone(),
+            project_id: input.project_id.clone(),
+            source_request_id: input.source_request_id.clone(),
+            source_sha256: input.source_sha256.clone(),
+            config_sha256: input.config_sha256.clone(),
+            activation_attempt: proof.activation_attempt.clone(),
+            reconciliation_attempt: proof.reconciliation_attempt.clone(),
+            logical_session_id: proof.logical_session_id.clone(),
+            session_epoch: proof.session_epoch,
+            api_instance_id: api_instance_id.into(),
+            previous_ack_sha256: previous_ack_sha256.map(str::to_owned),
+        }
+    }
+
+    fn owner_fixture(state: &str, child_status: &str) -> Value {
+        json!({
+            "schema_version": "runtime_service_owner.v1",
+            "owner_token": "11111111-1111-4111-8111-111111111111",
+            "process_start_token": "22222222-2222-4222-8222-222222222222",
+            "pid": 3241,
+            "host": "fullmag-test-host",
+            "target_id": "docker-all",
+            "protocol": "stdin-v1",
+            "state": state,
+            "acquired_at": "2026-10-19T10:00:00Z",
+            "heartbeat_at": "2026-10-19T10:00:01Z",
+            "control_address": "127.0.0.1:43123",
+            "build_commit": "6".repeat(40),
+            "build_snapshot": "7".repeat(64),
+            "compute_pool_id": "compute-pool",
+            "preparation_pool_id": "preparation-pool",
+            "compute_pool_generation": 7,
+            "preparation_pool_generation": 8,
+            "children": [
+                {"role": "compute", "pid": 3250, "status": child_status},
+                {"role": "preparation", "pid": 3251, "status": child_status},
+            ],
+        })
+    }
+
+    fn canonical_record_bytes(value: &Value) -> Vec<u8> {
+        let mut bytes = fullmag_session::canonical_json_bytes(value);
+        bytes.push(b'\n');
+        bytes
+    }
+
+    #[test]
+    fn legacy_input_stays_strict_and_initial_extension_is_explicit() {
+        let mut input = input();
+        assert!(validate_input_digests(&input).is_ok());
+        input.request_sha256 = Some("8".repeat(64));
+        input.restore_mode = Some(RESTORE_MODE_HELD.into());
+        assert!(validate_input_digests(&input).is_ok());
+        input.previous_ack_sha256 = Some("9".repeat(64));
+        assert!(validate_input_digests(&input).is_err());
+        input.restore_mode = Some(RESTORE_MODE_SUCCESSOR_AUTO.into());
+        input.previous_ack_path = Some("previous-ack.json".into());
+        assert!(validate_input_digests(&input).is_err());
+        input.previous_drain_path = Some("previous-drain.json".into());
+        assert!(validate_input_digests(&input).is_err());
+        input.previous_drain_sha256 = Some("a".repeat(64));
+        assert!(validate_input_digests(&input).is_ok());
+        input.previous_ack_path = None;
+        assert!(validate_input_digests(&input).is_err());
+    }
+
+    #[test]
+    fn successor_ack_and_drain_names_bind_one_api_generation() {
+        let mut input = successor_input();
+        let proof = proof(&input);
+        let old_id = "11111111-1111-4111-8111-111111111111";
+        let new_id = "22222222-2222-4222-8222-222222222222";
+        assert_eq!(
+            validate_ack_record_path(
+                input.previous_ack_path.as_deref().unwrap(),
+                &input.proof_path,
+                "previous_ack_path",
+            )
+            .unwrap(),
+            old_id
+        );
+        assert!(validate_ack_record_path(
+            "accepted-run-reattach/proof/restore-ack-other.json",
+            &input.proof_path,
+            "previous_ack_path",
+        )
+        .is_err());
+        let old_ack = ack(&input, &proof, old_id, None, RESTORE_MODE_HELD);
+        let old_ack_raw = canonical_record_bytes(&serde_json::to_value(&old_ack).unwrap());
+        let old_ack_sha256 = fullmag_session::hex_sha256(&old_ack_raw);
+        input.previous_ack_sha256 = Some(old_ack_sha256.clone());
+        let temporary = tempfile::tempdir().unwrap();
+        let proof_dir = temporary.path().join("accepted-run-reattach/proof");
+        fs::create_dir_all(&proof_dir).unwrap();
+
+        let terminal_owner = owner_fixture("drained", "exited_success");
+        let ready_owner = owner_fixture("ready", "running");
+        let process_record = json!({
+            "schema": "fullmag.docker-process-tree.v1",
+            "state": "drained",
+            "api_pid": 3227,
+            "api_exit_code": 0,
+            "runtime_pid": null,
+            "service_owner": ready_owner.clone(),
+            "terminal_service_owner": terminal_owner.clone(),
+            "accepted_reattach": {
+                "schema": SUCCESSOR_RUNTIME_SCHEMA,
+                "restore_mode": RESTORE_MODE_HELD,
+                "request_sha256": input.request_sha256.clone().unwrap(),
+                "proof_sha256": input.proof_sha256.clone(),
+                "run_id": input.run_id.clone(),
+                "project_id": input.project_id.clone(),
+                "source_request_id": input.source_request_id.clone(),
+                "source_sha256": input.source_sha256.clone(),
+                "config_sha256": input.config_sha256.clone(),
+                "ack_relative": input.previous_ack_path.clone().unwrap(),
+                "ack_sha256": old_ack_sha256.clone(),
+                "api_instance_id": old_id,
+                "previous_ack_sha256": null,
+            },
+        });
+        let process_raw = canonical_record_bytes(&process_record);
+        fs::write(
+            proof_dir.join(format!("successor-terminal-process-{old_id}.json")),
+            &process_raw,
+        )
+        .unwrap();
+        let terminal_raw = canonical_record_bytes(&terminal_owner);
+        fs::write(
+            proof_dir.join(format!("successor-terminal-owner-{old_id}.json")),
+            &terminal_raw,
+        )
+        .unwrap();
+        let ready_raw = canonical_record_bytes(&ready_owner);
+        fs::write(
+            proof_dir.join(format!("successor-ready-owner-{old_id}.json")),
+            &ready_raw,
+        )
+        .unwrap();
+        let mut drain = AcceptedRestoreSuccessorDrain {
+            schema: SUCCESSOR_DRAIN_SCHEMA.into(),
+            state: "drained".into(),
+            request_sha256: input.request_sha256.clone().unwrap(),
+            proof_sha256: input.proof_sha256.clone(),
+            run_id: input.run_id.clone(),
+            project_id: input.project_id.clone(),
+            source_request_id: input.source_request_id.clone(),
+            source_sha256: input.source_sha256.clone(),
+            config_sha256: input.config_sha256.clone(),
+            api_instance_id: old_id.into(),
+            ack_relative: input.previous_ack_path.clone().unwrap(),
+            ack_sha256: old_ack_sha256,
+            ready_owner_token: ready_owner
+                .get("owner_token")
+                .and_then(Value::as_str)
+                .unwrap()
+                .into(),
+            terminal_process_record_path: format!(
+                "accepted-run-reattach/proof/successor-terminal-process-{old_id}.json"
+            ),
+            terminal_process_record_sha256: fullmag_session::hex_sha256(&process_raw),
+            terminal_owner_record_path: format!(
+                "accepted-run-reattach/proof/successor-terminal-owner-{old_id}.json"
+            ),
+            terminal_owner_record_sha256: fullmag_session::hex_sha256(&terminal_raw),
+            ready_owner_record_path: format!(
+                "accepted-run-reattach/proof/successor-ready-owner-{old_id}.json"
+            ),
+            ready_owner_record_sha256: fullmag_session::hex_sha256(&ready_raw),
+        };
+        let drain_raw = canonical_record_bytes(&serde_json::to_value(&drain).unwrap());
+        input.previous_drain_sha256 = Some(fullmag_session::hex_sha256(&drain_raw));
+        assert!(validate_restore_ack(
+            &old_ack,
+            &input,
+            &proof,
+            old_id,
+        )
+        .is_ok());
+        let held_successor_ack = ack(
+            &input,
+            &proof,
+            new_id,
+            input.previous_ack_sha256.as_deref(),
+            RESTORE_MODE_HELD,
+        );
+        assert!(validate_restore_ack(
+            &held_successor_ack,
+            &input,
+            &proof,
+            new_id,
+        )
+        .is_ok());
+        assert!(validate_successor_drain(
+            temporary.path(),
+            &drain,
+            &old_ack,
+            &input,
+            input.previous_ack_path.as_deref().unwrap(),
+            input.previous_ack_sha256.as_deref().unwrap(),
+        )
+        .is_ok());
+        let mut mismatched_digest = drain.clone();
+        mismatched_digest.terminal_owner_record_sha256 = "f".repeat(64);
+        assert!(validate_successor_drain(
+            temporary.path(),
+            &mismatched_digest,
+            &old_ack,
+            &input,
+            input.previous_ack_path.as_deref().unwrap(),
+            input.previous_ack_sha256.as_deref().unwrap(),
+        )
+        .is_err());
+        drain.api_instance_id = new_id.into();
+        assert!(validate_successor_drain(
+            temporary.path(),
+            &drain,
+            &old_ack,
+            &input,
+            input.previous_ack_path.as_deref().unwrap(),
+            input.previous_ack_sha256.as_deref().unwrap(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn restore_ack_has_exact_python_wire_fields() {
+        let input = successor_input();
+        let p = proof(&input);
+        let value = serde_json::to_value(ack(
+            &input,
+            &p,
+            "11111111-1111-4111-8111-111111111111",
+            None,
+            RESTORE_MODE_HELD,
+        ))
+        .unwrap();
+        let fields = value.as_object().unwrap().keys().cloned().collect::<std::collections::BTreeSet<_>>();
+        let expected = [
+            "schema", "state", "restore_mode", "request_sha256", "proof_sha256",
+            "run_id", "project_id", "source_request_id", "source_sha256",
+            "config_sha256", "activation_attempt", "reconciliation_attempt",
+            "logical_session_id", "session_epoch", "api_instance_id",
+            "previous_ack_sha256",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(fields, expected);
+    }
+
+    #[test]
+    fn terminal_outcome_requires_every_task_terminal() {
+        let pending: fullmag_session::FmsRunCatalog = serde_json::from_value(json!({
+            "schema_version": "run_catalog.v1",
+            "run_id": "run-1",
+            "revision": 1,
+            "updated_at": "2026-10-20T10:00:00Z",
+            "tasks": [{
+                "task_id": "task-1",
+                "input_fingerprint": "a".repeat(64),
+                "lifecycle": "accepted",
+                "readiness": {"state": "blocked", "reason": "awaiting_compute"}
+            }]
+        }))
+        .unwrap();
+        assert!(terminal_catalog_outcome(&pending).is_err());
+    }
+
+    #[test]
+    fn successor_auto_uses_native_catalog_and_release_state() {
+        let held: fullmag_session::FmsRunCatalog = serde_json::from_value(json!({
+            "schema_version": "run_catalog.v1",
+            "run_id": "run-1",
+            "revision": 1,
+            "updated_at": "2026-10-20T10:00:00Z",
+            "tasks": [{
+                "task_id": "task-1",
+                "input_fingerprint": "a".repeat(64),
+                "lifecycle": "accepted",
+                "readiness": {"state": "blocked", "reason": "awaiting_compute"}
+            }]
+        }))
+        .unwrap();
+        let (mode, outcome, wire_mode) = classify_restore_state(
+            Some(RESTORE_MODE_SUCCESSOR_AUTO),
+            true,
+            Some(RESTORE_MODE_HELD),
+            true,
+            false,
+            false,
+            &held,
+        )
+        .unwrap();
+        assert_eq!(mode, AcceptedRestoreMode::Held);
+        assert_eq!(outcome, None);
+        assert_eq!(wire_mode, RESTORE_MODE_HELD);
+
+        let terminal: fullmag_session::FmsRunCatalog = serde_json::from_value(json!({
+            "schema_version": "run_catalog.v1",
+            "run_id": "run-1",
+            "revision": 2,
+            "updated_at": "2026-10-20T10:00:00Z",
+            "tasks": [{
+                "task_id": "task-1",
+                "input_fingerprint": "a".repeat(64),
+                "lifecycle": "succeeded",
+                "readiness": {"state": "ready"}
+            }]
+        }))
+        .unwrap();
+        let (mode, outcome, wire_mode) = classify_restore_state(
+            Some(RESTORE_MODE_SUCCESSOR_AUTO),
+            true,
+            Some(RESTORE_MODE_HELD),
+            false,
+            true,
+            true,
+            &terminal,
+        )
+        .unwrap();
+        assert_eq!(mode, AcceptedRestoreMode::Consumed);
+        assert_eq!(outcome.as_deref(), Some("completed"));
+        assert_eq!(wire_mode, RESTORE_MODE_CONSUMED);
+
+        assert!(classify_restore_state(
+            Some(RESTORE_MODE_SUCCESSOR_AUTO),
+            false,
+            None,
+            true,
+            false,
+            false,
+            &held,
+        )
+        .is_err());
+        assert!(classify_restore_state(
+            Some(RESTORE_MODE_SUCCESSOR_AUTO),
+            true,
+            Some(RESTORE_MODE_HELD),
+            true,
+            true,
+            false,
+            &held,
+        )
+        .is_err());
+        assert!(classify_restore_state(
+            Some(RESTORE_MODE_SUCCESSOR_AUTO),
+            true,
+            Some(RESTORE_MODE_CONSUMED),
+            true,
+            false,
+            false,
+            &held,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn current_docker_binding_requires_exact_group_source_and_control_volume() {
+        let input = input();
+        let proof = proof(&input);
+        assert!(validate_docker_binding_values(
+            &proof,
+            &proof.compose_project,
+            &proof.source_root,
+            &proof.control_volume,
+        )
+        .is_ok());
+        assert!(validate_docker_binding_values(
+            &proof,
+            "different-compose-project",
+            &proof.source_root,
+            &proof.control_volume,
+        )
+        .is_err());
+        assert!(validate_docker_binding_values(
+            &proof,
+            &proof.compose_project,
+            "D:/other-source",
+            &proof.control_volume,
+        )
+        .is_err());
+        assert!(validate_docker_binding_values(
+            &proof,
+            &proof.compose_project,
+            &proof.source_root,
+            "different-control-volume",
+        )
+        .is_err());
     }
 
     #[test]
@@ -2020,32 +3523,6 @@ mod tests {
         assert!(validate_compiled_target(&input, build).is_err());
     }
 
-    fn owner_fixture(state: &str, child_status: &str) -> Value {
-        serde_json::json!({
-            "schema_version": "runtime_service_owner.v1",
-            "owner_token": "11111111-1111-4111-8111-111111111111",
-            "process_start_token": "22222222-2222-4222-8222-222222222222",
-            "pid": 3241,
-            "host": "fullmag-test-host",
-            "target_id": "docker-all",
-            "protocol": "stdin-v1",
-            "state": state,
-            "acquired_at": "2026-10-19T10:00:00Z",
-            "heartbeat_at": "2026-10-19T10:00:01Z",
-            "control_address": "127.0.0.1:43123",
-            "build_commit": "6".repeat(40),
-            "build_snapshot": "7".repeat(64),
-            "compute_pool_id": "compute-pool",
-            "preparation_pool_id": "preparation-pool",
-            "compute_pool_generation": 7,
-            "preparation_pool_generation": 8,
-            "children": [
-                {"role": "compute", "pid": 3250, "status": child_status},
-                {"role": "preparation", "pid": 3251, "status": child_status},
-            ],
-        })
-    }
-
     fn process_receipt_fixture(owner: Option<Value>) -> Value {
         let mut receipt = serde_json::json!({
             "schema": "fullmag.docker-process-tree.v1",
@@ -2096,6 +3573,65 @@ mod tests {
             false,
         )
         .is_err());
+    }
+
+    #[test]
+    fn api_start_failure_requires_exact_api_error_and_drained_terminal_state() {
+        let mut process_receipt = process_receipt_fixture(None);
+        process_receipt["error"] = json!("API binding did not become ready: API loopback probe failed");
+        let failed_owner = owner_fixture("failed", "exited_failure");
+        let process_sha = "a".repeat(64);
+        let mut probe = serde_json::json!({
+            "schema": "fullmag.docker-native-start-failure-stop-probe.v1",
+            "failure_mode": API_START_FAILURE_MODE,
+            "process_receipt_sha256": process_sha,
+            "process_receipt": process_receipt,
+            "failed_owner_sha256": "b".repeat(64),
+            "failed_owner": failed_owner,
+            "api_pid_exists": false,
+            "owner_pid_exists": false,
+            "child_pids_exist": false,
+            "native_processes_live": false,
+            "startup_enabled": null,
+            "legacy_activation_marker_exists": false,
+            "active_lease_count": 0,
+        });
+        assert!(validate_native_process_receipt_mode(
+            probe.get("process_receipt").unwrap(), false, true
+        )
+        .is_ok());
+        assert!(validate_native_failure_probe_mode(
+            &probe,
+            &process_sha,
+            probe.get("process_receipt").unwrap(),
+            false,
+            true,
+        )
+        .is_ok());
+
+        probe["process_receipt"]["error"] = json!(
+            "private accepted-run reattach must succeed before API startup"
+        );
+        assert!(validate_native_process_receipt_mode(
+            probe.get("process_receipt").unwrap(), false, true
+        )
+        .is_err());
+
+        probe["process_receipt"]["error"] = json!(
+            "API binding did not become ready: API loopback probe failed"
+        );
+        probe["failed_owner"]["children"][0]["status"] = json!("running");
+        assert!(validate_native_failure_probe_mode(
+            &probe,
+            &process_sha,
+            probe.get("process_receipt").unwrap(),
+            false,
+            true,
+        )
+        .is_err());
+        probe["failed_owner"]["children"][0]["status"] = json!("exited_failure");
+        probe["reservation_states"] = json!(["unknown"]);
+        assert!(require_all_released(&probe, "reservation_states").is_err());
     }
 
     #[test]

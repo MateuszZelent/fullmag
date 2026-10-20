@@ -55,6 +55,21 @@ def ready_owner(*, compute_status: str = "running") -> dict[str, object]:
     return value
 
 
+def api_start_failure_probe(**changes: object) -> dict[str, object]:
+    document = probe(
+        process_receipt={
+            **probe()["process_receipt"],
+            "error": "API binding did not become ready: API loopback probe failed",
+        },
+        failed_owner=owner(compute_status="exited_failure"),
+        owner_pid_exists=False,
+        child_pids_exist=False,
+        failure_mode=stop.API_START_FAILURE_MODE,
+    )
+    document.update(changes)
+    return document
+
+
 def probe(**changes: object) -> dict[str, object]:
     receipt = {
         "schema": "fullmag.docker-process-tree.v1",
@@ -65,9 +80,9 @@ def probe(**changes: object) -> dict[str, object]:
     }
     document = {
         "schema": stop.NATIVE_FAILURE_PROBE_SCHEMA,
-        "process_receipt_sha256": "r" * 64,
+        "process_receipt_sha256": "a" * 64,
         "process_receipt": receipt,
-        "failed_owner_sha256": "o" * 64,
+        "failed_owner_sha256": "b" * 64,
         "failed_owner": owner(),
         "api_pid_exists": False,
         "native_processes_live": False,
@@ -93,9 +108,9 @@ def after_ready_probe(**changes: object) -> dict[str, object]:
     failed = owner(compute_status="exited_failure")
     document = {
         "schema": stop.NATIVE_AFTER_READY_FAILURE_PROBE_SCHEMA,
-        "process_receipt_sha256": "r" * 64,
+        "process_receipt_sha256": "a" * 64,
         "process_receipt": receipt,
-        "failed_owner_sha256": "o" * 64,
+        "failed_owner_sha256": "b" * 64,
         "failed_owner": failed,
         "api_pid_exists": False,
         "owner_pid_exists": False,
@@ -125,28 +140,86 @@ class NativeFailedStopTests(unittest.TestCase):
         exec(compile(ast.fix_missing_locations(module), "<native-process-probe>", "exec"), namespace)
         return namespace["native_processes_live"]
 
+    def test_accepts_api_start_failure_receipt_with_failed_compute_child(self):
+        value = stop._validate_native_failure_probe(
+            api_start_failure_probe(), "a" * 64, api_start_failure=True
+        )
+        self.assertEqual(value["failed_owner"]["children"][0]["status"], "exited_failure")
+
+    def test_rejects_stderr_only_as_api_start_failure(self):
+        document = api_start_failure_probe(
+            process_receipt={
+                **api_start_failure_probe()["process_receipt"],
+                "error": "private accepted-run reattach must succeed before API startup",
+            }
+        )
+        with self.assertRaisesRegex(stop.BuildControlError, "API binding"):
+            stop._validate_native_failure_probe(document, "a" * 64, api_start_failure=True)
+
+    def test_api_start_failure_accepts_only_terminal_child_statuses(self):
+        for status in ("exited_success", "exited_failure"):
+            with self.subTest(status=status):
+                document = api_start_failure_probe(
+                    failed_owner=owner(compute_status=status)
+                )
+                stop._validate_native_failure_probe(
+                    document, "a" * 64, api_start_failure=True
+                )
+        for status in ("running", "unknown"):
+            with self.subTest(status=status):
+                document = api_start_failure_probe(
+                    failed_owner=owner(compute_status=status)
+                )
+                with self.assertRaises(stop.BuildControlError):
+                    stop._validate_native_failure_probe(
+                        document, "a" * 64, api_start_failure=True
+                    )
+
+    def test_pre_stop_cas_detects_owner_drift(self):
+        first = api_start_failure_probe()
+        changed = api_start_failure_probe(
+            failed_owner={**first["failed_owner"], "owner_token": "other-owner"},
+            failed_owner_sha256="d" * 64,
+        )
+        self.assertNotEqual(stop._native_failure_probe_cas(first), stop._native_failure_probe_cas(changed))
+
+    def test_api_start_failure_blocks_unknown_process_and_resource_state(self):
+        for changes in (
+            {"owner_pid_exists": True},
+            {"child_pids_exist": True},
+            {"reservation_states": ["unknown"]},
+            {"lease_states": ["unknown"]},
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaises(stop.BuildControlError):
+                    stop._validate_native_failure_probe(
+                        api_start_failure_probe(**changes),
+                        "a" * 64,
+                        api_start_failure=True,
+                    )
+
     def test_accepts_terminal_native_owner_with_drained_children(self):
         value = stop._validate_native_failure_probe(
-            probe(), "r" * 64
+            probe(), "a" * 64
         )
         self.assertEqual(value["failed_owner"]["state"], "failed")
 
     def test_rejects_failed_child_without_rewriting_evidence(self):
         with self.assertRaises(stop.BuildControlError):
             stop._validate_native_failure_probe(
-                probe(failed_owner=owner(compute_status="exited_failure")), "r" * 64
+                probe(failed_owner=owner(compute_status="exited_failure")), "a" * 64
             )
 
     def test_rejects_live_child(self):
         with self.assertRaises(stop.BuildControlError):
             stop._validate_native_failure_probe(
-                probe(failed_owner=owner(compute_status="running")), "r" * 64
+                probe(failed_owner=owner(compute_status="running")), "a" * 64
             )
 
     def test_rejects_active_lease_without_touching_history(self):
         document = probe(lease_states=["released", "active"])
         with self.assertRaises(stop.BuildControlError):
-            stop._validate_native_failure_probe(document, "r" * 64)
+            stop._validate_native_failure_probe(document, "a" * 64)
 
     def test_rejects_receipt_that_can_still_drain_an_owner(self):
         document = probe(
@@ -156,7 +229,7 @@ class NativeFailedStopTests(unittest.TestCase):
             }
         )
         with self.assertRaises(stop.BuildControlError):
-            stop._validate_native_failure_probe(document, "r" * 64)
+            stop._validate_native_failure_probe(document, "a" * 64)
 
     def test_rejects_digest_mismatch(self):
         with self.assertRaises(stop.BuildControlError):
@@ -171,7 +244,7 @@ class NativeFailedStopTests(unittest.TestCase):
                     "api_pid": value,
                 }
                 with self.assertRaisesRegex(stop.BuildControlError, "API pid"):
-                    stop._validate_native_failure_probe(document, "r" * 64)
+                    stop._validate_native_failure_probe(document, "a" * 64)
 
         document = probe()
         document["process_receipt"] = {
@@ -179,11 +252,11 @@ class NativeFailedStopTests(unittest.TestCase):
             if key != "api_pid"
         }
         with self.assertRaisesRegex(stop.BuildControlError, "API pid"):
-            stop._validate_native_failure_probe(document, "r" * 64)
+            stop._validate_native_failure_probe(document, "a" * 64)
 
     def test_accepts_after_ready_failure_with_failed_compute_child(self):
         value = stop._validate_native_after_ready_failure_probe(
-            after_ready_probe(), "r" * 64
+            after_ready_probe(), "a" * 64
         )
         self.assertEqual(value["failed_owner"]["state"], "failed")
         self.assertEqual(value["ready_owner"]["state"], "ready")
@@ -192,7 +265,7 @@ class NativeFailedStopTests(unittest.TestCase):
         altered = after_ready_probe()
         altered["failed_owner"] = {**altered["failed_owner"], "owner_token": "other"}
         with self.assertRaisesRegex(stop.BuildControlError, "differs from retained ready"):
-            stop._validate_native_after_ready_failure_probe(altered, "r" * 64)
+            stop._validate_native_after_ready_failure_probe(altered, "a" * 64)
 
     def test_after_ready_child_identity_is_pinned(self):
         altered = after_ready_probe()
@@ -205,18 +278,18 @@ class NativeFailedStopTests(unittest.TestCase):
             ],
         }
         with self.assertRaisesRegex(stop.BuildControlError, "differs from retained ready"):
-            stop._validate_native_after_ready_failure_probe(altered, "r" * 64)
+            stop._validate_native_after_ready_failure_probe(altered, "a" * 64)
 
     def test_after_ready_rejects_live_native_child(self):
         with self.assertRaises(stop.BuildControlError):
             stop._validate_native_after_ready_failure_probe(
-                after_ready_probe(child_pids_exist=True), "r" * 64
+                after_ready_probe(child_pids_exist=True), "a" * 64
             )
 
     def test_after_ready_rejects_live_native_worker(self):
         with self.assertRaises(stop.BuildControlError):
             stop._validate_native_after_ready_failure_probe(
-                after_ready_probe(native_processes_live=True), "r" * 64
+                after_ready_probe(native_processes_live=True), "a" * 64
             )
 
     def test_after_ready_requires_positive_api_pid(self):
@@ -228,7 +301,7 @@ class NativeFailedStopTests(unittest.TestCase):
                     "api_pid": value,
                 }
                 with self.assertRaisesRegex(stop.BuildControlError, "API pid"):
-                    stop._validate_native_after_ready_failure_probe(document, "r" * 64)
+                    stop._validate_native_after_ready_failure_probe(document, "a" * 64)
 
         document = after_ready_probe()
         document["process_receipt"] = {
@@ -236,18 +309,18 @@ class NativeFailedStopTests(unittest.TestCase):
             if key != "api_pid"
         }
         with self.assertRaisesRegex(stop.BuildControlError, "API pid"):
-            stop._validate_native_after_ready_failure_probe(document, "r" * 64)
+            stop._validate_native_after_ready_failure_probe(document, "a" * 64)
 
     def test_after_ready_rejects_active_host_ledger(self):
         with self.assertRaisesRegex(stop.BuildControlError, "host ledger"):
             stop._validate_native_after_ready_failure_probe(
-                after_ready_probe(reservation_states=["active"]), "r" * 64
+                after_ready_probe(reservation_states=["active"]), "a" * 64
             )
 
     def test_after_ready_requires_integer_zero_lease_count(self):
         with self.assertRaisesRegex(stop.BuildControlError, "active durable resource lease"):
             stop._validate_native_after_ready_failure_probe(
-                after_ready_probe(active_lease_count=False), "r" * 64
+                after_ready_probe(active_lease_count=False), "a" * 64
             )
 
     def test_after_ready_requires_retained_ready_owner(self):
@@ -257,7 +330,7 @@ class NativeFailedStopTests(unittest.TestCase):
             if key != "service_owner"
         }
         with self.assertRaises(stop.BuildControlError):
-            stop._validate_native_after_ready_failure_probe(document, "r" * 64)
+            stop._validate_native_after_ready_failure_probe(document, "a" * 64)
 
     def test_probe_uses_canonical_receipt_and_scans_both_lease_roots(self):
         script = stop._native_failure_probe_script()
@@ -268,6 +341,9 @@ class NativeFailedStopTests(unittest.TestCase):
         self.assertIn("OWNER.json", script)
         self.assertIn("NATIVE_AFTER_READY_FAILURE_PROBE_SCHEMA", stop.__dict__)
         self.assertIn("owner_pid_exists", script)
+        self.assertIn("API_START_FAILURE_ERROR_PREFIX", script)
+        self.assertIn("failure_mode", script)
+        self.assertNotIn("FULLMAG_ACCEPTED_REATTACH_REQUEST", script)
         self.assertIn("package_root=pathlib.Path('/opt/fullmag/package')", script)
         self.assertIn("relative=pathlib.Path(executable).relative_to(package_root)", script)
         self.assertIn("executable_name == 'fullmag'", script)

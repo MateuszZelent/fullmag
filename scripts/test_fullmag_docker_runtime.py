@@ -1136,6 +1136,539 @@ class DockerRuntimeContract(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    def test_accepted_reattach_immutable_publication_never_overwrites_competing_writer(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        service = self.load_service()
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "immutable.json"
+            barrier = Barrier(2)
+            values = [b'{"writer":"first"}\n', b'{"writer":"second"}\n']
+
+            def publish(raw):
+                barrier.wait(timeout=5)
+                try:
+                    return service._publish_accepted_reattach_raw(path, raw, "test immutable record")
+                except service.RuntimeServiceError:
+                    return None
+
+            with ThreadPoolExecutor(max_workers=2) as workers:
+                futures = [workers.submit(publish, raw) for raw in values]
+                results = [future.result(timeout=10) for future in futures]
+            self.assertEqual(sum(value is not None for value in results), 1)
+            retained = path.read_bytes()
+            self.assertIn(retained, values)
+            self.assertEqual(
+                service._publish_accepted_reattach_raw(path, retained, "test immutable record"),
+                hashlib.sha256(retained).hexdigest(),
+            )
+            with self.assertRaises(service.RuntimeServiceError):
+                service._publish_accepted_reattach_raw(path, b"different", "test immutable record")
+            self.assertEqual(path.read_bytes(), retained)
+
+    def test_accepted_reattach_ack_binds_raw_request_and_successor_generation(self):
+        service = self.load_service()
+        request = {
+            "schema": service.ACCEPTED_REATTACH_REQUEST_SCHEMA,
+            "run_id": "run-1",
+            "project_id": "project-1",
+            "source_request_id": "request-1",
+            "source_sha256": "a" * 64,
+            "startup_provenance_sha256": "b" * 64,
+            "config_sha256": "c" * 64,
+            "proof_path": "accepted-run-reattach/proof/proof.json",
+            "proof_sha256": "d" * 64,
+        }
+        proof = {
+            "activation_attempt": "e" * 32,
+            "reconciliation_attempt": "f" * 32,
+            "logical_session_id": "session-1",
+            "session_epoch": 7,
+        }
+        api_id = "11111111-1111-4111-8111-111111111111"
+        base_ack = {
+            "schema": service.ACCEPTED_REATTACH_ACK_SCHEMA,
+            "state": "consumed",
+            "request_sha256": "1" * 64,
+            "proof_sha256": request["proof_sha256"],
+            "run_id": request["run_id"],
+            "project_id": request["project_id"],
+            "source_request_id": request["source_request_id"],
+            "source_sha256": request["source_sha256"],
+            "config_sha256": request["config_sha256"],
+            "activation_attempt": proof["activation_attempt"],
+            "reconciliation_attempt": proof["reconciliation_attempt"],
+            "logical_session_id": proof["logical_session_id"],
+            "session_epoch": proof["session_epoch"],
+            "api_instance_id": api_id,
+            "previous_ack_sha256": "2" * 64,
+        }
+        for outcome in (
+            service.ACCEPTED_REATTACH_INITIAL_MODE,
+            service.ACCEPTED_REATTACH_SUCCESSOR_MODE,
+        ):
+            ack = dict(base_ack, restore_mode=outcome)
+            raw = (json.dumps(ack, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            observed = service._validate_accepted_reattach_ack(
+                request,
+                proof,
+                raw,
+                request_sha256=ack["request_sha256"],
+                expected_previous_ack_sha256=ack["previous_ack_sha256"],
+                expected_restore_mode=None,
+                expected_api_instance_id=api_id,
+            )
+            self.assertEqual(observed["restore_mode"], outcome)
+            self.assertEqual(observed["api_instance_id"], api_id)
+
+            for field, replacement in (
+                ("request_sha256", "3" * 64),
+                ("previous_ack_sha256", "4" * 64),
+                ("api_instance_id", "22222222-2222-4222-8222-222222222222"),
+            ):
+                changed = dict(ack, **{field: replacement})
+                changed_raw = (
+                    json.dumps(changed, sort_keys=True, separators=(",", ":")) + "\n"
+                ).encode()
+                with self.assertRaises(service.RuntimeServiceError):
+                    service._validate_accepted_reattach_ack(
+                        request,
+                        proof,
+                        changed_raw,
+                        request_sha256=ack["request_sha256"],
+                        expected_previous_ack_sha256=ack["previous_ack_sha256"],
+                        expected_restore_mode=None,
+                        expected_api_instance_id=api_id,
+                    )
+
+        invalid_mode = dict(base_ack, restore_mode=service.ACCEPTED_REATTACH_SUCCESSOR_INPUT_MODE)
+        with self.assertRaises(service.RuntimeServiceError):
+            service._validate_accepted_reattach_ack(
+                request,
+                proof,
+                (json.dumps(invalid_mode, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+                request_sha256=invalid_mode["request_sha256"],
+                expected_previous_ack_sha256=invalid_mode["previous_ack_sha256"],
+                expected_restore_mode=None,
+                expected_api_instance_id=api_id,
+            )
+
+        preflight = {
+            "request_sha256": base_ack["request_sha256"],
+            "proof_sha256": request["proof_sha256"],
+            "restore_mode": service.ACCEPTED_REATTACH_SUCCESSOR_INPUT_MODE,
+            "previous_ack_relative": "accepted-run-reattach/proof/restore-ack-old.json",
+            "previous_ack_sha256": base_ack["previous_ack_sha256"],
+            "previous_drain_relative": "accepted-run-reattach/proof/successor-drain-old.json",
+            "previous_drain_sha256": "3" * 64,
+        }
+        service._accepted_reattach_preflight_shape(
+            {service.ACCEPTED_REATTACH_DIGEST_ENV: base_ack["request_sha256"]},
+            request,
+            preflight,
+        )
+        with self.assertRaises(service.RuntimeServiceError):
+            service._accepted_reattach_preflight_shape(
+                {service.ACCEPTED_REATTACH_DIGEST_ENV: base_ack["request_sha256"]},
+                request,
+                dict(preflight, restore_mode=service.ACCEPTED_REATTACH_SUCCESSOR_MODE),
+            )
+        with self.assertRaises(service.RuntimeServiceError):
+            service._accepted_reattach_preflight_shape(
+                {service.ACCEPTED_REATTACH_DIGEST_ENV: base_ack["request_sha256"]},
+                request,
+                dict(preflight, previous_drain_sha256=None),
+            )
+        with tempfile.TemporaryDirectory() as root:
+            paths = service.RuntimePaths(state_root=Path(root))
+            environment = {
+                service.ACCEPTED_REATTACH_DIGEST_ENV: base_ack["request_sha256"],
+                "FULLMAG_RUNTIME_PROVENANCE": "/provenance.json",
+            }
+            with patch.object(
+                service,
+                "_accepted_reattach_documents",
+                return_value=(environment, request, b"{}"),
+            ), patch.object(
+                service,
+                "ACCEPTED_REATTACH_PROVENANCE",
+                Path("/provenance.json"),
+            ), patch.object(
+                service,
+                "_read_json",
+                return_value={
+                    "schema": "fullmag.docker-all-image.v1",
+                    "state": "succeeded",
+                    "commit": "e" * 40,
+                    "source_snapshot_sha256": "f" * 64,
+                },
+            ):
+                with service.accepted_reattach_api_input(paths, preflight=preflight) as (_, stream):
+                    payload = json.load(stream)
+            self.assertEqual(payload["restore_mode"], service.ACCEPTED_REATTACH_SUCCESSOR_INPUT_MODE)
+            self.assertEqual(payload["previous_drain_path"], preflight["previous_drain_relative"])
+            self.assertEqual(payload["previous_drain_sha256"], preflight["previous_drain_sha256"])
+
+    def test_accepted_reattach_runtime_metadata_is_generation_bound(self):
+        service = self.load_service()
+        request = {
+            "run_id": "run-1",
+            "project_id": "project-1",
+            "source_request_id": "request-1",
+            "source_sha256": "a" * 64,
+            "config_sha256": "b" * 64,
+            "proof_sha256": "d" * 64,
+            "proof_path": "accepted-run-reattach/proof/proof.json",
+        }
+        api_id = "33333333-3333-4333-8333-333333333333"
+        base_metadata = {
+            "schema": service.ACCEPTED_REATTACH_RUNTIME_SCHEMA,
+            "request_sha256": "c" * 64,
+            "proof_sha256": "d" * 64,
+            "run_id": request["run_id"],
+            "project_id": request["project_id"],
+            "source_request_id": request["source_request_id"],
+            "source_sha256": request["source_sha256"],
+            "config_sha256": request["config_sha256"],
+            "ack_relative": "accepted-run-reattach/proof/restore-ack-" + api_id + ".json",
+            "ack_sha256": "e" * 64,
+            "api_instance_id": api_id,
+            "previous_ack_sha256": "f" * 64,
+        }
+        for outcome in (
+            service.ACCEPTED_REATTACH_INITIAL_MODE,
+            service.ACCEPTED_REATTACH_SUCCESSOR_MODE,
+        ):
+            metadata = dict(base_metadata, restore_mode=outcome)
+            service._validate_accepted_reattach_runtime_metadata(
+                metadata, request=request, request_sha256=metadata["request_sha256"]
+            )
+            if outcome == service.ACCEPTED_REATTACH_SUCCESSOR_MODE:
+                with self.assertRaises(service.RuntimeServiceError):
+                    service._validate_accepted_reattach_runtime_metadata(
+                        dict(metadata, previous_ack_sha256=None),
+                        request=request,
+                        request_sha256=metadata["request_sha256"],
+                    )
+            with self.assertRaises(service.RuntimeServiceError):
+                service._validate_accepted_reattach_runtime_metadata(
+                    dict(metadata, ack_relative="accepted-run-reattach/proof/other.json"),
+                    request=request,
+                    request_sha256=metadata["request_sha256"],
+                )
+
+        with self.assertRaises(service.RuntimeServiceError):
+            service._validate_accepted_reattach_runtime_metadata(
+                dict(base_metadata, restore_mode=service.ACCEPTED_REATTACH_SUCCESSOR_INPUT_MODE),
+                request=request,
+                request_sha256=base_metadata["request_sha256"],
+            )
+        initial_metadata = dict(
+            base_metadata,
+            restore_mode=service.ACCEPTED_REATTACH_INITIAL_MODE,
+            previous_ack_sha256=None,
+        )
+        service._validate_accepted_reattach_runtime_metadata(
+            initial_metadata, request=request, request_sha256=initial_metadata["request_sha256"]
+        )
+
+    def test_accepted_reattach_held_generations_replay_raw_drains_before_terminal_ack(self):
+        """Exercise three held successors before the native terminal decision.
+
+        This test models only the native ACK boundary: each ACK is supplied as
+        if it came from the Rust restore authority.  Python must carry the
+        predecessor ACK and authenticated raw drain archives across every
+        restart; it must never infer the terminal outcome from the previous
+        metadata itself.
+        """
+        import copy
+        from dataclasses import replace
+
+        service = self.load_service()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            paths = replace(
+                service.RuntimePaths(),
+                state=root,
+                storage=root,
+                runs=root / "runs" / "worktree-test",
+                store=root / "runs" / "worktree-test" / "session-store",
+                state_root=root / ".fullmag",
+                runtime_services=root / "runtime-services",
+                config=root / "runtime.json",
+            )
+            proof_dir = paths.state_root / "accepted-run-reattach" / "proof"
+            proof_dir.mkdir(parents=True)
+            runtime_services = service.runtime_services_root(paths)
+            runtime_services.mkdir(parents=True)
+            process_path = service.process_receipt_path(paths)
+            process_path.parent.mkdir(parents=True)
+
+            api_ids = (
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                "33333333-3333-4333-8333-333333333333",
+                "44444444-4444-4444-8444-444444444444",
+            )
+            owner_ids = (
+                "99999999-9999-4999-8999-999999999999",
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            )
+
+            def owner(generation, state, *, children_state):
+                return {
+                    "schema_version": "runtime_service_owner.v1",
+                    "owner_token": owner_ids[generation],
+                    "process_start_token": (
+                        f"{generation:08d}-0000-4000-8000-000000000000"
+                    ),
+                    "pid": 1200 + generation,
+                    "host": "fullmag-test-host",
+                    "target_id": service.TARGET_ID,
+                    "protocol": "stdin-v1",
+                    "state": state,
+                    "acquired_at": f"2026-10-17T10:00:0{generation}Z",
+                    "heartbeat_at": f"2026-10-17T10:00:1{generation}Z",
+                    "compute_pool_generation": 7 + generation,
+                    "preparation_pool_generation": 8 + generation,
+                    "control_address": "127.0.0.1:43123",
+                    "build_commit": "a" * 40,
+                    "build_snapshot": "b" * 64,
+                    "compute_pool_id": service.COMPUTE_POOL_ID,
+                    "preparation_pool_id": service.PREPARATION_POOL_ID,
+                    "children": [
+                        {"role": "compute", "pid": 1700 + generation,
+                         "status": children_state},
+                        {"role": "preparation", "pid": 1800 + generation,
+                         "status": children_state},
+                    ],
+                }
+
+            def write_initial_terminal_records():
+                terminal = owner(0, "drained", children_state="exited_success")
+                receipt = {
+                    "schema": "fullmag.docker-process-tree.v1",
+                    "state": "drained",
+                    "terminal_service_owner": terminal,
+                }
+                service._atomic_json(
+                    runtime_services / "OWNER.json", terminal,
+                    "test accepted initial terminal owner",
+                )
+                service._atomic_json(
+                    process_path, receipt,
+                    "test accepted initial terminal process receipt",
+                )
+                (proof_dir / "terminal-owner.json").write_bytes(
+                    (runtime_services / "OWNER.json").read_bytes()
+                )
+                (proof_dir / "terminal-process.json").write_bytes(
+                    process_path.read_bytes()
+                )
+
+            write_initial_terminal_records()
+            proof = {
+                "schema": "fullmag.development-accepted-run-reattach-proof.v1",
+                "activation_attempt": "a" * 32,
+                "reconciliation_attempt": "b" * 32,
+                "logical_session_id": "accepted-session-1",
+                "session_epoch": 7,
+                "terminal_owner_record_path":
+                "accepted-run-reattach/proof/terminal-owner.json",
+                "terminal_owner_record_sha256": hashlib.sha256(
+                    (proof_dir / "terminal-owner.json").read_bytes()
+                ).hexdigest(),
+                "terminal_process_record_path":
+                "accepted-run-reattach/proof/terminal-process.json",
+                "terminal_process_record_sha256": hashlib.sha256(
+                    (proof_dir / "terminal-process.json").read_bytes()
+                ).hexdigest(),
+            }
+            proof_path = proof_dir / "proof.json"
+            service._atomic_json(proof_path, proof, "test accepted reattach proof")
+            request = {
+                "schema": service.ACCEPTED_REATTACH_REQUEST_SCHEMA,
+                "run_id": "run-held-generations",
+                "project_id": "project-held-generations",
+                "source_request_id": "request-held-generations",
+                "source_sha256": "c" * 64,
+                "startup_provenance_sha256": "d" * 64,
+                "config_sha256": "e" * 64,
+                "proof_path": "accepted-run-reattach/proof/proof.json",
+                "proof_sha256": hashlib.sha256(proof_path.read_bytes()).hexdigest(),
+            }
+            request_path = proof_dir / "request.json"
+            service._atomic_json(request_path, request, "test accepted reattach request")
+            request_raw = request_path.read_bytes()
+            environment = {
+                service.ACCEPTED_REATTACH_REQUEST_ENV:
+                "accepted-run-reattach/proof/request.json",
+                service.ACCEPTED_REATTACH_DIGEST_ENV:
+                hashlib.sha256(request_raw).hexdigest(),
+            }
+
+            def write_ack(api_id, previous_ack_sha256, restore_mode):
+                ack = {
+                    "schema": service.ACCEPTED_REATTACH_ACK_SCHEMA,
+                    "state": "consumed",
+                    "restore_mode": restore_mode,
+                    "request_sha256": environment[service.ACCEPTED_REATTACH_DIGEST_ENV],
+                    "proof_sha256": request["proof_sha256"],
+                    "run_id": request["run_id"],
+                    "project_id": request["project_id"],
+                    "source_request_id": request["source_request_id"],
+                    "source_sha256": request["source_sha256"],
+                    "config_sha256": request["config_sha256"],
+                    "activation_attempt": proof["activation_attempt"],
+                    "reconciliation_attempt": proof["reconciliation_attempt"],
+                    "logical_session_id": proof["logical_session_id"],
+                    "session_epoch": proof["session_epoch"],
+                    "api_instance_id": api_id,
+                    "previous_ack_sha256": previous_ack_sha256,
+                }
+                relative, path = service._accepted_reattach_record_path(
+                    paths, request, service.ACCEPTED_REATTACH_ACK_PREFIX + api_id + ".json",
+                    "test accepted restore acknowledgement",
+                )
+                service._atomic_json(path, ack, "test accepted restore acknowledgement")
+                return relative, path.read_bytes()
+
+            def write_drained_generation(generation, metadata):
+                ready = owner(generation, "ready", children_state="running")
+                terminal = copy.deepcopy(ready)
+                terminal["state"] = "drained"
+                terminal["children"] = [
+                    {**child, "status": "exited_success"}
+                    for child in ready["children"]
+                ]
+                receipt = {
+                    "schema": "fullmag.docker-process-tree.v1",
+                    "state": "drained",
+                    "service_owner": ready,
+                    "terminal_service_owner": terminal,
+                    "accepted_reattach": dict(metadata),
+                }
+                service._atomic_json(
+                    runtime_services / "OWNER.json", terminal,
+                    "test accepted successor terminal owner",
+                )
+                service._atomic_json(
+                    runtime_services / f"docker-client-{ready['owner_token']}.json",
+                    ready,
+                    "test accepted successor ready owner pin",
+                )
+                service._atomic_json(
+                    process_path, receipt,
+                    "test accepted successor drained process receipt",
+                )
+                drain_sha256 = service.accepted_reattach_record_drain(
+                    paths, runtime=metadata
+                )
+                drain_relative = service._accepted_reattach_record_relative(
+                    request,
+                    service.ACCEPTED_REATTACH_DRAIN_PREFIX
+                    + metadata["api_instance_id"] + ".json",
+                )
+                drain_path = paths.state_root / drain_relative
+                drain = json.loads(drain_path.read_text())
+                self.assertEqual(
+                    hashlib.sha256(drain_path.read_bytes()).hexdigest(), drain_sha256
+                )
+                for path_field, digest_field in (
+                    ("terminal_process_record_path", "terminal_process_record_sha256"),
+                    ("terminal_owner_record_path", "terminal_owner_record_sha256"),
+                    ("ready_owner_record_path", "ready_owner_record_sha256"),
+                ):
+                    archive = paths.state_root / drain[path_field]
+                    self.assertEqual(
+                        hashlib.sha256(archive.read_bytes()).hexdigest(),
+                        drain[digest_field],
+                    )
+                return drain_sha256
+
+            with patch.object(service, "process_environment", return_value=environment):
+                preflight = service.accepted_reattach_preflight(paths)
+                self.assertEqual(
+                    preflight["restore_mode"], service.ACCEPTED_REATTACH_INITIAL_MODE
+                )
+                previous_ack = None
+                previous_drain = None
+                held_metadata = []
+                for generation, api_id in enumerate(api_ids[:3], 1):
+                    mode = service.ACCEPTED_REATTACH_INITIAL_MODE
+                    if generation > 1:
+                        self.assertEqual(
+                            preflight["restore_mode"],
+                            service.ACCEPTED_REATTACH_SUCCESSOR_INPUT_MODE,
+                        )
+                        self.assertEqual(preflight["previous_ack_sha256"], previous_ack)
+                        self.assertEqual(preflight["previous_drain_sha256"], previous_drain)
+                    write_ack(api_id, previous_ack, mode)
+                    metadata = service.accepted_reattach_runtime_ack(
+                        paths,
+                        preflight=preflight,
+                        handle=service.RuntimeHandle(
+                            paths, {}, {}, 8081,
+                            {"api_instance_id": api_id},
+                        ),
+                    )
+                    self.assertEqual(metadata["restore_mode"], mode)
+                    self.assertEqual(metadata["previous_ack_sha256"], previous_ack)
+                    held_metadata.append(metadata)
+                    previous_ack = metadata["ack_sha256"]
+                    previous_drain = write_drained_generation(generation, metadata)
+                    preflight = service.accepted_reattach_preflight(paths)
+
+                self.assertEqual(len(held_metadata), 3)
+                self.assertEqual(
+                    preflight["restore_mode"],
+                    service.ACCEPTED_REATTACH_SUCCESSOR_INPUT_MODE,
+                )
+                self.assertEqual(preflight["previous_ack_sha256"], previous_ack)
+                self.assertEqual(preflight["previous_drain_sha256"], previous_drain)
+
+                final_drain_relative = service._accepted_reattach_record_relative(
+                    request,
+                    service.ACCEPTED_REATTACH_DRAIN_PREFIX + api_ids[2] + ".json",
+                )
+                final_drain = json.loads(
+                    (paths.state_root / final_drain_relative).read_text()
+                )
+                archived_owner = paths.state_root / final_drain[
+                    "terminal_owner_record_path"
+                ]
+                archived_owner_raw = archived_owner.read_bytes()
+                archived_owner.write_bytes(b"tampered successor owner archive")
+                with self.assertRaises(service.RuntimeServiceError):
+                    service.accepted_reattach_preflight(paths)
+                archived_owner.write_bytes(archived_owner_raw)
+                preflight = service.accepted_reattach_preflight(paths)
+
+                terminal_api_id = api_ids[3]
+                write_ack(
+                    terminal_api_id,
+                    previous_ack,
+                    service.ACCEPTED_REATTACH_SUCCESSOR_MODE,
+                )
+                terminal_metadata = service.accepted_reattach_runtime_ack(
+                    paths,
+                    preflight=preflight,
+                    handle=service.RuntimeHandle(
+                        paths, {}, {}, 8081,
+                        {"api_instance_id": terminal_api_id},
+                    ),
+                )
+                self.assertEqual(
+                    terminal_metadata["restore_mode"],
+                    service.ACCEPTED_REATTACH_SUCCESSOR_MODE,
+                )
+                self.assertEqual(
+                    terminal_metadata["previous_ack_sha256"], previous_ack
+                )
+
     def test_process_environment_pins_optional_package_root_without_rewriting_source_root(self):
         service = self.load_service()
         paths = service.RuntimePaths()

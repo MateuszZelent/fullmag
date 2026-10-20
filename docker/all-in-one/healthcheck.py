@@ -35,7 +35,7 @@ MAX_BACKEND_RECEIPT_BYTES = 512 * 1024
 BACKEND_LIVENESS_TIMEOUT_SECONDS = 5.0
 
 
-FRONTEND_RECEIPT_PATH = Path("/state/development/frontend-dev-receipt.json")
+FRONTEND_RECEIPT_PATH = Path("/run/fullmag/frontend-owner/receipt.json")
 FRONTEND_RECEIPT_SCHEMA = "fullmag.docker-frontend-development-receipt.v1"
 FRONTEND_INTERNAL_HOST = "127.0.0.1"
 FRONTEND_INTERNAL_PORT = 8080

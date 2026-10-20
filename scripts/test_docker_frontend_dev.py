@@ -137,6 +137,7 @@ def isolated(module):
         names = {
             "INPUTS_PATH": inputs_path,
             "DEVELOPMENT_ROOT": root,
+            "OWNER_ROOT": root / "frontend-owner",
             "WORKSPACE_ROOT": workspace,
             "FRONTEND_ROOT": root / "cache",
             "PNPM_STORE_ROOT": root / "pnpm-store",
@@ -146,12 +147,15 @@ def isolated(module):
             "TEMP_ROOT": root / "tmp",
             "FREEZE_ROOT": root / "frozen-inputs",
             "FREEZE_PATH": root / "inputs-freeze.json",
-            "RECEIPT_PATH": root / "frontend-dev-receipt.json",
+            "RECEIPT_PATH": root / "frontend-owner" / "receipt.json",
+            "DIAGNOSTIC_RECEIPT_PATH": root / "frontend-dev-receipt.json",
             "LOG_PATH": root / "next.log",
+            "LOG_ROLLBACK_PATH": root / "next.log.rollback",
             "RUNTIME_LOCK_PATH": root / "cache" / ".fullmag-frontend-runtime.lock",
             "SOURCE_CONTAINER_ROOT": source,
         }
         (root / "cache").mkdir(parents=True, exist_ok=True)
+        (root / "frontend-owner").mkdir(parents=True, exist_ok=True)
         runtime_lock = root / "cache" / ".fullmag-frontend-runtime.lock"
         runtime_lock.write_bytes(b"")
         runtime_lock.chmod(0o660)
@@ -388,6 +392,10 @@ class FrontendDevContractTests(TestCase):
 
     def test_frontend_healthcheck_requires_owned_receipt_process_and_tcp(self):
         healthcheck = load_healthcheck_module()
+        self.assertEqual(
+            healthcheck.FRONTEND_RECEIPT_PATH,
+            Path("/run/fullmag/frontend-owner/receipt.json"),
+        )
         with tempfile.TemporaryDirectory(prefix="fullmag-frontend-health-") as raw:
             root = Path(raw)
             proc_root = root / "proc"
@@ -400,7 +408,8 @@ class FrontendDevContractTests(TestCase):
             (process_root / "stat").write_text(
                 f"{pid} (next-server) {' '.join(stat_fields)}\n", encoding="ascii"
             )
-            receipt_path = root / "frontend-dev-receipt.json"
+            receipt_path = root / "frontend-owner" / "receipt.json"
+            receipt_path.parent.mkdir()
             receipt_path.write_text(
                 json.dumps(
                     {
@@ -585,19 +594,147 @@ class FrontendDevContractTests(TestCase):
                     tailer.stop()
                 log_stream.close()
 
-    def test_child_log_is_bounded_and_full_log_blocks_next_start(self):
-        with isolated(self.module) as (root, _workspace, _inputs):
+    @skipIf(os.name == "nt", "log rotation uses Linux directory fsync and flock")
+    def test_child_log_is_bounded_and_full_log_rotates_on_next_start(self):
+        with isolated(self.module) as (_root, _workspace, _inputs):
             overflow = io.StringIO()
             with patch.object(self.module, "MAX_LOG_BYTES", 128), redirect_stdout(overflow):
                 log = self.module._log_stream()
-                result = subprocess.run([sys.executable, "-B", "-c", "import sys;sys.stdout.buffer.write(b'q'*4096)"],
-                                        stdout=log, stderr=subprocess.STDOUT, timeout=5)
+                result = subprocess.run(
+                    [sys.executable, "-B", "-c", "import sys;sys.stdout.buffer.write(b'q'*4096)"],
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    timeout=5,
+                )
                 log.close()
                 self.assertEqual(result.returncode, 0)
-                self.assertEqual(self.module.LOG_PATH.read_bytes(), b'q'*128)
-                self.assertIn('q'*128, overflow.getvalue())
-                with self.assertRaisesRegex(self.module.FrontendDevError, "log budget exhausted"):
-                    self.module._log_stream()
+                self.assertEqual(self.module.LOG_PATH.read_bytes(), b"q" * 128)
+                self.assertIn("q" * 128, overflow.getvalue())
+                runtime_lock = self.module._acquire_runtime_lock()
+                try:
+                    self.module._rotate_log_if_needed(runtime_lock)
+                finally:
+                    self.module._release_runtime_lock(runtime_lock)
+                self.assertEqual(self.module.LOG_ROLLBACK_PATH.read_bytes(), b"q" * 128)
+                self.assertFalse(self.module.LOG_PATH.exists())
+                fresh = self.module._log_stream()
+                fresh.write(b"fresh frontend generation\n")
+                fresh.close()
+                self.assertEqual(
+                    self.module.LOG_PATH.read_bytes(),
+                    b"fresh frontend generation\n",
+                )
+
+    @skipIf(os.name == "nt", "log rotation uses Linux directory fsync and flock")
+    def test_log_rotation_keeps_one_previous_generation(self):
+        with isolated(self.module) as (_root, _workspace, _inputs):
+            with patch.object(self.module, "MAX_LOG_BYTES", 16):
+                first = b"a" * 16
+                second = b"b" * 16
+                self.module.LOG_PATH.write_bytes(first)
+                self.module.LOG_ROLLBACK_PATH.write_bytes(b"old rollback")
+                runtime_lock = self.module._acquire_runtime_lock()
+                try:
+                    self.module._rotate_log_if_needed(runtime_lock)
+                finally:
+                    self.module._release_runtime_lock(runtime_lock)
+                self.assertEqual(self.module.LOG_ROLLBACK_PATH.read_bytes(), first)
+                self.assertFalse(self.module.LOG_PATH.exists())
+                self.module.LOG_PATH.write_bytes(second)
+                runtime_lock = self.module._acquire_runtime_lock()
+                try:
+                    self.module._rotate_log_if_needed(runtime_lock)
+                finally:
+                    self.module._release_runtime_lock(runtime_lock)
+                self.assertEqual(self.module.LOG_ROLLBACK_PATH.read_bytes(), second)
+                self.assertFalse(self.module.LOG_PATH.exists())
+                self.assertFalse(
+                    (self.module.LOG_PATH.parent / "next.log.rollback.1").exists()
+                )
+
+    @skipIf(os.name == "nt", "log rotation uses Linux directory fsync and flock")
+    def test_log_rotation_failure_before_rename_preserves_generations(self):
+        with isolated(self.module) as (_root, _workspace, _inputs):
+            with patch.object(self.module, "MAX_LOG_BYTES", 16):
+                current = b"q" * 16
+                rollback = b"p" * 16
+                self.module.LOG_PATH.write_bytes(current)
+                self.module.LOG_ROLLBACK_PATH.write_bytes(rollback)
+                runtime_lock = self.module._acquire_runtime_lock()
+                try:
+                    with patch.object(
+                        self.module.os,
+                        "replace",
+                        side_effect=OSError("injected before rename"),
+                    ), self.assertRaisesRegex(
+                        self.module.FrontendDevError,
+                        "durable frontend log rotation is unknown",
+                    ):
+                        self.module._rotate_log_if_needed(runtime_lock)
+                finally:
+                    self.module._release_runtime_lock(runtime_lock)
+                self.assertEqual(self.module.LOG_PATH.read_bytes(), current)
+                self.assertEqual(self.module.LOG_ROLLBACK_PATH.read_bytes(), rollback)
+
+    @skipIf(os.name == "nt", "log rotation uses Linux directory fsync and flock")
+    def test_log_rotation_failure_after_rename_keeps_rollback_for_resume(self):
+        with isolated(self.module) as (_root, _workspace, _inputs):
+            with patch.object(self.module, "MAX_LOG_BYTES", 16):
+                current = b"q" * 16
+                self.module.LOG_PATH.write_bytes(current)
+                runtime_lock = self.module._acquire_runtime_lock()
+                try:
+                    with patch.object(
+                        self.module,
+                        "_sync_log_directory",
+                        side_effect=OSError("injected after rename"),
+                    ), self.assertRaisesRegex(
+                        self.module.FrontendDevError,
+                        "durable frontend log rotation is unknown",
+                    ):
+                        self.module._rotate_log_if_needed(runtime_lock)
+                finally:
+                    self.module._release_runtime_lock(runtime_lock)
+                self.assertFalse(self.module.LOG_PATH.exists())
+                self.assertEqual(self.module.LOG_ROLLBACK_PATH.read_bytes(), current)
+                fresh = self.module._log_stream()
+                fresh.write(b"resumed\n")
+                fresh.close()
+                self.assertEqual(
+                    self.module.LOG_PATH.read_bytes(),
+                    b"resumed\n",
+                )
+
+    @skipIf(os.name == "nt", "log rotation uses Linux links, FIFO, and flock")
+    def test_log_rotation_preserves_unsafe_current_and_rollback_paths(self):
+        for role in ("current", "rollback"):
+            for kind in ("symlink", "hardlink", "fifo", "oversized"):
+                with self.subTest(role=role, kind=kind), isolated(self.module) as (root, _, _):
+                    with patch.object(self.module, "MAX_LOG_BYTES", 16):
+                        self.module.LOG_PATH.write_bytes(b"q" * 16)
+                        self.module.LOG_ROLLBACK_PATH.write_bytes(b"p" * 16)
+                        target = self.module.LOG_PATH if role == "current" else self.module.LOG_ROLLBACK_PATH
+                        target.unlink()
+                        protected = root / "keep.txt"
+                        protected.write_bytes(b"keep")
+                        if kind == "symlink":
+                            target.symlink_to(protected)
+                        elif kind == "hardlink":
+                            os.link(protected, target)
+                        elif kind == "fifo":
+                            os.mkfifo(target)
+                        else:
+                            target.write_bytes(b"x" * 17)
+                        lock = self.module._acquire_runtime_lock()
+                        try:
+                            with self.assertRaises(self.module.FrontendDevError):
+                                self.module._rotate_log_if_needed(lock)
+                        finally:
+                            self.module._release_runtime_lock(lock)
+                        self.assertEqual(protected.read_bytes(), b"keep")
+                        other = self.module.LOG_ROLLBACK_PATH if role == "current" else self.module.LOG_PATH
+                        self.assertEqual(other.read_bytes(), b"p" * 16 if role == "current" else b"q" * 16)
+                        self.assertTrue(os.path.lexists(target))
 
     @skipIf(os.name == "nt", "FIFO no-follow regression uses the Linux container filesystem")
     def test_log_tailer_rejects_fifo_without_blocking(self):
@@ -831,6 +968,10 @@ else:
         text = compose.read_text(encoding="utf-8")
         self.assertIn(
             "FULLMAG_WATCHPACK_POLLING_MS: ${FULLMAG_WATCHPACK_POLLING_MS:-5000}",
+            text,
+        )
+        self.assertIn(
+            "/run/fullmag/frontend-owner:rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700",
             text,
         )
 
@@ -1280,6 +1421,53 @@ else:
                 self.module._reject_existing_owner(
                     {"state": "stop-timeout", "pid": os.getpid()}
                 )
+
+    def test_unknown_owner_is_authoritative_only_within_current_container(self):
+        with isolated(self.module) as (_root, _workspace, _inputs):
+            diagnostic = {
+                "schema": self.module.RECEIPT_SCHEMA,
+                "state": "unknown",
+                "generated_files_gate": "next-started-v1",
+            }
+            self.module.DIAGNOSTIC_RECEIPT_PATH.write_text(
+                json.dumps(diagnostic), encoding="utf-8"
+            )
+            self.assertIsNone(self.module._load_receipt())
+            self.assertEqual(self.module._load_diagnostic_receipt()["state"], "unknown")
+            self.module._reject_existing_owner(None)
+            owner = dict(diagnostic, pid=os.getpid())
+            self.module._atomic_json(self.module.RECEIPT_PATH, owner, "owner receipt")
+            with self.assertRaises(self.module.FrontendDevUnknown):
+                self.module._reject_existing_owner(owner)
+
+    def test_new_container_keeps_generated_gate_from_legacy_diagnostic_receipt(self):
+        with isolated(self.module) as (_root, _workspace, _inputs):
+            self.module.DIAGNOSTIC_RECEIPT_PATH.write_text(
+                json.dumps({
+                    "schema": self.module.RECEIPT_SCHEMA,
+                    "state": "unknown",
+                    "generated_files_gate": "next-started-v1",
+                }),
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                self.module._generated_gate(self.module._load_diagnostic_receipt())
+            )
+            self.assertIsNone(self.module._load_receipt())
+
+    def test_publish_receipt_keeps_owner_and_diagnostic_copies(self):
+        with isolated(self.module) as (_root, _workspace, inputs):
+            receipt = self.module._receipt_base(inputs, None)
+            receipt["state"] = "starting"
+            self.module._publish_receipt(receipt)
+            self.assertEqual(
+                json.loads(self.module.RECEIPT_PATH.read_text(encoding="utf-8")),
+                receipt,
+            )
+            self.assertEqual(
+                json.loads(self.module.DIAGNOSTIC_RECEIPT_PATH.read_text(encoding="utf-8")),
+                receipt,
+            )
 
     @skipIf(os.name == "nt", "Linux process identity probing is a container contract")
     def test_terminal_failed_receipt_without_identity_requires_recovery(self):

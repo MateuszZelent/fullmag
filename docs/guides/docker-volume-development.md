@@ -117,7 +117,9 @@ restartu są oddzielone od autoryzacji recovery. Nie powstaje nowy request recov
 nie zmienia się historia i nie jest ponawiane Solve. Zachowywany jest oryginalny
 storage sesji; `fresh_state=true` pozostaje odrzucane.
 Nadzór startu odczytuje receipt PID 1 przez kanoniczne `runtime_service.process_receipt_path(canonical_paths())`, z technicznego wolumenu runtime-control. Potwierdzony `failed_outcome_retained` przerywa oczekiwanie na gotowość; nie czeka na pełny timeout i nie ponawia Solve.
-`just docker-dev-stop-failed <source> <container-id> <image-id> <process-receipt-sha256>` może zatrzymać również nadzorcę po nieudanym starcie native runtime. Obsługuje dwa jawne dowody: pierwotny błąd startu, gdzie oba schedulery muszą zakończyć się poprawnie, oraz błąd po wcześniejszym `READY`, gdzie retained `service_owner` pozostaje wyłącznie pinem tożsamości, a dziecko zakończone błędem jest dopuszczalne po potwierdzeniu jego braku. W obu wariantach wymagane są zakończone API, brak żywych procesów i aktywnych lease’ów oraz zwolnione rezerwacje hosta. Zapisuje dowód przed zatrzymaniem i weryfikuje niezmienionego ownera po nim. Nie odzyskuje GPU, nie zmienia ownera i nie powtarza skryptu. Obserwacja nieznana lub aktywne zasoby blokują tę komendę.
+`just docker-dev-stop-failed <source> <container-id> <image-id> <process-receipt-sha256>` może zatrzymać nadzorcę po potwierdzonej awarii. Pierwotny błąd startu native wymaga poprawnego zakończenia obu schedulerów. Błąd po wcześniejszym `READY` przypina zachowany `service_owner` wyłącznie jako tożsamość. Osobny wariant `api-start-failure` rozpoznaje dokładny prefiks `API binding did not become ready:` w trwałym receipcie procesu, a nie tekst prywatnego stderr; może zachować historycznego ownera `Failed` z terminalnym błędem dziecka. Nie dowodzi, że native runtime nigdy wcześniej nie działał.
+
+Każdy wariant wymaga zakończonego API, braku żywych procesów i aktywnych lease’ów oraz zwolnionych rezerwacji hosta. Bezpośrednio przed zapisem journalu komenda ponownie pobiera dowody i porównuje receipt oraz surowe piny `OWNER`; drift przerywa operację. Po zatrzymaniu weryfikuje niezmienionego ownera. Sam stop nie odzyskuje GPU, nie zmienia ownera i nie powtarza skryptu; dalszy start nadal podlega natywnym bramkom recovery. Obserwacja nieznana lub aktywne zasoby blokują komendę.
 Stara komenda odtwarzania przez hostowy receipt DEV odmawia wykonania.
 
 ### Aktywacja skryptu w już działającym Workspace
@@ -212,6 +214,25 @@ Kopia postępu w konsoli jest diagnostyczna. Rozłączenie stdout (`BrokenPipeEr
 storage Windows. Log w wolumenie kontrolnym i trwałe receipty pozostają wymagane;
 błąd ich zapisu nadal przerywa operację. Zakończenie samego procesu kontrolera
 pozostaje odrębną utratą obserwacji i wymaga rozstrzygnięcia stanu.
+
+### Browser QA istniejącej grupy
+
+Po uruchomieniu zdrowej grupy można wykonać kontrolę Home, sesji i WebGL przez
+obraz Playwright przypięty do digestu:
+
+```powershell
+just docker-dev-browser-qa "$source" 3197
+```
+
+Kontrola wymaga istniejącego control volume, dokładnie jednej zdrowej pary
+`backend`/`frontend`, zgodnych receiptów źródła i portu oraz przypiętego
+frontend state volume. Nie tworzy brakującego control volume, nie naprawia
+named volume i nie restartuje usług. Domyślny limit pracy przeglądarki wynosi
+180 sekund, a osobny limit pobrania brakującego obrazu wynosi 1800 sekund;
+parametry `timeout` i `pull_timeout` są ostatnimi argumentami pozycyjnymi
+recepty, po `browser_image`. Nieudane lub
+niejednoznaczne kontrole kończą się zachowaniem zasobów i wymagają ręcznego
+przeglądu receiptu operacji.
 
 ## Granica zapisu i retencja
 

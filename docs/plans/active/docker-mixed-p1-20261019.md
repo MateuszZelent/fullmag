@@ -464,3 +464,35 @@ Review nie ma już Required/P1 w nowych defaults/setup. Istniejące ograniczenie
 apostrofów w jawnych argumentach ścisłej powłoki pozostaje P2. NOT VERIFIED:
 aktualny live start API po bounded retry, aktywacja nowego skrótu, exact rings
 i operator/parity CPU/GPU. Nie usuwano cache, wolumenów ani wyników.
+
+## Checkpoint 20.10.2026 — ponowne restarty odtworzonego modelu
+
+- PR #205 scalony na remote `master` jako
+  `bb50223a30562ce9d6f85d0ee410760d34f1e038`. Worktree zadania jest na tej bazie.
+  Lokalny główny `master` pozostał na `759c1e66799c0c8b28c4c8974ef38a7f676bb0bd`:
+  fast-forward blokują cudze zmiany `justfile`; nie wykonano stash/reset.
+- Poprawka restartów rozdziela historyczny dowód pierwszej awarii od kolejnych
+  poprawnie zamkniętych generacji API. Natywny ACK jest przypięty do instancji,
+  a drain zachowuje surowe archiwa procesu i obu stanów ownera. Publikacja
+  jest create-only, z identycznym replayem; konflikt nie nadpisuje dowodu.
+- Interpreted checks w tej samej grupie Compose: 117 przypadków, 3 pominięte,
+  wynik OK. Receipt w control volume:
+  `verification/interpreted-attempts/bceeee3b00d245749f1f969441f80006.json`.
+  Test obejmuje trzy kolejne generacje held, terminalny ACK, zmianę surowego
+  archiwum i rzeczywisty wyścig dwóch writerów. Symuluje wynik ACK; nie dowodzi
+  natywnej decyzji katalogu, wykonania solvera ani restartu żywego backendu.
+- Audyt starego runu `fullmag-master` wykazał brak admission, próby workera,
+  lease i rezerwacji hosta. Istniejący cancellation intent nadal wymaga
+  kanonicznej projekcji do katalogu. Nie utworzono fałszywego WorkerNoSpawn,
+  nie zmieniono schematu shared ledgera i nie zwolniono obcych zasobów.
+- Build zależności nadal działa w istniejącej próbie recreate; przy tym
+  checkpointcie MFEM/CUDA osiągnął 254/269. Nie uruchomiono drugiego buildu,
+  nie usunięto cache, wolumenów ani wyników. Bieżący build, natywne testy CI,
+  restart API, browser/WebGL, exact rings, kolejne skrypty, HMR i retencja
+  pozostają osobnymi, niedokończonymi bramkami pełnego zadania.
+
+- Review natywne: każda generacja ponownie sprawdza bieżący projekt Compose,
+  źródła i control volume; starsze regresje zostały zachowane. Parser Rust
+  w helperze tej grupy PASS, receipt
+  `verification/rust-parse-attempts/8423f4eebfb446ceafb3044798f61b13.json`.
+  To dowód składni, bez lokalnego Cargo i bez kompilacji testów jednostkowych.

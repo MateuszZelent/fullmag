@@ -345,6 +345,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::reaped_child_receipt_survives_unacknowledged_final_heartbeat -- --exact
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_supervisor::tests::host_bound_pre_spawn_retries_writer_busy_without_re_admission -- --exact
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler scheduler_writer_busy_tests
+          cargo test -p fullmag-runtime-control --lib worker_inbox::tests
           cargo test -p fullmag-api --bin fullmag-runtime-service orphan_teardown_
           cargo test -p fullmag-runtime-control --lib claim::host_binding_tests::fresh_v2_host_claim_receives_the_canonical_runtime_generation_binding -- --exact
           cargo test -p fullmag-runner --lib fem_gpu_execution_receipt_contract_tests
@@ -783,6 +784,7 @@ jobs:
       - name: Verify Docker storage probes and runtime lifecycle contracts
         run: |
           python -B scripts/test_fullmag_docker_runtime.py -v
+          python -B scripts/test_docker_backend_dev.py -v
           python -B scripts/test_docker_container_runtime_recovery.py -v
           python -B scripts/test_docker_volume_container_recovery.py -v
           python -B scripts/test_docker_volume_dev_runtime_state.py -v
@@ -800,6 +802,8 @@ jobs:
           python -B scripts/test_docker_script_output_source.py -v
           python -B scripts/test_docker_volume_idle_stop.py -v
           python -B scripts/test_docker_dev_defaults.py -v
+          python -B scripts/test_docker_dev_recreate.py -v
+          python -B scripts/test_docker_dev_browser_qa.py -v
           python -B scripts/test_docker_volume_receipts.py -v
           python -B scripts/test_docker_volume_checks.py -v
           python -B scripts/test_docker_accepted_reattach.py -v

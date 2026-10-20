@@ -9,6 +9,9 @@ SHELL := bash
 
 FULLMAG_STORAGE_RESOLVER ?= scripts/fullmag_storage.py
 FULLMAG_CARGO_TARGET_DIR ?=
+# The direct backend may set this private value to the already-owned package
+# candidate. Manual/release Make invocations retain the repo-local default.
+FULLMAG_INTERNAL_INSTALL_ROOT ?= .fullmag/local
 
 storage-info:
 	@"$${FULLMAG_STORAGE_PYTHON:-python3}" "$(FULLMAG_STORAGE_RESOLVER)" resolve --repo-root "$(CURDIR)" --format json
@@ -122,7 +125,7 @@ install-cli install-cli-dev install-cli-static:
 	else \
 		echo "Direct Compose source reconciliation owns source freshness; skipping managed mtime refresh."; \
 	fi
-	mkdir -p .fullmag/local
+	mkdir -p "$(FULLMAG_INTERNAL_INSTALL_ROOT)"
 	@set -e; \
 	cmake_bin=""; \
 	if [ -n "$${FULLMAG_CMAKE:-}" ] && [ -x "$${FULLMAG_CMAKE:-}" ]; then \
@@ -138,8 +141,8 @@ install-cli install-cli-dev install-cli-static:
 	elif command -v nvcc >/dev/null 2>&1; then \
 		nvcc_bin="$$(command -v nvcc)"; \
 	fi; \
-	build_log=".fullmag/local/install-cli-build.log"; \
-	managed_log=".fullmag/local/install-cli-managed-fem-gpu.log"; \
+	build_log="$(FULLMAG_INTERNAL_INSTALL_ROOT)/install-cli-build.log"; \
+	managed_log="$(FULLMAG_INTERNAL_INSTALL_ROOT)/install-cli-managed-fem-gpu.log"; \
 	managed_runtime_bin=".fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin"; \
 	managed_export_timeout="$${FULLMAG_MANAGED_FEM_GPU_EXPORT_TIMEOUT_SEC:-1800}"; \
 	cpu_only="$${FULLMAG_BUILD_CPU_ONLY:-0}"; \
@@ -157,7 +160,7 @@ install-cli install-cli-dev install-cli-static:
 	cargo_target_fstype="$$(findmnt -no FSTYPE -T "$$cargo_target_dir" 2>/dev/null || true)"; \
 	if [ "$$cargo_target_fstype" = "cifs" ]; then echo "Refusing direct CIFS Fullmag Cargo target directory: $$cargo_target_dir" >&2; exit 2; fi; \
 	if [ -z "$${FULLMAG_SOURCE_GIT_COMMIT:-}" ] || [ -z "$${FULLMAG_SOURCE_WORKTREE_STATE:-}" ] || [ -z "$${FULLMAG_SOURCE_SNAPSHOT_SHA256:-}" ]; then \
-		source_identity_file=".fullmag/local/source-identity.json"; mkdir -p "$$(dirname "$$source_identity_file")"; \
+		source_identity_file="$(FULLMAG_INTERNAL_INSTALL_ROOT)/source-identity.json"; mkdir -p "$$(dirname "$$source_identity_file")"; \
 		python3 scripts/capture_source_snapshot_identity.py --repo-root . --ignore-non-runtime-dirty --output "$$source_identity_file"; \
 		export FULLMAG_SOURCE_GIT_COMMIT="$$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["head_commit_full"])' "$$source_identity_file")"; \
 		export FULLMAG_SOURCE_WORKTREE_STATE="$$(python3 -c 'import json,sys; print("dirty" if json.load(open(sys.argv[1], encoding="utf-8"))["source_snapshot_dirty"] else "clean")' "$$source_identity_file")"; \
@@ -204,7 +207,7 @@ install-cli install-cli-dev install-cli-static:
 			build_mode="cuda-fem-gpu"; \
 		else \
 			echo "Host FEM GPU backend not available; falling back to CUDA-only launcher."; \
-			echo "Probe log: $(PWD)/.fullmag/local/install-cli-build.log"; \
+			echo "Probe log: $(abspath $(FULLMAG_INTERNAL_INSTALL_ROOT)/install-cli-build.log)"; \
 			CARGO_TARGET_DIR="$$cargo_target_dir" CARGO_INCREMENTAL=0 cargo +nightly clean -p fullmag-fem-sys >/dev/null 2>&1 || true; \
 				cargo_cli_api_build "fullmag-cli/cuda fullmag-api/cuda" \
 					FULLMAG_CMAKE="$$cmake_bin" CUDACXX="$$nvcc_bin"; \
@@ -224,7 +227,7 @@ install-cli install-cli-dev install-cli-static:
 							else \
 								echo "Managed FEM GPU host runtime export failed; staying on local CUDA-only launcher."; \
 								echo "If this was a timeout/hang, set FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 or FULLMAG_BUILD_CPU_ONLY=1."; \
-								echo "Managed runtime log: $(PWD)/.fullmag/local/install-cli-managed-fem-gpu.log"; \
+								echo "Managed runtime log: $(abspath $(FULLMAG_INTERNAL_INSTALL_ROOT)/install-cli-managed-fem-gpu.log)"; \
 							fi; \
 						else \
 							if ./scripts/export_fem_gpu_runtime.sh >"$$managed_log" 2>&1; then \
@@ -233,7 +236,7 @@ install-cli install-cli-dev install-cli-static:
 							else \
 								echo "Managed FEM GPU host runtime export failed; staying on local CUDA-only launcher."; \
 								echo "If this was a timeout/hang, set FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 or FULLMAG_BUILD_CPU_ONLY=1."; \
-								echo "Managed runtime log: $(PWD)/.fullmag/local/install-cli-managed-fem-gpu.log"; \
+								echo "Managed runtime log: $(abspath $(FULLMAG_INTERNAL_INSTALL_ROOT)/install-cli-managed-fem-gpu.log)"; \
 							fi; \
 						fi; \
 					else \
@@ -254,13 +257,13 @@ install-cli install-cli-dev install-cli-static:
 	fi; \
 	echo "[backend 3/3] Building native Python core for mesh certification..."; \
 	CARGO_TARGET_DIR="$$cargo_target_dir" CARGO_INCREMENTAL="$$build_incremental" cargo +nightly build --locked -p fullmag-py-core $$cargo_profile_args; \
-	mkdir -p .fullmag/local/lib; \
+	mkdir -p "$(FULLMAG_INTERNAL_INSTALL_ROOT)/lib"; \
 	if [ ! -f "$$cargo_target_profile_dir/lib_fullmag_core.so" ]; then \
 		echo "Native Python core build did not produce lib_fullmag_core.so" >&2; exit 2; \
 	fi; \
-	cp "$$cargo_target_profile_dir/lib_fullmag_core.so" .fullmag/local/_fullmag_core.so.new; \
-	mv -f .fullmag/local/_fullmag_core.so.new .fullmag/local/_fullmag_core.so; \
-	rm -f .fullmag/local/lib/libfullmag_fdm.so* .fullmag/local/lib/libfullmag_fem.so*; \
+	cp "$$cargo_target_profile_dir/lib_fullmag_core.so" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/_fullmag_core.so.new"; \
+	mv -f "$(FULLMAG_INTERNAL_INSTALL_ROOT)/_fullmag_core.so.new" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/_fullmag_core.so"; \
+	rm -f "$(FULLMAG_INTERNAL_INSTALL_ROOT)/lib/"libfullmag_fdm.so* "$(FULLMAG_INTERNAL_INSTALL_ROOT)/lib/"libfullmag_fem.so*; \
 	if [ -n "$${FULLMAG_FDM_NATIVE_BUILD_ROOT:-}" ]; then \
 		fdm_root="$${FULLMAG_FDM_NATIVE_BUILD_ROOT}"; \
 		case "$$fdm_root" in \
@@ -272,7 +275,7 @@ install-cli install-cli-dev install-cli-static:
 		if [ -z "$$fdm_library" ]; then \
 			echo "Configured FULLMAG_FDM_NATIVE_BUILD_ROOT has no regular libfullmag_fdm.so*" >&2; exit 2; \
 		fi; \
-		if ! cp -a "$$fdm_dir"/libfullmag_fdm.so* .fullmag/local/lib/; then \
+		if ! cp -a "$$fdm_dir"/libfullmag_fdm.so* "$(FULLMAG_INTERNAL_INSTALL_ROOT)/lib/"; then \
 			echo "Failed to copy FDM library from FULLMAG_FDM_NATIVE_BUILD_ROOT" >&2; exit 2; \
 		fi; \
 	else \
@@ -280,45 +283,45 @@ install-cli install-cli-dev install-cli-static:
 		if [ -z "$$fdm_dir" ]; then \
 			fdm_dir=$$(find "$$cargo_target_profile_dir" -path '*native-build/backends/fdm/libfullmag_fdm.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
 		fi; \
-		if [ -n "$$fdm_dir" ]; then cp -a "$$fdm_dir"/libfullmag_fdm.so* .fullmag/local/lib/ 2>/dev/null || true; fi; \
+		if [ -n "$$fdm_dir" ]; then cp -a "$$fdm_dir"/libfullmag_fdm.so* "$(FULLMAG_INTERNAL_INSTALL_ROOT)/lib/" 2>/dev/null || true; fi; \
 	fi; \
 	if [ "$$build_mode" = "cuda-fem-gpu" ] || [ "$$build_mode" = "fem-cpu" ]; then \
 		if [ "$$cargo_profile_dir" = "backend-dev" ]; then \
 			fem_snapshot="$${FULLMAG_SOURCE_SNAPSHOT_SHA256:?backend-dev FEM source snapshot is required}"; \
 			fem_dir=$$(python3 scripts/select_managed_fem_library.py --cargo-target "$$cargo_target_dir" --snapshot "$$fem_snapshot" --profile "$$cargo_profile_dir"); \
-			cp -a "$$fem_dir"/libfullmag_fem.so* .fullmag/local/lib/; \
+			cp -a "$$fem_dir"/libfullmag_fem.so* "$(FULLMAG_INTERNAL_INSTALL_ROOT)/lib/"; \
 		elif [ -n "$${FULLMAG_SOURCE_SNAPSHOT_SHA256:-}" ]; then \
 			fem_dir=$$(python3 scripts/select_managed_fem_library.py --cargo-target "$$cargo_target_dir" --snapshot "$${FULLMAG_SOURCE_SNAPSHOT_SHA256}" --profile "$$cargo_profile_dir"); \
-			cp -a "$$fem_dir"/libfullmag_fem.so* .fullmag/local/lib/; \
+			cp -a "$$fem_dir"/libfullmag_fem.so* "$(FULLMAG_INTERNAL_INSTALL_ROOT)/lib/"; \
 		else \
 			fem_dir=$$(find "$$cargo_target_profile_dir/build" -path '*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
 			if [ -z "$$fem_dir" ]; then \
 				fem_dir=$$(find "$$cargo_target_profile_dir" -path '*native-build/backends/fem/libfullmag_fem.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
 			fi; \
-			if [ -n "$$fem_dir" ]; then cp -a "$$fem_dir"/libfullmag_fem.so* .fullmag/local/lib/ 2>/dev/null || true; fi; \
+			if [ -n "$$fem_dir" ]; then cp -a "$$fem_dir"/libfullmag_fem.so* "$(FULLMAG_INTERNAL_INSTALL_ROOT)/lib/" 2>/dev/null || true; fi; \
 		fi; \
 	fi; \
-	printf '%s\n' "$$build_mode" > .fullmag/local/launcher-build-mode
-	@mkdir -p .fullmag/local/bin
-	@cp "$$cargo_target_profile_dir/fullmag" .fullmag/local/bin/fullmag-bin.new
-	@mv -f .fullmag/local/bin/fullmag-bin.new .fullmag/local/bin/fullmag-bin
-	@cp "$$cargo_target_profile_dir/fullmag-api" .fullmag/local/bin/fullmag-api.new
-	@mv -f .fullmag/local/bin/fullmag-api.new .fullmag/local/bin/fullmag-api
-	@cp "$$cargo_target_profile_dir/fullmag-api-accepted-worker" .fullmag/local/bin/fullmag-api-accepted-worker.new
-	@mv -f .fullmag/local/bin/fullmag-api-accepted-worker.new .fullmag/local/bin/fullmag-api-accepted-worker
-	@cp "$$cargo_target_profile_dir/fullmag-api-accepted-supervisor" .fullmag/local/bin/fullmag-api-accepted-supervisor.new
-	@mv -f .fullmag/local/bin/fullmag-api-accepted-supervisor.new .fullmag/local/bin/fullmag-api-accepted-supervisor
+	printf '%s\n' "$$build_mode" > "$(FULLMAG_INTERNAL_INSTALL_ROOT)/launcher-build-mode"
+	@mkdir -p "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin"
+	@cp "$$cargo_target_profile_dir/fullmag" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-bin.new"
+	@mv -f "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-bin.new" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-bin"
+	@cp "$$cargo_target_profile_dir/fullmag-api" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api.new"
+	@mv -f "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api.new" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api"
+	@cp "$$cargo_target_profile_dir/fullmag-api-accepted-worker" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api-accepted-worker.new"
+	@mv -f "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api-accepted-worker.new" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api-accepted-worker"
+	@cp "$$cargo_target_profile_dir/fullmag-api-accepted-supervisor" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api-accepted-supervisor.new"
+	@mv -f "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api-accepted-supervisor.new" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api-accepted-supervisor"
 	@for binary in fullmag-api-accepted-scheduler fullmag-runtime-service fullmag-api-resource-pool fullmag-api-accepted-fem-preparer fullmag-api-accepted-fem-preparation-supervisor fullmag-api-accepted-fem-preparation-scheduler fullmag-api-preparation-resource-pool fullmag-api-preparation-retry; do \
-		cp "$$cargo_target_profile_dir/$$binary" ".fullmag/local/bin/$$binary.new" || exit $$?; \
-		mv -f ".fullmag/local/bin/$$binary.new" ".fullmag/local/bin/$$binary" || exit $$?; \
+		cp "$$cargo_target_profile_dir/$$binary" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/$$binary.new" || exit $$?; \
+		mv -f "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/$$binary.new" "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/$$binary" || exit $$?; \
 	done
 	@if command -v patchelf >/dev/null 2>&1; then \
-		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-bin; \
-		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api; \
-		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api-accepted-worker; \
-		patchelf --set-rpath '$$ORIGIN/../lib' .fullmag/local/bin/fullmag-api-accepted-supervisor; \
+		patchelf --set-rpath '$$ORIGIN/../lib' "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-bin"; \
+		patchelf --set-rpath '$$ORIGIN/../lib' "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api"; \
+		patchelf --set-rpath '$$ORIGIN/../lib' "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api-accepted-worker"; \
+		patchelf --set-rpath '$$ORIGIN/../lib' "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag-api-accepted-supervisor"; \
 		for binary in fullmag-api-accepted-scheduler fullmag-runtime-service fullmag-api-resource-pool fullmag-api-accepted-fem-preparer fullmag-api-accepted-fem-preparation-supervisor fullmag-api-accepted-fem-preparation-scheduler fullmag-api-preparation-resource-pool fullmag-api-preparation-retry; do \
-			patchelf --set-rpath '$$ORIGIN/../lib' ".fullmag/local/bin/$$binary" || exit $$?; \
+			patchelf --set-rpath '$$ORIGIN/../lib' "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/$$binary" || exit $$?; \
 		done; \
 	fi
 		@printf '%s\n' '#!/usr/bin/env bash' \
@@ -382,17 +385,17 @@ install-cli install-cli-dev install-cli-static:
 			'fi' \
 		'export LD_LIBRARY_PATH="$$LOCAL_LD_LIBRARY_PATH"' \
 		'exec "$$SELF_DIR/fullmag-bin" "$$@"' \
-		> .fullmag/local/bin/fullmag
-	@chmod +x .fullmag/local/bin/fullmag
+		> "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag"
+	@chmod +x "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag"
 	@if [ "$(INSTALL_STATIC_WEB)" = "1" ]; then $(MAKE) web-build-static-if-needed; fi
 	@echo ""
 	@echo "Installed repo-local launcher:"
-	@echo "  $(PWD)/.fullmag/local/bin/fullmag"
+	@echo "  $(abspath $(FULLMAG_INTERNAL_INSTALL_ROOT)/bin/fullmag)"
 	@echo "Build mode:"
-	@echo "  $$(cat .fullmag/local/launcher-build-mode)"
+	@echo "  $$(cat $(FULLMAG_INTERNAL_INSTALL_ROOT)/launcher-build-mode)"
 	@echo ""
 	@echo "Add it to PATH for this shell:"
-	@echo "  export PATH=\"$(PWD)/.fullmag/local/bin:\$$PATH\""
+	@echo "  export PATH=\"$(abspath $(FULLMAG_INTERNAL_INSTALL_ROOT)/bin):\$$PATH\""
 
 show-cli-path:
 	@echo "$(PWD)/.fullmag/local/bin/fullmag"

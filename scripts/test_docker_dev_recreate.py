@@ -966,15 +966,15 @@ class DockerDevRecreateContract(unittest.TestCase):
             with self.assertRaisesRegex(docker_dev.DirectDockerError, "source labels"):
                 docker_dev._assert_no_running_fullmag(project, identity)
 
-    def test_up_delegates_selected_arguments_to_volume_route(self):
+    def test_up_delegates_selected_arguments_to_reconciliation_route(self):
         args = types.SimpleNamespace(source_root=Path('/owned/checkout'), port=3197)
-        fake_volume = types.ModuleType('docker_volume_dev')
-        fake_volume.start = Mock()
-        with patch.dict(sys.modules, {'docker_volume_dev': fake_volume}), \
+        fake_up = types.ModuleType('docker_dev_up')
+        fake_up.ensure_up = Mock()
+        with patch.dict(sys.modules, {'docker_dev_up': fake_up}), \
                 patch.object(docker_dev, '_backend_start_inputs') as prepare, \
                 patch.object(runtime, 'start') as legacy_start:
             docker_dev.up(args)
-        fake_volume.start.assert_called_once_with(args)
+        fake_up.ensure_up.assert_called_once_with(args)
         prepare.assert_not_called()
         legacy_start.assert_not_called()
 

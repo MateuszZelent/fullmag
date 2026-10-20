@@ -60,6 +60,12 @@ services:
       FULLMAG_FRONTEND_CONTROL_ROOT: "${FULLMAG_FRONTEND_CONTROL_ROOT:?Resolved frontend control namespace is required}"
       FULLMAG_DEVELOPMENT_INPUTS_PATH: "${FULLMAG_DEVELOPMENT_INPUTS_PATH:?Resolved frontend inputs path is required}"
       FULLMAG_FRONTEND_CACHE_RUNTIME_IMAGE_ID: "${FULLMAG_FRONTEND_CACHE_RUNTIME_IMAGE_ID:?Attested image identity is required}"
+    # The owner receipt is an incarnation-local authority. Cache, frozen
+    # inputs, generated output, and the last diagnostic receipt remain in the
+    # named volume below; this tmpfs disappears when Docker creates a new
+    # frontend container.
+    tmpfs:
+      - "/run/fullmag/frontend-owner:rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
     volumes:
       - type: volume
         source: frontend-development-state

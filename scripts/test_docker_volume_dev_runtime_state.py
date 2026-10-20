@@ -17,6 +17,71 @@ import docker_volume_dev
 
 
 class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
+    @staticmethod
+    def _frontend_owner_service(actual_options):
+        owner = "/run/fullmag/frontend-owner"
+        return {
+            "document": {
+                "services": {
+                    "frontend": {
+                        "environment": {},
+                        "labels": {},
+                        "volumes": [],
+                        "tmpfs": [owner + ":rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"],
+                    }
+                },
+                "volumes": {},
+            },
+            "actual": {
+                "Config": {"Env": [], "Labels": {}},
+                "HostConfig": {
+                    "ReadonlyRootfs": True,
+                    "Privileged": False,
+                    "Tmpfs": {owner: actual_options},
+                },
+                "Mounts": [{"Destination": owner, "Type": "tmpfs", "RW": True}],
+            },
+        }
+
+    def test_retained_frontend_owner_tmpfs_is_exact_and_conflicts_fail_closed(self):
+        fixture = self._frontend_owner_service(
+            "rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
+        )
+        docker_volume_dev._validate_retained_service(
+            fixture["document"], fixture["actual"], "frontend", {}
+        )
+        for tampered in (
+            "ro,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700",
+            "rw,ro,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700",
+            "rw,nosuid,nodev,exec,size=1m,uid=65532,gid=65532,mode=0700",
+            "rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0777",
+        ):
+            with self.subTest(tampered=tampered):
+                changed = self._frontend_owner_service(tampered)
+                with self.assertRaisesRegex(docker_volume_dev.BuildControlError, "tmpfs"):
+                    docker_volume_dev._validate_retained_service(
+                        changed["document"], changed["actual"], "frontend", {}
+                    )
+
+    def test_legacy_frontend_manifest_is_allowed_only_for_recreation(self):
+        fixture = self._frontend_owner_service(
+            "rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
+        )
+        fixture["document"]["services"]["frontend"].pop("tmpfs")
+        fixture["actual"]["HostConfig"].pop("Tmpfs")
+        fixture["actual"]["Mounts"] = []
+        with self.assertRaisesRegex(docker_volume_dev.BuildControlError, "missing.*owner tmpfs"):
+            docker_volume_dev._validate_retained_service(
+                fixture["document"], fixture["actual"], "frontend", {}
+            )
+        docker_volume_dev._validate_retained_service(
+            fixture["document"],
+            fixture["actual"],
+            "frontend",
+            {},
+            allow_legacy_frontend=True,
+        )
+
     def test_actual_process_probe_reads_runtime_control_receipt_and_missing_state(self):
         with tempfile.TemporaryDirectory() as directory:
             control = Path(directory) / "runtime-control"

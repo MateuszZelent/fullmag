@@ -593,6 +593,10 @@ def _validate_stop_journal(
     failure_kind = record.get("failure_kind")
     if failure_kind not in {"native-start-failure", "native-after-ready-failure"}:
         raise _fail("stopped-backend journal has no typed native failure kind")
+    failure_mode = record.get("failure_mode")
+    api_start_failure = failure_mode == "api-start-failure"
+    if failure_mode is not None and (failure_kind != "native-start-failure" or not api_start_failure):
+        raise _fail("stopped-backend journal has an unsupported failure mode")
     if not isinstance(process_receipt_sha256, str) or SHA256_RE.fullmatch(process_receipt_sha256) is None:
         raise _fail("stopped-backend journal has no process receipt digest")
     if probe.get("process_receipt") != process_receipt or probe.get("process_receipt_sha256") != process_receipt_sha256:
@@ -604,7 +608,9 @@ def _validate_stop_journal(
         )
 
         if failure_kind == "native-start-failure":
-            native = _validate_native_failure_probe(probe, process_receipt_sha256)
+            native = _validate_native_failure_probe(
+                probe, process_receipt_sha256, api_start_failure=api_start_failure
+            )
         else:
             native = _validate_native_after_ready_failure_probe(probe, process_receipt_sha256)
     except (ImportError, BuildControlError) as error:
@@ -746,6 +752,12 @@ def _validate_namespace_attestation(
         raise _fail("stopped namespace journal has no typed native failure kind")
     if record.get("failure_kind") != failure_kind:
         raise _fail("stopped namespace failure kind differs from journal")
+    if record.get("failure_mode") != journal.get("failure_mode"):
+        raise _fail("stopped namespace failure mode differs from journal")
+    if (journal.get("failure_mode") is not None
+            and (failure_kind != "native-start-failure"
+                 or journal.get("failure_mode") != "api-start-failure")):
+        raise _fail("stopped namespace journal has an unsupported failure mode")
     probe = journal.get("native_failure_probe")
     if not isinstance(probe, Mapping) or record.get("native_failure_probe") != dict(probe):
         raise _fail("stopped namespace native failure proof differs from journal")

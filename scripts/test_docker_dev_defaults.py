@@ -148,10 +148,12 @@ class DockerDevDefaultsTests(unittest.TestCase):
         backend_id, frontend_id = "b" * 64, "f" * 64
         inspect = {
             backend_id: {
+                "State": {"Running": True, "Health": {"Status": "healthy"}},
                 "HostConfig": {"PortBindings": {}, "NetworkMode": "fullmag-net"},
                 "NetworkSettings": {"Networks": {"fullmag-net": {}}},
             },
             frontend_id: {
+                "State": {"Running": True, "Health": {"Status": "healthy"}},
                 "HostConfig": {
                     "PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3197"}]},
                 },
@@ -172,6 +174,17 @@ class DockerDevDefaultsTests(unittest.TestCase):
 
         with patch("docker_volume_activate._docker_text", side_effect=docker_text):
             defaults._validate_live_network(backend_id, frontend_id, "fullmag-master", 3197)
+        for status in ("starting", "unhealthy"):
+            with self.subTest(frontend_health=status):
+                inspect[frontend_id]["State"]["Health"]["Status"] = status
+                with patch("docker_volume_activate._docker_text", side_effect=docker_text), \
+                        self.assertRaisesRegex(defaults.DiscoveryError, "frontend health is not healthy"):
+                    defaults._validate_live_network(backend_id, frontend_id, "fullmag-master", 3197)
+        inspect[frontend_id]["State"].pop("Health")
+        with patch("docker_volume_activate._docker_text", side_effect=docker_text), \
+                self.assertRaisesRegex(defaults.DiscoveryError, "frontend health is not healthy"):
+            defaults._validate_live_network(backend_id, frontend_id, "fullmag-master", 3197)
+        inspect[frontend_id]["State"]["Health"] = {"Status": "healthy"}
         inspect[frontend_id]["HostConfig"]["PortBindings"]["8080/tcp"][0]["HostIp"] = "0.0.0.0"
         with patch("docker_volume_activate._docker_text", side_effect=docker_text), \
                 self.assertRaisesRegex(defaults.DiscoveryError, "loopback"):

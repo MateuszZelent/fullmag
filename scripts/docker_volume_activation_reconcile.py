@@ -132,8 +132,13 @@ def _validate_native_restart_metadata(
         raise _fail("Unknown activation recovery requires native failed-stop metadata")
     if metadata.get("schema") != "fullmag.docker-native-failed-stop-recreate.v1":
         raise _fail("Native failed-stop metadata schema differs")
-    if metadata.get("failure_kind") not in {"native-start-failure", "native-after-ready-failure"}:
+    failure_kind = metadata.get("failure_kind")
+    if failure_kind not in {"native-start-failure", "native-after-ready-failure"}:
         raise _fail("Native failed-stop metadata has an invalid failure kind")
+    failure_mode = metadata.get("failure_mode")
+    if failure_mode is not None and (failure_kind != "native-start-failure"
+                                     or failure_mode != "api-start-failure"):
+        raise _fail("Native failed-stop metadata has an unsupported failure mode")
     if metadata.get("container_id") != backend_id or metadata.get("image_id") != image_id:
         raise _fail("Native failed-stop metadata is pinned to another backend")
     if metadata.get("claim_pending") is not False:
@@ -298,6 +303,12 @@ def _validate_namespace_attestation(
         raise _fail("Stopped namespace attestation failure kind is invalid")
     if journal.get("failure_kind") != failure_kind:
         raise _fail("Stopped namespace attestation failure kind differs from journal")
+    if attestation.get("failure_mode") != journal.get("failure_mode"):
+        raise _fail("Stopped namespace attestation failure mode differs from journal")
+    failure_mode = journal.get("failure_mode")
+    api_start_failure = failure_mode == "api-start-failure"
+    if failure_mode is not None and (failure_kind != "native-start-failure" or not api_start_failure):
+        raise _fail("Stopped namespace journal has an unsupported failure mode")
     probe = attestation.get("native_failure_probe")
     if not isinstance(probe, Mapping) or probe != journal.get("native_failure_probe"):
         raise _fail("Stopped namespace attestation native proof differs from journal")
@@ -311,7 +322,9 @@ def _validate_namespace_attestation(
         native = (
             _validate_native_after_ready_failure_probe(probe, process_sha256)
             if failure_kind == "native-after-ready-failure"
-            else _validate_native_failure_probe(probe, process_sha256)
+            else _validate_native_failure_probe(
+                probe, process_sha256, api_start_failure=api_start_failure
+            )
         )
     except (ImportError, BuildControlError) as error:
         raise _fail("Stopped namespace attestation native proof is not authoritative") from error
@@ -469,6 +482,8 @@ def publish_stopped_namespace_attestation(
             "native_failure_probe": dict(probe),
             "created_at": time.time(),
         }
+        if journal.get("failure_mode") is not None:
+            attestation["failure_mode"] = journal.get("failure_mode")
         if journal.get("failure_kind") == "native-after-ready-failure":
             attestation["retained_ready_owner"] = journal.get("retained_ready_owner")
         _validate_namespace_attestation(
@@ -1795,6 +1810,8 @@ def reconcile_unknown_activation(
     if hashlib.sha256(journal_raw).hexdigest() != native["journal_sha256"]:
         raise _fail("Native stop journal differs from retained restart metadata")
     journal = _json(journal_raw, "native failed-stop journal")
+    if journal.get("failure_mode") != native.get("failure_mode"):
+        raise _fail("Native stop journal failure mode differs from restart metadata")
     if (journal.get("schema") != "fullmag.stop-failed-admission.v1"
             or journal.get("state") != "stopped-confirmed"
             or journal.get("container_id") != backend_id

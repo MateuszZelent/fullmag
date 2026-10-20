@@ -127,6 +127,14 @@ lub narzędziem diagnostycznym. Start uruchamia dwie stałe usługi; backend wyk
 przed API. Otwórz `http://127.0.0.1:3197/workspace`. Brak `--script` oznacza Home,
 a nie automatyczny wybór dawnej sesji.
 
+Ponowne `just docker-dev` uzgadnia istniejącą grupę przez `ensure_up`.
+Przy zgodnych źródłach, obrazach i konfiguracji wykorzystuje działające usługi
+bez restartu; podany skrypt aktywuje istniejącą ścieżką w tej grupie. Zmiana
+źródeł uruchamia kontrolowany restart, a zatrzymana grupa jest wznawiana na
+podstawie zachowanych receiptów. Niezdrowy backend, nieznany owner lub
+niejednoznaczne zasoby nie są przerywane ani przejmowane; wymagają rozstrzygnięcia
+stanu. Szczegóły uzgadniania opisuje [przewodnik DEV](docker-volume-development.md).
+
 Po uruchomieniu tej grupy skrypt można aktywować bez ręcznego przepisywania
 attemptu i digestu konfiguracji:
 
@@ -183,11 +191,13 @@ docker logs -f <backend-container-id>
 
 Usługi Compose DEV ustawiają Docker `json-file` logging z rotacją `10m × 3`
 na każdy kontener. Frontend zapisuje szczegóły Next w stałym
-`/state/development/next.log` z named volume; plik jest zerowany przy każdym
-nowym starcie frontendu, więc restarty nie dopisują kolejnych kopii. To nie
-ogranicza rozmiaru `next.log` podczas jednej długiej sesji ani archiwów starych
-pakietów backendu. Pełna retencja tych technicznych plików nadal wymaga pracy;
-limit logów Docker nie jest quota dla wolumenów ani BuildKit.
+`/state/development/next.log` z named volume, z limitem 64 MiB. Nadmiar trafia
+do rotowanego logu Docker. Przy następnym starcie, pod blokadą procesu,
+pełny log jest atomowo przenoszony do jednej poprzedniej kopii
+`next.log.rollback`; niepełny log pozostaje do dalszego dopisywania.
+Szczegóły i pozostałe ograniczenia retencji opisuje
+[cykl danych](docker-build-storage-lifecycle.md#4-co-sprzątamy-automatycznie-a-co-pozostaje).
+Limity logów nie są quota dla cache, wolumenów ani BuildKit.
 
 Każdy start sam sprawdza aktualne zamontowane źródła. Bez zmian używa istniejącego
 wyniku; po edycji kompiluje zmienione moduły oraz ich zależnych konsumentów,

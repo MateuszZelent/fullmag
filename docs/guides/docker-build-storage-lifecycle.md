@@ -66,9 +66,10 @@ Git/resolvera; `<run-id>` jest tożsamością uruchomienia, nie kluczem cache.
 | Backend: build v2 | Named volume `fullmag-backend-v2-<24hex>-build` → `/build` | Prywatny trwały cache checkoutu/profilu/toolchaina, w dysku danych Docker Desktop |
 | Cień źródeł backendu | `/build/workspace`; aktualny manifest `/build/.fullmag-live-source/manifest.json` | Stabilny workspace synchronizowany przy starcie. Manifest zastępowany, nie katalog na każdy commit |
 | Rust/CMake | `/build/workspace/.fullmag-build/cargo-targets/direct/<cargo-profile>`; osobne `fullmag-fdm-sys-stable/out/native-build` i `fullmag-fem-sys-stable/out/native-build` pod `build/`; `CARGO_HOME=/build/cargo` | Zachowany cache. W komendach Cargo `/workspace` jest aliasem workspace; nie osobną kopią na hoście |
-| Zainstalowany wynik kompilacji | `/build/workspace/.fullmag/local` | Techniczne wyjście Make; odrębne od zweryfikowanego pakietu runtime |
+| Zainstalowany wynik kompilacji daily DEV | Kandydat w `.development/candidates/` pod `/opt/fullmag/package`, wybrany przez kontroler | Make zapisuje bezpośrednio do named package volume; brak dodatkowej pełnej kopii w `/build/workspace/.fullmag/local`. Istniejący legacy stage pozostaje zachowany |
 | Backend: pakiet v2 | Named volume `fullmag-backend-v2-<24hex>-package` → `/opt/fullmag/package` | Bieżący zweryfikowany pakiet, kontrola publikacji i rollback; bez transferu przez Windows |
-| Frontend: zależności, Next i HMR state | Named volume `<compose-project>-fullmag-frontend-dev-v2-<key>` → `/state/development`; control namespace → `/opt/fullmag/control` | Named volume grupy Compose dla pnpm, `node_modules`, Next cache, logów i receiptów; brak zapisu do Windows storage w ścieżce v2 (**NOT VERIFIED** runtime) |
+| Frontend: zależności, Next i HMR state | Named volume `<compose-project>-fullmag-frontend-dev-v2-<key>` → `/state/development`; control namespace → `/opt/fullmag/control` | Named volume grupy Compose dla pnpm, `node_modules`, Next cache, logów i diagnostycznej kopii receiptu; brak zapisu do Windows storage w ścieżce v2 (**NOT VERIFIED** runtime) |
+| Frontend: bieżący owner procesu | `/run/fullmag/frontend-owner/receipt.json` w prywatnym tmpfs 1 MiB, UID/GID 65532, tryb 0700 | Ulotny autorytet procesu i wejście healthchecka; znika po zatrzymaniu kontenera. `/state/development/frontend-dev-receipt.json` zachowuje wyłącznie historię/cache, nie dowodzi żywego ownera. Wdrożenie źródłowe: [ADR 0061](../adr/0061-docker-development-build-and-runtime-container.md); restart runtime **NOT VERIFIED** |
 | Frontend: live kod | `app`, `src`, `public`, `scripts` z checkoutu → readonly pod `/state/development/workspace/apps/control-room` | HMR czyta pliki Windows. Wygenerowane pliki i Linux `node_modules` nie trafiają do checkoutu |
 | Uruchomienie, sesje i wyniki daily DEV | `<storage>/runs/<worktree-id>/docker-dev/<run-id>/state` → `/state` backendu; frontend dostaje jego `development` | Fizyczne pliki Windows. Restart istniejącego kontenera zachowuje mount; nowy run ma własny namespace |
 | Ustawienia i ostatnie projekty | `<storage>/user-data/<compose-project>/workspace.db` → `/user-data` | Trwałe, osobne dla mastera i każdego worktree |
@@ -153,6 +154,36 @@ Nie są to nowe archiwa źródeł wykonywane przy każdym restarcie bezpośredni
    live-shadow assembly/provenance i receipty pozostają w control/package
    volumes, a `startup-provenance`, `runtime-recovery-consumed`, host-ledger i
    certyfikat mountu są per-run operacyjnymi dowodami w Windows run root.
+
+   W ścieżce backend-dev kontroler może przekazać Make prywatny
+   `FULLMAG_INTERNAL_INSTALL_ROOT`, wskazujący wyłącznie na wcześniej utworzonego
+   i oznaczonego właścicielem kandydata w named package volume. Make zapisuje tam
+   wynik bez tworzenia drugiej kopii w `.fullmag/local`; istniejący legacy
+   `.fullmag/local` pozostaje na miejscu i jest porównywany przez bounded snapshot
+   metadanych przed/po materializacji źródeł oraz Make. Każda zmiana tej starej
+   ścieżki kończy operację fail-closed. Przed rotacją kontroler materializuje
+   dozwolone aliasy SONAME, sprawdza kompletny inwentarz, hashe, manifesty i
+   marker kandydata. Zmienna jest usuwana z odziedziczonego środowiska i ustawiana
+   tylko przez kontroler. Jedyny dodatkowy output Make `bin/fullmag` jest usuwany
+   jako własny wrapper repo-local przed inwentarzem; po relokacji kandydata jego
+   względne rooty repozytorium/runtime byłyby błędne. Domyślne, ręczne oraz
+   release/static targety zachowują `.fullmag/local`. Dla direct DEV stdout Make
+   od początku trafia do `/build/failed-candidate-diagnostics/<candidate>/`, a
+   kontroler najpierw zapisuje terminalny receipt z hashem i rozmiarem, dopiero
+   potem usuwa wyłącznie bounded, marker-owned inwentarz znanych outputów.
+   Retencja obejmuje najwyżej 8 zakończonych błędów i 64 MiB logów; receipt
+   pozostaje także po wycofaniu logu. Udany log jest kopiowany do kandydata i
+   źródło techniczne jest usuwane dopiero po jego publikacji. Logi opcjonalne,
+   częściowe receipty oraz nieznany, uszkodzony albo niekompletny do potwierdzenia
+   kandydat pozostają i blokują publikację do ręcznej diagnostyki.
+   Czas między przeniesieniem payloadu a usunięciem markera jest jawnie
+   odzyskiwalny: następny preflight najpierw weryfikuje bieżący pakiet i jego
+   rzeczywisty inwentarz z hasha receiptu, a potem usuwa wyłącznie marker-only
+   kandydata z identycznym dowodem. Po przerwaniu tuż po unlink markera usuwa
+   także wyłącznie pusty katalog o nazwie z własnej przestrzeni kandydatów;
+   payload, dodatkowy wpis albo niezgodny hash pozostaje fail-closed. Cargo,
+   CMake, runtime cache, rollback i dane użytkownika nie należą do tej ścieżki;
+   sam routing nie jest dowodem odzyskania fizycznego miejsca na hoście.
 7. Frontend reaguje przez HMR. Zmiany backendu stosujemy przez restart
    **backendu tej grupy**, po zapisaniu projektu i zakończeniu symulacji.
    Restart nie tworzy z założenia nowego cache ani nie powtarza Solve skryptu.
@@ -173,14 +204,14 @@ nie jest etapem codziennego startu DEV.
 | Binarne pakiety backendu | Po udanej publikacji w named package volume: bieżący + jeden bezpośredni rollback; starsze potwierdzone backupy usuwane od najstarszego | Tylko poprawny łańcuch receiptów/rotacji pod blokadą. Nieznane/uszkodzone dane pozostają; `retention skipped` wymaga sprawdzenia |
 | Dowody usuniętych pakietów | Receipt i rotacja w `/opt/fullmag/package/.development/retired`; bez kopii pełnego build logu; najwyżej 8 archiwów i 64 MiB payloadu | Najnowsze wpisy zostają; starsze/za duże archiwa z manifestem i bezpiecznym drzewem są usuwane. Pełny legacy log jest hashowany tylko, gdy zachowane archiwum mieści się w budżecie |
 | Logi stdout/stderr kontenerów DEV | Compose używa `json-file`, `max-size=10m`, `max-file=3` dla usług grupy | Do 30 MiB na kontener dla kopii logów Dockera; nie ogranicza plików logów w named volumes ani BuildKit |
-| Log Next.js | Stały `/state/development/next.log` w frontend cache volume; plik jest zerowany po przejęciu blokady przy każdym starcie frontendu | Zapobiega kumulowaniu logów między restartami; długa pojedyncza sesja Next może nadal zwiększać plik bez limitu |
-| Normalny staging kandydata/kopii daily live-shadow | Technical build/control/package volumes; `finally` usuwa własne tymczasowe drzewa po powrocie operacji | Przerwanie procesu/zasilania może pozostawić kandydatów lub manifesty w wolumenie; brak ogólnego sweepu. Przy niepewnym rollbacku zachowujemy dowody |
+| Log Next.js | Stały `/state/development/next.log` oraz najwyżej jeden `/state/development/next.log.rollback` w frontend cache volume; po przejęciu istniejącego runtime locka pełny regularny `next.log` jest atomowo obracany i katalog jest synchronizowany przed utworzeniem świeżego pliku | Retencja bieżącej i jednej poprzedniej generacji ma limit 64 MiB na plik; stdout ponad limit pozostaje w rotowanym driverze Docker. Ścieżki nieznane, dowiązania, hardlinki i pliki nieregularne są zachowywane/fail-closed, bez ogólnego GC |
+| Staging kandydata daily live-shadow | Named package volume; usuwanie tylko znanych, oznaczonych kandydatów po potwierdzonym błędzie albo publikacji | Dziennik `rotation.pending.json` pozwala odzyskać dokładną przerwaną rotację przy kolejnym starcie. Nieznane, zmienione lub niekompletne dowody pozostają zachowane; brak ogólnego sweepu |
 | Cień źródeł | Uzgodnienie jednego workspace w `/build`, usunięcie usuniętych plików źródłowych | Nie kasuje używanego cache Cargo/CMake. Jeden aktualny manifest zamiast historii snapshotów źródeł |
 | Snapshoty host-ledgera | Ograniczony GC pod blokadą po publikacji/operacjach ledgera | Usuwa wyłącznie bezpieczne nieosiągalne CAS `snapshot` i `snapshot-order-v2`; zachowuje bieżący digest. Limit inspekcji 256 wpisów na katalog/wywołanie |
 | Rezerwacje, readiness i recovery | Zachowanie historii i dowodów | Powyższy GC nie usuwa historii rezerwacji, CAS readiness ani sesji |
 | Cargo/CMake/pnpm/Next | Ponowne użycie trwałego cache | Brak ogólnego limitu ani GC starych generacji. Cargo target może rosnąć wraz z wariantami grafu/flag |
 | Backend v1/v2 i historyczny frontend ext4 | Jawne przygotowanie/reuse dokładnej tożsamości | Legacy adaptery nie usuwają starych wolumenów/backing files. Nowa generacja named volume nie dowodzi zbędności poprzedniej |
-| Build logs, receipty i provenance daily live-shadow | Control/package volumes grupy Compose oraz BuildKit; Docker stdout ma limit 10 MiB × 3 pliki na kontener; retired ma limit 8 wpisów / 64 MiB | `next.log` w długiej sesji, cache Cargo/CMake, BuildKit i stare wolumeny nadal nie mają ogólnego limitu/GC. Runtime proof **NOT VERIFIED**; hostowe metadata/logi frozen/static/release należą do osobnych recept |
+| Build logs, receipty i provenance daily live-shadow | Control/package volumes grupy Compose oraz BuildKit; stdout direct Make ma bounded receipt/log w `/build/failed-candidate-diagnostics`, najwyżej 8 terminalnych błędów / 64 MiB; Docker stdout ma limit 10 MiB × 3 pliki na kontener | cache Cargo/CMake, BuildKit i stare wolumeny nadal nie mają ogólnego limitu/GC; retencja `next.log` dotyczy wyłącznie dwóch znanych ścieżek technicznych opisanych wyżej. Unknown/building records są zachowywane fail-closed. Runtime proof **NOT VERIFIED**; hostowe metadata/logi frozen/static/release należą do osobnych recept |
 | Runy, logi sesji, failed/unknown i per-run evidence | Zachowanie w Windows `/state`/run root, w tym `startup-provenance`, `runtime-recovery-consumed`, host-ledger i certyfikat mountu | To operacyjne dowody sesji/runtime, nie dane buildu; brak pełnej automatycznej retencji tej ścieżki |
 | Sesje, projekty, wyniki, `workspace.db` | Trwałe dane użytkownika | Wyłączone ze sprzątania technicznego |
 | Obrazy / BuildKit / stare grupy | Brak automatycznego globalnego czyszczenia Fullmaga | Zatrzymany kontener nadal może referencjonować obraz/cache; inna grupa może go używać |

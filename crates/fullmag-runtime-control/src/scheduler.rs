@@ -15,6 +15,7 @@ use fullmag_authoring::StudyInputSource;
 use fullmag_session::{FmsTaskLifecycle, FmsTaskReadiness, SessionStore};
 
 use crate::claim::{claimed_task_resource_compatibility, ClaimedTaskResourceCompatibility};
+use crate::worker_inbox::DurableWorkerInboxError;
 
 #[derive(Clone, Debug)]
 pub struct ScheduledAcceptedTask {
@@ -593,8 +594,8 @@ pub fn resume_next_admitted_accepted_task_with_host(
             crate::load_accepted_worker_step(store, &specification.snapshot.project_id, pending)
                 .context("revalidating pending admitted task Prepare")?;
             worker_inbox
-                .confirm_applied(pending)
-                .map_err(|error| anyhow::anyhow!(error))?;
+                .confirm_applied_preserving_store_writer_busy(pending)
+                .map_err(DurableWorkerInboxError::into_anyhow)?;
         }
         Some(pending) if matches!(&pending.command, fullmag_application::WorkerCommand::Start) => {
             if start.as_ref() != Some(pending)
@@ -606,7 +607,7 @@ pub fn resume_next_admitted_accepted_task_with_host(
         Some(_) => bail!("worker inbox has an unexpected pending command"),
         None if applied_prepare_count == 0 => {
             worker_inbox
-                .receive(&prepare, |envelope| {
+                .receive_preserving_store_writer_busy(&prepare, |envelope| {
                     retry_store_writer_busy(|| {
                         crate::load_accepted_worker_step(
                             store,
@@ -615,9 +616,8 @@ pub fn resume_next_admitted_accepted_task_with_host(
                         )
                     })
                     .map(|_| ())
-                    .map_err(|error| ExecutionError::Invalid(error.to_string()))
                 })
-                .map_err(|error| anyhow::anyhow!(error))?;
+                .map_err(DurableWorkerInboxError::into_anyhow)?;
         }
         None => {}
     }
@@ -667,11 +667,11 @@ pub fn resume_next_admitted_accepted_task_with_host(
         }) {
             bail!("worker inbox has already applied the accepted task Start command");
         }
-        match worker_inbox.receive(&start, |_| {
-            Err(ExecutionError::Invalid(EXTERNAL_START_HANDOFF.into()))
+        match worker_inbox.receive_preserving_store_writer_busy(&start, |_| {
+            Err(anyhow::anyhow!(EXTERNAL_START_HANDOFF))
         }) {
-            Err(ExecutionError::Invalid(reason)) if reason == EXTERNAL_START_HANDOFF => {}
-            Err(error) => return Err(anyhow::anyhow!(error)),
+            Err(error) if error.is_protocol_invalid(EXTERNAL_START_HANDOFF) => {}
+            Err(error) => return Err(error.into_anyhow()),
             Ok(_) => bail!("accepted scheduler unexpectedly applied Start during recovery handoff"),
         }
     }
@@ -883,6 +883,19 @@ fn schedule_next_ready_accepted_task_with_admission(
         else {
             continue;
         };
+        // Only a durable host binding has the existing recovery path that
+        // can safely defer after admission; legacy local admissions retain
+        // their fatal inbox error contract.
+        let host_bound_admission = store
+            .read_task_admission(
+                run_id.as_str(),
+                claim.task_id.as_str(),
+                claim.attempt_id.as_str(),
+            )?
+            .context("accepted scheduler admission record missing after commit")?
+            .lease
+            .host_launch_binding
+            .is_some();
         let coordinator = WorkerCoordinator::new(task, claim.clone())?;
         let mut coordinator = DurableWorkerCoordinator::new(coordinator);
         let prepare = crate::publish_accepted_task_prepare(
@@ -896,19 +909,35 @@ fn schedule_next_ready_accepted_task_with_admission(
             retry_store_writer_busy(|| SessionStore::open_existing(store.root().to_path_buf()))
                 .context("open accepted scheduler worker inbox store")?;
         let mut worker_inbox = crate::DurableWorkerInbox::new(inbox_store, claim.clone());
-        worker_inbox
-            .receive(&prepare, |envelope| {
-                retry_store_writer_busy(|| {
-                    crate::load_accepted_worker_step(
-                        store,
-                        &specification.snapshot.project_id,
-                        envelope,
-                    )
+        let prepare_result = if host_bound_admission {
+            worker_inbox
+                .receive_preserving_store_writer_busy(&prepare, |envelope| {
+                    retry_store_writer_busy(|| {
+                        crate::load_accepted_worker_step(
+                            store,
+                            &specification.snapshot.project_id,
+                            envelope,
+                        )
+                    })
+                    .map(|_| ())
                 })
-                .map(|_| ())
-                .map_err(|error| ExecutionError::Invalid(error.to_string()))
-            })
-            .map_err(|error| anyhow::anyhow!(error))?;
+                .map_err(DurableWorkerInboxError::into_anyhow)
+        } else {
+            worker_inbox
+                .receive(&prepare, |envelope| {
+                    retry_store_writer_busy(|| {
+                        crate::load_accepted_worker_step(
+                            store,
+                            &specification.snapshot.project_id,
+                            envelope,
+                        )
+                    })
+                    .map(|_| ())
+                    .map_err(|error| ExecutionError::Invalid(error.to_string()))
+                })
+                .map_err(|error| anyhow::anyhow!(error))
+        };
+        prepare_result?;
         let prepared_message_id = format!(
             "event-prepared-{}",
             fullmag_session::hex_sha256(
@@ -935,13 +964,22 @@ fn schedule_next_ready_accepted_task_with_admission(
         let start = crate::publish_accepted_task_start(store, &mut coordinator)?;
         const EXTERNAL_START_HANDOFF: &str =
             "accepted scheduler staged Start for external supervisor execution";
-        let handoff = worker_inbox.receive(&start, |_| {
-            Err(ExecutionError::Invalid(EXTERNAL_START_HANDOFF.into()))
-        });
-        match handoff {
-            Err(ExecutionError::Invalid(reason)) if reason == EXTERNAL_START_HANDOFF => {}
-            Err(error) => return Err(anyhow::anyhow!(error)),
-            Ok(_) => bail!("accepted scheduler unexpectedly applied Start during handoff"),
+        if host_bound_admission {
+            match worker_inbox.receive_preserving_store_writer_busy(&start, |_| {
+                Err(anyhow::anyhow!(EXTERNAL_START_HANDOFF))
+            }) {
+                Err(error) if error.is_protocol_invalid(EXTERNAL_START_HANDOFF) => {}
+                Err(error) => return Err(error.into_anyhow()),
+                Ok(_) => bail!("accepted scheduler unexpectedly applied Start during handoff"),
+            }
+        } else {
+            match worker_inbox.receive(&start, |_| {
+                Err(ExecutionError::Invalid(EXTERNAL_START_HANDOFF.into()))
+            }) {
+                Err(ExecutionError::Invalid(reason)) if reason == EXTERNAL_START_HANDOFF => {}
+                Err(error) => return Err(anyhow::anyhow!(error)),
+                Ok(_) => bail!("accepted scheduler unexpectedly applied Start during handoff"),
+            }
         }
         if worker_inbox.checkpoint().pending.as_ref() != Some(&start) {
             bail!("accepted scheduler did not durably retain Start for supervisor execution");

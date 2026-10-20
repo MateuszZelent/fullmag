@@ -81,6 +81,33 @@ PACKAGE_DEVELOPMENT_OWNER = "owner.json"
 PACKAGE_CANDIDATES_DIRNAME = "candidates"
 PACKAGE_BACKUPS_DIRNAME = "backups"
 PACKAGE_RETENTION_ARCHIVE_DIRNAME = "retired"
+PACKAGE_CANDIDATE_MARKER = ".candidate-owner.json"
+PACKAGE_CANDIDATE_SCHEMA = "fullmag.direct-compose.package-candidate.v1"
+PACKAGE_CANDIDATE_NAME_RE = re.compile(r"^\.backend-package-candidate-[A-Za-z0-9._-]+$")
+PACKAGE_ROTATION_JOURNAL_NAME = "rotation.pending.json"
+PACKAGE_ROTATION_JOURNAL_SCHEMA = "fullmag.direct-compose.package-rotation-journal.v1"
+MAX_PACKAGE_ROTATION_CHILDREN = 256
+MAX_PACKAGE_CANDIDATES = 4
+MAX_LEGACY_INSTALL_STAGE_ENTRIES = 65536
+MAX_LEGACY_INSTALL_STAGE_LINK_TARGET_BYTES = 4096
+MAX_FAILED_CANDIDATE_ENTRIES = 16384
+PACKAGE_CANDIDATE_OPTIONAL_FILES = frozenset(
+    {
+        PACKAGE_CANDIDATE_MARKER,
+        "direct-backend-build.log",
+        "install-cli-build.log",
+        "install-cli-managed-fem-gpu.log",
+        "source-identity.json",
+    }
+)
+FAILED_CANDIDATE_DIAGNOSTIC_FILES = frozenset(
+    {
+        "backend-build-receipt.json",
+        "direct-backend-build.log",
+        "install-cli-build.log",
+        "install-cli-managed-fem-gpu.log",
+    }
+)
 MAX_RETENTION_ARCHIVES = 64
 MAX_BUILD_LOG_BYTES = 64 * 1024 * 1024
 PACKAGE_CACHE_CONTROL_DIRNAME = "cache-maintenance"
@@ -89,6 +116,14 @@ PACKAGE_CACHE_READBACK_NAME = ".fullmag-backend-cache-readback"
 PACKAGE_RETENTION_SCHEMA = "fullmag.direct-compose.package-retention.v1"
 PACKAGE_RETENTION_ARCHIVE_COUNT_LIMIT = 8
 PACKAGE_RETENTION_ARCHIVE_BYTES_LIMIT = 64 * 1024 * 1024
+FAILED_MAKE_DIAGNOSTICS_DIRNAME = "failed-candidate-diagnostics"
+FAILED_MAKE_RECEIPT_NAME = "attempt.json"
+FAILED_MAKE_LOG_NAME = "direct-backend-build.log"
+FAILED_MAKE_SCHEMA = "fullmag.direct-compose.failed-make-attempt.v1"
+FAILED_MAKE_RECORD_LIMIT = MAX_RETENTION_ARCHIVES
+FAILED_MAKE_LOG_LIMIT = PACKAGE_RETENTION_ARCHIVE_COUNT_LIMIT
+FAILED_MAKE_LOG_BYTES_LIMIT = PACKAGE_RETENTION_ARCHIVE_BYTES_LIMIT
+FAILED_MAKE_RECEIPT_BYTES_LIMIT = 1024 * 1024
 OWNER_MARKER = ".fullmag-direct-backend-owner.json"
 WORKSPACE_INVENTORY_SCHEMA = "fullmag.direct-compose.workspace-inventory.v1"
 RUNTIME_LOCK_NAME = ".fullmag-backend-runtime.lock"
@@ -467,6 +502,7 @@ def _ensure_package_development_root(output: Path) -> Path:
         PACKAGE_BACKUPS_DIRNAME,
         PACKAGE_RETENTION_ARCHIVE_DIRNAME,
         PACKAGE_CACHE_CONTROL_DIRNAME,
+        PACKAGE_ROTATION_JOURNAL_NAME,
     }
     try:
         entries = tuple(control.iterdir())
@@ -478,6 +514,11 @@ def _ensure_package_development_root(output: Path) -> Path:
         metadata = entry.lstat()
         if stat.S_ISLNK(metadata.st_mode):
             _fail(f"backend package development control contains a symlink: {entry.name}")
+    journal = control / PACKAGE_ROTATION_JOURNAL_NAME
+    if journal.exists() or journal.is_symlink():
+        metadata = journal.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            _fail("backend package rotation journal is not one regular file")
     _ensure_directory(cache_control, "backend cache maintenance control directory")
     try:
         cache_entries = tuple(cache_control.iterdir())
@@ -1023,13 +1064,18 @@ def _sync_live_source_tree(
     capsule: Mapping[str, Any],
     git_object_ids: Mapping[str, str],
     live_manifest_sha256: str,
+    *,
+    preserve_legacy_install_stage: bool = False,
 ) -> None:
     source_root = _absolute(source_root, "live source root")
     _assert_no_links(source_root, "live source root")
     expected = _source_manifest_inventory(capsule)
     started = time.monotonic()
     _log_phase("sync", "start", files=len(expected))
-    _remove_generated_build_output(workspace)
+    _remove_generated_build_output(
+        workspace,
+        preserve_legacy_install_stage=preserve_legacy_install_stage,
+    )
     existing_files, existing_directories = _workspace_tree_inventory(workspace)
     for relative in existing_directories:
         if relative.split("/", 1)[0] not in PERSISTENT_WORKSPACE_DIRS:
@@ -1138,7 +1184,117 @@ def _verify_shadow_source(workspace: Path, capsule: Mapping[str, Any]) -> None:
         if digest != entry["sha256"] or metadata.st_size != entry["size"]:
             _fail(f"shadow source changed during Make: {relative}")
 
-def _remove_generated_build_output(workspace: Path) -> None:
+def _legacy_install_stage_signature(
+    metadata: os.stat_result,
+    kind: str,
+    link_target: str | None = None,
+) -> tuple[object, ...]:
+    """Return bounded metadata for one retained legacy install entry."""
+
+    return (
+        kind,
+        int(metadata.st_dev),
+        int(metadata.st_ino),
+        int(metadata.st_mode),
+        int(metadata.st_nlink),
+        int(metadata.st_size),
+        int(metadata.st_mtime_ns),
+        int(metadata.st_ctime_ns),
+        link_target,
+    )
+
+
+def _snapshot_legacy_install_stage(
+    workspace: Path,
+) -> dict[str, tuple[object, ...]] | None:
+    """Capture bounded metadata without hashing the retained legacy package.
+
+    The direct candidate is published into a separate package-control tree.
+    A pre-existing ``.fullmag/local`` tree is therefore retained as an
+    independent legacy stage, but it must not be changed by source
+    materialization or the candidate Make invocation.  This inventory follows
+    directories only, records symlink targets without following them, and
+    never reads file contents.
+    """
+
+    workspace = _absolute(workspace, "backend workspace")
+    stage = workspace / ".fullmag" / "local"
+    _assert_no_links(stage.parent, "legacy install stage parent")
+    try:
+        root_metadata = stage.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        _fail(f"cannot inspect retained legacy install stage: {error}")
+    if (
+        stat.S_ISLNK(root_metadata.st_mode)
+        or bool(getattr(root_metadata, "st_file_attributes", 0) & 0x400)
+        or not stat.S_ISDIR(root_metadata.st_mode)
+    ):
+        _fail("retained legacy install stage root is unsafe")
+
+    inventory: dict[str, tuple[object, ...]] = {
+        ".": _legacy_install_stage_signature(root_metadata, "directory")
+    }
+    pending: list[tuple[Path, str]] = [(stage, "")]
+    while pending:
+        directory, relative = pending.pop()
+        try:
+            with os.scandir(directory) as iterator:
+                children = sorted(iterator, key=lambda entry: entry.name)
+        except OSError as error:
+            _fail(f"cannot inspect retained legacy install stage {directory}: {error}")
+        for entry in children:
+            child = Path(entry.path)
+            key = f"{relative}/{entry.name}" if relative else entry.name
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                _fail(f"cannot inspect retained legacy install stage entry {child}: {error}")
+            if bool(getattr(metadata, "st_file_attributes", 0) & 0x400):
+                _fail(f"retained legacy install stage contains a reparse point: {child}")
+            if stat.S_ISDIR(metadata.st_mode):
+                kind = "directory"
+                link_target = None
+            elif stat.S_ISREG(metadata.st_mode):
+                kind = "file"
+                link_target = None
+            elif stat.S_ISLNK(metadata.st_mode):
+                try:
+                    link_target = os.readlink(child)
+                except OSError as error:
+                    _fail(f"cannot read retained legacy install stage link {child}: {error}")
+                if len(link_target.encode("utf-8", errors="surrogateescape")) > MAX_LEGACY_INSTALL_STAGE_LINK_TARGET_BYTES:
+                    _fail(f"retained legacy install stage link target is too long: {child}")
+                kind = "symlink"
+            else:
+                _fail(f"retained legacy install stage contains a special file: {child}")
+            if len(inventory) >= MAX_LEGACY_INSTALL_STAGE_ENTRIES:
+                _fail("retained legacy install stage exceeds its bounded entry limit")
+            inventory[key] = _legacy_install_stage_signature(metadata, kind, link_target)
+            if kind == "directory":
+                pending.append((child, key))
+    return inventory
+
+
+def _assert_legacy_install_stage_unchanged(
+    workspace: Path,
+    expected: dict[str, tuple[object, ...]] | None,
+    phase: str,
+) -> None:
+    observed = _snapshot_legacy_install_stage(workspace)
+    if observed != expected:
+        _fail(
+            "direct backend candidate changed the retained .fullmag/local stage "
+            f"during {phase}"
+        )
+
+
+def _remove_generated_build_output(
+    workspace: Path,
+    *,
+    preserve_legacy_install_stage: bool = False,
+) -> None:
     """Remove owned generated children while preserving the output root.
 
     Make publishes package files and native-library aliases below ``.fullmag``.
@@ -1167,6 +1323,15 @@ def _remove_generated_build_output(workspace: Path) -> None:
             + ", ".join(unexpected)
         )
     for child in children:
+        if child.name == "local" and preserve_legacy_install_stage:
+            metadata = child.lstat()
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+                or not stat.S_ISDIR(metadata.st_mode)
+            ):
+                _fail(f"retained legacy install stage root is unsafe: {child}")
+            continue
         _remove_owned_tree(child)
 
 
@@ -1257,6 +1422,8 @@ def _reconcile_source_tree(
     workspace: Path,
     capsule: Mapping[str, Any],
     archive_hash: str,
+    *,
+    preserve_legacy_install_stage: bool = False,
 ) -> None:
     """Reconcile verified capsule bytes while preserving unchanged mtimes."""
 
@@ -1264,7 +1431,10 @@ def _reconcile_source_tree(
     stage_files, _ = _stage_tree_inventory(stage)
     if stage_files != set(expected):
         _fail("extracted source inventory differs from the source manifest")
-    _remove_generated_build_output(workspace)
+    _remove_generated_build_output(
+        workspace,
+        preserve_legacy_install_stage=preserve_legacy_install_stage,
+    )
     existing_files, existing_directories = _workspace_tree_inventory(workspace)
     expected_directories: set[str] = set()
     for relative in expected:
@@ -1576,13 +1746,21 @@ def _materialize_live_source(
     source_root: Path,
     git_common_root: Path,
     build_root: Path,
+    *,
+    preserve_legacy_install_stage: bool = False,
 ) -> tuple[Path, dict[str, Any], dict[str, Any], str, None, str]:
     document, manifest_bytes = _read_json(manifest_path, "live source manifest", 64 * 1024 * 1024)
     capsule, native, git_object_ids, live_manifest_sha256 = _validate_live_manifest(document)
     manifest_hash = _sha256_bytes(manifest_bytes)
     workspace = _prepare_workspace(build_root)
     _sync_live_source_tree(
-        source_root, git_common_root, workspace, capsule, git_object_ids, live_manifest_sha256
+        source_root,
+        git_common_root,
+        workspace,
+        capsule,
+        git_object_ids,
+        live_manifest_sha256,
+        preserve_legacy_install_stage=preserve_legacy_install_stage,
     )
     after_document, after_bytes = _read_json(manifest_path, "live source manifest", 64 * 1024 * 1024)
     if after_bytes != manifest_bytes or after_document != document:
@@ -1599,11 +1777,18 @@ def _materialize_source(
     *,
     source_root: Path,
     git_common_root: Path,
+    preserve_legacy_install_stage: bool = False,
 ) -> tuple[Path, dict[str, Any], dict[str, Any], str, str | None, str]:
     manifest_path = _absolute(manifest_path, "source manifest")
     document, _manifest_bytes = _read_json(manifest_path, "source manifest", 64 * 1024 * 1024)
     if document.get("schema") == LIVE_MANIFEST_SCHEMA:
-        return _materialize_live_source(manifest_path, source_root, git_common_root, build_root)
+        return _materialize_live_source(
+            manifest_path,
+            source_root,
+            git_common_root,
+            build_root,
+            preserve_legacy_install_stage=preserve_legacy_install_stage,
+        )
     if source_tar is None:
         _fail("archive source manifest requires --source-tar")
     source_tar = _absolute(source_tar, "source archive")
@@ -1637,7 +1822,13 @@ def _materialize_source(
         )
         if after_manifest_bytes != manifest_bytes or after_document != document:
             _fail("source manifest changed during extraction")
-        _reconcile_source_tree(stage, workspace, capsule, archive_hash)
+        _reconcile_source_tree(
+            stage,
+            workspace,
+            capsule,
+            archive_hash,
+            preserve_legacy_install_stage=preserve_legacy_install_stage,
+        )
         return workspace, capsule, native, manifest_hash, archive_hash, "archive"
     finally:
         _remove_extracted_source(stage)
@@ -1844,7 +2035,11 @@ def _hash_package(root: Path) -> list[dict[str, Any]]:
 
 
 def _package_children(
-    root: Path, name: str, *, exclude_development_control: bool = False
+    root: Path,
+    name: str,
+    *,
+    exclude_development_control: bool = False,
+    exclude_candidate_marker: bool = False,
 ) -> dict[str, tuple[int, int, int, int, int]]:
     """Return package entries, excluding only the owned control directory."""
 
@@ -1865,12 +2060,20 @@ def _package_children(
             if not stat.S_ISDIR(metadata.st_mode):
                 _fail(f"{name} development control entry is not a directory")
             continue
+        if exclude_candidate_marker and child.name == PACKAGE_CANDIDATE_MARKER:
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                _fail(f"{name} candidate owner marker is not one regular file")
+            continue
         children[child.name] = _file_signature(metadata)
     return children
 
 
 def _validated_package(
-    root: Path, name: str, *, exclude_development_control: bool = False
+    root: Path,
+    name: str,
+    *,
+    exclude_development_control: bool = False,
+    exclude_candidate_marker: bool = False,
 ) -> tuple[dict[str, Any], bytes, dict[str, tuple[int, int, int, int, int]]]:
     """Validate a complete package and retain its exact receipt/entry snapshot."""
 
@@ -1885,7 +2088,10 @@ def _validated_package(
     if receipt.get("artifacts") != records:
         _fail(f"{name} artifacts differ from its build receipt")
     return receipt, receipt_bytes, _package_children(
-        root, name, exclude_development_control=exclude_development_control
+        root,
+        name,
+        exclude_development_control=exclude_development_control,
+        exclude_candidate_marker=exclude_candidate_marker,
     )
 
 
@@ -1905,6 +2111,7 @@ def _assert_exact_backup_inventory(
     build_log = root / "direct-backend-build.log"
     if build_log.exists() or build_log.is_symlink():
         allowed_files.add("direct-backend-build.log")
+    optional_files = PACKAGE_CANDIDATE_OPTIONAL_FILES - {PACKAGE_CANDIDATE_MARKER}
     actual_files, actual_directories = _stage_tree_inventory(root)
     allowed_directories: set[str] = set()
     for relative in allowed_files:
@@ -1912,7 +2119,10 @@ def _assert_exact_backup_inventory(
         allowed_directories.update(
             PurePosixPath(*parts[:index]).as_posix() for index in range(1, len(parts))
         )
-    if actual_files != allowed_files or actual_directories != allowed_directories:
+    if (
+        actual_files - optional_files != allowed_files - optional_files
+        or actual_directories != allowed_directories
+    ):
         _fail(f"{name} has an unrecognized file or directory inventory")
 
 
@@ -2052,7 +2262,200 @@ def _rename_package_child(source_root: Path, target_root: Path, name: str, label
         _fail(f"cannot atomically move {label} child {name}: {error}")
 
 
-def _rollback_package_rotation(rotation: Mapping[str, Any]) -> list[str]:
+def _rotation_names(value: object, name: str) -> list[str]:
+    result = _retention_child_names(value, name)
+    if len(result) > MAX_PACKAGE_ROTATION_CHILDREN:
+        _fail(f"{name} child inventory is unbounded")
+    return result
+
+
+def _rotation_identity_map(root: Path, names: list[str], name: str) -> dict[str, list[int]]:
+    result: dict[str, list[int]] = {}
+    for child_name in names:
+        try:
+            metadata = (root / child_name).lstat()
+        except OSError as error:
+            _fail(f"cannot inspect {name} child {child_name}: {error}")
+        if stat.S_ISLNK(metadata.st_mode) or not (
+            stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)
+        ):
+            _fail(f"{name} child is unsafe: {child_name}")
+        result[child_name] = [
+            int(metadata.st_dev),
+            int(metadata.st_ino),
+            int(stat.S_IFMT(metadata.st_mode)),
+        ]
+    return result
+
+
+def _rotation_validate_identity_map(
+    root: Path,
+    names: set[str],
+    expected: object,
+    name: str,
+) -> None:
+    if not isinstance(expected, dict) or set(expected) != names:
+        _fail(f"{name} identity map does not match its child inventory")
+    actual = _rotation_identity_map(root, sorted(names), name)
+    for child_name in sorted(names):
+        value = expected.get(child_name)
+        if (
+            not isinstance(value, list)
+            or len(value) != 3
+            or any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in value)
+            or actual[child_name] != value
+        ):
+            _fail(f"{name} child identity differs from its rotation journal: {child_name}")
+
+
+def _rotation_metadata_document(rotation: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema": "fullmag.direct-compose.package-rotation.v1",
+        "state": "succeeded",
+        "old_receipt_sha256": rotation.get("old_receipt_sha256"),
+        "new_receipt_sha256": rotation["new_receipt_sha256"],
+        "old_children": list(rotation["old_children"]),
+        "new_children": list(rotation["new_children"]),
+    }
+
+
+def _rotation_journal_document(rotation: Mapping[str, Any], state: str) -> dict[str, Any]:
+    if state not in {"prepared", "committed"}:
+        _fail("backend package rotation journal state is invalid")
+    old_names = _rotation_names(rotation.get("old_children"), "rotation old")
+    new_names = _rotation_names(rotation.get("new_children"), "rotation new")
+    old_identity = rotation.get("old_identity")
+    new_identity = rotation.get("new_identity")
+    if not isinstance(old_identity, dict) or set(old_identity) != set(old_names):
+        _fail("backend package rotation old identity map is invalid")
+    if not isinstance(new_identity, dict) or set(new_identity) != set(new_names):
+        _fail("backend package rotation new identity map is invalid")
+    old_sha256 = rotation.get("old_receipt_sha256")
+    new_sha256 = rotation.get("new_receipt_sha256")
+    if old_sha256 is not None and (
+        not isinstance(old_sha256, str) or not SHA256_RE.fullmatch(old_sha256)
+    ):
+        _fail("backend package rotation old receipt hash is invalid")
+    if not isinstance(new_sha256, str) or not SHA256_RE.fullmatch(new_sha256):
+        _fail("backend package rotation new receipt hash is invalid")
+    if bool(old_names) != (old_sha256 is not None):
+        _fail("backend package rotation old inventory and receipt disagree")
+    return {
+        "schema": PACKAGE_ROTATION_JOURNAL_SCHEMA,
+        "state": state,
+        "output": str(rotation["output"]),
+        "candidate": str(rotation["candidate"]),
+        "backup": rotation.get("backup"),
+        "old_children": old_names,
+        "new_children": new_names,
+        "old_identity": old_identity,
+        "new_identity": new_identity,
+        "old_receipt_sha256": old_sha256,
+        "new_receipt_sha256": new_sha256,
+    }
+
+
+def _write_rotation_journal(rotation: Mapping[str, Any], state: str) -> None:
+    path = _absolute(Path(str(rotation["journal"])), "backend package rotation journal")
+    _assert_no_links(path.parent, "backend package rotation journal parent")
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        metadata = None
+    except OSError as error:
+        _fail(f"cannot inspect backend package rotation journal: {error}")
+    if metadata is not None and (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1):
+        _fail("backend package rotation journal is not one regular file")
+    _write_json(path, _rotation_journal_document(rotation, state), "backend package rotation journal")
+    _fsync_directory(path.parent, "backend package development control directory")
+
+
+def _clear_rotation_journal(rotation: Mapping[str, Any]) -> None:
+    path = _absolute(Path(str(rotation["journal"])), "backend package rotation journal")
+    _assert_no_links(path.parent, "backend package rotation journal parent")
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        _fail(f"cannot inspect backend package rotation journal: {error}")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        _fail("backend package rotation journal is not one regular file")
+    try:
+        path.unlink()
+    except OSError as error:
+        _fail(f"cannot remove backend package rotation journal: {error}")
+    _fsync_directory(path.parent, "backend package development control directory")
+
+
+def _read_rotation_journal(output: Path, control_root: Path) -> dict[str, Any] | None:
+    path = control_root / PACKAGE_ROTATION_JOURNAL_NAME
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        _fail(f"cannot inspect backend package rotation journal: {error}")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        _fail("backend package rotation journal is not one regular file")
+    document, _ = _read_json(path, "backend package rotation journal", 1024 * 1024)
+    required = {
+        "schema", "state", "output", "candidate", "backup", "old_children",
+        "new_children", "old_identity", "new_identity", "old_receipt_sha256",
+        "new_receipt_sha256",
+    }
+    if set(document) != required or document.get("schema") != PACKAGE_ROTATION_JOURNAL_SCHEMA:
+        _fail("backend package rotation journal has unexpected fields")
+    if document.get("state") not in {"prepared", "committed"} or document.get("output") != str(output):
+        _fail("backend package rotation journal does not match this package")
+    candidate = _absolute(Path(str(document.get("candidate"))), "rotation journal candidate")
+    if candidate.parent != control_root / PACKAGE_CANDIDATES_DIRNAME or not PACKAGE_CANDIDATE_NAME_RE.fullmatch(candidate.name):
+        _fail("backend package rotation journal candidate is outside its namespace")
+    backup_value = document.get("backup")
+    if backup_value is not None:
+        if not isinstance(backup_value, str):
+            _fail("backend package rotation journal backup path is invalid")
+        backup = _absolute(Path(backup_value), "rotation journal backup")
+        if backup.parent != control_root / PACKAGE_BACKUPS_DIRNAME or not re.fullmatch(
+            r"\.backend-package-backup-[A-Za-z0-9._-]+", backup.name
+        ):
+            _fail("backend package rotation journal backup is outside its namespace")
+    old_names = _rotation_names(document.get("old_children"), "journal old")
+    new_names = _rotation_names(document.get("new_children"), "journal new")
+    old_identity = document.get("old_identity")
+    new_identity = document.get("new_identity")
+    if not isinstance(old_identity, dict) or set(old_identity) != set(old_names):
+        _fail("backend package rotation journal old identity map is invalid")
+    if not isinstance(new_identity, dict) or set(new_identity) != set(new_names):
+        _fail("backend package rotation journal new identity map is invalid")
+    old_sha256 = document.get("old_receipt_sha256")
+    new_sha256 = document.get("new_receipt_sha256")
+    if old_sha256 is not None and (not isinstance(old_sha256, str) or not SHA256_RE.fullmatch(old_sha256)):
+        _fail("backend package rotation journal old receipt hash is invalid")
+    if not isinstance(new_sha256, str) or not SHA256_RE.fullmatch(new_sha256):
+        _fail("backend package rotation journal new receipt hash is invalid")
+    if bool(old_names) != (old_sha256 is not None):
+        _fail("backend package rotation journal old inventory and receipt disagree")
+    if "backend-build-receipt.json" not in new_names or (old_names and "backend-build-receipt.json" not in old_names):
+        _fail("backend package rotation journal has no package receipt")
+    return {
+        "journal": str(path),
+        "output": str(output),
+        "candidate": str(candidate),
+        "backup": backup_value,
+        "old_children": old_names,
+        "new_children": new_names,
+        "old_identity": old_identity,
+        "new_identity": new_identity,
+        "old_receipt_sha256": old_sha256,
+        "new_receipt_sha256": new_sha256,
+        "state": document["state"],
+    }
+
+
+def _rollback_package_rotation(
+    rotation: Mapping[str, Any], *, tolerate_completed: bool = False
+) -> list[str]:
     """Move only this rotation's children back, refusing destination overwrite."""
 
     output = Path(str(rotation["output"]))
@@ -2066,28 +2469,56 @@ def _rollback_package_rotation(rotation: Mapping[str, Any]) -> list[str]:
         source = output / name
         target = candidate / name
         if not source.exists() and not source.is_symlink():
+            if tolerate_completed and (target.exists() or target.is_symlink()):
+                try:
+                    _rotation_identity_map(candidate, [name], "completed candidate rollback")
+                except (BackendBuildError, OSError) as error:
+                    errors.append(str(error))
+                continue
+            errors.append(f"candidate rollback source is missing: {name}")
             continue
         if target.exists() or target.is_symlink():
             errors.append(f"candidate rollback destination already exists: {name}")
             continue
         try:
-            os.rename(source, target)
-        except OSError as error:
+            _rotation_identity_map(output, [name], "candidate rollback source")
+            _rename_package_child(output, candidate, name, "candidate rollback")
+        except (BackendBuildError, OSError) as error:
             errors.append(f"candidate rollback failed for {name}: {error}")
     if backup is not None:
         for name in old_names:
             source = backup / name
             target = output / name
             if not source.exists() and not source.is_symlink():
+                if tolerate_completed and (target.exists() or target.is_symlink()):
+                    try:
+                        _rotation_identity_map(output, [name], "completed old package rollback")
+                    except (BackendBuildError, OSError) as error:
+                        errors.append(str(error))
+                    continue
                 errors.append(f"backup rollback source is missing: {name}")
                 continue
             if target.exists() or target.is_symlink():
                 errors.append(f"old package rollback destination already exists: {name}")
                 continue
             try:
-                os.rename(source, target)
-            except OSError as error:
+                _rotation_identity_map(backup, [name], "old package rollback source")
+                _rename_package_child(backup, output, name, "old package rollback")
+            except (BackendBuildError, OSError) as error:
                 errors.append(f"old package rollback failed for {name}: {error}")
+    for directory, label in (
+        (output, "backend package output directory after rollback"),
+        (candidate, "backend package candidate directory after rollback"),
+    ):
+        try:
+            _fsync_directory(directory, label)
+        except (BackendBuildError, OSError) as error:
+            errors.append(f"{label} durability sync failed: {error}")
+    if backup is not None:
+        try:
+            _fsync_directory(backup, "backend package backup directory after rollback")
+        except (BackendBuildError, OSError) as error:
+            errors.append(f"backend package backup directory durability sync failed: {error}")
     return errors
 
 
@@ -2111,66 +2542,82 @@ def _rotate_package(
     )
     if dict(current_children) != dict(previous_children):
         _fail("backend package changed while its build candidate was prepared")
-    candidate_children = _package_children(candidate, "candidate backend package")
+    candidate_children = _package_children(
+        candidate,
+        "candidate backend package",
+        exclude_candidate_marker=True,
+    )
     new_names = sorted(candidate_children)
     if "backend-build-receipt.json" not in candidate_children:
         _fail("candidate backend package has no build receipt")
     ordered_new_names = [name for name in new_names if name != "backend-build-receipt.json"]
     ordered_new_names.append("backend-build-receipt.json")
     old_names = sorted(current_children)
+    if len(old_names) > MAX_PACKAGE_ROTATION_CHILDREN or len(ordered_new_names) > MAX_PACKAGE_ROTATION_CHILDREN:
+        _fail("backend package rotation inventory is unbounded")
+    old_identity = _rotation_identity_map(output, old_names, "current backend package")
+    new_identity = _rotation_identity_map(candidate, ordered_new_names, "candidate backend package")
+    journal = control_root / PACKAGE_ROTATION_JOURNAL_NAME
+    if journal.exists() or journal.is_symlink():
+        _fail("backend package has a pending rotation journal")
     backup: Path | None = None
     if old_names:
-        try:
-            backup = Path(
-                tempfile.mkdtemp(
-                    prefix=".backend-package-backup-",
-                    dir=control_root / PACKAGE_BACKUPS_DIRNAME,
-                )
-            )
-        except OSError as error:
-            _fail(f"cannot create retained backend package backup: {error}")
+        suffix = candidate.name.removeprefix(".backend-package-candidate-")
+        if not suffix or not re.fullmatch(r"[A-Za-z0-9._-]+", suffix):
+            _fail("backend package candidate has an unsafe rotation suffix")
+        backup = control_root / PACKAGE_BACKUPS_DIRNAME / f".backend-package-backup-{suffix}"
+        if backup.exists() or backup.is_symlink():
+            _fail("backend package rotation backup already exists")
+    old_receipt_sha256 = _sha256_bytes(previous_receipt_bytes) if previous_receipt_bytes is not None else None
+    new_receipt_sha256 = _sha256_bytes(candidate_receipt_bytes)
     rotation: dict[str, Any] = {
         "output": str(output),
         "candidate": str(candidate),
         "backup": str(backup) if backup is not None else None,
+        "journal": str(journal),
         "old_children": old_names,
         "new_children": ordered_new_names,
+        "old_identity": old_identity,
+        "new_identity": new_identity,
+        "old_receipt_sha256": old_receipt_sha256,
+        "new_receipt_sha256": new_receipt_sha256,
     }
     moved_old: list[str] = []
     moved_new: list[str] = []
     try:
+        _write_rotation_journal(rotation, "prepared")
         if backup is not None:
+            try:
+                backup.mkdir()
+            except OSError as error:
+                _fail(f"cannot create retained backend package backup: {error}")
+            _fsync_directory(backup, "backend package backup directory")
+            _fsync_directory(backup.parent, "backend package backup directory")
             for name in old_names:
                 _rename_package_child(output, backup, name, "old package backup")
                 moved_old.append(name)
         for name in ordered_new_names:
             _rename_package_child(candidate, output, name, "candidate package")
             moved_new.append(name)
+        _fsync_directory(output, "backend package output directory")
+        _fsync_directory(candidate, "backend package candidate directory")
         if backup is not None:
             _write_json(
                 backup / "rotation.json",
-                {
-                    "schema": "fullmag.direct-compose.package-rotation.v1",
-                    "state": "succeeded",
-                    "old_receipt_sha256": (
-                        _sha256_bytes(previous_receipt_bytes)
-                        if previous_receipt_bytes is not None
-                        else None
-                    ),
-                    "new_receipt_sha256": _sha256_bytes(candidate_receipt_bytes),
-                    "old_children": old_names,
-                    "new_children": ordered_new_names,
-                },
+                _rotation_metadata_document(rotation),
                 "backend package rotation metadata",
             )
+            _fsync_directory(backup, "backend package backup directory")
+        _write_rotation_journal(rotation, "committed")
         return rotation
     except (BackendBuildError, OSError) as error:
         rollback = {**rotation, "old_children": moved_old, "new_children": moved_new}
         rollback_errors = _rollback_package_rotation(rollback)
-        if not rollback_errors and backup is not None:
+        if not rollback_errors and backup is not None and backup.exists():
             try:
                 if not any(backup.iterdir()):
                     _remove_owned_tree(backup)
+                    _fsync_directory(backup.parent, "backend package backup directory")
             except OSError as cleanup_error:
                 rollback_errors.append(f"empty backup cleanup failed: {cleanup_error}")
         if rollback_errors:
@@ -2181,6 +2628,420 @@ def _rotate_package(
         if isinstance(error, BackendBuildError):
             raise
         _fail(f"backend package publication failed: {error}")
+
+
+def _finalize_published_candidate(candidate: Path, rotation: Mapping[str, Any]) -> None:
+    """Remove only the marker from a candidate after a committed rotation.
+
+    ``_rotate_package`` intentionally excludes the candidate owner marker from
+    the package children it moves.  The marker therefore remains as a small
+    piece of incomplete-publication evidence until the committed rotation has
+    been checked.  This helper validates that exact rotation and refuses to
+    remove any payload or unknown entry from the candidate directory.
+    """
+
+    candidate = _absolute(candidate, "published backend package candidate")
+    if rotation.get("candidate") != str(candidate):
+        _fail("published backend package candidate does not match its rotation")
+    output_value = rotation.get("output")
+    new_names = rotation.get("new_children")
+    if not isinstance(output_value, str) or not isinstance(new_names, list):
+        _fail("published backend package rotation has no exact successor inventory")
+    if any(
+        not isinstance(name, str)
+        or not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+        for name in new_names
+    ) or len(new_names) != len(set(new_names)):
+        _fail("published backend package rotation successor inventory is unsafe")
+    output = _absolute(Path(output_value), "published backend package")
+    current_children = _package_children(
+        output,
+        "published backend package",
+        exclude_development_control=True,
+    )
+    if set(current_children) != set(new_names):
+        _fail("published backend package successor inventory differs from rotation")
+    try:
+        metadata = candidate.lstat()
+    except FileNotFoundError:
+        # A retry after a completed cleanup is idempotent.  No path is
+        # removed in this case.
+        return
+    except OSError as error:
+        _fail(f"cannot inspect published backend package candidate: {error}")
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+        or not stat.S_ISDIR(metadata.st_mode)
+    ):
+        _fail("published backend package candidate is unsafe")
+    try:
+        entries = tuple(sorted(candidate.iterdir(), key=lambda path: path.name))
+    except OSError as error:
+        _fail(f"cannot inspect published backend package candidate: {error}")
+    if not entries:
+        # A crash after unlinking the marker leaves no payload to preserve.
+        # Removing this empty directory is the only recovery deletion allowed.
+        try:
+            candidate.rmdir()
+        except OSError as error:
+            _fail(f"cannot remove empty published backend package candidate: {error}")
+        _fsync_directory(candidate.parent, "backend package candidate directory")
+        return
+    if len(entries) != 1 or entries[0].name != PACKAGE_CANDIDATE_MARKER:
+        _fail("published backend package candidate retains payload or unknown entries")
+    marker = entries[0]
+    marker_metadata = marker.lstat()
+    if not stat.S_ISREG(marker_metadata.st_mode) or marker_metadata.st_nlink != 1:
+        _fail("published backend package candidate owner marker is unsafe")
+    try:
+        marker.unlink()
+        _fsync_directory(candidate, "published backend package candidate directory")
+        candidate.rmdir()
+        _fsync_directory(candidate.parent, "backend package candidate directory")
+    except OSError as error:
+        _fail(f"cannot finalize published backend package candidate: {error}")
+
+
+def _rotation_children(
+    root: Path,
+    name: str,
+    *,
+    candidate: bool = False,
+    output: bool = False,
+) -> set[str] | None:
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        _fail(f"cannot inspect {name}: {error}")
+    return set(
+        _package_children(
+            root,
+            name,
+            exclude_development_control=output,
+            exclude_candidate_marker=candidate,
+        )
+    )
+
+
+def _rotation_validate_full(
+    root: Path,
+    name: str,
+    rotation: Mapping[str, Any],
+    expected_sha256: str,
+    expected_children: set[str],
+    identity: object,
+    *,
+    candidate: bool = False,
+    backup: bool = False,
+    output: bool = False,
+) -> tuple[dict[str, Any], bytes]:
+    receipt, receipt_bytes, children = _validated_package(
+        root,
+        name,
+        exclude_development_control=output,
+        exclude_candidate_marker=candidate,
+    )
+    if _sha256_bytes(receipt_bytes) != expected_sha256 or set(children) != expected_children:
+        _fail(f"{name} differs from the pending rotation receipt")
+    identity_names = expected_children - ({"rotation.json"} if backup else set())
+    _rotation_validate_identity_map(root, identity_names, identity, name)
+    if candidate:
+        _assert_direct_candidate_inventory(
+            root, receipt["artifacts"], include_receipt=True
+        )
+    if backup:
+        metadata_path = root / "rotation.json"
+        expected = _rotation_metadata_document(rotation)
+        try:
+            metadata_path.lstat()
+        except FileNotFoundError:
+            _write_json(metadata_path, expected, "backend package rotation metadata recovery")
+            _fsync_directory(root, "backend package backup directory")
+        observed, _ = _read_json(
+            metadata_path, "backend package rotation metadata", 1024 * 1024
+        )
+        if observed != expected:
+            _fail("pending backend package rotation metadata differs from its journal")
+        _assert_exact_backup_inventory(root, receipt, name)
+    return receipt, receipt_bytes
+
+
+def _rotation_remove_empty_backup(rotation: Mapping[str, Any]) -> None:
+    value = rotation.get("backup")
+    if value is None:
+        return
+    backup = Path(str(value))
+    children = _rotation_children(backup, "pending backend package backup")
+    if children is None:
+        return
+    if children == {"rotation.json"}:
+        observed, _ = _read_json(
+            backup / "rotation.json", "pending backend package rotation metadata", 1024 * 1024
+        )
+        if observed != _rotation_metadata_document(rotation):
+            _fail("pending backend package rotation metadata differs before cleanup")
+    elif children:
+        _fail("pending backend package backup is not empty")
+    _remove_owned_tree(backup)
+    _fsync_directory(backup.parent, "backend package backup directory")
+
+
+def _rotation_validate_partitions(
+    rotation: Mapping[str, Any],
+    output: Path,
+    candidate: Path,
+    backup: Path | None,
+) -> tuple[set[str], set[str], set[str], set[str] | None, set[str] | None]:
+    """Classify every journaled child before any recovery rename or cleanup."""
+
+    old_names = set(rotation["old_children"])
+    new_names = set(rotation["new_children"])
+    if old_names and backup is None:
+        _fail("pending rotation with an old package has no backup namespace")
+    output_children = _rotation_children(
+        output, "pending backend package output", output=True
+    )
+    if output_children is None:
+        _fail("pending rotation output is missing")
+    candidate_children = _rotation_children(
+        candidate, "pending backend package candidate", candidate=True
+    )
+    backup_children = (
+        _rotation_children(backup, "pending backend package backup")
+        if backup is not None
+        else None
+    )
+    backup_payload = (backup_children or set()) - {"rotation.json"}
+    if output_children - old_names - new_names:
+        _fail("pending rotation has unknown current children")
+    if candidate_children is not None and candidate_children - new_names:
+        _fail("pending rotation has unknown candidate children")
+    if backup_payload - old_names:
+        _fail("pending rotation has unknown backup children")
+    if backup_children and "rotation.json" in backup_children:
+        observed, _ = _read_json(
+            backup / "rotation.json", "pending backend package rotation metadata", 1024 * 1024
+        )
+        if observed != _rotation_metadata_document(rotation):
+            _fail("pending backend package rotation metadata differs from its journal")
+
+    output_identity = _rotation_identity_map(
+        output, sorted(output_children), "pending backend package output"
+    )
+    candidate_identity = (
+        _rotation_identity_map(
+            candidate, sorted(candidate_children), "pending backend package candidate"
+        )
+        if candidate_children is not None
+        else {}
+    )
+    backup_identity = (
+        _rotation_identity_map(
+            backup, sorted(backup_payload), "pending backend package backup"
+        )
+        if backup_payload and backup is not None
+        else {}
+    )
+    old_identity = rotation["old_identity"]
+    new_identity = rotation["new_identity"]
+
+    def matches(expected: object, name: str, actual: list[int]) -> bool:
+        value = expected.get(name) if isinstance(expected, dict) else None
+        return (
+            isinstance(value, list)
+            and len(value) == 3
+            and all(
+                isinstance(item, int) and not isinstance(item, bool) and item >= 0
+                for item in value
+            )
+            and actual == value
+        )
+
+    # Each observed object must be one of the exact old/new objects recorded by
+    # the journal.  A top-level name shared by both generations is accepted
+    # only when its identity selects exactly one generation.
+    for name in sorted(output_children):
+        old_match = name in old_names and matches(old_identity, name, output_identity[name])
+        new_match = name in new_names and matches(new_identity, name, output_identity[name])
+        if old_match == new_match:
+            _fail(f"pending rotation output child has no unique journal identity: {name}")
+    for name in sorted(candidate_children or set()):
+        if name not in new_names or not matches(new_identity, name, candidate_identity[name]):
+            _fail(f"pending rotation candidate child has no journal identity: {name}")
+    for name in sorted(backup_payload):
+        if name not in old_names or not matches(old_identity, name, backup_identity[name]):
+            _fail(f"pending rotation backup child has no journal identity: {name}")
+
+    old_locations: dict[str, str] = {}
+    for name in sorted(old_names):
+        locations: list[str] = []
+        if name in output_children and matches(old_identity, name, output_identity[name]):
+            locations.append("output")
+        if name in backup_payload and matches(old_identity, name, backup_identity[name]):
+            locations.append("backup")
+        if len(locations) != 1:
+            _fail(f"pending rotation old child is missing or duplicated: {name}")
+        old_locations[name] = locations[0]
+
+    new_locations: dict[str, str] = {}
+    for name in sorted(new_names):
+        locations: list[str] = []
+        if name in output_children and matches(new_identity, name, output_identity[name]):
+            locations.append("output")
+        if (
+            candidate_children is not None
+            and name in candidate_children
+            and matches(new_identity, name, candidate_identity[name])
+        ):
+            locations.append("candidate")
+        if len(locations) != 1:
+            _fail(f"pending rotation new child is missing or duplicated: {name}")
+        new_locations[name] = locations[0]
+
+    moved_old = {name for name, location in old_locations.items() if location == "backup"}
+    moved_new = {name for name, location in new_locations.items() if location == "output"}
+    return moved_old, moved_new, output_children, candidate_children, backup_children
+
+
+def _recover_pending_package_rotation(output: Path, control_root: Path, build_root: Path) -> None:
+    """Recover one exact journaled rotation while the runtime lock is held."""
+
+    rotation = _read_rotation_journal(output, control_root)
+    if rotation is None:
+        return
+    candidate = Path(str(rotation["candidate"]))
+    backup_value = rotation.get("backup")
+    backup = Path(str(backup_value)) if backup_value is not None else None
+    old_names = set(rotation["old_children"])
+    new_names = set(rotation["new_children"])
+    moved_old, moved_new, output_children, candidate_children, backup_children = (
+        _rotation_validate_partitions(rotation, output, candidate, backup)
+    )
+    old_sha256 = rotation.get("old_receipt_sha256")
+    new_sha256 = str(rotation["new_receipt_sha256"])
+
+    # A complete successor in output plus a complete old rollback in backup is
+    # the only published state.  Candidate marker cleanup is then the final
+    # idempotent step; no payload is removed from an unknown location.
+    if moved_new == new_names and moved_old == old_names:
+        if old_names:
+            if backup is None:
+                _fail("published pending rotation has no verified rollback namespace")
+            backup_expected = old_names | (
+                {"rotation.json"} if backup_children and "rotation.json" in backup_children else set()
+            )
+            _rotation_validate_full(
+                backup,
+                "pending backend package backup",
+                rotation,
+                str(old_sha256),
+                backup_expected,
+                rotation["old_identity"],
+                backup=True,
+            )
+        elif backup_children:
+            _fail("first published pending rotation has an unexpected backup")
+        current, _ = _rotation_validate_full(
+            output,
+            "published backend package",
+            rotation,
+            new_sha256,
+            new_names,
+            rotation["new_identity"],
+            output=True,
+        )
+        if candidate.exists() or candidate.is_symlink():
+            if candidate_children:
+                _fail("published pending candidate still contains payload")
+            entries = tuple(sorted(candidate.iterdir(), key=lambda path: path.name))
+            if entries:
+                marker = _validate_candidate_marker(candidate, output, build_root, state="ready")
+                if marker.get("artifact_inventory_sha256") != _sha256_bytes(
+                    _canonical(current["artifacts"])
+                ):
+                    _fail("published pending candidate marker differs from current package")
+            _finalize_published_candidate(candidate, rotation)
+        _clear_rotation_journal(rotation)
+        return
+
+    # No payload moved: this is the prepared journal state.  Validate both
+    # complete generations, then retire only the exact owned candidate/backup.
+    if not moved_old and not moved_new:
+        if candidate_children is None:
+            _fail("unpublished pending rotation lost its candidate")
+        _validate_candidate_marker(candidate, output, build_root, state="ready")
+        if old_names:
+            _rotation_validate_full(
+                output,
+                "unpublished current backend package",
+                rotation,
+                str(old_sha256),
+                old_names,
+                rotation["old_identity"],
+                output=True,
+            )
+        elif output_children:
+            _fail("first unpublished pending rotation retained current children")
+        _rotation_validate_full(
+            candidate,
+            "unpublished backend package candidate",
+            rotation,
+            new_sha256,
+            new_names,
+            rotation["new_identity"],
+            candidate=True,
+        )
+        _remove_owned_tree(candidate)
+        _fsync_directory(candidate.parent, "backend package candidate directory")
+        _rotation_remove_empty_backup(rotation)
+        _clear_rotation_journal(rotation)
+        return
+
+    # Every other partition is a crash during old->backup or candidate->output.
+    # Roll back only the names actually observed in their moved locations.  A
+    # later crash during this rollback is handled by the same classification.
+    if candidate_children is None:
+        _fail("partial pending rotation lost its candidate")
+    _validate_candidate_marker(candidate, output, build_root, state="ready")
+    rollback = {
+        **rotation,
+        "old_children": sorted(moved_old),
+        "new_children": sorted(moved_new),
+    }
+    rollback_errors = _rollback_package_rotation(rollback, tolerate_completed=True)
+    if rollback_errors:
+        _fail("pending backend package rollback is incomplete: " + "; ".join(rollback_errors))
+    if old_names:
+        _rotation_validate_full(
+            output,
+            "rolled-back backend package",
+            rotation,
+            str(old_sha256),
+            old_names,
+            rotation["old_identity"],
+            output=True,
+        )
+    elif _rotation_children(output, "rolled-back first backend package", output=True):
+        _fail("first package rollback retained current children")
+    _rotation_validate_full(
+        candidate,
+        "rolled-back backend package candidate",
+        rotation,
+        new_sha256,
+        new_names,
+        rotation["new_identity"],
+        candidate=True,
+    )
+    _remove_owned_tree(candidate)
+    _fsync_directory(candidate.parent, "backend package candidate directory")
+    _rotation_remove_empty_backup(rotation)
+    _clear_rotation_journal(rotation)
 
 
 def _retention_receipt_identity(
@@ -2423,6 +3284,673 @@ def _prune_retention_archives(archive_root: Path) -> int:
     if removed:
         _fsync_directory(archive_root, "backend package retention archive directory")
     return removed
+
+
+def _candidate_marker_path(candidate: Path) -> Path:
+    return candidate / PACKAGE_CANDIDATE_MARKER
+
+
+def _validate_candidate_marker(
+    candidate: Path,
+    package_root: Path,
+    build_root: Path,
+    *,
+    state: str | None = None,
+) -> dict[str, Any]:
+    """Validate the worker-owned marker for one incomplete package candidate."""
+
+    candidate = _absolute(candidate, "backend package candidate")
+    package_root = _absolute(package_root, "backend package root")
+    build_root = _absolute(build_root, "backend build root")
+    expected_parent = package_root / PACKAGE_DEVELOPMENT_DIRNAME / PACKAGE_CANDIDATES_DIRNAME
+    if candidate.parent != expected_parent or not PACKAGE_CANDIDATE_NAME_RE.fullmatch(candidate.name):
+        _fail(f"backend package candidate is outside the owned candidate namespace: {candidate}")
+    _assert_no_links(candidate, "backend package candidate")
+    metadata = candidate.lstat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        _fail(f"backend package candidate is not a directory: {candidate}")
+    marker = _candidate_marker_path(candidate)
+    try:
+        marker_metadata = marker.lstat()
+    except OSError as error:
+        _fail(f"cannot inspect backend package candidate owner marker: {error}")
+    if not stat.S_ISREG(marker_metadata.st_mode) or marker_metadata.st_nlink != 1:
+        _fail("backend package candidate owner marker is not one regular file")
+    document, _ = _read_json(marker, "backend package candidate owner marker", 16 * 1024)
+    required = {
+        "schema",
+        "state",
+        "candidate",
+        "package_root",
+        "build_root",
+        "cargo_profile",
+    }
+    if document.get("state") == "ready":
+        required.add("artifact_inventory_sha256")
+    if set(document) != required:
+        _fail("backend package candidate owner marker has unexpected fields")
+    if (
+        document.get("schema") != PACKAGE_CANDIDATE_SCHEMA
+        or document.get("candidate") != str(candidate)
+        or document.get("package_root") != str(package_root)
+        or document.get("build_root") != str(build_root)
+        or document.get("cargo_profile") != BACKEND_CARGO_PROFILE
+        or document.get("state") not in {"building", "ready"}
+    ):
+        _fail("backend package candidate owner marker does not match this build")
+    marker_state = str(document["state"])
+    if state is not None and marker_state != state:
+        _fail(
+            "backend package candidate owner marker has unexpected state: "
+            f"{marker_state!r}"
+        )
+    if marker_state == "ready" and not (
+        isinstance(document.get("artifact_inventory_sha256"), str)
+        and SHA256_RE.fullmatch(document["artifact_inventory_sha256"])
+    ):
+        _fail("backend package candidate owner marker has no artifact inventory proof")
+    return document
+
+
+def _write_candidate_marker(
+    candidate: Path,
+    package_root: Path,
+    build_root: Path,
+    *,
+    state: str,
+    records: list[dict[str, Any]] | None = None,
+) -> None:
+    document: dict[str, Any] = {
+        "schema": PACKAGE_CANDIDATE_SCHEMA,
+        "state": state,
+        "candidate": str(_absolute(candidate, "backend package candidate")),
+        "package_root": str(_absolute(package_root, "backend package root")),
+        "build_root": str(_absolute(build_root, "backend build root")),
+        "cargo_profile": BACKEND_CARGO_PROFILE,
+    }
+    if records is not None:
+        document["artifact_inventory_sha256"] = _sha256_bytes(_canonical(records))
+    _write_json(
+        _candidate_marker_path(candidate),
+        document,
+        "backend package candidate owner marker",
+    )
+    _fsync_directory(candidate, "backend package candidate directory")
+
+
+def _reject_partial_package_candidates(
+    output: Path,
+    control_root: Path,
+    build_root: Path,
+    *,
+    current_package: tuple[
+        dict[str, Any], bytes, dict[str, tuple[int, int, int, int, int]]
+    ]
+    | None = None,
+) -> None:
+    """Recover only a marker-only candidate after a committed package rotation.
+
+    A rotation moves the package payload before the candidate marker is
+    removed.  If the worker stops between those operations, the next start may
+    remove that marker only after validating the current package's actual
+    receipt inventory.  Every other candidate state remains an operator-visible
+    failure.  An empty owned candidate directory is also safe to remove: it is
+    the only state left by a crash after marker unlink and before ``rmdir``.
+    """
+
+    candidates = control_root / PACKAGE_CANDIDATES_DIRNAME
+    try:
+        iterator = iter(candidates.iterdir())
+        entries: list[Path] = []
+        for _ in range(MAX_PACKAGE_CANDIDATES + 1):
+            try:
+                entries.append(next(iterator))
+            except StopIteration:
+                break
+        if len(entries) > MAX_PACKAGE_CANDIDATES:
+            _fail("backend package candidate staging exceeds its bounded entry limit")
+    except OSError as error:
+        _fail(f"cannot inspect backend package candidate staging: {error}")
+    for entry in sorted(entries, key=lambda path: path.name):
+        metadata = entry.lstat()
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+            or not stat.S_ISDIR(metadata.st_mode)
+        ):
+            _fail(f"backend package candidate staging contains an unsafe entry: {entry.name}")
+        try:
+            child_entries = tuple(sorted(entry.iterdir(), key=lambda path: path.name))
+        except OSError as error:
+            _fail(f"cannot inspect backend package candidate {entry.name}: {error}")
+        if not child_entries:
+            if not PACKAGE_CANDIDATE_NAME_RE.fullmatch(entry.name):
+                _fail(
+                    "backend package candidate staging contains an unknown empty entry: "
+                    f"{entry.name}"
+                )
+            try:
+                entry.rmdir()
+                _fsync_directory(entry.parent, "backend package candidate directory")
+            except OSError as error:
+                _fail(f"cannot remove empty backend package candidate {entry.name}: {error}")
+            continue
+
+        marker = _validate_candidate_marker(entry, output, build_root, state=None)
+        if marker.get("state") != "ready":
+            _fail(
+                "backend package candidate from an incomplete prior build is preserved: "
+                f"{entry.name}"
+            )
+        if len(child_entries) != 1 or child_entries[0].name != PACKAGE_CANDIDATE_MARKER:
+            _fail(
+                "ready backend package candidate retains payload or unknown entries: "
+                f"{entry.name}"
+            )
+        marker_path = child_entries[0]
+        marker_metadata = marker_path.lstat()
+        if not stat.S_ISREG(marker_metadata.st_mode) or marker_metadata.st_nlink != 1:
+            _fail("ready backend package candidate owner marker is unsafe")
+        if current_package is None:
+            _fail(
+                "ready backend package candidate cannot be retired without a verified current package"
+            )
+        artifacts = current_package[0].get("artifacts")
+        if not isinstance(artifacts, list):
+            _fail("verified current backend package has no artifact inventory")
+        current_inventory_sha256 = _sha256_bytes(_canonical(artifacts))
+        if marker.get("artifact_inventory_sha256") != current_inventory_sha256:
+            _fail(
+                "ready backend package candidate inventory differs from the verified current package"
+            )
+        try:
+            marker_path.unlink()
+            _fsync_directory(entry, "backend package candidate directory")
+            entry.rmdir()
+            _fsync_directory(entry.parent, "backend package candidate directory")
+        except OSError as error:
+            _fail(f"cannot retire published backend package candidate {entry.name}: {error}")
+
+
+def _flatten_package_library_aliases(root: Path) -> None:
+    """Materialize only the allowed native SONAME aliases in a direct candidate."""
+
+    library_root = root / "lib"
+    if not library_root.exists() and not library_root.is_symlink():
+        _fail("direct backend package has no library directory")
+    metadata = library_root.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        _fail("direct backend package library directory is unsafe")
+    for child in sorted(library_root.iterdir(), key=lambda path: path.name):
+        if not child.is_symlink():
+            continue
+        source = _resolve_package_library_alias(library_root, child)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{child.name}.flatten-", dir=library_root
+        )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        try:
+            temporary.unlink()
+            _copy_regular_file(source, temporary, source.stat().st_mode, "package library alias")
+            os.replace(temporary, child)
+        except OSError as error:
+            _fail(f"cannot flatten package library alias {child}: {error}")
+        finally:
+            temporary.unlink(missing_ok=True)
+    _fsync_directory(library_root, "direct backend package library directory")
+
+
+def _assert_direct_candidate_empty_for_make(candidate: Path) -> None:
+    """Require a newly owned candidate to contain only its owner marker."""
+
+    candidate = _absolute(candidate, "backend package candidate")
+    try:
+        entries = tuple(candidate.iterdir())
+    except OSError as error:
+        _fail(f"cannot inspect direct backend package candidate before Make: {error}")
+    if len(entries) != 1 or entries[0].name != PACKAGE_CANDIDATE_MARKER:
+        _fail("direct backend package candidate contains pre-existing payload")
+    metadata = entries[0].lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        _fail("direct backend package candidate owner marker is unsafe before Make")
+
+
+def _discard_direct_make_launcher(root: Path) -> None:
+    """Remove Make's repo-local wrapper before package inventory.
+
+    The wrapper is useful for a repo-local ``.fullmag/local`` install, but its
+    relative repository and managed-runtime roots are wrong after a candidate
+    is moved below ``/opt/fullmag/package``.  The direct candidate is checked
+    as marker-only before Make, so this one regular file is an output owned by
+    the current invocation; unknown files remain fail-closed for inventory.
+    """
+
+    launcher = _absolute(root, "direct backend package") / "bin" / "fullmag"
+    _assert_no_links(launcher.parent, "direct Make launcher parent")
+    try:
+        metadata = launcher.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        _fail(f"cannot inspect direct Make launcher: {error}")
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+    ):
+        _fail("direct Make launcher is not one regular file")
+    try:
+        launcher.unlink()
+    except OSError as error:
+        _fail(f"cannot remove direct Make launcher: {error}")
+    _fsync_directory(launcher.parent, "direct backend package bin directory")
+
+
+def _assert_direct_candidate_inventory(
+    root: Path,
+    records: list[dict[str, Any]],
+    *,
+    include_receipt: bool = False,
+) -> None:
+    """Reject Make leftovers before the candidate can enter package rotation."""
+
+    optional_files = set(PACKAGE_CANDIDATE_OPTIONAL_FILES)
+    if include_receipt:
+        optional_files.add("backend-build-receipt.json")
+    allowed_files = set(optional_files)
+    allowed_files.update(str(record["path"]) for record in records)
+    actual_files, actual_directories = _stage_tree_inventory(root)
+    allowed_directories: set[str] = set()
+    for relative in allowed_files:
+        parts = PurePosixPath(relative).parts
+        allowed_directories.update(
+            PurePosixPath(*parts[:index]).as_posix() for index in range(1, len(parts))
+        )
+    if actual_files - optional_files != allowed_files - optional_files:
+        _fail("direct backend package candidate has an unrecognized file inventory")
+    if actual_directories != allowed_directories:
+        _fail("direct backend package candidate has an unrecognized directory inventory")
+
+
+def _known_failed_candidate_path(relative: str) -> bool:
+    if relative in {
+        PACKAGE_CANDIDATE_MARKER,
+        "direct-backend-build.log",
+        "install-cli-build.log",
+        "install-cli-managed-fem-gpu.log",
+        "source-identity.json",
+        "launcher-build-mode",
+        "bin/fullmag",
+        "backend-build-receipt.json",
+        *REQUIRED_PACKAGE_PATHS,
+        *RUNTIME_MANIFEST_PATHS,
+    }:
+        return True
+    if relative == "_fullmag_core.so.new":
+        return True
+    if relative.startswith("bin/") and relative.endswith(".new"):
+        return relative[:-4] in {
+            path for path in REQUIRED_PACKAGE_PATHS if path.startswith("bin/")
+        }
+    if not relative.startswith("lib/") or "/" in relative[4:]:
+        return False
+    return bool(
+        re.fullmatch(
+            r"libfullmag_(?:fdm|fem)\.so(?:\.[A-Za-z0-9._-]+)?",
+            relative[4:],
+        )
+    )
+
+
+def _failed_candidate_inventory_is_known(candidate: Path) -> bool:
+    """Accept only bounded, marker-owned Make output for failure cleanup."""
+
+    allowed_files = {
+        PACKAGE_CANDIDATE_MARKER,
+        "direct-backend-build.log",
+        "install-cli-build.log",
+        "install-cli-managed-fem-gpu.log",
+        "source-identity.json",
+        "launcher-build-mode",
+        "bin/fullmag",
+        "backend-build-receipt.json",
+        *REQUIRED_PACKAGE_PATHS,
+        *RUNTIME_MANIFEST_PATHS,
+    }
+    allowed_directories: set[str] = {"lib"}
+    for relative in allowed_files:
+        parts = PurePosixPath(relative).parts
+        allowed_directories.update(
+            PurePosixPath(*parts[:index]).as_posix() for index in range(1, len(parts))
+        )
+    pending: list[tuple[Path, str]] = [(candidate, "")]
+    seen = 0
+    while pending:
+        directory, relative = pending.pop()
+        try:
+            children = tuple(sorted(directory.iterdir(), key=lambda path: path.name))
+        except OSError:
+            return False
+        for child in children:
+            child_relative = f"{relative}/{child.name}" if relative else child.name
+            try:
+                metadata = child.lstat()
+            except OSError:
+                return False
+            seen += 1
+            if seen > MAX_FAILED_CANDIDATE_ENTRIES:
+                return False
+            if stat.S_ISDIR(metadata.st_mode):
+                if child_relative not in allowed_directories:
+                    return False
+                pending.append((child, child_relative))
+            elif stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_nlink != 1 or not _known_failed_candidate_path(child_relative):
+                    return False
+            else:
+                return False
+    return True
+
+
+def _failed_make_paths(build_root: Path, candidate: Path, *, create: bool = False) -> tuple[Path, Path, Path]:
+    build_root = _absolute(build_root, "backend build root")
+    candidate = _absolute(candidate, "backend package candidate")
+    if not PACKAGE_CANDIDATE_NAME_RE.fullmatch(candidate.name):
+        _fail("failed Make attempt has an unsafe candidate name")
+    namespace = build_root / FAILED_MAKE_DIAGNOSTICS_DIRNAME
+    if create:
+        _ensure_directory(namespace, "failed Make diagnostics namespace")
+    else:
+        _assert_no_links(build_root, "backend build root")
+    attempt = namespace / candidate.name
+    return attempt, attempt / FAILED_MAKE_RECEIPT_NAME, attempt / FAILED_MAKE_LOG_NAME
+
+
+def _read_failed_make_attempt(
+    build_root: Path, candidate: Path
+) -> tuple[dict[str, Any], Path, Path] | None:
+    """Read one bounded attempt; malformed records are never disposable."""
+
+    attempt, receipt_path, log_path = _failed_make_paths(build_root, candidate)
+    try:
+        metadata = attempt.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        _fail(f"cannot inspect failed Make attempt: {error}")
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        _fail("failed Make attempt is not an owned directory")
+    names: set[str] = set()
+    try:
+        iterator = iter(attempt.iterdir())
+        for _ in range(3):
+            try:
+                names.add(next(iterator).name)
+            except StopIteration:
+                break
+        else:
+            _fail("failed Make attempt contains too many entries")
+    except OSError as error:
+        _fail(f"cannot inspect failed Make attempt: {error}")
+    if not names.issubset({FAILED_MAKE_RECEIPT_NAME, FAILED_MAKE_LOG_NAME}):
+        _fail("failed Make attempt contains an unknown entry")
+    receipt_metadata = receipt_path.lstat()
+    if not stat.S_ISREG(receipt_metadata.st_mode) or receipt_metadata.st_nlink != 1:
+        _fail("failed Make attempt receipt is not one regular file")
+    document, _ = _read_json(receipt_path, "failed Make attempt receipt", FAILED_MAKE_RECEIPT_BYTES_LIMIT)
+    state = document.get("state")
+    required = {"schema", "state", "candidate", "build_root", "log_path", "make_target"}
+    if state in {"failed", "succeeded"}:
+        required |= {"exit_code", "terminal_at_ns", "log_sha256", "log_size", "log_retired"}
+        if document.get("log_retired"):
+            required.add("log_retired_at_ns")
+    elif state != "building":
+        _fail("failed Make attempt receipt has an unknown state")
+    if set(document) != required:
+        _fail("failed Make attempt receipt has unexpected fields")
+    if (
+        document.get("schema") != FAILED_MAKE_SCHEMA
+        or document.get("candidate") != str(candidate)
+        or document.get("build_root") != str(_absolute(build_root, "backend build root"))
+        or document.get("log_path") != log_path.relative_to(build_root).as_posix()
+        or document.get("make_target") not in {"install-cli", "install-cli-dev"}
+    ):
+        _fail("failed Make attempt receipt does not match this build")
+    if state == "building":
+        return document, attempt, log_path
+    if (
+        isinstance(document.get("exit_code"), bool)
+        or not isinstance(document.get("exit_code"), int)
+        or not -255 <= document["exit_code"] <= 255
+        or isinstance(document.get("terminal_at_ns"), bool)
+        or not isinstance(document.get("terminal_at_ns"), int)
+        or document["terminal_at_ns"] <= 0
+        or isinstance(document.get("log_size"), bool)
+        or not isinstance(document.get("log_size"), int)
+        or not 0 <= document["log_size"] <= MAX_BUILD_LOG_BYTES
+        or not isinstance(document.get("log_sha256"), str)
+        or not SHA256_RE.fullmatch(document["log_sha256"])
+        or not isinstance(document.get("log_retired"), bool)
+        or (state == "failed") == (document["exit_code"] == 0)
+    ):
+        _fail("failed Make attempt receipt has invalid terminal evidence")
+    if document["log_retired"] and (
+        isinstance(document.get("log_retired_at_ns"), bool)
+        or not isinstance(document.get("log_retired_at_ns"), int)
+        or document["log_retired_at_ns"] <= 0
+    ):
+        _fail("failed Make attempt receipt has invalid retirement evidence")
+    if FAILED_MAKE_LOG_NAME in names:
+        log_metadata = log_path.lstat()
+        if not stat.S_ISREG(log_metadata.st_mode) or log_metadata.st_nlink != 1:
+            _fail("failed Make diagnostic log is not one regular file")
+        digest, observed = _sha256_file(log_path, "failed Make diagnostic log", MAX_BUILD_LOG_BYTES)
+        if observed.st_size != document["log_size"] or digest != document["log_sha256"]:
+            _fail("failed Make diagnostic log differs from its receipt")
+    elif not document["log_retired"]:
+        _fail("failed Make attempt is missing its diagnostic log")
+    return document, attempt, log_path
+
+
+def _begin_failed_make_attempt(build_root: Path, candidate: Path, make_target: str) -> Path:
+    attempt, receipt_path, log_path = _failed_make_paths(build_root, candidate, create=True)
+    try:
+        attempt.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        _fail("failed Make diagnostics already contain this candidate attempt")
+    try:
+        attempt.mkdir(mode=0o770)
+    except OSError as error:
+        _fail(f"cannot create failed Make attempt: {error}")
+    _write_json(
+        receipt_path,
+        {
+            "schema": FAILED_MAKE_SCHEMA,
+            "state": "building",
+            "candidate": str(_absolute(candidate, "backend package candidate")),
+            "build_root": str(_absolute(build_root, "backend build root")),
+            "log_path": log_path.relative_to(_absolute(build_root, "backend build root")).as_posix(),
+            "make_target": make_target,
+        },
+        "failed Make attempt receipt",
+    )
+    _fsync_directory(attempt, "failed Make attempt directory")
+    _fsync_directory(attempt.parent, "failed Make diagnostics namespace")
+    return log_path
+
+
+def _finish_failed_make_attempt(build_root: Path, candidate: Path, exit_code: int) -> dict[str, Any]:
+    record = _read_failed_make_attempt(build_root, candidate)
+    if record is None or record[0].get("state") != "building":
+        _fail("failed Make attempt has no building receipt")
+    document, attempt, log_path = record
+    # The terminal receipt is the durable witness for the external log.  Sync
+    # the completed regular file before hashing it or publishing that receipt.
+    _fsync_owned_tree(log_path, "failed Make diagnostic log")
+    digest, observed = _sha256_file(log_path, "failed Make diagnostic log", MAX_BUILD_LOG_BYTES)
+    document = dict(document)
+    document.update({
+        "state": "failed" if exit_code else "succeeded",
+        "exit_code": exit_code,
+        "terminal_at_ns": time.time_ns(),
+        "log_sha256": digest,
+        "log_size": observed.st_size,
+        "log_retired": False,
+    })
+    _write_json(attempt / FAILED_MAKE_RECEIPT_NAME, document, "failed Make attempt receipt")
+    _fsync_directory(attempt, "failed Make attempt directory")
+    return document
+
+
+def _retire_make_log(record: tuple[dict[str, Any], Path, Path]) -> None:
+    document, attempt, log_path = record
+    if document.get("log_retired"):
+        try:
+            log_path.lstat()
+        except FileNotFoundError:
+            return
+        _remove_owned_tree(log_path)
+        _fsync_directory(attempt, "failed Make attempt directory")
+        return
+    document = dict(document)
+    document.update({"log_retired": True, "log_retired_at_ns": time.time_ns()})
+    _write_json(attempt / FAILED_MAKE_RECEIPT_NAME, document, "failed Make attempt receipt")
+    _fsync_directory(attempt, "failed Make attempt directory")
+    if log_path.exists() or log_path.is_symlink():
+        _remove_owned_tree(log_path)
+        _fsync_directory(attempt, "failed Make attempt directory")
+
+
+def _prune_failed_make_logs(build_root: Path, package_root: Path | None = None) -> None:
+    """Retire only known terminal failed logs; preserve building/foreign records."""
+
+    build_root = _absolute(build_root, "backend build root")
+    namespace = build_root / FAILED_MAKE_DIAGNOSTICS_DIRNAME
+    expected_candidate_parent = None
+    if package_root is not None:
+        expected_candidate_parent = (
+            _absolute(package_root, "backend package root")
+            / PACKAGE_DEVELOPMENT_DIRNAME
+            / PACKAGE_CANDIDATES_DIRNAME
+        )
+    try:
+        _assert_no_links(namespace, "failed Make diagnostics namespace")
+        iterator = iter(namespace.iterdir())
+        entries = []
+        for _ in range(FAILED_MAKE_RECORD_LIMIT + 1):
+            try:
+                entries.append(next(iterator))
+            except StopIteration:
+                break
+        if len(entries) > FAILED_MAKE_RECORD_LIMIT:
+            return
+        entries.sort(key=lambda path: path.name)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        _fail(f"cannot inspect failed Make diagnostics namespace: {error}")
+    if len(entries) > FAILED_MAKE_RECORD_LIMIT:
+        return
+    records: list[tuple[dict[str, Any], Path, Path]] = []
+    for entry in entries:
+        if not PACKAGE_CANDIDATE_NAME_RE.fullmatch(entry.name):
+            return
+        try:
+            receipt, _ = _read_json(entry / FAILED_MAKE_RECEIPT_NAME, "failed Make attempt receipt", FAILED_MAKE_RECEIPT_BYTES_LIMIT)
+            candidate_value = receipt.get("candidate")
+            if not isinstance(candidate_value, str):
+                return
+            candidate = Path(candidate_value)
+            if (
+                expected_candidate_parent is None
+                or candidate.parent != expected_candidate_parent
+                or candidate.name != entry.name
+            ):
+                return
+            try:
+                candidate_metadata = candidate.lstat()
+            except FileNotFoundError:
+                candidate_metadata = None
+            except OSError:
+                return
+            if candidate_metadata is not None:
+                if not stat.S_ISDIR(candidate_metadata.st_mode):
+                    return
+                _validate_candidate_marker(
+                    candidate,
+                    expected_candidate_parent.parent.parent,
+                    build_root,
+                )
+            record = _read_failed_make_attempt(build_root, candidate)
+        except (BackendBuildError, OSError):
+            return
+        if record is None or record[1] != entry or record[0].get("state") == "building":
+            return
+        if record[0].get("state") == "failed" and not record[0].get("log_retired"):
+            records.append(record)
+    records.sort(key=lambda item: int(item[0]["terminal_at_ns"]))
+    total_bytes = sum(int(item[0]["log_size"]) for item in records)
+    while len(records) > FAILED_MAKE_LOG_LIMIT or total_bytes > FAILED_MAKE_LOG_BYTES_LIMIT:
+        record = records.pop(0)
+        total_bytes -= int(record[0]["log_size"])
+        _retire_make_log(record)
+
+
+def _failed_candidate_diagnostics_present(candidate: Path) -> bool:
+    """Keep a failed candidate when it contains durable diagnostic evidence."""
+
+    found = False
+    for relative in sorted(FAILED_CANDIDATE_DIAGNOSTIC_FILES):
+        path = candidate / relative
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            # An unreadable diagnostic path must remain available for operator
+            # recovery; treating it as present keeps cleanup fail-closed.
+            found = True
+            continue
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            found = True
+            continue
+        _fsync_owned_tree(path, f"failed backend candidate diagnostic {relative}")
+        found = True
+    return found
+
+
+def _discard_failed_candidate_if_owned(
+    candidate: Path,
+    package_root: Path,
+    build_root: Path,
+) -> bool:
+    """Drop a known failed candidate; preserve unknown or malformed trees."""
+
+    try:
+        _validate_candidate_marker(candidate, package_root, build_root, state="building")
+        attempt = _read_failed_make_attempt(build_root, candidate)
+        if attempt is not None and attempt[0].get("state") != "failed":
+            # A running or successful Make attempt is incomplete publication
+            # evidence. Keep the candidate and its external log for retry.
+            return False
+        if not _failed_candidate_inventory_is_known(candidate):
+            return False
+        if _failed_candidate_diagnostics_present(candidate):
+            # Logs and a partial receipt are the durable failure evidence.  Do
+            # not remove their containing candidate merely because every other
+            # entry is known; a later operator/recovery pass can inspect it.
+            return False
+        if attempt is not None:
+            _prune_failed_make_logs(build_root, package_root)
+        _remove_owned_tree(candidate)
+        _fsync_directory(candidate.parent, "backend package candidate directory")
+        return True
+    except (BackendBuildError, OSError):
+        return False
 
 
 def _copy_regular_file_fsync(source: Path, target: Path, name: str) -> tuple[str, int]:
@@ -2719,7 +4247,32 @@ def _retain_package_backups(
         )
 
 
-def _copy_package(workspace: Path, output: Path) -> list[dict[str, Any]]:
+def _copy_package(
+    workspace: Path,
+    output: Path,
+    *,
+    direct_install: bool = False,
+    package_root: Path | None = None,
+    build_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    if direct_install:
+        if package_root is None or build_root is None:
+            _fail("direct package publication has no exact package/build roots")
+        _validate_candidate_marker(output, package_root, build_root, state="building")
+        _discard_direct_make_launcher(output)
+        _flatten_package_library_aliases(output)
+        _write_runtime_manifests(output)
+        _fsync_owned_tree(output, "direct backend package candidate")
+        records = _hash_package(output)
+        _assert_direct_candidate_inventory(output, records)
+        _write_candidate_marker(
+            output,
+            package_root,
+            build_root,
+            state="ready",
+            records=records,
+        )
+        return records
     source = workspace / ".fullmag" / "local"
     if source.is_symlink() or not source.is_dir():
         _fail("canonical Make target did not publish .fullmag/local")
@@ -2812,32 +4365,102 @@ def _prepare_locked(
     output: Path,
     jobs: int,
     toolchain: Mapping[str, Any],
+    direct_install_root: Path | None = None,
 ) -> int:
     source_tar = Path(args.source_tar) if args.source_tar is not None else None
+    direct_install = direct_install_root is not None
+    legacy_stage_before_materialize = (
+        _snapshot_legacy_install_stage(build_root / "workspace")
+        if direct_install
+        else None
+    )
     workspace, capsule, native, manifest_hash, archive_hash, source_mode = _materialize_source(
         source_tar,
         Path(args.manifest),
         build_root,
         source_root=Path(args.source_root),
         git_common_root=Path(args.git_common_root),
+        preserve_legacy_install_stage=direct_install,
     )
+    legacy_stage_before_make: dict[str, tuple[object, ...]] | None = None
+    if direct_install:
+        _assert_legacy_install_stage_unchanged(
+            workspace,
+            legacy_stage_before_materialize,
+            "source materialization",
+        )
+        legacy_stage_before_make = _snapshot_legacy_install_stage(workspace)
     cargo_profile = _validate_cargo_profile(
         os.environ.get("FULLMAG_BACKEND_CARGO_PROFILE", BACKEND_CARGO_PROFILE)
     )
     environment = _build_environment(workspace, build_root, native, jobs, cargo_profile)
-    build_log = workspace / ".fullmag" / "local" / "direct-backend-build.log"
-    _ensure_directory(build_log.parent, "backend build log parent")
+    if direct_install:
+        if direct_install_root != output or cargo_profile != BACKEND_CARGO_PROFILE:
+            _fail("direct package publication is reserved for the backend-dev candidate")
+        _validate_candidate_marker(output, PACKAGE_ROOT, build_root, state="building")
+        _assert_direct_candidate_empty_for_make(output)
+        environment.pop("FULLMAG_INTERNAL_INSTALL_ROOT", None)
+        environment["FULLMAG_INTERNAL_INSTALL_ROOT"] = str(output)
+        build_log = None
+    else:
+        # A host/Compose variable must never redirect legacy or release Make.
+        environment.pop("FULLMAG_INTERNAL_INSTALL_ROOT", None)
+        build_log = workspace / ".fullmag" / "local" / "direct-backend-build.log"
     make_target = "install-cli-dev" if cargo_profile == "backend-dev" else "install-cli"
     command = [shutil.which("make") or "/usr/bin/make", make_target]
+    if direct_install:
+        build_log = _begin_failed_make_attempt(build_root, output, make_target)
+    else:
+        _ensure_directory(build_log.parent, "backend build log parent")
+    assert build_log is not None
     return_code = _run_canonical_make(command, workspace, environment, build_log)
+    if direct_install:
+        _finish_failed_make_attempt(build_root, output, return_code)
+    if direct_install:
+        _assert_legacy_install_stage_unchanged(
+            workspace,
+            legacy_stage_before_make,
+            "canonical Make",
+        )
     if return_code != 0:
         _fail(f"canonical Make target failed with exit code {return_code}")
     if source_mode == LIVE_SOURCE_MODE:
         _verify_shadow_source(workspace, capsule)
-    return _publish_completed_build(
+    if direct_install:
+        attempt = _read_failed_make_attempt(build_root, output)
+        if attempt is None or attempt[0].get("state") != "succeeded":
+            _fail("successful Make attempt has no terminal receipt")
+        receipt = attempt[0]
+        digest, size = _copy_regular_file_fsync(
+            build_log,
+            output / FAILED_MAKE_LOG_NAME,
+            "successful Make diagnostic log",
+        )
+        if digest != receipt["log_sha256"] or size != receipt["log_size"]:
+            _fail("successful Make diagnostic log changed before package publication")
+        _fsync_directory(output, "backend package candidate directory")
+    result = _publish_completed_build(
         workspace, output, capsule, native, manifest_hash, archive_hash, source_mode,
         toolchain, command, cargo_profile,
+        direct_install=direct_install,
+        package_root=PACKAGE_ROOT if direct_install else None,
+        build_root=build_root if direct_install else None,
     )
+    if direct_install:
+        attempt = _read_failed_make_attempt(build_root, output)
+        if attempt is None or attempt[0].get("state") != "succeeded":
+            _fail("successful Make attempt receipt disappeared")
+        receipt = attempt[0]
+        digest, size = _sha256_file(
+            output / FAILED_MAKE_LOG_NAME,
+            "published Make diagnostic log",
+            MAX_BUILD_LOG_BYTES,
+        )
+        if digest != receipt["log_sha256"] or size != receipt["log_size"]:
+            _fail("published Make diagnostic log differs from its attempt receipt")
+        _retire_make_log(attempt)
+        _prune_failed_make_logs(build_root, PACKAGE_ROOT)
+    return result
 
 
 def _publish_completed_build(
@@ -2845,12 +4468,22 @@ def _publish_completed_build(
     manifest_hash: str, archive_hash: str | None, source_mode: str,
     toolchain: Mapping[str, Any], command: list[str],
     cargo_profile: str,
+    *,
+    direct_install: bool = False,
+    package_root: Path | None = None,
+    build_root: Path | None = None,
 ) -> int:
     """Publish verified artifacts after the canonical Make invocation succeeded."""
     started = time.monotonic()
     _log_phase("package", "start")
     cargo_profile = _validate_cargo_profile(cargo_profile)
-    records = _copy_package(workspace, output)
+    records = _copy_package(
+        workspace,
+        output,
+        direct_install=direct_install,
+        package_root=package_root,
+        build_root=build_root,
+    )
     source_record: dict[str, Any] = {
         "manifest_sha256": manifest_hash,
         "source_mode": source_mode,
@@ -2973,6 +4606,9 @@ def _publish_runtime_provenance(output: Path) -> None:
         _fail("backend build receipt has incomplete source provenance")
     if not isinstance(toolchain, dict) or not isinstance(build, dict):
         _fail("backend build receipt has incomplete build provenance")
+    runtime_image_id = os.environ.get("FULLMAG_RUNTIME_IMAGE_ID", "")
+    if not IMAGE_RE.fullmatch(runtime_image_id):
+        _fail("FULLMAG_RUNTIME_IMAGE_ID must be an immutable sha256 image ID")
     commit = source.get("resolved_commit")
     snapshot = native.get("source_snapshot_sha256")
     if not isinstance(commit, str) or not GIT_OBJECT_RE.fullmatch(commit):
@@ -2995,6 +4631,7 @@ def _publish_runtime_provenance(output: Path) -> None:
     provenance: dict[str, Any] = {
         "schema": "fullmag.docker-all-image.v1",
         "state": "succeeded",
+        "image_id": runtime_image_id,
         "qualification": "NOT VERIFIED",
         "build_kind": "direct-compose",
         "direct_source_provenance": (
@@ -3119,13 +4756,14 @@ def _start(args: argparse.Namespace) -> int:
     rollback_failed = False
     provenance_before: bytes | None = None
     provenance_publish_started = False
+    publication_committed = False
     # Keep the lock across package verification and the exec handoff.  The
     # descriptor is O_CLOEXEC, so the API process does not inherit a stale
     # build lock after execvpe.  A failed build therefore cannot start API.
     with _runtime_build_lock(build_root):
         try:
             control_root = _ensure_package_development_root(output)
-            _backend_cache_receipt()
+            _recover_pending_package_rotation(output, control_root, build_root)
             previous_receipt: tuple[dict[str, Any], bytes, dict[str, tuple[int, int, int, int, int]]] | None
             existing_children = _package_children(
                 output,
@@ -3140,6 +4778,14 @@ def _start(args: argparse.Namespace) -> int:
                 )
             else:
                 previous_receipt = None
+            _reject_partial_package_candidates(
+                output,
+                control_root,
+                build_root,
+                current_package=previous_receipt,
+            )
+            _backend_cache_receipt()
+            _prune_failed_make_logs(build_root, output)
             _, toolchain = _toolchain_identity()
             start_args = argparse.Namespace(**vars(args))
             start_args.manifest = _capture_start_manifest(args, build_root)
@@ -3161,11 +4807,42 @@ def _start(args: argparse.Namespace) -> int:
                     dir=control_root / PACKAGE_CANDIDATES_DIRNAME,
                 )
             )
-            result = _prepare_locked(start_args, build_root, candidate, jobs, toolchain)
+            _write_candidate_marker(
+                candidate,
+                output,
+                build_root,
+                state="building",
+            )
+            try:
+                result = _prepare_locked(
+                    start_args,
+                    build_root,
+                    candidate,
+                    jobs,
+                    toolchain,
+                    candidate,
+                )
+            except (BackendBuildError, OSError):
+                if _discard_failed_candidate_if_owned(candidate, output, build_root):
+                    candidate = None
+                raise
             if result != 0:
                 _fail(f"backend preparation failed with exit code {result}")
+            candidate_marker = _validate_candidate_marker(
+                candidate,
+                output,
+                build_root,
+                state="ready",
+            )
+            candidate_inventory = _hash_package(candidate)
+            if candidate_marker.get("artifact_inventory_sha256") != _sha256_bytes(
+                _canonical(candidate_inventory)
+            ):
+                _fail("candidate backend package owner marker inventory proof differs")
             _candidate_receipt, candidate_receipt_bytes, _candidate_children = _validated_package(
-                candidate, "candidate backend package"
+                candidate,
+                "candidate backend package",
+                exclude_candidate_marker=True,
             )
             if previous_receipt is not None:
                 _validated_package(
@@ -3186,29 +4863,44 @@ def _start(args: argparse.Namespace) -> int:
             provenance_before = _snapshot_bound_provenance()
             provenance_publish_started = True
             _publish_runtime_provenance(output)
-            _remove_owned_tree(candidate)
+            publication_committed = True
+            _finalize_published_candidate(candidate, rotation)
             candidate = None
+            journal_cleared = True
             try:
-                _retain_package_backups(
-                    output,
-                    control_root,
-                    _candidate_receipt,
-                    candidate_receipt_bytes,
-                )
+                _clear_rotation_journal(rotation)
             except (BackendBuildError, OSError) as error:
-                # Publication is already durable.  Unknown or corrupt backup
-                # state is retained and diagnosed; it must never roll back a
-                # valid current package or delete a direct rollback.
-                retention_reason = re.sub(r"[^A-Za-z0-9_.:/-]+", "-", str(error)).strip("-")
-                if not retention_reason:
-                    retention_reason = type(error).__name__
-                _log_phase(
-                    "retention",
-                    "skipped",
-                    reason=retention_reason[:64],
-                    error=type(error).__name__,
-                )
+                journal_cleared = False
+                _log_phase("package", "rotation-journal-retained", reason=type(error).__name__)
+            if journal_cleared:
+                try:
+                    _retain_package_backups(
+                        output,
+                        control_root,
+                        _candidate_receipt,
+                        candidate_receipt_bytes,
+                    )
+                except (BackendBuildError, OSError) as error:
+                    # Publication is already durable.  Unknown or corrupt backup
+                    # state is retained and diagnosed; it must never roll back a
+                    # valid current package or delete a direct rollback.
+                    retention_reason = re.sub(r"[^A-Za-z0-9_.:/-]+", "-", str(error)).strip("-")
+                    if not retention_reason:
+                        retention_reason = type(error).__name__
+                    _log_phase(
+                        "retention",
+                        "skipped",
+                        reason=retention_reason[:64],
+                        error=type(error).__name__,
+                    )
+            else:
+                _log_phase("retention", "skipped", reason="pending-rotation-journal")
         except (BackendBuildError, OSError) as error:
+            if publication_committed:
+                _log_phase(
+                    "package", "rotation-finalization-deferred", reason=type(error).__name__
+                )
+                raise
             rollback_errors: list[str] = []
             if provenance_publish_started:
                 if provenance_before is None:
@@ -3234,7 +4926,10 @@ def _start(args: argparse.Namespace) -> int:
             raise
         finally:
             if candidate is not None and candidate.exists() and not rollback_failed:
-                _remove_owned_tree(candidate)
+                # A marker-bearing candidate is durable evidence of an
+                # incomplete publication.  Preserve it for the next bounded
+                # startup audit instead of deleting a partial build.
+                _log_phase("package", "candidate-preserved", reason="incomplete-publication")
         _log_phase("start", "handoff")
         return _serve([])
 

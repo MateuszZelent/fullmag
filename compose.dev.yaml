@@ -295,7 +295,9 @@ services:
         target: /state/development/workspace/apps/control-room/scripts
         read_only: true
         bind: {create_host_path: false}
-    tmpfs: ["/tmp:rw,nosuid,nodev,size=512m"]
+    tmpfs:
+      - "/tmp:rw,nosuid,nodev,size=512m"
+      - "/run/fullmag/frontend-owner:rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
     healthcheck:
       # Two 120s tool probes + 60m frozen install + 60s Next startup margin.
       start_period: 3900s

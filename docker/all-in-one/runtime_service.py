@@ -701,6 +701,27 @@ ACCEPTED_REATTACH_STDIN_ENV = "FULLMAG_DEVELOPMENT_ACCEPTED_REATTACH_STDIN"
 ACCEPTED_REATTACH_PROVENANCE = Path("/opt/fullmag/control/backend/runtime-provenance.json")
 ACCEPTED_REATTACH_REQUEST_SCHEMA = "fullmag.docker-accepted-run-reattach-request.v1"
 ACCEPTED_REATTACH_INPUT_SCHEMA = "fullmag.development-accepted-run-reattach.v1"
+ACCEPTED_REATTACH_ACK_SCHEMA = "fullmag.development-accepted-run-reattach-ack.v1"
+ACCEPTED_REATTACH_DRAIN_SCHEMA = "fullmag.docker-accepted-run-reattach-drain.v1"
+ACCEPTED_REATTACH_RUNTIME_SCHEMA = "fullmag.docker-accepted-run-reattach-runtime.v1"
+ACCEPTED_REATTACH_INITIAL_MODE = "held_pending_restore"
+ACCEPTED_REATTACH_SUCCESSOR_MODE = "completed_consumed_no_replay"
+# The value above is an outcome emitted by the native restore authority.  A
+# successor input deliberately does not select an outcome: the native side
+# must inspect the accepted catalog, start-release receipt, and lease proofs
+# before deciding whether the held run remains pending or is terminally
+# consumed.
+ACCEPTED_REATTACH_SUCCESSOR_INPUT_MODE = "successor_auto"
+ACCEPTED_REATTACH_OUTCOME_MODES = frozenset({
+    ACCEPTED_REATTACH_INITIAL_MODE,
+    ACCEPTED_REATTACH_SUCCESSOR_MODE,
+})
+ACCEPTED_REATTACH_INPUT_MODES = frozenset({
+    ACCEPTED_REATTACH_INITIAL_MODE,
+    ACCEPTED_REATTACH_SUCCESSOR_INPUT_MODE,
+})
+ACCEPTED_REATTACH_ACK_PREFIX = "restore-ack-"
+ACCEPTED_REATTACH_DRAIN_PREFIX = "successor-drain-"
 ACCEPTED_REATTACH_FIELDS = frozenset({
     "schema", "run_id", "project_id", "source_request_id", "source_sha256",
     "startup_provenance_sha256", "config_sha256", "proof_path", "proof_sha256",
@@ -757,19 +778,377 @@ def _accepted_reattach_documents(paths: RuntimePaths):
     return environment, request, proof
 
 
+def _accepted_reattach_record_relative(request: Mapping[str, Any], filename: str) -> str:
+    """Return one fixed proof-directory record name without accepting a host path."""
+
+    if not isinstance(filename, str) or not filename or "/" in filename or "\\" in filename:
+        _fail("accepted-run record filename is invalid")
+    parent = PurePosixPath(request["proof_path"]).parent
+    relative = str(parent / filename)
+    if relative.startswith("../") or relative == "..":
+        _fail("accepted-run record path escapes the proof directory")
+    return relative
+
+
+def _accepted_reattach_record_path(
+    paths: RuntimePaths, request: Mapping[str, Any], filename: str, name: str
+) -> tuple[str, Path]:
+    relative = _accepted_reattach_record_relative(request, filename)
+    return relative, _reattach_relative(paths.state_root, relative, name)
+
+
+def _accepted_reattach_api_id(value: object, name: str) -> str:
+    if not isinstance(value, str) or UUID_RE.fullmatch(value) is None:
+        _fail(f"{name} is not a canonical API instance UUID")
+    return value
+
+
+def _accepted_reattach_json(raw: bytes, name: str) -> dict[str, Any]:
+    try:
+        value = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        _fail(f"{name} is not valid JSON: {error}")
+    if not isinstance(value, dict):
+        _fail(f"{name} must contain a JSON object")
+    return value
+
+
+ACCEPTED_REATTACH_ACK_FIELDS = frozenset({
+    "schema", "state", "restore_mode", "request_sha256", "proof_sha256",
+    "run_id", "project_id", "source_request_id", "source_sha256", "config_sha256",
+    "activation_attempt", "reconciliation_attempt", "logical_session_id",
+    "session_epoch", "api_instance_id", "previous_ack_sha256",
+})
+
+
+def _validate_accepted_reattach_proof_identity(proof: Mapping[str, Any]) -> None:
+    """Validate the proof fields copied into the native restore acknowledgement."""
+
+    for field in ("activation_attempt", "reconciliation_attempt", "logical_session_id"):
+        value = proof.get(field)
+        if not isinstance(value, str) or not value or len(value) > 256:
+            _fail("accepted-run proof has invalid " + field)
+    session_epoch = proof.get("session_epoch")
+    if type(session_epoch) is not int or session_epoch < 0:
+        _fail("accepted-run proof has invalid session_epoch")
+
+
+def _validate_accepted_reattach_ack(
+    request: Mapping[str, Any],
+    proof: Mapping[str, Any],
+    raw: bytes,
+    *,
+    request_sha256: str,
+    expected_previous_ack_sha256: str | None,
+    expected_restore_mode: str | None,
+    expected_api_instance_id: str | None = None,
+) -> dict[str, Any]:
+    """Validate a native immutable restore ack, never a Python status marker."""
+
+    if not HEX64.fullmatch(request_sha256):
+        _fail("accepted-run request digest is invalid")
+    if expected_restore_mode is not None:
+        if expected_restore_mode not in ACCEPTED_REATTACH_OUTCOME_MODES:
+            _fail("accepted-run restore mode is unsupported")
+        accepted_restore_modes = {expected_restore_mode}
+    else:
+        # A successor input is intentionally outcome-free.  Only the native
+        # restore authority may choose between a still-held run and a
+        # terminally consumed run after checking its durable proofs.
+        accepted_restore_modes = ACCEPTED_REATTACH_OUTCOME_MODES
+    if expected_previous_ack_sha256 is not None and not HEX64.fullmatch(expected_previous_ack_sha256):
+        _fail("accepted-run previous acknowledgement digest is invalid")
+    if expected_restore_mode == ACCEPTED_REATTACH_SUCCESSOR_MODE and expected_previous_ack_sha256 is None:
+        _fail("successor accepted-run restore has no previous acknowledgement digest")
+    if expected_restore_mode is None and expected_previous_ack_sha256 is None:
+        _fail("successor accepted-run restore input has no previous acknowledgement digest")
+    # ``held_pending_restore`` is also the native outcome for a successor
+    # whose accepted run remains blocked.  Its predecessor is what marks it
+    # as a successor generation; the mode string alone cannot do that.
+    _validate_accepted_reattach_proof_identity(proof)
+    ack = _accepted_reattach_json(raw, "native accepted-run restore acknowledgement")
+    if set(ack) != ACCEPTED_REATTACH_ACK_FIELDS:
+        _fail("native accepted-run restore acknowledgement fields differ")
+    expected = {
+        "schema": ACCEPTED_REATTACH_ACK_SCHEMA,
+        "state": "consumed",
+        "request_sha256": request_sha256,
+        "proof_sha256": request["proof_sha256"],
+        "run_id": request["run_id"],
+        "project_id": request["project_id"],
+        "source_request_id": request["source_request_id"],
+        "source_sha256": request["source_sha256"],
+        "config_sha256": request["config_sha256"],
+        "activation_attempt": proof["activation_attempt"],
+        "reconciliation_attempt": proof["reconciliation_attempt"],
+        "logical_session_id": proof["logical_session_id"],
+        "session_epoch": proof["session_epoch"],
+        "previous_ack_sha256": expected_previous_ack_sha256,
+    }
+    for key, value in expected.items():
+        if ack.get(key) != value:
+            _fail("native accepted-run restore acknowledgement differs: " + key)
+    if ack.get("restore_mode") not in accepted_restore_modes:
+        _fail("native accepted-run restore acknowledgement has an invalid restore mode")
+    api_instance_id = _accepted_reattach_api_id(
+        ack.get("api_instance_id"), "native restore API instance"
+    )
+    if expected_api_instance_id is not None and api_instance_id != expected_api_instance_id:
+        _fail("native restore API instance differs from the live API")
+    return ack
+
+
+ACCEPTED_REATTACH_DRAIN_FIELDS = frozenset({
+    "schema", "state", "request_sha256", "proof_sha256", "run_id", "project_id",
+    "source_request_id", "source_sha256", "config_sha256", "api_instance_id",
+    "ack_relative", "ack_sha256", "ready_owner_token", "terminal_process_record_path",
+    "terminal_process_record_sha256", "terminal_owner_record_path",
+    "terminal_owner_record_sha256", "ready_owner_record_path",
+    "ready_owner_record_sha256",
+})
+# The three record paths below point to immutable raw archives in the same
+# proof directory.  Their bytes are archived before the sidecar is published;
+# a hash without the bytes would not prove a drained predecessor after
+# start() rotates the live OWNER/process records.
+
+
+def _validate_accepted_reattach_successor_drain(
+    paths: RuntimePaths,
+    request: Mapping[str, Any],
+    proof: Mapping[str, Any],
+    *,
+    metadata: Mapping[str, Any],
+    ack: Mapping[str, Any],
+    ack_raw: bytes,
+    drain_raw: bytes,
+    drain_relative: str,
+) -> dict[str, Any]:
+    """Bind the old accepted restore to the authenticated successor drain."""
+
+    drain = _accepted_reattach_json(drain_raw, "accepted-run successor drain")
+    if set(drain) != ACCEPTED_REATTACH_DRAIN_FIELDS:
+        _fail("accepted-run successor drain fields differ")
+    ack_sha256 = _sha256_bytes(ack_raw)
+    expected = {
+        "schema": ACCEPTED_REATTACH_DRAIN_SCHEMA,
+        "state": "drained",
+        "request_sha256": metadata["request_sha256"],
+        "proof_sha256": metadata["proof_sha256"],
+        "run_id": request["run_id"],
+        "project_id": request["project_id"],
+        "source_request_id": request["source_request_id"],
+        "source_sha256": request["source_sha256"],
+        "config_sha256": request["config_sha256"],
+        "api_instance_id": metadata["api_instance_id"],
+        "ack_relative": metadata["ack_relative"],
+        "ack_sha256": ack_sha256,
+    }
+    for key, value in expected.items():
+        if drain.get(key) != value:
+            _fail("accepted-run successor drain differs: " + key)
+    if drain_relative != _accepted_reattach_record_relative(
+        request, ACCEPTED_REATTACH_DRAIN_PREFIX + str(metadata["api_instance_id"]) + ".json"
+    ):
+        _fail("accepted-run successor drain path differs")
+    api_id = _accepted_reattach_api_id(
+        drain.get("api_instance_id"), "accepted-run successor drain API instance"
+    )
+    if api_id != metadata["api_instance_id"] or api_id != ack.get("api_instance_id"):
+        _fail("accepted-run successor drain API instance differs from native acknowledgement")
+
+    current_receipt_raw = _bounded_regular(
+        process_receipt_path(paths), "accepted-run drained process receipt", MAX_JSON_BYTES
+    )
+    current_receipt = _accepted_reattach_json(
+        current_receipt_raw, "accepted-run drained process receipt"
+    )
+    current_metadata = current_receipt.get("accepted_reattach")
+    if current_metadata != dict(metadata):
+        _fail("accepted-run drained process receipt lacks the native restore binding")
+
+    authenticated = _read_authenticated_terminal_drain(paths)
+    terminal_owner_raw = _bounded_regular(
+        runtime_services_root(paths) / "OWNER.json",
+        "accepted-run terminal owner",
+        MAX_JSON_BYTES,
+    )
+    ready_owner = authenticated["pin"]
+    ready_owner_raw = _bounded_regular(
+        _owner_pin_path(paths, ready_owner),
+        "accepted-run restored ready owner pin",
+        MAX_JSON_BYTES,
+    )
+    archive_specs = (
+        ("terminal_process_record_path", "terminal_process_record_sha256",
+         current_receipt_raw, "accepted-run archived drained process receipt"),
+        ("terminal_owner_record_path", "terminal_owner_record_sha256",
+         terminal_owner_raw, "accepted-run archived terminal owner"),
+        ("ready_owner_record_path", "ready_owner_record_sha256",
+         ready_owner_raw, "accepted-run archived ready owner"),
+    )
+    for path_field, digest_field, current_raw, name in archive_specs:
+        relative = drain.get(path_field)
+        expected_digest = drain.get(digest_field)
+        if not isinstance(relative, str) or not isinstance(expected_digest, str):
+            _fail("accepted-run successor drain archive pin is incomplete")
+        expected_relative = _accepted_reattach_record_relative(
+            request, relative.rsplit("/", 1)[-1]
+        )
+        if relative != expected_relative or not HEX64.fullmatch(expected_digest):
+            _fail("accepted-run successor drain archive path or digest is invalid")
+        archive_raw = _bounded_regular(
+            _reattach_relative(paths.state_root, relative, name), name, MAX_JSON_BYTES
+        )
+        if _sha256_bytes(archive_raw) != expected_digest or archive_raw != current_raw:
+            _fail("accepted-run successor drain archive differs from current terminal record")
+    if drain.get("ready_owner_token") != ready_owner.get("owner_token"):
+        _fail("accepted-run successor drain does not match current authenticated records")
+    return drain
+
+
+def _read_optional_accepted_reattach_record(path: Path, name: str) -> tuple[bytes, dict[str, Any]] | None:
+    try:
+        raw = _bounded_regular(path, name, MAX_JSON_BYTES)
+    except FileNotFoundError:
+        return None
+    return raw, _accepted_reattach_json(raw, name)
+
+
 def accepted_reattach_preflight(paths: RuntimePaths):
-    """Pin old terminal records before recovery rotates owner/process files."""
+    """Pin old records or an authenticated successor drain before rotation.
+
+    The first restore compares the mutable records with the immutable terminal
+    archive.  Later restarts must use a native consumed acknowledgement and an
+    authenticated drain of that API successor; comparing the new owner with
+    the historical owner would reject a legitimate restart.
+    """
     environment, request, proof_raw = _accepted_reattach_documents(paths)
     if request is None:
         return None
-    try:
-        proof = json.loads(proof_raw, object_pairs_hook=_reject_duplicate_keys)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        _fail(f"accepted-run backing proof is not valid JSON: {error}")
+    proof = _accepted_reattach_json(proof_raw, "accepted-run backing proof")
     if (not isinstance(proof, dict)
             or proof.get("schema") != "fullmag.development-accepted-run-reattach-proof.v1"):
         _fail("accepted-run backing proof schema differs")
     proof_path = _reattach_relative(paths.state_root, request["proof_path"], "accepted-run proof")
+
+    # The first entrypoint invocation has no native ack yet.  It is admitted
+    # only while both mutable records are byte-identical to the archived
+    # terminal records.  A later invocation may never infer this phase from a
+    # state string or marker: it needs the exact drained successor metadata.
+    current_receipt_path = process_receipt_path(paths)
+    metadata = None
+    try:
+        current_receipt_raw = _bounded_regular(
+            current_receipt_path, "accepted-run current process receipt", MAX_JSON_BYTES
+        )
+        current_receipt = _accepted_reattach_json(
+            current_receipt_raw, "accepted-run current process receipt"
+        )
+        candidate = current_receipt.get("accepted_reattach")
+        if isinstance(candidate, dict):
+            metadata = candidate
+    except FileNotFoundError:
+        current_receipt_raw = None
+        current_receipt = None
+
+    request_sha256 = environment[ACCEPTED_REATTACH_DIGEST_ENV]
+    if metadata is not None:
+        metadata_fields = {
+            "schema", "restore_mode", "request_sha256", "proof_sha256", "run_id",
+            "project_id", "source_request_id", "source_sha256", "config_sha256",
+            "ack_relative", "ack_sha256", "api_instance_id", "previous_ack_sha256",
+        }
+        if set(metadata) != metadata_fields:
+            _fail("accepted-run current receipt has invalid restore metadata")
+        expected_metadata = {
+            "schema": ACCEPTED_REATTACH_RUNTIME_SCHEMA,
+            "request_sha256": request_sha256,
+            "proof_sha256": request["proof_sha256"],
+            "run_id": request["run_id"],
+            "project_id": request["project_id"],
+            "source_request_id": request["source_request_id"],
+            "source_sha256": request["source_sha256"],
+            "config_sha256": request["config_sha256"],
+        }
+        for key, value in expected_metadata.items():
+            if metadata.get(key) != value:
+                _fail("accepted-run current receipt restore metadata differs: " + key)
+        _validate_accepted_reattach_runtime_metadata(
+            metadata, request=request, request_sha256=request_sha256
+        )
+        api_id = _accepted_reattach_api_id(
+            metadata.get("api_instance_id"), "accepted-run current receipt API instance"
+        )
+        expected_ack_relative = _accepted_reattach_record_relative(
+            request, ACCEPTED_REATTACH_ACK_PREFIX + api_id + ".json"
+        )
+        if metadata.get("ack_relative") != expected_ack_relative:
+            _fail("accepted-run current receipt restore acknowledgement path differs")
+        if not isinstance(metadata.get("ack_sha256"), str) or not HEX64.fullmatch(metadata["ack_sha256"]):
+            _fail("accepted-run current receipt restore acknowledgement digest is invalid")
+        previous_ack_sha256 = metadata.get("previous_ack_sha256")
+        restore_mode = metadata.get("restore_mode")
+        if restore_mode not in ACCEPTED_REATTACH_OUTCOME_MODES:
+            _fail("accepted-run current receipt restore mode is invalid")
+        if previous_ack_sha256 is None:
+            if restore_mode != ACCEPTED_REATTACH_INITIAL_MODE:
+                _fail("successor accepted-run restore has no previous acknowledgement digest")
+        elif not isinstance(previous_ack_sha256, str) or not HEX64.fullmatch(previous_ack_sha256):
+            _fail("successor accepted-run restore has an invalid previous acknowledgement digest")
+        ack_record = _read_optional_accepted_reattach_record(
+            _reattach_relative(paths.state_root, expected_ack_relative, "native restore acknowledgement"),
+            "native accepted-run restore acknowledgement",
+        )
+        if ack_record is None:
+            _fail("accepted-run current receipt references a missing native restore acknowledgement")
+        ack_raw, ack = ack_record
+        if _sha256_bytes(ack_raw) != metadata["ack_sha256"]:
+            _fail("accepted-run native restore acknowledgement digest differs")
+        ack = _validate_accepted_reattach_ack(
+            request,
+            proof,
+            ack_raw,
+            request_sha256=request_sha256,
+            expected_previous_ack_sha256=previous_ack_sha256,
+            expected_restore_mode=restore_mode,
+            expected_api_instance_id=api_id,
+        )
+        drain_relative = _accepted_reattach_record_relative(
+            request, ACCEPTED_REATTACH_DRAIN_PREFIX + api_id + ".json"
+        )
+        drain_record = _read_optional_accepted_reattach_record(
+            _reattach_relative(paths.state_root, drain_relative, "accepted-run successor drain"),
+            "accepted-run successor drain",
+        )
+        if drain_record is None:
+            _fail("accepted-run current receipt has no authenticated successor drain")
+        drain_raw, _ = drain_record
+        _validate_accepted_reattach_successor_drain(
+            paths,
+            request,
+            proof,
+            metadata=metadata,
+            ack=ack,
+            ack_raw=ack_raw,
+            drain_raw=drain_raw,
+            drain_relative=drain_relative,
+        )
+        return {
+            "request_sha256": request_sha256,
+            "proof_sha256": request["proof_sha256"],
+            # This is an input decision, not the previous ACK's outcome.  The
+            # native restore path must re-read the catalog/start-release and
+            # lease proofs and emit the next ACK outcome.
+            "restore_mode": ACCEPTED_REATTACH_SUCCESSOR_INPUT_MODE,
+            "previous_ack_relative": metadata["ack_relative"],
+            "previous_ack_sha256": metadata["ack_sha256"],
+            "previous_drain_relative": drain_relative,
+            "previous_drain_sha256": _sha256_bytes(drain_raw),
+        }
+
+    # The API-specific acknowledgement filename is not knowable until the
+    # native successor receives its new API instance identity.  No mutable
+    # marker is accepted as a substitute for that first native acknowledgement.
     for prefix, filename, current in (
             ("terminal_owner_record", "terminal-owner.json", runtime_services_root(paths) / "OWNER.json"),
             ("terminal_process_record", "terminal-process.json", process_receipt_path(paths))):
@@ -783,8 +1162,15 @@ def accepted_reattach_preflight(paths: RuntimePaths):
         current_raw = _bounded_regular(current, "accepted-run current terminal record", 256 * 1024)
         if _sha256_bytes(archive_raw) != expected or current_raw != archive_raw:
             _fail("accepted-run current terminal record differs from immutable backing evidence")
-    return {"request_sha256": environment[ACCEPTED_REATTACH_DIGEST_ENV],
-            "proof_sha256": request["proof_sha256"]}
+    return {
+        "request_sha256": request_sha256,
+        "proof_sha256": request["proof_sha256"],
+        "restore_mode": ACCEPTED_REATTACH_INITIAL_MODE,
+        "previous_ack_relative": None,
+        "previous_ack_sha256": None,
+        "previous_drain_relative": None,
+        "previous_drain_sha256": None,
+    }
 
 
 @contextmanager
@@ -798,9 +1184,18 @@ def accepted_reattach_api_input(paths: RuntimePaths, *, preflight=None):
     if request is None:
         yield environment, None
         return
-    if preflight != {"request_sha256": environment[ACCEPTED_REATTACH_DIGEST_ENV],
-                     "proof_sha256": request["proof_sha256"]}:
+    expected_preflight = {
+        "request_sha256": environment[ACCEPTED_REATTACH_DIGEST_ENV],
+        "proof_sha256": request["proof_sha256"],
+        "restore_mode": preflight.get("restore_mode") if isinstance(preflight, dict) else None,
+        "previous_ack_relative": preflight.get("previous_ack_relative") if isinstance(preflight, dict) else None,
+        "previous_ack_sha256": preflight.get("previous_ack_sha256") if isinstance(preflight, dict) else None,
+        "previous_drain_relative": preflight.get("previous_drain_relative") if isinstance(preflight, dict) else None,
+        "previous_drain_sha256": preflight.get("previous_drain_sha256") if isinstance(preflight, dict) else None,
+    }
+    if preflight != expected_preflight:
         _fail("accepted-run API input requires the matching early terminal preflight")
+    _accepted_reattach_preflight_shape(environment, request, preflight)
     if environment.get("FULLMAG_RUNTIME_PROVENANCE") != str(ACCEPTED_REATTACH_PROVENANCE):
         _fail("accepted-run reattach requires fixed Docker runtime provenance")
     provenance = _read_json(ACCEPTED_REATTACH_PROVENANCE, "accepted-run build provenance")
@@ -810,14 +1205,367 @@ def accepted_reattach_api_input(paths: RuntimePaths, *, preflight=None):
             or not isinstance(commit, str) or not HEX40.fullmatch(commit)
             or not isinstance(snapshot, str) or not HEX64.fullmatch(snapshot)):
         _fail("accepted-run reattach requires succeeded pinned build provenance")
-    payload = dict(request, schema=ACCEPTED_REATTACH_INPUT_SCHEMA,
-                   target_build_id=commit, target_source_sha256=snapshot)
+    payload = dict(
+        request,
+        schema=ACCEPTED_REATTACH_INPUT_SCHEMA,
+        target_build_id=commit,
+        target_source_sha256=snapshot,
+        request_sha256=environment[ACCEPTED_REATTACH_DIGEST_ENV],
+        restore_mode=preflight["restore_mode"],
+        previous_ack_path=preflight["previous_ack_relative"],
+        previous_ack_sha256=preflight["previous_ack_sha256"],
+        previous_drain_path=preflight["previous_drain_relative"],
+        previous_drain_sha256=preflight["previous_drain_sha256"],
+    )
     _ensure_directory(paths.state_root, "accepted-run runtime control")
     with tempfile.TemporaryFile(mode="w+b", dir=paths.state_root) as stream:
         stream.write(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf8"))
         stream.seek(0)
         environment[ACCEPTED_REATTACH_STDIN_ENV] = "1"
         yield environment, stream
+
+
+ACCEPTED_REATTACH_RUNTIME_FIELDS = frozenset({
+    "schema", "restore_mode", "request_sha256", "proof_sha256", "run_id", "project_id",
+    "source_request_id", "source_sha256", "config_sha256", "ack_relative", "ack_sha256",
+    "api_instance_id", "previous_ack_sha256",
+})
+
+
+def _validate_accepted_reattach_runtime_metadata(
+    metadata: Mapping[str, Any], *, request: Mapping[str, Any], request_sha256: str
+) -> None:
+    if set(metadata) != ACCEPTED_REATTACH_RUNTIME_FIELDS:
+        _fail("accepted-run runtime metadata fields differ")
+    expected = {
+        "schema": ACCEPTED_REATTACH_RUNTIME_SCHEMA,
+        "request_sha256": request_sha256,
+        "proof_sha256": request["proof_sha256"],
+        "run_id": request["run_id"],
+        "project_id": request["project_id"],
+        "source_request_id": request["source_request_id"],
+        "source_sha256": request["source_sha256"],
+        "config_sha256": request["config_sha256"],
+    }
+    for key, value in expected.items():
+        if metadata.get(key) != value:
+            _fail("accepted-run runtime metadata differs: " + key)
+    restore_mode = metadata.get("restore_mode")
+    if restore_mode not in ACCEPTED_REATTACH_OUTCOME_MODES:
+        _fail("accepted-run runtime metadata has an unsupported restore mode")
+    previous_ack_sha256 = metadata.get("previous_ack_sha256")
+    # The held outcome is valid both for the first restore (no predecessor)
+    # and for a later successor which is still waiting for Compute.  A
+    # predecessor digest therefore distinguishes those two generations;
+    # Python must not collapse the held successor into the terminal outcome.
+    if previous_ack_sha256 is None:
+        if restore_mode != ACCEPTED_REATTACH_INITIAL_MODE:
+            _fail("successor accepted-run runtime metadata has no previous acknowledgement")
+    elif not isinstance(previous_ack_sha256, str) or not HEX64.fullmatch(previous_ack_sha256):
+        _fail("successor accepted-run runtime metadata has an invalid previous acknowledgement")
+    api_id = _accepted_reattach_api_id(
+        metadata.get("api_instance_id"), "accepted-run runtime API instance"
+    )
+    ack_relative = metadata.get("ack_relative")
+    expected_ack_relative = _accepted_reattach_record_relative(
+        request, ACCEPTED_REATTACH_ACK_PREFIX + api_id + ".json"
+    )
+    if ack_relative != expected_ack_relative:
+        _fail("accepted-run runtime metadata acknowledgement path differs")
+    if not isinstance(metadata.get("ack_sha256"), str) or not HEX64.fullmatch(metadata["ack_sha256"]):
+        _fail("accepted-run runtime metadata has an invalid acknowledgement digest")
+
+
+def _accepted_reattach_preflight_shape(
+    environment: Mapping[str, str], request: Mapping[str, Any], preflight: Mapping[str, Any]
+) -> None:
+    expected = {
+        "request_sha256": environment.get(ACCEPTED_REATTACH_DIGEST_ENV),
+        "proof_sha256": request.get("proof_sha256"),
+        "restore_mode": preflight.get("restore_mode"),
+        "previous_ack_relative": preflight.get("previous_ack_relative"),
+        "previous_ack_sha256": preflight.get("previous_ack_sha256"),
+        "previous_drain_relative": preflight.get("previous_drain_relative"),
+        "previous_drain_sha256": preflight.get("previous_drain_sha256"),
+    }
+    if dict(preflight) != expected:
+        _fail("accepted-run API input requires the matching early terminal preflight")
+    restore_mode = preflight.get("restore_mode")
+    if restore_mode not in ACCEPTED_REATTACH_INPUT_MODES:
+        _fail("accepted-run API input has an unsupported restore mode")
+    previous_fields = (
+        "previous_ack_relative", "previous_ack_sha256",
+        "previous_drain_relative", "previous_drain_sha256",
+    )
+    if restore_mode == ACCEPTED_REATTACH_INITIAL_MODE:
+        if any(preflight.get(field) is not None for field in previous_fields):
+            _fail("initial accepted-run restore cannot reference successor records")
+        return
+    for field in ("previous_ack_relative", "previous_drain_relative"):
+        value = preflight.get(field)
+        try:
+            _reattach_relative(Path("/"), value, "accepted-run " + field)
+        except (TypeError, RuntimeServiceError):
+            _fail("successor accepted-run restore has an invalid " + field)
+    for field in ("previous_ack_sha256", "previous_drain_sha256"):
+        value = preflight.get(field)
+        if not isinstance(value, str) or not HEX64.fullmatch(value):
+            _fail("successor accepted-run restore has an invalid " + field)
+
+
+def accepted_reattach_runtime_ack(
+    paths: RuntimePaths, *, preflight: Mapping[str, Any], handle: RuntimeHandle
+) -> dict[str, Any]:
+    """Consume and authenticate the native restore acknowledgement for this API."""
+
+    environment, request, proof_raw = _accepted_reattach_documents(paths)
+    if request is None:
+        _fail("accepted-run native restore acknowledgement has no request")
+    proof = _accepted_reattach_json(proof_raw, "accepted-run backing proof")
+    _accepted_reattach_preflight_shape(environment, request, preflight)
+    request_sha256 = environment[ACCEPTED_REATTACH_DIGEST_ENV]
+    api_identity = handle.api_identity
+    if not isinstance(api_identity, Mapping):
+        _fail("accepted-run native restore acknowledgement has no API identity")
+    api_id = _accepted_reattach_api_id(
+        api_identity.get("api_instance_id"), "accepted-run live API instance"
+    )
+    ack_relative, ack_path = _accepted_reattach_record_path(
+        paths, request, ACCEPTED_REATTACH_ACK_PREFIX + api_id + ".json",
+        "native accepted-run restore acknowledgement",
+    )
+    ack_raw = _bounded_regular(
+        ack_path, "native accepted-run restore acknowledgement", MAX_JSON_BYTES
+    )
+    input_restore_mode = preflight["restore_mode"]
+    if input_restore_mode == ACCEPTED_REATTACH_SUCCESSOR_INPUT_MODE:
+        # The successor request is deliberately outcome-free.  Passing None
+        # makes the validator accept only the two native outcome modes while
+        # leaving the choice to the proof-backed Rust restore path.
+        expected_restore_mode = None
+    elif input_restore_mode in ACCEPTED_REATTACH_OUTCOME_MODES:
+        expected_restore_mode = input_restore_mode
+    else:
+        _fail("accepted-run native restore input mode is unsupported")
+    ack = _validate_accepted_reattach_ack(
+        request,
+        proof,
+        ack_raw,
+        request_sha256=request_sha256,
+        expected_previous_ack_sha256=preflight["previous_ack_sha256"],
+        expected_restore_mode=expected_restore_mode,
+        expected_api_instance_id=api_id,
+    )
+    previous_ack_sha256 = preflight["previous_ack_sha256"]
+    if previous_ack_sha256 is not None:
+        previous_relative = preflight["previous_ack_relative"]
+        if not isinstance(previous_relative, str):
+            _fail("successor accepted-run restore has no previous acknowledgement path")
+        previous_raw = _bounded_regular(
+            _reattach_relative(
+                paths.state_root, previous_relative,
+                "previous native restore acknowledgement",
+            ),
+            "previous native restore acknowledgement", MAX_JSON_BYTES,
+        )
+        if _sha256_bytes(previous_raw) != previous_ack_sha256:
+            _fail("successor accepted-run previous acknowledgement digest differs")
+        previous_ack = _accepted_reattach_json(
+            previous_raw, "previous native restore acknowledgement"
+        )
+        previous_api_id = _accepted_reattach_api_id(
+            previous_ack.get("api_instance_id"), "previous native restore API instance"
+        )
+        expected_previous_relative = _accepted_reattach_record_relative(
+            request, ACCEPTED_REATTACH_ACK_PREFIX + previous_api_id + ".json"
+        )
+        if previous_relative != expected_previous_relative:
+            _fail("successor accepted-run previous acknowledgement path differs")
+        previous_mode = previous_ack.get("restore_mode")
+        previous_previous_sha256 = previous_ack.get("previous_ack_sha256")
+        _validate_accepted_reattach_ack(
+            request,
+            proof,
+            previous_raw,
+            request_sha256=request_sha256,
+            expected_previous_ack_sha256=previous_previous_sha256,
+            expected_restore_mode=previous_mode,
+            expected_api_instance_id=previous_api_id,
+        )
+        if previous_api_id == api_id:
+            _fail("successor accepted-run restore reused the previous API instance")
+    metadata = {
+        "schema": ACCEPTED_REATTACH_RUNTIME_SCHEMA,
+        # Persist the native decision, never the successor input selector.
+        "restore_mode": ack["restore_mode"],
+        "request_sha256": request_sha256,
+        "proof_sha256": request["proof_sha256"],
+        "run_id": request["run_id"],
+        "project_id": request["project_id"],
+        "source_request_id": request["source_request_id"],
+        "source_sha256": request["source_sha256"],
+        "config_sha256": request["config_sha256"],
+        "ack_relative": ack_relative,
+        "ack_sha256": _sha256_bytes(ack_raw),
+        "api_instance_id": ack["api_instance_id"],
+        "previous_ack_sha256": previous_ack_sha256,
+    }
+    _validate_accepted_reattach_runtime_metadata(
+        metadata, request=request, request_sha256=request_sha256
+    )
+    return metadata
+
+
+def _publish_accepted_reattach_record(
+    path: Path, value: Mapping[str, Any], name: str
+) -> str:
+    """Publish an immutable technical record, accepting only an exact replay."""
+
+    raw = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    return _publish_accepted_reattach_raw(path, raw, name)
+
+
+def _publish_accepted_reattach_raw(path: Path, raw: bytes, name: str) -> str:
+    """Create one immutable record without replacing a concurrent writer."""
+
+    if len(raw) > MAX_JSON_BYTES:
+        _fail(name + " exceeds its size bound")
+    path = _absolute(path, name)
+    parent = _ensure_directory(path.parent, f"{name} parent")
+    try:
+        descriptor = os.open(
+            path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o660
+        )
+    except FileExistsError:
+        # Another writer owns the existing name. Its exact bytes, including a
+        # partial/failed publication, are retained and can never be overwritten.
+        existing = _bounded_regular(path, name, MAX_JSON_BYTES)
+        if existing != raw:
+            _fail(name + " already exists with different bytes")
+        return _sha256_bytes(existing)
+    try:
+        view = memoryview(raw)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                _fail(f"short write while publishing {name}")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        directory = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError as error:
+        _fail(f"durable publication of {name} is unknown: {error}")
+    existing = _bounded_regular(path, name, MAX_JSON_BYTES)
+    if existing != raw:
+        _fail(name + " changed during publication")
+    return _sha256_bytes(existing)
+
+
+def accepted_reattach_record_drain(
+    paths: RuntimePaths, *, runtime: Mapping[str, Any], receipt_path: Path | None = None
+) -> str:
+    """Record an authenticated successor drain after the final receipt is durable."""
+
+    environment, request, proof_raw = _accepted_reattach_documents(paths)
+    if request is None:
+        _fail("accepted-run successor drain has no request")
+    request_sha256 = environment[ACCEPTED_REATTACH_DIGEST_ENV]
+    _validate_accepted_reattach_runtime_metadata(
+        runtime, request=request, request_sha256=request_sha256
+    )
+    receipt_path = receipt_path or process_receipt_path(paths)
+    receipt_raw = _bounded_regular(
+        receipt_path, "accepted-run drained process receipt", MAX_JSON_BYTES
+    )
+    receipt = _accepted_reattach_json(receipt_raw, "accepted-run drained process receipt")
+    if receipt.get("schema") != "fullmag.docker-process-tree.v1" or receipt.get("state") != "drained":
+        _fail("accepted-run successor drain requires a drained process receipt")
+    if receipt.get("accepted_reattach") != dict(runtime):
+        _fail("accepted-run successor drain receipt metadata differs")
+    authenticated = _read_authenticated_terminal_drain(paths)
+    terminal_owner_raw = _bounded_regular(
+        runtime_services_root(paths) / "OWNER.json",
+        "accepted-run terminal owner",
+        MAX_JSON_BYTES,
+    )
+    ready_owner = authenticated["pin"]
+    ready_owner_raw = _bounded_regular(
+        _owner_pin_path(paths, ready_owner),
+        "accepted-run restored ready owner pin",
+        MAX_JSON_BYTES,
+    )
+    ack_raw = _bounded_regular(
+        _reattach_relative(paths.state_root, runtime["ack_relative"],
+                           "native accepted-run restore acknowledgement"),
+        "native accepted-run restore acknowledgement", MAX_JSON_BYTES,
+    )
+    if _sha256_bytes(ack_raw) != runtime["ack_sha256"]:
+        _fail("accepted-run successor drain acknowledgement digest differs")
+    api_id = _accepted_reattach_api_id(
+        runtime["api_instance_id"], "accepted-run successor drain API instance"
+    )
+    drain_relative, drain_path = _accepted_reattach_record_path(
+        paths, request, ACCEPTED_REATTACH_DRAIN_PREFIX + api_id + ".json",
+        "accepted-run successor drain",
+    )
+    process_archive_relative, process_archive_path = _accepted_reattach_record_path(
+        paths, request, "successor-terminal-process-" + api_id + ".json",
+        "accepted-run archived drained process receipt",
+    )
+    terminal_owner_archive_relative, terminal_owner_archive_path = _accepted_reattach_record_path(
+        paths, request, "successor-terminal-owner-" + api_id + ".json",
+        "accepted-run archived terminal owner",
+    )
+    ready_owner_archive_relative, ready_owner_archive_path = _accepted_reattach_record_path(
+        paths, request, "successor-ready-owner-" + api_id + ".json",
+        "accepted-run archived ready owner",
+    )
+    # Publish the raw records before the sidecar which references them.  The
+    # archives are immutable and make the drain independently verifiable after
+    # start() rotates OWNER.json and process-tree.json for the successor API.
+    process_archive_sha256 = _publish_accepted_reattach_raw(
+        process_archive_path, receipt_raw, "accepted-run archived drained process receipt"
+    )
+    terminal_owner_archive_sha256 = _publish_accepted_reattach_raw(
+        terminal_owner_archive_path, terminal_owner_raw, "accepted-run archived terminal owner"
+    )
+    ready_owner_archive_sha256 = _publish_accepted_reattach_raw(
+        ready_owner_archive_path, ready_owner_raw, "accepted-run archived ready owner"
+    )
+    drain = {
+        "schema": ACCEPTED_REATTACH_DRAIN_SCHEMA,
+        "state": "drained",
+        "request_sha256": runtime["request_sha256"],
+        "proof_sha256": runtime["proof_sha256"],
+        "run_id": request["run_id"],
+        "project_id": request["project_id"],
+        "source_request_id": request["source_request_id"],
+        "source_sha256": request["source_sha256"],
+        "config_sha256": request["config_sha256"],
+        "api_instance_id": api_id,
+        "ack_relative": runtime["ack_relative"],
+        "ack_sha256": runtime["ack_sha256"],
+        "ready_owner_token": ready_owner["owner_token"],
+        "terminal_process_record_path": process_archive_relative,
+        "terminal_process_record_sha256": process_archive_sha256,
+        "terminal_owner_record_path": terminal_owner_archive_relative,
+        "terminal_owner_record_sha256": terminal_owner_archive_sha256,
+        "ready_owner_record_path": ready_owner_archive_relative,
+        "ready_owner_record_sha256": ready_owner_archive_sha256,
+    }
+    if drain_relative != _accepted_reattach_record_relative(
+        request, ACCEPTED_REATTACH_DRAIN_PREFIX + api_id + ".json"
+    ):
+        _fail("accepted-run successor drain path differs")
+    return _publish_accepted_reattach_record(
+        drain_path, drain, "accepted-run successor drain"
+    )
 
 
 def _positive(environment: Mapping[str, str], name: str, default: int) -> int:

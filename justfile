@@ -52,6 +52,13 @@ docker-dev-stop-unadmitted attempt config_sha256 source_root backend_container_i
 docker-dev-control-checks source_root:
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_checks.py" --source-root {{quote(source_root)}}
 
+# Probe the already-running volume DEV frontend with an image-owned browser.
+# Reuse the exact pinned image or acquire it through this Compose group's
+# BuildControl operation; no browser install or source/build/cache write happens
+# on the host.
+docker-dev-browser-qa source_root="" port="" browser_image="" timeout="180" pull_timeout="1800":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_browser_qa.py" --repo-root "{{repo_root}}" {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} {{if port == "" { "" } else { "--port " + quote(port) }}} --timeout {{quote(timeout)}} --pull-timeout {{quote(pull_timeout)}} {{if browser_image == "" { "" } else { "--browser-image " + quote(browser_image) }}}
+
 # Resume observation of one retained volume DEV start without restarting backend.
 docker-dev-resume attempt config_sha256 source_root port="3197" restart_backend="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" resume-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} {{if restart_backend == "true" { "--restart-backend" } else if restart_backend == "false" { "" } else { error("restart_backend must be true or false") }}}

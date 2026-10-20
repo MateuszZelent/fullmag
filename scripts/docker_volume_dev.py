@@ -80,6 +80,50 @@ _ACCEPTED_REATTACH_ENVIRONMENT_KEYS = frozenset({
     "FULLMAG_ACCEPTED_REATTACH_REQUEST",
     "FULLMAG_ACCEPTED_REATTACH_REQUEST_SHA256",
 })
+_FRONTEND_OWNER_TMPFS = "/run/fullmag/frontend-owner"
+
+
+def _normalize_tmpfs_options(value, *, label):
+    """Return one canonical option map and reject duplicate/conflicting keys."""
+
+    if not isinstance(value, str):
+        raise BuildControlError("Retained tmpfs options are malformed: " + label)
+    aliases = {
+        "rw": "access", "ro": "access",
+        "suid": "suid", "nosuid": "suid",
+        "dev": "device", "nodev": "device",
+        "exec": "exec", "noexec": "exec",
+    }
+    options = {}
+    for raw in value.split(","):
+        token = raw.strip().lower()
+        if not token:
+            raise BuildControlError("Retained tmpfs options contain an empty item: " + label)
+        if "=" in token:
+            key, item = token.split("=", 1)
+            if not key or not item:
+                raise BuildControlError("Retained tmpfs option is malformed: " + label)
+            if key in {"uid", "gid"}:
+                try:
+                    item = str(int(item, 10))
+                except ValueError as error:
+                    raise BuildControlError("Retained tmpfs identity is malformed: " + label) from error
+            elif key == "mode":
+                try:
+                    item = format(int(item, 8), "o")
+                except ValueError as error:
+                    raise BuildControlError("Retained tmpfs mode is malformed: " + label) from error
+            elif key == "size" and item == "1048576":
+                item = "1m"
+            canonical = (key, item)
+            option_key = key
+        else:
+            option_key = aliases.get(token, token)
+            canonical = (option_key, token)
+        if option_key in options:
+            raise BuildControlError("Retained tmpfs options duplicate or conflict: " + label)
+        options[option_key] = canonical
+    return tuple(sorted(options.values()))
 
 
 def _validate_recovery_environment(values):
@@ -1041,6 +1085,17 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             {"type": "volume", "source": "frontend-build", "target": "/state/development", "volume": {"nocopy": True}},
             {"type": "volume", "source": "build-control", "target": "/opt/fullmag/control", "read_only": True,
              "volume": {"nocopy": True, "subpath": "frontend"}}]
+        owner_tmpfs = "/run/fullmag/frontend-owner:rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
+        existing_tmpfs = [
+            value for value in frontend.get("tmpfs", [])
+            if isinstance(value, str) and value.split(":", 1)[0] == _FRONTEND_OWNER_TMPFS
+        ]
+        if existing_tmpfs and existing_tmpfs != [owner_tmpfs]:
+            raise BuildControlError("Frontend owner tmpfs declaration is ambiguous")
+        frontend["tmpfs"] = [
+            value for value in frontend.get("tmpfs", [])
+            if not (isinstance(value, str) and value.split(":", 1)[0] == _FRONTEND_OWNER_TMPFS)
+        ] + [owner_tmpfs]
         document["volumes"] = {**document.get("volumes", {}), **cache["overlay"]["volumes"],
             "frontend-build": {"name": frontend_volume, "external": True},
             "build-control": {"name": control.volume, "external": True}}
@@ -1234,7 +1289,8 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
 
 
 
-def _validate_retained_service(document, actual, service, image_config, *, expected_started_at=None):
+def _validate_retained_service(document, actual, service, image_config, *,
+                               expected_started_at=None, allow_legacy_frontend=False):
     """Reject configuration/mount drift and a replaced observed incarnation."""
     if expected_started_at is not None and actual.get("State", {}).get("StartedAt") != expected_started_at:
         raise BuildControlError("Backend incarnation changed during readiness observation")
@@ -1266,6 +1322,35 @@ def _validate_retained_service(document, actual, service, image_config, *, expec
             or set(host.get("Tmpfs") or {}) != temporary
             or any(mounts[target].get("Type") != "tmpfs" for target in set(mounts) - targets)):
         raise BuildControlError("Retained service has missing or extra mounts: " + service)
+    if service == "frontend":
+        owner_specs = [
+            value for value in expected.get("tmpfs", [])
+            if isinstance(value, str) and value.split(":", 1)[0] == _FRONTEND_OWNER_TMPFS
+        ]
+        if owner_specs:
+            if len(owner_specs) != 1:
+                raise BuildControlError("Frontend service must declare one ephemeral owner tmpfs")
+            _, expected_options = owner_specs[0].split(":", 1)
+            actual_options = (host.get("Tmpfs") or {}).get(_FRONTEND_OWNER_TMPFS)
+            expected_normalized = _normalize_tmpfs_options(
+                expected_options, label="frontend owner expected"
+            )
+            actual_normalized = _normalize_tmpfs_options(
+                actual_options, label="frontend owner observed"
+            )
+            required = _normalize_tmpfs_options(
+                "rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700",
+                label="frontend owner required",
+            )
+            if expected_normalized != required:
+                raise BuildControlError("Frontend owner tmpfs declaration is not private and bounded")
+            if actual_normalized != required:
+                raise BuildControlError("Frontend owner tmpfs mount is not private and bounded")
+        if not owner_specs and not allow_legacy_frontend:
+            raise BuildControlError("Retained frontend is missing the ephemeral owner tmpfs")
+        # A retained compose document from before this migration may be read
+        # only during a controlled recreation that renders the current document;
+        # a normal resume must never restart it without the new owner boundary.
     for mount in expected["volumes"]:
         observed = mounts[mount["target"]]
         if observed.get("Type") != mount["type"] or bool(observed.get("RW")) == bool(mount.get("read_only", False)):
@@ -1970,6 +2055,10 @@ def _native_failed_stop_recovery_context(control, previous, *, backend_id, fresh
     ):
         raise BuildControlError("Native failed-stop journal is not the exact stopped backend proof")
     after_ready = failure_kind == "native-after-ready-failure"
+    failure_mode = journal.get("failure_mode")
+    api_start_failure = failure_mode == "api-start-failure"
+    if failure_mode is not None and (failure_kind != "native-start-failure" or not api_start_failure):
+        raise BuildControlError("Native failed-stop journal has an unsupported failure mode")
     failure = journal.get("failure_receipt")
     if not isinstance(failure, Mapping):
         raise BuildControlError("Native failed-stop journal has no failed process receipt")
@@ -1989,7 +2078,9 @@ def _native_failed_stop_recovery_context(control, previous, *, backend_id, fresh
     validated = (
         _validate_native_after_ready_failure_probe(probe, process_sha)
         if after_ready
-        else _validate_native_failure_probe(probe, process_sha)
+        else _validate_native_failure_probe(
+            probe, process_sha, api_start_failure=api_start_failure
+        )
     )
 
     terminal_raw = _control_bytes(control, "runtime-control/runtime-service/process-tree.json")
@@ -2071,6 +2162,8 @@ def _native_failed_stop_recovery_context(control, previous, *, backend_id, fresh
         "previous_config_sha256": previous_config_sha256,
         "claim_pending": False,
     }
+    if api_start_failure:
+        metadata["failure_mode"] = failure_mode
     if after_ready:
         metadata["retained_ready_owner"] = validated["ready_owner"]
     if namespace_attestation is not None:
@@ -2198,7 +2291,13 @@ def _retained_operation(args, *, recreate_services, restart_idle_service=False, 
         recorded_id = previous.get(service + "_container")
         if recorded_id is not None and observed.get("Id") != recorded_id:
             raise BuildControlError("Recorded container incarnation differs")
-        _validate_retained_service(document, observed, service, image_config)
+        _validate_retained_service(
+            document,
+            observed,
+            service,
+            image_config,
+            allow_legacy_frontend=recreate_services,
+        )
     if restart_idle_service:
         if (not actual["backend"]["State"]["Running"]
                 or actual["backend"]["State"].get("Health", {}).get("Status") != "healthy"):

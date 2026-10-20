@@ -34,7 +34,15 @@ class AcceptedReattachTransportTests(unittest.TestCase):
             self.backing[prefix + "_path"] = filename
             self.backing[prefix + "_sha256"] = hashlib.sha256(raw).hexdigest()
         self.proof.write_text(json.dumps({
-            "schema": "fullmag.development-accepted-run-reattach-proof.v1", **self.backing}))
+            "schema": "fullmag.development-accepted-run-reattach-proof.v1",
+            # These are copied into every native restore acknowledgement.  Keep
+            # the transport fixture aligned with the producer contract so an
+            # input that can pass this test is also suitable for ACK validation.
+            "activation_attempt": "a" * 32,
+            "reconciliation_attempt": "b" * 32,
+            "logical_session_id": "session-1",
+            "session_epoch": 7,
+            **self.backing}))
         self.request = {
             "schema": runtime.ACCEPTED_REATTACH_REQUEST_SCHEMA,
             "run_id": "run-existing", "project_id": "project-existing",
@@ -107,6 +115,13 @@ class AcceptedReattachTransportTests(unittest.TestCase):
             self.assertEqual(value["target_source_sha256"], "e" * 64)
             self.assertEqual(value["run_id"], "run-existing")
             self.assertEqual(value["schema"], runtime.ACCEPTED_REATTACH_INPUT_SCHEMA)
+            self.assertEqual(value["request_sha256"],
+                             self.environment[runtime.ACCEPTED_REATTACH_DIGEST_ENV])
+            self.assertEqual(value["restore_mode"], runtime.ACCEPTED_REATTACH_INITIAL_MODE)
+            for field in ("previous_ack_path", "previous_ack_sha256",
+                          "previous_drain_path", "previous_drain_sha256"):
+                with self.subTest(field=field):
+                    self.assertIsNone(value[field])
         self.assertTrue(stream.closed)
         self.assertEqual(set(self.root.iterdir()), before)
         self.assertNotIn(runtime.ACCEPTED_REATTACH_STDIN_ENV, self.environment)

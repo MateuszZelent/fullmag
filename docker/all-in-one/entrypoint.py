@@ -268,6 +268,7 @@ def serve():
     result = 1
     last_full_api_probe = 0.0
     degraded_since = None
+    accepted_runtime = None
     try:
         service._atomic_json(receipt_path, receipt, "process tree receipt")
         handle = service.start(paths, api_port=8081, expected_binding=bootstrap["binding"],
@@ -277,6 +278,16 @@ def serve():
         # native owner; the terminal drain receipt must retain that identity.
         receipt["service_owner"] = handle.owner
         service._atomic_json(receipt_path, receipt, "process tree receipt")
+        if accepted_preflight is not None:
+            # The native API writes an immutable, API-instance-bound
+            # acknowledgement after restoring the run.  Its restore_mode is
+            # the native proof-backed outcome (held or terminally consumed);
+            # do not infer it from a mutable workspace marker or old bytes.
+            accepted_runtime = service.accepted_reattach_runtime_ack(
+                paths, preflight=accepted_preflight, handle=handle
+            )
+            receipt["accepted_reattach"] = accepted_runtime
+            service._atomic_json(receipt_path, receipt, "process tree receipt")
         last_full_api_probe = time.monotonic()
         try:
             startup_result = activate_startup_script()
@@ -372,6 +383,13 @@ def serve():
             raise
         finally:
             service._atomic_json(receipt_path, receipt, "process tree receipt")
+            if receipt.get("state") == "drained" and accepted_runtime is not None:
+                # The immutable successor-drain record is published only after
+                # the drained process receipt is durable.  If this publication
+                # fails, the next start remains fail-closed and requires recovery.
+                service.accepted_reattach_record_drain(
+                    paths, runtime=accepted_runtime, receipt_path=receipt_path
+                )
     return result
 
 

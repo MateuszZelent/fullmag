@@ -1,12 +1,34 @@
 """Interpreted publication failure regressions for Docker Windows attestations."""
+import ctypes
 import json
 import hashlib
+import os
 import tempfile
+import threading
+import time
 import unittest
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import windows_folder_host as host
+
+
+class _FakeWinFunction:
+    def __init__(self, callback):
+        self._callback = callback
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *args):
+        return self._callback(*args)
+
+
+class _FakeKernel32:
+    def __init__(self, move, attributes=0x20):
+        self.MoveFileExW = _FakeWinFunction(move)
+        self.GetFileAttributesW = _FakeWinFunction(lambda path: attributes)
 
 
 class WindowsFolderEvidence(unittest.TestCase):
@@ -132,6 +154,296 @@ class WindowsFolderEvidence(unittest.TestCase):
             parent_link.symlink_to(real_parent, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "reparse point"):
                 host.write_bound_evidence(parent_link / "host.json", {"owner": "new"})
+
+
+    def test_replace_target_identity_rejects_dangling_reparse_point(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "host.json"
+            target.symlink_to(root / "missing.json")
+            with self.assertRaisesRegex(ValueError, "reparse point"):
+                host._replace_target_identity(target)
+
+    def test_windows_replace_retries_known_sharing_errors_then_succeeds(self):
+        for error_code in (5, 32, 33):
+            with self.subTest(error_code=error_code), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "incoming.tmp"
+                target = root / "host.json"
+                source.write_text("new", encoding="utf-8")
+                target.write_text("old", encoding="utf-8")
+                calls = []
+                clock = type("Clock", (), {"now": 0.0})()
+
+                def move(source_name, destination_name, flags):
+                    calls.append((source_name, destination_name, flags))
+                    if len(calls) == 1:
+                        return 0
+                    os.replace(source_name, destination_name)
+                    return 1
+
+                api = _FakeKernel32(move)
+                with patch.object(host, "os", SimpleNamespace(name="nt", replace=os.replace)), \
+                        patch.object(host, "_pinned_replacement_parents", return_value=nullcontext()), \
+                        patch.object(host.ctypes, "WinDLL", return_value=api, create=True), \
+                        patch.object(host.ctypes, "get_last_error", return_value=error_code, create=True), \
+                        patch.object(host.ctypes, "WinError", create=True,
+                                     side_effect=lambda code: OSError(code, "winerror")), \
+                        patch.object(host.time, "monotonic",
+                                     side_effect=lambda: clock.now), \
+                        patch.object(host.time, "sleep",
+                                     side_effect=lambda delay: setattr(clock, "now", clock.now + delay)):
+                    host._replace_write_through(source, target)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(target.read_text(encoding="utf-8"), "new")
+
+
+    def test_windows_replace_holds_parent_guard_for_all_retries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "incoming.tmp"
+            target = root / "host.json"
+            source.write_text("new", encoding="utf-8")
+            target.write_text("old", encoding="utf-8")
+            calls = []
+            state = {"active": False, "events": []}
+            clock = type("Clock", (), {"now": 0.0})()
+
+            @contextmanager
+            def guard(_source, _destination):
+                state["events"].append("enter")
+                state["active"] = True
+                try:
+                    yield
+                finally:
+                    state["active"] = False
+                    state["events"].append("exit")
+
+            def move(source_name, destination_name, flags):
+                self.assertTrue(state["active"])
+                calls.append((source_name, destination_name, flags))
+                if len(calls) == 1:
+                    return 0
+                os.replace(source_name, destination_name)
+                return 1
+
+            api = _FakeKernel32(move)
+            with patch.object(host, "os", SimpleNamespace(name="nt", replace=os.replace)), \
+                    patch.object(host, "_pinned_replacement_parents", side_effect=guard), \
+                    patch.object(host.ctypes, "WinDLL", return_value=api, create=True), \
+                    patch.object(host.ctypes, "get_last_error", return_value=5, create=True), \
+                    patch.object(host.ctypes, "WinError", create=True,
+                                 side_effect=lambda code: OSError(code, "winerror")), \
+                    patch.object(host.time, "monotonic",
+                                 side_effect=lambda: clock.now), \
+                    patch.object(host.time, "sleep",
+                                 side_effect=lambda delay: setattr(clock, "now", clock.now + delay)):
+                host._replace_write_through(source, target)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(state["events"], ["enter", "exit"])
+            self.assertFalse(state["active"])
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+
+    def test_windows_replace_rejects_readonly_destination_without_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "incoming.tmp"
+            target = root / "host.json"
+            source.write_text("new", encoding="utf-8")
+            target.write_text("old", encoding="utf-8")
+            calls = []
+
+            def move(source_name, destination_name, flags):
+                calls.append((source_name, destination_name, flags))
+                return 0
+
+            api = _FakeKernel32(move, attributes=0x20 | 0x1)
+            with patch.object(host, "os", SimpleNamespace(name="nt", replace=os.replace)), \
+                    patch.object(host, "_pinned_replacement_parents", return_value=nullcontext()), \
+                    patch.object(host.ctypes, "WinDLL", return_value=api, create=True), \
+                    patch.object(host.ctypes, "get_last_error", return_value=5, create=True), \
+                    patch.object(host.ctypes, "WinError", create=True,
+                                 side_effect=lambda code: OSError(code, "winerror")), \
+                    patch.object(host.time, "monotonic", return_value=0.0):
+                with self.assertRaises(OSError):
+                    host._replace_write_through(source, target)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(target.read_text(encoding="utf-8"), "old")
+
+    def test_windows_replace_rejects_destination_identity_change_without_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "incoming.tmp"
+            target = root / "host.json"
+            source.write_text("new", encoding="utf-8")
+            target.write_text("old", encoding="utf-8")
+            calls = []
+
+            def move(source_name, destination_name, flags):
+                calls.append((source_name, destination_name, flags))
+                target.write_text("changed", encoding="utf-8")
+                return 0
+
+            api = _FakeKernel32(move)
+            with patch.object(host, "os", SimpleNamespace(name="nt", replace=os.replace)), \
+                    patch.object(host, "_pinned_replacement_parents", return_value=nullcontext()), \
+                    patch.object(host.ctypes, "WinDLL", return_value=api, create=True), \
+                    patch.object(host.ctypes, "get_last_error", return_value=5, create=True), \
+                    patch.object(host.ctypes, "WinError", create=True,
+                                 side_effect=lambda code: OSError(code, "winerror")), \
+                    patch.object(host.time, "monotonic", return_value=0.0):
+                with self.assertRaises(OSError):
+                    host._replace_write_through(source, target)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(target.read_text(encoding="utf-8"), "changed")
+
+
+    def test_windows_replace_rechecks_identity_after_wait_and_preserves_pending_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "incoming.tmp"
+            target = root / "host.json"
+            source.write_text("pending", encoding="utf-8")
+            target.write_text("published", encoding="utf-8")
+            calls = []
+
+            def move(source_name, destination_name, flags):
+                calls.append((source_name, destination_name, flags))
+                return 0
+
+            def mutate_during_sleep(_delay):
+                metadata = target.stat()
+                os.utime(
+                    target,
+                    ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000_000),
+                )
+
+            api = _FakeKernel32(move)
+            with patch.object(host, "os", SimpleNamespace(name="nt", replace=os.replace)), \
+                    patch.object(host, "_pinned_replacement_parents", return_value=nullcontext()), \
+                    patch.object(host.ctypes, "WinDLL", return_value=api, create=True), \
+                    patch.object(host.ctypes, "get_last_error", return_value=5, create=True), \
+                    patch.object(host.ctypes, "WinError", create=True,
+                                 side_effect=lambda code: OSError(code, "winerror")), \
+                    patch.object(host.time, "monotonic", return_value=0.0), \
+                    patch.object(host.time, "sleep", side_effect=mutate_during_sleep):
+                with self.assertRaises(OSError):
+                    host._replace_write_through(source, target)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(source.read_text(encoding="utf-8"), "pending")
+            self.assertEqual(target.read_text(encoding="utf-8"), "published")
+
+    def test_windows_replace_does_not_retry_nonsharing_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "incoming.tmp"
+            target = root / "host.json"
+            source.write_text("pending", encoding="utf-8")
+            target.write_text("published", encoding="utf-8")
+            calls = []
+
+            def move(source_name, destination_name, flags):
+                calls.append((source_name, destination_name, flags))
+                return 0
+
+            api = _FakeKernel32(move)
+            with patch.object(host, "os", SimpleNamespace(name="nt", replace=os.replace)), \
+                    patch.object(host, "_pinned_replacement_parents", return_value=nullcontext()), \
+                    patch.object(host.ctypes, "WinDLL", return_value=api, create=True), \
+                    patch.object(host.ctypes, "get_last_error", return_value=87, create=True), \
+                    patch.object(host.ctypes, "WinError", create=True,
+                                 side_effect=lambda code: OSError(code, "winerror")):
+                with self.assertRaises(OSError):
+                    host._replace_write_through(source, target)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(source.read_text(encoding="utf-8"), "pending")
+            self.assertEqual(target.read_text(encoding="utf-8"), "published")
+
+    def test_windows_replace_stops_known_sharing_retry_at_one_second(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "incoming.tmp"
+            target = root / "host.json"
+            source.write_text("new", encoding="utf-8")
+            target.write_text("old", encoding="utf-8")
+            calls = []
+            clock = type("Clock", (), {"now": 0.0})()
+
+            def move(source_name, destination_name, flags):
+                calls.append((source_name, destination_name, flags))
+                return 0
+
+            api = _FakeKernel32(move)
+            with patch.object(host, "os", SimpleNamespace(name="nt", replace=os.replace)), \
+                    patch.object(host, "_pinned_replacement_parents", return_value=nullcontext()), \
+                    patch.object(host.ctypes, "WinDLL", return_value=api, create=True), \
+                    patch.object(host.ctypes, "get_last_error", return_value=5, create=True), \
+                    patch.object(host.ctypes, "WinError", create=True,
+                                 side_effect=lambda code: OSError(code, "winerror")), \
+                    patch.object(host.time, "monotonic",
+                                 side_effect=lambda: clock.now), \
+                    patch.object(host.time, "sleep",
+                                 side_effect=lambda delay: setattr(clock, "now", clock.now + delay)):
+                with self.assertRaises(OSError):
+                    host._replace_write_through(source, target)
+            self.assertGreaterEqual(clock.now, 1.0)
+            self.assertEqual(len(calls), 21)
+            self.assertEqual(target.read_text(encoding="utf-8"), "old")
+
+    @unittest.skipUnless(os.name == "nt", "native Windows only")
+    def test_native_reader_without_delete_share_releases_after_200ms(self):
+        from ctypes import wintypes
+
+        api = ctypes.WinDLL("kernel32", use_last_error=True)
+        api.CreateFileW.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        api.CreateFileW.restype = wintypes.HANDLE
+        api.CloseHandle.argtypes = [wintypes.HANDLE]
+        api.CloseHandle.restype = wintypes.BOOL
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / ".windows-folder-probe" / "host.json"
+            target.parent.mkdir()
+            value = {"reader": "held", "checks": {"restart": True}}
+            target.write_text(
+                json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+            handle = api.CreateFileW(
+                str(target), 0x80000000, 0x1 | 0x2, None, 3, 0x80, None
+            )
+            if handle == ctypes.c_void_p(-1).value:
+                raise ctypes.WinError(ctypes.get_last_error())
+            lock = threading.Lock()
+            released = threading.Event()
+
+            def release_reader():
+                nonlocal handle
+                with lock:
+                    if handle is not None:
+                        api.CloseHandle(handle)
+                        handle = None
+                    released.set()
+
+            timer = threading.Timer(0.2, release_reader)
+            timer.daemon = True
+            timer.start()
+            started = time.perf_counter()
+            try:
+                host.publish_evidence(target, value)
+            finally:
+                with lock:
+                    if handle is not None:
+                        api.CloseHandle(handle)
+                        handle = None
+                    released.set()
+                timer.join(2.0)
+            elapsed = time.perf_counter() - started
+            self.assertTrue(released.is_set())
+            self.assertGreaterEqual(elapsed, 0.15)
+            self.assertLess(elapsed, 1.0)
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8")), value)
+            self.assertEqual(list(target.parent.iterdir()), [target])
 
     def test_attest_emits_typed_development_build_delegation(self):
         binary_hashes = {"fullmag": "e" * 64}

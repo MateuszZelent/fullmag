@@ -330,6 +330,13 @@ def _validate_live_network(backend_id: str, frontend_id: str, project: str, port
         if not isinstance(observed, list) or len(observed) != 1 or not isinstance(observed[0], Mapping):
             raise DiscoveryError(f"running {service} identity is ambiguous")
         records[service] = observed[0]
+    for service, record in records.items():
+        state = record.get("State")
+        health = state.get("Health") if isinstance(state, Mapping) else None
+        if not isinstance(state, Mapping) or state.get("Running") is not True:
+            raise DiscoveryError(f"running {service} is not running")
+        if not isinstance(health, Mapping) or health.get("Status") != "healthy":
+            raise DiscoveryError(f"running {service} health is not healthy")
     backend = records["backend"]
     backend_host = backend.get("HostConfig", {})
     if not isinstance(backend_host, Mapping):

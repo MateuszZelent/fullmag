@@ -232,8 +232,10 @@ Retencja ma odróżniać:
 - **orphan staging po awarii:** nie usuwać wyłącznie po nazwie lub wieku;
   wymaga dowodu zakończenia procesu/operacji i braku referencji;
 - **logi i metadane:** stdout/stderr usługi Compose ma obecnie rotację
-  `json-file` `10m × 3`; `next.log` jest zerowany przy starcie, ale może rosnąć
-  w długiej sesji; `/retired` ogranicza duplikację do 8 wpisów / 64 MiB, ale
+  `json-file` `10m × 3`; `next.log` ma limit 64 MiB i przy kolejnym starcie
+  pełny log jest atomowo obracany do jednej poprzedniej kopii pod runtime
+  lockiem. Nadmiar trafia do Docker stdout; `/retired` ogranicza duplikację
+  do 8 wpisów / 64 MiB, ale
   Cargo/CMake/BuildKit i stare wolumeny nadal nie mają ogólnego GC;
 - **sesje/wyniki/settings/ledger:** poza cleanupem builda.
 

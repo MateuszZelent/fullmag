@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import ctypes
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import re
@@ -10,6 +10,7 @@ import stat
 import os
 import shutil
 import subprocess
+import time
 import unicodedata
 import uuid
 from pathlib import Path
@@ -27,19 +28,31 @@ DEVELOPMENT_PROVENANCE_PATH = "/opt/fullmag/control/backend/runtime-provenance.j
 BOUND_EVIDENCE_MAX_BYTES = 1024 * 1024
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+_WINDOWS_REPLACE_RETRY_SECONDS = 1.0
+_WINDOWS_REPLACE_RETRY_ERRORS = frozenset((5, 32, 33))
+_WINDOWS_FILE_ATTRIBUTE_READONLY = 0x1
+_WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def _replace_target_identity(path):
+    path = Path(path)
+    # Check the link before exists(): a dangling reparse point must never be
+    # treated as an absent destination that can be replaced.
+    if storage.is_link(path):
+        raise ValueError("Evidence destination is a reparse point")
+    if not path.exists():
+        return None
+    metadata = path.stat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise ValueError("Evidence destination is not an unshared regular file")
+    return metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns
 
 
 def _replace_write_through(source, destination):
     if os.name != "nt":
         os.replace(source, destination)
         return
-    from ctypes import wintypes
-    api = ctypes.WinDLL("kernel32", use_last_error=True)
-    api.MoveFileExW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
-    api.MoveFileExW.restype = wintypes.BOOL
-    # Keep atomic same-volume replacement and wait for the move to reach disk.
-    if not api.MoveFileExW(str(source), str(destination), 0x1 | 0x8):
-        raise ctypes.WinError(ctypes.get_last_error())
+    return _replace_write_through_windows(source, destination)
 
 
 @contextmanager
@@ -102,6 +115,55 @@ def _pinned_no_reparse_ancestors(path):
     finally:
         for handle in reversed(handles):
             api.CloseHandle(handle)
+
+
+@contextmanager
+def _pinned_replacement_parents(source, destination):
+    """Pin both replacement parents for the complete native publication."""
+    source_parent = Path(source).parent
+    destination_parent = Path(destination).parent
+    with ExitStack() as stack:
+        stack.enter_context(_pinned_no_reparse_ancestors(destination_parent))
+        if source_parent != destination_parent:
+            stack.enter_context(_pinned_no_reparse_ancestors(source_parent))
+        yield
+
+
+def _replace_write_through_windows(source, destination):
+    from ctypes import wintypes
+
+    api = ctypes.WinDLL("kernel32", use_last_error=True)
+    api.MoveFileExW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
+    api.MoveFileExW.restype = wintypes.BOOL
+    api.GetFileAttributesW.argtypes = [wintypes.LPCWSTR]
+    api.GetFileAttributesW.restype = wintypes.DWORD
+    # Keep same-volume replacement and wait for the move to reach disk.
+    # A bounded reader may briefly deny replacement; retry only known sharing
+    # failures while the original regular-file destination remains unchanged.
+    with _pinned_replacement_parents(source, destination):
+        expected_destination = _replace_target_identity(destination)
+        deadline = time.monotonic() + _WINDOWS_REPLACE_RETRY_SECONDS
+        while True:
+            if api.MoveFileExW(str(source), str(destination), 0x1 | 0x8):
+                return
+            error_code = ctypes.get_last_error()
+            if error_code not in _WINDOWS_REPLACE_RETRY_ERRORS:
+                raise ctypes.WinError(error_code)
+            current_destination = _replace_target_identity(destination)
+            if expected_destination is None or current_destination != expected_destination:
+                raise ctypes.WinError(error_code)
+            attributes = api.GetFileAttributesW(str(destination))
+            if attributes == 0xFFFFFFFF or attributes & (
+                _WINDOWS_FILE_ATTRIBUTE_READONLY | _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+            ):
+                raise ctypes.WinError(error_code)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ctypes.WinError(error_code)
+            time.sleep(min(0.05, remaining))
+            current_destination = _replace_target_identity(destination)
+            if expected_destination is None or current_destination != expected_destination:
+                raise ctypes.WinError(error_code)
 
 
 def publish_evidence(path, value):

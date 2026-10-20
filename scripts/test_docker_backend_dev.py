@@ -80,6 +80,131 @@ class BackendPackageTests(unittest.TestCase):
         records = backend._copy_package(workspace, output)
         return output, records
 
+    @staticmethod
+    def _copy_into_marked_candidate(workspace, candidate, package_root, build_root):
+        marker = candidate / backend.PACKAGE_CANDIDATE_MARKER
+        backend._validate_candidate_marker(candidate, package_root, build_root, state="building")
+        marker.unlink()
+        records = backend._copy_package(workspace, candidate)
+        backend._write_candidate_marker(
+            candidate,
+            package_root,
+            build_root,
+            state="ready",
+            records=records,
+        )
+        return records
+
+    @staticmethod
+    def _populate_direct_candidate(package, build_root, candidate):
+        candidate.mkdir()
+        backend._write_candidate_marker(candidate, package, build_root, state="building")
+        for relative in backend.REQUIRED_PACKAGE_PATHS:
+            if relative in backend.RUNTIME_MANIFEST_PATHS:
+                continue
+            path = candidate.joinpath(*relative.split("/"))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            content = b"cuda-fem-gpu\n" if relative == "launcher-build-mode" else b"candidate\n"
+            path.write_bytes(content)
+            if relative.startswith("bin/"):
+                path.chmod(0o755)
+        for relative in ("lib/libfullmag_fdm.so.1", "lib/libfullmag_fem.so.1"):
+            path = candidate.joinpath(*relative.split("/"))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"native-library")
+        (candidate / "lib/libfullmag_fdm.so").symlink_to("libfullmag_fdm.so.1")
+        (candidate / "lib/libfullmag_fem.so").symlink_to("libfullmag_fem.so.1")
+        launcher = candidate / "bin/fullmag"
+        launcher.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        launcher.chmod(0o755)
+        for name in (
+            "direct-backend-build.log",
+            "install-cli-build.log",
+            "install-cli-managed-fem-gpu.log",
+        ):
+            (candidate / name).write_text("build fixture\n", encoding="utf-8")
+
+    @staticmethod
+    def _direct_candidate_fixture(root, name=".backend-package-candidate-direct"):
+        package = root / "package"
+        package.mkdir()
+        build_root = root / "build"
+        build_root.mkdir()
+        control = backend._ensure_package_development_root(package)
+        candidate = control / backend.PACKAGE_CANDIDATES_DIRNAME / name
+        workspace = root / "workspace"
+        workspace.mkdir()
+        BackendPackageTests._populate_direct_candidate(package, build_root, candidate)
+        return package, build_root, control, candidate, workspace
+
+    @staticmethod
+    def _failed_make_fixture(root, name, payload=b"make failure\n"):
+        root.mkdir(parents=True, exist_ok=True)
+        package = root / "package"
+        package.mkdir()
+        build_root = root / "build"
+        build_root.mkdir()
+        control = backend._ensure_package_development_root(package)
+        candidate = control / backend.PACKAGE_CANDIDATES_DIRNAME / name
+        candidate.mkdir()
+        backend._write_candidate_marker(candidate, package, build_root, state="building")
+        log_path = backend._begin_failed_make_attempt(build_root, candidate, "install-cli-dev")
+        log_path.write_bytes(payload)
+        return package, build_root, candidate, log_path
+
+    def _ready_rotation_fixture(self, root, name):
+        package, current_records = self._published_package(root)
+        backend._write_json(
+            package / "backend-build-receipt.json",
+            {
+                "schema": backend.RECEIPT_SCHEMA,
+                "state": "succeeded",
+                "execution_lanes": {
+                    lane: {"status": "compiled"} for lane in backend.LANES
+                },
+                "artifacts": current_records,
+            },
+            "rotation journal current receipt",
+        )
+        build_root = root / "build"
+        build_root.mkdir()
+        control = backend._ensure_package_development_root(package)
+        candidate = control / backend.PACKAGE_CANDIDATES_DIRNAME / name
+        self._populate_direct_candidate(package, build_root, candidate)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        candidate_records = backend._copy_package(
+            workspace,
+            candidate,
+            direct_install=True,
+            package_root=package,
+            build_root=build_root,
+        )
+        previous = backend._validated_package(
+            package,
+            "rotation journal current package",
+            exclude_development_control=True,
+        )
+        candidate_receipt = {
+            "schema": backend.RECEIPT_SCHEMA,
+            "state": "succeeded",
+            "execution_lanes": {lane: {"status": "compiled"} for lane in backend.LANES},
+            "artifacts": candidate_records,
+        }
+        backend._write_json(
+            candidate / "backend-build-receipt.json",
+            candidate_receipt,
+            "rotation journal candidate receipt",
+        )
+        return (
+            package,
+            build_root,
+            control,
+            candidate,
+            previous,
+            (candidate / "backend-build-receipt.json").read_bytes(),
+        )
+
     def _rotated_package_fixture(self, root, versions=3):
         package, records = self._published_package(root)
         toolchain = self._toolchain_fixture()
@@ -117,7 +242,7 @@ class BackendPackageTests(unittest.TestCase):
             candidate_receipt_bytes = (
                 candidate / "backend-build-receipt.json"
             ).read_bytes()
-            backend._rotate_package(
+            rotation = backend._rotate_package(
                 package,
                 candidate,
                 control,
@@ -125,7 +250,8 @@ class BackendPackageTests(unittest.TestCase):
                 previous[1],
                 candidate_receipt_bytes,
             )
-            backend._remove_owned_tree(candidate)
+            backend._finalize_published_candidate(candidate, rotation)
+            backend._clear_rotation_journal(rotation)
         return package, control, toolchain
 
     @staticmethod
@@ -471,11 +597,20 @@ class BackendPackageTests(unittest.TestCase):
                 candidate = args[2]
                 build_number += 1
                 workspace = self._package_workspace(root / f"candidate-{build_number}")
-                records = backend._copy_package(workspace, candidate)
+                records = self._copy_into_marked_candidate(
+                    workspace, candidate, backend.PACKAGE_ROOT, args[1]
+                )
                 if build_number == 2:
                     binary = candidate / "bin/fullmag-bin"
                     binary.write_bytes(b"changed candidate\n")
                     records = backend._hash_package(candidate)
+                    backend._write_candidate_marker(
+                        candidate,
+                        backend.PACKAGE_ROOT,
+                        args[1],
+                        state="ready",
+                        records=records,
+                    )
                 backend._write_json(
                     candidate / "backend-build-receipt.json",
                     {
@@ -558,6 +693,8 @@ class BackendPackageTests(unittest.TestCase):
                 self.assertFalse(prepare_args[2].is_relative_to(build_root))
                 self.assertNotEqual(prepare_args[2], package)
                 self.assertEqual(prepare_args[3], 3)
+                self.assertEqual(prepare_args[5], prepare_args[2])
+                self.assertTrue(prepare_args[5].name.startswith(".backend-package-candidate-"))
                 self.assertEqual(events[1][1], package)
                 self.assertEqual(events[2][1], [])
                 self.assertNotEqual((package / "bin/fullmag-bin").read_bytes(), b"package\n")
@@ -1334,9 +1471,18 @@ class BackendPackageTests(unittest.TestCase):
             def prepare_candidate(*args):
                 candidate = args[2]
                 workspace = self._package_workspace(root / "changed-candidate")
-                candidate_records = backend._copy_package(workspace, candidate)
+                candidate_records = self._copy_into_marked_candidate(
+                    workspace, candidate, backend.PACKAGE_ROOT, args[1]
+                )
                 (candidate / "bin/fullmag-bin").write_bytes(b"changed source candidate\n")
                 candidate_records = backend._hash_package(candidate)
+                backend._write_candidate_marker(
+                    candidate,
+                    backend.PACKAGE_ROOT,
+                    args[1],
+                    state="ready",
+                    records=candidate_records,
+                )
                 backend._write_json(
                     candidate / "backend-build-receipt.json",
                     self._receipt_for_manifest(candidate_records, changed_manifest, toolchain),
@@ -1818,11 +1964,18 @@ class BackendPackageTests(unittest.TestCase):
             def prepare_candidate(*args):
                 nonlocal calls
                 calls += 1
-                if calls == 2:
-                    raise backend.BackendBuildError("candidate build failed")
                 candidate = args[2]
-                workspace = self._package_workspace(root / "candidate")
-                records = backend._copy_package(workspace, candidate)
+                if calls == 2:
+                    (candidate / "bin").mkdir()
+                    (candidate / "bin/fullmag-api.new").write_bytes(b"partial install")
+                    log = backend._begin_failed_make_attempt(args[1], candidate, "install-cli-dev")
+                    log.write_bytes(b"compiler failed after a partial install\n")
+                    backend._finish_failed_make_attempt(args[1], candidate, 7)
+                    raise backend.BackendBuildError("candidate build failed")
+                workspace = self._package_workspace(root / f"candidate-{calls}")
+                records = self._copy_into_marked_candidate(
+                    workspace, candidate, backend.PACKAGE_ROOT, args[1]
+                )
                 backend._write_json(
                     candidate / "backend-build-receipt.json",
                     {
@@ -1869,15 +2022,31 @@ class BackendPackageTests(unittest.TestCase):
                         path.relative_to(package).as_posix(): path.read_bytes()
                         for path in package.rglob("*")
                         if path.is_file()
+                        and backend.PACKAGE_DEVELOPMENT_DIRNAME
+                        not in path.relative_to(package).parts
                     }
                     self.assertEqual(backend.main(command), 2)
+                    retained = {
+                        path.relative_to(package).as_posix(): path.read_bytes()
+                        for path in package.rglob("*")
+                        if path.is_file()
+                        and backend.PACKAGE_DEVELOPMENT_DIRNAME
+                        not in path.relative_to(package).parts
+                    }
+                    self.assertEqual(retained, before)
+                    # The same container start can retry after the source fix;
+                    # the failed candidate does not require manual deletion.
+                    self.assertEqual(backend.main(command), 0)
                 after = {
                     path.relative_to(package).as_posix(): path.read_bytes()
                     for path in package.rglob("*")
                     if path.is_file()
+                    and backend.PACKAGE_DEVELOPMENT_DIRNAME
+                    not in path.relative_to(package).parts
                 }
                 self.assertEqual(after, before)
-                self.assertEqual(serve.call_count, 1)
+                self.assertEqual(calls, 3)
+                self.assertEqual(serve.call_count, 2)
                 self.assertFalse(
                     list(
                         (
@@ -2008,11 +2177,20 @@ class BackendPackageTests(unittest.TestCase):
                 prepare_calls += 1
                 candidate = args[2]
                 workspace = self._package_workspace(root / f"publication-{prepare_calls}")
-                records = backend._copy_package(workspace, candidate)
+                records = self._copy_into_marked_candidate(
+                    workspace, candidate, backend.PACKAGE_ROOT, args[1]
+                )
                 if prepare_calls == 2:
                     binary = candidate / "bin/fullmag-bin"
                     binary.write_bytes(b"changed candidate\n")
                     records = backend._hash_package(candidate)
+                    backend._write_candidate_marker(
+                        candidate,
+                        backend.PACKAGE_ROOT,
+                        args[1],
+                        state="ready",
+                        records=records,
+                    )
                 backend._write_json(
                     candidate / "backend-build-receipt.json",
                     {
@@ -2067,16 +2245,20 @@ class BackendPackageTests(unittest.TestCase):
                         path.relative_to(package).as_posix(): path.read_bytes()
                         for path in package.rglob("*")
                         if path.is_file()
+                        and backend.PACKAGE_DEVELOPMENT_DIRNAME
+                        not in path.relative_to(package).parts
                     }
                     self.assertEqual(backend.main(command), 2)
                 after = {
                     path.relative_to(package).as_posix(): path.read_bytes()
                     for path in package.rglob("*")
                     if path.is_file()
+                    and backend.PACKAGE_DEVELOPMENT_DIRNAME
+                    not in path.relative_to(package).parts
                 }
                 self.assertEqual(after, before)
                 self.assertEqual(serve.call_count, 1)
-                self.assertFalse(
+                self.assertTrue(
                     list(
                         (
                             package
@@ -2118,11 +2300,20 @@ class BackendPackageTests(unittest.TestCase):
                 calls += 1
                 candidate = args[2]
                 workspace = self._package_workspace(root / f"candidate-{calls}")
-                records = backend._copy_package(workspace, candidate)
+                records = self._copy_into_marked_candidate(
+                    workspace, candidate, backend.PACKAGE_ROOT, args[1]
+                )
                 if calls == 2:
                     binary = candidate / "bin/fullmag-bin"
                     binary.write_bytes(b"changed candidate\n")
                     records = backend._hash_package(candidate)
+                    backend._write_candidate_marker(
+                        candidate,
+                        backend.PACKAGE_ROOT,
+                        args[1],
+                        state="ready",
+                        records=records,
+                    )
                 backend._write_json(
                     candidate / "backend-build-receipt.json",
                     {
@@ -2232,9 +2423,38 @@ class BackendPackageTests(unittest.TestCase):
             provenance_path.touch()
             original_provenance_path = backend.PROVENANCE_PATH
             backend.PROVENANCE_PATH = provenance_path
+            runtime_image_id = "sha256:" + "f" * 64
             try:
-                backend._publish_runtime_provenance(output)
+                with patch.dict(
+                    os.environ,
+                    {"FULLMAG_RUNTIME_IMAGE_ID": runtime_image_id},
+                    clear=False,
+                ):
+                    backend._publish_runtime_provenance(output)
                 provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+                published_bytes = provenance_path.read_bytes()
+                self.assertEqual(provenance["image_id"], runtime_image_id)
+                with patch.dict(os.environ, {}, clear=False):
+                    os.environ.pop("FULLMAG_RUNTIME_IMAGE_ID", None)
+                    with self.assertRaisesRegex(
+                        backend.BackendBuildError, "FULLMAG_RUNTIME_IMAGE_ID"
+                    ):
+                        backend._publish_runtime_provenance(output)
+                for malformed in (
+                    "not-an-image",
+                    "sha256:" + "A" * 64,
+                    "sha256:" + "e" * 63,
+                ):
+                    with self.subTest(malformed=malformed), patch.dict(
+                        os.environ,
+                        {"FULLMAG_RUNTIME_IMAGE_ID": malformed},
+                        clear=False,
+                    ):
+                        with self.assertRaisesRegex(
+                            backend.BackendBuildError, "FULLMAG_RUNTIME_IMAGE_ID"
+                        ):
+                            backend._publish_runtime_provenance(output)
+                self.assertEqual(provenance_path.read_bytes(), published_bytes)
             finally:
                 backend.PROVENANCE_PATH = original_provenance_path
             self.assertEqual(provenance["commit"], "a" * 40)
@@ -2262,6 +2482,765 @@ class BackendPackageTests(unittest.TestCase):
             backend._copy_package_tree(source, target)
             self.assertEqual((target / "lib/libfullmag_fdm.so").read_bytes(), b"native-library")
             self.assertFalse((target / "lib/libfullmag_fdm.so").is_symlink())
+
+    def test_direct_candidate_is_flattened_and_verified_without_mutating_legacy_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, build_root, _control, candidate, workspace = self._direct_candidate_fixture(root)
+            legacy_stage = workspace / ".fullmag" / "local"
+            (legacy_stage / "bin").mkdir(parents=True)
+            (legacy_stage / "bin/fullmag").write_bytes(b"retained legacy launcher\n")
+            (legacy_stage / "lib").mkdir()
+            (legacy_stage / "lib/libfullmag_fdm.so.1").write_bytes(b"retained native\n")
+            (legacy_stage / "lib/libfullmag_fdm.so").symlink_to("libfullmag_fdm.so.1")
+            legacy_before = backend._snapshot_legacy_install_stage(workspace)
+            records = backend._copy_package(
+                workspace,
+                candidate,
+                direct_install=True,
+                package_root=package,
+                build_root=build_root,
+            )
+            self.assertEqual(backend._snapshot_legacy_install_stage(workspace), legacy_before)
+            self.assertFalse((candidate / "bin/fullmag").exists())
+            self.assertFalse((candidate / "lib/libfullmag_fdm.so").is_symlink())
+            self.assertFalse((candidate / "lib/libfullmag_fem.so").is_symlink())
+            marker = json.loads(
+                (candidate / backend.PACKAGE_CANDIDATE_MARKER).read_text(encoding="utf-8")
+            )
+            self.assertEqual(marker["state"], "ready")
+            self.assertEqual(
+                marker["artifact_inventory_sha256"],
+                backend._sha256_bytes(backend._canonical(records)),
+            )
+            self.assertEqual(records, backend._hash_package(candidate))
+
+    def test_direct_candidate_rejects_an_unowned_symlink_without_deleting_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, build_root, _control, candidate, workspace = self._direct_candidate_fixture(root)
+            outside = root / "outside"
+            outside.write_bytes(b"retained")
+            (candidate / "unexpected-link").symlink_to(outside)
+            with self.assertRaises(backend.BackendBuildError):
+                backend._copy_package(
+                    workspace,
+                    candidate,
+                    direct_install=True,
+                    package_root=package,
+                    build_root=build_root,
+                )
+            self.assertTrue((candidate / "unexpected-link").is_symlink())
+            self.assertEqual(outside.read_bytes(), b"retained")
+
+    def test_direct_candidate_rejects_preexisting_payload_before_make(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, _build_root, _control, candidate, _workspace = self._direct_candidate_fixture(root)
+            with self.assertRaisesRegex(backend.BackendBuildError, "pre-existing payload"):
+                backend._assert_direct_candidate_empty_for_make(candidate)
+            self.assertTrue((candidate / "bin/fullmag").is_file())
+
+    def test_failed_candidate_cleanup_requires_known_marker_owned_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, build_root, _control, candidate, _workspace = self._direct_candidate_fixture(root)
+            diagnostic = candidate / "direct-backend-build.log"
+            diagnostic_bytes = diagnostic.read_bytes()
+            self.assertFalse(
+                backend._discard_failed_candidate_if_owned(candidate, package, build_root)
+            )
+            self.assertTrue(candidate.is_dir())
+            self.assertEqual(diagnostic.read_bytes(), diagnostic_bytes)
+
+            for name in (
+                "direct-backend-build.log",
+                "install-cli-build.log",
+                "install-cli-managed-fem-gpu.log",
+            ):
+                (candidate / name).unlink()
+            self.assertTrue(
+                backend._discard_failed_candidate_if_owned(candidate, package, build_root)
+            )
+            self.assertFalse(candidate.exists())
+
+            unknown_root = root / "unknown"
+            unknown_root.mkdir()
+            package, build_root, _control, candidate, _workspace = self._direct_candidate_fixture(
+                unknown_root, name=".backend-package-candidate-unknown"
+            )
+            (candidate / "unknown-build-output.bin").write_bytes(b"preserve")
+            self.assertFalse(
+                backend._discard_failed_candidate_if_owned(candidate, package, build_root)
+            )
+            self.assertTrue((candidate / "unknown-build-output.bin").is_file())
+
+    def test_failed_make_receipt_preserves_external_log_after_candidate_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package, build_root, candidate, log_path = self._failed_make_fixture(
+                Path(directory), ".backend-package-candidate-failed"
+            )
+            receipt = backend._finish_failed_make_attempt(build_root, candidate, 17)
+            self.assertEqual(receipt["state"], "failed")
+            self.assertTrue(
+                backend._discard_failed_candidate_if_owned(candidate, package, build_root)
+            )
+            self.assertFalse(candidate.exists())
+            self.assertTrue(log_path.is_file())
+            attempt = build_root / backend.FAILED_MAKE_DIAGNOSTICS_DIRNAME / candidate.name
+            observed, _ = backend._read_json(
+                attempt / backend.FAILED_MAKE_RECEIPT_NAME,
+                "failed Make receipt",
+            )
+            self.assertEqual(observed["log_sha256"], receipt["log_sha256"])
+            self.assertEqual(observed["log_size"], log_path.stat().st_size)
+
+    def test_building_make_attempt_blocks_candidate_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package, build_root, candidate, log_path = self._failed_make_fixture(
+                Path(directory), ".backend-package-candidate-building"
+            )
+            self.assertFalse(
+                backend._discard_failed_candidate_if_owned(candidate, package, build_root)
+            )
+            self.assertTrue(candidate.is_dir())
+            self.assertTrue(log_path.is_file())
+
+    def test_successful_make_log_is_copied_then_external_log_is_retired(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package, build_root, candidate, log_path = self._failed_make_fixture(
+                Path(directory), ".backend-package-candidate-succeeded", b"success\n"
+            )
+            receipt = backend._finish_failed_make_attempt(build_root, candidate, 0)
+            digest, size = backend._copy_regular_file_fsync(
+                log_path,
+                candidate / backend.FAILED_MAKE_LOG_NAME,
+                "successful Make diagnostic log",
+            )
+            self.assertEqual((digest, size), (receipt["log_sha256"], receipt["log_size"]))
+            backend._retire_make_log(
+                backend._read_failed_make_attempt(build_root, candidate)
+            )
+            self.assertEqual(
+                (candidate / backend.FAILED_MAKE_LOG_NAME).read_bytes(), b"success\n"
+            )
+            self.assertFalse(log_path.exists())
+            observed, _ = backend._read_json(
+                build_root
+                / backend.FAILED_MAKE_DIAGNOSTICS_DIRNAME
+                / candidate.name
+                / backend.FAILED_MAKE_RECEIPT_NAME,
+                "retired Make receipt",
+            )
+            self.assertTrue(observed["log_retired"])
+
+    def test_failed_make_log_retention_bounds_logs_and_preserves_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "package"
+            package.mkdir()
+            build_root = root / "build"
+            build_root.mkdir()
+            control = backend._ensure_package_development_root(package)
+            for index in range(backend.FAILED_MAKE_LOG_LIMIT + 1):
+                candidate = (
+                    control
+                    / backend.PACKAGE_CANDIDATES_DIRNAME
+                    / f".backend-package-candidate-{index}"
+                )
+                candidate.mkdir()
+                backend._write_candidate_marker(
+                    candidate, package, build_root, state="building"
+                )
+                log_path = backend._begin_failed_make_attempt(
+                    build_root, candidate, "install-cli-dev"
+                )
+                log_path.write_bytes(f"failure-{index}\n".encode())
+                backend._finish_failed_make_attempt(build_root, candidate, 17)
+            backend._prune_failed_make_logs(build_root, package)
+            namespace = build_root / backend.FAILED_MAKE_DIAGNOSTICS_DIRNAME
+            self.assertEqual(
+                len(list(namespace.glob(f"*/{backend.FAILED_MAKE_LOG_NAME}"))),
+                backend.FAILED_MAKE_LOG_LIMIT,
+            )
+            self.assertEqual(
+                len(list(namespace.glob(f"*/{backend.FAILED_MAKE_RECEIPT_NAME}"))),
+                backend.FAILED_MAKE_LOG_LIMIT + 1,
+            )
+
+    def test_failed_make_log_drift_keeps_candidate_and_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package, build_root, candidate, log_path = self._failed_make_fixture(
+                Path(directory), ".backend-package-candidate-drift"
+            )
+            backend._finish_failed_make_attempt(build_root, candidate, 2)
+            log_path.write_bytes(b"tampered\n")
+            self.assertFalse(
+                backend._discard_failed_candidate_if_owned(candidate, package, build_root)
+            )
+            self.assertTrue(candidate.is_dir())
+
+    def test_failed_make_unknown_record_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package, build_root, candidate, log_path = self._failed_make_fixture(
+                Path(directory), ".backend-package-candidate-foreign"
+            )
+            backend._finish_failed_make_attempt(build_root, candidate, 3)
+            namespace = build_root / backend.FAILED_MAKE_DIAGNOSTICS_DIRNAME
+            (namespace / "foreign-record").write_bytes(b"keep")
+            backend._prune_failed_make_logs(build_root, package)
+            self.assertTrue(log_path.is_file())
+            self.assertTrue((namespace / "foreign-record").is_file())
+
+    def test_failed_make_zero_exit_code_cannot_claim_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package, build_root, candidate, _log_path = self._failed_make_fixture(
+                Path(directory), ".backend-package-candidate-zero"
+            )
+            backend._finish_failed_make_attempt(build_root, candidate, 2)
+            receipt_path = (
+                build_root
+                / backend.FAILED_MAKE_DIAGNOSTICS_DIRNAME
+                / candidate.name
+                / backend.FAILED_MAKE_RECEIPT_NAME
+            )
+            receipt, _ = backend._read_json(receipt_path, "failed Make receipt")
+            receipt["exit_code"] = 0
+            backend._write_json(receipt_path, receipt, "tampered failed Make receipt")
+            self.assertFalse(
+                backend._discard_failed_candidate_if_owned(candidate, package, build_root)
+            )
+            self.assertTrue(candidate.is_dir())
+
+    def test_failed_make_log_sync_failure_preserves_building_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package, build_root, candidate, log = self._failed_make_fixture(
+                Path(directory), ".backend-package-candidate-unsynced"
+            )
+            with patch.object(backend, "_fsync_owned_tree", side_effect=backend.BackendBuildError("log sync failed")):
+                with self.assertRaises(backend.BackendBuildError):
+                    backend._finish_failed_make_attempt(build_root, candidate, 7)
+            attempt = backend._read_failed_make_attempt(build_root, candidate)
+            self.assertEqual(attempt[0]["state"], "building")
+            self.assertFalse(backend._discard_failed_candidate_if_owned(candidate, package, build_root))
+            self.assertTrue(candidate.is_dir())
+            self.assertTrue(log.is_file())
+
+    def test_failed_make_prune_rejects_receipt_redirect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package, build_root, candidate_a, log_a = self._failed_make_fixture(
+                Path(directory), ".backend-package-candidate-a", b"a\n"
+            )
+            candidate_b = candidate_a.parent / ".backend-package-candidate-b"
+            candidate_b.mkdir()
+            backend._write_candidate_marker(candidate_b, package, build_root, state="building")
+            log_b = backend._begin_failed_make_attempt(build_root, candidate_b, "install-cli-dev")
+            log_b.write_bytes(b"b\n")
+            backend._finish_failed_make_attempt(build_root, candidate_a, 17)
+            backend._finish_failed_make_attempt(build_root, candidate_b, 17)
+            receipt_a = build_root / backend.FAILED_MAKE_DIAGNOSTICS_DIRNAME / candidate_a.name / backend.FAILED_MAKE_RECEIPT_NAME
+            document, _ = backend._read_json(receipt_a, "redirected Make receipt")
+            document["candidate"] = str(candidate_b)
+            backend._write_json(receipt_a, document, "redirected Make receipt")
+            with patch.object(backend, "FAILED_MAKE_LOG_LIMIT", 0):
+                backend._prune_failed_make_logs(build_root, package)
+            self.assertTrue(log_a.is_file())
+            self.assertTrue(log_b.is_file())
+
+    def test_rotation_rollback_reports_missing_or_linked_payload(self):
+        for linked in (False, True):
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                package, build_root, control, candidate, previous, candidate_bytes = self._ready_rotation_fixture(
+                    root, ".backend-package-candidate-unsafe-rollback"
+                )
+                rotation = backend._rotate_package(package, candidate, control, previous[2], previous[1], candidate_bytes)
+                retained = root / "detached-bin"
+                (package / "bin").rename(retained)
+                if linked:
+                    (package / "bin").symlink_to(retained, target_is_directory=True)
+                errors = backend._rollback_package_rotation(rotation)
+                self.assertTrue(errors)
+                self.assertTrue(any("bin" in error for error in errors))
+                self.assertTrue((retained / "fullmag-bin").is_file())
+                self.assertTrue((control / backend.PACKAGE_ROTATION_JOURNAL_NAME).is_file())
+                if linked:
+                    self.assertTrue((package / "bin").is_symlink())
+
+    def test_rotation_rollback_fsyncs_all_mutated_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package, build_root, control, candidate, previous, candidate_bytes = self._ready_rotation_fixture(
+                Path(directory), ".backend-package-candidate-fsync-rollback"
+            )
+            rotation = backend._rotate_package(package, candidate, control, previous[2], previous[1], candidate_bytes)
+            with patch.object(backend, "_fsync_directory", wraps=backend._fsync_directory) as sync:
+                self.assertEqual(backend._rollback_package_rotation(rotation), [])
+            self.assertTrue({package, candidate, Path(rotation["backup"])}.issubset({Path(call.args[0]) for call in sync.call_args_list}))
+
+    def test_finalize_error_after_marker_unlink_keeps_committed_package_recoverable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, build_root, control, candidate, previous, candidate_bytes = self._ready_rotation_fixture(
+                root, ".backend-package-candidate-finalize-error"
+            )
+            provenance = root / "provenance.json"
+            provenance.write_bytes(b"previous")
+            records = json.loads(candidate_bytes)["artifacts"]
+
+            def prepare(*args):
+                backend._write_candidate_marker(candidate, package, build_root, state="ready", records=records)
+                return 0
+
+            def finalize(*args):
+                (candidate / backend.PACKAGE_CANDIDATE_MARKER).unlink()
+                raise backend.BackendBuildError("injected rmdir failure after marker unlink")
+
+            with (
+                patch.object(backend, "PACKAGE_ROOT", package),
+                patch.object(backend, "PROVENANCE_PATH", provenance),
+                patch.dict(os.environ, {"FULLMAG_BACKEND_CARGO_PROFILE": "backend-dev"}),
+                patch.object(backend, "_toolchain_identity", return_value=("sha256:" + "a" * 64, {"image_id": "sha256:" + "a" * 64})),
+                patch.object(backend, "_capture_start_manifest", return_value=root / "manifest.json"),
+                # The fixture preconstructs the package normally produced by Make.
+                patch.object(backend, "_reject_partial_package_candidates"),
+                patch.object(backend.tempfile, "mkdtemp", return_value=str(candidate)),
+                patch.object(backend, "_prepare_locked", side_effect=prepare),
+                patch.object(backend, "_publish_runtime_provenance", side_effect=lambda output: provenance.write_bytes(b"successor")),
+                patch.object(backend, "_finalize_published_candidate", side_effect=finalize),
+                patch.object(backend, "_rollback_package_rotation", wraps=backend._rollback_package_rotation) as rollback,
+                patch.object(backend, "_serve") as serve,
+            ):
+                self.assertEqual(backend.main(["start", "--build-root", str(build_root)]), 2)
+                rollback.assert_not_called()
+                serve.assert_not_called()
+            self.assertEqual((package / "backend-build-receipt.json").read_bytes(), candidate_bytes)
+            self.assertEqual(provenance.read_bytes(), b"successor")
+            self.assertTrue((control / backend.PACKAGE_ROTATION_JOURNAL_NAME).is_file())
+            backend._recover_pending_package_rotation(package, control, build_root)
+            self.assertFalse(candidate.exists())
+            self.assertFalse((control / backend.PACKAGE_ROTATION_JOURNAL_NAME).exists())
+            self.assertEqual((package / "backend-build-receipt.json").read_bytes(), candidate_bytes)
+
+    def test_direct_candidate_rotation_preserves_current_and_rollback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, _current_records = self._published_package(root)
+            backend._write_json(
+                package / "backend-build-receipt.json",
+                {
+                    "schema": backend.RECEIPT_SCHEMA,
+                    "state": "succeeded",
+                    "execution_lanes": {
+                        lane: {"status": "compiled"} for lane in backend.LANES
+                    },
+                    "artifacts": _current_records,
+                },
+                "initial direct rotation fixture receipt",
+            )
+            build_root = root / "build"
+            build_root.mkdir()
+            control = backend._ensure_package_development_root(package)
+            candidate = control / backend.PACKAGE_CANDIDATES_DIRNAME / ".backend-package-candidate-rotation"
+            self._populate_direct_candidate(package, build_root, candidate)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            candidate_records = backend._copy_package(
+                workspace,
+                candidate,
+                direct_install=True,
+                package_root=package,
+                build_root=build_root,
+            )
+            previous = backend._validated_package(
+                package,
+                "current package",
+                exclude_development_control=True,
+            )
+            previous_bytes = previous[1]
+            candidate_receipt = {
+                "schema": backend.RECEIPT_SCHEMA,
+                "state": "succeeded",
+                "execution_lanes": {lane: {"status": "compiled"} for lane in backend.LANES},
+                "artifacts": candidate_records,
+            }
+            backend._write_json(
+                candidate / "backend-build-receipt.json",
+                candidate_receipt,
+                "direct candidate receipt",
+            )
+            candidate_receipt_bytes = (candidate / "backend-build-receipt.json").read_bytes()
+            _rotation = backend._rotate_package(
+                package,
+                candidate,
+                control,
+                previous[2],
+                previous_bytes,
+                candidate_receipt_bytes,
+            )
+            backup = next(
+                (control / backend.PACKAGE_BACKUPS_DIRNAME).glob(".backend-package-backup-*")
+            )
+            self.assertEqual((package / "bin/fullmag-bin").read_bytes(), b"candidate\n")
+            self.assertEqual((backup / "bin/fullmag-bin").read_bytes(), b"package\n")
+            self.assertTrue((candidate / backend.PACKAGE_CANDIDATE_MARKER).is_file())
+            current_after_rotation = backend._validated_package(
+                package,
+                "current package after interrupted finalize",
+                exclude_development_control=True,
+            )
+            # Simulate a crash after the payload rotation and before the
+            # normal in-process marker finalization.  The next-start preflight
+            # must validate the real current package inventory before removing
+            # the marker-only candidate.
+            backend._recover_pending_package_rotation(package, control, build_root)
+            self.assertFalse(candidate.exists())
+            # The next unchanged start must not mistake a successfully
+            # published candidate marker for an incomplete prior build.
+            backend._reject_partial_package_candidates(
+                package,
+                control,
+                build_root,
+                current_package=current_after_rotation,
+            )
+
+            empty_candidate = (
+                control
+                / backend.PACKAGE_CANDIDATES_DIRNAME
+                / ".backend-package-candidate-crash-empty"
+            )
+            empty_candidate.mkdir()
+            # Simulate the narrower crash window after marker unlink and before
+            # candidate rmdir.  Only this empty owned namespace is removable.
+            backend._reject_partial_package_candidates(
+                package,
+                control,
+                build_root,
+                current_package=current_after_rotation,
+            )
+            self.assertFalse(empty_candidate.exists())
+
+    def test_rotation_journal_recovers_crash_before_first_rename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, build_root, control, candidate, previous, candidate_bytes = (
+                self._ready_rotation_fixture(
+                    root, ".backend-package-candidate-journal-before-rename"
+                )
+            )
+            with patch.object(
+                backend,
+                "_rename_package_child",
+                side_effect=KeyboardInterrupt("fault before first rotation rename"),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    backend._rotate_package(
+                        package,
+                        candidate,
+                        control,
+                        previous[2],
+                        previous[1],
+                        candidate_bytes,
+                    )
+            journal = control / backend.PACKAGE_ROTATION_JOURNAL_NAME
+            self.assertTrue(journal.is_file())
+            backend._recover_pending_package_rotation(package, control, build_root)
+            self.assertFalse(journal.exists())
+            self.assertFalse(candidate.exists())
+            self.assertEqual((package / "bin/fullmag-bin").read_bytes(), b"package\n")
+            self.assertEqual(tuple((control / backend.PACKAGE_BACKUPS_DIRNAME).iterdir()), ())
+
+    def test_rotation_journal_recovers_after_first_old_backup_rename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, build_root, control, candidate, previous, candidate_bytes = (
+                self._ready_rotation_fixture(
+                    root, ".backend-package-candidate-journal-mid-old"
+                )
+            )
+            original_rename = backend._rename_package_child
+            calls = 0
+
+            def fail_after_first_old(source, target, name, label):
+                nonlocal calls
+                if label == "old package backup":
+                    calls += 1
+                    if calls == 2:
+                        raise KeyboardInterrupt("fault after first old backup rename")
+                return original_rename(source, target, name, label)
+
+            with patch.object(backend, "_rename_package_child", side_effect=fail_after_first_old):
+                with self.assertRaises(KeyboardInterrupt):
+                    backend._rotate_package(
+                        package,
+                        candidate,
+                        control,
+                        previous[2],
+                        previous[1],
+                        candidate_bytes,
+                    )
+            self.assertGreaterEqual(calls, 2)
+            backend._recover_pending_package_rotation(package, control, build_root)
+            self.assertFalse((control / backend.PACKAGE_ROTATION_JOURNAL_NAME).exists())
+            self.assertFalse(candidate.exists())
+            self.assertEqual(
+                tuple((control / backend.PACKAGE_BACKUPS_DIRNAME).iterdir()), ()
+            )
+            backend._validated_package(
+                package,
+                "old package after mid-old recovery",
+                exclude_development_control=True,
+            )
+            self.assertEqual((package / "bin/fullmag-bin").read_bytes(), b"package\n")
+
+    def test_rotation_journal_recovers_after_first_new_publish_rename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, build_root, control, candidate, previous, candidate_bytes = (
+                self._ready_rotation_fixture(
+                    root, ".backend-package-candidate-journal-mid-new"
+                )
+            )
+            original_rename = backend._rename_package_child
+            calls = 0
+
+            def fail_after_first_new(source, target, name, label):
+                nonlocal calls
+                if label == "candidate package":
+                    calls += 1
+                    if calls == 2:
+                        raise KeyboardInterrupt("fault after first new publish rename")
+                return original_rename(source, target, name, label)
+
+            with patch.object(backend, "_rename_package_child", side_effect=fail_after_first_new):
+                with self.assertRaises(KeyboardInterrupt):
+                    backend._rotate_package(
+                        package,
+                        candidate,
+                        control,
+                        previous[2],
+                        previous[1],
+                        candidate_bytes,
+                    )
+            self.assertGreaterEqual(calls, 2)
+            backend._recover_pending_package_rotation(package, control, build_root)
+            self.assertFalse((control / backend.PACKAGE_ROTATION_JOURNAL_NAME).exists())
+            self.assertFalse(candidate.exists())
+            self.assertEqual(
+                tuple((control / backend.PACKAGE_BACKUPS_DIRNAME).iterdir()), ()
+            )
+            backend._validated_package(
+                package,
+                "old package after mid-new recovery",
+                exclude_development_control=True,
+            )
+            self.assertEqual((package / "bin/fullmag-bin").read_bytes(), b"package\n")
+
+    def test_rotation_journal_recovers_first_publish_after_first_new_rename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, build_root, control, candidate, previous, candidate_bytes = (
+                self._ready_rotation_fixture(
+                    root, ".backend-package-candidate-journal-first-publish"
+                )
+            )
+            for child_name in previous[2]:
+                backend._remove_owned_tree(package / child_name)
+            original_rename = backend._rename_package_child
+            calls = 0
+
+            def fail_after_first_new(source, target, name, label):
+                nonlocal calls
+                if label == "candidate package":
+                    calls += 1
+                    if calls == 2:
+                        raise KeyboardInterrupt("fault during first package publish")
+                return original_rename(source, target, name, label)
+
+            with patch.object(backend, "_rename_package_child", side_effect=fail_after_first_new):
+                with self.assertRaises(KeyboardInterrupt):
+                    backend._rotate_package(
+                        package,
+                        candidate,
+                        control,
+                        {},
+                        None,
+                        candidate_bytes,
+                    )
+            self.assertGreaterEqual(calls, 2)
+            backend._recover_pending_package_rotation(package, control, build_root)
+            self.assertFalse((control / backend.PACKAGE_ROTATION_JOURNAL_NAME).exists())
+            self.assertFalse(candidate.exists())
+            self.assertEqual(
+                {child.name for child in package.iterdir()},
+                {backend.PACKAGE_DEVELOPMENT_DIRNAME},
+            )
+
+    def test_rotation_journal_preserves_unknown_partition_without_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, build_root, control, candidate, previous, candidate_bytes = (
+                self._ready_rotation_fixture(
+                    root, ".backend-package-candidate-journal-unknown"
+                )
+            )
+            with patch.object(
+                backend,
+                "_rename_package_child",
+                side_effect=KeyboardInterrupt("fault before unknown partition check"),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    backend._rotate_package(
+                        package,
+                        candidate,
+                        control,
+                        previous[2],
+                        previous[1],
+                        candidate_bytes,
+                    )
+            foreign = candidate / "unknown-after-journal.bin"
+            foreign.write_bytes(b"preserve")
+            journal = control / backend.PACKAGE_ROTATION_JOURNAL_NAME
+            with self.assertRaisesRegex(backend.BackendBuildError, "unknown candidate"):
+                backend._recover_pending_package_rotation(package, control, build_root)
+            self.assertTrue(journal.is_file())
+            self.assertTrue(foreign.is_file())
+            self.assertEqual((package / "bin/fullmag-bin").read_bytes(), b"package\n")
+
+    def test_legacy_stage_preservation_is_bounded_and_detects_metadata_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = self._workspace(root)
+            stage = workspace / ".fullmag" / "local"
+            stage.mkdir(parents=True)
+            retained = stage / "retained.bin"
+            retained.write_bytes(b"retained\n")
+            before = backend._snapshot_legacy_install_stage(workspace)
+            backend._remove_generated_build_output(
+                workspace,
+                preserve_legacy_install_stage=True,
+            )
+            backend._assert_legacy_install_stage_unchanged(
+                workspace,
+                before,
+                "preservation probe",
+            )
+            retained.write_bytes(b"changed\n")
+            with self.assertRaisesRegex(backend.BackendBuildError, "changed the retained"):
+                backend._assert_legacy_install_stage_unchanged(
+                    workspace,
+                    before,
+                    "mutation probe",
+                )
+
+    def test_partial_or_foreign_candidate_is_preserved_and_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "package"
+            package.mkdir()
+            build_root = root / "build"
+            build_root.mkdir()
+            control = backend._ensure_package_development_root(package)
+            foreign = control / backend.PACKAGE_CANDIDATES_DIRNAME / "foreign-candidate"
+            foreign.mkdir()
+            with self.assertRaises(backend.BackendBuildError):
+                backend._reject_partial_package_candidates(package, control, build_root)
+            self.assertTrue(foreign.is_dir())
+            candidate = (
+                control
+                / backend.PACKAGE_CANDIDATES_DIRNAME
+                / ".backend-package-candidate-incomplete"
+            )
+            candidate.mkdir()
+            marker = candidate / backend.PACKAGE_CANDIDATE_MARKER
+            backend._write_candidate_marker(candidate, package, build_root, state="building")
+            with self.assertRaises(backend.BackendBuildError):
+                backend._reject_partial_package_candidates(package, control, build_root)
+            self.assertTrue(marker.is_file())
+            self.assertTrue(candidate.is_dir())
+
+    def test_make_default_and_direct_install_roots_are_distinct(self):
+        """Exercise the installer with fake build outputs, without compiling."""
+        makefile = Path(__file__).resolve().parents[1] / "Makefile"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = root / "tools"
+            tools.mkdir()
+            for tool in ("cargo", "patchelf"):
+                executable = tools / tool
+                executable.write_text(
+                    "#!/bin/sh\nprintf '%s\\n' " + tool
+                    + ' >> "$FULLMAG_INSTALL_TRACE"\n',
+                    encoding="utf-8",
+                )
+                executable.chmod(0o755)
+            target = root / "target" / "backend-dev"
+            target.mkdir(parents=True)
+            binaries = {
+                Path(relative).name
+                for relative in backend.REQUIRED_PACKAGE_PATHS
+                if relative.startswith("bin/")
+            }
+            for binary in binaries:
+                cargo_name = "fullmag" if binary == "fullmag-bin" else binary
+                (target / cargo_name).write_bytes(("fixture:" + binary).encode())
+            (target / "lib_fullmag_core.so").write_bytes(b"python-core-fixture")
+            native = root / "native" / "backends" / "fdm"
+            native.mkdir(parents=True)
+            (native / "libfullmag_fdm.so.1").write_bytes(b"fdm-library-fixture")
+            (native / "libfullmag_fdm.so").symlink_to("libfullmag_fdm.so.1")
+            trace = root / "tools.log"
+            for custom in (False, True):
+                with self.subTest(custom=custom):
+                    workspace = root / ("custom" if custom else "default")
+                    workspace.mkdir()
+                    legacy = workspace / ".fullmag" / "local"
+                    legacy.mkdir(parents=True)
+                    (legacy / "keep.txt").write_bytes(b"retain legacy data")
+                    destination = root / "candidate" if custom else legacy
+                    library_directory = destination / "lib"
+                    library_directory.mkdir(parents=True)
+                    stale = library_directory / "libfullmag_fdm.so.obsolete"
+                    stale.write_bytes(b"obsolete-library")
+                    environment = {
+                        key: value for key, value in os.environ.items()
+                        if not key.startswith("FULLMAG_")
+                    }
+                    environment.update(
+                        PATH=str(tools) + os.pathsep + os.environ["PATH"],
+                        FULLMAG_INSTALL_TRACE=str(trace),
+                        FULLMAG_DIRECT_COMPOSE="1",
+                        FULLMAG_BUILD_CPU_ONLY="1",
+                        FULLMAG_BACKEND_CARGO_PROFILE="backend-dev",
+                        FULLMAG_CARGO_TARGET_DIR=str(target.parent),
+                        FULLMAG_FDM_NATIVE_BUILD_ROOT=str(root / "native"),
+                        FULLMAG_SOURCE_GIT_COMMIT="a" * 40,
+                        FULLMAG_SOURCE_WORKTREE_STATE="clean",
+                        FULLMAG_SOURCE_SNAPSHOT_SHA256="b" * 64,
+                    )
+                    if custom:
+                        environment["FULLMAG_INTERNAL_INSTALL_ROOT"] = str(destination)
+                    result = subprocess.run(
+                        # This fixture exercises the installer body with fake outputs;
+                        # the managed storage shell is qualified by separate checks.
+                        ["/usr/bin/make", "--no-print-directory", ".SHELLFLAGS=-e -c",
+                         "-f", str(makefile), "install-cli-dev"],
+                        cwd=workspace, env=environment, stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout.decode("utf-8", "replace"))
+                    for binary in binaries:
+                        self.assertEqual(
+                            (destination / "bin" / binary).read_bytes(),
+                            ("fixture:" + binary).encode(),
+                        )
+                    self.assertEqual((destination / "_fullmag_core.so").read_bytes(), b"python-core-fixture")
+                    self.assertEqual((library_directory / "libfullmag_fdm.so").read_bytes(), b"fdm-library-fixture")
+                    self.assertEqual((destination / "launcher-build-mode").read_text().strip(), "cpu")
+                    self.assertFalse(stale.exists())
+                    self.assertEqual((legacy / "keep.txt").read_bytes(), b"retain legacy data")
+                    if custom:
+                        self.assertEqual({path.name for path in legacy.iterdir()}, {"keep.txt"})
+            self.assertEqual(trace.read_text().splitlines().count("cargo"), 4)
 
     def test_package_alias_cannot_escape_library_directory(self):
         with tempfile.TemporaryDirectory() as directory:

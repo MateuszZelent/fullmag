@@ -440,6 +440,39 @@ class AcceptedReattachProducerTests(unittest.TestCase):
             proof["namespace_attestation_sha256"],
         )
 
+    def test_api_binding_failure_mode_survives_stop_journal_validation(self) -> None:
+        journal = json.loads(self.records["verification/stop-failed-" + self.backend + ".json"])
+        journal["failure_mode"] = "api-start-failure"
+        probe = journal["native_failure_probe"]
+        probe["failure_mode"] = "api-start-failure"
+        receipt = probe["process_receipt"]
+        receipt["error"] = "API binding did not become ready: API exited before bind"
+        process_sha = hashlib.sha256(_raw(receipt)).hexdigest()
+        probe["process_receipt_sha256"] = process_sha
+        journal["failure_receipt"].update(receipt=receipt, sha256=process_sha)
+        failed_owner = probe["failed_owner"]
+        failed_owner["children"][0]["status"] = "exited_failure"
+        owner_sha = hashlib.sha256(_raw(failed_owner)).hexdigest()
+        probe["failed_owner_sha256"] = owner_sha
+        journal["terminal_failed_owner"] = failed_owner
+        journal["terminal_failed_owner_sha256"] = owner_sha
+        unresolved = json.loads(self.records["activation/unresolved.json"])
+
+        def validate() -> object:
+            raw = _raw(journal)
+            unresolved["native_stop_journal_sha256"] = hashlib.sha256(raw).hexdigest()
+            return producer._validate_stop_journal(journal, raw, unresolved)
+
+        validate()
+        # The older successful-exit route must not accept this observation.
+        del journal["failure_mode"]
+        with self.assertRaises(producer.BuildControlError):
+            validate()
+        journal["failure_mode"] = "api-start-failure"
+        probe["failure_mode"] = "unsupported"
+        with self.assertRaises(producer.BuildControlError):
+            validate()
+
     def test_current_stop_journal_does_not_require_namespace_sidecar(self) -> None:
         """A complete current incarnation is authoritative without a sidecar."""
 
