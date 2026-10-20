@@ -19,8 +19,8 @@
 #include <HYPRE_config.h>
 #include <_hypre_utilities.h>
 
-#if MFEM_VERSION != 40900
-#error "FEM GPU HYPRE stream interop requires MFEM 4.9.0"
+#if MFEM_VERSION != 40900 && MFEM_VERSION != 41000
+#error "FEM GPU HYPRE stream interop requires MFEM 4.9.0 or 4.10.0"
 #endif
 
 static_assert(

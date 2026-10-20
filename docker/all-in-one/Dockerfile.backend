@@ -1,0 +1,83 @@
+# Direct Compose backend image.  The host supplies an already attested
+# Dockerfile.dev image; this layer only adds the trusted direct builder.
+ARG DEV_BASE
+FROM ${DEV_BASE} AS fullmag-backend-direct
+
+ARG FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SCHEMA
+ARG FULLMAG_DIRECT_DEVELOPMENT_BASE_CONTEXT_SHA256
+ARG FULLMAG_DIRECT_DEVELOPMENT_BACKEND_CONTEXT_SHA256
+ARG FULLMAG_DIRECT_DEVELOPMENT_RUNTIME_CONTEXT_SHA256
+ARG FULLMAG_DIRECT_DEVELOPMENT_RECEIPT_SCHEMA
+
+USER root
+
+# Empty prefixes preserve the frozen release context; DEV reads an allowlisted checkout.
+ARG FULLMAG_DOCKER_HELPERS=""
+
+COPY ${FULLMAG_DOCKER_HELPERS}backend_dev.py /opt/fullmag/backend_dev.py
+# The source extractor is supplied by the image-runtime integration worker.
+# Keep it image-owned and immutable; backend_dev.py remains the command
+# boundary and never executes source-controlled commands.
+COPY ${FULLMAG_DOCKER_HELPERS}backend_source.py /opt/fullmag/backend_source.py
+# This fixed image-owned helper is used only by the isolated, networkless
+# CAP_CHOWN maintenance service before the unprivileged backend starts.
+COPY ${FULLMAG_DOCKER_HELPERS}backend_volume_cache_maintenance.py /opt/fullmag/backend_volume_cache_maintenance.py
+
+# The canonical Makefile's managed-container escape hatch uses /workspace for
+# the private source/build root.  It is an image-owned link to the persistent
+# /build volume, never a host checkout or a source bind.
+RUN set -eu; \
+    test -d /root/.cargo; \
+    test -d /root/.rustup; \
+    test -d /root/.rustup/toolchains; \
+    test -x /root/.cargo/bin/cargo; \
+    chmod o+x /root; \
+    chmod o+rx /root/.cargo /root/.cargo/bin /root/.rustup /root/.rustup/toolchains; \
+    mkdir -p /build/workspace /build/cargo /output /input /opt/fullmag/source-git; \
+    if [ -e /workspace ] || [ -L /workspace ]; then \
+        test ! -L /workspace; \
+        test -d /workspace; \
+        test -z "$(find /workspace -mindepth 1 -maxdepth 1 -print -quit)"; \
+        rmdir /workspace; \
+    fi; \
+    ln -s /build/workspace /workspace; \
+    chown -R 65532:65532 /build /output /opt/fullmag/backend_dev.py /opt/fullmag/backend_source.py /opt/fullmag/backend_volume_cache_maintenance.py; \
+    chmod 0755 /opt/fullmag/backend_dev.py; \
+    chmod 0644 /opt/fullmag/backend_source.py; \
+    chmod 0755 /opt/fullmag/backend_volume_cache_maintenance.py
+
+LABEL org.fullmag.direct-development.context-schema="${FULLMAG_DIRECT_DEVELOPMENT_CONTEXT_SCHEMA}" \
+      org.fullmag.direct-development.base-context-sha256="${FULLMAG_DIRECT_DEVELOPMENT_BASE_CONTEXT_SHA256}" \
+      org.fullmag.direct-development.backend-context-sha256="${FULLMAG_DIRECT_DEVELOPMENT_BACKEND_CONTEXT_SHA256}" \
+      org.fullmag.direct-development.runtime-context-sha256="${FULLMAG_DIRECT_DEVELOPMENT_RUNTIME_CONTEXT_SHA256}" \
+      org.fullmag.direct-development.receipt-schema="${FULLMAG_DIRECT_DEVELOPMENT_RECEIPT_SCHEMA}"
+
+ENV FULLMAG_RUNTIME_ROOT=/opt/fullmag/package \
+    FULLMAG_REPO_ROOT=/opt/fullmag/source \
+    FULLMAG_WEB_STATIC_DIR=/opt/fullmag/package/web \
+    FULLMAG_RUNTIME_PACKAGE_ROOT=/opt/fullmag/package \
+    FULLMAG_PACKAGE_PROVENANCE=/opt/fullmag/provenance.json \
+    FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME=1 \
+    FULLMAG_FORCE_LOCAL_FEM_GPU=0 \
+    FULLMAG_FORCE_LOCAL_FEM_CPU=0 \
+    FULLMAG_FEM_REQUIRE_GPU=0 \
+    FULLMAG_FEM_REQUIRE_CEED=1 \
+    FULLMAG_FEM_MFEM_DEVICE="" \
+    FULLMAG_FEM_ALL_IN_GPU=0 \
+    FULLMAG_WINDOWS_CONTAINER_MANAGED=1 \
+    FULLMAG_CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/direct \
+    CARGO_TARGET_DIR=/workspace/.fullmag-build/cargo-targets/direct \
+    FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets \
+    CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets \
+    CARGO_HOME=/build/cargo \
+    RUSTUP_HOME=/root/.rustup \
+    RUSTUP_TOOLCHAIN=nightly \
+    RUSTUP_AUTO_INSTALL=0 \
+    PYTHONPATH=/build/workspace/packages/fullmag-py/src:/opt/fullmag/package \
+    PATH=/root/.cargo/bin:/opt/fullmag/package/bin:/opt/fullmag-deps/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+WORKDIR /build
+USER 65532:65532
+# Keep the shared image's normal all-in-one entrypoint for non-backend roles.
+# Compose invokes backend_dev.py explicitly for the typed start/serve boundary
+# used by the backend service.

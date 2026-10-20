@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from verify_boris_nf_interface import (
+    BORIS_UNIT_ADAPTER_VERSION,
     MUB_E_V_PER_T,
+    MeshFields,
+    compute_interface_balance,
+    compute_interface_slice,
     map_boris_spin_to_fullmag_mu_s,
     read_text_ovf,
     validate_boris_artifact,
@@ -167,7 +171,7 @@ def _interface_balances(payload: Mapping[str, Any], module: Mapping[str, Any]) -
         "absorbed_spin_flux": list(_vector(absorbed, label="interface_balances.absorbed_spin_flux")),
         "torque": list(_vector(torque, label="interface_balances.torque")),
         "charge_closure": _finite(
-            raw.get("charge_closure", 0.0), label="interface_balances.charge_closure"
+            raw.get("charge_closure"), label="interface_balances.charge_closure"
         ),
     }
     for key in ("normal_spin_flux", "ferromagnet_spin_flux", "spin_torque_closure"):
@@ -347,10 +351,9 @@ def _concat_qia(normal: Mapping[str, Any], ferromagnet: Mapping[str, Any]) -> tu
         mesh = normal if index < len(normal["Jc"].values) else ferromagnet
         local = index if mesh is normal else index - len(normal["Jc"].values)
         components = []
-        for flow_axis in range(3):
-            components.extend(
-                mesh[field].values[local][flow_axis] for field in ("Jsx", "Jsy", "Jsz")
-            )
+        # BORIS GetSpinCurrent selects a flow row; each row is spin XYZ.
+        for field in ("Jsx", "Jsy", "Jsz"):
+            components.extend(mesh[field].values[local])
         result.append(_tensor(components, label=f"BORIS Q_ia[{index}]"))
     return tuple(result)
 
@@ -367,7 +370,7 @@ def _scale_vector(value: object, factor: float, *, label: str) -> list[float]:
     return [component * factor for component in vector]
 
 
-def normalize_boris_artifact(path: Path) -> NormalizedTransportArtifact:
+def normalize_boris_artifact(path: Path, *, repo_root: Path | None = None) -> NormalizedTransportArtifact:
     """Map BORIS N/F OVFs to one contiguous shared-domain representation.
 
     BORIS' display spin-current expression carries the factor
@@ -379,7 +382,18 @@ def normalize_boris_artifact(path: Path) -> NormalizedTransportArtifact:
     """
 
     root = path if path.is_dir() else path.parent
-    payload = validate_boris_artifact(root)
+    payload = validate_boris_artifact(root, repo_root=repo_root)
+    return _normalize_boris_fields(root, payload, source=str(path))
+
+
+def _normalize_boris_fields(
+    root: Path, payload: Mapping[str, Any], *, source: str,
+) -> NormalizedTransportArtifact:
+    """Pure OVF unit mapping after admission; this helper grants no runtime proof.
+
+    Synthetic regression callers exercise this algorithm directly. Public
+    benchmark callers must enter through normalize_boris_artifact.
+    """
     scenario = payload["scenario"]
     parameters = scenario["parameters"]
     fields = payload["fields"]
@@ -413,7 +427,26 @@ def normalize_boris_artifact(path: Path) -> NormalizedTransportArtifact:
     torque = tuple((0.0, 0.0, 0.0) for _ in normal["Jc"].values) + tuple(
         tuple(row) for row in ferromagnet["Tsi"].values
     )
-    balance = dict(payload["interface_balances"])
+    # Historical summaries may contain transposed interface extraction.
+    # Rebuild from the same raw fields as Q_ia; never relabel old balances.
+    historical_balance = payload["interface_balances"]
+    axis = str(historical_balance.get("normal_axis", "z"))
+    sign = historical_balance.get("normal_sign", 1)
+    if not isinstance(sign, int) or isinstance(sign, bool):
+        raise ValueError("BORIS interface normal_sign must be an integer")
+
+    def mesh_fields(mesh: Mapping[str, Any]) -> MeshFields:
+        return MeshFields(mesh["Jc"], mesh["Jsx"], mesh["Jsy"], mesh["Jsz"], mesh["S"])
+
+    balance = compute_interface_balance(compute_interface_slice(
+        mesh_fields(normal), mesh_fields(ferromagnet), ferromagnet["Tsi"],
+        normal_axis=axis, normal_sign=sign,
+    ))
+    balance["adapter_version"] = BORIS_UNIT_ADAPTER_VERSION
+    balance["provenance"] = "recomputed_from_raw_ovf"
+    # Torque closure mixes distinct native conventions and is not a parity gate.
+    balance.pop("spin_torque_closure_vector")
+    balance.pop("spin_torque_closure")
     spin_current_scale = 1.0 / MUB_E_V_PER_T
     for key in (
         "normal_spin_flux",
@@ -429,6 +462,7 @@ def normalize_boris_artifact(path: Path) -> NormalizedTransportArtifact:
     balance["torque_unit"] = "boris_tsi_A_per_m_s"
     balance["torque_comparison_status"] = "not_comparable_without_tsi_eff_gamma_mapping"
     conventions = {
+        "adapter_version": BORIS_UNIT_ADAPTER_VERSION,
         "component_order": "row_major_Q_ia",
         "mu_s_convention": "full_spin_splitting_voltage",
         "spin_mapping": "mu_s=2*De*S/(elC*MUB_E)",
@@ -439,13 +473,9 @@ def normalize_boris_artifact(path: Path) -> NormalizedTransportArtifact:
         "torque_unit": "boris_tsi_A_per_m_s",
         "source_spin_quantity": "BORIS_native_S",
     }
-    axis = str(balance.get("normal_axis", "z"))
-    sign = balance.get("normal_sign", 1)
-    if not isinstance(sign, int) or isinstance(sign, bool):
-        raise ValueError("BORIS interface normal_sign must be an integer")
     shape = (n_shape[0], n_shape[1], n_shape[2] + f_shape[2])
     return NormalizedTransportArtifact(
-        source=str(path),
+        source=source,
         shape=shape,
         origin_m=normal["V"].origin_m,
         step_m=normal["V"].step_m,
@@ -621,8 +651,9 @@ def main() -> int:
     parser.add_argument("--boris", type=Path, required=True, help="BORIS summary.json or artifact directory")
     parser.add_argument("--fullmag", type=Path, required=True, help="Fullmag FDM M2 JSON artifact")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--boris-repo-root", type=Path, help="trusted managed BORIS v2 storage context")
     args = parser.parse_args()
-    boris = normalize_boris_artifact(args.boris)
+    boris = normalize_boris_artifact(args.boris, repo_root=args.boris_repo_root)
     fullmag = load_fullmag_m2_artifact(args.fullmag)
     report = compare_transport_artifacts(boris, fullmag)
     args.output.parent.mkdir(parents=True, exist_ok=True)

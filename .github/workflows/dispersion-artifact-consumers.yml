@@ -5,6 +5,7 @@ on:
     paths:
       # Consumers import validators, receipts and analytic oracles across scripts.
       - 'scripts/**/*.py'
+      - 'docs/guides/comsol-dispersion-benchmark/parameters.json'
       - 'docker/all-in-one/**'
       - 'crates/fullmag-session/src/docker_desktop_storage.rs'
       - 'crates/fullmag-workspace-inspect/**'
@@ -14,10 +15,11 @@ on:
       - 'packages/fullmag-py/**'
       - '.github/workflows/dispersion-artifact-consumers.yml'
   push:
-    branches: [master, 'codex/**']
+    branches: [master, main]
     paths:
       # Consumers import validators, receipts and analytic oracles across scripts.
       - 'scripts/**/*.py'
+      - 'docs/guides/comsol-dispersion-benchmark/parameters.json'
       - 'docker/all-in-one/**'
       - 'crates/fullmag-session/src/docker_desktop_storage.rs'
       - 'crates/fullmag-workspace-inspect/**'
@@ -29,6 +31,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   artifact-consumer-contracts:
@@ -52,6 +58,11 @@ jobs:
           python -B -m pytest -q
           scripts/test_validate_comsol_dispersion_scientific_gate.py
           scripts/test_comsol_tracking_provenance_gate.py
+          scripts/test_comsol_tracking_fields.py
+          scripts/test_comsol_tracking_replay.py
+          scripts/test_comsol_cross_run_matching.py
+          scripts/test_comsol_signed_k_replay.py
+          scripts/test_compare_comsol_a1_frequency_reference.py
           scripts/test_fem_producer_provenance_replay.py
 
       - name: Run frequency-domain provenance verifier regressions
@@ -89,6 +100,9 @@ jobs:
           scripts/test_de_gamma_krylov_trial.py
           scripts/test_de_signed_state_closure.py
 
+      - name: Verify generation reader and exact byte binding
+        run: python -B scripts/test_frequency_domain_generation.py -v
+
   terminal-artifact-attestation:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -115,5 +129,9 @@ jobs:
         run: |
           python -B scripts/test_managed_runtime_artifact_root.py -v
           python -B scripts/test_fullmag_docker_runtime.py -v
+          python -B scripts/test_docker_startup_script.py -v
+          python -B scripts/test_docker_entrypoint_device_access.py -v
           python -B scripts/test_docker_frontend_dev.py -v
           python -B scripts/test_verify_docker_all_runtime.py -v
+          python -B scripts/test_docker_host_ledger.py -v
+          python -B scripts/test_bootstrap_docker_toolchain.py -v

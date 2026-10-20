@@ -17,6 +17,7 @@ import numpy as np
 
 from fullmag._core import (
     certify_mixed_mesh_arrays,
+    certify_mixed_mesh_arrays_v2,
     preflight_mixed_mesh_arrays,
     validate_mesh_ir,
 )
@@ -24,6 +25,7 @@ from fullmag._core import (
 from ._certification_receipt import (
     ARTIFACT_SCHEMA_V2,
     MIXED_CERTIFIER_ALGORITHM,
+    MIXED_CERTIFIER_ALGORITHM_V2,
     RECEIPT_SCHEMA_V1,
     RECEIPT_SCHEMA_V2,
     CertificationReceiptBindingsV1,
@@ -38,12 +40,38 @@ from ._gmsh_types import (
     MeshQualityReport,
     MeshRealizationReport,
     MixedLayerTopologyCertificate,
+    MixedLayerTopologyCertificateV2,
+    MixedLayerTopologyCertificateLike,
+    _mixed_layer_topology_certificate_from_serialized,
     _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
     _bind_trusted_topology_fingerprint_v3,
     _bind_trusted_topology_fingerprint_v3_from_native,
     _certificate_payload_sha256,
     _mint_trusted_native_preflight_receipt_proof,
 )
+
+
+def _certify_mixed_mesh(
+    *,
+    mesh: MeshData,
+    metadata: Mapping[str, object],
+    certificate: MixedLayerTopologyCertificateLike,
+    require_native: bool,
+) -> object | None:
+    """Dispatch persistence through the certificate's schema-native bridge."""
+    if isinstance(certificate, MixedLayerTopologyCertificateV2):
+        return certify_mixed_mesh_arrays_v2(
+            mesh=mesh,
+            metadata=metadata,
+            certificate=certificate.to_dict(),
+            require_native=require_native,
+        )
+    return certify_mixed_mesh_arrays(
+        mesh=mesh,
+        metadata=metadata,
+        certificate=certificate.to_dict(),
+        require_native=require_native,
+    )
 
 
 ARTIFACT_SCHEMA_V1 = "fullmag.mesh-artifact.v1"
@@ -127,7 +155,7 @@ def mesh_data_from_ir(payload: Mapping[str, object]) -> MeshData:
             else None
         ),
         mixed_layer_topology_certificate=(
-            MixedLayerTopologyCertificate.from_dict(
+            _mixed_layer_topology_certificate_from_serialized(
                 dict(payload["mixed_layer_topology_certificate"])
             )
             if payload.get("mixed_layer_topology_certificate") is not None
@@ -278,14 +306,14 @@ def _serialize_mesh(mesh: MeshData) -> bytes:
 
 def _deserialize_mesh_with_detached_certificate(
     payload: bytes,
-) -> tuple[MeshData, MixedLayerTopologyCertificate | None]:
+) -> tuple[MeshData, MixedLayerTopologyCertificateLike | None]:
     try:
         data = np.load(BytesIO(payload), allow_pickle=False)
         metadata = json.loads(str(data["metadata_json"]))
         realization = metadata.get("realization_report")
         certificate_payload = metadata.get("mixed_layer_topology_certificate")
         certificate = (
-            MixedLayerTopologyCertificate.from_dict(certificate_payload)
+            _mixed_layer_topology_certificate_from_serialized(certificate_payload)
             if certificate_payload is not None
             else None
         )
@@ -337,7 +365,7 @@ def _deserialize_mesh(payload: bytes) -> MeshData:
 
 def _attach_native_certificate_without_revalidation(
     mesh_without_certificate: MeshData,
-    certificate: MixedLayerTopologyCertificate,
+    certificate: MixedLayerTopologyCertificateLike,
 ) -> MeshData:
     """Attach a certificate after the native engine already audited the mesh.
 
@@ -350,7 +378,7 @@ def _attach_native_certificate_without_revalidation(
     """
     if mesh_without_certificate.mixed_layer_topology_certificate is not None:
         raise ValueError("native certificate attachment requires an unsigned mesh")
-    if not isinstance(certificate, MixedLayerTopologyCertificate):
+    if not isinstance(certificate, (MixedLayerTopologyCertificate, MixedLayerTopologyCertificateV2)):
         raise TypeError("native certificate attachment requires a mixed certificate")
     result = object.__new__(MeshData)
     for descriptor in fields(MeshData):
@@ -591,7 +619,7 @@ def _validate_v2_receipt(
     manifest: Mapping[str, object],
     members: Mapping[str, bytes],
     mesh: MeshData,
-    certificate: MixedLayerTopologyCertificate,
+    certificate: MixedLayerTopologyCertificateLike,
     topology_fingerprint_v3: str,
 ) -> tuple[
     CertificationReceiptV1 | CertificationReceiptV2,
@@ -637,6 +665,18 @@ def _validate_v2_receipt(
         raise MeshArtifactCorruptionError(
             "certification receipt does not match artifact contents and bindings"
         )
+    expected_algorithm = (
+        MIXED_CERTIFIER_ALGORITHM_V2
+        if isinstance(certificate, MixedLayerTopologyCertificateV2)
+        else MIXED_CERTIFIER_ALGORITHM
+    )
+    if (
+        bindings.certifier_algorithm_id != expected_algorithm
+        or receipt.certificate.algorithm_id != expected_algorithm
+    ):
+        raise MeshArtifactCorruptionError(
+            "certification receipt algorithm does not match certificate schema"
+        )
     if certificate.gmsh_version != receipt.producer.gmsh_version:
         raise MeshArtifactCorruptionError(
             "mixed certificate Gmsh version does not match certification receipt"
@@ -681,21 +721,23 @@ def save_mesh_artifact(
     certificate = mesh.mixed_layer_topology_certificate
     if certificate is not None:
         if native_certificate is None:
-            native_certificate = certify_mixed_mesh_arrays(
+            native_certificate = _certify_mixed_mesh(
                 mesh=mesh,
                 metadata={"mesh_name": mesh_name},
-                certificate=certificate.to_dict(),
+                certificate=certificate,
                 require_native=certification_bindings is not None,
             )
         if native_certificate is not None:
-            # The native certifier computes and validates the v3 fingerprint
-            # over the exact CSR arrays.  Recomputing that byte stream in
-            # Python here duplicates a large linear pass for SP4 meshes.
-            expected_fingerprint = native_certificate.topology_fingerprint_v3
             expected_payload = _certificate_payload_sha256(certificate)
-            if (
-                not native_certificate.validated_claimed_certificate
-                or native_certificate.topology_fingerprint_v3 != expected_fingerprint
+            if isinstance(certificate, MixedLayerTopologyCertificateV2):
+                certificate_fingerprint = native_certificate.topology_fingerprint
+                certificate_version = native_certificate.topology_fingerprint_version
+            else:
+                certificate_fingerprint = native_certificate.topology_fingerprint_v3
+                certificate_version = "v3"
+            if not native_certificate.validated_claimed_certificate or (
+                certificate_fingerprint != certificate.topology_fingerprint
+                or certificate_version != certificate.topology_fingerprint_version
                 or native_certificate.certificate_payload_sha256 != expected_payload
             ):
                 if certification_bindings is not None:
@@ -709,11 +751,11 @@ def save_mesh_artifact(
     )
     if native_certificate is None:
         mesh.validate_strict(require_positive_orientation=True)
-    topology_fingerprint = (
-        native_certificate.topology_fingerprint_v3
-        if native_certificate is not None
-        else mesh.topology_fingerprint_v3()
-    )
+    topology_fingerprint = mesh.topology_fingerprint_v3()
+    if native_certificate is not None and not isinstance(
+        certificate, MixedLayerTopologyCertificateV2
+    ):
+        topology_fingerprint = native_certificate.topology_fingerprint_v3
     if not native_mixed_certificate_validated:
         mesh_ir = mesh.to_ir(mesh_name)
         if validate_mesh_ir(mesh_ir) is False:
@@ -755,18 +797,25 @@ def save_mesh_artifact(
             )
         native = native_certificate
         if native is None:  # pragma: no cover - require_native contract
-            native = certify_mixed_mesh_arrays(
+            native = _certify_mixed_mesh(
                 mesh=mesh,
                 metadata={"mesh_name": mesh_name},
-                certificate=certificate.to_dict(),
+                certificate=certificate,
                 require_native=True,
             )
         if native is None:  # pragma: no cover - require_native contract
             raise RuntimeError("native mixed mesh certifier is required")
         expected_payload = _certificate_payload_sha256(certificate)
+        if isinstance(certificate, MixedLayerTopologyCertificateV2):
+            certificate_fingerprint = native.topology_fingerprint
+            certificate_version = native.topology_fingerprint_version
+        else:
+            certificate_fingerprint = native.topology_fingerprint_v3
+            certificate_version = "v3"
         if (
             not native.validated_claimed_certificate
-            or native.topology_fingerprint_v3 != topology_fingerprint
+            or certificate_fingerprint != certificate.topology_fingerprint
+            or certificate_version != certificate.topology_fingerprint_version
             or native.certificate_payload_sha256 != expected_payload
             or native.algorithm_id != certification_bindings.certifier_algorithm_id
             or native.rayon_threads != certification_bindings.certifier_threads
@@ -775,7 +824,7 @@ def save_mesh_artifact(
         receipt = CertificationReceiptV2.from_components(
             topology_bytes=topology,
             build_report_bytes=report_bytes,
-            topology_fingerprint_v3=native.topology_fingerprint_v3,
+            topology_fingerprint_v3=topology_fingerprint,
             semantic_manifest_sha256=_semantic_manifest_sha256(
                 region_markers=regions,
                 object_region_markers=object_regions,
@@ -864,14 +913,16 @@ def _load_mesh_artifact_full_audit(
         )
         if certificate is None:
             raise MeshArtifactCorruptionError("v2 artifact is missing mixed certificate")
-        native = certify_mixed_mesh_arrays(
+        native = _certify_mixed_mesh(
             mesh=unsigned,
             metadata={"mesh_name": str(manifest.get("mesh_name", ""))},
-            certificate=certificate.to_dict(),
+            certificate=certificate,
             require_native=require_native,
         )
         topology_fingerprint = (
-            native.topology_fingerprint_v3
+            unsigned.topology_fingerprint_v3()
+            if isinstance(certificate, MixedLayerTopologyCertificateV2)
+            else native.topology_fingerprint_v3
             if native is not None
             else unsigned.topology_fingerprint_v3()
         )
@@ -883,10 +934,16 @@ def _load_mesh_artifact_full_audit(
             topology_fingerprint_v3=topology_fingerprint,
         )
         if native is not None:
+            if isinstance(certificate, MixedLayerTopologyCertificateV2):
+                certificate_fingerprint = native.topology_fingerprint
+                certificate_version = native.topology_fingerprint_version
+            else:
+                certificate_fingerprint = native.topology_fingerprint_v3
+                certificate_version = "v3"
             if (
                 not native.validated_claimed_certificate
-                or native.topology_fingerprint_v3
-                != f"sha256:{receipt.topology_fingerprint_v3}"
+                or certificate_fingerprint != certificate.topology_fingerprint
+                or certificate_version != certificate.topology_fingerprint_version
                 or native.certificate_payload_sha256
                 != f"sha256:{receipt.certificate.payload_sha256}"
                 or native.algorithm_id != receipt.certificate.algorithm_id
@@ -918,26 +975,42 @@ def _load_mesh_artifact_full_audit(
         )
         mesh = unsigned
         if certificate is not None:
-            native = certify_mixed_mesh_arrays(
+            native = _certify_mixed_mesh(
                 mesh=mesh,
                 metadata={"mesh_name": str(manifest.get("mesh_name", ""))},
-                certificate=certificate.to_dict(),
+                certificate=certificate,
                 require_native=require_native,
             )
             if native is not None:
+                if isinstance(certificate, MixedLayerTopologyCertificateV2):
+                    certificate_fingerprint = native.topology_fingerprint
+                    certificate_version = native.topology_fingerprint_version
+                    algorithm_id = native.algorithm_id
+                else:
+                    certificate_fingerprint = native.topology_fingerprint_v3
+                    certificate_version = "v3"
+                    algorithm_id = native.algorithm_id
                 if (
                     not native.validated_claimed_certificate
-                    or native.topology_fingerprint_v3
-                    != certificate.topology_fingerprint
+                    or certificate_fingerprint != certificate.topology_fingerprint
+                    or certificate_version != certificate.topology_fingerprint_version
                     or native.certificate_payload_sha256
                     != _certificate_payload_sha256(certificate)
-                    or native.algorithm_id != MIXED_CERTIFIER_ALGORITHM
+                    or algorithm_id != (
+                        MIXED_CERTIFIER_ALGORITHM_V2
+                        if isinstance(certificate, MixedLayerTopologyCertificateV2)
+                        else MIXED_CERTIFIER_ALGORITHM
+                    )
                 ):
                     raise MeshArtifactCorruptionError(
                         "native certificate audit does not match legacy mixed artifact"
                     )
                 native_backend = "rust_rayon"
-                topology_fingerprint = native.topology_fingerprint_v3
+                topology_fingerprint = (
+                    mesh.topology_fingerprint_v3()
+                    if isinstance(certificate, MixedLayerTopologyCertificateV2)
+                    else native.topology_fingerprint_v3
+                )
                 try:
                     mesh = _attach_native_certificate_without_revalidation(
                         mesh, certificate
@@ -1035,7 +1108,7 @@ def _load_trusted_cached_mesh_artifact(
     expected_source_snapshot_sha256: str,
     expected_gmsh_version: str,
     expected_repair_algorithm_id: str,
-    expected_certifier_algorithm_id: str,
+    expected_certifier_algorithm_id: str | Sequence[str],
     use_native_fingerprint: bool = False,
 ) -> MeshArtifact:
     source = Path(path)
@@ -1051,6 +1124,34 @@ def _load_trusted_cached_mesh_artifact(
     )
     if certificate is None:
         raise MeshArtifactCorruptionError("v2 artifact is missing mixed certificate")
+    if isinstance(certificate, MixedLayerTopologyCertificateV2):
+        # The legacy native preflight receipt only proves the v1 topology
+        # contract.  A v2 artifact must take the schema-native full audit;
+        # never feed it through the v1 trusted shortcut.
+        audited = _load_mesh_artifact_full_audit(
+            source,
+            expected_authoring_document=None,
+            require_native=True,
+            artifact_trust="forced_audit_v2",
+        )
+        receipt = _receipt_from_members(members)
+        allowed_algorithms = (
+            {expected_certifier_algorithm_id}
+            if isinstance(expected_certifier_algorithm_id, str)
+            else set(expected_certifier_algorithm_id)
+        )
+        if (
+            receipt.authoring.document_sha256 != expected_authoring_sha256
+            or receipt.authoring.resolved_policy_sha256 != expected_policy_sha256
+            or receipt.producer.source_snapshot_sha256 != expected_source_snapshot_sha256
+            or receipt.producer.gmsh_version != expected_gmsh_version
+            or receipt.producer.repair_algorithm_id != expected_repair_algorithm_id
+            or receipt.certificate.algorithm_id not in allowed_algorithms
+        ):
+            raise MeshArtifactCorruptionError(
+                "trusted v2 cache receipt does not match expected bindings"
+            )
+        return audited
     native = None
     if use_native_fingerprint:
         # Parse the receipt before native preflight so its bounded counts can
@@ -1117,13 +1218,17 @@ def _load_trusted_cached_mesh_artifact(
         )
     if topology_fingerprint != manifest.get("topology_fingerprint"):
         raise MeshArtifactCorruptionError("topology fingerprint does not match manifest")
+    allowed_certifier_algorithms = (
+        {expected_certifier_algorithm_id}
+        if isinstance(expected_certifier_algorithm_id, str)
+        else set(expected_certifier_algorithm_id)
+    )
     expected_bindings = {
         "document_sha256": expected_authoring_sha256,
         "resolved_policy_sha256": expected_policy_sha256,
         "source_snapshot_sha256": expected_source_snapshot_sha256,
         "gmsh_version": expected_gmsh_version,
         "repair_algorithm_id": expected_repair_algorithm_id,
-        "certifier_algorithm_id": expected_certifier_algorithm_id,
     }
     actual_bindings = {
         "document_sha256": receipt.authoring.document_sha256,
@@ -1131,9 +1236,11 @@ def _load_trusted_cached_mesh_artifact(
         "source_snapshot_sha256": receipt.producer.source_snapshot_sha256,
         "gmsh_version": receipt.producer.gmsh_version,
         "repair_algorithm_id": receipt.producer.repair_algorithm_id,
-        "certifier_algorithm_id": receipt.certificate.algorithm_id,
     }
-    if actual_bindings != expected_bindings:
+    if (
+        actual_bindings != expected_bindings
+        or receipt.certificate.algorithm_id not in allowed_certifier_algorithms
+    ):
         raise MeshArtifactCorruptionError(
             "trusted cache receipt does not match expected bindings"
         )

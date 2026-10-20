@@ -1,0 +1,146 @@
+diff --git a/dist/esm/server/lib/router-server.js b/dist/esm/server/lib/router-server.js
+index 47195b4b68a7e45ce4527c49c5605374b790cde1..8ce261c93c1a402dc63c302cb3227ddf237a4ef1 100644
+--- a/dist/esm/server/lib/router-server.js
++++ b/dist/esm/server/lib/router-server.js
+@@ -566,6 +566,9 @@ export async function initialize(opts) {
+     renderServerOpts.serverFields.routerServerHandler = requestHandlerImpl;
+     // pre-initialize workers
+     const handlers = await renderServer.instance.initialize(renderServerOpts);
++    if (opts.dev && development && development.bundler && development.bundler.serverFields && development.bundler.serverFields.appPathRoutes) {
++        await renderServer.instance.propagateServerField(opts.dir, 'appPathRoutes', development.bundler.serverFields.appPathRoutes);
++    }
+     // this must come after initialize of render server since it's
+     // using initialized methods
+     if (!routerServerGlobal[RouterServerContextSymbol]) {
+diff --git a/dist/server/lib/router-server.js b/dist/server/lib/router-server.js
+index 53b77458f62b9169567ec2d651476aca0056bd9b..691a51e05998af4fd3bb8befbca01a6c13f9629c 100644
+--- a/dist/server/lib/router-server.js
++++ b/dist/server/lib/router-server.js
+@@ -621,6 +621,9 @@ async function initialize(opts) {
+     renderServerOpts.serverFields.routerServerHandler = requestHandlerImpl;
+     // pre-initialize workers
+     const handlers = await renderServer.instance.initialize(renderServerOpts);
++    if (opts.dev && development && development.bundler && development.bundler.serverFields && development.bundler.serverFields.appPathRoutes) {
++        await renderServer.instance.propagateServerField(opts.dir, 'appPathRoutes', development.bundler.serverFields.appPathRoutes);
++    }
+     // this must come after initialize of render server since it's
+     // using initialized methods
+     if (!_routerservercontext.routerServerGlobal[_routerservercontext.RouterServerContextSymbol]) {
+diff --git a/dist/esm/server/lib/router-utils/setup-dev-bundler.js b/dist/esm/server/lib/router-utils/setup-dev-bundler.js
+index 9dce7fc..0a4719a 100644
+--- a/dist/esm/server/lib/router-utils/setup-dev-bundler.js
++++ b/dist/esm/server/lib/router-utils/setup-dev-bundler.js
+@@ -46,6 +46,7 @@ import { normalizeAppPath, compareAppPaths } from '../../../shared/lib/router/ut
+ import { ensureLeadingSlash } from '../../../shared/lib/page-path/ensure-leading-slash';
+ import { Lockfile } from '../../../build/lockfile';
+ import { deobfuscateText } from '../../../shared/lib/magic-identifier';
++import { DefaultFileReader } from '../../route-matcher-providers/dev/helpers/file-reader/default-file-reader';
+ async function verifyTypeScript(opts) {
+     const verifyResult = await verifyAndRunTypeScript({
+         dir: opts.dir,
+@@ -70,6 +71,27 @@ export async function propagateServerField(opts, field, args) {
+     var _opts_renderServer_instance, _opts_renderServer;
+     await ((_opts_renderServer = opts.renderServer) == null ? void 0 : (_opts_renderServer_instance = _opts_renderServer.instance) == null ? void 0 : _opts_renderServer_instance.propagateServerField(opts.dir, field, args));
+ }
++async function seedMissingAppFiles(appDir, validFileMatcher, knownFiles) {
++    if (!appDir) return;
++    const reader = new DefaultFileReader({
++        pathnameFilter: (pathname)=>validFileMatcher.isAppRouterPage(pathname) || validFileMatcher.isAppRouterRoute(pathname) || validFileMatcher.isAppLayoutPage(pathname) || validFileMatcher.isAppDefaultPage(pathname) || validFileMatcher.isRootNotFound(pathname),
++        ignorePartFilter: (part)=>part.startsWith('_')
++    });
++    const appFiles = await reader.read(appDir);
++    for (const fileName of appFiles){
++        const meta = knownFiles.get(fileName);
++        if ((meta == null ? void 0 : meta.accuracy) !== undefined) continue;
++        try {
++            const stat = await fs.promises.stat(fileName);
++            knownFiles.set(fileName, {
++                accuracy: 1,
++                timestamp: stat.mtimeMs
++            });
++        } catch (err) {
++            if (err.code !== 'ENOENT') throw err;
++        }
++    }
++}
+ async function startWatcher(opts) {
+     const { nextConfig, appDir, pagesDir, dir, resetFetch } = opts;
+     const { useFileSystemPublicRoutes } = nextConfig;
+@@ -232,6 +254,7 @@ async function startWatcher(opts) {
+         const routeTypesFilePath = path.join(distDir, 'types', 'routes.d.ts');
+         const validatorFilePath = path.join(distDir, 'types', 'validator.ts');
+         let initialWatchTime = performance.now() + performance.timeOrigin;
++        let initialAppRouteScanComplete = false;
+         wp.on('aggregated', async ()=>{
+             var _serverFields_middleware, _serverFields_middleware1;
+             let writeEnvDefinitions = false;
+@@ -239,6 +262,10 @@ async function startWatcher(opts) {
+             let middlewareMatchers;
+             const routedPages = [];
+             const knownFiles = wp.getTimeInfoEntries();
++            if (!initialAppRouteScanComplete) {
++                await seedMissingAppFiles(appDir, validFileMatcher, knownFiles);
++                initialAppRouteScanComplete = true;
++            }
+             const appPaths = {};
+             const pageNameSet = new Set();
+             const conflictingAppPagePaths = new Set();
+diff --git a/dist/server/lib/router-utils/setup-dev-bundler.js b/dist/server/lib/router-utils/setup-dev-bundler.js
+index d6bb381..8d29125 100644
+--- a/dist/server/lib/router-utils/setup-dev-bundler.js
++++ b/dist/server/lib/router-utils/setup-dev-bundler.js
+@@ -68,6 +68,7 @@ const _apppaths = require("../../../shared/lib/router/utils/app-paths");
+ const _ensureleadingslash = require("../../../shared/lib/page-path/ensure-leading-slash");
+ const _lockfile = require("../../../build/lockfile");
+ const _magicidentifier = require("../../../shared/lib/magic-identifier");
++const _defaultfilereader = require("../../route-matcher-providers/dev/helpers/file-reader/default-file-reader");
+ function _interop_require_default(obj) {
+     return obj && obj.__esModule ? obj : {
+         default: obj
+@@ -138,6 +139,27 @@ async function propagateServerField(opts, field, args) {
+     var _opts_renderServer_instance, _opts_renderServer;
+     await ((_opts_renderServer = opts.renderServer) == null ? void 0 : (_opts_renderServer_instance = _opts_renderServer.instance) == null ? void 0 : _opts_renderServer_instance.propagateServerField(opts.dir, field, args));
+ }
++async function seedMissingAppFiles(appDir, validFileMatcher, knownFiles) {
++    if (!appDir) return;
++    const reader = new _defaultfilereader.DefaultFileReader({
++        pathnameFilter: (pathname)=>validFileMatcher.isAppRouterPage(pathname) || validFileMatcher.isAppRouterRoute(pathname) || validFileMatcher.isAppLayoutPage(pathname) || validFileMatcher.isAppDefaultPage(pathname) || validFileMatcher.isRootNotFound(pathname),
++        ignorePartFilter: (part)=>part.startsWith('_')
++    });
++    const appFiles = await reader.read(appDir);
++    for (const fileName of appFiles){
++        const meta = knownFiles.get(fileName);
++        if ((meta == null ? void 0 : meta.accuracy) !== undefined) continue;
++        try {
++            const stat = await _fs.default.promises.stat(fileName);
++            knownFiles.set(fileName, {
++                accuracy: 1,
++                timestamp: stat.mtimeMs
++            });
++        } catch (err) {
++            if (err.code !== 'ENOENT') throw err;
++        }
++    }
++}
+ async function startWatcher(opts) {
+     const { nextConfig, appDir, pagesDir, dir, resetFetch } = opts;
+     const { useFileSystemPublicRoutes } = nextConfig;
+@@ -300,6 +322,7 @@ async function startWatcher(opts) {
+         const routeTypesFilePath = _path.default.join(distDir, 'types', 'routes.d.ts');
+         const validatorFilePath = _path.default.join(distDir, 'types', 'validator.ts');
+         let initialWatchTime = performance.now() + performance.timeOrigin;
++        let initialAppRouteScanComplete = false;
+         wp.on('aggregated', async ()=>{
+             var _serverFields_middleware, _serverFields_middleware1;
+             let writeEnvDefinitions = false;
+@@ -307,6 +330,10 @@ async function startWatcher(opts) {
+             let middlewareMatchers;
+             const routedPages = [];
+             const knownFiles = wp.getTimeInfoEntries();
++            if (!initialAppRouteScanComplete) {
++                await seedMissingAppFiles(appDir, validFileMatcher, knownFiles);
++                initialAppRouteScanComplete = true;
++            }
+             const appPaths = {};
+             const pageNameSet = new Set();
+             const conflictingAppPagePaths = new Set();

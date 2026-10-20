@@ -1474,9 +1474,8 @@ describe("buildModelTree", () => {
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:object:center_microstrip:magnetic-texture",
     );
-    expect(flattened.map((node) => node.id)).not.toContain(
-      "model:object:center_microstrip:mesh",
-    );
+    expect(flattened.find((node) => node.id === "model:object:center_microstrip:mesh"))
+      .toMatchObject({ kind: "object.mesh", objectRole: "antenna" });
   });
 
   it("shows authored object regions, material fields, and couplings from model resources", () => {

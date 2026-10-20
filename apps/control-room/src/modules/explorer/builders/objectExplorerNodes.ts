@@ -1,3 +1,5 @@
+import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
+import { antennaRegionalSources } from "@/shared/domain/physics/antennaRegionalSource";
 import type {
   ExplorerNode,
   ExplorerNodeStatus,
@@ -9,7 +11,7 @@ import type {
   FrozenSpinsDefinition,
   FrozenSpinsSelectionExpression,
 } from "@/kernel/api/apiTypes";
-import { antennaPortStatus } from "@/shared/domain/physics/antennaPortValidation";
+import { antennaPortValidationMessages } from "@/shared/domain/physics/antennaPortValidation";
 import { antennaStageValidationMessages } from "@/shared/domain/physics/antennaStageValidation";
 
 import { buildPhysicsGraphObjectNode } from "./physicsGraphTree";
@@ -70,6 +72,7 @@ export function buildObjectExplorerNode(
   const meshStatus = object.meshStatus ?? "primitive-only";
   const createObjectMonitorInput = planarMonitorObjectCreationInput(resources, objectId);
   if (object.objectRole === "antenna") {
+    const regional = antennaRegionalSources(resources.scene ?? null, objectId);
     return {
       id: parentId,
       kind: "object.root",
@@ -109,7 +112,7 @@ export function buildObjectExplorerNode(
           badge: "composition",
           icon: "wave",
           objectId,
-          selectable: false,
+          selectable: true,
           status: "ready",
           contextCommands: ["workspace.focus-selection"],
           children: [
@@ -118,15 +121,32 @@ export function buildObjectExplorerNode(
               kind: "object.antenna.regional",
               label: "Regional field drive",
               parentId: `${parentId}:antenna`,
-              badge: "field drive",
+              badge: regional.canonical ? regional.canonical.enabled === false ? "disabled" : "configured"
+                : regional.legacy ? "migration required" : "not configured",
+              statusReason: regional.canonical ? "Explicit prescribed regional magnetic field; it does not solve conductor current or the antenna Oersted field. Configuration is not proof of execution."
+                : regional.legacy ? "Deprecated prescribed Zeeman-mask source; migrate it explicitly in the regional field inspector."
+                : "No regional field source is assigned to this object. Assign an explicit geometry-mask RegionalFieldDrive before editing its waveform; the conductor solve is separate.",
               icon: "wave",
               objectId,
               objectRole: "antenna",
-              status: "ready",
+              status: regional.canonical ? regional.canonical.enabled === false ? "degraded" : "ready" : regional.legacy ? "warning" : "unavailable",
               contextCommands: ["workspace.focus-selection"],
             },
             ...antennaCompositionNodes(parentId, objectId, resources),
           ],
+        },
+        {
+          id: `${parentId}:mesh`,
+          kind: "object.mesh",
+          label: "Mesh",
+          parentId,
+          badge: meshStatusBadge(meshStatus),
+          icon: "mesh",
+          objectId,
+          objectRole: object.objectRole,
+          status: meshStatus,
+          statusReason: "Object mesh policy and build evidence. A saved policy does not certify a current antenna field-solve mesh.",
+          contextCommands: ["mesh.build-selected", "mesh.open-object-report"],
         },
         {
           id: `${parentId}:visualization`,
@@ -266,6 +286,20 @@ function antennaCompositionNodes(
 
   return [
     {
+      id: `${antennaParentId}:terminals`,
+      kind: "object.antenna.terminals",
+      label: "Terminals and source",
+      parentId: antennaParentId,
+      badge: "source definition",
+      icon: "activity",
+      objectId,
+      objectRole: "antenna",
+      antennaResourceId: objectId,
+      antennaResourceKind: "terminals",
+      status: "warning",
+      contextCommands: ["workspace.focus-selection"],
+    },
+    {
       id: `${antennaParentId}:conductor`,
       kind: "object.antenna.conductor",
       label: "Conductor",
@@ -279,14 +313,17 @@ function antennaCompositionNodes(
       status: "ready",
       contextCommands: ["workspace.focus-selection"],
     },
-    ...portModes.map((mode) => {
-      const status = antennaPortStatus(mode, scene ?? null);
+    ...portModes.map((mode, index) => {
+      const validationMessages = antennaPortValidationMessages(mode, scene ?? null);
+      const status = validationMessages.length === 0 ? "ready" as const : "warning" as const;
       return {
         id: `${antennaParentId}:port:${encodeURIComponent(mode.id)}`,
         kind: "object.antenna.port" as const,
-        label: `Port ${mode.id}`,
+        label: `Port ${index + 1}`,
         parentId: antennaParentId,
-        badge: `${mode.branches.length} branches${status === "ready" ? " · authoring" : " · invalid"}`,
+        badge: `${mode.branches.length} branches · ${validationMessages.length ? `${validationMessages.length} issues` : "configured"}`,
+        statusReason: `Port ID: ${mode.id}. Transport ID: ${mode.current_transport_id}. ` + (validationMessages.length ? validationMessages.join("; ")
+          : "Port inputs are configured. Current balance and field-source qualification still require execution."),
         icon: "activity" as const,
         objectId,
         objectRole: "antenna" as const,
@@ -296,32 +333,36 @@ function antennaCompositionNodes(
         contextCommands: ["workspace.focus-selection"],
       };
     }),
-    ...solveStages.map((stage) => {
-      const invalid = antennaStageValidationMessages(stage, scene ?? null).length > 0;
+    ...solveStages.map((stage, index) => {
+      const validationMessages = antennaStageValidationMessages(stage, scene ?? null);
+      const invalid = validationMessages.length > 0;
       return {
         id: `${antennaParentId}:solution:${encodeURIComponent(stage.id)}`,
         kind: "object.antenna.solution" as const,
-        label: `Field solve ${stage.id}`,
+        label: `Field solve ${index + 1}`,
         parentId: antennaParentId,
-        badge: `${stage.outputs.length} outputs · ${invalid ? "invalid" : "configured"}`,
+        badge: `${stage.outputs.length} outputs · ${invalid ? `${validationMessages.length} issues` : "configured"}`,
+        statusReason: `Definition ID: ${stage.id}. Source object ID: ${stage.source_object_id}. Sampling: ${targetDescription(stage.field_sampling_domain, scene)}. ` + (invalid ? validationMessages.join("; ")
+          : "Field-solve inputs are configured. This node does not establish that a result has been computed."),
         icon: "mesh" as const,
         objectId,
         objectRole: "antenna" as const,
         antennaResourceId: stage.id,
         antennaResourceKind: "solution" as const,
-        status: "warning" as const,
+        status: invalid ? "validation-blocked" as const : "warning" as const,
         contextCommands: ["study.add-antenna-field-solve-stage", "workspace.focus-selection"],
         contextCommandInputs: {
           "study.add-antenna-field-solve-stage": { objectId, stageId: stage.id },
         },
       };
     }),
-    ...projections.map((projection) => ({
+    ...projections.map((projection, index) => ({
       id: `${antennaParentId}:projection:${encodeURIComponent(projection.id)}`,
       kind: "object.antenna.projection" as const,
-      label: `Projection ${projection.id}`,
+      label: `Projection ${index + 1} → ${targetDescription(projection.target, scene)}`,
       parentId: antennaParentId,
-      badge: `${targetDescription(projection.target)} · pending`,
+      badge: "authored binding",
+      statusReason: `Projection ID: ${projection.id}. Source stage ID: ${projection.solution.stage_id}. Source output ID: ${projection.solution.output_id}. Target: ${projection.target.kind === "global" ? "global" : `${projection.target.object_id}${projection.target.kind === "region" ? ` / ${projection.target.region_id}` : ""}`}. Authored binding only; result publication and field qualification are not established by this node.`,
       icon: "triangle" as const,
       objectId,
       objectRole: "antenna" as const,
@@ -333,9 +374,10 @@ function antennaCompositionNodes(
     ...drives.map((drive) => ({
       id: `${antennaParentId}:drive:${encodeURIComponent(drive.id)}`,
       kind: "object.antenna.drive" as const,
-      label: drive.name,
+      label: drive.name.trim() || "Unnamed current drive",
       parentId: antennaParentId,
-      badge: `${drive.peak_current_a.toExponential(2)} A · configured`,
+      badge: `${formatValueWithUnit(drive.peak_current_a, "A")} · ${drive.waveform.kind === "piecewise_linear" ? "piecewise" : drive.waveform.kind === "sinc_pulse" ? "sinc" : drive.waveform.kind}`,
+      statusReason: `Drive ID: ${drive.id}. Projection ID: ${drive.projection_ref}. Port ID: ${drive.port_mode_id}. Time origin: ${drive.time_origin}. Configured current scale and waveform; this node does not establish a published field or an executed Run.`,
       icon: "wave" as const,
       objectId,
       objectRole: "antenna" as const,
@@ -344,12 +386,13 @@ function antennaCompositionNodes(
       status: "warning" as const,
       contextCommands: ["workspace.focus-selection"],
     })),
-    ...spectra.map((request) => ({
+    ...spectra.map((request, index) => ({
       id: `${antennaParentId}:spectrum:${encodeURIComponent(request.id)}`,
       kind: "object.antenna.spectrum" as const,
-      label: `Spectrum ${request.id}`,
+      label: `Source spectrum ${index + 1}`,
       parentId: antennaParentId,
-      badge: `${request.transform} · configured`,
+      badge: `${request.component === "vector_power" ? "vector magnitude²" : request.component} · ${request.window}`,
+      statusReason: `Spectrum request ID: ${request.id}. Source stage ID: ${request.solution_ref.stage_id}. Source output ID: ${request.solution_ref.output_id}. Transform: ${request.transform}. Spatial spectrum of the antenna source field. This is not a measured magnetization response or evidence of an excited mode.`,
       icon: "activity" as const,
       objectId,
       objectRole: "antenna" as const,
@@ -361,12 +404,20 @@ function antennaCompositionNodes(
   ];
 }
 
-function targetDescription(
-  target: AntennaTargetResource,
-): string {
-  if (target.kind === "global") return "global";
-  if (target.kind === "object") return `object:${target.object_id}`;
-  return `region:${target.object_id}/${target.region_id}`;
+function targetDescription(target: AntennaTargetResource | null | undefined, scene: SceneResource | null | undefined): string {
+  if (!target) return "Unspecified";
+  if (target.kind === "global") return "Global";
+  const matches = scene?.objects?.filter(object => object.id === target.object_id) ?? [];
+  if (matches.length !== 1) return `${matches.length ? "Ambiguous" : "Missing"} object · ${target.object_id}${target.kind === "region" ? ` / ${target.region_id}` : ""}`;
+  const object = matches[0], name = object.name?.trim();
+  const duplicateName = name && (scene?.objects?.filter(item => item.name?.trim() === name).length ?? 0) > 1;
+  const objectLabel = name ? duplicateName ? `${name} [${object.id}]` : name : `Object · ${object.id}`;
+  if (target.kind === "object") return objectLabel;
+  const regions = object.regions?.filter(region => region.region_id === target.region_id && (!region.owner_object || region.owner_object === object.id)) ?? [];
+  if (regions.length !== 1) return `${objectLabel} / ${regions.length ? "Ambiguous" : "Missing"} region · ${target.region_id}`;
+  const region = regions[0], regionName = region.name?.trim();
+  const duplicateRegionName = regionName && (object.regions?.filter(item => item.name?.trim() === regionName).length ?? 0) > 1;
+  return `${objectLabel} / ${regionName ? duplicateRegionName ? `${regionName} [${region.region_id}]` : regionName : target.region_id}`;
 }
 
 function physicsGraphObjectChildren(

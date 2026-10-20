@@ -16,6 +16,7 @@ import {
   computeFromTelemetry,
   describeRuntimeLanes,
   isTelemetrySampleStale,
+  isTelemetrySampleStaleByAge,
 } from "./computeTelemetry";
 import {
   parseComputeNodePolicyResource,
@@ -24,6 +25,31 @@ import {
 import type { ComputeProbeController, ComputeProbeState } from "./types";
 
 export const COMPUTE_POLL_MS = 5000;
+
+function monotonicNow(): number {
+  return typeof performance === "undefined" ? 0 : performance.now();
+}
+
+interface ResourceReceipt<TData> {
+  readonly data: TData | null;
+  readonly receivedAt: number;
+}
+
+function resourceReceipt<TData>(data: TData | null): ResourceReceipt<TData> {
+  return {
+    data,
+    receivedAt: data == null ? 0 : monotonicNow(),
+  };
+}
+
+function elapsedSinceResourceReceipt<TData>(
+  receipt: ResourceReceipt<TData>,
+  data: TData | null,
+  now: number | undefined,
+): number {
+  if (receipt.data !== data || receipt.data == null || now === undefined) return 0;
+  return Math.max(0, now - receipt.receivedAt);
+}
 
 /** One owner for the rail, settings, templates and project compatibility checks. */
 export function useComputeProbe(): ComputeProbeController {
@@ -36,20 +62,52 @@ export function useComputeProbe(): ComputeProbeController {
   const nodeInventoryStatus = nodeInventoryResource.status;
   const nodeInventoryRefreshError = nodeInventoryResource.refreshError;
   const [freshnessNow, setFreshnessNow] = useState<number | undefined>(undefined);
+  const [resourceClockNow, setResourceClockNow] = useState<number | undefined>(undefined);
+  // `collected_at` belongs to the server's wall clock. Anchor each response
+  // by data identity in the browser's monotonic clock, without extending the
+  // shared resource result or introducing another cache. The timestamp is a
+  // read performed only when the resource identity changes.
+  const nodeInventoryReceipt = useMemo(
+    () => resourceReceipt(nodeInventoryData),
+    [nodeInventoryData],
+  );
+  const nodeInventoryElapsedMs = elapsedSinceResourceReceipt(
+    nodeInventoryReceipt,
+    nodeInventoryData,
+    resourceClockNow,
+  );
+  const cpuTelemetryReceipt = useMemo(
+    () => resourceReceipt(cpu.data),
+    [cpu.data],
+  );
+  const gpuTelemetryReceipt = useMemo(
+    () => resourceReceipt(gpu.data),
+    [gpu.data],
+  );
+  const cpuTelemetryElapsedMs = elapsedSinceResourceReceipt(
+    cpuTelemetryReceipt,
+    cpu.data,
+    resourceClockNow,
+  );
+  const gpuTelemetryElapsedMs = elapsedSinceResourceReceipt(
+    gpuTelemetryReceipt,
+    gpu.data,
+    resourceClockNow,
+  );
   const nodeInventory = useMemo(
     () => summarizeComputeNodeInventory({
       data: nodeInventoryData,
       status: nodeInventoryStatus,
       refreshError: nodeInventoryRefreshError,
-    }, freshnessNow),
-    [freshnessNow, nodeInventoryData, nodeInventoryRefreshError, nodeInventoryStatus],
+    }, nodeInventoryElapsedMs),
+    [nodeInventoryData, nodeInventoryElapsedMs, nodeInventoryRefreshError, nodeInventoryStatus],
   );
   const [desktop, setDesktop] = useState<ComputeProbeState>(undefined);
   const [desktopRefreshing, setDesktopRefreshing] = useState(false);
   const [desktopFailed, setDesktopFailed] = useState(false);
   const [desktopRefreshId, setDesktopRefreshId] = useState(0);
   const operatorCapability = useRef<string | null>(null);
-  const [canEditNodePolicy, setCanEditNodePolicy] = useState(false);
+  const [hasLocalComputeOperator, setHasLocalComputeOperator] = useState(false);
   const needsDesktop = cpu.status === "error" && gpu.status === "error" && !cpu.data && !gpu.data;
 
   useEffect(() => {
@@ -60,12 +118,12 @@ export function useComputeProbe(): ComputeProbeController {
       if (cancelled) return;
       if (typeof value === "string" && /^[0-9a-f]{32}$/.test(value)) {
         operatorCapability.current = value;
-        setCanEditNodePolicy(true);
+        setHasLocalComputeOperator(true);
       }
     }).catch(() => {
       if (!cancelled) {
         operatorCapability.current = null;
-        setCanEditNodePolicy(false);
+        setHasLocalComputeOperator(false);
       }
     });
     return () => {
@@ -122,8 +180,14 @@ export function useComputeProbe(): ComputeProbeController {
     if (!parsed) throw new Error("The API returned an invalid compute-node policy.");
     return parsed;
   }, [api, refetchNodeInventory]);
+  const publishExecutionProfile = useCallback((request: Parameters<ComputeProbeController["publishExecutionProfile"]>[0]) => {
+    const capability = operatorCapability.current;
+    if (!capability) throw new Error("Profile publishing is available only in the local Fullmag desktop app.");
+    return api.platform.publishComputeProfile(request, { operatorCapability: capability });
+  }, [api]);
   const refresh = useCallback(() => {
     setFreshnessNow(Date.now());
+    setResourceClockNow(monotonicNow());
     refetchCpu();
     refetchGpu();
     refetchCapabilities();
@@ -136,6 +200,7 @@ export function useComputeProbe(): ComputeProbeController {
     const sample = () => {
       if (document.hidden) return;
       setFreshnessNow(Date.now());
+      setResourceClockNow(monotonicNow());
       if (cpu.data?.status === "available" && cpu.status === "ready") refetchCpu();
       if (gpu.data?.status === "available" && gpu.status === "ready") refetchGpu();
       refetchNodeInventory();
@@ -175,14 +240,18 @@ export function useComputeProbe(): ComputeProbeController {
   const resources = [cpu, gpu, capabilities];
   const usingDesktop = needsDesktop && Boolean(desktop);
   const observedResources = usingDesktop ? [capabilities] : resources;
-  const sampleTimes = usingDesktop
-    ? [desktop?.sampledAt]
+  const staleByAge = usingDesktop
+    ? freshnessNow !== undefined && [desktop?.sampledAt].some((timestamp) =>
+      isTelemetrySampleStale(timestamp, freshnessNow))
     : [
-        cpu.data?.status === "available" ? cpu.data.sample_time_unix_ms : undefined,
-        gpu.data?.status === "available" ? gpu.data.sample_time_unix_ms : undefined,
-      ];
-  const staleByAge = freshnessNow !== undefined &&
-    sampleTimes.some((timestamp) => isTelemetrySampleStale(timestamp, freshnessNow));
+        cpu.data?.status === "available"
+          ? { elapsedMs: cpuTelemetryElapsedMs, timestamp: cpu.data.sample_time_unix_ms }
+          : undefined,
+        gpu.data?.status === "available"
+          ? { elapsedMs: gpuTelemetryElapsedMs, timestamp: gpu.data.sample_time_unix_ms }
+          : undefined,
+      ].some((sample) => sample !== undefined &&
+        isTelemetrySampleStaleByAge(sample.elapsedMs, sample.timestamp));
   const stale = staleByAge ||
     observedResources.some((resource) => resource.data &&
       (resource.status === "error" || resource.refreshError)) || (usingDesktop && desktopFailed);
@@ -191,7 +260,8 @@ export function useComputeProbe(): ComputeProbeController {
   return {
     compute,
     nodeInventory,
-    canEditNodePolicy,
+    canEditNodePolicy: hasLocalComputeOperator,
+    canPublishExecutionProfiles: hasLocalComputeOperator,
     refreshing: (needsDesktop && desktopRefreshing) ||
       nodeInventoryResource.status === "loading" ||
       (nodeInventoryResource.status === "stale" && !nodeInventoryResource.refreshError) ||
@@ -205,5 +275,6 @@ export function useComputeProbe(): ComputeProbeController {
       : null,
     refresh,
     updateNodePolicy,
+    publishExecutionProfile,
   };
 }

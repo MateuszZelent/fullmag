@@ -1,6 +1,7 @@
 """Pure contract checks for the all-in-Docker runtime verifier."""
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -31,6 +32,161 @@ class DockerAllRuntimeVerifierTests(unittest.TestCase):
             else:
                 value[key] = override
         return value
+
+    def _host_ledger_fixture(self, root: Path):
+        import docker_host_ledger as ledger
+
+        # Native Windows may expose TemporaryDirectory through an 8.3 short
+        # alias (for example RUNNER~1).  Resolve it before deriving any
+        # owned paths so the fixture matches the production no-short-path
+        # admission guard.
+        root = root.resolve()
+        image = "sha256:" + "a" * 64
+        container_id = "b" * 64
+        run_root = root / "run"
+        run_root.mkdir()
+        mount_root = "/mnt/fullmag-host-ledger-test"
+        backing_image = "/tmp/storage/build-volumes/fullmag-host-ledger-v1.ext4"
+        host_receipt = {
+            "schema": ledger.HOST_RECEIPT_SCHEMA,
+            "profile": ledger.PROFILE,
+            "state": "ready",
+            "project_id": "fullmag-test",
+            "backing_image": backing_image,
+            "mount_root": mount_root,
+            "mount_target": "/host-ledger",
+            "ledger_root": mount_root + "/ledger",
+            "filesystem": "ext4",
+            "filesystem_uuid": "11111111-1111-1111-1111-111111111111",
+            "image_size_bytes": ledger.IMAGE_SIZE_BYTES,
+            "loop_device": "/dev/loop7",
+            "mount_active": True,
+            "created_image": True,
+        }
+        verify_host_receipt = {**host_receipt, "state": "validated", "created_image": False}
+        environment = {
+            "FULLMAG_HOST_LEDGER_PROFILE": ledger.PROFILE,
+            "FULLMAG_HOST_LEDGER_ROOT": ledger.LEDGER_ROOT,
+            "FULLMAG_HOST_LEDGER_MOUNT_TARGET": ledger.MOUNT_TARGET,
+            "FULLMAG_HOST_LEDGER_MOUNT_ROOT": mount_root,
+            "FULLMAG_HOST_LEDGER_LEDGER_ROOT": mount_root + "/ledger",
+            "FULLMAG_HOST_LEDGER_BACKING_IMAGE": backing_image,
+            "FULLMAG_HOST_LEDGER_PROJECT_ID": "fullmag-test",
+            "FULLMAG_DOCKER_HOST_ID": "c" * 64,
+        }
+        adapter_path = run_root / "host-ledger-adapter-receipt.json"
+        adapter = {
+            "schema": ledger.RECEIPT_SCHEMA,
+            "state": "ready",
+            "run_id": "d" * 32,
+            "profile": ledger.PROFILE,
+            "project_id": "fullmag-test",
+            "image_id": image,
+            "backing_image": backing_image,
+            "mount_root": mount_root,
+            "ledger_root": ledger.LEDGER_ROOT,
+            "receipt_path": str(adapter_path),
+            "environment": environment,
+            "host_receipt": host_receipt,
+        }
+        adapter_path.write_text(json.dumps(adapter, sort_keys=True), encoding="utf-8")
+        profile = {
+            "schema": ledger.SCHEMA,
+            "state": "ready",
+            "run_id": "d" * 32,
+            "profile": ledger.PROFILE,
+            "project_id": "fullmag-test",
+            "image_id": image,
+            "environment": environment,
+            "mount_root": mount_root,
+            "ledger_root": ledger.LEDGER_ROOT,
+            "ledger_root_daemon": mount_root + "/ledger",
+            "backing_image": backing_image,
+            "run_root": str(run_root),
+            "maintenance_compose": str(run_root / "compose.host-ledger.maintenance.json"),
+            "receipt": str(adapter_path),
+            "receipt_sha256": hashlib.sha256(adapter_path.read_bytes()).hexdigest(),
+            "host_receipt": host_receipt,
+        }
+        attestation = {
+            "schema": "fullmag.docker-host-ledger-attestation.v1",
+            "profile": ledger.PROFILE,
+            "backend_container_id": container_id,
+            "mount_source": mount_root,
+            "mount_target": ledger.MOUNT_TARGET,
+            "ledger_root": ledger.LEDGER_ROOT,
+            "filesystem": "ext4",
+            "filesystem_uuid": host_receipt["filesystem_uuid"],
+            "loop_device": host_receipt["loop_device"],
+            "backing_image": backing_image,
+            "backend_verification": "PASS",
+            "host_verification": "PASS",
+            "host_receipt": verify_host_receipt,
+        }
+        document = {
+            "Id": container_id,
+            "Image": image,
+            "Config": {
+                "User": "65532:65532",
+                "Env": [f"{key}={value}" for key, value in {
+                    **environment,
+                    "FULLMAG_DOCKER_HOST_EXECUTION": "1",
+                }.items()],
+            },
+            "Mounts": [{
+                "Destination": ledger.MOUNT_TARGET,
+                "Type": "bind",
+                "RW": True,
+                "Source": mount_root,
+            }],
+            "HostConfig": {"Privileged": False},
+        }
+        return {
+            "receipt": {
+                "image_id": image,
+                "container_id": container_id,
+                "host_ledger": profile,
+                "host_ledger_attestation": attestation,
+            },
+            "document": document,
+            "run_root": run_root,
+        }
+
+    def test_host_ledger_attestation_requires_launcher_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(verifier.VerificationError, "adapter receipt"):
+                verifier._validate_host_ledger_attestation(
+                    {"image_id": "sha256:" + "a" * 64}, {}, Path(directory), lambda *args, **kwargs: "verified"
+                )
+
+    def test_host_ledger_attestation_rejects_launcher_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._host_ledger_fixture(Path(directory))
+            fixture["receipt"]["host_ledger_attestation"]["ledger_root"] = "/host-ledger/foreign"
+            with self.assertRaisesRegex(verifier.VerificationError, "attestation differs"):
+                verifier._validate_host_ledger_attestation(
+                    fixture["receipt"], fixture["document"], fixture["run_root"],
+                    lambda *args, **kwargs: "verified",
+                )
+
+    def test_host_ledger_attestation_accepts_distinct_ensure_and_verify_receipts_without_maintenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._host_ledger_fixture(Path(directory))
+            self.assertEqual(fixture["receipt"]["host_ledger"]["host_receipt"]["state"], "ready")
+            self.assertEqual(fixture["receipt"]["host_ledger_attestation"]["host_receipt"]["state"], "validated")
+            calls = []
+
+            def fake_docker(*args, **kwargs):
+                calls.append((args, kwargs))
+                return "verified"
+
+            result = verifier._validate_host_ledger_attestation(
+                fixture["receipt"], fixture["document"], fixture["run_root"], fake_docker
+            )
+            self.assertEqual(result["schema"], "fullmag.docker-host-ledger-attestation.v1")
+            self.assertEqual(result["backend_verification"], "PASS")
+            self.assertEqual([call[0][0] for call in calls], ["exec"])
+            self.assertTrue(all("compose" not in call[0] for call in calls))
 
     def test_service_rejects_foreign_network_extra_attachment_and_changed_hostname(self):
         import copy

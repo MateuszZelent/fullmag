@@ -338,6 +338,8 @@ pub struct QuantityDescriptorWire {
     pub location: String,
     pub domain: String,
     pub n_comp: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tensor: Option<crate::QuantityTensorDescriptor>,
     pub normalization_hint: String,
     pub interactive_preview: bool,
     pub supports_preview_2d: bool,
@@ -364,6 +366,7 @@ pub fn build_wire_catalog() -> Vec<QuantityDescriptorWire> {
             location: spec.location.as_str().to_string(),
             domain: spec.domain.as_str().to_string(),
             n_comp: spec.n_comp,
+            tensor: spec.tensor_descriptor(),
             normalization_hint: spec.normalization_hint.as_str().to_string(),
             interactive_preview: spec.interactive_preview,
             supports_preview_2d: spec.supports_preview_2d,

@@ -265,6 +265,7 @@ fn sample_plane(
     let mut occupancy = vec![Occupancy::Empty; pixel_count];
     let mut vectors = vec![[f64::NAN; 3]; pixel_count];
     let mut scalars = vec![f64::NAN; pixel_count];
+    let mut component_values = vec![f64::NAN; pixel_count * field.n_comp()];
     let mut source_entity_ids = vec![None; pixel_count];
     for y in 0..request.resolution[1] {
         for x in 0..request.resolution[0] {
@@ -276,6 +277,8 @@ fn sample_plane(
             };
             occupancy[index] = Occupancy::Occupied;
             source_entity_ids[index] = Some(cell_id);
+            component_values[index * field.n_comp()..(index + 1) * field.n_comp()]
+                .copy_from_slice(value);
             write_value(value, &mut scalars[index], &mut vectors[index]);
         }
     }
@@ -290,8 +293,10 @@ fn sample_plane(
             0,
             0,
         ),
+        n_comp: field.n_comp(),
+        component_values,
         scalar_values: scalars,
-        vector_values: (field.n_comp() >= 3).then_some(vectors),
+        vector_values: (field.n_comp() == 3).then_some(vectors),
         occupancy,
         source_entity_ids,
         overlay: None,
@@ -424,11 +429,13 @@ pub(super) fn finish_reduction(
     let mut occupancy = Vec::with_capacity(accumulators.len());
     let mut scalar_values = Vec::with_capacity(accumulators.len());
     let mut vector_values = Vec::with_capacity(accumulators.len());
+    let mut component_values = Vec::with_capacity(accumulators.len() * n_comp);
     let mut occupied_measure = 0.0;
     for accumulator in accumulators {
         occupied_measure += accumulator.weight();
         match accumulator.finish(reduction, pixel_area) {
             Some(value) => {
+                component_values.extend_from_slice(&value);
                 occupancy.push(
                     if full_measure
                         .is_some_and(|full| accumulator.weight() < full * (1.0 - 1.0e-10))
@@ -447,13 +454,17 @@ pub(super) fn finish_reduction(
                         .sum::<f64>()
                         .sqrt()
                 });
-                vector_values.push(if n_comp >= 3 {
+                vector_values.push(if n_comp == 3 {
                     [value[0], value[1], value[2]]
                 } else {
                     [f64::NAN; 3]
                 });
             }
             None => {
+                component_values.extend(std::iter::repeat_n(
+                    if include_air_as_zero { 0.0 } else { f64::NAN },
+                    n_comp,
+                ));
                 occupancy.push(Occupancy::Empty);
                 scalar_values.push(if include_air_as_zero { 0.0 } else { f64::NAN });
                 vector_values.push([f64::NAN; 3]);
@@ -462,8 +473,10 @@ pub(super) fn finish_reduction(
     }
     Ok(PlanarSampleResult {
         meta: provenance::meta(request, method, &occupancy, occupied_measure, 0, 0, 0, 1),
+        n_comp,
+        component_values,
         scalar_values,
-        vector_values: (n_comp >= 3).then_some(vector_values),
+        vector_values: (n_comp == 3).then_some(vector_values),
         source_entity_ids: vec![None; occupancy.len()],
         occupancy,
         overlay: None,
@@ -497,7 +510,7 @@ fn write_value(value: &[f64], scalar: &mut f64, vector: &mut [f64; 3]) {
             .sum::<f64>()
             .sqrt()
     };
-    if value.len() >= 3 {
+    if value.len() == 3 {
         *vector = [value[0], value[1], value[2]];
     }
 }

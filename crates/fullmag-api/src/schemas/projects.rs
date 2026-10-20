@@ -55,7 +55,7 @@ pub(crate) struct ProjectRunSubmitRequest {
     pub archive_base64: String,
     /// Versioned `run_intent.v1` object; parsed and validated by the application contract.
     pub run_intent: BTreeMap<String, serde_json::Value>,
-    /// Versioned `study_plan.v2` object with typed steps, references and runner controls.
+    /// Versioned `study_plan.v1/v2/v3/v4`; v4 adds typed inspection operations and captured source.
     pub study_plan: BTreeMap<String, serde_json::Value>,
     /// Immutable study catalog: legacy v1, or v2 with pinned execution profiles and field origins.
     pub study_problem_catalog: BTreeMap<String, serde_json::Value>,
@@ -148,6 +148,9 @@ pub(crate) struct ProjectBatchCommandRequest {
     pub expected_revision: u64,
     pub action: ProjectBatchCommandAction,
     pub reason: String,
+    /// Required only when action is `retry`; targets one task in one stable batch case.
+    #[serde(default)]
+    pub retry: Option<ProjectBatchRetryRequest>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
@@ -156,6 +159,17 @@ pub(crate) enum ProjectBatchCommandAction {
     PauseAdmission,
     ResumeAdmission,
     CancelAdmission,
+    Retry,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProjectBatchRetryRequest {
+    pub case_id: String,
+    pub task_id: String,
+    pub retry_id: String,
+    #[schema(minimum = 1)]
+    pub expected_catalog_revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
@@ -174,6 +188,15 @@ pub(crate) struct ProjectBatchCommandResource {
     pub revision: u64,
     pub command_revision: u64,
     pub expansion_state: ProjectBatchExpansionState,
+    /// Present when the command creates or replays one case task attempt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry: Option<ProjectBatchRetryResource>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectBatchRetryResource {
+    pub case_id: String,
+    pub task: ProjectRunTaskRetryResource,
 }
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams, ToSchema)]
@@ -323,7 +346,22 @@ pub(crate) struct ProjectRunTaskResource {
     pub resource_id: Option<String>,
     pub accepted_state_ref: Option<crate::schemas::common::AcceptedStateRefResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false, nullable = false)]
+    pub execution: Option<ProjectRunTaskExecutionResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cancellation_intent: Option<ProjectRunTaskCancellationSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectRunTaskExecutionResource {
+    pub step_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(
+        required = false,
+        nullable = false,
+        value_type = crate::schemas::compute_preview::ExecutionMaterializationSchema
+    )]
+    pub materialization: Option<fullmag_ir::MaterializedExecutionRequestIR>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -389,6 +427,7 @@ impl From<FmsTaskCatalogEntry> for ProjectRunTaskResource {
             artifact_ids: task.artifact_ids,
             resource_id: task.resource_id,
             accepted_state_ref: None,
+            execution: None,
             cancellation_intent: None,
         }
     }
@@ -429,6 +468,37 @@ pub(crate) struct ProjectRunTaskCancellationRequest {
     pub cancellation_id: Option<String>,
     #[serde(default)]
     pub expected_catalog_revision: Option<u64>,
+}
+
+/// Revision-fenced request to create a fresh attempt for one terminal task.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProjectRunTaskRetryRequest {
+    /// Stable idempotency identity for this operator retry request.
+    pub retry_id: String,
+    /// Catalog revision observed by the caller before requesting the retry.
+    pub expected_catalog_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectRunTaskRetryResource {
+    pub disposition: ProjectRunTaskRetryDisposition,
+    pub run_id: String,
+    pub task_id: String,
+    pub retry_id: String,
+    /// Attempt that was terminal when the retry was requested.
+    pub previous_attempt_id: String,
+    pub previous_ownership_epoch: u64,
+    /// Retry ACK reports the durable task state, not solver completion.
+    pub lifecycle: ProjectRunTaskLifecycle,
+    pub catalog_revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProjectRunTaskRetryDisposition {
+    Accepted,
+    Replayed,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

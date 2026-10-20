@@ -1,0 +1,70 @@
+# Overlay after compose.dev.yaml or compose.static.yaml.
+# The operator must render both host paths in the daemon's Linux namespace.
+# The maintenance service is run once before the application services:
+#   docker compose -f compose.dev.yaml -f compose.host-ledger.yaml \
+#     --profile host-ledger-maintenance run --rm host-ledger-maintenance ensure
+services:
+  backend:
+    environment:
+      FULLMAG_DOCKER_HOST_EXECUTION: "1"
+      FULLMAG_DOCKER_HOST_ID: ${FULLMAG_DOCKER_HOST_ID:?Resolved Docker daemon identity is required}
+      FULLMAG_HOST_LEDGER_PROFILE: ${FULLMAG_HOST_LEDGER_PROFILE:?Resolve host-ledger-v1 first}
+      FULLMAG_HOST_LEDGER_PROJECT_ID: ${FULLMAG_HOST_LEDGER_PROJECT_ID:?Resolved project id is required}
+      FULLMAG_HOST_LEDGER_STORAGE_ROOT: ${FULLMAG_HOST_LEDGER_STORAGE_ROOT:?Resolved storage root is required}
+      FULLMAG_HOST_LEDGER_BACKING_IMAGE: ${FULLMAG_HOST_LEDGER_BACKING_IMAGE:?Resolved backing image is required}
+      FULLMAG_HOST_LEDGER_MOUNT_ROOT: ${FULLMAG_HOST_LEDGER_MOUNT_ROOT:?Resolved host mount root is required}
+      FULLMAG_HOST_LEDGER_LOCK_PATH: ${FULLMAG_HOST_LEDGER_LOCK_PATH:?Resolved lock path is required}
+      FULLMAG_HOST_LEDGER_OWNER_MARKER: ${FULLMAG_HOST_LEDGER_OWNER_MARKER:?Resolved owner marker is required}
+      FULLMAG_HOST_LEDGER_SIZE_BYTES: ${FULLMAG_HOST_LEDGER_SIZE_BYTES:?Resolved image size is required}
+      FULLMAG_HOST_LEDGER_MOUNT_TARGET: ${FULLMAG_HOST_LEDGER_MOUNT_TARGET:?Resolved daemon target is required}
+      FULLMAG_HOST_LEDGER_ROOT: /host-ledger/ledger
+    volumes:
+      - type: bind
+        source: ${FULLMAG_HOST_LEDGER_MOUNT_ROOT:?Resolved host mount root is required}
+        target: /host-ledger
+        read_only: false
+        bind: {create_host_path: false}
+
+  host-ledger-maintenance:
+    image: ${FULLMAG_HOST_LEDGER_HELPER_IMAGE:?Use the inspected application image containing bash and nsenter}
+    profiles: [host-ledger-maintenance]
+    user: "0:0"
+    privileged: true
+    pid: host
+    network_mode: none
+    restart: "no"
+    read_only: true
+    entrypoint: ["/bin/bash", "/usr/local/sbin/docker_host_ledger.sh"]
+    command: ["ensure"]
+    environment:
+      FULLMAG_HOST_LEDGER_PROFILE: ${FULLMAG_HOST_LEDGER_PROFILE:?Resolve host-ledger-v1 first}
+      FULLMAG_HOST_LEDGER_PROJECT_ID: ${FULLMAG_HOST_LEDGER_PROJECT_ID:?Resolved project id is required}
+      FULLMAG_HOST_LEDGER_STORAGE_ROOT: ${FULLMAG_HOST_LEDGER_STORAGE_ROOT:?Resolved storage root is required}
+      FULLMAG_HOST_LEDGER_BACKING_IMAGE: ${FULLMAG_HOST_LEDGER_BACKING_IMAGE:?Resolved backing image is required}
+      FULLMAG_HOST_LEDGER_MOUNT_ROOT: ${FULLMAG_HOST_LEDGER_MOUNT_ROOT:?Resolved host mount root is required}
+      FULLMAG_HOST_LEDGER_LOCK_PATH: ${FULLMAG_HOST_LEDGER_LOCK_PATH:?Resolved lock path is required}
+      FULLMAG_HOST_LEDGER_OWNER_MARKER: ${FULLMAG_HOST_LEDGER_OWNER_MARKER:?Resolved owner marker is required}
+      FULLMAG_HOST_LEDGER_SIZE_BYTES: ${FULLMAG_HOST_LEDGER_SIZE_BYTES:?Resolved image size is required}
+      FULLMAG_HOST_LEDGER_MOUNT_TARGET: ${FULLMAG_HOST_LEDGER_MOUNT_TARGET:?Resolved daemon target is required}
+      FULLMAG_HOST_LEDGER_LEDGER_ROOT: ${FULLMAG_HOST_LEDGER_LEDGER_ROOT:?Resolved ledger child is required}
+      FULLMAG_HOST_LEDGER_HOST_PID: ${FULLMAG_HOST_LEDGER_HOST_PID:-1}
+      FULLMAG_HOST_LEDGER_RUNTIME_UID: ${FULLMAG_HOST_LEDGER_RUNTIME_UID:-65532}
+      FULLMAG_HOST_LEDGER_RUNTIME_GID: ${FULLMAG_HOST_LEDGER_RUNTIME_GID:-65532}
+      FULLMAG_HOST_LEDGER_LOCK_WAIT_SECONDS: ${FULLMAG_HOST_LEDGER_LOCK_WAIT_SECONDS:-120}
+    volumes:
+      # The exact daemon-visible source/target path is required by nsenter.
+      - type: bind
+        source: ${FULLMAG_HOST_LEDGER_HELPER_PATH:?Bind the versioned helper read-only}
+        target: /usr/local/sbin/docker_host_ledger.sh
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_HOST_LEDGER_STORAGE_ROOT:?Resolved storage root is required}
+        target: ${FULLMAG_HOST_LEDGER_STORAGE_ROOT:?Resolved storage root is required}
+        read_only: false
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_HOST_LEDGER_MOUNT_ROOT:?Resolved host mount root is required}
+        target: ${FULLMAG_HOST_LEDGER_MOUNT_ROOT:?Resolved host mount root is required}
+        read_only: false
+        bind: {create_host_path: true}

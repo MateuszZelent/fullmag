@@ -1,4 +1,12 @@
 #[cfg(feature = "fem-gpu")]
+pub(super) fn preserve_mixed_body_markers_for_runtime(plan: &fullmag_ir::FemPlanIR) -> bool {
+    plan.mesh_build_report
+        .as_ref()
+        .and_then(|report| report.mixed_layer_topology_certificate_v2.as_ref())
+        .is_some()
+}
+
+#[cfg(feature = "fem-gpu")]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 
 #[cfg(feature = "fem-gpu")]

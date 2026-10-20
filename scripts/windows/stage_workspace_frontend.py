@@ -132,6 +132,67 @@ def _require_real_directory(path: Path, label: str) -> None:
         raise StageError(f"{label} is missing or not a directory: {path}")
 
 
+def is_patch_relative(relative: str | os.PathLike[str]) -> bool:
+    value = os.fspath(relative).replace("\\", "/")
+    return value.startswith("patches/") and value.endswith(".patch")
+
+
+def patch_file_relatives(repo_root: Path) -> tuple[Path, ...]:
+    """Return the deterministic, no-follow inventory of ``patches/**/*.patch``.
+
+    pnpm owns patch declaration and lockfile validation.  The staging helpers
+    only need to transport the patch bytes, so unrelated files under
+    ``patches/`` are ignored.  Every directory and entry is inspected with
+    ``lstat`` before it can be traversed or read; a reparse point anywhere in
+    the tree fails closed.
+    """
+
+    repo_root = Path(repo_root)
+    patches_root = repo_root / "patches"
+    try:
+        exists = _lexists(patches_root)
+    except OSError as error:
+        raise StageError(f"Cannot inspect pnpm patches directory: {patches_root}") from error
+    if not exists:
+        return ()
+    _require_real_directory(patches_root, "pnpm patches directory")
+
+    relatives: list[Path] = []
+    pending = [patches_root]
+    while pending:
+        directory = pending.pop()
+        _require_real_directory(directory, "pnpm patches directory")
+        try:
+            children = sorted(
+                directory.iterdir(), key=lambda path: path.as_posix(), reverse=True
+            )
+        except OSError as error:
+            raise StageError(f"Cannot enumerate pnpm patches directory: {directory}") from error
+        for child in children:
+            if _is_reparse_point(child):
+                raise StageError(f"Pnpm patch tree contains a reparse point: {child}")
+            try:
+                mode = child.lstat().st_mode
+            except OSError as error:
+                raise StageError(f"Cannot inspect pnpm patch entry: {child}") from error
+            if stat.S_ISDIR(mode):
+                pending.append(child)
+                continue
+            if stat.S_ISREG(mode):
+                try:
+                    relative = child.relative_to(repo_root)
+                except ValueError as error:
+                    raise StageError(
+                        f"Pnpm patch path escaped the checkout: {child}"
+                    ) from error
+                if is_patch_relative(relative):
+                    relatives.append(relative)
+                continue
+            if child.name.endswith(".patch"):
+                raise StageError(f"Pnpm patch file is not regular: {child}")
+    return tuple(sorted(relatives, key=lambda path: path.as_posix()))
+
+
 def _is_excluded_directory(name: str) -> bool:
     lowered = name.casefold()
     return lowered in EXCLUDED_DIRECTORY_NAMES or any(
@@ -438,6 +499,9 @@ def _build_source_entries(
         source = repo_root / relative
         _require_regular_file(source, f"workspace metadata {relative}")
         add(source, relative, "workspace-metadata")
+
+    for relative in patch_file_relatives(repo_root):
+        add(repo_root / relative, relative, "pnpm-patch")
 
     control_room = repo_root / CONTROL_ROOM_RELATIVE
     _require_real_directory(control_room, "Control Room source directory")

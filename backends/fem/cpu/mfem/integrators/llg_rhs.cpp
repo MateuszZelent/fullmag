@@ -10,6 +10,7 @@
 #include "fem_common.hpp"
 
 #include <algorithm>
+#include <limits>
 
 namespace fullmag::fem {
 
@@ -35,14 +36,28 @@ void llg_rhs_aos(
     const std::vector<double> *alpha_field,
     bool precession_enabled,
     std::vector<double> &rhs_xyz,
-    double &max_rhs)
+    double &max_rhs,
+    const std::vector<uint8_t> *magnetic_node_mask)
 {
     const size_t n = m_xyz.size() / 3u;
     rhs_xyz.resize(m_xyz.size());
     max_rhs = 0.0;
+    const bool use_magnetic_node_mask =
+        magnetic_node_mask != nullptr && !magnetic_node_mask->empty();
+    if (use_magnetic_node_mask && magnetic_node_mask->size() != n) {
+        std::fill(rhs_xyz.begin(), rhs_xyz.end(), 0.0);
+        max_rhs = std::numeric_limits<double>::infinity();
+        return;
+    }
 
     for (size_t i = 0; i < n; ++i) {
         const size_t base = i * 3u;
+        if (use_magnetic_node_mask && (*magnetic_node_mask)[i] == 0u) {
+            rhs_xyz[base + 0] = 0.0;
+            rhs_xyz[base + 1] = 0.0;
+            rhs_xyz[base + 2] = 0.0;
+            continue;
+        }
         const double mx = m_xyz[base + 0];
         const double my = m_xyz[base + 1];
         const double mz = m_xyz[base + 2];

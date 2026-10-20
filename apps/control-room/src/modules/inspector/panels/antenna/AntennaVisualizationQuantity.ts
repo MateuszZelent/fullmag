@@ -1,4 +1,4 @@
-import type { AntennaInspectionDisplayResource } from "@/kernel/api/apiTypes";
+import { isClosedLoopDisplay, type AntennaInspectionDisplay } from "@/kernel/resources/antennaClosedLoopInspectionModel";
 import type { AntennaFieldQuantity } from "@/kernel/visualization/antennaFieldIntent";
 
 export const ANTENNA_RAW_QUANTITIES = {
@@ -7,13 +7,22 @@ export const ANTENNA_RAW_QUANTITIES = {
   magnetic_field: { label: "Inspection Oersted field H", unit: "A/m", components: 3 },
 } as const;
 
-export function antennaInspectionHasCurrent(display: AntennaInspectionDisplayResource | null): boolean {
+export const ANTENNA_CLOSED_LOOP_QUANTITIES = {
+  ...ANTENNA_RAW_QUANTITIES,
+  electric_potential_per_ampere: { label: "Inspection potential V/Ic", unit: "V/A", components: 1 },
+  current_density_per_ampere: { label: "Inspection current J/Ic", unit: "1/m^2", components: 3 },
+  magnetic_field_per_ampere: { label: "Inspection Oersted field H/Ic", unit: "1/m", components: 3 },
+} as const;
+
+export function antennaInspectionHasCurrent(display: AntennaInspectionDisplay | null): boolean {
+  if (display && isClosedLoopDisplay(display)) return display.capabilities.current_density === true;
   return display?.schema_version === "antenna_inspection_display.v2"
     && display.capabilities.current_density === true
     && display.device_current != null;
 }
 
-export function antennaVisualizationQuantity(quantity: AntennaFieldQuantity, inspection: boolean, currentAvailable: boolean): AntennaFieldQuantity {
+export function antennaVisualizationQuantity(quantity: AntennaFieldQuantity, inspection: boolean, currentAvailable: boolean, closedLoop = false): AntennaFieldQuantity {
+  if (inspection && closedLoop) return quantity;
   if (inspection) {
     switch (quantity) {
       case "electric_potential_per_ampere":

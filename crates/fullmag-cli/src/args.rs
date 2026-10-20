@@ -171,6 +171,18 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = false)]
         submit_only: bool,
     },
+    /// Capture a trusted readonly DSL script and submit its typed inspection pipeline.
+    RunScriptAccepted {
+        script: PathBuf,
+        #[arg(long)] project: PathBuf,
+        /// Published execution_profile.v1 JSON; Submit verifies its immutable version.
+        #[arg(long)] execution_profile: PathBuf,
+        /// Explicit CPU/memory/storage minimum reservation JSON.
+        #[arg(long)] resources: PathBuf,
+        #[arg(long)] idempotency_key: String,
+        #[arg(long)] api_url: String,
+        #[arg(long, default_value_t=false)] submit_only: bool,
+    },
     /// Deprecated compatibility alias for `run-json`.
     #[command(hide = true)]
     SubmitRunJson {
@@ -366,6 +378,31 @@ pub(crate) enum RuntimeCommand {
         #[arg(long)]
         config_sha256: String,
     },
+    /// Recover one exactly pinned unknown native service owner after a durable
+    /// empty-store and host-quiescence proof.
+    ServiceRecover {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        request_sha256: String,
+    },
+    /// Recover one exactly pinned stopped Docker service container namespace
+    /// after an authoritative managed teardown attestation.
+    #[command(name = "service-recover-container", hide = true)]
+    ServiceRecoverContainer {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        request_sha256: String,
+        #[arg(long)]
+        attestation: PathBuf,
+        #[arg(long)]
+        attestation_sha256: String,
+    },
     /// Internal managed proof of one-shot durable handoff acceptance.
     #[command(hide = true)]
     VerifyDevelopmentHandoffCommit {
@@ -410,6 +447,17 @@ pub(crate) enum RuntimeCommand {
         target: String,
         #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u64).range(1..=30))]
         timeout_seconds: u64,
+    },
+    /// Internal read-only cold integrity gate for one pinned completed inspection.
+    #[command(hide = true)]
+    VerifySavedInspection {
+        #[arg(long)] store: PathBuf,
+        #[arg(long)] project_id: String,
+        #[arg(long)] run_id: String,
+        #[arg(long)] task_id: String,
+        #[arg(long)] attempt_id: String,
+        #[arg(long)] ownership_epoch: u64,
+        #[arg(long)] object_ref: String,
     },
     /// Internal cold integrity gate for an explicitly pinned saved FEM tensor.
     #[command(hide = true)]

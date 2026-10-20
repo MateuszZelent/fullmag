@@ -19,6 +19,8 @@ interface SlotHostProps {
   slotId: SlotId;
   /** Explicit manifest override — if null, auto-discover from kernel registry. */
   moduleManifest?: ModuleManifest | null;
+  /** Stable fallback for a lazy module while its client chunk is loading. */
+  loadingFallback?: ReactNode;
 }
 
 export function resolveSlotModuleManifest(
@@ -39,6 +41,7 @@ const lazyCache = new Map<string, ComponentType<ModuleProps>>();
 interface ModuleErrorBoundaryProps {
   children: ReactNode;
   manifest: ModuleManifest;
+  loadingFallback?: ReactNode;
 }
 
 interface ModuleErrorBoundaryState {
@@ -84,7 +87,7 @@ class ModuleErrorBoundary extends Component<
     return (
       <Suspense
         key={this.state.retryKey}
-        fallback={<div className="fm-slot__loading">Loading…</div>}
+        fallback={this.props.loadingFallback ?? <div className="fm-slot__loading">Loading…</div>}
       >
         {this.props.children}
       </Suspense>
@@ -108,6 +111,7 @@ function ensureLazyCached(manifest: ModuleManifest): void {
  * react-hooks/static-components lint violations with dynamic component types.
  */
 export function MountedModule({
+  loadingFallback,
   manifest,
   kernel,
   slotId,
@@ -115,6 +119,7 @@ export function MountedModule({
   manifest: ModuleManifest;
   kernel: ReturnType<typeof useKernel>;
   slotId: SlotId;
+  loadingFallback?: ReactNode;
 }) {
   ensureLazyCached(manifest);
   const [config, setConfigState] = useState<ModuleConfig>({});
@@ -127,6 +132,7 @@ export function MountedModule({
   return (
     <ModuleErrorBoundary
       key={`${slotId}:${manifest.id}`}
+      loadingFallback={loadingFallback}
       manifest={manifest}
     >
       {createElement(lazyCache.get(manifest.id)!, {
@@ -148,7 +154,7 @@ export function MountedModule({
  * 2. First module registered for this slotId in the kernel ModuleRegistry
  * 3. Empty placeholder
  */
-export function SlotHost({ slotId, moduleManifest }: SlotHostProps) {
+export function SlotHost({ loadingFallback, slotId, moduleManifest }: SlotHostProps) {
   const kernel = useKernel();
   const activeModuleTab = useLayoutSelector((layout) => layout.activeModuleTab);
 
@@ -170,7 +176,12 @@ export function SlotHost({ slotId, moduleManifest }: SlotHostProps) {
 
   return (
     <section className="fm-slot" data-slot-id={slotId}>
-      <MountedModule kernel={kernel} manifest={manifest} slotId={slotId} />
+      <MountedModule
+        kernel={kernel}
+        loadingFallback={loadingFallback}
+        manifest={manifest}
+        slotId={slotId}
+      />
     </section>
   );
 }

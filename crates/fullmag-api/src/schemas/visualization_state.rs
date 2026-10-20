@@ -334,6 +334,19 @@ pub enum PlanarViewScopeState {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanarFieldComponent {
+    C0,
+    C1,
+    C2,
+    C3,
+    C4,
+    C5,
+    C6,
+    C7,
+    C8,
+    Frobenius,
+    SpinFlowX,
+    SpinFlowY,
+    SpinFlowZ,
     X,
     Y,
     Z,
@@ -1037,6 +1050,7 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
                 surface_mono_color: "var(--fm-airbox-fill)".to_string(),
                 surface_opacity: 0.18,
                 surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
+                tensor_projection: None,
                 surface_visible: false,
                 viewport_colorbar_visible: false,
                 vector_alpha: 1.0,
@@ -1094,6 +1108,9 @@ pub struct VisualizationResolvedTargetSettings {
     pub surface_mono_color: String,
     pub surface_opacity: f64,
     pub surface_projection_mode: SurfaceFieldProjectionMode,
+    /// Explicit flow-major tensor projection; absent for scalar/vector fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tensor_projection: Option<String>,
     pub surface_visible: bool,
     pub viewport_colorbar_visible: bool,
     pub vector_alpha: f64,
@@ -1147,6 +1164,12 @@ pub struct VisualizationTargetStyleOverride {
     pub surface_color_source: Option<SurfaceColorSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_projection_mode: Option<SurfaceFieldProjectionMode>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tensor_projection: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_mono_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

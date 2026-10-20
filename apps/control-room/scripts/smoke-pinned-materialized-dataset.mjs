@@ -30,6 +30,14 @@ const MANIFEST_OBJECT_REF = sha256Hex("fullmag.p6-65.legacy-manifest-f64.v1");
 const F32_MANIFEST_OBJECT_REF = sha256Hex("fullmag.p6-65.manifest-f32.v1");
 const FORGED_MANIFEST_OBJECT_REF = sha256Hex("fullmag.p6-65.forged-manifest.v1");
 const FORGED_ARTIFACT_OBJECT_REF = sha256Hex("fullmag.p6-65.forged-artifact.v1");
+const SAVED_ANTENNA_FIELDS = [
+  { variant: "potential", quantity: "V_electric", unit: "V", role: "source_nodes", components: 1, values: [-2, 0, 1, 3] },
+  { variant: "current", quantity: "J_charge", unit: "A/m^2", role: "tet4_cell_local_nodes", components: 3, values: [2, 0, 0, 0, 4, 0, 0, 0, 6, 3, 4, 0] },
+  { variant: "antenna-field", quantity: "H_ant", unit: "A/m", role: "sample_nodes", components: 3, values: [-1, 0, 0, 0, -3, 0, 0, 0, 5, 2, 3, 0] },
+].map((field) => {
+  const manifest = sha256Hex(`saved-antenna-${field.variant}-manifest.v1`);
+  return { ...field, manifest, artifactId: `materialized-dataset-${manifest}` };
+});
 const F64_TENSOR_OBJECT_REF = sha256Hex(savedTensorPayload("f64"));
 const F32_TENSOR_OBJECT_REF = sha256Hex(savedTensorPayload("f32"));
 const SAVED_TOPOLOGY_BUFFER = makeSavedTopologyBuffer();
@@ -41,6 +49,10 @@ const F32_LAYOUT_DIGEST = sha256Hex("fullmag.p6-65.layout-f32.v1");
 const POSITIVE_ARTIFACT_ID = `materialized-dataset-${MANIFEST_OBJECT_REF}`;
 const F32_ARTIFACT_ID = `materialized-dataset-${F32_MANIFEST_OBJECT_REF}`;
 const FORGED_ARTIFACT_ID = `materialized-dataset-${FORGED_ARTIFACT_OBJECT_REF}`;
+function savedVariantForArtifact(artifactId) {
+  return SAVED_ANTENNA_FIELDS.find((field) => field.artifactId === artifactId)?.variant
+    ?? (artifactId === F32_ARTIFACT_ID ? "f32" : "f64");
+}
 const MATERIALIZED_DATASET_SCHEMA = "fullmag.materialized_dataset.v1";
 const MATERIALIZED_DATASET_RESOURCE_SCHEMA =
   "fullmag.analysis.materialized_dataset.v1";
@@ -158,7 +170,8 @@ async function main() {
     }
     if (
       url.pathname.startsWith("/v2/sessions/current/") &&
-      !((state.collectionMismatch && method === "GET" && url.pathname === "/v2/sessions/current/status") ||
+      !(isHostTelemetryRead(method, url.pathname) ||
+        (state.collectionMismatch && method === "GET" && url.pathname === "/v2/sessions/current/status") ||
         (state.activeSessionPhase && method === "GET") ||
         isVisualizationClientAck)
     ) {
@@ -299,8 +312,13 @@ async function main() {
     });
     assertPositivePinnedInspector(positive.inspectorText);
     await assertBoundedValues(page, state);
-    await page.getByRole("button", { name: "Apply", exact: true }).isDisabled().then((disabled) => assertCondition(disabled, "Pinned readonly dataset exposed Apply."));
-    await page.getByRole("button", { name: "Focus", exact: true }).isDisabled().then((disabled) => assertCondition(disabled, "Project Inspector exposed runtime Focus."));
+    for (const name of ["Apply", "Focus"]) {
+      const actions = page.getByRole("button", { name, exact: true });
+      // Read-only Inspector actions may be omitted or disabled, but never executable.
+      for (let index = 0, count = await actions.count(); index < count; index += 1) {
+        assertCondition(await actions.nth(index).isDisabled(), `Pinned readonly dataset exposed executable ${name}.`);
+      }
+    }
     await page.getByRole("button", { name: "Hide Inspector", exact: true }).click();
     await page.getByRole("button", { name: "Show Inspector", exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
     await page.getByRole("button", { name: "Show Inspector", exact: true }).click();
@@ -365,7 +383,7 @@ async function main() {
     await openSavedResults(page, "loading");
     await page.getByText("No saved runs in this project.", { exact: true }).waitFor({ state: "visible", timeout: timeoutMs });
     await page.locator(".fm-inspector__empty").waitFor({ state: "visible", timeout: timeoutMs });
-    const mismatchCurrent = state.requests.slice(mismatchRequestOffset).filter((request) => request.path.startsWith("/v2/sessions/current/"));
+    const mismatchCurrent = state.requests.slice(mismatchRequestOffset).filter((request) => request.path.startsWith("/v2/sessions/current/") && !isHostTelemetryRead(request.method, request.path));
     assertCondition(mismatchCurrent.length > 0, "Identity mismatch did not exercise the status bootstrap.");
     assertCondition(mismatchCurrent.every((request) => request.method === "GET" && request.path === "/v2/sessions/current/status"), "Mismatched cached session identity mounted runtime resources.");
     assert.equal(await page.locator(".fm-ribbon__tab").count(), 0, "Mismatched status enabled session ribbon.");
@@ -449,6 +467,37 @@ async function main() {
     await page.waitForTimeout(250);
     const savedF32CameraRestored = await readViewportCameraSnapshot(page);
     assert.deepEqual(savedF32CameraRestored, savedF32CameraAfter, "Returning to saved F32 did not restore its selection-scoped camera.");
+
+    for (const field of SAVED_ANTENNA_FIELDS) {
+      await page.getByRole("tab", { name: "Saved", exact: true }).click({ force: true });
+      const before = await readWebglAuditCounters(page);
+      const selected = await selectPinnedArtifact(page, { artifactId: field.artifactId, projectId: activeProjectId, runId: TARGET_RUN_ID });
+      for (const [label, expected] of [["Quantity", field.quantity], ["Unit", field.unit], ["Elements / components", `4 / ${field.components}`]]) {
+        const row = selected.inspector.locator("dl > div").filter({ has: page.locator("dt", { hasText: new RegExp(`^${label}$`) }) });
+        assert.equal((await row.locator("dd").innerText()).trim(), expected, `Saved ${field.quantity} Inspector changed ${label}.`);
+      }
+      await assertSavedViewportRendered(page, state, field.variant, before);
+      const viewportQuantity = page.locator(`.fm-viewport-3d [data-quantity-id="${field.quantity}"]`);
+      await viewportQuantity.waitFor({ state: "visible", timeout: timeoutMs });
+      assert.equal(await page.locator(".fm-viewport-3d__colorbar-quantity").first().innerText(), field.quantity, "Saved colorbar displayed another quantity.");
+      assert.doesNotMatch(await page.locator(".fm-viewport-3d").innerText(), /q:m top:/, "Saved viewport exposed unrelated live field diagnostics.");
+      if (field.components === 1) {
+        assert.equal(await page.locator(".fm-viewport-3d__colorbar-component").count(), 0, "Scalar potential was labelled as a vector magnitude.");
+        assert.match(await page.locator(".fm-viewport-3d__colorbar-limit").first().innerText(), /[-−]/, "Saved potential lost its negative range.");
+      }
+      assert.equal(liveResourceRequestCount(state), liveBeforeSaved, `Saved ${field.quantity} fetched live data.`);
+      assert.equal(state.cameraMutationRequests.length, cameraMutationsBeforeSaved, `Saved ${field.quantity} mutated live visualization.`);
+      await assertSavedLegendLayout(page, state, field.variant);
+      await captureScreenshot(page, state, `saved-${field.variant}.png`);
+      if (field.components === 1) {
+        await page.setViewportSize({ height: 1100, width: 1024 });
+        await page.waitForTimeout(250);
+        await assertSavedLegendLayout(page, state, "potential-narrow", true);
+        await captureScreenshot(page, state, "saved-potential-narrow.png");
+        await page.setViewportSize({ height: 1100, width: 1440 });
+        await page.waitForTimeout(250);
+      }
+    }
 
     state.savedGeometryMode = "mismatch";
     const mismatchSaved = await reloadSavedViewport(page, state, POSITIVE_ARTIFACT_ID, activeProjectId);
@@ -604,9 +653,16 @@ async function main() {
   );
 }
 
+// CPU/GPU handlers report the host independently of any live session.
+// No other diagnostic, data request or mutation receives this exemption.
+function isHostTelemetryRead(method, path) {
+  return method === "GET" && (path === "/v2/sessions/current/diagnostics/cpu" || path === "/v2/sessions/current/diagnostics/gpu");
+}
+
 function createFixtureState() {
   return {
     currentProjectId: null,
+    savedLegendLayouts: [],
     forgeManifestForArtifact: null,
     projectCreateCount: 0,
     requests: [],
@@ -735,7 +791,7 @@ async function selectPinnedArtifact(page, { artifactId, projectId, runId }) {
     { timeout: timeoutMs },
   );
 
-  if (artifactId === POSITIVE_ARTIFACT_ID || artifactId === F32_ARTIFACT_ID) {
+  if (artifactId === POSITIVE_ARTIFACT_ID || artifactId === F32_ARTIFACT_ID || SAVED_ANTENNA_FIELDS.some((field) => field.artifactId === artifactId)) {
     await status.filter({ hasText: "Manifest verified." }).waitFor({
       state: "visible",
       timeout: timeoutMs,
@@ -945,7 +1001,7 @@ async function assertSavedViewportRendered(page, state, variant, auditBefore = n
   await page.getByRole("tab", { name: "3D Viewport", exact: true }).click({ force: true });
   const canvas = page.locator(".fm-viewport-3d canvas").first();
   await canvas.waitFor({ state: "visible", timeout: timeoutMs });
-  const artifactId = variant === "f32" ? F32_ARTIFACT_ID : POSITIVE_ARTIFACT_ID;
+  const artifactId = SAVED_ANTENNA_FIELDS.find((field) => field.variant === variant)?.artifactId ?? (variant === "f32" ? F32_ARTIFACT_ID : POSITIVE_ARTIFACT_ID);
   await waitForCondition(
     () => state.savedGeometryRequests.some((request) => request.kind === "geometry" && request.artifactId === artifactId) &&
       state.savedBinaryRequests.some((request) => request.kind === "topology" && request.artifactId === artifactId) &&
@@ -961,6 +1017,27 @@ async function assertSavedViewportRendered(page, state, variant, auditBefore = n
   assert.equal(proof.active_node_count, 3, `Saved ${variant} viewport did not preserve its inactive support mask.`);
   assert.equal(proof.active_color_mask_seen, true, `Saved ${variant} viewport did not upload distinct active-node colors with the support mask applied.`);
   return proof;
+}
+
+async function assertSavedLegendLayout(page, state, phase, narrow = false) {
+  const proof = await page.locator(".fm-viewport-3d").evaluate((viewport) => {
+    const legend = viewport.querySelector(".fm-viewport-3d__colorbar-stack");
+    if (!legend) throw new Error("Saved field legend is missing.");
+    const view = viewport.getBoundingClientRect();
+    const rect = legend.getBoundingClientRect();
+    const reserve = 12 * parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const canvas = viewport.querySelector("canvas");
+    const gl = canvas?.getContext("webgl2") ?? canvas?.getContext("webgl");
+    return { width: view.width, legendWidth: rect.width,
+      inside: rect.left >= view.left && rect.right <= view.right && rect.top >= view.top && rect.bottom <= view.bottom,
+      overlapsOrientation: rect.left < view.left + reserve && rect.bottom > view.bottom - reserve,
+      webglReady: Boolean(canvas && gl && !gl.isContextLost() && gl.drawingBufferWidth > 0 && gl.drawingBufferHeight > 0) };
+  });
+  assert.ok(proof.inside && proof.legendWidth > 0, "Saved legend is clipped by its viewport.");
+  assert.equal(proof.overlapsOrientation, false, "Saved legend overlaps the direction reference area.");
+  assert.equal(proof.webglReady, true, "Saved legend layout lost the WebGL drawing buffer.");
+  if (narrow) assert.ok(proof.width <= 512, `Narrow legend case did not exercise its container breakpoint: ${proof.width}px.`);
+  state.savedLegendLayouts.push({ phase, ...proof });
 }
 
 async function readViewportCameraSnapshot(page) {
@@ -1267,7 +1344,7 @@ async function installFixtureRoutes(page, state) {
     if (method === "GET" && savedGeometryMatch) {
       const projectId = decodeURIComponent(savedGeometryMatch[1]);
       const artifactId = decodeURIComponent(savedGeometryMatch[6]);
-      const variant = artifactId === F32_ARTIFACT_ID ? "f32" : "f64";
+      const variant = savedVariantForArtifact(artifactId);
       const kind = savedGeometryMatch[7] ?? "geometry";
       state.savedGeometryRequests.push({ artifactId, kind, projectId });
       if (kind === "geometry") {
@@ -1311,7 +1388,7 @@ async function installFixtureRoutes(page, state) {
       const artifactId = decodeURIComponent(sliceMatch[6]);
       if (state.activeSessionPhase) {
         assert.equal(projectId, state.currentProjectId);
-        assert.ok([POSITIVE_ARTIFACT_ID, F32_ARTIFACT_ID].includes(artifactId));
+        assert.ok([POSITIVE_ARTIFACT_ID, F32_ARTIFACT_ID, ...SAVED_ANTENNA_FIELDS.map((field) => field.artifactId)].includes(artifactId));
         state.savedBinaryRequests.push({ artifactId, kind: "slice" });
       } else {
         assert.equal(projectId, "project-pinned-materialized-dataset-1");
@@ -1321,7 +1398,7 @@ async function installFixtureRoutes(page, state) {
       if (held) await new Promise((release) => { state.releaseSlice = release; });
       try {
         const sliceBody = state.activeSessionPhase
-          ? activeDatasetSliceBody(url.searchParams, artifactId === F32_ARTIFACT_ID ? "f32" : "f64", state.corruptSlice, projectId)
+          ? activeDatasetSliceBody(url.searchParams, savedVariantForArtifact(artifactId), state.corruptSlice, projectId)
           : datasetSliceBody(url.searchParams, state.corruptSlice);
         await route.fulfill({
           status: 200,
@@ -1354,7 +1431,7 @@ async function installFixtureRoutes(page, state) {
       });
       if (state.activeSessionPhase) {
         await fulfillJson(route, activeMaterializedDatasetResource(
-          artifactId === F32_ARTIFACT_ID ? "f32" : "f64",
+          savedVariantForArtifact(artifactId),
           decodeURIComponent(materializedMatch[1]),
         ));
       } else {
@@ -1533,6 +1610,7 @@ function solutionSetArtifactsPage(projectId = "project-pinned-materialized-datas
     artifact(POSITIVE_ARTIFACT_ID, MANIFEST_OBJECT_REF),
     artifact(F32_ARTIFACT_ID, F32_MANIFEST_OBJECT_REF),
     artifact(FORGED_ARTIFACT_ID, FORGED_ARTIFACT_OBJECT_REF),
+    ...(_state?.activeSessionPhase ? SAVED_ANTENNA_FIELDS.map((field) => artifact(field.artifactId, field.manifest)) : []),
   ];
   return {
     items,
@@ -1792,6 +1870,27 @@ function activeMaterializedDatasetResource(variant, projectId, options = {}) {
       descriptor,
     },
   };
+  const antenna = SAVED_ANTENNA_FIELDS.find((field) => field.variant === variant);
+  if (antenna) {
+    const layout = `sha256:${sha256Hex(`saved-antenna-${variant}-layout.v1`)}`;
+    const payload = savedTensorPayload(variant);
+    resource.artifact_id = antenna.artifactId;
+    resource.manifest_object_ref = antenna.manifest;
+    source.artifact_id = `tensor:${antenna.quantity}:f64`;
+    source.tensor_object_ref = sha256Hex(payload);
+    resource.field_id = resource.field.field_id = `field:${antenna.quantity}`;
+    resource.dataset.dataset_id = `dataset:${antenna.quantity}`;
+    resource.dataset.definition_id = resource.definition.definition_id = `definition:${antenna.quantity}`;
+    resource.field.producer_id = "fullmag.closed-loop-inspection";
+    resource.field.producer_version = "2";
+    resource.field.tensor_byte_length = String(payload.length);
+    Object.assign(resource.field.tensor_artifact, { artifact_id: source.artifact_id, object_ref: source.tensor_object_ref, byte_length: String(payload.length) });
+    Object.assign(resource.field.coverage, { component_count: String(antenna.components), total_bytes: String(payload.length) });
+    Object.assign(descriptor, { quantity_id: antenna.quantity, unit: antenna.unit, tensor_rank: antenna.components === 1 ? "0" : "1", normalization: "none", layout_digest: layout,
+      carrier_id: `carrier:${antenna.role}:${layout}`, component_axis: antenna.components === 1 ? null : "component",
+      axes: [{ axis_id: "node", unit: "1", length: "4" }, ...(antenna.components === 1 ? [] : [{ axis_id: "component", unit: "1", length: "3" }])] });
+    Object.assign(descriptor.function_space, { space_id: `space:${antenna.role}:${layout}`, family: "owned_sample_values", order: "0", vector_dimension: String(antenna.components), basis_id: `basis:${antenna.role}:${layout}` });
+  }
   if (forged) resource.manifest_object_ref = FORGED_MANIFEST_OBJECT_REF;
   return resource;
 }
@@ -1800,6 +1899,8 @@ function activeSavedGeometryResource(variant, projectId) {
   const dataset = activeMaterializedDatasetResource(variant, projectId);
   const geometryManifestObjectRef = sha256Hex(`fullmag.p6-65.geometry-manifest-${variant}.v1`);
   const geometryPayloadObjectRef = sha256Hex(`fullmag.p6-65.geometry-payload-${variant}.v1`);
+  const geometrySchema = SAVED_ANTENNA_FIELDS.some((field) => field.variant === variant)
+    ? "fullmag.owned_sample_field_geometry.v1" : "fullmag.fem_p1_field_geometry.v1";
   return {
     schema_version: "fullmag.persistence.saved_field_geometry.v1",
     project_id: projectId,
@@ -1834,12 +1935,12 @@ function activeSavedGeometryResource(variant, projectId) {
       accepted_state: null,
     },
     geometry_payload: {
-      schema_id: "fullmag.fem_p1_field_geometry.v1",
+      schema_id: geometrySchema,
       object_ref: geometryPayloadObjectRef,
       byte_length: "512",
       accepted_state: null,
     },
-    geometry_schema_version: "fullmag.fem_p1_field_geometry.v1",
+    geometry_schema_version: geometrySchema,
     tensor_artifact: {
       artifact_id: dataset.field.tensor_artifact.artifact_id,
       schema_id: dataset.field.tensor_artifact.schema_id,
@@ -1880,7 +1981,7 @@ function activeSavedGeometryResource(variant, projectId) {
 function activeDatasetSliceBody(query, variant, corrupt, projectId) {
   const dataset = activeMaterializedDatasetResource(variant, projectId);
   const f32 = variant === "f32";
-  const expectedBytes = f32 ? 48 : 96;
+  const expectedBytes = Number(dataset.field.coverage.total_bytes);
   assert.equal(query.get("expected_manifest_object_ref"), dataset.manifest_object_ref);
   const byteBudget = Number(query.get("max_response_bytes"));
   // Inspector requests a bounded 64 KiB preview; the viewport requests the
@@ -1913,7 +2014,7 @@ function activeDatasetSliceBody(query, variant, corrupt, projectId) {
       element_offset: "0",
       element_count: "4",
       total_elements: "4",
-      component_count: "3",
+      component_count: dataset.field.coverage.component_count,
       precision: f32 ? "f32" : "f64",
       byte_order: "little_endian",
       payload_bytes: String(payload.length),
@@ -2045,8 +2146,9 @@ function makeSavedSupportBuffer() {
 }
 
 function savedTensorPayload(variant) {
-  const buffer = Buffer.alloc(variant === "f32" ? 48 : 96);
-  const values = variant === "f32"
+  const antenna = SAVED_ANTENNA_FIELDS.find((field) => field.variant === variant);
+  const buffer = Buffer.alloc(antenna ? antenna.values.length * 8 : variant === "f32" ? 48 : 96);
+  const values = antenna ? antenna.values : variant === "f32"
     ? [0.9, 0.1, 0.2, 0.2, 0.8, 0.3, 0.3, 0.4, 0.95, 0.7, 0.6, 0.1]
     : [1, 0, 0, 0.5, 0.25, 0.75, 0, 1, 0.5, 0.25, 0.5, 1];
   values.forEach((value, index) => {
@@ -2397,10 +2499,16 @@ function assertResourceRequestBounds(state) {
     const requestCount = state.liveResourceRequests.filter((request) => request.mount === mount).length;
     assert.ok(requestCount <= 64, `Active-session resource request count exceeded the fixture bound for ${mount}.`);
   }
-  for (const artifactId of [POSITIVE_ARTIFACT_ID, F32_ARTIFACT_ID]) {
+  for (const artifactId of [POSITIVE_ARTIFACT_ID, F32_ARTIFACT_ID, ...SAVED_ANTENNA_FIELDS.map((field) => field.artifactId)]) {
     const geometryCount = state.savedGeometryRequests.filter((entry) => entry.artifactId === artifactId && entry.kind === "geometry").length;
     const binaryCount = state.savedBinaryRequests.filter((entry) => entry.artifactId === artifactId).length;
-    assert.ok(geometryCount <= 3, `Saved geometry request count exceeded the fixture bound for ${artifactId}.`);
+    const unavailableAttempts = state.responses.filter((entry) => entry.method === "GET" && entry.status === 503 &&
+      entry.path.endsWith(`/artifacts/${encodeURIComponent(artifactId)}/saved-field-geometry`)).length;
+    // ControlRoomApi permits two retries for a transient GET failure. Count those
+    // transport attempts separately from the unchanged three logical-load bound.
+    assert.ok(unavailableAttempts <= 3, `Saved geometry 503 retry count exceeded the client bound for ${artifactId}.`);
+    const logicalGeometryCount = geometryCount - Math.max(0, unavailableAttempts - 1);
+    assert.ok(logicalGeometryCount <= 3, `Saved geometry logical request count exceeded the fixture bound for ${artifactId}.`);
     assert.ok(binaryCount <= 9, `Saved binary request count exceeded the fixture bound for ${artifactId}.`);
     for (const kind of ["topology", "support"]) {
       const requestCount = state.savedGeometryRequests.filter((entry) => entry.artifactId === artifactId && entry.kind === kind).length;
@@ -2441,6 +2549,7 @@ async function writeReport({
     workspace_url: url,
     screenshots: state.screenshots,
     viewport_proofs: state.viewportProofs,
+    saved_legend_layouts: state.savedLegendLayouts,
     camera_snapshots: state.cameraSnapshots,
     screenshot_error: state.screenshotError ?? null,
     proof,

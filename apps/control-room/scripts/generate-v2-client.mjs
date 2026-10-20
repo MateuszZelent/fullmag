@@ -1,11 +1,26 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(scriptDir, "..");
-const generatedDir = join(appRoot, "src", "kernel", "api", "generated");
-const openApiPath = join(generatedDir, "openapi-v2.json");
+const defaultGeneratedDir = join(appRoot, "src", "kernel", "api", "generated");
+const { values } = parseArgs({
+  options: {
+    input: { type: "string" },
+    "output-dir": { type: "string" },
+  },
+  allowPositionals: false,
+});
+const generatedDir = values["output-dir"] ?? defaultGeneratedDir;
+if (!isAbsolute(generatedDir)) {
+  throw new Error("OpenAPI client output directory must be absolute");
+}
+const openApiPath = values.input ?? join(defaultGeneratedDir, "openapi-v2.json");
+if (!isAbsolute(openApiPath)) {
+  throw new Error("OpenAPI client input path must be absolute");
+}
 const clientOut = join(generatedDir, "openapi-v2-client.ts");
 const pathsOut = join(generatedDir, "openapi-v2-paths.ts");
 

@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <set>
 #include <unordered_set>
 #include <utility>
 
@@ -488,6 +489,257 @@ bool import_mesh_descriptor(
     return true;
 }
 
+bool validate_mixed_body_certificate_v2(
+    const fullmag_fem_plan_desc &plan,
+    const fullmag_fem_mixed_body_certificate_v2 *certificate,
+    std::string &error)
+{
+    error.clear();
+    FemMeshRuntimeState mesh;
+    if (!import_mesh_descriptor(plan.mesh, mesh, error)) {
+        return false;
+    }
+
+    std::unordered_set<uint32_t> magnetic_markers;
+    bool has_magnetic_prism = false;
+    bool has_magnetic_tet = false;
+    for (size_t cell = 0; cell < mesh.cell_types.size(); ++cell) {
+        if (mesh.cell_markers[cell] == 0u) {
+            continue;
+        }
+        magnetic_markers.insert(mesh.cell_markers[cell]);
+        has_magnetic_prism = has_magnetic_prism ||
+            mesh.cell_types[cell] == FULLMAG_FEM_CELL_PRISM6;
+        has_magnetic_tet = has_magnetic_tet ||
+            mesh.cell_types[cell] == FULLMAG_FEM_CELL_TET4;
+    }
+    // The v2 certificate is required only for the newly admitted mixed-prism
+    // route.  Legacy all-tet multi-marker meshes already have their own
+    // conforming-domain realization and must remain valid without this
+    // append-only certificate.  A supplied certificate is still validated for
+    // every topology; this condition only controls the null-certificate gate.
+    const bool mixed_body_topology = has_magnetic_prism &&
+        (magnetic_markers.size() > 1u || has_magnetic_tet);
+    if (certificate == nullptr) {
+        if (mixed_body_topology) {
+            error =
+                "mixed magnetic prism/tet or multi-marker topology requires "
+                "native mixed-body ownership certificate v2";
+        }
+        return !mixed_body_topology;
+    }
+
+    if (certificate->abi_version != FULLMAG_FEM_MIXED_BODY_CERTIFICATE_V2_ABI_VERSION ||
+        certificate->struct_size != sizeof(fullmag_fem_mixed_body_certificate_v2)) {
+        error = "mixed-body ownership certificate ABI version/size mismatch";
+        return false;
+    }
+    if (certificate->body_count == 0u ||
+        certificate->body_count > static_cast<uint64_t>(mesh.n_elements)) {
+        error = "mixed-body ownership certificate body_count is outside the mesh extent";
+        return false;
+    }
+    if (certificate->body_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
+        !validate_span(certificate->body_markers, certificate->body_count,
+            "mixed-body body_markers", error) ||
+        !validate_span(certificate->body_node_offsets, certificate->body_node_offsets_len,
+            "mixed-body body_node_offsets", error) ||
+        !validate_span(certificate->body_node_indices, certificate->body_node_index_count,
+            "mixed-body body_node_indices", error)) {
+        return false;
+    }
+    if (certificate->body_node_offsets_len != certificate->body_count + 1u) {
+        error = "mixed-body body_node_offsets length must equal body_count plus one";
+        return false;
+    }
+    if (certificate->body_node_index_count >
+        static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        error = "mixed-body body_node_indices length exceeds addressable memory";
+        return false;
+    }
+
+    std::unordered_set<uint32_t> certificate_markers;
+    std::vector<int32_t> node_owner(mesh.n_nodes, -1);
+    std::vector<uint8_t> node_seen_in_magnetic_cell(mesh.n_nodes, 0u);
+    std::vector<std::array<double, 3>> body_min(
+        static_cast<size_t>(certificate->body_count),
+        std::array<double, 3>{std::numeric_limits<double>::infinity(),
+         std::numeric_limits<double>::infinity(),
+         std::numeric_limits<double>::infinity()});
+    std::vector<std::array<double, 3>> body_max(
+        static_cast<size_t>(certificate->body_count),
+        std::array<double, 3>{-std::numeric_limits<double>::infinity(),
+         -std::numeric_limits<double>::infinity(),
+         -std::numeric_limits<double>::infinity()});
+
+    for (uint64_t body = 0u; body < certificate->body_count; ++body) {
+        const uint32_t marker = certificate->body_markers[body];
+        if (marker == 0u || !certificate_markers.insert(marker).second) {
+            error = "mixed-body certificate body markers must be unique and nonzero";
+            return false;
+        }
+        const uint64_t start = certificate->body_node_offsets[body];
+        const uint64_t end = certificate->body_node_offsets[body + 1u];
+        if (start >= end || end > certificate->body_node_index_count) {
+            error = "mixed-body certificate node offsets are empty, non-monotonic, or out of range";
+            return false;
+        }
+        for (uint64_t cursor = start; cursor < end; ++cursor) {
+            const uint32_t node = certificate->body_node_indices[cursor];
+            if (node >= mesh.n_nodes) {
+                error = "mixed-body certificate node index is outside the mesh";
+                return false;
+            }
+            if (node_owner[node] != -1) {
+                error = "mixed-body certificate assigns one node to multiple magnetic bodies";
+                return false;
+            }
+            node_owner[node] = static_cast<int32_t>(body);
+            for (size_t axis = 0u; axis < 3u; ++axis) {
+                const double coordinate = mesh.nodes_xyz[3u * node + axis];
+                body_min[body][axis] = std::min(body_min[body][axis], coordinate);
+                body_max[body][axis] = std::max(body_max[body][axis], coordinate);
+            }
+        }
+    }
+    if (certificate_markers.size() != magnetic_markers.size()) {
+        error = "mixed-body certificate body marker set does not match magnetic cell markers";
+        return false;
+    }
+    for (uint32_t marker : magnetic_markers) {
+        if (certificate_markers.find(marker) == certificate_markers.end()) {
+            error = "mixed-body certificate omits a magnetic cell marker";
+            return false;
+        }
+    }
+
+    const auto body_for_marker = [&](uint32_t marker) -> int32_t {
+        for (uint64_t body = 0u; body < certificate->body_count; ++body) {
+            if (certificate->body_markers[body] == marker) {
+                return static_cast<int32_t>(body);
+            }
+        }
+        return -1;
+    };
+    for (size_t cell = 0u; cell < mesh.cell_types.size(); ++cell) {
+        const uint32_t marker = mesh.cell_markers[cell];
+        const uint32_t start = mesh.cell_offsets[cell];
+        const uint32_t end = mesh.cell_offsets[cell + 1u];
+        if (marker != 0u) {
+            const int32_t body = body_for_marker(marker);
+            if (body < 0) {
+                error = "mixed-body certificate has no owner for a magnetic cell marker";
+                return false;
+            }
+            for (uint32_t cursor = start; cursor < end; ++cursor) {
+                const uint32_t node = mesh.cell_nodes[cursor];
+                if (node_owner[node] != body) {
+                    error = "mixed-body certificate magnetic cell crosses body ownership";
+                    return false;
+                }
+                node_seen_in_magnetic_cell[node] = 1u;
+            }
+        } else {
+            // A conforming air cell may contain boundary nodes from more than
+            // one magnetic body.  It belongs to the shared Poisson domain and
+            // is precisely how the demagnetizing field couples separated
+            // bodies through air.  Only a non-zero-marker cell is a magnetic
+            // ownership bridge; the branch above rejects that case.
+            (void)start;
+            (void)end;
+        }
+    }
+    for (uint32_t node = 0u; node < mesh.n_nodes; ++node) {
+        if (node_owner[node] >= 0 && node_seen_in_magnetic_cell[node] == 0u) {
+            error = "mixed-body certificate owns a node outside its magnetic cells";
+            return false;
+        }
+    }
+
+    if (certificate->pair_count >
+        static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
+        !validate_span(certificate->pair_body_a, certificate->pair_count,
+            "mixed-body pair_body_a", error) ||
+        !validate_span(certificate->pair_body_b, certificate->pair_count,
+            "mixed-body pair_body_b", error) ||
+        !validate_span(certificate->pair_min_gap_m, certificate->pair_count,
+            "mixed-body pair_min_gap_m", error) ||
+        !validate_span(certificate->pair_contact_state, certificate->pair_count,
+            "mixed-body pair_contact_state", error)) {
+        return false;
+    }
+    if (certificate->body_count > 1u &&
+        certificate->body_count - 1u >
+            std::numeric_limits<uint64_t>::max() / certificate->body_count) {
+        error = "mixed-body certificate body_count overflows pair cardinality";
+        return false;
+    }
+    const uint64_t expected_pair_count =
+        certificate->body_count * (certificate->body_count - 1u) / 2u;
+    if (certificate->pair_count != expected_pair_count) {
+        error = "mixed-body certificate must contain exactly one pair for every body combination";
+        return false;
+    }
+
+    double coordinate_scale = 1.0;
+    for (uint32_t node = 0u; node < mesh.n_nodes; ++node) {
+        for (size_t axis = 0u; axis < 3u; ++axis) {
+            coordinate_scale = std::max(coordinate_scale,
+                std::abs(mesh.nodes_xyz[3u * node + axis]));
+        }
+    }
+    const double geometry_tolerance = std::max(
+        1e-18,
+        256.0 * std::numeric_limits<double>::epsilon() * coordinate_scale);
+    std::set<std::pair<uint32_t, uint32_t>> seen_pairs;
+    for (uint64_t pair = 0u; pair < certificate->pair_count; ++pair) {
+        const uint32_t body_a = certificate->pair_body_a[pair];
+        const uint32_t body_b = certificate->pair_body_b[pair];
+        if (body_a >= certificate->body_count || body_b >= certificate->body_count ||
+            body_a >= body_b || !seen_pairs.emplace(body_a, body_b).second) {
+            error = "mixed-body certificate pair indices must be unique canonical body combinations";
+            return false;
+        }
+        if (certificate->pair_contact_state[pair] !=
+            FULLMAG_FEM_MIXED_BODY_CONTACT_SEPARATED) {
+            error = "mixed-body certificate contact_state is not separated";
+            return false;
+        }
+        const double certified_gap = certificate->pair_min_gap_m[pair];
+        if (!std::isfinite(certified_gap) || certified_gap <= 0.0) {
+            error = "mixed-body certificate min_gap_m must be finite and positive";
+            return false;
+        }
+        double squared_box_gap = 0.0;
+        for (size_t axis = 0u; axis < 3u; ++axis) {
+            const double gap = body_max[body_a][axis] < body_min[body_b][axis]
+                ? body_min[body_b][axis] - body_max[body_a][axis]
+                : body_max[body_b][axis] < body_min[body_a][axis]
+                    ? body_min[body_a][axis] - body_max[body_b][axis]
+                    : 0.0;
+            squared_box_gap += gap * gap;
+        }
+        const double computed_gap = std::sqrt(squared_box_gap);
+        if (!std::isfinite(computed_gap) || !(computed_gap > geometry_tolerance)) {
+            error =
+                "mixed-body native AABB separation proof unavailable: body bounds "
+                "touch or overlap; this mixed-body geometry is unsupported";
+            return false;
+        }
+        // The producer records the exact gap between the realized body AABBs,
+        // not an arbitrary lower bound.  Require the native recomputation to
+        // agree within the coordinate-scale tolerance so a stale or inflated
+        // certificate cannot admit a different mesh.
+        if (std::abs(certified_gap - computed_gap) > geometry_tolerance) {
+            error =
+                "mixed-body certificate min_gap_m does not match the native "
+                "body AABB separation";
+            return false;
+        }
+    }
+    return true;
+}
+
 bool initialize_mesh_plan_fields(
     Context &ctx,
     const fullmag_fem_mesh_desc &mesh,
@@ -568,12 +820,25 @@ bool validate_supported_physics_topology(
                 return type == FULLMAG_FEM_FACET_TRI3 ||
                     type == FULLMAG_FEM_FACET_QUAD4;
             });
+    // A magnetic body may be represented by either a swept prism6 or a
+    // tetrahedral P1 region. The previous admission rule coupled the
+    // magnetic mask to prism6 and rejected a valid disconnected prism6+tet4
+    // workload before MFEM could assemble body-owned nodal coefficients.
+    // Keep the air side deliberately narrow: tet4 and pyramid5 are the only
+    // non-magnetic cells in the mixed-P1 contract.
+    const auto is_magnetic_cell_family = [](uint32_t type) {
+        return type == FULLMAG_FEM_CELL_PRISM6 || type == FULLMAG_FEM_CELL_TET4;
+    };
+    const auto is_air_cell_family = [](uint32_t type) {
+        return type == FULLMAG_FEM_CELL_TET4 || type == FULLMAG_FEM_CELL_PYRAMID5;
+    };
     bool markers_match_scope =
         ctx.mesh.cell_markers.size() == ctx.mesh.cell_types.size();
     for (size_t i = 0; markers_match_scope && i < ctx.mesh.cell_types.size(); ++i) {
         const bool magnetic = ctx.mesh.cell_markers[i] != 0u;
-        markers_match_scope =
-            (ctx.mesh.cell_types[i] == FULLMAG_FEM_CELL_PRISM6) == magnetic;
+        markers_match_scope = magnetic
+            ? is_magnetic_cell_family(ctx.mesh.cell_types[i])
+            : is_air_cell_family(ctx.mesh.cell_types[i]);
     }
     const bool pure_prism_markers_cover_magnetic_and_air =
         ctx.mesh.cell_markers.size() == ctx.mesh.cell_types.size() &&
@@ -598,9 +863,19 @@ bool validate_supported_physics_topology(
         ctx.dmi.rotated_interfacial_enabled || plan.dind_field_len != 0u ||
         plan.dbulk_field_len != 0u;
     const bool dmi_supported = !has_dmi || mfem_device == "cpu";
+    // Mixed bodies use body-owned nodal P1 material fields. The field
+    // importer performs definitive extent/value validation; this admission
+    // predicate only distinguishes those fields from unsupported element-DG0
+    // and unrelated interaction extensions.
+    const auto valid_optional_nodal_field = [&](uint64_t length) {
+        return length == 0u || length == static_cast<uint64_t>(ctx.mesh.n_nodes);
+    };
+    const bool body_owned_nodal_material_fields =
+        valid_optional_nodal_field(plan.ms_field_len) &&
+        valid_optional_nodal_field(plan.a_field_len) &&
+        valid_optional_nodal_field(plan.alpha_field_len);
     const bool no_other_extended_physics =
-        plan.ms_field_len == 0u && plan.a_field_len == 0u &&
-        plan.alpha_field_len == 0u && plan.ms_element_field_len == 0u &&
+        body_owned_nodal_material_fields && plan.ms_element_field_len == 0u &&
         plan.a_element_field_len == 0u &&
         plan.has_zhang_li_stt == 0 && plan.has_slonczewski_stt == 0 &&
         plan.has_oersted_cylinder == 0 && plan.oersted_field_len == 0u &&
@@ -651,7 +926,7 @@ bool validate_supported_physics_topology(
             error =
                 "native FEM pure prism P2 scope rejected: required=explicit_cpu+double+"
                 "P1_magnetization_state+prism6_shared_magnetic_air+tri3_quad4+no_periodic+"
-                "exchange+poisson_robin_or_dirichlet+uniform_Ms_A_alpha+no_DMI; "
+                "exchange+poisson_robin_or_dirichlet+uniform_or_body_owned_nodal_P1_Ms_A_alpha+no_DMI; "
                 "failed_predicates=[" + failed_predicates + "]; fallback=none";
             return false;
         }
@@ -664,7 +939,7 @@ bool validate_supported_physics_topology(
         };
         if (!exact_cell_families) add_failed("mixed_cell_families");
         if (!exact_facet_families) add_failed("mixed_facet_families");
-        if (!markers_match_scope) add_failed("magnetic_prism6_markers");
+        if (!markers_match_scope) add_failed("magnetic_prism6_or_tet4_markers");
         if (!exact_plan_topology) add_failed("plan_topology_matches_import");
         if (!explicit_cpu_or_cuda_device) add_failed("explicit_cpu_or_cuda_device");
         if (plan.fe_order != 1u) add_failed("p1");
@@ -683,8 +958,8 @@ bool validate_supported_physics_topology(
         if (!no_other_extended_physics) add_failed("unrelated_extended_physics_scope");
         error =
             "native FEM mixed P1 scope rejected: required=explicit_cpu_or_gpu+double+P1+"
-            "prism6_magnetic+pyramid5_tet4_air+tri3_quad4+exchange+"
-            "poisson_robin_or_dirichlet+uniform_Ms_A_alpha+local_anisotropy_cpu_or_cuda+"
+            "prism6_or_tet4_magnetic+pyramid5_tet4_air+tri3_quad4+exchange+"
+            "poisson_robin_or_dirichlet+uniform_or_body_owned_nodal_P1_Ms_A_alpha+local_anisotropy_cpu_or_cuda+"
             "dmi_cpu_only; failed_predicates=[" + failed_predicates + "]; fallback=none";
         return false;
     }

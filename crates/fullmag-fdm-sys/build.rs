@@ -20,7 +20,6 @@ fn main() {
     println!("cargo:rerun-if-changed=../../native/cmake/FindFullmagWindowsModal.cmake");
     println!("cargo:rerun-if-changed=../../backends/fdm/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../backends/fdm/api");
-    println!("cargo:rerun-if-changed=../../backends/fdm/core");
     println!("cargo:rerun-if-changed=../../backends/fdm/cpu");
     println!("cargo:rerun-if-changed=../../backends/fdm/gpu/cuda");
     println!("cargo:rerun-if-changed=../../backends/fdm/include");
@@ -36,10 +35,10 @@ fn main() {
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let native_root = manifest_dir.join("../../native");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let build_dir = std::env::var_os("FULLMAG_FDM_NATIVE_BUILD_ROOT")
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| out_dir.join("native-build"));
+    // Direct Compose supplies a stable, cache-key-scoped root so Cargo
+    // fingerprint changes do not create a fresh CMake tree. Standalone
+    // callers keep the historical OUT_DIR fallback.
+    let build_dir = native_build_dir(&out_dir, "FULLMAG_FDM_NATIVE_BUILD_ROOT");
 
     std::fs::create_dir_all(&build_dir).expect("creating native build dir should succeed");
 
@@ -111,6 +110,13 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=fullmag_fdm");
     emit_unix_runtime_rpath("$ORIGIN/../lib");
     println!("cargo:metadata=lib_dir={}", native_lib_dir.display());
+}
+
+fn native_build_dir(out_dir: &std::path::Path, env_name: &str) -> std::path::PathBuf {
+    std::env::var_os(env_name)
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| out_dir.join("native-build"))
 }
 
 fn emit_unix_runtime_rpath(path: &str) {

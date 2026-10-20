@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fullmag.model.geometry import RigidTransform
 from fullmag.model.study import _MAX_FEM_EIGEN_SOLVER_ITERATIONS
 from fullmag.model.compute_resources import ComputeResources
 from fullmag.model.output_storage import OutputStorage
@@ -690,7 +691,7 @@ def _decode_structured_current_closure(value: object) -> StructuredCurrentClosur
         plane_context = f"{context}.plane"
         plane = _mapping(cut.get("plane"), plane_context)
         _reject_unknown_fields(
-            plane, frozenset({"axis", "offset_m", "normal"}), plane_context
+            plane, frozenset({"axis", "offset_m", "normal", "coordinate_frame"}), plane_context
         )
         drive_context = f"{context}.drive"
         drive = _mapping(cut.get("drive"), drive_context)
@@ -711,6 +712,7 @@ def _decode_structured_current_closure(value: object) -> StructuredCurrentClosur
                 ),
                 region=_region_ref(cut.get("region"), f"{context}.region"),
                 plane=StructuredCutPlane(
+                    coordinate_frame=plane.get("coordinate_frame", "world"),
                     axis=_nonempty_string(plane.get("axis"), f"{context}.plane.axis"),
                     offset_m=_finite_number(
                         plane.get("offset_m"), f"{context}.plane.offset_m"
@@ -999,6 +1001,7 @@ def _decode_conservative_current_view(value: object) -> ConservativeCurrentView:
                 _vec3(cut.get("translation_m"), f"conservative_current_view.closure.source_cuts[{index}].translation_m"),
                 _finite_number(cut.get("potential_drop_v"), f"conservative_current_view.closure.source_cuts[{index}].potential_drop_v"),
                 pairs,
+                closure_operator_version=closure_value.get("operator_version", "fem_closed_current_geometry.v1"),
             )
         )
     closure = ConservativeCurrentClosedGeometry(
@@ -1907,9 +1910,12 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         geometry = dict(obj.get("geometry") or {})
         geometry_params = dict(geometry.get("geometry_params") or {})
         transform = dict(obj.get("transform") or {})
-        translation = _owner_frame_translation(transform, object_id)
-        if any(abs(value) > 0 for value in translation):
-            geometry_params["translation"] = list(translation)
+        if geometry.get("geometry_kind") in {"MicrostripAntennaLayout", "CPWAntennaLayout"}:
+            geometry_params = _compose_antenna_owner_transform(geometry_params, transform, object_id)
+        else:
+            translation = _owner_frame_translation(transform, object_id)
+            if any(abs(value) > 0 for value in translation):
+                geometry_params["translation"] = list(translation)
 
         magnetization_asset = magnetization_assets.get(magnetization_ref, {})
         magnetization = {
@@ -2197,7 +2203,45 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(value, list):
                 raise ValueError(f"{collection} must be a list when present")
             builder[collection] = copy.deepcopy(value)
+            if collection == "antenna_field_solve_stages":
+                for stage in builder[collection]:
+                    if isinstance(stage, dict) and stage.get("conservative_current_view_ref") is None:
+                        stage.pop("conservative_current_view_ref", None)
     return builder
+
+
+def _compose_antenna_owner_transform(params: dict[str, object], transform: Mapping[str, object],
+                                     object_id: str) -> dict[str, object]:
+    """Lower the scene owner and the antenna's authored local rigid frame once."""
+    def vector(key: str, default: tuple[float, ...]) -> tuple[float, ...]:
+        raw = transform.get(key, default)
+        if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence) or len(raw) != len(default):
+            raise ValueError(f"objects.{object_id}.transform.{key} has invalid components")
+        return tuple(_finite_number(value, f"objects.{object_id}.transform.{key}") for value in raw)
+
+    translation = vector("translation", (0.0, 0.0, 0.0))
+    quaternion = vector("rotation_quat", (0.0, 0.0, 0.0, 1.0))
+    if vector("scale", (1.0, 1.0, 1.0)) != (1.0, 1.0, 1.0):
+        raise ValueError("antenna owner transform requires unit scale for the public RigidTransform")
+    if vector("pivot", (0.0, 0.0, 0.0)) != (0.0, 0.0, 0.0):
+        raise ValueError("antenna owner transform with nonzero pivot is not supported")
+    norm = math.hypot(*quaternion)
+    if norm == 0.0 or not math.isfinite(norm):
+        raise ValueError("antenna owner rotation requires a finite nonzero quaternion")
+    x, y, z, w = (value / norm for value in quaternion)
+    rotation = ((1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)),
+                (2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)),
+                (2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)))
+    if rotation == RigidTransform.identity().rotation_matrix and translation == (0.0, 0.0, 0.0):
+        return params
+    inner = RigidTransform.from_ir(params.get("transform", RigidTransform.identity().to_ir()))
+    composed = RigidTransform(
+        rotation_matrix=tuple(tuple(sum(rotation[row][k] * inner.rotation_matrix[k][column]
+                                        for k in range(3)) for column in range(3)) for row in range(3)),
+        translation_m=tuple(sum(rotation[row][k] * inner.translation_m[k] for k in range(3))
+                            + translation[row] for row in range(3)),
+    )
+    return dict(params, transform=composed.to_ir())
 
 
 def _owner_frame_translation(

@@ -1513,6 +1513,368 @@ pub struct MixedLayerTopologyCertificateV1IR {
     pub fallbacks_triggered: Vec<String>,
 }
 
+/// Typed evidence for the disconnected-body mixed-P1 FEM route.
+///
+/// This is deliberately a separate wire type from [`MixedLayerTopologyCertificateV1IR`].
+/// V1 has one magnetic prism marker and old readers must continue to reject
+/// meshes whose magnetic domain contains more than that single region.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MixedLayerTopologyCertificateV2IR {
+    pub schema_version: String,
+    pub certificate_status: String,
+    pub magnetic_regions: Vec<MagneticRegionV2IR>,
+    pub body_separation_pairs: Vec<BodySeparationPairV2IR>,
+    pub body_material_fields: Vec<BodyMaterialFieldV2IR>,
+    /// Gmsh's exact hybrid realization policy.  HXT (10) is retained for the
+    /// tetrahedral stage, while the structured transition stage stays on
+    /// algorithm 1 because its quad interface is not accepted by HXT.
+    #[serde(default = "default_mixed_v2_algorithm")]
+    pub requested_algorithm_3d: u32,
+    #[serde(default = "default_mixed_v2_algorithm")]
+    pub transition_algorithm_3d: u32,
+    #[serde(default = "default_mixed_v2_algorithm")]
+    pub tetrahedral_algorithm_3d: u32,
+    #[serde(default)]
+    pub optimizer: Option<String>,
+    #[serde(default)]
+    pub optimizer_iterations: u32,
+    // Keep the complete shared-domain proof from v1 at the top level.  V2
+    // adds body ownership; it does not replace the quality, volume, marker,
+    // manifold or deterministic-input evidence consumed by existing views.
+    pub requested_sweep_direction: String,
+    pub resolved_sweep_direction: String,
+    pub requested_layer_count: u32,
+    pub realized_layer_count: u32,
+    pub magnetic_plane_coordinates_m: Vec<f64>,
+    pub plane_tolerance_m: f64,
+    pub transition_shell_thickness_m: f64,
+    pub transition_shell_interface_tri3_count: u64,
+    pub interface_marker: u32,
+    pub outer_boundary_marker: u32,
+    pub magnetic_bounds_min_m: [f64; 3],
+    pub magnetic_bounds_max_m: [f64; 3],
+    pub airbox_bounds_min_m: [f64; 3],
+    pub airbox_bounds_max_m: [f64; 3],
+    pub magnetic_bounds_relative_error: f64,
+    pub airbox_bounds_relative_error: f64,
+    pub jacobian_minima_m3_by_family: BTreeMap<String, f64>,
+    pub quality_metric: String,
+    pub scaled_jacobian_minima_by_family: BTreeMap<String, f64>,
+    pub scaled_jacobian_p05_by_family: BTreeMap<String, f64>,
+    pub magnetic_volume_m3: f64,
+    pub expected_magnetic_volume_m3: f64,
+    pub magnetic_relative_volume_error: f64,
+    pub air_volume_m3: f64,
+    pub shared_domain_volume_m3: f64,
+    pub expected_shared_domain_volume_m3: f64,
+    pub shared_domain_relative_volume_error: f64,
+    pub marker_coverage_complete: bool,
+    pub nonconforming_face_count: u64,
+    pub orphan_face_count: u64,
+    pub nonmanifold_face_count: u64,
+    pub coincident_interface_face_count: u64,
+    pub deterministic_inputs: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub fallbacks_triggered: Vec<String>,
+    pub topology_fingerprint_version: String,
+    pub topology_fingerprint: String,
+    pub gmsh_version: String,
+    pub strategy: String,
+    pub effective_gmsh_thread_count: u32,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cell_family_counts_by_marker: BTreeMap<String, BTreeMap<String, u64>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cell_family_counts_by_part: BTreeMap<String, BTreeMap<String, u64>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub facet_family_counts_by_role_marker: BTreeMap<String, BTreeMap<String, u64>>,
+}
+
+fn default_mixed_v2_algorithm() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MagneticRegionV2IR {
+    pub object_id: String,
+    pub body_marker: u32,
+    pub material_marker: u32,
+    pub cell_family_counts: BTreeMap<String, u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_sweep: Option<ExactSweepEvidenceV2IR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ExactSweepEvidenceV2IR {
+    pub sweep_direction_requested: String,
+    pub sweep_direction_resolved: String,
+    pub requested_layer_count: u32,
+    pub realized_layer_count: u32,
+    pub magnetic_plane_coordinates_m: Vec<f64>,
+    pub plane_tolerance_m: f64,
+    pub topology_fingerprint_version: String,
+    pub topology_fingerprint: String,
+    pub node_order_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BodySeparationPairV2IR {
+    pub body_a: String,
+    pub body_b: String,
+    pub min_gap_m: f64,
+    pub contact_state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BodyMaterialFieldV2IR {
+    pub object_id: String,
+    pub field_basis: String,
+    pub coefficient_domains: Vec<String>,
+    pub air_interpolation_policy: String,
+    pub cross_body_interpolation_policy: String,
+    pub node_order_digest: String,
+    pub field_digest: String,
+    #[serde(default)]
+    pub values: BTreeMap<String, Value>,
+}
+
+impl MixedLayerTopologyCertificateV2IR {
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if self.schema_version != "mixed_layer_topology_certificate.v2" {
+            errors.push(
+                "mixed layer topology certificate v2 schema_version must be mixed_layer_topology_certificate.v2".to_string(),
+            );
+        }
+        if self.certificate_status != "accepted" {
+            errors.push("mixed layer topology certificate v2 status must be accepted".to_string());
+        }
+        if self.magnetic_regions.is_empty() {
+            errors.push("mixed layer topology certificate v2 requires magnetic_regions".to_string());
+        }
+        let mut object_ids = BTreeSet::new();
+        let mut body_markers = BTreeSet::new();
+        let mut material_markers = BTreeSet::new();
+        for region in &self.magnetic_regions {
+            if region.object_id.trim().is_empty() || !object_ids.insert(region.object_id.clone()) {
+                errors.push("mixed layer topology certificate v2 magnetic region object_id is empty or duplicated".to_string());
+            }
+            if region.body_marker == 0 || !body_markers.insert(region.body_marker) {
+                errors.push("mixed layer topology certificate v2 magnetic region body_marker is zero or duplicated".to_string());
+            }
+            if region.material_marker == 0 || !material_markers.insert(region.material_marker) {
+                errors.push("mixed layer topology certificate v2 magnetic region material_marker is zero or duplicated".to_string());
+            }
+            if region.cell_family_counts.is_empty()
+                || region.cell_family_counts.iter().any(|(family, count)| {
+                    !matches!(family.as_str(), "prism6" | "tet4") || *count == 0
+                })
+            {
+                errors.push(format!(
+                    "mixed layer topology certificate v2 region '{}' has invalid cell_family_counts",
+                    region.object_id
+                ));
+            }
+            if let Some(sweep) = &region.exact_sweep {
+                if !matches!(sweep.sweep_direction_requested.as_str(), "auto" | "x" | "y" | "z")
+                    || !matches!(sweep.sweep_direction_resolved.as_str(), "x" | "y" | "z")
+                    || (sweep.sweep_direction_requested != "auto"
+                        && sweep.sweep_direction_requested != sweep.sweep_direction_resolved)
+                    || sweep.requested_layer_count == 0
+                    || sweep.requested_layer_count != sweep.realized_layer_count
+                    || !matches!(sweep.realized_layer_count, 1..=3)
+                    || sweep.magnetic_plane_coordinates_m.len() != sweep.realized_layer_count as usize + 1
+                    || sweep.magnetic_plane_coordinates_m.windows(2).any(|pair| pair[1] <= pair[0])
+                    || sweep.magnetic_plane_coordinates_m.iter().any(|value| !value.is_finite())
+                    || !sweep.plane_tolerance_m.is_finite()
+                    || sweep.plane_tolerance_m <= 0.0
+                    || !matches!(sweep.topology_fingerprint_version.as_str(), "v2" | "v3")
+                    || !is_sha256_fingerprint(&sweep.topology_fingerprint)
+                    || !is_sha256_fingerprint(&sweep.node_order_digest)
+                {
+                    errors.push(format!(
+                        "mixed layer topology certificate v2 region '{}' has invalid exact_sweep evidence",
+                        region.object_id
+                    ));
+                }
+            }
+        }
+        let mut separation_pairs = BTreeSet::new();
+        let expected_pair_count = self.magnetic_regions.len().saturating_mul(self.magnetic_regions.len().saturating_sub(1)) / 2;
+        if self.body_separation_pairs.len() != expected_pair_count {
+            errors.push("mixed layer topology certificate v2 separation pair coverage is incomplete".to_string());
+        }
+        for pair in &self.body_separation_pairs {
+            if pair.body_a >= pair.body_b
+                || !object_ids.contains(&pair.body_a)
+                || !object_ids.contains(&pair.body_b)
+                || !separation_pairs.insert((pair.body_a.clone(), pair.body_b.clone()))
+                || pair.contact_state != "separated"
+                || !pair.min_gap_m.is_finite()
+                || pair.min_gap_m <= 0.0
+            {
+                errors.push("mixed layer topology certificate v2 separation pair is invalid".to_string());
+            }
+        }
+        let required_domains = ["Ms", "Aex", "alpha", "Ku1", "anisotropy_axis"];
+        let mut material_objects = BTreeSet::new();
+        for fields in &self.body_material_fields {
+            let required_domain_order = required_domains
+                .iter()
+                .map(|domain| (*domain).to_string())
+                .collect::<Vec<_>>();
+            if !object_ids.contains(&fields.object_id)
+                || !material_objects.insert(fields.object_id.clone())
+                || fields.field_basis != "body_owned_p1"
+                || fields.coefficient_domains != required_domain_order
+                || required_domains.iter().any(|domain| !fields.coefficient_domains.iter().any(|value| value == domain))
+                || fields.air_interpolation_policy != "forbidden"
+                || fields.cross_body_interpolation_policy != "forbidden"
+                || !is_sha256_fingerprint(&fields.node_order_digest)
+                || !is_sha256_digest(&fields.field_digest)
+                || !crate::mixed_certificate_v2::mixed_v2_body_material_values_are_valid(
+                    &fields.values,
+                )
+            {
+                errors.push(format!(
+                    "mixed layer topology certificate v2 material fields for '{}' are invalid",
+                    fields.object_id
+                ));
+            }
+        }
+        if material_objects.len() != object_ids.len() {
+            errors.push("mixed layer topology certificate v2 material field coverage is incomplete".to_string());
+        }
+        if !self.fallbacks_triggered.is_empty() {
+            errors.push("mixed layer topology certificate v2 must not contain fallbacks".to_string());
+        }
+        if !matches!(
+            self.requested_algorithm_3d,
+            1 | 10
+        ) || !matches!(self.transition_algorithm_3d, 1 | 10)
+            || !matches!(self.tetrahedral_algorithm_3d, 1 | 10)
+        {
+            errors.push("mixed layer topology certificate v2 3D meshing algorithms are invalid".to_string());
+        } else if (self.requested_algorithm_3d == 10
+            && (self.transition_algorithm_3d != 1 || self.tetrahedral_algorithm_3d != 10))
+            || (self.requested_algorithm_3d == 1
+                && (self.transition_algorithm_3d != 1 || self.tetrahedral_algorithm_3d != 1))
+        {
+            errors.push("mixed layer topology certificate v2 hybrid 3D algorithm policy is invalid".to_string());
+        }
+        if self.optimizer.as_deref().is_some_and(|value| value != "Gmsh")
+            || (self.optimizer.is_none() && self.optimizer_iterations != 0)
+            || (self.optimizer.is_some() && self.optimizer_iterations == 0)
+        {
+            errors.push("mixed layer topology certificate v2 optimizer policy is invalid".to_string());
+        }
+        if self.deterministic_inputs
+            != crate::mixed_certificate_v2::mixed_v2_deterministic_inputs(
+                self.requested_algorithm_3d,
+                self.transition_algorithm_3d,
+                self.tetrahedral_algorithm_3d,
+                self.optimizer.as_deref(),
+                self.optimizer_iterations,
+            )
+        {
+            errors.push("mixed layer topology certificate v2 deterministic inputs are stale".to_string());
+        }
+        if !matches!(self.requested_sweep_direction.as_str(), "auto" | "x" | "y" | "z")
+            || !matches!(self.resolved_sweep_direction.as_str(), "x" | "y" | "z")
+            || (self.requested_sweep_direction != "auto"
+                && self.requested_sweep_direction != self.resolved_sweep_direction)
+            || self.requested_layer_count == 0
+            || self.requested_layer_count != self.realized_layer_count
+            || !matches!(self.realized_layer_count, 1..=3)
+            || self.magnetic_plane_coordinates_m.len() != self.realized_layer_count as usize + 1
+            || self.magnetic_plane_coordinates_m.windows(2).any(|pair| pair[1] <= pair[0])
+            || self.magnetic_plane_coordinates_m.iter().any(|value| !value.is_finite())
+            || !self.plane_tolerance_m.is_finite()
+            || self.plane_tolerance_m <= 0.0
+        {
+            errors.push("mixed layer topology certificate v2 shared exact-layer evidence is invalid".to_string());
+        }
+        for (name, value) in [
+            ("transition_shell_thickness_m", self.transition_shell_thickness_m),
+            ("magnetic_volume_m3", self.magnetic_volume_m3),
+            ("expected_magnetic_volume_m3", self.expected_magnetic_volume_m3),
+            ("air_volume_m3", self.air_volume_m3),
+            ("shared_domain_volume_m3", self.shared_domain_volume_m3),
+            ("expected_shared_domain_volume_m3", self.expected_shared_domain_volume_m3),
+        ] {
+            if !value.is_finite() || value <= 0.0 {
+                errors.push(format!("mixed layer topology certificate v2 {name} must be positive"));
+            }
+        }
+        if self.transition_shell_interface_tri3_count == 0
+            || self.interface_marker == 0
+            || self.outer_boundary_marker == 0
+            || self.interface_marker == self.outer_boundary_marker
+            || self.jacobian_minima_m3_by_family.is_empty()
+            || self.scaled_jacobian_minima_by_family.is_empty()
+            || self.scaled_jacobian_p05_by_family.is_empty()
+            || self.quality_metric != "mixed_topology_scaled_jacobian.v1"
+            || self.gmsh_version != "4.15.2"
+            || self.strategy != "shared_geo_extrusion_partitioned_pyramid_tet.v2"
+            || self.effective_gmsh_thread_count != 1
+        {
+            errors.push("mixed layer topology certificate v2 shared quality/realization proof is invalid".to_string());
+        }
+        if self.magnetic_bounds_relative_error < 0.0
+            || self.magnetic_bounds_relative_error > 1.0e-8
+            || self.airbox_bounds_relative_error < 0.0
+            || self.airbox_bounds_relative_error > 1.0e-8
+            || self.magnetic_relative_volume_error < 0.0
+            || self.magnetic_relative_volume_error > 1.0e-8
+            || self.shared_domain_relative_volume_error < 0.0
+            || self.shared_domain_relative_volume_error > 1.0e-8
+            || !self.marker_coverage_complete
+            || self.nonconforming_face_count != 0
+            || self.orphan_face_count != 0
+            || self.nonmanifold_face_count != 0
+            || self.coincident_interface_face_count != 0
+        {
+            errors.push("mixed layer topology certificate v2 shared conformity/volume proof is invalid".to_string());
+        }
+        for value in self.scaled_jacobian_p05_by_family.values() {
+            if !value.is_finite() || *value < 0.1 {
+                errors.push("mixed layer topology certificate v2 scaled Jacobian p05 is below the qualified minimum".to_string());
+            }
+        }
+        if !matches!(self.topology_fingerprint_version.as_str(), "v2" | "v3")
+            || !is_sha256_fingerprint(&self.topology_fingerprint)
+        {
+            errors.push("mixed layer topology certificate v2 fingerprint is invalid".to_string());
+        }
+        if errors.is_empty() { Ok(()) } else { Err(errors) }
+    }
+}
+
+/// Validate v2 marker/family evidence against the realized typed mesh.
+///
+/// The v1 validator remains the sole implementation for v1.  This function
+/// intentionally accepts only the v2 marker contract and never upgrades a v1
+/// certificate in place.
+pub fn validate_mixed_layer_topology_certificate_v2_against_mesh(
+    mesh: &MeshIR,
+    certificate: &MixedLayerTopologyCertificateV2IR,
+) -> Result<(), Vec<String>> {
+    crate::mixed_certificate_v2::validate_mixed_layer_topology_certificate_v2_against_mesh(
+        mesh,
+        certificate,
+    )
+}
+
+fn is_sha256_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    })
+}
+
 impl MixedLayerTopologyCertificateV1IR {
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
@@ -1878,6 +2240,8 @@ pub struct FemSharedDomainBuildReportIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mixed_layer_topology_certificate: Option<MixedLayerTopologyCertificateV1IR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mixed_layer_topology_certificate_v2: Option<MixedLayerTopologyCertificateV2IR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mixed_topology_provenance: Option<crate::FemMixedTopologyProvenanceIR>,
 }
 
@@ -1915,22 +2279,51 @@ impl<'de> Deserialize<'de> for FemDomainMeshAssetIR {
         }
 
         let wire = Wire::deserialize(deserializer)?;
-        let mesh_level_certificate = wire
+        let mesh_level_certificate_value = wire
             .mesh
             .as_ref()
             .and_then(|mesh| mesh.get("mixed_layer_topology_certificate"))
             .filter(|value| !value.is_null())
+            .cloned();
+        let mesh_level_certificate_v1 = mesh_level_certificate_value
+            .as_ref()
+            .filter(|value| {
+                value
+                    .get("schema_version")
+                    .and_then(Value::as_str)
+                    == Some("mixed_layer_topology_certificate.v1")
+            })
             .cloned()
             .map(serde_json::from_value)
             .transpose()
             .map_err(serde::de::Error::custom)?;
+        let mesh_level_certificate_v2 = mesh_level_certificate_value
+            .as_ref()
+            .filter(|value| {
+                value
+                    .get("schema_version")
+                    .and_then(Value::as_str)
+                    == Some("mixed_layer_topology_certificate.v2")
+            })
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        if mesh_level_certificate_value.is_some()
+            && mesh_level_certificate_v1.is_none()
+            && mesh_level_certificate_v2.is_none()
+        {
+            return Err(serde::de::Error::custom(
+                "mesh-level mixed certificate has an unsupported schema_version",
+            ));
+        }
         let mesh = wire
             .mesh
             .map(serde_json::from_value)
             .transpose()
             .map_err(serde::de::Error::custom)?;
         let mut build_report = wire.build_report;
-        if let Some(mesh_certificate) = mesh_level_certificate {
+        if let Some(mesh_certificate) = mesh_level_certificate_v1 {
             let report = build_report.as_mut().ok_or_else(|| {
                 serde::de::Error::custom(
                     "mesh-level mixed certificate requires a shared-domain build report",
@@ -1944,6 +2337,22 @@ impl<'de> Deserialize<'de> for FemDomainMeshAssetIR {
                 }
                 Some(_) => {}
                 None => report.mixed_layer_topology_certificate = Some(mesh_certificate),
+            }
+        }
+        if let Some(mesh_certificate) = mesh_level_certificate_v2 {
+            let report = build_report.as_mut().ok_or_else(|| {
+                serde::de::Error::custom(
+                    "mesh-level mixed v2 certificate requires a shared-domain build report",
+                )
+            })?;
+            match report.mixed_layer_topology_certificate_v2.as_ref() {
+                Some(report_certificate) if report_certificate != &mesh_certificate => {
+                    return Err(serde::de::Error::custom(
+                        "mesh-level and build-report mixed v2 certificates conflict",
+                    ));
+                }
+                Some(_) => {}
+                None => report.mixed_layer_topology_certificate_v2 = Some(mesh_certificate),
             }
         }
         Ok(Self {
@@ -1992,20 +2401,66 @@ impl FemDomainMeshAssetIR {
                 None => errors.push("fem_domain_mesh_asset mixed layer topology certificate requires an inline mesh for fingerprint binding".to_string()),
             }
         }
+        if let Some(certificate) = self
+            .build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate_v2.as_ref())
+        {
+            match &self.mesh {
+                Some(mesh) => {
+                    if let Err(certificate_errors) =
+                        validate_mixed_layer_topology_certificate_v2_against_mesh(mesh, certificate)
+                    {
+                        errors.extend(certificate_errors.into_iter().map(|error| {
+                            format!("fem_domain_mesh_asset.build_report.{error}")
+                        }));
+                    }
+                }
+                None => {
+                    if let Err(certificate_errors) = certificate.validate() {
+                        errors.extend(certificate_errors.into_iter().map(|error| {
+                            format!("fem_domain_mesh_asset.build_report.{error}")
+                        }));
+                    }
+                    errors.push(
+                        "fem_domain_mesh_asset mixed v2 certificate requires an inline mesh for complete proof binding"
+                            .to_string(),
+                    );
+                }
+            }
+        }
         if let Some(provenance) = self
             .build_report
             .as_ref()
             .and_then(|report| report.mixed_topology_provenance.as_ref())
         {
-            let certificate = self
-                .build_report
-                .as_ref()
-                .and_then(|report| report.mixed_layer_topology_certificate.as_ref());
+            let certificate_binding = self.build_report.as_ref().and_then(|report| {
+                match (
+                    report.mixed_layer_topology_certificate.as_ref(),
+                    report.mixed_layer_topology_certificate_v2.as_ref(),
+                ) {
+                    (Some(_), Some(_)) => {
+                        errors.push(
+                            "fem_domain_mesh_asset mixed topology provenance cannot bind both v1 and v2 certificates"
+                                .to_string(),
+                        );
+                        None
+                    }
+                    (Some(certificate), None) => Some((
+                        certificate.topology_fingerprint.as_str(),
+                        certificate.topology_fingerprint_version.as_str(),
+                    )),
+                    (None, Some(certificate)) => Some((
+                        certificate.topology_fingerprint.as_str(),
+                        certificate.topology_fingerprint_version.as_str(),
+                    )),
+                    (None, None) => None,
+                }
+            });
             let mut accepted_fingerprint_is_stale = false;
-            match certificate {
-                Some(certificate)
-                    if provenance.accepted_certificate_fingerprint
-                        != certificate.topology_fingerprint =>
+            match certificate_binding {
+                Some((fingerprint, _))
+                    if provenance.accepted_certificate_fingerprint != fingerprint =>
                 {
                     accepted_fingerprint_is_stale = true;
                 }
@@ -2023,9 +2478,9 @@ impl FemDomainMeshAssetIR {
                                 .to_string(),
                         );
                     }
-                    if let Some(certificate) = certificate {
+                    if let Some((_, fingerprint_version)) = certificate_binding {
                         match mesh.mixed_topology_fingerprint_for_version(
-                            &certificate.topology_fingerprint_version,
+                            fingerprint_version,
                         ) {
                             Ok(fingerprint)
                                 if provenance.accepted_certificate_fingerprint != fingerprint =>

@@ -2,27 +2,39 @@
 
 import {
   Activity,
+  Ban,
   Box,
   Braces,
   ChevronRight,
   Circle,
+  CircleCheck,
+  CircleHelp,
+  CircleX,
+  Clock3,
   Database,
+  Eye,
   File,
   Folder,
   Gauge,
+  History,
   Layers,
   Magnet,
+  Pause,
   Play,
   Settings,
   Shield,
+  SkipForward,
   Sparkles,
+  Square,
   Triangle,
+  TriangleAlert,
   Waves,
 } from "lucide-react";
 import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -56,8 +68,10 @@ import {
   ContextMenuTrigger,
 } from "@/shared/ui/ContextMenu";
 
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/Tooltip";
+
 import { selectExplorerNode } from "./explorerSelection";
-import { explorerStatusClassName } from "./explorerStatusClass";
+import { explorerStatusClassName, explorerStatusLabel } from "./explorerStatusClass";
 import { cn } from "@/shared/utils/className";
 import {
   setExplorerKeyboardRow,
@@ -88,6 +102,28 @@ const ICONS: Record<ExplorerIconToken, ReactNode> = {
   sparkles: <Sparkles size={14} />,
   triangle: <Triangle size={14} />,
   wave: <Waves size={14} />,
+};
+
+const STATUS_ICONS: Record<ExplorerNodeStatus, ReactNode> = {
+  ready: <Circle size={12} />,
+  "primitive-only": <Box size={12} />,
+  "mesh-stale": <History size={12} />,
+  "mesh-building": <Activity size={12} />,
+  "mesh-ready": <CircleCheck size={12} />,
+  "mesh-failed": <CircleX size={12} />,
+  "validation-blocked": <Ban size={12} />,
+  stale: <History size={12} />,
+  queued: <Clock3 size={12} />,
+  running: <Play size={12} />,
+  paused: <Pause size={12} />,
+  completed: <CircleCheck size={12} />,
+  skipped: <SkipForward size={12} />,
+  cancelled: <Square size={12} />,
+  failed: <CircleX size={12} />,
+  degraded: <TriangleAlert size={12} />,
+  warning: <TriangleAlert size={12} />,
+  unavailable: <CircleHelp size={12} />,
+  unsupported: <Ban size={12} />,
 };
 
 const EXPLORER_ROW_HEIGHT = 28;
@@ -312,6 +348,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   rowIds: readonly string[];
   tabId: ExplorerTabId;
 }) {
+  const statusReasonId = useId();
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const commandDetail = useCommandDetailResource(selectedCommandId);
   const commandItems = contextCommandItemsForNode({
@@ -371,8 +408,10 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   }
 
   const tooltipParts: string[] = [node.label];
-  if (node.status && node.status !== "ready") tooltipParts.push(`[${node.status}]`);
+  if (node.status && node.status !== "ready") tooltipParts.push(`[${explorerStatusLabel(node.status)}]`);
+  if (node.activeAnalysisField) tooltipParts.push("Active field");
   if (node.badge) tooltipParts.push(`— ${node.badge}`);
+  if (node.statusReason) tooltipParts.push(node.statusReason);
 
   const row = (
     <div
@@ -387,7 +426,9 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       data-status={statusLabel(node.status)}
       role="treeitem"
       tabIndex={focusable ? 0 : -1}
-      title={tooltipParts.length > 1 ? tooltipParts.join(" ") : undefined}
+      aria-label={node.label}
+      aria-level={depth + 1}
+      aria-describedby={tooltipParts.length > 1 ? statusReasonId : undefined}
       aria-expanded={hasChildren ? expanded : undefined}
       aria-selected={selectable ? active : undefined}
       onClick={selectable ? handleSelect : undefined}
@@ -443,24 +484,29 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       >
         {node.icon ? ICONS[node.icon] : ICONS.file}
       </span>
+      {tooltipParts.length > 1 ? <span id={statusReasonId} className="fm-explorer-tree-row__description sr-only">{tooltipParts.slice(1).join(" ")}</span> : null}
       <span className="fm-explorer-tree-row__label">{node.label}</span>
-      {node.status && node.status !== "ready" ? (
-        <span className="fm-explorer-tree-row__status">{node.status}</span>
-      ) : null}
-      {node.activeAnalysisField ? (
-        <span className="fm-explorer-tree-row__active-field">active</span>
-      ) : null}
-      {node.badge ? (
-        <span className="fm-explorer-tree-row__badge" title={node.badge}>
-          {node.badge}
-        </span>
-      ) : null}
+      <span className="fm-explorer-tree-row__metadata" aria-hidden="true">
+        {node.status && node.status !== "ready" ? (
+          <span className="fm-explorer-tree-row__status">
+            <span className="fm-explorer-tree-row__status-icon">{STATUS_ICONS[node.status]}</span>
+            <span className="fm-explorer-tree-row__status-text">{explorerStatusLabel(node.status)}</span>
+          </span>
+        ) : null}
+        {node.activeAnalysisField ? (
+          <span className="fm-explorer-tree-row__active-field"><Eye size={12} /><span className="fm-explorer-tree-row__active-text">active</span></span>
+        ) : null}
+        {node.badge ? <span className="fm-explorer-tree-row__badge">{node.badge}</span> : null}
+      </span>
     </div>
   );
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild><ContextMenuTrigger asChild>{row}</ContextMenuTrigger></TooltipTrigger>
+        <TooltipContent side="right" align="start" className="fm-explorer-node-tooltip">{tooltipParts.join(" ")}</TooltipContent>
+      </Tooltip>
       <ContextMenuContent>
         <ContextMenuLabel>{node.label}</ContextMenuLabel>
         <ContextMenuSeparator />
@@ -632,41 +678,43 @@ export function ExplorerTreeView({
   }, [activeNodeId, rows, viewport.height]);
 
   return (
-    <div
-      ref={treeRef}
-      className="fm-explorer-tree"
-      role="tree"
-      aria-label="Explorer tree"
-      onScroll={handleScroll}
-    >
-      {visibleRows.topPadding > 0 ? (
-        <div
-          aria-hidden="true"
-          style={{ height: visibleRows.topPadding }}
-        />
-      ) : null}
-      {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
-        <ExplorerTreeRow
-          key={node.id}
-          active={activeNodeId === node.id}
-          depth={depth}
-          expanded={expanded}
-          focusable={focusableRowId === node.id}
-          hasChildren={hasChildren}
-          kernel={kernel}
-          moduleId={moduleId}
-          node={node}
-          resourceData={commandResourceData}
-          rowIds={visibleRowIds}
-          tabId={tabId}
-        />
-      ))}
-      {visibleRows.bottomPadding > 0 ? (
-        <div
-          aria-hidden="true"
-          style={{ height: visibleRows.bottomPadding }}
-        />
-      ) : null}
-    </div>
+    <TooltipProvider delayDuration={350}>
+      <div
+        ref={treeRef}
+        className="fm-explorer-tree"
+        role="tree"
+        aria-label="Explorer tree"
+        onScroll={handleScroll}
+      >
+        {visibleRows.topPadding > 0 ? (
+          <div
+            aria-hidden="true"
+            style={{ height: visibleRows.topPadding }}
+          />
+        ) : null}
+        {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
+          <ExplorerTreeRow
+            key={node.id}
+            active={activeNodeId === node.id}
+            depth={depth}
+            expanded={expanded}
+            focusable={focusableRowId === node.id}
+            hasChildren={hasChildren}
+            kernel={kernel}
+            moduleId={moduleId}
+            node={node}
+            resourceData={commandResourceData}
+            rowIds={visibleRowIds}
+            tabId={tabId}
+          />
+        ))}
+        {visibleRows.bottomPadding > 0 ? (
+          <div
+            aria-hidden="true"
+            style={{ height: visibleRows.bottomPadding }}
+          />
+        ) : null}
+      </div>
+    </TooltipProvider>
   );
 }

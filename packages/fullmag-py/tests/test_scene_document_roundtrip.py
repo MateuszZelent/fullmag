@@ -6,7 +6,11 @@ from fullmag.runtime.scene_document import (
     build_scene_document_from_builder,
     builder_overrides_from_scene_document,
 )
-from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
+from fullmag.runtime.script_builder import (
+    export_builder_draft,
+    render_scene_document_as_script,
+    rewrite_loaded_problem_script,
+)
 
 
 def test_scene_document_round_trips_eigenmode_periodic_airbox_k0() -> None:
@@ -79,6 +83,62 @@ study.stages.add_eigenmodes(target='frequency_window', frequency_min=1e9, freque
     reloaded = fm.load_problem_from_script(exported, lightweight_assets=True)
 
     assert reloaded.stages[0].problem.to_ir(include_geometry_assets=False)["study"] == loaded.stages[0].problem.to_ir(include_geometry_assets=False)["study"]
+
+
+def test_public_gpu_round_trips_through_scene_document_without_legacy_cuda_alias(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "public_gpu.py"
+    source.write_text(
+        """import fullmag as fm
+study = fm.study('public_gpu')
+study.engine('fem')
+study.device('gpu', precision='double')
+body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name='film')
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.texture.uniform(1, 0, 0)
+""",
+        encoding="utf-8",
+    )
+    loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+
+    runtime = loaded.problem.to_ir(include_geometry_assets=False)["problem_meta"][
+        "runtime_metadata"
+    ]["runtime_selection"]
+    assert runtime["device"] == "gpu"
+
+    draft = export_builder_draft(loaded)
+    assert draft["requested_device"] == "gpu"
+    scene = build_scene_document_from_builder(draft)
+    assert scene["study"]["requested_device"] == "gpu"
+
+    rendered_scene = render_scene_document_as_script(
+        scene,
+        include_authored_stages=False,
+        include_legacy_relax_stages=False,
+    )
+    assert 'study.device("gpu", precision="double")' in rendered_scene
+    assert "cuda:0" not in rendered_scene
+
+    rendered_source = rewrite_loaded_problem_script(loaded)["rendered_source"]
+    assert 'study.device("gpu", precision="double")' in rendered_source
+
+    legacy_source = tmp_path / "legacy_cuda.py"
+    legacy_source.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "study.device('gpu', precision='double')",
+            "study.device('cuda:0', precision='double')",
+        ),
+        encoding="utf-8",
+    )
+    legacy_loaded = fm.load_problem_from_script(legacy_source, lightweight_assets=True)
+    legacy_runtime = legacy_loaded.problem.to_ir(include_geometry_assets=False)[
+        "problem_meta"
+    ]["runtime_metadata"]["runtime_selection"]
+    assert legacy_runtime["device"] == "cuda"
+    legacy_rendered = rewrite_loaded_problem_script(legacy_loaded)["rendered_source"]
+    assert 'study.device("cuda:0", precision="double")' in legacy_rendered
 
 
 def test_k0_requested_cpu_and_gpu_intent_survives_problem_ir(tmp_path: Path) -> None:

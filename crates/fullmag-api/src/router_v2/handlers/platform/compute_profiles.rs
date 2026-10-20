@@ -66,11 +66,15 @@ pub async fn get_compute_profiles(
 #[utoipa::path(
     post,
     path = "/v2/platform/compute/profiles",
+    params(
+        ("Authorization" = String, Header, description = "Bearer capability issued by the local Fullmag desktop application")
+    ),
     request_body = PublishExecutionProfileRequest,
     responses(
         (status = 201, description = "Immutable profile version published", body = PublishExecutionProfileResource),
         (status = 200, description = "Identical publication intent replayed", body = PublishExecutionProfileResource),
         (status = 400, description = "Invalid profile or publication identity"),
+        (status = 403, description = "A local desktop-operator capability is required"),
         (status = 409, description = "Revision, intent, version or catalogue capacity conflict"),
         (status = 503, description = "No configured profile store"),
     ),
@@ -78,8 +82,19 @@ pub async fn get_compute_profiles(
 )]
 pub async fn post_compute_profile(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request): Json<PublishExecutionProfileRequest>,
 ) -> Result<(StatusCode, Json<PublishExecutionProfileResource>), ApiError> {
+    if !super::super::super::middleware::compute_operator_auth::is_authorized(
+        &headers,
+        state.local_compute_operator_token.as_deref(),
+    ) {
+        return Err(ApiError::with_status_and_code(
+            StatusCode::FORBIDDEN,
+            "local_compute_operator_required",
+            "A local Fullmag desktop operator is required to publish execution profiles.",
+        ));
+    }
     let root = configured_root(&state)?;
     // Publication validates semantic defaults with the same resolver as Submit.
     // It neither probes a device nor admits execution of this profile.
@@ -310,5 +325,36 @@ mod tests {
         ] {
             assert!(catalog_page(catalog(), query(value)).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn profile_write_fails_closed_without_the_local_operator_capability() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("http://localhost:8081"),
+        );
+        let request = PublishExecutionProfileRequest {
+            expected_revision: 0,
+            client_intent_id: "intent-profile-1".into(),
+            profile: fullmag_ir::ExecutionProfileIR {
+                profile_id: "exec:interactive".into(),
+                version: "1".into(),
+                ..Default::default()
+            },
+        };
+
+        let result = post_compute_profile(
+            State(crate::router_v2::tests::test_app_state()),
+            headers,
+            Json(request),
+        )
+        .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("Origin alone must not authorize profile publication"),
+        };
+        assert_eq!(error.status, StatusCode::FORBIDDEN);
+        assert_eq!(error.code.as_deref(), Some("local_compute_operator_required"));
     }
 }

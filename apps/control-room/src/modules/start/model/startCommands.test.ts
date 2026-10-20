@@ -168,13 +168,19 @@ describe("start commands", () => {
     });
   });
 
-  it("reports why a new simulation cannot start without confirmed session absence", () => {
+  it("reports why a new simulation cannot start without confirmed session absence", async () => {
     const registry = registryWithShellAndStart();
     startScreenStore.attach(hostFor(registry, "Session list unavailable."));
 
-    expect(registry.isEnabled("start.new-fdm", WITH_PROJECTS)).toBe(false);
-    expect(startActionDisabledReason("start.new-fdm", startScreenStore.getSnapshot().host, WITH_PROJECTS))
-      .toBe("Session list unavailable.");
+    for (const commandId of ["start.new-fdm", "start.new-fem"]) {
+      expect(registry.isEnabled(commandId, WITH_PROJECTS)).toBe(false);
+      expect(startActionDisabledReason(commandId, startScreenStore.getSnapshot().host, WITH_PROJECTS))
+        .toBe("Session list unavailable.");
+    }
+    await expect(registry.execute("start.new-fdm", WITH_PROJECTS)).resolves.toEqual({
+      message: "Session list unavailable.",
+      status: "failed",
+    });
     // Navigation and browsing do not depend on the session list.
     expect(registry.isEnabled("start.templates", WITH_PROJECTS)).toBe(true);
     expect(registry.isEnabled("start.browse", WITH_PROJECTS)).toBe(true);

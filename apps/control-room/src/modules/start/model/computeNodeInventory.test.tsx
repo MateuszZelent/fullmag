@@ -115,7 +115,54 @@ describe("compute-node snapshot inventory", () => {
     expect(html).toContain("Current sample");
   });
 
-  it("marks retained samples stale only after the API freshness boundary", () => {
+  it("shows why observed CPU capacity is unavailable", () => {
+    const parsed = parseComputeNodeSnapshot("desktop-host", {
+      ...snapshot,
+      cpu: {
+        ...snapshot.cpu,
+        effective_capacity_millis: { status: "unavailable", reason: "unsupported" },
+      },
+    });
+    expect(parsed?.cpu.effectiveCapacityReason).toBe("unsupported");
+
+    const summary: ComputeNodeInventorySummary = {
+      hasSnapshot: true,
+      nodeCount: 1,
+      nodes: [{ nodeId: "desktop-host", state: "current", snapshot: parsed, nodePolicy: null }],
+      refreshFailed: false,
+      resourceStatus: "ready",
+      staleAfterSeconds: 30,
+      state: "current",
+    };
+    const html = renderToStaticMarkup(<ComputeNodeInventoryDetails summary={summary} />);
+    expect(html).toContain("Unavailable · unsupported on this host");
+  });
+
+  it.each([
+    ["browser clock behind the server", "2026-10-13T12:05:00Z"],
+    ["browser clock ahead of the server", "2026-10-13T11:55:00Z"],
+  ])("trusts server freshness when %s", (_description, collectedAt) => {
+    const shiftedSnapshot = {
+      ...snapshot,
+      sample: { ...snapshot.sample, collected_at: collectedAt },
+    } as unknown as ComputeNodesResource["nodes"][number]["snapshot"];
+    const summary = summarizeComputeNodeInventory({
+      data: {
+        schema_version: "compute_nodes.v1",
+        state: "current",
+        stale_after_seconds: 30,
+        nodes: [{ node_id: "desktop-host", state: "current", stale_after_seconds: 30, snapshot: shiftedSnapshot }],
+      },
+      status: "ready",
+      refreshError: null,
+    });
+
+    expect(summary.state).toBe("current");
+    expect(summary.nodes[0]?.state).toBe("current");
+    expect(summary.nodes[0]?.snapshot?.sample.freshness).toBe("current");
+  });
+
+  it("ages retained samples from the browser receipt boundary", () => {
     const resource: Parameters<typeof summarizeComputeNodeInventory>[0] = {
       data: {
         schema_version: "compute_nodes.v1",
@@ -129,14 +176,14 @@ describe("compute-node snapshot inventory", () => {
 
     const atBoundary = summarizeComputeNodeInventory(
       resource,
-      Date.parse("2026-10-13T12:00:30Z"),
+      30_000,
     );
     expect(atBoundary.state).toBe("current");
     expect(atBoundary.nodes[0]?.snapshot?.sample.freshness).toBe("current");
 
     const beyondBoundary = summarizeComputeNodeInventory(
       resource,
-      Date.parse("2026-10-13T12:00:30.001Z"),
+      30_001,
     );
     expect(beyondBoundary.state).toBe("stale");
     expect(beyondBoundary.nodes[0]?.state).toBe("stale");
@@ -158,7 +205,7 @@ describe("compute-node snapshot inventory", () => {
       },
       status: "ready",
       refreshError: null,
-    }, Date.parse("2026-10-13T12:00:31Z"));
+    }, 30_001);
 
     expect(summary.state).toBe("unavailable");
     expect(summary.nodes[0]?.state).toBe("unavailable");

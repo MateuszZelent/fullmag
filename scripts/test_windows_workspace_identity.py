@@ -58,3 +58,12 @@ def test_dependency_only_edits_invalidate_backend_and_frozen_dependencies(repo):
     (repo / "pnpm-lock.yaml").write_text("new dependency identity")
     assert identity.fingerprint(repo)["sha256"] != backend
     assert identity.fingerprint(repo, identity.DEPENDENCY_INPUTS)["sha256"] != dependencies
+
+
+def test_untracked_patch_input_invalidates_dependency_identity(repo):
+    patch = repo / "patches" / "next.patch"
+    patch.parent.mkdir()
+    patch.write_text("patch one")
+    previous = identity.fingerprint(repo, identity.DEPENDENCY_INPUTS)["sha256"]
+    patch.write_text("patch two")
+    assert identity.fingerprint(repo, identity.DEPENDENCY_INPUTS)["sha256"] != previous

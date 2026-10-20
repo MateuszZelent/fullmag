@@ -4831,9 +4831,31 @@ describe("ribbon structure", () => {
       });
     expect(exportGroup?.actions.find((action) => action.id === "export-state"))
       .toMatchObject({
-        commandId: "study.export-state",
+        commandId: "study.save-state",
+        label: "Save State",
         disabled: false,
       });
+  });
+
+  it("keeps Study Export State separate from the Results Save State action", () => {
+    const studyControl = ALL_TAB_CONTENT.study.groups.find(
+      (group) => group.id === "control",
+    );
+    const studyExport = studyControl?.actions.find(
+      (action) => action.id === "study.export-state",
+    );
+    const resultsExport = ALL_TAB_CONTENT.results.groups
+      .find((group) => group.id === "results-export")
+      ?.actions.find((action) => action.id === "export-state");
+
+    expect(studyExport).toMatchObject({
+      commandId: "study.export-state",
+      label: "Export State",
+    });
+    expect(resultsExport).toMatchObject({
+      commandId: "study.save-state",
+      label: "Save State",
+    });
   });
 
   it("keeps unsupported Results analysis workflows disabled", () => {

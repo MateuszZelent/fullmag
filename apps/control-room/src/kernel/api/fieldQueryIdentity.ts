@@ -11,6 +11,7 @@ import type {
 import { resolveCanonicalQuantityId } from "./quantityIds";
 
 export interface CanonicalFieldVectorQuery {
+  readonly carrierId?: string;
   readonly component: string;
   readonly componentExplicit: boolean;
   readonly expectedArtifactGenerationId?: string;
@@ -30,6 +31,7 @@ export interface CanonicalFieldVectorQuery {
 }
 
 const FIELD_VECTOR_QUERY_ORDER = [
+  "carrier_id",
   "component",
   "expected_artifact_generation_id",
   "expected_carrier_revision",
@@ -96,6 +98,7 @@ export function canonicalFieldVectorQuery(
   const scopeKind = nonEmptyString(query.scope_kind) ?? "full";
   const component = nonEmptyString(query.component);
   return {
+    carrierId: nonEmptyString(query.carrier_id),
     component: component ?? "full",
     componentExplicit: component !== undefined,
     expectedArtifactGenerationId: nonEmptyString(
@@ -121,6 +124,7 @@ export function canonicalFieldVectorQueryParams(
   query: CanonicalFieldVectorQuery,
 ): Record<(typeof FIELD_VECTOR_QUERY_ORDER)[number], string | undefined> {
   return {
+    carrier_id: query.carrierId,
     component: query.componentExplicit ? query.component : undefined,
     expected_artifact_generation_id: query.expectedArtifactGenerationId,
     expected_carrier_revision: query.expectedCarrierRevision,
@@ -142,6 +146,7 @@ export function canonicalFieldVectorQueriesEqual(
   right: CanonicalFieldVectorQuery,
 ): boolean {
   return (
+    left.carrierId === right.carrierId &&
     left.component === right.component &&
     left.expectedArtifactGenerationId === right.expectedArtifactGenerationId &&
     left.expectedCarrierRevision === right.expectedCarrierRevision &&
@@ -229,6 +234,7 @@ export function parseCanonicalFieldVectorResourceKey(
   const maxSamples = url.searchParams.get("max_samples");
   const phaseRad = url.searchParams.get("phase_rad");
   return canonicalFieldVectorQuery(quantityId, {
+    carrier_id: url.searchParams.get("carrier_id") ?? undefined,
     component: url.searchParams.get("component") ?? undefined,
     expected_artifact_generation_id:
       url.searchParams.get("expected_artifact_generation_id") ?? undefined,

@@ -3,7 +3,7 @@
 //! These types define the logical snapshot of a simulation session,
 //! used for both the internal `SessionStore` and the portable `.fms` file format.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -48,11 +48,39 @@ pub enum RestoreClass {
 
 // ── Session manifest ───────────────────────────────────────────────────
 
+pub const FMS_SESSION_FORMAT_V1: &str = "fullmag.session.v1";
+pub const FMS_SESSION_FORMAT_V2: &str = "fullmag.session.v2";
+pub const FMS_ACCEPTED_PROVENANCE_MANIFEST_REF: &str = "manifest/accepted_provenance.json";
+
+/// Typed pointer to the detached accepted-run evidence closure in a v2 FMS.
+///
+/// This is provenance only. It carries no lease, claim, process, scheduler,
+/// or resume authority and must never be used as a runtime store binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsAcceptedProvenanceReference {
+    pub manifest_ref: String,
+    pub accepted_run_id: String,
+    pub closure_sha256: String,
+}
+
+impl FmsAcceptedProvenanceReference {
+    pub fn validate(&self) -> Result<()> {
+        if self.manifest_ref != FMS_ACCEPTED_PROVENANCE_MANIFEST_REF {
+            bail!("accepted provenance manifest reference is not canonical");
+        }
+        crate::repository_path::validate_store_id(&self.accepted_run_id)
+            .context("invalid accepted provenance run id")?;
+        validate_prefixed_sha256(&self.closure_sha256, "accepted provenance closure_sha256")
+    }
+}
+
 /// Top-level manifest written as `manifest/session.json` in the `.fms` archive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FmsSessionManifest {
-    /// Always `"fullmag.session.v1"`.
+    /// `fullmag.session.v1` for ordinary archives or `fullmag.session.v2`
+    /// when an evidence-only accepted-run provenance closure is attached.
     pub format: String,
     /// Unique session identifier.
     pub session_id: String,
@@ -78,6 +106,10 @@ pub struct FmsSessionManifest {
     pub workspace_ref: String,
     /// Reference to export profile.
     pub export_profile_ref: String,
+    /// Present only for `fullmag.session.v2`; points to an evidence-only
+    /// accepted-run closure under `manifest/accepted_provenance.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_provenance_ref: Option<FmsAcceptedProvenanceReference>,
 }
 
 impl FmsSessionManifest {
@@ -88,7 +120,7 @@ impl FmsSessionManifest {
     ) -> Self {
         let now = Utc::now();
         Self {
-            format: "fullmag.session.v1".into(),
+            format: FMS_SESSION_FORMAT_V1.into(),
             session_id: session_id.into(),
             name: name.into(),
             profile,
@@ -100,6 +132,7 @@ impl FmsSessionManifest {
             batch_refs: Vec::new(),
             workspace_ref: "manifest/workspace.json".into(),
             export_profile_ref: "manifest/export_profile.json".into(),
+            accepted_provenance_ref: None,
         }
     }
 }
@@ -390,7 +423,8 @@ pub const FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_SCHEMA: &str = "batch_output_storage
 pub const FMS_BATCH_EXPANSION_MANIFEST_SCHEMA: &str = "batch_expansion_manifest.v2";
 pub const FMS_BATCH_EXPANSION_PROGRESS_LEGACY_SCHEMA: &str = "batch_expansion_progress.v1";
 pub const FMS_BATCH_EXPANSION_PROGRESS_SCHEMA: &str = "batch_expansion_progress.v2";
-pub const FMS_BATCH_COMMAND_SCHEMA: &str = "batch_command.v1";
+pub const FMS_BATCH_COMMAND_LEGACY_SCHEMA: &str = "batch_command.v1";
+pub const FMS_BATCH_COMMAND_SCHEMA: &str = "batch_command.v2";
 const FMS_BATCH_EXPANSION_MAX_CASES: usize = 10_000;
 pub(crate) const FMS_BATCH_COMMAND_HISTORY_MAX: usize = 128;
 
@@ -455,10 +489,7 @@ impl FmsBatchIntent {
         validate_sha256(&self.manifest_object_ref, "manifest_object_ref")?;
         validate_sha256(&self.definition_object_ref, "definition_object_ref")?;
         validate_sha256(&self.study_object_ref, "study_object_ref")?;
-        validate_sha256(
-            &self.study_catalog_object_ref,
-            "study_catalog_object_ref",
-        )?;
+        validate_sha256(&self.study_catalog_object_ref, "study_catalog_object_ref")?;
 
         let snapshot_schema = self
             .specification
@@ -468,9 +499,8 @@ impl FmsBatchIntent {
         let output_storage = self.specification.get("output_storage");
         if snapshot_schema == FMS_BATCH_SUBMIT_SNAPSHOT_SCHEMA {
             validate_batch_output_storage_snapshot(
-                output_storage.context(
-                    "batch_submit_snapshot.v2 requires an output_storage snapshot",
-                )?,
+                output_storage
+                    .context("batch_submit_snapshot.v2 requires an output_storage snapshot")?,
             )?;
         } else if snapshot_schema == FMS_BATCH_SUBMIT_SNAPSHOT_LEGACY_SCHEMA {
             if let Some(snapshot) = output_storage {
@@ -539,8 +569,7 @@ impl FmsBatchIntent {
                 .and_then(Value::as_str)
                 .context("batch immutable asset has no content_sha256")?;
             if !seen.insert(asset_id)
-                || self.asset_object_refs.get(asset_id).map(String::as_str)
-                    != Some(content_sha256)
+                || self.asset_object_refs.get(asset_id).map(String::as_str) != Some(content_sha256)
             {
                 bail!("batch asset object does not match immutable asset reference");
             }
@@ -679,7 +708,9 @@ fn validate_resolved_batch_output_storage_snapshot(snapshot: &Value) -> Result<(
         .filter(|value| value.is_object())
         .context("batch output_storage snapshot has no settings object")?;
     let settings: fullmag_ir::OutputStorageIR = serde_json::from_value(settings_value.clone())
-        .context("batch output_storage settings do not match the resolved OutputStorage contract")?;
+        .context(
+            "batch output_storage settings do not match the resolved OutputStorage contract",
+        )?;
     settings
         .validate()
         .map_err(|errors| anyhow::anyhow!(errors.join("; ")))
@@ -783,6 +814,7 @@ pub enum FmsBatchCommandAction {
     PauseAdmission,
     ResumeAdmission,
     CancelAdmission,
+    Retry,
 }
 
 impl FmsBatchCommandAction {
@@ -791,7 +823,34 @@ impl FmsBatchCommandAction {
             Self::PauseAdmission => "pause_admission",
             Self::ResumeAdmission => "resume_admission",
             Self::CancelAdmission => "cancel_admission",
+            Self::Retry => "retry",
         }
+    }
+}
+
+/// Immutable target for a case-scoped retry command. The run ID is pinned in
+/// addition to the case ID so a replay cannot be redirected by a changed or
+/// malformed expansion manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsBatchRetryTarget {
+    pub case_id: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub retry_id: String,
+    pub expected_catalog_revision: u64,
+}
+
+impl FmsBatchRetryTarget {
+    fn validate(&self) -> Result<()> {
+        crate::repository_path::validate_store_id(&self.case_id)?;
+        crate::repository_path::validate_store_id(&self.run_id)?;
+        crate::repository_path::validate_store_id(&self.task_id)?;
+        crate::repository_path::validate_store_id(&self.retry_id)?;
+        if self.expected_catalog_revision == 0 {
+            bail!("batch retry target requires a positive task catalog revision");
+        }
+        Ok(())
     }
 }
 
@@ -806,6 +865,9 @@ pub struct FmsBatchCommandIntent {
     pub revision: u64,
     pub action: FmsBatchCommandAction,
     pub reason: String,
+    /// Present only for the v2 case retry action. Missing on v1 records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_target: Option<FmsBatchRetryTarget>,
     pub created_at: DateTime<Utc>,
     pub payload_sha256: String,
 }
@@ -818,18 +880,58 @@ impl FmsBatchCommandIntent {
         action: FmsBatchCommandAction,
         reason: impl Into<String>,
     ) -> Self {
+        Self::new_with_retry_target(
+            batch_id,
+            command_id,
+            expected_revision,
+            action,
+            reason,
+            None,
+        )
+    }
+
+    pub fn new_retry(
+        batch_id: impl Into<String>,
+        command_id: impl Into<String>,
+        expected_revision: u64,
+        target: FmsBatchRetryTarget,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::new_with_retry_target(
+            batch_id,
+            command_id,
+            expected_revision,
+            FmsBatchCommandAction::Retry,
+            reason,
+            Some(target),
+        )
+    }
+
+    fn new_with_retry_target(
+        batch_id: impl Into<String>,
+        command_id: impl Into<String>,
+        expected_revision: u64,
+        action: FmsBatchCommandAction,
+        reason: impl Into<String>,
+        retry_target: Option<FmsBatchRetryTarget>,
+    ) -> Self {
         let batch_id = batch_id.into();
         let command_id = command_id.into();
         let reason = reason.into();
         let revision = expected_revision.saturating_add(1);
-        let payload_sha256 = canonical_json_sha256(&serde_json::json!({
+        let mut payload = serde_json::json!({
             "batch_id": batch_id,
             "command_id": command_id,
             "expected_revision": expected_revision,
             "revision": revision,
             "action": action.as_str(),
             "reason": reason,
-        }));
+        });
+        if let Some(target) = retry_target.as_ref() {
+            payload["retry_target"] = serde_json::to_value(target)
+                .expect("batch retry target is serializable");
+        }
+        let payload_sha256 = canonical_json_sha256(&payload);
         Self {
             schema_version: FMS_BATCH_COMMAND_SCHEMA.into(),
             batch_id,
@@ -838,32 +940,65 @@ impl FmsBatchCommandIntent {
             revision,
             action,
             reason,
+            retry_target,
             created_at: Utc::now(),
             payload_sha256,
         }
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != FMS_BATCH_COMMAND_SCHEMA {
+        if self.schema_version != FMS_BATCH_COMMAND_SCHEMA
+            && self.schema_version != FMS_BATCH_COMMAND_LEGACY_SCHEMA
+        {
             bail!("unsupported batch command schema `{}`", self.schema_version);
         }
         crate::repository_path::validate_store_id(&self.batch_id)?;
         crate::repository_path::validate_store_id(&self.command_id)?;
-        if self.revision != self.expected_revision.checked_add(1).context("batch command revision overflow")? {
+        if self.revision
+            != self
+                .expected_revision
+                .checked_add(1)
+                .context("batch command revision overflow")?
+        {
             bail!("batch command revision does not follow its expected revision");
         }
         if self.reason.trim().is_empty() || self.reason.len() > 1024 {
             bail!("batch command reason must be nonempty and at most 1024 bytes");
         }
+        match (
+            self.schema_version.as_str(),
+            self.action,
+            self.retry_target.as_ref(),
+        ) {
+            (FMS_BATCH_COMMAND_LEGACY_SCHEMA, FmsBatchCommandAction::Retry, _)
+            | (FMS_BATCH_COMMAND_LEGACY_SCHEMA, _, Some(_))
+            | (FMS_BATCH_COMMAND_SCHEMA, FmsBatchCommandAction::Retry, None) => {
+                bail!("batch command retry target does not match its schema and action");
+            }
+            (FMS_BATCH_COMMAND_SCHEMA, _, Some(_))
+                if self.action != FmsBatchCommandAction::Retry =>
+            {
+                bail!("batch command retry target does not match its schema and action");
+            }
+            (FMS_BATCH_COMMAND_SCHEMA, FmsBatchCommandAction::Retry, Some(target)) => {
+                target.validate()?;
+            }
+            (FMS_BATCH_COMMAND_LEGACY_SCHEMA | FMS_BATCH_COMMAND_SCHEMA, _, None) => {}
+            _ => bail!("batch command retry target is invalid for its action"),
+        }
         validate_sha256(&self.payload_sha256, "payload_sha256")?;
-        let expected = canonical_json_sha256(&serde_json::json!({
+        let mut payload = serde_json::json!({
             "batch_id": self.batch_id,
             "command_id": self.command_id,
             "expected_revision": self.expected_revision,
             "revision": self.revision,
             "action": self.action.as_str(),
             "reason": self.reason,
-        }));
+        });
+        if let Some(target) = self.retry_target.as_ref() {
+            payload["retry_target"] = serde_json::to_value(target)?;
+        }
+        let expected = canonical_json_sha256(&payload);
         if self.payload_sha256 != expected {
             bail!("batch command payload digest does not match its contents");
         }
@@ -971,14 +1106,19 @@ impl FmsBatchExpansionProgress {
         let valid_stopped_state = self.state == FmsBatchExpansionState::Stopped
             && self.next_case_index > 0
             && self.next_case_index < self.total_cases;
-        let latest_action = self.commands.last().map(|command| command.action);
+        let latest_admission_action = self
+            .commands
+            .iter()
+            .rev()
+            .map(|command| command.action)
+            .find(|action| *action != FmsBatchCommandAction::Retry);
         let valid_command_state = match self.state {
             FmsBatchExpansionState::Paused => {
                 self.next_case_index < self.total_cases
-                    && latest_action == Some(FmsBatchCommandAction::PauseAdmission)
+                    && latest_admission_action == Some(FmsBatchCommandAction::PauseAdmission)
             }
             FmsBatchExpansionState::Cancelled => {
-                latest_action == Some(FmsBatchCommandAction::CancelAdmission)
+                latest_admission_action == Some(FmsBatchCommandAction::CancelAdmission)
             }
             _ => false,
         };
@@ -998,8 +1138,7 @@ impl FmsBatchExpansionProgress {
         let manifest: Value = serde_json::from_slice(manifest_bytes)
             .context("batch expansion manifest object is not valid JSON")?;
         if self.state == FmsBatchExpansionState::Stopped
-            && manifest.get("failure_policy").and_then(Value::as_str)
-                != Some("stop_admission")
+            && manifest.get("failure_policy").and_then(Value::as_str) != Some("stop_admission")
         {
             bail!("stopped batch expansion requires stop_admission failure policy");
         }
@@ -1022,6 +1161,81 @@ impl FmsBatchExpansionProgress {
         }
         Ok(())
     }
+
+    /// Apply one command to a candidate progress snapshot without writing it.
+    /// The session store uses this both to preflight a compound retry request
+    /// and to commit the exact same command under the writer lease.
+    pub fn with_command(
+        &self,
+        command: &FmsBatchCommandIntent,
+    ) -> Result<(Self, BatchCommandCommitDisposition)> {
+        self.validate()?;
+        command.validate()?;
+        if command.batch_id != self.batch_id {
+            bail!("batch command targets a different progress record");
+        }
+        if let Some(existing) = self
+            .commands
+            .iter()
+            .find(|existing| existing.command_id == command.command_id)
+        {
+            if existing.payload_sha256 == command.payload_sha256 {
+                return Ok((self.clone(), BatchCommandCommitDisposition::Replayed));
+            }
+            return Err(BatchCommandConflict::Identity.into());
+        }
+        let actual_revision = u64::try_from(self.commands.len())?;
+        if command.expected_revision != actual_revision || command.revision != actual_revision + 1 {
+            return Err(BatchCommandConflict::Revision {
+                expected: command.expected_revision,
+                actual: actual_revision,
+            }
+            .into());
+        }
+        if self.commands.len() >= FMS_BATCH_COMMAND_HISTORY_MAX {
+            bail!("batch command history is full");
+        }
+        let next_state = match (self.state, command.action) {
+            (
+                FmsBatchExpansionState::Pending | FmsBatchExpansionState::Expanding,
+                FmsBatchCommandAction::PauseAdmission,
+            ) if self.next_case_index < self.total_cases => FmsBatchExpansionState::Paused,
+            (FmsBatchExpansionState::Paused, FmsBatchCommandAction::ResumeAdmission) => {
+                if self.next_case_index == 0 {
+                    FmsBatchExpansionState::Pending
+                } else if self.next_case_index == self.total_cases {
+                    FmsBatchExpansionState::Complete
+                } else {
+                    FmsBatchExpansionState::Expanding
+                }
+            }
+            (
+                FmsBatchExpansionState::Pending
+                | FmsBatchExpansionState::Expanding
+                | FmsBatchExpansionState::Paused,
+                FmsBatchCommandAction::CancelAdmission,
+            ) => FmsBatchExpansionState::Cancelled,
+            (state, FmsBatchCommandAction::Retry) if command.retry_target.is_some() => state,
+            (state, action) => {
+                return Err(BatchCommandConflict::InvalidTransition {
+                    action: action.as_str(),
+                    state,
+                }
+                .into())
+            }
+        };
+        let mut next = self.clone();
+        next.commands.push(command.clone());
+        next.sequence = self
+            .sequence
+            .checked_add(1)
+            .context("batch expansion sequence overflow")?;
+        next.schema_version = FMS_BATCH_EXPANSION_PROGRESS_SCHEMA.into();
+        next.state = next_state;
+        next.updated_at = Utc::now();
+        next.validate()?;
+        Ok((next, BatchCommandCommitDisposition::Accepted))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1038,9 +1252,15 @@ pub enum BatchCommandCommitDisposition {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BatchCommandConflict {
-    Revision { expected: u64, actual: u64 },
+    Revision {
+        expected: u64,
+        actual: u64,
+    },
     Identity,
-    InvalidTransition { action: &'static str, state: FmsBatchExpansionState },
+    InvalidTransition {
+        action: &'static str,
+        state: FmsBatchExpansionState,
+    },
 }
 
 impl std::fmt::Display for BatchCommandConflict {
@@ -1050,7 +1270,9 @@ impl std::fmt::Display for BatchCommandConflict {
                 formatter,
                 "batch command revision conflict: expected {expected}, found {actual}"
             ),
-            Self::Identity => formatter.write_str("batch command id was reused for another request"),
+            Self::Identity => {
+                formatter.write_str("batch command id was reused for another request")
+            }
             Self::InvalidTransition { action, state } => write!(
                 formatter,
                 "batch command `{action}` is invalid while expansion is {state:?}"
@@ -1495,6 +1717,9 @@ impl FmsTaskPreparationReceipt {
 
     fn validate_payload_identity(&self) -> Result<()> {
         let payload = &self.payload;
+        if payload["schema_version"] == "closed_loop_preparation_receipt.v1" {
+            return self.validate_closed_loop_payload_identity();
+        }
         if payload["schema_version"] != FMS_PREPARATION_RECEIPT_SCHEMA
             || payload["preparation_id"].as_str() != Some(self.preparation_id.as_str())
             || payload["plan_fingerprint"].as_str() != Some(self.plan_fingerprint.as_str())
@@ -1560,6 +1785,31 @@ impl FmsTaskPreparationReceipt {
         Ok(())
     }
 
+    fn validate_closed_loop_payload_identity(&self) -> Result<()> {
+        let payload = self.payload.as_object().context("inspection preparation is not an object")?;
+        let keys: std::collections::BTreeSet<_> = payload.keys().map(String::as_str).collect();
+        if keys != ["schema_version", "preparation_id", "plan_fingerprint", "plan", "native"].into_iter().collect()
+            || payload["preparation_id"].as_str() != Some(self.preparation_id.as_str())
+            || payload["plan_fingerprint"].as_str() != Some(self.plan_fingerprint.as_str()) {
+            bail!("inspection preparation payload identity differs from envelope");
+        }
+        let plan = payload["plan"].as_object().context("inspection preparation plan is missing")?;
+        let source = plan.get("source").and_then(Value::as_object).context("inspection preparation accepted source is missing")?;
+        if plan.get("schema_version").and_then(Value::as_str) != Some("closed_loop_preparation_plan.v1")
+            || source.get("schema_version").and_then(Value::as_str) != Some("accepted_run_preparation_source.v1")
+            || source.get("run_id").and_then(Value::as_str) != Some(self.run_id.as_str())
+            || source.get("step_id").and_then(Value::as_str) != Some(self.step_id.as_str())
+            || source.get("problem_fingerprint") != plan.get("problem_fingerprint")
+            || format!("sha256:{}", canonical_json_sha256(&payload["plan"])) != self.plan_fingerprint {
+            bail!("inspection preparation source differs from its envelope");
+        }
+        for field in ["problem_fingerprint", "carrier_fingerprint", "operation_fingerprint", "source_mesh_fingerprint"] {
+            validate_prefixed_sha256(plan.get(field).and_then(Value::as_str).context("inspection preparation digest missing")?, "inspection preparation fingerprint")?;
+        }
+        validate_prefixed_sha256(source.get("specification_fingerprint").and_then(Value::as_str).context("inspection accepted RunSpec digest missing")?, "inspection RunSpec fingerprint")?;
+        Ok(())
+    }
+
     pub fn relative_path(&self) -> Result<String> {
         self.validate()?;
         Ok(format!(
@@ -1596,7 +1846,10 @@ impl FmsTaskPreparationReceipt {
             bail!("accepted RunSpec run_id does not match task preparation receipt");
         }
         let expected = format!("sha256:{}", canonical_json_sha256(&intent.specification));
-        let actual = self.payload["accepted_run_source"]["specification_fingerprint"]
+        let source = if self.payload["schema_version"] == "closed_loop_preparation_receipt.v1" {
+            &self.payload["plan"]["source"]
+        } else { &self.payload["accepted_run_source"] };
+        let actual = source["specification_fingerprint"]
             .as_str()
             .context("accepted run specification fingerprint is missing")?;
         if actual != expected {
@@ -1615,6 +1868,110 @@ impl FmsTaskPreparationReceipt {
             && self.plan_fingerprint == other.plan_fingerprint
             && self.payload_sha256 == other.payload_sha256
             && self.payload == other.payload
+    }
+}
+
+/// Immutable pointer proving that the live accepted projection selected one
+/// study-stage preparation. The task receipt remains the authoritative
+/// payload; this record stores the exact task/plan identity needed to recover
+/// the selected stage after an API restart without replacing the run-level
+/// live preparation anchor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsAcceptedStagePreparationReceipt {
+    pub schema_version: String,
+    pub run_id: String,
+    pub step_id: String,
+    pub task_id: String,
+    pub input_fingerprint: String,
+    pub preparation_id: String,
+    pub plan_fingerprint: String,
+    pub task_receipt_payload_sha256: String,
+}
+
+pub const FMS_ACCEPTED_STAGE_PREPARATION_RECEIPT_SCHEMA: &str =
+    "accepted_stage_preparation_receipt.v1";
+
+impl FmsAcceptedStagePreparationReceipt {
+    pub fn from_task_receipt(receipt: &FmsTaskPreparationReceipt) -> Result<Self> {
+        receipt.validate()?;
+        let stage = Self {
+            schema_version: FMS_ACCEPTED_STAGE_PREPARATION_RECEIPT_SCHEMA.into(),
+            run_id: receipt.run_id.clone(),
+            step_id: receipt.step_id.clone(),
+            task_id: receipt.task_id.clone(),
+            input_fingerprint: receipt.input_fingerprint.clone(),
+            preparation_id: receipt.preparation_id.clone(),
+            plan_fingerprint: receipt.plan_fingerprint.clone(),
+            task_receipt_payload_sha256: receipt.payload_sha256.clone(),
+        };
+        stage.validate()?;
+        Ok(stage)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_ACCEPTED_STAGE_PREPARATION_RECEIPT_SCHEMA {
+            bail!(
+                "unsupported accepted stage preparation receipt schema `{}`",
+                self.schema_version
+            );
+        }
+        crate::repository_path::validate_store_id(&self.run_id)
+            .context("invalid accepted stage receipt run_id")?;
+        validate_study_step_id(&self.step_id)?;
+        crate::repository_path::validate_store_id(&self.task_id)
+            .context("invalid accepted stage receipt task_id")?;
+        validate_sha256(
+            &self.input_fingerprint,
+            "accepted stage receipt input_fingerprint",
+        )?;
+        crate::repository_path::validate_store_id(&self.preparation_id)
+            .context("invalid accepted stage receipt preparation_id")?;
+        validate_prefixed_sha256(
+            &self.plan_fingerprint,
+            "accepted stage receipt plan_fingerprint",
+        )?;
+        validate_sha256(
+            &self.task_receipt_payload_sha256,
+            "accepted stage receipt task_receipt_payload_sha256",
+        )?;
+        let expected_task_id = task_id_for_study_step(&self.run_id, &self.step_id)?;
+        if self.task_id != expected_task_id {
+            bail!("accepted stage receipt task_id does not match run_id and step_id");
+        }
+        if self.preparation_id != format!("prep-{}", self.task_id) {
+            bail!("accepted stage receipt preparation_id is not deterministic for its task");
+        }
+        Ok(())
+    }
+
+    pub fn relative_path(&self) -> Result<String> {
+        self.validate()?;
+        Ok(format!(
+            "runs/{}/accepted_stage_preparation_receipts/{}.json",
+            self.run_id, self.task_id
+        ))
+    }
+
+    pub fn matches_task_receipt(&self, receipt: &FmsTaskPreparationReceipt) -> bool {
+        self.run_id == receipt.run_id
+            && self.step_id == receipt.step_id
+            && self.task_id == receipt.task_id
+            && self.input_fingerprint == receipt.input_fingerprint
+            && self.preparation_id == receipt.preparation_id
+            && self.plan_fingerprint == receipt.plan_fingerprint
+            && self.task_receipt_payload_sha256 == receipt.payload_sha256
+    }
+
+    pub fn same_immutable_payload(&self, other: &Self) -> bool {
+        self.schema_version == other.schema_version
+            && self.run_id == other.run_id
+            && self.step_id == other.step_id
+            && self.task_id == other.task_id
+            && self.input_fingerprint == other.input_fingerprint
+            && self.preparation_id == other.preparation_id
+            && self.plan_fingerprint == other.plan_fingerprint
+            && self.task_receipt_payload_sha256 == other.task_receipt_payload_sha256
     }
 }
 
@@ -2994,6 +3351,11 @@ pub struct FmsHostLaunchBinding {
     pub schema_version: String,
     pub ledger_root: PathBuf,
     pub policy: crate::host_resource_ledger::HostResourceLedgerPolicy,
+    /// Canonical digest of the immutable host-readiness blob for the strict
+    /// runtime generation that admitted this lease. Legacy bindings may omit
+    /// it and remain readable, but new v2 launch paths require it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_generation_sha256: Option<String>,
 }
 
 impl FmsHostLaunchBinding {
@@ -3018,7 +3380,20 @@ impl FmsHostLaunchBinding {
             bail!("host launch binding ledger_root must name a dedicated directory");
         }
         self.policy.validate()?;
+        if let Some(digest) = self.runtime_generation_sha256.as_deref() {
+            validate_runtime_generation_sha256(digest)?;
+        }
         Ok(())
+    }
+
+    /// Return the generation carried by a strict host binding. This separate
+    /// accessor preserves readability of legacy bindings while preventing a
+    /// v2 worker from treating a missing generation as an admission proof.
+    pub fn require_runtime_generation_sha256(&self) -> Result<&str> {
+        self.validate()?;
+        self.runtime_generation_sha256
+            .as_deref()
+            .context("host launch binding is missing runtime_generation_sha256")
     }
 }
 
@@ -3198,7 +3573,9 @@ impl FmsPreparationResourceLease {
             || task.ownership_epoch.is_some()
             || task.resource_id.is_some()
         {
-            bail!("preparation resource lease requires an unclaimed accepted task awaiting preparation");
+            bail!(
+                "preparation resource lease requires an unclaimed accepted task awaiting preparation"
+            );
         }
         Ok(())
     }
@@ -3418,6 +3795,198 @@ impl FmsTaskAdmissionRecord {
     }
 }
 
+/// Durable dispatch identity for one externally scheduled solver attempt.
+///
+/// The record is written before a provider is contacted. Its initial
+/// `submission_unknown` state is intentionally conservative: after a process
+/// restart the coordinator must look up this idempotency key before it can
+/// submit again. A retry is a new Fullmag attempt and never reuses this record.
+pub const FMS_PROVIDER_JOB_SUBMISSION_SCHEMA: &str = "provider_job_submission.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FmsProviderJobStatus {
+    SubmissionUnknown,
+    Rejected,
+    Submitted,
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+impl FmsProviderJobStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Rejected | Self::Succeeded | Self::Failed | Self::Cancelled
+        )
+    }
+
+    pub fn can_transition_to(self, next: Self) -> bool {
+        use FmsProviderJobStatus::*;
+        match self {
+            SubmissionUnknown => matches!(
+                next,
+                Rejected | Submitted | Queued | Running | Succeeded | Failed | Cancelled
+            ),
+            Submitted => matches!(next, Queued | Running | Succeeded | Failed | Cancelled),
+            Queued => matches!(next, Running | Succeeded | Failed | Cancelled),
+            Running => matches!(next, Succeeded | Failed | Cancelled),
+            Rejected | Succeeded | Failed | Cancelled => false,
+        }
+    }
+}
+
+/// Durable binding between one Fullmag attempt and one external provider job.
+///
+/// Provider credentials and arbitrary command text are deliberately absent.
+/// The request digest binds the immutable submission payload; the idempotency
+/// key is stable for the attempt/provider/target tuple and is safe to use for
+/// lookup after an ACK timeout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsProviderJobSubmission {
+    pub schema_version: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    pub ownership_epoch: u64,
+    pub provider_id: String,
+    pub target_id: String,
+    pub scheduler_id: String,
+    pub resource_id: String,
+    pub idempotency_key: String,
+    pub request_digest: String,
+    pub status: FmsProviderJobStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_job_id: Option<String>,
+    pub revision: u64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl FmsProviderJobSubmission {
+    pub fn expected_idempotency_key(&self) -> String {
+        let identity = serde_json::json!({
+            "run_id": &self.run_id,
+            "task_id": &self.task_id,
+            "attempt_id": &self.attempt_id,
+            "ownership_epoch": self.ownership_epoch,
+            "provider_id": &self.provider_id,
+            "target_id": &self.target_id,
+            "scheduler_id": &self.scheduler_id,
+            "resource_id": &self.resource_id,
+        });
+        format!("fullmag-{}", canonical_json_sha256(&identity))
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_PROVIDER_JOB_SUBMISSION_SCHEMA {
+            bail!(
+                "unsupported provider job submission schema `{}`",
+                self.schema_version
+            );
+        }
+        for (value, field) in [
+            (self.run_id.as_str(), "run_id"),
+            (self.task_id.as_str(), "task_id"),
+            (self.attempt_id.as_str(), "attempt_id"),
+            (self.provider_id.as_str(), "provider_id"),
+            (self.target_id.as_str(), "target_id"),
+            (self.scheduler_id.as_str(), "scheduler_id"),
+            (self.resource_id.as_str(), "resource_id"),
+        ] {
+            crate::repository_path::validate_store_id(value)
+                .with_context(|| format!("invalid provider job submission {field}"))?;
+        }
+        if self.ownership_epoch == 0 || self.revision == 0 {
+            bail!("provider job submission epoch and revision must be positive");
+        }
+        validate_prefixed_sha256(&self.request_digest, "provider job request_digest")?;
+        if self.idempotency_key != self.expected_idempotency_key() {
+            bail!("provider job submission idempotency key does not match its attempt");
+        }
+        if self.updated_at < self.created_at {
+            bail!("provider job submission updated_at precedes created_at");
+        }
+        match (self.status, self.provider_job_id.as_deref()) {
+            (FmsProviderJobStatus::SubmissionUnknown, None) => {}
+            (FmsProviderJobStatus::SubmissionUnknown, Some(_)) => {
+                bail!("unknown provider submission must not claim a provider job id")
+            }
+            (FmsProviderJobStatus::Rejected, None) => {}
+            (FmsProviderJobStatus::Rejected, Some(_)) => {
+                bail!("rejected provider submission must not claim a provider job id")
+            }
+            (_, Some(provider_job_id))
+                if !provider_job_id.trim().is_empty()
+                    && provider_job_id.len() <= 1024
+                    && !provider_job_id.chars().any(char::is_control) => {}
+            (_, _) => bail!("known provider job status requires a valid provider_job_id"),
+        }
+        Ok(())
+    }
+
+    pub fn matches_dispatch_identity(&self, other: &Self) -> bool {
+        self.run_id == other.run_id
+            && self.task_id == other.task_id
+            && self.attempt_id == other.attempt_id
+            && self.ownership_epoch == other.ownership_epoch
+            && self.schema_version == other.schema_version
+            && self.provider_id == other.provider_id
+            && self.target_id == other.target_id
+            && self.scheduler_id == other.scheduler_id
+            && self.resource_id == other.resource_id
+            && self.idempotency_key == other.idempotency_key
+            && self.request_digest == other.request_digest
+    }
+
+    pub fn validate_transition_from(&self, previous: &Self) -> Result<()> {
+        self.validate()?;
+        previous.validate()?;
+        if !self.matches_dispatch_identity(previous) {
+            bail!("provider job update changed its immutable dispatch identity");
+        }
+        if self.created_at != previous.created_at {
+            bail!("provider job update changed its creation timestamp");
+        }
+        let expected_revision = previous
+            .revision
+            .checked_add(1)
+            .context("provider job submission revision exhausted")?;
+        if self.revision != expected_revision {
+            bail!("provider job submission revision is stale or skipped");
+        }
+        if !previous.status.can_transition_to(self.status) {
+            bail!(
+                "provider job status cannot transition from {:?} to {:?}",
+                previous.status,
+                self.status
+            );
+        }
+        if previous
+            .provider_job_id
+            .as_ref()
+            .is_some_and(|provider_job_id| self.provider_job_id.as_ref() != Some(provider_job_id))
+        {
+            bail!("provider job update changed the provider job id");
+        }
+        if self.updated_at < previous.updated_at {
+            bail!("provider job submission update timestamp moved backwards");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderJobSubmissionDisposition {
+    Prepared,
+    Updated,
+    Replayed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskAdmissionCommitDisposition {
     Admitted,
@@ -3463,6 +4032,10 @@ pub fn canonical_json_bytes(value: &Value) -> Vec<u8> {
 
 pub fn canonical_json_sha256(value: &Value) -> String {
     format!("{:x}", Sha256::digest(canonical_json_bytes(value)))
+}
+
+pub(crate) fn validate_runtime_generation_sha256(value: &str) -> Result<()> {
+    validate_sha256(value, "runtime_generation_sha256")
 }
 
 fn validate_sha256(value: &str, field: &str) -> Result<()> {
@@ -3873,13 +4446,38 @@ mod graph_schema_tests {
 }
 
 #[cfg(test)]
+mod closed_loop_preparation_identity_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn closed_loop_envelope_requires_session_derived_task_preparation_id() {
+        let run_id="run-inspection";
+        let step_id=format!("script-execution-{}","b".repeat(64));
+        let task_id=task_id_for_study_step(run_id,&step_id).unwrap();
+        assert_ne!(task_id,step_id);
+        let problem_fingerprint=format!("sha256:{}","c".repeat(64));
+        let plan=json!({"schema_version":"closed_loop_preparation_plan.v1", "source":{"schema_version":"accepted_run_preparation_source.v1","run_id":run_id,"step_id":step_id,"problem_fingerprint":problem_fingerprint,"specification_fingerprint":format!("sha256:{}","d".repeat(64))},"problem_fingerprint":problem_fingerprint,"carrier_fingerprint":format!("sha256:{}","e".repeat(64)),"operation_fingerprint":format!("sha256:{}","f".repeat(64)),"source_mesh_fingerprint":format!("sha256:{}","a".repeat(64))});
+        let plan_fingerprint=format!("sha256:{}",canonical_json_sha256(&plan));
+        // Metadata-only session fixture; application still requires genuine native mesh evidence.
+        let payload=|preparation_id:&str|json!({"schema_version":"closed_loop_preparation_receipt.v1","preparation_id":preparation_id,"plan_fingerprint":plan_fingerprint,"plan":plan,"native":{}});
+        let wrong=format!("prep-{step_id}");
+        assert!(FmsTaskPreparationReceipt::new(run_id,step_id.clone(),"a".repeat(64),wrong.clone(),plan_fingerprint.clone(),payload(&wrong)).is_err());
+        let expected=format!("prep-{task_id}");
+        let expected_payload=payload(&expected);
+        let receipt=FmsTaskPreparationReceipt::new(run_id,step_id,"a".repeat(64),expected.clone(),plan_fingerprint,expected_payload).unwrap();
+        assert_eq!(receipt.task_id,task_id);assert_eq!(receipt.preparation_id,expected);receipt.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
 mod host_launch_binding_tests {
     use super::{
-        FmsHostLaunchBinding, FmsResourceBudget, FmsResourceKind, FmsResourceLease,
-        FmsResourceLeaseState, FMS_HOST_LAUNCH_BINDING_SCHEMA, FMS_RESOURCE_LEASE_SCHEMA,
+        FMS_HOST_LAUNCH_BINDING_SCHEMA, FMS_RESOURCE_LEASE_SCHEMA, FmsHostLaunchBinding,
+        FmsResourceBudget, FmsResourceKind, FmsResourceLease, FmsResourceLeaseState,
     };
     use crate::host_resource_ledger::{
-        HostResourceLedgerPolicy, HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1,
+        HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1, HostResourceLedgerPolicy,
     };
     use chrono::Utc;
     use std::collections::{BTreeMap, BTreeSet};
@@ -3915,6 +4513,7 @@ mod host_launch_binding_tests {
                 gpu_vram_bytes_by_uuid: BTreeMap::new(),
                 allowed_cpu_ids: BTreeSet::new(),
             },
+            runtime_generation_sha256: None,
         }
     }
 
@@ -3947,12 +4546,16 @@ mod host_launch_binding_tests {
     #[test]
     fn binding_validates_absolute_non_traversing_root_and_policy() {
         assert!(binding(absolute_test_root()).validate().is_ok());
-        assert!(binding(PathBuf::from("relative/ledger"))
-            .validate()
-            .is_err());
-        assert!(binding(absolute_test_root().join("..").join("ledger"))
-            .validate()
-            .is_err());
+        assert!(
+            binding(PathBuf::from("relative/ledger"))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            binding(absolute_test_root().join("..").join("ledger"))
+                .validate()
+                .is_err()
+        );
 
         let mut invalid_policy = binding(absolute_test_root());
         invalid_policy.policy.revision = 0;
@@ -3981,9 +4584,9 @@ mod host_launch_binding_tests {
 #[cfg(test)]
 mod resolved_inputs_snapshot_tests {
     use super::{
-        canonical_json_sha256, FmsResolvedInputsSnapshot, FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA,
+        FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA, FmsResolvedInputsSnapshot, canonical_json_sha256,
     };
-    use serde_json::{json, Map, Value};
+    use serde_json::{Map, Value, json};
     use std::collections::BTreeSet;
 
     #[test]
@@ -4043,21 +4646,22 @@ mod resolved_inputs_snapshot_tests {
             snapshot.object_refs().unwrap(),
             BTreeSet::from(["b".repeat(64)])
         );
-        assert!(FmsResolvedInputsSnapshot::new(json!({
-            "artifact": {"study_artifact": {"object_ref": "not-a-sha256"}}
-        }))
-        .is_err());
+        assert!(
+            FmsResolvedInputsSnapshot::new(json!({
+                "artifact": {"study_artifact": {"object_ref": "not-a-sha256"}}
+            }))
+            .is_err()
+        );
     }
 }
 
 #[cfg(test)]
 mod batch_output_storage_snapshot_tests {
     use super::{
+        FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_LEGACY_SCHEMA, FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_SCHEMA,
         canonical_json_sha256, validate_batch_output_storage_snapshot,
-        FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_LEGACY_SCHEMA,
-        FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_SCHEMA,
     };
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     fn legacy_snapshot(settings: Value) -> Value {
         json!({
@@ -4130,32 +4734,40 @@ mod batch_output_storage_snapshot_tests {
             "cleanup": "on_success",
             "existing_output": "timestamp"
         });
-        assert!(validate_batch_output_storage_snapshot(&resolved_snapshot(
-            settings.clone(),
-            "workspace_defaults"
-        ))
-        .is_ok());
-        assert!(validate_batch_output_storage_snapshot(&resolved_snapshot(
-            settings.clone(),
-            "project_authoring"
-        ))
-        .is_ok());
+        assert!(
+            validate_batch_output_storage_snapshot(&resolved_snapshot(
+                settings.clone(),
+                "workspace_defaults"
+            ))
+            .is_ok()
+        );
+        assert!(
+            validate_batch_output_storage_snapshot(&resolved_snapshot(
+                settings.clone(),
+                "project_authoring"
+            ))
+            .is_ok()
+        );
 
         let mut relative = settings.clone();
         relative["output_dir"] = json!("results");
-        assert!(validate_batch_output_storage_snapshot(&resolved_snapshot(
-            relative,
-            "workspace_defaults"
-        ))
-        .is_err());
+        assert!(
+            validate_batch_output_storage_snapshot(&resolved_snapshot(
+                relative,
+                "workspace_defaults"
+            ))
+            .is_err()
+        );
 
         let mut traversal = settings.clone();
         traversal["output_dir"] = json!(format!("{output_dir}/../escape"));
-        assert!(validate_batch_output_storage_snapshot(&resolved_snapshot(
-            traversal,
-            "workspace_defaults"
-        ))
-        .is_err());
+        assert!(
+            validate_batch_output_storage_snapshot(&resolved_snapshot(
+                traversal,
+                "workspace_defaults"
+            ))
+            .is_err()
+        );
 
         let mut missing_policy_digest = resolved_snapshot(settings.clone(), "project_authoring");
         missing_policy_digest

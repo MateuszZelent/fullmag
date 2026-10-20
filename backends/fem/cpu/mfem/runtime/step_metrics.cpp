@@ -147,6 +147,31 @@ double max_norm_aos(const std::vector<double> &field_xyz)
     return max_value;
 }
 
+double max_norm_aos_masked(
+    const std::vector<double> &field_xyz,
+    const std::vector<uint8_t> &magnetic_node_mask)
+{
+    if (field_xyz.size() % 3u != 0u) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const size_t n = field_xyz.size() / 3u;
+    if (!magnetic_node_mask.empty() && magnetic_node_mask.size() != n) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    double max_value = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        if (!magnetic_node_mask.empty() && magnetic_node_mask[i] == 0u) {
+            continue;
+        }
+        const size_t base = i * 3u;
+        max_value = std::max(
+            max_value,
+            vector_norm3(field_xyz[base + 0], field_xyz[base + 1], field_xyz[base + 2]));
+    }
+    return max_value;
+}
+
 double max_cross_norm_aos(
     const std::vector<double> &a_xyz,
     const std::vector<double> &b_xyz)

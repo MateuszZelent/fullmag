@@ -729,6 +729,7 @@ export function resolveObjectVisualizationLane(
  * structured-grid selection as a FEM scene object.
  */
 export function resolveObjectVisualizationTargetForLane({
+  artifactInspection = false,
   fdmNativeLayers,
   lane,
   selection,
@@ -739,11 +740,37 @@ export function resolveObjectVisualizationTargetForLane({
     magnet_name: string;
     object_id: string;
   }[] | null;
+  artifactInspection?: boolean;
   lane: ObjectVisualizationLane;
   selection: Selection;
   selectionTarget: VisualizationTargetRef | null;
 }): VisualizationTargetRef | null {
-  if (lane === "unresolved") return null;
+  if (artifactInspection) return selectionTarget?.kind === "object" ? selectionTarget : null;
+
+  const objectVisualizationSelection =
+    selection.kind === "object.antenna.visualization" ||
+    selection.kind === "object.visualization" ||
+    selection.kind === "object.visualization.debug" ||
+    selection.kind === "object.region.visualization" ||
+    selection.kind === "object.region.visualization.debug";
+  const explicitObjectVisualizationSelection =
+    objectVisualizationSelection && selection.ref?.type === "scene-object";
+
+  if (lane === "unresolved") {
+    // An explicit object/region visualization node already carries a semantic
+    // target. Keep its display controls usable while the numerical lane is
+    // still loading; lane-specific field and mesh resources stay disabled
+    // until the status identifies FDM or FEM.
+    return explicitObjectVisualizationSelection &&
+      (selectionTarget?.kind === "object" || selectionTarget?.kind === "region")
+      ? selectionTarget
+      : null;
+  }
+
+  if (selection.kind === "object.antenna.visualization") {
+    // The conductor owns its result carriers; never substitute a magnetic layer.
+    return selectionTarget?.kind === "object" ? selectionTarget : null;
+  }
   if (selection.ref?.type === "fdm-cell") {
     return lane === "fdm"
       ? { id: "fdm-domain", kind: "fdm-domain", label: selection.label }
@@ -769,11 +796,6 @@ export function resolveObjectVisualizationTargetForLane({
     return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
   }
 
-  const objectVisualizationSelection =
-    selection.kind === "object.visualization" ||
-    selection.kind === "object.visualization.debug" ||
-    selection.kind === "object.region.visualization" ||
-    selection.kind === "object.region.visualization.debug";
   if (objectVisualizationSelection) {
     if (lane === "fdm" && selection.objectId) {
       const nativeLayer = fdmNativeLayers?.find(
@@ -802,10 +824,13 @@ export function resolveObjectVisualizationTargetForLane({
 export function resolveObjectVisualizationResourceGates({
   lane,
   target,
+  artifactInspection = false,
 }: {
+  artifactInspection?: boolean;
   lane: ObjectVisualizationLane;
   target: VisualizationTargetRef | null;
 }): { fdm: boolean; fem: boolean } {
+  if (artifactInspection) return { fdm: false, fem: false };
   return {
     fdm: lane === "fdm" && target !== null,
     fem:
@@ -3232,4 +3257,16 @@ export function buildVisualizationPanelSections({
   });
 
   return sections;
+}
+
+/** Historical carrier admission is independent of live magnetic materialization. */
+export function resolveArtifactInspectionDataState({ executionSelected = true, catalogReady, catalogError, quantityAvailable, ownerReady, presentationReady }: {
+  executionSelected?: boolean; catalogReady: boolean; catalogError: boolean; quantityAvailable: boolean; ownerReady: boolean; presentationReady: boolean;
+}): string {
+  if (!executionSelected) return "Select execution";
+  if (catalogError) return "Unavailable";
+  if (!catalogReady) return "Loading catalog";
+  if (!quantityAvailable) return "Select raw SI quantity";
+  if (!ownerReady) return "Select execution";
+  return presentationReady ? "Historical snapshot" : "Loading historical result";
 }

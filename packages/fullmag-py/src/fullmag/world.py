@@ -125,6 +125,7 @@ from fullmag.model.output_storage import OutputStorage
 from fullmag.model.compute_resources import ComputeResources
 from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer, _parallel_execution_lane
 from fullmag.model.study import (
+    FieldOnly,
     DEFAULT_RELAXATION_TORQUE_TOLERANCE_T,
     AdaptiveRefinement,
     Eigenmodes,
@@ -139,6 +140,7 @@ from fullmag.model.study import (
     FemEigenSolverPolicy,
     FrequencyResponseSolverPolicy,
     GammaResponseAnalysis,
+    FiniteKResponseAnalysis,
     RelaxStop,
     Relaxation,
     SaturationProbe,
@@ -1497,6 +1499,35 @@ def _normalize_selector_list(
     return selectors
 
 
+class _AuxiliaryMeshOwner:
+    """Mesh state for an authored non-magnetic geometry."""
+
+    def __init__(self, shape: object, name: str) -> None:
+        self._owner_state = _state.current()
+        self._shape = shape
+        self._name = name
+        self._mesh_spec = _MeshSpecState()
+        self._last_mesh_quality: object | None = None
+        self.mesh = GeometryMeshHandle(self)
+
+    def _assert_active_context(self) -> None:
+        if _state.current() is not self._owner_state:
+            raise RuntimeError(
+                f"geometry mesh handle '{self._name}' belongs to a different authoring context"
+            )
+
+    @property
+    def _fdm_cell_size(self) -> None:
+        return None
+
+    @_fdm_cell_size.setter
+    def _fdm_cell_size(self, value: object) -> None:
+        raise ValueError("cell_size requires a magnetic object; auxiliary geometry uses FEM mesh controls")
+
+    def _resolved_geometry(self) -> object:
+        return self._shape
+
+
 class GeometryMeshHandle:
     """Explicit mesh workflow API bound to one flat-script geometry/magnet.
 
@@ -1509,7 +1540,7 @@ class GeometryMeshHandle:
         report = flower.mesh.quality()
     """
 
-    def __init__(self, owner: MagnetHandle) -> None:
+    def __init__(self, owner: MagnetHandle | _AuxiliaryMeshOwner) -> None:
         self._owner = owner
 
     def __call__(
@@ -2518,6 +2549,7 @@ class _WorldState:
     # Magnets (ordered)
     _magnets: list[MagnetHandle] = field(default_factory=list)
     _auxiliary_geometries: list[object] = field(default_factory=list)
+    _auxiliary_mesh_owners: dict[str, _AuxiliaryMeshOwner] = field(default_factory=dict)
     _auxiliary_geometry_roles: dict[str, str] = field(default_factory=dict)
     _auxiliary_geometry_object_ids: dict[str, str] = field(default_factory=dict)
     _couplings: CouplingRegistry = field(default_factory=CouplingRegistry)
@@ -3915,7 +3947,9 @@ def capture_workspace_problem() -> Problem | None:
         _state._declared_stages
         and _state._declared_stages[-1].entrypoint_kind == "flat_antenna_field_solve"
     )
-    if not _capture_binding.current().enabled or (not _state._magnets and not has_antenna_stage):
+    if not _capture_binding.current().enabled or not (
+        _state._magnets or _state._auxiliary_geometries or has_antenna_stage
+    ):
         return None
     previous_interactive = _state._interactive
     _state._interactive = True
@@ -4370,7 +4404,15 @@ class StudyStagesBuilder:
             raise ValueError(
                 "antenna field solve requires exactly one H_ant_basis output"
             )
-        problem_before_action = _build_problem(study_kind="antenna_field_solve")
+        closed_loop = any(
+            module.name == normalized_definition.current_transport_id
+            and module.structured_current_closure is not None
+            and module.structured_current_closure.schema_version == "structured_current_closure.v2"
+            for module in _state._current_modules
+        )
+        problem_before_action = _build_problem(
+            study_kind="time_evolution" if closed_loop else "antenna_field_solve"
+        )
         _state._antenna_field_solve_stages.append(normalized_definition)
         _state._declared_stages.append(
             CapturedStage(
@@ -4548,7 +4590,7 @@ class StudyStagesBuilder:
 
     def fft_response(
         self,
-        response_component: str = "my",
+        response_component: str | FiniteKResponseAnalysis = "my",
         *,
         enabled: bool = True,
         detrend: str = "linear",
@@ -4556,17 +4598,22 @@ class StudyStagesBuilder:
         susceptibility_floor_fraction: float = 1e-6,
         stage_id: str | None = None,
     ) -> "StudyStagesBuilder":
-        """Enable or disable k=0 response FFT analysis for subsequent stages."""
+        """Configure Gamma or typed finite-k response analysis for subsequent stages."""
         resolved_id = self._allocate_stage_id("fft-response", stage_id)
         problem_before_action = _build_problem()
         request: dict[str, object] | None
         if enabled:
-            request = GammaResponseAnalysis(
-                response_component=response_component,
-                detrend=detrend,
-                window=window,
-                susceptibility_floor_fraction=susceptibility_floor_fraction,
-            ).to_runtime_metadata()
+            if isinstance(response_component, FiniteKResponseAnalysis):
+                if detrend != "linear" or window != "hann" or susceptibility_floor_fraction != 1e-6:
+                    raise ValueError("finite-k analysis does not accept Gamma preprocessing options")
+                request = response_component.to_runtime_metadata()
+            else:
+                request = GammaResponseAnalysis(
+                    response_component=response_component,
+                    detrend=detrend,
+                    window=window,
+                    susceptibility_floor_fraction=susceptibility_floor_fraction,
+                ).to_runtime_metadata()
             _state._extra_runtime_metadata["spin_wave_response"] = request
         else:
             request = None
@@ -5349,7 +5396,30 @@ class StudyObjectsMeshDefaultsHandle:
 
 class StudyObjectsMeshHandle:
     def __init__(self, owner: "StudyBuilder") -> None:
+        self._owner_state = _state.current()
         self.defaults = StudyObjectsMeshDefaultsHandle(owner)
+
+    def by_id(self, object_id: str) -> GeometryMeshHandle:
+        """Select an existing object's mesh by its exact immutable identity."""
+        if _state.current() is not self._owner_state:
+            raise RuntimeError("mesh registry belongs to a different authoring context")
+        if not isinstance(object_id, str):
+            raise TypeError("object_id must be a string")
+        if not object_id.strip():
+            raise ValueError("object_id must be non-empty")
+        matches = [
+            handle.mesh for handle in _state._magnets
+            if (handle.object_id or handle._name) == object_id
+        ]
+        matches.extend(
+            _state._auxiliary_mesh_owners[name].mesh
+            for name, identity in _state._auxiliary_geometry_object_ids.items()
+            if identity == object_id
+        )
+        if len(matches) != 1:
+            raise ValueError(f"object_id {object_id!r} is unknown or ambiguous")
+        matches[0]._owner._assert_active_context()
+        return matches[0]
 
 
 class StudyObjectsHandle:
@@ -7789,7 +7859,7 @@ def _mesh_source_root() -> Path:
 
 
 def _collect_flat_geometries() -> list[object]:
-    return [handle._resolved_geometry() for handle in _state._magnets]
+    return [handle._resolved_geometry() for handle in _state._magnets] + list(_state._auxiliary_geometries)
 
 
 def _resolve_flat_fem_hint() -> FEM | None:
@@ -7804,7 +7874,7 @@ def _resolve_flat_fem_hint() -> FEM | None:
             return True
         if s._default_mesh_spec.operations or s._default_mesh_spec.size_fields:
             return True
-        for handle in s._magnets:
+        for handle in [*s._magnets, *s._auxiliary_mesh_owners.values()]:
             if (
                 handle._mesh_spec.is_configured()
                 or handle._mesh_spec.build_requested
@@ -7823,14 +7893,14 @@ def _resolve_flat_fem_hint() -> FEM | None:
 
     def _explicit_object_hmaxs() -> list[float | str]:
         values: list[float | str] = []
-        for handle in s._magnets:
+        for handle in [*s._magnets, *s._auxiliary_mesh_owners.values()]:
             if handle._mesh_spec.hmax is not None:
                 values.append(handle._mesh_spec.hmax)
         return values
 
-    explicit_specs = [handle._mesh_spec for handle in s._magnets if handle._mesh_spec.is_configured()]
-    build_requested = any(handle._mesh_spec.build_requested for handle in s._magnets)
-    operation_specs = [handle._mesh_spec for handle in s._magnets if handle._mesh_spec.operations]
+    explicit_specs = [handle._mesh_spec for handle in [*s._magnets, *s._auxiliary_mesh_owners.values()] if handle._mesh_spec.is_configured()]
+    build_requested = any(handle._mesh_spec.build_requested for handle in [*s._magnets, *s._auxiliary_mesh_owners.values()])
+    operation_specs = [handle._mesh_spec for handle in [*s._magnets, *s._auxiliary_mesh_owners.values()] if handle._mesh_spec.operations]
     default_spec = s._default_mesh_spec
     build_requested = build_requested or default_spec.build_requested
     study_surface = s._api_surface == "study"
@@ -8121,11 +8191,11 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
 
 
 def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
-    configured_handles = [handle for handle in _state._magnets if handle._mesh_spec.is_configured()]
+    configured_handles = [handle for handle in [*_state._magnets, *_state._auxiliary_mesh_owners.values()] if handle._mesh_spec.is_configured()]
     explicit_domain_mesh = _state._domain_mesh_source is not None
     frozen_magnetic_submesh = _state._frozen_magnetic_submesh_source is not None
     operations = []
-    for handle in _state._magnets:
+    for handle in [*_state._magnets, *_state._auxiliary_mesh_owners.values()]:
         for operation in handle._mesh_spec.operations:
             operations.append(
                 {
@@ -8144,7 +8214,7 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
                 }
             )
     build_requested = _state._default_mesh_spec.build_requested or any(
-        handle._mesh_spec.build_requested for handle in _state._magnets
+        handle._mesh_spec.build_requested for handle in [*_state._magnets, *_state._auxiliary_mesh_owners.values()]
     )
     explicit_mesh_api = bool(
         configured_handles
@@ -8251,7 +8321,7 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         ]
 
     per_geometry = []
-    for handle in _state._magnets:
+    for handle in [*_state._magnets, *_state._auxiliary_mesh_owners.values()]:
         entry = {
             "geometry": handle._name,
             "mode": "custom" if _mesh_spec_declares_override(handle._mesh_spec) else "inherit",
@@ -8311,7 +8381,7 @@ def _current_mesh_authoring_document() -> dict[str, object]:
         _state._domain_mesh_source is not None
         and _state._backend != "fem"
         and not _state._default_mesh_spec.is_configured()
-        and not any(handle._mesh_spec.is_configured() for handle in _state._magnets)
+        and not any(handle._mesh_spec.is_configured() for handle in [*_state._magnets, *_state._auxiliary_mesh_owners.values()])
     ):
         fem_hint = None
     fem_payload = fem_hint.to_ir() if fem_hint is not None else None
@@ -8329,7 +8399,7 @@ def _current_mesh_authoring_document() -> dict[str, object]:
                 "geometry": handle._name,
                 "mesh": _mesh_spec_to_metadata(handle._mesh_spec),
             }
-            for handle in _state._magnets
+            for handle in [*_state._magnets, *_state._auxiliary_mesh_owners.values()]
         ],
         "periodic_boundary_conditions": (
             _state._pbc.to_ir() if _state._pbc is not None else None
@@ -8434,6 +8504,16 @@ def _build_explicit_mesh_assets(
                 )
                 for handle in _state._magnets
             },
+        },
+        body_material_fields={
+            handle._resolved_geometry().geometry_name: {
+                "Ms": float(handle.Ms),
+                "Aex": float(handle.Aex),
+                "alpha": float(handle.alpha),
+                "Ku1": float(handle.Ku1 or 0.0),
+                "anisotropy_axis": list(handle.anisU or (0.0, 0.0, 1.0)),
+            }
+            for handle in _state._magnets
         },
         discretization=DiscretizationHints(**discretization_kwargs),
         study_universe=(
@@ -8559,14 +8639,14 @@ def _quality_payload_for_mesh_ir(mesh_ir: Mapping[str, object]) -> object | None
 
 
 def _cache_mesh_quality_reports(assets: dict[str, Any] | None) -> None:
-    for handle in _state._magnets:
+    for handle in [*_state._magnets, *_state._auxiliary_mesh_owners.values()]:
         handle._last_mesh_quality = None
 
     if not isinstance(assets, dict):
         return
 
-    handles_by_alias: dict[str, MagnetHandle] = {}
-    for handle in _state._magnets:
+    handles_by_alias: dict[str, MagnetHandle | _AuxiliaryMeshOwner] = {}
+    for handle in [*_state._magnets, *_state._auxiliary_mesh_owners.values()]:
         handles_by_alias[handle._name] = handle
         resolved = handle._resolved_geometry()
         geometry_name = getattr(resolved, "geometry_name", None)
@@ -8657,6 +8737,7 @@ def geometry_object(
     ):
         raise ValueError(f"duplicate object_id {resolved_id!r}")
     _state._auxiliary_geometries.append(resolved)
+    _state._auxiliary_mesh_owners[geometry_name] = _AuxiliaryMeshOwner(resolved, geometry_name)
     _state._auxiliary_geometry_roles[geometry_name] = normalized_type
     _state._auxiliary_geometry_object_ids[geometry_name] = resolved_id
     if normalized_type == "antenna":
@@ -9508,16 +9589,19 @@ def _build_problem(
     s = _state
 
     if study_kind is None:
-        study_kind = (
-            "antenna_field_solve"
-            if s._declared_stages and s._declared_stages[-1].entrypoint_kind == "flat_antenna_field_solve"
-            else "time_evolution"
-        )
+        study_kind = "time_evolution"
+        if s._declared_stages and s._declared_stages[-1].entrypoint_kind == "flat_antenna_field_solve":
+            previous_study = s._declared_stages[-1].problem.study
+            if isinstance(previous_study, AntennaFieldSolve):
+                study_kind = "antenna_field_solve"
+            elif isinstance(previous_study, FieldOnly) and not s._magnets:
+                study_kind = "field_only"
 
     _validate_current_compute_resources_runtime_intent()
 
     # ── Validate ──
-    if not s._magnets and study_kind != "antenna_field_solve":
+    field_only = study_kind == "field_only" or (not s._magnets and study_kind == "time_evolution")
+    if not s._magnets and study_kind != "antenna_field_solve" and not (field_only and s._auxiliary_geometries):
         raise ValueError("No magnets defined — call fm.geometry(...) first")
 
     # Convert handles to Ferromagnet objects
@@ -9572,7 +9656,7 @@ def _build_problem(
         llg_kwargs["field_refresh"] = FieldRefreshPolicy(
             demag_interval_s=s._demag_interval_s
         )
-    dynamics = None if study_kind == "antenna_field_solve" else LLG(**llg_kwargs)
+    dynamics = None if field_only or study_kind == "antenna_field_solve" else LLG(**llg_kwargs)
 
     # Discretization
     disc_kwargs: dict[str, Any] = {}
@@ -9681,7 +9765,9 @@ def _build_problem(
         and not isinstance(o, _RESPONSE_OUTPUT_TYPES)
     ]
 
-    if study_kind == "relaxation":
+    if field_only:
+        study = FieldOnly(outputs=outputs)
+    elif study_kind == "relaxation":
         if relax_stop is None:
             relax_kwargs = {
                 "torque_tolerance": relax_torque_tolerance,
@@ -9811,6 +9897,8 @@ def _guard_profile_direct_execution() -> None:
 
 def run(until: float) -> Any:
     """Build the problem and run until the given simulation time."""
+    if not _state._magnets:
+        raise ValueError("Run requires explicitly authored magnetic state; FieldOnly cannot execute LLG")
     if until <= 0.0:
         raise ValueError("run(until) requires a positive stop time")
     from fullmag.runtime import Simulation

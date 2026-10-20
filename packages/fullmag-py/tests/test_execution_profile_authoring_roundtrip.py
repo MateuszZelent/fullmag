@@ -3,12 +3,13 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
 import fullmag as fm
 import fullmag.world as world
 import pytest
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
-from fullmag.runtime.loader import load_problem_from_script
+from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
     build_scene_document_from_builder,
@@ -90,6 +91,33 @@ def _write_study_script(path: Path, *, include_run: bool = True) -> Path:
 def _assert_profile_metadata(metadata: dict[str, object]) -> None:
     assert metadata["execution_profile"] == _profile().to_ir()
     assert metadata["execution_layers"] == [_layer().to_ir()]
+
+
+def test_loaded_problem_detects_profiles_on_base_and_individual_stages(tmp_path: Path) -> None:
+    source = _write_study_script(tmp_path / "profile_source.py", include_run=False)
+    loaded = load_problem_from_script(source, lightweight_assets=True)
+    assert loaded.has_declared_execution_profile()
+
+    base_without_profile = SimpleNamespace(runtime_metadata={})
+    profile_stage = SimpleNamespace(
+        problem=SimpleNamespace(runtime_metadata={"execution_profile": _profile().to_ir()})
+    )
+    loaded_without_base_profile = LoadedProblem(
+        problem=base_without_profile,
+        source_path=source,
+        script_source="",
+        entrypoint_kind="direct",
+        stages=(profile_stage,),
+    )
+    assert loaded_without_base_profile.has_declared_execution_profile()
+
+    plain_legacy = LoadedProblem(
+        problem=base_without_profile,
+        source_path=source,
+        script_source="",
+        entrypoint_kind="direct",
+    )
+    assert not plain_legacy.has_declared_execution_profile()
 
 
 def test_execution_request_layer_roundtrips_sparse_auto_and_null() -> None:

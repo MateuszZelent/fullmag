@@ -4024,6 +4024,62 @@ async function installInspectorFixtureApi(page, fixture) {
         }],
       });
     }
+    // Home stays mounted while session bootstrap is loading. These are
+    // read-only startup resources, so keep their fixture responses explicit;
+    // the catch-all below must continue to reject route drift.
+    if (path === "/v2/workspace/settings/telemetry.enabled" && request.method() === "GET") {
+      return fulfillJson(route, {
+        is_default: true,
+        key: "telemetry.enabled",
+        value: false,
+        writable: true,
+      });
+    }
+    if (path === "/v2/workspace/settings/update.available" && request.method() === "GET") {
+      return fulfillJson(route, {
+        is_default: true,
+        key: "update.available",
+        value: null,
+        writable: false,
+      });
+    }
+    if (path === "/v2/workspace/items" && request.method() === "GET") {
+      return fulfillJson(route, { items: [], outcome: { state: "ready" } });
+    }
+    if (path === "/v2/sessions/current/diagnostics/cpu" && request.method() === "GET") {
+      return fulfillJson(route, {
+        logical_cpus: 0,
+        memory_total_mb: 0,
+        memory_used_mb: 0,
+        model_name: null,
+        process_cpu_percent: 0,
+        process_rss_mb: 0,
+        process_threads: 0,
+        reason: "Inspector fixture does not probe host telemetry.",
+        sample_time_unix_ms: 1,
+        status: "unavailable",
+        utilization_cpu_percent: 0,
+      });
+    }
+    if (path === "/v2/sessions/current/diagnostics/gpu" && request.method() === "GET") {
+      return fulfillJson(route, {
+        devices: [],
+        reason: "Inspector fixture does not probe host telemetry.",
+        sample_time_unix_ms: 1,
+        status: "unavailable",
+      });
+    }
+    if (path === "/v2/platform/capabilities" && request.method() === "GET") {
+      return fulfillJson(route, { engines: [], profile_version: "fixture.v1" });
+    }
+    if (path === "/v2/platform/compute/nodes" && request.method() === "GET") {
+      return fulfillJson(route, {
+        nodes: [],
+        schema_version: "compute_nodes.v1",
+        stale_after_seconds: 30,
+        state: "not_probed",
+      });
+    }
     if (path === "/v2/sessions/current/visualization/mode-compositions/active") {
       if (request.method() === "GET") {
         return fulfillJson(route, inspectorModeComposition(fixture));
@@ -4846,12 +4902,12 @@ function inspectorPreparationResource() {
 function inspectorObjectMetrics() {
   return {
     energies: {
-      anisotropy: 0,
-      demag: 0,
-      dmi: 0,
-      exchange: 0,
-      total: 0,
-      zeeman: 0,
+      anisotropy: null,
+      demag: null,
+      dmi: null,
+      exchange: null,
+      total: null,
+      zeeman: null,
     },
     has_solver_sample: false,
     magnetization_average: { mx: 1, my: 0, mz: 0 },

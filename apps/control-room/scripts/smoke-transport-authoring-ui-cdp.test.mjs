@@ -43,7 +43,7 @@ it("transport authoring fixture serves complete resources used by region selecti
 
     const objectMetrics = await getJson("/v2/sessions/current/simulation/objects/film/metrics");
     assert.equal(objectMetrics.object_id, "film");
-    assert.equal(objectMetrics.energies.total, 0);
+    assert.equal(objectMetrics.energies.total, null);
 
     const fieldCatalog = await getJson("/v2/sessions/current/data/fields");
     assert.ok(Array.isArray(fieldCatalog.quantities));

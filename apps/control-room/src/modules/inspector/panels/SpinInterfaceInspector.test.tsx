@@ -12,6 +12,21 @@ const known = { id: "nf", kind: "mixing_conductance", normal_side: { object_id: 
 const opaque = { id: "future", kind: "vendor.interface.v9", exact: { preserve: true } };
 
 vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
+  useSpinAuthoringGeometryResource: () => ({
+    data: {
+      revision: 4,
+      objects: [{ id: "stack", name: "Stack", regions: [
+        { region_id: "n", name: "Normal metal" },
+        { region_id: "f", name: "Ferromagnet" },
+      ] }],
+      current_transports: [],
+      spin_transports: [{ id: "spin", interfaces: [known, opaque] }],
+    },
+    error: null,
+    revision: 4,
+    status: "ready",
+  }),
+  useSpinInterfaceMeshEvidenceResource: () => ({ data: null, error: null, revision: null, status: "idle" }),
   SPIN_INTERFACES_RESOURCE_KEY: "interfaces",
   SPIN_TRANSPORTS_RESOURCE_KEY: "transports",
   useSpinInterfacesResource: () => ({ data: { scene_revision: 4, items: [
@@ -90,8 +105,10 @@ describe("SpinInterfaceInspectorPanel", () => {
 
   it("renders a known mixing interface as model-specific typed SI fields", () => {
     const html = renderToStaticMarkup(<KernelContext.Provider value={kernel}><SpinInterfaceInspectorPanel selection={selection(0, "nf")} /></KernelContext.Provider>);
-    expect(html).toContain("Normal-metal object");
-    expect(html).toContain("Ferromagnet region");
+    expect(html).toContain("Normal-metal scope");
+    expect(html).toContain('value="[&quot;stack&quot;,&quot;n&quot;]" selected=""');
+    expect(html).toContain('value="[&quot;stack&quot;,&quot;f&quot;]" selected=""');
+    expect(html).toContain("Ferromagnet scope");
     expect(html).toContain("S/m²");
     expect(html).toContain("magnetoelectronic.fullmag.v2");
     expect(html).toContain("0, 0, 1");
@@ -114,7 +131,9 @@ describe("SpinInterfaceInspectorPanel", () => {
     };
     const html = renderToStaticMarkup(<KernelContext.Provider value={kernel}><SpinInterfaceInspectorPanel selection={graphSelection} /></KernelContext.Provider>);
     expect(html).toContain("magnetoelectronic.fullmag.v2");
-    expect(html).toContain("Normal-metal object");
+    expect(html).toContain("Normal-metal scope");
+    expect(html).toContain('value="[&quot;stack&quot;,&quot;n&quot;]" selected=""');
+    expect(html).toContain('value="[&quot;stack&quot;,&quot;f&quot;]" selected=""');
   });
 
   it("renders an unknown interface losslessly without mutation controls", () => {

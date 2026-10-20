@@ -81,6 +81,8 @@ pub enum GeometryEntryIR {
     #[serde(rename = "microstrip")]
     MicrostripAntenna {
         name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        r#loop: Option<crate::antenna::MicrostripClosedLoopIR>,
         length_m: f64,
         thickness_m: f64,
         conductivity_s_per_m: f64,

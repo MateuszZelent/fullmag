@@ -43,7 +43,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: public-documentation
+  group: public-documentation-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

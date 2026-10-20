@@ -17,6 +17,8 @@ import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdenti
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import type { KernelApi } from "@/kernel/types";
 import { InspectorEditSessionProvider, useInspectorEditSession } from "@/modules/inspector/InspectorEditSession";
+import { AntennaConductorAuthoring } from "@/modules/inspector/panels/antenna/AntennaConductorAuthoring";
+import { AntennaCompositionPanel } from "@/modules/inspector/panels/antenna/AntennaCompositionPanels";
 import { AntennaPortEditor } from "@/modules/inspector/panels/antenna/AntennaPortEditor";
 
 const API_INSTANCE = "66666666-6666-4666-8666-666666666666";
@@ -29,7 +31,7 @@ interface FixtureControl {
   release(): void;
   conflict(renameFirstBranch?: string): void;
   rejectNext(): void;
-  malformedNext(kind?: "normalization" | "scene_revision"): void;
+  malformedNext(kind?: "normalization" | "scene_revision" | "scene_id"): void;
   switchSession(name: "A" | "B"): void;
   resetHistory(): void;
 }
@@ -42,8 +44,8 @@ function makeScene(name: string): SceneResource {
     branches: [{ id: "signal", inlet_terminal_ref: terminals[0], outlet_terminal_ref: terminals[1], signed_weight: 1 },
       { id: "return", inlet_terminal_ref: terminals[2], outlet_terminal_ref: terminals[3], signed_weight: -1 }],
   };
-  return { revision: 1, scene_revision: 1,
-    scene: { id: `session-${name}`, name, authoring_schema: "fixture", source_of_truth: "fixture" },
+  const scene: SceneResource = { revision: 1, scene_revision: 1,
+    scene: { id: `restored-model-${name}`, name, authoring_schema: "fixture", source_of_truth: "fixture" },
     objects: [{ id: sourceId, name: "Antenna signal", role: "antenna" }, { id: returnId, name: "Return", role: "conductor" }],
     current_transports: ["transport", "alternative"].map((name) => ({ name, kind: "current_transport", model: "ohmic_poisson",
       domain: [{ object_id: sourceId }, { object_id: returnId }],
@@ -51,10 +53,36 @@ function makeScene(name: string): SceneResource {
         surfaces: [{ object_id: id.startsWith("signal") ? sourceId : returnId, surface_id: id, orientation: [1, 0, 0] }] })),
     })), antenna_port_modes: [port, { ...structuredClone(port), id: "unrelated-port" }],
   };
+  const scenario = typeof window === "undefined" ? null : new URL(window.location.href).searchParams.get("scenario");
+  if (scenario === "composed-port-dependent") scene.antenna_field_solve_stages = [{
+    id: "dependent-solve", source_object_id: sourceId, current_transport_id: "transport", port_mode_ids: [portId],
+    conductor_mesh_policy: "inherit_source", solver_policy: "default", model: "quasistatic_conduction_biot_savart3d",
+    oersted_realization: "direct_tetra_quadrature", field_sampling_domain: { kind: "object", object_id: returnId },
+    target_refs: [{ kind: "object", object_id: returnId }],
+    outputs: [{ id: "basis", quantity: "H_ant_basis" }],
+  }];
+  if (scenario === "malformed-source") Object.assign(scene.current_transports![0], { conservative_current_source: {} });
+  if (scenario === "structured-v3") {
+    Object.assign(scene.antenna_port_modes![0], { schema_version: "antenna_port_mode.v3",
+      normalization: { kind: "source_cut_rt0", source_cut_ref: "cut", orientation: "minus_outward" } });
+    Object.assign(scene.current_transports![0], { structured_current_closure: { schema_version: "structured_current_closure.v2", kind: "closed_geometry",
+      source_cuts: [{ source_cut_id: "cut", region: { object_id: sourceId } }] } });
+  }
+  if (typeof window !== "undefined" && new URL(window.location.href).searchParams.get("creator") === "1") {
+    Object.assign(scene.objects![0], { geometry: { geometry_kind: "MicrostripAntennaLayout", geometry_params: {
+      conductivity_s_per_m: 58000000, conductors: [{ id: "signal" }, { id: "return" }],
+    } } });
+    scene.current_transports = [scene.current_transports![0]];
+    Object.assign(scene.current_transports[0], { coupling: "one_way", domain: [{ object_id: sourceId }],
+      materials: [{ region: { object_id: sourceId }, material: { kind: "ohmic", sigma_Spm: 58000000 } }] });
+    const boundaries = scene.current_transports[0].boundaries;
+    for (const boundary of Array.isArray(boundaries) ? boundaries : []) Object.assign(boundary, { surfaces: [{ object_id: sourceId, surface_id: boundary.id, orientation: [1, 0, 0] }] });
+  }
+  return scene;
 }
 
 function makeFixture() {
-  const state = { name: "A" as "A" | "B", clock: 1, scenes: { A: makeScene("A"), B: makeScene("B") }, renders: 0, reject: false, malformed: null as "normalization" | "scene_revision" | null };
+  const state = { name: "A" as "A" | "B", clock: 1, scenes: { A: makeScene("A"), B: makeScene("B") }, renders: 0, reject: false, malformed: null as "normalization" | "scene_revision" | "scene_id" | null };
   const calls: Call[] = [], unexpected: string[] = [], pending: (() => void)[] = [];
   const bus = new EventBus<KernelEventMap>(), resources = new ResourceInvalidationController(bus);
   let invalidations = 0;
@@ -97,6 +125,7 @@ function makeFixture() {
           const acknowledgement = structuredClone(after);
           if (malformed === "normalization" && acknowledgement.antenna_port_modes) acknowledgement.antenna_port_modes[0].normalization_current_a = 2;
           if (malformed === "scene_revision") acknowledgement.scene_revision = revision + 1;
+          if (malformed === "scene_id" && acknowledgement.scene) acknowledgement.scene.id = "foreign-model";
           resolve(json({ transaction_kind: "merge_patch", scene_revision: revision, committed_scene: acknowledgement }));
         }));
       }
@@ -121,10 +150,19 @@ function makeFixture() {
 
 function EditorOwner() {
   const scene = useSceneResource(), session = useInspectorEditSession();
+  const creator = new URL(window.location.href).searchParams.get("creator") === "1";
+  const composed = new URL(window.location.href).searchParams.get("scenario")?.startsWith("composed-port");
+  const nodeId = `model:object:${sourceId}:antenna:port:${portId}`;
   return <>
     <output data-testid="port-owner">{scene.data?.scene?.id}</output>
     <output data-testid="port-dirty">{String(session?.dirty ?? false)}</output>
-    <section data-testid="port-editor"><AntennaPortEditor objectId={sourceId} portId={portId} scene={scene.data} status={scene.status} refetch={scene.refetch} /></section>
+    <output data-testid="port-global-valid">{String(session?.valid ?? false)}</output>
+    <output data-testid="port-global-reason">{session?.applyBlockReason}</output>
+    {creator || composed ? <>
+      <button data-testid="port-global-apply" type="button" disabled={!session?.dirty || !session?.valid || session?.applying} onClick={() => { void session?.apply(); }}>{creator ? "Apply conductor changes" : "Apply port changes"}</button>
+      <button data-testid="port-global-discard" type="button" disabled={!session?.dirty || session?.applying} onClick={() => { void session?.reset(); }}>{creator ? "Discard conductor changes" : "Discard port changes"}</button>
+    </> : null}
+    <section data-testid="port-editor">{creator ? <AntennaConductorAuthoring objectId={sourceId} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} /> : composed ? <AntennaCompositionPanel kind="port" selection={{ kind: "object.antenna.port", objectId: sourceId, nodeId, label: "Port", moduleSource: null, ref: { type: "scene-object", kind: "object.antenna.port", objectId: sourceId, nodeId, visualizationTargetId: `object:${sourceId}`, antennaResourceKind: "port", antennaResourceId: portId } }} /> : <AntennaPortEditor objectId={sourceId} portId={portId} scene={scene.data} sceneScopeKey={scene.sessionScopeKey} status={scene.status} refetch={scene.refetch} />}</section>
     <div style={{ height: 550 }} aria-hidden="true" />
   </>;
 }

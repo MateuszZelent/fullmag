@@ -501,6 +501,50 @@ class StageAutosave:
 
 
 @dataclass(frozen=True, slots=True)
+class FiniteKResponseAnalysis:
+    response_component: str = "my"
+    probe_count: int = 128
+    analysis_x_min_m: float | None = None
+    analysis_x_max_m: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.response_component not in {"mx", "my", "mz"}:
+            raise ValueError("response_component must be 'mx', 'my', or 'mz'")
+        if isinstance(self.probe_count, bool) or not isinstance(self.probe_count, int):
+            raise TypeError("probe_count must be an integer")
+        if not 4 <= self.probe_count <= 2048:
+            raise ValueError("probe_count must be in 4..2048")
+        for name in ("analysis_x_min_m", "analysis_x_max_m"):
+            value = getattr(self, name)
+            if value is not None:
+                if isinstance(value, bool):
+                    raise TypeError(f"{name} must be a finite real number")
+                resolved = float(value)
+                if not math.isfinite(resolved):
+                    raise ValueError(f"{name} must be finite")
+                object.__setattr__(self, name, resolved)
+        if (
+            self.analysis_x_min_m is not None
+            and self.analysis_x_max_m is not None
+            and self.analysis_x_max_m <= self.analysis_x_min_m
+        ):
+            raise ValueError("analysis_x_max_m must exceed analysis_x_min_m")
+
+    def to_runtime_metadata(self) -> dict[str, object]:
+        request: dict[str, object] = {
+            "schema_version": "spin_wave_response.request.v1",
+            "analysis": "finite_k",
+            "response_component": self.response_component,
+            "probe_count": self.probe_count,
+        }
+        for name in ("analysis_x_min_m", "analysis_x_max_m"):
+            value = getattr(self, name)
+            if value is not None:
+                request[name] = value
+        return request
+
+
+@dataclass(frozen=True, slots=True)
 class GammaResponseAnalysis:
     response_component: str = "my"
     weighting: str = "Ms_times_lumped_volume"
@@ -674,6 +718,25 @@ def _serialize_spin_wave_bc(value: SpinWaveBoundarySpec) -> str | dict[str, obje
             raise ValueError(f"spin_wave_bc.kind must be one of: {supported}")
         return serialized
     raise ValueError("spin_wave_bc must be a string, mapping, PeriodicBC, or FloquetBC")
+
+
+@dataclass(frozen=True, slots=True)
+class FieldOnly:
+    """Static field-stage authoring without magnetic state or dynamics.
+
+    Results are owned by explicit antenna solve stages and their carriers,
+    rather than time-dependent magnetization sampling.
+    """
+
+    outputs: Sequence[TimeOutputSpec] = ()
+    constraints: Sequence[FrozenSpins] = ()
+
+    def __post_init__(self) -> None:
+        if self.outputs or self.constraints:
+            raise ValueError("FieldOnly uses stage-owned outputs and has no magnetic constraints")
+
+    def to_ir(self) -> dict[str, object]:
+        return {"kind": "field_only", "sampling": {"outputs": []}}
 
 
 @dataclass(frozen=True, slots=True)

@@ -74,3 +74,33 @@ Ubuntu 16 testów; Windows 15 i jeden jawny POSIX-only skip. Named regresje
 contention/retry, interrupted stamp, Windows replacement oraz FIFO na
 Ubuntu przeszły. Kontrole konsumentów także przeszły. To zastępuje wcześniejszy
 pending status tych bramek; pełny solver runtime i nauka pozostają NOT VERIFIED.
+
+
+## Doprecyzowanie 20.10.2026 — skrypt uruchamiany przez Docker DEV
+
+Domyślna lokalizacja wyników zwykłego skryptu obowiązuje również przy jego
+aktywacji w UI przez Docker DEV: `model.zarr` powstaje obok `model.py`.
+Wszystkie polecenia `save`, `autosave` i `tableautosave` korzystają ze wspólnej
+polityki wyników. Istniejący writer HDF5 zachowuje kontener `model.results`
+z plikami `.h5`; ta zmiana nie wprowadza pojedynczego skonsolidowanego HDF5.
+Jawna polityka OutputStorage zachowuje pierwszeństwo. Rozwiązane ścieżki
+kontenera należą do metadanych wykonania; eksport Python pozostaje przenośny.
+
+Domyślna lokalizacja jawnej operacji zapisu sesji to sąsiedni `model.fms`.
+Wybrana przez użytkownika ścieżka ma pierwszeństwo. Kolizja tworzy nową nazwę;
+wcześniejszy plik pozostaje zachowany. Osobny Export zachowuje pobieranie
+archiwum przez przeglądarkę. Save zapisuje plik przez backend na hoście i nie
+może raportować pobrania do katalogu Downloads jako zapisu obok skryptu.
+
+Canonical source bind pozostaje readonly. Operator może jawnie udzielić
+backendowi zapisu do jednego podkatalogu źródeł przez
+`FULLMAG_SCRIPT_OUTPUT_DIRECTORY`; pusty wpis nie udziela takiego dostępu.
+Katalog główny checkoutu, wyjście poza checkout i dowiązania są odrzucane.
+Grant umożliwia technicznie zmianę innych plików wybranego podkatalogu,
+więc jest jawną konfiguracją operatora. Frontend nie otrzymuje tego aliasu.
+Dane kompilacji pozostają w named volumes / BuildKit. Sesje wewnętrzne,
+CAS i dowody wykonania zachowują dotychczasowe lokalizacje i właścicieli.
+
+Nieobsługiwany writer lub brak prawa zapisu kończy preflight błędem przed
+Solve. Implementacja, codegen, CI i runtime mają osobne bramki w planie
+`docker-dev-up-20261020`; ten zapis decyzji nie jest dowodem ich przejścia.

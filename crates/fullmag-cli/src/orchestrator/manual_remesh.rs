@@ -806,10 +806,14 @@ fn prepare_manual_interactive_remesh(
                 .context("failed to serialize declared universe for shared-domain remesh")?;
             let object_region_mesh_specs =
                 shared_domain_object_region_mesh_specs(&remesh_problem_source)?;
+            let (body_material_fields, geometry_object_ids) =
+                shared_domain_body_material_payload(&remesh_problem_source)?;
             invoke_shared_domain_remesh_full(
                 &remesh_problem_source.geometry.entries,
                 &object_region_mesh_specs,
                 &declared_universe_value,
+                &body_material_fields,
+                &geometry_object_ids,
                 hmax,
                 plan.fe_order,
                 &opts,

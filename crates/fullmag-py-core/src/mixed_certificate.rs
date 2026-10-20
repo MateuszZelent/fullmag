@@ -1,9 +1,11 @@
 use fullmag_ir::{
     compute_mixed_certificate_evidence,
-    validate_mixed_layer_topology_certificate_and_compute_evidence, validate_mixed_mesh_semantics,
+    validate_mixed_layer_topology_certificate_and_compute_evidence,
+    validate_mixed_layer_topology_certificate_v2_against_mesh, validate_mixed_mesh_semantics,
     FemCellMeshPartIR, FemCellTypeIR, FemConnectivityIR, FemFacetConnectivityIR, FemFacetRoleIR,
     FemFacetTypeIR, MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR,
     MixedCertificateEvidenceV1, MixedLayerTopologyCertificateV1IR,
+    MixedLayerTopologyCertificateV2IR,
 };
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
@@ -19,6 +21,8 @@ use std::cell::Cell;
 
 const CERTIFIER_ALGORITHM_ID: &str = "fullmag.mixed-certificate.rust-rayon.v1";
 const CERTIFICATE_RESULT_SCHEMA: &str = "fullmag.mixed-certificate-native-result.v1";
+const CERTIFIER_V2_ALGORITHM_ID: &str = "fullmag.mixed-certificate-v2.rust-rayon.v1";
+const CERTIFICATE_V2_RESULT_SCHEMA: &str = "fullmag.mixed-certificate-v2-native-result.v1";
 const CERTIFICATE_JSON_MAX_BYTES: usize = 1024 * 1024;
 const PREFLIGHT_RESULT_SCHEMA: &str = "fullmag.mixed-preflight-native-result.v1";
 const CELL_TOPOLOGY_CODES: [(&str, u8, FemCellTypeIR); 4] = [
@@ -78,6 +82,18 @@ struct NativeCertificateResult {
     evidence: MixedCertificateEvidenceV1,
     topology_fingerprint_v3: String,
     certificate_payload_sha256: Option<String>,
+    algorithm_id: &'static str,
+    rayon_threads: usize,
+    elapsed_ns: u64,
+    validated_claimed_certificate: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct NativeCertificateV2Result {
+    schema_version: &'static str,
+    topology_fingerprint_version: String,
+    topology_fingerprint: String,
+    certificate_payload_sha256: String,
     algorithm_id: &'static str,
     rayon_threads: usize,
     elapsed_ns: u64,
@@ -455,6 +471,29 @@ where
     Ok((certificate, canonical_typed_projection))
 }
 
+fn prepare_certificate_json_v2_with<F>(
+    payload: &str,
+    mut canonicalize: F,
+) -> PyResult<(MixedLayerTopologyCertificateV2IR, String)>
+where
+    F: FnMut(&str) -> PyResult<String>,
+{
+    enforce_certificate_json_size(payload).map_err(PyValueError::new_err)?;
+    let canonical_input = canonicalize(payload)?;
+    let certificate: MixedLayerTopologyCertificateV2IR =
+        serde_json::from_str(&canonical_input).map_err(|error| {
+            PyValueError::new_err(format!("invalid mixed v2 certificate JSON: {error}"))
+        })?;
+    certificate
+        .validate()
+        .map_err(|errors| PyValueError::new_err(errors.join("; ")))?;
+    let typed_projection = serde_json::to_string(&certificate).map_err(|error| {
+        PyValueError::new_err(format!("invalid mixed v2 certificate JSON: {error}"))
+    })?;
+    let canonical_typed_projection = canonicalize(&typed_projection)?;
+    Ok((certificate, canonical_typed_projection))
+}
+
 fn canonical_certificate_digest(canonical_json: &str) -> String {
     let digest = Sha256::digest(canonical_json.as_bytes());
     format!("sha256:{digest:x}")
@@ -522,6 +561,39 @@ fn run_certificate(
         rayon_threads: rayon::current_num_threads(),
         elapsed_ns: started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
         validated_claimed_certificate: validated,
+    })
+}
+
+fn run_certificate_v2(
+    mesh: MeshIR,
+    certificate: MixedLayerTopologyCertificateV2IR,
+    canonical_certificate_json: String,
+) -> Result<NativeCertificateV2Result, String> {
+    let started = Instant::now();
+    if !matches!(certificate.topology_fingerprint_version.as_str(), "v2" | "v3") {
+        return Err(
+            "native mixed v2 mesh certifier requires topology fingerprint v2 or v3".to_string(),
+        );
+    }
+    validate_mixed_layer_topology_certificate_v2_against_mesh(&mesh, &certificate)
+        .map_err(|errors| errors.join("; "))?;
+    let topology_fingerprint = match certificate.topology_fingerprint_version.as_str() {
+        "v2" => mesh.topology_fingerprint_v6(),
+        "v3" => mesh.mixed_topology_fingerprint_v3()?,
+        _ => unreachable!("fingerprint version was checked above"),
+    };
+    if topology_fingerprint != certificate.topology_fingerprint {
+        return Err("native mixed v2 certificate topology fingerprint is stale".to_string());
+    }
+    Ok(NativeCertificateV2Result {
+        schema_version: CERTIFICATE_V2_RESULT_SCHEMA,
+        topology_fingerprint_version: certificate.topology_fingerprint_version,
+        topology_fingerprint,
+        certificate_payload_sha256: canonical_certificate_digest(&canonical_certificate_json),
+        algorithm_id: CERTIFIER_V2_ALGORITHM_ID,
+        rayon_threads: rayon::current_num_threads(),
+        elapsed_ns: started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+        validated_claimed_certificate: true,
     })
 }
 
@@ -715,6 +787,76 @@ pub(crate) fn certify_mixed_mesh_arrays(
     };
     let result = detach_native_compute(py, move || {
         run_certificate(mesh, certificate, canonical_certificate_json)
+    })
+    .map_err(PyValueError::new_err)?;
+    serde_json::to_string(&result).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// Validate a v2 disconnected-body certificate against the exact typed mesh.
+///
+/// This entrypoint is deliberately certificate-required: unlike the legacy v1
+/// certifier it never mints a proof from an unsigned mesh.  The returned
+/// digest is over the canonical, serde-typed certificate projection so a
+/// caller can bind the proof to the payload it persisted.
+#[pyfunction]
+#[pyo3(signature = (
+    node_ids,
+    node_coordinates,
+    cell_global_ordinals,
+    cell_topology_codes,
+    cell_region_ids,
+    cell_offsets,
+    cell_connectivity,
+    facet_global_ordinals,
+    facet_topology_codes,
+    facet_marker_ids,
+    facet_offsets,
+    facet_connectivity,
+    metadata_json,
+    certificate_json
+))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn certify_mixed_mesh_arrays_v2(
+    py: Python<'_>,
+    node_ids: PyReadonlyArray1<'_, i64>,
+    node_coordinates: PyReadonlyArray2<'_, f64>,
+    cell_global_ordinals: PyReadonlyArray1<'_, i64>,
+    cell_topology_codes: PyReadonlyArray1<'_, u8>,
+    cell_region_ids: PyReadonlyArray1<'_, i64>,
+    cell_offsets: PyReadonlyArray1<'_, i64>,
+    cell_connectivity: PyReadonlyArray1<'_, i64>,
+    facet_global_ordinals: PyReadonlyArray1<'_, i64>,
+    facet_topology_codes: PyReadonlyArray1<'_, u8>,
+    facet_marker_ids: PyReadonlyArray1<'_, i64>,
+    facet_offsets: PyReadonlyArray1<'_, i64>,
+    facet_connectivity: PyReadonlyArray1<'_, i64>,
+    metadata_json: &str,
+    certificate_json: &str,
+) -> PyResult<String> {
+    let metadata: TypedMeshMetadata = serde_json::from_str(metadata_json).map_err(|error| {
+        PyValueError::new_err(format!("invalid mixed mesh metadata JSON: {error}"))
+    })?;
+    let mesh = parse_typed_mesh(
+        &node_ids,
+        &node_coordinates,
+        &cell_global_ordinals,
+        &cell_topology_codes,
+        &cell_region_ids,
+        &cell_offsets,
+        &cell_connectivity,
+        &facet_global_ordinals,
+        &facet_topology_codes,
+        &facet_marker_ids,
+        &facet_offsets,
+        &facet_connectivity,
+        metadata,
+    )?;
+    let (certificate, canonical_certificate_json) = prepare_certificate_json_v2_with(
+        certificate_json,
+        |candidate| canonicalize_certificate_json_with_python(py, candidate),
+    )?;
+    let result = detach_native_compute(py, move || {
+        run_certificate_v2(mesh, certificate, canonical_certificate_json)
     })
     .map_err(PyValueError::new_err)?;
     serde_json::to_string(&result).map_err(|error| PyValueError::new_err(error.to_string()))

@@ -121,7 +121,31 @@ const currentItems = [
   structuredCurrent,
 ];
 
+const spinItems = [
+  { id: "moved", schema_version: "spin_transport.v1", current_source_id: "charge", mode: "steady", domain: [], materials: [], solver: { default_external_boundary: "spin_insulating", engine: "gmres", linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 }, operator_version: "fv_spin_upwind_v1", physical_residual_version: "transport_balance_integrated_l2.v1" }, requested_execution: { device: "cpu", discretization: "fdm", execution_mode: "strict", precision: "double" }, constitutive_version: "transport_constitutive.one_way.fullmag.v1" },
+  { id: "other", schema_version: "spin_transport.v1", current_source_id: "charge", mode: "steady", domain: [], materials: [], solver: { default_external_boundary: "spin_insulating", engine: "gmres", linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 }, operator_version: "fv_spin_upwind_v1", physical_residual_version: "transport_balance_integrated_l2.v1" }, requested_execution: { device: "cpu", discretization: "fdm", execution_mode: "strict", precision: "double" }, constitutive_version: "transport_constitutive.one_way.fullmag.v1" },
+  futureSpin,
+  futureMixingSpin,
+  { ...futureSpin, constitutive_version: "transport_constitutive.one_way.fullmag.v1", id: "", solver: { ...futureSpin.solver, operator_version: "fv_spin_upwind_v1", physical_residual_version: "transport_balance_integrated_l2.v1" } },
+];
+
 vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
+  useSpinAuthoringGeometryResource: () => ({
+    data: {
+      revision: 7,
+      objects: [
+        { id: "ring", name: "Ring", regions: [{ region_id: "conductor" }, { region_id: "source-arm" }] },
+        { id: "stack", name: "Stack", regions: [{ region_id: "normal" }, { region_id: "free" }] },
+        { id: "pillar", name: "Pillar", regions: [{ region_id: "free-layer" }] },
+        { id: "free-layer", name: "Free layer", regions: [] },
+      ],
+      current_transports: currentItems,
+      spin_transports: spinItems,
+    },
+    error: null,
+    revision: 7,
+    status: "ready",
+  }),
   CURRENT_TRANSPORTS_RESOURCE_KEY: "model/current-transports",
   SPIN_TRANSPORTS_RESOURCE_KEY: "model/spin-transports",
   useCurrentTransportsResource: () => ({
@@ -130,13 +154,7 @@ vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
   }),
   useSpinTransportsResource: () => ({
     data: {
-      items: [
-        { id: "moved", schema_version: "spin_transport.v1", current_source_id: "charge", mode: "steady", domain: [], materials: [], solver: { default_external_boundary: "spin_insulating", engine: "gmres", linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 }, operator_version: "fv_spin_upwind_v1", physical_residual_version: "transport_balance_integrated_l2.v1" }, requested_execution: { device: "cpu", discretization: "fdm", execution_mode: "strict", precision: "double" }, constitutive_version: "transport_constitutive.one_way.fullmag.v1" },
-        { id: "other", schema_version: "spin_transport.v1", current_source_id: "charge", mode: "steady", domain: [], materials: [], solver: { default_external_boundary: "spin_insulating", engine: "gmres", linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 }, operator_version: "fv_spin_upwind_v1", physical_residual_version: "transport_balance_integrated_l2.v1" }, requested_execution: { device: "cpu", discretization: "fdm", execution_mode: "strict", precision: "double" }, constitutive_version: "transport_constitutive.one_way.fullmag.v1" },
-        futureSpin,
-        futureMixingSpin,
-        { ...futureSpin, constitutive_version: "transport_constitutive.one_way.fullmag.v1", id: "", solver: { ...futureSpin.solver, operator_version: "fv_spin_upwind_v1", physical_residual_version: "transport_balance_integrated_l2.v1" } },
-      ],
+      items: spinItems,
       scene_revision: 7,
     },
     status: "ready",
@@ -249,7 +267,7 @@ describe("TransportAuthoringInspector", () => {
     );
 
     expect(html).toContain('value="ohmic_poisson" selected=""');
-    expect(html).toContain('&quot;region_id&quot;: &quot;free-layer&quot;');
+    expect(html).toContain('value="[&quot;pillar&quot;,&quot;free-layer&quot;]" selected=""');
     expect(html).toContain('data-scope-kind="region"');
     expect(html).toContain("region:pillar:free-layer");
   });
@@ -268,8 +286,7 @@ describe("TransportAuthoringInspector", () => {
       </KernelContext.Provider>,
     );
 
-    expect(html).toContain('&quot;object_id&quot;: &quot;pillar&quot;');
-    expect(html).toContain('&quot;region_id&quot;: &quot;free-layer&quot;');
+    expect(html).toContain('value="[&quot;pillar&quot;,&quot;free-layer&quot;]" selected=""');
     expect(html).toContain('data-scope-kind="region"');
     expect(html).toContain("region:pillar:free-layer");
   });
@@ -287,8 +304,8 @@ describe("TransportAuthoringInspector", () => {
       </KernelContext.Provider>,
     );
 
-    expect(html).toContain('&quot;object_id&quot;: &quot;free-layer&quot;');
-    expect(html).not.toContain('&quot;region_id&quot;');
+    expect(html).toContain('value="[&quot;free-layer&quot;,&quot;&quot;]" selected=""');
+    expect(html).not.toMatch(/<option[^>]*value="\[&quot;free-layer&quot;,&quot;[^&]+&quot;\]"[^>]*selected=""/);
     expect(html).toContain('data-scope-kind="object"');
     expect(html).toContain("object:free-layer");
   });
@@ -308,6 +325,23 @@ describe("TransportAuthoringInspector", () => {
 
     expect(html).toContain('value="moved"');
     expect(html).not.toContain('value="other"');
+  });
+
+  it("disables an unavailable GPU transport choice while retaining the CPU request", () => {
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <SpinTransportInspectorPanel selection={selection("physics.spin-transport", {
+          kind: "physics.spin-transport",
+          nodeId: "model:physics:spin-transports:moved",
+          spinTransportId: "moved",
+          type: "spin-transport",
+        })} />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain('value="cpu" selected=""');
+    expect(html).toMatch(/<option(?=[^>]*\bvalue="gpu")(?=[^>]*\bdisabled="")[^>]*>/);
+    expect(html).toContain("GPU unavailable");
   });
 
   it("renders a future current model losslessly without edit, Replace, or Delete actions", () => {

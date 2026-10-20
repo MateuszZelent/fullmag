@@ -2338,6 +2338,99 @@ describe("study runtime command contributions", () => {
     expect(resources.getRevision(PERSISTENCE_EXPORTS_PATH)).toBe("session-1");
   });
 
+  it("saves state through the persistence facade without downloading a second copy", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(bus);
+    const resources = new ResourceInvalidationController(bus);
+    const create = vi.fn(async () => ({
+      filename: "permalloy_layer.fms",
+      fms_base64: "",
+      profile: "resume",
+      saved_path: "/opt/fullmag/script-output/permalloy_layer.fms",
+      session_id: "session-1",
+      size_bytes: 3,
+    }));
+
+    const result = await registry.execute("study.save-state", {
+      api: {
+        persistence: {
+          exports: { create },
+        },
+      } as never,
+      layout,
+      resources,
+      input: { targetPath: "/opt/fullmag/script-output/custom.fms" },
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "State saved as permalloy_layer.fms.",
+      status: "completed",
+    });
+    expect(create).toHaveBeenCalledWith({
+      profile: "resume",
+      target_path: "/opt/fullmag/script-output/custom.fms",
+      save_to_source: true,
+      ui_state: {
+        kernel_layout: {
+          activeBottomPanelTab: "telemetry",
+          activeModuleTab: "home",
+          activeViewportMainModuleId: "viewport-3d",
+          focusedSlot: null,
+          panelVisible: {
+            bottom: true,
+            left: true,
+            right: true,
+          },
+        },
+        version: 1,
+        workspace_layout: null,
+      },
+    }, {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+    });
+    expect(resources.getRevision(PERSISTENCE_EXPORTS_PATH)).toBe("session-1");
+  });
+
+  it("fails source save when the API omits the publication path", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(bus);
+    const resources = new ResourceInvalidationController(bus);
+    const create = vi.fn(async () => ({
+      fms_base64: "Zm1z",
+      profile: "resume",
+      session_id: "session-1",
+      size_bytes: 3,
+    }));
+
+    const result = await registry.execute("study.save-state", {
+      api: {
+        persistence: {
+          exports: { create },
+        },
+      } as never,
+      layout,
+      resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "State was not saved to the source directory.",
+      status: "failed",
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: "resume",
+        save_to_source: true,
+      }),
+      expect.anything(),
+    );
+  });
+
   it("does not publish an export response into a newer session", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();

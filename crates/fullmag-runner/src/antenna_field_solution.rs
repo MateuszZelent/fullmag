@@ -1,5 +1,13 @@
 use crate::antenna_spectrum::FieldTetraBvh;
 pub(crate) mod direct_quadrature;
+pub(crate) mod closed_loop_v2;
+mod closed_loop_public_inspection;
+pub use closed_loop_public_inspection::{load_antenna_closed_loop_inspection_bytes, load_published_antenna_closed_loop_inspection, verify_antenna_closed_loop_inspection_bytes, LoadedAntennaClosedLoopInspection};
+pub(crate) mod closed_loop_execution;
+pub use closed_loop_execution::execute_antenna_closed_loop_inspection;
+pub(crate) mod direct_quadrature_v2;
+pub(crate) mod closed_loop_identity_v2;
+pub(crate) mod closed_loop_balance_v2;
 pub use direct_quadrature::AntennaQuadratureEvidenceRef;
 use direct_quadrature::{DirectOerstedSnapshot, DirectQuadratureEvidence, EVIDENCE_SCHEMA};
 use crate::types::{AuxiliaryArtifact, RunError};
@@ -71,9 +79,9 @@ pub(crate) struct AntennaFieldSolutionInput {
     pub bases: Vec<AntennaFieldBasisInput>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct AntennaSampleCarrier {
+pub struct AntennaSampleCarrier {
     pub domain: FieldTargetIR,
     pub carrier_kind: String,
     pub location: String,
@@ -311,6 +319,9 @@ fn parse_verified_manifest(
 pub(crate) fn verify_antenna_field_solution_manifest(
     manifest_bytes: &[u8],
 ) -> Result<(), RunError> {
+    if closed_loop_v2::is_v2(manifest_bytes) {
+        return closed_loop_v2::payload_lengths(manifest_bytes).map(|_| ());
+    }
     parse_verified_manifest(manifest_bytes).map(|_| ())
 }
 
@@ -319,6 +330,9 @@ pub(crate) fn verify_antenna_field_solution_manifest(
 pub(crate) fn antenna_field_solution_payload_lengths(
     manifest_bytes: &[u8],
 ) -> Result<BTreeMap<String, usize>, RunError> {
+    if closed_loop_v2::is_v2(manifest_bytes) {
+        return closed_loop_v2::payload_lengths(manifest_bytes);
+    }
     let (_, manifest) = parse_verified_manifest(manifest_bytes)?;
     let mut lengths = BTreeMap::new();
     let prefix = format!("antenna/field_solutions/{}/", manifest.solution_id);
@@ -520,6 +534,9 @@ fn verify_field_solution_payloads(
     payloads: &[AuxiliaryArtifact],
     require_exact_payload_set: bool,
 ) -> Result<(), RunError> {
+    if closed_loop_v2::is_v2(manifest_bytes) {
+        return closed_loop_v2::verify(manifest_bytes, payloads, require_exact_payload_set);
+    }
     antenna_field_solution_payload_lengths(manifest_bytes)?;
     let (_, manifest) = parse_verified_manifest(manifest_bytes)?;
     let mut expected_paths = BTreeSet::from([
@@ -1194,6 +1211,7 @@ pub struct AntennaFieldSolutionAsset {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AntennaFieldSolutionSamples {
+    pub sample_carrier: Option<AntennaSampleCarrier>,
     pub solution_id: String,
     pub source_object_id: String,
     pub port_mode_id: String,
@@ -1314,6 +1332,7 @@ pub fn load_antenna_field_solution_samples(
         })
         .transpose()?;
     Ok(AntennaFieldSolutionSamples {
+        sample_carrier: manifest.sample_carrier.clone(),
         solution_id: manifest.solution_id,
         source_object_id: manifest.source_object_id,
         port_mode_id: port_mode_id.to_string(),
@@ -3200,12 +3219,24 @@ mod tests {
         )
         .is_err());
 
+        verify_antenna_field_solution_referenced_data(
+            &artifacts.last().unwrap().bytes,
+            &artifacts[..artifacts.len() - 1],
+        )
+        .expect("untampered fixture passes referenced payload integrity");
         let mut payloads = artifacts[..artifacts.len() - 1].to_vec();
-        payloads
+        let field_payload = payloads
             .iter_mut()
             .find(|artifact| artifact.relative_path.ends_with("H_per_A.f64le"))
-            .expect("magnetic field payload")
-            .bytes[0] ^= 1;
+            .expect("magnetic field payload");
+        let original_bytes = field_payload.bytes.clone();
+        field_payload.bytes[0] ^= 1;
+        assert_eq!(field_payload.bytes.len(), original_bytes.len());
+        assert!(field_payload.bytes.chunks_exact(8).all(|chunk| {
+            f64::from_le_bytes(chunk.try_into().unwrap()).is_finite()
+        }));
+        assert_ne!(sha256(&field_payload.bytes), sha256(&original_bytes));
+        let field_path = field_payload.relative_path.clone();
         let error = load_solved_antenna_drive_basis_projected(
             &artifacts.last().unwrap().bytes,
             &payloads,
@@ -3218,10 +3249,11 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(
-            error.message.contains("H_per_A.f64le") && error.message.contains("sha256"),
-            "{}",
-            error.message
+        assert_eq!(
+            error.message,
+            format!(
+                "antenna field payload '{field_path}' sha256, size, or finite-value check failed"
+            )
         );
 
         assert!(load_solved_antenna_drive_basis_projected(

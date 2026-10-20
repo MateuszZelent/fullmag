@@ -184,7 +184,7 @@ def test_field_solve_projection_and_spectrum_are_typed_thin_references() -> None
     assert spectrum.to_ir()["normalization"] == "integral_si"
     with pytest.raises(ValueError, match="equilibrium_ref is only valid"):
         replace(spectrum, equilibrium_ref="equilibrium_1")
-    with pytest.raises(ValueError, match="transverse spectrum is unsupported"):
+    with pytest.raises(ValueError, match="canonical immutable equilibrium identity"):
         replace(spectrum, component="transverse", equilibrium_ref="equilibrium_1")
     with pytest.raises(ValueError, match="mode_basis_ref is unsupported"):
         replace(spectrum, mode_basis_ref="modes_1")

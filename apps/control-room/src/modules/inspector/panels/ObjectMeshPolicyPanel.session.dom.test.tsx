@@ -146,7 +146,7 @@ describe("ObjectMeshPolicyPanel session fencing", () => {
 
       expect(mocks.replace).toHaveBeenCalledWith(
         "film",
-        expect.objectContaining({ config: { maximum_element_size: 2e-9 } }),
+        expect.objectContaining({ config: { maximum_element_size: 2e-9, mode: "custom" } }),
         { sessionScopeKey: "session=A&epoch=4&request_scope_epoch=4" },
       );
       expect(mocks.invalidate).toHaveBeenCalled();

@@ -1149,6 +1149,9 @@ export const PROJECT_SAVED_FIELD_SUPPORT_PATH = openApiV2Path(
 export const PROJECT_RUN_TASK_CANCELLATION_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation",
 );
+export const PROJECT_RUN_TASK_RETRY_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/retry",
+);
 
 export const PERSISTENCE_RECOVERY_PATH = openApiV2Path(
   "/v2/sessions/current/persistence/recovery",
@@ -1187,6 +1190,8 @@ export function workspaceItemArchiveUrl(baseUrl: string, id: string): string {
 export function workspaceItemThumbnailUrl(baseUrl: string, id: string): string {
   return `${baseUrl}${WORKSPACE_ITEM_THUMBNAIL_PATH.replace("{id}", encodeURIComponent(id))}`;
 }
+export const PLATFORM_COMPUTE_ALLOCATION_PATH = openApiV2Path("/v2/platform/compute/allocations/{allocation_id}");
+export const PLATFORM_COMPUTE_QUEUE_PATH = openApiV2Path("/v2/platform/compute/queue");
 export const PLATFORM_COMPUTE_PROFILES_PATH = openApiV2Path("/v2/platform/compute/profiles");
 export const PLATFORM_COMPUTE_PREVIEW_PATH = openApiV2Path("/v2/platform/compute/preview");
 export const PLATFORM_COMPUTE_NODES_PATH = openApiV2Path("/v2/platform/compute/nodes");

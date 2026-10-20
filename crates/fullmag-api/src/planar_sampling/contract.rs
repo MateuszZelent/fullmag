@@ -1,7 +1,7 @@
 use crate::error::ApiError;
 use fullmag_ir::{PlanarFrameIR, PlanarOperatorIR};
 
-pub(crate) const PLANAR_SAMPLER_VERSION: &str = "planar_sampling_v1";
+pub(crate) const PLANAR_SAMPLER_VERSION: &str = "planar_sampling_v2";
 pub(crate) const MAX_PLANAR_SAMPLE_POINTS: u32 = 1_048_576;
 
 #[derive(Debug, Clone)]
@@ -15,6 +15,9 @@ pub(crate) struct ResolvedPlanarSampleRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PlanarComponent {
     Scalar,
+    Index(usize),
+    Frobenius,
+    SpinFlow(usize),
     Magnitude,
     MagnitudeSquared,
     WorldX,
@@ -85,6 +88,9 @@ pub(crate) struct PlanarSampleMeta {
 #[derive(Debug, Clone)]
 pub(crate) struct PlanarSampleResult {
     pub meta: PlanarSampleMeta,
+    /// All sampled components, interleaved by point, before derived projection.
+    pub component_values: Vec<f64>,
+    pub n_comp: usize,
     pub scalar_values: Vec<f64>,
     pub vector_values: Option<Vec<[f64; 3]>>,
     pub occupancy: Vec<Occupancy>,
@@ -446,8 +452,57 @@ fn apply_component(
     result: &mut PlanarSampleResult,
     request: &ResolvedPlanarSampleRequest,
 ) -> Result<(), ApiError> {
+    // Derive tensor views only after interpolation and spatial reduction.
+    match request.component {
+        PlanarComponent::Index(index) => {
+            if index >= result.n_comp {
+                return Err(ApiError::bad_request(
+                    "invalid_planar_component: index out of range",
+                ));
+            }
+            result.scalar_values = result
+                .component_values
+                .chunks_exact(result.n_comp)
+                .map(|point| point[index])
+                .collect();
+            if result.n_comp != 3 {
+                result.vector_values = None;
+            }
+            return Ok(());
+        }
+        PlanarComponent::Frobenius | PlanarComponent::SpinFlow(_) => {
+            if result.n_comp != 9 {
+                return Err(ApiError::bad_request(
+                    "invalid_planar_component: flow-major tensor requires nine components",
+                ));
+            }
+            if let PlanarComponent::SpinFlow(axis) = request.component {
+                if axis >= 3 {
+                    return Err(ApiError::bad_request(
+                        "invalid_planar_component: spin axis out of range",
+                    ));
+                }
+                let vectors: Vec<[f64; 3]> = result
+                    .component_values
+                    .chunks_exact(9)
+                    .map(|point| [point[axis], point[3 + axis], point[6 + axis]])
+                    .collect();
+                result.scalar_values = vectors.iter().map(|v| dot(*v, *v).sqrt()).collect();
+                result.vector_values = Some(vectors);
+            } else {
+                result.scalar_values = result
+                    .component_values
+                    .chunks_exact(9)
+                    .map(|point| point.iter().fold(0.0_f64, |norm, value| norm.hypot(*value)))
+                    .collect();
+                result.vector_values = None;
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
     if request.component == PlanarComponent::Scalar {
-        if result.vector_values.is_some() {
+        if result.n_comp != 1 {
             return Err(ApiError::bad_request(
                 "invalid_planar_component: scalar requires a scalar quantity",
             ));
@@ -470,7 +525,10 @@ fn apply_component(
                 return f64::NAN;
             }
             match request.component {
-                PlanarComponent::Scalar => unreachable!(),
+                PlanarComponent::Scalar
+                | PlanarComponent::Index(_)
+                | PlanarComponent::Frobenius
+                | PlanarComponent::SpinFlow(_) => unreachable!(),
                 PlanarComponent::Magnitude => dot(*vector, *vector).sqrt(),
                 PlanarComponent::MagnitudeSquared => dot(*vector, *vector),
                 PlanarComponent::WorldX => vector[0],

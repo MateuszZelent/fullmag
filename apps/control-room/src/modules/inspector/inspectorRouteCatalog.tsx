@@ -10,8 +10,10 @@ import {
 import { PinnedVisualizationsInspectorPanel } from "./panels/analysis-results/PinnedVisualizationsInspectorPanel";
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
 import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
+import { AntennaCompositionSummaryPanel } from "./panels/antenna/AntennaCompositionSummaryPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { AntennaVisualizationPanel } from "./panels/antenna/AntennaVisualizationPanel";
+import { AntennaTerminalsPanel } from "./panels/antenna/AntennaTerminalsPanel";
 import { AntennaGeometryPanel } from "./panels/antenna/AntennaGeometryPanel";
 import {
   AntennaConductorPanel,
@@ -81,7 +83,7 @@ import {
   ObjectRegionOverviewPanel,
   ObjectRegionVisualizationPanel,
 } from "./panels/ObjectRegionsPanel";
-import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
+import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationEntryPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
 import { PhysicsGraphModuleInspectorPanel } from "./panels/PhysicsGraphModuleInspectorPanel";
 import { PlanarMonitorDraftInspectorPanel } from "./panels/PlanarMonitorDraftInspectorPanel";
@@ -917,9 +919,15 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     component: BuilderPrimitiveInspectorPanel,
   },
   {
+    id: "antenna-composition",
+    title: "Antenna composition",
+    selectionKinds: ["object.antenna"],
+    component: AntennaCompositionSummaryPanel,
+  },
+  {
     id: "antenna-object",
     title: "Regional field drive",
-    selectionKinds: ["object.antenna", "object.antenna.regional"],
+    selectionKinds: ["object.antenna.regional"],
     component: AntennaObjectPanel,
   },
   {
@@ -927,6 +935,12 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Antenna geometry",
     selectionKinds: ["object.antenna.geometry"],
     component: AntennaGeometryPanel,
+  },
+  {
+    id: "antenna-terminals",
+    title: "Antenna terminals",
+    selectionKinds: ["object.antenna.terminals"],
+    component: AntennaTerminalsPanel,
   },
   {
     id: "antenna-conductor",

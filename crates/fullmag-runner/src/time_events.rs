@@ -13,6 +13,17 @@ pub(crate) fn resolved_field_drive_is_active(
             .is_active_for(time_stage.study_kind, time_stage.active_stage_id.as_deref())
 }
 
+/// Analysis uses the same semantic stage activation as accepted antenna execution.
+pub(crate) fn resolved_solved_antenna_drive_is_active(
+    basis: &ResolvedSolvedAntennaDriveBasisIR,
+    time_stage: &TimeStageContextIR,
+) -> bool {
+    basis.drive.activation.is_active_for(
+        time_stage.study_kind,
+        time_stage.active_stage_id.as_deref(),
+    )
+}
+
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StageTimeWindow {

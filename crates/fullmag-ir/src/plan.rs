@@ -75,6 +75,21 @@ pub struct AntennaFieldSamplingPlanIR {
     pub cells: FemConnectivityIR,
 }
 
+/// Session carriers for a selected static antenna action, without magnetic DOFs.
+/// Numerical execution remains owned by the resolved antenna action.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaFieldOnlyPlanIR {
+    pub schema_version: String,
+    pub stage_id: String,
+    pub port_mode_id: String,
+    pub source_object_id: String,
+    pub source_mesh: MeshIR,
+    pub source_object_segments: Vec<FemObjectSegmentIR>,
+    pub source_mesh_parts: Vec<FemMeshPartIR>,
+    pub field_sampling: AntennaFieldSamplingPlanIR,
+}
+
 /// Dedicated static antenna precomputation plan.
 ///
 /// This wrapper deliberately cannot be passed to the ordinary LLG runner as
@@ -328,6 +343,7 @@ fn resolved_frozen_mask_sha256(mask: &[bool]) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BackendPlanIR {
+    AntennaFieldOnly(AntennaFieldOnlyPlanIR),
     AntennaExternalLeadInspection(AntennaExternalLeadInspectionBackendPlanIR),
     Fdm(FdmPlanIR),
     FdmMultilayer(FdmMultilayerPlanIR),

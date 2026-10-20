@@ -115,6 +115,39 @@ double zeeman_like_energy(const std::vector<double> &m, const std::vector<double
     return energy;
 }
 
+void inactive_air_rhs_is_zero_and_excluded_from_metric() {
+    const std::vector<double> m = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    const std::vector<double> h = {
+        0.0, 0.0, 2.0,
+        0.0, 0.0, 2000.0,
+    };
+    const std::vector<uint8_t> magnetic_node_mask = {1u, 0u};
+    std::vector<double> rhs;
+    double max_rhs = 0.0;
+
+    fullmag::fem::llg_rhs_aos(
+        m,
+        h,
+        1.0,
+        0.0,
+        nullptr,
+        true,
+        rhs,
+        max_rhs,
+        &magnetic_node_mask);
+
+    check_near(rhs[0], 0.0, 1e-15, "active node rhs x");
+    check_near(rhs[1], 2.0, 1e-15, "active node rhs y");
+    check_near(rhs[2], 0.0, 1e-15, "active node rhs z");
+    check_near(rhs[3], 0.0, 1e-15, "air rhs x is zero");
+    check_near(rhs[4], 0.0, 1e-15, "air rhs y is zero");
+    check_near(rhs[5], 0.0, 1e-15, "air rhs z is zero");
+    check_near(max_rhs, 2.0, 1e-15, "air rhs is excluded from max metric");
+}
+
 void damping_only_macrospin_energy_decreases_under_relaxation() {
     std::vector<double> m = {1.0, 0.0, 0.0};
     const std::vector<double> h = {0.0, 0.0, 1.0};
@@ -249,6 +282,7 @@ void gamma_mu0_convention_is_pinned_by_docs_and_material_validation() {
 int main() {
     llg_rhs_is_owned_by_integrator_module();
     llg_rhs_uses_llg_gilbert_form_and_nodewise_damping();
+    inactive_air_rhs_is_zero_and_excluded_from_metric();
     damping_only_macrospin_energy_decreases_under_relaxation();
     llg_rhs_can_disable_precession_for_overdamped_relaxation();
     aos_helpers_normalize_and_mask_nodes();

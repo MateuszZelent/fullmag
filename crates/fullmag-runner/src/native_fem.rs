@@ -93,7 +93,9 @@ pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_tran
 #[cfg(feature = "fem-gpu")]
 pub(crate) use steady_transport::{
     execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
-    solve_native_fem_steady_transport_rt0, NativeFemSteadyTransportBundle,
+    solve_native_fem_steady_transport_rt0, solve_native_fem_prepared_closed_loop,
+    NativeFemPreparedClosedLoopChargeRequest, PreparedClosedLoopRuntimeBinding,
+    NativeFemSteadyTransportBundle,
     NativeFemSteadyTransportExecution, NativeFemSteadyTransportGauge,
     NativeFemSteadyTransportInterface, NativeFemSteadyTransportRequest,
     NativeFemSteadyTransportResult, NativeFemSteadyTransportRt0Result,
@@ -121,7 +123,7 @@ use fullmag_ir::StageCompletionIR;
 #[cfg(feature = "fem-gpu")]
 use plan::{
     has_slonczewski_stt, has_zhang_li_stt, native_fem_gpu_demag_mode,
-    native_fem_precession_enabled, single_precision_rejection,
+    native_fem_precession_enabled, preserve_mixed_body_markers_for_runtime, single_precision_rejection,
 };
 
 #[cfg(feature = "fem-gpu")]
@@ -566,6 +568,144 @@ impl PackedNativeMesh {
 }
 
 #[cfg(feature = "fem-gpu")]
+struct PackedNativeMixedBodyCertificate {
+    body_markers: Vec<u32>,
+    body_node_offsets: Vec<u64>,
+    body_node_indices: Vec<u32>,
+    pair_body_a: Vec<u32>,
+    pair_body_b: Vec<u32>,
+    pair_min_gap_m: Vec<f64>,
+    pair_contact_state: Vec<u32>,
+}
+
+#[cfg(feature = "fem-gpu")]
+impl PackedNativeMixedBodyCertificate {
+    fn descriptor(&self) -> ffi::fullmag_fem_mixed_body_certificate_v2 {
+        ffi::fullmag_fem_mixed_body_certificate_v2 {
+            abi_version: ffi::FULLMAG_FEM_MIXED_BODY_CERTIFICATE_V2_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_mixed_body_certificate_v2>() as u32,
+            body_count: self.body_markers.len() as u64,
+            body_markers: optional_slice_ptr(&self.body_markers),
+            body_node_offsets: optional_slice_ptr(&self.body_node_offsets),
+            body_node_offsets_len: self.body_node_offsets.len() as u64,
+            body_node_indices: optional_slice_ptr(&self.body_node_indices),
+            body_node_index_count: self.body_node_indices.len() as u64,
+            pair_count: self.pair_body_a.len() as u64,
+            pair_body_a: optional_slice_ptr(&self.pair_body_a),
+            pair_body_b: optional_slice_ptr(&self.pair_body_b),
+            pair_min_gap_m: optional_slice_ptr(&self.pair_min_gap_m),
+            pair_contact_state: optional_slice_ptr(&self.pair_contact_state),
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn pack_native_mixed_body_certificate(
+    plan: &fullmag_ir::FemPlanIR,
+) -> Result<Option<PackedNativeMixedBodyCertificate>, RunError> {
+    let Some(report) = plan.mesh_build_report.as_ref() else {
+        return Ok(None);
+    };
+    let Some(certificate) = report.mixed_layer_topology_certificate_v2.as_ref() else {
+        return Ok(None);
+    };
+    if plan.mesh.element_markers.len() != plan.mesh.cells.types.len() {
+        return Err(RunError {
+            message: "mixed-body certificate requires one element marker per realized cell"
+                .to_string(),
+        });
+    }
+
+    let mut body_markers = Vec::with_capacity(certificate.magnetic_regions.len());
+    let mut body_node_offsets = vec![0u64];
+    let mut body_node_indices = Vec::new();
+    let mut body_index_by_object = HashMap::new();
+    for (body_index, region) in certificate.magnetic_regions.iter().enumerate() {
+        if body_index_by_object
+            .insert(region.object_id.as_str(), body_index as u32)
+            .is_some()
+        {
+            return Err(RunError {
+                message: format!(
+                    "mixed-body certificate repeats magnetic object '{}'",
+                    region.object_id
+                ),
+            });
+        }
+        body_markers.push(region.body_marker);
+        let mut nodes = BTreeSet::new();
+        for cell in 0..plan.mesh.cells.types.len() {
+            if plan.mesh.element_markers[cell] != region.body_marker {
+                continue;
+            }
+            let cell_nodes = plan.mesh.cells.item_nodes(cell).ok_or_else(|| RunError {
+                message: format!(
+                    "mixed-body certificate cannot read CSR nodes for cell {cell}"
+                ),
+            })?;
+            nodes.extend(cell_nodes.iter().copied());
+        }
+        if nodes.is_empty() {
+            return Err(RunError {
+                message: format!(
+                    "mixed-body certificate body marker {} has no realized cells",
+                    region.body_marker
+                ),
+            });
+        }
+        body_node_indices.extend(nodes);
+        body_node_offsets.push(body_node_indices.len() as u64);
+    }
+
+    let mut pair_body_a = Vec::with_capacity(certificate.body_separation_pairs.len());
+    let mut pair_body_b = Vec::with_capacity(certificate.body_separation_pairs.len());
+    let mut pair_min_gap_m = Vec::with_capacity(certificate.body_separation_pairs.len());
+    let mut pair_contact_state = Vec::with_capacity(certificate.body_separation_pairs.len());
+    for pair in &certificate.body_separation_pairs {
+        let body_a = *body_index_by_object.get(pair.body_a.as_str()).ok_or_else(|| RunError {
+            message: format!(
+                "mixed-body separation pair references unknown body '{}'",
+                pair.body_a
+            ),
+        })?;
+        let body_b = *body_index_by_object.get(pair.body_b.as_str()).ok_or_else(|| RunError {
+            message: format!(
+                "mixed-body separation pair references unknown body '{}'",
+                pair.body_b
+            ),
+        })?;
+        if body_a == body_b {
+            return Err(RunError {
+                message: "mixed-body separation pair cannot name the same body twice".to_string(),
+            });
+        }
+        let (body_a, body_b) = if body_a < body_b {
+            (body_a, body_b)
+        } else {
+            (body_b, body_a)
+        };
+        pair_body_a.push(body_a);
+        pair_body_b.push(body_b);
+        pair_min_gap_m.push(pair.min_gap_m);
+        pair_contact_state.push(if pair.contact_state == "separated" {
+            ffi::FULLMAG_FEM_MIXED_BODY_CONTACT_SEPARATED
+        } else {
+            0
+        });
+    }
+
+    Ok(Some(PackedNativeMixedBodyCertificate {
+        body_markers,
+        body_node_offsets,
+        body_node_indices,
+        pair_body_a,
+        pair_body_b,
+        pair_min_gap_m,
+        pair_contact_state,
+    }))
+}
+
+#[cfg(feature = "fem-gpu")]
 fn resolve_native_fem_plan_dt_seconds(plan: &fullmag_ir::FemPlanIR) -> Result<f64, RunError> {
     if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
         return Ok(crate::NON_LLG_RELAXATION_ABI_DT_PLACEHOLDER);
@@ -799,6 +939,8 @@ fn normalized_native_runtime_element_markers(
         return infer_native_runtime_element_markers(plan);
     }
 
+    let preserve_body_markers = preserve_mixed_body_markers_for_runtime(plan);
+
     let distinct_nonzero = plan
         .mesh
         .element_markers
@@ -807,7 +949,14 @@ fn normalized_native_runtime_element_markers(
         .filter(|marker| *marker != 0)
         .collect::<BTreeSet<_>>();
     if distinct_nonzero.is_empty() {
-        return Ok(Some(vec![0; plan.mesh.element_markers.len()]));
+        return if preserve_body_markers {
+            // A V2 certificate must never be paired with a synthesized binary
+            // mask.  Keep the original marker vector so the native validator
+            // can reject an incomplete certificate/mesh pair explicitly.
+            Ok(None)
+        } else {
+            Ok(Some(vec![0; plan.mesh.element_markers.len()]))
+        };
     }
 
     let magnetic_markers = if !plan.region_materials.is_empty() {
@@ -864,6 +1013,13 @@ fn normalized_native_runtime_element_markers(
                 "invalid native FEM plan: magnetic runtime markers must not include element_marker=0"
                     .to_string(),
         });
+    }
+
+    if preserve_body_markers {
+        // Native C++ derives its separate magnetic_element_mask from
+        // cell_markers != 0.  Preserve the V2 body identities (for example
+        // 1,2,0) for certificate ownership and MFEM material attributes.
+        return Ok(None);
     }
 
     Ok(Some(
@@ -2848,6 +3004,7 @@ impl NativeFemBackend {
         let (sot_envelope, _sot_envelope_points) = pack_native_sot_envelope(plan)?;
 
         let mesh = packed_mesh.descriptor(&plan.mesh);
+        let mixed_body_certificate = pack_native_mixed_body_certificate(plan)?;
 
         let material = ffi::fullmag_fem_material_desc {
             saturation_magnetisation: plan.material.saturation_magnetisation,
@@ -3494,10 +3651,21 @@ impl NativeFemBackend {
             has_rotated_interfacial_dmi: i32::from(plan.rotated_interfacial_dmi.is_some()),
             rotated_interfacial_dmi_constant: plan.rotated_interfacial_dmi.unwrap_or(0.0),
         };
+        let mixed_body_certificate_descriptor = mixed_body_certificate
+            .as_ref()
+            .map(PackedNativeMixedBodyCertificate::descriptor);
+        let plan_desc_v3 = ffi::fullmag_fem_plan_desc_v3 {
+            abi_version: ffi::FULLMAG_FEM_PLAN_DESC_V3_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_plan_desc_v3>() as u32,
+            base: plan_desc_v2,
+            mixed_body_certificate_v2: mixed_body_certificate_descriptor
+                .as_ref()
+                .map_or(std::ptr::null(), |descriptor| descriptor as *const _),
+        };
         let adaptive_ptr = adaptive_cfg
             .as_ref()
             .map_or(std::ptr::null(), |cfg| cfg as *const _);
-        let handle = unsafe { ffi::fullmag_fem_backend_create_v3(&plan_desc_v2, adaptive_ptr) };
+        let handle = unsafe { ffi::fullmag_fem_backend_create_v4(&plan_desc_v3, adaptive_ptr) };
         if handle.is_null() {
             let availability = native_availability();
             return Err(RunError {

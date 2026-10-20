@@ -4874,6 +4874,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         },
     ];
     let sampling = match &mut demag_ir.study {
+        fullmag_ir::StudyIR::FieldOnly { .. } => panic!("magnetic fixture cannot use FieldOnly"),
         fullmag_ir::StudyIR::TimeEvolution { sampling, .. }
         | fullmag_ir::StudyIR::Relaxation { sampling, .. }
         | fullmag_ir::StudyIR::Eigenmodes { sampling, .. }
@@ -15328,6 +15329,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             orphan_entities: Vec::new(),
             rejected_element_types: Vec::new(),
             mixed_layer_topology_certificate: None,
+            mixed_layer_topology_certificate_v2: None,
             mixed_topology_provenance: None,
         }),
     };
@@ -16213,6 +16215,7 @@ fn fdm_prescribed_zeeman_mask_antenna_plans_with_extra_geometry() {
         every_seconds: 1.0e-12,
     };
     match &mut ir.study {
+        StudyIR::FieldOnly { .. } => panic!("magnetic fixture cannot use FieldOnly"),
         StudyIR::TimeEvolution { sampling, .. }
         | StudyIR::Relaxation { sampling, .. }
         | StudyIR::Eigenmodes { sampling, .. }
@@ -16261,6 +16264,7 @@ fn fdm_regional_field_drive_is_carried_as_canonical_plan_input() {
         migration: None,
     });
     match &mut ir.study {
+        StudyIR::FieldOnly { .. } => panic!("magnetic fixture cannot use FieldOnly"),
         StudyIR::TimeEvolution { sampling, .. }
         | StudyIR::Relaxation { sampling, .. }
         | StudyIR::Eigenmodes { sampling, .. }
@@ -16787,6 +16791,7 @@ fn valid_mixed_certificate_asset_for_version(
             authored_regions_count: Some(1),
             realized_regions_count: Some(1),
             mixed_layer_topology_certificate: Some(certificate),
+            mixed_layer_topology_certificate_v2: None,
             mixed_topology_provenance: None,
         }),
     }
@@ -16844,6 +16849,7 @@ fn python_mixed_certificate_asset_for_layers(layer_count: u32) -> fullmag_ir::Fe
             authored_regions_count: Some(1),
             realized_regions_count: Some(1),
             mixed_layer_topology_certificate: Some(certificate),
+            mixed_layer_topology_certificate_v2: None,
             mixed_topology_provenance: None,
         }),
     }

@@ -2,16 +2,22 @@
 //! checkpoint share one payload and one session-store publication.
 use anyhow::{bail, Context, Result};
 pub mod accepted_store;
+pub mod study_inspection;
+mod study_inspection_integrity;
+pub use study_inspection_integrity::{load_saved_inspection, verify_saved_inspection};
 pub mod application_attach;
 pub mod application_service_status;
 pub mod compute_node_probe;
 pub mod cuda_device_identity;
+pub(crate) mod nvml_gpu_partition;
 pub mod development_cold_idle;
 pub mod host_allocation;
 pub mod host_runtime;
 pub mod local_resources;
 pub mod process_environment;
 pub mod runtime_service_client;
+#[cfg(target_os = "linux")]
+pub mod worker_cgroup;
 use fullmag_application::{
     CoordinatorMessage, CoordinatorTransition, WorkerEvent, COORDINATOR_TRANSITION_SCHEMA,
 };
@@ -112,6 +118,12 @@ fn commit_transition_with_catalog_revision(
     store: &SessionStore,
     transition: &CoordinatorTransition,
 ) -> Result<(CoordinatorJournalCommitDisposition, u64)> {
+    let _writer = store.write_transaction()?;
+    if let CoordinatorMessage::Command(envelope) = &transition.message {
+        if matches!(&envelope.command, fullmag_application::WorkerCommand::Prepare { .. } | fullmag_application::WorkerCommand::Start) {
+            study_completion::require_task_dependencies_locked(store, &transition.checkpoint.claim.run_id, transition.checkpoint.claim.task_id.as_str())?;
+        }
+    }
     if let CoordinatorMessage::Event(envelope) = &transition.message {
         if matches!(&envelope.event, WorkerEvent::Completed { .. }) {
             study::validate_study_task_completion(store, &transition.checkpoint.claim)?;
@@ -243,7 +255,7 @@ pub fn reconcile_coordinator_catalog(
         FmsObservationState as StoredObservation, FmsTaskLifecycle as StoredLifecycle,
     };
     let transaction = store.write_transaction()?;
-    let recovered = recover_coordinator(store, claim)?;
+    let recovered = recover_coordinator_locked(store, claim)?;
     let recovered_task = recovered.coordinator.task();
     if recovered_task.lifecycle == fullmag_application::TaskLifecycle::Succeeded {
         study::validate_study_task_completion(store, claim)?;
@@ -320,6 +332,11 @@ pub fn recover_coordinator(
     claim: &fullmag_application::TaskClaim,
 ) -> Result<RecoveredCoordinator> {
     let _transaction = store.write_transaction()?;
+    recover_coordinator_locked(store, claim)
+}
+
+/// Caller already holds this store handle's native writer.
+pub(crate) fn recover_coordinator_locked(store: &SessionStore, claim: &fullmag_application::TaskClaim) -> Result<RecoveredCoordinator> {
     let catalog = store
         .read_run_catalog(claim.run_id.as_str())?
         .context("coordinator recovery requires a run catalog")?;
@@ -626,7 +643,8 @@ pub use claim::{
 
 mod scheduler;
 pub use scheduler::{
-    accepted_run_has_scheduler_ready_task, resume_next_admitted_accepted_task_with_host,
+    accepted_run_has_scheduler_ready_task, accepted_run_step_is_scheduler_ready,
+    resume_next_admitted_accepted_task_with_host,
     schedule_next_ready_accepted_task, schedule_next_ready_accepted_task_with_host,
     ScheduledAcceptedTask,
 };
@@ -639,6 +657,7 @@ pub use study_field_tensor::{
 mod study_dataset;
 
 mod study;
+mod study_completion;
 pub use study::{
     load_accepted_study_snapshot, load_accepted_worker_step, load_accepted_worker_step_for_start,
     load_study_observation_runtime, publish_accepted_task_prepare, publish_accepted_task_start,

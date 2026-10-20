@@ -135,6 +135,8 @@ import {
 } from "./FdmCuboidLayer";
 import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
+import { ArtifactFieldLayer } from "./ArtifactFieldLayer";
+import type { ArtifactFieldOverlayModel } from "../model/artifactFieldOverlayModel";
 import { AntennaFieldLayer } from "./AntennaFieldLayer";
 import type { AntennaFieldOverlayModel } from "../model/antennaFieldOverlayModel";
 import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
@@ -181,6 +183,7 @@ import { Viewport3DMoveToolLayer, type Translation3 } from "../MoveObjectGizmo";
 const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
 
 interface Viewport3DSceneProps {
+  artifactFieldOverlay?: ArtifactFieldOverlayModel | null;
   antennaFieldOverlay?: AntennaFieldOverlayModel | null;
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   sessionIdentity?: SessionResourceIdentity | null;
@@ -1740,6 +1743,7 @@ function useViewport3DRenderAdoptionFrame({
 }
 
 export function Viewport3DScene({
+  artifactFieldOverlay,
   antennaFieldOverlay,
   adoptionRegistry,
   sessionIdentity,
@@ -2034,6 +2038,7 @@ export function Viewport3DScene({
 
   return (
     <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
+      <ArtifactFieldLayer adoptionRegistry={adoptionRegistry} model={artifactFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
       <AntennaFieldLayer model={antennaFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
       <color attach="background" args={[colors.background]} />
       <Viewport3DLightingRig profileId={visualProfileId} />

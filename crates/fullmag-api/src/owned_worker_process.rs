@@ -4,6 +4,11 @@ use std::io;
 use std::ops::{Deref, DerefMut};
 use std::process::{Child, Command, ExitStatus};
 
+#[cfg(target_os = "linux")]
+pub(super) use fullmag_runtime_control::worker_cgroup::LinuxWorkerCgroup;
+#[cfg(not(target_os = "linux"))]
+pub(super) struct LinuxWorkerCgroup;
+
 #[cfg(windows)]
 #[path = "worker_startup_gate.rs"]
 mod startup_gate;
@@ -11,16 +16,30 @@ mod startup_gate;
 pub(super) struct OwnedWorkerProcess {
     child: Child,
     startup_failure: Option<String>,
+    #[cfg(target_os = "linux")]
+    linux_cgroup: Option<LinuxWorkerCgroup>,
     #[cfg(windows)]
     job: Option<WindowsJob>,
 }
 
 impl OwnedWorkerProcess {
-    pub(super) fn spawn(command: &mut Command, cpu_ids: &BTreeSet<u32>) -> io::Result<Self> {
+    pub(super) fn spawn(
+        command: &mut Command,
+        cpu_ids: &BTreeSet<u32>,
+        cpu_rate_limit: Option<u32>,
+        linux_cgroup: Option<LinuxWorkerCgroup>,
+    ) -> io::Result<Self> {
         #[cfg(windows)]
         {
             use std::process::Stdio;
-            let job = WindowsJob::new()?;
+            let _ = linux_cgroup;
+            if !cpu_ids.is_empty() && cpu_rate_limit.is_none() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "pinned worker CPU allocation requires a hard Job Object CPU rate limit",
+                ));
+            }
+            let job = WindowsJob::new(cpu_rate_limit)?;
             command
                 .arg(startup_gate::STARTUP_GATE_FLAG)
                 .arg(startup_gate::STARTUP_GATE_VERSION)
@@ -29,10 +48,49 @@ impl OwnedWorkerProcess {
         }
         #[cfg(not(windows))]
         {
+            let _ = cpu_rate_limit;
             configure_cpu_affinity(command, cpu_ids)?;
+            #[cfg(target_os = "linux")]
+            if let Some(cgroup) = &linux_cgroup {
+                cgroup.attach_to(command)?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = linux_cgroup;
+            let mut child = command.spawn()?;
+            #[cfg(target_os = "linux")]
+            if let Some(cgroup) = &linux_cgroup {
+                match cgroup.contains_pid(child.id()) {
+                    Ok(true) => {}
+                    Ok(false) => match child.try_wait() {
+                        Ok(Some(_)) => {
+                            // A short-lived worker may leave cgroup.procs before
+                            // the parent reads it. The pre-exec migration itself
+                            // succeeded or Command::spawn would have failed.
+                        }
+                        Ok(None) => {
+                            return Err(cleanup_failed_linux_worker_spawn(
+                                child,
+                                cgroup,
+                                io::Error::new(
+                                    io::ErrorKind::PermissionDenied,
+                                    "worker is not present in its assigned CPU quota cgroup",
+                                ),
+                            ));
+                        }
+                        Err(error) => {
+                            return Err(cleanup_failed_linux_worker_spawn(child, cgroup, error));
+                        }
+                    },
+                    Err(error) => {
+                        return Err(cleanup_failed_linux_worker_spawn(child, cgroup, error));
+                    }
+                }
+            }
             Ok(Self {
-                child: command.spawn()?,
+                child,
                 startup_failure: None,
+                #[cfg(target_os = "linux")]
+                linux_cgroup,
             })
         }
     }
@@ -118,6 +176,10 @@ impl OwnedWorkerProcess {
         if let Some(job) = &self.job {
             return job.terminate();
         }
+        #[cfg(target_os = "linux")]
+        if let Some(cgroup) = &self.linux_cgroup {
+            return cgroup.terminate_and_remove();
+        }
         self.child.kill()
     }
 
@@ -155,6 +217,11 @@ impl OwnedWorkerProcess {
             job.terminate()?;
             self.job.take();
         }
+        #[cfg(target_os = "linux")]
+        if let Some(cgroup) = &self.linux_cgroup {
+            cgroup.terminate_and_remove()?;
+            self.linux_cgroup.take();
+        }
         Ok(())
     }
 
@@ -163,9 +230,81 @@ impl OwnedWorkerProcess {
         Self {
             child,
             startup_failure: None,
+            #[cfg(target_os = "linux")]
+            linux_cgroup: None,
             #[cfg(windows)]
             job: None,
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_failed_linux_worker_spawn(
+    mut child: Child,
+    cgroup: &LinuxWorkerCgroup,
+    error: io::Error,
+) -> io::Error {
+    let first_cgroup_cleanup = cgroup.terminate_and_remove();
+    if first_cgroup_cleanup.is_err() {
+        let _ = child.kill();
+    }
+    let child_reap = child.wait();
+    let final_cgroup_cleanup = cgroup.terminate_and_remove();
+    let mut message = format!("verify Linux worker quota cgroup membership: {error}");
+    if let Err(cleanup) = first_cgroup_cleanup {
+        message.push_str(&format!("; initial cgroup cleanup failed: {cleanup}"));
+    }
+    if let Err(reap) = child_reap {
+        message.push_str(&format!("; worker reap failed: {reap}"));
+    }
+    if let Err(cleanup) = final_cgroup_cleanup {
+        message.push_str(&format!("; final cgroup cleanup failed: {cleanup}"));
+    }
+    io::Error::new(error.kind(), message)
+}
+
+/// Convert a milli-CPU allocation into the Windows Job Object hard-cap scale.
+/// Windows accepts a percentage of effective processor capacity in 1/100th
+/// percent units; rounding down prevents the OS limit from exceeding the lease.
+#[cfg(any(windows, test))]
+pub(crate) fn cpu_rate_limit(cpu_millis: u64, effective_capacity_millis: u64) -> io::Result<u32> {
+    if cpu_millis == 0 || effective_capacity_millis == 0 || cpu_millis > effective_capacity_millis
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "worker CPU budget must be positive and no greater than current effective capacity",
+        ));
+    }
+    let rate = u128::from(cpu_millis) * 10_000 / u128::from(effective_capacity_millis);
+    let rate = u32::try_from(rate).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "Windows CPU rate is out of range")
+    })?;
+    if rate == 0 || rate > 10_000 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "worker CPU budget is below Windows Job Object quota precision",
+        ));
+    }
+    Ok(rate)
+}
+
+#[cfg(test)]
+mod cpu_rate_limit_tests {
+    use super::cpu_rate_limit;
+
+    #[test]
+    fn converts_fractional_cpu_budget_to_windows_hard_cap_units() {
+        assert_eq!(cpu_rate_limit(2_500, 8_000).unwrap(), 3_125);
+        assert_eq!(cpu_rate_limit(1, 3).unwrap(), 3_333);
+        assert_eq!(cpu_rate_limit(8_000, 8_000).unwrap(), 10_000);
+    }
+
+    #[test]
+    fn rejects_unusable_or_out_of_range_cpu_budgets() {
+        assert!(cpu_rate_limit(0, 8_000).is_err());
+        assert!(cpu_rate_limit(1, 0).is_err());
+        assert!(cpu_rate_limit(8_001, 8_000).is_err());
+        assert!(cpu_rate_limit(1, 1_000_000).is_err());
     }
 }
 
@@ -329,7 +468,8 @@ mod linux_cpu_affinity_tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
-        let mut worker = OwnedWorkerProcess::spawn(&mut command, &requested_cpu_ids).unwrap();
+        let mut worker =
+            OwnedWorkerProcess::spawn(&mut command, &requested_cpu_ids, None, None).unwrap();
         let mut observed_words = vec![0usize; word_count];
         let readback = unsafe {
             libc::sched_getaffinity(
@@ -418,7 +558,7 @@ struct WindowsJob {
 
 #[cfg(windows)]
 impl WindowsJob {
-    fn new() -> io::Result<Self> {
+    fn new(cpu_rate_limit: Option<u32>) -> io::Result<Self> {
         use windows_sys::Win32::System::JobObjects::*;
         // An unnamed, non-inheritable handle belongs only to this supervisor.
         let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
@@ -442,7 +582,62 @@ impl WindowsJob {
         if success == 0 {
             return Err(io::Error::last_os_error());
         }
+        if let Some(cpu_rate_limit) = cpu_rate_limit {
+            job.set_cpu_rate_limit(cpu_rate_limit)?;
+        }
         Ok(job)
+    }
+
+    fn set_cpu_rate_limit(&self, cpu_rate: u32) -> io::Result<()> {
+        const JOB_OBJECT_CPU_RATE_CONTROL_INFORMATION: i32 = 15;
+        const JOB_OBJECT_CPU_RATE_CONTROL_ENABLE: u32 = 0x1;
+        const JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP: u32 = 0x4;
+
+        if !(1..=10_000).contains(&cpu_rate) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Windows Job Object CPU rate must be between 1 and 10000",
+            ));
+        }
+        let requested = WindowsCpuRateControlInformation {
+            control_flags: JOB_OBJECT_CPU_RATE_CONTROL_ENABLE
+                | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+            cpu_rate,
+        };
+        let information_bytes = std::mem::size_of_val(&requested) as u32;
+        let set = unsafe {
+            windows_sys::Win32::System::JobObjects::SetInformationJobObject(
+                self.handle,
+                JOB_OBJECT_CPU_RATE_CONTROL_INFORMATION,
+                (&requested as *const WindowsCpuRateControlInformation).cast(),
+                information_bytes,
+            )
+        };
+        if set == 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut observed = WindowsCpuRateControlInformation::default();
+        let mut returned_bytes = 0u32;
+        let query = unsafe {
+            windows_sys::Win32::System::JobObjects::QueryInformationJobObject(
+                self.handle,
+                JOB_OBJECT_CPU_RATE_CONTROL_INFORMATION,
+                (&mut observed as *mut WindowsCpuRateControlInformation).cast(),
+                information_bytes,
+                &mut returned_bytes,
+            )
+        };
+        if query == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if returned_bytes != information_bytes || observed != requested {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Windows job applied a different CPU rate limit than requested",
+            ));
+        }
+        Ok(())
     }
 
     fn set_cpu_affinity(&self, cpu_ids: &BTreeSet<u32>) -> io::Result<()> {
@@ -560,6 +755,14 @@ impl WindowsJob {
 }
 
 #[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct WindowsCpuRateControlInformation {
+    control_flags: u32,
+    cpu_rate: u32,
+}
+
+#[cfg(windows)]
 impl Drop for WindowsJob {
     fn drop(&mut self) {
         unsafe {
@@ -664,7 +867,7 @@ Start-Sleep -Seconds 60
             // The fixture implements the same stdin barrier without worker CLI flags.
             let mut owned = OwnedWorkerProcess::spawn_in_job(
                 &mut command,
-                WindowsJob::new().unwrap(),
+                WindowsJob::new(None).unwrap(),
                 &BTreeSet::new(),
             )
             .unwrap();

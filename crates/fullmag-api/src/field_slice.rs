@@ -562,9 +562,6 @@ fn fdm_slice_via_planar_engine(
     let component = match q.component.clone() {
         ComponentSelection::Full if field.n_comp == 1 => PlanarComponent::Scalar,
         ComponentSelection::Magnitude => PlanarComponent::Magnitude,
-        ComponentSelection::Index(0) => PlanarComponent::WorldX,
-        ComponentSelection::Index(1) => PlanarComponent::WorldY,
-        ComponentSelection::Index(2) => PlanarComponent::WorldZ,
         ComponentSelection::Full => PlanarComponent::Magnitude,
         ComponentSelection::MagnitudeSquared => PlanarComponent::MagnitudeSquared,
         ComponentSelection::AbsIndex(0) => PlanarComponent::AbsWorldX,
@@ -575,11 +572,9 @@ fn fdm_slice_via_planar_engine(
                 "invalid_component: planar vectors expose x, y, and z",
             ));
         }
-        ComponentSelection::Index(_) => {
-            return Err(ApiError::bad_request(
-                "invalid_component: planar vectors expose x, y, and z",
-            ));
-        }
+        ComponentSelection::Index(index) => PlanarComponent::Index(index),
+        ComponentSelection::Frobenius => PlanarComponent::Frobenius,
+        ComponentSelection::SpinFlow(axis) => PlanarComponent::SpinFlow(axis),
     };
     let source = FdmPlanarField::new(
         field.n_comp,
@@ -597,7 +592,7 @@ fn fdm_slice_via_planar_engine(
             component,
         },
     )?;
-    let full_vector_output = field.n_comp >= 3 && matches!(q.component, ComponentSelection::Full);
+    let full_vector_output = field.n_comp == 3 && matches!(q.component, ComponentSelection::Full);
     let scalar_values = if full_vector_output {
         sampled
             .vector_values
@@ -616,7 +611,7 @@ fn fdm_slice_via_planar_engine(
             (min.min(*value), max.max(*value))
         });
     let vector_values = sampled.vector_values.unwrap_or_default();
-    let (arrow_values, arrow_count) = if q.include_arrows && field.n_comp >= 3 {
+    let (arrow_values, arrow_count) = if q.include_arrows && !vector_values.is_empty() {
         let values = vector_values
             .iter()
             .flat_map(|value| value.iter().copied())
@@ -1056,10 +1051,10 @@ fn projection_planar_component(
         ComponentSelection::AbsIndex(0) => PlanarComponent::AbsWorldX,
         ComponentSelection::AbsIndex(1) => PlanarComponent::AbsWorldY,
         ComponentSelection::AbsIndex(2) => PlanarComponent::AbsWorldZ,
-        ComponentSelection::Index(0) => PlanarComponent::WorldX,
-        ComponentSelection::Index(1) => PlanarComponent::WorldY,
-        ComponentSelection::Index(2) => PlanarComponent::WorldZ,
-        ComponentSelection::AbsIndex(index) | ComponentSelection::Index(index) => {
+        ComponentSelection::Index(index) => PlanarComponent::Index(*index),
+        ComponentSelection::Frobenius => PlanarComponent::Frobenius,
+        ComponentSelection::SpinFlow(axis) => PlanarComponent::SpinFlow(*axis),
+        ComponentSelection::AbsIndex(index) => {
             return Err(ApiError::bad_request(format!(
                 "invalid_component: planar projection supports vector components 0..2, got {index}"
             )));
@@ -1351,10 +1346,10 @@ fn fem_projection_via_planar_engine(
             ComponentSelection::AbsIndex(0) => PlanarComponent::AbsWorldX,
             ComponentSelection::AbsIndex(1) => PlanarComponent::AbsWorldY,
             ComponentSelection::AbsIndex(2) => PlanarComponent::AbsWorldZ,
-            ComponentSelection::Index(0) => PlanarComponent::WorldX,
-            ComponentSelection::Index(1) => PlanarComponent::WorldY,
-            ComponentSelection::Index(2) => PlanarComponent::WorldZ,
-            ComponentSelection::AbsIndex(index) | ComponentSelection::Index(index) => {
+            ComponentSelection::Index(index) => PlanarComponent::Index(index),
+            ComponentSelection::Frobenius => PlanarComponent::Frobenius,
+            ComponentSelection::SpinFlow(axis) => PlanarComponent::SpinFlow(axis),
+            ComponentSelection::AbsIndex(index) => {
                 return Err(ApiError::bad_request(format!(
                     "invalid_component: planar projection supports vector components 0..2, got {index}"
                 )));
@@ -1563,7 +1558,14 @@ fn component_sample(
         ComponentSelection::AbsIndex(index) => {
             values.get(base + *index).copied().unwrap_or(0.0).abs()
         }
-        ComponentSelection::Magnitude => {
+        ComponentSelection::SpinFlow(axis) => (0..3)
+            .map(|flow| {
+                let value = values.get(base + 3 * flow + *axis).copied().unwrap_or(0.0);
+                value * value
+            })
+            .sum::<f64>()
+            .sqrt(),
+        ComponentSelection::Frobenius | ComponentSelection::Magnitude => {
             let mut sum = 0.0;
             for c in 0..n_comp {
                 let value = values.get(base + c).copied().unwrap_or(0.0);
@@ -1773,6 +1775,8 @@ pub fn slice_etag_token(
     let comp_str = match &q.component {
         ComponentSelection::Full => "full".to_string(),
         ComponentSelection::Magnitude => "magnitude".to_string(),
+        ComponentSelection::Frobenius => "frobenius".to_string(),
+        ComponentSelection::SpinFlow(axis) => format!("spin_flow_{}", ["x", "y", "z"][*axis]),
         ComponentSelection::MagnitudeSquared => "magnitude_squared".to_string(),
         ComponentSelection::AbsIndex(i) => format!("abs_c{}", i),
         ComponentSelection::Index(i) => format!("c{}", i),

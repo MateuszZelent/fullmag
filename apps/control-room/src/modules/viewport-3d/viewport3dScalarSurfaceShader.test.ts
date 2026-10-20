@@ -9,6 +9,7 @@ import {
   updateScalarSurfaceShaderMaterial,
   VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
   VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
+  VIEWPORT_3D_ORIENTATION_COLOR_GLSL,
   VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
   VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
 } from "./viewport3dScalarSurfaceShader";
@@ -413,7 +414,8 @@ describe("viewport3dScalarSurfaceShader", () => {
       const orientationShader = source.slice(
         source.indexOf("const ORIENTATION_SURFACE_FRAGMENT_SHADER"),
       );
-      expect(orientationShader).toContain("vec3 srgbToLinearVec3(vec3 c)");
+      expect(orientationShader).toContain("${VIEWPORT_3D_ORIENTATION_COLOR_GLSL}");
+      expect(VIEWPORT_3D_ORIENTATION_COLOR_GLSL).toContain("vec3 srgbToLinearVec3(vec3 c)");
       expect(orientationShader).toContain("vec3 color = srgbToLinearVec3(shaded);");
       expect(orientationShader).toContain("#include <colorspace_fragment>");
     });

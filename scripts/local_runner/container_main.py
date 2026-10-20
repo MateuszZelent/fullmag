@@ -12,6 +12,7 @@ import time
 
 from fullmag_storage import validate_path
 from local_runner.queue import JobQueue
+from local_runner.coordinator_replacement import is_pending
 from local_runner.build_executor import execute_build, reconcile_build, capsule_path, profile_lane, PROFILES
 from local_runner.build_source import bind_identity
 from local_runner.worker_entrypoint import canonical, SCHEMA
@@ -135,6 +136,8 @@ def submission_manifest(source, expected_digest):
 
 
 class Application:
+    # Fail closed for an instance without an explicitly loaded activation record.
+    boris_cpu_enabled = False
     def __init__(self, config):
         profiles = config.get('allowed_profiles')
         if (not isinstance(profiles, list) or not profiles
@@ -146,6 +149,7 @@ class Application:
         self.allowed_profiles = frozenset(profiles)
         self.storage = Path('/storage')
         self.owner = config['operator']
+        self.boris_cpu_enabled = 'boris-cpu-v1' in config.get('allowed_profiles', [])
         self.layout = {'storage_root': '/storage', 'container_coordinator': True,
                        'host_storage_root': config['host_storage_root'],
                        'daemon_storage_root': desktop_daemon_root(config['host_storage_root'])}
@@ -202,7 +206,8 @@ class Application:
         if service_state == 'error' and not worker_error:
             worker_error = service.get('last_error') or 'Worker service reported an error'
         stop = read_stop_request(self.paths)
-        paused = stop is not None or worker_state in ('paused', 'failed') or not worker_alive
+        replacement_pending = is_pending(self.storage)
+        paused = replacement_pending or stop is not None or worker_state in ('paused', 'failed') or not worker_alive
         accepting_jobs = worker_alive and worker_state not in ('starting', 'paused', 'failed', 'stopping') and not paused and not legacy and not worker_error
         # ``ok`` describes the API/coordinator process.  An intentional
         # paused coordinator remains healthy for lifecycle reconciliation,
@@ -210,6 +215,7 @@ class Application:
         healthy = worker_state not in ('starting', 'failed', 'stopping') and not legacy and not worker_error
         return {
             'ok': healthy,
+            'replacement_pending': replacement_pending,
             'accepting_jobs': accepting_jobs,
             'worker_alive': worker_alive,
             'worker_state': worker_state,
@@ -269,6 +275,8 @@ class Application:
         profile_lane(payload['profile'])
         if payload['profile'] not in self.allowed_profiles:
             raise ValueError('Build profile is not enabled by the operator configuration')
+        if payload['profile'] == 'boris-cpu-v1' and not self.boris_cpu_enabled:
+            raise ValueError('BORIS CPU profile requires explicit operator activation')
         detail = payload['payload']
         if set(detail) != {'source_mode', 'capsule_relative', 'origin_repo', 'capture_id', 'native_source_identity'}:
             raise ValueError('Unknown source request fields')
@@ -329,6 +337,74 @@ class Application:
                 with path.open('rb') as stream:
                     stream.seek(max(0, path.stat().st_size - 16000))
                     parts.append(filename + '\n' + stream.read(16000).decode(errors='replace'))
+        boris_profile = job.get('profile') == 'boris-cpu-v1'
+        if boris_profile:
+            log_root = validate_path(root / 'artifacts' / 'logs', root)
+
+            def trusted_stage(name):
+                if name in ('boris-cpu-link', 'boris-binary-inspect', 'boris-cpu-abi-compile', 'boris-cpu-abi-link', 'boris-cpu-abi-observe'):
+                    return True
+                match = re.fullmatch(r'boris-cpu-compile-([0-9]{5})', name) if isinstance(name, str) else None
+                return match is not None and int(match[1]) < 20000
+
+            names = set()
+            if log_root.exists():
+                for entry in log_root.iterdir():
+                    match = re.fullmatch(r'(.+)\.(stderr|stdout)\.log', entry.name)
+                    if match and trusted_stage(match[1]) and not entry.is_symlink() and entry.is_file():
+                        names.add(match[1])
+            failed = []
+            receipt_error = None
+            receipt_path = root / 'artifacts' / 'build-receipt.json'
+            try:
+                if not receipt_path.is_symlink() and receipt_path.is_file():
+                    receipt_path = validate_path(receipt_path, root)
+                    if receipt_path.stat().st_size <= 32 * 1024 * 1024:
+                        with receipt_path.open('rb') as stream:
+                            body = stream.read(32 * 1024 * 1024 + 1)
+                        if len(body) <= 32 * 1024 * 1024:
+                            receipt = json.loads(body)
+                            if (isinstance(receipt, dict)
+                                    and receipt.get('schema') == 'fullmag.local-runner.build-receipt.v1'
+                                    and receipt.get('job_id') == job_id
+                                    and receipt.get('profile') == 'boris-cpu-v1'
+                                    and isinstance(receipt.get('stages'), list)
+                                    and len(receipt['stages']) <= 20005):
+                                for stage in receipt['stages']:
+                                    if (isinstance(stage, dict) and trusted_stage(stage.get('name'))
+                                            and 'exit_code' in stage
+                                            and (stage['exit_code'] is None or
+                                                 (type(stage['exit_code']) is int and stage['exit_code'] != 0))):
+                                        failed.append(stage['name'])
+                                        break
+                                if isinstance(receipt.get('error'), str):
+                                    receipt_error = receipt['error'][-16000:]
+            except (OSError, ValueError, TypeError, RecursionError):
+                pass
+
+            def stage_order(name):
+                abi_order = {'boris-cpu-abi-compile': 3, 'boris-cpu-abi-link': 4, 'boris-cpu-abi-observe': 5}
+                if name in abi_order:
+                    return (abi_order[name], 0)
+                if name == 'boris-binary-inspect':
+                    return (2, 0)
+                if name == 'boris-cpu-link':
+                    return (1, 0)
+                return (0, int(name.rsplit('-', 1)[1]))
+
+            recent = sorted(names, key=stage_order, reverse=True)
+            selected = list(dict.fromkeys([*failed, *recent]))[:4]
+            for stage in selected:
+                for stream_name in ('stderr', 'stdout'):
+                    filename = stage + '.' + stream_name + '.log'
+                    path = log_root / filename
+                    if not path.is_symlink() and path.is_file():
+                        path = validate_path(path, log_root)
+                        with path.open('rb') as stream:
+                            stream.seek(max(0, path.stat().st_size - 16000))
+                            parts.append(filename + '\n' + stream.read(16000).decode(errors='replace'))
+            if receipt_error:
+                parts.append('BORIS build receipt error\n' + receipt_error)
         journal_path = validate_path(root / 'coordinator.json', self.storage)
         if journal_path.exists():
             journal = json.loads(journal_path.read_text())
@@ -340,7 +416,8 @@ class Application:
                     parts.append(stream.read(16000).decode(errors='replace'))
             elif journal.get('container_id'):
                 inspect_owned(docker, journal['container_id'], job_id)
-                parts.append(docker(['logs', '--tail', '100', journal['container_id']]))
+                docker_tail = docker(['logs', '--tail', '100', journal['container_id']])
+                parts.append(docker_tail[-16000:] if boris_profile else docker_tail)
         return {'job_id': job_id, 'tail': '\n'.join(parts)}
 
     def stop(self):
@@ -356,6 +433,12 @@ class Application:
 
     def resume(self):
         with self._lifecycle_lock:
+            if is_pending(self.storage):
+                return {'resumed': False, 'worker_started': False,
+                        'worker_alive': bool(self._worker_thread and self._worker_thread.is_alive()),
+                        'worker_state': self._worker_state,
+                        'stop_requested': read_stop_request(self.paths) is not None,
+                        'reason': 'coordinator replacement requires explicit forward recovery'}
             worker_alive = self._worker_thread is not None and self._worker_thread.is_alive()
             # Once drain starts, the service can decide to stop before it
             # publishes its terminal record. Do not clear the marker until
@@ -405,6 +488,7 @@ class Application:
             free_bytes = None
         return {
             'ok': snapshot['ok'],
+            'replacement_pending': snapshot['replacement_pending'],
             'service': 'fullmag-build-runner',
             'worker_alive': snapshot['worker_alive'],
             'worker_state': snapshot['worker_state'],

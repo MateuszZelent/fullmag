@@ -391,14 +391,21 @@ pub struct ObjectMagnetizationAverage {
     pub mz: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+/// Per-energy availability is explicit: null is missing, while Some(0.0) is an observed zero.
+#[derive(Debug, Default, Serialize, Deserialize, ToSchema)]
 pub struct ObjectEnergySummary {
-    pub exchange: f64,
-    pub demag: f64,
-    pub zeeman: f64,
-    pub anisotropy: f64,
-    pub dmi: f64,
-    pub total: f64,
+    #[schema(required, nullable)]
+    pub exchange: Option<f64>,
+    #[schema(required, nullable)]
+    pub demag: Option<f64>,
+    #[schema(required, nullable)]
+    pub zeeman: Option<f64>,
+    #[schema(required, nullable)]
+    pub anisotropy: Option<f64>,
+    #[schema(required, nullable)]
+    pub dmi: Option<f64>,
+    #[schema(required, nullable)]
+    pub total: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

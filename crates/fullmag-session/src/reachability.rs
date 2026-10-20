@@ -9,15 +9,16 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use fullmag_quantities::SolutionSet;
 
+use crate::accepted_provenance::AcceptedProvenanceManifest;
 use crate::archive_document::{ArchiveDocuments, ArchiveFileSnapshot};
 use crate::typed_documents::{LiveSnapshotArtifactReference, LiveSnapshotArtifactReferences};
 use crate::types::{
-    ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
-    FmsBatchExpansionProgress, FmsBatchIntent, FmsCheckpoint, FmsCoordinatorJournalDirection,
-    FmsExportProfile,
+    ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole,
+    FmsAcceptedStagePreparationReceipt, FmsArtifactCatalog, FmsBatchExpansionProgress,
+    FmsBatchIntent, FmsCheckpoint, FmsCoordinatorJournalDirection, FmsExportProfile,
     FmsPreparationProcessExitReceipt, FmsPreparationProcessLaunch, FmsPreparationReceipt,
     FmsPreparationResourceLease, FmsPreparationResourcePool, FmsPreparationRetryDecision,
     FmsResourceLease, FmsRetryDecision, FmsRunCatalog, FmsRunIntent, FmsRunManifest,
@@ -214,6 +215,7 @@ enum RunPathKind {
 const KNOWN_RUN_RECORDS: &[&str] = &[
     "run_manifest.json",
     "run_intent.json",
+    "start_release.json",
     "run_catalog.json",
     "artifact_catalog.json",
     "preparation_receipt.json",
@@ -271,6 +273,7 @@ fn classify_run_path(relative: &str) -> Result<RunPathKind> {
         && matches!(
             parts[0],
             "task_preparation_receipts"
+                | "accepted_stage_preparation_receipts"
                 | "worker_inbox"
                 | "retry_decisions"
                 | "preparation_retry_decisions"
@@ -317,6 +320,7 @@ fn is_reserved_run_container(parts: &[&str]) -> bool {
                     | "checkpoints"
                     | "worker_inbox"
                     | "task_preparation_receipts"
+                    | "accepted_stage_preparation_receipts"
                     | "retry_decisions"
                     | "preparation_retry_decisions"
                     | "worker_process_exit_receipts"
@@ -426,7 +430,8 @@ pub(crate) fn walk_export_file_documents_with_project(
     inline_project_documents: &HashMap<String, Vec<u8>>,
 ) -> Result<ReachabilityReport> {
     for name in inline_project_documents.keys() {
-        validate_file_ref(name).with_context(|| format!("invalid inline project document `{name}`"))?;
+        validate_file_ref(name)
+            .with_context(|| format!("invalid inline project document `{name}`"))?;
         if !name.starts_with("project/") || name.starts_with("objects/") {
             bail!("inline export overlay accepts only project documents: `{name}`");
         }
@@ -717,7 +722,9 @@ impl StoreWalker {
                     "live snapshot `{source}` references missing run artifact `{relative}`"
                 ));
             }
-            Err(error) => return Err(error).with_context(|| format!("checking live artifact `{relative}`")),
+            Err(error) => {
+                return Err(error).with_context(|| format!("checking live artifact `{relative}`"));
+            }
         };
         if metadata.is_file() {
             self.report.file_refs.insert(relative.to_string());
@@ -1315,18 +1322,12 @@ impl StoreWalker {
             for entry in read_directory(&batch_directory)? {
                 let entry_name = entry.file_name().to_string_lossy().into_owned();
                 if entry.file_type()?.is_symlink() || !entry.file_type()?.is_file() {
-                    bail!(
-                        "unknown batch namespace entry `{}`",
-                        entry.path().display()
-                    )
+                    bail!("unknown batch namespace entry `{}`", entry.path().display())
                 }
                 match entry_name.as_str() {
                     "batch_intent.json" => intent_path = Some(entry.path()),
                     "expansion_progress.json" => progress_path = Some(entry.path()),
-                    _ => bail!(
-                        "unknown batch namespace entry `{}`",
-                        entry.path().display()
-                    ),
+                    _ => bail!("unknown batch namespace entry `{}`", entry.path().display()),
                 }
             }
             let intent_path = intent_path.with_context(|| {
@@ -1432,6 +1433,19 @@ impl StoreWalker {
             if intent_path.exists() {
                 self.walk_run_intent_file(&intent_path, &run_id)?;
             }
+            let start_release_path = run_entry.path().join("start_release.json");
+            if start_release_path.exists() {
+                let relative = format!("runs/{run_id}/start_release.json");
+                let data = self.read_json(&relative)?;
+                let release: crate::AcceptedRunStartRelease = parse_json(&data, &relative)?;
+                let intent_relative = format!("runs/{run_id}/run_intent.json");
+                let intent_data = self.read_json(&intent_relative)?;
+                let intent: FmsRunIntent = parse_json(&intent_data, &intent_relative)?;
+                if intent.run_id != run_id {
+                    bail!("start release owner intent differs from the run path");
+                }
+                release.validate_for(&intent)?;
+            }
             let catalog_path = run_entry.path().join("run_catalog.json");
             if catalog_path.exists() {
                 self.walk_run_catalog_file(&catalog_path, &run_id)?;
@@ -1445,6 +1459,7 @@ impl StoreWalker {
                 self.walk_preparation_receipt_file(&preparation_receipt_path, &run_id)?;
             }
             self.walk_task_preparation_receipts(&run_entry.path(), &run_id)?;
+            self.walk_accepted_stage_preparation_receipts(&run_entry.path(), &run_id)?;
             self.walk_run_task_admissions(&run_entry.path(), &run_id)?;
             self.walk_run_task_cancellations(&run_entry.path(), &run_id)?;
             self.walk_run_retry_decisions(&run_entry.path(), &run_id)?;
@@ -2233,16 +2248,14 @@ impl StoreWalker {
             return Ok(());
         }
         let catalog_relative = format!("runs/{expected_run_id}/run_catalog.json");
-        let catalog_path = run_path.join("run_catalog.json");
-        let catalog_data = self.read_file(&catalog_path, &catalog_relative)?;
+        let catalog_data = self.read_json(&catalog_relative)?;
         let catalog: FmsRunCatalog = parse_json(&catalog_data, &catalog_relative)?;
         catalog.validate()?;
         if catalog.run_id != expected_run_id {
             bail!("task preparation receipt catalog identity does not match run path");
         }
         let intent_relative = format!("runs/{expected_run_id}/run_intent.json");
-        let intent_path = run_path.join("run_intent.json");
-        let intent_data = self.read_file(&intent_path, &intent_relative)?;
+        let intent_data = self.read_json(&intent_relative)?;
         let intent: FmsRunIntent = parse_json(&intent_data, &intent_relative)?;
         intent.validate()?;
         for entry in entries {
@@ -2252,13 +2265,73 @@ impl StoreWalker {
             }
             let file_name = entry.file_name().to_string_lossy().into_owned();
             let relative = format!("runs/{expected_run_id}/task_preparation_receipts/{file_name}");
-            let data = self.read_file(&entry.path(), &relative)?;
+            let data = self.read_json(&relative)?;
             let receipt: FmsTaskPreparationReceipt = parse_json(&data, &relative)?;
             if receipt.relative_path()? != relative {
                 bail!("task preparation receipt path identity mismatch");
             }
             receipt.validate_for_catalog(&catalog)?;
             receipt.validate_for_run_intent(&intent)?;
+        }
+        Ok(())
+    }
+
+    fn walk_accepted_stage_preparation_receipts(
+        &mut self,
+        run_path: &Path,
+        expected_run_id: &str,
+    ) -> Result<()> {
+        let directory = run_path.join("accepted_stage_preparation_receipts");
+        crate::repository_path::reject_link(&directory)?;
+        if !directory.exists() {
+            return Ok(());
+        }
+        let metadata = fs::symlink_metadata(&directory)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            bail!(
+                "unsafe accepted stage preparation receipt directory `{}`",
+                directory.display()
+            );
+        }
+        let entries = read_directory(&directory)?;
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let catalog_relative = format!("runs/{expected_run_id}/run_catalog.json");
+        let catalog_data = self.read_json(&catalog_relative)?;
+        let catalog: FmsRunCatalog = parse_json(&catalog_data, &catalog_relative)?;
+        catalog.validate()?;
+        if catalog.run_id != expected_run_id {
+            bail!("accepted stage receipt catalog identity does not match run path");
+        }
+        let intent_relative = format!("runs/{expected_run_id}/run_intent.json");
+        let intent_data = self.read_json(&intent_relative)?;
+        let intent: FmsRunIntent = parse_json(&intent_data, &intent_relative)?;
+        intent.validate()?;
+        for entry in entries {
+            crate::repository_path::reject_link(&entry.path())?;
+            if !entry.file_type()?.is_file() {
+                bail!("accepted stage preparation receipt entry must be a file");
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let relative =
+                format!("runs/{expected_run_id}/accepted_stage_preparation_receipts/{file_name}");
+            let data = self.read_json(&relative)?;
+            let stage: FmsAcceptedStagePreparationReceipt = parse_json(&data, &relative)?;
+            if stage.relative_path()? != relative {
+                bail!("accepted stage preparation receipt path identity mismatch");
+            }
+            let task_relative = format!(
+                "runs/{expected_run_id}/task_preparation_receipts/{}.json",
+                stage.task_id
+            );
+            let task_data = self.read_json(&task_relative)?;
+            let task: FmsTaskPreparationReceipt = parse_json(&task_data, &task_relative)?;
+            if task.relative_path()? != task_relative || !stage.matches_task_receipt(&task) {
+                bail!("accepted stage preparation receipt does not match its task receipt");
+            }
+            task.validate_for_catalog(&catalog)?;
+            task.validate_for_run_intent(&intent)?;
         }
         Ok(())
     }
@@ -2675,6 +2748,19 @@ impl StoreWalker {
         self.report.object_refs.insert(object_ref.to_string());
     }
 
+    fn read_json(&mut self, relative: &str) -> Result<Vec<u8>> {
+        validate_file_ref(relative)?;
+        reject_link_chain(&self.root, relative)?;
+        self.report.file_refs.insert(relative.to_string());
+        self.seen_files.insert(relative.to_string());
+        crate::repository_path::read_bounded_regular_file(
+            &self.root,
+            relative,
+            crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize,
+        )
+        .with_context(|| format!("reading session JSON `{relative}`"))
+    }
+
     fn read_file(&mut self, path: &Path, relative: &str) -> Result<Vec<u8>> {
         validate_file_ref(relative)?;
         reject_link_chain(&self.root, relative)?;
@@ -2763,9 +2849,46 @@ impl<'a> ArchiveWalker<'a> {
         self.validate_archive_namespace()?;
         self.walk_archive_live_snapshot()?;
         self.walk_archive_solutions()?;
+        // A manual-start grant is control provenance, including before a run
+        // manifest exists. It cannot be imported as an opaque JSON document.
+        let release_names = self
+            .documents
+            .keys()
+            .filter(|name| name.ends_with("/start_release.json"))
+            .cloned()
+            .collect::<Vec<_>>();
+        for relative in release_names {
+            let run_id = relative
+                .strip_prefix("runs/")
+                .and_then(|name| name.strip_suffix("/start_release.json"))
+                .context("start release path is outside a run namespace")?;
+            validate_component(run_id)?;
+            let bytes = self
+                .documents
+                .read(&relative)?
+                .context("start release disappeared")?;
+            let release: crate::AcceptedRunStartRelease = parse_json(&bytes, &relative)?;
+            let intent_relative = format!("runs/{run_id}/run_intent.json");
+            let intent_bytes = self
+                .documents
+                .read(&intent_relative)?
+                .context("start release requires its immutable owner run intent")?;
+            let intent: FmsRunIntent = parse_json(&intent_bytes, &intent_relative)?;
+            if intent.run_id != run_id {
+                bail!("start release owner intent differs from the archive path");
+            }
+            release.validate_for(&intent)?;
+            self.report.file_refs.insert(relative.clone());
+            self.walk_run_intent(&intent_relative, run_id)?;
+        }
+        let has_accepted_provenance = self.documents.keys().any(|name| {
+            name == crate::types::FMS_ACCEPTED_PROVENANCE_MANIFEST_REF
+                || name.starts_with("accepted_provenance/")
+        });
         if let Some(data) = self.documents.read("manifest/session.json")? {
             let session: FmsSessionManifest = parse_json(&data, "manifest/session.json")?;
             validate_session(&session, "manifest/session.json")?;
+            self.walk_accepted_provenance(&session)?;
             for run_ref in &session.run_refs {
                 validate_file_ref(run_ref)?;
                 if let Some(run_id) = run_ref
@@ -2784,6 +2907,8 @@ impl<'a> ArchiveWalker<'a> {
                     .context("validated session batch ref lost its identity")?;
                 self.walk_batch_intent(batch_ref, batch_id)?;
             }
+        } else if has_accepted_provenance {
+            bail!("accepted provenance evidence requires a session manifest with a v2 reference");
         }
 
         // A portable archive may contain a run that was not selected by the
@@ -2819,7 +2944,9 @@ impl<'a> ArchiveWalker<'a> {
         let progress_names = self
             .documents
             .keys()
-            .filter(|name| name.starts_with("batches/") && name.ends_with("/expansion_progress.json"))
+            .filter(|name| {
+                name.starts_with("batches/") && name.ends_with("/expansion_progress.json")
+            })
             .cloned()
             .collect::<Vec<_>>();
         for progress_ref in progress_names {
@@ -2853,6 +2980,24 @@ impl<'a> ArchiveWalker<'a> {
             let run_manifest_ref = format!("runs/{run_id}/run_manifest.json");
             if !self.documents.contains_key(&run_manifest_ref) {
                 self.walk_task_preparation_receipts(&run_id)?;
+            }
+        }
+
+        let stage_receipt_marker = "/accepted_stage_preparation_receipts/";
+        let stage_receipt_runs = self
+            .documents
+            .keys()
+            .filter_map(|name| {
+                let rest = name.strip_prefix(receipt_prefix)?;
+                let (run_id, _) = rest.split_once(stage_receipt_marker)?;
+                Some(run_id.to_string())
+            })
+            .collect::<HashSet<_>>();
+        for run_id in stage_receipt_runs {
+            validate_component(&run_id)?;
+            let run_manifest_ref = format!("runs/{run_id}/run_manifest.json");
+            if !self.documents.contains_key(&run_manifest_ref) {
+                self.walk_accepted_stage_preparation_receipts(&run_id)?;
             }
         }
 
@@ -2997,6 +3142,86 @@ impl<'a> ArchiveWalker<'a> {
         Ok(std::mem::take(&mut self.report))
     }
 
+    fn walk_accepted_provenance(&mut self, session: &FmsSessionManifest) -> Result<()> {
+        let Some(reference) = session.accepted_provenance_ref.as_ref() else {
+            if self.documents.keys().any(|name| {
+                name == crate::types::FMS_ACCEPTED_PROVENANCE_MANIFEST_REF
+                    || name.starts_with("accepted_provenance/")
+            }) {
+                bail!("accepted provenance evidence requires a v2 session reference");
+            }
+            return Ok(());
+        };
+
+        let manifest_bytes = self
+            .documents
+            .read(&reference.manifest_ref)?
+            .context("accepted provenance manifest is missing from the archive")?;
+        let manifest: AcceptedProvenanceManifest =
+            parse_json(&manifest_bytes, &reference.manifest_ref)?;
+        manifest.validate()?;
+        if manifest.accepted_run_id != reference.accepted_run_id
+            || manifest.closure_sha256 != reference.closure_sha256
+        {
+            bail!("accepted provenance session reference does not match its closure");
+        }
+
+        let mut detached = BTreeMap::new();
+        let mut expected_records = HashSet::new();
+        for record in &manifest.records {
+            if !expected_records.insert(record.archive_path.clone()) {
+                bail!("accepted provenance archive record path is duplicated");
+            }
+            let bytes = self
+                .documents
+                .read(&record.archive_path)?
+                .with_context(|| {
+                    format!(
+                        "accepted provenance record is missing: {}",
+                        record.archive_path
+                    )
+                })?;
+            if bytes.len() as u64 != record.byte_count
+                || crate::cas::hex_sha256(&bytes) != record.content_sha256
+            {
+                bail!("accepted provenance record digest mismatch");
+            }
+            self.report.file_refs.insert(record.archive_path.clone());
+            detached.insert(record.archive_path.clone(), bytes.into_owned());
+        }
+        manifest.validate_detached_records_with_cas(&detached, |object_ref| {
+            self.bounded_archive_object(
+                object_ref,
+                crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES,
+            )
+        })?;
+
+        for object in &manifest.cas_objects {
+            self.report.object_refs.insert(object.object_ref.clone());
+            let Some(length) = self.object_length(&object.object_ref)? else {
+                self.report.missing(format!(
+                    "accepted provenance references missing CAS object `{}`",
+                    object.object_ref
+                ))?;
+                continue;
+            };
+            if length != object.byte_count {
+                bail!(
+                    "accepted provenance CAS object `{}` length does not match its manifest",
+                    object.object_ref
+                );
+            }
+        }
+
+        for name in self.documents.keys() {
+            if name.starts_with("accepted_provenance/") && !expected_records.contains(name) {
+                bail!("unreferenced accepted provenance document `{name}`");
+            }
+        }
+        self.report.file_refs.insert(reference.manifest_ref.clone());
+        Ok(())
+    }
+
     fn finalize_namespace_coverage(&mut self) {
         let mut paths = self.namespace_files.iter().collect::<Vec<_>>();
         paths.sort();
@@ -3097,7 +3322,9 @@ impl<'a> ArchiveWalker<'a> {
             Ok(metadata) if metadata.is_file() => Ok(true),
             Ok(_) => bail!("archived live artifact member `{relative}` is not a regular file"),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error).with_context(|| format!("checking archived artifact `{relative}`")),
+            Err(error) => {
+                Err(error).with_context(|| format!("checking archived artifact `{relative}`"))
+            }
         }
     }
 
@@ -3119,14 +3346,19 @@ impl<'a> ArchiveWalker<'a> {
             };
             match namespace {
                 "manifest" => {
-                    if !matches!(
-                        name.as_str(),
-                        "manifest/session.json"
-                            | "manifest/workspace.json"
-                            | "manifest/export_profile.json"
-                    ) {
+                    if name != "manifest/session.json"
+                        && name != "manifest/workspace.json"
+                        && name != "manifest/export_profile.json"
+                        && name != crate::types::FMS_ACCEPTED_PROVENANCE_MANIFEST_REF
+                    {
                         bail!("unknown archive manifest document `{name}`")
                     }
+                }
+                "accepted_provenance" => {
+                    if remainder.is_empty() {
+                        bail!("accepted provenance namespace root must be a directory `{name}`")
+                    }
+                    self.namespace_files.insert(name.clone());
                 }
                 "project" => {
                     if !KNOWN_PROJECT_LEAFS.contains(&remainder) {
@@ -3666,6 +3898,7 @@ impl<'a> ArchiveWalker<'a> {
             self.walk_preparation_receipt(&preparation_receipt_ref, expected_run_id)?;
         }
         self.walk_task_preparation_receipts(expected_run_id)?;
+        self.walk_accepted_stage_preparation_receipts(expected_run_id)?;
         self.walk_task_admissions(expected_run_id)?;
         self.walk_task_cancellations(expected_run_id)?;
         let lease_prefix = format!("runs/{expected_run_id}/resource_leases/");
@@ -3826,11 +4059,7 @@ impl<'a> ArchiveWalker<'a> {
         self.report.file_refs.insert(relative.to_string());
         let progress_ref = format!("batches/{expected_batch_id}/expansion_progress.json");
         if self.documents.contains_key(&progress_ref) {
-            self.walk_batch_expansion_progress(
-                &progress_ref,
-                &intent,
-                manifest_bytes.as_deref(),
-            )?;
+            self.walk_batch_expansion_progress(&progress_ref, &intent, manifest_bytes.as_deref())?;
         }
         Ok(())
     }
@@ -3969,6 +4198,66 @@ impl<'a> ArchiveWalker<'a> {
             }
             receipt.validate_for_catalog(&catalog)?;
             receipt.validate_for_run_intent(&intent)?;
+            self.report.file_refs.insert(relative);
+        }
+        Ok(())
+    }
+
+    fn walk_accepted_stage_preparation_receipts(&mut self, expected_run_id: &str) -> Result<()> {
+        let prefix = format!("runs/{expected_run_id}/accepted_stage_preparation_receipts/");
+        let mut names = self
+            .documents
+            .keys()
+            .filter(|name| name.starts_with(&prefix))
+            .cloned()
+            .collect::<Vec<_>>();
+        if names.is_empty() {
+            return Ok(());
+        }
+        names.sort();
+        let catalog_ref = format!("runs/{expected_run_id}/run_catalog.json");
+        let catalog_data = self.documents.read(&catalog_ref)?.with_context(|| {
+            format!("archive accepted stage receipts require run catalog `{catalog_ref}`")
+        })?;
+        let catalog: FmsRunCatalog = parse_json(&catalog_data, &catalog_ref)?;
+        catalog.validate()?;
+        if catalog.run_id != expected_run_id {
+            bail!("archive accepted stage receipt catalog identity does not match run path");
+        }
+        let intent_ref = format!("runs/{expected_run_id}/run_intent.json");
+        let intent_data = self.documents.read(&intent_ref)?.with_context(|| {
+            format!("archive accepted stage receipts require run intent `{intent_ref}`")
+        })?;
+        let intent: FmsRunIntent = parse_json(&intent_data, &intent_ref)?;
+        intent.validate()?;
+        for relative in names {
+            let rest = relative
+                .strip_prefix(&prefix)
+                .context("invalid accepted stage receipt archive path")?;
+            if rest.is_empty() || rest.contains('/') || !rest.ends_with(".json") {
+                bail!("invalid accepted stage receipt archive path `{relative}`");
+            }
+            let data = self
+                .documents
+                .read(&relative)?
+                .context("archive accepted stage receipt disappeared")?;
+            let stage: FmsAcceptedStagePreparationReceipt = parse_json(&data, &relative)?;
+            if stage.relative_path()? != relative {
+                bail!("accepted stage receipt path identity mismatch");
+            }
+            let task_relative = format!(
+                "runs/{expected_run_id}/task_preparation_receipts/{}.json",
+                stage.task_id
+            );
+            let task_data = self.documents.read(&task_relative)?.with_context(|| {
+                format!("archive accepted stage receipt requires task receipt `{task_relative}`")
+            })?;
+            let task: FmsTaskPreparationReceipt = parse_json(&task_data, &task_relative)?;
+            if task.relative_path()? != task_relative || !stage.matches_task_receipt(&task) {
+                bail!("accepted stage receipt does not match its task receipt");
+            }
+            task.validate_for_catalog(&catalog)?;
+            task.validate_for_run_intent(&intent)?;
             self.report.file_refs.insert(relative);
         }
         Ok(())
@@ -4608,8 +4897,20 @@ fn validate_cancellation_catalog_identity(
 }
 
 fn validate_session(session: &FmsSessionManifest, source: &str) -> Result<()> {
-    if session.format != "fullmag.session.v1" {
-        bail!("unknown session schema `{}` in `{source}`", session.format)
+    match session.format.as_str() {
+        crate::types::FMS_SESSION_FORMAT_V1 => {
+            if session.accepted_provenance_ref.is_some() {
+                bail!("fullmag.session.v1 cannot carry accepted provenance");
+            }
+        }
+        crate::types::FMS_SESSION_FORMAT_V2 => {
+            session
+                .accepted_provenance_ref
+                .as_ref()
+                .context("fullmag.session.v2 requires accepted provenance reference")?
+                .validate()?;
+        }
+        _ => bail!("unknown session schema `{}` in `{source}`", session.format),
     }
     validate_component(&session.session_id)
         .with_context(|| format!("invalid session_id in `{source}`"))?;
@@ -4879,18 +5180,18 @@ fn reject_link_chain(root: &Path, relative: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::materialized_dataset::{MaterializedDatasetManifest, MATERIALIZED_DATASET_SCHEMA};
-    use crate::solution_tensor_field::{TensorFieldBinding, TENSOR_FIELD_BINDING_SCHEMA};
+    use crate::materialized_dataset::{MATERIALIZED_DATASET_SCHEMA, MaterializedDatasetManifest};
+    use crate::solution_tensor_field::{TENSOR_FIELD_BINDING_SCHEMA, TensorFieldBinding};
     use crate::solution_tensor_source::SOLUTION_TENSOR_SCHEMA;
     use crate::{FmsRunIntent, TensorChunk, TensorDescriptor, TensorDtype};
     use fullmag_quantities::{
         ActiveSupportDescriptor, DatasetFieldDescriptor, DatasetSlicePlane, DatasetSource,
         FieldAxisDescriptor, FieldFrameDescriptor, FieldFrameKind, FieldNormalization,
         FieldResolution, FieldSampleLocation, FieldValueRepresentation, FunctionSpaceDescriptor,
-        FunctionSpaceOrdering, MaterializedDatasetRef, QuantityId, ScientificAssessment,
-        ScientificAssessmentStatus, SolutionArtifactKind, SolutionArtifactRef,
-        SolutionExecutionStatus, SolutionMember, SolutionSet, SolutionSetManifestState,
-        SolutionSetProvenance, SOLUTION_SET_SCHEMA_VERSION,
+        FunctionSpaceOrdering, MaterializedDatasetRef, QuantityId, SOLUTION_SET_SCHEMA_VERSION,
+        ScientificAssessment, ScientificAssessmentStatus, SolutionArtifactKind,
+        SolutionArtifactRef, SolutionExecutionStatus, SolutionMember, SolutionSet,
+        SolutionSetManifestState, SolutionSetProvenance,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -4954,7 +5255,11 @@ mod tests {
         let zarr_file_relative = "single.zarr";
         let snapshot = live_snapshot_bytes(
             run_id,
-            &[(spectrum_relative, "json"), (zarr_relative, "zarr"), (zarr_file_relative, "zarr")],
+            &[
+                (spectrum_relative, "json"),
+                (zarr_relative, "zarr"),
+                (zarr_file_relative, "zarr"),
+            ],
             false,
         );
 
@@ -4965,22 +5270,41 @@ mod tests {
         let store_artifacts = store_root.join("runs/run-live/artifacts");
         fs::create_dir_all(store_artifacts.join("eigen")).unwrap();
         fs::write(store_artifacts.join(spectrum_relative), b"spectrum").unwrap();
-        fs::write(store_artifacts.join(zarr_file_relative), b"single-zarr-file").unwrap();
+        fs::write(
+            store_artifacts.join(zarr_file_relative),
+            b"single-zarr-file",
+        )
+        .unwrap();
         let zarr_root = store_artifacts.join(zarr_relative);
         fs::create_dir_all(&zarr_root).unwrap();
         fs::write(zarr_root.join(".zgroup"), b"{}").unwrap();
 
         let store_report = walk_store_root(&store_root, ReachabilityMode::Restore).unwrap();
         assert!(store_report.complete, "{:?}", store_report.warnings);
-        assert!(store_report.file_refs.contains("runs/run-live/artifacts/eigen/spectrum.v2.json"));
-        assert!(store_report.file_refs.contains("runs/run-live/artifacts/fields/m.zarr/.zgroup"));
-        assert!(store_report.file_refs.contains("runs/run-live/artifacts/single.zarr"));
+        assert!(
+            store_report
+                .file_refs
+                .contains("runs/run-live/artifacts/eigen/spectrum.v2.json")
+        );
+        assert!(
+            store_report
+                .file_refs
+                .contains("runs/run-live/artifacts/fields/m.zarr/.zgroup")
+        );
+        assert!(
+            store_report
+                .file_refs
+                .contains("runs/run-live/artifacts/single.zarr")
+        );
 
         let spectrum_path = "runs/run-live/artifacts/eigen/spectrum.v2.json";
         let zarr_member_path = "runs/run-live/artifacts/fields/m.zarr/.zgroup";
         let zarr_file_path = "runs/run-live/artifacts/single.zarr";
         let archive = HashMap::from([
-            ("project/current_live_snapshot.json".to_string(), snapshot.clone()),
+            (
+                "project/current_live_snapshot.json".to_string(),
+                snapshot.clone(),
+            ),
             (spectrum_path.to_string(), b"spectrum".to_vec()),
             (zarr_member_path.to_string(), b"{}".to_vec()),
             (zarr_file_path.to_string(), b"single-zarr-file".to_vec()),
@@ -5015,16 +5339,11 @@ mod tests {
                 ArchiveFileSnapshot::capture(&inventory_zarr_file).unwrap(),
             ),
         ]);
-        let inline_project = HashMap::from([(
-            "project/current_live_snapshot.json".to_string(),
-            snapshot,
-        )]);
-        let export_report = walk_export_file_documents_with_project(
-            &snapshots,
-            &inventory_root,
-            &inline_project,
-        )
-        .unwrap();
+        let inline_project =
+            HashMap::from([("project/current_live_snapshot.json".to_string(), snapshot)]);
+        let export_report =
+            walk_export_file_documents_with_project(&snapshots, &inventory_root, &inline_project)
+                .unwrap();
         assert!(export_report.complete, "{:?}", export_report.warnings);
         assert!(export_report.file_refs.contains(spectrum_path));
         assert!(export_report.file_refs.contains(zarr_member_path));
@@ -5036,7 +5355,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let snapshot = live_snapshot_bytes(
             "run-missing",
-            &[("eigen/spectrum.v2.json", "json"), ("fields/m.zarr", "zarr")],
+            &[
+                ("eigen/spectrum.v2.json", "json"),
+                ("fields/m.zarr", "zarr"),
+            ],
             true,
         );
         let store_root = directory.path().join("store");
@@ -5063,13 +5385,14 @@ mod tests {
 
         let inventory_root = directory.path().join("empty-inventory");
         fs::create_dir_all(&inventory_root).unwrap();
-        let inline_project = HashMap::from([(
-            "project/current_live_snapshot.json".to_string(),
-            snapshot,
-        )]);
-        let export_report =
-            walk_export_file_documents_with_project(&HashMap::new(), &inventory_root, &inline_project)
-                .unwrap();
+        let inline_project =
+            HashMap::from([("project/current_live_snapshot.json".to_string(), snapshot)]);
+        let export_report = walk_export_file_documents_with_project(
+            &HashMap::new(),
+            &inventory_root,
+            &inline_project,
+        )
+        .unwrap();
         assert!(!export_report.complete);
         assert!(export_report.has_blocking_incompleteness);
         assert!(!export_report.opaque_project_documents_only);
@@ -5095,10 +5418,8 @@ mod tests {
                 walk_store_root(&store_root, ReachabilityMode::Restore).is_err(),
                 "store accepted artifact path {path:?}"
             );
-            let archive = HashMap::from([(
-                "project/current_live_snapshot.json".to_string(),
-                snapshot,
-            )]);
+            let archive =
+                HashMap::from([("project/current_live_snapshot.json".to_string(), snapshot)]);
             assert!(
                 walk_archive_documents(&archive, ReachabilityMode::Export).is_err(),
                 "archive accepted artifact path {path:?}"
@@ -5114,10 +5435,8 @@ mod tests {
                 walk_store_root(&store_root, ReachabilityMode::Restore).is_err(),
                 "store accepted run id {run_id:?}"
             );
-            let archive = HashMap::from([(
-                "project/current_live_snapshot.json".to_string(),
-                snapshot,
-            )]);
+            let archive =
+                HashMap::from([("project/current_live_snapshot.json".to_string(), snapshot)]);
             assert!(
                 walk_archive_documents(&archive, ReachabilityMode::Export).is_err(),
                 "archive accepted run id {run_id:?}"
@@ -5168,12 +5487,10 @@ mod tests {
             "project/current_live_snapshot.json".to_string(),
             live_snapshot_bytes("run-link", &[("spectrum.json", "json")], false),
         )]);
-        assert!(walk_export_file_documents_with_project(
-            &snapshots,
-            &inventory_root,
-            &inline_project,
-        )
-        .is_err());
+        assert!(
+            walk_export_file_documents_with_project(&snapshots, &inventory_root, &inline_project,)
+                .is_err()
+        );
     }
 
     #[test]
@@ -5185,23 +5502,26 @@ mod tests {
             ArchiveFileSnapshot::from_bytes(b"inventory"),
         )]);
         let shadow = HashMap::from([(snapshot_path.to_string(), b"inline".to_vec())]);
-        assert!(walk_export_file_documents_with_project(&snapshots, directory.path(), &shadow).is_err());
+        assert!(
+            walk_export_file_documents_with_project(&snapshots, directory.path(), &shadow).is_err()
+        );
 
         let nonproject = HashMap::from([(
-            "objects/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "objects/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
             b"inline".to_vec(),
         )]);
-        assert!(walk_export_file_documents_with_project(&HashMap::new(), directory.path(), &nonproject).is_err());
+        assert!(
+            walk_export_file_documents_with_project(&HashMap::new(), directory.path(), &nonproject)
+                .is_err()
+        );
     }
 
     #[test]
     fn archive_rejects_live_artifact_file_and_subtree_collision() {
         let snapshot = live_snapshot_bytes("run-conflict", &[("fields/m.zarr", "zarr")], false);
         let archive = HashMap::from([
-            (
-                "project/current_live_snapshot.json".to_string(),
-                snapshot,
-            ),
+            ("project/current_live_snapshot.json".to_string(), snapshot),
             (
                 "runs/run-conflict/artifacts/fields/m.zarr".to_string(),
                 b"file payload".to_vec(),
@@ -5559,9 +5879,11 @@ mod tests {
         write_store_fixture(&store_root, &solution, &intent, &objects);
         let store_error = walk_store_root(&store_root, ReachabilityMode::Restore)
             .expect_err("store walker accepted missing historical owner");
-        assert!(store_error
-            .to_string()
-            .contains("revisions/00000000000000000001"));
+        assert!(
+            store_error
+                .to_string()
+                .contains("revisions/00000000000000000001")
+        );
 
         let archive_error = walk_archive_documents(
             &archive_fixture(&solution, &intent, &objects),

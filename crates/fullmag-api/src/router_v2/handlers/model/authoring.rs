@@ -7,6 +7,7 @@ use axum::Json;
 use serde_json::Value;
 
 use crate::error::ApiError;
+use crate::router_v2::handlers::transport_authoring_policy::candidate_capability;
 use crate::router_v2::handlers::data::field_resolution::flatten_json_field_values;
 use crate::schemas::authoring::{
     AuthoringTransactionRequest, AuthoringTransactionResponse, CouplingCreateRequest,
@@ -29,7 +30,7 @@ use crate::schemas::authoring::{
     SpinTorqueCommitResource, SpinTorqueListResource, SpinTorqueMutationRequest,
     SpinTransportCommitResource, SpinTransportListResource, SpinTransportMutationRequest,
     StudyRuntimePatchRequest, StudyRuntimeResource, TransportAuthoringOperation,
-    TransportExecutionCapability, TransportExecutionLane, TransportSemanticValidation,
+    TransportExecutionCapability, TransportSemanticValidation,
     TransportValidationCandidate, TransportValidationIssue, TransportValidationRequest,
     TransportValidationResponse, UniverseFitRequest, UniversePatchRequest, UniverseResource,
 };
@@ -37,13 +38,13 @@ use crate::types::{
     AppState, LatestFields, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse,
 };
 use fullmag_authoring::{
-    geometry_capabilities, realize_geometry_scene, validate_geometry_scene, CurrentTransportModel,
+    geometry_capabilities, realize_geometry_scene, validate_geometry_scene,
     GeometryBackendTarget, GeometryCapabilitiesResource, GeometryDiagnostic,
     GeometryDiagnosticsResource, GeometryRealizationSnapshot, GeometryRegionCandidate,
     GeometryValidationResource, MagnetizationAsset, SceneCurrentTransport, SceneDocument,
     SceneGeometry, SceneMaterialAsset, SceneMaterialReference, SceneObject, SceneOerstedField,
     SceneRegionOverride, SceneSpinInterface, SceneSpinTorque, SceneSpinTransport,
-    SceneTransportCoupling, ScriptBuilderMagneticInteractionEntry,
+    ScriptBuilderMagneticInteractionEntry,
     ScriptBuilderMagneticInteractionKind, ScriptBuilderUniverseState, Transform3D,
 };
 
@@ -305,128 +306,6 @@ fn replace_or_create<T>(
     Ok(())
 }
 
-fn requested_lane(resource: &SceneSpinTransport) -> Option<TransportExecutionLane> {
-    let request = &resource.known()?.requested_execution;
-    let value = serde_json::to_value(request).ok()?;
-    Some(TransportExecutionLane {
-        discretization: value.get("discretization")?.as_str()?.to_string(),
-        device: value.get("device")?.as_str()?.to_string(),
-        precision: value.get("precision")?.as_str()?.to_string(),
-        execution_mode: value.get("execution_mode")?.as_str()?.to_string(),
-    })
-}
-
-fn candidate_capability(candidate: &TransportValidationCandidate) -> TransportExecutionCapability {
-    let (status, allowed, reason, requested) = match candidate {
-        TransportValidationCandidate::CurrentTransport { resource, .. } => {
-            let Some(value) = resource.known() else {
-                return TransportExecutionCapability {
-                    status: "unsupported".to_string(),
-                    qualification: "unsupported".to_string(),
-                    authoring_allowed: false,
-                    reason: Some("Unknown current transport variants are read-only.".to_string()),
-                    requested_lane: None,
-                    resolved_lane: None,
-                };
-            };
-            if value.model == CurrentTransportModel::PrescribedDensity
-                && value.coupling == SceneTransportCoupling::Bidirectional
-            {
-                return TransportExecutionCapability {
-                    status: "unsupported".to_string(),
-                    qualification: "unsupported".to_string(),
-                    authoring_allowed: false,
-                    reason: Some(
-                        "M2 bidirectional coupling is unsupported for prescribed_density transport."
-                            .to_string(),
-                    ),
-                    requested_lane: None,
-                    resolved_lane: None,
-                };
-            }
-            let reciprocal = value.coupling == SceneTransportCoupling::Bidirectional
-                || value.model == CurrentTransportModel::MagnetoresistivePoisson;
-            if reciprocal {
-                ("semantic_only", true, Some("M2 reciprocal authoring is available; executable qualification remains workload-scoped.".to_string()), None)
-            } else {
-                ("semantic_only", true, Some("M1 authoring is available; executable qualification remains workload-scoped.".to_string()), None)
-            }
-        }
-        TransportValidationCandidate::SpinTransport { resource, .. } => {
-            let requested = requested_lane(resource);
-            let Some(known) = resource.known() else {
-                return TransportExecutionCapability {
-                    status: "unsupported".to_string(),
-                    qualification: "unsupported".to_string(),
-                    authoring_allowed: false,
-                    reason: Some("Unknown spin transport variants are read-only.".to_string()),
-                    requested_lane: requested,
-                    resolved_lane: None,
-                };
-            };
-            let reciprocal = known.constitutive_version != "transport_constitutive.one_way.fullmag.v1";
-            let lane_blocked = requested.as_ref().is_some_and(|lane| {
-                lane.device == "gpu"
-                    || lane.precision == "single"
-            });
-            let transient = serde_json::to_value(known.mode).ok().and_then(|v| v.as_str().map(str::to_string)).as_deref() == Some("transient");
-            if reciprocal {
-                ("semantic_only", true, Some("M2 reciprocal authoring is available; executable qualification remains workload-scoped.".to_string()), requested)
-            } else if transient {
-                ("unsupported", false, Some("Transient spin transport is an M3 authoring capability.".to_string()), requested)
-            } else if lane_blocked {
-                ("unsupported", false, Some("M1 authoring is limited to CPU/auto, double precision, and strict or extended execution.".to_string()), requested)
-            } else {
-                ("semantic_only", true, Some("M1 steady one-way authoring is available; the execution lane is resolved only by planning.".to_string()), requested)
-            }
-        }
-        TransportValidationCandidate::SpinInterface { resource, .. } => {
-            let known = serde_json::from_value::<SceneSpinInterface>(resource.clone()).is_ok();
-            if known {
-                ("semantic_only", true, Some("Interface authoring is available; execution qualification remains workload-scoped.".to_string()), None)
-            } else {
-                ("unsupported", false, Some("Unknown spin interface variants are read-only.".to_string()), None)
-            }
-        }
-        TransportValidationCandidate::SpinTorque { resource, .. } => match resource {
-            SceneSpinTorque::Known(_) => (
-                "source_visible",
-                true,
-                Some("Typed torque authoring is available; execution qualification is variant-specific.".to_string()),
-                None,
-            ),
-            SceneSpinTorque::Unsupported(_) => (
-                "unsupported",
-                false,
-                Some("Unknown spin torque variants are read-only.".to_string()),
-                None,
-            ),
-        },
-        TransportValidationCandidate::OerstedField { resource, .. } => match resource {
-            SceneOerstedField::Known(_) => (
-                "source_visible",
-                true,
-                Some("Typed Oersted authoring is available; execution qualification is realization-specific.".to_string()),
-                None,
-            ),
-            SceneOerstedField::Unsupported(_) => (
-                "unsupported",
-                false,
-                Some("Unknown Oersted field variants are read-only.".to_string()),
-                None,
-            ),
-        },
-    };
-    TransportExecutionCapability {
-        status: status.to_string(),
-        qualification: status.to_string(),
-        authoring_allowed: allowed,
-        reason,
-        requested_lane: requested,
-        resolved_lane: None,
-    }
-}
-
 fn apply_validation_candidate(
     scene: &mut SceneDocument,
     candidate: TransportValidationCandidate,
@@ -545,11 +424,44 @@ fn apply_validation_candidate(
     }
 }
 
+fn evaluate_transport_candidate(
+    scene: &SceneDocument,
+    candidate: TransportValidationCandidate,
+) -> (TransportSemanticValidation, TransportExecutionCapability) {
+    let mut clone = scene.clone();
+    let apply_error = apply_validation_candidate(&mut clone, candidate.clone()).err();
+    let validation_error = apply_error.or_else(|| {
+        fullmag_authoring::validate_scene_document(&clone)
+            .err()
+            .map(|error| error.message)
+    });
+    let semantic = match validation_error {
+        Some(message) => TransportSemanticValidation {
+            valid: false,
+            issues: vec![TransportValidationIssue {
+                code: "invalid_transport_candidate".to_string(),
+                path: "candidate".to_string(),
+                message,
+            }],
+        },
+        None => TransportSemanticValidation {
+            valid: true,
+            issues: Vec::new(),
+        },
+    };
+    let mut execution = candidate_capability(&clone, &candidate);
+    execution.authoring_allowed &= semantic.valid;
+    (semantic, execution)
+}
+
 fn ensure_candidate_authorable(
     scene: &SceneDocument,
     candidate: TransportValidationCandidate,
 ) -> Result<(), ApiError> {
-    let capability = candidate_capability(&candidate);
+    let (semantic, capability) = evaluate_transport_candidate(scene, candidate);
+    if let Some(issue) = semantic.issues.first() {
+        return Err(ApiError::bad_request(issue.message.clone()));
+    }
     if !capability.authoring_allowed
         || !matches!(
             capability.status.as_str(),
@@ -560,10 +472,6 @@ fn ensure_candidate_authorable(
             || "transport candidate capability is unavailable".to_string(),
         )));
     }
-    let mut clone = scene.clone();
-    apply_validation_candidate(&mut clone, candidate).map_err(ApiError::bad_request)?;
-    fullmag_authoring::validate_scene_document(&clone)
-        .map_err(|error| ApiError::bad_request(error.message))?;
     Ok(())
 }
 
@@ -571,7 +479,7 @@ fn ensure_resulting_scene_authorable(
     scene: &SceneDocument,
     removed: &TransportValidationCandidate,
 ) -> Result<(), ApiError> {
-    let capability = candidate_capability(removed);
+    let capability = candidate_capability(scene, removed);
     if !capability.authoring_allowed {
         return Err(ApiError::bad_request(
             capability
@@ -594,32 +502,11 @@ pub async fn validate_transport_candidate(
         ));
     }
     let request_context = crate::capture_current_live_request_context(&state).await?;
-    let mut scene =
+    let scene =
         crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
             .await?;
     require_spin_base_revision(&scene, req.base_revision)?;
-    let mut execution = candidate_capability(&req.candidate);
-    let apply_error = apply_validation_candidate(&mut scene, req.candidate).err();
-    let validation_error = apply_error.or_else(|| {
-        fullmag_authoring::validate_scene_document(&scene)
-            .err()
-            .map(|error| error.message)
-    });
-    let semantic = match validation_error {
-        Some(message) => TransportSemanticValidation {
-            valid: false,
-            issues: vec![TransportValidationIssue {
-                code: "invalid_transport_candidate".to_string(),
-                path: "candidate".to_string(),
-                message,
-            }],
-        },
-        None => TransportSemanticValidation {
-            valid: true,
-            issues: Vec::new(),
-        },
-    };
-    execution.authoring_allowed &= semantic.valid;
+    let (semantic, execution) = evaluate_transport_candidate(&scene, req.candidate);
     Ok(Json(TransportValidationResponse {
         validation_version: "transport-authoring-validation.v1".to_string(),
         scene_revision: req.base_revision,
@@ -3695,13 +3582,19 @@ pub async fn get_authoring_script_source(
 pub async fn sync_authoring_script(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScriptSyncRequest>,
-) -> Result<Json<ScriptSyncResponse>, ApiError> {
+) -> Result<(axum::http::HeaderMap, Json<ScriptSyncResponse>), ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let _transition = state.current_live_session_transition.lock().await;
     crate::validate_current_live_request_context(&state, &request_context).await?;
     let response = crate::script::sync_current_live_script_with_request(&state, req).await?;
     crate::validate_current_live_request_context(&state, &request_context).await?;
-    Ok(Json(response))
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let scope = crate::current_live_publisher_scope_header(&state, snapshot);
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(crate::router_v2::middleware::session_scope::HEADER_NAME,
+        axum::http::HeaderValue::from_str(&scope).map_err(|error| ApiError::internal(error.to_string()))?);
+    Ok((headers, Json(response)))
 }
 
 fn apply_scene_merge_patch(

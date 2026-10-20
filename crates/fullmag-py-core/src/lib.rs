@@ -503,6 +503,10 @@ fn fullmag_py_core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        mixed_certificate::certify_mixed_mesh_arrays_v2,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         mixed_certificate::preflight_mixed_mesh_arrays,
         module
     )?)?;

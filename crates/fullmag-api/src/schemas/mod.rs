@@ -5,6 +5,8 @@ pub mod common;
 pub mod compute_profiles;
 pub mod compute_preview;
 pub mod compute_nodes;
+pub mod compute_queue;
+pub mod compute_allocations;
 #[allow(dead_code)]
 pub mod decimal_u64;
 pub mod diagnostics;

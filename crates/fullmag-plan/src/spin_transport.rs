@@ -906,7 +906,7 @@ pub(crate) fn resolve_fem_charge_only_transport(
         }
         if charge.structured_current_closure.is_some() {
             errors.push(format!(
-                "{prefix} structured_current_closure is an FDM contract and is not executable on FEM"
+                "{prefix} structured_current_closure requires detached coincident-v2 mesh/view materialization before FEM execution; v1 remains FDM-only"
             ));
         }
         if !matches!(charge.solver.engine.as_str(), "auto" | "cg") {
@@ -1997,10 +1997,11 @@ fn validate_conservative_current_view(
             "{prefix} external-lead closure is not yet executable in the public FEM planner"
         )]);
     };
-    if operator_version.trim().is_empty()
+    if !matches!(operator_version.as_str(), "fem_closed_current_geometry.v1" | "fem_closed_current_geometry.v2")
         || revision.trim().is_empty()
         || digest.trim().is_empty()
         || source_cuts.is_empty()
+        || (operator_version == "fem_closed_current_geometry.v2" && source_cuts.len() != 1)
     {
         return Err(vec![format!(
             "{prefix} closed_geometry identity/source_cuts are incomplete"
@@ -2010,7 +2011,9 @@ fn validate_conservative_current_view(
     for cut in source_cuts {
         if cut.id.trim().is_empty()
             || !cut.potential_drop_v.is_finite()
-            || cut.translation_m.iter().all(|value| *value == 0.0)
+            || (operator_version == "fem_closed_current_geometry.v2" && cut.potential_drop_v == 0.0)
+            || cut.translation_m.iter().any(|value| !value.is_finite())
+            || (cut.translation_m.iter().all(|value| *value == 0.0) != (operator_version == "fem_closed_current_geometry.v2"))
             || cut.face_pairs.is_empty()
             || !cut_ids.insert(cut.id.as_str())
         {
@@ -2018,12 +2021,40 @@ fn validate_conservative_current_view(
                 "{prefix} contains an invalid or duplicate source cut"
             )]);
         }
+        if operator_version == "fem_closed_current_geometry.v2" {
+            let minus_ids = cut.face_pairs.iter().flat_map(|pair| pair.minus_face_vertex_ids).collect::<BTreeSet<_>>();
+            let plus_ids = cut.face_pairs.iter().flat_map(|pair| pair.plus_face_vertex_ids).collect::<BTreeSet<_>>();
+            if !minus_ids.is_disjoint(&plus_ids) {
+                return Err(vec![format!("{prefix} v2 sourcecut traces require globally disjoint stable IDs")]);
+            }
+        }
+        let positions = if operator_version == "fem_closed_current_geometry.v2" {
+            view.stable_vertex_ids.iter().enumerate()
+                .map(|(i, id)| (*id, mesh.nodes[i])).collect::<BTreeMap<_, _>>()
+        } else {
+            BTreeMap::new()
+        };
         for pair in &cut.face_pairs {
             if pair.minus_face_vertex_ids == pair.plus_face_vertex_ids {
                 return Err(vec![format!(
                     "{prefix} source cut '{}' must pair distinct minus and plus faces",
                     cut.id
                 )]);
+            }
+            if operator_version == "fem_closed_current_geometry.v2" {
+                if pair.minus_face_vertex_ids.iter().any(|id| pair.plus_face_vertex_ids.contains(id)) {
+                    return Err(vec![format!("{prefix} v2 traces require distinct stable IDs")]);
+                }
+                for id in pair.minus_face_vertex_ids {
+                    let Some(xyz) = positions.get(&id) else {
+                        return Err(vec![format!("{prefix} v2 sourcecut references unknown vertex")]);
+                    };
+                    if !pair.plus_face_vertex_ids.iter().any(|plus| positions.get(plus).is_some_and(|other| {
+                        xyz.iter().zip(other).all(|(a, b)| a.to_bits() == b.to_bits())
+                    })) {
+                        return Err(vec![format!("{prefix} v2 sourcecut requires bit-identical paired coordinates")]);
+                    }
+                }
             }
             for face in [pair.minus_face_vertex_ids, pair.plus_face_vertex_ids] {
                 if face[0] == 0
@@ -2918,6 +2949,10 @@ fn materialize_structured_current_closure(
         closure_id,
         source_cuts,
     } = closure;
+    if schema_version != "structured_current_closure.v1" || source_cuts.iter().any(|cut|
+        cut.plane.coordinate_frame.as_deref().unwrap_or("world") != "world") {
+        return Err(vec!["FDM sourcecut materialization supports only structured_current_closure.v1 world-frame; no v2 fallback".into()]);
+    }
     let component_labels =
         connected_component_labels(charge_active_cells, context.grid_cells, &BTreeSet::new());
     let mut resolved = Vec::with_capacity(source_cuts.len());
@@ -4381,6 +4416,7 @@ mod tests {
                     region_id: Some(region_id.into()),
                 },
                 plane: StructuredCutPlaneIR {
+                    coordinate_frame: None,
                     axis,
                     offset_m,
                     normal: StructuredCutNormalIR::PositiveAxis,
@@ -5326,6 +5362,7 @@ mod tests {
                     signed_weight: -1.0,
                 },
             ],
+            normalization: None,
             normalization_current_a: ANTENNA_NORMALIZATION_CURRENT_A,
         }];
         problem.antenna_field_solve_stages = vec![AntennaFieldSolveStageIR {

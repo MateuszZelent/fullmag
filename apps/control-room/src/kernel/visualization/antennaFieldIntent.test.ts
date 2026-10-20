@@ -16,7 +16,7 @@ const inspection = {
   stage_id: "solve-definition", runtime_stage_id: "runtime-segment", stage_revision: 3,
   record_content_digest: "sha256:record", output_id: "output", port_mode_id: "port",
   manifest: { source_object_id: "antenna", content_digest: "sha256:payload" },
-  outputs: [{ inspection_ref: { content_digest: "sha256:payload" } }],
+  outputs: [{ inspection_ref: { stage_id: "solve-definition", output_id: "output", content_digest: "sha256:payload" } }],
 } as unknown as AntennaExternalLeadInspectionResource;
 
 describe("antenna inspection display execution identity", () => {
@@ -39,6 +39,12 @@ describe("antenna inspection display execution identity", () => {
     expect(antennaInspectionIntentMatchesOwner(intent, { ...inspection, status: "cancelled" })).toBe(false);
     expect(antennaInspectionIntentMatchesOwner({ ...intent, kind: "basis" }, inspection)).toBe(false);
     expect(antennaInspectionIntentMatchesOwner(intent, { ...inspection, outputs: [] })).toBe(false);
+    for (const patch of [{ stage_id: "other" }, { output_id: "other" }, { stage_id: undefined }, { output_id: undefined }]) {
+      expect(antennaInspectionIntentMatchesOwner(intent, {
+        ...inspection,
+        outputs: [{ ...inspection.outputs[0], inspection_ref: { ...inspection.outputs[0].inspection_ref, ...patch } }],
+      } as unknown as AntennaExternalLeadInspectionResource)).toBe(false);
+    }
     expect(antennaInspectionIntentMatchesOwner(intent, { ...inspection, outputs: [{ ...inspection.outputs[0], inspection_ref: { ...inspection.outputs[0].inspection_ref, content_digest: "other" } }] })).toBe(false);
   });
 });

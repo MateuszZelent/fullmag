@@ -124,6 +124,24 @@ fn resolve_antenna_sample_topology(
         })
 }
 
+// The legacy charge result and conservative-current ABI solve different
+// boundary-value problems. A shared label cannot attest their combined data.
+fn require_legacy_charge_only_publication(
+    module_id: &str,
+    has_conservative_current_view: bool,
+    has_oersted_source: bool,
+    has_antenna_basis_request: bool,
+) -> Result<(), RunError> {
+    if has_conservative_current_view || has_oersted_source || has_antenna_basis_request {
+        return Err(RunError {
+            message: format!(
+                "FEM charge module '{module_id}' cannot publish a mixed accepted charge state: the legacy V/J/terminal-current solve and the conservative RT0/Oersted solve have independent owners; use owned external-lead inspection for raw modeled-domain V/J/H; qualified antenna basis execution requires a single accepted source owner"
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn execute_native_fem_charge_transport(
     mesh: &MeshIR,
     charge_transport_plans: &[ResolvedChargeTransportPlanIR],
@@ -154,6 +172,15 @@ fn execute_native_fem_charge_transport(
         None => None,
     };
     let prepared = preflight_charge_transport_plans(mesh, charge_transport_plans)?;
+    // Refuse the whole batch before native execution or partial publication.
+    for item in &prepared {
+        require_legacy_charge_only_publication(
+            &item.resolved.module_id,
+            item.descriptor.conservative_current_view.is_some(),
+            item.descriptor.oersted_source_bound,
+            item.resolved.antenna_field_solution_request.is_some(),
+        )?;
+    }
     let method = match oersted_realization {
         Some(fullmag_ir::OerstedRealization::FemVectorPotential) => {
             NativeFemSteadyTransportOerstedMethod::FemVectorPotential
@@ -1315,6 +1342,30 @@ fn sha256_f64_slice(values: &[f64]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_charge_only_without_independent_source_owner_remains_allowed() {
+        assert!(require_legacy_charge_only_publication("charge", false, false, false).is_ok());
+    }
+
+    #[test]
+    fn legacy_mixed_owner_outputs_fail_closed_for_every_source_combination() {
+        for (view, oersted, basis) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (true, true, false),
+            (true, false, true),
+            (false, true, true),
+            (true, true, true),
+        ] {
+            let error = require_legacy_charge_only_publication("source-module", view, oersted, basis)
+                .unwrap_err();
+            assert!(error.message.contains("source-module"));
+            assert!(error.message.contains("mixed accepted charge state"));
+            assert!(error.message.contains("independent owners"));
+        }
+    }
 
     fn port_request(
         branches: &[(&str, &str, f64)],

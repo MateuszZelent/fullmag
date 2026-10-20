@@ -368,6 +368,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     (explorer) => explorer.resultContextRunId,
   );
   const previousSelectedNodeId = useRef<string | null>(null);
+  const lastRevealedSelectionPath = useRef<string | null>(null);
   const previousCurrentRunId = useRef<string | null>(null);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
@@ -909,11 +910,17 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [activeTab, selectedNodeId]);
 
   useEffect(() => {
-    if (!selectedNodeId) return;
-    const path = findExplorerNodePath(nodes, selectedNodeId);
-    if (!path) return;
+    const path = selectedNodeId ? findExplorerNodePath(nodes, selectedNodeId) : null;
+    if (!selectedNodeId || !path) {
+      lastRevealedSelectionPath.current = null;
+      return;
+    }
+    const revealKey = JSON.stringify([modelResource.sessionScopeKey, activeTab, path]);
+    // Resource refreshes must not undo an explicit collapse of the selected path.
+    if (lastRevealedSelectionPath.current === revealKey) return;
+    lastRevealedSelectionPath.current = revealKey;
     revealExplorerNode(activeTab, selectedNodeId, path.slice(0, -1));
-  }, [activeTab, nodes, selectedNodeId]);
+  }, [activeTab, modelResource.sessionScopeKey, nodes, selectedNodeId]);
 
   useEffect(() => {
     if (activeTab !== "results") return;

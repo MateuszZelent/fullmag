@@ -4,7 +4,7 @@ use crate::{
     SceneChargePotentialGauge, SceneDocument, SceneFdmDiscretizationState, SceneOerstedField,
     SceneOerstedTimeDependence, ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef,
     SceneSpinBoundary, SceneSpinInterface, SceneSpinTorque, SceneSpinTransport,
-    SceneSpinTransportMode, SceneStructuredCurrentClosure, SceneStructuredCurrentDrive,
+    SceneSpinTransportMode, SceneStructuredCurrentClosure,
     SceneSurfaceRef, SceneTimeEnvelope, SceneTransportCoupling,
     ScriptBuilderMagneticInteractionKind, SlonczewskiFormulaVersion, StudyPipelineDocument,
     StudyPipelineNode,
@@ -1282,6 +1282,7 @@ fn validate_spin_authoring(
             ))
         })?;
         validate_current_transport(index, transport, object_ids)?;
+        validate_scene_closed_loop_owner(index, transport, scene)?;
         if !transport_ids.insert(transport.name.clone()) {
             return Err(SceneDocumentValidationError::new(format!(
                 "duplicate current transport id '{}'",
@@ -1947,57 +1948,82 @@ fn validate_scene_structured_current_closure(
     object_ids: &BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
     let prefix = format!("current_transports[{index}].structured_current_closure");
-    let SceneStructuredCurrentClosure::ClosedGeometry {
-        schema_version,
-        closure_id,
-        source_cuts,
-    } = closure;
-    if schema_version != "structured_current_closure.v1" {
-        return Err(SceneDocumentValidationError::new(format!(
-            "{prefix}.schema_version must be structured_current_closure.v1"
-        )));
+    let typed: fullmag_ir::StructuredCurrentClosureIR = serde_json::from_value(
+        serde_json::to_value(closure).expect("typed closure is serializable"),
+    ).map_err(|error| SceneDocumentValidationError::new(format!("{prefix}: {error}")))?;
+    let errors = typed.validation_errors(&format!("current_transports[{index}]"));
+    if !errors.is_empty() {
+        return Err(SceneDocumentValidationError::new(errors.join("; ")));
     }
-    if closure_id.trim().is_empty() || source_cuts.is_empty() {
-        return Err(SceneDocumentValidationError::new(format!(
-            "{prefix} requires a non-empty closure_id and source_cuts"
-        )));
-    }
-    let mut cut_ids = BTreeSet::new();
-    let mut circuit_ids = BTreeSet::new();
-    let mut drive_ids = BTreeSet::new();
+    let SceneStructuredCurrentClosure::ClosedGeometry { source_cuts, .. } = closure;
     for (cut_index, cut) in source_cuts.iter().enumerate() {
-        let cut_path = format!("{prefix}.source_cuts[{cut_index}]");
-        if cut.source_cut_id.trim().is_empty() || !cut_ids.insert(cut.source_cut_id.as_str()) {
-            return Err(SceneDocumentValidationError::new(format!(
-                "{cut_path}.source_cut_id must be non-empty and unique"
-            )));
+        validate_spin_region_ref(&cut.region, object_ids, &format!("{prefix}.source_cuts[{cut_index}].region"))?;
+    }
+    Ok(())
+}
+
+fn is_authored_closed_loop(transport: &KnownSceneCurrentTransport) -> bool {
+    matches!(&transport.structured_current_closure,
+        Some(SceneStructuredCurrentClosure::ClosedGeometry { schema_version, .. })
+            if schema_version == "structured_current_closure.v2")
+}
+
+fn is_prepared_closed_loop(transport: &KnownSceneCurrentTransport) -> bool {
+    transport.conservative_current_source.as_ref().is_some_and(|source|
+        source.get("kind").and_then(Value::as_str) == Some("closed_geometry_potential_jump")
+            && source.get("schema_version").and_then(Value::as_str) == Some("conservative_current_source.v2"))
+}
+
+fn validate_scene_closed_loop_owner(
+    index: usize,
+    transport: &KnownSceneCurrentTransport,
+    scene: &SceneDocument,
+) -> Result<(), SceneDocumentValidationError> {
+    if !is_authored_closed_loop(transport) && !is_prepared_closed_loop(transport) { return Ok(()); }
+    let prefix = format!("current_transports[{index}]");
+    let owner = &transport.domain[0].object_id; // The charge contract has validated one complete owner.
+    let object = scene.objects.iter().find(|object| &object.id == owner)
+        .ok_or_else(|| SceneDocumentValidationError::new(format!("{prefix} closed-loop owner is missing")))?;
+    let params = &object.geometry.geometry_params;
+    if object.geometry.geometry_kind != "MicrostripAntennaLayout" || params.pointer("/loop/enabled").and_then(Value::as_bool) != Some(true) {
+        return Err(SceneDocumentValidationError::new(format!("{prefix} closed loop requires an explicitly enabled MicrostripAntennaLayout loop")));
+    }
+    let geometry = crate::validate_geometry_scene(scene, crate::GeometryBackendTarget::Fem);
+    if let Some(error) = geometry.diagnostics.iter().find(|diagnostic|
+        diagnostic.object_id.as_deref() == Some(owner.as_str()) && diagnostic.severity == crate::GeometryDiagnosticSeverity::Error) {
+        return Err(SceneDocumentValidationError::new(format!("{prefix} closed-loop geometry: {}", error.message)));
+    }
+    let loop_params = &params["loop"];
+    let conductor_id = |kind: &str| params.get("conductors").and_then(Value::as_array)
+        .and_then(|parts| parts.iter().find(|part| part.get("kind").and_then(Value::as_str) == Some(kind)))
+        .and_then(|part| part.get("id")).and_then(Value::as_str).unwrap_or(kind).to_string();
+    let parts = [conductor_id("signal"), conductor_id("return"),
+        loop_params["inlet_connection_part_id"].as_str().unwrap_or("").to_string(),
+        loop_params["outlet_connection_part_id"].as_str().unwrap_or("").to_string()];
+    let conductivity = [params["conductivity_s_per_m"].as_f64(), params["conductivity_s_per_m"].as_f64(),
+        loop_params["inlet_connection_conductivity_s_per_m"].as_f64(), loop_params["outlet_connection_conductivity_s_per_m"].as_f64()];
+    if parts.iter().any(|part| part.trim().is_empty()) || parts.iter().collect::<BTreeSet<_>>().len() != 4 {
+        return Err(SceneDocumentValidationError::new(format!("{prefix} closed-loop geometry requires four distinct part IDs")));
+    }
+    for (part, sigma) in parts.iter().zip(conductivity) {
+        let assignments: Vec<_> = transport.materials.iter().filter(|assignment|
+            assignment.region.region_id.as_ref().map_or(true, |id| id == part)).collect();
+        if assignments.len() != 1 || sigma != Some(assignments[0].material.sigma_spm) {
+            return Err(SceneDocumentValidationError::new(format!("{prefix} material for part '{part}' must exactly match its authored geometry conductivity")));
         }
-        if cut.circuit_id.trim().is_empty() || !circuit_ids.insert(cut.circuit_id.as_str()) {
-            return Err(SceneDocumentValidationError::new(format!(
-                "{cut_path}.circuit_id must identify exactly one source cut"
-            )));
+    }
+    if let Some(SceneStructuredCurrentClosure::ClosedGeometry { source_cuts, .. }) = &transport.structured_current_closure {
+        let cut = &source_cuts[0]; // Canonical v2 closure validation requires one cut.
+        let thickness = params["thickness_m"].as_f64().unwrap_or(f64::NAN);
+        let gap = params["return_offset_m"].as_f64().unwrap_or(f64::NAN);
+        if cut.region.object_id != *owner || cut.region.region_id.as_ref() != Some(&parts[2])
+            || !(cut.plane.offset_m > -thickness / 2.0 - gap && cut.plane.offset_m < -thickness / 2.0) {
+            return Err(SceneDocumentValidationError::new(format!("{prefix} source cut must lie strictly in the inlet bridge clearance of the complete owner")));
         }
-        validate_spin_region_ref(&cut.region, object_ids, &format!("{cut_path}.region"))?;
-        if !cut.plane.offset_m.is_finite() {
-            return Err(SceneDocumentValidationError::new(format!(
-                "{cut_path}.plane.offset_m must be finite"
-            )));
-        }
-        let SceneStructuredCurrentDrive::ImpressedPotentialJump(drive) = &cut.drive;
-        if drive.schema_version != "impressed_potential_jump.v1" {
-            return Err(SceneDocumentValidationError::new(format!(
-                "{cut_path}.drive.schema_version must be impressed_potential_jump.v1"
-            )));
-        }
-        if drive.drive_id.trim().is_empty() || !drive_ids.insert(drive.drive_id.as_str()) {
-            return Err(SceneDocumentValidationError::new(format!(
-                "{cut_path}.drive.drive_id must be non-empty and unique"
-            )));
-        }
-        if !drive.potential_jump_v.is_finite() || drive.potential_jump_v == 0.0 {
-            return Err(SceneDocumentValidationError::new(format!(
-                "{cut_path}.drive.potential_jump_V must be finite and non-zero"
-            )));
+    }
+    if let Some(source) = &transport.conservative_current_source {
+        if source.get("object_id").and_then(Value::as_str) != Some(owner.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!("{prefix} prepared source must belong to the complete owner")));
         }
     }
     Ok(())
@@ -2555,10 +2581,17 @@ fn validate_scene_charge_contract(
     object_ids: &BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
     let prefix = format!("current_transports[{index}]");
+    let closed_loop = is_authored_closed_loop(transport) || is_prepared_closed_loop(transport);
+    if closed_loop && (transport.domain.len() != 1 || transport.domain[0].region_id.is_some()
+        || transport.model != CurrentTransportModel::OhmicPoisson || transport.coupling != SceneTransportCoupling::OneWay
+        || !transport.boundaries.is_empty() || transport.gauge != Some(SceneChargePotentialGauge::ZeroMean)
+        || transport.time_envelope.is_some()) {
+        return Err(SceneDocumentValidationError::new(format!("{prefix} closed loop requires one complete owner, static one-way Ohmic transport, empty boundaries and gauge=zero_mean")));
+    }
     if transport.domain.is_empty()
         || transport.materials.is_empty()
         || (transport.boundaries.is_empty() && transport.conservative_current_source.is_none()
-            && transport.external_lead_preparation.is_none())
+            && transport.external_lead_preparation.is_none() && !is_authored_closed_loop(transport))
         || transport.gauge.is_none()
         || transport.solver.is_none()
     {
@@ -2568,9 +2601,9 @@ fn validate_scene_charge_contract(
     }
     if transport.conservative_current_source.is_some()
         && (!transport.boundaries.is_empty()
-            || transport.gauge != Some(SceneChargePotentialGauge::TerminalReference))
+            || transport.gauge != Some(if is_prepared_closed_loop(transport) { SceneChargePotentialGauge::ZeroMean } else { SceneChargePotentialGauge::TerminalReference }))
     {
-        return Err(SceneDocumentValidationError::new(format!("{prefix}.conservative_current_source requires empty boundaries and gauge=terminal_reference")));
+        return Err(SceneDocumentValidationError::new(format!("{prefix}.conservative_current_source requires empty boundaries and its source-specific gauge (v1 terminal_reference; v2 zero_mean)")));
     }
     if transport.external_lead_preparation.is_some()
         && (!transport.boundaries.is_empty()
@@ -2602,7 +2635,8 @@ fn validate_scene_charge_contract(
             assignment.region.object_id.clone(),
             assignment.region.region_id.clone(),
         );
-        if !domain.contains(&key) || !assigned.insert(key) {
+        let selected = domain.contains(&key) || closed_loop && key.0 == transport.domain[0].object_id && key.1.is_some();
+        if !selected || !assigned.insert(key) {
             return Err(SceneDocumentValidationError::new(format!(
                 "{prefix}.materials must map every domain region exactly once"
             )));
@@ -2650,9 +2684,10 @@ fn validate_scene_charge_contract(
             )));
         }
     }
-    if assigned != domain {
+    let complete_loop_materials = closed_loop && (assigned == domain || assigned.len() == 4 && assigned.iter().all(|(_, part)| part.is_some()));
+    if closed_loop && !complete_loop_materials || !closed_loop && assigned != domain {
         return Err(SceneDocumentValidationError::new(format!(
-            "{prefix}.materials must map every domain region exactly once"
+            "{prefix}.materials must map every domain region exactly once (closed loop: one whole-owner or four distinct parts)"
         )));
     }
 
@@ -2754,7 +2789,7 @@ fn validate_scene_charge_contract(
     let expected_operator = if reciprocal {
         "fdm_coupled_charge_spin_fv_block_gmres.v1"
     } else if terminal_count != 0 || transport.conservative_current_source.is_some()
-        || transport.external_lead_preparation.is_some() {
+        || transport.external_lead_preparation.is_some() || closed_loop {
         "fem_charge_conforming_h1_p1.transparent.v1"
     } else if transport.structured_current_closure.is_some() {
         "fv_charge_harmonic_source_cut_v1"
@@ -5925,3 +5960,7 @@ fn validate_coupling_parameters(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "closed_loop_authoring_tests.rs"]
+mod closed_loop_authoring_tests;

@@ -7,6 +7,7 @@
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
+#include <cstdint>
 
 namespace fullmag::fem {
 
@@ -18,6 +19,7 @@ void fullmag_cuda_llg_rhs_fused(
     const double *hx, const double *hy, const double *hz,
     double *dmx, double *dmy, double *dmz,
     double *block_max_rhs,
+    const uint8_t *magnetic_node_mask,
     const double *alpha_field,
     double gamma, double alpha,
     bool use_alpha_field,

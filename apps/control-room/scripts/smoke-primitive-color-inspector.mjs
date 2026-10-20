@@ -19,7 +19,7 @@ try {
   const channel = process.env.FULLMAG_PRIMITIVE_COLOR_BROWSER_CHANNEL;
   if (channel && !["chrome", "msedge"].includes(channel)) throw new Error("Unsupported browser channel");
   browser = await playwright.chromium.launch({ headless: true, ...(channel ? { channel } : {}) });
-  page = await browser.newPage({ viewport: { width: 1360, height: 1000 } });
+  page = await browser.newPage({ viewport: { width: 1360, height: 1400 } });
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(process.env.CONTROL_ROOM_URL ?? "http://127.0.0.1:3257/primitive-color-inspector", { waitUntil: "domcontentloaded", timeout });
   await page.waitForFunction(() => Boolean(window.__primitiveColorFixture), undefined, { timeout });
@@ -128,6 +128,69 @@ try {
   assert.equal(await panel.getByRole("textbox", { name: "Primitive color", exact: true }).inputValue(), "#d4af37");
   checks.push({ name: "solid shader override takes precedence without erasing local primitive preference", passed: true });
   await screenshot("08-solid-override-cleared");
+  const footer = page.getByRole("status", { name: "Live telemetry", exact: true });
+  const energyLabels = ["Energy", "Exchange", "Demag", "Zeeman", "Anisotropy", "DMI"];
+  const metric = label => footer.locator(".fm-footer-telemetry__metric").filter({ has: page.locator(".fm-footer-telemetry__metric-label span", { hasText: new RegExp(`^${label}$`) }) });
+  const expectMetric = async (label, value, source) => {
+    const item = metric(label);
+    await page.waitForFunction(({ label, value, source }) => {
+      const root = document.querySelector('[aria-label="Live telemetry"]');
+      const item = [...root.querySelectorAll(".fm-footer-telemetry__metric")].find(node => node.querySelector(".fm-footer-telemetry__metric-label span")?.textContent === label);
+      return item?.querySelector(".fm-footer-telemetry__metric-value > span")?.textContent === value && item.title.endsWith(`\n${source}`);
+    }, { label, value, source }, { timeout });
+    assert.equal(await item.count(), 1);
+  };
+  await footer.waitFor({ timeout });
+  await page.evaluate(() => window.__primitiveColorFixture.telemetry("empty"));
+  for (const label of energyLabels) await expectMetric(label, "—", "No energy sample");
+  assert.ok(!(await read()).calls.some(call => call.path.includes("/metrics")), "Standalone antenna fetched magnetic metrics");
+  checks.push({ name: "standalone antenna: six absent energies stay unavailable and no magnetic metric request", passed: true });
+  const visibleEnergies = await footer.evaluate(root => {
+    const grid = root.querySelector(".fm-footer-telemetry__metrics-grid").getBoundingClientRect();
+    return [...root.querySelectorAll('[data-group="energy"]')].filter(node => {
+      const box = node.getBoundingClientRect();
+      return box.height > 0 && box.top >= grid.top && box.bottom <= grid.bottom + 1 && box.right <= grid.right;
+    }).length;
+  });
+  assert.equal(visibleEnergies, 6, "All energy values must be visible in the allocated telemetry panel");
+  await screenshot("09-footer-no-sample");
+
+  await page.evaluate(() => window.__primitiveColorFixture.telemetry("partial"));
+  await expectMetric("Energy", "0.000000e+0", "Live scalar sample");
+  await expectMetric("Demag", "2", "Session summary");
+  await expectMetric("Zeeman", "0.000000e+0", "Session summary");
+  for (const label of ["Exchange", "Anisotropy", "DMI"]) await expectMetric(label, "—", "No energy sample");
+  await expectMetric("avg mx", "0.250000", "Live scalar sample");
+  checks.push({ name: "partial scalar row: real zeros preserved and independent summary/missing provenance", passed: true });
+  await screenshot("10-footer-partial-sources");
+
+  await page.evaluate(() => window.__primitiveColorFixture.telemetry("mixed"));
+  await expectMetric("avg mx", "0.250000", "Live scalar sample");
+  assert.ok(!(await read()).calls.some(call => call.path.includes("/metrics")), "Selecting antenna in mixed scene fetched object metrics");
+  await page.evaluate(() => window.__primitiveColorFixture.telemetry("magnetic"));
+  await expectMetric("Exchange", "4", "Object: explicit-magnetic");
+  await expectMetric("Energy", "0.000000e+0", "Live scalar sample");
+  await expectMetric("Demag", "2", "Session summary");
+  await expectMetric("DMI", "—", "No energy sample");
+  await expectMetric("avg mx", "0.250000", "Live scalar sample");
+  assert.equal((await read()).calls.filter(call => call.path.includes("/metrics")).length, 1, "Only configured magnetic object may fetch scoped metrics");
+  await screenshot("11-footer-magnetic-scope");
+  await page.evaluate(() => window.__primitiveColorFixture.telemetry("placeholder"));
+  for (const label of energyLabels) await expectMetric(label, "—", "No energy sample");
+  await page.evaluate(() => window.__primitiveColorFixture.telemetry("zero"));
+  for (const label of energyLabels) await expectMetric(label, "0.000000e+0", "Object: explicit-magnetic");
+  checks.push({ name: "object placeholder zeros unavailable; actual finite zero solver sample preserved", passed: true });
+  await page.evaluate(() => window.__primitiveColorFixture.telemetry("global"));
+  for (const label of energyLabels) await expectMetric(label, "0.000000e+0", "Session summary (object resource)");
+  assert.ok(!(await footer.innerText()).includes("Object: explicit-magnetic"), "Global row copied to object resource claimed object provenance");
+  checks.push({ name: "global energy row transported by object resource retains session scope", passed: true });
+  const beforeAntenna = (await read()).calls.length;
+  await page.evaluate(() => window.__primitiveColorFixture.telemetry("antenna"));
+  await expectMetric("Exchange", "—", "No energy sample");
+  await expectMetric("avg mx", "0.250000", "Live scalar sample");
+  assert.ok(!(await read()).calls.slice(beforeAntenna).some(call => call.path.includes("/metrics")), "Returning to antenna fetched object metrics");
+  checks.push({ name: "mixed scene: global magnetization remains global, scoped energies drop on return to antenna", passed: true });
+  await screenshot("12-footer-return-to-antenna");
   evidence = await read();
   assert.deepEqual(errors, []);
   assert.deepEqual(evidence.unexpected, []);

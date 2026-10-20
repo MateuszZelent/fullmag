@@ -2035,6 +2035,8 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
         with_api("project-document", {}, project_document)
         from windows.verify_scene_stage_authoring import exercise as exercise_scene_stages
         with_api("scene-stage-authoring", {}, lambda get: exercise_scene_stages(get, checks, receipt, run_root))
+        from windows.verify_stage_field_catalog import exercise as exercise_stage_catalogs
+        with_api("stage-field-catalog", {}, lambda get: exercise_stage_catalogs(get, checks, receipt, run_root))
         # Fault helpers live only in a verifier-owned source root. No user
         # package or interpreter is modified, and no authored script executes.
         for fault in ("deadline", "log-overflow"):

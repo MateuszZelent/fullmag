@@ -1303,6 +1303,7 @@ mod tests {
             port_mode_id: "common".into(),
             solution_id: solution_id.into(),
             field_solution: crate::AntennaFieldSolutionSamples {
+                sample_carrier: None,
                 solution_id: solution_id.into(),
                 source_object_id: "antenna".into(),
                 port_mode_id: "common".into(),
@@ -1614,7 +1615,12 @@ mod tests {
         let (asset_id, _) = manifest_metadata(&result).unwrap();
         let revision = physical_solution_revision_dir(&root, &result.solution_id, &asset_id);
         assert!(!revision.exists());
-        assert!(fs::read_dir(revision.parent().unwrap()).unwrap().next().is_none());
+        let revision_parent = root.join(solution_prefix(&result.solution_id));
+        assert_eq!(
+            fs::read_dir(&revision_parent).unwrap().count(),
+            0,
+            "cancellation must leave neither a published revision nor temporary entries"
+        );
         fs::remove_dir_all(&root).ok();
     }
 

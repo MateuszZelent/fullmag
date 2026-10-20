@@ -1678,7 +1678,16 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
   const priorRenderedClick = await page.evaluate(() =>
     window.__FULLMAG_CHART_DIAGNOSTICS__?.lastRenderedClick ?? null,
   );
-  await page.mouse.click(coordinateTarget.x, coordinateTarget.y);
+  // Tooltip/layout work can move the canvas after the zoom measurement.
+  // Resolve the same rendered source row immediately before the single click.
+  const clickSpacing = await inspectFrequencyDomainPointSpacing(page, expected);
+  if (!clickSpacing.available || clickSpacing.nearestCompetitorDistancePx < 14) {
+    throw new Error(
+      `Rendered source row ${expected.rowId} is no longer isolated before click: ${JSON.stringify(clickSpacing)}`,
+    );
+  }
+  const clickTarget = clickSpacing.target;
+  await page.mouse.click(clickTarget.x, clickTarget.y);
   const request = await expectedModeRequest;
   const modeResponse = await expectedModeResponse;
   if (!request || !modeResponse) {
@@ -1718,6 +1727,7 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
       requestSeen: Boolean(request),
       responseSeen: Boolean(modeResponse),
       targetCoordinate: coordinateTarget,
+      clickTarget,
       zoomEvidence,
     };
     mkdirSync(acceptanceDirectory, { recursive: true });
@@ -1867,6 +1877,7 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
   }
   return {
     coordinateTarget,
+    clickTarget,
     zoomEvidence,
     expectedModePath,
     fieldId: expected.fieldId,

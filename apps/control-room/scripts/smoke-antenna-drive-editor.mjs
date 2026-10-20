@@ -125,9 +125,9 @@ try {
     await fresh(); await peak().fill('0.01'); await save().click(); await pending();
     if (change === 'session') {
       await page.evaluate(() => window.__antennaDriveEditorFixture.switchSession('B'));
-      await page.waitForFunction(() => document.querySelector('[data-testid="drive-owner"]')?.textContent === 'session-B');
+      await page.waitForFunction(() => document.querySelector('[data-testid="drive-owner"]')?.textContent === 'restored-model-B');
       await page.evaluate(() => window.__antennaDriveEditorFixture.switchSession('A'));
-      await page.waitForFunction(() => document.querySelector('[data-testid="drive-owner"]')?.textContent === 'session-A');
+      await page.waitForFunction(() => document.querySelector('[data-testid="drive-owner"]')?.textContent === 'restored-model-A');
     } else {
       await page.evaluate(() => window.__antennaDriveEditorFixture.switchDrive('drive-b'));
       await page.waitForFunction(() => document.querySelector('[data-testid="drive-editor"]')?.getAttribute('data-drive-id') === 'drive-b');
@@ -146,7 +146,7 @@ try {
     assert.equal(await page.getByText('Antenna drive committed.', { exact: true }).count(), 0);
     await shot(`03-${change}-aba`); checks.push(`${change} ABA rejects stale ACK`);
   }
-  for (const malformed of ['amplitude', 'scene_revision']) {
+  for (const malformed of ['amplitude', 'scene_revision', 'scene_id']) {
     await fresh(); await peak().fill('0.01');
     await page.evaluate(kind => window.__antennaDriveEditorFixture.malformedNext(kind), malformed);
     await save().click(); await pending(); const prior = await read();

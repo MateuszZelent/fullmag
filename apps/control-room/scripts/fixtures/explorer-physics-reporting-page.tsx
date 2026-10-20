@@ -13,19 +13,46 @@ import {
 import { modelTreeSnapshotFromScene } from "@/modules/explorer/builders/sceneModelTreeAdapter";
 import { Button } from "@/shared/ui/Button";
 
-type ScenarioId = "zero-and-missing" | "signed-nonzero" | "explicit-overrides";
+type ScenarioId = "zero-and-missing" | "signed-nonzero" | "explicit-overrides" | "antenna-readiness" | "antenna-regional";
 
 const subscribeHydration = () => () => {};
 const clientHydrated = () => true;
 const serverHydrated = () => false;
 
 const scenarioLabels: Record<ScenarioId, string> = {
+  "antenna-readiness": "Antenna readiness and source spectrum",
+  "antenna-regional": "Explicit regional source bindings",
   "zero-and-missing": "Zero and missing DMI",
   "signed-nonzero": "Positive and negative DMI",
   "explicit-overrides": "Explicit stack and Study overrides",
 };
 
 function sceneForScenario(scenario: ScenarioId): SceneResource {
+  if (scenario === "antenna-regional") {
+    return {
+      objects: ["active", "disabled", "legacy"].map(id => ({ id, name: `Regional ${id}`, role: "antenna", geometry: { geometry_kind: "Box" } })),
+      field_drives: { drives: ["active", "disabled"].map(id => ({ id: `field-${id}`, name: `Field ${id}`, kind: "regional", enabled: id !== "disabled",
+        target: { kind: "global" }, amplitude_B_T: 1e-3, direction: [0, 1, 0], spatial_profile: { kind: "geometry_mask", object_id: id, envelope: { kind: "uniform" } },
+        waveform: { kind: "constant" }, time_origin: "stage_local", activation: { kind: "all_time_evolution" } })) },
+      current_modules: { modules: [{ name: "old-source", kind: "antenna_field_source", model: "prescribed_zeeman_mask", object: "legacy" }] },
+    } as SceneResource;
+  }
+  if (scenario === "antenna-readiness") {
+    const terminals = ["signal-in", "signal-out", "return-in", "return-out"];
+    const port = { id: "configured-port", schema_version: "antenna_port_mode.v2", source_object_id: "antenna", current_transport_id: "transport", normalization_current_a: 1,
+      branches: [{ id: "signal", inlet_terminal_ref: terminals[0], outlet_terminal_ref: terminals[1], signed_weight: 1 },
+        { id: "return", inlet_terminal_ref: terminals[2], outlet_terminal_ref: terminals[3], signed_weight: -1 }] };
+    return {
+      objects: [{ id: "antenna", name: "Antenna readiness", role: "antenna", geometry: { geometry_kind: "Box" } }],
+      current_transports: [{ name: "transport", kind: "current_transport", model: "ohmic_poisson", domain: [{ object_id: "antenna" }],
+        boundaries: terminals.map(id => ({ id, kind: "voltage_electrode", potential_V: 0, surfaces: [{ object_id: "antenna", surface_id: id, orientation: [1, 0, 0] }] })) }],
+      antenna_port_modes: [port, { ...port, id: "broken-port", current_transport_id: "missing-transport" }],
+      antenna_field_solve_stages: [{ id: "blocked-solve", source_object_id: "antenna", current_transport_id: "missing-transport", port_mode_ids: ["broken-port"],
+        model: "quasistatic_conduction_biot_savart3d", oersted_realization: "direct_tetra_quadrature", conductor_mesh_policy: "inherit_source", solver_policy: "default",
+        field_sampling_domain: { kind: "global" }, target_refs: [{ kind: "global" }], outputs: [{ id: "solution", quantity: "H_ant_basis" }] }],
+      antenna_spectrum_requests: [{ id: "source-k", solution_ref: { kind: "stage_output", stage_id: "blocked-solve", output_id: "solution" }, transform: "spatial_fft", output_id: "fft", component: "x", target: { kind: "global" }, port_mode_id: "configured-port", window: "rectangular", normalization: "integral_si", sampling_plane: { origin_m: [0, 0, 0], axis_u: [1, 0, 0], axis_v: [0, 1, 0], extent_u_m: 1e-6, extent_v_m: 1e-6, sample_count_u: 2, sample_count_v: 2, interpolation: "fem_element", outside_policy: "error" } }],
+    } as SceneResource;
+  }
   if (scenario === "zero-and-missing") {
     return {
       materials: [
@@ -155,7 +182,7 @@ function ExplorerPhysicsReportingView() {
   const [scenario, setScenario] = useState<ScenarioId>("zero-and-missing");
   const scene = useMemo(() => sceneForScenario(scenario), [scenario]);
   const snapshot = useMemo(() => modelTreeSnapshotFromScene(scene), [scene]);
-  const nodes = useMemo(() => buildModelTree(snapshot), [snapshot]);
+  const nodes = useMemo(() => buildModelTree(snapshot, { scene }), [snapshot, scene]);
   const expandedIds = useMemo(
     () => new Set(collectExplorerNodeIds(nodes)),
     [nodes],

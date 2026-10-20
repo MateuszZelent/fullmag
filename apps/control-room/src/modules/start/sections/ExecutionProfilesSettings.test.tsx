@@ -1,8 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ExecutionProfile } from "@/kernel/api/apiTypes";
+
 const { resource } = vi.hoisted(() => {
-  const profile = {
+  const profile: ExecutionProfile = {
     schema_version: "execution_profile.v1",
     profile_id: "exec:interactive",
     version: "2",
@@ -49,7 +51,6 @@ const { resource } = vi.hoisted(() => {
       error: null,
       refreshError: null,
       refetch: vi.fn(),
-      publish: vi.fn(),
       findPublication: vi.fn(),
       scope: "test-resource-scope",
     },
@@ -60,10 +61,38 @@ vi.mock("@/kernel/resources/useExecutionProfilesResource", () => ({
   useExecutionProfilesResource: () => resource,
 }));
 
-import { ExecutionProfilesSettings } from "./ExecutionProfilesSettings";
+import {
+  ExecutionProfilesSettings,
+  newExecutionProfileDraft,
+} from "./ExecutionProfilesSettings";
+import {
+  EXECUTION_BACKENDS,
+  unavailableExecutionAvailability,
+  type ExecutionAvailability,
+} from "../model/executionAvailability";
+
+const cpuOnlyAvailability: ExecutionAvailability = {
+  byBackend: Object.fromEntries(
+    EXECUTION_BACKENDS.map((backend) => [backend, {
+      cpu: { enabled: true, reason: "" },
+      gpu: unavailableExecutionAvailability.byBackend[backend].gpu,
+    }]),
+  ) as ExecutionAvailability["byBackend"],
+};
 
 describe("execution profile settings", () => {
-  it("inspects resolved profile defaults and offers duplicate and new-version actions", () => {
+  it("defaults a new profile to CPU without rewriting an existing GPU intent", () => {
+    const newDraft = newExecutionProfileDraft(undefined, cpuOnlyAvailability);
+    const existingGpuDraft = newExecutionProfileDraft(
+      resource.data.entries[0].profile,
+      cpuOnlyAvailability,
+    );
+
+    expect(newDraft.profile.defaults.device).toBe("cpu");
+    expect(existingGpuDraft.profile.defaults.device).toBe("gpu");
+  });
+
+  it("inspects profile defaults while keeping publication actions read-only without the local operator", () => {
     const html = renderToStaticMarkup(<ExecutionProfilesSettings />);
 
     expect(html).toContain("<summary>Inspect</summary>");
@@ -71,6 +100,21 @@ describe("execution profile settings", () => {
     expect(html).toContain("GPU-0123456789abcdef");
     expect(html).toContain("8 GiB");
     expect(html).toContain("16 GiB");
+    expect(html).toContain("Publishing profiles is available only in the local Fullmag desktop app.");
+    expect(html).toContain("Duplicate");
+    expect(html).toContain("New version");
+    expect(html).toContain("disabled");
+  });
+
+  it("enables publication actions only when a local operator callback is provided", () => {
+    const html = renderToStaticMarkup(
+      <ExecutionProfilesSettings
+        canPublishExecutionProfiles
+        onPublishExecutionProfile={() => Promise.resolve({} as never)}
+      />,
+    );
+
+    expect(html).not.toContain("Publishing profiles is available only in the local Fullmag desktop app.");
     expect(html).toContain("Duplicate");
     expect(html).toContain("New version");
   });

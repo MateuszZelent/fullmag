@@ -376,7 +376,7 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
         "self-hosted",
         "linux",
         "x64",
-        "${{ vars.FULLMAG_FEM_RUNNER_LABEL || 'fem-managed' }}",
+        "${{ github.event_name == 'workflow_dispatch' && inputs.runner_label || format('fullmag-fem-private-{0}', github.run_id) }}",
     ]
     assert "continue-on-error" not in json.dumps(managed_job)
     assert managed_job.get("if") is None
@@ -401,6 +401,27 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
         "frontend-3d-managed-fem / managed-fem-qualification",
     ):
         assert context in matrix
+
+
+def test_managed_fem_dispatch_requires_private_runner_label_without_changing_gate() -> None:
+    managed = load_workflow(REPO_ROOT / ".github/workflows/frontend-3d-managed-fem.yml")
+    events = managed.get("on", managed.get(True))
+    dispatch = events["workflow_dispatch"]
+    runner_label = dispatch["inputs"]["runner_label"]
+    assert runner_label["required"] is True
+    assert runner_label["type"] == "string"
+    assert "default" not in runner_label
+
+    managed_job = managed["jobs"]["managed-fem-qualification"]
+    dispatch_label = managed_job["runs-on"][3]
+    assert "github.event_name == 'workflow_dispatch'" in dispatch_label
+    assert "inputs.runner_label" in dispatch_label
+    assert "github.event_name != 'workflow_dispatch'" not in dispatch_label
+    assert "format('fullmag-fem-private-{0}', github.run_id)" in dispatch_label
+    assert "vars.FULLMAG_FEM_RUNNER_LABEL" not in dispatch_label
+    assert managed_job["steps"][-1]["run"] == (
+        "./scripts/ci/run_frontend3d_required_gate.sh managed-fem-qualification"
+    )
 
 
 def test_browser_audit_build_uses_isolated_dist_dir_and_restores_next_env() -> None:

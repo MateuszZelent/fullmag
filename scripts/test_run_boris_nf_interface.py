@@ -45,9 +45,12 @@ def test_runner_refuses_nonempty_output(tmp_path: Path) -> None:
 def test_identity_records_binary_and_source_hashes(tmp_path: Path) -> None:
     build_root = _fake_build_root(tmp_path)
 
-    identity = capture_runtime_identity(build_root, "sha256:" + "a" * 64, "cpu")
+    identity = capture_runtime_identity(build_root, "sha256:" + "a" * 64, "cpu",
+        runtime_probe={"binary_version":"BORIS fixture", "python_version":"3.10",
+                       "device_detected":"cpu", "device_residency_evidence":"synthetic"})
 
-    assert identity["identity_complete"] is True
+    assert identity["identity_complete"] is False
+    assert identity["precision"] is None
     assert len(identity["binary_sha256"]) == 64
     assert len(identity["source_manifest_sha256"]) == 64
     assert identity["device_detected"] == "cpu"
@@ -96,7 +99,7 @@ def test_managed_cuda_probe_ignores_container_license_commas() -> None:
 
 
 def test_cuda_identity_requires_residency_and_gpu_evidence() -> None:
-    with pytest.raises(ValueError, match="compute capability"):
+    with pytest.raises(ValueError, match="verified managed build proof"):
         validate_runtime_identity(
             {
                 "schema_version": "fullmag.boris.runtime.v1",

@@ -24,7 +24,8 @@ class _Surface:
     def __init__(self, vertices: object) -> None:
         self.vertices = np.asarray(vertices, dtype=np.float64)
 
-    def export(self, path: str | Path) -> None:
+    def export(self, path: str | Path, *, file_type: str) -> None:
+        assert file_type == "stl_ascii"
         Path(path).write_text("solid fallback-regression\nendsolid fallback-regression\n")
 
 

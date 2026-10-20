@@ -4,8 +4,9 @@
 mod antenna_import;
 
 use std::collections::{BTreeMap, HashMap};
-use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use std::fs::{self, OpenOptions};
+use std::io::{Cursor, Write};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -33,10 +34,17 @@ use crate::{
 };
 
 use fullmag_session::{
-    capture_checkpoint, determine_restore_class, pack_fms, preflight_fms_staged, unpack_fms_staged,
-    CaptureRequest, CheckpointCompatibility, CheckpointSnapshotProvider, FieldCapturePolicy,
-    FmsExportProfile, FmsStagedPreflight, FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest,
-    PackOptions, SaveProfile, SessionInspection, SessionStore, SolverEnergies,
+    capture_checkpoint, determine_restore_class, pack_fms, pack_fms_with_accepted_provenance,
+    preflight_fms_staged, unpack_fms_staged, unpack_fms_staged_readonly, CaptureRequest,
+    CheckpointCompatibility,
+    CheckpointSnapshotProvider, FieldCapturePolicy, FmsAcceptedProvenanceReference,
+    FmsExportProfile, FmsRunManifest, FmsSessionManifest, FmsStagedPreflight,
+    FmsWorkspaceManifest, PackOptions, SaveProfile, SessionInspection, SessionStore,
+    SolverEnergies,
+};
+use fullmag_session::accepted_provenance::{
+    plan_accepted_provenance, AcceptedProvenanceContext, AcceptedProvenanceManifest,
+    AcceptedProvenancePlan, AcceptedProvenanceRecordKind,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -401,15 +409,562 @@ pub(crate) struct SessionExportRequest {
     /// Optional UI workspace snapshot provided by frontend.
     #[serde(default)]
     pub ui_state: Option<serde_json::Value>,
+    /// Explicit `.fms` output path.  It is used only when `save_to_source` is
+    /// true and must resolve inside the configured output mapping.
+    #[serde(default)]
+    pub target_path: Option<String>,
+    /// Persist the archive beside the admitted source script instead of only
+    /// returning its base64 representation.  Omitted requests preserve the
+    /// historical export/download behavior.
+    #[serde(default)]
+    pub save_to_source: Option<bool>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionExportResponse {
     pub session_id: String,
     pub profile: SaveProfile,
-    /// Base64-encoded `.fms` file content.
+    /// Base64-encoded `.fms` file content for browser exports.  This remains
+    /// a required compatibility field and is empty when `saved_path` is
+    /// present; source-save consumers should use the persisted path instead.
     pub fms_base64: String,
     pub size_bytes: usize,
+    /// Path written when `save_to_source` was enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_path: Option<String>,
+    /// File name written when `save_to_source` was enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+}
+
+const SESSION_OUTPUT_ROOT_ENV: &str = "FULLMAG_SCRIPT_OUTPUT_ROOT";
+const SESSION_OUTPUT_SOURCE_DIR_ENV: &str = "FULLMAG_SCRIPT_OUTPUT_SOURCE_DIR";
+const DEFAULT_CONTAINER_SOURCE_ROOT: &str = "/opt/fullmag/source";
+const MAX_SESSION_OUTPUT_COLLISION_ATTEMPTS: usize = 10_000;
+
+/// Resolve the host-backed output mapping for a source script.  Docker may
+/// expose only a deliberately selected source subtree as a writable alias;
+/// the source checkout itself remains read-only.  With no mapping configured
+/// (the native desktop case), an explicit absolute target is allowed and the
+/// default is beside the admitted script.
+fn resolve_session_output_target(
+    script_path: &Path,
+    requested_target: Option<&str>,
+) -> Result<PathBuf, ApiError> {
+    let output_root = std::env::var_os(SESSION_OUTPUT_ROOT_ENV).map(PathBuf::from);
+    let source_root = output_root.as_ref().map(|_| {
+        std::env::var_os(SESSION_OUTPUT_SOURCE_DIR_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_CONTAINER_SOURCE_ROOT))
+    });
+
+    resolve_session_output_target_for_mapping(
+        script_path,
+        requested_target,
+        output_root
+            .as_deref()
+            .zip(source_root.as_deref()),
+    )
+}
+
+fn resolve_session_output_target_for_mapping(
+    script_path: &Path,
+    requested_target: Option<&str>,
+    output_mapping: Option<(&Path, &Path)>,
+) -> Result<PathBuf, ApiError> {
+    let target = if let Some((output_root, source_root)) = output_mapping {
+        require_absolute_path(output_root, SESSION_OUTPUT_ROOT_ENV)?;
+        require_absolute_path(source_root, SESSION_OUTPUT_SOURCE_DIR_ENV)?;
+        let output_root = canonical_directory(output_root, SESSION_OUTPUT_ROOT_ENV)?;
+        let source_root = canonical_directory(source_root, SESSION_OUTPUT_SOURCE_DIR_ENV)?;
+        let script = canonical_regular_file(script_path, "session script")?;
+        let relative = script.strip_prefix(&source_root).map_err(|_| {
+            ApiError::bad_request(format!(
+                "session script `{}` is outside configured source output mapping `{}`",
+                script.display(),
+                source_root.display()
+            ))
+        })?;
+        let default_target = output_root
+            .join(relative.parent().unwrap_or_else(|| Path::new("")))
+            .join(default_session_filename(&script)?);
+        let target = requested_target
+            .map(PathBuf::from)
+            .unwrap_or(default_target);
+        validate_target_within_root(&target, &output_root, SESSION_OUTPUT_ROOT_ENV)?;
+        target
+    } else {
+        let target = requested_target
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                script_path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(
+                        script_path
+                            .file_stem()
+                            .map(|stem| format!("{}.fms", stem.to_string_lossy()))
+                            .unwrap_or_else(|| "session.fms".into()),
+                    )
+            });
+        require_absolute_path(&target, "session target path")?;
+        validate_path_components(&target, "session target path")?;
+        target
+    };
+
+    require_fms_extension(&target)?;
+    let parent = target
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| ApiError::bad_request("session target path has no parent directory"))?;
+    canonical_directory(parent, "session target parent")?;
+    validate_path_components(&target, "session target path")?;
+    Ok(target)
+}
+
+fn validate_session_output_request(
+    requested_target: Option<&str>,
+    save_to_source: bool,
+) -> Result<(), ApiError> {
+    if requested_target.is_some() && !save_to_source {
+        return Err(ApiError::bad_request(
+            "target_path requires save_to_source=true",
+        ));
+    }
+    Ok(())
+}
+
+fn default_session_filename(script_path: &Path) -> Result<String, ApiError> {
+    let stem = script_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::bad_request("session script has no usable file stem"))?;
+    Ok(format!("{stem}.fms"))
+}
+
+fn session_export_base64(fms_bytes: &[u8], saved_path: Option<&str>) -> String {
+    if saved_path.is_some() {
+        String::new()
+    } else {
+        base64_encode(fms_bytes)
+    }
+}
+
+fn require_absolute_path(path: &Path, label: &str) -> Result<(), ApiError> {
+    if !path.is_absolute() {
+        return Err(ApiError::bad_request(format!(
+            "{label} must be absolute"
+        )));
+    }
+    Ok(())
+}
+
+fn require_fms_extension(path: &Path) -> Result<(), ApiError> {
+    let valid = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("fms"));
+    if !valid {
+        return Err(ApiError::bad_request(format!(
+            "session target must use the .fms extension: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf, ApiError> {
+    validate_path_components(path, label)?;
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        ApiError::bad_request(format!("{label} is not available: {error}"))
+    })?;
+    if !metadata.file_type().is_dir() {
+        return Err(ApiError::bad_request(format!(
+            "{label} must be a directory: {}",
+            path.display()
+        )));
+    }
+    fs::canonicalize(path)
+        .map_err(|error| ApiError::bad_request(format!("cannot canonicalize {label}: {error}")))
+}
+
+fn canonical_regular_file(path: &Path, label: &str) -> Result<PathBuf, ApiError> {
+    require_absolute_path(path, label)?;
+    validate_path_components(path, label)?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| ApiError::bad_request(format!("{label} is not available: {error}")))?;
+    if !metadata.file_type().is_file() {
+        return Err(ApiError::bad_request(format!(
+            "{label} must be a regular file: {}",
+            path.display()
+        )));
+    }
+    fs::canonicalize(path)
+        .map_err(|error| ApiError::bad_request(format!("cannot canonicalize {label}: {error}")))
+}
+
+fn validate_target_within_root(
+    target: &Path,
+    root: &Path,
+    root_label: &str,
+) -> Result<(), ApiError> {
+    require_absolute_path(target, "session target path")?;
+    validate_path_components(target, "session target path")?;
+    let parent = target
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| ApiError::bad_request("session target path has no parent directory"))?;
+    let canonical_parent = canonical_directory(parent, "session target parent")?;
+    if !canonical_parent.starts_with(root) {
+        return Err(ApiError::bad_request(format!(
+            "session target path must stay inside {root_label}"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject links/reparse points in every existing component.  Canonicalizing
+/// only the final path is insufficient when the final file has not been
+/// created yet, because a parent link could redirect the publication.
+fn validate_path_components(path: &Path, label: &str) -> Result<(), ApiError> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        if matches!(component, Component::ParentDir) {
+            return Err(ApiError::bad_request(format!(
+                "{label} may not contain a parent-directory component"
+            )));
+        }
+        current.push(component.as_os_str());
+        #[cfg(windows)]
+        if matches!(component, Component::Prefix(_)) {
+            // A Windows volume/UNC prefix is not a filesystem component.
+            // Inspecting it as a standalone path can return ERROR_INVALID_FUNCTION;
+            // the following RootDir and normal components are still checked.
+            continue;
+        }
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(ApiError::bad_request(format!(
+                    "cannot inspect {label}: {error}"
+                )))
+            }
+        };
+        if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+            return Err(ApiError::bad_request(format!(
+                "{label} may not traverse a symlink or reparse point: {}",
+                current.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes()
+        & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+        != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+fn next_session_output_candidate(base: &Path, suffix: usize) -> PathBuf {
+    if suffix == 0 {
+        return base.to_path_buf();
+    }
+    let stem = base
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("session");
+    base.with_file_name(format!("{stem}-{suffix}.fms"))
+}
+
+/// Publish a new archive without replacing an existing file.  The session
+/// store transaction held by the export handler serializes API writers; the
+/// create-new staging file plus hard-link publication closes the remaining
+/// destination race without relying on rename-overwrite semantics.
+fn publish_session_archive(
+    base: &Path,
+    bytes: &[u8],
+) -> Result<(PathBuf, String), ApiError> {
+    let parent = base
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| ApiError::bad_request("session target path has no parent directory"))?;
+    canonical_directory(parent, "session target parent")?;
+    for suffix in 0..=MAX_SESSION_OUTPUT_COLLISION_ATTEMPTS {
+        let candidate = next_session_output_candidate(base, suffix);
+        validate_path_components(&candidate, "session target path")?;
+        if let Ok(metadata) = fs::symlink_metadata(&candidate) {
+            if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+                return Err(ApiError::bad_request(format!(
+                    "session target may not be a symlink or reparse point: {}",
+                    candidate.display()
+                )));
+            }
+            continue;
+        }
+
+        let staging = parent.join(format!(
+            ".{}.{}.fms.part",
+            candidate
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("session"),
+            uuid::Uuid::new_v4()
+        ));
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(ApiError::internal(format!(
+                    "cannot stage session archive `{}`: {error}",
+                    staging.display()
+                )))
+            }
+        };
+        let result = (|| -> Result<(), ApiError> {
+            file.write_all(bytes).map_err(|error| {
+                ApiError::internal(format!("cannot write session archive staging file: {error}"))
+            })?;
+            file.sync_all().map_err(|error| {
+                ApiError::internal(format!("cannot sync session archive staging file: {error}"))
+            })?;
+            drop(file);
+            match fs::hard_link(&staging, &candidate) {
+                Ok(()) => {
+                    let published = OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&candidate)
+                        .map_err(|error| {
+                            ApiError::internal(format!(
+                                "cannot reopen published session archive: {error}"
+                            ))
+                        })?;
+                    published.sync_all().map_err(|error| {
+                        ApiError::internal(format!(
+                            "cannot sync published session archive: {error}"
+                        ))
+                    })?;
+                    Ok(())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Err(ApiError::conflict("session output candidate already exists"))
+                }
+                Err(error) => Err(ApiError::internal(format!(
+                    "cannot publish session archive `{}`: {error}",
+                    candidate.display()
+                ))),
+            }
+        })();
+        let _ = fs::remove_file(&staging);
+        match result {
+            Ok(()) => {
+                let filename = candidate
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .ok_or_else(|| ApiError::internal("published session filename is not UTF-8"))?
+                    .to_owned();
+                return Ok((candidate, filename));
+            }
+            Err(error) if error.status == axum::http::StatusCode::CONFLICT => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(ApiError::conflict(
+        "could not reserve a collision-free session output filename",
+    ))
+}
+
+#[cfg(test)]
+mod session_output_target_tests {
+    use super::*;
+
+    #[test]
+    fn default_session_filename_uses_the_script_stem() {
+        assert_eq!(
+            default_session_filename(Path::new("/tmp/permalloy_layer.py")).unwrap(),
+            "permalloy_layer.fms"
+        );
+    }
+
+    #[test]
+    fn mapped_default_target_preserves_the_script_relative_directory() {
+        let root = tempfile::tempdir().expect("temporary mapping root");
+        let source_root = root.path().join("source");
+        let output_root = root.path().join("output");
+        let script_directory = source_root.join("examples");
+        std::fs::create_dir_all(&script_directory).expect("script directory");
+        std::fs::create_dir_all(output_root.join("examples")).expect("output directory");
+        let script = script_directory.join("model.py");
+        std::fs::write(&script, b"study = None\n").expect("source script");
+
+        let target = resolve_session_output_target_for_mapping(
+            &script,
+            None,
+            Some((&output_root, &source_root)),
+        )
+        .expect("mapped target");
+
+        let expected = std::fs::canonicalize(&output_root)
+            .expect("canonical output directory")
+            .join("examples/model.fms");
+        assert_eq!(target, expected);
+    }
+
+    #[test]
+    fn explicit_target_takes_priority_inside_the_output_mapping() {
+        let root = tempfile::tempdir().expect("temporary mapping root");
+        let source_root = root.path().join("source");
+        let output_root = root.path().join("output");
+        let script_directory = source_root.join("examples");
+        std::fs::create_dir_all(&script_directory).expect("script directory");
+        std::fs::create_dir_all(&output_root).expect("output directory");
+        let script = script_directory.join("model.py");
+        std::fs::write(&script, b"study = None\n").expect("source script");
+        let explicit = output_root.join("chosen.fms");
+
+        let target = resolve_session_output_target_for_mapping(
+            &script,
+            Some(explicit.to_str().expect("UTF-8 target")),
+            Some((&output_root, &source_root)),
+        )
+        .expect("explicit mapped target");
+
+        assert_eq!(target, explicit);
+    }
+
+    #[test]
+    fn mapped_target_rejects_a_script_outside_the_source_mapping() {
+        let root = tempfile::tempdir().expect("temporary mapping root");
+        let source_root = root.path().join("source");
+        let output_root = root.path().join("output");
+        std::fs::create_dir_all(&source_root).expect("source directory");
+        std::fs::create_dir_all(&output_root).expect("output directory");
+        let script = root.path().join("outside.py");
+        std::fs::write(&script, b"study = None\n").expect("outside script");
+
+        let error = resolve_session_output_target_for_mapping(
+            &script,
+            None,
+            Some((&output_root, &source_root)),
+        )
+        .expect_err("off-prefix script must be rejected");
+
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mapped_target_rejects_a_symlinked_source_component() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("temporary mapping root");
+        let source_root = root.path().join("source");
+        let real_directory = root.path().join("real-examples");
+        let output_root = root.path().join("output");
+        std::fs::create_dir_all(&source_root).expect("source directory");
+        std::fs::create_dir_all(&real_directory).expect("real script directory");
+        std::fs::create_dir_all(&output_root).expect("output directory");
+        let real_script = real_directory.join("model.py");
+        std::fs::write(&real_script, b"study = None\n").expect("source script");
+        let linked_directory = source_root.join("examples");
+        symlink(&real_directory, &linked_directory).expect("source symlink");
+        let script = linked_directory.join("model.py");
+
+        let error = resolve_session_output_target_for_mapping(
+            &script,
+            None,
+            Some((&output_root, &source_root)),
+        )
+        .expect_err("symlinked source component must be rejected");
+
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn native_target_rejects_parent_directory_components() {
+        let root = tempfile::tempdir().expect("temporary output root");
+        let target = root.path().join("nested").join("..").join("model.fms");
+
+        let error = resolve_session_output_target(
+            &root.path().join("model.py"),
+            Some(target.to_str().expect("UTF-8 target")),
+        )
+        .expect_err("parent-directory target must be rejected");
+
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn explicit_target_requires_source_save() {
+        let error = validate_session_output_request(Some("/tmp/model.fms"), false)
+            .expect_err("target path without source save must be rejected");
+
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn source_saved_response_omits_archive_base64_but_export_keeps_it() {
+        assert_eq!(session_export_base64(b"archive", Some("/tmp/model.fms")), "");
+        assert_eq!(
+            session_export_base64(b"archive", None),
+            base64_encode(b"archive")
+        );
+    }
+
+    #[test]
+    fn publication_adds_a_suffix_without_overwriting_an_existing_archive() {
+        let root = tempfile::tempdir().expect("temporary output root");
+        let base = root.path().join("model.fms");
+        std::fs::write(&base, b"old archive").expect("existing archive");
+
+        let (published, filename) = publish_session_archive(&base, b"new archive")
+            .expect("collision-free archive publication");
+
+        assert_eq!(filename, "model-1.fms");
+        assert_eq!(published, root.path().join("model-1.fms"));
+        assert_eq!(std::fs::read(&base).unwrap(), b"old archive");
+        assert_eq!(std::fs::read(published).unwrap(), b"new archive");
+    }
+
+    #[test]
+    fn publication_rejects_a_non_fms_target() {
+        let root = tempfile::tempdir().expect("temporary output root");
+        let target = root.path().join("model.zip");
+        let error = resolve_session_output_target(
+            &root.path().join("model.py"),
+            Some(target.to_str().expect("UTF-8 target")),
+        )
+        .expect_err("non-FMS target must be rejected");
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn publication_reports_a_non_directory_parent_without_partial_output() {
+        let root = tempfile::tempdir().expect("temporary output root");
+        let parent = root.path().join("parent");
+        std::fs::write(&parent, b"parent file").expect("parent marker");
+        let target = parent.join("model.fms");
+
+        let error = publish_session_archive(&target, b"archive")
+            .expect_err("a file cannot be used as an output directory");
+
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(std::fs::read(&parent).unwrap(), b"parent file");
+    }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -733,6 +1288,851 @@ pub(crate) fn open_store(state: &AppState) -> Result<SessionStore, ApiError> {
     SessionStore::open(session_store_root(state)).map_err(|e| ApiError::internal(e.to_string()))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AcceptedExportIdentity {
+    session_id: String,
+    run_id: String,
+    session_epoch: u64,
+    scene_revision: u64,
+}
+
+#[derive(Debug)]
+struct AcceptedExportCapture {
+    identity: AcceptedExportIdentity,
+    /// Full accepted-store closure captured before profile filtering.  The
+    /// archive may intentionally omit solver outputs, but a final fence must
+    /// still detect records appended to the source closure meanwhile.
+    full_provenance_manifest: AcceptedProvenanceManifest,
+    run_manifest: FmsRunManifest,
+    provenance: AcceptedProvenancePlan,
+}
+
+fn accepted_marker_value(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<Option<String>, ApiError> {
+    let object = value.as_object().ok_or_else(|| {
+        ApiError::conflict(format!(
+            "accepted export marker containing `{field}` must be an object"
+        ))
+    })?;
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    let value = value.as_str().ok_or_else(|| {
+        ApiError::conflict(format!(
+            "accepted export marker `{field}` must be a string"
+        ))
+    })?;
+    if value.is_empty() {
+        return Err(ApiError::conflict(format!(
+            "accepted export marker `{field}` must not be empty"
+        )));
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn declared_accepted_run_id(
+    snapshot: &SessionStateResponse,
+) -> Result<Option<String>, ApiError> {
+    let startup = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("docker_startup"));
+    let startup_run = startup
+        .map(|value| accepted_marker_value(value, "run_id"))
+        .transpose()?
+        .flatten();
+    let workspace_run = snapshot
+        .mesh_workspace
+        .as_ref()
+        .map(|workspace| accepted_marker_value(workspace, "accepted_run_id"))
+        .transpose()?
+        .flatten();
+    if let (Some(startup), Some(workspace)) = (&startup_run, &workspace_run) {
+        if startup != workspace {
+            return Err(ApiError::conflict(
+                "accepted export markers disagree on the run identity",
+            ));
+        }
+    }
+    Ok(startup_run.or(workspace_run))
+}
+
+fn accepted_fms_run_status(status: &str) -> Result<fullmag_session::RunStatus, ApiError> {
+    match status {
+        "running" | "waiting_for_solve" | "waiting_for_compute" | "awaiting_command"
+        | "preparing" => Ok(fullmag_session::RunStatus::Running),
+        "paused" => Ok(fullmag_session::RunStatus::Paused),
+        "completed" => Ok(fullmag_session::RunStatus::Completed),
+        "failed" => Ok(fullmag_session::RunStatus::Failed),
+        "interrupted" | "stopped" => Ok(fullmag_session::RunStatus::Interrupted),
+        other => Err(ApiError::conflict(format!(
+            "accepted export has unsupported run status `{other}`"
+        ))),
+    }
+}
+
+fn accepted_plan_for_profile(
+    plan: AcceptedProvenancePlan,
+    context: &AcceptedProvenanceContext,
+    include_artifacts: bool,
+) -> anyhow::Result<AcceptedProvenancePlan> {
+    if include_artifacts {
+        return Ok(plan);
+    }
+
+    // Compact/ConfigOnly exports retain the accepted input closure but must
+    // not smuggle accepted solver outputs into the archive.  The generic
+    // planner intentionally discovers all typed outputs; trim that plan here
+    // before the FMS packer sees it and retain only CAS objects named by the
+    // immutable RunIntent.
+    let retained_records = plan
+        .records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.kind,
+                AcceptedProvenanceRecordKind::RunIntent
+                    | AcceptedProvenanceRecordKind::RunCatalog
+                    | AcceptedProvenanceRecordKind::TaskPreparationReceipt
+                    | AcceptedProvenanceRecordKind::AcceptedStagePreparationReceipt
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let intent_record = retained_records
+        .iter()
+        .find(|record| record.kind == AcceptedProvenanceRecordKind::RunIntent)
+        .ok_or_else(|| anyhow::anyhow!("accepted provenance closure has no RunIntent"))?;
+    let intent_bytes = plan.read_record(intent_record)?;
+    let intent: fullmag_session::FmsRunIntent = serde_json::from_slice(&intent_bytes)?;
+    intent.validate()?;
+
+    let mut retained_refs = std::collections::BTreeSet::new();
+    for object_ref in [
+        intent.definition_object_ref.as_deref(),
+        intent.study_object_ref.as_deref(),
+        intent.study_catalog_object_ref.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        retained_refs.insert(object_ref.to_string());
+    }
+    retained_refs.extend(intent.asset_object_refs.values().cloned());
+
+    let retained_objects = plan
+        .cas_objects
+        .iter()
+        .filter(|object| retained_refs.contains(&object.object_ref))
+        .cloned()
+        .collect::<Vec<_>>();
+    let manifest_records = retained_records
+        .iter()
+        .map(|record| fullmag_session::accepted_provenance::AcceptedProvenanceRecord {
+            kind: record.kind,
+            source_path: record.source_relative_path.clone(),
+            archive_path: record.archive_path.clone(),
+            content_sha256: record.content_sha256.clone(),
+            byte_count: record.byte_count,
+        })
+        .collect::<Vec<_>>();
+    let manifest_objects = retained_objects
+        .iter()
+        .map(|object| fullmag_session::accepted_provenance::AcceptedProvenanceCasObject {
+            object_ref: object.object_ref.clone(),
+            byte_count: object.byte_count,
+        })
+        .collect::<Vec<_>>();
+    let manifest = AcceptedProvenanceManifest::from_context(
+        context,
+        manifest_records,
+        manifest_objects,
+    )?;
+    let filtered = AcceptedProvenancePlan {
+        source_root: plan.source_root.clone(),
+        manifest,
+        records: retained_records,
+        cas_objects: retained_objects,
+    };
+    filtered.verify_sources()?;
+    Ok(filtered)
+}
+
+fn accepted_export_capture(
+    state: &AppState,
+    snapshot: &SessionStateResponse,
+    profile: &FmsExportProfile,
+) -> Result<Option<AcceptedExportCapture>, ApiError> {
+    if snapshot.runtime_status.code == "imported_read_only" {
+        return Err(ApiError::conflict(
+            "imported_read_only: accepted session export is unavailable",
+        ));
+    }
+    let declared_run_id = declared_accepted_run_id(snapshot)?;
+    let Some(run) = snapshot.run.as_ref() else {
+        if declared_run_id.is_some() {
+            return Err(ApiError::conflict(
+                "accepted export marker has no current accepted run",
+            ));
+        }
+        return Ok(None);
+    };
+    if run.run_id != snapshot.session.run_id {
+        return Err(ApiError::conflict(
+            "accepted export run differs from the current session run",
+        ));
+    }
+    if declared_run_id
+        .as_deref()
+        .is_some_and(|declared| declared != run.run_id)
+    {
+        return Err(ApiError::conflict(
+            "accepted export marker differs from the current run",
+        ));
+    }
+
+    let Some(accepted_root) = state.submit_store_root.clone() else {
+        if declared_run_id.is_some() {
+            return Err(ApiError::with_status_and_code(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "accepted_export_store_unavailable",
+                "accepted export requires the configured durable run store",
+            ));
+        }
+        return Ok(None);
+    };
+    let accepted_store = match SessionStore::open_existing(&accepted_root) {
+        Ok(store) => store,
+        Err(_error) if declared_run_id.is_none() => return Ok(None),
+        Err(error) => {
+            return Err(ApiError::conflict(format!(
+                "accepted export store cannot be opened: {error}"
+            )));
+        }
+    };
+    let intent = accepted_store
+        .read_run_intent(&run.run_id)
+        .map_err(|error| ApiError::conflict(format!("accepted export RunIntent read failed: {error}")))?;
+    let Some(intent) = intent else {
+        if declared_run_id.is_some() {
+            return Err(ApiError::conflict(
+                "accepted export marker has no durable RunIntent",
+            ));
+        }
+        return Ok(None);
+    };
+    if intent.run_id != run.run_id {
+        return Err(ApiError::conflict(
+            "accepted export RunIntent identity differs from the current run",
+        ));
+    }
+
+    let scene_revision = snapshot
+        .scene_document
+        .as_ref()
+        .map(|scene| scene.revision)
+        .ok_or_else(|| ApiError::conflict("accepted export has no persisted scene revision"))?;
+    let session_epoch = state
+        .current_live_session_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
+    if session_epoch == 0 {
+        return Err(ApiError::conflict(
+            "accepted export has no positive live session epoch",
+        ));
+    }
+    let bare_binding = fullmag_runtime_control::accepted_store::store_binding(&accepted_root)
+        .ok_or_else(|| ApiError::conflict("accepted export store has no stable binding"))?;
+    let context = AcceptedProvenanceContext {
+        source_store_binding: format!("sha256:{bare_binding}"),
+        accepted_run_id: run.run_id.clone(),
+        captured_live_session_id: snapshot.session.session_id.clone(),
+        captured_live_session_epoch: session_epoch,
+        captured_scene_revision: scene_revision.to_string(),
+    };
+    let full_plan = plan_accepted_provenance(&accepted_root, &context).map_err(|error| {
+        ApiError::conflict(format!("accepted export closure is incomplete or invalid: {error}"))
+    })?;
+    let full_provenance_manifest = full_plan.manifest.clone();
+    let plan = accepted_plan_for_profile(full_plan, &context, profile.include_artifacts())
+        .map_err(|error| {
+            ApiError::conflict(format!("accepted export closure profile is invalid: {error}"))
+        })?;
+    let run_status = accepted_fms_run_status(&run.status)?;
+    let now = chrono::Utc::now();
+    let run_manifest = FmsRunManifest {
+        run_id: run.run_id.clone(),
+        status: run_status,
+        study_kind: "accepted_study".into(),
+        backend: snapshot
+            .session
+            .resolved_backend
+            .clone()
+            .unwrap_or_else(|| snapshot.session.requested_backend.clone()),
+        precision: snapshot
+            .session
+            .resolved_precision
+            .clone()
+            .unwrap_or_else(|| snapshot.session.precision.clone()),
+        started_at: now,
+        finished_at: matches!(run_status, fullmag_session::RunStatus::Completed).then_some(now),
+        total_steps: run.total_steps as u64,
+        total_time_s: snapshot
+            .live_state
+            .as_ref()
+            .map(|live| live.latest_step.time)
+            .unwrap_or(0.0),
+        plan_ref: None,
+        live_state_ref: None,
+        latest_checkpoint_ref: None,
+        artifact_index_ref: None,
+    };
+    Ok(Some(AcceptedExportCapture {
+        identity: AcceptedExportIdentity {
+            session_id: snapshot.session.session_id.clone(),
+            run_id: run.run_id.clone(),
+            session_epoch,
+            scene_revision,
+        },
+        full_provenance_manifest,
+        run_manifest,
+        provenance: plan,
+    }))
+}
+
+fn validate_accepted_export_capture(
+    state: &AppState,
+    snapshot: &SessionStateResponse,
+    capture: &AcceptedExportCapture,
+    profile: &FmsExportProfile,
+) -> Result<AcceptedProvenancePlan, ApiError> {
+    let epoch = state
+        .current_live_session_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
+    if epoch != capture.identity.session_epoch
+        || snapshot.session.session_id != capture.identity.session_id
+        || snapshot
+            .run
+            .as_ref()
+            .map(|run| run.run_id.as_str())
+            != Some(capture.identity.run_id.as_str())
+        || snapshot.session.run_id != capture.identity.run_id
+        || snapshot
+            .scene_document
+            .as_ref()
+            .map(|scene| scene.revision)
+            != Some(capture.identity.scene_revision)
+    {
+        return Err(ApiError::conflict(
+            "accepted export context changed during archive preparation",
+        ));
+    }
+    if declared_accepted_run_id(snapshot)?.as_deref()
+        .is_some_and(|run_id| run_id != capture.identity.run_id)
+    {
+        return Err(ApiError::conflict(
+            "accepted export marker changed during archive preparation",
+        ));
+    }
+    let root = state.submit_store_root.as_ref().ok_or_else(|| {
+        ApiError::conflict("accepted export store disappeared during archive preparation")
+    })?;
+    let bare_binding = fullmag_runtime_control::accepted_store::store_binding(root)
+        .ok_or_else(|| ApiError::conflict("accepted export store has no stable binding"))?;
+    let source_store_binding = format!("sha256:{bare_binding}");
+    if capture.full_provenance_manifest.source_store_binding != source_store_binding {
+        return Err(ApiError::conflict(
+            "accepted export store binding changed during archive preparation",
+        ));
+    }
+    let context = AcceptedProvenanceContext {
+        source_store_binding,
+        accepted_run_id: capture.identity.run_id.clone(),
+        captured_live_session_id: capture.identity.session_id.clone(),
+        captured_live_session_epoch: capture.identity.session_epoch,
+        captured_scene_revision: capture.identity.scene_revision.to_string(),
+    };
+    let full_plan = plan_accepted_provenance(root, &context).map_err(|error| {
+        ApiError::conflict(format!(
+            "accepted export closure changed during archive preparation: {error}"
+        ))
+    })?;
+    if full_plan.manifest != capture.full_provenance_manifest {
+        return Err(ApiError::conflict(
+            "accepted export closure changed during archive preparation",
+        ));
+    }
+    let refreshed = accepted_plan_for_profile(full_plan, &context, profile.include_artifacts())
+        .map_err(|error| {
+            ApiError::conflict(format!(
+                "accepted export closure profile changed during archive preparation: {error}"
+            ))
+        })?;
+    if refreshed.manifest != capture.provenance.manifest {
+        return Err(ApiError::conflict(
+            "accepted export profile closure changed during archive preparation",
+        ));
+    }
+    refreshed.verify_sources().map_err(|error| {
+        ApiError::conflict(format!(
+            "accepted export closure changed during archive preparation: {error}"
+        ))
+    })?;
+    Ok(refreshed)
+}
+
+fn validate_imported_accepted_provenance(
+    preflight: &FmsStagedPreflight,
+    persisted: &PersistedCurrentLiveSnapshot,
+) -> Result<(), ApiError> {
+    let Some(reference) = preflight.session.accepted_provenance_ref.as_ref() else {
+        return Ok(());
+    };
+    let manifest_bytes = preflight
+        .read_document(&reference.manifest_ref)
+        .map_err(|error| {
+            ApiError::bad_request(format!(
+                "invalid_fms_accepted_provenance: manifest cannot be read: {error}"
+            ))
+        })?;
+    let manifest: AcceptedProvenanceManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| {
+            ApiError::bad_request(format!(
+                "invalid_fms_accepted_provenance: manifest is invalid: {error}"
+            ))
+        })?;
+    manifest.validate().map_err(|error| {
+        ApiError::bad_request(format!(
+            "invalid_fms_accepted_provenance: manifest validation failed: {error}"
+        ))
+    })?;
+    if manifest.accepted_run_id != reference.accepted_run_id
+        || manifest.closure_sha256 != reference.closure_sha256
+    {
+        return Err(ApiError::bad_request(
+            "invalid_fms_accepted_provenance: manifest reference does not match closure",
+        ));
+    }
+    if manifest.accepted_run_id != persisted.session.run_id
+        || persisted
+            .run
+            .as_ref()
+            .map(|run| run.run_id.as_str())
+            != Some(manifest.accepted_run_id.as_str())
+    {
+        return Err(ApiError::bad_request(
+            "invalid_fms_accepted_provenance: accepted run does not match persisted snapshot",
+        ));
+    }
+    if manifest.captured_live_session_id != persisted.session.session_id {
+        return Err(ApiError::bad_request(
+            "invalid_fms_accepted_provenance: captured session does not match persisted snapshot",
+        ));
+    }
+    let scene_revision = persisted
+        .scene_document
+        .as_ref()
+        .map(|scene| scene.revision)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "invalid_fms_accepted_provenance: persisted snapshot has no scene revision",
+            )
+        })?;
+    if manifest.captured_scene_revision != scene_revision.to_string() {
+        return Err(ApiError::bad_request(
+            "invalid_fms_accepted_provenance: captured scene revision does not match persisted snapshot",
+        ));
+    }
+
+    // The startup metadata is an optional duplicate marker. If present, it is
+    // part of the same binding and must not silently disagree with the typed
+    // run/scene identity above.
+    let snapshot: SessionStateResponse = persisted.clone().into();
+    if let Some(marked_run_id) = declared_accepted_run_id(&snapshot)? {
+        if marked_run_id != manifest.accepted_run_id {
+            return Err(ApiError::bad_request(
+                "invalid_fms_accepted_provenance: accepted marker does not match closure",
+            ));
+        }
+    }
+    if let Some(startup) = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("docker_startup"))
+    {
+        if let Some(marked_scene_revision) = startup.get("scene_revision") {
+            if marked_scene_revision.as_u64() != Some(scene_revision) {
+                return Err(ApiError::bad_request(
+                    "invalid_fms_accepted_provenance: startup scene revision does not match closure",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod accepted_fms_persistence_tests {
+    use super::*;
+    use axum::extract::State;
+    use base64::Engine;
+    use std::io::{Cursor, Read, Write};
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use zip::write::SimpleFileOptions;
+
+    fn scene(revision: u64) -> fullmag_authoring::SceneDocument {
+        serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "revision": revision,
+            "objects": [{
+                "id": "strip",
+                "name": "strip",
+                "role": "magnet",
+                "geometry": {
+                    "geometry_kind": "Box",
+                    "geometry_params": {"size": [200e-9, 20e-9, 6e-9]}
+                },
+                "material_ref": "permalloy",
+                "magnetization_ref": "uniform",
+                "regions": [{
+                    "region_id": "strip:core",
+                    "owner_object": "strip",
+                    "name": "core",
+                    "shape": {"kind": "box", "size": [200e-9, 20e-9, 6e-9], "center": [0.0, 0.0, 0.0]},
+                    "frame": "object",
+                    "enabled": true,
+                    "priority": 1,
+                    "realization_policy": "inherit"
+                }]
+            }],
+            "materials": [{
+                "id": "permalloy",
+                "name": "Permalloy",
+                "properties": {"Ms": 800e3, "Aex": 13e-12, "alpha": 0.02}
+            }],
+            "magnetization_assets": [{
+                "id": "uniform",
+                "name": "Uniform",
+                "kind": "uniform",
+                "value": [0.0, 0.0, 1.0]
+            }],
+            "study": {
+                "backend": "fdm",
+                "requested_backend": "fdm",
+                "requested_device": "cpu",
+                "requested_precision": "double",
+                "requested_mode": "strict",
+                "fdm": {"default_cell": [10e-9, 10e-9, 6e-9]}
+            }
+        }))
+        .expect("accepted FMS scene fixture should deserialize")
+    }
+
+    fn rewrite_member(bytes: &[u8], target: &str, replacement: Option<Vec<u8>>) -> Vec<u8> {
+        let mut source = zip::ZipArchive::new(Cursor::new(bytes)).expect("valid FMS ZIP");
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let mut found = false;
+        for index in 0..source.len() {
+            let mut member = source.by_index(index).expect("ZIP member");
+            let name = member.name().to_string();
+            let mut data = Vec::new();
+            member.read_to_end(&mut data).expect("read ZIP member");
+            drop(member);
+            if name == target {
+                found = true;
+                let Some(replacement) = replacement.as_ref() else {
+                    continue;
+                };
+                data = replacement.clone();
+            }
+            writer.start_file(name, options).expect("write ZIP member");
+            writer.write_all(&data).expect("write ZIP payload");
+        }
+        assert!(found, "test fixture must contain {target}");
+        writer.finish().expect("finish rewritten ZIP").into_inner()
+    }
+
+    async fn destination_state(root: &std::path::Path) -> Arc<AppState> {
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let state_mut = Arc::get_mut(&mut state).expect("test state has one owner");
+        state_mut.repo_root = root.to_path_buf();
+        state_mut.current_workspace_root = root.to_path_buf();
+        state_mut.submit_store_root = Some(root.join("accepted-store-unused"));
+        state_mut.current_command_journal_store_root = Some(root.join("live-store"));
+        let script = root.join("import.py");
+        std::fs::write(&script, b"study = fullmag.Study()\n").expect("import script");
+        drop(state_mut);
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            snapshot.session.script_path = script.display().to_string();
+        }
+        state
+    }
+
+    #[tokio::test]
+    async fn accepted_fms_export_inspect_readonly_import_and_tamper_rejection() {
+        let source_root = tempfile::tempdir().expect("source temp root");
+        let accepted_root = source_root.path().join("accepted-store");
+        let live_root = source_root.path().join("live-store");
+        let script = source_root.path().join("scene.py");
+        std::fs::write(&script, b"study = fullmag.Study()\n").expect("source script");
+
+        let run_id = "run-accepted-fms";
+        let accepted_store = SessionStore::open(&accepted_root).expect("accepted store");
+        let intent = fullmag_session::FmsRunIntent::new(
+            run_id,
+            "intent-accepted-fms",
+            serde_json::json!({"run_id": run_id, "solver": "fixture"}),
+        );
+        accepted_store
+            .commit_run_intent(&intent)
+            .expect("accepted intent");
+        accepted_store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.into(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: Vec::new(),
+            })
+            .expect("accepted catalog");
+        drop(accepted_store);
+
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let state_mut = Arc::get_mut(&mut state).expect("source state has one owner");
+        state_mut.repo_root = source_root.path().to_path_buf();
+        state_mut.current_workspace_root = source_root.path().to_path_buf();
+        state_mut.submit_store_root = Some(accepted_root);
+        state_mut.current_command_journal_store_root = Some(live_root);
+        state_mut
+            .current_live_session_epoch
+            .store(7, Ordering::Release);
+        drop(state_mut);
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().expect("live state fixture");
+            snapshot.session.run_id = run_id.into();
+            snapshot.session.script_path = script.display().to_string();
+            snapshot.run = Some(crate::types::RunManifest {
+                run_id: run_id.into(),
+                session_id: snapshot.session.session_id.clone(),
+                status: "completed".into(),
+                total_steps: 0,
+                final_time: None,
+                final_e_ex: None,
+                final_e_demag: None,
+                final_e_ext: None,
+                final_e_ani: None,
+                final_e_dmi: None,
+                final_e_rotated_dmi: None,
+                final_e_total: None,
+                artifact_dir: source_root.path().join("legacy-artifacts").display().to_string(),
+            });
+            snapshot.scene_document = Some(scene(17));
+            snapshot.metadata = Some(serde_json::json!({
+                "docker_startup": {"run_id": run_id, "scene_revision": 17}
+            }));
+        }
+
+        let exported = export_session_with_context(
+            State(state.clone()),
+            Json(SessionExportRequest {
+                profile: SaveProfile::Compact,
+                name: Some("accepted FMS fixture".into()),
+                compression: Some(fullmag_session::CompressionProfile::Speed),
+                ui_state: None,
+                target_path: None,
+                save_to_source: None,
+            }),
+            None,
+        )
+        .await
+        .expect("accepted export")
+        .0;
+        let fms_bytes = base64::engine::general_purpose::STANDARD
+            .decode(exported.fms_base64)
+            .expect("exported FMS base64");
+
+        let destination_root = tempfile::tempdir().expect("destination temp root");
+        let destination = destination_state(destination_root.path()).await;
+        let inspection = import_session_inspect(
+            State(destination.clone()),
+            Json(SessionImportInspectRequest {
+                fms_base64: base64::engine::general_purpose::STANDARD.encode(&fms_bytes),
+            }),
+        )
+        .await
+        .expect("accepted archive inspection")
+        .0;
+        assert_eq!(inspection.inspection.format_version, fullmag_session::FMS_SESSION_FORMAT_V2);
+        assert_eq!(inspection.inspection.session_id, "test-session");
+
+        let imported = import_session_commit(
+            State(destination.clone()),
+            Json(SessionImportCommitRequest {
+                fms_base64: base64::engine::general_purpose::STANDARD.encode(&fms_bytes),
+                restore_mode: SessionRestoreMode::VisualizationOnly,
+            }),
+        )
+        .await
+        .expect("accepted archive readonly import")
+        .0;
+        assert_eq!(imported.session_id, "test-session");
+        assert_eq!(imported.restore_mode, SessionRestoreMode::VisualizationOnly);
+        assert!(!destination_root.path().join("accepted-store-unused").exists());
+        assert_eq!(
+            destination
+                .current_live_state
+                .read()
+                .await
+                .as_ref()
+                .expect("imported snapshot")
+                .session
+                .run_id,
+            run_id
+        );
+        let colliding_store = SessionStore::open(
+            destination_root.path().join("accepted-store-unused"),
+        )
+        .expect("colliding submit store fixture");
+        colliding_store
+            .commit_run_intent(&fullmag_session::FmsRunIntent::new(
+                run_id,
+                "colliding-imported-read-only",
+                serde_json::json!({"run_id": run_id, "solver": "fixture"}),
+            ))
+            .expect("colliding submit intent");
+        drop(colliding_store);
+        let readonly_reexport = export_session(
+            State(destination.clone()),
+            Json(SessionExportRequest {
+                profile: SaveProfile::Compact,
+                name: None,
+                compression: None,
+                ui_state: None,
+                target_path: None,
+                save_to_source: None,
+            }),
+        )
+        .await
+        .expect_err("imported read-only accepted state must not be re-exported");
+        assert_eq!(readonly_reexport.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(
+            readonly_reexport.message,
+            "imported_read_only: accepted session export is unavailable"
+        );
+
+        let mut manifest = Vec::new();
+        {
+            let mut archive = zip::ZipArchive::new(Cursor::new(&fms_bytes)).expect("FMS ZIP");
+            let mut member = archive
+                .by_name(fullmag_session::FMS_ACCEPTED_PROVENANCE_MANIFEST_REF)
+                .expect("accepted closure manifest");
+            member.read_to_end(&mut manifest).expect("closure manifest");
+        }
+        let mut tampered_manifest: serde_json::Value =
+            serde_json::from_slice(&manifest).expect("closure manifest JSON");
+        tampered_manifest["closure_sha256"] = serde_json::Value::String(format!(
+            "sha256:{}",
+            "0".repeat(64)
+        ));
+        let tampered = rewrite_member(
+            &fms_bytes,
+            fullmag_session::FMS_ACCEPTED_PROVENANCE_MANIFEST_REF,
+            Some(serde_json::to_vec(&tampered_manifest).expect("tampered manifest JSON")),
+        );
+        let error = import_session_inspect(
+            State(destination.clone()),
+            Json(SessionImportInspectRequest {
+                fms_base64: base64::engine::general_purpose::STANDARD.encode(tampered),
+            }),
+        )
+        .await
+        .expect_err("tampered closure must be rejected");
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+
+        let mut snapshot_bytes = Vec::new();
+        {
+            let mut archive = zip::ZipArchive::new(Cursor::new(&fms_bytes)).expect("FMS ZIP");
+            let mut member = archive
+                .by_name("project/current_live_snapshot.json")
+                .expect("persisted snapshot");
+            member
+                .read_to_end(&mut snapshot_bytes)
+                .expect("persisted snapshot bytes");
+        }
+        let mut tampered_snapshot: serde_json::Value =
+            serde_json::from_slice(&snapshot_bytes).expect("persisted snapshot JSON");
+        tampered_snapshot["session"]["session_id"] = serde_json::Value::String(
+            "different-session".into(),
+        );
+        let tampered_snapshot_archive = rewrite_member(
+            &fms_bytes,
+            "project/current_live_snapshot.json",
+            Some(serde_json::to_vec(&tampered_snapshot).expect("tampered snapshot JSON")),
+        );
+        let error = import_session_inspect(
+            State(destination.clone()),
+            Json(SessionImportInspectRequest {
+                fms_base64: base64::engine::general_purpose::STANDARD
+                    .encode(tampered_snapshot_archive),
+            }),
+        )
+        .await
+        .expect_err("snapshot identity tampering must be rejected");
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+
+        let missing = rewrite_member(
+            &fms_bytes,
+            fullmag_session::FMS_ACCEPTED_PROVENANCE_MANIFEST_REF,
+            None,
+        );
+        let error = import_session_inspect(
+            State(destination),
+            Json(SessionImportInspectRequest {
+                fms_base64: base64::engine::general_purpose::STANDARD.encode(missing),
+            }),
+        )
+        .await
+        .expect_err("missing closure must be rejected");
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn context_bound_export_rejects_session_identity_before_script_read() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let context = crate::capture_current_live_request_context(&state)
+            .await
+            .expect("request context");
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().expect("live state fixture");
+            snapshot.session.session_id = "replacement-session".into();
+            snapshot.session.script_path = "missing-script-for-stale-context-test.py".into();
+        }
+
+        let error = export_session_with_context(
+            State(state),
+            Json(SessionExportRequest {
+                profile: SaveProfile::Compact,
+                name: None,
+                compression: None,
+                ui_state: None,
+                target_path: None,
+                save_to_source: None,
+            }),
+            Some(&context),
+        )
+        .await
+        .expect_err("stale context must reject before reading the script");
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(error.message, "request_context_stale");
+    }
+}
+
 async fn current_session_id(state: &AppState) -> Result<String, ApiError> {
     let current = state.current_live_state.read().await;
     current
@@ -1048,9 +2448,16 @@ pub(crate) async fn export_session_with_context(
     Json(req): Json<SessionExportRequest>,
     request_context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<Json<SessionExportResponse>, ApiError> {
+    // Establish the transition fence before reading any session identity,
+    // script bytes, snapshot, or project document.  A context-bound export
+    // must never assemble an archive from a session that is being replaced.
+    let _transition = state.current_live_session_transition.lock().await;
     if let Some(context) = request_context {
         crate::validate_current_live_request_context(&state, context).await?;
     }
+    let save_to_source = req.save_to_source.unwrap_or(false);
+    let requested_target = req.target_path.as_deref();
+    validate_session_output_request(requested_target, save_to_source)?;
     let session_id = current_session_id(&state).await?;
     let script = read_canonical_script(&state).await?;
 
@@ -1064,66 +2471,94 @@ pub(crate) async fn export_session_with_context(
             .unwrap_or_else(|| "Untitled".into())
     };
 
-    let mut session_manifest = FmsSessionManifest::new(&session_id, &name, req.profile);
-
-    // Capture the actual local-live artifact directory into the SessionStore.
-    // The store is the only artifact source that `pack_fms` reads, so packing
-    // directly from it makes a solved save independent of local-live history.
-    let run_capture = {
-        let guard = state.current_live_state.read().await;
-        if let Some(snapshot) = guard.as_ref() {
-            let run_ref = format!("runs/{}/run_manifest.json", snapshot.session.run_id);
-            session_manifest.run_refs.push(run_ref.clone());
-
-            let run_manifest = FmsRunManifest {
-                run_id: snapshot.session.run_id.clone(),
-                status: fullmag_session::RunStatus::Completed, // simplified
-                study_kind: "unknown".into(),
-                backend: snapshot.session.requested_backend.clone(),
-                precision: snapshot.session.precision.clone(),
-                started_at: chrono::Utc::now(),
-                finished_at: None,
-                total_steps: snapshot
-                    .run
-                    .as_ref()
-                    .map(|r| r.total_steps as u64)
-                    .unwrap_or(0),
-                total_time_s: snapshot
-                    .live_state
-                    .as_ref()
-                    .map(|ls| ls.latest_step.time)
-                    .unwrap_or(0.0),
-                plan_ref: None,
-                live_state_ref: None,
-                latest_checkpoint_ref: None,
-                artifact_index_ref: None,
-            };
-            Some((run_manifest, crate::session::current_artifact_dir(snapshot)))
-        } else {
-            None
-        }
-    };
-
     let export_profile = FmsExportProfile::for_profile(req.profile);
-    let docs = collect_project_documents(&state, req.ui_state.as_ref(), script).await;
-
-    // The archive is written to the session store after all slow reads have
-    // completed. Hold the transition fence for the transaction so a session
-    // replacement cannot publish an export assembled from mixed identities.
-    let _transition = if request_context.is_some() {
-        Some(state.current_live_session_transition.lock().await)
+    let snapshot = state
+        .current_live_state
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    let save_target = if save_to_source {
+        Some(resolve_session_output_target(
+            Path::new(&snapshot.session.script_path),
+            requested_target,
+        )?)
     } else {
         None
     };
+    let mut accepted_capture = accepted_export_capture(&state, &snapshot, &export_profile)?;
+    let mut session_manifest = FmsSessionManifest::new(&session_id, &name, req.profile);
+
+    if let Some(capture) = accepted_capture.as_ref() {
+        session_manifest.format = fullmag_session::FMS_SESSION_FORMAT_V2.into();
+        session_manifest.run_refs.push(format!(
+            "runs/{}/run_manifest.json",
+            capture.identity.run_id
+        ));
+        session_manifest.accepted_provenance_ref = Some(FmsAcceptedProvenanceReference {
+            manifest_ref: fullmag_session::FMS_ACCEPTED_PROVENANCE_MANIFEST_REF.into(),
+            accepted_run_id: capture.provenance.manifest.accepted_run_id.clone(),
+            closure_sha256: capture.provenance.manifest.closure_sha256.clone(),
+        });
+    }
+
+    // Legacy live runs still use the local-live artifact snapshot. Accepted
+    // runs use their detached accepted-store closure and never read the
+    // legacy artifact directory as solver-result evidence.
+    let run_capture = if accepted_capture.is_some() {
+        None
+    } else {
+        let run_ref = format!("runs/{}/run_manifest.json", snapshot.session.run_id);
+        session_manifest.run_refs.push(run_ref);
+        let run_manifest = FmsRunManifest {
+            run_id: snapshot.session.run_id.clone(),
+            status: fullmag_session::RunStatus::Completed, // simplified
+            study_kind: "unknown".into(),
+            backend: snapshot.session.requested_backend.clone(),
+            precision: snapshot.session.precision.clone(),
+            started_at: chrono::Utc::now(),
+            finished_at: None,
+            total_steps: snapshot
+                .run
+                .as_ref()
+                .map(|r| r.total_steps as u64)
+                .unwrap_or(0),
+            total_time_s: snapshot
+                .live_state
+                .as_ref()
+                .map(|ls| ls.latest_step.time)
+                .unwrap_or(0.0),
+            plan_ref: None,
+            live_state_ref: None,
+            latest_checkpoint_ref: None,
+            artifact_index_ref: None,
+        };
+        Some((run_manifest, crate::session::current_artifact_dir(&snapshot)))
+    };
+    let docs = collect_project_documents(&state, req.ui_state.as_ref(), script).await;
+
     if let Some(context) = request_context {
         crate::validate_current_live_request_context(&state, context).await?;
+    }
+    if let Some(capture) = accepted_capture.as_mut() {
+        let current = state.current_live_state.read().await;
+        let current = current
+            .as_ref()
+            .ok_or_else(|| ApiError::conflict("accepted export workspace disappeared"))?;
+        let refreshed = validate_accepted_export_capture(
+            &state,
+            current,
+            &*capture,
+            &export_profile,
+        )?;
+        capture.provenance = refreshed;
     }
     let store = open_store(&state)?;
     // No await may occur while this thread-owned transaction is held.
     let _transaction = store
         .write_transaction()
         .map_err(|error| ApiError::conflict(error.to_string()))?;
-    if export_profile.include_artifacts() {
+    if export_profile.include_artifacts() && accepted_capture.is_none() {
         let (run_manifest, artifact_source) = run_capture.as_ref().ok_or_else(|| {
             ApiError::conflict("solved session export requires an active run artifact directory")
         })?;
@@ -1154,36 +2589,62 @@ pub(crate) async fn export_session_with_context(
             .unwrap_or(fullmag_session::CompressionProfile::Balanced),
     };
 
-    if let Some((run_manifest, _)) = run_capture {
+    if let Some(capture) = accepted_capture.as_ref() {
         store
-            .commit_run(&run_manifest)
+            .commit_run(&capture.run_manifest)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    } else if let Some((run_manifest, _)) = run_capture.as_ref() {
+        store
+            .commit_run(run_manifest)
             .map_err(|e| ApiError::internal(e.to_string()))?;
     }
     // Pack to in-memory buffer.
     let mut buf = Cursor::new(Vec::new());
-    pack_fms(
-        &mut buf,
-        &store,
-        &session_manifest,
-        &workspace_manifest,
-        &export_profile,
-        &docs,
-        &opts,
-    )
-    .map_err(|e| ApiError::internal(format!("packing .fms: {e}")))?;
+    if let Some(capture) = accepted_capture.as_ref() {
+        pack_fms_with_accepted_provenance(
+            &mut buf,
+            &store,
+            &session_manifest,
+            &workspace_manifest,
+            &export_profile,
+            &docs,
+            &opts,
+            &capture.provenance,
+        )
+        .map_err(|e| ApiError::internal(format!("packing accepted .fms: {e}")))?;
+    } else {
+        pack_fms(
+            &mut buf,
+            &store,
+            &session_manifest,
+            &workspace_manifest,
+            &export_profile,
+            &docs,
+            &opts,
+        )
+        .map_err(|e| ApiError::internal(format!("packing .fms: {e}")))?;
+    }
 
     store
         .commit_session(&session_manifest)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let fms_bytes = buf.into_inner();
-    let fms_base64 = base64_encode(&fms_bytes);
+    let (saved_path, filename) = if let Some(target) = save_target {
+        let (saved_path, filename) = publish_session_archive(&target, &fms_bytes)?;
+        (Some(saved_path.display().to_string()), Some(filename))
+    } else {
+        (None, None)
+    };
+    let fms_base64 = session_export_base64(&fms_bytes, saved_path.as_deref());
 
     Ok(Json(SessionExportResponse {
         session_id,
         profile: req.profile,
         fms_base64,
         size_bytes: fms_bytes.len(),
+        saved_path,
+        filename,
     }))
 }
 
@@ -1209,6 +2670,22 @@ pub(crate) async fn import_session_inspect(
         .map_err(|error| ApiError::internal(format!("creating archive decode root: {error}")))?;
     let staged = preflight_fms_staged(Cursor::new(&fms_bytes), &[], &decoding_root)
         .map_err(|error| archive_preflight_error(error, "invalid_fms_preflight"))?;
+    if staged.session.accepted_provenance_ref.is_some() {
+        let snapshot_bytes = staged
+            .read_document("project/current_live_snapshot.json")
+            .map_err(|error| {
+                ApiError::bad_request(format!(
+                    "invalid_fms_accepted_provenance: persisted snapshot is missing: {error}"
+                ))
+            })?;
+        let persisted: PersistedCurrentLiveSnapshot =
+            serde_json::from_slice(&snapshot_bytes).map_err(|error| {
+                ApiError::bad_request(format!(
+                    "invalid_fms_accepted_provenance: persisted snapshot is invalid: {error}"
+                ))
+            })?;
+        validate_imported_accepted_provenance(&staged, &persisted)?;
+    }
     let inspection = staged.inspection.clone();
 
     Ok(Json(SessionImportInspectResponse { inspection }))
@@ -1533,11 +3010,20 @@ fn publish_imported_session(
     let result = (|| -> Result<(), ApiError> {
         let staging_store = SessionStore::open(&staging)
             .map_err(|error| ApiError::internal(format!("creating import staging: {error}")))?;
-        let imported_session = unpack_fms_staged(preflight, &staging_store)
-            .map_err(|error| {
-                retain_staging = error.downcast_ref::<fullmag_session::PublicationUncertain>().is_some();
-                ApiError::internal(format!("archive import storage failure at {}: {error}", staging.display()))
-            })?;
+        let imported_session = if preflight.session.format == fullmag_session::FMS_SESSION_FORMAT_V2 {
+            unpack_fms_staged_readonly(preflight, &staging_store)
+        } else {
+            unpack_fms_staged(preflight, &staging_store)
+        }
+        .map_err(|error| {
+            retain_staging = error
+                .downcast_ref::<fullmag_session::PublicationUncertain>()
+                .is_some();
+            ApiError::internal(format!(
+                "archive import storage failure at {}: {error}",
+                staging.display()
+            ))
+        })?;
         if imported_session.session_id != preflight.session.session_id {
             return Err(ApiError::bad_request(
                 "invalid_fms_unpack: session manifest changed during import",
@@ -1632,6 +3118,10 @@ pub(crate) async fn import_session_commit_with_context(
         ));
     }
 
+    // Validate the accepted closure against the exact snapshot bytes from the
+    // archive before any presentation/reference normalization can rewrite
+    // identity-bearing fields.
+    validate_imported_accepted_provenance(&preflight, &persisted)?;
     antenna_import::normalize_registered_refs(&mut persisted, &preflight)?;
     normalize_imported_read_only(&mut persisted);
     let import_id = format!(

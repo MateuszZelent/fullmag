@@ -1,5 +1,7 @@
 #include "cpu/mfem/transport/periodic_charge_potential.hpp"
 #include "cpu/mfem/transport/affine_trace_relations.hpp"
+#include "cpu/mfem/transport/coincident_cut_v2.hpp"
+#include "cpu/mfem/transport/prepared_closed_loop_digest_v2.hpp"
 #include "cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.hpp"
 
 #include <mfem.hpp>
@@ -466,6 +468,8 @@ public:
     std::unique_ptr<mfem::H1_FECollection> collection;
     std::unique_ptr<mfem::FiniteElementSpace> space;
     std::unique_ptr<mfem::GridFunction> field;
+    std::string prepared_execution_digest, accepted_charge_field_digest;
+    std::vector<PairedChargeWeakReactionV2> paired_weak_reactions;
     StableMeshVertexIdentities stable_ids;
     std::string operator_version;
     bool converged = false;
@@ -494,6 +498,13 @@ PeriodicChargePotentialSnapshot::PeriodicChargePotentialSnapshot(
 }
 
 PeriodicChargePotentialSnapshot::~PeriodicChargePotentialSnapshot() = default;
+const std::string &PeriodicChargePotentialSnapshot::prepared_execution_digest() const { return impl_->prepared_execution_digest; }
+const std::string &PeriodicChargePotentialSnapshot::accepted_charge_field_digest() const { return impl_->accepted_charge_field_digest; }
+
+const std::vector<PairedChargeWeakReactionV2> &PeriodicChargePotentialSnapshot::paired_weak_reactions_v2() const
+{
+    return impl_->paired_weak_reactions;
+}
 
 const mfem::FiniteElementSpace &
 PeriodicChargePotentialSnapshot::potential_space() const
@@ -611,7 +622,8 @@ PeriodicChargePotentialSolver::Solve(
         throw std::invalid_argument(
             "periodic charge solve requires mesh and conductivity");
     }
-    if (request.operator_version != kOperatorVersion) {
+    const bool coincident = request.operator_version == "fem_charge_h1_periodic_jump.v2";
+    if (request.operator_version != kOperatorVersion && !coincident) {
         throw std::invalid_argument(
             "periodic charge operator_version is unsupported");
     }
@@ -620,7 +632,12 @@ PeriodicChargePotentialSolver::Solve(
     require_finite_string(request.source_cut.id, "source cut id");
     require_finite_string(request.source_module_id, "source module id");
     require_finite_string(request.source_state_revision, "source state revision");
-    require_finite_string(request.source_field_digest, "source field digest");
+    const bool prepared = !request.prepared_execution_digest.empty();
+    if (prepared) {
+        (void)prepared_closed_loop_v2::digest_bytes(request.prepared_execution_digest);
+        if (!coincident || !request.source_field_digest.empty() || request.prepared_conductivity_spm_per_element.size()!=static_cast<std::size_t>(request.mesh->GetNE()))
+            throw std::invalid_argument("prepared periodic input cannot contain accepted field identity or inconsistent conductivity");
+    } else require_finite_string(request.source_field_digest, "source field digest");
     require_finite_string(request.envelope_revision, "envelope revision");
     require_finite_string(request.envelope_digest, "envelope digest");
     require_finite_string(request.mesh_revision, "mesh revision");
@@ -644,7 +661,19 @@ PeriodicChargePotentialSolver::Solve(
                 "periodic source-cut translation must be finite");
         }
     }
-    if (!(norm3(request.source_cut.translation_m) > 0.0)) {
+    if (coincident) {
+        if (request.source_cut.translation_m != std::array<double, 3>{} ||
+                request.source_cut.potential_drop_v == 0.0 ||
+                request.algebraic_relative_tolerance > 1.0e-12) {
+            throw std::invalid_argument("coincident cut v2 requires zero translation, nonzero jump and residual tolerance at most 1e-12");
+        }
+#if defined(MFEM_USE_MPI)
+        if (dynamic_cast<mfem::ParMesh *>(request.mesh)) {
+            throw std::invalid_argument("coincident cut v2 currently requires serial CPU execution");
+        }
+#endif
+        coincident_cut_v2::validate_mesh(*request.mesh);
+    } else if (!(norm3(request.source_cut.translation_m) > 0.0)) {
         throw std::invalid_argument(
             "periodic source-cut translation must be nonzero");
     }
@@ -1042,7 +1071,8 @@ PeriodicChargePotentialSolver::Solve(
 #endif
 
     auto mesh = std::make_unique<mfem::Mesh>(*request.mesh);
-    validate_affine_tetrahedral_mesh(*mesh);
+    if (coincident) coincident_cut_v2::validate_mesh(*mesh);
+    else validate_affine_tetrahedral_mesh(*mesh);
     if (request.stable_vertex_identities.local_to_stable.size() !=
             static_cast<std::size_t>(mesh->GetNV())) {
         throw std::invalid_argument(
@@ -1130,22 +1160,23 @@ PeriodicChargePotentialSolver::Solve(
             throw std::invalid_argument(
                 "source-cut face pairing is incomplete, repeated, or not physical");
         }
-        auto vertex_pairs = match_pair_vertices(*mesh,
-            request.stable_vertex_identities, minus_found->second,
-            plus_found->second, request.source_cut.translation_m,
-            translation_tolerance);
+        auto vertex_pairs = coincident
+            ? coincident_cut_v2::match_vertices(*mesh, request.stable_vertex_identities,
+                minus_found->second, plus_found->second)
+            : match_pair_vertices(*mesh, request.stable_vertex_identities, minus_found->second,
+                plus_found->second, request.source_cut.translation_m, translation_tolerance);
         paired_vertices.insert(
             paired_vertices.end(), vertex_pairs.begin(), vertex_pairs.end());
-        const auto minus_normal = outward_unit_normal(*mesh, minus_found->second);
-        const auto plus_normal = outward_unit_normal(*mesh, plus_found->second);
-        const double normal_mismatch = norm3({
-            minus_normal[0] + plus_normal[0],
-            minus_normal[1] + plus_normal[1],
-            minus_normal[2] + plus_normal[2],
-        });
-        if (normal_mismatch > 1.0e-10) {
-            throw std::invalid_argument(
-                "source-cut paired faces have inconsistent outward orientation");
+        if (!coincident) {
+            const auto minus_normal = outward_unit_normal(*mesh, minus_found->second);
+            const auto plus_normal = outward_unit_normal(*mesh, plus_found->second);
+            const double normal_mismatch = norm3({
+                minus_normal[0] + plus_normal[0], minus_normal[1] + plus_normal[1],
+                minus_normal[2] + plus_normal[2],
+            });
+            if (normal_mismatch > 1.0e-10) {
+                throw std::invalid_argument("source-cut paired faces have inconsistent outward orientation");
+            }
         }
         paired_boundaries.emplace_back(minus_found->second, plus_found->second);
     }
@@ -1154,6 +1185,17 @@ PeriodicChargePotentialSolver::Solve(
             "source-cut pair map is not a bijection over classified cut faces");
     }
 
+    if (coincident) {
+        std::map<int, int> forward, reverse;
+        for (const auto &[minus, plus] : paired_vertices) {
+            const auto a = forward.emplace(minus, plus), b = reverse.emplace(plus, minus);
+            if ((!a.second && a.first->second != plus) || (!b.second && b.first->second != minus))
+                throw std::invalid_argument("coincident cut v2 has inconsistent seam vertex maps");
+        }
+        for (const auto &[minus, plus] : forward)
+            if (reverse.count(minus) || forward.count(plus))
+                throw std::invalid_argument("coincident cut v2 reuses a vertex on both source sides");
+    }
     auto impl = std::make_unique<PeriodicChargePotentialSnapshot::Impl>(
         std::move(mesh));
     if (impl->space->GetVSize() != impl->space->GetTrueVSize()) {
@@ -1189,6 +1231,8 @@ PeriodicChargePotentialSolver::Solve(
     trace_request.algebraic_relative_tolerance = request.algebraic_relative_tolerance;
     trace_request.maximum_iterations = request.maximum_iterations;
     const auto charge = antenna_field_solve::solve_charge_trace_workspace(trace_request);
+    if (coincident && charge->component_ids.size() != 1)
+        throw std::runtime_error("coincident cut v2 requires one accepted electrical component");
     const double relative_residual = *std::max_element(
         charge->component_relative_residuals.begin(),
         charge->component_relative_residuals.end());
@@ -1210,6 +1254,15 @@ PeriodicChargePotentialSolver::Solve(
     const double mean_before_shift = mass_weights * *impl->field / volume;
     *impl->field -= mean_before_shift;
     const double mean_after_shift = mass_weights * *impl->field / volume;
+    if (coincident) {
+        double potential_scale = 0.0;
+        for (int i = 0; i < impl->field->Size(); ++i)
+            potential_scale = std::max(potential_scale, std::abs((*impl->field)[i]));
+        const double gate = 1.0e-12 + 128.0 * std::numeric_limits<double>::epsilon() * potential_scale;
+        if (!std::isfinite(mean_after_shift) || std::abs(mean_after_shift) > gate ||
+                !std::isfinite(relative_residual) || relative_residual > 1.0e-12)
+            throw std::runtime_error("coincident cut v2 failed its independent gauge or H1 residual gate");
+    }
 
     double jump_sum = 0.0;
     std::size_t jump_count = 0;
@@ -1226,9 +1279,9 @@ PeriodicChargePotentialSolver::Solve(
         maximum_jump_error = std::max(maximum_jump_error,
             std::abs(jump - request.source_cut.potential_drop_v));
     }
-    const double jump_tolerance = std::max(
-        1.0e-12,
-        128.0 * std::numeric_limits<double>::epsilon() *
+    const double jump_tolerance = coincident
+        ? 1.0e-12 + 128.0 * std::numeric_limits<double>::epsilon() * std::abs(request.source_cut.potential_drop_v)
+        : std::max(1.0e-12, 128.0 * std::numeric_limits<double>::epsilon() *
             std::max(1.0, std::abs(request.source_cut.potential_drop_v)));
     if (jump_count == 0 || maximum_jump_error > jump_tolerance) {
         throw std::runtime_error(
@@ -1237,7 +1290,21 @@ PeriodicChargePotentialSolver::Solve(
 
     double maximum_flux_mismatch = 0.0;
     double maximum_flux_scale = 0.0;
-    for (const auto &[minus_boundary, plus_boundary] : paired_boundaries) {
+    if (coincident) {
+        // Original K reactions certify affine-trace weak balance. Raw P1 face
+        // flux is not a conservative RT0 face flux and cannot replace it.
+        std::set<std::pair<int, int>> unique(paired_vertices.begin(), paired_vertices.end());
+        for (const auto &[minus, plus] : unique) {
+            const double a = charge->reaction_vertex_values_a.at(minus);
+            const double b = charge->reaction_vertex_values_a.at(plus);
+            const double mismatch = std::abs(a + b);
+            if (!std::isfinite(mismatch) || mismatch > 1.0e-18 + 1.0e-10 * (std::abs(a) + std::abs(b)))
+                throw std::runtime_error("coincident cut v2 failed its paired original-K weak reaction gate");
+            impl->paired_weak_reactions.push_back({request.stable_vertex_identities.local_to_stable.at(minus),
+                request.stable_vertex_identities.local_to_stable.at(plus), a, b});
+            maximum_flux_mismatch = std::max(maximum_flux_mismatch, mismatch);
+        }
+    } else for (const auto &[minus_boundary, plus_boundary] : paired_boundaries) {
         const double minus_flux = integrate_boundary_flux(*impl->mesh,
             *impl->field, *request.conductivity, minus_boundary);
         const double plus_flux = integrate_boundary_flux(*impl->mesh,
@@ -1254,7 +1321,7 @@ PeriodicChargePotentialSolver::Solve(
     const double paired_flux_gate = std::max(1.0e-12,
         request.algebraic_relative_tolerance *
             std::max(maximum_flux_scale, 1.0e-30));
-    if (maximum_flux_mismatch > paired_flux_gate) {
+    if (!coincident && maximum_flux_mismatch > paired_flux_gate) {
         throw std::runtime_error(
             "periodic charge field failed the independent paired weak-flux gate");
     }
@@ -1272,7 +1339,17 @@ PeriodicChargePotentialSolver::Solve(
     impl->source_cut_digest = request.source_cut_digest;
     impl->source_module_id = request.source_module_id;
     impl->source_state_revision = request.source_state_revision;
-    impl->source_field_digest = request.source_field_digest;
+    if (prepared) {
+        std::vector<double> potential_vertices(impl->mesh->GetNV());
+        for(int vertex=0;vertex<impl->mesh->GetNV();++vertex) {
+            mfem::Array<int> dofs; impl->space->GetVertexDofs(vertex,dofs); potential_vertices[vertex]=(*impl->field)[dofs[0]];
+        }
+        impl->prepared_execution_digest=request.prepared_execution_digest;
+        impl->accepted_charge_field_digest=prepared_closed_loop_v2::charge_digest(
+            request.prepared_execution_digest,*impl->mesh,request.stable_vertex_identities,potential_vertices,
+            request.prepared_conductivity_spm_per_element,request.source_cut.potential_drop_v,impl->potential_jump,impl->gauge_mean,impl->relative_residual);
+        impl->source_field_digest=impl->accepted_charge_field_digest;
+    } else impl->source_field_digest = request.source_field_digest;
     impl->evaluation_time = request.evaluation_time_s;
     impl->stage_identity = request.stage_identity;
     impl->envelope_revision = request.envelope_revision;

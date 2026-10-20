@@ -98,6 +98,17 @@ bool validate_supported_physics_topology(
     std::string &error);
 
 /*
+ * Validate the native mixed-body ownership/separation proof before any MFEM
+ * operator is constructed. A null certificate is accepted only for legacy
+ * single-body topology; mixed magnetic markers or prism/tet bodies require a
+ * positive native proof.
+ */
+bool validate_mixed_body_certificate_v2(
+    const fullmag_fem_plan_desc &plan,
+    const fullmag_fem_mixed_body_certificate_v2 *certificate,
+    std::string &error);
+
+/*
  * Initialize magnetic element and node masks from imported FEM mesh markers.
  *
  * Missing element markers mean the whole mesh is magnetic. Explicit marker 0

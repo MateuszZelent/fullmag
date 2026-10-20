@@ -2,14 +2,29 @@
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { useThree } from "@react-three/fiber";
-import { BufferGeometry, ShaderMaterial, SRGBColorSpace, Vector2, Vector3, WebGLRenderTarget } from "three";
+import { BufferGeometry, InstancedMesh, Matrix4, ShaderMaterial, SRGBColorSpace, Vector2, Vector3, WebGLRenderTarget } from "three";
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
-import { DATA_ANTENNA_FIELD_SOLUTION_PATH, DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH, DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH, DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH, DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_DISPLAY_PATH, DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH, MODEL_SCENE_PATH, SESSIONS_PATH, SESSION_STATUS_PATH, SIMULATION_STAGES_EXECUTION_PATH } from "@/kernel/api/apiPaths";
-import type { AntennaFieldSolutionResource, AntennaExternalLeadInspectionResource, AntennaInspectionDisplayResource, SceneResource, StageExecutionResource } from "@/kernel/api/apiTypes";
+import { decodeFieldVector } from "@/kernel/api/codecs/fieldVectorCodec";
+import { DataPreviewDialog } from "@/kernel/layout/DataPreviewDialog";
+import { LayoutController } from "@/kernel/layout/LayoutController";
+import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { AuthoringHistoryController } from "@/kernel/authoring/AuthoringHistoryController";
+import { DATA_FIELDS_PATH, DATA_FIELD_VECTOR_PATH, SIMULATION_SOLVER_STATUS_PATH } from "@/kernel/api/apiPaths";
+import { DATA_ANTENNA_FIELD_SOLUTION_PATH, DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH, DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH, DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH, DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_DISPLAY_PATH, DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH, VISUALIZATION_STATE_PATH, MODEL_SCENE_PATH, SESSIONS_PATH, SESSION_STATUS_PATH, SIMULATION_STAGES_EXECUTION_PATH, DATA_QUANTITIES_PATH } from "@/kernel/api/apiPaths";
+import type { VisualizationStateResource, VisualizationStatePatch, AntennaFieldSolutionResource, AntennaExternalLeadInspectionResource, AntennaInspectionDisplayResource, SceneResource, StageExecutionResource } from "@/kernel/api/apiTypes";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { KernelContext } from "@/kernel/KernelContext";
+import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
+import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
+import { RIBBON_COMMANDS, RIBBON_VISUALIZATION_PATCH_STATE_COMMAND } from "@/modules/ribbon/ribbonCommands";
+import { ClipPlaneLayer } from "@/modules/viewport-3d/layers/ClipPlaneLayer";
+import { DEFAULT_CAMERA_REGISTRY_STATE, CameraRegistryController } from "@/kernel/visualization/CameraRegistryController";
+import { viewport3dManifest } from "@/modules/viewport-3d/manifest";
+import { viewport3dStore } from "@/modules/viewport-3d/viewport3dStore";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { antennaFieldPayloadEtag, antennaInspectionPayloadEtag } from "@/kernel/resources/antennaResources";
@@ -17,6 +32,7 @@ import type { KernelApi } from "@/kernel/types";
 import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useAntennaFieldOverlay } from "@/modules/viewport-3d/hooks/useAntennaFieldOverlay";
 import { Viewport3DCanvas } from "@/modules/viewport-3d/Viewport3DCanvas";
@@ -25,40 +41,56 @@ import { VectorGlyphDerivedBufferCacheProvider } from "@/modules/viewport-3d/lay
 import { Viewport3DResourceTracker } from "@/modules/viewport-3d/viewport3dDiagnostics";
 import { buildObjectExplorerNode } from "@/modules/explorer/builders/objectExplorerNodes";
 import { resolveInspectorRoute } from "@/modules/inspector/inspectorRouteCatalog";
+import { VisualizationDebugSampleTable } from "@/modules/inspector/panels/visualization-debug/VisualizationDebugSampleTable";
+import type { VisualizationDebugPanelModel } from "@/modules/inspector/panels/visualization-debug/VisualizationDebugPanelModel";
+import { buildFieldVectorDebugSamples } from "@/modules/viewport-3d/model/scanFieldVectorDebugStatistics";
+import { makeClosedLoopBrowserFixture } from "../../scripts/fixtures/closed-loop-inspection-data";
 
 const instance = "55555555-5555-4555-8555-555555555555";
 const owner = { session_id: "antenna-viz-fixture", session_epoch: "antenna-viz-fixture@1", request_scope_epoch: `${instance}:1` };
+const scope = () => sessionRequestScopeKey({ sessionId: owner.session_id, sessionEpoch: owner.session_epoch, requestScopeEpoch: owner.request_scope_epoch });
 const digest = `sha256:${"a".repeat(64)}`;
 const subscribe = () => () => {};
 const client = () => true;
 const server = () => false;
-type Call = { path: string; range: string | null; scope: string | null; port: string | null };
-declare global { interface Window { __antennaVisualizationFixture?: { read(): { calls: Call[]; tree: unknown; unexpected: string[] }; selectOther(): void; }; __antennaFieldPixel?: (position: number[]) => number[]; __antennaFieldCanvas?: () => { lost: boolean; width: number; height: number; sampleCount: number; pointCount: number; glyphCount: number; surfaceTriangles: number; wireframeEdges: number; normalization: string; quantity: string; colorMinimum: number; colorMaximum: number; currentVertices: number; currentMaterial: string; currentComponent: number; paletteTextures: number; minimum: number; maximum: number; surfaceUuid: string; wireUuid: string; pointsUuid: string; materialUuid: string; paletteUuid: string; }; } }
+type Call = { method: string; path: string; range: string | null; scope: string | null; port: string | null; component?: string | null; maxSamples?: string | null; decodedQuantityId?: string };
+declare global { interface Window { __antennaVisualizationFixture?: { read(): { calls: Call[]; tree: unknown; unexpected: string[] }; selectOther(): void; }; __antennaFieldPixel?: (position: number[]) => number[]; __antennaFieldCanvas?: () => { glyphMeshUuids: string[]; glyphMaterialUuids: string[]; clippingPlanes: number; lost: boolean; width: number; height: number; sampleCount: number; pointCount: number; glyphCount: number; surfaceTriangles: number; wireframeEdges: number; normalization: string; quantity: string; colorMinimum: number; colorMaximum: number; pointColors: number[]; surfaceColors: number[]; glyphColors: number[][]; glyphMatrices: number[][]; glyphPixelBounds: number[][]; glyphDepthTests: boolean[]; glyphDepthWrites: boolean[]; rangeMinimum: number; rangeMaximum: number; shaderMinimum: number; shaderMaximum: number; vectorScale: number; currentVertices: number; currentMaterial: string; currentComponent: number; paletteTextures: number; minimum: number; maximum: number; surfaceUuid: string; wireUuid: string; pointsUuid: string; materialUuid: string; paletteUuid: string; }; } }
 
 function makeFixture() {
   const scenario = new URL(window.location.href).searchParams.get("scenario") ?? "ready";
+  const sampleCount = scenario === "glyph-count-7" ? 7 : scenario === "glyph-count-14" ? 14 : 10;
   const isInspection = scenario.startsWith("inspection");
+  const cancellation = scenario === "inspection-closed-current-cancellation" ? "current"
+    : scenario === "inspection-closed-magnetic-cancellation" ? "magnetic" : undefined;
+  const closedFixture = scenario.startsWith("inspection-closed") ? makeClosedLoopBrowserFixture(owner, cancellation) : null;
   const isCurrent = scenario.startsWith("inspection-current");
   const scene = {
     revision: 1, objects: [{ id: "antenna", name: "Antenna", role: "antenna" }],
     antenna_field_solve_stages: scenario === "empty" ? [] : [{ id: "solve", source_object_id: "antenna", current_transport_id: "transport", port_mode_ids: ["port"], model: "quasistatic_conduction_biot_savart3d", oersted_realization: "direct_tetra_quadrature", conductor_mesh_policy: "inherit_source", solver_policy: "default", field_sampling_domain: { kind: "global" }, target_refs: [{ kind: "global" }], outputs: [{ id: "solution", quantity: "H_ant_basis" }] }],
     antenna_port_modes: [{ id: "port", schema_version: "antenna_port_mode.v2", source_object_id: "antenna", current_transport_id: "transport", normalization_current_a: 1, branches: [{ id: "signal", inlet_terminal_ref: "signal-in", outlet_terminal_ref: "signal-out", signed_weight: 1 }, { id: "return", inlet_terminal_ref: "return-in", outlet_terminal_ref: "return-out", signed_weight: -1 }] }],
     // Synthetic fixture-only contract; never submitted to a solver.
-    current_transports: [{ name: "transport", conservative_current_view: { stable_vertex_ids: [1], boundary_faces: [{}], identity: {}, pins: {}, closure: {} } }],
+    current_transports: [{ name: "transport", kind: "current_transport", model: "ohmic_poisson",
+      domain: [{ object_id: "antenna" }],
+      boundaries: ["signal-in", "signal-out", "return-in", "return-out"].map((id) => ({
+        id, kind: "voltage_electrode", potential_V: 0, surfaces: [{ object_id: "antenna", surface_id: id }],
+      })),
+      conservative_current_view: { stable_vertex_ids: [1], boundary_faces: [{}], identity: {}, pins: {}, closure: {} },
+    }],
   } as unknown as SceneResource;
   const ref = (layout: string, unit: string, value_count: number) => ({ layout, unit, value_count, scalar_type: "float64_le", sha256: "a".repeat(64), path: "fixture-only" });
   const solution: AntennaFieldSolutionResource = {
     ...owner, solution_id: "solution", stage_id: "solve", status: "ready", quantity: "H_ant_basis", asset_id: "fixture-asset", content_digest: digest,
     source_object_id: scenario === "foreign" ? "foreign-antenna" : "antenna", current_transport_id: "transport", geometry_revision: "historical-geometry", material_revision: "historical-material", mesh_digest: "historical-mesh",
     schema_version: "fixture-only", resource_id: "fixture-only", assumptions: ["Synthetic UI fixture; not a solver result"], component: "vector_basis", gauge_policy: "fixture-only", requested_execution: {}, resolved_execution: {}, solver_policy: {}, signatures: { current_solution_signature: "fixture-current", field_solution_signature: "fixture-field", target_projection_signatures: {} },
-    conductor_positions: ref("node_xyz_interleaved", "m", 30), sample_positions: ref("sample_xyz_interleaved", "m", 30),
+    conductor_positions: ref("node_xyz_interleaved", "m", sampleCount * 3), sample_positions: ref("sample_xyz_interleaved", "m", sampleCount * 3),
     sample_carrier: { domain: { kind: "global" }, carrier_kind: "mesh_nodes", location: "node", topology_digest: "field-topology" },
-    bases: [{ port_mode_id: "port", normalization_current_a: 1, measured_positive_terminal_current_a: 1, normalization_scale: 1, current_balance_certificate_digest: "fixture-only", quadrature_diagnostics: {}, electric_potential_per_ampere: ref("node_scalar", "V/A", 10), current_density_per_ampere: ref("sample_xyz_interleaved", "A/m^2/A", 30), magnetic_field_per_ampere: ref(scenario === "malformed" ? "wrong_layout" : "sample_xyz_interleaved", "A/m/A", 30) }],
+    bases: [{ port_mode_id: "port", normalization_current_a: 1, measured_positive_terminal_current_a: 1, normalization_scale: 1, current_balance_certificate_digest: "fixture-only", quadrature_diagnostics: {}, electric_potential_per_ampere: ref("node_scalar", "V/A", sampleCount), current_density_per_ampere: ref("sample_xyz_interleaved", "A/m^2/A", sampleCount * 3), magnetic_field_per_ampere: ref(scenario === "malformed" ? "wrong_layout" : "sample_xyz_interleaved", "A/m/A", sampleCount * 3) }],
   };
   if (scenario === "cardinality") solution.bases[0].magnetic_field_per_ampere.value_count = 27;
+  if (scenario === "basis-duplicate-port") solution.bases.push({ ...solution.bases[0] });
   if (scenario === "multiport") solution.bases.push({ ...solution.bases[0], port_mode_id: "port-two" });
   const inspection: AntennaExternalLeadInspectionResource = {
-    ...owner, schema_version: "antenna_external_lead_stage_output.v1", resource_id: "fixture-inspection", run_id: "fixture-run", runtime_stage_id: "solve", stage_revision: 1,
+    ...owner, schema_version: "antenna_external_lead_stage_output.v1", resource_id: "fixture-inspection", run_id: "fixture-run", runtime_stage_id: "runtime-solve-001", stage_revision: 1,
     record_content_digest: digest, stage_id: "solve", stage_kind: "antenna_external_lead_inspection", output_id: "inspection", port_mode_id: "port",
     status: "inspection_only", field_scope: "external_electrode_truncation", qualification: "NOT VERIFIED", resolved_action: "inspection_only",
     outputs: [{ kind: "inspection_only", manifest_ref: "fixture-only", payload_units: {}, reused_existing: false, inspection_ref: { content_digest: digest, output_id: "inspection", stage_id: "solve" } }],
@@ -123,7 +155,7 @@ function makeFixture() {
       return { layout, unit, scalar_type, value_count: data.byteLength / (scalar_type === "uint32_le" ? 4 : 8), byte_count: data.byteLength, sha256: [...hash].map((byte) => byte.toString(16).padStart(2, "0")).join(""), path: `fixture-only/${kind}.bin` };
     };
     const display: AntennaInspectionDisplayResource = {
-      ...owner, schema_version: "antenna_inspection_display.v1", resource_id: "fixture-display", run_id: inspection.run_id, runtime_stage_id: "solve", stage_revision: 1,
+      ...owner, schema_version: "antenna_inspection_display.v1", resource_id: "fixture-display", run_id: inspection.run_id, runtime_stage_id: "runtime-solve-001", stage_revision: 1,
       record_content_digest: digest, content_digest: digest, source_object_id: "antenna", status: "inspection_only", qualification: "NOT VERIFIED", field_scope: "external_electrode_truncation", normalization: "raw_authored_current",
       capabilities: { display: true, per_ampere_basis: false, llg_drive: false, source_fft: false, current_density: false }, device_node_count: 10, device_cell_count: 4,
       sampling_carrier: inspection.manifest!.sampling_carrier,
@@ -164,8 +196,20 @@ function makeFixture() {
   })();
   const tree = buildObjectExplorerNode({ id: "antenna", label: "Antenna", objectRole: "antenna" }, { scene });
   const calls: Call[] = [], unexpected: string[] = [];
+  let remote = { revision: 1, overrides: [], layers: {}, camera: DEFAULT_CAMERA_REGISTRY_STATE, clip: { enabled: false, axis: "z", position_percent: 50, flipped: false } } as unknown as VisualizationStateResource;
+  let holdClip = false;
+  const pendingClip: (() => void)[] = [];
   const bus = new EventBus<KernelEventMap>(), resources = new ResourceInvalidationController(bus), diagnostics = new RequestDiagnosticsController();
   const selection = new SelectionController(bus), visualization = new ObjectVisualizationController();
+  const layout = new LayoutController(bus); layout.setActiveTab("geometry"); layout.setActiveViewportMainModule("viewport-3d");
+  const visualizationDebug = new VisualizationDebugController();
+  const commands = new CommandRegistry();
+  for (const command of viewport3dManifest.contributes?.commands ?? []) {
+    if (scenario !== "camera-unavailable" && ["viewport-3d.fit", "viewport-3d.reset-camera", "viewport-3d.open-camera-dialog"].includes(command.id)) commands.register(command);
+  }
+  const clipCommand = RIBBON_COMMANDS.find(command => command.id === RIBBON_VISUALIZATION_PATCH_STATE_COMMAND)!;
+  if (scenario !== "clip-unavailable") commands.register(clipCommand);
+  commands.attachSessionScopeSource({ getScopeKey: () => scope(), subscribe: () => () => {} });
   selection.set({ kind: "object.antenna.visualization", objectId: "antenna" }, "inspector");
   const diagnosticRecorder = new DiagnosticRecorderController({ diagnostics });
   const headers = { "x-api-contract-version": "1.0.0", "x-fullmag-api-instance": instance };
@@ -176,22 +220,73 @@ function makeFixture() {
   const payloadPrefix = path(DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH, "solution_id", "solution").split("{payload_kind}")[0];
   const api = new ControlRoomApi({ baseUrl: "http://antenna-visualization.fixture.invalid", expectedApiInstance: instance, diagnostics, maxGetRetries: 0, fetchImpl: async (input, init) => {
     const request = new Request(input, init), url = new URL(request.url);
-    calls.push({ path: url.pathname, range: request.headers.get("range"), scope: request.headers.get("x-fullmag-session-scope"), port: url.searchParams.get("port_mode_id") });
-    if (calls.length > 80 || request.method !== "GET") throw new Error("Fixture budget/method violation");
+    const call: Call = { method: request.method, path: url.pathname, range: request.headers.get("range"), scope: request.headers.get("x-fullmag-session-scope"), port: url.searchParams.get("port_mode_id") };
+    calls.push(call);
+    if (calls.length > 100) throw new Error("Fixture request budget exceeded");
+    if (url.pathname === VISUALIZATION_STATE_PATH) {
+      if (request.headers.get("x-fullmag-session-scope") !== scope()) throw new Error("Unconfirmed section scope");
+      if (scenario === "clip-unavailable") return new Response("{}", { status: 404, headers });
+      if (request.method === "PATCH") {
+        const patch = await request.json() as VisualizationStatePatch;
+        if (Object.keys(patch).some(key => key !== "clip") || !patch.clip) throw new Error("Unexpected section patch");
+        if (scenario === "clip-reject") return new Response(JSON.stringify({ error: "Section rejected by fixture" }), { status: 409, headers });
+        if (holdClip) await new Promise<void>(resolve => pendingClip.push(resolve));
+        remote = { ...remote, revision: remote.revision + 1, clip: {
+          axis: patch.clip.axis ?? remote.clip.axis, enabled: patch.clip.enabled ?? remote.clip.enabled,
+          flipped: patch.clip.flipped ?? remote.clip.flipped, position_percent: patch.clip.position_percent ?? remote.clip.position_percent,
+        } };
+      } else if (request.method !== "GET") throw new Error("Unexpected section method");
+      return json(remote);
+    }
+    if (request.method !== "GET") throw new Error("Fixture method violation");
+    if (scenario === "tensor-data-preview") {
+      if (url.pathname === SIMULATION_SOLVER_STATUS_PATH) return json({ revision: 1, step_index: 3, sim_time_seconds: 0, runtime_state: "idle" });
+      if (url.pathname === DATA_FIELDS_PATH) return json({ revision: 1, quantities: [{ quantity_id: "m" }, { quantity_id: "spin_current_tensor" }] });
+      const vectorPrefix = DATA_FIELD_VECTOR_PATH.split("{quantity_id}")[0];
+      if (url.pathname.startsWith(vectorPrefix) && url.pathname.endsWith("/samples/vector")) {
+        const quantityId = decodeURIComponent(url.pathname.slice(vectorPrefix.length).split("/")[0]);
+        const component = url.searchParams.get("component"), maxSamples = url.searchParams.get("max_samples");
+        Object.assign(call, { component, maxSamples });
+        if (request.headers.get("x-fullmag-session-scope") !== scope() || maxSamples !== "17" ||
+            !(quantityId === "spin_current_tensor" && component === "full" || quantityId === "m" && (component === "full" || component === "x"))) throw new Error("Unexpected Data Preview field query");
+        const tensor = quantityId === "spin_current_tensor";
+        const values = tensor ? [1, -2, 3, -4, 5, -6, 7, -8, 9, -10, 11, -12, 13, -14, 15, -16, 17, -18] : component === "x" ? [2, -5] : [2, 3, 4, -5, 6, 7];
+        const nComp = tensor ? 9 : component === "x" ? 1 : 3;
+        const body = previewFieldBuffer(quantityId, nComp, values);
+        call.decodedQuantityId = decodeFieldVector(body).quantityId;
+        if (call.decodedQuantityId !== quantityId) throw new Error("Data Preview fixture lost full decoded quantity identity");
+        return new Response(body, { headers: { ...headers, "content-type": "application/octet-stream", "x-fullmag-encoding": "FMVP;version=5", "x-fullmag-quantity-id": quantityId, etag: `"preview-${quantityId}-${component}"` } });
+      }
+    }
     if (url.pathname === SESSIONS_PATH) return json({ schema_version: "1.0", sessions: [{ session_id: owner.session_id, name: "Fixture", current: true, status: "idle" }] });
-    if (url.pathname === SESSION_STATUS_PATH) return json({ session: { ...owner, name: "Fixture", created_at: "fixture", workspace_root: "fixture" }, resources: { scene_revision: 1 }, capabilities: {}, lifecycle: { solver: "idle", session_resource: "active", connectivity: "connected", commandability: "writable" } });
+    if (url.pathname === SESSION_STATUS_PATH) return json({ session: { ...owner, name: "Fixture", created_at: "fixture", workspace_root: "fixture" }, run: { run_id: execution.run_id }, resources: { scene_revision: 1 }, capabilities: {}, lifecycle: { solver: "idle", session_resource: "active", connectivity: "connected", commandability: "writable" } });
+    if (url.pathname === DATA_QUANTITIES_PATH && (scenario === "tensor-table" || scenario === "tensor-data-preview")) return json({ schema_version: "tensor-fixture.v1", quantities: [{ id: "spin_current_tensor", tensor: { rank: 2, shape: [3, 3], layout: "flow_major", axes: ["flow", "spin"], component_labels: ["Q_xx", "Q_xy", "Q_xz", "Q_yx", "Q_yy", "Q_yz", "Q_zx", "Q_zy", "Q_zz"] } }] });
+    // This fixture has no canonical raw artifact carriers; their public path has a separate fixture.
+    if (url.pathname === DATA_FIELDS_PATH) return json({ revision: 1, quantities: [] });
+    if (url.pathname === DATA_QUANTITIES_PATH) return json({ schema_version: "basis-fixture.v1", quantities: [] });
     if (url.pathname === MODEL_SCENE_PATH) return json(scene);
     if (url.pathname === SIMULATION_STAGES_EXECUTION_PATH) return json(execution);
     if (url.pathname === metadataPath) return isInspection ? new Response("{}", { status: 404, headers }) : json(solution);
-    if (url.pathname === catalogPath) return json({ ...owner, stage_id: "solve", status: "ready", outputs: [{ output_id: "solution", solution_ref: { asset_id: solution.asset_id, content_digest: digest, stage_id: "solve" } }] });
-    if (url.pathname === path(DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH, "stage_id", "solve")) { if (isInspection) await displayMetadata(); return isInspection ? json(inspection) : new Response("{}", { status: 404, headers }); }
-    if (url.pathname === path(DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_DISPLAY_PATH, "stage_id", "solve")) {
+    if (url.pathname === catalogPath) {
+      const output = { output_id: "solution", solution_ref: { output_id: scenario === "basis-output-ref" ? "other" : "solution", asset_id: solution.asset_id, content_digest: digest, stage_id: "solve" } };
+      return json({ ...owner, stage_id: "solve", status: "ready", outputs: scenario === "basis-duplicate-output" ? [output, { ...output }] : [output] });
+    }
+    if (url.pathname === path(DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH, "stage_id", "runtime-solve-001")) { if (closedFixture) { const closed = await closedFixture; if (scenario === "inspection-closed-foreign") closed.inspection.run_id = "foreign-run"; return json(closed.inspection); } if (isInspection) await displayMetadata(); return isInspection ? json(inspection) : new Response("{}", { status: 404, headers }); }
+    if (url.pathname === path(DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_DISPLAY_PATH, "stage_id", "runtime-solve-001")) {
       if (!isInspection || url.searchParams.get("content_digest") !== digest) throw new Error("Unexpected display metadata contract");
+      if (closedFixture) return json((await closedFixture).display);
       return json(await displayMetadata());
     }
-    const inspectionPrefix = path(DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH, "stage_id", "solve").split("{payload_kind}")[0];
+    const inspectionPrefix = path(DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH, "stage_id", "runtime-solve-001").split("{payload_kind}")[0];
     if (url.pathname.startsWith(inspectionPrefix)) {
       const kind = url.pathname.slice(inspectionPrefix.length) as keyof typeof rawPayloads;
+      if (closedFixture) {
+        const closed = await closedFixture;
+        const selected = kind as keyof typeof closed.payloads;
+        const data = closed.payloads[selected], descriptor = closed.inspection.closed_loop_manifest.payloads[selected];
+        if (!data || !descriptor || request.headers.get("range") !== `bytes=0-${data.byteLength - 1}` || url.searchParams.get("content_digest") !== digest) throw new Error("Closed-loop fixture payload identity/range differs");
+        return new Response(data, { status: 206, headers: { ...headers, "content-type": "application/octet-stream", etag: await antennaInspectionPayloadEtag(closed.inspection as unknown as AntennaExternalLeadInspectionResource, selected, descriptor.sha256), "content-range": `bytes 0-${data.byteLength - 1}/${data.byteLength}` } });
+      }
       if (!isInspection || !Object.hasOwn(rawPayloads, kind) || url.searchParams.get("content_digest") !== digest) throw new Error("Unexpected inspection payload contract");
       const metadata = await displayMetadata();
       const currentDescriptors = {
@@ -217,11 +312,14 @@ function makeFixture() {
         view.setFloat64(index * 8, scenario === "nonfinite" && index === 9 && !kind.endsWith("positions") ? NaN : value, true);
       }
       const etag = scenario === "etag" ? '"wrong-revision"' : antennaFieldPayloadEtag(solution, kind, port);
-      return new Response(scenario === "short" ? data.slice(0, Math.max(0, bytes - 8)) : data, { status: 206, headers: { ...headers, "content-type": "application/octet-stream", etag, "content-range": `bytes 0-${bytes - 1}/${kind === "electric_potential_per_ampere" ? 80 : 240}`, "x-fullmag-scalar-type": "float64_le" } });
+      return new Response(scenario === "short" ? data.slice(0, Math.max(0, bytes - 8)) : data, { status: 206, headers: { ...headers, "content-type": "application/octet-stream", etag, "content-range": `bytes 0-${bytes - 1}/${kind === "electric_potential_per_ampere" ? sampleCount * 8 : sampleCount * 24}`, "x-fullmag-scalar-type": "float64_le" } });
     }
     unexpected.push(url.pathname); throw new Error(`Unexpected fixture request: ${url.pathname}`);
   } });
-  return { kernel: { api, bus, resources, diagnostics, diagnosticRecorder, selection, visualization } as unknown as KernelApi, control: { read: () => ({ calls, tree, unexpected }), selectOther: () => selection.set({ objectId: "other", ref: null }, "inspector") } };
+  const visualizationSync = new VisualizationRegistrySyncController({ api: api.visualization, resourceCacheScope: api.resourceCacheScope, resources });
+  const cameraRegistry = new CameraRegistryController({ api: api.visualization, idleFlushMs: null, windowTarget: null, documentTarget: null });
+  cameraRegistry.patchCamera({ position: [7e-7, 2e-7, 5e-7] });
+  return { kernel: { api, bus, resources, diagnostics, diagnosticRecorder, layout, visualizationDebug, analysisFieldOverlay: new AnalysisFieldOverlayController(), authoringHistory: new AuthoringHistoryController(api, resources), selection, visualization, commands, cameraRegistry, visualizationSync } as unknown as KernelApi, control: { read: () => ({ calls, tree, unexpected, camera: cameraRegistry.getSnapshot(), viewport: viewport3dStore.getSnapshot(), clip: remote.clip, clipPending: pendingClip.length }), holdClip: () => { holdClip = true; }, releaseClip: () => { holdClip = false; for (const resolve of pendingClip.splice(0)) resolve(); }, selectOther: () => selection.set({ objectId: "other", ref: null }, "inspector") } };
 }
 
 function FieldCanvasProbe({ tracker }: { tracker: Viewport3DResourceTracker }) {
@@ -233,17 +331,45 @@ function FieldCanvasProbe({ tracker }: { tracker: Viewport3DResourceTracker }) {
       const target = new WebGLRenderTarget(size.x * 2, size.y * 2);
       target.texture.colorSpace = SRGBColorSpace;
       const previous = gl.getRenderTarget(), pixel = new Uint8Array(4);
+      const field = scene.getObjectByName("antenna-scientific-field");
+      const decorations = scene.children.filter(child => child !== field && !child.getObjectByName("antenna-scientific-field"))
+        .map(object => ({ object, visible: object.visible }));
+      for (const { object } of decorations) object.visible = false;
       try {
         gl.setRenderTarget(target); gl.render(scene, camera);
         const projected = new Vector3(position[0], position[1], position[2]).project(camera);
         gl.readRenderTargetPixels(target, Math.floor((projected.x + 1) / 2 * target.width), Math.floor((projected.y + 1) / 2 * target.height), 1, 1, pixel);
         return Array.from(pixel);
-      } finally { gl.setRenderTarget(previous); target.dispose(); }
+      } finally { gl.setRenderTarget(previous); target.dispose(); for (const { object, visible } of decorations) object.visible = visible; }
     };
     window.__antennaFieldCanvas = () => {
       const size = gl.getDrawingBufferSize(new Vector2());
       let glyphCount = 0;
-      scene.traverse((object) => { if ("isInstancedMesh" in object && object.isInstancedMesh && "count" in object) glyphCount = Math.max(glyphCount, Number(object.count)); });
+      const glyphColors: number[][] = [], glyphMatrices: number[][] = [];
+      const glyphMeshUuids: string[] = [], glyphMaterialUuids: string[] = [];
+      const glyphDepthTests: boolean[] = [], glyphDepthWrites: boolean[] = [];
+      const glyphPixelBounds: number[][] = [];
+      scene.traverse((object) => { if (object instanceof InstancedMesh) {
+        glyphCount = Math.max(glyphCount, object.count);
+        glyphMeshUuids.push(object.uuid);
+        for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+          glyphMaterialUuids.push(material.uuid);
+          glyphDepthTests.push(material.depthTest); glyphDepthWrites.push(material.depthWrite);
+        }
+        glyphColors.push(Array.from(object.instanceColor?.array.slice(0, object.count * 3) ?? []));
+        glyphMatrices.push(Array.from(object.instanceMatrix.array.slice(0, object.count * 16)));
+        object.geometry.computeBoundingBox();
+        const bounds = object.geometry.boundingBox!;
+        for (let index = 0; index < object.count; index++) {
+          const matrix = new Matrix4(); object.getMatrixAt(index, matrix);
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const x of [bounds.min.x, bounds.max.x]) for (const y of [bounds.min.y, bounds.max.y]) for (const z of [bounds.min.z, bounds.max.z]) {
+            const point = new Vector3(x, y, z).applyMatrix4(matrix).applyMatrix4(object.matrixWorld).project(camera);
+            minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x); minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y);
+          }
+          glyphPixelBounds.push([(maxX - minX) * size.x / 2, (maxY - minY) * size.y / 2]);
+        }
+      } });
       const field = scene.getObjectByName("antenna-scientific-field");
       const points = scene.getObjectByName("antenna-field-samples");
       const surface = scene.getObjectByName("antenna-field-surface"), wireframe = scene.getObjectByName("antenna-field-wireframe");
@@ -255,7 +381,12 @@ function FieldCanvasProbe({ tracker }: { tracker: Viewport3DResourceTracker }) {
       }
       const indices = (object: typeof surface) => object && "geometry" in object && object.geometry instanceof BufferGeometry ? object.geometry.index?.count ?? 0 : 0;
       const currentMaterial = surface && "material" in surface && surface.material instanceof ShaderMaterial ? surface.material : null;
-      return { lost: gl.getContext().isContextLost(), width: size.x, height: size.y, sampleCount: field?.userData.sampleCount ?? 0, pointCount: points ? field?.userData.sampleCount ?? 0 : 0, glyphCount, surfaceTriangles: indices(surface) / 3, wireframeEdges: indices(wireframe) / 2, quantity: field?.userData.quantity ?? "", normalization: field?.userData.normalization ?? "", colorMinimum, colorMaximum,
+      return { glyphMeshUuids, glyphMaterialUuids, clippingPlanes: gl.clippingPlanes.length, lost: gl.getContext().isContextLost(), width: size.x, height: size.y, sampleCount: field?.userData.sampleCount ?? 0, pointCount: points ? field?.userData.sampleCount ?? 0 : 0, glyphCount, surfaceTriangles: indices(surface) / 3, wireframeEdges: indices(wireframe) / 2, quantity: field?.userData.quantity ?? "", normalization: field?.userData.normalization ?? "", colorMinimum, colorMaximum,
+        pointColors: points && "geometry" in points && points.geometry instanceof BufferGeometry ? Array.from(points.geometry.getAttribute("color")?.array ?? []) : [], glyphColors, glyphMatrices, glyphPixelBounds, glyphDepthTests, glyphDepthWrites,
+        surfaceColors: surface && "geometry" in surface && surface.geometry instanceof BufferGeometry ? Array.from(surface.geometry.getAttribute("color")?.array ?? []) : [],
+        rangeMinimum: field?.userData.colorRange?.minimum ?? 0, rangeMaximum: field?.userData.colorRange?.maximum ?? 0,
+        shaderMinimum: currentMaterial?.uniforms.fmAntennaMinimum.value ?? 0, shaderMaximum: currentMaterial?.uniforms.fmAntennaMaximum.value ?? 0,
+        vectorScale: field?.userData.surfaceVectorScale ?? 1,
         currentVertices: geometry instanceof BufferGeometry ? geometry.getAttribute("fmAntennaCurrentVector")?.count ?? 0 : 0,
         currentMaterial: currentMaterial?.name ?? "", currentComponent: currentMaterial?.uniforms.fmAntennaComponent.value ?? -1,
         paletteTextures: tracker.getSnapshot().textures, minimum: field?.userData.minimum ?? 0, maximum: field?.userData.maximum ?? 0,
@@ -271,6 +402,15 @@ function FieldCanvasProbe({ tracker }: { tracker: Viewport3DResourceTracker }) {
 
 function FieldViewport() {
   const model = useAntennaFieldOverlay();
+  const section = useVisualizationStateResource();
+  const positions = model?.wirePositions ?? model?.positions;
+  const bounds = useMemo(() => {
+    if (!positions?.length) return null;
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (let index = 0; index < positions.length; index++) { const axis = index % 3; min[axis] = Math.min(min[axis], positions[index]); max[axis] = Math.max(max[axis], positions[index]); }
+    const size = max.map((value, axis) => value - min[axis]) as [number, number, number];
+    return { center: min.map((value, axis) => value + size[axis] / 2) as [number, number, number], size, radius: Math.hypot(...size) / 2 };
+  }, [positions]);
   const owner = useSessionResourceIdentity();
   const tracker = useMemo(() => new Viewport3DResourceTracker(), []);
   useEffect(() => () => tracker.disposeAll(), [tracker]);
@@ -279,19 +419,49 @@ function FieldViewport() {
       <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
         <color attach="background" args={["black"]} />
         <FieldCanvasProbe tracker={tracker} />
+        {section.optimisticData?.clip.enabled ? <ClipPlaneLayer bounds={bounds} clip={section.optimisticData.clip} frameRotationDegrees={0} intersectionMarkers={null}
+          colors={{ accent: "white", background: "black", field: "white", mesh: "white", wire: "white" }} tracker={tracker} /> : null}
         <AntennaFieldLayer model={model} colors={{ accent: "white", background: "black", field: "white", mesh: "white", wire: "white" }} tracker={tracker} sessionIdentity={owner} />
       </VectorGlyphDerivedBufferCacheProvider>
     </Viewport3DCanvas>
   </div>;
 }
 
+// FMVP v5 retains the complete quantity ID after the fixed 16-byte legacy prefix.
+function previewFieldBuffer(quantityId: string, nComp: number, values: number[]) {
+  const encoder = new TextEncoder(), quantity = encoder.encode(quantityId), domain = encoder.encode("preview-domain"), scopeKind = encoder.encode("full");
+  const metadataLength = (88 + scopeKind.length + domain.length + quantity.length + 7) & ~7;
+  const buffer = new ArrayBuffer(48 + metadataLength + values.length * 8), header = new DataView(buffer);
+  new Uint8Array(buffer, 0, 4).set(encoder.encode("FMVP"));
+  header.setUint8(4, 5); header.setUint8(5, 1); header.setUint8(6, nComp);
+  header.setUint32(8, metadataLength, true); header.setUint32(12, values.length, true);
+  header.setUint32(16, 2, true); header.setUint32(20, 1, true); header.setUint32(24, 1, true);
+  new Uint8Array(buffer, 28, 16).set(quantity.subarray(0, 16));
+  const metadata = new DataView(buffer, 48, metadataLength);
+  new Uint8Array(buffer, 48, 4).set(encoder.encode("FMMI"));
+  metadata.setUint16(4, 4, true); metadata.setUint16(8, domain.length, true);
+  metadata.setUint16(64, scopeKind.length, true); metadata.setUint16(80, quantity.length, true);
+  let offset = 48 + 88;
+  for (const bytes of [scopeKind, domain, quantity]) { new Uint8Array(buffer, offset, bytes.length).set(bytes); offset += bytes.length; }
+  new Float64Array(buffer, 48 + metadataLength).set(values);
+  return buffer;
+}
+
+function TensorSampleTableFixture() {
+  const samples = buildFieldVectorDebugSamples({ nComp: 9, pointCount: 2, nodeIndices: new Uint32Array([7, 19]), values: Float64Array.from([1, -2, 3, -4, 5, -6, 7, -8, 9, -10, 11, -12, 13, -14, 15, -16, 17, -18]) }).samples;
+  const model = { viewports: [{ carriers: [{ carrierId: "tensor-fixture", observations: [{ query: { quantityId: "spin_current_tensor", component: "full" }, backendMeta: { unit: "fixture-unit" }, carrier: { samples } }] }] }] } as unknown as VisualizationDebugPanelModel;
+  return <section aria-label="Synthetic tensor table fixture"><h2>Tensor sample table · controlled data</h2><VisualizationDebugSampleTable model={model} /></section>;
+}
+
 function MountedFixture() {
   const fixture = useMemo(() => makeFixture(), []);
-  useEffect(() => { window.__antennaVisualizationFixture = fixture.control; return () => { delete window.__antennaVisualizationFixture; }; }, [fixture]);
+  useEffect(() => { window.__antennaVisualizationFixture = fixture.control; fixture.kernel.visualizationSync.start(); return () => { fixture.kernel.visualizationSync.stop(); delete window.__antennaVisualizationFixture; }; }, [fixture]);
   const legacy = new URL(window.location.href).searchParams.has("legacy");
   const kind = legacy ? "object.visualization" : "object.antenna.visualization";
   const Panel = resolveInspectorRoute(kind)!.component;
-  return <KernelContext.Provider value={fixture.kernel}><FieldViewport /><Panel selection={{ ...EMPTY_SELECTION, kind, objectId: "antenna", ref: { type: "scene-object", kind, nodeId: "model:object:antenna:visualization", objectId: "antenna", visualizationTargetId: "object:antenna" } }} /></KernelContext.Provider>;
+  const tensorTable = new URL(window.location.href).searchParams.get("scenario") === "tensor-table";
+  const dataPreview = new URL(window.location.href).searchParams.get("scenario") === "tensor-data-preview";
+  return <KernelContext.Provider value={fixture.kernel}><FieldViewport /><Panel selection={{ ...EMPTY_SELECTION, kind, objectId: "antenna", ref: { type: "scene-object", kind, nodeId: "model:object:antenna:visualization", objectId: "antenna", visualizationTargetId: "object:antenna" } }} />{tensorTable ? <TensorSampleTableFixture /> : null}{dataPreview ? <DataPreviewDialog open={true} onOpenChange={() => {}} /> : null}</KernelContext.Provider>;
 }
 
 export default function AntennaVisualizationFixturePage() {

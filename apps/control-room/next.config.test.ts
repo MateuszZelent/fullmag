@@ -11,7 +11,11 @@ import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
 import nextConfig, {
+  DOCKER_DEV_WATCH_POLLING_DEFAULT_MS,
+  isDockerDevGeneratedWatchPath,
   resolveControlRoomDistDir,
+  resolveDockerDevWatchOptions,
+  resolveDockerDevWatchPollingMs,
   validateManagedControlRoomStorage,
 } from "./next.config";
 
@@ -22,6 +26,110 @@ describe("control-room Next dev proxy config", () => {
       destination: "/workspace",
       permanent: false,
     });
+  });
+
+  it("keeps live Docker source trees watchable while ignoring generated trees", () => {
+    expect(DOCKER_DEV_WATCH_POLLING_DEFAULT_MS).toBe(5000);
+    expect(isDockerDevGeneratedWatchPath("/state/.fullmag-frontend/out")).toBe(
+      true,
+    );
+    expect(isDockerDevGeneratedWatchPath("/state/.next-control-room-8080/dev")).toBe(
+      true,
+    );
+    expect(isDockerDevGeneratedWatchPath("/state/node_modules/next")).toBe(true);
+    for (const livePath of [
+      "/state/development/workspace/apps/control-room/app/page.tsx",
+      "/state/development/workspace/apps/control-room/src/kernel.ts",
+      "/state/development/workspace/apps/control-room/public/logo.svg",
+      "/state/development/workspace/apps/control-room/scripts/dev.ts",
+    ]) {
+      expect(isDockerDevGeneratedWatchPath(livePath)).toBe(false);
+    }
+
+    const inheritedIgnored = /(?:^|[\\/])\.git(?:[\\/]|$)/;
+    const options = resolveDockerDevWatchOptions(inheritedIgnored, "5000");
+    expect(options.poll).toBe(5000);
+    const ignored = Array.isArray(options.ignored)
+      ? options.ignored
+      : [options.ignored];
+    const matchesIgnored = (pathValue: string) =>
+      ignored.some((entry) =>
+        entry instanceof RegExp ? entry.test(pathValue) : false,
+      );
+    expect(matchesIgnored("/state/repo/.git/HEAD")).toBe(true);
+    expect(matchesIgnored("/state/repo/.next-control-room-8080/dev")).toBe(
+      true,
+    );
+    expect(matchesIgnored("/state/repo/apps/control-room/app/page.tsx")).toBe(
+      false,
+    );
+
+    const stringOptions = resolveDockerDevWatchOptions("**/.git/**", "5000");
+    expect(Array.isArray(stringOptions.ignored)).toBe(true);
+    expect(stringOptions.ignored).toContain("**/.git/**");
+    expect(stringOptions.ignored).toContain("**/.next*/**");
+
+    const arrayOptions = resolveDockerDevWatchOptions(
+      ["**/.git/**", "**/.cache/**"],
+      "5000",
+    );
+    expect(arrayOptions.ignored).toEqual([
+      "**/.git/**",
+      "**/.cache/**",
+      "**/node_modules/**",
+      "**/.fullmag-frontend/**",
+      "**/.next*/**",
+    ]);
+    expect(() => resolveDockerDevWatchOptions([/\.git/], "5000")).toThrow(
+      /arrays must contain only strings/,
+    );
+  });
+
+  it("validates and preserves an explicit Docker polling override", () => {
+    expect(resolveDockerDevWatchPollingMs("2000")).toBe(2000);
+    expect(resolveDockerDevWatchOptions(undefined, "7500").poll).toBe(7500);
+    expect(() => resolveDockerDevWatchPollingMs("249")).toThrow(
+      /between 250 and 10000 ms/,
+    );
+    expect(() => resolveDockerDevWatchPollingMs("10001")).toThrow(
+      /between 250 and 10000 ms/,
+    );
+  });
+
+  it("applies the watcher policy only to the Docker development webpack config", () => {
+    const webpack = nextConfig.webpack;
+    expect(webpack).toBeTypeOf("function");
+    const originalMode = process.env.FULLMAG_DOCKER_FRONTEND;
+    const originalPolling = process.env.WATCHPACK_POLLING;
+    try {
+      process.env.FULLMAG_DOCKER_FRONTEND = "dev";
+      delete process.env.WATCHPACK_POLLING;
+      const dockerDevConfig = webpack?.(
+        { watchOptions: { ignored: /\.git/ } } as never,
+        { dev: true } as never,
+      );
+      expect(dockerDevConfig?.watchOptions?.poll).toBe(5000);
+      expect(dockerDevConfig?.watchOptions?.ignored).not.toBeTypeOf("function");
+
+      process.env.FULLMAG_DOCKER_FRONTEND = "static";
+      const releaseConfig = webpack?.(
+        { watchOptions: { ignored: /\.git/ } } as never,
+        { dev: true } as never,
+      );
+      expect(releaseConfig?.watchOptions?.poll).toBeUndefined();
+      expect(releaseConfig?.watchOptions?.ignored).toEqual(/\.git/);
+    } finally {
+      if (originalMode === undefined) {
+        delete process.env.FULLMAG_DOCKER_FRONTEND;
+      } else {
+        process.env.FULLMAG_DOCKER_FRONTEND = originalMode;
+      }
+      if (originalPolling === undefined) {
+        delete process.env.WATCHPACK_POLLING;
+      } else {
+        process.env.WATCHPACK_POLLING = originalPolling;
+      }
+    }
   });
 
   it("uses the managed export child so Next cleans storage instead of a repo directory", () => {

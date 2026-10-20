@@ -77,45 +77,117 @@ pub fn accepted_run_has_scheduler_ready_task(store: &SessionStore, run_id: &RunI
         {
             continue;
         }
-        let task_id =
-            fullmag_session::task_id_for_study_step(run_id.as_str(), &study_step.step_id)?;
-        let durable_task = catalog
-            .tasks
-            .iter()
-            .find(|task| task.task_id == task_id)
-            .with_context(|| {
-                format!(
-                    "accepted scheduler step `{}` has no durable task",
-                    study_step.step_id
-                )
-            })?;
-        let scheduler_owned_accepted = durable_task.lifecycle == FmsTaskLifecycle::Accepted
-            && matches!(
-                &durable_task.readiness,
-                FmsTaskReadiness::Blocked { reason }
-                    if reason == crate::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION
-            )
-            && durable_task.attempt_id.is_none()
-            && durable_task.resource_id.is_none();
-        let unclaimed_queue = durable_task.lifecycle == FmsTaskLifecycle::Queued
-            && durable_task.readiness == FmsTaskReadiness::Ready
-            && durable_task.attempt_id.is_none()
-            && durable_task.resource_id.is_none();
-        if !scheduler_owned_accepted && !unclaimed_queue {
-            continue;
-        }
-        if scheduler_owned_accepted
-            && store
-                .read_task_preparation_receipt(run_id.as_str(), task_id.as_str())?
-                .is_none()
-        {
-            continue;
-        }
-        if inputs_are_automatically_resolvable(run_id.as_str(), &study_step.inputs, &catalog)? {
+        if scheduler_step_is_ready(store, run_id, &accepted, &catalog, study_step, execution_step)? {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Report readiness for one exact durable preparation anchor.  Callers that
+/// already possess an immutable anchor must not rediscover a different first
+/// planned step; this applies the same dependency and input checks as the
+/// scheduler's ordinary readiness scan.
+pub fn accepted_run_step_is_scheduler_ready(
+    store: &SessionStore,
+    run_id: &RunId,
+    step_id: &str,
+) -> Result<bool> {
+    let intent = store
+        .read_run_intent(run_id.as_str())?
+        .context("accepted scheduler requires an immutable run intent")?;
+    let specification: fullmag_application::RunSpecification =
+        serde_json::from_value(intent.specification.clone())
+            .context("accepted scheduler run specification is not typed")?;
+    if specification.run_id != *run_id {
+        bail!("accepted scheduler run id differs from the immutable RunSpec");
+    }
+    let Some(catalog) = store.read_run_catalog(run_id.as_str())? else {
+        return Ok(false);
+    };
+    if catalog.tasks.iter().all(|task| {
+        matches!(
+            task.lifecycle,
+            FmsTaskLifecycle::Succeeded
+                | FmsTaskLifecycle::Failed
+                | FmsTaskLifecycle::Cancelled
+                | FmsTaskLifecycle::Interrupted
+        )
+    }) {
+        return Ok(false);
+    }
+    let accepted = crate::load_accepted_study_snapshot(
+        store,
+        run_id,
+        &specification.snapshot.project_id,
+    )?;
+    let study_step = accepted
+        .study
+        .steps
+        .iter()
+        .find(|step| step.step_id == step_id)
+        .with_context(|| format!("accepted scheduler step `{step_id}` is missing"))?;
+    let execution_step = accepted
+        .lowered
+        .steps
+        .iter()
+        .find(|step| step.step_id == step_id)
+        .with_context(|| format!("accepted scheduler lowered step `{step_id}` is missing"))?;
+    scheduler_step_is_ready(store, run_id, &accepted, &catalog, study_step, execution_step)
+}
+
+fn scheduler_step_is_ready(
+    store: &SessionStore,
+    run_id: &RunId,
+    accepted: &crate::study::AcceptedStudySnapshot,
+    catalog: &fullmag_session::FmsRunCatalog,
+    study_step: &fullmag_authoring::StudyStep,
+    execution_step: &fullmag_plan::StudyStepExecutionPlan,
+) -> Result<bool> {
+    if !study_step.enabled
+        || !execution_step.enabled
+        || !matches!(
+            &execution_step.status,
+            fullmag_plan::StudyStepLoweringStatus::Planned
+        )
+    {
+        return Ok(false);
+    }
+    let task_id = fullmag_session::task_id_for_study_step(run_id.as_str(), &study_step.step_id)?;
+    let durable_task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .with_context(|| {
+            format!(
+                "accepted scheduler step `{}` has no durable task",
+                study_step.step_id
+            )
+        })?;
+    let scheduler_owned_accepted = durable_task.lifecycle == FmsTaskLifecycle::Accepted
+        && matches!(
+            &durable_task.readiness,
+            FmsTaskReadiness::Blocked { reason }
+                if reason == crate::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION
+        )
+        && durable_task.attempt_id.is_none()
+        && durable_task.resource_id.is_none();
+    let unclaimed_queue = durable_task.lifecycle == FmsTaskLifecycle::Queued
+        && durable_task.readiness == FmsTaskReadiness::Ready
+        && durable_task.attempt_id.is_none()
+        && durable_task.resource_id.is_none();
+    if !scheduler_owned_accepted && !unclaimed_queue {
+        return Ok(false);
+    }
+    if scheduler_owned_accepted
+        && store
+            .read_task_preparation_receipt(run_id.as_str(), task_id.as_str())?
+            .is_none()
+    {
+        return Ok(false);
+    }
+    Ok(crate::study_completion::dependencies_ready(store, accepted, study_step)?
+        && inputs_are_automatically_resolvable(run_id.as_str(), &study_step.inputs, catalog)?)
 }
 
 /// Select and durably dispatch one accepted task for the supplied resource.
@@ -172,7 +244,11 @@ pub fn schedule_next_ready_accepted_task_with_host(
                 return Ok(None);
             }
             let request = crate::host_allocation::host_request_for_task_claim(
-                store, ledger, claim, placement,
+                store,
+                ledger,
+                claim,
+                placement,
+                host.expected_runtime_generation_sha256(),
             )?;
             crate::try_commit_claimed_task_admission_with_host(
                 store, task, claim, ledger, &request, inputs,
@@ -201,6 +277,13 @@ pub fn resume_next_admitted_accepted_task_with_host(
             .context("accepted scheduler recovery run specification is not typed")?;
     if specification.run_id != *run_id {
         bail!("accepted scheduler recovery run id differs from the immutable RunSpec");
+    }
+    // Recovery can find a durable Preparing claim after a process restart.
+    // Requiring the same immutable Compute release here prevents an old claim
+    // from turning into a worker launch when a manual run is still held.
+    // Runs without the optional manual policy retain legacy automatic behavior.
+    if !store.accepted_run_start_permitted(run_id.as_str())? {
+        return Ok(None);
     }
     let catalog = store
         .read_run_catalog(run_id.as_str())?
@@ -280,7 +363,8 @@ pub fn resume_next_admitted_accepted_task_with_host(
         )?
         .context("preparing accepted task has no durable task-admission record")?;
     validate_admission_matches_claim(&admission, durable_task, &claim)?;
-    if admission.lease.host_launch_binding.as_ref() != Some(&host.ledger().worker_launch_binding())
+    let current_binding = crate::retry_store_writer_busy(|| host.ledger().worker_launch_binding())?;
+    if admission.lease.host_launch_binding.as_ref() != Some(&current_binding)
     {
         bail!("task admission host binding differs from the configured host ledger");
     }
@@ -705,6 +789,11 @@ fn schedule_next_ready_accepted_task_with_admission(
     if specification.run_id != *run_id {
         bail!("accepted scheduler run id differs from the immutable RunSpec");
     }
+    // Preparation remains independent. An explicit-start run must not be
+    // auto-queued or allocated merely because a preparation receipt exists.
+    if !store.accepted_run_start_permitted(run_id.as_str())? {
+        return Ok(None);
+    }
     let accepted =
         crate::load_accepted_study_snapshot(store, run_id, &specification.snapshot.project_id)?;
 
@@ -760,41 +849,14 @@ fn schedule_next_ready_accepted_task_with_admission(
         let catalog = store
             .read_run_catalog(run_id.as_str())?
             .context("accepted scheduler requires a durable run catalog")?;
-        let task_id =
-            fullmag_session::task_id_for_study_step(run_id.as_str(), &study_step.step_id)?;
-        let durable_task = catalog
-            .tasks
-            .iter()
-            .find(|task| task.task_id == task_id)
-            .with_context(|| {
-                format!(
-                    "accepted scheduler step `{}` has no durable task",
-                    study_step.step_id
-                )
-            })?;
-        let scheduler_owned_accepted = durable_task.lifecycle == FmsTaskLifecycle::Accepted
-            && matches!(
-                &durable_task.readiness,
-                FmsTaskReadiness::Blocked { reason }
-                    if reason == crate::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION
-            )
-            && durable_task.attempt_id.is_none()
-            && durable_task.resource_id.is_none();
-        let unclaimed_queue = durable_task.lifecycle == FmsTaskLifecycle::Queued
-            && durable_task.readiness == FmsTaskReadiness::Ready
-            && durable_task.attempt_id.is_none()
-            && durable_task.resource_id.is_none();
-        if !scheduler_owned_accepted && !unclaimed_queue {
-            continue;
-        }
-        if scheduler_owned_accepted
-            && store
-                .read_task_preparation_receipt(run_id.as_str(), task_id.as_str())?
-                .is_none()
-        {
-            continue;
-        }
-        if !inputs_are_automatically_resolvable(run_id.as_str(), &study_step.inputs, &catalog)? {
+        if !scheduler_step_is_ready(
+            store,
+            run_id,
+            &accepted,
+            &catalog,
+            study_step,
+            execution_step,
+        )? {
             continue;
         }
 
@@ -863,7 +925,7 @@ fn schedule_next_ready_accepted_task_with_admission(
             store,
             &mut coordinator,
             WorkerEventEnvelope {
-                schema_version: WORKER_PROTOCOL_SCHEMA.into(),
+                schema_version: prepare.schema_version.clone(),
                 message_id: prepared_message_id,
                 sequence: 1,
                 claim: claim.identity(),
@@ -1246,5 +1308,365 @@ mod resource_requirement_tests {
             &cpu_request,
             &offer(ResourceKind::Cpu, 500, 2_000, 0, 4_000),
         ));
+    }
+}
+
+#[cfg(test)]
+mod accepted_start_tests {
+    use crate::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION;
+    use fullmag_application::{
+        ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget, ResourceBudget,
+        ResourceKind, RunId, RunSpecification, StudyId, StudyReference,
+    };
+    use fullmag_authoring::{
+        PrimitiveStageNode, StudyDiscretizationReference, StudyExecutionProfileReference,
+        StudyModelReference, StudyPipelineDocument, StudyPipelineNode, StudyPipelineNodeSource,
+        StudyPlan, StudyPlanMigrationDefaults, StudyPrimitiveStageKind, StudySolverConfigReference,
+    };
+    use fullmag_ir::ProblemIR;
+    use fullmag_plan::{
+        lower_study_plan_with_catalog, StudyProblemCatalog, StudyProblemCatalogEntry,
+    };
+    use fullmag_session::{
+        FmsRunCatalog, FmsRunIntent, FmsTaskCatalogEntry, FmsTaskLifecycle, FmsTaskPreparationReceipt,
+        FmsTaskReadiness, SessionStore, FMS_RUN_CATALOG_SCHEMA,
+    };
+    use serde_json::json;
+
+    struct Fixture {
+        _directory: tempfile::TempDir,
+        store: SessionStore,
+        run_id: RunId,
+        project_id: ProjectId,
+        specification_sha256: String,
+    }
+
+    fn study_and_catalog() -> (
+        StudyPlan,
+        StudyProblemCatalog,
+        fullmag_plan::StudyExecutionPlan,
+    ) {
+        let study = StudyPlan::from_pipeline(
+            "manual_scheduler_study",
+            1,
+            &StudyPipelineDocument {
+                version: "study_pipeline.v2".into(),
+                nodes: vec![StudyPipelineNode::Primitive(PrimitiveStageNode {
+                    id: "step:run".into(),
+                    label: "Run".into(),
+                    enabled: true,
+                    notes: None,
+                    source: Some(StudyPipelineNodeSource::UiAuthored),
+                    stage_kind: StudyPrimitiveStageKind::Run,
+                    payload: [("until_seconds".into(), json!("1e-9"))]
+                        .into_iter()
+                        .collect(),
+                })],
+            },
+            &StudyPlanMigrationDefaults {
+                model: StudyModelReference {
+                    model_id: "model:one".into(),
+                    version: "v1".into(),
+                },
+                solver_config: StudySolverConfigReference {
+                    preset_id: "solver:default".into(),
+                    version: "v1".into(),
+                },
+                discretization: StudyDiscretizationReference {
+                    recipe_id: "mesh:default".into(),
+                    version: "v1".into(),
+                },
+                execution_profile: StudyExecutionProfileReference {
+                    profile_id: "exec:auto".into(),
+                    version: "v1".into(),
+                },
+            },
+        )
+        .expect("manual scheduler study fixture is valid");
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        problem.object_regions.push(fullmag_ir::ObjectRegionIR {
+            region_id: "strip:core".into(),
+            owner_object: "strip".into(),
+            name: "core".into(),
+            shape: fullmag_ir::RegionShapeIR::Box {
+                size: [200e-9, 20e-9, 6e-9],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: fullmag_ir::RegionFrameIR::Object,
+            enabled: true,
+            priority: 1,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            material_transition: None,
+            realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+        });
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".into(), json!({"device": "cpu", "precision": "double"}));
+        let catalog = StudyProblemCatalog::from_entries(
+            &study,
+            study
+                .steps
+                .iter()
+                .map(|step| StudyProblemCatalogEntry::from_step(step, problem.clone()))
+                .collect(),
+        )
+        .expect("manual scheduler catalog is valid");
+        let lowered = lower_study_plan_with_catalog(&study, &catalog)
+            .expect("manual scheduler plan is valid");
+        (study, catalog, lowered)
+    }
+
+    fn fixture() -> Fixture {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let run_id = RunId::parse("run-manual-scheduler").unwrap();
+        let project_id = ProjectId::parse("project-manual-scheduler").unwrap();
+        let (study, catalog, lowered) = study_and_catalog();
+        let definition_bytes = b"accepted-definition".to_vec();
+        let definition_sha256 = fullmag_session::hex_sha256(&definition_bytes);
+        let study_bytes = study.canonical_json_bytes().unwrap();
+        let study_sha256 = fullmag_session::hex_sha256(&study_bytes);
+        let catalog_bytes = fullmag_session::canonical_json_bytes(
+            &serde_json::to_value(&catalog).unwrap(),
+        );
+        let catalog_sha256 = fullmag_session::hex_sha256(&catalog_bytes);
+        let mut specification = RunSpecification::new(
+            ProjectSnapshot {
+                project_id: project_id.clone(),
+                definition_revision: 1,
+                definition_sha256,
+            },
+            StudyReference {
+                study_id: StudyId::parse(study.study_id.clone()).unwrap(),
+                plan_version: study.schema_version.clone(),
+                plan_sha256: study_sha256,
+            },
+            catalog_sha256,
+            json!({
+                (fullmag_session::ACCEPTED_RUN_START_POLICY_KEY): {
+                    "schema_version": "accepted_run_start_policy.v1",
+                    "mode": "manual"
+                }
+            }),
+            RequestedExecution {
+                backend: "fdm".into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                mode: "strict".into(),
+                minimum_resources: Some(RequestedResourceBudget {
+                    cpu_millis: 100,
+                    memory_bytes: 1,
+                    gpu_memory_bytes: 0,
+                    storage_bytes: 1,
+                }),
+            },
+        );
+        specification.run_id = run_id.clone();
+        let mut intent = FmsRunIntent::new(
+            run_id.as_str(),
+            "intent-manual-scheduler",
+            serde_json::to_value(&specification).unwrap(),
+        );
+        assert_eq!(
+            intent.payload_sha256,
+            specification.fingerprint().unwrap(),
+            "the test must use the same canonical RunSpec fingerprint as the store gate"
+        );
+        assert_eq!(
+            store.store_blob(&definition_bytes).unwrap(),
+            specification.snapshot.definition_sha256
+        );
+        assert_eq!(store.store_blob(&study_bytes).unwrap(), specification.study.plan_sha256);
+        assert_eq!(
+            store.store_blob(&catalog_bytes).unwrap(),
+            specification.study_catalog_sha256
+        );
+        intent.definition_object_ref = Some(specification.snapshot.definition_sha256.clone());
+        intent.study_object_ref = Some(specification.study.plan_sha256.clone());
+        intent.study_catalog_object_ref = Some(specification.study_catalog_sha256.clone());
+        store.commit_run_intent(&intent).unwrap();
+
+        let step_id = lowered.steps[0].step_id.clone();
+        let task_id = fullmag_session::task_id_for_study_step(run_id.as_str(), &step_id).unwrap();
+        let input_fingerprint = fullmag_application::study_task_input_fingerprint(
+            &specification,
+            &lowered.steps[0],
+        )
+        .unwrap();
+        store
+            .commit_run_catalog(&FmsRunCatalog {
+                schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.as_str().into(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: vec![FmsTaskCatalogEntry {
+                    task_id: task_id.clone(),
+                    input_fingerprint: input_fingerprint.clone(),
+                    lifecycle: FmsTaskLifecycle::Accepted,
+                    readiness: FmsTaskReadiness::Blocked {
+                        reason: ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION.into(),
+                    },
+                    observation: None,
+                    attempt_id: None,
+                    ownership_epoch: None,
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: None,
+                    coordinator_watermark: None,
+                    coordinator_genesis: None,
+                }],
+            })
+            .unwrap();
+
+        let accepted = crate::AcceptedStudySnapshot {
+            run: crate::AcceptedRunSnapshot {
+                intent: intent.clone(),
+                specification: specification.clone(),
+                definition_bytes,
+            },
+            study,
+            catalog,
+            lowered,
+        };
+        let preparation = accepted
+            .materialize_fdm_preparation_receipt(
+                format!("prep-{task_id}"),
+                &step_id,
+            )
+            .unwrap();
+        store
+            .commit_task_preparation_receipt(
+                &FmsTaskPreparationReceipt::new(
+                    run_id.as_str(),
+                    &step_id,
+                    input_fingerprint,
+                    preparation.preparation_id.clone(),
+                    preparation.plan_fingerprint.clone(),
+                    serde_json::to_value(preparation).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        Fixture {
+            _directory: directory,
+            store,
+            run_id,
+            project_id,
+            specification_sha256: intent.payload_sha256,
+        }
+    }
+
+    fn offer() -> fullmag_application::ResourceLease {
+        fullmag_application::ResourceLease::new(
+            "resource-manual-scheduler",
+            ResourceKind::Cpu,
+            ResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn manual_start_holds_scheduler_readiness_and_admission_until_exact_release() {
+        let fixture = fixture();
+        let before = fixture.store.read_run_catalog(fixture.run_id.as_str()).unwrap().unwrap();
+        assert!(!fixture
+            .store
+            .accepted_run_start_permitted(fixture.run_id.as_str())
+            .unwrap());
+        // The read-only queue scan may still report prepared work. The
+        // mutation boundary below is the authoritative Compute gate.
+        assert!(super::accepted_run_has_scheduler_ready_task(&fixture.store, &fixture.run_id)
+            .unwrap());
+        let queue_error = crate::queue_accepted_study_task(
+            &fixture.store,
+            &fixture.project_id,
+            &fixture.run_id,
+            "step:run",
+            Default::default(),
+        )
+        .expect_err("direct queueing must require the exact Compute release");
+        assert!(queue_error.to_string().contains("explicit Compute release"));
+        let admission_calls = std::cell::Cell::new(0);
+        let scheduled = super::schedule_next_ready_accepted_task_with_admission(
+            &fixture.store,
+            &fixture.run_id,
+            offer(),
+            |_| Ok(true),
+            |_task, _claim, _inputs| {
+                admission_calls.set(admission_calls.get() + 1);
+                Ok(None)
+            },
+        )
+        .unwrap();
+        assert!(scheduled.is_none());
+        assert_eq!(
+            admission_calls.get(),
+            0,
+            "the start gate precedes claim/admission"
+        );
+        assert_eq!(
+            fixture
+                .store
+                .read_run_catalog(fixture.run_id.as_str())
+                .unwrap()
+                .unwrap(),
+            before,
+            "a held run must not be queued or have its catalog revised"
+        );
+        let task_id = before.tasks[0].task_id.clone();
+        assert!(fixture
+            .store
+            .read_active_resource_lease_for_task(fixture.run_id.as_str(), &task_id)
+            .unwrap()
+            .is_none());
+
+        fixture
+            .store
+            .release_accepted_run_start(
+                fixture.run_id.as_str(),
+                &fixture.specification_sha256,
+                "compute-release",
+            )
+            .unwrap();
+        assert!(fixture
+            .store
+            .accepted_run_start_permitted(fixture.run_id.as_str())
+            .unwrap());
+        assert!(super::accepted_run_has_scheduler_ready_task(&fixture.store, &fixture.run_id)
+            .unwrap());
+        let scheduled = super::schedule_next_ready_accepted_task_with_admission(
+            &fixture.store,
+            &fixture.run_id,
+            offer(),
+            |_| Ok(true),
+            |_task, _claim, _inputs| {
+                admission_calls.set(admission_calls.get() + 1);
+                Ok(None)
+            },
+        )
+        .unwrap();
+        assert!(scheduled.is_none(), "the injected admission declines launch");
+        assert_eq!(
+            admission_calls.get(),
+            1,
+            "release reaches the existing admission boundary"
+        );
+        let after = fixture.store.read_run_catalog(fixture.run_id.as_str()).unwrap().unwrap();
+        assert_eq!(after.tasks[0].lifecycle, FmsTaskLifecycle::Queued);
+        assert_eq!(after.tasks[0].readiness, FmsTaskReadiness::Ready);
+        assert!(fixture
+            .store
+            .read_active_resource_lease_for_task(fixture.run_id.as_str(), &task_id)
+            .unwrap()
+            .is_none());
     }
 }

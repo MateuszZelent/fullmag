@@ -13,6 +13,7 @@ import {
 } from "./ObjectVisualizationPanelModel";
 
 interface VisualizationVectorAccountingRowsProps {
+  ownedCounts?: { decodedSampleCount: number; adoptedGlyphCount: number | null } | null;
   anchorKind?: "cell" | "node" | null;
   availableAnchorCount?: number | null;
   /** @deprecated Kept for the opt-in visualization debug panel contract. */
@@ -44,7 +45,7 @@ export function VisualizationVectorAccountingRows(
   const snapshots = useVisualizationDebugSnapshots(
     props.targetId ?? props.targetKind,
   );
-  const accounting = resolveVisualizationVectorAccounting({
+  const reported = resolveVisualizationVectorAccounting({
     anchorKind: props.anchorKind,
     availableAnchorCount: props.exact
       ? props.availableAnchorCount ?? props.availableNodeCount ?? null
@@ -71,8 +72,12 @@ export function VisualizationVectorAccountingRows(
     requestedBudget: props.requestedBudget,
     snapshots,
   });
+  const accounting: VisualizationVectorAccounting = props.ownedCounts ? { ...reported,
+    decodedSampleCount: props.ownedCounts.decodedSampleCount, adoptedGlyphCount: props.ownedCounts.adoptedGlyphCount,
+    status: props.ownedCounts.adoptedGlyphCount === null ? "pending" : "ready" } : reported;
   return (
     <VectorAccountingRows
+      ownedCounts={props.ownedCounts}
       accounting={accounting}
       anchorKind={props.anchorKind}
       availableAnchorCount={
@@ -87,6 +92,7 @@ export function VisualizationVectorAccountingRows(
 
 function VectorAccountingRows({
   accounting,
+  ownedCounts,
   anchorKind,
   availableAnchorCount,
   exact,
@@ -96,7 +102,7 @@ function VectorAccountingRows({
   accounting: VisualizationVectorAccounting;
 }) {
   const resolvedAnchorKind = accounting.anchorKind ?? anchorKind;
-  const anchorUnit = resolvedAnchorKind === "node" ? "nodes" : "cells";
+  const anchorUnit = ownedCounts ? "samples" : resolvedAnchorKind === "node" ? "nodes" : "cells";
   const availableValue =
     accounting.availableAnchorCount ?? availableAnchorCount;
   const status = accounting.status ?? "unavailable";

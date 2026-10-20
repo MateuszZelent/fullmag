@@ -264,6 +264,62 @@
         "gpu-pgbb-kernels"
       ],
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "eq-mixed-p1-disconnected-body-partition",
+      "symbols": [
+        "OmegaBodies",
+        "OmegaBodyA",
+        "OmegaBodyB",
+        "gap"
+      ],
+      "sources": [
+        "exact-rings-source",
+        "mixed-certificate-v2-contract"
+      ]
+    },
+    {
+      "id": "eq-mixed-p1-body-material-fields",
+      "symbols": [
+        "MsH",
+        "AH",
+        "alphaH",
+        "bodyIndicator",
+        "bodyNodeSet",
+        "bodyBasis"
+      ],
+      "sources": [
+        "body-material-authoring",
+        "mixed-certificate-v2-contract"
+      ]
+    },
+    {
+      "id": "eq-mixed-p1-separated-exchange-weak-form",
+      "symbols": [
+        "exchangeBilinear",
+        "AH",
+        "OmegaBodyA",
+        "vectorTestV"
+      ],
+      "sources": [
+        "exchange-operator",
+        "mixed-certificate-v2-contract"
+      ]
+    },
+    {
+      "id": "eq-mixed-p1-separated-demag-weak-form",
+      "symbols": [
+        "phi",
+        "scalarTestQ",
+        "domainD",
+        "MsH",
+        "bodyIndicator",
+        "OmegaBodyA"
+      ],
+      "sources": [
+        "demag-rhs",
+        "mixed-certificate-v2-contract"
+      ]
     }
   ],
   "symbols": [
@@ -584,6 +640,90 @@
       "latex": "\\operatorname{Retr}_{\\mathbb S^2}",
       "meaning": "unit-sphere retraction",
       "si_unit": "1"
+    },
+    {
+      "id": "OmegaBodies",
+      "latex": "\\mathcal B",
+      "meaning": "finite set of disconnected magnetic bodies",
+      "si_unit": "1"
+    },
+    {
+      "id": "OmegaBodyA",
+      "latex": "\\Omega_b",
+      "meaning": "magnetic domain owned by body b",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "OmegaBodyB",
+      "latex": "\\Omega_a\\cap\\Omega_b",
+      "meaning": "overlap of two body domains",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "gap",
+      "latex": "g_{ab}",
+      "meaning": "resolved air gap between bodies a and b",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "bodyIndicator",
+      "latex": "\\chi_b",
+      "meaning": "indicator of body b in the magnetic domain",
+      "si_unit": "1"
+    },
+    {
+      "id": "bodyNodeSet",
+      "latex": "I_b",
+      "meaning": "global node indices owned by body b",
+      "si_unit": "1"
+    },
+    {
+      "id": "bodyBasis",
+      "latex": "N_i^{(b)}",
+      "meaning": "body-local P1 basis function",
+      "si_unit": "1"
+    },
+    {
+      "id": "MsH",
+      "latex": "M_{s,h}",
+      "meaning": "body-owned interpolated saturation magnetization",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "AH",
+      "latex": "A_h",
+      "meaning": "body-owned interpolated exchange stiffness",
+      "si_unit": "\\mathrm{J\\,m^{-1}}"
+    },
+    {
+      "id": "alphaH",
+      "latex": "\\alpha_h",
+      "meaning": "body-owned interpolated Gilbert damping",
+      "si_unit": "1"
+    },
+    {
+      "id": "exchangeBilinear",
+      "latex": "a_{\\mathrm{ex}}",
+      "meaning": "exchange bilinear form summed over magnetic bodies",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "vectorTestV",
+      "latex": "\\mathbf v_h",
+      "meaning": "magnetic vector test function",
+      "si_unit": "1"
+    },
+    {
+      "id": "scalarTestQ",
+      "latex": "q_h",
+      "meaning": "shared-domain scalar-potential test function",
+      "si_unit": "1"
+    },
+    {
+      "id": "contactInterface",
+      "latex": "\\Gamma_{ab}",
+      "meaning": "possible contact interface between bodies a and b",
+      "si_unit": "\\mathrm{m^2}"
     }
   ],
   "sources": [
@@ -993,6 +1133,83 @@
       "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.hpp",
       "symbol": "tangent_gradient_from_field",
       "responsibility": "Provide the CPU reference tangent-gradient operation used for derivative and parity gates."
+    },
+    {
+      "id": "mixed-certificate-v2-volume-reduction",
+      "path": "crates/fullmag-ir/src/mixed_certificate_v2.rs",
+      "symbol": "CompensatedSum",
+      "responsibility": "Accumulate v2 shared-domain, magnetic-body, and closed-faceted volume evidence with fixed-order Neumaier-compensated binary64 arithmetic after global-ordinal ordering.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
+      "id": "mixed-certificate-v2-swept-shell-owner",
+      "path": "crates/fullmag-ir/src/mixed_certificate_v2.rs",
+      "symbol": "exact_swept_body_bounds",
+      "responsibility": "Select the unique magnetic region carrying typed exact_sweep evidence and use its realized body bounds for transition-shell verification while retaining union bounds for the complete magnetic domain.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
+      "id": "mixed-certificate-v2-validation",
+      "path": "crates/fullmag-ir/src/mixed_certificate_v2.rs",
+      "symbol": "validate_mixed_layer_topology_certificate_v2_against_mesh",
+      "responsibility": "Recompute the complete mixed-body v2 topology, ownership, regional shell, quality, and volume evidence from the received typed mesh with fail-closed exact_sweep ownership.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
+      "id": "exact-rings-source",
+      "path": "examples/permalloy_layer_cofeb_rings_relax_300nm.py",
+      "symbol": "study",
+      "responsibility": "Canonical source-contract fixture for the implemented v2 positive-gap multi-body workload: one swept prism layer and one disconnected tet4 CoFeB ring with body-specific material and initial-state assignments.",
+      "evidence_status": "source_contract_implemented_runtime_and_physics_not_verified"
+    },
+    {
+      "id": "body-material-authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_to_ferromagnet",
+      "responsibility": "Lower each named magnetic body with its own Ms, Aex, alpha, uniaxial parameters and initial magnetization; the future mixed-body path must preserve object ownership.",
+      "evidence_status": "authoring_exists_multi_body_execution_pending"
+    },
+    {
+      "id": "body-material-ir",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_export_geometry_entry",
+      "responsibility": "Provide the stable geometry/material/magnetization serialization boundary that certificate-v2 lowering must extend with body markers and material realization.",
+      "evidence_status": "planned_extension"
+    },
+    {
+      "id": "mixed-certificate-v2-contract",
+      "path": "docs/adr/0021-native-mixed-p1-fem-topology.md",
+      "symbol": "DOC-ANCHOR:mixed-p1-v2-disconnected-bodies",
+      "responsibility": "Define the additive v2 certificate for per-body magnetic cell families, exact sweep evidence, positive gaps, contact rejection and body-local material fields; v1 readers remain fail-closed.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "planner-disconnected-body-scope",
+      "path": "crates/fullmag-plan/src/mesh.rs",
+      "symbol": "validate_mixed_p1_execution_scope",
+      "responsibility": "Future planner owner for v2 positive-gap body markers, mixed magnetic prism/tet topology, body-local material fields and no-fallback CPU/GPU legality.",
+      "evidence_status": "planned_implementation"
+    },
+    {
+      "id": "native-disconnected-body-scope",
+      "path": "backends/fem/core/fem_mesh.cpp",
+      "symbol": "validate_mixed_body_certificate_v2",
+      "responsibility": "Independently check realized body marker/node ownership and positive AABB separation before MFEM allocation; legal air cells do not create an exchange bridge. Overlapping AABBs are outside this conservative proof.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
+      "id": "cpu-llg-magnetic-mask",
+      "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp",
+      "symbol": "llg_rhs_aos",
+      "responsibility": "Zero LLG RHS on nonmagnetic nodes and exclude them from RHS maxima while retaining body-local damping on active nodes.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
+      "id": "gpu-llg-magnetic-mask",
+      "path": "backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu",
+      "symbol": "llg_rhs_fused_kernel",
+      "responsibility": "Zero LLG RHS on nonmagnetic nodes and exclude them from RHS maxima while retaining body-local damping on active nodes.",
+      "evidence_status": "source_implementation_under_review_runtime_not_verified"
     }
   ],
   "public_api": {
@@ -1060,6 +1277,56 @@
         "meaning": "finite-element order",
         "backend_support": "FEM CPU/GPU only",
         "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].order"
+      },
+      {
+        "python": "MagnetHandle.Ms",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{A\\,m^{-1}}",
+        "validation": "finite and strictly positive; owned by one magnetic body",
+        "meaning": "body saturation magnetization for the disconnected-body P1 field",
+        "backend_support": "implemented source-contract FEM CPU/GPU v2; current v1 rejects multi-body fields",
+        "problem_ir": "geometry.entries[].material.Ms"
+      },
+      {
+        "python": "MagnetHandle.Aex",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{J\\,m^{-1}}",
+        "validation": "finite and strictly positive; no interpolation through air",
+        "meaning": "body exchange stiffness for the body-local weak form",
+        "backend_support": "implemented source-contract FEM CPU/GPU v2; current v1 rejects multi-body fields",
+        "problem_ir": "geometry.entries[].material.Aex"
+      },
+      {
+        "python": "MagnetHandle.alpha",
+        "type": "float",
+        "default": "0.01",
+        "si_unit": "1",
+        "validation": "finite and non-negative; evaluated only in the owning body",
+        "meaning": "body Gilbert damping coefficient",
+        "backend_support": "implemented source-contract FEM CPU/GPU v2; current v1 rejects multi-body fields",
+        "problem_ir": "geometry.entries[].material.alpha"
+      },
+      {
+        "python": "MagnetHandle.Ku1",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "finite when present; body-owned local coefficient",
+        "meaning": "body first-order uniaxial anisotropy coefficient",
+        "backend_support": "implemented source-contract FEM CPU/GPU v2",
+        "problem_ir": "geometry.entries[].physics_stack[].params.ku1"
+      },
+      {
+        "python": "MagnetHandle.anisU",
+        "type": "tuple[float, float, float] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite nonzero vector, normalized during canonical lowering",
+        "meaning": "body uniaxial anisotropy axis",
+        "backend_support": "implemented source-contract FEM CPU/GPU v2",
+        "problem_ir": "geometry.entries[].physics_stack[].params.axis"
       }
     ]
   }

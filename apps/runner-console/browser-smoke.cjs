@@ -653,6 +653,23 @@ function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function waitForDialogContaining(page, expectedText, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      page.off('dialog', onDialog);
+      reject(new Error(`Timed out waiting for dialog containing: ${expectedText}`));
+    }, timeoutMs);
+    const onDialog = dialog => {
+      const message = dialog.message();
+      if (!message.includes(expectedText)) return;
+      clearTimeout(timeout);
+      page.off('dialog', onDialog);
+      resolve(message);
+    };
+    page.on('dialog', onDialog);
+  });
+}
+
 async function run() {
   assert(fs.existsSync(appRoot), `Runner Console source not found: ${appRoot}`);
   assert(fs.existsSync(assetRoot) && fs.statSync(assetRoot).isDirectory() &&
@@ -770,9 +787,10 @@ async function run() {
     assert.equal(await textOf('#plan-title'), 'Retencja kopii roboczych');
     assert.match(await textOf('#plan-metadata'), /plan-b0123456789abcdef/);
     assert.match(await textOf('#plan-metadata'), /Status: preview/);
+    const previewSafetyNotice = waitForDialogContaining(page, 'Tryb podglądu');
     await page.locator('#btn-apply-plan').click();
-    await wait(150);
-    assert(dialogMessages.some(message => message.includes('Tryb podglądu')), 'preview-only apply did not show the safety notice');
+    const safetyNotice = await previewSafetyNotice;
+    assert(dialogMessages.includes(safetyNotice), 'preview-only apply did not show the safety notice');
     console.log('[browser-smoke] preview_only: execution-scoped plan, guarded apply, no deletion');
 
     mockMode = 'healthy';

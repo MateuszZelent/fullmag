@@ -4,6 +4,77 @@ use utoipa::ToSchema;
 use crate::schemas::common::{AcceptedObservationFrameRef, FieldPublicationBundle};
 use crate::schemas::quantities::ResolvedQuantityCapability;
 
+/// Durable accepted publication identity; epoch remains a lossless decimal string in JSON.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptedInspectionArtifactOwner {
+    pub project_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    pub ownership_epoch: String,
+    pub artifact_id: String,
+    pub object_ref: String,
+}
+
+/// Provider-owned immutable source identity. Stable native mesh IDs are binary-only.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct ArtifactFieldOwnerBinding {
+    pub session_id: String,
+    pub session_epoch: String,
+    pub request_scope_epoch: String,
+    pub run_id: String,
+    pub runtime_stage_id: String,
+    pub authored_stage_id: String,
+    pub module_id: String,
+    pub object_id: String,
+    pub output_id: String,
+    pub source_digest: String,
+    pub content_digest: String,
+    pub observation_mesh_revision: u64,
+    pub observation_topology_revision: u64,
+    pub historical_inspection: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_artifact: Option<AcceptedInspectionArtifactOwner>,
+    pub native_mesh_identity: String,
+    pub native_topology_identity: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactSampleIndexing {
+    SourceNodes, SampleNodes, PointSamples, Tet4CellLocalNodes, CellCenters,
+}
+impl ArtifactSampleIndexing {
+    pub(crate) fn code(self) -> u32 { match self { Self::SourceNodes => 4, Self::SampleNodes => 5,
+        Self::PointSamples => 6, Self::Tet4CellLocalNodes => 7, Self::CellCenters => 8 } }
+    pub(crate) fn as_str(self) -> &'static str { match self { Self::SourceNodes => "source_nodes",
+        Self::SampleNodes => "sample_nodes", Self::PointSamples => "point_samples",
+        Self::Tet4CellLocalNodes => "tet4_cell_local_nodes", Self::CellCenters => "cell_centers" } }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct ArtifactFieldLocatorResource {
+    pub owner: ArtifactFieldOwnerBinding,
+    pub carrier_scope_kind: String,
+    pub carrier_scope_id: Option<String>,
+    pub carrier_id: String,
+    pub carrier_digest: String,
+    /// Canonical decimal u64 string; exact across JavaScript JSON readers.
+    pub carrier_revision: String,
+    pub indexing: ArtifactSampleIndexing,
+    pub sample_count: u64,
+    pub coordinate_frame: String,
+    pub coordinate_unit: String,
+    pub topology_binary_schema: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams, ToSchema)]
+pub struct ArtifactCarrierGeometryQuery {
+    pub carrier_id: Option<String>,
+    pub stage_id: Option<String>,
+    pub expected_carrier_revision: Option<String>,
+}
+
 // ── Existing catalog / meta types ────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -61,6 +132,8 @@ pub enum FieldMaterializationState {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct FieldDescriptor {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_field_locator: Option<ArtifactFieldLocatorResource>,
     pub quantity_id: String,
     pub label: String,
     /// Whether this canonical quantity is intended for interactive UI selection.
@@ -95,6 +168,8 @@ pub struct FieldDescriptor {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct FieldMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_field_locator: Option<ArtifactFieldLocatorResource>,
     pub observation_frame: AcceptedObservationFrameRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publication_bundle: Option<FieldPublicationBundle>,
@@ -137,6 +212,8 @@ pub struct FieldStats {
 /// Query parameters for the `/fields/{quantity_id}/vector` endpoint.
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams, ToSchema)]
 pub struct FieldVectorQuery {
+    /// Exact immutable artifact carrier selector.
+    pub carrier_id: Option<String>,
     /// Component to return.
     ///
     /// Accepted values: `full` (default), `magnitude`, `x`, `y`, `z`, `c0`, `c1`, …, `cN-1`.
@@ -384,4 +461,11 @@ pub struct FieldProjectionProfileSample {
     pub normal_coord: f64,
     pub value: f64,
     pub measure: f64,
+}
+
+
+/// An exact execution catalog. Omission retains the ordinary live solver catalog.
+#[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams, ToSchema)]
+pub struct ArtifactFieldCatalogQuery {
+    pub stage_id: Option<String>,
 }

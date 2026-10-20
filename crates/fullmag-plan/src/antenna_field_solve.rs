@@ -199,7 +199,7 @@ pub(crate) fn plan_antenna_field_solve_v03(
 ) -> Result<AntennaFieldSolvePlanIR, PlanError> {
     match plan_antenna_field_solve_execution(problem, stage_id, port_mode_id)? {
         AntennaFieldSolveExecutionPlan::FieldBasis(plan) => Ok(plan),
-        AntennaFieldSolveExecutionPlan::ExternalLeadInspection { .. } => Err(fail(
+        AntennaFieldSolveExecutionPlan::ExternalLeadInspection { .. } | AntennaFieldSolveExecutionPlan::ClosedLoopInspection { .. } => Err(fail(
             "source_not_qualified: external-lead inspection is not a legacy antenna field basis; use the dedicated inspection stage execution",
         )),
     }
@@ -209,6 +209,11 @@ pub(crate) fn plan_antenna_field_solve_v03(
 #[derive(Debug, Clone)]
 pub enum AntennaFieldSolveExecutionPlan {
     FieldBasis(AntennaFieldSolvePlanIR),
+    ClosedLoopInspection {
+        input: fullmag_ir::ResolvedAntennaClosedLoopCurrentInputIR,
+        requested_execution: fullmag_ir::RequestedTransportExecutionIR,
+        output_id: String,
+    },
     ExternalLeadInspection {
         input: fullmag_ir::ResolvedAntennaExternalLeadCurrentInputIR,
         requested_execution: fullmag_ir::RequestedTransportExecutionIR,
@@ -408,7 +413,12 @@ pub fn plan_antenna_field_solve_execution(
         meshes.push((object_id.clone(), mesh));
         mesh_sources.push(mesh_source);
     }
-    let (mesh, mut object_segments) = merge_fem_meshes(&meshes).map_err(fail)?;
+    let (mesh, mut object_segments) = if matches!(&definition.conservative_current_source, Some(fullmag_ir::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(_))) {
+        let (object_id,mesh)=&meshes[0];
+        let segment=fullmag_ir::FemObjectSegmentIR {object_id:object_id.clone(),geometry_id:None,node_start:0,node_count:u32::try_from(mesh.nodes.len()).map_err(|_|fail("source mesh node count exceeds u32"))?,
+            element_start:0,element_count:u32::try_from(mesh.cell_count()).map_err(|_|fail("source mesh element count exceeds u32"))?,boundary_face_start:0,boundary_face_count:u32::try_from(mesh.facet_count()).map_err(|_|fail("source mesh facet count exceeds u32"))?};
+        (mesh.clone(),vec![segment])
+    } else {merge_fem_meshes(&meshes).map_err(fail)?};
     for segment in &mut object_segments {
         segment.geometry_id = geometry_by_object.get(&segment.object_id).cloned();
     }
@@ -455,6 +465,11 @@ pub fn plan_antenna_field_solve_execution(
             .find(|port| port.id == port_mode_id)
             .ok_or_else(|| fail(format!("antenna port mode '{port_mode_id}' does not exist")))?;
         let field_sampling = resolve_field_sampling(problem, &stage.field_sampling_domain)?;
+        if matches!(&definition.conservative_current_source, Some(fullmag_ir::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(_))) {
+            let input=crate::antenna_current_source::materialize_antenna_closed_loop_current_input(problem,&mesh,&object_segments,definition,stage,port,&field_sampling)?;
+            return Ok(AntennaFieldSolveExecutionPlan::ClosedLoopInspection {input,requested_execution:fullmag_ir::RequestedTransportExecutionIR {
+                discretization:problem.backend_policy.requested_backend,device,precision:problem.backend_policy.execution_precision,execution_mode:problem.validation_profile.execution_mode},output_id:solution_id});
+        }
         let input = crate::antenna_current_source::materialize_antenna_external_lead_current_input(
             &mesh,
             &object_segments,

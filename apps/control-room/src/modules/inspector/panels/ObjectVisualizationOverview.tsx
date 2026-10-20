@@ -13,10 +13,12 @@ export interface VisualizationInspectorOverviewProps {
   advanced: ReactNode;
   camera: ReactNode;
   clipping: ReactNode;
+  clippingSummary?: string;
   dataState: string;
   display: ReactNode;
   enabledPassCount: number;
   meshState: string;
+  meshStateLabel?: string;
   quantitySource: string;
   surfaceColoring: ReactNode;
   vectors: ReactNode;
@@ -26,11 +28,13 @@ export function VisualizationInspectorOverview({
   advanced,
   camera,
   clipping,
+  clippingSummary = "Section: Off",
   context,
   dataState,
   display,
   enabledPassCount,
   meshState,
+  meshStateLabel = "Mesh Readiness",
   quantitySource,
   surfaceColoring,
   vectors,
@@ -53,7 +57,7 @@ export function VisualizationInspectorOverview({
           },
           { label: "Quantity Source", value: quantitySource },
           {
-            label: "Mesh Readiness",
+            label: meshStateLabel,
             tone: meshState === "Ready" ? "success" : "degraded",
             value: meshState,
           },
@@ -73,7 +77,7 @@ export function VisualizationInspectorOverview({
             defaultOpen: false,
             icon: <Scissors size={16} strokeWidth={1.75} />,
             id: "clipping",
-            summary: "Section: Off",
+            summary: clippingSummary,
             title: "Clipping & Section",
           },
           {

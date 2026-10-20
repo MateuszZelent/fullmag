@@ -16,7 +16,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub const STUDY_PLAN_SCHEMA_VERSION_V1: &str = "study_plan.v1";
-pub const STUDY_PLAN_SCHEMA_VERSION: &str = "study_plan.v2";
+pub const STUDY_PLAN_SCHEMA_VERSION_V2: &str = "study_plan.v2";
+pub const STUDY_PLAN_SCHEMA_VERSION: &str = "study_plan.v3";
+pub const STUDY_PLAN_SCHEMA_VERSION_V4: &str = "study_plan.v4";
 pub const ANTENNA_INSPECTION_OUTPUT_PORT_ID: &str = "inspection";
 
 /// An immutable reference to the model definition captured by a study step.
@@ -147,6 +149,12 @@ pub enum StudyAcquisitionPolicy {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StudyStepKind {
+    ClosedLoopInspection {
+        stage_id: String,
+        port_mode_id: String,
+        output_id: String,
+    },
+
     Primitive {
         stage_kind: StudyPrimitiveStageKind,
     },
@@ -175,6 +183,7 @@ impl<'de> Deserialize<'de> for StudyStepKind {
             .ok_or_else(|| D::Error::custom("study step kind requires a string kind"))?;
 
         match kind {
+            "closed_loop_inspection" => serde_json::from_value::<KnownStudyStepKind>(raw.clone()).map(Into::into).map_err(D::Error::custom),
             "primitive" | "macro" | "group" | "unsupported" => {
                 match serde_json::from_value::<KnownStudyStepKind>(raw.clone()) {
                     Ok(known) => Ok(known.into()),
@@ -195,6 +204,12 @@ impl<'de> Deserialize<'de> for StudyStepKind {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum KnownStudyStepKind {
+    ClosedLoopInspection {
+        stage_id: String,
+        port_mode_id: String,
+        output_id: String,
+    },
+
     Primitive {
         stage_kind: StudyPrimitiveStageKind,
     },
@@ -214,6 +229,7 @@ enum KnownStudyStepKind {
 impl From<KnownStudyStepKind> for StudyStepKind {
     fn from(value: KnownStudyStepKind) -> Self {
         match value {
+            KnownStudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id } => Self::ClosedLoopInspection { stage_id, port_mode_id, output_id },
             KnownStudyStepKind::Primitive { stage_kind } => Self::Primitive { stage_kind },
             KnownStudyStepKind::Macro { macro_kind } => Self::Macro { macro_kind },
             KnownStudyStepKind::Group { child_step_ids } => Self::Group { child_step_ids },
@@ -231,6 +247,7 @@ impl From<KnownStudyStepKind> for StudyStepKind {
 impl StudyStepKind {
     pub fn kind_name(&self) -> &str {
         match self {
+            Self::ClosedLoopInspection { .. } => "closed_loop_inspection",
             Self::Primitive { .. } => "primitive",
             Self::Macro { .. } => "macro",
             Self::Group { .. } => "group",
@@ -275,6 +292,9 @@ pub struct StudyStep {
     pub until_seconds: Option<f64>,
     #[serde(default)]
     pub inputs: Vec<StudyInputPort>,
+    /// Execution IDs that must durably succeed; these are not data ports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completion_dependencies: Vec<String>,
     #[serde(default)]
     pub outputs: Vec<StudyOutputPort>,
     pub acceptance: StudyAcceptancePolicy,
@@ -285,16 +305,95 @@ pub struct StudyStep {
     pub legacy_payload: Option<Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StudyPlan {
     pub schema_version: String,
     pub study_id: String,
     pub revision: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_pipeline_version: Option<String>,
-    #[serde(default)]
     pub steps: Vec<StudyStep>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StudyPlanWire {
+    schema_version: String,
+    study_id: String,
+    revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_pipeline_version: Option<String>,
+    #[serde(default)]
+    steps: Vec<Value>,
+}
+
+impl Serialize for StudyPlan {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let v3 = matches!(self.schema_version.as_str(), STUDY_PLAN_SCHEMA_VERSION | STUDY_PLAN_SCHEMA_VERSION_V4);
+        let mut steps = Vec::with_capacity(self.steps.len());
+        for step in &self.steps {
+            if self.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4 && matches!(step.kind, StudyStepKind::ClosedLoopInspection { .. }) {
+                return Err(serde::ser::Error::custom("closed_loop_inspection requires study_plan.v4"));
+            }
+            if !v3 && !step.completion_dependencies.is_empty() {
+                return Err(serde::ser::Error::custom(
+                    "completion dependencies require study_plan.v3",
+                ));
+            }
+            let mut value = serde_json::to_value(step).map_err(serde::ser::Error::custom)?;
+            if v3 {
+                value
+                    .as_object_mut()
+                    .expect("study step serializes as object")
+                    .insert(
+                        "completion_dependencies".into(),
+                        serde_json::to_value(&step.completion_dependencies)
+                            .map_err(serde::ser::Error::custom)?,
+                    );
+            }
+            steps.push(value);
+        }
+        StudyPlanWire {
+            schema_version: self.schema_version.clone(),
+            study_id: self.study_id.clone(),
+            revision: self.revision,
+            source_pipeline_version: self.source_pipeline_version.clone(),
+            steps,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for StudyPlan {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = StudyPlanWire::deserialize(deserializer)?;
+        let v3 = matches!(wire.schema_version.as_str(), STUDY_PLAN_SCHEMA_VERSION | STUDY_PLAN_SCHEMA_VERSION_V4);
+        if !v3
+            && wire.schema_version != STUDY_PLAN_SCHEMA_VERSION_V1
+            && wire.schema_version != STUDY_PLAN_SCHEMA_VERSION_V2
+        {
+            return Err(D::Error::custom("unsupported study plan schema"));
+        }
+        let mut steps = Vec::with_capacity(wire.steps.len());
+        for value in wire.steps {
+            if wire.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4 && value.pointer("/kind/kind").and_then(Value::as_str) == Some("closed_loop_inspection") {
+                return Err(D::Error::custom("closed_loop_inspection requires study_plan.v4"));
+            }
+            let field = value.get("completion_dependencies");
+            if (v3 && !field.is_some_and(Value::is_array)) || (!v3 && field.is_some()) {
+                return Err(D::Error::custom(
+                    "completion_dependencies must be present as an array only in study_plan.v3",
+                ));
+            }
+            steps.push(serde_json::from_value(value).map_err(D::Error::custom)?);
+        }
+        Ok(Self {
+            schema_version: wire.schema_version,
+            study_id: wire.study_id,
+            revision: wire.revision,
+            source_pipeline_version: wire.source_pipeline_version,
+            steps,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -337,9 +436,13 @@ impl std::error::Error for StudyContractError {}
 impl StudyPlan {
     pub fn validate(&self) -> Result<(), StudyContractError> {
         let is_legacy_v1 = self.schema_version == STUDY_PLAN_SCHEMA_VERSION_V1;
-        if !is_legacy_v1 && self.schema_version != STUDY_PLAN_SCHEMA_VERSION {
+        if !is_legacy_v1
+            && self.schema_version != STUDY_PLAN_SCHEMA_VERSION_V2
+            && self.schema_version != STUDY_PLAN_SCHEMA_VERSION
+            && self.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4
+        {
             return Err(StudyContractError::Invalid(format!(
-                "schema_version must be {STUDY_PLAN_SCHEMA_VERSION_V1} or {STUDY_PLAN_SCHEMA_VERSION}, got {}",
+                "schema_version must be {STUDY_PLAN_SCHEMA_VERSION_V1}, {STUDY_PLAN_SCHEMA_VERSION_V2} or {STUDY_PLAN_SCHEMA_VERSION}, got {}",
                 self.schema_version
             )));
         }
@@ -348,6 +451,31 @@ impl StudyPlan {
         let mut step_ids = BTreeSet::new();
         for step in &self.steps {
             validate_step_references(step)?;
+            if let StudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id } = &step.kind {
+                if self.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4 {
+                    return Err(StudyContractError::Invalid("closed_loop_inspection requires study_plan.v4".into()));
+                }
+                for (value, name) in [(stage_id, "stage_id"), (port_mode_id, "port_mode_id"), (output_id, "output_id")] { validate_reference(value, name)?; }
+                if step.until_seconds.is_some() || !step.inputs.is_empty() || step.outputs != [StudyOutputPort { port_id: "inspection".into(), data_kind: StudyPortDataKind::Artifact }] || step.acceptance != StudyAcceptancePolicy::Any {
+                    return Err(StudyContractError::Invalid("closed-loop inspection requires no horizon/state input, one inspection Artifact output, and Any assessment".into()));
+                }
+            }
+            if !matches!(self.schema_version.as_str(), STUDY_PLAN_SCHEMA_VERSION | STUDY_PLAN_SCHEMA_VERSION_V4)
+                && !step.completion_dependencies.is_empty()
+            {
+                return Err(StudyContractError::Invalid(
+                    "completion dependencies require study_plan.v3".into(),
+                ));
+            }
+            let mut completion_ids = BTreeSet::new();
+            for dependency in &step.completion_dependencies {
+                require_identifier(dependency, "completion dependency")?;
+                if dependency == &step.step_id || !completion_ids.insert(dependency) {
+                    return Err(StudyContractError::Invalid(
+                        "self or duplicate completion dependency".into(),
+                    ));
+                }
+            }
             if let Some(until_seconds) = step.until_seconds {
                 if !until_seconds.is_finite() || until_seconds <= 0.0 {
                     return Err(StudyContractError::Invalid(format!(
@@ -384,6 +512,25 @@ impl StudyPlan {
         let mut dependencies = BTreeMap::<String, BTreeSet<String>>::new();
         for step in &self.steps {
             dependencies.entry(step.step_id.clone()).or_default();
+            for dependency in &step.completion_dependencies {
+                let source = self
+                    .steps
+                    .iter()
+                    .find(|source| source.step_id == *dependency)
+                    .ok_or_else(|| StudyContractError::UnknownReference {
+                        from: step.step_id.clone(),
+                        to: dependency.clone(),
+                    })?;
+                if step.enabled && !source.enabled {
+                    return Err(StudyContractError::Invalid(
+                        "enabled completion dependency targets a disabled step".into(),
+                    ));
+                }
+                dependencies
+                    .entry(step.step_id.clone())
+                    .or_default()
+                    .insert(dependency.clone());
+            }
             if let StudyStepKind::Group { child_step_ids } = &step.kind {
                 for child in child_step_ids {
                     if !step_ids.contains(child.as_str()) {
@@ -465,6 +612,10 @@ impl StudyPlan {
         let mut dependencies = BTreeMap::<String, BTreeSet<String>>::new();
         for step in &self.steps {
             dependencies.entry(step.step_id.clone()).or_default();
+            dependencies
+                .entry(step.step_id.clone())
+                .or_default()
+                .extend(step.completion_dependencies.iter().cloned());
             if let StudyStepKind::Group { child_step_ids } = &step.kind {
                 dependencies
                     .entry(step.step_id.clone())
@@ -494,7 +645,8 @@ impl StudyPlan {
         ))
     }
 
-    /// Convert the current authoring pipeline into the typed contract. The
+    /// Convert the structural authoring pipeline into the legacy v2 contract.
+    /// This adapter does not claim expanded sequential execution semantics. The
     /// legacy payload is kept on each migrated step. Only the documented
     /// `Run.until_seconds` field is projected into typed run control; payload
     /// data is never guessed or reinterpreted as a solver preset.
@@ -509,7 +661,7 @@ impl StudyPlan {
             migrate_node(node, defaults, &mut steps, true)?;
         }
         let plan = Self {
-            schema_version: STUDY_PLAN_SCHEMA_VERSION.to_string(),
+            schema_version: STUDY_PLAN_SCHEMA_VERSION_V2.to_string(),
             study_id: study_id.into(),
             revision,
             source_pipeline_version: Some(document.version.clone()),
@@ -616,6 +768,7 @@ fn migrate_node(
 
     let outputs = authored_stage_output_ports(&kind);
     steps.push(StudyStep {
+        completion_dependencies: Vec::new(),
         step_id: step_id.clone(),
         label: label.clone(),
         enabled: enabled && ancestors_enabled,
@@ -932,7 +1085,7 @@ mod tests {
     #[test]
     fn unknown_kind_is_preserved_and_blocks_execution() {
         let value = json!({
-            "schema_version": STUDY_PLAN_SCHEMA_VERSION,
+            "schema_version": STUDY_PLAN_SCHEMA_VERSION_V2,
             "study_id": "study:one",
             "revision": 1,
             "steps": [{
@@ -1054,7 +1207,7 @@ mod tests {
             })],
         };
         let plan = StudyPlan::from_pipeline("study:run", 1, &document, &defaults()).unwrap();
-        assert_eq!(plan.schema_version, STUDY_PLAN_SCHEMA_VERSION);
+        assert_eq!(plan.schema_version, STUDY_PLAN_SCHEMA_VERSION_V2);
         assert_eq!(plan.steps[0].until_seconds, Some(2.5e-9));
         assert_eq!(
             plan.steps[0]
@@ -1122,4 +1275,197 @@ mod tests {
             );
         }
     }
+
+    fn completion_fixture() -> StudyPlan {
+        serde_json::from_value(json!({
+            "schema_version": "study_plan.v2", "study_id": "completion", "revision": 1,
+            "steps": (["a", "b", "c"].map(|id| json!({
+                "step_id": id, "label": id, "kind": {"kind": "primitive", "stage_kind": "relax"},
+                "model": {"model_id": "m", "version": "v1"},
+                "solver_config": {"preset_id": "s", "version": "v1"},
+                "discretization": {"recipe_id": "d", "version": "v1"},
+                "execution_profile": {"profile_id": "e", "version": "v1"},
+                "acceptance": {"kind": "any"}, "acquisition": "exclusive"
+            })))
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn completion_wire_distinguishes_missing_empty_and_null_by_version() {
+        for version in [STUDY_PLAN_SCHEMA_VERSION_V1, STUDY_PLAN_SCHEMA_VERSION_V2] {
+            let mut plan = completion_fixture();
+            plan.schema_version = version.into();
+            let legacy = serde_json::to_value(&plan).unwrap();
+            assert!(legacy["steps"][0].get("completion_dependencies").is_none());
+            assert_eq!(
+                serde_json::from_value::<StudyPlan>(legacy.clone()).unwrap(),
+                plan
+            );
+            for value in [json!([]), json!(null), json!(["a"])] {
+                let mut invalid = legacy.clone();
+                invalid["steps"][0]["completion_dependencies"] = value;
+                assert!(serde_json::from_value::<StudyPlan>(invalid).is_err());
+            }
+        }
+        let mut plan = completion_fixture();
+        plan.schema_version = STUDY_PLAN_SCHEMA_VERSION.into();
+        let value = serde_json::to_value(&plan).unwrap();
+        assert_eq!(value["steps"][0]["completion_dependencies"], json!([]));
+        assert_eq!(
+            serde_json::from_value::<StudyPlan>(value.clone()).unwrap(),
+            plan
+        );
+        let mut missing = value.clone();
+        missing["steps"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("completion_dependencies");
+        assert!(serde_json::from_value::<StudyPlan>(missing).is_err());
+        let mut null = value.clone();
+        null["steps"][0]["completion_dependencies"] = json!(null);
+        assert!(serde_json::from_value::<StudyPlan>(null).is_err());
+        let mut unknown = value;
+        unknown["steps"][0]["future_dependency"] = json!([]);
+        assert!(serde_json::from_value::<StudyPlan>(unknown).is_err());
+    }
+
+    #[test]
+    fn completion_graph_rejects_self_duplicate_unknown_and_disabled_sources() {
+        let mut plan = completion_fixture();
+        plan.schema_version = STUDY_PLAN_SCHEMA_VERSION.into();
+        for dependencies in [vec!["b"], vec!["a", "a"], vec!["missing"], vec![""]] {
+            plan.steps[1].completion_dependencies =
+                dependencies.into_iter().map(str::to_string).collect();
+            assert!(plan.validate().is_err());
+        }
+        plan.steps[1].completion_dependencies = vec!["a".into()];
+        plan.steps[0].enabled = false;
+        assert!(plan.validate_for_execution().is_err());
+    }
+
+    #[test]
+    fn completion_cycle_is_checked_in_union_with_group_and_data_edges() {
+        let mut plan = completion_fixture();
+        plan.schema_version = STUDY_PLAN_SCHEMA_VERSION.into();
+        plan.steps[0].completion_dependencies = vec!["c".into()];
+        plan.steps[2].kind = StudyStepKind::Group {
+            child_step_ids: vec!["a".into()],
+        };
+        assert!(matches!(plan.validate(), Err(StudyContractError::Cycle(_))));
+        plan.steps[2].kind = StudyStepKind::Primitive {
+            stage_kind: StudyPrimitiveStageKind::Relax,
+        };
+        plan.steps[0].completion_dependencies.clear();
+        plan.steps[0].outputs.push(StudyOutputPort {
+            port_id: "state".into(),
+            data_kind: StudyPortDataKind::State,
+        });
+        plan.steps[2].inputs.push(StudyInputPort {
+            port_id: "state".into(),
+            data_kind: StudyPortDataKind::State,
+            required: true,
+            source: StudyInputSource::StepOutput {
+                step_id: "a".into(),
+                port: "state".into(),
+                case_id: "case".into(),
+            },
+        });
+        plan.steps[0].completion_dependencies = vec!["c".into()];
+        assert!(matches!(plan.validate(), Err(StudyContractError::Cycle(_))));
+    }
+
+    #[test]
+    fn completion_edges_change_digest_and_order_without_creating_ports() {
+        let mut plan = completion_fixture();
+        plan.schema_version = STUDY_PLAN_SCHEMA_VERSION.into();
+        let original = plan.canonical_sha256().unwrap();
+        plan.steps[0].completion_dependencies = vec!["c".into()];
+        assert_ne!(plan.canonical_sha256().unwrap(), original);
+        let order = plan.topological_order().unwrap();
+        assert!(order.iter().position(|id| id == "c") < order.iter().position(|id| id == "a"));
+        assert!(plan
+            .steps
+            .iter()
+            .all(|step| step.inputs.is_empty() && step.outputs.is_empty()));
+    }
+
+    #[test]
+    fn completion_legacy_canonical_bytes_remain_exact() {
+        let plan = completion_fixture();
+        assert_eq!(
+            plan.canonical_sha256().unwrap(),
+            "6a6b17b3e8553a028debd348354802cd5e8e5136219c6b1da4d09b23f3a166e3"
+        );
+        let mut v1 = plan.clone();
+        v1.schema_version = STUDY_PLAN_SCHEMA_VERSION_V1.into();
+        assert_eq!(
+            v1.canonical_sha256().unwrap(),
+            "2c27a46dcd947711d1483b2b3cfe4723512e95c287503a774605140c30307b4b"
+        );
+        let value = serde_json::to_value(&plan).unwrap();
+        assert!(value["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|step| step.get("completion_dependencies").is_none()));
+        assert_eq!(
+            plan.canonical_json_bytes().unwrap(),
+            canonical_json_bytes(&value).unwrap()
+        );
+        let mut invalid = plan;
+        invalid.steps[1].completion_dependencies = vec!["a".into()];
+        assert!(invalid.validate().is_err());
+        assert!(serde_json::to_value(&invalid).is_err());
+    }
+    fn closed_loop_wire_fixture() -> StudyPlan {
+        let mut plan=completion_fixture();
+        plan.schema_version=STUDY_PLAN_SCHEMA_VERSION_V4.into();
+        plan.steps.truncate(1);
+        let step=&mut plan.steps[0];
+        step.kind=StudyStepKind::ClosedLoopInspection{stage_id:"stage".into(),port_mode_id:"port".into(),output_id:"result".into()};
+        step.outputs=vec![StudyOutputPort{port_id:"inspection".into(),data_kind:StudyPortDataKind::Artifact}];
+        plan
+    }
+    #[test]
+    fn closed_loop_v4_roundtrip_requires_present_completion_array() {
+        let plan=closed_loop_wire_fixture();
+        plan.validate_for_execution().unwrap();
+        let value=serde_json::to_value(&plan).unwrap();
+        assert_eq!(serde_json::from_value::<StudyPlan>(value.clone()).unwrap().canonical_json_bytes().unwrap(),plan.canonical_json_bytes().unwrap());
+        for missing in [true,false] {
+            let mut invalid=value.clone();
+            if missing { invalid["steps"][0].as_object_mut().unwrap().remove("completion_dependencies"); }
+            else { invalid["steps"][0]["completion_dependencies"]=Value::Null; }
+            assert!(serde_json::from_value::<StudyPlan>(invalid).is_err());
+        }
+    }
+    #[test]
+    fn closed_loop_kind_never_enters_legacy_wire_even_when_malformed() {
+        let value=serde_json::to_value(closed_loop_wire_fixture()).unwrap();
+        for version in [STUDY_PLAN_SCHEMA_VERSION_V1,STUDY_PLAN_SCHEMA_VERSION_V2,STUDY_PLAN_SCHEMA_VERSION] {
+            let mut invalid=value.clone();invalid["schema_version"]=json!(version);
+            if version!=STUDY_PLAN_SCHEMA_VERSION {invalid["steps"][0].as_object_mut().unwrap().remove("completion_dependencies");}
+            assert!(serde_json::from_value::<StudyPlan>(invalid.clone()).is_err());
+            invalid["steps"][0]["kind"]=json!({"kind":"closed_loop_inspection"});
+            assert!(serde_json::from_value::<StudyPlan>(invalid).is_err());
+        }
+    }
+    #[test]
+    fn inspection_has_no_solver_horizon_or_state_port() {
+        let mut plan=closed_loop_wire_fixture();plan.steps[0].until_seconds=Some(1.0);
+        assert!(plan.validate_for_execution().is_err());
+        plan.steps[0].until_seconds=None;plan.steps[0].outputs[0].data_kind=StudyPortDataKind::State;
+        assert!(plan.validate_for_execution().is_err());
+    }
+
+    #[test]
+    fn malformed_v4_operation_is_not_an_unsupported_kind_fallback() {
+        let mut value=serde_json::to_value(closed_loop_wire_fixture()).unwrap();
+        value["steps"][0]["kind"]["additional"]=json!(true);
+        assert!(serde_json::from_value::<StudyPlan>(value.clone()).is_err());
+        value["steps"][0]["enabled"]=json!(false);
+        assert!(serde_json::from_value::<StudyPlan>(value).is_err());
+    }
+
 }

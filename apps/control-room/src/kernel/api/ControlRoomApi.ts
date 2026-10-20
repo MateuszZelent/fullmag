@@ -1,3 +1,5 @@
+import { artifactFieldResponseIdentityError } from "./artifactFieldResponseIdentity";
+import { objectMeshPolicyWireRequest } from "./objectMeshPolicyWire";
 import { API_INSTANCE_HEADER, isApiInstanceId, resolveApiInstancePin } from "./apiInstancePin";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
@@ -214,6 +216,7 @@ import {
   PROJECT_RUN_MATERIALIZATION_PATH,
   PROJECT_RUN_PATH,
   PROJECT_RUN_TASK_CANCELLATION_PATH,
+  PROJECT_RUN_TASK_RETRY_PATH,
   PROJECT_BATCHES_PATH,
   PROJECT_BATCH_CASES_PATH,
   PROJECT_BATCH_COMMANDS_PATH,
@@ -327,12 +330,14 @@ import type {
   EngineLogResource,
   FieldAvailabilityQuery,
   FieldAvailabilityResource,
+  ArtifactFieldCatalogQuery,
   FieldCatalogResource,
   QuantityCatalogResource,
   FieldVectorIdentityIssue,
   FieldVectorPendingResponse,
   FieldVectorResponseMetadata,
   FieldMetaResource,
+  ArtifactCarrierGeometryQuery,
   FieldMetaQuery,
   FieldStateExportRequest,
   FieldStateExportResponse,
@@ -528,6 +533,8 @@ import type {
   ProjectRunListResource,
   ProjectRunTaskCancellationRequest,
   ProjectRunTaskCancellationResource,
+  ProjectRunTaskRetryRequest,
+  ProjectRunTaskRetryResource,
   ProjectBatchSubmitRequest,
   ProjectBatchSubmitResource,
   ProjectBatchCommandRequest,
@@ -585,6 +592,9 @@ export function parseFieldVectorResponseMetadata(
   headers: Headers,
 ): FieldVectorResponseMetadata {
   return {
+    carrierId: headers.get("x-fullmag-carrier-id"),
+    carrierRevision: headers.get("x-fullmag-carrier-revision"),
+    carrierDigest: headers.get("x-fullmag-carrier-digest"),
     component: headers.get("x-fullmag-component"),
     domainGenerationId: headers.get("x-fullmag-domain-generation-id"),
     artifactGenerationId: headers.get("x-fullmag-artifact-generation-id"),
@@ -629,7 +639,8 @@ export function collectFieldVectorIdentityIssues(
   if (
     payload.formatVersion === 3 ||
     payload.formatVersion === 4 ||
-    payload.formatVersion === 5
+    payload.formatVersion === 5 ||
+    payload.formatVersion === 6
   ) {
     compare("scopeKind", metadata.scopeKind, payload.scopeKind ?? null);
     compare("scopeId", metadata.scopeId, payload.scopeId ?? null);
@@ -657,7 +668,7 @@ export function collectFieldVectorIdentityIssues(
       payload.domainGenerationId ?? null,
     );
   }
-  if (payload.formatVersion === 4 || payload.formatVersion === 5) {
+  if (payload.formatVersion === 4 || payload.formatVersion === 5 || payload.formatVersion === 6) {
     compare("sourceKind", metadata.sourceKind ?? null, payload.sourceKind ?? null);
     compare("sourceId", metadata.sourceId ?? null, payload.sourceId ?? null);
     compare(
@@ -670,6 +681,10 @@ export function collectFieldVectorIdentityIssues(
       metadata.fieldGenerationId ?? null,
       payload.fieldGenerationId ?? null,
     );
+  }
+  if (payload.formatVersion === 6) {
+    compare("carrierRevision", metadata.carrierRevision ?? null, payload.meshTopologyRevision ?? null);
+    compare("carrierDigest", metadata.carrierDigest ?? null, payload.meshTopologyHash ?? null);
   }
   return issues;
 }
@@ -1003,6 +1018,10 @@ interface ComputeNodePolicyWriteOptions extends RequestOptions {
   readonly expectedRevision: number;
 }
 
+interface ComputeProfileWriteOptions extends RequestOptions {
+  readonly operatorCapability: string;
+}
+
 function baseRevisionPayload(options?: AuthoringWriteOptions): { base_revision?: number } {
   return options?.baseRevision === undefined
     ? {}
@@ -1193,8 +1212,14 @@ export class ControlRoomApi {
       this.postJson<ComputePreviewResource, ComputePreviewRequest>(PLATFORM_COMPUTE_PREVIEW_PATH, input, options),
     computeProfiles: (query: ExecutionProfileCatalogQuery = {}, options?: RequestOptions) =>
       this.requestJson<ExecutionProfileCatalogResource>(PLATFORM_COMPUTE_PROFILES_PATH, options, { query }),
-    publishComputeProfile: (input: PublishExecutionProfileRequest, options?: RequestOptions) =>
-      this.postJson<PublishExecutionProfileResource, PublishExecutionProfileRequest>(PLATFORM_COMPUTE_PROFILES_PATH, input, options),
+    publishComputeProfile: (input: PublishExecutionProfileRequest, options: ComputeProfileWriteOptions) =>
+      this.postJson<PublishExecutionProfileResource, PublishExecutionProfileRequest>(
+        PLATFORM_COMPUTE_PROFILES_PATH,
+        input,
+        { sessionScopeKey: options.sessionScopeKey, signal: options.signal },
+        undefined,
+        { Authorization: `Bearer ${options.operatorCapability}` },
+      ),
     outputStorageDefaults: (options?: RequestOptions) =>
       this.requestJson<OutputStorageDefaultsResource>(PLATFORM_OUTPUT_STORAGE_PATH, options),
     saveOutputStorageDefaults: (input: OutputStorageDefaultsRequest, options?: RequestOptions) =>
@@ -1868,8 +1893,10 @@ export class ControlRoomApi {
           options,
           { layer_id: layerId },
         ),
-      topology: (options?: BinaryRequestOptions) =>
-        this.requestTopology(DATA_DOMAIN_TOPOLOGY_PATH, options),
+      topology: (options?: BinaryRequestOptions, query?: ArtifactCarrierGeometryQuery) =>
+        this.requestTopology(DATA_DOMAIN_TOPOLOGY_PATH, options, undefined, query ? {
+          carrier_id: query.carrier_id, stage_id: query.stage_id, expected_carrier_revision: query.expected_carrier_revision,
+        } : undefined),
       topologyBytes: (options?: BinaryRequestOptions) =>
         this.requestBinaryBytes(DATA_DOMAIN_TOPOLOGY_PATH, options),
       topologyChunked: (options?: BinaryRequestOptions) =>
@@ -1900,8 +1927,8 @@ export class ControlRoomApi {
         ),
     },
     fields: {
-      catalog: (options?: RequestOptions) =>
-        this.requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options).then(
+      catalog: (options?: RequestOptions, query: ArtifactFieldCatalogQuery = {}) =>
+        this.requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options, { query }).then(
           withDerivedDriveFluxDensity,
         ),
       availability: (
@@ -2091,8 +2118,8 @@ export class ControlRoomApi {
       },
     },
     quantities: {
-      catalog: (options?: RequestOptions) =>
-        this.requestJson<QuantityCatalogResource>(DATA_QUANTITIES_PATH, options),
+      catalog: (options?: RequestOptions, query: ArtifactFieldCatalogQuery = {}) =>
+        this.requestJson<QuantityCatalogResource>(DATA_QUANTITIES_PATH, options, { query }),
     },
     meshRegionMembership: (
       ownerObjectId: string,
@@ -2311,7 +2338,7 @@ export class ControlRoomApi {
     ) =>
       this.putJson<MeshObjectConfigResource, MeshObjectConfigReplaceRequest>(
         MESHING_OBJECT_POLICY_PATH,
-        request,
+        objectMeshPolicyWireRequest(request),
         options,
         {
           path: { object_id: objectId },
@@ -3521,6 +3548,25 @@ export class ControlRoomApi {
             },
           },
         ),
+      retryRunTask: (
+        projectId: string,
+        runId: string,
+        taskId: string,
+        request: ProjectRunTaskRetryRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<ProjectRunTaskRetryResource, ProjectRunTaskRetryRequest>(
+          PROJECT_RUN_TASK_RETRY_PATH,
+          request,
+          options,
+          {
+            path: {
+              project_id: projectId,
+              run_id: runId,
+              task_id: taskId,
+            },
+          },
+        ),
     },
   };
 
@@ -3823,11 +3869,12 @@ export class ControlRoomApi {
     body: TBody,
     options: RequestOptions = {},
     params?: Record<string, unknown>,
+    additionalHeaders?: Record<string, string>,
   ): Promise<TResponse> {
     const result = await this.transport.POST(path as never, {
       body,
       cache: "no-store",
-      headers: sessionScopeHeaders(options),
+      headers: { ...sessionScopeHeaders(options), ...additionalHeaders },
       params,
       signal: options.signal,
     } as never);
@@ -3926,6 +3973,7 @@ export class ControlRoomApi {
     path: OpenApiV2Path,
     options: BinaryRequestOptions = {},
     pathParams?: PathParams,
+    query?: QueryParams,
   ): Promise<BinaryResourceResult<DecodedTopology>> {
     return this.requestBinaryResource(
       path,
@@ -3933,6 +3981,21 @@ export class ControlRoomApi {
       decodeTopology,
       options,
       pathParams,
+      query,
+      query?.carrier_id ? (response) => {
+        const carrierId = response.headers.get("x-fullmag-carrier-id");
+        const carrierRevision = response.headers.get("x-fullmag-carrier-revision");
+        const carrierDigest = response.headers.get("x-fullmag-carrier-digest");
+        if (carrierId !== query.carrier_id || carrierRevision !== query.expected_carrier_revision
+          || !carrierRevision || !/^[1-9][0-9]*$/.test(carrierRevision) || BigInt(carrierRevision) > BigInt("18446744073709551615")
+          || !carrierDigest || !/^[0-9a-f]{64}$/.test(carrierDigest)
+          || response.headers.get("x-fullmag-mesh-topology-hash")?.replace(/^sha256:/, "") !== carrierDigest
+          || response.headers.get("x-fullmag-coordinate-frame") !== "world"
+          || response.headers.get("x-fullmag-coordinate-unit") !== "m") {
+          throw new ControlRoomApiError("Artifact topology owner headers differ", 409);
+        }
+        return { carrierId, carrierRevision, carrierDigest, coordinateFrame: "world", coordinateUnit: "m" };
+      } : undefined,
     );
   }
 
@@ -4258,10 +4321,10 @@ export class ControlRoomApi {
             409,
           );
         }
-        return {
-          ...metadata,
-          identityIssues: collectFieldVectorIdentityIssues(data, metadata),
-        };
+        const identityIssues = collectFieldVectorIdentityIssues(data, metadata);
+        const artifactIdentityError = artifactFieldResponseIdentityError(String(pathParams.quantity_id), query, data, { ...metadata, identityIssues });
+        if (artifactIdentityError) throw new ControlRoomApiError(artifactIdentityError, 409);
+        return { ...metadata, identityIssues };
       },
     );
   }
@@ -4715,17 +4778,24 @@ export class ControlRoomApi {
           method,
         });
 
-        if (this.apiInstanceMismatch || (this.expectedApiInstance && response.headers.get(API_INSTANCE_HEADER) !== this.expectedApiInstance)) {
+        const transportUnavailable = isTransportUnavailableResponse(
+          response,
+          this.expectedApiInstance,
+        );
+        if (!transportUnavailable && (this.apiInstanceMismatch || (this.expectedApiInstance && response.headers.get(API_INSTANCE_HEADER) !== this.expectedApiInstance))) {
           this.apiInstanceMismatch = true;
           throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, response.headers.get("x-request-id"), "API_INSTANCE_MISMATCH");
         }
 
-        const contractVersionError = resolveContractVersionError(response, {
-          allowMissing: allowMissingContractVersion,
-        });
+        const contractVersionError = transportUnavailable
+          ? null
+          : resolveContractVersionError(response, {
+              allowMissing: allowMissingContractVersion,
+            });
         const accepted =
           (response.ok || acceptedStatuses.has(response.status)) &&
-          !contractVersionError;
+          !contractVersionError &&
+          !transportUnavailable;
         const responseDetail = await resolveResponseDiagnosticDetail({
           attempt,
           method,
@@ -4758,6 +4828,15 @@ export class ControlRoomApi {
           throw contractVersionError;
         }
 
+        if (transportUnavailable) {
+          throw new ControlRoomApiError(
+            API_UNAVAILABLE_MESSAGE,
+            response.status,
+            response.headers.get("x-request-id") ?? requestId,
+            API_UNAVAILABLE_CODE,
+          );
+        }
+
         return response;
       } catch (error) {
         if (error instanceof ControlRoomApiError) {
@@ -4765,13 +4844,11 @@ export class ControlRoomApi {
         }
 
         lastError = error;
-        if (
-          attempt < maxAttempts &&
-          !(error instanceof DOMException && error.name === "AbortError")
-        ) {
+        if (attempt < maxAttempts && !isAbortError(error)) {
           await delayRetry(this.retryDelayMs, init.signal);
           continue;
         }
+        break;
       }
     }
 
@@ -4784,18 +4861,47 @@ export class ControlRoomApi {
       durationMs: Date.now() - started,
       etag: null,
       method,
-      outcome:
-        lastError instanceof DOMException && lastError.name === "AbortError"
-          ? "aborted"
-          : "network-error",
+      outcome: isAbortError(lastError) ? "aborted" : "network-error",
       path,
       requestId,
       resourceKey: path,
       status: null,
     });
 
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    if (isAbortError(lastError)) {
+      throw lastError;
+    }
+    throw new ControlRoomApiError(
+      API_UNAVAILABLE_MESSAGE,
+      0,
+      requestId,
+      API_UNAVAILABLE_CODE,
+    );
   }
+}
+
+const API_UNAVAILABLE_CODE = "API_UNAVAILABLE";
+const API_UNAVAILABLE_MESSAGE = "Fullmag API unavailable";
+
+function isTransportUnavailableResponse(
+  response: Response,
+  expectedApiInstance: string | null,
+): boolean {
+  return (
+    !response.ok &&
+    response.status >= 500 &&
+    response.headers.get(API_CONTRACT_VERSION_HEADER) == null &&
+    (expectedApiInstance == null ||
+      response.headers.get(API_INSTANCE_HEADER) == null ||
+      response.headers.get(API_INSTANCE_HEADER) === expectedApiInstance)
+  );
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
 }
 
 function retryableGetStatus(method: string, status: number): boolean {
@@ -4978,6 +5084,9 @@ function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
 
 function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
   return {
+    carrier_id: query.carrier_id ?? undefined,
+    expected_carrier_revision: query.expected_carrier_revision ?? undefined,
+    view: query.view ?? undefined,
     component: query.component ?? undefined,
     owner_object_id: query.owner_object_id ?? undefined,
     scope_id: normalizeFieldMetaScopeId(
@@ -4992,6 +5101,10 @@ function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
 
 function fieldAvailabilityQueryParams(query: FieldAvailabilityQuery): QueryParams {
   return {
+    stage_id: query.stage_id ?? undefined,
+    carrier_id: query.carrier_id ?? undefined,
+    expected_carrier_revision: query.expected_carrier_revision ?? undefined,
+    view: query.view ?? undefined,
     target_id: query.target_id ?? undefined,
     scope_kind: query.scope_kind ?? undefined,
     scope_id: query.scope_id ?? undefined,

@@ -142,6 +142,39 @@
         ],
         "type": "object"
       },
+      "AcceptedInspectionArtifactOwner": {
+        "additionalProperties": false,
+        "description": "Durable accepted publication identity; epoch remains a lossless decimal string in JSON.",
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "attempt_id": {
+            "type": "string"
+          },
+          "object_ref": {
+            "type": "string"
+          },
+          "ownership_epoch": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "task_id",
+          "attempt_id",
+          "ownership_epoch",
+          "artifact_id",
+          "object_ref"
+        ],
+        "type": "object"
+      },
       "AcceptedObservationFrameRef": {
         "properties": {
           "domain_generation_id": {
@@ -2284,6 +2317,200 @@
         ],
         "type": "object"
       },
+      "AntennaClosedLoopInspectionDisplayResource": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/AntennaInspectionDisplayCapabilities"
+          },
+          "closed_loop_display": {},
+          "content_digest": {
+            "type": "string"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "record_content_digest": {
+            "type": "string"
+          },
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "runtime_stage_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "stage_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "resource_id",
+          "session_id",
+          "session_epoch",
+          "request_scope_epoch",
+          "run_id",
+          "runtime_stage_id",
+          "stage_revision",
+          "record_content_digest",
+          "content_digest",
+          "capabilities",
+          "normalization",
+          "closed_loop_display"
+        ],
+        "type": "object"
+      },
+      "AntennaEquilibriumBindingResource": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance_certificate_sha256": {
+            "type": "string"
+          },
+          "asset_id": {
+            "type": "string"
+          },
+          "authored_stage_id": {
+            "type": "string"
+          },
+          "boundary_signature": {
+            "type": "string"
+          },
+          "certified_fields_sha256": {
+            "type": "string"
+          },
+          "completion_sha256": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "equilibrium_content_sha256": {
+            "type": "string"
+          },
+          "equilibrium_id": {
+            "type": "string"
+          },
+          "indexing_sha256": {
+            "type": "string"
+          },
+          "mapping_digest": {
+            "type": "string"
+          },
+          "material_signature": {
+            "type": "string"
+          },
+          "mesh_generation_id": {
+            "type": "string"
+          },
+          "mesh_topology_sha256": {
+            "type": "string"
+          },
+          "norm_floor": {
+            "format": "double",
+            "type": "number"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "owning_plan_sha256": {
+            "type": "string"
+          },
+          "part_registry_sha256": {
+            "type": "string"
+          },
+          "producer_contract": {
+            "type": "string"
+          },
+          "projection_version": {
+            "type": "string"
+          },
+          "recomputed_certificate_sha256": {
+            "type": "string"
+          },
+          "resolved_execution_engine": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_carrier_sha256": {
+            "type": "string"
+          },
+          "source_run_id": {
+            "type": "string"
+          },
+          "source_solution_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaFieldSolutionRefResource"
+              }
+            ]
+          },
+          "source_stage_id": {
+            "type": "string"
+          },
+          "static_demag_sha256": {
+            "type": "string"
+          },
+          "static_physics_signature": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "producer_contract",
+          "resolved_execution_engine",
+          "asset_id",
+          "equilibrium_id",
+          "content_digest",
+          "source_run_id",
+          "source_stage_id",
+          "authored_stage_id",
+          "completion_sha256",
+          "acceptance_certificate_sha256",
+          "recomputed_certificate_sha256",
+          "certified_fields_sha256",
+          "equilibrium_content_sha256",
+          "mesh_generation_id",
+          "mesh_topology_sha256",
+          "indexing_sha256",
+          "part_registry_sha256",
+          "owning_plan_sha256",
+          "material_signature",
+          "static_physics_signature",
+          "boundary_signature",
+          "static_demag_sha256",
+          "source_carrier_sha256",
+          "target",
+          "mapping_digest",
+          "normalization",
+          "norm_floor",
+          "projection_version"
+        ],
+        "type": "object"
+      },
       "AntennaExternalLeadInspectionResource": {
         "allOf": [
           {
@@ -2291,6 +2518,7 @@
           },
           {
             "properties": {
+              "closed_loop_manifest": {},
               "manifest": {
                 "oneOf": [
                   {
@@ -2940,6 +3168,16 @@
         ],
         "type": "object"
       },
+      "AntennaInspectionDisplayFamilyResource": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AntennaInspectionDisplayResource"
+          },
+          {
+            "$ref": "#/components/schemas/AntennaClosedLoopInspectionDisplayResource"
+          }
+        ]
+      },
       "AntennaInspectionDisplayResource": {
         "properties": {
           "capabilities": {
@@ -3151,6 +3389,12 @@
       "AntennaInspectionOutputResource": {
         "additionalProperties": false,
         "properties": {
+          "content_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "inspection_ref": {
             "$ref": "#/components/schemas/AntennaInspectionReferenceResource"
           },
@@ -3171,14 +3415,14 @@
           },
           "reused_existing": {
             "type": "boolean"
-          }
+          },
+          "source": {}
         },
         "required": [
           "kind",
           "inspection_ref",
           "manifest_ref",
-          "payload_units",
-          "reused_existing"
+          "payload_units"
         ],
         "type": "object"
       },
@@ -3302,6 +3546,12 @@
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_object_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "stage_id": {
             "type": "string"
@@ -3536,6 +3786,16 @@
           "content_digest": {
             "type": "string"
           },
+          "equilibrium_binding": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaEquilibriumBindingResource"
+              }
+            ]
+          },
           "equivalent_noise_bandwidth_bins": {
             "format": "double",
             "type": "number"
@@ -3738,9 +3998,13 @@
             "type": "string"
           },
           "equilibrium_ref": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EquilibriumRefResource"
+              }
             ]
           },
           "id": {
@@ -3950,6 +4214,12 @@
           },
           "target": {
             "$ref": "#/components/schemas/AntennaFieldTargetResource"
+          },
+          "transform": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
           }
         },
         "required": [
@@ -3966,6 +4236,8 @@
           "sample_count_u",
           "sample_count_v",
           "interpolation",
+          "transform",
+          "window",
           "realization",
           "outside_policy",
           "outside_count",
@@ -4241,6 +4513,29 @@
         ],
         "type": "object"
       },
+      "ArtifactCarrierGeometryQuery": {
+        "properties": {
+          "carrier_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_carrier_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ArtifactEntry": {
         "properties": {
           "kind": {
@@ -4263,6 +4558,148 @@
         "required": [
           "path",
           "kind"
+        ],
+        "type": "object"
+      },
+      "ArtifactFieldLocatorResource": {
+        "properties": {
+          "carrier_digest": {
+            "type": "string"
+          },
+          "carrier_id": {
+            "type": "string"
+          },
+          "carrier_revision": {
+            "description": "Canonical decimal u64 string; exact across JavaScript JSON readers.",
+            "type": "string"
+          },
+          "carrier_scope_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "carrier_scope_kind": {
+            "type": "string"
+          },
+          "coordinate_frame": {
+            "type": "string"
+          },
+          "coordinate_unit": {
+            "type": "string"
+          },
+          "indexing": {
+            "$ref": "#/components/schemas/ArtifactSampleIndexing"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/ArtifactFieldOwnerBinding"
+          },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "topology_binary_schema": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "carrier_scope_kind",
+          "carrier_id",
+          "carrier_digest",
+          "carrier_revision",
+          "indexing",
+          "sample_count",
+          "coordinate_frame",
+          "coordinate_unit",
+          "topology_binary_schema"
+        ],
+        "type": "object"
+      },
+      "ArtifactFieldOwnerBinding": {
+        "description": "Provider-owned immutable source identity. Stable native mesh IDs are binary-only.",
+        "properties": {
+          "accepted_artifact": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AcceptedInspectionArtifactOwner"
+              }
+            ]
+          },
+          "authored_stage_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "historical_inspection": {
+            "type": "boolean"
+          },
+          "module_id": {
+            "type": "string"
+          },
+          "native_mesh_identity": {
+            "type": "string"
+          },
+          "native_topology_identity": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "observation_mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observation_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "runtime_stage_id": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "source_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "session_epoch",
+          "request_scope_epoch",
+          "run_id",
+          "runtime_stage_id",
+          "authored_stage_id",
+          "module_id",
+          "object_id",
+          "output_id",
+          "source_digest",
+          "content_digest",
+          "observation_mesh_revision",
+          "observation_topology_revision",
+          "historical_inspection",
+          "native_mesh_identity",
+          "native_topology_identity"
         ],
         "type": "object"
       },
@@ -4300,6 +4737,16 @@
           "kind"
         ],
         "type": "object"
+      },
+      "ArtifactSampleIndexing": {
+        "enum": [
+          "source_nodes",
+          "sample_nodes",
+          "point_samples",
+          "tet4_cell_local_nodes",
+          "cell_centers"
+        ],
+        "type": "string"
       },
       "Author": {
         "properties": {
@@ -6337,6 +6784,184 @@
         ],
         "type": "string"
       },
+      "ComputeAllocationOwner": {
+        "oneOf": [
+          {
+            "properties": {
+              "attempt_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "solver"
+                ],
+                "type": "string"
+              },
+              "ownership_epoch": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "attempt_id",
+              "ownership_epoch",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "preparation"
+                ],
+                "type": "string"
+              },
+              "preparation_attempt_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "preparation_attempt_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ComputeAllocationResource": {
+        "description": "Read-only detail of one exact host-ledger allocation, without lease tokens.",
+        "properties": {
+          "allocation_id": {
+            "type": "string"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ComputeNodePolicyBudget"
+          },
+          "compute_node_owner_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "compute_node_owner_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cpu_ids": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "exclusive_gpu_uuids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "gpu_vram_bytes_by_uuid": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "host_owner_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "node_policy_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/ComputeAllocationOwner"
+          },
+          "parallelism": {
+            "description": "Canonical parallelism intent; returned as JSON to preserve its versioned shape.",
+            "type": "object"
+          },
+          "policy_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "scheduling_priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ComputeAllocationState"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "topology_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "allocation_id",
+          "node_id",
+          "host_id",
+          "run_id",
+          "task_id",
+          "resource_id",
+          "owner",
+          "state",
+          "budget",
+          "cpu_ids",
+          "exclusive_gpu_uuids",
+          "policy_revision",
+          "node_policy_revision",
+          "host_owner_epoch",
+          "topology_sha256",
+          "scheduling_priority",
+          "parallelism"
+        ],
+        "type": "object"
+      },
+      "ComputeAllocationState": {
+        "enum": [
+          "tentative",
+          "committed",
+          "quarantined",
+          "released"
+        ],
+        "type": "string"
+      },
       "ComputeNodeParallelismPattern": {
         "oneOf": [
           {
@@ -6904,6 +7529,114 @@
         "required": [
           "step_id",
           "execution"
+        ],
+        "type": "object"
+      },
+      "ComputeQueueItemResource": {
+        "description": "One non-terminal accepted run or task projected from the existing durable store.",
+        "properties": {
+          "accepted_at": {
+            "type": "string"
+          },
+          "attempt_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blocking_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "item_id": {
+            "description": "Stable opaque cursor identity, not an operational capability.",
+            "type": "string"
+          },
+          "ownership_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resource_id": {
+            "description": "Stable scheduler resource name; contains no lease token.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "scheduling_priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ComputeQueueItemState"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "item_id",
+          "project_id",
+          "run_id",
+          "accepted_at",
+          "scheduling_priority",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ComputeQueueItemState": {
+        "enum": [
+          "pending_materialization",
+          "accepted",
+          "queued",
+          "preparing",
+          "running",
+          "stopping"
+        ],
+        "type": "string"
+      },
+      "ComputeQueueResource": {
+        "description": "Bounded page of the durable accepted-run scheduler read model.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ComputeQueueItemResource"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "description": "Digest of the observed durable queue rows; cursors are tied to this revision.",
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "revision",
+          "items"
         ],
         "type": "object"
       },
@@ -8730,6 +9463,68 @@
         ],
         "type": "object"
       },
+      "EquilibriumRefResource": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/EquilibriumReferenceResource"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "EquilibriumReferenceResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage_output"
+                ],
+                "type": "string"
+              },
+              "output_id": {
+                "type": "string"
+              },
+              "stage_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage_id",
+              "output_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "asset_id": {
+                "type": "string"
+              },
+              "content_digest": {
+                "type": "string"
+              },
+              "equilibrium_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "artifact"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "asset_id",
+              "equilibrium_id",
+              "content_digest",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ExecutionBackendSchema": {
         "enum": [
           "auto",
@@ -10341,6 +11136,16 @@
       },
       "FieldDescriptor": {
         "properties": {
+          "artifact_field_locator": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ArtifactFieldLocatorResource"
+              }
+            ]
+          },
           "available": {
             "type": "boolean"
           },
@@ -10824,6 +11629,16 @@
       },
       "FieldMeta": {
         "properties": {
+          "artifact_field_locator": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ArtifactFieldLocatorResource"
+              }
+            ]
+          },
           "components": {
             "format": "int32",
             "minimum": 0,
@@ -10957,6 +11772,7 @@
       "FieldPayloadState": {
         "enum": [
           "current",
+          "historical",
           "legacy_unverified",
           "unmaterialized"
         ],
@@ -11240,6 +12056,16 @@
       },
       "FieldPublicationBinding": {
         "properties": {
+          "artifact_field_locator": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ArtifactFieldLocatorResource"
+              }
+            ]
+          },
           "carrier_fingerprint": {
             "type": "string"
           },
@@ -12031,6 +12857,13 @@
       "FieldVectorQuery": {
         "description": "Query parameters for the `/fields/{quantity_id}/vector` endpoint.",
         "properties": {
+          "carrier_id": {
+            "description": "Exact immutable artifact carrier selector.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "component": {
             "description": "Component to return.\n\nAccepted values: `full` (default), `magnitude`, `x`, `y`, `z`, `c0`, `c1`, …, `cN-1`.\n\n- `full` → full interleaved vector (nComp unchanged)\n- `magnitude` → per-point L2 norm (nComp=1)\n- `x`/`y`/`z`/`cN` → single component by index (nComp=1)",
             "type": [
@@ -22271,6 +23104,39 @@
         ],
         "type": "string"
       },
+      "MeshMixedExactSweepSummaryResource": {
+        "properties": {
+          "actual_node_plane_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "realized_layer_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requested_layer_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sweep_direction_requested": {
+            "type": "string"
+          },
+          "sweep_direction_resolved": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sweep_direction_requested",
+          "sweep_direction_resolved",
+          "requested_layer_count",
+          "realized_layer_count",
+          "actual_node_plane_count"
+        ],
+        "type": "object"
+      },
       "MeshMixedLayerTopologyCertificateSummaryResource": {
         "properties": {
           "actual_node_plane_count": {
@@ -22314,6 +23180,37 @@
           "requested_layer_count",
           "realized_layer_count",
           "gmsh_version"
+        ],
+        "type": "object"
+      },
+      "MeshMixedLayerTopologyCertificateV2SummaryResource": {
+        "description": "Thin v2 certificate summary. Numerical coefficients and mesh arrays stay in their owners.",
+        "properties": {
+          "certificate_status": {
+            "type": "string"
+          },
+          "gmsh_version": {
+            "type": "string"
+          },
+          "magnetic_regions": {
+            "items": {
+              "$ref": "#/components/schemas/MeshMixedMagneticRegionSummaryResource"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "topology_fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "certificate_status",
+          "topology_fingerprint",
+          "gmsh_version",
+          "magnetic_regions"
         ],
         "type": "object"
       },
@@ -22383,6 +23280,51 @@
           "certificate_status",
           "requested_layer_count",
           "rejection_reason"
+        ],
+        "type": "object"
+      },
+      "MeshMixedMagneticRegionSummaryResource": {
+        "properties": {
+          "body_marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cell_family_counts": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "exact_sweep": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedExactSweepSummaryResource"
+              }
+            ]
+          },
+          "material_marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "object_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_id",
+          "body_marker",
+          "material_marker",
+          "cell_family_counts"
         ],
         "type": "object"
       },
@@ -23749,6 +24691,17 @@
               }
             ]
           },
+          "mixed_layer_topology_certificate_v2": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedLayerTopologyCertificateV2SummaryResource",
+                "description": "Region-scoped evidence; never collapse multiple bodies into the v1 layer summary."
+              }
+            ]
+          },
           "mixed_topology_provenance": {
             "oneOf": [
               {
@@ -23970,6 +24923,17 @@
               },
               {
                 "$ref": "#/components/schemas/MeshMixedLayerTopologyCertificateSummaryResource"
+              }
+            ]
+          },
+          "mixed_layer_topology_certificate_v2": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedLayerTopologyCertificateV2SummaryResource",
+                "description": "Region-scoped evidence; never collapse multiple bodies into the v1 layer summary."
               }
             ]
           },
@@ -25060,30 +26024,49 @@
         "type": "object"
       },
       "ObjectEnergySummary": {
+        "description": "Per-energy availability is explicit: null is missing, while Some(0.0) is an observed zero.",
         "properties": {
           "anisotropy": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "demag": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "dmi": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "exchange": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "total": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "zeeman": {
             "format": "double",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "required": [
@@ -26418,6 +27401,19 @@
       },
       "PlanarFieldComponent": {
         "enum": [
+          "c0",
+          "c1",
+          "c2",
+          "c3",
+          "c4",
+          "c5",
+          "c6",
+          "c7",
+          "c8",
+          "frobenius",
+          "spin_flow_x",
+          "spin_flow_y",
+          "spin_flow_z",
           "x",
           "y",
           "z",
@@ -28648,7 +29644,8 @@
         "enum": [
           "pause_admission",
           "resume_admission",
-          "cancel_admission"
+          "cancel_admission",
+          "retry"
         ],
         "type": "string"
       },
@@ -28675,6 +29672,17 @@
           },
           "reason": {
             "type": "string"
+          },
+          "retry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectBatchRetryRequest",
+                "description": "Required only when action is `retry`; targets one task in one stable batch case."
+              }
+            ]
           }
         },
         "required": [
@@ -28706,6 +29714,17 @@
           },
           "expansion_state": {
             "$ref": "#/components/schemas/ProjectBatchExpansionState"
+          },
+          "retry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectBatchRetryResource",
+                "description": "Present when the command creates or replays one case task attempt."
+              }
+            ]
           },
           "revision": {
             "format": "int64",
@@ -28784,6 +29803,47 @@
         "required": [
           "project_id",
           "batches"
+        ],
+        "type": "object"
+      },
+      "ProjectBatchRetryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "expected_catalog_revision": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "retry_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "task_id",
+          "retry_id",
+          "expected_catalog_revision"
+        ],
+        "type": "object"
+      },
+      "ProjectBatchRetryResource": {
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "task": {
+            "$ref": "#/components/schemas/ProjectRunTaskRetryResource"
+          }
+        },
+        "required": [
+          "case_id",
+          "task"
         ],
         "type": "object"
       },
@@ -29709,7 +30769,7 @@
           },
           "study_plan": {
             "additionalProperties": {},
-            "description": "Versioned `study_plan.v2` object with typed steps, references and runner controls.",
+            "description": "Versioned `study_plan.v1/v2/v3/v4`; v4 adds typed inspection operations and captured source.",
             "propertyNames": {
               "type": "string"
             },
@@ -29922,6 +30982,20 @@
         ],
         "type": "object"
       },
+      "ProjectRunTaskExecutionResource": {
+        "properties": {
+          "materialization": {
+            "$ref": "#/components/schemas/ExecutionMaterializationSchema"
+          },
+          "step_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_id"
+        ],
+        "type": "object"
+      },
       "ProjectRunTaskLifecycle": {
         "enum": [
           "accepted",
@@ -30006,6 +31080,9 @@
               }
             ]
           },
+          "execution": {
+            "$ref": "#/components/schemas/ProjectRunTaskExecutionResource"
+          },
           "input_fingerprint": {
             "type": "string"
           },
@@ -30055,6 +31132,79 @@
           "lifecycle",
           "readiness",
           "artifact_ids"
+        ],
+        "type": "object"
+      },
+      "ProjectRunTaskRetryDisposition": {
+        "enum": [
+          "accepted",
+          "replayed"
+        ],
+        "type": "string"
+      },
+      "ProjectRunTaskRetryRequest": {
+        "additionalProperties": false,
+        "description": "Revision-fenced request to create a fresh attempt for one terminal task.",
+        "properties": {
+          "expected_catalog_revision": {
+            "description": "Catalog revision observed by the caller before requesting the retry.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_id": {
+            "description": "Stable idempotency identity for this operator retry request.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "retry_id",
+          "expected_catalog_revision"
+        ],
+        "type": "object"
+      },
+      "ProjectRunTaskRetryResource": {
+        "properties": {
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/ProjectRunTaskRetryDisposition"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProjectRunTaskLifecycle",
+            "description": "Retry ACK reports the durable task state, not solver completion."
+          },
+          "previous_attempt_id": {
+            "description": "Attempt that was terminal when the retry was requested.",
+            "type": "string"
+          },
+          "previous_ownership_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "disposition",
+          "run_id",
+          "task_id",
+          "retry_id",
+          "previous_attempt_id",
+          "previous_ownership_epoch",
+          "lifecycle",
+          "catalog_revision"
         ],
         "type": "object"
       },
@@ -30287,6 +31437,16 @@
           "supports_preview_3d": {
             "type": "boolean"
           },
+          "tensor": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QuantityTensorDescriptor"
+              }
+            ]
+          },
           "unit": {
             "type": "string"
           }
@@ -30376,6 +31536,46 @@
           "unavailable"
         ],
         "type": "string"
+      },
+      "QuantityTensorDescriptor": {
+        "properties": {
+          "axes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "component_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "layout": {
+            "type": "string"
+          },
+          "rank": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "shape": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rank",
+          "shape",
+          "layout",
+          "axes",
+          "component_labels"
+        ],
+        "type": "object"
       },
       "QuantityVisualizationPatch": {
         "properties": {
@@ -35258,6 +36458,13 @@
         ],
         "type": "string"
       },
+      "SceneStructuredCutCoordinateFrame": {
+        "enum": [
+          "world",
+          "object"
+        ],
+        "type": "string"
+      },
       "SceneStructuredCutNormal": {
         "enum": [
           "positive_axis",
@@ -35266,9 +36473,21 @@
         "type": "string"
       },
       "SceneStructuredCutPlane": {
+        "additionalProperties": false,
         "properties": {
           "axis": {
             "$ref": "#/components/schemas/SceneStructuredCutAxis"
+          },
+          "coordinate_frame": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneStructuredCutCoordinateFrame",
+                "description": "An omitted frame retains the legacy world-frame contract."
+              }
+            ]
           },
           "normal": {
             "$ref": "#/components/schemas/SceneStructuredCutNormal"
@@ -36979,6 +38198,20 @@
             "$ref": "#/components/schemas/SaveProfile",
             "description": "Save profile: \"compact\", \"solved\", \"resume\", \"archive\"."
           },
+          "save_to_source": {
+            "description": "Persist the archive beside the admitted source script instead of only\nreturning its base64 representation.  Omitted requests preserve the\nhistorical export/download behavior.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "target_path": {
+            "description": "Explicit `.fms` output path.  It is used only when `save_to_source` is\ntrue and must resolve inside the configured output mapping.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "ui_state": {
             "description": "Optional UI workspace snapshot provided by frontend."
           }
@@ -36990,12 +38223,26 @@
       },
       "SessionExportResponse": {
         "properties": {
+          "filename": {
+            "description": "File name written when `save_to_source` was enabled.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "fms_base64": {
-            "description": "Base64-encoded `.fms` file content.",
+            "description": "Base64-encoded `.fms` file content for browser exports.  This remains\na required compatibility field and is empty when `saved_path` is\npresent; source-save consumers should use the persisted path instead.",
             "type": "string"
           },
           "profile": {
             "$ref": "#/components/schemas/SaveProfile"
+          },
+          "saved_path": {
+            "description": "Path written when `save_to_source` was enabled.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "session_id": {
             "type": "string"
@@ -44132,6 +45379,13 @@
           "surface_visible": {
             "type": "boolean"
           },
+          "tensor_projection": {
+            "description": "Explicit flow-major tensor projection; absent for scalar/vector fields.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "vector_alpha": {
             "format": "double",
             "type": "number"
@@ -44851,6 +46105,12 @@
               {
                 "$ref": "#/components/schemas/SurfaceFieldProjectionMode"
               }
+            ]
+          },
+          "tensor_projection": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "vector_alpha": {
@@ -47708,6 +48968,84 @@
         ]
       }
     },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/retry": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects_project_id_runs_run_id_tasks_task_id_retry",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Accepted durable child run identity",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact durable task identity",
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectRunTaskRetryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRunTaskRetryResource"
+                }
+              }
+            },
+            "description": "Identical retry request replayed"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRunTaskRetryResource"
+                }
+              }
+            },
+            "description": "A fresh attempt was durably queued after terminal reconciliation"
+          },
+          "400": {
+            "description": "Invalid retry identity or catalog revision"
+          },
+          "404": {
+            "description": "Accepted run intent is missing"
+          },
+          "409": {
+            "description": "Task is not retryable, the catalog changed, terminal proof or its exact lease release is missing, or a lease is still active"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
     "/v2/platform/asyncapi.json": {
       "get": {
         "operationId": "platform_get_platform_asyncapi_json",
@@ -47739,6 +49077,49 @@
               }
             },
             "description": "Runtime capabilities"
+          },
+          "500": {
+            "description": "Invalid runtime package root configuration"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/compute/allocations/{allocation_id}": {
+      "get": {
+        "operationId": "platform_get_platform_compute_allocations_allocation_id",
+        "parameters": [
+          {
+            "description": "Stable opaque allocation identity",
+            "in": "path",
+            "name": "allocation_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputeAllocationResource"
+                }
+              }
+            },
+            "description": "Read-only allocation detail without operational tokens"
+          },
+          "304": {
+            "description": "The allocation is unchanged for the supplied ETag"
+          },
+          "404": {
+            "description": "The allocation is not present in the configured local host ledger"
+          },
+          "503": {
+            "description": "The configured local host ledger could not be safely read"
           }
         },
         "tags": [
@@ -48057,6 +49438,17 @@
       },
       "post": {
         "operationId": "platform_post_platform_compute_profiles",
+        "parameters": [
+          {
+            "description": "Bearer capability issued by the local Fullmag desktop application",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -48091,11 +49483,68 @@
           "400": {
             "description": "Invalid profile or publication identity"
           },
+          "403": {
+            "description": "A local desktop-operator capability is required"
+          },
           "409": {
             "description": "Revision, intent, version or catalogue capacity conflict"
           },
           "503": {
             "description": "No configured profile store"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/platform/compute/queue": {
+      "get": {
+        "operationId": "platform_get_platform_compute_queue",
+        "parameters": [
+          {
+            "description": "Opaque continuation cursor returned by the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Default 50, maximum 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputeQueueResource"
+                }
+              }
+            },
+            "description": "Bounded read model of the existing durable run scheduler"
+          },
+          "304": {
+            "description": "The requested compute queue page is unchanged"
+          },
+          "400": {
+            "description": "Invalid page size or cursor"
+          },
+          "409": {
+            "description": "The queue changed while paging; refresh from the first page"
+          },
+          "503": {
+            "description": "Managed accepted-run storage is unavailable"
           }
         },
         "tags": [
@@ -51961,10 +53410,10 @@
                 }
               }
             },
-            "description": "Inspection record and manifest-only metadata; never a drive basis"
+            "description": "Inspection record; external-lead manifest metadata or fully verified closed-loop thin metadata; never a drive basis"
           },
           "304": {
-            "description": "Unchanged manifest-only resource"
+            "description": "Unchanged inspection resource after family validation"
           },
           "404": {
             "content": {
@@ -52067,7 +53516,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AntennaInspectionDisplayResource"
+                  "$ref": "#/components/schemas/AntennaInspectionDisplayFamilyResource"
                 }
               }
             },
@@ -52760,6 +54209,39 @@
         "operationId": "data_get_sessions_current_data_domain_topology",
         "parameters": [
           {
+            "in": "query",
+            "name": "carrier_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Strong ETag from a previous domain topology response",
             "in": "header",
             "name": "If-None-Match",
@@ -53084,6 +54566,17 @@
         "operationId": "data_get_sessions_current_data_fields",
         "parameters": [
           {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
@@ -53118,6 +54611,54 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Exact runtime stage that owns the immutable inspection.",
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Exact immutable carrier selected from field metadata.",
+            "in": "query",
+            "name": "carrier_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional inspection view: full or explicit J_charge cell_centers.",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Canonical nonzero decimal u64 precondition for the immutable carrier.",
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {
@@ -53188,6 +54729,9 @@
           },
           "404": {
             "description": "No active workspace or unknown quantity"
+          },
+          "409": {
+            "description": "Ambiguous owner, immutable carrier mismatch, or changed observation"
           }
         },
         "tags": [
@@ -53206,6 +54750,39 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "carrier_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {
@@ -58292,6 +59869,18 @@
             }
           },
           {
+            "description": "Exact immutable artifact carrier selector.",
+            "in": "query",
+            "name": "carrier_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Component to return.\n\nAccepted values: `full` (default), `magnitude`, `x`, `y`, `z`, `c0`, `c1`, …, `cN-1`.\n\n- `full` → full interleaved vector (nComp unchanged)\n- `magnitude` → per-point L2 norm (nComp=1)\n- `x`/`y`/`z`/`cN` → single component by index (nComp=1)",
             "in": "query",
             "name": "component",
@@ -58459,10 +60048,28 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary FMVP field vector. Analysis response and eigen-mode vectors use FMVP v5 metadata with the full quantity ID and domain generation identity; when a mesh carrier is available they also include topology, scope, and indexing metadata. Analysis vectors without a mesh use the explicit legacy_count_only absent-topology sentinel and cannot establish topology-bound overlay compatibility. Other scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.",
+            "description": "Binary FMVP field vector. Immutable artifact inspections use separate FMVP v6 metadata with lossless u64 sample identities, source ownership and carrier revision/digest; this does not change the generic v5 full-quantity-ID layout. Analysis response and eigen-mode vectors use FMVP v5 metadata with the full quantity ID and domain generation identity; when a mesh carrier is available they also include topology, scope, and indexing metadata. Analysis vectors without a mesh use the explicit legacy_count_only absent-topology sentinel and cannot establish topology-bound overlay compatibility. Other scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.",
             "headers": {
               "x-fullmag-artifact-generation-id": {
                 "description": "Committed analysis artifact generation identity; present only when the served field member is verified",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-carrier-digest": {
+                "description": "Bare lowercase SHA256 artifact carrier digest; present for FMVP v6",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-carrier-id": {
+                "description": "Immutable artifact carrier ID; present for FMVP v6",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-carrier-revision": {
+                "description": "Lossless decimal u64 artifact carrier revision; present for FMVP v6",
                 "schema": {
                   "type": "string"
                 }
@@ -58480,7 +60087,7 @@
                 }
               },
               "x-fullmag-encoding": {
-                "description": "FMVP encoding and version",
+                "description": "FMVP encoding and version, including FMVP;version=6 for immutable artifact inspections",
                 "schema": {
                   "type": "string"
                 }
@@ -59120,6 +60727,17 @@
       "get": {
         "operationId": "data_get_sessions_current_data_quantities",
         "parameters": [
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           {
             "$ref": "#/components/parameters/FullmagSessionScope"
           }

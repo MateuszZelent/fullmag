@@ -2024,34 +2024,26 @@ pub async fn get_object_metrics(
         Some(initial_m)
     };
 
-    let zero_energies = ObjectEnergySummary {
-        exchange: 0.0,
-        demag: 0.0,
-        zeeman: 0.0,
-        anisotropy: 0.0,
-        dmi: 0.0,
-        total: 0.0,
-    };
     let energies = object_scalars
         .map(|values| ObjectEnergySummary {
-            exchange: number_from_metric(values, "e_ex").unwrap_or(0.0),
-            demag: number_from_metric(values, "e_demag").unwrap_or(0.0),
-            zeeman: number_from_metric(values, "e_ext").unwrap_or(0.0),
-            anisotropy: number_from_metric(values, "e_ani").unwrap_or(0.0),
-            dmi: number_from_metric(values, "e_dmi").unwrap_or(0.0),
-            total: number_from_metric(values, "e_total").unwrap_or(0.0),
+            exchange: number_from_metric(values, "e_ex"),
+            demag: number_from_metric(values, "e_demag"),
+            zeeman: number_from_metric(values, "e_ext"),
+            anisotropy: number_from_metric(values, "e_ani"),
+            dmi: number_from_metric(values, "e_dmi"),
+            total: number_from_metric(values, "e_total"),
         })
         .or_else(|| {
             latest_energy_row.as_ref().map(|row| ObjectEnergySummary {
-                exchange: row.e_ex,
-                demag: row.e_demag,
-                zeeman: row.e_ext,
-                anisotropy: row.e_ani,
-                dmi: row.e_dmi,
-                total: row.e_total,
+                exchange: row.e_ex.is_finite().then_some(row.e_ex),
+                demag: row.e_demag.is_finite().then_some(row.e_demag),
+                zeeman: row.e_ext.is_finite().then_some(row.e_ext),
+                anisotropy: row.e_ani.is_finite().then_some(row.e_ani),
+                dmi: row.e_dmi.is_finite().then_some(row.e_dmi),
+                total: row.e_total.is_finite().then_some(row.e_total),
             })
         })
-        .unwrap_or(zero_energies);
+        .unwrap_or_default();
 
     Ok(Json(ObjectMetricsResource {
         object_id: canonical_object_id,

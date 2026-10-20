@@ -15,7 +15,7 @@ use fullmag_engine::{
     magnetoelastic::{MagnetoelasticParams, PrescribedStrainField},
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
     EngineError, EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState,
-    ExchangeLlgStateSoA, ExternalStageTerms, FdmBoundaryPolicy, FdmCpuSolverCheckpointV1,
+    ExchangeLlgStateSoA, FdmBoundaryPolicy, FdmCpuSolverCheckpointV1,
     FftWorkspace, GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig,
     MaterialParameters, OerstedCylinderConfig, ProjectionPolicy, RegionalFieldDriveTerm,
     ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, SotFormula, StepReport,
@@ -1047,13 +1047,14 @@ pub(crate) fn execute_coupled_ars_trial(
                 .map_err(|error| {
                     EngineError::with_code(EngineErrorCode::CoupledSolverFailure, error.message)
                 })?;
-            let terms = ExternalStageTerms {
-                additional_field_apm: evaluation
+            let terms = problem.external_stage_terms_from_gilbert_source(
+                magnetization,
+                evaluation
                     .combined_oersted_field_apm
                     .clone()
                     .unwrap_or_else(|| vec![[0.0; 3]; magnetization.len()]),
-                direct_torque_per_s: evaluation.combined_transport_torque_per_s.clone(),
-            };
+                evaluation.combined_transport_torque_per_s.clone(),
+            )?;
             candidate = Some(evaluation);
             Ok(terms)
         },
@@ -1111,13 +1112,14 @@ pub(crate) fn execute_coupled_heun_trial(
                 .map_err(|error| {
                     EngineError::with_code(EngineErrorCode::CoupledSolverFailure, error.message)
                 })?;
-            let terms = ExternalStageTerms {
-                additional_field_apm: evaluation
+            let terms = problem.external_stage_terms_from_gilbert_source(
+                magnetization,
+                evaluation
                     .combined_oersted_field_apm
                     .clone()
                     .unwrap_or_else(|| vec![[0.0; 3]; magnetization.len()]),
-                direct_torque_per_s: evaluation.combined_transport_torque_per_s.clone(),
-            };
+                evaluation.combined_transport_torque_per_s.clone(),
+            )?;
             candidate = Some(evaluation);
             Ok(terms)
         },

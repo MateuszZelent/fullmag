@@ -2545,3 +2545,31 @@ def test_export_isolates_release_cache_by_build_image_content() -> None:
     assert '${CARGO_TARGET_DIR}/release/fullmag' in script
     assert '${CARGO_TARGET_DIR}/release/fullmag-api' in script
     assert '${CARGO_TARGET_DIR}/release/lib_fullmag_core.so' in script
+
+
+def test_export_native_cubin_requirement_follows_expected_device() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    start = exporter.index(': "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY:=8.9}"')
+    end = exporter.index(': "${FULLMAG_ENABLE_NVTX:=0}"', start)
+    setup = exporter[start:end]
+    for capability, cubin in (("8.6", "sm_86"), ("8.9", "sm_89"), ("10.0", "sm_100")):
+        result = run_bash(
+            f'FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY={capability}\n'
+            + setup + '\nprintf "%s" "${FULLMAG_FEM_REQUIRED_NATIVE_CUBIN}"'
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == cubin
+    assert exporter.count('--require-native-cubin "fullmag_fem=${FULLMAG_FEM_REQUIRED_NATIVE_CUBIN}"') == 2
+    assert exporter.count('--require-native-cubin "hypre=${FULLMAG_FEM_REQUIRED_NATIVE_CUBIN}"') == 2
+    assert exporter.count('--require-compute-capability "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY}"') == 2
+
+
+def test_export_rejects_malformed_expected_device_capability() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    start = exporter.index(': "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY:=8.9}"')
+    end = exporter.index(': "${FULLMAG_ENABLE_NVTX:=0}"', start)
+    setup = exporter[start:end]
+    for capability in ("8", "8.90", "8.6-extra", "0.0", "-1.0"):
+        result = run_bash(f'FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY={capability}\n' + setup)
+        assert result.returncode == 2, (capability, result.stderr)
+        assert "expected compute capability must have major.minor form" in result.stderr

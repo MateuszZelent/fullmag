@@ -370,6 +370,235 @@ execution disables error-based rejection but still executes the same versioned
 ARS stages. `coupled_bdf2_small_oracle.v1` remains validation-only and is not a
 production authoring choice in M3.
 
+(spin-transport-frozen-free-error-support)=
+### 2.6.1. Frozen M, free target i zaakceptowany czas — prerejestracja
+
+**Stan: `planned_contract`, runtime `NOT VERIFIED`.** To doprecyzowanie
+istniejącego zerowania wag masked/nonmagnetic DOF, nie zmiana równań transportu.
+Support błędu zewnętrznego kroku jest przecięciem fizycznych torque targetów
+ze swobodnymi aktywnymi magnetycznymi DOF resolved constraintu:
+
+```{math}
+:label: spin-transport-free-target-support
+\Omega_{T,U}=\Omega_T\cap\Omega_U.
+```
+
+Dla niepustego supportu obie normy mają identyczny support i wagę objętościową:
+
+```{math}
+:label: spin-transport-free-target-error-budget
+\Delta t\sqrt{\frac{\int_{\Omega_{T,U}}
+\lVert\Delta\mathbf T_{\mathrm{tr}}\rVert^2\,\mathrm dV}
+{\lvert\Omega_{T,U}\rvert}}
+\le\eta_{\mathrm{tr}}\sqrt{\frac{\int_{\Omega_{T,U}}
+\lVert\delta\mathbf m_{\mathrm{emb}}\rVert^2\,\mathrm dV}
+{\lvert\Omega_{T,U}\rvert}}.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\Omega_{T,U}$ | Wspólny free torque-target support | $\mathrm{m^3}$ |
+| $\Omega_T$ | Fizyczny obszar targetów torque | $\mathrm{m^3}$ |
+| $\Omega_U$ | Obszar swobodnych aktywnych magnetycznych DOF | $\mathrm{m^3}$ |
+| $\Delta\mathbf T_{\mathrm{tr}}$ | Różnica transportowych źródeł Gilberta użyta w istniejącym outer-error gate | $\mathrm{s^{-1}}$ |
+| $\delta\mathbf m_{\mathrm{emb}}$ | Istniejący embedded estimator przed renormalizacją, projektowany na free support | $1$ |
+| $\Delta t$ | Rzeczywisty czas kroku | $\mathrm{s}$ |
+| $\eta_{\mathrm{tr}}$ | Istniejący udział błędu transportu w budżecie kroku | $1$ |
+| $\lvert\Omega_{T,U}\rvert$ | Objętość wspólnego supportu | $\mathrm{m^3}$ |
+| $\mathrm dV$ | Miara objętościowa | $\mathrm{m^3}$ |
+
+Dla pustego supportu obie redukcje mają wartość zero, a wyłącznie powyższe
+kryterium wpływu błędu torque na swobodne M jest vacuous. Nie dzieli się przez
+zero i nie ustanawia dodatniego floor dla LTE. Nie wolno usuwać zamrożonych
+targetów z fizycznego torque, mu/Q, reakcji, obserwabli ani bilansów. Niezależne
+charge/spin residuals, physical balances, finite-value oraz nonlinear-update
+gates pozostają obowiązkowe. Błąd odrzuca trial bez publikacji accepted.
+Nie wystarczy wyłączyć cały M2 gate, gdy wszystkie M są zamrożone.
+
+Historyczny scalar embedded_lte_m był redukowany po wszystkich komórkach n
+po projekcji i przekazywany każdemu modułowi M2. Nie zawierał informacji
+potrzebnej do redukcji na odmiennym target∩free support.
+
+Implementacja źródłowa przenosi teraz pożyczoną surową różnicę kandydatów
+Heuna i Eulera przed normalizacją w istniejącym scratch k[2]
+przez synchroniczny corrected callback i TransportStageErrorBudget. Właściciel
+normy redukuje błąd oraz zmianę torque po identycznym per-module target∩free
+support. Maska nie zmienia fizycznych targetów ani obserwabli. Normy i ich
+iloczyny muszą pozostać finite przed oceną ratio; empty support daje (0,0),
+bez dodatniego floor. Nie dodano alokacji gridowej dla estimatora ani maski.
+Różnica torque pozostaje różnicą źródeł Gilberta.
+
+Ten fragment ma status SOURCE_ONLY: składnia i kontrolowane sprawdzenia
+źródeł nie dowodzą typów/lifetimes ani wykonania solvera. Build 78 nie zawiera
+tej zmiany. Naprawy shortcutu all-frozen, czasu, completion i polityki Relax+M3
+pozostają planned_contract; poniższe runtime gates nadal są wymagane.
+
+All-frozen TimeEvolution wykonuje istniejące coupled Heun (steady M1/M2)
+lub ARS (M3), z końcową maską pełnego RHS i restore M w każdym candidate;
+nie wykonuje fikcyjnego dt=0. M3 adaptive nadal ocenia transportowe observables
+i spinową historię w full/two-half comparison mimo zerowej różnicy M.
+Czysto magnetyczny all-frozen pozostaje no-op zgodnie z 0996.
+
+Stage i istniejący time-event scheduler są jednym właścicielem czasu. Każde
+źródło jest oceniane w rzeczywistym czasie etapu z zachowaniem authored origin.
+Fixed/adaptive krok musi trafić w current-envelope breakpoint, wymagany output
+i końcowy endpoint; partial fixed M3 step zachowuje swoje rzeczywiste dt i
+historię. Nie wolno nadawać wynikowi innego czasu przez canonicalization po
+solve. Zmiana dt podlega istniejącemu kontraktowi historii, bez nowego ownera.
+`accepted.evaluated_time_s`, state time, report, counters i checkpoint muszą
+opisywać ten sam stan. Pause/cancel nie oznacza completed/converged ani nie
+przeskakuje czasu; success wymaga rzeczywistego accepted endpoint transportu.
+
+Publiczny Relax odrzuca aktywne niekonserwatywne torque przez
+`crates/fullmag-plan/src/validate.rs::validate_conservative_relaxation`.
+Prerejestrowana polityka dodatkowo odrzuca aktywny M3 w Relax również bez torque:
+brak kanonicznego kryterium zbieżności transient transportu. To wymaganie
+przyszłej walidacji, nie claim istniejącej implementacji. Zachowane steady
+zero-current/disabled-torque grafy nie otrzymują nowej odmowy przez tę regułę.
+Nie implementuje się nowej zbieżności ani pseudoczasu minimizatora.
+
+Zakres realizacji: FDM CPU/double fixed Heun M1/M2 oraz fixed/adaptive
+`coupled_imex_ark2` M3 wymagają odrębnych managed gates. Inne integratory,
+FEM/GPU i single nie dziedziczą kwalifikacji. Nie zmienia się publicznych
+parametrów, ProblemIR ani source/torque modelu dla dopasowania BORIS.
+Bramki: dokładne M w każdym etapie, physical balances, empty/partial free-target,
+czasowy pulse/PWL napęd, off-grid events/final endpoint, late-failure rollback,
+pause/cancel oraz checkpoint/restart; dowody samego źródła nie kwalifikują runtime.
+
+(fdm-cpu-transport-gilbert-rhs-boundary)=
+### 2.6.2 Jedna konwersja transportowego źródła Gilberta — FDM CPU
+
+**Stan z 2026-10-15: historyczny `SOURCE_BUG_CONFIRMED`; prerejestracja
+poprzedziła zapis poprawki. Obecnie implementacja `SOURCE_ONLY`, runtime
+`NOT VERIFIED`.** Norma 0960, `governing-equations`, odróżnia źródło
+Gilberta od jawnego RHS. Dla jednostkowego $m$ i stycznego źródła obowiązuje:
+
+```{math}
+:label: fdm-cpu-transport-gilbert-explicit-source
+T_{\mathrm{tr,RHS}}=
+\frac{T_{\mathrm{tr},G}+\alpha\,m\times T_{\mathrm{tr},G}}{1+\alpha^2}.
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $T_{\mathrm{tr},G}$ | źródło transportowe przed konwersją Gilberta | $\mathrm{s^{-1}}$ |
+| $T_{\mathrm{tr,RHS}}$ | jawny wkład transportowy do pochodnej magnetyzacji | $\mathrm{s^{-1}}$ |
+| $m$ | zredukowana magnetyzacja bieżącej próbki etapu | $1$ |
+| $\alpha$ | lokalne tłumienie Gilberta | $1$ |
+
+`crates/fullmag-runner/src/fdm/cpu/spin_transport.rs::FdmSpinTransportWorkflow::evaluate_stage_internal`
+sumuje surowe `transport_gilbert_torque_per_s` producentów M1/M2/M3.
+Przed poprawką `reference.rs::execute_coupled_ars_trial` i
+`execute_coupled_heun_trial` przekazywały tę sumę bez konwersji do
+`ExternalStageTerms.direct_torque_per_s`.
+Jednak `crates/fullmag-engine/src/fdm/shared/types.rs::ExternalStageTerms`
+jawnie definiuje to pole jako **już jawne** $dm/dt$; CPU
+`integrators.rs::apply_external_stage_terms` dodaje je po obliczeniu RHS pola.
+Poprawna implementacja tego kontraktu nie konwertuje direct drugi raz.
+Potwierdzona historyczna luka leżała na granicy przekazania źródła przez oba
+callbacki, nie w samym dodawaniu jawnego RHS.
+
+Przerejestrowany pojedynczy owner jest już zapisany jako metoda
+`ExchangeLlgProblem::external_stage_terms_from_gilbert_source` w CPU
+`fields/direct_torques.rs`. Tworzy istniejące `ExternalStageTerms` z dokładnego
+trial $m$ i lokalnego `ExchangeLlgProblem::alpha_at`, konwertując wyłącznie
+przekazane źródło Gilberta. Oba callbacki wywołują ten sam helper. To kontrola
+źródeł, bez kompilacji lub wykonania helpera; snapshoty transportowe pozostają
+surowym źródłem, a Oersted pozostaje polem
+w $\mathrm{A/m}$. Nie zmienia się semantyki istniejącego direct pola,
+Python, `ProblemIR`, znaków absorpcji ani operatorów transportu.
+
+| Argument Rust / typ | Default i walidacja | SI / znaczenie |
+|---|---|---|
+| `magnetization: &[Vector3]` | required; dokładnie `grid.cell_count()`; bez nowej normalizacji | $1$; dokładny trial bieżącego callbacku |
+| `additional_field_apm: Vec<Vector3>` | required; dokładnie grid count; pole przekazane bez przeliczenia | $\mathrm{A/m}$; dodatkowe pole, nie źródło Gilberta |
+| `gilbert_source_per_s: Vec<Vector3>` | required; dokładnie grid count; owned buffer konwertowany in-place; raw obserwacje są zachowane przez caller clone | $\mathrm{s^{-1}}$; źródło przed konwersją, wynik w istniejącym direct polu jest jawny |
+
+Niezgodna liczność daje `InvalidInput`; istniejąca późniejsza kontrola
+`apply_external_stage_terms` nadal odrzuca niefinitywne external terms.
+Nie dodano nowego parametru Python ani `ProblemIR`.
+
+Obowiązuje dotychczasowa konwencja trialu z
+`ProjectionPolicy::project` i `ExchangeLlgProblem::llg_rhs_from_field_at`:
+bez nowej normalizacji, korekty mianownika normą $m$ ani zmiany projekcji RK.
+Zero źródła w nieaktywnych komórkach pozostaje zerem; zamrożone DOF nadal
+podlegają istniejącej końcowej masce. Nowy adapter nie może włączać torque
+w domenie niemagnetycznej ani zmieniać maski targetu.
+`precession_enabled=false` nie jest globalnie odrzucane przez engine;
+dotychczasowy RHS wyłącza nim wyłącznie precesyjną część pola. Adapter nie
+zmienia tej flagi i nie pomija z jej powodu konwersji źródła. Kanoniczny
+`crates/fullmag-plan/src/validate.rs::validate_conservative_relaxation`
+odrzuca aktywne niekonserwatywne torque w Relax; dostępność niskopoziomowego
+engine API nie kwalifikuje takiego publicznego workflow.
+
+Zakres luki: stały krok Heuna dla M1/M2 oraz ARS(2,3,2)
+`coupled_imex_ark2` dla M3, także jego adaptacyjne pełny/dwa półkroki.
+To nie ustalenie o innych integratorach, FEM ani GPU. Bramka poprawki wymaga
+odrębnych dowodów źródłowych/algebry i rzeczywistego runtime: lokalne różne
+$\alpha$, nieosiowe $m$, wszystkie próbki obu metod, brak podwójnej konwersji,
+zero źródła, nieaktywne/zamrożone komórki i rollback. Te bramki nie są tutaj
+wykonane. Sam rename artefaktu lub porównanie z BORIS nie naprawia równania.
+
+Zapisane regresje w `crates/fullmag-engine/tests/fdm_cpu_gilbert_stage.rs`:
+`gilbert_stage_uses_local_damping_and_preserves_field_and_source_observations`
+oraz `gilbert_source_matches_independent_field_rhs_through_heun_and_ars_trials`
+obejmują lokalne tłumienie, zachowanie obserwabli oraz niezależną tożsamość
+źródło–pole dla Heuna i ARS. Ich stan to **source-only: niekompilowane i
+niewykonane**; nie zamykają bramek powyżej.
+
+(spin-transport-composite-resume-v2)=
+### 2.6.3. Composite checkpoint v2: accepted ARS i durable outputs
+
+**Stan: planned_contract; codec/integracja/runtime NOT VERIFIED.** Dokładny
+schema fullmag.fdm.coupled_m3_checkpoint.v2, required fields i hash są w
+[§13 frozen spec](../specs/frozen-spins-v1.md#frozen-v2-composite-checkpoint).
+Reuse dotyczy pełnego FdmCoupledCheckpoint V1 i jego complete validatora,
+FrozenSpinsCheckpointV1, FrozenSpinsActivationSet oraz AcceptedStateRef.
+Nie zmienia równań, parametrów SpinDriftDiffusion/TransportExecution/solver
+policy ani Python→ProblemIR mapping. Nowe nazwy Composite*V2 są planowane,
+nie istniejącymi konstruktorami publicznymi lub obsługiwanym codec.
+
+| Solver | Device | Composite v2 ExactResume |
+|---|---|---|
+| FDM | CPU | Planned reference FP64 ARS fixed/adaptive; runtime NOT VERIFIED |
+| FDM | GPU | Unsupported tutaj: brak zgodnego composite ownera, bez fallbacku |
+| FEM | CPU | Unsupported tutaj: inne DOF/runtime i brak codec |
+| FEM | GPU | Unsupported tutaj: brak kwalifikacji tej kombinacji |
+
+Outer accepted dt, czas, krok i M muszą bitowo zgadzać się między common,
+nested M3 i obecnym frozen child. Adaptive ARS zachowuje zaakceptowane dwa
+podkroki. TransientSpinState.previous_dt_s jest faktycznym drugim residual dt, a
+previous_spin_potential_v stanem split. Nested previous_magnetization nadal
+wskazuje outer start; error_controller.next_dt nie jest last accepted dt.
+Report/outer accepted_steps liczą jeden krok; transient revisions/telemetry
+zachowują rzeczywistą historię dwóch commitów. Nie wymaga się exact 2*inner=outer
+ani równych inner dt. Wcześniej ustalony trial endpoint musi być osiągnięty
+przed estimator, bez przepisywania timestampów. To nie jest order proof ARS.
+
+Original authored endpoint/grid/waveform/output origins i istniejące schedule
+cursory są required; off-grid pauza nie przesuwa nominalnej siatki ani fazy.
+Hash v2 używa istniejącego canonical_json_bytes, a nested M3 zachowuje własny
+payload digest. Raw strict completeness odrzuca pominięte defaults/unknown
+fields, zamiast dorabiać historię w codec V1. Restore waliduje całość lokalnie
+przed publikacją obu subsystemów i controller/cursor state.
+
+Binding outputs wskazuje faktyczny FmsStudyOutputManifest przez immutable
+published entry/revision w FmsArtifactCatalog; nie jest nowym receiptem.
+ArtifactRecorder enqueue nie dowodzi trwałego scalar/field/default/boundary
+prefixu. SessionStore::commit_checkpoint ma writer lease i marker po common
+state/reachability. Powiązanie prefixu z immutable attempt allow-list oraz
+checkpoint graph pozostaje work itemem istniejącego publication ownera.
+Do czasu jego domknięcia composite_outputs_not_committed odmawia ExactResume,
+nawet przy poprawnych hash/count/cursorach. Bez nowego per-step fsync i timera.
+
+Aktywacja frozen zachowuje źródłowe mask/reference/epoki bez recapture, także
+na inactive→active stage chain; [nota 0996](0996-frozen-spins-constraint.md#frozen-spins-composite-resume-v2)
+opisuje tę granicę. Standalone legacy codecs i ich kwalifikacje nie otrzymują
+nowego claimu, tymczasowe odmowy transport resume nie są znoszone.
+Przyszłe niewykonane gates: composite_v2_ars_history,
+composite_v2_outputs_atomicity, composite_v2_cli_api_roundtrip oraz pełna
+macierz §13.7. Focused docs check nie jest execution/parity proof.
+
 (symbols-and-si-units)=
 ### 2.7 Symbols and SI units
 
@@ -1852,6 +2081,62 @@ outputs. Quantities include `V_electric [V]`, `J_charge [A/m^2]`,
 and transport torque. `Q` uses nine FMVP components with metadata
 `row_major_Q_ia`, flow/spin axes, location, and scope.
 
+(spin-current-tensor-descriptor)=
+Kanoniczny katalog quantities opisuje `spin_current_tensor` dodatkowym,
+opcjonalnym polem `tensor`: `rank=2`, `shape=[3,3]`, `layout=flow_major`,
+`axes=[flow,spin]` i `component_labels=[Q_xx,Q_xy,Q_xz,Q_yx,Q_yy,Q_yz,Q_zx,Q_zy,Q_zz]`.
+Właścicielem jest `crates/fullmag-quantities/src/catalog.rs::tensor_descriptor`;
+`build_wire_catalog` oraz API `QuantityCatalogEntry` przekazują te same dane.
+Opis wynika z kanonicznej tożsamości quantity, nie z liczby komponentów payloadu.
+Starszy JSON bez pola pozostaje czytelny, lecz brak metadanych nie upoważnia do
+interpretowania dziewięciu komponentów jako wektora XYZ. Jednostka pozostaje
+$\mathrm{A\,m^{-2}}$ z katalogu; metadane nie przenoszą ciężkiego tensora.
+
+Ten fragment nie zmienia równań, Python/ProblemIR ani backend support. Istniejący
+API wybór `c0`–`c8` zachowuje kolejność flow-major. Preview 2D/3D pozostaje
+`export_only` do czasu kwalifikacji selectorów, kontrakcji, próbkowania i browser
+regression. Dodanie deskryptora nie jest dowodem działającej wizualizacji.
+
+(spin-current-tensor-projection-contract)=
+Projekcja prezentacyjna tensora nie zmienia zaakceptowanego wyniku transportu.
+Indeksy numeryczne osi x, y, z to odpowiednio 0, 1, 2. Skalar komponentu i
+wektor przepływu dla wybranej polaryzacji mają następujące znaczenie:
+
+```{math}
+:label: spin-current-tensor-display-projections
+c=3i+a,\qquad
+N_Q=\left(\sum_{i=0}^{2}\sum_{a=0}^{2}Q_{ia}^{2}\right)^{1/2},\qquad
+\mathbf q_a=(Q_{0a},Q_{1a},Q_{2a}).
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $i$ | indeks osi przepływu x/y/z jako 0/1/2 | $1$ |
+| $a$ | indeks polaryzacji spinu x/y/z jako 0/1/2 | $1$ |
+| $c$ | indeks komponentu payloadu flow-major | $1$ |
+| $N_Q$ | norma Frobeniusa wszystkich dziewięciu składowych | $\mathrm{A\,m^{-2}}$ |
+| $\mathbf q_a$ | przestrzenny wektor przepływu dla ustalonej polaryzacji spinu | $\mathrm{A\,m^{-2}}$ |
+
+Jawny wybór `component` zawiera obie osie; `frobenius` wybiera normę $N_Q$;
+`spin_flow_vector` wybiera polaryzację i trzy kierunki przestrzennego przepływu.
+Surowy rank-2 carrier pozostaje dziewięcioskładowy i nie jest wejściem XYZ glyph
+ani orientation renderer. Nie opisuje się normy jako mocy lub momentu.
+
+Planar/FEM sampling najpierw interpoluje lub redukuje wszystkie składowe,
+a dopiero potem liczy normę. Norma próbek węzłowych interpolowana jako skalar
+nie jest równoważna normie interpolowanego tensora. Wektor kolumny zachowuje
+orientację flow/spin i znaki; surface flux wymaga rzeczywistej normalnej i
+zgodnego nośnika, nie domyślnego kierunku kamery.
+
+Zapisane ustawienia targetu zawierają jawny rodzaj projekcji oraz jej osie.
+Tożsamość cache/ETag/requestu obejmuje canonical projection token wraz z
+quantity, scope, session i generation/revision. Zmiana projekcji nie rozwiązuje
+transportu i nie tworzy nowej topologii. Brak lub niezgodny descriptor oznacza
+odmowę tensor visualization; brak jednostki nie otrzymuje pustej legendy.
+Bramki preview pozostają zamknięte do czasu rzeczywistego HTTP oraz browser
+proof dziewięciu komponentów, normy, wybranej kolumny i poprawnej interpolacji.
+Stan: kontrakt wdrożenia E10, nie kwalifikacja runtime ani nowej lane.
+
 Telemetry includes scaled residuals, iterations, reason, preconditioner,
 operator revision, balances, stage refreshes, timings, nonlinear iterations,
 and H2D/D2H counts. Provenance records full splitting convention, index order,
@@ -1943,13 +2228,24 @@ stiff-limit convergence to steady M1/M2 are not established by the current M1
 reference slice. BORIS and published models remain planned comparisons after
 explicit unit/sign conversion, not primary proof.
 
-The current FDM CPU-double M2 reference slice has an executable six-case
-matrix (three N/F resolutions and two tolerances) with independent charge and
-spin residuals; its artifact and binary identity are recorded in the audit
-plan. The corresponding BORIS matrix is intentionally diagnostic only: after
-the explicit `Q_ia=Js_ia/MUB_E` normalization, potential profiles improve with
-refinement but `mu_s`, interface fluxes, and torque do not meet the comparison
-contract. This does not promote either solver to cross-backend validation.
+Historyczna macierz referencyjna FDM CPU-double M2 obejmowała trzy
+rozdzielczości N/F i dwie tolerancje z niezależnymi residualami charge/spin;
+jej zapis w audycie nie jest wykonaniem aktualnego adaptera ani nową
+kwalifikacją. Historyczne porównanie BORIS po `Q_ia=Js_ia/MUB_E` pozostaje
+diagnostyczne: poprawa potencjału nie zamyka zgodności `mu_s`, strumieni
+interfejsowych ani torque.
+
+Aktualny `scripts/run_boris_fullmag_she_nf_matrix.py::run_resolution_matrix`
+wykonuje wyłącznie na Windows sześć przypadków **Fullmaga**: trzy istniejące,
+odrębne managed BORIS CPU `runtime.v2` coarse/medium/fine są ponownie używane
+przy dwóch tolerancjach Fullmaga (domyślnie $10^{-8}$ i $10^{-10}$).
+Tolerancja BORIS pozostaje stałym parametrem jego managed scenariusza;
+nie jest to sweep tolerancji BORIS ani przywrócenie dawnych siatek 10/20/40.
+`_require_reference_pin` sprawdza dokładne bytes summary/runtime/receipt/scenario
+wokół normalizacji, wykonania Fullmaga i porównania; binaria Fullmaga mają
+osobne piny. Drift przerywa macierz, a `validate_matrix_summary` kontroluje
+strukturę/metryki bez ponownego wykonania i bez nadania authority runtime.
+Nowej macierzy, benchmarku i zgodności solverów **nie zaliczono**.
 
 The bounded FEM CPU M2 lane also has a nontrivial managed constitutive oracle,
 `just verify-fem-steady-transport-m2-affine-contract`. It uses a
@@ -2065,6 +2361,53 @@ exchange/dephasing terms (`l_ex`, `l_ph`) and, when enabled, magnetization-drift
 topological-Hall, or pumping sources. A normal-metal scalar residual must never
 be applied to an F mesh; an N/F comparison either evaluates those terms from an
 explicit material/magnetization manifest or marks the F residual unsupported.
+
+(boris-flow-major-unit-adapter-v2)=
+#### 5.2.2 Adapter BORIS: kolejność indeksów i jednostki v2
+
+Adapter `fullmag.boris_flow_major_units.v2` naprawia mapowanie danych; nie
+zmienia równań transportu, publicznego Python DSL, `ProblemIR`, capabilities
+ani realizacji żadnej z czterech lane FDM CPU/GPU i FEM CPU/GPU. Nie kwalifikuje
+ich przez podobieństwo wyników BORIS. Właścicielem mapowania jest
+`scripts/compare_boris_fullmag_she_nf.py::normalize_boris_artifact`.
+
+Dla BORIS `048503d2ca6475e91b073eb1762ecf9d3634c3e1`,
+`Transport::GetSpinCurrent(component)` wybiera kierunek przepływu. `Jsx`, `Jsy`,
+`Jsz` zawierają odpowiednio wiersze przepływu x, y, z; komponenty XYZ każdego
+wiersza oznaczają polaryzację spinu. Fullmag zachowuje indeks przepływu $i$
+i polaryzacji $a$ w `row_major_Q_ia`: xx, xy, xz, yx, yy, yz, zx, zy, zz.
+Nie należy transponować tych wierszy. Dane OVF są x-fast; adapter zachowuje
+kolejność punktów domeny N, następnie F na wspólnej siatce z-normalnej.
+
+| Wielkość | Wejście BORIS | Wyjście/odmowa adaptera |
+|---|---|---|
+| Potencjał ładunku | $V$ w $\mathrm V$ | $V$ w $\mathrm V$; porównanie dopuszcza tylko stały offset gauge |
+| Potencjał spinowy | $\mathbf S$ w $\mathrm{A\,m^{-1}}$ | pełne splitting voltage $\boldsymbol\mu_s$ w $\mathrm V$, zgodnie z mapowaniem 5.2.1 |
+| Prąd spinowy | $J^s_{ia}$ w $\mathrm{A\,s^{-1}}$ | $Q_{ia}$ w $\mathrm{A\,m^{-2}}$, przez dokładne historyczne `MUB_E=5.788381608e-05` w $\mathrm{m^2\,s^{-1}}$ |
+| Strumień normalny | wszystkie polaryzacje wiersza `Jsz` | znak skoku wynika z zadanej normalnej; pola osi przepływu nie są osiami polaryzacji |
+| Torque `Tsi` | $\mathrm{A\,m^{-1}\,s^{-1}}$ | pozostaje `boris_tsi_A_per_m_s`, nieporównywalny z Gilbert source w $\mathrm{s^{-1}}$ bez osobnego modelu `tsi_eff`/gamma |
+
+Bilans interfejsu jest ponownie wyznaczany z tych samych surowych OVF przez
+`scripts/verify_boris_nf_interface.py::compute_interface_slice`, a nie
+przejmowany z historycznego `summary.json`, które mogło zawierać transpozycję.
+Pozostaje diagnostyką; mieszanej jednostkowo różnicy strumień–torque nie
+przedstawia się jako bramki parity. Residuals zachowują provenance historycznego
+wejścia i nie otrzymują automatycznie nowej kwalifikacji.
+
+`scripts/verify_boris_tensor_adapter.py::main` sprawdza surowe pliki OVF:
+osiem punktów N/F, 72 różne podpisane składowe, kolejność punktów, splitting
+voltage, normalną ±z, ponowny odczyt z celowo błędnym historycznym bilansem
+oraz odmowę porównania torque. Hashe trzech przypiętych plików BORIS, w tym
+`Funcs_Math_base.h`, są sprawdzane przed oceną adaptera. Nie dopasowuje się
+współczynnika ani globalnego znaku do wyników solvera.
+
+Dowód 11.10.2026: poprzedni adapter RED, exit 1, 48 błędnych składowych
+pozadiagonalnych; poprawiony GREEN, exit 0, 72/72 składowych, oba znaki normalnej.
+Raporty zachowano pod `storage/runs/antenna-transport-e2e-20261011-5e7f0d529ca256ef/e1/`.
+To **kwalifikacja adaptera na fixture**, nie ponowne wykonanie benchmarku
+BORIS–Fullmag ani dowód bilansu fizycznego solverów. Historyczne porównania
+pozostają historyczne. Nowy benchmark wymaga oddzielnie źródeł, binariów,
+parametrów i wyników obu solverów oraz niezależnej walidacji znaków SHE/iSHE.
 
 ### 5.3 Regression and quantitative gates
 
@@ -2295,6 +2638,509 @@ The remaining public charge work includes larger and masked domains,
 convergence and sanitizer gates, cross-backend parity, and the complete
 spin/SHE/M2/M3/FEM paths.
 
+(fem-steady-transport-identity)=
+### Tożsamość naukowego artefaktu FEM steady transport
+
+Surowy `fullmag.fem.steady_spin_transport.v2` zawiera obowiązkowy dla kwalifikacji,
+addytywny blok `modules[].transport_identity` ze schematem
+`fullmag.fem.steady_transport_identity.v1`. Starszy artefakt bez tego bloku pozostaje
+odczytywalny diagnostycznie; checker odmawia kwalifikacji. Blok powstaje z
+`prepared.request` zaakceptowanego przez preflight, a nie z pliku IR wskazanego przez
+odbiorcę. Nie zmienia równań, ABI ani statusu capability. Implementacja źródłowa
+nie jest dowodem realnego wykonania; nowy pakiet i rzeczywisty przebieg managed
+pozostają wymagane.
+
+| Pole / grupa pól | Typ, obowiązek i walidacja | Jednostka SI | Znaczenie i źródło |
+|---|---|---|---|
+| `schema`, `digest_codec`, `mesh_topology_codec` | wymagane, dokładne wersje v1/v1/v3 | $1$ | kontrakt metadanych i encoderów |
+| `request_sha256`, `descriptor_sha256`, `result_sha256` | wymagane `sha256:` + 64 cyfry hex; ponownie obliczane | $1$ | odpowiednio actual request, opublikowany descriptor, cały opublikowany result |
+| `request.module_id`, `current_source_id` | wymagane niepuste identyfikatory | $1$ | właściciel spin i charge source |
+| `mesh_name`, `node_carrier` | wymagane; carrier `ordered_mesh_nodes_u32.v1` | $1$ | kolejność węzłów jest kolejnością carrier wyników; nie arbitralną permutacją |
+| `mesh_topology_sha256` | wymagany canonical topology v3; finite współrzędne | $1$ | pełna kolejność nodes, cells/facets, global ordinals, mesh parts, markers i PBC |
+| `node_count`, `cell_count` | wymagane całkowite dodatnie | $1$ | rozmiar faktycznego carrier; sam count nie potwierdza identity |
+| `execution`, `interface`, `gauge`, `constitutive_model` | wymagane jawne identyfikatory actual request | $1$ | rzeczywista lane, przestrzeń/interface, gauge i M1/M2 |
+| `constitutive_version`, `operator_version`, `physical_residual_version` | wymagane dokładne identyfikatory; zgodne z result | $1$ | zamrożone znaczenie operatora i bilansów |
+| `charge_conductivity_Spm_per_element` | wymagane finite dodatnie, długość cell count | $\mathrm{S\,m^{-1}}$ | actual conductivity każdego elementu |
+| `magnetization` | wymagane finite uporządkowane wektory, długość node count | $1$ | actual kierunki użyte do constitutive solve |
+| `sigma_s_Spm` | wymagane finite dodatnie | $\mathrm{S\,m^{-1}}$ | actual spin conductivity |
+| `sigma_parallel_Spm`, `sigma_perpendicular_Spm`, `sigma_ahe_Spm` | opcjonalne liczby finite, `null` dla M1 | $\mathrm{S\,m^{-1}}$ | actual reciprocal materiał, bez dopisywania M2 do M1 |
+| `polarization_p`, `theta_sh` | wymagane finite, domena publicznego materiału | $1$ | actual charge/spin cross coefficients |
+| `lambda_sf_m`, `lambda_j_m`, `lambda_phi_m` | dodatnie długości lub jawne disabled/null istniejącego request | $\mathrm{m}$ | actual reaction lengths; publiczny `lambda_sf_m` nadal wymaga finite dodatniej wartości |
+| `gamma_e_per_Ts` | wymagane finite dodatnie | $\mathrm{s^{-1}\,T^{-1}}$ | actual gyromagnetic coefficient z planner |
+| `saturation_magnetization_Apm` | wymagane finite dodatnie | $\mathrm{A\,m^{-1}}$ | actual magnetic normalization |
+| `relative_tolerance`, `absolute_tolerance`, `maximum_iterations` | wymagane istniejące linear solver policy | $1$ | actual solver policy, bez dostrajania do wyniku |
+| `charge_dirichlet` | uporządkowane pary MFEM boundary attribute i finite value | $\mathrm{V}$ | actual voltage BC; ID jest markerem, nie nodal index |
+| `spin_dirichlet` | uporządkowane pary MFEM boundary attribute i finite xyz | $\mathrm{V}$ | actual spin-potential BC |
+
+`fullmag.transport_tagged_json.v1` koduje `null`, bool, string, array, object
+oraz liczbę osobnymi tagami `N/T/F/S/A/O/D`. Długości są `u64` little-endian,
+stringi UTF-8, klucze object są sortowane, liczby finite binary64 little-endian,
+a signed zero jest normalizowane. Całkowite wartości powyżej $2^{53}$ są odrzucane
+przez ten encoder; mesh IDs zachowuje oddzielny canonical topology v3 bez tej
+redukcji. SHA-256 ma prefix preimage `fullmag:transport-tagged-json:v1`.
+Tożsamość topology jest wspólna z
+`crates/fullmag-ir/src/mesh_hints.rs::MeshIR::mixed_topology_fingerprint_v3`
+i `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py::MeshData::topology_fingerprint_v3`.
+
+Publiczny checker generuje stage-first Python przez
+`scripts/verify_transport_public_oracles.py::source`, obniża go przez
+`fullmag.runtime.loader::load_problem_from_script` i porównuje intent
+`current_modules`, `spin_transport_modules`, materiały, magnetization, geometry,
+backend i study z tym samym publicznym fixture. Dla FEM M1 sinh wymaga $L=1\,\mathrm{m}$,
+przekroju $0.1\,\mathrm{m}$ na $0.1\,\mathrm{m}$, $\lambda_{sf}=0.2\,\mathrm{m}$,
+$\sigma=\sigma_s=4\,\mathrm{S\,m^{-1}}$, $P=\theta_{SH}=0$, jawnych existing FEM
+operator IDs i identycznych charge/spin linear policies: tolerance `1e-12`,
+absolute tolerance `0`, max iterations `10000`. Żadna BC ani mesh identity
+nie pochodzi z wyniku solve; marker groups wyprowadza z topology i geometrii.
+Istniejące bramki: max nodal spin error `<1e-3 V`, residual `<1e-10`, bilans `<5%`
+scale flux/reaction, voltage error `<2e-10 V`. Bool/NaN/Inf są odrzucane.
+
+`scripts/run_managed_transport_oracles.py::start` dopuszcza tylko terminalny,
+zweryfikowany pakiet CPU z exact kapsułą źródeł i pinned image. Jedyna komenda
+izolowanego kontenera tworzy publiczny fixture i pełny IR w tmpfs, wykonuje ten
+sam IR oraz emituje jego hash i hash raw artifact do logu Dockera.
+`::observe` ponownie atestuje komendę, mounty, lane, source capsule, pakiet,
+startup stamp oraz zgodność retained files z tym manifestem. Receipt
+`fullmag.managed-transport-oracles.v1` zachowuje source/native/build/image/binary
+identity, IR/artifact/script hashes i actual transport identity. Sam plik receipt
+nie jest dowodem: checker wywołuje ponownie `observe` przed bramką. Brak receipts,
+stary producer lub obca siatka zwracają `not_verified`; przygotowanie zwraca
+`prepared_not_run`. Katalog wyjściowy musi być nowy.
+
+| Lane | Zakres dowodu tego kontraktu | Ograniczenie |
+|---|---|---|
+| FEM CPU | actual metadata + independent M1 finite-lambda sinh checker | real managed execution i nowy pakiet jeszcze niewykonane w tym kroku |
+| FEM GPU | jawne odrzucenie dla tego checkera | brak kwalifikowanego operatora M2 GPU |
+| FDM CPU | istniejące charge bar/sinh oracles, bez zmiany solvera | osobna ścieżka accepted artifact; ta FEM identity nie jest używana |
+| FDM GPU | brak claimu | nie wolno zastąpić rzeczywistego urządzenia CPU fallbackiem |
+
+M2 affine z wyłączonym spin-flip nadal nie przechodzi publicznego authoringu,
+ponieważ publiczny `lambda_sf_m` wymaga finite dodatniej długości. Ten checker
+nie kwalifikuje M2 ani nie zastępuje disabled reaction dużą długością.
+
+### E1: luka zaufanego dowodu builda BORIS
+
+(boris-managed-build-proof-gate)=
+
+Existing source/runtime v1 nie wiążą trusted operator receipt ze źródłami,
+compile flags i actual binary. SHA dowolnego caller JSON ani literal double
+nie są takim dowodem. Legacy capture zachowuje observed source/binary/image
+hashes, lecz identity_complete=false, precision=null oraz
+build_proof_status=unverified. Nowy run i public benchmark verifier odmawiają.
+Synthetic OVF mapping nie jest wykonaniem BORIS ani solver qualification.
+Regresja `scripts/verify_boris_tensor_adapter.py::main` jawnie sprawdza odmowę
+public admission, następnie używa prywatnego obliczeniowego helpera
+`scripts/compare_boris_fullmag_she_nf.py::_normalize_boris_fields` dla raw OVF.
+Helper nie nadaje runtime proof; public normalize_boris_artifact zawsze przechodzi
+przez pełny verifier. Brak public allow-incomplete flag lub synthetic receipt.
+
+| Generated pole / typ | Zakres i walidacja | SI / znaczenie |
+|---|---|---|
+| source manifest / JSON object | regular nonsymlink file, 1..1 MiB, UTF-8, unique keys; unknown schema bez authority | $1$; obserwacja, nie trusted build receipt |
+| identity_complete / bool | false dla obecnego producer v1; caller true nie zastępuje receipt | $1$; completeness, nie science PASS |
+| precision / nullable string | null bez verified source/compile proof; nie zgadywać double | $1$; precision pozostaje niezweryfikowana |
+| build_proof_status / string | unverified; actual managed verifier jeszcze nie istnieje | $1$; jawna luka |
+
+Proposed fullmag.boris.source.v2/runtime.v2 wymaga actual managed profile,
+niezależnego receipt verifiera i exact binding pinned upstream/source-file
+hashes, CPU overlay/flags, compiler/Python/link, worker/runtime image oraz
+binary SHA. Manifest nie hashuje własnego checksumu. Caller JSON nie nadaje
+complete/double. Profil boris-cpu-v1 ma teraz source-only fixed build producer; operator activation,
+rzeczywisty build oraz trusted runtime admission pozostają NOT VERIFIED.
+Nie zmienia się fizyka, normalizacja, tolerancje ani CPU/GPU qualification.
+
+Źródła: scripts/run_boris_nf_interface.py::capture_runtime_identity,
+validate_runtime_identity, run_boris_case oraz
+scripts/verify_boris_nf_interface.py::validate_boris_artifact.
+
+(boris-offline-toolchain-provisioning)=
+### E1: offline toolchain BORIS i oddzielna bramka solvera
+
+Producent `scripts/local_runner/boris_toolchain.py` oraz
+`Dockerfile.boris-toolchain` przygotowują zależności zewnętrznego BORIS CPU.
+Nie zmieniają Python DSL, ProblemIR, równań transportu, normalizacji ani
+prerejestrowanych tolerancji. Historyczny runtime v1 i wcześniejszy benchmark
+nadal nie mają admission. Kwalifikacja FDM CPU/GPU oraz FEM CPU/GPU Fullmaga
+pozostaje określona przez ich własne bramki; obraz toolchaina jej nie rozszerza.
+
+`dependency_selection` wybiera pełną bibliotekową domkniętą zależność trzech
+korzeni: libfftw3-dev, libx11-dev i libtbb-dev. Dla przypiętego Ubuntu 22.04.5
+jammy amd64 jest to 17 pakietów z zamrożonego zbioru 80 pobranych archiwów.
+`validate_bundle` wiąże wersje, architekturę, Depends/PreDepends, świadków
+pakietów bazowych, podpisane indeksy, URI i SHA256 archiwów. `install_apt`
+wymaga identycznego bazowego inventory, sprawdza symulację bez usunięć lub
+upgrade i instaluje wyłącznie wybrane lokalne archiwa z jawnym cache,
+pustymi źródłami APT i `--no-download --no-upgrade --no-install-recommends`.
+Zależności Python z pobranego zbioru APT nie są instalowane.
+
+Bazowy NumPy 2.2.6 pozostaje pod
+`/usr/local/lib/python3.10/dist-packages/numpy/__init__.py` z niezmienionym SHA256.
+Osobny zamrożony bundle zawiera dziesięć prywatnych wheels: Matplotlib 3.8.4,
+contourpy 1.2.1, kiwisolver 1.4.5, Pillow 10.3.0, fonttools 4.51.0,
+packaging 24.0, pyparsing 3.1.2, python-dateutil 2.9.0.post0, cycler 0.12.1
+oraz six 1.16.0. `validate_wheels` sprawdza release metadata, METADATA,
+wersje, hashe i receipt bazowego importu; `install_wheels` rozpakowuje je bez
+pip i sieci do `/opt/fullmag-boris-python`. Bundle nie zawiera NumPy.
+Wybór wheels Matplotlib 3.8.4 wynika z ich budowania przeciw NumPy 2 przez
+upstream [14]; rozszerzenia zbudowane przeciw NumPy 1 mogą być niezgodne z
+NumPy 2 [15]. Deklaracja minimalnej wersji zależności nie jest dowodem ABI:
+wymagany jest rzeczywisty import i zapis wykresu Agg.
+
+| Parametr operacyjny / typ | Walidacja i pochodzenie | SI / znaczenie |
+|---|---|---|
+| base_image / string | exact sha256 image ID, amd64; inventory i wersje pakietów zgodne z lock | $1$; niezmienna baza |
+| bundle, wheel_bundle / path | prywatny resolver storage; regular files, brak symlinków, zamrożone SHA256 i bounded membership | $1$; offline wejścia |
+| context / path | `prepare_context`; lock, source freeze i hashe helpera/Dockerfile; jawny deny-default kontekst | $1$; powtarzalny build input |
+| tag / string | `build_image`; ograniczony lokalny `fullmag/boris-toolchain:*` | $1$; etykieta, nie tożsamość |
+| image_id / string | rzeczywisty Docker inspect po exit 0; lokalny alias bazy sprawdzony przed i po buildzie, zgodny prefiks RootFS layers | $1$; wynik provisioningu |
+| runtime-preflight.json / JSON | `runtime_preflight`; rzeczywiste wersje i module paths, NumPy hash, linker paths FFTW3/X11/TBB, Python embedding flags oraz SHA256 PNG Agg | $1$; dowód toolchaina, nie solvera |
+
+Obserwowany build wiąże bazę
+`sha256:e360637ea8b00e280efdca7648ee022e6dd16150b10130b734425bb8a65b5aa0`,
+lock SHA256 `8da46421ac443e529b6204493475f159d15329712aadbdd127326c90716095d8`
+i wheel manifest SHA256
+`93c00e46e23b2efe0c15aafb0e4ef1fe0dcd2620887684bd27476b5326842d2c`.
+Osobny preflight zawiera te same bindingi; jego zakres pozostaje toolchainowy.
+
+Kanoniczne wejścia operacyjne to `just runner-boris-toolchain-context` oraz
+`just runner-boris-toolchain-image`. Build używa lokalnego frontendu i
+`--network none --pull=false`; instalacja w obrazie następuje jako USER 0,
+a finalny `USER 65532:65532` nie otrzymuje uprawnień instalacyjnych.
+`build_image` zapisuje terminalny receipt pod resolverowym
+`storage/builds/<worktree-id>/windows-native/boris-image-<id>/`.
+Kontekst i receipt wiążą helper, Dockerfile, bazę, lock oraz wheel manifest.
+Samo przygotowanie lub build obrazu nie zmienia konfiguracji koordynatora.
+
+| Bramka / zakres | Stan obserwowany 2026-10-11 | Ograniczenie dowodu |
+|---|---|---|
+| Bazowy import dziesięciu wheels i Agg | PASS; `reviews/boris-python-wheels` | prywatny import, bez solvera |
+| Offline build toolchaina przez `just` | PASS; image `sha256:dd3441d07c3aa19fe1e4a206c2926b42c89899a59bbc517eb890bd99657b079e` | receipt `boris-image-8ea0710662644c49820179099d46fd90/terminal-receipt.json`, status SUCCEEDED_IMAGE_ONLY |
+| Finalny preflight UID 65532 | PASS; `reviews/boris-toolchain-final-image-v3/results/runtime-preflight.json` | readonly, network none, 2 CPU, 1 GiB, 128 pids; dziesięć importów z prywatnego katalogu, niezmieniony NumPy, trzy biblioteki linkera, embedding flags i Agg PNG |
+| BORIS source-image i niezależny readback | PASS; szczegóły poniżej | dokładne źródła i toolchain, bez kompilacji solvera |
+| Kompilacja CPU i ABI witness | NOT VERIFIED | wymagany terminalny build w zarządzanej kolejce |
+| Managed runtime, public admission i benchmark | NOT VERIFIED | wymagany kompletny trusted łańcuch source/binary/ABI/runtime i niezależne bramki naukowe |
+| Operator activation | nie wykonano | istniejąca kolejka i profile zachowane |
+
+Receipt buildu ma kwalifikator NONROOT_RUNTIME_PREFLIGHT_AND_BORIS_NOT_VERIFIED;
+osobny późniejszy preflight zamyka jedynie jego część toolchainową i ma
+TOOLCHAIN_ONLY_NOT_SOLVER_QUALIFIED. Nie nadaje identity_complete dla BORIS.
+Następny etap po opisanym niżej source-image to jawna aktywacja operatora przy pustym
+aktywnym slocie oraz kompilacja BORIS w tej samej kolejce Fullmag_build_runner.
+Dopiero rzeczywisty witness ABI i managed runtime pozwalają sprawdzać nowy
+benchmark; provisioning nie zastępuje żadnej z tych bramek.
+
+(boris-offline-source-image-provisioning)=
+### E1: przypięty source-image i rzeczywisty readback
+
+`scripts/local_runner/boris_cpu.py::prepare_context` wymaga sześciu jawnych
+wejść CLI: repo-root, boris-source, toolchain-image, toolchain-proof,
+toolchain-context i toolchain-container. Receptura `just` dostarcza repo-root;
+pozostałe pięć argumentów przekazuje operator. `admit_toolchain` odtwarza
+bibliotekowy dependency graph i wheel admission, sprawdza frozen context/lock/
+manifest binding oraz rzeczywisty terminalny kontener: exact image i container
+ID, exit 0, brak OOM/running, UID 65532, readonly rootfs, network none, brak
+privileged/GPU i dokładną komendę preflight. Dowód musi pochodzić z jedynego
+bind mountu `/proof`; ścieżka i SHA256 wskazanego JSON muszą odpowiadać temu
+rzeczywistemu outputowi. Caller JSON lub sam image ID nie zastępują admission.
+
+Checkout BORIS musi być czysty na
+`048503d2ca6475e91b073eb1762ecf9d3634c3e1`. `clean_blob_ids` sprawdza Git blob
+identities z rzeczywistymi clean filters checkoutu, w tym CRLF; capture
+zachowuje oryginalne checkout bytes i przypina ich SHA256, rozmiar i tryb.
+Ponowny odczyt hashów i statusu przed zapisem odmawia drift. `validate_context`
+wymaga exact bounded membership, producer/Dockerfile hashes, source manifest
+oraz toolchain inspect/proof/context/container binding. Nie wykonuje overlay
+CPU ani kompilacji podczas provisioningu.
+
+| Parametr / typ | Domyślnie i walidacja | SI / znaczenie |
+|---|---|---|
+| repo-root / path | required; resolver właściciela worktree | $1$; storage/provenance owner, bez zmiany ProblemIR |
+| boris-source / path | required; prywatny storage, clean pinned Git, brak symlink/gitlink, bounded bytes/files | $1$; oryginalne źródła |
+| toolchain-image / string | required; installed immutable sha256 ID i zgodny inspect | $1$; dokładny toolchain |
+| toolchain-proof / path | required; actual mounted runtime-preflight.json, freeze hashes i qualification TOOLCHAIN_ONLY_NOT_SOLVER_QUALIFIED | $1$; ograniczony dowód narzędzi |
+| toolchain-context / path | required; zamrożony kontekst pod storage/tmp, complete dependency/wheel admission | $1$; inputs provisioningu |
+| toolchain-container / string | required; pełny 64-hex ID zachowanego terminalnego kontenera preflight | $1$; rzeczywisty execution binding |
+| context, tag / path, string | required dla `build_image`; właściciel zgodny, tag `fullmag/boris-cpu:*`, immutable context hashes | $1$; source-image build, nie solver stage |
+
+`Dockerfile.boris-cpu` kopiuje źródła, manifesty i helper do `/opt/fullmag-boris`
+jako USER 65532:65532 i wykonuje tylko `validate-image-source`, czyli
+`verify_source`. `build_image` używa lokalnego aliasu bazy sprawdzonego przed
+oraz po buildzie, `--network none --pull=false`, sprawdza finalny USER i prefiks
+RootFS layers toolchaina. Atomic terminalny receipt ma schema
+fullmag.boris.source-image-build.v1, SUCCEEDED_SOURCE_IMAGE_ONLY oraz
+BORIS_BUILD_AND_RUNTIME_NOT_VERIFIED. native_compilation_executed i
+operator_changed pozostają false. Nie jest to trusted receipt solvera.
+
+Rzeczywisty build przez `just runner-boris-image` zakończył się exit 0 obrazem
+`sha256:545279e00703d60dcaf33d455461ba90e0dea7ec5647e96392bbc9246c21b6a6`,
+z toolchainem `sha256:dd3441d07c3aa19fe1e4a206c2926b42c89899a59bbc517eb890bd99657b079e`.
+Receipt i `root-source-readback.json` są zachowane pod resolverowym
+`windows-native/boris-source-image-b5ffb0df863d47f5b76ff5e2d4af4e2c/`.
+Context SHA256 wynosi
+`5c53c82e963c5c27cca3b706e017652fab5a20c28cc9b02ee00975434a84aced`;
+source-tree SHA256 wynosi
+`0d0d924321c6b0d664f3e862a7a73d7c31a1c4c14d2a7f973b6238e2a58161a6`.
+Readback poza buildem, readonly bez bind mountów i sieci, UID 65532,
+1 CPU/512 MiB/32 pids, rzeczywisty exit 0, wywołał `verify_source` dla
+1133 plików / 26427761 bajtów i odczytał NumPy 2.2.6 oraz Matplotlib 3.8.4.
+Ten dowód ma zakres SOURCE_AND_TOOLCHAIN_ONLY_NOT_SOLVER_QUALIFIED.
+Dziewiętnaście interpretowanych regresji producenta, w tym actual Git CRLF
+clean-filter capture, przeszło; nie stanowią wykonania BORIS.
+
+Public Python/ProblemIR, wszystkie cztery backendy Fullmaga, historyczne
+odmowy v1 i benchmarku oraz tolerancje naukowe pozostają bez zmian.
+Operator nie jest aktywowany i kolejka nie została zmieniona. Kompilacja BORIS,
+CPU ABI witness, solver runtime i nowe porównanie nadal są NOT VERIFIED;
+ciężka kompilacja pozostaje zadaniem tej samej kolejki Fullmag_build_runner.
+
+(boris-cpu-abi-witness-contract)=
+### E1: prerejestracja produkcyjnego CPU ABI witness
+
+Kontrakt prerejestrowany przed kodem; implementacja SOURCE ONLY, NOT VERIFIED.
+Witness jest artefaktem pochodzenia profilu boris-cpu-v1,
+nie testem jednostkowym ani solverem. Nie wykonano kompilacji,
+witnessa ani runtime benchmarku. W upstream
+048503d2ca6475e91b073eb1762ecf9d3634c3e1 Boris/MeshBase.h deklaruje
+VEC_VC<double> V oraz VEC_VC<DBL3> E/S; BorisLib/Types_VAL.h definiuje
+DBL3=VAL3<double>. Oryginalne hashe obu plików są przypięte do pełnego
+image_source.v1; worker odmawia drift. SINGLEPRECISION opisuje CUDA,
+nie jest samodzielnym dowodem precyzji CPU.
+
+Fixed witness obejmuje actual MeshBase.h i static_assert typów skalarów V/E/S
+oraz DBL3. Sprawdza CHAR_BIT=8, sizeof(double)=8, radix=2, digits=53,
+max_exponent=1024. CPU solver i witness używają tego samego compiler path,
+flags -Ofast/-std=c++17/-fopenmp, includes, sanitised image environment oraz
+tego samego zestawu flag linkowania. Wyjściowe fakty ABI są obserwowane przez
+fixed stage i kopiowane do bounded JSON wraz z job/source/image/flags binding.
+Wszystkie trzy etapy compile/link/observe muszą mieć dokładnie jeden sukces;
+exact komendy witnessa są sprawdzane wobec komend produkcyjnego solvera.
+-Ofast nie oznacza ścisłej arytmetyki IEEE: binary64 ABI nie kwalifikuje
+błędów naukowych ani konwergencji. Brak witnessa odmawia nowego build receipt.
+Legacy runtime.v1 nadal incomplete; witness nie nadaje identity_complete,
+nie otwiera public benchmark admission i nie zmienia żadnej tolerancji fizycznej.
+
+| Generated parametr / typ | Granica i walidacja | Jednostka / znaczenie |
+|---|---|---|
+| schema_version / string | fullmag.boris.cpu_abi.v1; exact fixed fields | $1$; wersja dowodu ABI |
+| job_id, capsule_digest, image_digest / string | exact owning receipt values | $1$; managed provenance |
+| compile_flags_sha256, cuda_flags_sha256 / string | SHA256 actual output headers | $1$; compiler input binding |
+| type_source_sha256 / map | exact pinned MeshBase.h/Types_VAL.h SHA256 | $1$; rzeczywiste typy V/E/S |
+| facts / object | integer CHAR_BIT=8, double_bytes=8, radix=2, digits=53, max_exponent=1024; bool nie zastępuje integer | $1$; ABI, nie science PASS |
+| cpu_abi_witness.cpp / bytes | exact generated source, <=8 KiB | $1$; fixed production witness |
+| cpu_abi_witness / bytes | regular file, 1..16 MiB; actual SHA256 | $1$; production provenance executable |
+| cpu_abi_witness.json / JSON | regular UTF8 unique-key file, 1..4 KiB; same job/source/flags; no self hash | $1$; retained observation |
+| boris-cpu-abi-compile/link/observe / stages | unique exit=0; exact compile/link/run commands; bounded stdout <=4 KiB | $1$; managed execution evidence required |
+
+Wspólne Python authoring, ProblemIR, FDM/FEM równania i publiczne jednostki
+pozostają niezmienione. Witness dotyczy wyłącznie zewnętrznego BORIS CPU;
+nie kwalifikuje FDM CPU/GPU ani FEM CPU/GPU Fullmaga. Toolchain/dependencies
+pozostają faktyczną bramką preflight: brak FFTW3/X11/TBB odmawia przed compile.
+Actual source implementation: scripts/local_runner/boris_cpu.py::run_build,
+validate_abi_outputs, validate_outputs; output membership scripts/local_runner/build_entrypoint.py::required_outputs_for_profile.
+
+(boris-fixed-m-transport-v2-contract)=
+### E1: generator fixed-M i dowód l_J v2
+
+**Stan z 2026-10-15: kontrakt prerejestrowany przed kodem, implementacja
+`SOURCE_ONLY`; runtime `NOT VERIFIED`, scenariusz `SCENARIO_NOT_QUALIFIED`.**
+Przerejestracja poprzedziła zmianę generatora i walidatorów. Zapisane źródła
+zastępują `statictransportsolver(1)` oraz `Relax`/`Run`, które nie zamrażają M,
+przez `statictransportsolver(0)` i `computefields` z pomiarem przed/po.
+W przypiętym BORIS `048503d2ca6475e91b073eb1762ecf9d3634c3e1`
+publiczna nazwa parametru to `l_J` (wewnętrzny `l_ex`), a `computefields`
+aktualizuje pola/transport bez kroku `odeSolver.Iterate`. To podstawa
+wyboru metody, nie dowód zrealizowania stanu przez binarium.
+
+Nowe schematy to dokładnie `fullmag.boris_she_nf.scenario.v2`,
+`fullmag.boris_she_nf.native.v2` i `fullmag.boris_she_nf.v2` dla summary.
+`fullmag.boris.runtime.v2` oraz `fullmag.boris_flow_major_units.v2` pozostają
+bez zmiany. Nowy publiczny admission wymaga poniższego pomiaru i odrzuca
+scenario/native/summary v1; historycznych bytes ani receipts nie retaguje się.
+Generator zachowuje eksperymentalne N/T/F, lecz publiczny/managed benchmark
+nadal dopuszcza tylko N/F; nie przyznaje się kwalifikacji bariery.
+
+| Wersjonowane pole | Dokładny typ, wartość i walidacja | SI / zakres |
+|---|---|---|
+| `scenario.execution` | exact object: `mode="fixed_m_transport_only"`, `ode="LLGStatic-SA"`, `transport_call="computefields"`, `static_transport=false`, `magnetization_relative_tolerance=1e-6`, `magnetization_absolute_tolerance_apm=1e-6`, `l_J_relative_tolerance=1e-6`; nieznane pola i zamienne typy odrzucone | $1$ poza absolute tolerance w $\mathrm{A\,m^{-1}}$; immutable intent, nie pomiar |
+| `NfCaseConfig.magnetization` | dokładnie `(1,0,0)`; inne kierunki odrzucone przed renderowaniem, bo historyczny renderer ustawia literalne +X | $1$; brak udawanej obsługi dowolnego m |
+| `ferromagnet.param.l_J` | ustawione jawnie z finite positive `config.l_ex_m` | $\mathrm m$; nie wnioskowanie z defaultu BORIS |
+| `native.fixed_m` | exact object: `schema_version="fullmag.boris_fixed_m.v1"`, `M_before="f_M_before.ovf"`, `M_after="f_M_after.ovf"`, `l_J_readback_m` jako finite positive scalar non-bool, `execution_mode="fixed_m_transport_only"` | M w $\mathrm{A\,m^{-1}}$, readback w $\mathrm m$ |
+| `ns.setparam("ferromagnet","l_J")` | zapytanie bez wartości; dokładnie skończony dodatni skalar; string, list i bool odrzucone bez heurystycznego parsowania | $\mathrm m$; źródłowo C++ `get_meshparam_value_sci` → unitless `ToString(get0)` → pojedyncze pole float NetSocks; runtime readback jeszcze niewykonany |
+| `f_M_before.ovf`, `f_M_after.ovf` | dwa pełne F-grid OVF, `valuedim=3`, exact shape; origin i step zgodne z manifestem i `f_V` przy relative $10^{-12}$ i absolute $10^{-18}\,\mathrm m$ | pozycja $\mathrm m$, M $\mathrm{A\,m^{-1}}$; wszystkie komórki, nie średnia ani pojedynczy probe |
+| `l_J_readback_m` względem `config.l_ex_m` | relative tolerance $10^{-6}$, absolute $0\,\mathrm m$; nie niefinitywny, zerowy ani bool | $\mathrm m$; ten proof nie poświadcza wszystkich innych parametrów |
+| `summary.fixed_m_proof` | exact recomputed object opisany poniżej; deklaracja caller JSON nie jest dowodem | $1$ jako envelope pomiaru |
+
+#### Kanoniczna ścieżka wyjścia generowanego skryptu
+
+**Dopisek prerejestrowany przed kodem host-path; implementacja `SOURCE_ONLY`,
+runtime `NOT VERIFIED`.** Renderowanie `Path("/export").resolve()` na Windows
+może dać hostowe `D:\export`, a odtworzenie na Linux `/export`. Wewnętrzne
+`render_boris_script(config, *, execution_output_dir=None)` rozdziela teraz
+default lokalnego generatora od stałego celu kontenera:
+
+| Parametr wewnętrzny | Typ/default i walidacja | SI / znaczenie |
+|---|---|---|
+| `execution_output_dir` | `str or None`, default `None`; jedyny dopuszczony override to dokładny literal `/export`, bez `Path.resolve`; inna wartość odrzucona | $1$ jako identyfikator ścieżki; nie zmienia konfiguracji storage |
+
+Przy `None` zachowuje się dotychczasowe `str(config.output_dir.resolve())`.
+`run_managed_boris_nf.py::fixed_inputs` przekazuje wyłącznie stałe
+`execution_output_dir="/export"`, dzięki czemu host Windows i worker Linux
+muszą uzyskać identyczne bytes skryptu. `/export` jest **stałym celem wyjścia
+wewnątrz kontenera, nie rootem storage**. Faktyczne hostowe storage i mount
+nadal wyznacza istniejący resolver i managed launcher. Factory nie przyjmuje
+user-root, environment lub CLI override; nie dodaje mountów. Exact byteguard
+`fixed_inputs`/worker pozostaje obowiązkowy i nie jest osłabiany.
+
+Generator zachowuje wybór `LLGStatic-SA` do aktywacji transportu, ale wykonuje
+`statictransportsolver(0)` oraz `computefields()`, bez `setstages(Relax)` i
+`Run`. Eksporty M następują bezpośrednio przed i po tym wywołaniu. Nie zmienia
+się znaków Ts/Tsi, gamma, jednostek ani porównywalności torque.
+
+Dla każdej składowej każdej komórki wymagane są trzy kontrole: before względem
+$M_s(1,0,0)$, after względem tej samej wartości oraz after względem before.
+Norma poniżej jest maksimum bezwzględnych błędów **składowych po wszystkich
+komórkach**, a nie normą wektora ani błędem średniej:
+
+```{math}
+:label: boris-fixed-m-all-cell-admission
+M_\star=(M_s,0,0),\qquad
+\max\left(\lVert M^{\mathrm{before}}-M_\star\rVert_\infty,
+\lVert M^{\mathrm{after}}-M_\star\rVert_\infty,
+\lVert M^{\mathrm{after}}-M^{\mathrm{before}}\rVert_\infty\right)
+\le\epsilon_{\mathrm{abs}}+\epsilon_{\mathrm{rel}}M_s.
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $M^{\mathrm{before}}$ | pełne pole magnetyzacji przed transportem | $\mathrm{A\,m^{-1}}$ |
+| $M^{\mathrm{after}}$ | pełne pole magnetyzacji po transporcie | $\mathrm{A\,m^{-1}}$ |
+| $M_\star$ | oczekiwana magnetyzacja każdej komórki F | $\mathrm{A\,m^{-1}}$ |
+| $\lVert\cdot\rVert_\infty$ | maksimum błędu składowych po wszystkich komórkach F | $\mathrm{A\,m^{-1}}$ |
+| $\epsilon_{\mathrm{abs}}$ | bezwzględna tolerancja tekstowego eksportu M | $\mathrm{A\,m^{-1}}$ |
+| $\epsilon_{\mathrm{rel}}$ | względna tolerancja eksportu M | $1$ |
+
+Zamrożone wartości to $\epsilon_{\mathrm{abs}}=10^{-6}\,\mathrm{A\,m^{-1}}$
+i $\epsilon_{\mathrm{rel}}=10^{-6}$. Wspólny istniejący helper
+`scripts/verify_boris_nf_interface.py::validate_fixed_m(root,scenario,native)`
+ponownie czyta pełne OVF, oblicza trzy maksima i sprawdza l_J oraz geometrię.
+Reader oblicza hash z tych samych surowych bytes, z których dekoduje OVF;
+`require_fixed_m_members` wiąże oba hashe z retained output closure.
+Wynik ma dokładnie: `schema_version="fullmag.boris_fixed_m.proof.v1"`,
+`M_before_sha256`, `M_after_sha256` (64 lowerhex), `sample_count` (dodatni int,
+liczba komórek), `maximum_before_error_apm`, `maximum_after_error_apm`,
+`maximum_change_apm` (finite nonnegative) i `l_J_readback_m` (finite positive).
+Nie publikuje tablic M w summary. `summary.fixed_m_proof` musi być dokładnie
+równy ponownemu obliczeniu, a `RAW_OUTPUTS` i runtime output closure muszą
+wiązać oba nowe OVF; v2 ma 16 OVF zamiast historycznych 14.
+
+Przy managed publikacji i identity re-open `_artifact_summary` otrzymuje
+`retained_outputs` z tego samego `verified_outputs`. Jego końcowy pomiar M
+musi pasować do tych hashów, a `read_json` sprawdza hash tych samych bounded
+surowych bytes `boris_native_samples.json` przed parsowaniem readbacku l_J.
+`verify_runtime_identity` zwraca te entries dopiero po ponownym porównaniu
+summary, przez `validate_runtime_identity` do publicznego admission.
+Publiczny walidator wiąże z nimi również swój ostatni pomiar M i odczyt
+native JSON. Porównanie summary zachowuje rozróżnienie JSON bool/liczba.
+
+| Wewnętrzny parametr pomiaru | Typ/default i walidacja | SI / zakres |
+|---|---|---|
+| `_artifact_summary.retained_outputs` | `Sequence[Mapping[str,object]] or None`, default `None`; managed publikacja/re-open przekazują zweryfikowane entries, z których pobiera się dokładne hashe M i native JSON | $1$ jako manifest; `None` nie przyznaje managed identity |
+| `read_json.expected_sha256` | `str or None`, default `None`; przekazany hash musi odpowiadać pojedynczemu bounded odczytowi raw bytes przed decode/parse | $1$ jako SHA256; przy ponownym odczycie native JSON w managed/public v2 pochodzi z tej samej retained closure |
+
+Zmiana A→B między admission a końcowym odczytem ma być odrzucona nawet,
+gdy nowe M nadal mieści się w tolerancji fizycznej. Kontrolowane przypadki
+publikacji i obu re-open wykonują te gałęzie ze stubami zależności admission;
+nie są dowodem rzeczywistej tożsamości runtime.
+
+
+Mapowanie nie tworzy Python DSL ani `ProblemIR`: zmienia wyłącznie
+wersjonowany zewnętrzny generator i jego pomiar. Summary, publiczny walidator,
+worker i managed re-open wywołują ten sam helper; źródła kontrolowanego
+`check_fixed_m_contract` obejmują odmowy zmienionych M/siatki/l_J/proof/v1
+oraz porównanie bytes skryptu przy rozwiązywaniu ścieżek Windows i Linux.
+Dowód odbioru nadal wymaga rzeczywistego managed wykonania. Syntetyczne
+OVF, kontrolowane przypadki i AST nie dowodzą braku ewolucji M w BORIS. Nawet PASS
+tego ograniczonego pomiaru nie nadaje parity, konwergencji ani statusu
+„all parameters verified”. Nie dowodzi równoważności modeli ani
+obwodów zasilania BORIS i Fullmaga. FDM CPU/GPU i FEM CPU/GPU nie otrzymują nowej
+kwalifikacji; nowy benchmark nadal `NOT VERIFIED`.
+
+(boris-managed-runtime-v2-contract)=
+### E1: trusted managed runtime admission v2
+
+Kontrakt prerejestrowany przed implementacją. Actual source-only, NOT VERIFIED:
+oddzielny BORIS CPU helper
+wiąże authenticated terminal operator job z dokładnie czterema trusted plikami,
+actual binary/source/flags/CPU ABI witness i pinned installed image. Canonical
+build root wynika tylko z returned worktree_id/job_id oraz storage resolvera;
+API worktree_id musi zgadzać się z layout.worktree_id, owner z actual actor.
+Runtime root to fresh resolver-owned katalog o losowym pełnym runtime_id;
+caller JSON nie wybiera arbitrary proof path, komend, środowiska ani mountów.
+FEM-only validate_managed_build oraz sześć pozostałych profili nie zmieniają się.
+
+Fixed coarse/medium/fine N/F zachowuje istniejące parametry, tolerance=1e-5,
+max_iterations=200, CPU -g -1 i timeout180s. New managed run wymaga strict
+actual solver exit=0, stage marker i full native samples; historyczny v1 miał
+14 OVF, prerejestrowany fixed-M v2 wymaga 16 OVF; historyczne
+exit143 lub post-stage StdoutCatcher flush exit1 są odmową nowej ścieżki,
+nie synthetic sukcesem. Fullmag torque conversion refusal pozostaje bez zmian.
+Nie instaluje się pakietów ani nie pobiera obrazu podczas run. Brak dependencies
+lub niezgodna embedded Python wersja/imports oznacza jawną odmowę.
+
+| Internal generated pole / typ | Walidacja i granica | Jednostka / znaczenie |
+|---|---|---|
+| build_job_id, runtime_id / string | 32lowerhex; canonical resolver root; authenticated owning operator job | $1$; locator, nie receipt authority |
+| fullmag.boris.managed_run.v1 / JSON | <=4 MiB UTF8 unique keys finite; source/binary/image/trusted hashes; actual inspected terminal container | $1$; lokalny managed dowód, nie podpisana portable attestacja |
+| fullmag.boris.runtime.v2 / JSON | reopened complete trusted chain poprzez explicit repo_root; caller complete/precision ignored as authority | $1$; provenance only |
+| precision / string | double dopiero po verified actual ABI + same compiler/types/flags build i actual CPU run | $1$; binary64 storage, bez strict IEEE claim z -Ofast |
+| source_files_sha256 / map | full capsule verified; host imports compare frozen files, brak drift | $1$; helper/adapter bindings |
+| scenario.py, scenario.json / bytes | generated exact fixed defaults/resolution; SHA256 before/after run | $1$; scientific input identity |
+| outputs / entries | historyczny v1: 14 OVF; prerejestrowany fixed-M v2: exact16 OVF + native samples + runtime probe/logs; unique safe members <=32, aggregate <=256 MiB, each <=64 MiB | $1$; heavy payload files, bez JSON arrays |
+| container attestation / JSON | exact image/argv/env/mounts/runc/NVIDIA_VISIBLE_DEVICES=void/noGPU/noNetwork/UID65532/readonly/cap_drop/resource caps | $1$; rzeczywista lane/isolation |
+| summary/runtime/receipt digests / string | external digest framing; no receipt self-hash/cycle; summary recomputed from verified outputs | $1$; immutable closure |
+
+Publication ordering correction preregistered przed kodem, actual SOURCE ONLY:
+per-runtime storage
+lock odmawia parallel/reentrant observe. Final receipt bytes/hash są obliczone
+najpierw; runtime.json i independently recomputed summary.json zapisuje się
+przed terminalnym receipt, który jest jedynym commit point i powstaje LAST.
+Przerwanie przed nim nie zostawia succeeded receipt. Publication I/O failure
+pozostawia osobny resumable nonterminal publication_failed_resources_retained;
+validation failure jest terminal failed_resources_retained. Po commit żaden
+error handler nie nadpisuje sukcesu. Reobserve succeeded bundle jest verify-only,
+bez naprawiania dowodów; identity pin odnosi się do exact final receipt bytes,
+bez checksum cycle. To zmiana lifecycle/provenance, nie tolerancji ani fizyki.
+
+(boris-managed-matrix-v2-contract)=
+Macierz porównawcza używa wyłącznie trzech już zakończonych managed CPU
+runtime v2 i nie uruchamia BORIS ponownie przez `observe`. Jej execution
+odrzuca Linux, CUDA, legacy build-root i legacy grids. Dwa przypadki tolerancji
+Fullmaga korzystają z tych samych dokładnie przypiętych referencji BORIS;
+`run_boris_fullmag_she_nf_matrix.py::_managed_reference` ponownie otwiera
+zaufany łańcuch i sprawdza zgodność wspólnych parametrów oraz rzeczywistej
+siatki. Piny obejmują summary.json, runtime.json, receipt.json i scenario.json;
+revalidation i ponowne piny binariów otaczają każdy przypadek. Nie jest to
+dowód konwergencji BORIS. Stałe referencje oznaczają niezmienne retained bytes,
+nie potwierdzenie zamrożonego $M$ ani wszystkich zrealizowanych parametrów.
+Scenariusz pozostaje `SCENARIO_NOT_QUALIFIED`; nowy benchmark i dynamika
+transportowego RHS Fullmaga pozostają `NOT VERIFIED`.
+
+Public validate_boris_artifact i normalize_boris_artifact wymagają dla v2
+jawnego trusted repo/storage context i ponownego otwarcia źródeł/receipt/output
+closure; legacy v1 odmowy pozostają. Brak operatora lub retained evidence
+odmawia zamiast offline allow_incomplete. Complete runtime identity nie oznacza
+science qualification; status nadal diagnostic/NOT VERIFIED aż preregistered
+niezależne residual/interface/convergence kryteria zostaną wykonane.
+Python DSL, ProblemIR, wspólne równania i FDM/FEM CPU/GPU qualification Fullmaga
+pozostają bez zmian. Actual helper scripts/run_managed_boris_nf.py::resolved_boris_build, start,
+observe, verify_runtime_identity wykonuje powyższy source contract. Interpreted
+fixtures nie są trusted runtime proof; operator/image/native benchmark nie
+zostały wykonane. Strict solver exit=0 obejmuje brak historycznych wyjątków.
+Public wrapper scripts/run_boris_nf_interface.py::main udostępnia managed
+job/runtime locators, odmawia caller build/image/output/container overrides.
+Receipts wymagają retained actual container oraz dostępnego operatora; brak
+portable signed admission nie jest zastępowany caller JSON authority.
+
 (source-code-index)=
 ## 8. Source-code index
 
@@ -2304,6 +3150,71 @@ a qualified workload without the validation gates above.
 
 | Claim | Path | Symbol | Responsibility | Evidence |
 |---|---|---|---|---|
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-checkpoint` | Dokładny planned schema wrappera i required pola; codec niewdrożony. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-hash` | Strict ingress, kompletność nested codecs i kanoniczny outer hash. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-accepted-history` | Outer accepted dt i rzeczywiste inner ARS history, bez dopisywania timestampów. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-output-commit` | Binding istniejącego committed output manifestu i jawna odmowa braku trwałego prefixu. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-atomic-restore` | Atomowy capture/restore w istniejących ownerach; bez recapture i implicit continuation. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `FdmCoupledCheckpoint` | Istniejący nested M3 V1, accepted/history/controller i własny payload digest. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `validate_complete_coupled_checkpoint` | Istniejąca pełna walidacja nested M3, bez zastępowania jej wrapperem. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/constraints/checkpoint.rs` | `FrozenSpinsCheckpointV1` | Istniejący mask/reference/activation codec i historyczne defaults niedozwolone jako brakujące dane V2. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/constraints/activation.rs` | `FrozenSpinsActivationSet` | Reuse istniejącej historycznej mapy epok i active set. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/interactive/runtime.rs` | `frozen_spins_activation_set` | Rzeczywisty runtime owner historycznej activation set między etapami. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `ensure_interactive_preview_runtime` | Przeniesienie historycznego activation set przy przebudowie stage runtime. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm_with_coupled_checkpoint` | Istniejący adaptive full/two-half acceptance oraz outer dt/history writer; nie dowód runtime. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/schedules.rs` | `OutputSchedule` | Istniejący pojedynczy owner next_time i last_sampled_time; brak checkpoint cursorów V2. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-session/src/types.rs` | `canonical_json_bytes` | Istniejąca rekursywna kanonizacja JSON; planowany reuse dla outer digest. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-quantities/src/accepted_state.rs` | `AcceptedStateRef` | Istniejąca tożsamość accepted clocks/state/generation bez nowego modelu. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-session/src/types.rs` | `FmsStudyOutputManifest` | Istniejący CAS-backed manifest z task/attempt/step i accepted-state reference. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-session/src/types.rs` | `FmsArtifactCatalog` | Istniejący katalog revision i immutable published entries, nie nowy receipt. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/artifact_pipeline.rs` | `record_scalar` | Enqueue outputu nie potwierdza durable checkpoint prefixu. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-session/src/store.rs` | `commit_checkpoint` | Istniejący writer lease, common state, reachability oraz commit marker. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `crates/fullmag-session/src/capture.rs` | `capture_checkpoint` | Istniejący capture common M/backend payload przed publikacją markeru. | source_only_unqualified; prereg composite_v2_*; runtime NOT VERIFIED |
+| Composite checkpoint v2 | `docs/physics/0970-spin-hall-drift-diffusion-transport.md` | `DOC-ANCHOR:spin-transport-composite-resume-v2` | Granica prerejestracji composite bez rozszerzania kwalifikacji legacy. | planned_contract; prereg composite_v2_*; runtime NOT VERIFIED |
+| Prerejestracja frozen transport | `docs/physics/0996-frozen-spins-constraint.md` | `DOC-ANCHOR:frozen-spins-auxiliary-transport-time` | Prerejestracja no-op M oraz aktywnego transportu w fizycznym czasie; runtime niezweryfikowany. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `planned_contract`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-all-frozen` | Executed steps, czas, pause/cancel i odmowa Relax+M3. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `planned_contract`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `docs/physics/0970-spin-hall-drift-diffusion-transport.md` | `DOC-ANCHOR:spin-transport-frozen-free-error-support` | Wspólny free-target support outer-error gate; bez zmiany bilansów. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `planned_contract`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm_with_coupled_checkpoint` | Istniejący owner czasu, counters, outputs i completion; shortcut/gates wymagają naprawy. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `source_only_unqualified`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_coupled_heun_trial` | Istniejący transaction Heun evaluate/commit/rollback. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `source_only_unqualified`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_coupled_ars_trial` | Istniejący transaction ARS i historia M3. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `source_only_unqualified`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `heun_trial_with_external_stage_terms_and_lte` | Źródłowy raw embedded Heun estimator w borrowed k[2], mask/restore; typy i runtime NOT VERIFIED. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `source_only_unqualified`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-engine/src/fdm/shared/types.rs` | `TransportStageErrorBudget` | Źródłowy borrowed per-cell estimator i resolved frozen mask; synchroniczny zakres callback/solve bez nowego stanu; runtime NOT VERIFIED. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `source_only_unqualified`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs` | `CoupledTransportOuterErrorBudget` | Istniejący budżet outer-error z Gilbert-source delta; nie wprowadzać arbitralnego floor. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `source_only_unqualified`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `FdmSpinTransportWorkflow` | Istniejący accepted/rejected counters, cache, snapshot i checkpoint. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `source_only_unqualified`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs` | `transport_torque_delta_l2` | Źródłowa wspólna redukcja obu norm po target∩free, empty support i finite guards; runtime NOT VERIFIED. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `source_only_unqualified`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-runner/src/time_events.rs` | `build_resolved_stage_event_schedule_with_origin` | Istniejący owner zdarzeń; envelope current i fixed M3 clipping wymagają dowodów/naprawy. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `source_only_unqualified`; `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-plan/src/validate.rs` | `validate_conservative_relaxation` | Istniejąca odmowa niekonserwatywnych torque; jawna odmowa Relax+M3 jeszcze niezaimplementowana. | FDM CPU FP64; inne lane niekwalifikowane; gates `frozen-spins-auxiliary-transport-time`; `source_only_unqualified`; `worktree/uncommitted`; path + symbol |
+| boris-offline-toolchain-dependency-selection | scripts/local_runner/boris_toolchain.py | dependency_selection | Offline dependency admission, image provenance or bounded toolchain preflight; does not qualify the BORIS solver. | source_only; toolchain evidence only |
+| boris-offline-toolchain-validate-bundle | scripts/local_runner/boris_toolchain.py | validate_bundle | Offline dependency admission, image provenance or bounded toolchain preflight; does not qualify the BORIS solver. | source_only; toolchain evidence only |
+| boris-offline-toolchain-validate-wheels | scripts/local_runner/boris_toolchain.py | validate_wheels | Offline dependency admission, image provenance or bounded toolchain preflight; does not qualify the BORIS solver. | source_only; toolchain evidence only |
+| boris-offline-toolchain-prepare-context | scripts/local_runner/boris_toolchain.py | prepare_context | Offline dependency admission, image provenance or bounded toolchain preflight; does not qualify the BORIS solver. | source_only; toolchain evidence only |
+| boris-offline-toolchain-install-apt | scripts/local_runner/boris_toolchain.py | install_apt | Offline dependency admission, image provenance or bounded toolchain preflight; does not qualify the BORIS solver. | source_only; toolchain evidence only |
+| boris-offline-toolchain-install-wheels | scripts/local_runner/boris_toolchain.py | install_wheels | Offline dependency admission, image provenance or bounded toolchain preflight; does not qualify the BORIS solver. | source_only; toolchain evidence only |
+| boris-offline-toolchain-runtime-preflight | scripts/local_runner/boris_toolchain.py | runtime_preflight | Offline dependency admission, image provenance or bounded toolchain preflight; does not qualify the BORIS solver. | source_only; toolchain evidence only |
+| boris-offline-toolchain-build-image | scripts/local_runner/boris_toolchain.py | build_image | Offline dependency admission, image provenance or bounded toolchain preflight; does not qualify the BORIS solver. | source_only; toolchain evidence only |
+| boris-offline-toolchain-contract | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:boris-offline-toolchain-provisioning | Separate observed toolchain provisioning from pending BORIS source, ABI, runtime and scientific qualification. | planned_contract; toolchain evidence only |
+| boris-source-image-admit-toolchain | scripts/local_runner/boris_cpu.py | admit_toolchain | Bind exact source bytes and qualified toolchain inputs or verify offline source-image provenance; no solver qualification. | source_only; source-image only |
+| boris-source-image-clean-blob-ids | scripts/local_runner/boris_cpu.py | clean_blob_ids | Bind exact source bytes and qualified toolchain inputs or verify offline source-image provenance; no solver qualification. | source_only; source-image only |
+| boris-source-image-prepare-context | scripts/local_runner/boris_cpu.py | prepare_context | Bind exact source bytes and qualified toolchain inputs or verify offline source-image provenance; no solver qualification. | source_only; source-image only |
+| boris-source-image-validate-context | scripts/local_runner/boris_cpu.py | validate_context | Bind exact source bytes and qualified toolchain inputs or verify offline source-image provenance; no solver qualification. | source_only; source-image only |
+| boris-source-image-build-image | scripts/local_runner/boris_cpu.py | build_image | Bind exact source bytes and qualified toolchain inputs or verify offline source-image provenance; no solver qualification. | source_only; source-image only |
+| boris-source-image-verify-source | scripts/local_runner/boris_cpu.py | verify_source | Bind exact source bytes and qualified toolchain inputs or verify offline source-image provenance; no solver qualification. | source_only; source-image only |
+| boris-offline-source-image-contract | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:boris-offline-source-image-provisioning | Separate observed source-image build and readback from pending native compile, ABI, solver runtime and benchmark. | planned_contract; source-image only |
+| boris-managed-runtime-publication | scripts/run_managed_boris_nf.py | observe | Exclusive runtime storage lock, full bundle before exact terminal receipt LAST; precommit resumable I/O failure and immutable postcommit verification. | source_only; interpreted crash/reentrant checks, runtime NOT VERIFIED |
+| boris-managed-runtime-admission | scripts/run_managed_boris_nf.py | resolved_boris_build | Authenticated same-actor/worktree terminal job, four trusted hashes, source/ABI/binary/flags/image receipt verification; source only. | source_only; interpreted regressions, native/runtime NOT VERIFIED |
+| boris-managed-runtime-reopen | scripts/run_managed_boris_nf.py | verify_runtime_identity | Explicit trusted repo/root i retained closure; końcowe summary recompute wiąże M oraz native JSON z tymi samymi entries, które wracają do public admission; source-only, runtime NOT VERIFIED. | source_only; interpreted regressions, native/runtime NOT VERIFIED |
+| boris-managed-runtime-v2-contract | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:boris-managed-runtime-v2-contract | explicit trusted managed CPU run and public reopen gate | planned_contract; runtime NOT VERIFIED |
+| boris-cpu-abi-build-source | scripts/local_runner/boris_cpu.py | run_build | Fixed actual-source CPU ABI production stages share solver compiler flags/link/environment; no execution proof. | source_only; interpreted guards, no native run |
+| boris-cpu-abi-verifier-source | scripts/local_runner/boris_cpu.py | validate_abi_outputs | Bounded witness/source/flags/same-job observation and exact stage command binding; no runtime identity admission. | source_only; interpreted guards, no native run |
+| boris-cpu-abi-witness-contract | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:boris-cpu-abi-witness-contract | fixed CPU ABI provenance, separate runtime admission gate | planned_contract; no compilation/runtime proof |
+| boris-managed-build-proof-gate | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:boris-managed-build-proof-gate | legacy incomplete, future trusted v2 receipt prerequisite | planned contract, runtime NOT VERIFIED |
+| boris-raw-unit-algorithm | scripts/compare_boris_fullmag_she_nf.py | _normalize_boris_fields | pure raw OVF unit mapping after admission; synthetic checker uses algorithm only | 8 points/72 tensor checks, no solver proof |
+| boris-build-admission-source | scripts/run_boris_nf_interface.py | _require_verified_build | refusal before output/runtime without trusted build proof | interpreted guards, no native proof |
+| Kontrakt projekcji tensora | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:spin-current-tensor-projection-contract | komponent, norma i wektor kolumny po interpolacji | planned contract, runtime/UI jeszcze niezweryfikowane |
+| Metadane tensora spinowego | crates/fullmag-quantities/src/catalog.rs | tensor_descriptor | rank, shape, flow/spin axes i 9 etykiet z canonical ID | implementacja; runtime/API jeszcze niezweryfikowane |
+| Adapter BORIS v2 | scripts/compare_boris_fullmag_she_nf.py | normalize_boris_artifact; _concat_qia | flow-major rows i raw-OVF provenance | raw OVF fixture, nie parity solverów |
+| Strumień interfejsu BORIS | scripts/verify_boris_nf_interface.py | compute_interface_slice | wszystkie polaryzacje wiersza z | oba znaki normalnej na fixture |
+| Regresja adaptera BORIS | scripts/verify_boris_tensor_adapter.py | main | 8 punktów N/F, 72 komponenty, jednostki i torque refusal | RED→GREEN, bez solve |
 | M1 charge realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_charge | FEM CPU charge assembly and solve | managed native M1 contract |
 | M1 spin realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_spin | FEM CPU spin assembly and solve | managed native M1 contract |
 | M2 reciprocal realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_reciprocal | monolithic reciprocal FEM block solve | focused managed M2 runtime test |
@@ -2357,8 +3268,8 @@ a qualified workload without the validation gates above.
 | Public pure-Neumann managed recipe | justfile | verify-fdm-gpu-public-charge-zero-mean-runtime | compile through the container-backed runtime, execute the public fixture, and run the independent oracle | managed actual-device gate |
 | FDM GPU M1 contract and qualification boundary | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fdm-gpu-m1-fp64-contract | own the bounded charge realization and keep the broader M1 qualification gates explicit | partial implementation; unvalidated |
 | Frozen solved-current racetrack contract | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:racetrack-m1-v1-contract | freeze the synthetic fixture, equations, signs, parameter provenance, and qualification boundary | bounded implementation and executable contract; production qualification remains open |
-| Racetrack stage current action | crates/fullmag-cli/src/step_utils.rs | apply_pipeline_set_transport_current | apply the complete named normal-current electrode set at a workflow stage with exact terminal coverage | source contract; fresh production gate remains open |
-| Racetrack stage torque action | crates/fullmag-cli/src/step_utils.rs | apply_pipeline_set_spin_torque_enabled | atomically enable or disable the typed spin-torque graph module and incoming edges | source contract; fresh production gate remains open |
+| Racetrack stage current action | crates/fullmag-application/src/script_stage_materialization.rs | apply_pipeline_set_transport_current | apply the complete named normal-current electrode set at a workflow stage with exact terminal coverage | source contract; fresh production gate remains open |
+| Racetrack stage torque action | crates/fullmag-application/src/script_stage_materialization.rs | apply_pipeline_set_spin_torque_enabled | atomically enable or disable the typed spin-torque graph module and incoming edges | source contract; fresh production gate remains open |
 | Racetrack zero-drive torque gate | crates/fullmag-plan/src/spin_transport.rs | materialize_fdm_descriptor | allow inactive torque only when all named normal-current terminals are exactly zero and preserve fail-closed nonzero-drive conservation | source contract; fresh production gate remains open |
 | Public racetrack Neel seed authoring | packages/fullmag-py/src/fullmag/init/textures.py | neel_skyrmion | serialize the exact public preset parameters, world mapping, and translation into current ProblemIR | public lowering and formula-sample contract test |
 | Python racetrack Neel seed evaluator | packages/fullmag-py/src/fullmag/init/preset_eval.py | _skyrmion | evaluate and normalize the repository-owned analytic skyrmion formula | centre, wall, far-field, direction, and norm contract samples |
@@ -2381,6 +3292,40 @@ a qualified workload without the validation gates above.
 | FDM GPU M1 sparse public dispatch | backends/fdm/tests/gpu_m1_spin_sparse_dispatch_v1_contract.cpp | main | prove 1,048,576-cell public dispatch, 512 MiB external envelope, 2 GiB total peak, persistent cache, component-sensitive digest invalidation, NaN rollback and deterministic restore | `just verify-fdm-gpu-m1-spin-native-contract`; actual-device PASS |
 | FDM GPU M1 sparse performance | backends/fdm/tests/gpu_m1_spin_sparse_performance_v1_contract.cu | main | enforce the frozen absolute setup, warm-solve, transfer and whole-context memory budgets on one identified GPU | `just verify-fdm-gpu-m1-spin-sparse-performance-contract`; durable actual-device JSON PASS |
 
+| Kontrakt | Ścieżka | Symbol | Odpowiedzialność i dowód |
+|---|---|---|---|
+| boris-fixed-m-managed-factory-boundary | scripts/run_managed_boris_nf.py | fixed_inputs | Fixed factory przekazuje wyłącznie execution_output_dir=/export, stały cel kontenera bez nowego storage-root/override; exact-script byteguard zachowany, runtime NOT VERIFIED. |
+| boris-fixed-m-v2-contract | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:boris-fixed-m-transport-v2-contract | Przerejestracja przed kodem fixed-M N/F v2; implementacja SOURCE_ONLY, runtime NOT VERIFIED i SCENARIO_NOT_QUALIFIED. |
+| boris-fixed-m-generator-boundary | scripts/boris_nf_interface_smoke.py | render_boris_script | Zapisany renderer static0/computefields, jawny l_J, dwa eksporty M i literal-only /export; implementacja źródłowa, runtime NOT VERIFIED. |
+| boris-fixed-m-ovf-reader-boundary | scripts/verify_boris_nf_interface.py | read_text_ovf | Jednorazowy odczyt surowych bytes OVF, dekodowanie i hash tych samych bytes; geometria i wszystkie komórki, bez dowodu runtime. |
+| boris-fixed-m-summary-boundary | scripts/run_boris_nf_interface.py | _artifact_summary | Summary v2 recompute z retained_outputs wiąże końcowy proof M oraz raw native JSON z tymi samymi verified entries; source-only, bez authority caller JSON. |
+| boris-fixed-m-public-admission-boundary | scripts/verify_boris_nf_interface.py | validate_boris_artifact | Publiczny admission v2 wiąże ostatni pomiar M i odczyt native JSON z entries zwróconymi przez identity reopen, dokładnie porównuje proof i odmawia v1; source-only. |
+| boris-fixed-m-managed-closure-boundary | scripts/run_managed_boris_nf.py | verified_outputs | Managed re-open ponownie oblicza pomiar M/l_J i wiąże hashe obu nowych OVF z retained closure; source-only, runtime NOT VERIFIED. |
+| boris-fixed-m-config-guard | scripts/boris_nf_interface_smoke.py | class NfCaseConfig | NfCaseConfig.__post_init__ odmawia kierunków innych niż dokładne +X przed renderowaniem; source-only. |
+| boris-fixed-m-execution-contract | scripts/boris_nf_interface_smoke.py | FIXED_M_EXECUTION | Wspólne dokładne wartości execution v2, tolerancji M/l_J i metody fixed_m_transport_only; source-only. |
+| boris-fixed-m-recompute | scripts/verify_boris_nf_interface.py | validate_fixed_m | Jeden owner ponownego pomiaru pełnych pól M, geometrii i l_J oraz dokładnego obiektu proof; source-only, nie wykonanie BORIS. |
+| boris-fixed-m-closure-binding | scripts/run_managed_boris_nf.py | require_fixed_m_members | Wiąże hashe sparsowanych M_before/M_after z tymi samymi raw closure members w worker, publikacji, identity i public re-open; source-only. |
+| boris-fixed-m-controlled-source-checks | scripts/check_boris_fixed_m_contract.py | check_fixed_m_contract | Kontrolowane syntetyczne OVF, host-path byteguard i A→B odmowy końcowych gałęzi ze stubami admission; bez solvera, builda i nadania runtime identity. |
+| boris-fixed-m-native-json-reader | scripts/run_managed_boris_nf.py | read_json | expected_sha256 weryfikuje pojedynczy bounded raw odczyt native JSON przed decode/parse; readback l_J pozostaje przypięty do tych samych retained entries. |
+| boris-fixed-m-identity-pin-forwarding | scripts/run_boris_nf_interface.py | validate_runtime_identity | Runtime v2 wrapper przekazuje zwrócone verified entries do ostatniego publicznego pomiaru; nie tworzy odrębnego admission. |
+| fdm-cpu-gilbert-stage-helper | crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs | external_stage_terms_from_gilbert_source | Jedna konwersja owned Gilbert source z trial m i lokalnym alpha_at do istniejącego explicit ExternalStageTerms; źródła zapisane, runtime NOT VERIFIED. |
+| fdm-cpu-gilbert-stage-source-regression | crates/fullmag-engine/tests/fdm_cpu_gilbert_stage.rs | gilbert_stage_uses_local_damping_and_preserves_field_and_source_observations | Zapisana regresja lokalnego alpha, obu flag precesji, zero source, zachowania pól i shape guards; niekompilowana, niewykonana. |
+| fdm-cpu-gilbert-stage-field-equivalence | crates/fullmag-engine/tests/fdm_cpu_gilbert_stage.rs | gilbert_source_matches_independent_field_rhs_through_heun_and_ars_trials | Zapisana niezależna tożsamość Gilbert source z polem w czterech krokach Heuna/ARS; niekompilowana, niewykonana. |
+| fdm-cpu-gilbert-rhs-contract | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fdm-cpu-transport-gilbert-rhs-boundary | Prerejestracja przed kodem, historyczny SOURCE_BUG_CONFIRMED i obecna źródłowa poprawka; runtime NOT VERIFIED. |
+| fdm-cpu-gilbert-normative | docs/physics/0960-spin-torque-sign-units-and-prescribed-sot.md | DOC-ANCHOR:governing-equations | Normatywne rozdzielenie Gilbert source i explicit RHS oraz jedna konwersja; bez nowego dowodu runtime. |
+| fdm-cpu-external-stage-type | crates/fullmag-engine/src/fdm/shared/types.rs | ExternalStageTerms | Istniejące direct_torque_per_s to już jawny wkład dm/dt; zmiana jego semantyki jest niedopuszczalna. |
+| fdm-cpu-coupled-ars-source | crates/fullmag-runner/src/fdm/cpu/reference.rs | execute_coupled_ars_trial | Historyczny raw-Gilbert/direct mismatch potwierdzony; obecny callback wywołuje jeden CPU engine helper. Source-only, runtime NOT VERIFIED. |
+| fdm-cpu-coupled-heun-source | crates/fullmag-runner/src/fdm/cpu/reference.rs | execute_coupled_heun_trial | Historyczny raw-Gilbert/direct mismatch potwierdzony; obecny callback wywołuje jeden CPU engine helper. Source-only, runtime NOT VERIFIED. |
+| fdm-cpu-external-rhs-assembly | crates/fullmag-engine/src/fdm/cpu/integrators.rs | apply_external_stage_terms | Dodawanie już jawnych external terms po RHS pola i istniejąca maska; bez zmiany obecnej semantyki. |
+| fdm-cpu-local-alpha | crates/fullmag-engine/src/fdm/shared/problem.rs | alpha_at | Istniejący owner lokalnego tłumienia potrzebnego przyszłemu adapterowi; bez korekty normy trial m. |
+| fdm-cpu-direct-torque-owner | crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs | direct_torques_add_into | Istniejąca granica CPU direct RHS; osobny helper konwertuje wyłącznie zewnętrzne źródło Gilberta, bez drugiej konwersji istniejących torque. |
+| boris-managed-matrix-v2-driver | scripts/run_boris_fullmag_she_nf_matrix.py | run_resolution_matrix | Windows-only trzy stałe managed BORIS CPU runtime.v2 razy dwie tolerancje Fullmaga; source-only, benchmark NOT VERIFIED. |
+| boris-managed-matrix-v2-pin | scripts/run_boris_fullmag_she_nf_matrix.py | _require_reference_pin | Exact bytes summary/runtime/receipt/scenario przed i po wykorzystaniu; drift odmawia, bez runtime qualification. |
+| boris-managed-matrix-v2-validation | scripts/run_boris_fullmag_she_nf_matrix.py | validate_matrix_summary | Walidacja struktury i metryk sześciu rekordów nie zastępuje admission ani nowego wykonania solvera. |
+| Mandatory raw FEM identity | crates/fullmag-runner/src/native_fem/steady_transport/artifact_identity.rs | actual_transport_identity; tagged_json_digest | hash actual prepared request, full topology v3, descriptor and result; source-only, runtime unverified |
+| Independent public FEM readback | scripts/verify_transport_public_oracles.py | validate_fem_identity; check_fem | exact mesh/intent/operator binding and existing analytical gates; no PASS without managed observation |
+| Fixed managed FEM oracle | scripts/run_managed_transport_oracles.py | start; observe; transport_spec | source/package/container/log-output binding; no builds, runtime unverified |
+
 (scientific-bibliography)=
 ## 9. References
 
@@ -2399,3 +3344,5 @@ a qualified workload without the validation gates above.
     151--167 (1997), DOI: 10.1016/S0168-9274(97)00056-1; the published
     `(2,3,2)` tableaus and L-stability contract define `coupled_imex_ark2`.
 13. BORIS transport sources under `external_solvers/BORIS/Boris`, used as comparative implementation evidence only.
+14. Matplotlib, [release v3.8.4](https://github.com/matplotlib/matplotlib/releases/tag/v3.8.4): wheels built against NumPy 2; dependency provenance only.
+15. NumPy, [Troubleshooting ImportError](https://numpy.org/doc/2.0/user/troubleshooting-importerror.html): NumPy 1/2 extension ABI boundary; not solver qualification.

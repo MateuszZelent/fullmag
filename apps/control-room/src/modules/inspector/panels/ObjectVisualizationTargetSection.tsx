@@ -38,6 +38,8 @@ import type { Viewport3DRenderedScalarRangeQuery } from "@/modules/viewport-3d/p
 import {
   useFieldMetaResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import { useVisualizationFieldMeta } from "@/kernel/resources/useVisualizationFieldMeta";
+import { artifactSurfaceRangeKey, type ArtifactInspectorFieldBinding } from "@/kernel/visualization/artifactFieldSelection";
 import { useViewport3DRenderedScalarRange } from "@/modules/viewport-3d/public";
 import {
   buildVisualizationPanelSections,
@@ -284,6 +286,8 @@ export function VisualizationRenderModeSection({
 
 
 export function VisualizationSurfaceColoringSection({
+  fieldMetaOverride,
+  artifactFieldBinding,
   airboxFieldCarrierIdentity,
   patch,
   patchColor,
@@ -297,6 +301,8 @@ export function VisualizationSurfaceColoringSection({
   settings,
   target,
 }: {
+  fieldMetaOverride?: ReturnType<typeof useVisualizationFieldMeta>;
+  artifactFieldBinding?: ArtifactInspectorFieldBinding;
   airboxFieldCarrierIdentity?: VisualizationVectorScopeIdentity | null;
   patch: PatchVisualizationTarget;
   patchColor: (
@@ -343,19 +349,24 @@ export function VisualizationSurfaceColoringSection({
     colorbarComponent ?? "none",
     fieldMetaScopeQuery.scope_kind ?? "full",
     fieldMetaScopeQuery.scope_id ?? "full",
+    artifactFieldBinding?.identityKey ?? "",
   ].join(":");
+  const historicalSurface = Boolean(artifactFieldBinding?.historical);
   const renderedRange = useViewport3DRenderedScalarRange({
-    component: colorbarComponent,
+    component: historicalSurface ? colorbarComponent ?? "scalar" : colorbarComponent,
     quantityId: settings.activeQuantityId,
-    scopeId: fieldMetaScopeQuery.scope_id,
-    scopeKind: viewportRenderedRangeScopeKind(fieldMetaScopeQuery.scope_kind),
+    scopeId: historicalSurface ? artifactFieldBinding?.query?.scope_id : fieldMetaScopeQuery.scope_id,
+    scopeKind: historicalSurface ? artifactFieldBinding?.query?.scope_kind : viewportRenderedRangeScopeKind(fieldMetaScopeQuery.scope_kind),
+    inspectionKey: historicalSurface ? artifactSurfaceRangeKey(artifactFieldBinding?.expectedOwner ?? null, artifactFieldBinding?.query ?? null, settings.surfaceProjectionMode) ?? "unavailable-artifact-owner" : null,
   });
-  const fieldMeta = useFieldMetaResource({
+  const ownFieldMeta = useVisualizationFieldMeta({
+    binding: artifactFieldBinding,
     component: colorbarComponent ?? null,
-    enabled: showFieldMeta,
+    enabled: showFieldMeta && !fieldMetaOverride,
     quantityId: settings.activeQuantityId,
     ...fieldMetaScopeQuery,
   });
+  const fieldMeta = fieldMetaOverride ?? ownFieldMeta;
   const surfaceSummary = settings.surfaceColorSource === "solid"
     ? "Solid color"
     : `By Quantity • ${settings.activeQuantityId ?? "H_eff"} (Auto)`;
@@ -421,6 +432,8 @@ export function VisualizationSurfaceColoringSection({
           quantityId={settings.activeQuantityId}
           rangeIdentity={colorbarRangeIdentity}
           renderedRange={renderedRange}
+          requireRenderedRange={historicalSurface}
+          allowCachedRange={!artifactFieldBinding?.historical}
         />
       ) : null}
       {showFieldMeta ? (
@@ -467,6 +480,8 @@ export function VisualizationSurfaceColoringSection({
 }
 
 export function ScalarColorbarControl({
+  allowCachedRange = true,
+  requireRenderedRange = false,
   disabled,
   fieldMeta,
   palette,
@@ -475,6 +490,8 @@ export function ScalarColorbarControl({
   rangeIdentity,
   renderedRange,
 }: {
+  allowCachedRange?: boolean;
+  requireRenderedRange?: boolean;
   disabled: boolean;
   fieldMeta: ReturnType<typeof useFieldMetaResource>;
   palette: string;
@@ -495,8 +512,10 @@ export function ScalarColorbarControl({
       rememberScalarColorbarRange(rangeIdentity, fieldMeta.data);
     }
   }, [fieldMeta.data, rangeIdentity]);
-  const visibleMeta = fieldMeta.data ?? cachedRange;
-  const stats = renderedRange ?? visibleMeta?.stats;
+  const visibleMeta = fieldMeta.data ?? (allowCachedRange ? cachedRange : null);
+  const stats = requireRenderedRange
+    ? fieldMeta.status === "ready" && visibleMeta && !fieldMeta.error && !fieldMeta.refreshError ? renderedRange : null
+    : renderedRange ?? visibleMeta?.stats;
   const unit =
     visibleMeta?.unit?.trim() ||
     quantityUnitForColorbar(visibleMeta?.quantity_id ?? quantityId);
@@ -526,6 +545,8 @@ export function ScalarColorbarControl({
   const dataRange =
     minLabel && maxLabel
       ? `${minLabel} to ${maxLabel}`
+      : fieldMeta.error || fieldMeta.refreshError
+        ? "field range unavailable"
       : fieldMeta.status === "ready"
         ? "range unavailable"
         : "loading field range";
@@ -583,7 +604,8 @@ export function ScalarColorbarControl({
           {maxLabel ?? ""}
         </span>
       </div>
-      <FieldRow label="Data range" value={dataRange} />
+      <FieldRow label={requireRenderedRange ? "Rendered range" : "Data range"} value={dataRange} />
+      {fieldMeta.error || fieldMeta.refreshError ? <FeedbackBanner kind="error" message={(fieldMeta.error ?? fieldMeta.refreshError)?.message ?? "Field range unavailable"} /> : null}
     </div>
   );
 }
@@ -754,6 +776,9 @@ export function VisualizationWireframeSection({
 }
 
 export function VisualizationVectorsSection({
+  fieldMetaOverride,
+  inspectionPresentation,
+  artifactFieldBinding,
   airboxFieldCarrierIdentity,
   fieldCatalog,
   fieldCatalogLoading,
@@ -775,6 +800,8 @@ export function VisualizationVectorsSection({
   visualizationRevision,
   vectorTopologyHash,
 }: {
+  fieldMetaOverride?: ReturnType<typeof useVisualizationFieldMeta>;
+  artifactFieldBinding?: ArtifactInspectorFieldBinding;
   airboxFieldCarrierIdentity?: VisualizationVectorScopeIdentity | null;
   fieldCatalog: { data: FieldCatalogResource | null; status: string };
   fieldCatalogLoading: boolean;
@@ -805,6 +832,7 @@ export function VisualizationVectorsSection({
   target: VisualizationTargetRef;
   targetKind: VisualizationTargetKind;
   vectorBudgetRange: VisualizationVectorBudgetRange;
+  inspectionPresentation?: import("@/modules/viewport-3d/public").Viewport3DArtifactInspectionPresentation | null;
   vectorCapacity: import("@/kernel/visualization/visualizationVectorCapacity").VisualizationVectorCapacityDescriptor | null;
   visualizationRevision: string | number | null;
   vectorTopologyHash: string | null;
@@ -836,18 +864,21 @@ export function VisualizationVectorsSection({
     showColorbar &&
     !regionFieldMetaUnavailable &&
     fieldMetaQuantityAvailable;
-  const fieldMeta = useFieldMetaResource({
+  const ownFieldMeta = useVisualizationFieldMeta({
+    binding: artifactFieldBinding,
     component: colorbarComponent ?? null,
-    enabled: showFieldMeta,
+    enabled: showFieldMeta && !fieldMetaOverride,
     quantityId: settings.activeQuantityId,
     ...fieldMetaScopeQuery,
   });
+  const fieldMeta = fieldMetaOverride ?? ownFieldMeta;
   const colorbarRangeIdentity = [
     "vectors",
     settings.activeQuantityId,
     colorbarComponent ?? "none",
     fieldMetaScopeQuery.scope_kind ?? "full",
     fieldMetaScopeQuery.scope_id ?? "full",
+    artifactFieldBinding?.identityKey ?? "",
   ].join(":");
   const renderedRange = useViewport3DRenderedScalarRange({
     component: colorbarComponent,
@@ -914,7 +945,8 @@ export function VisualizationVectorsSection({
           patch={patch}
           quantityId={settings.activeQuantityId}
           rangeIdentity={colorbarRangeIdentity}
-          renderedRange={renderedRange}
+          renderedRange={artifactFieldBinding?.historical ? null : renderedRange}
+          allowCachedRange={!artifactFieldBinding?.historical}
         />
       ) : null}
       {showFieldMeta ? (
@@ -955,6 +987,7 @@ export function VisualizationVectorsSection({
       </div>
       <div className="fm-viz-vector-accounting">
         <VisualizationVectorAccountingRows
+          ownedCounts={inspectionPresentation}
           anchorKind={vectorBudgetRange.anchorKind}
           availableAnchorCount={availableVectorAnchorCount(vectorBudgetRange)}
           capacity={vectorCapacity}
@@ -1016,6 +1049,7 @@ export function VisualizationVectorsSection({
       settings.vectorSurfaceOffsetEnabled ? (
         <NumberField disabled={vectorsUnavailable || isFieldPending("vectorSurfaceOffsetScale")} label="Extra surface gap" max={1} min={0} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
       ) : null}
+      {artifactFieldBinding?.historical && settings.geometryScope === "surface" && settings.vectorSurfaceOffsetEnabled ? <FieldRow label="Surface lift" value="Display offset; field sample positions unchanged" /> : null}
       {meshParts && meshParts.length > 1 && onTogglePartVectors && (
         <fieldset className="fm-visualization-part-toggles" aria-label="Object target vector visibility">
           <span className="fm-visualization-part-toggles__label">Object surfaces</span>

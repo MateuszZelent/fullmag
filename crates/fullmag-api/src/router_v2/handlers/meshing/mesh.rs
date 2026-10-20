@@ -305,12 +305,7 @@ pub async fn get_mesh_active_build(
         effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
         effective_per_object_targets: mesh_workspace.get("effective_per_object_targets").cloned(),
         last_build_summary: mesh_workspace.get("last_build_summary").cloned(),
-        shared_domain_build_report: snapshot
-            .fem_mesh
-            .as_ref()
-            .and_then(|mesh| mesh.build_report.as_ref())
-            .and_then(|report| typed_shared_domain_build_report_from_ir(&snapshot, report))
-            .or_else(|| typed_shared_domain_build_report(&snapshot, mesh_workspace)),
+        shared_domain_build_report: typed_shared_domain_build_report(&snapshot, mesh_workspace),
         mixed_layer_topology_rejection: mixed_layer_topology_rejection(mesh_workspace),
         last_build_error: mesh_workspace
             .get("last_build_error")
@@ -432,6 +427,11 @@ fn typed_shared_domain_build_report(
     snapshot: &SessionStateResponse,
     mesh_workspace: &Value,
 ) -> Option<MeshSharedDomainBuildReportResource> {
+    // An existing current report is authoritative even when projection rejects
+    // it. Older workspace metadata must not hide a conflicting certificate.
+    if let Some(report) = snapshot.fem_mesh.as_ref().and_then(|mesh| mesh.build_report.as_ref()) {
+        return typed_shared_domain_build_report_from_ir(snapshot, report);
+    }
     let value = first_workspace_value(
         mesh_workspace,
         &[
@@ -440,11 +440,12 @@ fn typed_shared_domain_build_report(
             &["shared_domain_report", "shared_domain_build_report"],
         ],
     )?;
-    serde_json::from_value::<fullmag_ir::FemSharedDomainBuildReportIR>(value.clone())
-        .ok()
-        .as_ref()
-        .and_then(|report| typed_shared_domain_build_report_from_ir(snapshot, report))
-        .or_else(|| serde_json::from_value(value).ok())
+    match serde_json::from_value::<fullmag_ir::FemSharedDomainBuildReportIR>(value.clone()) {
+        Ok(report) => typed_shared_domain_build_report_from_ir(snapshot, &report),
+        // Compatibility applies only to a resource-shaped document. A parsed
+        // IR report rejected by its projection must never be reinterpreted.
+        Err(_) => serde_json::from_value(value).ok(),
+    }
 }
 
 fn typed_shared_domain_build_report_from_ir(
@@ -776,13 +777,7 @@ pub async fn get_mesh_shared_domain_report(
         "mesh_pipeline_status": mesh_workspace.get("mesh_pipeline_status").cloned().unwrap_or(Value::Null),
         "last_build_summary": mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null),
     });
-    if let Some(build_report) = snapshot
-        .fem_mesh
-        .as_ref()
-        .and_then(|mesh| mesh.build_report.as_ref())
-        .and_then(|report| typed_shared_domain_build_report_from_ir(&snapshot, report))
-        .or_else(|| typed_shared_domain_build_report(&snapshot, mesh_workspace))
-    {
+    if let Some(build_report) = typed_shared_domain_build_report(&snapshot, mesh_workspace) {
         if let (Some(target), Ok(Value::Object(fields))) =
             (report.as_object_mut(), serde_json::to_value(build_report))
         {
@@ -1528,6 +1523,21 @@ pub async fn get_mesh_quality_gates(
     }))
 }
 
+// Both wire versions must supply the same complete numerical quality evidence.
+// This read view cannot synthesize missing v2 data from generic mesh statistics.
+#[derive(serde::Deserialize)]
+struct MixedCertificateQualityView {
+    schema_version: String,
+    certificate_status: String,
+    topology_fingerprint_version: String,
+    topology_fingerprint: String,
+    deterministic_inputs: BTreeMap<String, Value>,
+    cell_family_counts_by_part: BTreeMap<String, BTreeMap<String, u64>>,
+    scaled_jacobian_p05_by_family: BTreeMap<String, f64>,
+    jacobian_minima_m3_by_family: BTreeMap<String, f64>,
+    quality_metric: String,
+}
+
 fn mixed_certificate_quality_evidence(
     snapshot: &SessionStateResponse,
 ) -> MeshMixedCertificateQualityEvidenceResource {
@@ -1542,11 +1552,7 @@ fn mixed_certificate_quality_evidence(
     };
     let mesh_ir = periodic_mesh_ir(mesh);
     let mut topology_fingerprint = mesh_ir.topology_fingerprint_v6();
-    let Some(certificate) = mesh
-        .build_report
-        .as_ref()
-        .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
-    else {
+    let Some(report) = mesh.build_report.as_ref() else {
         return mixed_certificate_quality_unavailable(
             snapshot.mesh_revision,
             Some(topology_fingerprint),
@@ -1554,6 +1560,40 @@ fn mixed_certificate_quality_evidence(
             MeshMixedCertificateQualityEvidenceStatus::Unavailable,
             "accepted mixed-layer topology certificate is unavailable",
         );
+    };
+    let (serialized, validation) = match (
+        report.mixed_layer_topology_certificate.as_ref(),
+        report.mixed_layer_topology_certificate_v2.as_ref(),
+    ) {
+        (Some(certificate), None) => (
+            serde_json::to_value(certificate),
+            fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&mesh_ir, certificate),
+        ),
+        (None, Some(certificate)) => (
+            serde_json::to_value(certificate),
+            fullmag_ir::validate_mixed_layer_topology_certificate_v2_against_mesh(&mesh_ir, certificate),
+        ),
+        (None, None) => return mixed_certificate_quality_unavailable(
+            snapshot.mesh_revision, Some(topology_fingerprint), None,
+            MeshMixedCertificateQualityEvidenceStatus::Unavailable,
+            "accepted mixed-layer topology certificate is unavailable",
+        ),
+        (Some(_), Some(_)) => return mixed_certificate_quality_unavailable(
+            snapshot.mesh_revision, Some(topology_fingerprint), None,
+            MeshMixedCertificateQualityEvidenceStatus::Rejected,
+            "mixed-layer certificate versions conflict",
+        ),
+    };
+    let certificate: MixedCertificateQualityView = match serialized
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
+    {
+        Some(certificate) => certificate,
+        None => return mixed_certificate_quality_unavailable(
+            snapshot.mesh_revision, Some(topology_fingerprint), None,
+            MeshMixedCertificateQualityEvidenceStatus::Rejected,
+            "mixed certificate common quality evidence is incomplete",
+        ),
     };
     let certificate_fingerprint = certificate.topology_fingerprint.clone();
     let certificate_schema_version = Some(certificate.schema_version.clone());
@@ -1589,9 +1629,7 @@ fn mixed_certificate_quality_evidence(
             family_gates: Vec::new(),
         };
     }
-    if let Err(reasons) =
-        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&mesh_ir, certificate)
-    {
+    if let Err(reasons) = validation {
         return MeshMixedCertificateQualityEvidenceResource {
             status: MeshMixedCertificateQualityEvidenceStatus::Rejected,
             mesh_revision: snapshot.mesh_revision,
@@ -2084,6 +2122,9 @@ pub async fn get_mesh_shared_domain_manifest(
                 mixed_layer_topology_certificate: topology_truth
                     .as_ref()
                     .and_then(|truth| truth.mixed_layer_topology_certificate.clone()),
+                mixed_layer_topology_certificate_v2: topology_truth
+                    .as_ref()
+                    .and_then(|truth| truth.mixed_layer_topology_certificate_v2.clone()),
                 mixed_topology_provenance: topology_truth
                     .as_ref()
                     .and_then(|truth| truth.mixed_topology_provenance.clone()),
@@ -2169,6 +2210,28 @@ fn mesh_part_family_counts(
     mesh: &FemMeshPayload,
     part: &FemMeshPartPayload,
 ) -> BTreeMap<String, u64> {
+    if let Some(certificate) = mesh.build_report.as_ref()
+        .and_then(|report| report.mixed_layer_topology_certificate_v2.as_ref())
+    {
+        if let Some(object_id) = part.object_id.as_ref() {
+            return certificate.magnetic_regions.iter()
+                .find(|region| &region.object_id == object_id)
+                .map(|region| region.cell_family_counts.clone())
+                .unwrap_or_default();
+        }
+        if part.role == "air" || part.id == "airbox" {
+            let mut counts = BTreeMap::new();
+            for source_part in ["transition_air", "far_air"] {
+                if let Some(families) = certificate.cell_family_counts_by_part.get(source_part) {
+                    for (family, count) in families {
+                        *counts.entry(family.clone()).or_default() += count;
+                    }
+                }
+            }
+            return counts;
+        }
+        return BTreeMap::new();
+    }
     let Some(certificate) = mesh
         .build_report
         .as_ref()

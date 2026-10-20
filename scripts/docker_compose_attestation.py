@@ -2,8 +2,15 @@
 import re
 
 
-def service_network(document, project, *, hostname=None):
-    name = project + "_fullmag"
+def _expected_network_name(project, network_name):
+    name = network_name or project + "_fullmag"
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name):
+        raise ValueError("Fullmag network name is invalid")
+    return name
+
+
+def service_network(document, project, *, hostname=None, network_name=None):
+    name = _expected_network_name(project, network_name)
     networks = document.get("NetworkSettings", {}).get("Networks") or {}
     if (document.get("HostConfig", {}).get("NetworkMode") != name
             or set(networks) != {name}):
@@ -16,10 +23,11 @@ def service_network(document, project, *, hostname=None):
     return network_id
 
 
-def network_owner(document, project, network_id):
+def network_owner(document, project, network_id, *, network_name=None):
+    name = _expected_network_name(project, network_name)
     labels = document.get("Labels") or {}
     if (document.get("Id") != network_id
-            or document.get("Name") != project + "_fullmag"
+            or document.get("Name") != name
             or document.get("Driver") != "bridge"
             or document.get("Scope") != "local"
             or document.get("Ingress") is True

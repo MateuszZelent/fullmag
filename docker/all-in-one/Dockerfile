@@ -9,6 +9,8 @@ COPY windows_folder_probe.py /opt/fullmag/windows_folder_probe.py
 COPY runtime_service.py /opt/fullmag/runtime_service.py
 COPY frontend_dev.py /opt/fullmag/frontend_dev.py
 COPY healthcheck.py /opt/fullmag/healthcheck.py
+COPY docker_startup_script.py /opt/fullmag/docker_startup_script.py
+COPY fullmag_storage.py /opt/fullmag/fullmag_storage.py
 # The pinned builder already prepared pnpm 10.8.1. Publish that immutable tool
 # for the unprivileged frontend instead of extracting it into Windows per run.
 RUN mkdir -p /opt/fullmag/tooling && \
@@ -60,5 +62,5 @@ WORKDIR /state
 USER 65532:65532
 EXPOSE 8080 8081
 ENTRYPOINT ["/usr/local/bin/python3", "/opt/fullmag/entrypoint.py"]
-HEALTHCHECK --interval=5s --timeout=5s --start-period=30s --retries=6 \
+HEALTHCHECK --interval=5s --timeout=10s --start-period=390s --retries=6 \
     CMD /usr/local/bin/python3 /opt/fullmag/healthcheck.py

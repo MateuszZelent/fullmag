@@ -4,7 +4,7 @@ type SpectrumPayloadManifest = Pick<AntennaSourceSpectrumResource,
   "amplitude_count" | "amplitude_unit" | "component" | "component_labels" |
   "k_u_count" | "k_v_count" | "normalization" | "payloads" | "power_count" |
   "quantity" | "wave_vector_unit"
->;
+> & Partial<Pick<AntennaSourceSpectrumResource, "schema_version" | "equilibrium_binding">>;
 
 export interface AntennaSpectrumPayloadByteLengths {
   payloads: Record<AntennaSpectrumPayloadKind, number>;
@@ -32,7 +32,12 @@ export function antennaSpectrumPayloadByteLengths(
   const u = positiveCount(spectrum.k_u_count, "k_u count");
   const v = positiveCount(spectrum.k_v_count, "k_v count");
   const cells = safeProduct(u, v, "k-grid count");
-  const labels = spectrum.component === "vector_power" ? ["x", "y", "z"]
+  const transverse = spectrum.component === "transverse";
+  if (transverse && (spectrum.schema_version !== "antenna_source_spectrum_artifact.v3" ||
+      spectrum.equilibrium_binding?.schema_version !== "antenna_equilibrium_binding.v1")) {
+    throw new Error("Transverse spectrum requires its v3 equilibrium binding.");
+  }
+  const labels = spectrum.component === "vector_power" || transverse ? ["x", "y", "z"]
     : ["x", "y", "z", "u", "v", "normal"].includes(spectrum.component)
       ? [spectrum.component] : null;
   if (spectrum.quantity !== "H_ant_source_spectrum" || !labels ||

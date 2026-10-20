@@ -87,7 +87,7 @@ function invalidateSceneResource(
 }
 
 export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
-  const { api, authoringHistory, commands, resources } = useKernel();
+  const { api, authoringHistory, commands, resources, selection: selectionController } = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const scene = useSceneResource();
   const model = resolveAntennaObjectPanelModel(selection, scene.data);
@@ -375,6 +375,12 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
         badge={model.mode === "canonical" ? "Regional drive" : model.mode === "legacy" ? "Migration required" : "unassigned"}
       >
         {model.mode === "legacy" ? <FeedbackBanner kind="warning" message="Deprecated prescribed_zeeman_mask source. Saving migrates it atomically to RegionalFieldDrive." /> : null}
+        <p>Explicit prescribed regional magnetic field. Conductor current and antenna Oersted fields require their separate solve and drive configuration.</p>
+        {model.mode === "missing" ? <Button type="button" disabled={scene.status !== "ready" || !sessionScopeKey || !scene.data?.objects?.some(object => object.id === model.objectId)} onClick={() => {
+          const nodeId = `model:physics:field-drive:draft:${encodeURIComponent(model.objectId)}`;
+          selectionController.set({ kind: "physics.field-drive", label: "New regional field drive", nodeId, objectId: null,
+            ref: { type: "physics-field-drive", kind: "physics.field-drive", nodeId, draft: true, sourceObjectId: model.objectId } }, "inspector");
+        }}>Create regional field drive</Button> : null}
         <FieldRow label="Object" value={model.objectId} />
         <FieldRow label="Source" value={model.source} />
         <FieldRow label="Amplitude" value={model.amplitude} />

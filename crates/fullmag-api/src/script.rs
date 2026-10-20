@@ -3,7 +3,7 @@
 use crate::error::ApiError;
 use crate::types::*;
 use fullmag_authoring::{
-    scene_document_problem_projection, scene_document_to_script_builder, SceneDocument,
+    scene_document_problem_projection, scene_document_to_script_builder, SceneDocument, StudyPlan,
     ScriptBuilderState,
 };
 use serde_json::Value;
@@ -622,6 +622,105 @@ pub(crate) fn scene_document_to_authored_problem_ir(
     )
 }
 
+/// Capture the immutable ProblemIR inputs for a canonical StudyPlan.
+///
+/// A live v2 accepted run must preserve the authored stage identity and its
+/// physical study kind.  The legacy `scene_document_to_problem_ir` helper is
+/// intentionally narrower and rejects FEM; accepted execution therefore uses
+/// the prepared stage materializer, then binds each authored stage through the
+/// application Study materializer. Geometry/lead assets are materialized only
+/// for this accepted-execution boundary; no profile or host capability is
+/// inferred here.
+pub(crate) fn scene_document_to_study_execution_inputs(
+    repo_root: &Path,
+    workspace_root: &Path,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    study: &StudyPlan,
+) -> Result<Vec<fullmag_application::StudyStepExecutionInput>, ApiError> {
+    scene_document_to_study_execution_inputs_with_asset_root(
+        repo_root,
+        workspace_root,
+        None,
+        scene_document,
+        requested_execution,
+        study,
+    )
+}
+
+/// As above, but allow a trusted startup caller to resolve relative imported
+/// assets from the immutable script's parent while keeping generated files in
+/// the writable workspace root. `None` preserves the existing workspace-root
+/// fallback for callers that do not have a script source root.
+pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    study: &StudyPlan,
+) -> Result<Vec<fullmag_application::StudyStepExecutionInput>, ApiError> {
+    requested_execution
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let stages = scene_document_to_prepared_stages_with_asset_root(
+        repo_root,
+        workspace_root,
+        asset_root,
+        scene_document,
+        requested_execution,
+    )?;
+    let enabled_steps = study.steps.iter().filter(|step| step.enabled);
+    enabled_steps
+        .map(|step| {
+            let matches = stages
+                .iter()
+                .filter(|stage| stage.action.is_none())
+                .filter(|stage| {
+                    stage
+                        .provenance
+                        .as_ref()
+                        .is_some_and(|provenance| provenance.authored_step_id == step.step_id)
+                })
+                .collect::<Vec<_>>();
+            let stage = if matches.len() == 1 {
+                matches[0]
+            } else if stages.len() == 1 && matches.is_empty() {
+                // A flat scene has no authored stage provenance.  Its one
+                // solver input is still the canonical source for the one-step
+                // StudyPlan projection.
+                stages.first().ok_or_else(|| {
+                    ApiError::unprocessable(
+                        "accepted study execution has no authored solver stage",
+                    )
+                })?
+            } else if matches.is_empty() {
+                return Err(ApiError::unprocessable(format!(
+                    "accepted study step `{}` has no authored solver stage",
+                    step.step_id
+                )));
+            } else {
+                return Err(ApiError::unprocessable(format!(
+                    "accepted study step `{}` expands to multiple solver stages",
+                    step.step_id
+                )));
+            };
+            stage.ir.validate().map_err(|errors| {
+                ApiError::unprocessable(format!(
+                    "accepted study step `{}` produced invalid ProblemIR: {}",
+                    step.step_id,
+                    errors.join("; ")
+                ))
+            })?;
+            Ok(fullmag_application::StudyStepExecutionInput {
+                step_id: step.step_id.clone(),
+                problem: stage.ir.clone(),
+                layers: scene_document.study.execution_layers.clone(),
+            })
+        })
+        .collect()
+}
+
 /// Capture actual authored stage IR/actions through the same Python helper as
 /// script execution. This does not bind profiles or create execution readiness.
 pub(crate) fn scene_document_to_authored_script_config(
@@ -654,6 +753,29 @@ pub(crate) fn scene_document_to_authored_stages(
         scene_document,
         requested_execution,
     )?;
+    materialize_scene_document_stages(config)
+}
+
+fn scene_document_to_prepared_stages_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<Vec<fullmag_application::script_stage_contract::ResolvedScriptStage>, ApiError> {
+    let config = scene_document_to_prepared_script_config_with_asset_root(
+        repo_root,
+        workspace_root,
+        asset_root,
+        scene_document,
+        requested_execution,
+    )?;
+    materialize_scene_document_stages(config)
+}
+
+fn materialize_scene_document_stages(
+    config: fullmag_application::script_stage_contract::ScriptExecutionConfig,
+) -> Result<Vec<fullmag_application::script_stage_contract::ResolvedScriptStage>, ApiError> {
     fullmag_application::script_stage_materialization::materialize_script_stages_with_output_policy_bounded(
         config,
         fullmag_ir::configure_project_autosave_policy,
@@ -675,9 +797,28 @@ pub(crate) fn scene_document_to_prepared_script_config(
     scene_document: &SceneDocument,
     requested_execution: &fullmag_application::RequestedExecution,
 ) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
-    capture_authored_scene(
+    scene_document_to_prepared_script_config_with_asset_root(
         repo_root,
         workspace_root,
+        None,
+        scene_document,
+        requested_execution,
+    )
+}
+
+/// Prepared execution capture with an optional trusted source root. The
+/// workspace root remains the destination for the temporary SceneDocument.
+pub(crate) fn scene_document_to_prepared_script_config_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
+    capture_authored_scene_with_asset_root(
+        repo_root,
+        workspace_root,
+        asset_root,
         scene_document,
         requested_execution,
         SceneCaptureKind::PreparedExecutionConfig,
@@ -720,6 +861,24 @@ fn capture_authored_scene<T: serde::de::DeserializeOwned>(
     requested_execution: &fullmag_application::RequestedExecution,
     kind: SceneCaptureKind,
 ) -> Result<T, ApiError> {
+    capture_authored_scene_with_asset_root(
+        repo_root,
+        workspace_root,
+        None,
+        scene_document,
+        requested_execution,
+        kind,
+    )
+}
+
+fn capture_authored_scene_with_asset_root<T: serde::de::DeserializeOwned>(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    kind: SceneCaptureKind,
+) -> Result<T, ApiError> {
     requested_execution
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
@@ -756,7 +915,7 @@ fn capture_authored_scene<T: serde::de::DeserializeOwned>(
         "--mode".to_string(),
         requested_execution.mode.clone(),
         "--asset-root".to_string(),
-        workspace_root.display().to_string(),
+        asset_root.unwrap_or(workspace_root).display().to_string(),
     ];
     kind.append_preparation_args(&mut helper_args);
     let output = run_python_helper(repo_root, &helper_args);
@@ -1159,6 +1318,200 @@ mod tests {
                 prepared,
             );
         }
+    }
+
+    #[test]
+    fn accepted_fem_execution_materializes_shared_mesh_asset() {
+        let root = repo_root();
+        let workspace = tempfile::tempdir().expect("create accepted execution workspace");
+        let source_path = workspace
+            .path()
+            .join("fem_capture_without_prebuilt_mesh.py");
+        std::fs::write(
+            &source_path,
+            r#"import fullmag as fm
+
+study = fm.study("accepted_fem_geometry_capture")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="auto", size=(160e-9, 120e-9, 80e-9),
+               center=(0.0, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
+study.universe.mesh(maximum_element_size=80e-9)
+body = study.geometry(fm.Box(120e-9, 80e-9, 20e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.5
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+body.mesh(maximum_element_size=40e-9, order=1)
+study.build_domain_mesh()
+study.demag(enabled=False)
+study.solver(dt=1e-13)
+study.relax(algorithm="projected_gradient_bb", max_steps=4, tolA=1e-30)
+"#,
+        )
+        .expect("write FEM capture fixture");
+        let scene = load_scene_document_state(&root, workspace.path(), &source_path)
+            .expect("export FEM capture SceneDocument through Python");
+        assert_eq!(scene.study.requested_backend, "fem");
+        assert_eq!(scene.study.requested_device, "cpu");
+        let defaults = fullmag_authoring::StudyPlanMigrationDefaults {
+            model: fullmag_authoring::StudyModelReference {
+                model_id: "model:accepted-geometry-regression".into(),
+                version: "1".into(),
+            },
+            solver_config: fullmag_authoring::StudySolverConfigReference {
+                preset_id: "solver:accepted-geometry-regression".into(),
+                version: "1".into(),
+            },
+            discretization: fullmag_authoring::StudyDiscretizationReference {
+                recipe_id: "mesh:accepted-geometry-regression".into(),
+                version: "1".into(),
+            },
+            execution_profile: fullmag_authoring::StudyExecutionProfileReference {
+                profile_id: "exec:accepted-geometry-regression".into(),
+                version: "1".into(),
+            },
+        };
+        let study = fullmag_authoring::scene_document_to_study_plan(
+            &scene,
+            "study:accepted-geometry-regression".to_owned(),
+            scene.revision,
+            &defaults,
+        )
+        .expect("project FEM SceneDocument to StudyPlan");
+        let requested_execution = fullmag_application::RequestedExecution {
+            backend: "fem".into(),
+            device: "cpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+            minimum_resources: None,
+        };
+
+        let inputs = scene_document_to_study_execution_inputs(
+            &root,
+            workspace.path(),
+            &scene,
+            &requested_execution,
+            &study,
+        )
+        .expect("accepted FEM execution should materialize prepared stage inputs");
+        assert!(
+            !inputs.is_empty(),
+            "FEM capture StudyPlan should have a solver step"
+        );
+        assert!(
+            inputs.iter().all(|input| input
+                .problem
+                .geometry_assets
+                .as_ref()
+                .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+                .is_some()),
+            "accepted execution must materialize the shared FEM mesh asset"
+        );
+    }
+
+    #[test]
+    fn accepted_fem_preparation_resolves_imported_asset_from_source_root() {
+        let root = repo_root();
+        let source_root = tempfile::tempdir().expect("create immutable source root");
+        let workspace = tempfile::tempdir().expect("create writable preparation workspace");
+        assert_ne!(source_root.path(), workspace.path());
+
+        std::fs::write(
+            source_root.path().join("shape.stl"),
+            r#"solid shape
+facet normal 0 0 -1
+  outer loop
+    vertex 0 0 0
+    vertex 0 10 0
+    vertex 10 0 0
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 0 0 0
+    vertex 10 0 0
+    vertex 0 0 10
+  endloop
+endfacet
+facet normal -1 0 0
+  outer loop
+    vertex 0 0 0
+    vertex 0 0 10
+    vertex 0 10 0
+  endloop
+endfacet
+facet normal 1 1 1
+  outer loop
+    vertex 10 0 0
+    vertex 0 10 0
+    vertex 0 0 10
+  endloop
+endfacet
+endsolid shape
+"#,
+        )
+        .expect("write relative FEM STL fixture");
+        let source_path = source_root.path().join("imported_fem.py");
+        std::fs::write(
+            &source_path,
+            r#"import fullmag as fm
+
+study = fm.study("accepted_fem_relative_asset")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="auto", size=(40e-9, 40e-9, 40e-9),
+               center=(0.0, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
+study.universe.mesh(maximum_element_size=8e-9)
+body = study.geometry(
+    fm.ImportedGeometry(source="shape.stl", name="shape", units="nm"),
+    name="shape",
+)
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.5
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+body.mesh(maximum_element_size=4e-9, order=1)
+study.build_domain_mesh()
+study.demag(enabled=False)
+study.solver(dt=1e-13)
+study.relax(algorithm="projected_gradient_bb", max_steps=1, tolA=1e-30)
+"#,
+        )
+        .expect("write relative FEM source fixture");
+
+        let scene = load_scene_document_state(&root, workspace.path(), &source_path)
+            .expect("export imported FEM SceneDocument through Python");
+        let requested_execution = fullmag_application::RequestedExecution {
+            backend: "fem".into(),
+            device: "cpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+            minimum_resources: None,
+        };
+        let config = scene_document_to_prepared_script_config_with_asset_root(
+            &root,
+            workspace.path(),
+            Some(source_root.path()),
+            &scene,
+            &requested_execution,
+        )
+        .expect("prepared helper should resolve the immutable source root");
+        let root_assets = config
+            .ir
+            .geometry_assets
+            .as_ref()
+            .expect("prepared pipeline config should publish root geometry assets");
+        assert!(
+            root_assets.fem_domain_mesh_asset.is_some(),
+            "prepared config must materialize the imported FEM domain mesh"
+        );
+        assert!(
+            !workspace.path().join("shape.stl").exists(),
+            "the prepared helper must not fall back to the writable workspace root"
+        );
     }
 
     #[tokio::test]

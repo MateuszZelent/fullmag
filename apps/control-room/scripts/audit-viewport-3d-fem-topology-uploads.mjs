@@ -51,6 +51,7 @@ const measurements = [];
 
 try {
   await mkdir(auditArtifactsDirectory, { recursive: true });
+  const resourceFailureGuardProof = await verifyFixtureResourceFailureGuard(browser);
   for (const passConfig of semanticOnly || preCanvasOnly ? [] : PASS_CONFIGS) {
     for (const partCount of FEM_PART_COUNTS) {
       const measurement = await measureFemTopologyUploads({
@@ -80,7 +81,7 @@ try {
   });
   await writeFile(
     path.join(auditArtifactsDirectory, "fem-topology-upload-metrics.json"),
-    `${JSON.stringify({ measurements, preCanvasErrorBoundaryProof, rawPerformanceTrace: measurements.map((measurement) => measurement.rawPerformanceTrace), semanticTargetExplorerProof }, null, 2)}\n`,
+    `${JSON.stringify({ measurements, preCanvasErrorBoundaryProof, resourceFailureGuardProof, rawPerformanceTrace: measurements.map((measurement) => measurement.rawPerformanceTrace), semanticTargetExplorerProof }, null, 2)}\n`,
   );
   console.log("FEM topology upload audit passed:", `measurements=${measurements.length}`);
 } finally {
@@ -155,6 +156,7 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
   ]);
   const selectedNodeIds = new Set();
   const errors = [];
+  const abortedRequests = await installFixtureResourceFailureAudit(page, errors);
   await installFemFixtureApi(page, fixture);
   await page.addInitScript(({ baseUrl }) => {
     window.__FULLMAG_CONFIG__ = {
@@ -326,6 +328,7 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
         `Boundary Faces interaction left WebGL unrenderable: ${JSON.stringify(postInteractionWebgl)}`,
       );
     }
+    await assertNoFixtureResourceFailures(page);
     await page.screenshot({
       path: path.join(
         auditArtifactsDirectory,
@@ -344,6 +347,7 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
       [...selectedNodeIds].sort().join(","),
     );
     return {
+      abortedRequests,
       boundaryFacesExplorerNodeId: "model:boundary-faces",
       boundaryFacesFields,
       boundaryFacesInspectorVisible: true,
@@ -362,6 +366,7 @@ async function measureFemTopologyUploads({ browser, partCount, passConfig, url }
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
   const fixture = createFemTopologyFixture({ partCount, passConfig });
   const errors = [];
+  const abortedRequests = await installFixtureResourceFailureAudit(page, errors);
   await installBrowserAuditInstrumentation(page);
   await installViewportPerformanceProbe(page);
   await installFemFixtureApi(page, fixture);
@@ -405,6 +410,18 @@ async function measureFemTopologyUploads({ browser, partCount, passConfig, url }
       },
     );
     const diagnostics = await readViewportDiagnostics(page);
+    await assertNoFixtureResourceFailures(page);
+    const webgl = await canvas.evaluate((element) => {
+      const gl = element.getContext("webgl2") ?? element.getContext("webgl");
+      return {
+        contextLost: gl?.isContextLost() ?? true,
+        drawingBufferHeight: gl?.drawingBufferHeight ?? 0,
+        drawingBufferWidth: gl?.drawingBufferWidth ?? 0,
+      };
+    });
+    if (webgl.contextLost || webgl.drawingBufferHeight <= 0 || webgl.drawingBufferWidth <= 0) {
+      throw new Error(`FEM ${passConfig.id} fixture WebGL is not renderable: ${JSON.stringify(webgl)}`);
+    }
     const gpu = await readBrowserAuditCounters(page);
     const rawPerformanceTrace = [
       await captureViewportPerformanceSnapshot(page, `${passConfig.id}:parts=${partCount}`),
@@ -424,12 +441,14 @@ async function measureFemTopologyUploads({ browser, partCount, passConfig, url }
       throw new Error(`FEM browser fixture emitted errors:\n${errors.join("\n")}`);
     }
     return {
+      abortedRequests,
       expectedPositionBytes: fixture.expectedPositionBytes,
       diagnostics,
       gpu,
       partCount,
       pass: passConfig.id,
       rawPerformanceTrace,
+      webgl,
     };
   } finally {
     await page.close();
@@ -858,6 +877,105 @@ function makeFemTopologyBuffer(partCount) {
   return buffer;
 }
 
+async function verifyFixtureResourceFailureGuard(browser) {
+  const page = await browser.newPage();
+  const errors = [];
+  await installFixtureResourceFailureAudit(page, errors);
+  try {
+    await page.goto("data:text/html,<html><body></body></html>");
+    await assertNoRecordedFixtureResourceFailures(page);
+    await page.evaluate(() => {
+      // Match NotificationsView's rendered output, independently of the real
+      // measurement pages; never clear their recorded failures.
+      const notification = document.createElement("output");
+      notification.className = "fm-notifications__toast";
+      notification.setAttribute("data-kind", "error");
+      const title = document.createElement("strong");
+      title.textContent = "Resource load failed";
+      const detail = document.createElement("span");
+      detail.textContent = "Injected guard control. Log resource:load-failed resource-hook.";
+      notification.append(title, detail);
+      document.body.appendChild(notification);
+    });
+    await page.locator('output.fm-notifications__toast[data-kind="error"]').waitFor({ state: "visible" });
+    await page.waitForFunction(() => window.__FM_FEM_AUDIT_RESOURCE_FAILURES__?.length === 1);
+    const assertRejected = async () => {
+      try {
+        await assertNoRecordedFixtureResourceFailures(page);
+      } catch (error) {
+        if (String(error).includes("Injected guard control")) return;
+        throw error;
+      }
+      throw new Error("Fixture resource failure guard accepted the injected notification.");
+    };
+    await assertRejected();
+    await page.locator("output.fm-notifications__toast").evaluate((notification) => notification.remove());
+    await assertRejected();
+    if (errors.length) throw new Error(`Resource failure guard control emitted API errors: ${errors.join("\n")}`);
+    return { detectedNotificationCount: 1, rejectedWhileVisible: true, retainedAfterRemoval: true };
+  } finally {
+    await page.close();
+  }
+}
+
+async function installFixtureResourceFailureAudit(page, errors) {
+  const abortedRequests = [];
+  page.on("response", (response) => {
+    if (new URL(response.url()).pathname.startsWith("/v2/") && response.status() >= 400) {
+      errors.push(`API HTTP ${response.status()}: ${response.url()}`);
+    }
+  });
+  page.on("requestfailed", (request) => {
+    if (new URL(request.url()).pathname.startsWith("/v2/")) {
+      const failure = request.failure()?.errorText;
+      // Resource scopes cancel obsolete reads during semantic selection.
+      if (failure === "net::ERR_ABORTED") {
+        if (abortedRequests.length < 16) abortedRequests.push(request.url());
+        return;
+      }
+      errors.push(`API request failed: ${request.url()}: ${failure}`);
+    }
+  });
+  await page.addInitScript(() => {
+    // Keep failures after a toast disappears; inspecting only the final frame
+    // could miss a broken catalog that failed earlier during startup.
+    const failures = [];
+    window.__FM_FEM_AUDIT_RESOURCE_FAILURES__ = failures;
+    new MutationObserver(() => {
+      for (const toast of document.querySelectorAll("output.fm-notifications__toast")) {
+        const text = toast.textContent ?? "";
+        const failed = toast.getAttribute("data-kind") === "error" || text.includes("resource:load-failed");
+        if (failed && !failures.includes(text) && failures.length < 16) {
+          failures.push(text);
+        }
+      }
+    }).observe(document, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-kind"] });
+  });
+  return abortedRequests;
+}
+
+async function assertNoFixtureResourceFailures(page) {
+  await waitForCondition(
+    () => page.evaluate(() => ["fields", "quantities"].every((name) => {
+      const catalog = window.__FULLMAG_CONTROL_ROOM_AUDIT__?.readViewportAuditResource(
+        `/v2/sessions/current/data/${name}`,
+      );
+      return catalog?.status === "ready" && Array.isArray(catalog.data?.quantities) && catalog.data.quantities.length === 0;
+    })),
+    15_000,
+    "FEM fixture did not load its canonical empty field and quantity catalogs.",
+  );
+  await assertNoRecordedFixtureResourceFailures(page);
+}
+
+async function assertNoRecordedFixtureResourceFailures(page) {
+  const failures = await page.evaluate(() => window.__FM_FEM_AUDIT_RESOURCE_FAILURES__);
+  if (!Array.isArray(failures)) throw new Error("Fixture resource failure observer was not installed.");
+  if (failures.length > 0) {
+    throw new Error(`FEM fixture emitted resource-load-failed notifications:\n${failures.join("\n")}`);
+  }
+}
+
 async function installFemFixtureApi(page, fixture) {
   await page.route("**/v2/**", async (route) => {
     const request = route.request();
@@ -889,6 +1007,49 @@ async function installFemFixtureApi(page, fixture) {
     }
     if (requestPath === "/v2/sessions/current/status") return fulfillJson(route, femStatusFixture());
     if (requestPath === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualizationState);
+    if (requestPath === "/v2/sessions/current/visualization/mode-compositions/active") {
+      return fulfillJson(route, {
+        artifact_revision: "",
+        composition_id: "active",
+        layers: [],
+        lifecycle: {
+          artifact_revision: 0,
+          mesh_revision: fixture.manifest.revision,
+          run_id: null,
+          session_id: "fem-topology-upload-fixture",
+        },
+        phase_clock: { master_rate_hz: 1, synchronized: true },
+        revision: 0,
+        run_id: "",
+        schema_version: "mode-composition.v1",
+        stage_id: "",
+      });
+    }
+    if (requestPath === "/v2/sessions/current/model/readiness") {
+      const reason = "Topology-only fixture has no authored simulation study.";
+      return fulfillJson(route, {
+        blockers: [reason],
+        capabilities: {
+          move: { available: false, reason },
+          rotate: { available: false, reason },
+          scale: { available: false, reason },
+        },
+        checks: [{ id: "study", label: "Study", state: "blocked", reason, target_resource: "model/study" }],
+        ready_to_export: false,
+        ready_to_run: false,
+        scene_revision: fixture.scene.revision,
+      });
+    }
+    if (requestPath === "/v2/sessions/current/data/fields") {
+      return fulfillJson(route, {
+        domain_generation_id: fixture.manifest.generation_id,
+        quantities: [],
+        revision: 1,
+      });
+    }
+    if (requestPath === "/v2/sessions/current/data/quantities") {
+      return fulfillJson(route, { quantities: [], schema_version: "2.0.0" });
+    }
     if (requestPath === "/v2/sessions/current/data/domain/meta") return fulfillJson(route, fixture.domainMeta ?? femDomainMetaFixture());
     if (requestPath === "/v2/sessions/current/data/domain/topology") return fulfillTopology(route, fixture.topology);
     if (requestPath === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") return fulfillJson(route, fixture.manifest);
@@ -971,7 +1132,19 @@ async function installBrowserAuditInstrumentation(page) {
 }
 
 async function waitForViewportDiagnostics(page) {
-  await page.waitForFunction(() => Array.from(document.querySelectorAll(".fm-viewport-3d__hud span")).some((node) => node.textContent?.includes("geo:")), undefined, { timeout: 20_000 });
+  const trigger = page.locator(".fm-viewport-3d").getByRole("button", { name: "Render details", exact: true });
+  if (await trigger.getAttribute("aria-expanded") !== "true") {
+    await trigger.click();
+  }
+  // Render diagnostics is portalled outside the viewport HUD.
+  const details = page.getByRole("dialog", { name: "Render diagnostics", exact: true });
+  await details.waitFor({ state: "visible", timeout: 20_000 });
+  await waitForCondition(
+    async () => (await details.textContent())?.includes("geo:"),
+    20_000,
+    "Timed out waiting for viewport render diagnostics.",
+  );
+  return details;
 }
 
 async function readBrowserAuditCounters(page) {
@@ -979,9 +1152,8 @@ async function readBrowserAuditCounters(page) {
 }
 
 async function readViewportDiagnostics(page) {
-  const raw = await page.locator(".fm-viewport-3d__hud span").evaluateAll((nodes) =>
-    nodes.find((node) => node.textContent?.includes("geo:"))?.textContent ?? "",
-  );
+  const details = await waitForViewportDiagnostics(page);
+  const raw = await details.textContent() ?? "";
   const match = raw.match(/(?:^|\s)geo:(\d+)/);
   return { geo: Number(match?.[1] ?? 0), raw };
 }

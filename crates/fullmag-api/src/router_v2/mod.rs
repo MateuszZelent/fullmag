@@ -35,6 +35,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::platform::compute_nodes::get_compute_nodes),
         )
         .route(
+            "/v2/platform/compute/queue",
+            get(handlers::platform::compute_queue::get_compute_queue),
+        )
+        .route(
+            "/v2/platform/compute/allocations/:allocation_id",
+            get(handlers::platform::compute_allocations::get_compute_allocation),
+        )
+        .route(
             "/v2/platform/compute/nodes/:node_id",
             get(handlers::platform::compute_nodes::get_compute_node),
         )
@@ -1277,6 +1285,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/tasks/:task_id/cancellation",
             post(handlers::persistence::projects::cancel_run_task),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/tasks/:task_id/retry",
+            post(handlers::persistence::projects::retry_run_task),
         )
         .route(
             "/v2/sessions/current/persistence/recovery",

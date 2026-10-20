@@ -711,6 +711,46 @@ mfem::Mesh conforming_exchange_prism_pyramid_tet()
     return mesh;
 }
 
+mfem::Mesh disconnected_exchange_prism_tet_pyramid_tet()
+{
+    // Two magnetic components use disjoint vertex ranges and are separated
+    // by a positive gap. The last two cells are disconnected air cells. This
+    // is the small native operator fixture for the v2 layer+ring certificate.
+    mfem::Mesh mesh(3, 19, 4, 0, 3);
+    const double vertices[][3] = {
+        {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {0, 1, 1},
+        {3, 0, 0}, {4, 0, 0}, {3, 1, 0}, {3, 0, 1},
+        {6, 0, 0}, {7, 0, 0}, {7, 1, 0}, {6, 1, 0}, {6.5, 0.5, 1},
+        {8, 0, 0}, {9, 0, 0}, {8, 1, 0}, {8, 0, 1},
+    };
+    for (const auto &vertex : vertices) mesh.AddVertex(vertex);
+    const int prism[] = {0, 1, 2, 3, 4, 5};
+    const int tet[] = {6, 7, 8, 9};
+    const int pyramid[] = {10, 11, 12, 13, 14};
+    const int air_tet[] = {15, 16, 17, 18};
+    mesh.AddWedge(prism, 7);
+    mesh.AddTet(tet, 11);
+    mesh.AddPyramid(pyramid, 13);
+    mesh.AddTet(air_tet, 13);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+    return mesh;
+}
+
+void set_vertex_values(
+    mfem::FiniteElementSpace &fes,
+    mfem::GridFunction &field,
+    const std::vector<int> &vertices,
+    double value)
+{
+    for (int vertex : vertices) {
+        mfem::Array<int> dofs;
+        fes.GetVertexDofs(vertex, dofs);
+        check(dofs.Size() == 1, "P1 body fixture must have one DOF per vertex");
+        field[dofs[0]] = value;
+    }
+}
+
 mfem::Mesh independent_all_tet_prism_reference()
 {
     mfem::Mesh mesh(3, 6, 3, 0, 3);
@@ -1268,6 +1308,76 @@ void production_exchange_masks_air_in_conforming_mixed_domain()
     }
     fullmag::fem::context_destroy_mfem(prism_ctx);
     fullmag::fem::context_destroy_mfem(mixed_ctx);
+}
+
+void production_exchange_keeps_disconnected_body_blocks_and_nodal_coefficients()
+{
+    mfem::Mesh mesh = disconnected_exchange_prism_tet_pyramid_tet();
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    mfem::GridFunction a_field(&fes);
+    mfem::GridFunction ms_field(&fes);
+    a_field = 0.0;
+    ms_field = 0.0;
+    set_vertex_values(fes, a_field, {0, 1, 2, 3, 4, 5}, 15.0e-12);
+    set_vertex_values(fes, a_field, {6, 7, 8, 9}, 31.0e-12);
+    set_vertex_values(fes, ms_field, {0, 1, 2, 3, 4, 5}, 1.60e6);
+    set_vertex_values(fes, ms_field, {6, 7, 8, 9}, 1.51e6);
+    mfem::GridFunctionCoefficient a_coeff(&a_field);
+    mfem::GridFunctionCoefficient ms_coeff(&ms_field);
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(mesh.GetNV());
+    ctx.mesh.n_elements = static_cast<uint32_t>(mesh.GetNE());
+    initialize_production_exchange(ctx, mesh, fes, a_coeff, ms_coeff, {1u, 1u, 0u, 0u});
+
+    auto &exchange_form = *ctx.exchange.mfem.exchange_form;
+    const auto &exchange_matrix = exchange_form.SpMat();
+    mfem::Array<int> columns;
+    mfem::Vector values;
+    for (int row = 0; row < 6; ++row) {
+        exchange_matrix.GetRow(row, columns, values);
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            check(
+                columns[entry] < 6,
+                "disconnected magnetic prism rows must not couple to magnetic tet DOFs");
+        }
+    }
+    for (int row = 6; row < 10; ++row) {
+        exchange_matrix.GetRow(row, columns, values);
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            check(
+                columns[entry] >= 6 && columns[entry] < 10,
+                "disconnected magnetic tet rows must not couple to prism DOFs");
+        }
+    }
+
+    mfem::GridFunction bodywise_constant(&fes);
+    bodywise_constant = 0.0;
+    set_vertex_values(fes, bodywise_constant, {0, 1, 2, 3, 4, 5}, 1.0);
+    set_vertex_values(fes, bodywise_constant, {6, 7, 8, 9}, -2.0);
+    check_close(
+        exchange_energy(exchange_form, bodywise_constant),
+        0.0,
+        1.0e-24,
+        "different constant magnetizations in separated bodies must have zero exchange energy");
+
+    mfem::GridFunction tet_only(&fes);
+    tet_only = 0.0;
+    set_vertex_values(fes, tet_only, {6, 7, 8, 9}, 1.0);
+    mfem::Vector tet_residual(fes.GetNDofs());
+    exchange_form.Mult(tet_only, tet_residual);
+    for (int row = 0; row < 6; ++row) {
+        check_close(
+            tet_residual[row],
+            0.0,
+            1.0e-24,
+            "a separated tet body must not induce exchange residual in the prism body");
+    }
+    check(
+        ctx.integration_weights.mfem_lumped_mass[0] > 0.0 &&
+            ctx.integration_weights.mfem_lumped_mass[6] > 0.0,
+        "both magnetic bodies must retain their own Ms-weighted mass rows");
+    fullmag::fem::context_destroy_mfem(ctx);
 }
 
 #if FULLMAG_HAS_CUDA_RUNTIME
@@ -1960,6 +2070,7 @@ int main() {
     failed_exchange_setup_does_not_publish_partial_state();
     production_exchange_supports_each_mixed_p1_cell_family();
     production_exchange_masks_air_in_conforming_mixed_domain();
+    production_exchange_keeps_disconnected_body_blocks_and_nodal_coefficients();
 #if FULLMAG_HAS_CUDA_RUNTIME
     production_mixed_p1_exchange_executes_on_cuda_without_tetrahedral_geometry();
 #endif

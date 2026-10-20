@@ -149,6 +149,130 @@ describe("fdmMeshInspectorModel", () => {
     });
   });
 
+  it("counts active-unassigned cells for the sole declared object owner", () => {
+    const canonical: DecodedFdmRegionMembership = {
+      counts: [2, 3, 4],
+      cellCount: 24,
+      formatVersion: 2,
+      gridFingerprint: "grid-1",
+      legendCount: 0,
+      payloadKind: 2,
+      regionIds: new Uint32Array([
+        0,
+        0,
+        ...new Array(22).fill(FMRM_INACTIVE_REGION_ID),
+      ]),
+      semanticStatus: "canonical",
+    };
+
+    const model = resolveFdmObjectMeshInspectorModel({
+      lane: "fdm",
+      objectId: "object:homogeneous",
+      resources: resources({
+        membership: snapshot(
+          membership({
+            object_ids: ["object:homogeneous"],
+            region_legend: [],
+          }),
+        ),
+        binary: snapshot(canonical),
+      }),
+    });
+
+    expect(model).toMatchObject({
+      status: "ready",
+      participation: "canonical-mask",
+      activeCellCount: 2,
+      inactiveCellCount: 22,
+      metadata: [],
+    });
+  });
+
+  it("fails closed for distinct exact owner IDs with a geometry-like suffix", () => {
+    const canonical: DecodedFdmRegionMembership = {
+      counts: [2, 3, 4],
+      cellCount: 24,
+      formatVersion: 2,
+      gridFingerprint: "grid-1",
+      legendCount: 0,
+      payloadKind: 2,
+      regionIds: new Uint32Array([
+        0,
+        0,
+        ...new Array(22).fill(FMRM_INACTIVE_REGION_ID),
+      ]),
+      semanticStatus: "canonical",
+    };
+
+    const model = resolveFdmObjectMeshInspectorModel({
+      lane: "fdm",
+      objectId: "foo",
+      resources: resources({
+        membership: snapshot(
+          membership({
+            object_ids: ["foo", "foo_geom"],
+            region_legend: [],
+          }),
+        ),
+        binary: snapshot(canonical),
+      }),
+    });
+
+    expect(model).toMatchObject({
+      status: "ready",
+      participation: "canonical-mask",
+      activeCellCount: 0,
+      inactiveCellCount: 22,
+      metadata: [],
+    });
+  });
+
+  it("does not infer active-unassigned ownership from a region legend", () => {
+    const canonical: DecodedFdmRegionMembership = {
+      counts: [2, 3, 4],
+      cellCount: 24,
+      formatVersion: 2,
+      gridFingerprint: "grid-1",
+      legendCount: 1,
+      payloadKind: 2,
+      regionIds: new Uint32Array([
+        0,
+        0,
+        ...new Array(22).fill(FMRM_INACTIVE_REGION_ID),
+      ]),
+      semanticStatus: "canonical",
+    };
+
+    const model = resolveFdmObjectMeshInspectorModel({
+      lane: "fdm",
+      objectId: "object:only",
+      resources: resources({
+        membership: snapshot(
+          membership({
+            object_ids: [],
+            region_legend: [
+              {
+                numeric_id: 7,
+                object_id: "object:only",
+                priority: 0,
+                region_id: "region:only",
+              },
+            ],
+          }),
+        ),
+        binary: snapshot(canonical),
+      }),
+    });
+
+    expect(model).toMatchObject({
+      status: "ready",
+      participation: "canonical-mask",
+      activeCellCount: 0,
+      inactiveCellCount: 22,
+      metadata: [{ numericId: 7, objectId: "object:only" }],
+    });
+  });
+
   it("scopes canonical participation to the selected authored region", () => {
     const canonical: DecodedFdmRegionMembership = {
       counts: [2, 3, 4],

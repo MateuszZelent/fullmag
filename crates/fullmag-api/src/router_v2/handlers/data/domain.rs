@@ -1664,6 +1664,7 @@ fn fdm_grid_descriptor(snapshot: &SessionStateResponse) -> FdmGridLayout {
     get,
     path = "/v2/sessions/current/data/domain/topology",
     params(
+        crate::schemas::fields::ArtifactCarrierGeometryQuery,
         ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous domain topology response"),
         ("Range" = Option<String>, Header, description = "Optional single byte range for chunked FMMT topology reads")
     ),
@@ -1681,8 +1682,54 @@ fn fdm_grid_descriptor(snapshot: &SessionStateResponse) -> FdmGridLayout {
 pub async fn get_domain_topology(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Query(query): Query<crate::schemas::fields::ArtifactCarrierGeometryQuery>,
 ) -> Result<axum::response::Response, ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
+    if let Some(carrier_id)=query.carrier_id.as_deref() {
+        super::inspection_field_provider::require_binary_pins(query.stage_id.as_deref(),
+            Some(carrier_id),query.expected_carrier_revision.as_deref())?;
+        let field=super::inspection_field_provider::geometry_field(&state,carrier_id,query.stage_id.as_deref()).await?;
+        let locator=super::inspection_field_provider::validate_scope(&field,None,None,query.expected_carrier_revision.as_deref(),None)?;
+        let response_field=Arc::clone(&field);
+        let response_state=Arc::clone(&state);
+        let response_headers=headers.clone();
+        let carrier_id=carrier_id.to_owned();
+        let response=tokio::task::spawn_blocking(move || {
+        let state=response_state;
+        let headers=response_headers;
+        let carrier_id=carrier_id.as_str();
+        let super::resolved_spatial_field::SpatialFieldCarrier::ArtifactSamples(carrier)=&response_field.carrier else {return Err(ApiError::internal("artifact geometry carrier mismatch"));};
+        let point_cloud;
+        let mesh=if let Some(mesh)=carrier.topology.as_ref() {mesh} else {
+            // Retained point samples have no cells; no magnetic topology is fabricated.
+            point_cloud=fullmag_runner::FemMeshPayload {mesh_name:carrier_id.into(),mesh_id:carrier_id.into(),nodes:carrier.positions_xyz_m.clone(),
+                cells:fullmag_ir::FemConnectivityIR::empty(),facets:fullmag_ir::FemFacetConnectivityIR::empty(),
+                element_markers:Vec::new(),boundary_markers:Vec::new(),periodic_boundary_pairs:Vec::new(),periodic_node_pairs:Vec::new(),
+                object_segments:Vec::new(),mesh_parts:Vec::new(),domain_mesh_mode:None,domain_frame:None,
+                generation_id:Some(locator.carrier_digest.clone()),per_domain_quality:Default::default(),build_report:None};
+            &point_cloud
+        };
+        let etag=crate::router_v2::handlers::shared::stable_strong_etag(&format!("artifact-topology:{}:{}",carrier_id,locator.carrier_revision));
+        let mut response=crate::router_v2::handlers::shared::conditional_fem_topology_response(&state,&headers,&etag,mesh).map_err(ApiError::conflict)?;
+        crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(&mut response,&locator.carrier_digest);
+        for (name,value) in [("x-fullmag-carrier-id",locator.carrier_id),("x-fullmag-carrier-revision",locator.carrier_revision.to_string()),
+            ("x-fullmag-carrier-digest",locator.carrier_digest),("x-fullmag-coordinate-frame","world".into()),("x-fullmag-coordinate-unit","m".into())] {
+            response.headers_mut().insert(HeaderName::from_static(name),HeaderValue::from_str(&value).map_err(|_|ApiError::conflict("invalid artifact geometry header"))?);
+        }
+        Ok::<_,ApiError>(response)
+        }).await.map_err(|error| ApiError::internal(format!("inspection topology serialization failed: {error}")))??;
+        super::inspection_field_provider::revalidate_owner(&state,&field).await?;
+        crate::validate_current_live_request_context(&state,&request_context).await?;
+        let current=state.current_live_state.read().await;
+        let snapshot=current.as_ref().ok_or_else(||ApiError::conflict("inspection disappeared"))?;
+        crate::ensure_current_live_request_context(snapshot,&request_context,
+            state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
+        super::inspection_field_provider::ensure_observation(snapshot,&field)?;
+        return Ok(response);
+    }
+    if query.expected_carrier_revision.is_some() || query.stage_id.is_some() {
+        return Err(ApiError::bad_request("artifact geometry revision/stage requires carrier_id"));
+    }
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()

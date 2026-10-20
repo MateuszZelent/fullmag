@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { fieldCatalogResourceKey } from "./fieldCatalogScope";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
@@ -2260,19 +2261,21 @@ export function useHysteresisReversalFieldsResource(
 
 export function useFieldCatalogResource({
   enabled = true,
-}: RuntimeResourceOptions = {}) {
+  stageId,
+  runId,
+}: RuntimeResourceOptions & { stageId?: string | null; runId?: string | null } = {}) {
   const { api } = useKernel();
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
-    DATA_FIELDS_PATH,
+    fieldCatalogResourceKey(DATA_FIELDS_PATH, stageId, runId),
   );
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
-      api.data.fields.catalog({ sessionScopeKey, signal }),
-    [api],
+      api.data.fields.catalog({ sessionScopeKey, signal }, stageId == null ? {} : { stage_id: stageId }),
+    [api, stageId],
   );
 
   return useResource<FieldCatalogResource>({
-    enabled: enabled && sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null && (stageId == null || stageId.length > 0),
     load,
     resolveRevision: (data) => data.revision,
     resourceKey,
@@ -2281,21 +2284,23 @@ export function useFieldCatalogResource({
 
 export function useQuantityCatalogResource({
   enabled = true,
-}: RuntimeResourceOptions = {}) {
+  stageId,
+  runId,
+}: RuntimeResourceOptions & { stageId?: string | null; runId?: string | null } = {}) {
   const { api } = useKernel();
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
-    DATA_QUANTITIES_PATH,
+    fieldCatalogResourceKey(DATA_QUANTITIES_PATH, stageId, runId),
   );
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
-      api.data.quantities.catalog({ sessionScopeKey, signal }),
-    [api],
+      api.data.quantities.catalog({ sessionScopeKey, signal }, stageId == null ? {} : { stage_id: stageId }),
+    [api, stageId],
   );
 
   return useResource<QuantityCatalogResource>({
-    enabled: enabled && sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null && (stageId == null || stageId.length > 0),
     load,
-    resolveRevision: (data) => data.schema_version,
+    resolveRevision: (data) => stageId == null ? data.schema_version : JSON.stringify([data.schema_version, data.quantities.map(entry => [entry.id, entry.materialization_state, entry.resolved_capability])]),
     resourceKey,
   });
 }
@@ -2311,6 +2316,9 @@ function fieldMetaQueryEntries(query: FieldMetaQuery): Array<[string, string]> {
       entries.push([key, value]);
     }
   };
+  push("carrier_id");
+  push("expected_carrier_revision");
+  push("view");
   push("component");
   push("owner_object_id");
   push("scope_id");
@@ -2374,6 +2382,10 @@ export function fieldMetaFreshnessRevision(
 
 export function useFieldMetaResource({
   enabled = true,
+  strictErrors = false,
+  carrier_id = null,
+  expected_carrier_revision = null,
+  view = null,
   component = null,
   owner_object_id = null,
   scope_id = null,
@@ -2381,7 +2393,7 @@ export function useFieldMetaResource({
   snapshot_id = null,
   stage_id = null,
   quantityId,
-}: RuntimeResourceOptions & FieldMetaQuery & { quantityId: string }) {
+}: RuntimeResourceOptions & FieldMetaQuery & { quantityId: string; strictErrors?: boolean }) {
   const { api, bus } = useKernel();
   const resolvedQuantityId = useMemo(
     () => normalizeQuantityIdOrDefault(quantityId),
@@ -2389,6 +2401,7 @@ export function useFieldMetaResource({
   );
   const query = useMemo(
     () => ({
+      carrier_id, expected_carrier_revision, view,
       component,
       ...(owner_object_id ? { owner_object_id } : {}),
       scope_id,
@@ -2396,7 +2409,7 @@ export function useFieldMetaResource({
       snapshot_id,
       stage_id,
     }),
-    [component, owner_object_id, scope_id, scope_kind, snapshot_id, stage_id],
+    [carrier_id, expected_carrier_revision, view, component, owner_object_id, scope_id, scope_kind, snapshot_id, stage_id],
   );
   const unscopedResourceKey = useMemo(
     () => resolveFieldMetaResourceKey(resolvedQuantityId, query),
@@ -2410,13 +2423,13 @@ export function useFieldMetaResource({
       api.data.fields
         .meta(resolvedQuantityId, query, { sessionScopeKey, signal })
         .catch((error: unknown) =>
-          ignoreMissingFieldMetaResource<FieldMetaResource>({
+          strictErrors ? Promise.reject(error) : ignoreMissingFieldMetaResource<FieldMetaResource>({
             bus,
             error,
             resourceKey,
           }),
         ),
-    [api, bus, query, resolvedQuantityId, resourceKey],
+    [api, bus, query, resolvedQuantityId, resourceKey, strictErrors],
   );
 
   return useResource<FieldMetaResource | null>({

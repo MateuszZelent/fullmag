@@ -52,6 +52,23 @@ fn native_fem_ffi_plan_carries_precession_mode() {
 }
 
 #[test]
+fn native_fem_mixed_body_certificate_is_lowered_before_backend_create() {
+    let source = include_str!("../../native_fem.rs");
+    assert!(
+        source.contains("pack_native_mixed_body_certificate(plan)?"),
+        "native FEM must lower the planner mixed-body proof from the realized plan"
+    );
+    assert!(
+        source.contains("fullmag_fem_plan_desc_v3"),
+        "native FEM must use the append-only ownership ABI wrapper"
+    );
+    assert!(
+        source.contains("fullmag_fem_backend_create_v4"),
+        "native FEM must pass the ownership proof through create_v4"
+    );
+}
+
+#[test]
 fn native_fem_accepts_periodic_dmi_pairs_in_native_context() {
     let mut plan = make_test_plan();
     plan.interfacial_dmi = Some(1.0e-3);

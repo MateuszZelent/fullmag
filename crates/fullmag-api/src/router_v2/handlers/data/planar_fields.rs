@@ -656,7 +656,11 @@ async fn build_planar_field_from_source(
         .unwrap_or_else(|| "live".to_string());
     drop(guard);
 
-    let component = resolve_component(query.component.as_deref(), n_comp)?;
+    let component = resolve_component(
+        query.component.as_deref(),
+        n_comp,
+        spec.tensor_descriptor().as_ref(),
+    )?;
     let request = ResolvedPlanarSampleRequest {
         frame: frame.clone(),
         operator: operator.clone(),
@@ -670,6 +674,8 @@ async fn build_planar_field_from_source(
     let component_label = query.component.clone().unwrap_or_else(|| {
         if n_comp == 1 {
             "scalar".to_string()
+        } else if spec.tensor_descriptor().is_some() {
+            "frobenius".to_string()
         } else {
             "magnitude".to_string()
         }
@@ -1153,7 +1159,26 @@ fn validate_scope(
     Ok(())
 }
 
-fn resolve_component(component: Option<&str>, n_comp: usize) -> Result<PlanarComponent, ApiError> {
+fn resolve_component(
+    component: Option<&str>,
+    n_comp: usize,
+    tensor: Option<&fullmag_quantities::QuantityTensorDescriptor>,
+) -> Result<PlanarComponent, ApiError> {
+    if tensor.is_some() {
+        use crate::field_projection::ComponentSelection;
+        return match crate::field_projection::parse_quantity_component(
+            component.or(Some("frobenius")),
+            n_comp,
+            tensor,
+        )? {
+            ComponentSelection::Index(index) => Ok(PlanarComponent::Index(index)),
+            ComponentSelection::Frobenius => Ok(PlanarComponent::Frobenius),
+            ComponentSelection::SpinFlow(axis) => Ok(PlanarComponent::SpinFlow(axis)),
+            _ => Err(ApiError::bad_request(
+                "invalid_planar_component: tensor requires cN, frobenius, or spin_flow_x/y/z",
+            )),
+        };
+    }
     if n_comp == 1 {
         return match component.unwrap_or("scalar") {
             "scalar" | "full" => Ok(PlanarComponent::Scalar),

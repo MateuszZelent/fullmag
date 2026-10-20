@@ -55,6 +55,38 @@ describe("ComputeEnvironmentWidget solver routes", () => {
     expect(html).not.toContain('data-availability="available"');
   });
 
+  it("labels experimental diagnostics while retaining unknown production availability", () => {
+    const html = render({
+      ...baseCompute,
+      runtimeLanes: [
+        {
+          backend: "FEM",
+          device: "CPU",
+          availability: "unknown",
+          precisions: [],
+          diagnostic: { kind: "experimental", state: "available" },
+        },
+        {
+          backend: "FEM",
+          device: "GPU",
+          availability: "unknown",
+          precisions: [],
+          diagnostic: {
+            kind: "experimental",
+            state: "unavailable",
+            reason: "Native FEM GPU driver is unavailable",
+          },
+        },
+      ],
+    });
+
+    expect(html).toContain("Experimental");
+    expect(html).toContain("Experimental unavailable");
+    expect(html).toContain("Native FEM GPU driver is unavailable");
+    expect(html).toContain('data-availability="unknown" data-diagnostic-state="available"');
+    expect(html).not.toContain('data-availability="available"');
+  });
+
   it("keeps the initial probe state distinct from a missing runtime report", () => {
     const html = render(undefined);
 

@@ -4,9 +4,13 @@ use anyhow::{bail, Context, Result};
 use crate::process_environment::remove_local_compute_operator_token;
 use fullmag_session::{
     repository_path::checked_path,
+    host_resource_ledger::DockerNamespaceTeardownAttestation,
     runtime_service::{
-        validate_descriptor, RuntimeServiceConfig, RuntimeServiceLaunchGuard,
-        RuntimeServiceOwnerDescriptor, RuntimeServiceState, RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
+        validate_descriptor, RuntimeServiceConfig, RuntimeServiceContainerRecoveryReceipt,
+        RuntimeServiceContainerRecoveryRequest, RuntimeServiceLaunchGuard,
+        RuntimeServiceOwnerDescriptor, RuntimeServiceRecoveryReceipt,
+        RuntimeServiceRecoveryRequest, RuntimeServiceState,
+        RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
     },
 };
 use serde::Deserialize;
@@ -24,6 +28,7 @@ const MAX_RESPONSE: usize = 256 * 1024;
 pub fn initialize_host_application(
     configuration_path: &Path,
     expected_configuration_sha256: &str,
+    application_state_root: &Path,
 ) -> Result<serde_json::Value> {
     if expected_configuration_sha256.len() != 64
         || !expected_configuration_sha256
@@ -39,7 +44,11 @@ pub fn initialize_host_application(
         bail!("host initialization configuration digest differs from the operator pin");
     }
     let store = fullmag_session::SessionStore::open_existing(&candidate.store_root)?;
-    let config = RuntimeServiceConfig::initialize_host_application(&store, &candidate)?;
+    let config = RuntimeServiceConfig::initialize_host_application(
+        &store,
+        &candidate,
+        application_state_root,
+    )?;
     let host = config
         .host_execution
         .as_ref()
@@ -56,6 +65,258 @@ pub fn initialize_host_application(
         "topology_sha256": host.policy.topology_sha256,
         "execution_available": false,
     }))
+}
+
+/// Execute the explicitly authorized recovery of one pinned unknown runtime
+/// owner. The request bytes are hashed before parsing and reread unchanged;
+/// no automatic service start or PID/age takeover is possible here.
+pub fn recover_unknown_empty(
+    configuration_path: &Path,
+    request_path: &Path,
+    expected_request_sha256: &str,
+) -> Result<RuntimeServiceRecoveryReceipt> {
+    if expected_request_sha256.len() != 64
+        || !expected_request_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("service recovery requires a lowercase request SHA-256");
+    }
+    let (candidate, configuration_sha256, configuration_bytes) =
+        read_stable_recovery_configuration(configuration_path)?;
+    let (request, request_sha256) = read_recovery_request(request_path)?;
+    if request_sha256 != expected_request_sha256 {
+        bail!("service recovery request differs from the operator SHA-256 pin");
+    }
+    if request.config_sha256 != configuration_sha256 {
+        bail!("service recovery configuration differs from the request pin");
+    }
+    let (stable_candidate, stable_configuration_sha256, stable_configuration_bytes) =
+        read_stable_recovery_configuration(configuration_path)?;
+    if stable_configuration_sha256 != configuration_sha256
+        || stable_candidate != candidate
+        || stable_configuration_bytes != configuration_bytes
+    {
+        bail!("service recovery configuration changed during admission");
+    }
+    let (stable_request, stable_request_sha256) = read_recovery_request(request_path)?;
+    if stable_request_sha256 != request_sha256 || stable_request != request {
+        bail!("service recovery request changed during admission");
+    }
+    let store = fullmag_session::SessionStore::open_existing(candidate.store_root.clone())?;
+    let executor = fullmag_build_info::identity();
+    fullmag_session::runtime_service::RuntimeServiceConfig::recover_unknown_empty(
+        &store,
+        &candidate,
+        &configuration_bytes,
+        &request,
+        &request_sha256,
+        executor.git_commit,
+        executor.source_snapshot_sha256,
+    )
+}
+
+/// Execute the explicitly authorized recovery of one pinned stopped Docker
+/// namespace. The request and teardown attestation are read through bounded
+/// regular-file guards, reread unchanged, and passed to the native recovery
+/// method without starting an API or retrying Solve.
+pub fn recover_container_empty(
+    configuration_path: &Path,
+    request_path: &Path,
+    expected_request_sha256: &str,
+    attestation_path: &Path,
+    expected_attestation_sha256: &str,
+) -> Result<RuntimeServiceContainerRecoveryReceipt> {
+    if expected_request_sha256.len() != 64
+        || !expected_request_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("container recovery requires a lowercase request SHA-256");
+    }
+    if expected_attestation_sha256.len() != 64
+        || !expected_attestation_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("container recovery requires a lowercase attestation SHA-256");
+    }
+    let (configuration_bytes, configuration_sha256) =
+        read_stable_container_recovery_document(
+            configuration_path,
+            64 * 1024,
+            "container recovery configuration",
+        )?;
+    let (request_bytes, request_sha256) = read_stable_container_recovery_document(
+        request_path,
+        256 * 1024,
+        "container recovery request",
+    )?;
+    let (attestation_bytes, _) = read_stable_container_recovery_document(
+        attestation_path,
+        256 * 1024,
+        "container recovery attestation",
+    )?;
+    if request_sha256 != expected_request_sha256 {
+        bail!("container recovery request differs from the operator SHA-256 pin");
+    }
+    let candidate: RuntimeServiceConfig = serde_json::from_slice(&configuration_bytes)
+        .context("parse container recovery configuration")?;
+    candidate.validate()?;
+    let request: RuntimeServiceContainerRecoveryRequest =
+        serde_json::from_slice(&request_bytes).context("parse container recovery request")?;
+    request.validate()?;
+    if request.config_sha256 != configuration_sha256 {
+        bail!("container recovery configuration differs from the request pin");
+    }
+    let attestation: DockerNamespaceTeardownAttestation =
+        serde_json::from_slice(&attestation_bytes).context("parse container recovery attestation")?;
+    attestation.validate_without_request()?;
+    let attestation_sha256 = attestation.sha256()?;
+    if attestation_sha256 != expected_attestation_sha256 {
+        bail!("container recovery attestation differs from the operator SHA-256 pin");
+    }
+
+    let (stable_configuration_bytes, stable_configuration_sha256) =
+        read_stable_container_recovery_document(
+            configuration_path,
+            64 * 1024,
+            "container recovery configuration",
+        )?;
+    let (stable_request_bytes, stable_request_sha256) = read_stable_container_recovery_document(
+        request_path,
+        256 * 1024,
+        "container recovery request",
+    )?;
+    let (stable_attestation_bytes, _) = read_stable_container_recovery_document(
+        attestation_path,
+        256 * 1024,
+        "container recovery attestation",
+    )?;
+    if stable_configuration_bytes != configuration_bytes
+        || stable_configuration_sha256 != configuration_sha256
+        || stable_request_bytes != request_bytes
+        || stable_request_sha256 != request_sha256
+        || stable_attestation_bytes != attestation_bytes
+    {
+        bail!("container recovery authorization changed during admission");
+    }
+
+    let store = fullmag_session::SessionStore::open_existing(candidate.store_root.clone())?;
+    let executor = fullmag_build_info::identity();
+    RuntimeServiceConfig::recover_container_empty(
+        &store,
+        &candidate,
+        &configuration_bytes,
+        &request,
+        &request_sha256,
+        &attestation,
+        executor.git_commit,
+        executor.source_snapshot_sha256,
+    )
+}
+
+fn read_stable_container_recovery_document(
+    path: &Path,
+    maximum_bytes: usize,
+    label: &str,
+) -> Result<(Vec<u8>, String)> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("{label} path must be absolute without parent traversal");
+    }
+    let parent = path.parent().context("container recovery document has no parent")?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("container recovery document name is not UTF-8")?;
+    let first = fullmag_session::repository_path::read_bounded_regular_file(
+        parent,
+        name,
+        maximum_bytes,
+    )
+    .with_context(|| format!("read {label}"))?;
+    let second = fullmag_session::repository_path::read_bounded_regular_file(
+        parent,
+        name,
+        maximum_bytes,
+    )
+    .with_context(|| format!("re-read {label}"))?;
+    if first != second {
+        bail!("{label} changed during admission");
+    }
+    Ok((first.clone(), fullmag_session::hex_sha256(&first)))
+}
+
+fn read_recovery_request(
+    request_path: &Path,
+) -> Result<(RuntimeServiceRecoveryRequest, String)> {
+    if !request_path.is_absolute()
+        || request_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("service recovery request path must be absolute without parent traversal");
+    }
+    let parent = request_path
+        .parent()
+        .context("service recovery request has no parent")?;
+    let name = request_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("service recovery request name is not UTF-8")?;
+    let first = fullmag_session::repository_path::read_bounded_regular_file(
+        parent,
+        name,
+        256 * 1024,
+    )?;
+    let second = fullmag_session::repository_path::read_bounded_regular_file(
+        parent,
+        name,
+        256 * 1024,
+    )?;
+    if first != second {
+        bail!("service recovery request changed during admission");
+    }
+    let digest = fullmag_session::hex_sha256(&first);
+    let request: RuntimeServiceRecoveryRequest = serde_json::from_slice(&first)
+        .context("parse service recovery request")?;
+    request.validate()?;
+    Ok((request, digest))
+}
+
+fn read_stable_recovery_configuration(
+    configuration_path: &Path,
+) -> Result<(RuntimeServiceConfig, String, Vec<u8>)> {
+    if !configuration_path.is_absolute()
+        || configuration_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("service recovery configuration path must be absolute without parent traversal");
+    }
+    let parent = configuration_path
+        .parent()
+        .context("service recovery configuration has no parent")?;
+    let name = configuration_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("service recovery configuration name is not UTF-8")?;
+    let first = fullmag_session::repository_path::read_bounded_regular_file(parent, name, 65536)
+        .context("read service recovery configuration")?;
+    let second =
+        fullmag_session::repository_path::read_bounded_regular_file(parent, name, 65536)
+            .context("re-read service recovery configuration")?;
+    if first != second {
+        bail!("service recovery configuration changed during admission");
+    }
+    let candidate: RuntimeServiceConfig =
+        serde_json::from_slice(&first).context("parse service recovery configuration")?;
+    candidate.validate()?;
+    Ok((candidate, fullmag_session::hex_sha256(&first), first))
 }
 
 fn read_api_document(port: u16) -> Result<(serde_json::Value, String)> {
@@ -881,7 +1142,8 @@ mod tests {
             "A".repeat(64),
             "g".repeat(64),
         ] {
-            let error = super::initialize_host_application(&path, &pin).unwrap_err();
+            let error =
+                super::initialize_host_application(&path, &pin, directory.path()).unwrap_err();
             assert!(error
                 .to_string()
                 .contains("lowercase canonical configuration SHA-256"));
@@ -911,7 +1173,7 @@ mod tests {
         } else {
             "a".repeat(64)
         };
-        let error = super::initialize_host_application(&path, &stale).unwrap_err();
+        let error = super::initialize_host_application(&path, &stale, directory.path()).unwrap_err();
         assert!(error
             .to_string()
             .contains("digest differs from the operator pin"));

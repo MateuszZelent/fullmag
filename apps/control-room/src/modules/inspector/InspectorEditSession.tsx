@@ -118,8 +118,9 @@ export function createInspectorEditSessionStore(): InspectorEditSessionStore {
   });
 }
 
-export function InspectorEditSessionProvider({ children }: { children: ReactNode }) {
-  const [store] = useState(createInspectorEditSessionStore);
+export function InspectorEditSessionProvider({ children, store: suppliedStore }: { children: ReactNode; store?: InspectorEditSessionStore }) {
+  const [ownedStore] = useState(createInspectorEditSessionStore);
+  const store = suppliedStore ?? ownedStore;
   return (
     <InspectorEditSessionContext.Provider value={store}>
       {children}
@@ -127,8 +128,12 @@ export function InspectorEditSessionProvider({ children }: { children: ReactNode
   );
 }
 
+export function useInspectorEditSessionStore(): InspectorEditSessionStore | null {
+  return useContext(InspectorEditSessionContext);
+}
+
 export function useInspectorEditSession(): InspectorEditSession | null {
-  const store = useContext(InspectorEditSessionContext);
+  const store = useInspectorEditSessionStore();
   useSyncExternalStore(
     store?.subscribe ?? subscribeEmpty,
     store?.getVersion ?? getEmptySnapshot,

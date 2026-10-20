@@ -9,10 +9,6 @@
 
 #include "fullmag_fem.h"
 
-#ifndef FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256
-#define FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 ""
-#endif
-
 #include "backend_handle.hpp"
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
@@ -1842,7 +1838,7 @@ int fullmag_fem_get_frequency_domain_dependency_info(
         "\"petsc_library_path\":\"%s\","
         "\"slepc_library_path\":\"%s\","
         "\"reason\":\"%s\"}",
-        FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256,
+        fullmag::fem::runtime_source_snapshot_sha256(),
         petsc_available ? "true" : "false",
         slepc_available ? "true" : "false",
         modal_eigen_native_cpu_slepc_available ? "true" : "false",
@@ -4914,6 +4910,100 @@ fullmag_fem_backend *fullmag_fem_backend_create_v3(
         base.adaptive_config = &adaptive_config->base;
     }
     if (!fullmag::fem::initialize_backend_runtime(handle->context, base, error)) {
+        fullmag_fem_set_global_error(error);
+        fullmag_fem_set_handle_error(handle, error);
+        delete handle;
+        return nullptr;
+    }
+
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return handle;
+}
+
+fullmag_fem_backend *fullmag_fem_backend_create_v4(
+    const fullmag_fem_plan_desc_v3 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+{
+    if (plan == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v4 received null plan");
+        return nullptr;
+    }
+    if (plan->abi_version != FULLMAG_FEM_PLAN_DESC_V3_ABI_VERSION ||
+        plan->struct_size != sizeof(fullmag_fem_plan_desc_v3)) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v4 plan ABI version/size mismatch");
+        return nullptr;
+    }
+    const fullmag_fem_plan_desc_v2 &base = plan->base;
+    if (base.abi_version != FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION ||
+        base.struct_size != sizeof(fullmag_fem_plan_desc_v2)) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v4 base plan ABI version/size mismatch");
+        return nullptr;
+    }
+    if (base.has_rotated_interfacial_dmi != 0 &&
+        base.has_rotated_interfacial_dmi != 1) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_create_v4 rotated-interfacial DMI flag must be 0 or 1");
+        return nullptr;
+    }
+    if (!std::isfinite(base.rotated_interfacial_dmi_constant)) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_create_v4 rotated-interfacial DMI constant must be finite");
+        return nullptr;
+    }
+    if (base.has_rotated_interfacial_dmi != 0 &&
+        (base.base.has_interfacial_dmi != 0 || base.base.has_bulk_dmi != 0)) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_create_v4 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
+        return nullptr;
+    }
+    if (base.has_rotated_interfacial_dmi != 0 &&
+        base.rotated_interfacial_dmi_constant != 0.0 &&
+        base.base.mesh.periodic_node_pairs_len != 0u) {
+        fullmag_fem_set_global_error(
+            "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes");
+        return nullptr;
+    }
+    const bool open_magnetic_boundary =
+        base.base.mesh.periodic_node_pairs_len == 0u;
+    if (base.has_rotated_interfacial_dmi != 0 &&
+        base.rotated_interfacial_dmi_constant != 0.0 &&
+        open_magnetic_boundary && base.base.enable_exchange == 0) {
+        fullmag_fem_set_global_error(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange "
+            "for the coupled natural boundary condition");
+        return nullptr;
+    }
+
+    auto *handle = new (std::nothrow) fullmag_fem_backend();
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("failed to allocate fullmag_fem_backend");
+        return nullptr;
+    }
+
+    std::string error;
+    if (adaptive_config != nullptr &&
+        !fullmag::fem::apply_adaptive_dt_v2_guard_fields(
+            handle->context, adaptive_config, error)) {
+        fullmag_fem_set_global_error(error);
+        fullmag_fem_set_handle_error(handle, error);
+        delete handle;
+        return nullptr;
+    }
+
+    fullmag::fem::initialize_rotated_dmi_plan_fields(
+        handle->context,
+        base.has_rotated_interfacial_dmi,
+        base.rotated_interfacial_dmi_constant);
+    fullmag_fem_plan_desc native_plan = base.base;
+    if (adaptive_config != nullptr) {
+        native_plan.adaptive_config = &adaptive_config->base;
+    }
+    if (!fullmag::fem::initialize_backend_runtime(
+            handle->context,
+            native_plan,
+            error,
+            plan->mixed_body_certificate_v2)) {
         fullmag_fem_set_global_error(error);
         fullmag_fem_set_handle_error(handle, error);
         delete handle;

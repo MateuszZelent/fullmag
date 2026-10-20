@@ -196,6 +196,9 @@ pub(crate) fn execution_plan_log_lines(
         stage.entrypoint_kind
     )];
     match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(carrier) => {
+            lines.push(format!("  field-only: source={} sampling_points={} magnetic_dofs=0", carrier.source_object_id, carrier.field_sampling.positions_xyz_m.len()));
+        }
         BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
             let input = &inspection.input;
             lines.push("Backend plan: antenna_external_lead_inspection (no LLG)".to_string());
@@ -341,6 +344,7 @@ pub(crate) fn current_artifact_layout(
     plan: &ExecutionPlanIR,
 ) -> serde_json::Value {
     match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(carrier) => serde_json::json!({"backend": "fem", "stage_kind": "antenna_field_solve", "magnetization": null, "source_mesh_name": carrier.source_mesh.mesh_name, "field_sampling": carrier.field_sampling}),
         BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
             let input = &inspection.input;
             serde_json::json!({

@@ -16,6 +16,16 @@ export function confirmedSessionResourceIdentity(
   return current.length === 1 && current[0].session_id === identity.sessionId ? identity : null;
 }
 
+/** HTTP status can move to a new session before the collection is invalidated. */
+export function sessionIdentityRecoveryRevision(
+  identity: SessionResourceIdentity | null,
+  collection: SessionListResource | null,
+): string | null {
+  if (!identity || !collection || confirmedSessionResourceIdentity(identity, collection)) return null;
+  const currentIds = collection.sessions.filter((session) => session.current).map((session) => session.session_id).sort();
+  return `session-identity:${JSON.stringify([sessionRequestScopeKey(identity), currentIds])}`;
+}
+
 export function sessionResourceIdentityFromStatus(
   status: LiveStatusResource | null,
 ): SessionResourceIdentity | null {

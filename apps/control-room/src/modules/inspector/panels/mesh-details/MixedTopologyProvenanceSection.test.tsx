@@ -7,6 +7,52 @@ import {
 } from "./MixedTopologyProvenanceSection";
 
 describe("MixedTopologyProvenanceSection", () => {
+  it("treats an unknown certificate status as unavailable", () => {
+    const model = resolveMixedTopologyPresentation({
+      buildReport: { mixed_layer_topology_certificate_v2: {
+        certificate_status: "pending", accepted: true, magnetic_regions: [],
+      } },
+      manifest: null,
+    });
+    expect(model.certificateStatus).toBe("unavailable");
+    const html = renderToStaticMarkup(<MixedTopologyProvenanceSection model={model} />);
+    expect(html).toContain("unrecognized status");
+    expect(html).toContain('data-kind="warning"');
+  });
+
+  it("keeps v2 swept-layer evidence local to its magnetic body", () => {
+    const model = resolveMixedTopologyPresentation({
+      buildReport: {
+        mixed_layer_topology_certificate_v2: {
+          schema_version: "mixed_layer_topology_certificate.v2",
+          certificate_status: "accepted",
+          topology_fingerprint: "sha256:regions",
+          magnetic_regions: [
+            { object_id: "layer", body_marker: 1, material_marker: 1,
+              cell_family_counts: { prism6: 12 },
+              exact_sweep: { requested_layer_count: 1, realized_layer_count: 1,
+                actual_node_plane_count: 2 } },
+            { object_id: "ring", body_marker: 2, material_marker: 2,
+              cell_family_counts: { tet4: 48 } },
+          ],
+        },
+      },
+      manifest: null,
+    });
+    expect(model.certificateStatus).toBe("accepted");
+    expect(model.hasSingleLayer).toBe(true);
+    expect(model.certificateFingerprint).toBe("sha256:regions");
+    expect(model.requestedLayers).toBeNull();
+    expect(model.resolvedLayers).toBeNull();
+    expect(model.nodePlanes).toBeNull();
+    expect(model.regionFields).toContainEqual({ label: "layer exact layers",
+      value: "1 requested / 1 realized; 2 node planes" });
+    expect(model.regionFields).toContainEqual({ label: "ring exact layers", value: "not swept" });
+    const markup = renderToStaticMarkup(<MixedTopologyProvenanceSection model={model} />);
+    expect(markup).toContain("Body ring");
+    expect(markup).toContain("tet4: 48");
+  });
+
   it("presents requested and resolved topology, family counts, and accepted certificate", () => {
     const model = resolveMixedTopologyPresentation({
       buildReport: {

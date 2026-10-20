@@ -281,7 +281,9 @@ export function createVisualizationAckCoordinator(
       if (status === "applied") {
         // `applied` is an internal data-revision registration, never a client ACK.
         // A renderer frame must supply a matching session/revision/resource receipt.
-        if (changeKind !== "data") return;
+        // Before a buffer exists there is no renderer adoption to time out.
+        // Keep waiting for its identity; never turn missing data into rendered.
+        if (changeKind !== "data" || dataIdentity === null) return;
         if (coordinator.pending.size >= MAX_PENDING_VISUALIZATION_ACKS) {
           sendTerminalAck(api, coordinator, key, {
             ...request,

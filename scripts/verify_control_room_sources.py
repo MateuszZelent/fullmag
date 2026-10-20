@@ -142,7 +142,7 @@ def run(repo: Path, route: str, dependency_workspace: Path | None = None):
                     raise storage.StorageError(f"Required frontend tool is missing: {package}")
                 return [node, str(path)]
             if route == "generate-client":
-                commands = [cli("openapi-typescript", "bin/cli.js") + ["src/kernel/api/generated/openapi-v2.json", "--output", "src/kernel/api/generated/openapi-v2-types.ts"], [node, "scripts/generate-v2-client.mjs"]]
+                commands = [cli("openapi-typescript", "bin/cli.js") + ["src/kernel/api/generated/openapi-v2.json", "--output", "src/kernel/api/generated/openapi-v2-types.ts", "--empty-objects-unknown"], [node, "scripts/generate-v2-client.mjs"]]
             elif route == "openapi-import-check":
                 commands = [[node, "--test", "scripts/normalize-openapi-build-identity.node-test.mjs", "scripts/managed-openapi-import.node-test.mjs"]]
                 receipt["interpreted_node_checks"] = True

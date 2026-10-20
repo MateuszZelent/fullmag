@@ -2,6 +2,8 @@ import type { ResourceRevision } from "../api/apiTypes";
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH,
+  ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
   ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH,
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
@@ -603,6 +605,10 @@ export class RealtimeInvalidationBridge {
             }
           }
         } else if (change.resource === "artifacts") {
+          this.queuePrefixInvalidation(`${DATA_FIELDS_PATH}?stage_id=`, change.revision);
+          this.queuePrefixInvalidation(`${DATA_QUANTITIES_PATH}?stage_id=`, change.revision);
+          this.queueResourceInvalidation(ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH, change.revision);
+          this.queueResourceInvalidation(ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH, change.revision);
           if (recommendedFetch) {
             this.queueResourceInvalidation(recommendedFetch, change.revision);
           }
@@ -625,6 +631,8 @@ export class RealtimeInvalidationBridge {
             change.resource_id === "catalog"
           ) {
             this.queueExactResourceInvalidation(DATA_FIELDS_PATH, change.revision);
+            this.queuePrefixInvalidation(`${DATA_FIELDS_PATH}?stage_id=`, change.revision);
+            this.queuePrefixInvalidation(`${DATA_QUANTITIES_PATH}?stage_id=`, change.revision);
             this.queueExactResourceInvalidation(
               DATA_QUANTITIES_PATH,
               change.revision,

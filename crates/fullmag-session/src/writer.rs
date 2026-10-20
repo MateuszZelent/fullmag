@@ -22,6 +22,30 @@ const OWNER_RECORD_PATH: &str = "WRITER.owner.json";
 #[derive(Debug)]
 pub struct StoreWriterBusy;
 
+#[derive(Debug, Clone, Copy)]
+enum WriterBusyConflict {
+    NativeDescriptor,
+    InProcessOtherThread,
+    DepthZero,
+}
+
+impl std::fmt::Display for WriterBusyConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::NativeDescriptor => "native descriptor",
+            Self::InProcessOtherThread => "inprocess otherthread",
+            Self::DepthZero => "depthzero",
+        })
+    }
+}
+
+fn writer_busy_error(root: &Path, conflict: WriterBusyConflict) -> anyhow::Error {
+    anyhow::Error::new(StoreWriterBusy).context(format!(
+        "session store writer is busy: root=`{}`, conflict={conflict}",
+        root.display()
+    ))
+}
+
 impl std::fmt::Display for StoreWriterBusy {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("session store writer is busy")
@@ -62,6 +86,7 @@ impl NativeLock {
 
 impl Drop for NativeLock {
     fn drop(&mut self) {
+        // dup/fork may keep the open file description alive after our close.
         if let Err(error) = self.unlock() {
             tracing::error!(%error, "could not release native writer lock");
         }
@@ -103,10 +128,13 @@ impl Writer {
             if active.depth == 0 {
                 // A failed explicit unlock leaves a depth-zero sentinel and
                 // keeps the native descriptor open until this Writer drops.
-                return Err(StoreWriterBusy.into());
+                return Err(writer_busy_error(&self.root, WriterBusyConflict::DepthZero));
             }
             if active.thread != std::thread::current().id() {
-                return Err(StoreWriterBusy.into());
+                return Err(writer_busy_error(
+                    &self.root,
+                    WriterBusyConflict::InProcessOtherThread,
+                ));
             }
             let mut record = active.record.clone();
             record.heartbeat_at = chrono::Utc::now();
@@ -213,7 +241,12 @@ fn open_lock_descriptor(root: &Path) -> Result<NativeLock> {
 
     match file.try_lock() {
         Ok(()) => {}
-        Err(TryLockError::WouldBlock) => return Err(StoreWriterBusy.into()),
+        Err(TryLockError::WouldBlock) => {
+            return Err(writer_busy_error(
+                root,
+                WriterBusyConflict::NativeDescriptor,
+            ))
+        }
         Err(TryLockError::Error(error)) => {
             return Err(error).context("acquiring native session writer lock");
         }

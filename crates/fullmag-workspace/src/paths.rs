@@ -18,9 +18,28 @@ pub fn state_dir() -> Result<PathBuf> {
     state_dir_from(|name| std::env::var_os(name))
 }
 
-/// Default location of `workspace.db`.
+/// Default location of `workspace.db`. The workspace database has a scoped
+/// override so it can live in durable user data without moving global runtime
+/// state selected by [`state_dir`].
 pub fn default_database_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join(DATABASE_FILE_NAME))
+    Ok(workspace_state_dir()?.join(DATABASE_FILE_NAME))
+}
+
+/// State directory used only for the per-user workspace database.
+///
+/// `FULLMAG_WORKSPACE_STATE_DIR` is checked first, then the canonical
+/// `FULLMAG_STATE_DIR`/platform defaults. It does not alter [`state_dir`].
+fn workspace_state_dir() -> Result<PathBuf> {
+    workspace_state_dir_from(|name| std::env::var_os(name))
+}
+
+fn workspace_state_dir_from(
+    env: impl Fn(&str) -> Option<OsString>,
+) -> Result<PathBuf> {
+    if let Some(explicit) = env("FULLMAG_WORKSPACE_STATE_DIR").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(explicit));
+    }
+    state_dir_from(env)
 }
 
 /// [`state_dir`] with an injectable environment, so tests need not mutate the
@@ -175,6 +194,31 @@ mod tests {
     fn explicit_state_dir_wins() {
         let dir = state_dir_from(env_of(&[("FULLMAG_STATE_DIR", "/tmp/fm"), ("HOME", "/h")]));
         assert_eq!(dir.unwrap(), PathBuf::from("/tmp/fm"));
+    }
+
+    #[test]
+    fn workspace_override_moves_only_the_database_state_dir() {
+        let global = state_dir_from(env_of(&[
+            ("FULLMAG_WORKSPACE_STATE_DIR", "/stable/fm"),
+            ("FULLMAG_STATE_DIR", "/runtime/fm"),
+        ]))
+        .unwrap();
+        let workspace = workspace_state_dir_from(env_of(&[
+            ("FULLMAG_WORKSPACE_STATE_DIR", "/stable/fm"),
+            ("FULLMAG_STATE_DIR", "/runtime/fm"),
+        ]))
+        .unwrap();
+        assert_eq!(global, PathBuf::from("/runtime/fm"));
+        assert_eq!(workspace, PathBuf::from("/stable/fm"));
+    }
+
+    #[test]
+    fn empty_workspace_override_falls_back_to_global_state_dir() {
+        let dir = workspace_state_dir_from(env_of(&[
+            ("FULLMAG_WORKSPACE_STATE_DIR", ""),
+            ("FULLMAG_STATE_DIR", "/runtime/fm"),
+        ]));
+        assert_eq!(dir.unwrap(), PathBuf::from("/runtime/fm"));
     }
 
     #[test]

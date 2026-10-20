@@ -804,7 +804,7 @@ def _run_client_codegen_locked(
         commands = [
             (
                 "openapi_typescript",
-                [node, cli, relative_json.as_posix(), "--output", relative_types.as_posix()],
+                [node, cli, relative_json.as_posix(), "--output", relative_types.as_posix(), "--empty-objects-unknown"],
             ),
             (
                 "generate_v2_client",

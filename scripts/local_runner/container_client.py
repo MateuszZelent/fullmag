@@ -28,6 +28,7 @@ from urllib.parse import unquote, urlsplit
 
 from fullmag_storage import StorageError, atomic_json, file_lock
 from local_runner import coordinator
+from local_runner.coordinator_replacement import assert_no_pending as assert_no_replacement
 
 
 def _resolve_env_port(default: int = 48765) -> int:
@@ -72,6 +73,8 @@ SLEPC_MODAL_PROFILES = (
 # The deployed coordinator catalogue is also the bounded compatibility list.
 # Keep the master catalogue when recognizing existing runner configuration.
 DEPLOYED_RUNTIME_PROFILES = SLEPC_MODAL_PROFILES
+BORIS_CPU_PROFILE = "boris-cpu-v1"
+CATALOG_PROFILES = (*DEPLOYED_RUNTIME_PROFILES, BORIS_CPU_PROFILE)
 _PROFILE_LISTS = (
     ALLOWED_PROFILES,
     CPU_CONTRACT_PROFILES,
@@ -91,7 +94,7 @@ def _known_profile_list(value: object) -> bool:
     val_list = list(value)
     if any(val_list == list(profiles) for profiles in _PROFILE_LISTS):
         return True
-    if len(set(val_list)) == len(val_list) and all(isinstance(p, str) and p in DEPLOYED_RUNTIME_PROFILES for p in val_list):
+    if len(set(val_list)) == len(val_list) and all(isinstance(p, str) and p in CATALOG_PROFILES for p in val_list):
         if val_list[:len(ALLOWED_PROFILES)] == list(ALLOWED_PROFILES):
             return True
     return False
@@ -101,7 +104,7 @@ def _observed_profile_list(value: object) -> list[str] | None:
     """Normalize only a complete, unique, known coordinator profile list."""
     if not isinstance(value, list) or not value:
         return None
-    if any(not isinstance(profile, str) or profile not in SLEPC_MODAL_PROFILES for profile in value):
+    if any(not isinstance(profile, str) or profile not in CATALOG_PROFILES for profile in value):
         return None
     if len(set(value)) != len(value) or not set(ALLOWED_PROFILES).issubset(value):
         return None
@@ -375,6 +378,8 @@ def _validate_secret(secret: Mapping[str, object], storage: Path, operator: str,
 def _load_config(layout: Mapping[str, object], operator: str) -> tuple[Path, Path, dict[str, Any], str]:
     operator = _owner(operator)
     storage = _storage_root(layout)
+    from local_runner.boris_transition import assert_no_pending
+    assert_no_pending(storage)
     public_path, secret_path, _ = _config_paths(layout)
     public = _validate_public(_read_object(public_path, "Container configuration"), storage, operator)
     secret = _read_object(secret_path, "Container secret")
@@ -393,6 +398,7 @@ def configure(
     image: str | None = None,
     enable_current_contracts: bool = False,
     enable_slepc_modal: bool = False,
+    enable_boris_cpu: bool = False,
     enable_slepc_runtime_v2: bool = False,
 ) -> dict[str, Any]:
     """Install or update host configuration without contacting Docker.
@@ -407,7 +413,7 @@ def configure(
     elif image is not None:
         raise ContainerClientError("Specify only one coordinator image ID")
     if not all(isinstance(flag, bool) for flag in
-               (enable_current_contracts, enable_slepc_modal, enable_slepc_runtime_v2)):
+               (enable_current_contracts, enable_slepc_modal, enable_slepc_runtime_v2, enable_boris_cpu)):
         raise ContainerClientError("Profile activation flags must be boolean")
     if sum((enable_current_contracts, enable_slepc_modal, enable_slepc_runtime_v2)) > 1:
         raise ContainerClientError("Choose only one profile activation set")
@@ -417,6 +423,9 @@ def configure(
     storage.mkdir(parents=True, exist_ok=True)
     public_path, secret_path, lock_path = _config_paths(layout, create=True)
     with file_lock(lock_path, "local runner container configuration", blocking=True):
+        from local_runner.boris_transition import assert_no_pending
+        assert_no_pending(storage)
+        assert_no_replacement(storage)
         public_exists = public_path.exists()
         secret_exists = secret_path.exists()
         if public_exists != secret_exists:
@@ -456,6 +465,7 @@ def configure(
                     port = CONTAINER_PORT
             port = _port(port)
             token = secrets.token_urlsafe(48)
+        had_boris = BORIS_CPU_PROFILE in selected_profiles
         if enable_slepc_runtime_v2:
             if "fem-cpu-slepc-runtime-v2" not in selected_profiles:
                 selected_profiles.append("fem-cpu-slepc-runtime-v2")
@@ -465,6 +475,8 @@ def configure(
             for profile in CURRENT_CONTRACT_PROFILES:
                 if profile not in selected_profiles:
                     selected_profiles.append(profile)
+        if (enable_boris_cpu or had_boris) and BORIS_CPU_PROFILE not in selected_profiles:
+            selected_profiles.append(BORIS_CPU_PROFILE)
         public = _public_record(storage, operator, image, port, allowed_profiles=selected_profiles)
         secret = _secret_record(storage, operator, token, port, allowed_profiles=selected_profiles)
         atomic_json(secret_path, secret)
@@ -774,6 +786,7 @@ def _start_unlocked(
     """Create/start the exact reserved container, never replacing a foreign one."""
 
     operator = _owner(owner)
+    assert_no_replacement(_storage_root(layout))
     storage, secret_path, public, _ = _load_config(layout, operator)
     docker = _selected_docker_call(docker_call, call)
     image = _image_id(public["image_id"])
@@ -909,6 +922,8 @@ def request(
     if not isinstance(method, str) or method.upper() not in {"GET", "POST"}:
         raise ContainerClientError("Runner API supports only GET and POST")
     method = method.upper()
+    if method == "POST":
+        assert_no_replacement(_storage_root(layout))
     path = _request_path(path)
     try:
         body = None if payload is None else json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -1091,6 +1106,7 @@ def _replace_unlocked(
     call: Callable[[list[str]], object] | None = None,
 ) -> dict[str, Any]:
     operator = _owner(owner)
+    assert_no_replacement(_storage_root(layout))
     new_image = _image_id(image_id)
     public_path, _, _ = _config_paths(layout)
     storage, secret_path, public, _ = _load_config(layout, operator)
@@ -1194,6 +1210,21 @@ def replace(
         raise ContainerClientError("Local runner container lifecycle lock is unavailable") from error
 
 
+def disable_boris_cpu(layout, owner, expected_public_sha256, expected_catalog_sha256, expected_boris_sha256, *, docker_call=None):
+    """Remove only matching BORIS activation from an attested exited coordinator."""
+    assert_no_replacement(_storage_root(layout))
+    from local_runner.boris_transition import disable
+    return disable(layout, owner, expected_public_sha256, expected_catalog_sha256,
+                   expected_boris_sha256, docker_call=docker_call)
+
+
+def recover_boris_profile(layout, owner, transaction_id, direction, *, docker_call=None):
+    """Resolve an exact pending offline transaction without starting Docker."""
+    assert_no_replacement(_storage_root(layout))
+    from local_runner.boris_transition import recover
+    return recover(layout, owner, transaction_id, direction, docker_call=docker_call)
+
+
 install = configure
 
 
@@ -1215,6 +1246,8 @@ __all__ = [
     "MAX_RESPONSE_BYTES",
     "SECRET_SCHEMA",
     "configure",
+    "disable_boris_cpu",
+    "recover_boris_profile",
     "install",
     "request",
     "replace",
@@ -1222,3 +1255,13 @@ __all__ = [
     "status",
     "stop",
 ]
+
+
+def replace_exited(layout, owner, **arguments):
+    from local_runner.coordinator_replacement import replace_exited as replace
+    return replace(layout, owner, **arguments)
+
+
+def recover_exited_replacement(layout, owner, transaction_id, **arguments):
+    from local_runner.coordinator_replacement import recover_exited
+    return recover_exited(layout, owner, transaction_id, **arguments)

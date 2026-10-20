@@ -1154,16 +1154,29 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     try {
       const next = await api.meshing.replaceObjectPolicy(
         objectId,
-        result.request,
+        result.request.config
+          ? { ...result.request, config: { ...result.request.config, mode: "custom" } }
+          : result.request,
         { sessionScopeKey: operationSessionScopeKey },
       );
       if (!isCurrentOperation()) return { ok: false };
+      if (next.object_id !== objectId || !Number.isSafeInteger(next.revision) || next.revision < 0) {
+        throw new Error("Object mesh policy ACK has an invalid owner or revision.");
+      }
       const revision = next.revision;
+      setDraftState((current) => current.identityKey === draftIdentityKey && current.draft === draft
+        ? initialInspectorDraftState({
+            baseDraft: draftFromObjectMeshPolicyResource(next, { effectiveTarget }),
+            baseKey: draftKeyForObjectMeshPolicyResource(objectId, next, { effectiveTarget }),
+            identityKey: draftIdentityKey,
+          })
+        : current);
       publishCommittedMeshPolicyResource?.(
         resources,
         resolveObjectMeshPolicyResourceKey(objectId),
         operationSessionScopeKey,
         next,
+        api.resourceCacheScope,
       );
       resources.invalidate(resolveObjectMeshPolicyResourceKey(objectId), revision);
       resources.invalidate(resolveObjectMeshReportResourceKey(objectId), revision);
@@ -1190,6 +1203,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     commandContext,
     draft,
     draftIdentityKey,
+    effectiveTarget,
     explicitFdm,
     meshLane,
     objectId,
@@ -1385,13 +1399,13 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
             objectId={objectId}
             policyRevision={resource.revision}
             policyStatus={policy.status}
-            qualityStatus={quality.status}
-            reportStatus={report.status}
+            qualityStatus={quality.status === "ready" ? qualityStatistics ? "available" : "not published" : quality.status}
+            reportStatus={report.status === "ready" ? reportRecord?.last_build_summary ? "build summary available" : "not published" : report.status}
           />
           <ObjectMeshEffectiveTargetSection
             effectiveTarget={effectiveTarget}
             report={reportRecord}
-            reportStatus={report.status}
+            reportStatus={report.status === "ready" ? effectiveTarget ? "available" : "not resolved" : report.status}
           />
           <fieldset disabled={jsonError !== null} className="fm-mesh-policy-fields contents">
             <ObjectMeshPresetSection draft={draft} updateDraft={updateDraft} />
@@ -1419,7 +1433,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
           <ObjectMeshTopologyQualitySection
             qualityRecord={qualityRecord}
             qualityRevision={quality.data?.revision}
-            qualityStatus={quality.status}
+            qualityStatus={quality.status === "ready" ? qualityStatistics ? "available" : "not published" : quality.status}
             topology={topology}
           />
           <ObjectMeshQualityStatisticsSection

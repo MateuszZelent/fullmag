@@ -39,6 +39,9 @@ mod antenna_field_solution;
 mod antenna_spectrum;
 mod antenna_stage;
 pub use antenna_field_solution::{
+    execute_antenna_closed_loop_inspection, verify_antenna_closed_loop_inspection_bytes,
+    load_antenna_closed_loop_inspection_bytes,
+    load_published_antenna_closed_loop_inspection, LoadedAntennaClosedLoopInspection,
     load_antenna_field_solution_samples, load_antenna_field_solution_samples_for_spectrum,
     load_solved_antenna_drive_basis_projected,
     materialize_fdm_solved_antenna_drives, materialize_fdm_solved_antenna_drives_v03,
@@ -46,7 +49,7 @@ pub use antenna_field_solution::{
     verify_antenna_field_solution_asset, verify_antenna_field_solution_signatures,
     verify_antenna_field_solution_referenced_data, AntennaQuadratureEvidenceRef,
     AntennaDependencySignatures, AntennaFieldSolutionAsset, AntennaFieldSolutionSamples,
-    AntennaFieldSolutionSignatures,
+    AntennaFieldSolutionSignatures, AntennaSampleCarrier,
 };
 pub use antenna_spectrum::{
     antenna_source_spectrum_auxiliary_artifact, antenna_source_spectrum_auxiliary_artifacts,
@@ -56,6 +59,8 @@ pub use antenna_spectrum::{
     reusable_antenna_source_spectrum_output,
     compute_antenna_source_spectrum_artifact,
     compute_antenna_source_spectrum_artifact_interruptible,
+    compute_antenna_source_spectrum_with_equilibrium,
+    verify_antenna_source_spectrum_equilibrium_binding,
     compute_nonuniform_k_antenna_source_spectrum,
     compute_structured_antenna_source_spectrum, sample_antenna_field_on_plane,
     AntennaSourceSpectrum2D, AntennaSourceSpectrumArtifact, AntennaSourceSpectrumManifest,
@@ -499,6 +504,7 @@ pub fn frozen_spins_runtime_status_for_backend_plan(
     backend_plan: &BackendPlanIR,
 ) -> Result<Option<constraints::FrozenSpinsRuntimeStatus>, RunError> {
     let (frozen_plan, active_mask, initial_magnetization) = match backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => return Ok(None),
         BackendPlanIR::Fdm(plan) => (
             plan.frozen_spins.as_ref(),
             plan.active_mask.clone(),
@@ -547,6 +553,7 @@ pub use fem_eigen::{
     FemRelaxationProducerPayloads, FemRelaxationProducerPlanSnapshot,
     FemRelaxationProducerProvenance, FEM_RELAXATION_PRODUCER_PLAN_NAMESPACE_V1,
     FEM_RELAXATION_PRODUCER_PROVENANCE_RELATIVE_PATH, FEM_RELAXATION_PRODUCER_PROVENANCE_V1,
+    accepted_antenna_equilibrium_artifacts, publish_accepted_antenna_equilibrium, load_verified_antenna_equilibrium, AntennaEquilibriumBinding, VerifiedAntennaEquilibriumContext,
 };
 pub use interactive::backend::BackendGeometry;
 pub use interactive::checkpoints::RunOutcome;
@@ -590,7 +597,8 @@ pub use types::{
     AuxiliaryArtifact, CertifiedFemEquilibriumFields, ExecutionProvenance, FdmGpuExecutionReceipt,
     FdmGpuOperatorResidency, FdmGpuPrecisionComponents, FdmGpuPrecisionPolicyReceipt,
     FdmGpuTransferCounts, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
-    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
+    FemGpuExecutionClass, FemGpuExecutionReceipt, FemMeshPartPayload, FemMeshPayload,
+    InitialTimestepReason, LegacyDtPolicy,
     LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
     LiveParallelExecutionTelemetry, LivePreviewRequest, LiveVectorFieldSnapshot,
     LlgTimestepCapabilityId,
@@ -1544,6 +1552,10 @@ pub fn is_native_fem_gpu_available() -> bool {
 
 #[derive(Debug, Clone)]
 pub struct NativeFemGpuStatus {
+    pub built_with_mfem_stack: bool,
+    pub built_with_cuda_runtime: bool,
+    pub built_with_ceed: bool,
+    pub reason_cpu: String,
     pub cpu_available: bool,
     pub available: bool,
     pub visible_cuda_device_count: i32,
@@ -1557,6 +1569,10 @@ pub struct NativeFemGpuStatus {
 pub fn native_fem_gpu_status() -> NativeFemGpuStatus {
     let availability = native_fem::native_availability();
     NativeFemGpuStatus {
+        built_with_mfem_stack: availability.built_with_mfem_stack,
+        built_with_cuda_runtime: availability.built_with_cuda_runtime,
+        built_with_ceed: availability.built_with_ceed,
+        reason_cpu: availability.reason_cpu,
         cpu_available: availability.native_fem_cpu_available,
         available: availability.native_fem_gpu_available,
         visible_cuda_device_count: availability.visible_cuda_device_count,
@@ -1799,11 +1815,221 @@ fn mixed_p1_runtime_supports_time_evolution(
         })
 }
 
+fn mixed_v2_relaxation_matches_plan(
+    study: &fullmag_ir::StudyIR,
+    planned_algorithm: Option<fullmag_ir::RelaxationAlgorithmIR>,
+) -> bool {
+    let Some(planned_algorithm) = planned_algorithm else {
+        return false;
+    };
+    let fullmag_ir::StudyIR::Relaxation { algorithm, .. } = study else {
+        return false;
+    };
+    matches!(
+        algorithm,
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+            | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+            | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
+    ) && *algorithm == planned_algorithm
+}
+
+fn require_supported_mixed_v2_runtime_scope(
+    problem: &ProblemIR,
+    study_kind: &str,
+    precision: fullmag_ir::ExecutionPrecision,
+    fem_plan: Option<&fullmag_ir::FemPlanIR>,
+    certificate: &fullmag_ir::MixedLayerTopologyCertificateV2IR,
+    requested_device: &str,
+) -> Result<(), RunError> {
+    let mut failed_predicates = Vec::new();
+    if problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fem {
+        failed_predicates.push("backend_not_fem");
+    }
+    if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+        failed_predicates.push("execution_mode_not_strict");
+    }
+    if problem.backend_policy.execution_precision != fullmag_ir::ExecutionPrecision::Double
+        || precision != fullmag_ir::ExecutionPrecision::Double
+    {
+        failed_predicates.push("execution_precision_not_double");
+    }
+    if !matches!(requested_device, "cpu" | "gpu") {
+        failed_predicates.push("explicit_device_cpu_or_gpu_required");
+    }
+
+    let body_count = certificate.magnetic_regions.len();
+    if body_count < 2 {
+        failed_predicates.push("v2_requires_multiple_magnetic_regions");
+    }
+    if problem.geometry.entries.len() != body_count {
+        failed_predicates.push("geometry_region_count_differs_from_v2_certificate");
+    }
+    if problem.regions.len() != body_count {
+        failed_predicates.push("region_count_differs_from_v2_certificate");
+    }
+    if problem.magnets.len() != body_count {
+        failed_predicates.push("magnet_count_differs_from_v2_certificate");
+    }
+    if problem.materials.len() != body_count {
+        failed_predicates.push("material_count_differs_from_v2_certificate");
+    }
+    if certificate
+        .magnetic_regions
+        .iter()
+        .filter(|region| region.exact_sweep.is_some())
+        .count()
+        != 1
+    {
+        failed_predicates.push("v2_requires_one_exact_swept_region");
+    }
+    if !certificate.fallbacks_triggered.is_empty() {
+        failed_predicates.push("mesh_fallback_triggered");
+    }
+
+    let Some(fem) = fem_plan else {
+        failed_predicates.push("fem_relaxation_plan_missing");
+        return Err(RunError {
+            message: format!(
+                "fem_mixed_p1_v2_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; failed_predicates=[{}]; fallback=none",
+                failed_predicates.join(",")
+            ),
+        });
+    };
+    if fem.fe_order != 1 {
+        failed_predicates.push("fem_fe_order_not_p1");
+    }
+    if fem.precision != fullmag_ir::ExecutionPrecision::Double {
+        failed_predicates.push("fem_precision_not_double");
+    }
+    if !fem.enable_exchange {
+        failed_predicates.push("fem_exchange_disabled");
+    }
+    if !fem.enable_demag {
+        failed_predicates.push("fem_demag_disabled");
+    }
+    if !matches!(
+        fem.demag_realization,
+        Some(
+            fullmag_ir::ResolvedFemDemagIR::PoissonRobin
+                | fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet
+        )
+    ) {
+        failed_predicates.push("fem_demag_realization_not_poisson_robin_or_dirichlet");
+    }
+    // Preserve the canonical planner's bounded relaxation policy.  The
+    // runtime must not introduce a narrower algorithm whitelist after planning.
+    let planned_relaxation = fem.relaxation.as_ref().map(|control| control.algorithm);
+    if !mixed_v2_relaxation_matches_plan(&problem.study, planned_relaxation) {
+        failed_predicates.push("v2_requires_matching_bounded_relaxation");
+    }
+    if !problem.object_regions.is_empty()
+        || !problem.material_parameter_fields.is_empty()
+        || !problem.couplings.is_empty()
+        || !problem.current_modules.is_empty()
+        || !problem.spin_torque_modules.is_empty()
+        || problem.current_density.is_some()
+        || problem.stt_degree.is_some()
+        || problem.stt_beta.is_some()
+        || problem.stt_spin_polarization.is_some()
+        || problem.stt_lambda.is_some()
+        || problem.stt_epsilon_prime.is_some()
+        || problem.stt_thickness.is_some()
+        || problem.stt_fixed_layer_position.is_some()
+        || problem.temperature.is_some()
+        || !problem.elastic_materials.is_empty()
+        || !problem.elastic_bodies.is_empty()
+        || !problem.magnetostriction_laws.is_empty()
+        || !problem.mechanical_bcs.is_empty()
+        || !problem.mechanical_loads.is_empty()
+        || problem.pbc.is_some()
+    {
+        failed_predicates.push("unsupported_extended_module");
+    }
+    if problem.materials.iter().any(|material| {
+        material.ms_field.is_some()
+            || material.a_field.is_some()
+            || material.alpha_field.is_some()
+            || material.ku_field.is_some()
+            || material.ku2_field.is_some()
+            || material.kc1_field.is_some()
+            || material.kc2_field.is_some()
+            || material.kc3_field.is_some()
+            || material.uniaxial_anisotropy_k2.is_some()
+            || material.cubic_anisotropy_kc1.is_some()
+            || material.cubic_anisotropy_kc2.is_some()
+            || material.cubic_anisotropy_kc3.is_some()
+            || material.cubic_anisotropy_axis1.is_some()
+            || material.cubic_anisotropy_axis2.is_some()
+            || material.interfacial_dmi.is_some()
+            || material.bulk_dmi.is_some()
+            || material.dind_field.is_some()
+            || material.dbulk_field.is_some()
+    }) {
+        failed_predicates.push("v2_unbound_material_field");
+    }
+    if problem
+        .field_drives
+        .iter()
+        .any(|drive| crate::time_events::resolved_field_drive_is_active(drive, &fem.time_stage))
+    {
+        failed_predicates.push("v2_regional_field_drive_not_bound_by_certificate");
+    }
+
+    let mut exchange_count = 0usize;
+    let mut demag_count = 0usize;
+    let mut unsupported_energy = false;
+    let mut has_dmi = false;
+    for term in &problem.energy_terms {
+        match term {
+            fullmag_ir::EnergyTermIR::Exchange => exchange_count += 1,
+            fullmag_ir::EnergyTermIR::Demag { realization }
+                if matches!(
+                    realization,
+                    fullmag_ir::RequestedFemDemagIR::Auto
+                        | fullmag_ir::RequestedFemDemagIR::PoissonRobin
+                        | fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
+                ) => demag_count += 1,
+            fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
+            | fullmag_ir::EnergyTermIR::BulkDmi { .. }
+            | fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. } => has_dmi = true,
+            fullmag_ir::EnergyTermIR::Zeeman { .. } => {}
+            _ => unsupported_energy = true,
+        }
+    }
+    if exchange_count == 0 {
+        failed_predicates.push("missing_exchange");
+    } else if exchange_count != 1 {
+        failed_predicates.push("exchange_term_count_not_one");
+    }
+    if demag_count == 0 {
+        failed_predicates.push("missing_qualified_demag");
+    } else if demag_count != 1 {
+        failed_predicates.push("demag_term_count_not_one");
+    }
+    if unsupported_energy {
+        failed_predicates.push("unsupported_energy_term");
+    }
+    if has_dmi {
+        failed_predicates.push("v2_dmi_not_bound_by_certificate");
+    }
+
+    if !failed_predicates.is_empty() {
+        return Err(RunError {
+            message: format!(
+                "fem_mixed_p1_v2_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; failed_predicates=[{}]; fallback=none",
+                failed_predicates.join(",")
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn require_supported_fem_topology(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<(), RunError> {
     let (mesh, build_report, precision, study_kind, fem_plan) = match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => return Ok(()),
         BackendPlanIR::Fem(fem) => (
             &fem.mesh,
             fem.mesh_build_report.as_ref(),
@@ -1842,8 +2068,20 @@ fn require_supported_fem_topology(
         && facet_families
             .iter()
             .all(|family| *family == fullmag_ir::FemFacetTypeIR::Tri3);
-    let has_mixed_metadata = build_report.is_some_and(|report| {
+    let has_v1_certificate = build_report.is_some_and(|report| {
         report.mixed_layer_topology_certificate.is_some()
+    });
+    let has_v2_certificate = build_report.is_some_and(|report| {
+        report.mixed_layer_topology_certificate_v2.is_some()
+    });
+    if has_v1_certificate && has_v2_certificate {
+        return Err(RunError {
+            message: "fem_mixed_p1_runtime_certificate_rejected: V1 and V2 certificates cannot be carried together; fallback=none".to_string(),
+        });
+    }
+    let has_mixed_metadata = build_report.is_some_and(|report| {
+        has_v1_certificate
+            || has_v2_certificate
             || report.mixed_topology_provenance.is_some()
     });
     if tetrahedral {
@@ -1890,6 +2128,78 @@ fn require_supported_fem_topology(
                 report.fallbacks_triggered, report.degraded
             ),
         });
+    }
+    if let Some(certificate) = report.mixed_layer_topology_certificate_v2.as_ref() {
+        let fingerprint = mesh
+            .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+            .map_err(|error| RunError {
+                message: format!(
+                    "fem_mixed_p1_v2_runtime_certificate_rejected: {error}; fallback=none"
+                ),
+            })?;
+        if certificate.topology_fingerprint != fingerprint {
+            return Err(RunError {
+                message: format!(
+                    "fem_mixed_p1_v2_runtime_certificate_stale: certificate={} mesh={fingerprint}; fallback=none",
+                    certificate.topology_fingerprint
+                ),
+            });
+        }
+        fullmag_ir::validate_mixed_layer_topology_certificate_v2_against_mesh(mesh, certificate)
+            .map_err(|reasons| RunError {
+                message: format!(
+                    "fem_mixed_p1_v2_runtime_certificate_rejected: {}; fallback=none",
+                    reasons.join("; ")
+                ),
+            })?;
+        let provenance = report
+            .mixed_topology_provenance
+            .as_ref()
+            .ok_or_else(|| RunError {
+                message: "fem_mixed_p1_runtime_provenance_required: accepted certificate identity is not bound to the plan; fallback=none".to_string(),
+            })?;
+        if provenance.accepted_certificate_fingerprint != fingerprint
+            || provenance.precision != precision
+            || precision != problem.backend_policy.execution_precision
+            || provenance.requested_topology != fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+            || provenance.resolved_topology != fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+        {
+            return Err(RunError {
+                message: "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none".to_string(),
+            });
+        }
+        let requested_device = match provenance.requested_device {
+            fullmag_ir::ExecutionDevice::Cpu => "cpu",
+            fullmag_ir::ExecutionDevice::Gpu => "gpu",
+            fullmag_ir::ExecutionDevice::Auto => "auto",
+        };
+        let metadata_device =
+            crate::solver_runtime::selection::effective_fem_device_request_from_metadata(problem);
+        let expected_device = match metadata_device.as_str() {
+            "cpu" => fullmag_ir::ExecutionDevice::Cpu,
+            "gpu" | "cuda" => fullmag_ir::ExecutionDevice::Gpu,
+            _ => fullmag_ir::ExecutionDevice::Auto,
+        };
+        if provenance.requested_device != expected_device {
+            return Err(RunError {
+                message: "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none".to_string(),
+            });
+        }
+        if provenance.capability_status
+            != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented
+        {
+            return Err(RunError {
+                message: "fem_mixed_p1_runtime_provenance_stale: capability status must be implemented until managed public runtime proof exists; fallback=none".to_string(),
+            });
+        }
+        return require_supported_mixed_v2_runtime_scope(
+            problem,
+            study_kind,
+            precision,
+            fem_plan,
+            certificate,
+            requested_device,
+        );
     }
     let certificate = report
         .mixed_layer_topology_certificate
@@ -2263,10 +2573,21 @@ fn require_tetrahedral_fem_plan_mesh(
     })
 }
 
+pub(crate) fn field_only_plan_not_executable_as_llg() -> RunError {
+    RunError {
+        message: "field_only_plan_not_executable_as_llg: execute the selected resolved antenna action; no magnetic state or fallback is available".to_string(),
+    }
+}
+
 pub(crate) fn require_resolved_runtime_sampling(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<(), RunError> {
+    if matches!(plan.backend_plan, BackendPlanIR::AntennaFieldOnly(_))
+        || matches!(problem.study, fullmag_ir::StudyIR::FieldOnly { .. })
+    {
+        return Err(field_only_plan_not_executable_as_llg());
+    }
     require_supported_fem_topology(problem, plan)?;
     schedules::require_resolved_periodic_outputs(&plan.output_plan.outputs)
         .map_err(|message| RunError { message })?;
@@ -2638,6 +2959,11 @@ fn validate_parallel_execution_workflow(
                     message: "parallel_execution adaptive is unsupported for FEM frequency-response workflows; use serial execution".into(),
                 });
             }
+            BackendPlanIR::AntennaFieldOnly(_) => {
+                return Err(RunError {
+                    message: "parallel_execution adaptive is unsupported for antenna field-only workflows; use serial execution".into(),
+                });
+            }
             BackendPlanIR::AntennaExternalLeadInspection(_) => {
                 return Err(RunError {
                     message: "parallel_execution adaptive is unsupported for antenna external-lead inspection workflows; use serial execution".into(),
@@ -2679,6 +3005,9 @@ fn append_parallel_execution_provenance(
 pub fn study_magnetization_layout_for_plan(
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<serde_json::Value, RunError> {
+    if matches!(plan.backend_plan, BackendPlanIR::AntennaFieldOnly(_)) {
+        return Err(field_only_plan_not_executable_as_llg());
+    }
     let layout = artifacts::field_layout(plan);
     let backend = layout
         .get("backend")
@@ -2906,6 +3235,7 @@ fn run_planned_problem_with_artifact_context(
 
     let cpu_threads = configured_control_pool_threads(problem, plan);
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
         BackendPlanIR::Fdm(fdm) => {
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
             let mut executed = dispatch::execute_fdm_in_mode(
@@ -3480,6 +3810,7 @@ fn run_planned_problem_with_callback_artifact_context(
 
     let cpu_threads = configured_control_pool_threads(problem, plan);
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
@@ -3673,6 +4004,7 @@ fn run_planned_problem_with_callback_artifact_context(
         ..StepStats::default()
     });
     let final_m = match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => None,
         BackendPlanIR::Fem(_) => None,
         _ => Some(
             executed
@@ -3684,6 +4016,7 @@ fn run_planned_problem_with_callback_artifact_context(
         ),
     };
     let final_grid = match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => [0, 0, 0],
         BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
         BackendPlanIR::FdmMultilayer(fdm) => [
             fdm.common_cells[0],
@@ -4037,6 +4370,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
     let live_display_selection = (field_every_n != u64::MAX).then_some(display_selection);
     let mut terminal_fdm_fields = None;
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
@@ -4227,6 +4561,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
         ..StepStats::default()
     });
     let final_grid = match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => [0, 0, 0],
         BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
         BackendPlanIR::FdmMultilayer(fdm) => [
             fdm.common_cells[0],
@@ -4239,6 +4574,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
         | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
     };
     let final_m = match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => None,
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => Some(
             executed
                 .result
@@ -4864,6 +5200,7 @@ pub fn snapshot_planned_problem_preview(
 ) -> Result<LivePreviewField, RunError> {
     require_physics_graph_runtime_provenance(problem, plan)?;
     match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
         BackendPlanIR::Fdm(fdm) => {
             let engine = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine;
             dispatch::snapshot_fdm_preview(engine, fdm, request)
@@ -4917,6 +5254,7 @@ pub fn snapshot_planned_problem_vector_fields(
 ) -> Result<Vec<LivePreviewField>, RunError> {
     require_physics_graph_runtime_provenance(problem, plan)?;
     match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
         BackendPlanIR::Fdm(fdm) => {
             let engine = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine;
             dispatch::snapshot_fdm_vector_fields(engine, fdm, quantities, request)
@@ -5243,6 +5581,7 @@ pub fn resolve_planned_runtime_engine(
 ) -> Result<RuntimeEngineInfo, RunError> {
     require_supported_fem_topology(problem, plan)?;
     match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
         BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
             solver_runtime::registry::resolve_antenna_inspection_runtime(inspection, None)?;
             Ok(RuntimeEngineInfo {
@@ -5443,6 +5782,7 @@ pub fn resolve_planned_runtime_capabilities(
 ) -> Result<BackendCapabilities, RunError> {
     require_supported_fem_topology(problem, plan)?;
     match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
         BackendPlanIR::AntennaExternalLeadInspection(inspection) => {
             solver_runtime::registry::resolve_antenna_inspection_runtime(inspection, None)?;
             // V/J/H are published by the owned inspection resource, not by the
@@ -6339,6 +6679,71 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn relaxation_study(
+        algorithm: fullmag_ir::RelaxationAlgorithmIR,
+    ) -> fullmag_ir::StudyIR {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        fullmag_ir::StudyIR::Relaxation {
+            algorithm,
+            dynamics: None,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_relaxation_time_s: None,
+            },
+            sampling: problem.study.sampling().clone(),
+        }
+    }
+
+    #[test]
+    fn mixed_v2_relaxation_policy_accepts_each_canonical_bounded_algorithm() {
+        for algorithm in [
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+            fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+        ] {
+            let study = relaxation_study(algorithm);
+            assert!(
+                mixed_v2_relaxation_matches_plan(&study, Some(algorithm)),
+                "canonical bounded algorithm must match the resolved FEM relaxation"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_v2_relaxation_policy_rejects_mismatch_tpi_and_time_evolution() {
+        let study = relaxation_study(fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb);
+        assert!(!mixed_v2_relaxation_matches_plan(
+            &study,
+            Some(fullmag_ir::RelaxationAlgorithmIR::NonlinearCg)
+        ));
+        assert!(!mixed_v2_relaxation_matches_plan(&study, None));
+
+        let tpi = relaxation_study(fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit);
+        assert!(!mixed_v2_relaxation_matches_plan(
+            &tpi,
+            Some(fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit)
+        ));
+
+        let bootstrap = fullmag_ir::ProblemIR::bootstrap_example();
+        let time_evolution = fullmag_ir::StudyIR::TimeEvolution {
+            dynamics: fullmag_ir::DynamicsIR::Llg {
+                gyromagnetic_ratio: 2.211e5,
+                integrator: "rk45".to_string(),
+                fixed_timestep: Some(1.0e-18),
+                adaptive_timestep: None,
+                field_refresh: None,
+                mechanics: None,
+            },
+            sampling: bootstrap.study.sampling().clone(),
+        };
+        assert!(!mixed_v2_relaxation_matches_plan(
+            &time_evolution,
+            Some(fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb)
+        ));
+    }
 
     #[test]
     fn antenna_inspection_cannot_enter_magnetic_run_before_artifact_writes() {

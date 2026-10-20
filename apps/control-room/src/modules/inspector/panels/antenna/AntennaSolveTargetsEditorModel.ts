@@ -12,6 +12,8 @@ export interface AntennaSolveTargetsDraft {
   baseRevision: number;
   dirty: boolean;
   targets: AntennaSolveTarget[];
+  samplingDomain?: AntennaSolveTarget;
+  oerstedRealization?: string;
 }
 
 export function antennaSolveTargetKey(target: AntennaSolveTarget): string {
@@ -39,8 +41,23 @@ export function antennaSolveTargetOptions(scene: SceneResource | null): AntennaS
   return targets;
 }
 
+/** The planner accepts domain/object Tet4 carriers; region point clouds are not implemented. */
+export function antennaSamplingDomainOptions(scene: SceneResource | null): AntennaSolveTargetOption[] {
+  return antennaSolveTargetOptions(scene).filter((option) => option.target.kind !== "region");
+}
+
+/** Current-driven and unresolved source lanes cannot request a vector-potential fallback. */
+export function antennaVectorPotentialSelectable(scene: SceneResource | null, stage: AntennaSolveStage | undefined): boolean {
+  const matches = (scene?.current_transports ?? []).filter(transport => transport.name === stage?.current_transport_id);
+  if (!stage || matches.length !== 1) return false;
+  const transport = matches[0];
+  return transport.kind === "current_transport" && transport.model === "ohmic_poisson" &&
+    transport.conservative_current_source == null && transport.external_lead_preparation == null &&
+    transport.structured_current_closure == null;
+}
+
 export function buildAntennaSolveTargetsTransaction(
-  scene: SceneResource, objectId: string, stageId: string, baseRevision: number, targets: readonly AntennaSolveTarget[],
+  scene: SceneResource, objectId: string, stageId: string, baseRevision: number, targets: readonly AntennaSolveTarget[], samplingDomain?: AntennaSolveTarget, oerstedRealization?: string,
 ): AuthoringTransactionRequest {
   if (!Number.isSafeInteger(baseRevision) || baseRevision < 0 || scene.revision !== baseRevision) {
     throw new Error("Scene changed. Refresh and explicitly rebase field-solve targets.");
@@ -59,9 +76,21 @@ export function buildAntennaSolveTargetsTransaction(
     if (seen.has(key)) throw new Error("Duplicate field-solve targets are not allowed.");
     seen.add(key);
   }
+  if (samplingDomain) {
+    if (samplingDomain.kind === "region") throw new Error("Region sampling requires an explicit point-cloud carrier; this runtime supports Global or Object Tet4 sampling only.");
+    if (!antennaSamplingDomainOptions(scene).some((option) => option.key === antennaSolveTargetKey(samplingDomain))) {
+      throw new Error("Select an existing Global or Object field-sampling domain.");
+    }
+  }
+  if (oerstedRealization !== undefined && !["direct_tetra_quadrature", "vector_potential_solver"].includes(oerstedRealization)) {
+    throw new Error("Select a supported explicit Oersted realization: direct tetrahedral quadrature or FEM vector potential.");
+  }
+  if (oerstedRealization === "vector_potential_solver" && !antennaVectorPotentialSelectable(scene, matches[0])) {
+    throw new Error("Vector potential is unavailable for current-driven or unresolved source definitions. Select direct tetrahedral quadrature explicitly; no automatic fallback is applied.");
+  }
   return {
     kind: "merge_patch", base_revision: baseRevision,
-    merge_patch: { antenna_field_solve_stages: stages.map((stage) => stage.id === stageId ? { ...stage, target_refs: targets.map((target) => ({ ...target })) } : stage) },
+    merge_patch: { antenna_field_solve_stages: stages.map((stage) => stage.id === stageId ? { ...stage, target_refs: targets.map((target) => ({ ...target })), ...(samplingDomain ? { field_sampling_domain: { ...samplingDomain } } : {}), ...(oerstedRealization !== undefined ? { oersted_realization: oerstedRealization } : {}) } : stage) },
   };
 }
 

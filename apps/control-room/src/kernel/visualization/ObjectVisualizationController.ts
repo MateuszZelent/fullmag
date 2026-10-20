@@ -1,3 +1,4 @@
+import type { ArtifactFieldSelection } from "./artifactFieldSelection";
 import type {
   VisualizationStatePatch,
   VisualizationStateResource,
@@ -117,6 +118,7 @@ export interface ViewportTargetRenderingPreferences {
 }
 
 export interface ObjectVisualizationSnapshot {
+  artifactFieldSelection?: ArtifactFieldSelection | null;
   antennaFieldIntent?: AntennaFieldIntent | null;
   antennaFieldDisplayStatus?: AntennaFieldDisplayStatus | null;
   defaults: Partial<Record<VisualizationTargetKind, VisualizationStoredTargetPatch>>;
@@ -568,6 +570,14 @@ const DEFAULT_PART_VISUALIZATION: VisualizationTargetSettings = {
 
 
 export class ObjectVisualizationController {
+  private artifactFieldSelection: ArtifactFieldSelection | null = null;
+
+  setArtifactFieldSelection(selection: ArtifactFieldSelection | null): void {
+    if (JSON.stringify(this.artifactFieldSelection) === JSON.stringify(selection)) return;
+    this.artifactFieldSelection = selection;
+    this.bump();
+  }
+
   private antennaFieldIntent: AntennaFieldIntent | null = null;
   private antennaFieldDisplayStatus: AntennaFieldDisplayStatus | null = null;
 
@@ -918,6 +928,7 @@ export class ObjectVisualizationController {
 
   private bump(): void {
     this.snapshot = {
+      artifactFieldSelection: this.artifactFieldSelection,
       antennaFieldIntent: this.antennaFieldIntent,
       antennaFieldDisplayStatus: this.antennaFieldDisplayStatus,
       defaults: Object.fromEntries(this.defaults),

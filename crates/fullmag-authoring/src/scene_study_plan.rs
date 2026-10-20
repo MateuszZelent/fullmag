@@ -92,6 +92,7 @@ pub fn scene_document_to_study_plan(
 
         let outputs = authored_stage_output_ports(&kind);
         steps.push(StudyStep {
+            completion_dependencies: Vec::new(),
             step_id,
             label,
             enabled,
@@ -112,7 +113,7 @@ pub fn scene_document_to_study_plan(
     }
 
     let plan = StudyPlan {
-        schema_version: crate::STUDY_PLAN_SCHEMA_VERSION.to_string(),
+        schema_version: crate::STUDY_PLAN_SCHEMA_VERSION_V2.to_string(),
         study_id,
         revision,
         source_pipeline_version: None,

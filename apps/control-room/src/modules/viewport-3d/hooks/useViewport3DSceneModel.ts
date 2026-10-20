@@ -581,7 +581,6 @@ const EMPTY_SEMANTIC_RENDER_TARGET_CATALOG: SemanticRenderTargetCatalog = {
   byTargetId: new Map(),
   entries: [],
 };
-const SAVED_VIEWPORT_AVAILABLE_QUANTITIES: ReadonlySet<string> = new Set(["m"]);
 const EMPTY_VIEWPORT_FDM_PART_STATES = new Map<
   string,
   Viewport3DAirboxFieldVectorPartState
@@ -3151,7 +3150,7 @@ export function useViewport3DSceneModel({
   const quantityCatalog = useQuantityCatalogResource({
     enabled: Boolean(
       liveViewportResourcesEnabled &&
-        (fdmLaneActive || femLaneActive),
+        (fdmLaneActive || femLaneActive || (scene.data?.antenna_field_solve_stages?.length ?? 0) > 0),
     ),
   });
   const availableFieldQuantityIds = useMemo(
@@ -6776,6 +6775,12 @@ export function useViewport3DSceneModel({
   const effectiveViewportQuantityId = savedSelectionActive
     ? savedViewportResources.field.data?.quantityId ?? ""
     : primaryFieldQuantityId;
+  const effectiveViewportAvailableQuantityIds = useMemo(
+    () => savedSelectionActive
+      ? new Set(effectiveViewportQuantityId ? [effectiveViewportQuantityId] : [])
+      : availableQuantityIdsForPlanning,
+    [availableQuantityIdsForPlanning, effectiveViewportQuantityId, savedSelectionActive],
+  );
   const effectiveViewportVectorColorMode = savedSelectionActive &&
       savedViewportResources.field.data?.componentCount === 1
     ? "magnitude"
@@ -6785,17 +6790,24 @@ export function useViewport3DSceneModel({
       savedSelectionActive
         ? {
             ...fallbackSettings,
-            activeQuantityId: "m",
+            activeQuantityId: effectiveViewportQuantityId,
             renderMode: "surface" as const,
             shaderColorMode: "magnitude" as const,
             shaderVisible: true,
             surfaceColorSource: "magnitude" as const,
             surfaceOpacityPercent: 100,
             surfaceProjectionMode: "raw_nodal" as const,
+            viewportColorbarVisible: true,
             visible: true,
           }
         : fallbackSettings,
-    [fallbackSettings, savedSelectionActive],
+    [effectiveViewportQuantityId, fallbackSettings, savedSelectionActive],
+  );
+  const effectiveViewportPartSettings = useCallback(
+    (part: Viewport3DMeshPart) => savedSelectionActive
+      ? effectiveViewportFallbackSettings
+      : getPartSettings(part),
+    [effectiveViewportFallbackSettings, getPartSettings, savedSelectionActive],
   );
   const domainSummary = fdmDomain
     ? formatFdmDisplaySamplingSummary({
@@ -7089,10 +7101,9 @@ export function useViewport3DSceneModel({
   };
 
   return {
+    artifactInspectionDefinitions: !savedSelectionActive && scene.status === "ready" ? scene.data?.antenna_field_solve_stages ?? [] : [],
     airboxSettings,
-    availableQuantityIds: savedSelectionActive
-      ? SAVED_VIEWPORT_AVAILABLE_QUANTITIES
-      : availableQuantityIdsForPlanning,
+    availableQuantityIds: effectiveViewportAvailableQuantityIds,
     bounds,
     cameraOrthographicScale: effectiveCameraOrthographicScale,
     cameraProjection: effectiveCameraProjection,
@@ -7179,7 +7190,7 @@ export function useViewport3DSceneModel({
     fieldModel: effectiveViewportFieldModel,
     fieldVector: savedSelectionActive ? null : fdmFieldVector,
     getObjectSettings,
-    getPartSettings,
+    getPartSettings: effectiveViewportPartSettings,
     getRegionSettings,
     hysteresisReplayGlyphModel: savedSelectionActive
       ? null

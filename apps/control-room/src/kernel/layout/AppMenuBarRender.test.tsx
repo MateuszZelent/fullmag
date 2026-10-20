@@ -9,16 +9,21 @@ import { KernelProvider } from "@/kernel/KernelProvider";
 
 const appMenuBarSourceUrl = new URL("./AppMenuBar.tsx", import.meta.url);
 
-import {
-  AppMenuBar,
-} from "./AppMenuBar";
+import { AppMenuBar } from "./AppMenuBar";
 import {
   resolveApiConnectionErrorDetails,
   resolveHeaderSessionDisplay,
   resolveHydrationSafeHeaderSessionSource,
+  resolveNoSessionSubtitle,
 } from "./AppMenuBarHeaderModel";
 
 describe("AppMenuBar", () => {
+  it("keeps the Home header stable while session discovery retries", () => {
+    expect(resolveNoSessionSubtitle("loading")).toBe("Home");
+    expect(resolveNoSessionSubtitle("error")).toBe("Home");
+    expect(resolveNoSessionSubtitle("no-session")).toBe("No active session");
+  });
+
   it("selects only header display fields from session status", () => {
     const source = readFileSync(appMenuBarSourceUrl, "utf8");
 

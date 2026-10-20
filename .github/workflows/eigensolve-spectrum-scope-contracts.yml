@@ -1,15 +1,6 @@
 name: eigensolve-spectrum-scope-contracts
 on:
   workflow_dispatch:
-  push:
-    branches: ['codex/eigensolve-dispersion-plan-20260912']
-    paths:
-      - 'crates/fullmag-ir/**'
-      - 'crates/fullmag-plan/**'
-      - 'crates/fullmag-application/**'
-      - 'crates/fullmag-runner/**'
-      - 'crates/fullmag-cli/**'
-      - '.github/workflows/eigensolve-spectrum-scope-contracts.yml'
 permissions:
   contents: read
 jobs:

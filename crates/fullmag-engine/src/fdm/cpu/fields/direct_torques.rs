@@ -177,6 +177,38 @@ pub(crate) fn prescribed_sot_torque_from_config(
 }
 
 impl ExchangeLlgProblem {
+    /// Convert a Gilbert source in 1/s exactly once for the current trial state.
+    /// Transport observations retain their unconverted source values. Fields,
+    /// stage projection, and the final frozen-spin mask keep their existing owners.
+    pub fn external_stage_terms_from_gilbert_source(
+        &self,
+        magnetization: &[Vector3],
+        additional_field_apm: Vec<Vector3>,
+        mut gilbert_source_per_s: Vec<Vector3>,
+    ) -> crate::Result<crate::ExternalStageTerms> {
+        let n = self.grid.cell_count();
+        if magnetization.len() != n
+            || additional_field_apm.len() != n
+            || gilbert_source_per_s.len() != n
+        {
+            return Err(crate::EngineError::with_code(
+                crate::EngineErrorCode::InvalidInput,
+                "external Gilbert sources and trial state must match the FDM grid",
+            ));
+        }
+        for (i, (m, source)) in magnetization.iter().zip(&mut gilbert_source_per_s).enumerate() {
+            let alpha = self.alpha_at(i);
+            *source = scale(
+                add(*source, scale(cross(*m, *source), alpha)),
+                1.0 / (1.0 + alpha * alpha),
+            );
+        }
+        Ok(crate::ExternalStageTerms {
+            additional_field_apm,
+            direct_torque_per_s: gilbert_source_per_s,
+        })
+    }
+
     pub(crate) fn direct_torques_add_into(&self, magnetization: &[Vector3], out: &mut [Vector3]) {
         let n = magnetization.len();
         if let Some(ref zl) = self.terms.zhang_li_stt {

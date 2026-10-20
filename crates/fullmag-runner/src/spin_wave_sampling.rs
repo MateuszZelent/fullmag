@@ -636,7 +636,12 @@ pub(crate) fn requested_finite_k_artifacts(
     let has_active_drive = fem
         .field_drives
         .iter()
-        .any(|drive| crate::time_events::resolved_field_drive_is_active(drive, &fem.time_stage));
+        .any(|drive| crate::time_events::resolved_field_drive_is_active(drive, &fem.time_stage))
+        || fem.solved_antenna_drive_bases.iter().any(|basis| {
+            basis.drive.peak_current_a.is_finite()
+                && basis.drive.peak_current_a != 0.0
+                && crate::time_events::resolved_solved_antenna_drive_is_active(basis, &fem.time_stage)
+        });
     if !has_active_drive {
         return Ok(vec![]);
     }

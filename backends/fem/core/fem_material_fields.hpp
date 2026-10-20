@@ -11,6 +11,12 @@ namespace fullmag::fem {
 
 struct Context;
 
+/* Reject non-empty raw ABI spans with null pointers before copy helpers can
+ * silently turn them into empty vectors and activate scalar fallbacks. */
+bool validate_material_field_spans(
+    const fullmag_fem_plan_desc &plan,
+    std::string &error);
+
 /*
  * Runtime owner for scalar and optional per-node material fields.
  *

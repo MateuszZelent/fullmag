@@ -4,10 +4,13 @@ use crate::{
     FdmProjectionPolicyIR, FemLinearSolverPolicy, FieldRefreshPolicyIR, HybridHintsIR,
     IntegratorChoice, RelaxationControlIR,
 };
-use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
+use serde::{
+    de::{Error as DeError, MapAccess, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::{collections::{BTreeMap, BTreeSet, HashMap, VecDeque}, fmt};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DiscretizationHintsIR {
@@ -1758,6 +1761,50 @@ impl Default for MeshIR {
     }
 }
 
+fn deserialize_canonical_u32_keyed_mesh_quality<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<u32, MeshQualityIR>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct NumericKeyedMeshQualityVisitor;
+
+    impl<'de> Visitor<'de> for NumericKeyedMeshQualityVisitor {
+        type Value = HashMap<u32, MeshQualityIR>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("an object with canonical unsigned-integer string keys")
+        }
+
+        fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+        where
+            M: MapAccess<'de>,
+        {
+            let mut values = HashMap::new();
+            while let Some((key, value)) = access.next_entry::<String, MeshQualityIR>()? {
+                let numeric_key = key.parse::<u32>().map_err(|_| {
+                    M::Error::custom(format!(
+                        "per_domain_quality key '{key}' is not a valid u32"
+                    ))
+                })?;
+                if key != numeric_key.to_string() {
+                    return Err(M::Error::custom(format!(
+                        "per_domain_quality key '{key}' is not a canonical u32"
+                    )));
+                }
+                if values.insert(numeric_key, value).is_some() {
+                    return Err(M::Error::custom(format!(
+                        "duplicate per_domain_quality numeric key '{key}'"
+                    )));
+                }
+            }
+            Ok(values)
+        }
+    }
+
+    deserializer.deserialize_map(NumericKeyedMeshQualityVisitor)
+}
+
 #[derive(Deserialize)]
 struct MeshIRWire {
     mesh_name: String,
@@ -1776,7 +1823,10 @@ struct MeshIRWire {
     periodic_boundary_pairs: Vec<MeshPeriodicBoundaryPairIR>,
     #[serde(default)]
     periodic_node_pairs: Vec<MeshPeriodicNodePairIR>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_canonical_u32_keyed_mesh_quality"
+    )]
     per_domain_quality: HashMap<u32, MeshQualityIR>,
 }
 
@@ -5033,6 +5083,120 @@ mod mesh_validation_tests {
         assert!(errors
             .iter()
             .any(|error| { error.contains("does not cover exactly the paired boundary faces") }));
+    }
+
+    fn mesh_quality_fixture(n_elements: u32) -> MeshQualityIR {
+        let value = n_elements as f64;
+        MeshQualityIR {
+            n_elements,
+            sicn_min: 0.1,
+            sicn_max: 0.9,
+            sicn_mean: 0.5,
+            sicn_p5: 0.2,
+            sicn_histogram: vec![n_elements],
+            gamma_min: 0.15,
+            gamma_mean: 0.6,
+            gamma_histogram: vec![n_elements],
+            volume_min: value,
+            volume_max: value + 1.0,
+            volume_mean: value + 0.5,
+            volume_std: 0.25,
+            avg_quality: 0.5,
+        }
+    }
+
+    fn execution_plan_with_domain_quality(single_domain: bool) -> crate::ExecutionPlanIR {
+        let mut fem = crate::FemPlanIR::default();
+        fem.mesh_name = "quality-mesh".to_string();
+        fem.mesh.mesh_name = "quality-mesh".to_string();
+        fem.mesh
+            .per_domain_quality
+            .insert(0, mesh_quality_fixture(208));
+        if !single_domain {
+            fem.mesh
+                .per_domain_quality
+                .insert(1, mesh_quality_fixture(86));
+        }
+
+        crate::ExecutionPlanIR {
+            common: crate::CommonPlanMeta {
+                ir_version: "0.3.0".to_string(),
+                requested_backend: crate::BackendTarget::Fem,
+                resolved_backend: crate::BackendTarget::Fem,
+                execution_mode: crate::ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: crate::BackendPlanIR::Fem(fem),
+            output_plan: crate::OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: crate::ProvenancePlanIR::default(),
+        }
+    }
+
+    #[test]
+    fn execution_plan_domain_quality_round_trips_through_json_text_and_value() {
+        let expected = execution_plan_with_domain_quality(false);
+        let encoded = serde_json::to_string(&expected).expect("execution plan serializes");
+
+        let from_text =
+            serde_json::from_str::<crate::ExecutionPlanIR>(&encoded).expect(
+                "serialized execution plan must deserialize through the tagged backend plan",
+            );
+        assert_eq!(from_text, expected);
+
+        let value = serde_json::to_value(&expected).expect("execution plan becomes JSON value");
+        let from_value =
+            serde_json::from_value::<crate::ExecutionPlanIR>(value).expect(
+                "JSON value execution plan must deserialize through the tagged backend plan",
+            );
+        assert_eq!(from_value, expected);
+    }
+
+    #[test]
+    fn execution_plan_domain_quality_rejects_invalid_and_noncanonical_keys() {
+        let expected = execution_plan_with_domain_quality(true);
+        let quality = serde_json::to_value(mesh_quality_fixture(208)).unwrap();
+
+        for key in ["not-a-number", "4294967296", "00"] {
+            let mut value = serde_json::to_value(&expected).unwrap();
+            let mut quality_map = serde_json::Map::new();
+            quality_map.insert(key.to_string(), quality.clone());
+            value["backend_plan"]["mesh"]["per_domain_quality"] =
+                serde_json::Value::Object(quality_map);
+
+            let error = serde_json::from_value::<crate::ExecutionPlanIR>(value)
+                .expect_err("invalid per-domain quality key must fail closed");
+            assert!(
+                error.to_string().contains("per_domain_quality key"),
+                "unexpected error for key {key}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn execution_plan_domain_quality_rejects_duplicate_numeric_keys() {
+        let expected = execution_plan_with_domain_quality(true);
+        let quality = serde_json::to_string(&mesh_quality_fixture(208)).unwrap();
+        let encoded = serde_json::to_string(&expected).unwrap();
+        let single = format!("\"per_domain_quality\":{{\"0\":{quality}}}");
+        let duplicate = format!(
+            "\"per_domain_quality\":{{\"0\":{quality},\"0\":{quality}}}"
+        );
+        assert!(
+            encoded.contains(&single),
+            "single quality fixture must have a stable serialized anchor"
+        );
+
+        let duplicate = encoded.replacen(&single, &duplicate, 1);
+        let error = serde_json::from_str::<crate::ExecutionPlanIR>(&duplicate)
+            .expect_err("duplicate numeric quality keys must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate per_domain_quality numeric key"),
+            "unexpected duplicate-key error: {error}"
+        );
     }
 
     #[test]

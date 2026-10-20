@@ -224,6 +224,21 @@ void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
 #endif
 }
 
+void rhs_norm_metric_excludes_non_magnetic_nodes() {
+    const std::vector<double> field = {
+        1.0, 0.0, 0.0,
+        0.0, 100.0, 0.0,
+    };
+    check_near(
+        fullmag::fem::max_norm_aos_masked(field, {1u, 0u}),
+        1.0,
+        1e-15,
+        "RHS norm metric excludes air nodes");
+    check(
+        !std::isfinite(fullmag::fem::max_norm_aos_masked(field, {1u})),
+        "RHS norm metric fails closed on a mask extent mismatch");
+}
+
 void torque_metric_excludes_non_magnetic_and_frozen_nodes() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 3;
@@ -403,6 +418,7 @@ void mixed_average_does_not_fallback_to_geometry_over_arity_node_volumes() {
 int main() {
     step_metrics_are_owned_by_runtime_module();
     fill_common_step_metrics_reports_energy_fields_torque_and_averages();
+    rhs_norm_metric_excludes_non_magnetic_nodes();
     torque_metric_excludes_non_magnetic_and_frozen_nodes();
     torque_metric_is_zero_for_all_frozen_nodes();
     torque_metric_fails_closed_on_mask_extent_mismatch();

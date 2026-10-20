@@ -604,7 +604,7 @@ bool context_step_explicit_rk_mfem(
     double max_rhs_final = 0.0;
     if (final_stage_cache_valid) {
         const auto &final_rhs = ws.fsal_valid ? ws.k[0] : ws.k[tab.stages - 1];
-        max_rhs_final = max_norm_aos(final_rhs);
+        max_rhs_final = max_norm_aos_masked(final_rhs, ctx.mesh.magnetic_node_mask);
     } else {
         if (!materialize_transport_stage_rhs(
                 ctx,
@@ -620,7 +620,7 @@ bool context_step_explicit_rk_mfem(
                     ctx.material_fields.material.gyromagnetic_ratio, ctx.material_fields.material.damping,
                     ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
                     ctx.base_plan.precession_enabled,
-                    ws.k[0], max_rhs_final);
+                    ws.k[0], max_rhs_final, &ctx.mesh.magnetic_node_mask);
         add_stt_rhs_aos(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final, ws.stt);
         add_sot_rhs_aos(
             ctx,
@@ -634,7 +634,7 @@ bool context_step_explicit_rk_mfem(
         if (ctx.frozen_spins.enabled()) {
             ctx.frozen_spins.zero_frozen_rhs(ws.k[0]);
         }
-        max_rhs_final = max_norm_aos(ws.k[0]);
+        max_rhs_final = max_norm_aos_masked(ws.k[0], ctx.mesh.magnetic_node_mask);
         total_rhs += 1;
         endpoint_telemetry.final_rhs_evaluations += 1u;
     }

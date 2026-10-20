@@ -454,6 +454,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.antenna" ||
       node.kind === "object.antenna.geometry" ||
       node.kind === "object.antenna.regional" ||
+      node.kind === "object.antenna.terminals" ||
       node.kind === "object.antenna.conductor" ||
       node.kind === "object.antenna.port" ||
       node.kind === "object.antenna.solution" ||

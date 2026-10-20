@@ -657,7 +657,7 @@ const studyTab: RibbonTabContent = {
         { id: "study.save-checkpoint", icon: icon(Save), label: "Save Checkpoint", iconColor: C.blue },
         { id: "study.restore-checkpoint", icon: icon(RotateCcw), label: "Restore", iconColor: C.lavender },
         { id: "study.import-state", icon: icon(Upload), label: "Restore Runtime State", iconColor: C.lavender },
-        { id: "study.export-state", icon: icon(Download), label: "Export State", iconColor: C.sapphire },
+        { id: "study.export-state", icon: icon(Download), label: "Export State", commandId: "study.export-state", iconColor: C.sapphire },
         { id: "study.discard-paused-state", icon: icon(Scissors), label: "Discard", iconColor: C.red },
         { id: "study.stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   iconColor: C.red },
         { id: "study.skip",  icon: icon(SkipForward),                           label: "Skip",                   iconColor: C.peach },
@@ -701,7 +701,7 @@ const resultsTab: RibbonTabContent = {
       tone: "sync",
       actions: [
         { id: "export-vtk",   icon: icon(Download), label: "VTK",   commandId: "study.save-vtk", iconColor: "text-blue-400",    menu: menu("results-export", "Export data", ["Field buffer", "Scalar table", "VTK file"]) },
-        { id: "export-state",icon: icon(Save),      label: "State", commandId: "study.export-state", iconColor: "text-emerald-400" },
+        { id: "export-state",icon: icon(Save),      label: "Save State", commandId: "study.save-state", iconColor: "text-emerald-400" },
       ],
     },
     {

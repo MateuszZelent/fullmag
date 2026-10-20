@@ -477,15 +477,27 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     {
         bail!("resource lease changed while the supervisor captured its task claim");
     }
-    let (gpu_uuid, cpu_ids) = if let Some(host) = host {
-        host.ensure_solver_claim_committed(store, &claim)?;
+    let _allocated_cpu_millis = lease.budget.cpu_millis;
+    let (gpu_uuid, cpu_ids, _cpu_capacity_millis) = if let Some(host) = host {
+        verify_host_solver_claim_before_spawn(host, store, &claim)?;
         let placement = host.solver_placement(&lease.resource_id)?;
-        (placement.gpu_uuid.clone(), placement.cpu_ids.clone())
+        let snapshot = host
+            .current_compute_node_snapshot()?
+            .context("accepted worker launch requires a current compute-node sample")?;
+        let cpu_capacity_millis = match snapshot.cpu.effective_capacity_millis {
+            fullmag_session::compute_node_snapshot::Observation::Available { value } => value,
+            _ => bail!("accepted worker launch requires measured effective CPU capacity"),
+        };
+        (
+            placement.gpu_uuid.clone(),
+            placement.cpu_ids.clone(),
+            cpu_capacity_millis,
+        )
     } else {
         if lease.host_launch_binding.is_some() {
             bail!("host-bound worker lease requires its pinned host supervisor context");
         }
-        (worker_gpu_uuid(&lease)?, BTreeSet::new())
+        (worker_gpu_uuid(&lease)?, BTreeSet::new(), 0)
     };
 
     let recovered_before_spawn =
@@ -498,8 +510,11 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
             .any(|event| matches!(&event.event, WorkerEvent::Started))
     {
         if let Some(host) = host {
-            host.ledger()
-                .close_worker_launch_before_spawn(store, &lease)?;
+            retry_store_writer_busy(|| {
+                host.ledger()
+                    .close_worker_launch_before_spawn(store, &lease)
+            })
+            .context("close host worker launch before cancelled worker spawn")?;
         }
         let mut coordinator =
             fullmag_application::DurableWorkerCoordinator::new(recovered_before_spawn.coordinator);
@@ -508,14 +523,21 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
         retry_store_writer_busy(|| store.release_resource_lease(&lease))
             .context("release pre-start cancelled worker resource lease")?;
         if let Some(host) = host {
-            let request = fullmag_runtime_control::host_allocation::host_request_for_task_claim(
-                store,
-                host.ledger(),
-                &claim,
-                host.solver_placement(&lease.resource_id)?,
-            )?;
-            host.ledger()
-                .release_worker_without_spawn(store, &request.identity)?;
+            let request = retry_store_writer_busy(|| {
+                fullmag_runtime_control::host_allocation::host_request_for_task_claim(
+                    store,
+                    host.ledger(),
+                    &claim,
+                    host.solver_placement(&lease.resource_id)?,
+                    host.expected_runtime_generation_sha256(),
+                )
+            })
+            .context("rebuild exact host request for cancelled worker")?;
+            retry_store_writer_busy(|| {
+                host.ledger()
+                    .release_worker_without_spawn(store, &request.identity)
+            })
+            .context("release host reservation for cancelled worker")?;
         }
         slot.release()?;
         return Ok(SupervisedWorkerResult {
@@ -576,9 +598,30 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     } else {
         Vec::new()
     };
+    #[cfg(windows)]
+    let cpu_rate_limit = if host.is_some() {
+        Some(owned_worker_process::cpu_rate_limit(
+            _allocated_cpu_millis,
+            _cpu_capacity_millis,
+        )?)
+    } else {
+        None
+    };
+    #[cfg(not(windows))]
+    let cpu_rate_limit = None;
+    #[cfg(target_os = "linux")]
+    let linux_cgroup = if host.is_some() {
+        Some(owned_worker_process::LinuxWorkerCgroup::prepare(
+            _allocated_cpu_millis,
+        )?)
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    let linux_cgroup = None;
     let mut active_lease = lease;
     let host_launch_token = host
-        .map(|host| host.ledger().authorize_worker_launch(store, &active_lease))
+        .map(|host| authorize_host_worker_launch(host.ledger(), store, &active_lease))
         .transpose()?;
     let outcome = match spawn_worker(
         worker_executable,
@@ -589,6 +632,8 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
         &cpu_ids,
         &cpu_thread_environment,
         host_launch_token.as_deref(),
+        cpu_rate_limit,
+        linux_cgroup,
         worker_timeout,
         heartbeat_interval,
         || renew_resource_lease(store, &mut active_lease),
@@ -602,31 +647,48 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
             ));
         }
     };
-    if let Err(error) = reconcile_final_resource_heartbeat(store, &claim, &mut active_lease) {
+    // Keep the final heartbeat result local until the reaped-child proof is
+    // durable. The heartbeat reconciliation may advance the lease and then
+    // discover another pending command; the receipt must bind that latest
+    // sequence so recovery can retain the ambiguous pending Start exactly.
+    let final_heartbeat_result =
+        reconcile_final_resource_heartbeat(store, &claim, &mut active_lease);
+    let receipt_lease = match receipt_lease_after_final_heartbeat(
+        store,
+        &claim,
+        &active_lease,
+        &final_heartbeat_result,
+    ) {
+        Ok(lease) => lease,
+        Err(error) => {
+            slot.retain_for_reconciliation();
+            return Err(error.context(
+                "confirm durable resource lease before process-exit receipt; supervisor slot retained",
+            ));
+        }
+    };
+    let process_exit_receipt = match persist_worker_process_exit_receipt(
+        store,
+        &claim,
+        &receipt_lease,
+        &outcome,
+    ) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            slot.retain_for_reconciliation();
+            return Err(
+                error.context("persist confirmed worker process exit; supervisor slot retained")
+            );
+        }
+    };
+    accepted_supervisor_test_fail_after_process_exit_receipt()?;
+    if let Err(error) = final_heartbeat_result {
         slot.retain_for_reconciliation();
         return Err(error.context(format!(
             "reconcile final worker-acknowledged resource heartbeat; {}",
             worker_failure_reason(&outcome)
         )));
     }
-    let process_exit_receipt = match worker_process_exit_receipt(&claim, &active_lease, &outcome) {
-        Ok(receipt) => receipt,
-        Err(error) => {
-            slot.retain_for_reconciliation();
-            return Err(
-                error.context("build durable process-exit receipt; supervisor slot retained")
-            );
-        }
-    };
-    if let Err(error) =
-        retry_store_writer_busy(|| store.commit_worker_process_exit_receipt(&process_exit_receipt))
-    {
-        slot.retain_for_reconciliation();
-        return Err(
-            error.context("persist confirmed worker process exit; supervisor slot retained")
-        );
-    }
-    accepted_supervisor_test_fail_after_process_exit_receipt()?;
     let reconciliation = reconcile_worker_exit(
         store,
         &claim,
@@ -658,6 +720,42 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     }
 }
 
+fn verify_host_solver_claim_before_spawn(
+    host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+) -> Result<()> {
+    retry_store_writer_busy(|| host.ensure_solver_claim_committed(store, claim))
+        .context("verify committed host solver claim before worker spawn")
+}
+
+fn authorize_host_worker_launch(
+    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    store: &SessionStore,
+    lease: &FmsResourceLease,
+) -> Result<String> {
+    retry_host_worker_launch(|| ledger.authorize_worker_launch(store, lease), || {})
+        .context("authorize host worker launch")
+}
+
+fn retry_host_worker_launch(
+    mut operation: impl FnMut() -> Result<String>,
+    mut on_busy: impl FnMut(),
+) -> Result<String> {
+    fullmag_runtime_control::retry_store_writer_busy(|| match operation() {
+        Ok(token) => Ok(token),
+        Err(error)
+            if error
+                .chain()
+                .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()) =>
+        {
+            on_busy();
+            Err(error)
+        }
+        Err(error) => Err(error),
+    })
+}
+
 fn finish_host_worker_exit(
     host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
     store: &SessionStore,
@@ -671,7 +769,8 @@ fn finish_host_worker_exit(
         retry_store_writer_busy(|| {
             host.ledger()
                 .release_worker_after_exit(store, &receipt.run_id, &receipt.receipt_id)
-        })?;
+        })
+        .context("release host reservation after worker exit")?;
         return Ok(());
     }
     receipt.validate_for_lease(&lease)?;
@@ -688,7 +787,8 @@ fn finish_host_worker_exit(
             ownership_epoch: receipt.ownership_epoch,
         },
     };
-    host.ledger().quarantine_reservation(&identity)?;
+    retry_store_writer_busy(|| host.ledger().quarantine_reservation(&identity))
+        .context("quarantine host reservation after worker exit")?;
     if require_release {
         bail!("successful worker reconciliation retained its local lease; host capacity remains quarantined");
     }
@@ -876,6 +976,8 @@ fn spawn_worker<H, C>(
     cpu_ids: &BTreeSet<u32>,
     cpu_thread_environment: &[(&'static str, String)],
     host_launch_token: Option<&str>,
+    cpu_rate_limit: Option<u32>,
+    linux_cgroup: Option<owned_worker_process::LinuxWorkerCgroup>,
     worker_timeout: Duration,
     heartbeat_interval: Duration,
     heartbeat: H,
@@ -936,7 +1038,7 @@ where
         }
         command.creation_flags(flags);
     }
-    let child = OwnedWorkerProcess::spawn(&mut command, cpu_ids)
+    let child = OwnedWorkerProcess::spawn(&mut command, cpu_ids, cpu_rate_limit, linux_cgroup)
         .with_context(|| format!("spawn accepted worker `{}`", worker_executable.display()))?;
     observe_child(
         child,
@@ -1644,6 +1746,36 @@ fn worker_process_exit_receipt(
     Ok(receipt)
 }
 
+fn receipt_lease_after_final_heartbeat(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    active_lease: &FmsResourceLease,
+    final_heartbeat_result: &Result<()>,
+) -> Result<FmsResourceLease> {
+    if final_heartbeat_result.is_ok() {
+        return Ok(active_lease.clone());
+    }
+    retry_store_writer_busy(|| {
+        store.read_resource_lease(
+            claim.run_id.as_str(),
+            active_lease.resource_id.as_str(),
+            active_lease.lease_token.as_str(),
+        )
+    })?
+    .context("active resource lease disappeared after final heartbeat failure")
+}
+
+fn persist_worker_process_exit_receipt(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    lease: &FmsResourceLease,
+    outcome: &ObservedWorkerProcess,
+) -> Result<FmsWorkerProcessExitReceipt> {
+    let receipt = worker_process_exit_receipt(claim, lease, outcome)?;
+    retry_store_writer_busy(|| store.commit_worker_process_exit_receipt(&receipt))?;
+    Ok(receipt)
+}
+
 fn worker_process_exit_receipt_for_current_task(
     store: &SessionStore,
     run_id: &str,
@@ -2115,6 +2247,293 @@ mod tests {
         (root, store)
     }
 
+    struct HostLaunchTestFixture {
+        store: SessionStore,
+        ledger: fullmag_session::host_resource_ledger::HostResourceLedger,
+        application_state_root: PathBuf,
+        ledger_root: PathBuf,
+        lease: FmsResourceLease,
+        claim: fullmag_application::TaskClaim,
+        _inventory_owner: fullmag_session::host_resource_ledger::HostInventoryOwner,
+        _root: tempfile::TempDir,
+    }
+
+    fn host_launch_test_fixture() -> HostLaunchTestFixture {
+        let root = tempfile::Builder::new()
+            .prefix("fullmag-accepted-supervisor-host-launch-")
+            .tempdir()
+            .unwrap();
+        let store = SessionStore::open(root.path().join("store")).unwrap();
+        let application_state_root = root.path().join("application-state");
+        std::fs::create_dir(&application_state_root).unwrap();
+        let budget = fullmag_session::FmsResourceBudget {
+            cpu_millis: 1000,
+            memory_bytes: 1024,
+            storage_bytes: 1024,
+            gpu_memory_bytes: 0,
+        };
+        let policy = fullmag_session::host_resource_ledger::HostResourceLedgerPolicy {
+            schema_version:
+                fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1.into(),
+            host_id: "host-accepted-supervisor-test".into(),
+            topology_sha256: "a".repeat(64),
+            revision: 1,
+            owner_epoch: 1,
+            total_budget: fullmag_session::FmsResourceBudget {
+                cpu_millis: 4000,
+                memory_bytes: 8192,
+                storage_bytes: 8192,
+                gpu_memory_bytes: 0,
+            },
+            allowed_cpu_ids: BTreeSet::new(),
+            gpu_vram_bytes_by_uuid: std::collections::BTreeMap::new(),
+        };
+        let ledger_root = root.path().join("host");
+        let ledger = fullmag_session::host_resource_ledger::HostResourceLedger::initialize_for_application(
+            &application_state_root,
+            &ledger_root,
+            policy.clone(),
+        )
+        .unwrap();
+        let inventory_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut sample = fullmag_runtime_control::compute_node_probe::sample_compute_node_for_owner(
+            &ledger,
+            inventory_owner.descriptor(),
+            None,
+        )
+        .unwrap();
+        // This fixture exercises host admission and must not depend on the
+        // CI runner's delegated cgroup configuration. Keep the observed
+        // capacity deterministic while retaining the real owner identity.
+        sample.cpu.effective_capacity_millis =
+            fullmag_session::compute_node_snapshot::Observation::Available {
+                value: policy.total_budget.cpu_millis,
+            };
+        sample.enforcement.cpu_quota =
+            fullmag_session::compute_node_snapshot::EnforcementStatus::Supported;
+        ledger
+            .publish_compute_node_snapshot_with_owner(&inventory_owner, &sample)
+            .unwrap();
+
+        let resource_id = "compute.accepted-supervisor-test".to_owned();
+        let run_id = "run-accepted-supervisor-test".to_owned();
+        let task_id = "task-accepted-supervisor-test".to_owned();
+        let attempt_id = "attempt-accepted-supervisor-test".to_owned();
+        let lease_token = "lease-accepted-supervisor-test".to_owned();
+        store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.clone(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: vec![fullmag_session::FmsTaskCatalogEntry {
+                    task_id: task_id.clone(),
+                    input_fingerprint: "a".repeat(64),
+                    lifecycle: fullmag_session::FmsTaskLifecycle::Queued,
+                    readiness: fullmag_session::FmsTaskReadiness::Ready,
+                    observation: None,
+                    attempt_id: None,
+                    ownership_epoch: None,
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: None,
+                    coordinator_watermark: None,
+                    coordinator_genesis: None,
+                }],
+            })
+            .unwrap();
+
+        let request = fullmag_session::host_resource_ledger::HostReservationRequest {
+            identity: fullmag_session::host_resource_ledger::HostReservationIdentity {
+                store_id: fullmag_session::host_resource_ledger::HostResourceLedger::store_id(
+                    store.root(),
+                )
+                .unwrap(),
+                run_id: run_id.clone(),
+                task_id: task_id.clone(),
+                resource_id: resource_id.clone(),
+                lease_token: lease_token.clone(),
+                owner: fullmag_session::host_resource_ledger::HostReservationOwner::Solver {
+                    attempt_id: attempt_id.clone(),
+                    ownership_epoch: 1,
+                },
+            },
+            expected_host_id: policy.host_id.clone(),
+            expected_policy_revision: policy.revision,
+            expected_node_policy_revision: 1,
+            expected_owner_epoch: policy.owner_epoch,
+            expected_compute_node_owner_id: Some(
+                inventory_owner.descriptor().host_owner_id.clone(),
+            ),
+            expected_compute_node_owner_epoch: Some(inventory_owner.descriptor().host_owner_epoch),
+            expected_topology_sha256: policy.topology_sha256.clone(),
+            runtime_generation_sha256: None,
+            budget: budget.clone(),
+            cpu_ids: BTreeSet::new(),
+            exclusive_gpu_uuids: BTreeSet::new(),
+            gpu_vram_bytes_by_uuid: std::collections::BTreeMap::new(),
+            scheduling_priority: 0,
+            parallelism: fullmag_ir::compute_resources::ComputeParallelismIR::SingleProcess,
+        };
+        let now = chrono::Utc::now();
+        let lease = FmsResourceLease {
+            schema_version: fullmag_session::FMS_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: resource_id.clone(),
+            kind: fullmag_session::FmsResourceKind::Cpu,
+            budget,
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            attempt_id,
+            ownership_epoch: 1,
+            lease_token,
+            state: fullmag_session::FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 0,
+            released_at: None,
+            host_launch_binding: None,
+        };
+        assert!(ledger
+            .try_commit_task_admission(
+                &request,
+                &store,
+                &lease,
+                &fullmag_session::FmsResolvedInputsSnapshot::new(serde_json::json!({})).unwrap(),
+            )
+            .unwrap()
+            .is_some());
+        let active_lease = store
+            .read_resource_lease(&run_id, &resource_id, &request.identity.lease_token)
+            .unwrap()
+            .unwrap();
+        let claim = fullmag_runtime_control::load_current_task_claim(
+            &store,
+            &fullmag_application::RunId::parse(&run_id).unwrap(),
+            &task_id,
+        )
+        .unwrap();
+        HostLaunchTestFixture {
+            store,
+            ledger,
+            application_state_root,
+            ledger_root,
+            lease: active_lease,
+            claim,
+            _inventory_owner: inventory_owner,
+            _root: root,
+        }
+    }
+
+    #[test]
+    fn host_bound_pre_spawn_retries_writer_busy_without_re_admission() {
+        let fixture = host_launch_test_fixture();
+        assert_eq!(fixture.claim.lease.resource_id, fixture.lease.resource_id);
+        assert_eq!(
+            fixture.claim.lease.lease_token.as_str(),
+            fixture.lease.lease_token.as_str()
+        );
+        let holder_store = SessionStore::open(fixture.ledger_root.clone()).unwrap();
+        let (acquired_sender, acquired_receiver) = std::sync::mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+        let holder = std::thread::spawn(move || {
+            let transaction = holder_store.write_transaction().unwrap();
+            acquired_sender.send(()).unwrap();
+            release_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap();
+            drop(transaction);
+        });
+        acquired_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        let busy = match fullmag_session::host_resource_ledger::HostResourceLedger::open_for_application(
+            &fixture.application_state_root,
+            &fixture.ledger_root,
+            fixture.ledger.policy().clone(),
+        ) {
+            Ok(_) => false,
+            Err(error) => error
+                .chain()
+                .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()),
+        };
+        if !busy {
+            release_sender.send(()).unwrap();
+            holder.join().unwrap();
+            drop(fixture);
+            panic!("host ledger writer fixture did not establish contention");
+        }
+
+        let mut busy_count = 0_u32;
+        let mut release_sender = Some(release_sender);
+        let launch = retry_host_worker_launch(
+            || {
+                fixture
+                    .ledger
+                    .authorize_worker_launch(&fixture.store, &fixture.lease)
+            },
+            || {
+                busy_count = busy_count.saturating_add(1);
+                if busy_count == 1 {
+                    release_sender.take().unwrap().send(()).unwrap();
+                }
+            },
+        );
+        if let Some(sender) = release_sender.take() {
+            sender.send(()).unwrap();
+        }
+        holder.join().unwrap();
+        assert!(
+            busy_count > 0,
+            "authorize did not observe typed writer busy"
+        );
+        let token = launch.unwrap();
+        assert!(!token.is_empty());
+        let reservation = fixture
+            .ledger
+            .read()
+            .unwrap()
+            .reservations
+            .into_iter()
+            .find(|reservation| {
+                reservation.identity.run_id == fixture.lease.run_id
+                    && reservation.identity.task_id == fixture.lease.task_id
+                    && reservation.identity.lease_token == fixture.lease.lease_token
+            })
+            .unwrap();
+        assert_eq!(
+            reservation.worker_launch_gate,
+            Some(
+                fullmag_session::host_resource_ledger::HostWorkerLaunchGate::Consumed {
+                    token: token.clone(),
+                }
+            )
+        );
+
+        let second = authorize_host_worker_launch(&fixture.ledger, &fixture.store, &fixture.lease)
+            .unwrap_err();
+        assert!(format!("{second:#}").contains("worker launch permit is not pending and committed"));
+        let after = fixture
+            .ledger
+            .read()
+            .unwrap()
+            .reservations
+            .into_iter()
+            .find(|reservation| {
+                reservation.identity.run_id == fixture.lease.run_id
+                    && reservation.identity.task_id == fixture.lease.task_id
+                    && reservation.identity.lease_token == fixture.lease.lease_token
+            })
+            .unwrap();
+        assert_eq!(after.worker_launch_gate, reservation.worker_launch_gate);
+        assert_eq!(after.identity, reservation.identity);
+        assert_eq!(
+            after.state,
+            fullmag_session::host_resource_ledger::HostResourceReservationState::Committed
+        );
+
+        drop(fixture);
+    }
+
     #[cfg(any(unix, windows))]
     #[test]
     fn zero_exit_cannot_publish_success_after_control_failure_or_timeout() {
@@ -2205,6 +2624,66 @@ mod tests {
     }
 
     #[test]
+    fn reaped_child_receipt_survives_unacknowledged_final_heartbeat() {
+        let fixture = host_launch_test_fixture();
+        let current_test_process = std::env::current_exe().unwrap();
+        let outcome = spawn_worker(
+            &current_test_process,
+            fixture.store.root(),
+            fixture.claim.run_id.as_str(),
+            fixture.claim.task_id.as_str(),
+            None,
+            &BTreeSet::new(),
+            &[],
+            None,
+            None,
+            None,
+            Duration::from_secs(5),
+            Duration::from_secs(1),
+            || Ok(false),
+            || Ok(false),
+        )
+        .unwrap();
+        assert!(outcome.process_id > 0);
+
+        let mut durable_lease = fixture.lease.clone();
+        durable_lease.heartbeat_sequence += 1;
+        durable_lease.heartbeat_at = chrono::Utc::now();
+        fixture
+            .store
+            .heartbeat_resource_lease(&durable_lease)
+            .unwrap();
+        let final_heartbeat_result: Result<()> = Err(anyhow::anyhow!(
+            "accepted worker exited with an unacknowledged heartbeat command"
+        ));
+        let receipt_lease = receipt_lease_after_final_heartbeat(
+            &fixture.store,
+            &fixture.claim,
+            &fixture.lease,
+            &final_heartbeat_result,
+        )
+        .unwrap();
+        assert_eq!(receipt_lease.heartbeat_sequence, durable_lease.heartbeat_sequence);
+        let receipt = persist_worker_process_exit_receipt(
+            &fixture.store,
+            &fixture.claim,
+            &receipt_lease,
+            &outcome,
+        )
+        .unwrap();
+        assert!(final_heartbeat_result.is_err());
+        assert_eq!(
+            fixture
+                .store
+                .read_worker_process_exit_receipt(fixture.claim.run_id.as_str(), &receipt.receipt_id)
+                .unwrap(),
+            Some(receipt.clone())
+        );
+        assert_eq!(receipt.process_id, outcome.process_id);
+        assert!(!receipt.status_success);
+    }
+
+    #[test]
     fn bounded_resource_slots_enforce_identity_and_global_limit() {
         let (root, store) = temporary_store("slot");
         let first = SupervisorSlot::acquire(&store, "run-a", "task-a", "cpu-a", 2, false).unwrap();
@@ -2266,6 +2745,8 @@ mod tests {
             None,
             &BTreeSet::new(),
             &[],
+            None,
+            None,
             None,
             Duration::from_secs(5),
             Duration::from_secs(1),

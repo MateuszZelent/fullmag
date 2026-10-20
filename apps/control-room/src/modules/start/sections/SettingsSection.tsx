@@ -7,6 +7,7 @@ import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 import { startSettings, type RecentView } from "../model/startSettings";
 import type { RecentIndexController } from "../model/useRecentIndex";
+import type { ExecutionAvailability } from "../model/executionAvailability";
 import type { WorkspaceItemsController } from "../model/useWorkspaceItems";
 import type { ComputeNodeInventorySummary, ComputeProbeController, ComputeProbeState, ScannedLocation } from "../model/types";
 
@@ -35,10 +36,13 @@ interface SettingsSectionProps {
   readonly nodeInventory?: ComputeNodeInventorySummary;
   readonly canEditNodePolicy?: boolean;
   readonly onUpdateNodePolicy?: ComputeProbeController["updateNodePolicy"];
+  readonly canPublishExecutionProfiles?: boolean;
+  readonly onPublishExecutionProfile?: ComputeProbeController["publishExecutionProfile"];
   readonly refreshing?: boolean;
   readonly stale?: boolean;
   readonly computeError?: string | null;
   readonly onRefreshCompute?: () => void;
+  readonly executionAvailability?: ExecutionAvailability;
 }
 
 export function SettingsSection({
@@ -48,10 +52,13 @@ export function SettingsSection({
   nodeInventory,
   canEditNodePolicy = false,
   onUpdateNodePolicy,
+  canPublishExecutionProfiles = false,
+  onPublishExecutionProfile,
   refreshing = false,
   stale = false,
   computeError = null,
   onRefreshCompute,
+  executionAvailability,
 }: SettingsSectionProps) {
   const [computeView, setComputeView] = useState<ComputeSettingsView>("overview");
   const settings = useSyncExternalStore(
@@ -98,7 +105,11 @@ export function SettingsSection({
           />
         </div>
         <div hidden={computeView !== "profiles"}>
-          <ExecutionProfilesSettings />
+          <ExecutionProfilesSettings
+            canPublishExecutionProfiles={canPublishExecutionProfiles}
+            onPublishExecutionProfile={onPublishExecutionProfile}
+            executionAvailability={executionAvailability}
+          />
         </div>
       </section>
 

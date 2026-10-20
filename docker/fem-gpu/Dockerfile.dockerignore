@@ -8,6 +8,15 @@
 !docker/fem-gpu/normalize_cuda_dpkg_lists.sh
 !docker/fem-gpu/write_dependency_versions.py
 !docker/fem-gpu/nvidia-entrypoint/
-!docker/fem-gpu/nvidia-entrypoint/**
+!docker/fem-gpu/nvidia-entrypoint/SOURCE.md
+!docker/fem-gpu/nvidia-entrypoint/entrypoint.d/
+!docker/fem-gpu/nvidia-entrypoint/entrypoint.d/10-banner.sh
+!docker/fem-gpu/nvidia-entrypoint/entrypoint.d/12-banner.sh
+!docker/fem-gpu/nvidia-entrypoint/entrypoint.d/15-container-copyright.txt
+!docker/fem-gpu/nvidia-entrypoint/entrypoint.d/30-container-license.txt
+!docker/fem-gpu/nvidia-entrypoint/entrypoint.d/50-gpu-driver-check.sh
+!docker/fem-gpu/nvidia-entrypoint/entrypoint.d/80-internal-image.sh
+!docker/fem-gpu/nvidia-entrypoint/entrypoint.d/90-deprecated-image.sh
+!docker/fem-gpu/nvidia-entrypoint/nvidia_entrypoint.sh
 !docker/fem-gpu/patches/
 !docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff

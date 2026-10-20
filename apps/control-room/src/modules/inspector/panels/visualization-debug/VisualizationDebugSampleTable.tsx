@@ -1,7 +1,9 @@
+import { tensorProjectionComponentLabels } from "@/kernel/api/tensorFieldProjection";
+import { useQuantityCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import type { VisualizationDebugPanelModel } from "./VisualizationDebugPanelModel";
 
 const MAX_SAMPLE_ROWS = 12;
-const MAX_SAMPLE_COMPONENTS = 8;
+const MAX_SAMPLE_COMPONENTS = 9;
 
 interface VisualizationDebugSampleTableProps {
   model: VisualizationDebugPanelModel;
@@ -10,11 +12,16 @@ interface VisualizationDebugSampleTableProps {
 export function VisualizationDebugSampleTable({
   model,
 }: VisualizationDebugSampleTableProps) {
+  const quantityCatalog = useQuantityCatalogResource();
   const samples = model.viewports.flatMap((viewport) =>
     viewport.carriers.flatMap((carrierGroup) =>
       carrierGroup.observations.flatMap((observation) =>
         observation.carrier.samples.map((sample) => ({
           carrierId: carrierGroup.carrierId,
+          labels: tensorProjectionComponentLabels(
+            quantityCatalog.data?.quantities.find((entry) => entry.id === observation.query?.quantityId)?.tensor,
+            observation.query?.component, sample.componentValues.length,
+          ),
           sample,
           unit: observation.backendMeta?.unit ?? "unknown",
         })),
@@ -31,9 +38,35 @@ export function VisualizationDebugSampleTable({
     ),
   );
 
+  const firstLabels = visible[0]?.labels;
+  const tensorLabels = firstLabels && visible.every((entry) => entry.labels?.join(",") === firstLabels.join(","))
+    ? firstLabels : null;
+  const fullTensor = tensorLabels?.length === 9;
+
   if (samples.length === 0) {
     return (
       <p className="fm-visualization-debug-empty">No sampled values are available.</p>
+    );
+  }
+
+  if (fullTensor) {
+    return (
+      <div className="fm-visualization-debug-table-wrap" role="region" aria-label="Tensor field sample matrices" tabIndex={0}>
+        {visible.map(({ carrierId, sample, unit }, rowIndex) => (
+          <table className="fm-visualization-debug-table" aria-label={`Flow-major tensor sample ${rowIndex}`} key={`${carrierId}:${sample.pointIndex}:${rowIndex}`}>
+            <caption>{carrierId} · point {formatInteger(sample.pointIndex)} · node {formatNullableInteger(sample.nodeIndex)} · {unit}</caption>
+            <thead><tr><th scope="col">Flow / spin</th>{["X", "Y", "Z"].map((axis) => <th scope="col" key={axis}>Spin {axis}</th>)}</tr></thead>
+            <tbody>{["X", "Y", "Z"].map((axis, flow) => (
+              <tr key={axis}><th scope="row">Flow {axis}</th>{[0, 1, 2].map((spin) => {
+                const component = flow * 3 + spin;
+                return <td key={spin} aria-label={tensorLabels![component]}>{formatScientific(sample.componentValues[component])}</td>;
+              })}</tr>
+            ))}</tbody>
+            <tfoot><tr><th scope="row">Frobenius</th><td colSpan={3}>{formatScientific(sample.magnitude)} {unit}</td></tr></tfoot>
+          </table>
+        ))}
+        <p className="fm-visualization-debug-caption">Showing {visible.length} of {samples.length} samples. Rows are flow directions; columns are spin polarizations.</p>
+      </div>
     );
   }
 
@@ -49,9 +82,9 @@ export function VisualizationDebugSampleTable({
             <th scope="col">Point index</th>
             <th scope="col">Node index</th>
             {Array.from({ length: componentCount }, (_, index) => (
-              <th scope="col" key={index}>{`c${index}`}</th>
+              <th scope="col" key={index}>{tensorLabels?.[index] ?? `c${index}`}</th>
             ))}
-            <th scope="col">Magnitude</th>
+            <th scope="col">{fullTensor ? "Frobenius" : "Magnitude"}</th>
             <th scope="col">Unit</th>
           </tr>
         </thead>
@@ -76,7 +109,7 @@ export function VisualizationDebugSampleTable({
         </tbody>
       </table>
       <p className="fm-visualization-debug-caption">
-        Showing {visible.length} of {samples.length} samples; at most 8 components
+        Showing {visible.length} of {samples.length} samples; at most 9 components
         per row.
       </p>
     </div>

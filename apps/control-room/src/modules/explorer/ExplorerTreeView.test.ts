@@ -434,12 +434,15 @@ describe("flattenVisibleExplorerRows", () => {
     expect(css).toContain(".fm-explorer-tree {\n  flex: 1 1 auto;");
     expect(css).toContain("container-name: fm-explorer-panel");
     expect(css).toContain("@container fm-explorer-panel (max-width: 360px)");
-    expect(css).toContain("grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto auto auto");
-    expect(css).toContain("width: max-content;");
+    expect(css).toContain("grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) fit-content(38%)");
+    expect(css).toContain(".fm-explorer-tree-row__metadata {\n  display: flex;\n  min-width: 0;");
+    expect(css).toContain("@container fm-explorer-panel (max-width: 480px)");
     expect(css).toContain(".fm-explorer-tree-row__label {\n  min-width: 0;");
-    expect(css.indexOf("/* The explorer is frequently docked below 360px."))
+    expect(css.indexOf("/* Compact metadata keeps deep object/resource names readable in docked panels."))
       .toBeGreaterThan(css.indexOf("/* Active field badge */"));
-    expect(explorerTreeViewSource).toContain('title={node.badge}');
+    expect(explorerTreeViewSource).toContain('if (node.badge) tooltipParts.push(`— ${node.badge}`)');
+    expect(explorerTreeViewSource).toContain('className="fm-explorer-node-tooltip">{tooltipParts.join(" ")}');
+    expect(explorerTreeViewSource).toContain('aria-describedby={tooltipParts.length > 1 ? statusReasonId : undefined}');
   });
 
   it("keeps the narrow explorer toolbar usable without removing button names", () => {

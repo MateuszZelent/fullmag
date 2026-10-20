@@ -678,7 +678,7 @@ pub fn materialize_antenna_external_lead_current_input(
         terminal_observations,
         drives,
         ..
-    } = source;
+    } = source else { return Err(fail("closed-loop source requires its distinct prepared inspection planner")); };
     require(
         lead_mesh.cells.nodes.len() <= 4 * MAX_ELEMENTS
             && lead_mesh.facets.nodes.len() <= 12 * MAX_ELEMENTS,
@@ -1297,6 +1297,7 @@ mod tests {
             source_object_id: "signal-object".into(),
             current_transport_id: "transport".into(),
             normalization_current_a: 1.,
+        normalization: None,
             branches: [("signal", 1.), ("return", -1.)]
                 .into_iter()
                 .map(|(id, w)| AntennaPortBranchV2IR {
@@ -1364,7 +1365,7 @@ mod tests {
         let ConservativeCurrentSourceIR::ExternalLeadCurrent {
             terminal_observations,
             ..
-        } = f.source();
+        } = f.source() else { unreachable!("legacy current-source fixture") };
         for observation in terminal_observations {
             observation.object_id = "device-object".into();
         }
@@ -1793,7 +1794,7 @@ mod tests {
         let ConservativeCurrentSourceIR::ExternalLeadCurrent {
             terminal_observations,
             ..
-        } = definition.conservative_current_source.as_mut().unwrap();
+        } = definition.conservative_current_source.as_mut().unwrap() else { unreachable!("legacy current-source fixture") };
         for observation in terminal_observations {
             observation.object_id = if observation.id.starts_with("signal-") {
                 "signal-object"
@@ -1942,7 +1943,7 @@ mod tests {
         let ConservativeCurrentSourceIR::ExternalLeadCurrent {
             terminal_observations,
             ..
-        } = f.source();
+        } = f.source() else { unreachable!("legacy current-source fixture") };
         terminal_observations[0].object_id = "return-object".into();
         terminal_observations[1].object_id = "return-object".into();
         f.port.branches[0].signed_weight = -1.;
@@ -1960,7 +1961,7 @@ mod tests {
     #[test]
     fn component_balance_does_not_accept_global_cancellation() {
         let mut f = fixture();
-        let ConservativeCurrentSourceIR::ExternalLeadCurrent { drives, .. } = f.source();
+        let ConservativeCurrentSourceIR::ExternalLeadCurrent { drives, .. } = f.source() else { unreachable!("legacy current-source fixture") };
         *drives[0]
             .outer_terminal_currents_a
             .get_mut("outer-signal-in")
@@ -2011,14 +2012,14 @@ mod tests {
                 2 => f.sampling.positions_xyz_m[0][2] += 0.25,
                 3 => {
                     let ConservativeCurrentSourceIR::ExternalLeadCurrent { drives, .. } =
-                        f.source();
+                        f.source() else { unreachable!("legacy current-source fixture") };
                     for i in drives[0].outer_terminal_currents_a.values_mut() {
                         *i = -*i;
                     }
                 }
                 4 => {
                     let ConservativeCurrentSourceIR::ExternalLeadCurrent { lead_mesh, .. } =
-                        f.source();
+                        f.source() else { unreachable!("legacy current-source fixture") };
                     lead_mesh.element_markers[0] += 1;
                 }
                 5 => {
@@ -2026,7 +2027,7 @@ mod tests {
                         node[1] += 0.125;
                     }
                     let ConservativeCurrentSourceIR::ExternalLeadCurrent { lead_mesh, .. } =
-                        f.source();
+                        f.source() else { unreachable!("legacy current-source fixture") };
                     for node in &mut lead_mesh.nodes {
                         node[1] += 0.125;
                     }
@@ -2036,7 +2037,7 @@ mod tests {
                         device_stable_vertex_ids,
                         interface_pairs,
                         ..
-                    } = f.source();
+                    } = f.source() else { unreachable!("legacy current-source fixture") };
                     let old = device_stable_vertex_ids[0];
                     device_stable_vertex_ids[0] = 2000;
                     for p in interface_pairs {
@@ -2058,7 +2059,7 @@ mod tests {
                         interface_pairs,
                         terminal_observations,
                         ..
-                    } = f.source();
+                    } = f.source() else { unreachable!("legacy current-source fixture") };
                     interface_pairs[0].id = "renamed-interface".into();
                     terminal_observations[0].interface_pair_ids[0] = "renamed-interface".into();
                 }
@@ -2082,7 +2083,7 @@ mod tests {
         let mut f = fixture();
         let ConservativeCurrentSourceIR::ExternalLeadCurrent {
             interface_pairs, ..
-        } = f.source();
+        } = f.source() else { unreachable!("legacy current-source fixture") };
         interface_pairs[0].vertex_pairs.swap(0, 1);
         // Reordering a bijection does not alter geometry, but is retained in authored identity.
         assert_ne!(
@@ -2091,7 +2092,7 @@ mod tests {
         );
         let ConservativeCurrentSourceIR::ExternalLeadCurrent {
             interface_pairs, ..
-        } = f.source();
+        } = f.source() else { unreachable!("legacy current-source fixture") };
         interface_pairs[0].vertex_pairs[0].swap(0, 1);
         rejected(&f, "bijection");
     }
@@ -2122,7 +2123,7 @@ mod tests {
     #[test]
     fn explicit_interfaces_must_match_actual_exterior_and_geometry() {
         let mut f = fixture();
-        let ConservativeCurrentSourceIR::ExternalLeadCurrent { lead_mesh, .. } = f.source();
+        let ConservativeCurrentSourceIR::ExternalLeadCurrent { lead_mesh, .. } = f.source() else { unreachable!("legacy current-source fixture") };
         for node in &mut lead_mesh.nodes {
             node[0] += 0.125;
         }
@@ -2132,7 +2133,7 @@ mod tests {
         let interior = [500, 496, 487];
         let ConservativeCurrentSourceIR::ExternalLeadCurrent {
             interface_pairs, ..
-        } = f.source();
+        } = f.source() else { unreachable!("legacy current-source fixture") };
         interface_pairs[0].device_face_vertex_ids = key(interior);
         for (i, id) in key(interior).into_iter().enumerate() {
             interface_pairs[0].vertex_pairs[i][0] = id;
@@ -2164,7 +2165,7 @@ mod tests {
                 .contains("control count overflows")
         );
         // Zero drive does not bypass topology's independent-control limit.
-        let ConservativeCurrentSourceIR::ExternalLeadCurrent { drives, .. } = f.source();
+        let ConservativeCurrentSourceIR::ExternalLeadCurrent { drives, .. } = f.source() else { unreachable!("legacy current-source fixture") };
         for current in drives[0].outer_terminal_currents_a.values_mut() {
             *current = 0.;
         }
@@ -2180,7 +2181,7 @@ mod tests {
             lead_stable_vertex_ids,
             outer_terminals,
             ..
-        } = f.definition.conservative_current_source.as_ref().unwrap();
+        } = f.definition.conservative_current_source.as_ref().unwrap() else { unreachable!("legacy current-source fixture") };
         let actual = topology(lead_mesh, lead_stable_vertex_ids).unwrap();
         assert!(
             validate_terminal_face_closure(actual.exterior.keys().copied(), outer_terminals)
@@ -2348,4 +2349,211 @@ mod tests {
             );
         }
     }
+}
+
+/// Resolve a prepared coincident loop without changing any vertex or cell ordinal.
+pub fn materialize_antenna_closed_loop_current_input(
+    problem: &fullmag_ir::ProblemIR, mesh: &MeshIR, segments: &[FemObjectSegmentIR],
+    definition: &ChargeTransportDefinitionIR, stage: &AntennaFieldSolveStageIR,
+    port: &AntennaPortModeIR, field_sampling: &AntennaFieldSamplingPlanIR,
+) -> Result<ResolvedAntennaClosedLoopCurrentInputIR, PlanError> {
+    require(problem.backend_policy.requested_backend==fullmag_ir::BackendTarget::Fem
+        && problem.backend_policy.execution_precision==fullmag_ir::ExecutionPrecision::Double
+        && problem.validation_profile.execution_mode==fullmag_ir::ExecutionMode::Strict
+        && problem.backend_policy.discretization_hints.as_ref().and_then(|hints|hints.fem.as_ref()).is_some_and(|hints|hints.order==1),
+        "prepared closed-loop input supports only explicit FEM P1 strict/double")?;
+    let Some(ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(source)) = &definition.conservative_current_source
+        else { return Err(fail("closed-loop input requires the typed prepared v2 source")); };
+    let errors=source.validation_errors("conservative_current_source");
+    if !errors.is_empty() { return Err(PlanError {reasons:errors}); }
+    require(stage.source_object_id==source.object_id && port.source_object_id==source.object_id
+        && stage.current_transport_id==port.current_transport_id && stage.port_mode_ids==[port.id.clone()]
+        && port.schema_version=="antenna_port_mode.v3" && stage.conservative_current_view_ref.is_none()
+        && stage.oersted_realization==AntennaOerstedRealizationIR::DirectTetraQuadrature
+        && stage.model==AntennaFieldModelIR::QuasistaticConductionBiotSavart3d
+        && stage.conductor_mesh_policy=="authored_shared_domain" && stage.solver_policy=="production_default",
+        "prepared loop requires one matching explicit v3 source port and direct inspection stage")?;
+    require(definition.domain.len()==1 && definition.domain[0].object_id==source.object_id
+        && definition.domain[0].region_id.is_none() && definition.boundaries.is_empty()
+        && definition.gauge==ChargePotentialGaugeIR::ZeroMean && definition.external_lead_preparation.is_none()
+        && definition.structured_current_closure.is_none() && definition.conservative_current_view.is_none(),
+        "prepared loop requires one complete object, zero_mean and no boundary/view/alternate source")?;
+    let solver=&definition.solver;
+    require(solver.engine=="cg" && solver.operator_version=="fem_charge_conforming_h1_p1.transparent.v1"
+        && solver.physical_residual_version=="charge_balance_integrated_l2.v1" && solver.linear.relative_tolerance.is_finite()
+        && solver.linear.relative_tolerance>0.0 && solver.linear.relative_tolerance<=1.0e-12
+        && solver.linear.absolute_tolerance==0.0 && solver.linear.max_iterations>0 && solver.linear.max_iterations<=i32::MAX as u32,
+        "prepared loop requires bounded conforming H1 CG with preregistered relative residual <=1e-12")?;
+    require(segments.len()==1 && segments[0].object_id==source.object_id && segments[0].geometry_id.as_ref()==Some(&source.geometry_id)
+        && segments[0].node_start==0 && segments[0].node_count as usize==mesh.nodes.len()
+        && segments[0].element_start==0 && segments[0].element_count as usize==mesh.cell_count()
+        && segments[0].boundary_face_start==0 && segments[0].boundary_face_count as usize==mesh.facet_count(),
+        "prepared loop must preserve its complete original mesh owner and ordinals")?;
+    let topology=topology(mesh,&source.stable_vertex_ids)?;
+    for tet in &topology.tets {
+        let points=tet.map(|node|mesh.nodes[node as usize]);
+        let scale=(0..4).flat_map(|a|(a+1..4).map(move |b|(a,b)))
+            .flat_map(|(a,b)|(0..3).map(move |axis|(points[a][axis]-points[b][axis]).abs())).fold(0.0_f64,f64::max);
+        let edges=std::array::from_fn::<_,3,_>(|index|std::array::from_fn::<_,3,_>(|axis|(points[index+1][axis]-points[0][axis])/scale));
+        let largest=(0..4).flat_map(|a|(a+1..4).map(move |b|(a,b))).map(|(a,b)|(0..3).map(|axis|((points[a][axis]-points[b][axis])/scale).powi(2)).sum::<f64>().sqrt()).fold(0.0_f64,f64::max);
+        require(determinant(edges[0],edges[1],edges[2])/largest.powi(3)>1.0e-12,"prepared source Tet4 quality is below the preregistered dimensionless gate")?;
+    }
+    require(mesh.cells.global_ordinals.iter().copied().eq(0..mesh.cell_count() as u64)
+        && mesh.mixed_topology_fingerprint_v3().map_err(fail)?==source.mesh_digest,
+        "prepared loop requires exact original cell order and full canonical mesh v3 identity")?;
+    let geometry=problem.geometry.entries.iter().find(|geometry| geometry.name()==source.geometry_id)
+        .ok_or_else(|| fail("prepared source geometry owner is missing"))?;
+    let fullmag_ir::GeometryEntryIR::MicrostripAntenna {conductors, conductivity_s_per_m, r#loop:Some(loop_geometry), ..}=geometry
+        else { return Err(fail("prepared source requires explicit complete microstrip loop geometry")); };
+    require(loop_geometry.enabled && conductors.len()==2 && conductors[0].kind=="signal" && conductors[1].kind=="return",
+        "prepared source requires explicit signal/return and two bridge parts")?;
+    let parts=[(conductors[0].id.as_str(),*conductivity_s_per_m),(conductors[1].id.as_str(),*conductivity_s_per_m),
+        (loop_geometry.inlet_connection_part_id.as_str(),loop_geometry.inlet_connection_conductivity_s_per_m),
+        (loop_geometry.outlet_connection_part_id.as_str(),loop_geometry.outlet_connection_conductivity_s_per_m)];
+    require(definition.materials.len()==1 || definition.materials.len()==4, "prepared source materials must be whole-object or four disjoint parts")?;
+    let whole=definition.materials.len()==1 && definition.materials[0].region.region_id.is_none();
+    let mut material_indices=BTreeSet::new();
+    let mut owners=vec![None;mesh.cell_count()];
+    let mut conductivity=vec![0.0;mesh.cell_count()];
+    for (part_index,(id,authored_sigma)) in parts.iter().enumerate() {
+        let matches=source.material_parts.iter().filter(|part| part.part_id==*id).collect::<Vec<_>>();
+        require(matches.len()==1,"prepared source material part ID is missing or duplicated")?;
+        let part=matches[0];
+        let assignment=definition.materials.get(part.material_assignment_index as usize).ok_or_else(||fail("prepared source material assignment index is out of range"))?;
+        let material=&assignment.material;
+        require(assignment.region.object_id==source.object_id && (if whole {assignment.region.region_id.is_none()} else {assignment.region.region_id.as_deref()==Some(*id)})
+            && material.sigma_spm.is_finite() && material.sigma_spm>0.0 && material.sigma_spm==*authored_sigma
+            && material.sigma_parallel_spm.is_none() && material.sigma_perpendicular_spm.is_none() && material.sigma_ahe_spm.is_none(),
+            "prepared source conductivity must exactly match its owning charge material and explicit geometry")?;
+        material_indices.insert(part.material_assignment_index);
+        for &ordinal in &part.element_ordinals {
+            let ordinal=usize::try_from(ordinal).map_err(|_|fail("prepared source ordinal exceeds host range"))?;
+            require(ordinal<owners.len(),"prepared material ordinal is outside source mesh")?;
+            require(owners[ordinal].replace(part_index).is_none() && mesh.element_markers.get(ordinal)==Some(&((part_index+1) as u32)),
+                "prepared source material parts overlap or disagree with actual part markers")?;
+            conductivity[ordinal]=material.sigma_spm;
+        }
+    }
+    require(owners.iter().all(Option::is_some) && material_indices.len()==definition.materials.len(),
+        "prepared source material parts must cover every cell and assignment exactly")?;
+    fn exact_ids(value:&mut Value, field:Option<&str>) {
+        match value {
+            Value::Object(map)=>for (key,value) in map {exact_ids(value,Some(key));},
+            Value::Array(values)=>for value in values {exact_ids(value,field);},
+            Value::Number(number) if matches!(field,Some("stable_vertex_ids"|"face_vertex_ids"|"minus_face_vertex_ids"|"plus_face_vertex_ids"|"element_ordinals"|"part_cell_ordinal"|"bridge_cell_ordinal")) => {*value=Value::String(number.to_string());},
+            _=>{},
+        }
+    }
+    let tagged=|value:&Value| fullmag_ir::transport_identity::tagged_json_digest(value).map_err(|cause|fail(cause.to_string()));
+    let mut mapping=serde_json::to_value(&source.material_parts).map_err(|cause|fail(cause.to_string()))?;exact_ids(&mut mapping,None);
+    require(tagged(&serde_json::json!({"schema":"antenna_coincident_material_binding.v2","assignments":definition.materials,
+        "material_parts":mapping,"resolved_conductivity_spm_per_element":conductivity}))?==source.materials_digest,
+        "prepared source material digest does not bind actual assignments, ordered coverage and sigma")?;
+    let fullmag_ir::ConservativeCurrentClosureIR::ClosedGeometry {source_cuts,..}=&source.closure
+        else {return Err(fail("prepared source requires closed_geometry v2"));};
+    let cut=&source_cuts[0];
+    require(matches!(&port.normalization,Some(fullmag_ir::antenna::AntennaPortNormalizationIR::SourceCutRt0 {source_cut_ref,orientation}) if source_cut_ref==&cut.id && orientation=="minus_outward"),
+        "prepared source normalization must use the same minus-outward cut")?;
+    let nodes=source.stable_vertex_ids.iter().enumerate().map(|(ordinal,id)|(*id,ordinal)).collect::<BTreeMap<_,_>>();
+    let mut source_faces=BTreeSet::new();
+    let mut seam_map=BTreeMap::new();let mut reverse_seam_map=BTreeMap::new();
+    let mut edges=topology.interior_element_pairs.clone();
+    for pair in &cut.face_pairs {
+        let minus=key(pair.minus_face_vertex_ids);let plus=key(pair.plus_face_vertex_ids);
+        require(pair.minus_face_vertex_ids==minus && pair.plus_face_vertex_ids==plus && minus!=plus
+            && source_faces.insert(minus) && source_faces.insert(plus), "prepared source seam faces must be unique canonical distinct identities")?;
+        let minus_cell=topology.exterior.get(&minus).ok_or_else(||fail("source minus face is not actual exterior"))?;
+        let plus_cell=topology.exterior.get(&plus).ok_or_else(||fail("source plus face is not actual exterior"))?;
+        let minus_xyz=minus.map(|id|mesh.nodes[nodes[&id]].map(f64::to_bits));
+        let plus_xyz=plus.map(|id|mesh.nodes[nodes[&id]].map(f64::to_bits));
+        require(minus_xyz.iter().all(|xyz|plus_xyz.iter().filter(|other|*other==xyz).count()==1),
+            "prepared seam must be bit coincident without epsilon gap")?;
+        for (id,xyz) in minus.iter().zip(minus_xyz) {
+            let other=plus[plus_xyz.iter().position(|point|*point==xyz).ok_or_else(||fail("missing paired seam vertex"))?];
+            require(*id!=other && seam_map.insert(*id,other).is_none_or(|previous|previous==other)
+                && reverse_seam_map.insert(other,*id).is_none_or(|previous|previous==*id),"source seam stable identities must be globally bijective and distinct")?;
+        }
+        let face_points=minus.map(|id|mesh.nodes[nodes[&id]]);
+        let minus_side=side([face_points[0],face_points[1],face_points[2],mesh.nodes[minus_cell.1 as usize]])?;
+        let plus_side=side([face_points[0],face_points[1],face_points[2],mesh.nodes[plus_cell.1 as usize]])?;
+        require(minus_side.is_sign_positive()!=plus_side.is_sign_positive(),"paired seam cells require opposite outward normals and no overlapping volume")?;
+        edges.push([minus_cell.0,plus_cell.0]);
+    }
+    let mut components=(0..mesh.cell_count()).collect::<Vec<_>>();
+    fn component(parents:&mut [usize],mut node:usize)->usize {while parents[node]!=node {parents[node]=parents[parents[node]];node=parents[node];}node}
+    for [a,b] in edges {let a=component(&mut components,a);let b=component(&mut components,b);components[b]=a;}
+    let first=component(&mut components,0);
+    require((0..mesh.cell_count()).all(|ordinal|component(&mut components,ordinal)==first),"prepared source requires exactly one connected closed circuit")?;
+    let mut incidence=BTreeMap::<[u64;3],Vec<usize>>::new();
+    for (ordinal,tet) in topology.tets.iter().enumerate() {
+        for omitted in 0..4 {
+            let ids=tet.iter().enumerate().filter(|(index,_)|*index!=omitted).map(|(_,node)|source.stable_vertex_ids[*node as usize]).collect::<Vec<_>>();
+            incidence.entry(key([ids[0],ids[1],ids[2]])).or_default().push(ordinal);
+        }
+    }
+    let mut observation_ids=BTreeSet::new();let mut observed_faces=BTreeSet::new();
+    for observation in &source.terminal_observations {
+        require(observation_ids.insert(observation.id.as_str()),"prepared observation IDs must be unique")?;
+        let part_index=parts.iter().position(|(id,_)|*id==observation.part_id).filter(|index|*index<2).ok_or_else(||fail("observation must bind actual signal or return part"))?;
+        let bridge_index=if observation.selector=="local_u_min" {2} else {3};
+        let expected=incidence.iter().filter(|(_,cells)|cells.len()==2 && ((owners[cells[0]]==Some(part_index)&&owners[cells[1]]==Some(bridge_index)) || (owners[cells[1]]==Some(part_index)&&owners[cells[0]]==Some(bridge_index))))
+            .map(|(face,_)|*face).collect::<BTreeSet<_>>();
+        let declared=observation.faces.iter().map(|face|key(face.face_vertex_ids)).collect::<BTreeSet<_>>();
+        require(!expected.is_empty() && declared==expected && declared.len()==observation.faces.len(),"observation must cover its entire actual internal interface exactly once")?;
+        for face in &observation.faces {
+            let a=usize::try_from(face.part_cell_ordinal).map_err(|_|fail("observation ordinal exceeds host range"))?;
+            let b=usize::try_from(face.bridge_cell_ordinal).map_err(|_|fail("observation ordinal exceeds host range"))?;
+            require(owners.get(a)==Some(&Some(part_index)) && owners.get(b)==Some(&Some(bridge_index))
+                && face.face_vertex_ids[0]==*face.face_vertex_ids.iter().min().unwrap()
+                && observed_faces.insert(key(face.face_vertex_ids)),"observation owners, outward triple or interface uniqueness mismatch")?;
+            let face_key=key(face.face_vertex_ids);
+            let actual=|cell:usize|topology.tets[cell].iter().filter(|node|face_key.contains(&source.stable_vertex_ids[**node as usize])).count()==3;
+            require(actual(a)&&actual(b),"observation is not the shared face of its declared actual owners")?;
+            let opposite=*topology.tets[a].iter().find(|node|!face_key.contains(&source.stable_vertex_ids[**node as usize])).ok_or_else(||fail("observation opposite vertex missing"))?;
+            let points=face.face_vertex_ids.map(|id|nodes.get(&id).map(|node|mesh.nodes[*node])).into_iter().collect::<Option<Vec<_>>>().ok_or_else(||fail("observation vertex missing"))?;
+            require(side([points[0],points[1],points[2],mesh.nodes[opposite as usize]])?<0.0,"observation normal must point outward from its actual part")?;
+        }
+    }
+    let branch_refs=port.branches.iter().flat_map(|branch|[branch.inlet_terminal_ref.as_str(),branch.outlet_terminal_ref.as_str()]).collect::<BTreeSet<_>>();
+    require(port.branches.len()==2 && branch_refs.len()==4 && port.branches.iter().all(|branch| {
+        let inlet=source.terminal_observations.iter().find(|obs|obs.id==branch.inlet_terminal_ref);
+        let outlet=source.terminal_observations.iter().find(|obs|obs.id==branch.outlet_terminal_ref);
+        branch.signed_weight.is_finite() && matches!((inlet,outlet),(Some(a),Some(b)) if a.part_id==b.part_id && a.selector=="local_u_min" && b.selector=="local_u_max")
+    }),"prepared port must reference four actual internal observations on paired parts")?;
+    let receipts=problem.problem_meta.runtime_metadata.get("antenna_coincident_preparations").and_then(Value::as_array).ok_or_else(||fail("prepared source authored intent receipt is missing"))?;
+    let matches=receipts.iter().filter(|receipt|receipt.get("current_transport_id").and_then(Value::as_str)==Some(stage.current_transport_id.as_str())
+        && receipt.get("object_id").and_then(Value::as_str)==Some(source.object_id.as_str()) && receipt.get("geometry_id").and_then(Value::as_str)==Some(source.geometry_id.as_str())).collect::<Vec<_>>();
+    require(matches.len()==1,"prepared source authored receipt is missing or ambiguous")?;
+    let authored=matches[0].pointer("/preparation/authored_intent").ok_or_else(||fail("prepared source lost its authored closure"))?;
+    let mut closure=serde_json::to_value(&source.closure).map_err(|cause|fail(cause.to_string()))?;
+    let object=closure.as_object_mut().ok_or_else(||fail("prepared closure shape"))?;object.remove("revision");object.remove("digest");exact_ids(&mut closure,None);
+    let mut stable=serde_json::json!(source.stable_vertex_ids);exact_ids(&mut stable,Some("stable_vertex_ids"));
+    let mut observations=serde_json::to_value(&source.terminal_observations).map_err(|cause|fail(cause.to_string()))?;exact_ids(&mut observations,None);
+    let mesh_workflow=matches[0].pointer("/preparation/prepared_mesh_workflow").filter(|value|value.is_object()).ok_or_else(||fail("prepared source mesh policy intent missing"))?;
+    let recipes=matches[0].pointer("/preparation/prepared_per_object_recipes").filter(|value|value.is_object()).ok_or_else(||fail("prepared source per-object mesh recipes missing"))?;
+    // Python FEM.to_ir retains the authored optional mesh as null; restore
+    // that canonical shape rather than hashing a Rust serialization omission.
+    let mut backend_policy=serde_json::to_value(&problem.backend_policy).map_err(|cause|fail(cause.to_string()))?;
+    if let Some(fem)=backend_policy.pointer_mut("/discretization_hints/fem").and_then(Value::as_object_mut) {
+        fem.entry("mesh".to_string()).or_insert(Value::Null);
+    }
+    let selection=problem.problem_meta.runtime_metadata.get("runtime_selection").ok_or_else(||fail("prepared source requested execution identity missing"))?;
+    let authored_input_preimage=serde_json::json!({"schema":"antenna_coincident_prepared_input.v2","object_id":source.object_id,"geometry":geometry,
+        "authored_closure":authored,"mesh_digest":source.mesh_digest,"stable_vertex_ids":stable,"closure":closure,"materials_digest":source.materials_digest,
+        "material_parts":mapping,"terminal_observations":observations,"port":port,"gauge":definition.gauge,"solver":solver,
+        "requested_execution":selection,"backend_policy":backend_policy,"validation_profile":problem.validation_profile,"mesh_workflow":mesh_workflow,"per_object_recipes":recipes});
+    require(tagged(&authored_input_preimage)?==source.authored_input_digest,
+        "prepared source authored input digest does not bind actual geometry, closure, carrier, materials and intent")?;
+    let boundary_roles=topology.exterior.keys().map(|face|fullmag_ir::ConservativeCurrentBoundaryFaceIR{face_vertex_ids:*face,
+        role:if source_faces.contains(face) {fullmag_ir::ConservativeCurrentBoundaryRoleIR::SourceCut} else {fullmag_ir::ConservativeCurrentBoundaryRoleIR::InsulatingOuter},
+        circuit_id:source_faces.contains(face).then(||cut.id.clone())}).collect();
+    require(!field_sampling.positions_xyz_m.is_empty() && field_sampling.positions_xyz_m.iter().flatten().all(|value|value.is_finite()),"prepared source sampling must be finite and nonempty")?;
+    let pairs=(mesh.cell_count() as u64).checked_mul(field_sampling.positions_xyz_m.len() as u64).filter(|pairs|*pairs<=MAX_PAIRS).ok_or_else(||fail("prepared source direct field pair budget exceeded"))?;
+    Ok(ResolvedAntennaClosedLoopCurrentInputIR {schema_version:"antenna_closed_loop_current_input.v2".into(),field_scope:"full_closed_loop.inspection_only.v2".into(),
+        stage:stage.clone(),port:port.clone(),authored_definition:definition.clone(),source_mesh:mesh.clone(),source_object_segments:segments.to_vec(),source:source.clone(),authored_input_preimage,
+        conductivity_spm_per_element:conductivity,boundary_roles,solver:solver.clone(),field_sampling:field_sampling.clone(),algebraic_relative_tolerance:1.0e-12,
+        physical_relative_gate:1.0e-10,physical_absolute_gate_a:1.0e-18,direct_field_policy:AntennaDirectFieldInputPolicyIR{
+            policy_version:"closed_loop_direct_defaults.unqualified.v2".into(),base_quadrature_order:fullmag_ir::ANTENNA_DIRECT_OERSTED_BASE_QUADRATURE_ORDER,
+            maximum_subdivision_depth:fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SUBDIVISION_DEPTH,absolute_tolerance_apm:fullmag_ir::ANTENNA_DIRECT_OERSTED_ABSOLUTE_TOLERANCE_APM,
+            relative_tolerance:fullmag_ir::ANTENNA_DIRECT_OERSTED_RELATIVE_TOLERANCE,maximum_source_target_pairs:MAX_PAIRS,source_target_pairs:pairs,relative_scale_floor_apm:0.0}})
 }

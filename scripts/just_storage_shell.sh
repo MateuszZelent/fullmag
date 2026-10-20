@@ -84,9 +84,195 @@ if is_windows_shell && command -v cygpath >/dev/null 2>&1; then
     bash_executable="$(cygpath -w "${bash_path}")"
   fi
 fi
+# Frozen coordinator provisioning must be admitted before diagnostic markers.
+case "${recipe}" in
+  *"scripts/launch_accepted_closed_loop_runtime.py"*)
+    closed_loop_pattern="^[^[:space:]]+ \"[^\"]+/scripts/launch_accepted_closed_loop_runtime.py\" --request '([^']+)' --request-sha256 '([0-9a-f]{64})'$"
+    if [[ ! "${recipe}" =~ ${closed_loop_pattern} ]]; then
+      echo "[fullmag just] invalid closed-loop runtime recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${script_dir}/launch_accepted_closed_loop_runtime.py" --request "${BASH_REMATCH[1]}" --request-sha256 "${BASH_REMATCH[2]}"
+    ;;
+  *"scripts/local_runner/coordinator_image.py"*)
+    coordinator_base_pattern="^[^[:space:]]+ \"[^\"]+/scripts/local_runner/coordinator_image.py\" provision-base --repo-root '([^']+)'$"
+    if [[ "${recipe}" =~ ${coordinator_base_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/local_runner/coordinator_image.py" provision-base --repo-root "${repo_root}"
+    fi
+    coordinator_context_pattern="^[^[:space:]]+ \"[^\"]+/scripts/local_runner/coordinator_image.py\" prepare-image-context --repo-root '([^']+)' --source commit --ref '([a-f0-9]{40})'$"
+    if [[ "${recipe}" =~ ${coordinator_context_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/local_runner/coordinator_image.py" prepare-image-context --repo-root "${repo_root}" --source commit --ref "${BASH_REMATCH[2]}"
+    fi
+    coordinator_image_pattern="^[^[:space:]]+ \"[^\"]+/scripts/local_runner/coordinator_image.py\" build-image --repo-root '([^']+)' --context '([^']+)' --context-sha256 '([a-f0-9]{64})' --tag '(fullmag/build-runner:[a-z0-9][a-z0-9_.-]{0,100})'$"
+    if [[ "${recipe}" =~ ${coordinator_image_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/local_runner/coordinator_image.py" build-image --repo-root "${repo_root}" --context "${BASH_REMATCH[2]}" --context-sha256 "${BASH_REMATCH[3]}" --tag "${BASH_REMATCH[4]}"
+    fi
+    echo "[fullmag just] invalid frozen coordinator image recipe" >&2
+    exit 2
+    ;;
+esac
+
 # Admit this fixed helper before generic diagnostic substring handling, so a
 # composite command cannot use a diagnostic marker to bypass its argument check.
 case "${recipe}" in
+  *"scripts/bootstrap_docker_toolchain.py"*)
+    toolchain_bootstrap_pattern='^[^[:space:]]+ "[^"]+/scripts/bootstrap_docker_toolchain.py" --repo-root "[^"]+"( --direct-development( --prepare-development-images)?)?$'
+    if [[ ! "${recipe}" =~ ${toolchain_bootstrap_pattern} ]]; then
+      echo "[fullmag just] invalid Docker toolchain bootstrap recipe" >&2
+      exit 2
+    fi
+    # This fresh-host operation owns its own storage initialization, global
+    # heavy lock, and enrolled-runner admission. Do not run prepare-links or
+    # the generic runner around it.
+    toolchain_mode=()
+    if [[ "${recipe}" == *" --direct-development"* ]]; then toolchain_mode+=(--direct-development); fi
+    if [[ "${recipe}" == *" --prepare-development-images" ]]; then toolchain_mode+=(--prepare-development-images); fi
+    exec "${python_cmd}" "${script_dir}/bootstrap_docker_toolchain.py" --repo-root "${repo_root}" "${toolchain_mode[@]}"
+    ;;
+  *"scripts/recover_docker_orphan.py"*)
+    orphan_recovery_pattern="^[^[:space:]]+ \"[^\"]+/scripts/recover_docker_orphan.py\" --pins '([^']+)' --target-container '([0-9a-f]{64})' --project '(fullmag-(master|worktree-[a-z0-9._-]+))' --diagnostics-root '([^']+)'( --resume-before-stop)?[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${orphan_recovery_pattern} ]]; then
+      echo "[fullmag just] invalid controlled worker orphan recovery recipe" >&2
+      exit 2
+    fi
+    # Execute fixed argv, not the supplied shell text. Keep the normal storage
+    # preflight and terminal execution receipt around this operator operation.
+    orphan_pins="${BASH_REMATCH[1]}"
+    orphan_container="${BASH_REMATCH[2]}"
+    orphan_project="${BASH_REMATCH[3]}"
+    orphan_diagnostics="${BASH_REMATCH[5]}"
+    orphan_resume=()
+    if [[ -n "${BASH_REMATCH[6]:-}" ]]; then
+      orphan_resume=(--resume-before-stop)
+    fi
+    exec "${python_cmd}" "${resolver}" run --repo-root "${repo_root}" --profile docker-all-gpu -- \
+      "${python_cmd}" "${script_dir}/recover_docker_orphan.py" --pins "${orphan_pins}" \
+      --target-container "${orphan_container}" --project "${orphan_project}" \
+      --diagnostics-root "${orphan_diagnostics}" "${orphan_resume[@]}"
+    ;;
+  *"scripts/docker_volume_stop_failed.py"*)
+    volume_stop_failed_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_stop_failed.py\" --source-root '[^']+' --container-id '[0-9a-f]{64}' --image-id 'sha256:[0-9a-f]{64}' --process-receipt-sha256 '[0-9a-f]{64}'[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${volume_stop_failed_pattern} ]]; then
+      echo "[fullmag just] invalid failed DEV supervisor stop recipe" >&2
+      exit 2
+    fi
+    exec "${bash_executable}" -euo pipefail -c "${recipe}"
+    ;;
+  *"scripts/docker_volume_checks.py"*)
+    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '[^']+'[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${volume_checks_pattern} ]]; then
+      echo "[fullmag just] invalid volume DEV checks recipe" >&2
+      exit 2
+    fi
+    exec "${bash_executable}" -euo pipefail -c "${recipe}"
+    ;;
+  *"scripts/docker_dev.py"*" stop-unadmitted "*)
+    volume_stop_unadmitted_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" stop-unadmitted --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --backend-container-id '([0-9a-f]{64})' --frontend-container-id '([0-9a-f]{64})' --image-id '(sha256:[0-9a-f]{64})' --failure-marker-sha256 '([0-9a-f]{64})' --process-receipt-sha256 '([0-9a-f]{64})' --source-sha256 '([0-9a-f]{64})' --request-id '([^']+)' --session-id '([^']+)'[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${volume_stop_unadmitted_pattern} ]]; then
+      echo "[fullmag just] invalid unadmitted startup stop recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" "${script_dir}/docker_dev.py" --repo-root "${repo_root}" stop-unadmitted \
+      --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}" \
+      --source-root "${BASH_REMATCH[3]}" --backend-container-id "${BASH_REMATCH[4]}" \
+      --frontend-container-id "${BASH_REMATCH[5]}" --image-id "${BASH_REMATCH[6]}" \
+      --failure-marker-sha256 "${BASH_REMATCH[7]}" --process-receipt-sha256 "${BASH_REMATCH[8]}" \
+      --source-sha256 "${BASH_REMATCH[9]}" --request-id "${BASH_REMATCH[10]}" \
+      --session-id "${BASH_REMATCH[11]}"
+    ;;
+  *"scripts/docker_dev.py"*)
+    docker_dev_build_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" build --gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?[[:space:]]*$"
+    docker_dev_up_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" up[ ]+(--port '([0-9]{4,5})'[ ]+)?--gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?( --script '([^']+)')?[[:space:]]*$"
+    docker_dev_codegen_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" codegen-openapi( --source-root '([^']+)')?[[:space:]]*$"
+    docker_dev_recreate_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate --direct-development --run-receipt '([^']+)' --previous-config-sha256 '([0-9a-f]{64})' --gpu-access '(auto|required|disabled)'[ ]+(--source-root '([^']+)'[ ]+)?--port '([0-9]{4,5})'[[:space:]]*$"
+    docker_dev_resume_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" resume-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'( --restart-backend)?[[:space:]]*$"
+    docker_dev_discover_script_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" script --script '([^']+)'( --source-root '([^']+)')?( --port '([0-9]{4,5})')?( --request-id '([^']+)')?[[:space:]]*$"
+    docker_dev_activate_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" activate-script --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --script '([^']+)'( --request-id '([^']+)')?[[:space:]]*$"
+    docker_dev_volume_recreate_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'([[:space:]]+--recovery-authorization '([^']+)')?([[:space:]]+--fresh-state)?[[:space:]]*$"
+    docker_dev_idle_restart_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'[[:space:]]*$"
+    docker_dev_args=(--repo-root "${repo_root}")
+    if [[ "${recipe}" =~ ${docker_dev_codegen_pattern} ]]; then
+      docker_dev_args+=(codegen-openapi)
+      if [[ -n "${BASH_REMATCH[2]:-}" ]]; then
+        docker_dev_args+=(--source-root "${BASH_REMATCH[2]}")
+      fi
+    elif [[ "${recipe}" =~ ${docker_dev_build_pattern} ]]; then
+      docker_dev_args+=(build --gpu-access "${BASH_REMATCH[1]}")
+      if [[ -n "${BASH_REMATCH[3]:-}" ]]; then
+        docker_dev_args+=(--source-root "${BASH_REMATCH[3]}")
+      fi
+    elif [[ "${recipe}" =~ ${docker_dev_up_pattern} ]]; then
+      docker_dev_args+=(up)
+      if [[ -n "${BASH_REMATCH[2]:-}" ]]; then docker_dev_args+=(--port "${BASH_REMATCH[2]}"); fi
+      docker_dev_args+=(--gpu-access "${BASH_REMATCH[3]}")
+      if [[ -n "${BASH_REMATCH[5]:-}" ]]; then
+        docker_dev_args+=(--source-root "${BASH_REMATCH[5]}")
+      fi
+      if [[ -n "${BASH_REMATCH[7]:-}" ]]; then
+        docker_dev_args+=(--script "${BASH_REMATCH[7]}")
+      fi
+    elif [[ "${recipe}" =~ ${docker_dev_recreate_pattern} ]]; then
+      echo "[fullmag just] host-receipt DEV recreation is retired; use docker-dev-resume with a Docker-volume attempt" >&2
+      exit 2
+    elif [[ "${recipe}" =~ ${docker_dev_discover_script_pattern} ]]; then
+      docker_dev_args+=(script --script "${BASH_REMATCH[1]}")
+      if [[ -n "${BASH_REMATCH[3]:-}" ]]; then docker_dev_args+=(--source-root "${BASH_REMATCH[3]}"); fi
+      if [[ -n "${BASH_REMATCH[5]:-}" ]]; then docker_dev_args+=(--port "${BASH_REMATCH[5]}"); fi
+      if [[ -n "${BASH_REMATCH[7]:-}" ]]; then docker_dev_args+=(--request-id "${BASH_REMATCH[7]}"); fi
+    elif [[ "${recipe}" =~ ${docker_dev_activate_pattern} ]]; then
+      docker_dev_args+=(activate-script --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --script "${BASH_REMATCH[4]}")
+      if [[ -n "${BASH_REMATCH[6]:-}" ]]; then docker_dev_args+=(--request-id "${BASH_REMATCH[6]}"); fi
+    elif [[ "${recipe}" =~ ${docker_dev_resume_pattern} ]]; then
+      docker_dev_args+=(resume-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}")
+      if [[ -n "${BASH_REMATCH[5]:-}" ]]; then docker_dev_args+=(--restart-backend); fi
+    elif [[ "${recipe}" =~ ${docker_dev_volume_recreate_pattern} ]]; then
+      docker_dev_args+=(recreate-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}")
+      if [[ -n "${BASH_REMATCH[6]:-}" ]]; then
+        docker_dev_args+=(--recovery-authorization "${BASH_REMATCH[6]}")
+      fi
+      if [[ -n "${BASH_REMATCH[7]:-}" ]]; then docker_dev_args+=(--fresh-state); fi
+    elif [[ "${recipe}" =~ ${docker_dev_idle_restart_pattern} ]]; then
+      docker_dev_args+=(restart-idle-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}")
+    else
+      echo "[fullmag just] invalid direct Docker development recipe" >&2
+      exit 2
+    fi
+    # docker_dev.py owns its storage preflight, lifecycle receipt, and host
+    # heavy-lock admission. Do not wrap this path in the legacy generic build
+    # runner, which would create host storage/build-status.json and compatibility
+    # target/cache directories before the Docker-only build starts.
+    exec "${python_cmd}" "${script_dir}/docker_dev.py" "${docker_dev_args[@]}"
+    ;;
+  *"scripts/run_managed_boris_nf_v2.py"*)
+    # Match just's quoted arguments, including escaped checkout apostrophes.
+    boris_runtime_start_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_boris_nf_v2.py\" --repo-root '([^']|'\\\\'')+' run --job-id '([0-9a-f]{32})' --resolution '(coarse|medium|fine)'$"
+    if [[ "${recipe}" =~ ${boris_runtime_start_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/run_managed_boris_nf_v2.py" --repo-root "${repo_root}" run --job-id "${BASH_REMATCH[2]}" --resolution "${BASH_REMATCH[3]}"
+    fi
+    boris_runtime_observe_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_boris_nf_v2.py\" --repo-root '([^']|'\\\\'')+' observe --runtime-id '([0-9a-f]{32})'$"
+    if [[ "${recipe}" =~ ${boris_runtime_observe_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/run_managed_boris_nf_v2.py" --repo-root "${repo_root}" observe --runtime-id "${BASH_REMATCH[2]}"
+    fi
+    echo "[fullmag just] invalid managed BORIS V2 runtime recipe" >&2
+    exit 2
+    ;;
+  *"scripts/run_managed_boris_nf.py"*)
+    # Match just's quoted arguments, including escaped checkout apostrophes.
+    boris_runtime_start_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_boris_nf.py\" --repo-root '([^']|'\\\\'')+' start --job-id '([0-9a-f]{32})' --resolution '(coarse|medium|fine)'$"
+    if [[ "${recipe}" =~ ${boris_runtime_start_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/run_managed_boris_nf.py" --repo-root "${repo_root}" start --job-id "${BASH_REMATCH[2]}" --resolution "${BASH_REMATCH[3]}"
+    fi
+    boris_runtime_observe_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_boris_nf.py\" --repo-root '([^']|'\\\\'')+' observe --runtime-id '([0-9a-f]{32})'$"
+    if [[ "${recipe}" =~ ${boris_runtime_observe_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/run_managed_boris_nf.py" --repo-root "${repo_root}" observe --runtime-id "${BASH_REMATCH[2]}"
+    fi
+    echo "[fullmag just] invalid managed BORIS runtime recipe" >&2
+    exit 2
+    ;;
   *"scripts/verify_docker_all_runtime.py"*)
     docker_verify_pattern="^[^[:space:]]+ \"[^\"]+/scripts/verify_docker_all_runtime.py\" --repo-root \"[^\"]+\" '[^']+'$"
     if [[ ! "${recipe}" =~ ${docker_verify_pattern} ]]; then
@@ -96,7 +282,7 @@ case "${recipe}" in
     exec "${python_cmd}" "${resolver}" run --repo-root "${repo_root}" --profile docker-all-gpu -- "${bash_executable}" -euo pipefail -c "${recipe}"
     ;;
   *"scripts/fullmag_docker_runtime.py"*)
-    docker_runtime_pattern="^[^[:space:]]+ \"[^\"]+/scripts/fullmag_docker_runtime.py\" --repo-root \"[^\"]+\" (submit-development( --source-root '[^']+')?|submit --commit '[a-f0-9]{40}'|build-image --job-id '[a-f0-9]{32}' --commit '[a-f0-9]{40}'( --development)?( --source-digest '[a-f0-9]{64}' --native-snapshot-sha256 '[a-f0-9]{64}')?( --source-root '[^']+')?|start --assembly-receipt '[^']+' --port '[0-9]{4,5}'( --frontend 'dev')?( --source-root '[^']+')?)[[:space:]]*$"
+    docker_runtime_pattern="^[^[:space:]]+ \"[^\"]+/scripts/fullmag_docker_runtime.py\" --repo-root \"[^\"]+\" (submit-development( --source-root '[^']+')?|submit --commit '[a-f0-9]{40}'|build-image --job-id '[a-f0-9]{32}' --commit '[a-f0-9]{40}'( --development)?( --source-digest '[a-f0-9]{64}' --native-snapshot-sha256 '[a-f0-9]{64}')?( --source-root '[^']+')?|start --assembly-receipt '[^']+' --port '[0-9]{4,5}'( --frontend 'dev')?( --source-root '[^']+')?( --startup-script '[^']+')?)[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${docker_runtime_pattern} ]]; then
       echo "[fullmag just] invalid all-in-Docker recipe" >&2
       exit 2
@@ -390,6 +576,38 @@ case "${recipe}" in
     ;;
 esac
 
+# Fixed offline BORIS provisioning owns resolver admission and its context lock.
+case "${recipe}" in
+  *"scripts/local_runner/boris_toolchain.py"*)
+    boris_context_pattern="^[^[:space:]]+ \"[^\"]+/scripts/local_runner/boris_toolchain.py\" prepare-image-context --repo-root '([^']+)' --bundle '([^']+)' --wheel-bundle '([^']+)' --base-image '(sha256:[a-f0-9]{64})'$"
+    if [[ "${recipe}" =~ ${boris_context_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/local_runner/boris_toolchain.py" prepare-image-context --repo-root "${repo_root}" --bundle "${BASH_REMATCH[2]}" --wheel-bundle "${BASH_REMATCH[3]}" --base-image "${BASH_REMATCH[4]}"
+    fi
+    boris_image_pattern="^[^[:space:]]+ \"[^\"]+/scripts/local_runner/boris_toolchain.py\" build-image --repo-root '([^']+)' --context '([^']+)' --tag '(fullmag/boris-toolchain:[a-z0-9][a-z0-9_.-]{0,100})'$"
+    if [[ "${recipe}" =~ ${boris_image_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/local_runner/boris_toolchain.py" build-image --repo-root "${repo_root}" --context "${BASH_REMATCH[2]}" --tag "${BASH_REMATCH[3]}"
+    fi
+    echo "[fullmag just] invalid BORIS provisioning recipe" >&2
+    exit 2
+    ;;
+esac
+
+# Fixed BORIS source capture/provisioning admits immutable toolchain proof.
+case "${recipe}" in
+  *"scripts/local_runner/boris_cpu.py"*)
+    boris_source_pattern="^[^[:space:]]+ \"[^\"]+/scripts/local_runner/boris_cpu.py\" prepare-image-context --repo-root '([^']+)' --boris-source '([^']+)' --toolchain-image '(sha256:[a-f0-9]{64})' --toolchain-proof '([^']+)' --toolchain-context '([^']+)' --toolchain-container '([a-f0-9]{64})'$"
+    if [[ "${recipe}" =~ ${boris_source_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/local_runner/boris_cpu.py" prepare-image-context --repo-root "${repo_root}" --boris-source "${BASH_REMATCH[2]}" --toolchain-image "${BASH_REMATCH[3]}" --toolchain-proof "${BASH_REMATCH[4]}" --toolchain-context "${BASH_REMATCH[5]}" --toolchain-container "${BASH_REMATCH[6]}"
+    fi
+    boris_source_image_pattern="^[^[:space:]]+ \"[^\"]+/scripts/local_runner/boris_cpu.py\" build-image --repo-root '([^']+)' --context '([^']+)' --tag '(fullmag/boris-cpu:[a-z0-9][a-z0-9_.-]{0,100})'$"
+    if [[ "${recipe}" =~ ${boris_source_image_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/local_runner/boris_cpu.py" build-image --repo-root "${repo_root}" --context "${BASH_REMATCH[2]}" --tag "${BASH_REMATCH[3]}"
+    fi
+    echo "[fullmag just] invalid BORIS source provisioning recipe" >&2
+    exit 2
+    ;;
+esac
+
 # Runner actions own their storage preflight and per-job/per-worktree locks.
 # Holding the generic worktree lock while `wait` polls would prevent the
 # coordinator from executing that same worktree's queued job.
@@ -427,16 +645,29 @@ esac
 # paths/lock inside the dedicated helper. Do not run the generic compatibility-
 # link or heavy-build wrapper for them.
 case "${recipe}" in
-  *"scripts/run_managed_antenna_http_ram.py"*)
-    antenna_http_ram_start_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_antenna_http_ram.py\" --repo-root \"[^\"]+\" start --job-id '([0-9a-f]{32})' --commit '([0-9a-f]{40})' --source-digest '([0-9a-f]{64})' --native-snapshot-sha256 '([0-9a-f]{64})'( --verify-cold-import)?( --standalone)?$"
-    if [[ "${recipe}" =~ ${antenna_http_ram_start_pattern} ]]; then
-      cold_args=()
-      if [[ -n "${BASH_REMATCH[5]}" ]]; then cold_args=(--verify-cold-import); fi
-      if [[ -n "${BASH_REMATCH[6]}" ]]; then cold_args+=(--standalone); fi
-      exec "${python_cmd}" "${script_dir}/run_managed_antenna_http_ram.py" --repo-root "${repo_root}" start --job-id "${BASH_REMATCH[1]}" --commit "${BASH_REMATCH[2]}" --source-digest "${BASH_REMATCH[3]}" --native-snapshot-sha256 "${BASH_REMATCH[4]}" "${cold_args[@]}"
+  *"scripts/run_managed_transport_oracles.py"*)
+    transport_start_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_transport_oracles.py\" --repo-root \"[^\"]+\" start --job-id '([0-9a-f]{32})' --commit '([0-9a-f]{40})' --source-digest '([0-9a-f]{64})' --native-snapshot-sha256 '([0-9a-f]{64})'$"
+    if [[ "${recipe}" =~ ${transport_start_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/run_managed_transport_oracles.py" --repo-root "${repo_root}" start --job-id "${BASH_REMATCH[1]}" --commit "${BASH_REMATCH[2]}" --source-digest "${BASH_REMATCH[3]}" --native-snapshot-sha256 "${BASH_REMATCH[4]}"
     fi
-    antenna_http_ram_observe_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_antenna_http_ram.py\" --repo-root \"[^\"]+\" observe --run-root '([^']+)'$"
-    if [[ "${recipe}" =~ ${antenna_http_ram_observe_pattern} ]]; then
+    transport_observe_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_transport_oracles.py\" --repo-root \"[^\"]+\" observe --run-root '([^']+)'$"
+    if [[ "${recipe}" =~ ${transport_observe_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/run_managed_transport_oracles.py" --repo-root "${repo_root}" observe --run-root "${BASH_REMATCH[1]}"
+    fi
+    echo "[fullmag just] invalid managed transport oracle recipe" >&2
+    exit 2
+    ;;
+  *"scripts/run_managed_antenna_http_ram.py"*)
+    antenna_http_start_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_antenna_http_ram.py\" --repo-root \"[^\"]+\" start --job-id '([0-9a-f]{32})' --commit '([0-9a-f]{40})' --source-digest '([0-9a-f]{64})' --native-snapshot-sha256 '([0-9a-f]{64})'( --fixture '(magnetic|nonmagnetic|closedloop)')?( --verify-cold-import)?( --standalone)?$"
+    if [[ "${recipe}" =~ ${antenna_http_start_pattern} ]]; then
+      antenna_http_args=()
+      if [[ -n "${BASH_REMATCH[6]}" ]]; then antenna_http_args+=(--fixture "${BASH_REMATCH[6]}"); fi
+      if [[ -n "${BASH_REMATCH[7]}" ]]; then antenna_http_args+=(--verify-cold-import); fi
+      if [[ -n "${BASH_REMATCH[8]}" ]]; then antenna_http_args+=(--standalone); fi
+      exec "${python_cmd}" "${script_dir}/run_managed_antenna_http_ram.py" --repo-root "${repo_root}" start --job-id "${BASH_REMATCH[1]}" --commit "${BASH_REMATCH[2]}" --source-digest "${BASH_REMATCH[3]}" --native-snapshot-sha256 "${BASH_REMATCH[4]}" "${antenna_http_args[@]}"
+    fi
+    antenna_http_observe_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_antenna_http_ram.py\" --repo-root \"[^\"]+\" observe --run-root '([^']+)'$"
+    if [[ "${recipe}" =~ ${antenna_http_observe_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/run_managed_antenna_http_ram.py" --repo-root "${repo_root}" observe --run-root "${BASH_REMATCH[1]}"
     fi
     echo "[fullmag just] invalid managed antenna HTTP RAM recipe" >&2
@@ -457,6 +688,14 @@ case "${recipe}" in
     exit 2
     ;;
   *"scripts/run_managed_browser.py"*)
+    managed_browser_snapshot_pattern="^[^[:space:]]+ \"[^\"]+/scripts/run_managed_browser.py\" --repo-root \"[^\"]+\" --job-id '([0-9a-f]{32})' --commit '([0-9a-f]{40})' --source-digest '([0-9a-f]{64})' --native-snapshot-sha256 '([0-9a-f]{64})' --port '([0-9]{4,5})'( --ephemeral)?$"
+    if [[ "${recipe}" =~ ${managed_browser_snapshot_pattern} ]]; then
+      managed_browser_args=(--repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --commit "${BASH_REMATCH[2]}" --source-digest "${BASH_REMATCH[3]}" --native-snapshot-sha256 "${BASH_REMATCH[4]}" --port "${BASH_REMATCH[5]}")
+      if [[ -n "${BASH_REMATCH[6]}" ]]; then
+        managed_browser_args+=(--ephemeral)
+      fi
+      exec "${python_cmd}" "${script_dir}/run_managed_browser.py" "${managed_browser_args[@]}"
+    fi
     managed_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/run_managed_browser.py" --repo-root "[^"]+" --job-id ([0-9a-f]{32}) --commit ([0-9a-f]{40}) --port ([0-9]{4,5})$'
     if [[ ! "${recipe}" =~ ${managed_browser_pattern} ]]; then
       echo "[fullmag just] invalid managed browser recipe" >&2
@@ -477,9 +716,25 @@ case "${recipe}" in
     if [[ "${recipe}" =~ ${preparation_workspace_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3268 --scenario preparation-workspace
     fi
-    antenna_spectrum_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3265 --scenario antenna-source-spectrum$'
+    antenna_workspace_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3274 --scenario antenna-workspace-authoring( --dependency-workspace "([^"]+)")?[[:space:]]*$'
+    if [[ "${recipe}" =~ ${antenna_workspace_browser_pattern} ]]; then
+      dependency_workspace="${BASH_REMATCH[2]}"
+      if [[ -n "${dependency_workspace}" ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3274 --scenario antenna-workspace-authoring --dependency-workspace "${dependency_workspace}"
+      fi
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3274 --scenario antenna-workspace-authoring
+    fi
+    antenna_spectrum_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3265 --scenario antenna-source-spectrum( --dependency-workspace "([^"]+)")?[[:space:]]*$'
     if [[ "${recipe}" =~ ${antenna_spectrum_browser_pattern} ]]; then
+      dependency_workspace="${BASH_REMATCH[2]:-}"
+      if [[ -n "${dependency_workspace}" ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3265 --scenario antenna-source-spectrum --dependency-workspace "${dependency_workspace}"
+      fi
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3265 --scenario antenna-source-spectrum
+    fi
+    artifact_field_overlay_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3276 --scenario artifact-field-overlay$'
+    if [[ "${recipe}" =~ ${artifact_field_overlay_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3276 --scenario artifact-field-overlay
     fi
     antenna_visualization_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3262 --scenario antenna-visualization$'
     if [[ "${recipe}" =~ ${antenna_visualization_browser_pattern} ]]; then
@@ -501,8 +756,16 @@ case "${recipe}" in
     if [[ "${recipe}" =~ ${port_diagnostics_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3263 --scenario antenna-port-diagnostics
     fi
-    port_editor_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3264 --scenario antenna-port-editor$'
+    solve_targets_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3256 --scenario antenna-solve-targets$'
+    if [[ "${recipe}" =~ ${solve_targets_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3256 --scenario antenna-solve-targets
+    fi
+    port_editor_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3264 --scenario antenna-port-editor( --dependency-workspace "([^"]+)")?[[:space:]]*$'
     if [[ "${recipe}" =~ ${port_editor_browser_pattern} ]]; then
+      dependency_workspace="${BASH_REMATCH[2]:-}"
+      if [[ -n "${dependency_workspace}" ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3264 --scenario antenna-port-editor --dependency-workspace "${dependency_workspace}"
+      fi
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3264 --scenario antenna-port-editor
     fi
     inspector_actions_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3257 --scenario inspector-actions$'
@@ -513,16 +776,24 @@ case "${recipe}" in
     if [[ "${recipe}" =~ ${primitive_color_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3257 --scenario primitive-color-inspector
     fi
-    stations_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3253 --scenario antenna-microstrip-stations$'
+    stations_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3253 --scenario antenna-microstrip-stations( --dependency-workspace "([^"]+)")?[[:space:]]*$'
     object_material_editor_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3266 --scenario object-material-editor$'
     if [[ "${recipe}" =~ ${object_material_editor_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3266 --scenario object-material-editor
+    fi
+    regional_drive_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3272 --scenario antenna-regional-drive$'
+    if [[ "${recipe}" =~ ${regional_drive_browser_pattern} ]]; then
+      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3272 --scenario antenna-regional-drive
     fi
     drive_editor_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3265 --scenario antenna-drive-editor$'
     if [[ "${recipe}" =~ ${drive_editor_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3265 --scenario antenna-drive-editor
     fi
     if [[ "${recipe}" =~ ${stations_browser_pattern} ]]; then
+      dependency_workspace="${BASH_REMATCH[2]:-}"
+      if [[ -n "${dependency_workspace}" ]]; then
+        exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3253 --scenario antenna-microstrip-stations --dependency-workspace "${dependency_workspace}"
+      fi
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3253 --scenario antenna-microstrip-stations
     fi
     antenna_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3252 --scenario antenna-external-lead-inspection$'

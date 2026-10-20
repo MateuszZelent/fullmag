@@ -99,8 +99,20 @@ pub enum SceneStructuredCutNormal {
     NegativeAxis,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneStructuredCutCoordinateFrame {
+    #[default]
+    World,
+    Object,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SceneStructuredCutPlane {
+    /// An omitted frame retains the legacy world-frame contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinate_frame: Option<SceneStructuredCutCoordinateFrame>,
     pub axis: SceneStructuredCutAxis,
     pub offset_m: f64,
     pub normal: SceneStructuredCutNormal,

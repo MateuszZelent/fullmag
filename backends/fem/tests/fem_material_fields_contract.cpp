@@ -161,6 +161,35 @@ void material_plan_import_and_validation_contract() {
     plan.a_element_field = a_element;
     plan.a_element_field_len = 2;
 
+    struct RawField {
+        const char *name;
+        const double *fullmag_fem_plan_desc::*pointer;
+        uint64_t fullmag_fem_plan_desc::*length;
+    };
+    const RawField raw_fields[] = {
+        {"Ms_field", &fullmag_fem_plan_desc::ms_field, &fullmag_fem_plan_desc::ms_field_len},
+        {"A_field", &fullmag_fem_plan_desc::a_field, &fullmag_fem_plan_desc::a_field_len},
+        {"alpha_field", &fullmag_fem_plan_desc::alpha_field, &fullmag_fem_plan_desc::alpha_field_len},
+        {"anisotropy_axis_x_field", &fullmag_fem_plan_desc::anisotropy_axis_x_field,
+         &fullmag_fem_plan_desc::anisotropy_axis_x_field_len},
+        {"anisotropy_axis_y_field", &fullmag_fem_plan_desc::anisotropy_axis_y_field,
+         &fullmag_fem_plan_desc::anisotropy_axis_y_field_len},
+        {"anisotropy_axis_z_field", &fullmag_fem_plan_desc::anisotropy_axis_z_field,
+         &fullmag_fem_plan_desc::anisotropy_axis_z_field_len},
+    };
+    for (const RawField &field : raw_fields) {
+        fullmag_fem_plan_desc null_span_plan = plan;
+        null_span_plan.*field.pointer = nullptr;
+        null_span_plan.*field.length = 2u;
+        std::string span_error;
+        check(
+            !fullmag::fem::validate_material_field_spans(null_span_plan, span_error),
+            "non-empty null material ABI span must be rejected before material copy");
+        check(
+            span_error.find(field.name) != std::string::npos,
+            "null material span diagnostic must identify the field");
+    }
+
     fullmag::fem::initialize_material_plan_fields(ctx, plan);
     check(ctx.material_fields.material.saturation_magnetisation == 800e3, "scalar Ms copied from plan");
     check(ctx.material_fields.material.exchange_stiffness == 13e-12, "scalar A copied from plan");

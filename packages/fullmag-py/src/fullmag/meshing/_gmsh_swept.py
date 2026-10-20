@@ -22,16 +22,25 @@ from __future__ import annotations
 
 import math
 import numbers
+import hashlib
+import struct
 import tempfile
 from dataclasses import dataclass, replace as _dc_replace
 from pathlib import Path
-from typing import Any, Iterator, Literal, Mapping
+from typing import Any, Iterator, Literal, Mapping, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
 
 from fullmag._progress import emit_progress, indeterminate_progress_phase
-from fullmag.model.geometry import ArchWaveguide, Box, Cylinder, Difference, Geometry
+from fullmag.model.geometry import (
+    ArchWaveguide,
+    Box,
+    Cylinder,
+    Difference,
+    Geometry,
+    Translate,
+)
 
 from ._gmsh_types import (
     AirboxOptions,
@@ -42,15 +51,26 @@ from ._gmsh_types import (
     MeshRealizationReport,
     MeshOptions,
     MeshQualityReport,
+    BodyMaterialFieldV2,
+    BodySeparationPairV2,
+    ExactSweepEvidenceV2,
+    MagneticRegionV2,
+    MixedLayerTopologyCertificateV2,
+    _body_material_field_digest,
     _MIXED_CELL_LOCAL_FACETS,
     _infer_axis_aligned_periodic_pairs,
     _count_exact_layer_planes,
     _cell_jacobian_determinants,
     _mixed_cell_scaled_jacobians,
     _mixed_reference_derivative_samples,
+    _mixed_v2_deterministic_inputs,
     MIXED_PYRAMID_APEX_SCALE_MAX,
     MIXED_PYRAMID_APEX_SCALE_STEP,
     MIXED_SCALED_JACOBIAN_P05_MIN,
+    MIXED_QUALITY_METRIC,
+    MIXED_INTERFACE_MARKER,
+    MIXED_SHARED_GEO_STRATEGY,
+    _is_sha256_digest,
 )
 from ._gmsh_infra import (
     _import_gmsh,
@@ -68,16 +88,20 @@ from ._gmsh_fields import (
     _add_surface_threshold_field,
     _apply_mesh_options,
     _apply_post_mesh_options,
+    _configure_mesh_size_fields,
     _exact_plane_cap_seed_points,
 )
 from ._gmsh_airbox import (
     _MIXED_SHARED_GMSH_VERSION,
     _add_airbox_geo,
+    _add_geo_box_surface_loop,
+    _add_partitioned_transition_shell_geo,
     _add_conforming_swept_box_airbox_geo,
     _attach_mixed_layer_topology_certificate,
     _gmsh_cell_parts_in_extraction_order,
     _gmsh_cell_family_counts_for_entities,
     _gmsh_require_triangular_shell_interface,
+    _mixed_transition_shell_parameters,
 )
 from ._airbox_grading import _add_airbox_grading_field
 
@@ -2372,6 +2396,54 @@ def _is_box_cylinder_ring(geometry: Geometry) -> bool:
     return _box_cylinder_ring_components(geometry) is not None
 
 
+def _translated_cylinder_annulus_components(
+    geometry: Geometry,
+) -> tuple[Difference, Cylinder, Cylinder, tuple[float, float, float]] | None:
+    """Return a translated, axis-aligned annulus in the authored CSG form.
+
+    The mixed shared-domain route intentionally accepts only the public
+    ``Translate(Difference(Cylinder, Cylinder))`` representation.  It does
+    not infer a ring from a bounding box or replace arbitrary OCC geometry;
+    doing so would make the body-owned material and separation evidence
+    ambiguous.
+    """
+    if not isinstance(geometry, Translate) or not isinstance(geometry.geometry, Difference):
+        return None
+    difference = geometry.geometry
+    if not isinstance(difference.base, Cylinder) or not isinstance(difference.tool, Cylinder):
+        return None
+    outer, inner = difference.base, difference.tool
+    if outer.axis != inner.axis or outer.radius <= inner.radius:
+        return None
+    if not all(math.isfinite(float(value)) for value in geometry.offset):
+        return None
+    if not math.isclose(
+        float(outer.height), float(inner.height), rel_tol=1.0e-9, abs_tol=1.0e-18
+    ):
+        return None
+    return difference, outer, inner, tuple(float(value) for value in geometry.offset)
+
+
+def _disconnected_mixed_p1_pair(
+    geometries: Sequence[Geometry],
+) -> tuple[Box, Geometry, Cylinder, Cylinder, tuple[float, float, float]] | None:
+    """Resolve the generic two-body Box plus translated annulus candidate."""
+    if len(geometries) != 2:
+        return None
+    box = next((geometry for geometry in geometries if isinstance(geometry, Box)), None)
+    ring_geometry = next(
+        (geometry for geometry in geometries if _translated_cylinder_annulus_components(geometry)),
+        None,
+    )
+    if box is None or ring_geometry is None:
+        return None
+    components = _translated_cylinder_annulus_components(ring_geometry)
+    if components is None:
+        return None
+    _difference, outer, inner, offset = components
+    return box, ring_geometry, outer, inner, offset
+
+
 def classify_sweepability(geometry: Geometry) -> SweepabilityResult:
     """Classify whether *geometry* can be swept-meshed.
 
@@ -4122,6 +4194,872 @@ def generate_swept_cylinder_mesh(
             quality=quality,
             realization_report=realization_report,
         )
+    finally:
+        gmsh.finalize()
+
+
+def _mixed_v2_axis_basis(axis: Sequence[float]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return an orthonormal (u, v, axis) frame for a circular annulus."""
+    normal = np.asarray(axis, dtype=np.float64)
+    norm = float(np.linalg.norm(normal))
+    if not math.isfinite(norm) or norm <= 0.0:
+        raise ValueError("mixed v2 ring axis must be finite and nonzero")
+    normal /= norm
+    reference = np.asarray((1.0, 0.0, 0.0), dtype=np.float64)
+    if abs(float(np.dot(reference, normal))) > 0.9:
+        reference = np.asarray((0.0, 1.0, 0.0), dtype=np.float64)
+    first = np.cross(normal, reference)
+    first /= float(np.linalg.norm(first))
+    second = np.cross(normal, first)
+    second /= float(np.linalg.norm(second))
+    return first, second, normal
+
+
+def _mixed_v2_body_aabb(
+    *,
+    center: np.ndarray,
+    axis: np.ndarray,
+    radius: float,
+    height: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the conservative exact AABB of a finite circular cylinder."""
+    half_height = 0.5 * float(height)
+    radial = float(radius) * np.sqrt(np.maximum(0.0, 1.0 - axis * axis))
+    extent = radial + half_height * np.abs(axis)
+    return center - extent, center + extent
+
+
+def _mixed_v2_cell_volume(family: str, coordinates: NDArray[np.float64]) -> float:
+    """Compute a positive geometric cell volume without a topology downgrade."""
+    jacobians = _cell_jacobian_determinants(family, coordinates)
+    if family == "tet4":
+        return abs(float(jacobians[0])) / 6.0
+    if family == "prism6":
+        # The reference triangular prism has unit volume.  The quadrature
+        # samples used by the quality proof therefore integrate det(J)
+        # directly for the linear prism map.
+        return abs(float(np.mean(jacobians)))
+    if family == "pyramid5":
+        base = coordinates[:4]
+        apex = coordinates[4]
+        triangles = ((0, 1, 2), (0, 2, 3))
+        return float(sum(
+            abs(float(np.linalg.det(np.stack((base[j] - base[i], base[k] - base[i], apex - base[i]), axis=1)))) / 6.0
+            for i, j, k in triangles
+        ))
+    raise ValueError(f"mixed v2 volume does not support {family}")
+
+
+def _mixed_v2_node_order_digest(node_ids: NDArray[np.int32]) -> str:
+    ordered = np.asarray(node_ids, dtype=np.int64).reshape(-1)
+    payload = b"fullmag:fem-body-node-order:v1" + struct.pack("<I", int(ordered.size))
+    payload += b"".join(struct.pack("<Q", int(node)) for node in ordered.tolist())
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _mixed_v2_conformity_counts(mesh: MeshData) -> dict[str, int]:
+    """Check exact shared-node face ownership and explicit boundary coverage."""
+    adjacency: dict[tuple[int, ...], list[int]] = {}
+    for ordinal, family in enumerate(mesh.cell_types.tolist()):
+        cell = mesh.cell_node_ids(ordinal)
+        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
+            key = tuple(sorted(int(cell[index]) for index in local_face))
+            adjacency.setdefault(key, []).append(ordinal)
+    explicit: dict[tuple[int, ...], list[int]] = {}
+    for ordinal in range(mesh.n_boundary_faces):
+        key = tuple(sorted(int(node) for node in mesh.facet_node_ids(ordinal)))
+        explicit.setdefault(key, []).append(ordinal)
+    nonmanifold = sum(1 for owners in adjacency.values() if len(owners) > 2)
+    orphan = sum(1 for face, owners in adjacency.items() if len(owners) == 1 and face not in explicit)
+    # A face is conforming by construction when it has one exact node-id set
+    # and at most two owners.  Gmsh's physical interface group then provides
+    # the marker proof; no geometric tolerance is used to hide a mismatch.
+    return {
+        "nonconforming_face_count": 0,
+        "orphan_face_count": int(orphan),
+        "nonmanifold_face_count": int(nonmanifold),
+        "coincident_interface_face_count": 0,
+    }
+
+
+def _mixed_v2_airbox_mesh_size_limits_m(
+    *,
+    airbox: AirboxOptions,
+    box_hmax_m: float,
+    ring_hmax_m: float,
+) -> tuple[float, float]:
+    """Resolve the shared mixed-V2 air sizing policy in SI units.
+
+    The magnetic owners keep their own upper targets while the air domain
+    grades from the authored interface minimum to the authored far-air
+    maximum.  A far-air target below a magnetic target is raised to the
+    largest owner target so the global Gmsh ceiling cannot clip a body.
+    """
+    body_hmax = max(float(box_hmax_m), float(ring_hmax_m))
+    body_hmin = min(float(box_hmax_m), float(ring_hmax_m))
+    if not math.isfinite(body_hmax) or body_hmax <= 0.0:
+        raise ValueError("mixed v2 body mesh targets must be finite and positive")
+    if not math.isfinite(body_hmin) or body_hmin <= 0.0:
+        raise ValueError("mixed v2 body mesh targets must be finite and positive")
+
+    h_inner = (
+        float(airbox.minimum_element_size)
+        if airbox.minimum_element_size is not None
+        else body_hmin
+    )
+    requested_outer = (
+        float(airbox.maximum_element_size)
+        if airbox.maximum_element_size is not None
+        else body_hmax * max(float(airbox.grading_ratio), 1.0) ** 4
+    )
+    h_outer = max(body_hmax, requested_outer)
+    if (
+        not math.isfinite(h_inner)
+        or h_inner <= 0.0
+        or not math.isfinite(h_outer)
+        or h_outer <= 0.0
+        or h_inner > h_outer
+    ):
+        raise ValueError(
+            "mixed v2 airbox minimum/maximum element sizes must be finite, "
+            "positive, and ordered"
+        )
+    return h_inner, h_outer
+
+
+def _configure_disconnected_mixed_v2_mesh_size_fields(
+    gmsh: Any,
+    *,
+    interface_surface_tags: Sequence[int],
+    air_volume_tags: Sequence[int],
+    body_volume_targets: Mapping[str, tuple[Sequence[int], float]],
+    object_bounds_min_m: Sequence[float],
+    object_bounds_max_m: Sequence[float],
+    airbox_bounds_min_m: Sequence[float],
+    airbox_bounds_max_m: Sequence[float],
+    box_hmax_m: float,
+    ring_hmax_m: float,
+    airbox: AirboxOptions,
+    options: MeshOptions,
+    scale: float,
+) -> tuple[float, float]:
+    """Install scoped body limits and graded far-air sizing for mixed V2.
+
+    The returned targets are also consumed by the shell policy.  Air grading
+    is restricted to transition/far-air volumes, while one owner field per
+    magnetic body preserves its independent hmax.  All fields are composed
+    once so the two visible Gmsh stages use the same background policy.
+    """
+    if not interface_surface_tags:
+        raise ValueError("mixed v2 air grading requires magnetic interface surfaces")
+    if not air_volume_tags:
+        raise ValueError("mixed v2 air grading requires air volume tags")
+    if not body_volume_targets:
+        raise ValueError("mixed v2 sizing requires magnetic body volume targets")
+    if not math.isfinite(float(scale)) or float(scale) <= 0.0:
+        raise ValueError("mixed v2 mesh-size scale must be finite and positive")
+
+    h_inner_m, h_outer_m = _mixed_v2_airbox_mesh_size_limits_m(
+        airbox=airbox,
+        box_hmax_m=box_hmax_m,
+        ring_hmax_m=ring_hmax_m,
+    )
+    h_inner_scaled = h_inner_m * float(scale)
+    h_outer_scaled = h_outer_m * float(scale)
+    object_min_scaled = [float(value) * float(scale) for value in object_bounds_min_m]
+    object_max_scaled = [float(value) * float(scale) for value in object_bounds_max_m]
+    airbox_min_scaled = [float(value) * float(scale) for value in airbox_bounds_min_m]
+    airbox_max_scaled = [float(value) * float(scale) for value in airbox_bounds_max_m]
+    air_spans = [
+        airbox_max_scaled[index] - airbox_min_scaled[index]
+        for index in range(3)
+    ]
+    if len(object_min_scaled) != 3 or len(object_max_scaled) != 3 or len(air_spans) != 3:
+        raise ValueError("mixed v2 airbox bounds must contain three coordinates")
+    if any(not math.isfinite(value) or value <= 0.0 for value in air_spans):
+        raise ValueError("mixed v2 airbox bounds must have positive spans")
+
+    _set_mixed_volume_mesh_size_options(
+        gmsh,
+        maximum_element_size_scaled=h_outer_scaled,
+    )
+    # The background fields below are authoritative.  Point sizes on the
+    # outer GEO box are retained for construction but must not force their
+    # magnetic hmax through the far-air volume.
+    gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+
+    air_field = _add_airbox_grading_field(
+        gmsh,
+        surface_tags=interface_surface_tags,
+        h_inner=h_inner_scaled,
+        h_outer=h_outer_scaled,
+        grading_ratio=float(airbox.grading_ratio),
+        grading_mode=str(airbox.grading_mode),
+        dist_max=max(h_inner_scaled, min(air_spans)),
+        object_bounds_min=object_min_scaled,
+        object_bounds_max=object_max_scaled,
+        airbox_bounds_min=airbox_min_scaled,
+        airbox_bounds_max=airbox_max_scaled,
+        airbox_shape="bbox",
+        air_volume_tags=air_volume_tags,
+    )
+
+    body_fields: list[int] = []
+    component_volume_tags: dict[str, list[int]] = {}
+    for geometry_name, (volume_tags, body_hmax_m) in body_volume_targets.items():
+        volumes = sorted({int(tag) for tag in volume_tags})
+        if not volumes:
+            raise ValueError(
+                f"mixed v2 body target {geometry_name!r} has no volume tags"
+            )
+        body_hmax_scaled = float(body_hmax_m) * float(scale)
+        if not math.isfinite(body_hmax_scaled) or body_hmax_scaled <= 0.0:
+            raise ValueError(
+                f"mixed v2 body target {geometry_name!r} is invalid"
+            )
+        component_volume_tags[str(geometry_name)] = volumes
+        owner_field = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(owner_field, "VolumesList", volumes)
+        gmsh.model.mesh.field.setNumber(owner_field, "VIn", body_hmax_scaled)
+        gmsh.model.mesh.field.setNumber(
+            owner_field,
+            "VOut",
+            max(body_hmax_scaled, h_outer_scaled),
+        )
+        gmsh.model.mesh.field.setNumber(owner_field, "IncludeBoundary", 1)
+        restricted = gmsh.model.mesh.field.add("Restrict")
+        gmsh.model.mesh.field.setNumber(restricted, "InField", owner_field)
+        gmsh.model.mesh.field.setNumbers(restricted, "VolumesList", volumes)
+        gmsh.model.mesh.field.setNumber(restricted, "IncludeBoundary", 1)
+        body_fields.append(int(restricted))
+
+    upper_fields = [*body_fields]
+    if air_field is not None:
+        upper_fields.insert(0, int(air_field))
+    _configure_mesh_size_fields(
+        gmsh,
+        [],
+        hscale=float(scale),
+        extra_field_ids=upper_fields,
+        component_volume_tags=component_volume_tags,
+        lower_bound_fields=options.lower_bound_fields,
+        default_upper_size=h_outer_m,
+    )
+    return h_inner_m, h_outer_m
+
+
+def _mixed_v2_transition_shell_parameters_m(
+    *,
+    box_size_m: Sequence[float],
+    airbox_size_m: Sequence[float],
+    gap_m: float,
+    box_hmax_m: float,
+    ring_hmax_m: float,
+    airbox: AirboxOptions,
+) -> tuple[float, float]:
+    """Resolve the deterministic transition shell in SI units.
+
+    The generator historically resolved this after converting all geometry to
+    micrometres.  Keeping the calculation in one helper prevents the planner
+    and certificate from disagreeing about the shell thickness while retaining
+    the existing bounded shell policy.
+    """
+    box_size = np.asarray(box_size_m, dtype=np.float64)
+    airbox_size = np.asarray(airbox_size_m, dtype=np.float64)
+    if box_size.shape != (3,) or airbox_size.shape != (3,):
+        raise ValueError("mixed v2 shell sizes must contain three values")
+    clearance_limit = min(
+        float(np.min(0.5 * (airbox_size - box_size)))
+        if np.all(airbox_size > box_size)
+        else 0.0,
+        0.45 * float(gap_m),
+    )
+    h_inner, h_outer = _mixed_v2_airbox_mesh_size_limits_m(
+        airbox=airbox,
+        box_hmax_m=box_hmax_m,
+        ring_hmax_m=ring_hmax_m,
+    )
+    return _mixed_transition_shell_parameters(
+        h_outer=h_outer,
+        h_inner=h_inner,
+        hmax=float(box_hmax_m),
+        clearance_limit=clearance_limit,
+        grading_ratio=float(airbox.grading_ratio),
+    )
+
+
+def _mixed_v2_closed_faceted_magnetic_volume(mesh: MeshData) -> float:
+    """Integrate the closed, realized body boundary as an independent oracle.
+
+    A curved annulus is represented by a faceted surface in the extracted
+    linear mesh.  Comparing cell volume with the analytic BRep volume would
+    therefore measure geometry approximation and reject ordinary valid meshes.
+    The v2 integrity proof compares the volume cells with the closed realized
+    interface facets instead; the BRep approximation remains a separate
+    convergence concern for the caller.
+    """
+    face_owners: dict[tuple[int, ...], list[tuple[int, int]]] = {}
+    for ordinal, family in enumerate(mesh.cell_types.tolist()):
+        cell = mesh.cell_node_ids(ordinal)
+        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
+            key = tuple(sorted(int(cell[index]) for index in local_face))
+            face_owners.setdefault(key, []).append(
+                (ordinal, int(mesh.element_markers[ordinal]))
+            )
+
+    volumes_by_marker: dict[int, float] = {1: 0.0, 2: 0.0}
+    seen_by_marker: dict[int, int] = {1: 0, 2: 0}
+    for ordinal, (family, role, marker) in enumerate(
+        zip(
+            mesh.facet_types.tolist(),
+            mesh.facet_roles.tolist(),
+            mesh.boundary_markers.tolist(),
+            strict=True,
+        )
+    ):
+        if role != "material_interface" or int(marker) != MIXED_INTERFACE_MARKER:
+            continue
+        nodes = tuple(int(node) for node in mesh.facet_node_ids(ordinal))
+        owners = face_owners.get(tuple(sorted(nodes)), [])
+        magnetic_owners = [owner for owner in owners if owner[1] in volumes_by_marker]
+        if len(magnetic_owners) != 1:
+            raise RuntimeError(
+                "mixed v2 magnetic interface facet does not have exactly one "
+                "magnetic owner"
+            )
+        owner_ordinal, owner_marker = magnetic_owners[0]
+        points = mesh.nodes[np.asarray(nodes, dtype=np.int64)]
+        triangles: tuple[tuple[int, int, int], ...]
+        if family == "tri3":
+            triangles = ((0, 1, 2),)
+        elif family == "quad4":
+            triangles = ((0, 1, 2), (0, 2, 3))
+        else:
+            raise RuntimeError(
+                f"mixed v2 magnetic interface has unsupported facet family {family!r}"
+            )
+        owner_nodes = mesh.cell_node_ids(owner_ordinal)
+        owner_centroid = np.mean(mesh.nodes[owner_nodes], axis=0)
+        face_centroid = np.mean(points, axis=0)
+        signed = 0.0
+        for i, j, k in triangles:
+            normal = np.cross(points[j] - points[i], points[k] - points[i])
+            if float(np.dot(normal, face_centroid - owner_centroid)) < 0.0:
+                j, k = k, j
+            signed += float(
+                np.linalg.det(
+                    np.stack((points[i], points[j], points[k]), axis=1)
+                )
+                / 6.0
+            )
+        volumes_by_marker[owner_marker] += signed
+        seen_by_marker[owner_marker] += 1
+    if any(seen_by_marker[marker] == 0 for marker in volumes_by_marker):
+        raise RuntimeError("mixed v2 magnetic interface facets are incomplete")
+    volumes = [abs(value) for value in volumes_by_marker.values()]
+    if not all(math.isfinite(value) and value > 0.0 for value in volumes):
+        raise RuntimeError("mixed v2 closed faceted magnetic volume is invalid")
+    return float(sum(volumes))
+
+
+def attach_disconnected_mixed_p1_certificate_v2(
+    mesh: MeshData,
+    *,
+    body_object_ids: tuple[str, str],
+    body_bounds_min_m: tuple[float, float, float],
+    body_bounds_max_m: tuple[float, float, float],
+    expected_magnetic_volume_m3: float,
+    airbox_bounds_min_m: tuple[float, float, float],
+    airbox_bounds_max_m: tuple[float, float, float],
+    requested_axis: int,
+    requested_layers: int,
+    requested_direction: str | None,
+    body_gap_m: float,
+    transition_shell_thickness_m: float,
+    body_material_fields: Mapping[str, Mapping[str, object]],
+    gmsh_version: str = _MIXED_SHARED_GMSH_VERSION,
+    effective_gmsh_thread_count: int = 1,
+    requested_algorithm_3d: int = 1,
+    transition_algorithm_3d: int = 1,
+    tetrahedral_algorithm_3d: int = 1,
+    optimizer: str | None = None,
+    optimizer_iterations: int = 0,
+) -> MeshData:
+    """Bind the complete v2 ownership and shared-domain proof to a mesh."""
+    if mesh.cell_mesh_parts.shape != (mesh.n_elements,):
+        raise RuntimeError("mixed v2 certificate requires a mesh part for every cell")
+    if len(body_object_ids) != 2 or len(set(body_object_ids)) != 2:
+        raise ValueError("mixed v2 certificate requires two distinct body object IDs")
+    if requested_axis not in (0, 1, 2) or requested_layers not in (1, 2, 3):
+        raise ValueError("mixed v2 certificate exact sweep controls are invalid")
+    if not math.isfinite(body_gap_m) or body_gap_m <= 0.0:
+        raise ValueError("mixed v2 certificate requires a positive body gap")
+    if set(body_material_fields) != set(body_object_ids):
+        raise ValueError("mixed v2 certificate material field coverage is incomplete")
+    topology_fingerprint = mesh.topology_fingerprint_v3()
+    resolved_direction = "xyz"[requested_axis]
+    requested_direction = requested_direction if requested_direction in {"auto", "x", "y", "z"} else resolved_direction
+
+    marker_counts: dict[str, dict[str, int]] = {}
+    part_counts: dict[str, dict[str, int]] = {}
+    for family, marker, part in zip(mesh.cell_types.tolist(), mesh.element_markers.tolist(), mesh.cell_mesh_parts.tolist(), strict=True):
+        by_marker = marker_counts.setdefault(str(int(marker)), {})
+        by_marker[str(family)] = by_marker.get(str(family), 0) + 1
+        by_part = part_counts.setdefault(str(part), {})
+        by_part[str(family)] = by_part.get(str(family), 0) + 1
+    if set(marker_counts) != {"0", "1", "2"}:
+        raise RuntimeError("mixed v2 mesh must contain air marker 0 and body markers 1 and 2")
+    if any(part != "magnetic" and marker != 0 for marker, part in zip(mesh.element_markers.tolist(), mesh.cell_mesh_parts.tolist(), strict=True)):
+        raise RuntimeError("mixed v2 mesh contains a nonzero air marker")
+    facet_counts: dict[str, dict[str, int]] = {}
+    for family, role, marker in zip(mesh.facet_types.tolist(), mesh.facet_roles.tolist(), mesh.boundary_markers.tolist(), strict=True):
+        key = f"{role}:{int(marker)}"
+        by_family = facet_counts.setdefault(key, {})
+        by_family[str(family)] = by_family.get(str(family), 0) + 1
+
+    cell_volumes = np.zeros(mesh.n_elements, dtype=np.float64)
+    jacobians: dict[str, list[float]] = {}
+    scaled: dict[str, list[float]] = {}
+    for ordinal, family in enumerate(mesh.cell_types.tolist()):
+        coordinates = mesh.nodes[mesh.cell_node_ids(ordinal)]
+        cell_volumes[ordinal] = _mixed_v2_cell_volume(str(family), coordinates)
+        jacobians.setdefault(str(family), []).extend(_cell_jacobian_determinants(str(family), coordinates).tolist())
+        scaled.setdefault(str(family), []).extend(_mixed_cell_scaled_jacobians(str(family), coordinates).tolist())
+    if not np.all(np.isfinite(cell_volumes)) or np.any(cell_volumes <= 0.0):
+        raise RuntimeError("mixed v2 mesh contains nonpositive cell volume")
+    jacobian_minima = {family: float(np.min(values)) for family, values in sorted(jacobians.items())}
+    scaled_minima = {family: float(np.min(values)) for family, values in sorted(scaled.items())}
+    scaled_p05 = {family: float(np.percentile(values, 5.0)) for family, values in sorted(scaled.items())}
+    if any(value < MIXED_SCALED_JACOBIAN_P05_MIN for value in scaled_p05.values()):
+        raise RuntimeError("mixed v2 mesh scaled Jacobian p05 is below the qualified minimum")
+
+    magnetic_mask = np.isin(mesh.element_markers, np.asarray([1, 2], dtype=np.int32))
+    magnetic_nodes = np.unique(np.concatenate([mesh.cell_node_ids(int(index)) for index in np.flatnonzero(magnetic_mask)]))
+    # The shared exact-layer evidence belongs to the swept prism body.  The
+    # second body is an independent annulus tetrahedral mesh and naturally
+    # contains many coordinates along the requested axis; combining its
+    # coordinates here would make a valid one-layer Box appear to have a
+    # non-deterministic layer count.
+    swept_nodes = np.unique(
+        np.concatenate(
+            [
+                mesh.cell_node_ids(int(index))
+                for index in np.flatnonzero(mesh.element_markers == 1)
+            ]
+        )
+    )
+    body_bounds: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for marker in (1, 2):
+        nodes = np.unique(
+            np.concatenate(
+                [
+                    mesh.cell_node_ids(int(index))
+                    for index in np.flatnonzero(mesh.element_markers == marker)
+                ]
+            )
+        )
+        if nodes.size == 0:
+            raise RuntimeError(f"mixed v2 body marker {marker} has no mesh nodes")
+        body_bounds[marker] = (
+            np.min(mesh.nodes[nodes], axis=0),
+            np.max(mesh.nodes[nodes], axis=0),
+        )
+    body_a_min, body_a_max = body_bounds[1]
+    body_b_min, body_b_max = body_bounds[2]
+    realized_gap_components = np.maximum(
+        np.maximum(body_a_min - body_b_max, body_b_min - body_a_max),
+        0.0,
+    )
+    realized_body_gap_m = float(np.linalg.norm(realized_gap_components))
+    if not math.isfinite(realized_body_gap_m) or realized_body_gap_m <= 0.0:
+        raise RuntimeError(
+            "mixed v2 realized mesh body AABBs are overlapping or touching"
+        )
+    realized_magnetic_min = tuple(float(value) for value in np.min(mesh.nodes[magnetic_nodes], axis=0))
+    realized_magnetic_max = tuple(float(value) for value in np.max(mesh.nodes[magnetic_nodes], axis=0))
+    shared_volume = float(np.sum(cell_volumes))
+    magnetic_volume = float(np.sum(cell_volumes[magnetic_mask]))
+    faceted_magnetic_volume = _mixed_v2_closed_faceted_magnetic_volume(mesh)
+    if not math.isfinite(faceted_magnetic_volume) or faceted_magnetic_volume <= 0.0:
+        raise RuntimeError("mixed v2 closed faceted magnetic volume is invalid")
+    expected_shared_volume = float(np.prod(np.asarray(airbox_bounds_max_m) - np.asarray(airbox_bounds_min_m)))
+    magnetic_bounds_scale = max(float(np.max(np.asarray(body_bounds_max_m) - np.asarray(body_bounds_min_m))), 1.0e-30)
+    airbox_bounds_scale = max(float(np.max(np.asarray(airbox_bounds_max_m) - np.asarray(airbox_bounds_min_m))), 1.0e-30)
+    magnetic_bounds_error = max(
+        float(np.max(np.abs(np.asarray(realized_magnetic_min) - np.asarray(body_bounds_min_m)))),
+        float(np.max(np.abs(np.asarray(realized_magnetic_max) - np.asarray(body_bounds_max_m)))),
+    ) / magnetic_bounds_scale
+    realized_airbox_min = np.min(mesh.nodes, axis=0)
+    realized_airbox_max = np.max(mesh.nodes, axis=0)
+    airbox_bounds_error = max(
+        float(np.max(np.abs(realized_airbox_min - np.asarray(airbox_bounds_min_m)))),
+        float(np.max(np.abs(realized_airbox_max - np.asarray(airbox_bounds_max_m)))),
+    ) / airbox_bounds_scale
+    if magnetic_bounds_error > 1.0e-8 or airbox_bounds_error > 1.0e-8:
+        raise RuntimeError("mixed v2 realized bounds do not match authored CAD bounds")
+    magnetic_plane_coordinates = sorted({float(value) for value in mesh.nodes[swept_nodes, requested_axis]})
+    plane_tolerance = max(FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M, FEM_EXACT_LAYER_PLANE_REL_TOLERANCE * (magnetic_plane_coordinates[-1] - magnetic_plane_coordinates[0]))
+    clustered: list[float] = []
+    for value in magnetic_plane_coordinates:
+        if not clustered or value - clustered[-1] > plane_tolerance:
+            clustered.append(value)
+    if len(clustered) != requested_layers + 1:
+        raise RuntimeError("mixed v2 exact sweep has an incorrect number of magnetic planes")
+
+    transition_faces = 0
+    adjacency: dict[tuple[int, ...], list[int]] = {}
+    for ordinal, family in enumerate(mesh.cell_types.tolist()):
+        cell = mesh.cell_node_ids(ordinal)
+        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
+            key = tuple(sorted(int(cell[index]) for index in local_face))
+            adjacency.setdefault(key, []).append(ordinal)
+    for owners in adjacency.values():
+        if len(owners) == 2:
+            parts = {str(mesh.cell_mesh_parts[index]) for index in owners}
+            if parts == {"transition_air", "far_air"}:
+                face = tuple(sorted(int(node) for node in mesh.cell_node_ids(owners[0])))
+                # Count the canonical transition interface from explicit
+                # facets below; face arity is checked by the facet itself.
+                del face
+    transition_face_keys = {
+        tuple(sorted(int(node) for node in mesh.facet_node_ids(index)))
+        for index, (role, marker, family) in enumerate(zip(mesh.facet_roles.tolist(), mesh.boundary_markers.tolist(), mesh.facet_types.tolist(), strict=True))
+        if role == "material_interface" and int(marker) == MIXED_INTERFACE_MARKER and family == "tri3"
+    }
+    # The transition/far interface is internal and therefore not in the
+    # explicit physical facet list; use exact owner sets and the local face
+    # arity to count it.
+    for key, owners in adjacency.items():
+        if len(owners) == 2 and {str(mesh.cell_mesh_parts[index]) for index in owners} == {"transition_air", "far_air"} and len(key) == 3:
+            transition_faces += 1
+    del transition_face_keys
+    conformity = _mixed_v2_conformity_counts(mesh)
+    if any(conformity.values()):
+        raise RuntimeError(f"mixed v2 conformity proof failed: {conformity}")
+
+    def region_nodes(marker: int) -> NDArray[np.int32]:
+        mask = mesh.element_markers == marker
+        return np.unique(np.concatenate([mesh.cell_node_ids(int(index)) for index in np.flatnonzero(mask)]))
+
+    regions: list[MagneticRegionV2] = []
+    material_fields: list[BodyMaterialFieldV2] = []
+    for object_id, marker in zip(body_object_ids, (1, 2), strict=True):
+        nodes = region_nodes(marker)
+        node_order_digest = _mixed_v2_node_order_digest(nodes)
+        families = dict(sorted(marker_counts[str(marker)].items()))
+        sweep = None
+        if marker == 1:
+            sweep = ExactSweepEvidenceV2(
+                sweep_direction_requested=requested_direction,
+                sweep_direction_resolved=resolved_direction,
+                requested_layer_count=requested_layers,
+                realized_layer_count=requested_layers,
+                magnetic_plane_coordinates_m=tuple(float(value) for value in clustered),
+                plane_tolerance_m=plane_tolerance,
+                topology_fingerprint_version="v3",
+                topology_fingerprint=topology_fingerprint,
+                node_order_digest=node_order_digest,
+            )
+        regions.append(MagneticRegionV2(object_id=object_id, body_marker=marker, material_marker=marker, cell_family_counts=families, exact_sweep=sweep))
+        field = BodyMaterialFieldV2(
+            object_id=object_id,
+            field_basis="body_owned_p1",
+            coefficient_domains=("Ms", "Aex", "alpha", "Ku1", "anisotropy_axis"),
+            air_interpolation_policy="forbidden",
+            cross_body_interpolation_policy="forbidden",
+            node_order_digest=node_order_digest,
+            field_digest="sha256:" + "0" * 64,
+            values=dict(body_material_fields[object_id]),
+        )
+        material_fields.append(_dc_replace(field, field_digest=_body_material_field_digest(field, topology_fingerprint_version="v3", topology_fingerprint=topology_fingerprint, body_marker=marker, material_marker=marker)))
+
+    certificate = MixedLayerTopologyCertificateV2(
+        certificate_status="accepted",
+        magnetic_regions=tuple(sorted(regions, key=lambda region: region.object_id)),
+        # Native FEM recomputes the separation from the realized mesh body
+        # AABBs.  Emit that exact value, rather than the pre-mesh CAD gap, so
+        # the certificate and the native admission proof cannot diverge due
+        # to meshing/coordinate quantization.
+        body_separation_pairs=(BodySeparationPairV2(body_a=min(body_object_ids), body_b=max(body_object_ids), min_gap_m=realized_body_gap_m, contact_state="separated"),),
+        body_material_fields=tuple(sorted(material_fields, key=lambda field: field.object_id)),
+        requested_algorithm_3d=int(requested_algorithm_3d),
+        transition_algorithm_3d=int(transition_algorithm_3d),
+        tetrahedral_algorithm_3d=int(tetrahedral_algorithm_3d),
+        optimizer=optimizer,
+        optimizer_iterations=int(optimizer_iterations),
+        requested_sweep_direction=requested_direction,
+        resolved_sweep_direction=resolved_direction,
+        requested_layer_count=requested_layers,
+        realized_layer_count=requested_layers,
+        magnetic_plane_coordinates_m=tuple(float(value) for value in clustered),
+        plane_tolerance_m=plane_tolerance,
+        transition_shell_thickness_m=float(transition_shell_thickness_m),
+        transition_shell_interface_tri3_count=int(transition_faces),
+        interface_marker=MIXED_INTERFACE_MARKER,
+        outer_boundary_marker=int(max(mesh.boundary_markers.tolist())),
+        magnetic_bounds_min_m=tuple(float(value) for value in body_bounds_min_m),
+        magnetic_bounds_max_m=tuple(float(value) for value in body_bounds_max_m),
+        airbox_bounds_min_m=tuple(float(value) for value in airbox_bounds_min_m),
+        airbox_bounds_max_m=tuple(float(value) for value in airbox_bounds_max_m),
+        magnetic_bounds_relative_error=magnetic_bounds_error,
+        airbox_bounds_relative_error=airbox_bounds_error,
+        jacobian_minima_m3_by_family=jacobian_minima,
+        quality_metric=MIXED_QUALITY_METRIC,
+        scaled_jacobian_minima_by_family=scaled_minima,
+        scaled_jacobian_p05_by_family=scaled_p05,
+        magnetic_volume_m3=magnetic_volume,
+        # The expected value is an independently integrated closed boundary
+        # volume of the realized linear mesh.  The analytic BRep volume passed
+        # by the planner is retained as a separate geometry-approximation
+        # input; using it as the integrity oracle would reject curved rings
+        # solely because their boundary is faceted.
+        expected_magnetic_volume_m3=float(faceted_magnetic_volume),
+        magnetic_relative_volume_error=abs(magnetic_volume - faceted_magnetic_volume) / faceted_magnetic_volume,
+        air_volume_m3=shared_volume - magnetic_volume,
+        shared_domain_volume_m3=shared_volume,
+        expected_shared_domain_volume_m3=expected_shared_volume,
+        shared_domain_relative_volume_error=abs(shared_volume - expected_shared_volume) / expected_shared_volume,
+        marker_coverage_complete=True,
+        nonconforming_face_count=conformity["nonconforming_face_count"],
+        orphan_face_count=conformity["orphan_face_count"],
+        nonmanifold_face_count=conformity["nonmanifold_face_count"],
+        coincident_interface_face_count=conformity["coincident_interface_face_count"],
+        deterministic_inputs=_mixed_v2_deterministic_inputs(
+            requested_algorithm_3d=int(requested_algorithm_3d),
+            transition_algorithm_3d=int(transition_algorithm_3d),
+            tetrahedral_algorithm_3d=int(tetrahedral_algorithm_3d),
+            optimizer=optimizer,
+            optimizer_iterations=int(optimizer_iterations),
+        ),
+        topology_fingerprint_version="v3",
+        topology_fingerprint=topology_fingerprint,
+        gmsh_version=gmsh_version,
+        strategy=MIXED_SHARED_GEO_STRATEGY,
+        effective_gmsh_thread_count=effective_gmsh_thread_count,
+        cell_family_counts_by_marker=marker_counts,
+        cell_family_counts_by_part=part_counts,
+        facet_family_counts_by_role_marker=facet_counts,
+    )
+    return _dc_replace(mesh, mixed_layer_topology_certificate=certificate)
+
+
+def generate_disconnected_mixed_p1_mesh(
+    box: Box,
+    ring_geometry: Geometry,
+    outer: Cylinder,
+    inner: Cylinder,
+    offset: tuple[float, float, float],
+    *,
+    box_hmax: float,
+    ring_hmax: float,
+    n_layers: int,
+    airbox: AirboxOptions,
+    options: MeshOptions | None = None,
+) -> MeshData:
+    """Generate a conforming Box-prism plus disconnected annulus-tet domain."""
+    opts = options or MeshOptions()
+    if opts.algorithm_2d != 6 or opts.algorithm_3d not in (1, 10) or opts.periodic_pair_ids:
+        raise ValueError(
+            "mixed v2 shared-domain route requires algorithm 2D=6, algorithm "
+            "3D=1 or 10, and no periodic pairs"
+        )
+    if opts.optimize not in (None, "Gmsh"):
+        raise ValueError(
+            "mixed v2 shared-domain route supports only the Gmsh optimizer"
+        )
+    if opts.size_fields or opts.boundary_layer_count is not None or opts.sweep_face_meshing not in (None, "triangular"):
+        raise ValueError("mixed v2 shared-domain route does not accept unresolved size/boundary fields")
+    if opts.optimize is None:
+        optimizer_iterations = 0
+    else:
+        optimizer_iterations = int(opts.optimize_iters)
+        if optimizer_iterations < 1:
+            raise ValueError("mixed v2 Gmsh optimizer requires at least one iteration")
+    if n_layers not in (1, 2, 3):
+        raise ValueError("mixed v2 exact layer count must be 1, 2 or 3")
+    if outer.axis != inner.axis or outer.radius <= inner.radius or not math.isclose(outer.height, inner.height, rel_tol=1.0e-9, abs_tol=1.0e-18):
+        raise ValueError("mixed v2 annulus components are not compatible")
+    if str(airbox.shape).strip().lower() != "bbox":
+        raise ValueError("mixed v2 shared-domain route requires a bbox airbox")
+    scale = 1.0e6
+    box_size = np.asarray(box.size, dtype=np.float64)
+    ring_center = np.asarray(offset, dtype=np.float64)
+    axis = np.asarray(outer.axis, dtype=np.float64)
+    ring_min, ring_max = _mixed_v2_body_aabb(center=ring_center, axis=axis, radius=float(outer.radius), height=float(outer.height))
+    box_min = -0.5 * box_size
+    box_max = 0.5 * box_size
+    separation_components = np.maximum(np.maximum(box_min - ring_max, ring_min - box_max), 0.0)
+    gap = float(np.linalg.norm(separation_components))
+    if not math.isfinite(gap) or gap <= max(1.0e-18, np.finfo(np.float64).eps * max(float(np.max(box_size)), float(np.max(np.abs(ring_center))), 1.0)):
+        raise ValueError("mixed v2 route requires a strictly positive axis-aligned body gap")
+    union_min = np.minimum(box_min, ring_min)
+    union_max = np.maximum(box_max, ring_max)
+    if airbox.size is None:
+        outer_size = (union_max - union_min) * float(airbox.padding_factor)
+    else:
+        outer_size = np.asarray(airbox.size, dtype=np.float64)
+    center = np.zeros(3, dtype=np.float64) if airbox.center is None else np.asarray(airbox.center, dtype=np.float64)
+    air_min = center - 0.5 * outer_size
+    air_max = center + 0.5 * outer_size
+    if np.any(union_min <= air_min) or np.any(union_max >= air_max):
+        raise ValueError("mixed v2 airbox must strictly contain both disconnected bodies")
+
+    emit_progress("Gmsh mixed v2: generating Box prism and disconnected annulus tetrahedron")
+    gmsh = _import_gmsh()
+    if str(getattr(gmsh, "__version__", "unknown")) != _MIXED_SHARED_GMSH_VERSION:
+        raise RuntimeError(f"mixed v2 route is qualified only for Gmsh {_MIXED_SHARED_GMSH_VERSION}")
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        effective_threads = _configure_gmsh_threads(gmsh, requested_threads=1, honor_environment=False)
+        if effective_threads != 1:
+            raise RuntimeError("mixed v2 route requires one effective Gmsh thread")
+        gmsh.model.add("fullmag_mixed_p1_v2")
+        # Box source face, followed by exact structured extrusion.
+        dims_scaled = box_size * scale
+        thin_axis = int(np.argmin(box_size))
+        requested_direction = opts.sweep_direction if opts.sweep_direction in {"auto", "x", "y", "z"} else "auto"
+        if requested_direction in _SWEEP_AXIS_INDEX:
+            thin_axis = _SWEEP_AXIS_INDEX[requested_direction]
+        face_axes = [axis_index for axis_index in range(3) if axis_index != thin_axis]
+        origin = -0.5 * dims_scaled
+        points: list[int] = []
+        for face_coordinate in ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)):
+            coordinate = origin.copy()
+            coordinate[face_axes[0]] += face_coordinate[0] * dims_scaled[face_axes[0]]
+            coordinate[face_axes[1]] += face_coordinate[1] * dims_scaled[face_axes[1]]
+            points.append(int(gmsh.model.geo.addPoint(*coordinate.tolist(), float(box_hmax * scale))))
+        lines = [int(gmsh.model.geo.addLine(points[index], points[(index + 1) % 4])) for index in range(4)]
+        source_loop = lines
+        first = np.zeros(3, dtype=np.float64); first[face_axes[0]] = 1.0
+        second = np.zeros(3, dtype=np.float64); second[face_axes[1]] = 1.0
+        extrusion_direction = np.zeros(3, dtype=np.float64); extrusion_direction[thin_axis] = dims_scaled[thin_axis]
+        if float(np.dot(np.cross(first, second), extrusion_direction)) > 0.0:
+            source_loop = [-line for line in reversed(lines)]
+        box_surface = int(gmsh.model.geo.addPlaneSurface([gmsh.model.geo.addCurveLoop(source_loop)]))
+
+        # Annulus source face in a frame aligned with the authored cylinder axis.
+        u, v, normal = _mixed_v2_axis_basis(outer.axis)
+        center_scaled = ring_center * scale
+        bottom_center = center_scaled - normal * (0.5 * float(outer.height) * scale)
+        ring_center_tag = int(gmsh.model.geo.addPoint(*bottom_center.tolist(), float(ring_hmax * scale)))
+        ring_loops: list[int] = []
+        for radius in (float(outer.radius), float(inner.radius)):
+            circle_points = [
+                int(gmsh.model.geo.addPoint(*(bottom_center + (u * math.cos(angle) + v * math.sin(angle)) * radius * scale).tolist(), float(ring_hmax * scale)))
+                for angle in (0.0, 0.5 * math.pi, math.pi, 1.5 * math.pi)
+            ]
+            arcs = [int(gmsh.model.geo.addCircleArc(circle_points[index], ring_center_tag, circle_points[(index + 1) % 4])) for index in range(4)]
+            ring_loops.append(int(gmsh.model.geo.addCurveLoop(arcs)))
+        ring_surface = int(gmsh.model.geo.addPlaneSurface(ring_loops))
+        gmsh.model.geo.synchronize()
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMax", float(max(box_hmax, ring_hmax) * scale))
+        if opts.hmin is not None:
+            gmsh.option.setNumber("Mesh.CharacteristicLengthMin", float(opts.hmin * scale))
+        gmsh.option.setNumber("Mesh.Algorithm", 6)
+        gmsh.model.mesh.generate(2)
+        box_extrusion = list(gmsh.model.geo.extrude([(2, box_surface)], *(extrusion_direction.tolist()), numElements=[n_layers], heights=[1.0], recombine=True))
+        ring_extrusion = list(gmsh.model.geo.extrude([(2, ring_surface)], *(normal * float(outer.height) * scale).tolist(), recombine=False))
+        gmsh.model.geo.synchronize()
+        box_volume = next(int(tag) for dim, tag in box_extrusion if int(dim) == 3)
+        ring_volume = next(int(tag) for dim, tag in ring_extrusion if int(dim) == 3)
+        ring_boundary = gmsh.model.getBoundary([(3, ring_volume)], combined=False, oriented=True)
+        ring_surface_loop = int(gmsh.model.geo.addSurfaceLoop([int(tag) for dim, tag in ring_boundary if int(dim) == 2]))
+        shell_thickness_m, shell_target_m = _mixed_v2_transition_shell_parameters_m(
+            box_size_m=box_size,
+            airbox_size_m=outer_size,
+            gap_m=gap,
+            box_hmax_m=box_hmax,
+            ring_hmax_m=ring_hmax,
+            airbox=airbox,
+        )
+        shell_thickness = float(shell_thickness_m * scale)
+        shell_target = float(shell_target_m * scale)
+        if shell_thickness <= 0.0:
+            raise ValueError("mixed v2 transition shell has no positive clearance from the annulus")
+        shell_min = -0.5 * dims_scaled - shell_thickness
+        shell_max = 0.5 * dims_scaled + shell_thickness
+        outer_surfaces, outer_loop = _add_geo_box_surface_loop(gmsh, bounds_min=air_min * scale, bounds_max=air_max * scale, mesh_size=float(max(box_hmax, ring_hmax) * scale))
+        transition_volumes, shell_outward = _add_partitioned_transition_shell_geo(gmsh, magnetic_volume=box_volume, shell_min=shell_min, body_min=-0.5 * dims_scaled, body_max=0.5 * dims_scaled, shell_max=shell_max, mesh_size=float(shell_target))
+        shell_inner_loop = int(gmsh.model.geo.addSurfaceLoop([-int(tag) for tag in shell_outward]))
+        far_air_volume = int(gmsh.model.geo.addVolume([int(outer_loop), shell_inner_loop, ring_surface_loop]))
+        gmsh.model.geo.synchronize()
+        box_surfaces = [int(tag) for dim, tag in gmsh.model.getBoundary([(3, box_volume)], combined=False, oriented=False) if int(dim) == 2]
+        ring_surfaces = [abs(int(tag)) for dim, tag in ring_boundary if int(dim) == 2]
+        interface_surfaces = sorted(set(box_surfaces + ring_surfaces))
+        gmsh.model.addPhysicalGroup(3, [box_volume], tag=1); gmsh.model.setPhysicalName(3, 1, "magnetic_box")
+        gmsh.model.addPhysicalGroup(3, [ring_volume], tag=2); gmsh.model.setPhysicalName(3, 2, "magnetic_ring")
+        gmsh.model.addPhysicalGroup(3, [*transition_volumes, far_air_volume], tag=3); gmsh.model.setPhysicalName(3, 3, "air")
+        gmsh.model.addPhysicalGroup(2, interface_surfaces, tag=MIXED_INTERFACE_MARKER); gmsh.model.setPhysicalName(2, MIXED_INTERFACE_MARKER, "mag_air_interface")
+        gmsh.model.addPhysicalGroup(2, outer_surfaces, tag=int(airbox.boundary_marker)); gmsh.model.setPhysicalName(2, int(airbox.boundary_marker), "Gamma_out")
+        _configure_disconnected_mixed_v2_mesh_size_fields(
+            gmsh,
+            interface_surface_tags=interface_surfaces,
+            air_volume_tags=[*map(int, transition_volumes), int(far_air_volume)],
+            body_volume_targets={
+                box.geometry_name: ([int(box_volume)], float(box_hmax)),
+                ring_geometry.geometry_name: ([int(ring_volume)], float(ring_hmax)),
+            },
+            object_bounds_min_m=tuple(float(value) for value in union_min),
+            object_bounds_max_m=tuple(float(value) for value in union_max),
+            airbox_bounds_min_m=tuple(float(value) for value in air_min),
+            airbox_bounds_max_m=tuple(float(value) for value in air_max),
+            box_hmax_m=float(box_hmax),
+            ring_hmax_m=float(ring_hmax),
+            airbox=airbox,
+            options=opts,
+            scale=scale,
+        )
+        gmsh.option.setNumber("Mesh.RandomFactor", 0.0)
+        gmsh.option.setNumber("Mesh.ElementOrder", 1)
+        # HXT (10) only accepts triangular surfaces.  The exact swept Box and
+        # its 3x3x3 transition partition intentionally retain quad faces so
+        # their first stage must use Delaunay (1).  Hide the transition stage
+        # while HXT meshes the annulus and far-air tetrahedral volumes, then
+        # restore visibility before extraction.  This is one Gmsh model and
+        # one conforming mesh, not two unrelated meshes or a fallback.
+        if opts.algorithm_3d == 10:
+            volume_tags = [int(tag) for dim, tag in gmsh.model.getEntities(3) if int(dim) == 3]
+            transition_stage = {int(box_volume), *(int(tag) for tag in transition_volumes)}
+            tetrahedral_stage = {int(ring_volume), int(far_air_volume)}
+            if not transition_stage.issubset(set(volume_tags)) or not tetrahedral_stage.issubset(set(volume_tags)):
+                raise RuntimeError("mixed v2 hybrid stage volume ownership is incomplete")
+            gmsh.option.setNumber("Mesh.MeshOnlyVisible", 1)
+            for tag in volume_tags:
+                gmsh.model.setVisibility([(3, tag)], tag in transition_stage)
+            gmsh.option.setNumber("Mesh.Algorithm3D", 1)
+            with _GmshProgressLogger(gmsh):
+                gmsh.model.mesh.generate(3)
+            for tag in volume_tags:
+                gmsh.model.setVisibility([(3, tag)], tag in tetrahedral_stage)
+            gmsh.option.setNumber("Mesh.Algorithm3D", 10)
+            with _GmshProgressLogger(gmsh):
+                gmsh.model.mesh.generate(3)
+            for tag in volume_tags:
+                gmsh.model.setVisibility([(3, tag)], True)
+            gmsh.option.setNumber("Mesh.MeshOnlyVisible", 0)
+        else:
+            gmsh.option.setNumber("Mesh.Algorithm3D", 1)
+            with _GmshProgressLogger(gmsh):
+                gmsh.model.mesh.generate(3)
+        if opts.optimize is not None:
+            with indeterminate_progress_phase(
+                phase="meshing",
+                progress_label="optimizing mixed-domain mesh",
+                message=f"Optimizing mixed-domain mesh ({opts.optimize}, {optimizer_iterations} iterations)",
+            ):
+                _apply_post_mesh_options(gmsh, opts)
+        with indeterminate_progress_phase(phase="meshing", progress_label="repairing mixed-domain tetrahedra", message="Repairing mixed-domain tetrahedra"):
+            mixed_tet_report = _repair_mixed_tetrahedra(gmsh)
+        with indeterminate_progress_phase(phase="meshing", progress_label="optimizing mixed-pyramid apices", message="Optimizing mixed-pyramid apices"):
+            _optimize_mixed_pyramid_apices(gmsh, initial_tet_report=mixed_tet_report)
+        raw = _extract_mesh_data(gmsh, has_physical_groups=True, boundary_role_markers=(MIXED_INTERFACE_MARKER, int(airbox.boundary_marker)))
+        mesh = MeshData(nodes=np.asarray(raw.nodes, dtype=np.float64) / scale, cell_types=raw.cell_types, cell_offsets=raw.cell_offsets, cell_nodes=raw.cell_nodes, element_markers=raw.element_markers, facet_types=raw.facet_types, facet_roles=raw.facet_roles, facet_offsets=raw.facet_offsets, facet_nodes=raw.facet_nodes, boundary_markers=raw.boundary_markers, cell_global_ordinals=raw.cell_global_ordinals, facet_global_ordinals=raw.facet_global_ordinals, cell_mesh_parts=_gmsh_cell_parts_in_extraction_order(gmsh, {"magnetic": [box_volume, ring_volume], "transition_air": [int(tag) for tag in transition_volumes], "far_air": [far_air_volume]}))
+        if mesh.cell_mesh_parts.shape != (mesh.n_elements,):
+            raise RuntimeError("mixed v2 cell mesh-part identity is incomplete")
+        mesh = mesh.oriented_copy()
+        mesh.validate_strict(require_positive_orientation=True)
+        return mesh
     finally:
         gmsh.finalize()
 

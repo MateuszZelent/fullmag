@@ -4,6 +4,7 @@
 #include "core/fem_mesh.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <cstdio>
@@ -61,6 +62,12 @@ static_assert(offsetof(fullmag_fem_mesh_abi_record, record_size) == 44u, "mesh A
 static_assert(offsetof(fullmag_fem_mesh_abi_record, endian_tag) == 48u, "mesh ABI record endian offset");
 static_assert(offsetof(fullmag_fem_mesh_abi_record, reserved) == 52u, "mesh ABI record reserved offset");
 static_assert(offsetof(fullmag_fem_mesh_abi_record, layout) == 56u, "mesh ABI record layout offset");
+static_assert(sizeof(fullmag_fem_mixed_body_certificate_v2) == 96u, "mixed-body certificate ABI size");
+static_assert(offsetof(fullmag_fem_plan_desc_v3, base) == 8u, "mixed-body plan base offset");
+static_assert(
+    offsetof(fullmag_fem_plan_desc_v3, mixed_body_certificate_v2) ==
+        8u + sizeof(fullmag_fem_plan_desc_v2),
+    "mixed-body certificate pointer must append after plan v2");
 
 namespace {
 
@@ -399,20 +406,10 @@ void native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_op
              value.ms_element_field = buffers.ms_element_field.data();
              value.ms_element_field_len = buffers.ms_element_field.size();
          }},
-        {"nodal Ms", [](fullmag_fem_plan_desc &value, MeshBuffers &buffers) {
-             buffers.ms_field.assign(value.mesh.nodes_xyz_len / 3u, 8.0e5);
+        {"nodal Ms bad extent", [](fullmag_fem_plan_desc &value, MeshBuffers &buffers) {
+             buffers.ms_field.assign(1u, 8.0e5);
              value.ms_field = buffers.ms_field.data();
              value.ms_field_len = buffers.ms_field.size();
-         }},
-        {"nodal A", [](fullmag_fem_plan_desc &value, MeshBuffers &buffers) {
-             buffers.a_field.assign(value.mesh.nodes_xyz_len / 3u, 13.0e-12);
-             value.a_field = buffers.a_field.data();
-             value.a_field_len = buffers.a_field.size();
-         }},
-        {"nodal alpha", [](fullmag_fem_plan_desc &value, MeshBuffers &buffers) {
-             buffers.alpha_field.assign(value.mesh.nodes_xyz_len / 3u, 0.02);
-             value.alpha_field = buffers.alpha_field.data();
-             value.alpha_field_len = buffers.alpha_field.size();
          }},
         {"PBC", [](fullmag_fem_plan_desc &value, MeshBuffers &mesh) {
              mesh.periodic_node_pairs = {0u, 1u};
@@ -440,6 +437,180 @@ void native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_op
         check(error.find("explicit_cpu_or_gpu") != std::string::npos, error.c_str());
         check(error.find("fallback=none") != std::string::npos, error.c_str());
     }
+}
+
+void native_physics_gate_accepts_body_owned_nodal_material_fields() {
+    MeshBuffers source = qualified_mixed_operator_mesh();
+    fullmag::fem::Context ctx;
+    std::string error;
+    check(fullmag::fem::initialize_mesh_plan_fields(ctx, source.desc(), error), error.c_str());
+    const size_t node_count = source.nodes_xyz.size() / 3u;
+    std::vector<double> ms(node_count, 1.6e6);
+    std::vector<double> a(node_count, 15.0e-12);
+    std::vector<double> alpha(node_count, 0.1);
+    auto plan = qualified_mixed_operator_plan(source);
+    plan.ms_field = ms.data();
+    plan.ms_field_len = ms.size();
+    plan.a_field = a.data();
+    plan.a_field_len = a.size();
+    plan.alpha_field = alpha.data();
+    plan.alpha_field_len = alpha.size();
+    for (const char *device : {"cpu", "cuda"}) {
+        plan.mfem_device_string = device;
+        error.clear();
+        check(
+            fullmag::fem::validate_supported_physics_topology(ctx, plan, error),
+            error.c_str());
+    }
+}
+
+void native_physics_gate_accepts_disconnected_prism_and_tet_magnetic_bodies() {
+    MeshBuffers source = qualified_mixed_operator_mesh();
+    // The first cell is tet4 and the second is prism6. Both are magnetic;
+    // the pyramid remains air. This is the native shape of the v2 certificate
+    // before the planner adds its body/separation proof.
+    source.cell_markers = {7u, 11u, 0u};
+    fullmag::fem::Context ctx;
+    std::string error;
+    check(fullmag::fem::initialize_mesh_plan_fields(ctx, source.desc(), error), error.c_str());
+    auto plan = qualified_mixed_operator_plan(source);
+    plan.mesh = source.desc();
+    for (const char *device : {"cpu", "cuda"}) {
+        plan.mfem_device_string = device;
+        error.clear();
+        check(
+            fullmag::fem::validate_supported_physics_topology(ctx, plan, error),
+            error.c_str());
+    }
+}
+
+void native_mixed_body_certificate_preserves_legacy_multibody_tet_lane() {
+    MeshBuffers source = qualified_mixed_operator_mesh();
+    source.cell_types = {
+        FULLMAG_FEM_CELL_TET4,
+        FULLMAG_FEM_CELL_TET4,
+        FULLMAG_FEM_CELL_TET4,
+    };
+    source.cell_offsets = {0u, 4u, 8u, 12u};
+    source.cell_nodes = {
+        0u, 1u, 2u, 3u,
+        4u, 5u, 6u, 7u,
+        10u, 11u, 12u, 13u,
+    };
+    source.cell_global_ordinals = {100u, 101u, 102u};
+    source.cell_markers = {7u, 11u, 0u};
+    source.facet_types = {
+        FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3,
+    };
+    source.facet_roles = {
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    };
+    source.facet_offsets = {0u, 3u, 6u};
+    source.facet_nodes = {0u, 1u, 2u, 4u, 5u, 6u};
+    source.facet_global_ordinals = {700u, 701u};
+    source.facet_markers = {3u, 4u};
+    source.periodic_node_pairs.clear();
+    source.periodic_boundary_pair_markers.clear();
+
+    auto plan = qualified_mixed_operator_plan(source);
+    plan.mesh = source.desc();
+    std::string error;
+    check(
+        fullmag::fem::validate_mixed_body_certificate_v2(plan, nullptr, error),
+        error.c_str());
+}
+
+void native_mixed_body_certificate_rejects_shared_nodes_bridges_and_contact() {
+    MeshBuffers source = qualified_mixed_operator_mesh();
+    source.cell_markers = {7u, 11u, 0u};
+    source.periodic_node_pairs.clear();
+    source.periodic_boundary_pair_markers.clear();
+    auto plan = qualified_mixed_operator_plan(source);
+    plan.mesh = source.desc();
+
+    std::string error;
+    check(
+        !fullmag::fem::validate_mixed_body_certificate_v2(plan, nullptr, error),
+        "mixed prism/tet bodies without a native ownership certificate must fail closed");
+    check(error.find("ownership certificate") != std::string::npos, error.c_str());
+
+    const uint32_t body_markers[] = {7u, 11u};
+    const uint64_t body_node_offsets[] = {0u, 4u, 10u};
+    const uint32_t body_node_indices[] = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u};
+    const uint32_t pair_body_a[] = {0u};
+    const uint32_t pair_body_b[] = {1u};
+    const double pair_min_gap_m[] = {1.0};
+    const uint32_t pair_contact_state[] = {FULLMAG_FEM_MIXED_BODY_CONTACT_SEPARATED};
+    fullmag_fem_mixed_body_certificate_v2 certificate{
+        FULLMAG_FEM_MIXED_BODY_CERTIFICATE_V2_ABI_VERSION,
+        sizeof(fullmag_fem_mixed_body_certificate_v2),
+        2u,
+        body_markers,
+        body_node_offsets,
+        3u,
+        body_node_indices,
+        10u,
+        1u,
+        pair_body_a,
+        pair_body_b,
+        pair_min_gap_m,
+        pair_contact_state,
+    };
+    error.clear();
+    check(
+        fullmag::fem::validate_mixed_body_certificate_v2(
+            plan, &certificate, error),
+        error.c_str());
+
+    const uint32_t shared_node_indices[] = {0u, 1u, 2u, 3u, 3u, 5u, 6u, 7u, 8u, 9u};
+    auto shared_node_certificate = certificate;
+    shared_node_certificate.body_node_indices = shared_node_indices;
+    error.clear();
+    check(
+        !fullmag::fem::validate_mixed_body_certificate_v2(
+            plan, &shared_node_certificate, error),
+        "mixed-body certificate must reject shared node ownership");
+    check(error.find("multiple magnetic bodies") != std::string::npos, error.c_str());
+
+    MeshBuffers touching = source;
+    for (size_t node = 4u; node < 10u; ++node) {
+        touching.nodes_xyz[3u * node] -= 1.0;
+    }
+    auto touching_plan = qualified_mixed_operator_plan(touching);
+    touching_plan.mesh = touching.desc();
+    error.clear();
+    check(
+        !fullmag::fem::validate_mixed_body_certificate_v2(
+            touching_plan, &certificate, error),
+        "mixed-body certificate must reject touching body bounds");
+    check(error.find("separation proof unavailable") != std::string::npos, error.c_str());
+
+    MeshBuffers bridged = source;
+    bridged.cell_nodes[4u] = 0u;
+    auto bridged_plan = qualified_mixed_operator_plan(bridged);
+    bridged_plan.mesh = bridged.desc();
+    error.clear();
+    check(
+        !fullmag::fem::validate_mixed_body_certificate_v2(
+            bridged_plan, &certificate, error),
+        "mixed-body certificate must reject a magnetic bridge cell");
+    check(error.find("crosses body ownership") != std::string::npos, error.c_str());
+
+    // An air cell may conformingly include boundary nodes from both magnetic
+    // bodies.  It remains part of the Poisson domain and must not be mistaken
+    // for a magnetic bridge.
+    MeshBuffers air_link = source;
+    air_link.cell_nodes[10u] = 3u;
+    air_link.cell_nodes[11u] = 4u;
+    auto air_link_plan = qualified_mixed_operator_plan(air_link);
+    air_link_plan.mesh = air_link.desc();
+    error.clear();
+    check(
+        fullmag::fem::validate_mixed_body_certificate_v2(
+            air_link_plan, &certificate, error),
+        error.c_str());
 }
 
 MeshBuffers qualified_pure_prism_p2_mesh() {
@@ -719,6 +890,10 @@ int main() {
     exported_mesh_abi_query_matches_compiled_layout();
     native_physics_gate_accepts_only_qualified_global_uniform_sinc_drive();
     native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_operator_scope();
+    native_physics_gate_accepts_body_owned_nodal_material_fields();
+    native_physics_gate_accepts_disconnected_prism_and_tet_magnetic_bodies();
+    native_mixed_body_certificate_preserves_legacy_multibody_tet_lane();
+    native_mixed_body_certificate_rejects_shared_nodes_bridges_and_contact();
     native_physics_gate_accepts_bounded_cpu_pure_prism_p2_shared_domain();
     typed_mesh_import_accepts_empty_optional_buffers();
     typed_mesh_import_rejects_bad_version_pointers_and_lengths();

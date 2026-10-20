@@ -134,6 +134,7 @@ pub(super) fn sample_boundary(
     let mut occupancy = Vec::with_capacity(pixel_count);
     let mut scalar_values = Vec::with_capacity(pixel_count);
     let mut vector_values = Vec::with_capacity(pixel_count);
+    let mut component_values = Vec::with_capacity(pixel_count * field.n_comp());
     let mut source_entity_ids = Vec::with_capacity(pixel_count);
     let mut occupied_measure = 0.0;
     let mut overlap_count = 0u32;
@@ -141,6 +142,7 @@ pub(super) fn sample_boundary(
     for mut faces in pixel_faces {
         if faces.is_empty() {
             occupancy.push(Occupancy::Empty);
+            component_values.extend(std::iter::repeat_n(f64::NAN, field.n_comp()));
             scalar_values.push(f64::NAN);
             vector_values.push([f64::NAN; 3]);
             source_entity_ids.push(None);
@@ -184,6 +186,7 @@ pub(super) fn sample_boundary(
         } else {
             Occupancy::Occupied
         });
+        component_values.extend_from_slice(&value);
         scalar_values.push(if field.n_comp() == 1 {
             value[0]
         } else {
@@ -193,7 +196,7 @@ pub(super) fn sample_boundary(
                 .sum::<f64>()
                 .sqrt()
         });
-        vector_values.push(if field.n_comp() >= 3 {
+        vector_values.push(if field.n_comp() == 3 {
             [value[0], value[1], value[2]]
         } else {
             [f64::NAN; 3]
@@ -212,8 +215,10 @@ pub(super) fn sample_boundary(
             1,
             1,
         ),
+        n_comp: field.n_comp(),
+        component_values,
         scalar_values,
-        vector_values: (field.n_comp() >= 3).then_some(vector_values),
+        vector_values: (field.n_comp() == 3).then_some(vector_values),
         occupancy,
         source_entity_ids,
         overlay: None,

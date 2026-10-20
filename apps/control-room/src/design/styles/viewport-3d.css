@@ -1,4 +1,5 @@
 .fm-viewport-3d {
+  container: fm-viewport-3d / inline-size;
   --fm-viewport-3d-orientation-reserve: 12rem;
 
   position: relative;
@@ -50,6 +51,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   backdrop-filter: blur(4px);
+}
+
+.fm-viewport-3d__render-details-trigger {
+  pointer-events: auto;
+}
+
+.fm-viewport-3d__render-details {
+  overflow-wrap: anywhere;
+  font-size: var(--fm-font-size-xs);
 }
 
 /* Empty HUD spans (e.g. undefined status) are hidden */
@@ -278,7 +288,7 @@
 .fm-viewport-3d__colorbar-stack {
   position: absolute;
   z-index: 2;
-  left: var(--fm-space-3);
+  right: var(--fm-space-3);
   bottom: calc(
     var(--fm-space-3) + var(--fm-control-height-compact) + var(--fm-space-2)
   );
@@ -288,6 +298,12 @@
   max-height: min(18rem, calc(100% - var(--fm-space-6)));
   overflow: hidden;
   pointer-events: none;
+}
+
+@container fm-viewport-3d (max-width: 32rem) {
+  .fm-viewport-3d__colorbar-stack {
+    bottom: calc(var(--fm-viewport-3d-orientation-reserve) + var(--fm-space-3));
+  }
 }
 
 .fm-viewport-3d__colorbar {

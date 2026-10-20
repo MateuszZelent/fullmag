@@ -38,6 +38,7 @@ const QUADRATURE_EVIDENCE_LIMIT: usize = 96_000_288;
 const ANTENNA_STAGE_OUTPUT_CATALOG_SCHEMA: &str = "stage_output_catalog.v1";
 const ANTENNA_STAGE_OUTPUT_CATALOG_NAME: &str = "stage_output_catalog.v1.json";
 const SOURCE_SPECTRUM_SCHEMA_V1: &str = "antenna_source_spectrum_artifact.v1";
+const SOURCE_SPECTRUM_SCHEMA_V3: &str = "antenna_source_spectrum_artifact.v3";
 const SOURCE_SPECTRUM_SCHEMA_V2: &str = "antenna_source_spectrum_artifact.v2";
 const SUPPORTED_SOURCE_SPECTRUM_REALIZATIONS: [&str; 2] =
     ["fem_p1_interpolation_v1", "identity_coordinates_v1"];
@@ -194,6 +195,8 @@ pub struct AntennaSpectrumSamplingResource {
     pub sample_count_u: u32,
     pub sample_count_v: u32,
     pub interpolation: String,
+    pub transform: String,
+    pub window: String,
     pub realization: String,
     pub outside_policy: String,
     pub outside_count: usize,
@@ -219,7 +222,46 @@ pub struct AntennaSpectrumPayloadsResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AntennaEquilibriumBindingResource {
+    pub schema_version: String,
+    pub producer_contract: String,
+    pub resolved_execution_engine: String,
+    pub asset_id: String,
+    pub equilibrium_id: String,
+    pub content_digest: String,
+    pub source_run_id: String,
+    pub source_stage_id: String,
+    pub authored_stage_id: String,
+    pub completion_sha256: String,
+    pub acceptance_certificate_sha256: String,
+    pub recomputed_certificate_sha256: String,
+    pub certified_fields_sha256: String,
+    pub equilibrium_content_sha256: String,
+    pub mesh_generation_id: String,
+    pub mesh_topology_sha256: String,
+    pub indexing_sha256: String,
+    pub part_registry_sha256: String,
+    pub owning_plan_sha256: String,
+    pub material_signature: String,
+    pub static_physics_signature: String,
+    pub boundary_signature: String,
+    pub static_demag_sha256: String,
+    pub source_carrier_sha256: String,
+    #[schema(value_type = Option<crate::schemas::authoring::AntennaFieldSolutionRefResource>)]
+    pub source_solution_ref: Option<fullmag_ir::AntennaFieldSolutionRefIR>,
+    #[schema(value_type = crate::schemas::authoring::FieldTargetResource)]
+    pub target: FieldTargetIR,
+    pub mapping_digest: String,
+    pub normalization: String,
+    pub norm_floor: f64,
+    pub projection_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AntennaSourceSpectrumResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equilibrium_binding: Option<AntennaEquilibriumBindingResource>,
     pub resource_id: String,
     pub session_id: String,
     pub session_epoch: String,
@@ -880,21 +922,33 @@ pub async fn get_antenna_source_spectrum(
 ) -> Result<axum::response::Response, ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let artifact_dir = require_antenna_artifact_dir(&state, &request_context).await?;
+    let v3_path = format!("antenna/source_spectra/{output_id}/spectrum.v3.json");
     let v2_path = format!("antenna/source_spectra/{output_id}/spectrum.v2.json");
     let v1_path = format!("antenna/source_spectra/{output_id}/spectrum.v1.json");
     let relative_path =
-        if crate::artifacts::try_resolve_artifact_path(&artifact_dir, &v2_path)?.is_some() {
+        if crate::artifacts::try_resolve_artifact_path(&artifact_dir, &v3_path)?.is_some() {
+            v3_path
+        } else if crate::artifacts::try_resolve_artifact_path(&artifact_dir, &v2_path)?.is_some() {
             v2_path
         } else {
             v1_path
         };
     let value = read_source_spectrum_manifest_value(&artifact_dir, &relative_path)?;
     let parsed = parse_source_spectrum_artifact(&value, &output_id, &relative_path)?;
+    if value.get("schema_version").and_then(Value::as_str) == Some(SOURCE_SPECTRUM_SCHEMA_V3) {
+        let manifest: AntennaSourceSpectrumManifest = serde_json::from_value(value.clone()).map_err(|cause| ApiError::internal(cause.to_string()))?;
+        fullmag_runner::verify_antenna_source_spectrum_equilibrium_binding(&artifact_dir, &manifest)
+            .map_err(|cause| ApiError::internal(cause.message))?;
+    }
+    let equilibrium_binding = value.get("equilibrium_binding").filter(|value| !value.is_null())
+        .map(|value| serde_json::from_value::<AntennaEquilibriumBindingResource>(value.clone()).map_err(|cause| ApiError::internal(cause.to_string()))).transpose()?;
+
     validate_source_spectrum_realization(&parsed.sampling.realization)?;
     validate_source_spectrum_payloads(&artifact_dir, &output_id, parsed.payloads.as_ref(), None)?;
 
     let (session_id, session_epoch) = current_session_identity(&state, &request_context).await?;
     let resource = AntennaSourceSpectrumResource {
+        equilibrium_binding,
         resource_id: format!("antenna/source-spectrum/{output_id}"),
         session_id,
         session_epoch: session_epoch.clone(),
@@ -977,7 +1031,7 @@ fn parse_source_spectrum_artifact(
                 "invalid {relative_path} artifact: missing schema_version"
             ))
         })?;
-    if schema == SOURCE_SPECTRUM_SCHEMA_V2 {
+    if schema == SOURCE_SPECTRUM_SCHEMA_V2 || schema == SOURCE_SPECTRUM_SCHEMA_V3 {
         validate_antenna_manifest_digest(value, "source spectrum")?;
         let manifest: AntennaSourceSpectrumManifest = serde_json::from_value(value.clone())
             .map_err(|error| {
@@ -1017,7 +1071,7 @@ fn parse_source_spectrum_artifact(
             amplitude_unit: manifest.spectrum.amplitude_unit,
             wave_vector_unit: manifest.spectrum.wave_vector_unit,
             sampling: manifest.sampling,
-            payload_format: "antenna_source_spectrum.v2.json".into(),
+            payload_format: if schema == SOURCE_SPECTRUM_SCHEMA_V3 { "antenna_source_spectrum.v3.json" } else { "antenna_source_spectrum.v2.json" }.into(),
             payloads: Some(manifest.payloads),
         });
     }
@@ -1110,14 +1164,16 @@ pub async fn get_antenna_source_spectrum_payload(
 ) -> Result<axum::response::Response, ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let artifact_dir = require_antenna_artifact_dir(&state, &request_context).await?;
-    let manifest_path = format!("antenna/source_spectra/{output_id}/spectrum.v2.json");
+    let v3_path = format!("antenna/source_spectra/{output_id}/spectrum.v3.json");
+    let manifest_path = if try_resolve_artifact_path(&artifact_dir, &v3_path)?.is_some() { v3_path }
+        else { format!("antenna/source_spectra/{output_id}/spectrum.v2.json") };
     let value = read_source_spectrum_manifest_value(&artifact_dir, &manifest_path)?;
     validate_antenna_manifest_digest(&value, "source spectrum")?;
     let manifest: AntennaSourceSpectrumManifest =
         serde_json::from_value(value).map_err(|error| {
             ApiError::internal(format!("invalid {manifest_path} artifact: {error}"))
         })?;
-    if manifest.schema_version != SOURCE_SPECTRUM_SCHEMA_V2 || manifest.output_id != output_id {
+    if !matches!(manifest.schema_version.as_str(), SOURCE_SPECTRUM_SCHEMA_V2 | SOURCE_SPECTRUM_SCHEMA_V3) || manifest.output_id != output_id {
         return Err(ApiError::internal(
             "antenna source spectrum manifest identity or schema mismatch",
         ));
@@ -1127,6 +1183,8 @@ pub async fn get_antenna_source_spectrum_payload(
             "invalid {manifest_path} artifact: {}",
             error.message,
         )))?;
+    fullmag_runner::verify_antenna_source_spectrum_equilibrium_binding(&artifact_dir, &manifest)
+        .map_err(|cause| ApiError::internal(cause.message))?;
     validate_source_spectrum_realization(&manifest.sampling.realization)?;
     let reference = match payload_kind.as_str() {
         "k_u_rad_per_m" => &manifest.payloads.k_u_rad_per_m,
@@ -1650,6 +1708,8 @@ fn sampling_resource(
         sample_count_u: sampling.sample_count_u,
         sample_count_v: sampling.sample_count_v,
         interpolation: sampling.interpolation,
+        transform: sampling.transform,
+        window: sampling.window,
         realization: sampling.realization,
         outside_policy: sampling.outside_policy,
         outside_count: sampling.outside_count,

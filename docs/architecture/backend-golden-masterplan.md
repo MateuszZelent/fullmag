@@ -284,6 +284,26 @@ Runner nie może zawierać:
 - produkcyjnych kerneli libCEED albo hypre-device,
 - zdublowanych GPU-resident state machines.
 
+### Accepted FEM GPU w Workspace
+
+[ADR 0060](../adr/0060-accepted-fem-gpu-docker-workspace.md) rozszerza
+orkiestrację accepted FEM o osobny GPU state producer. Adapter
+`accepted_fem_study_worker` zachowuje wspólny lifecycle workera i wywołuje
+natywnego runnera; nie przejmuje integratora ani operatorów MFEM. CPU i GPU
+mają oddzielne wersjonowane accepted-state carriers. GPU wiąże native values,
+node map, indexed geometry oraz typed native execution receipt z rzeczywistym
+UUID host allocation. Requested `auto` pozostaje authored intent, a resolved
+device wynika ze zweryfikowanego lease; GPU nie ma fallbacku CPU.
+
+Wdrożenie Docker wymaga natywnego probe, aktualnego inventory/topology,
+wspólnego ledgeru hosta i terminalnego release. Source implementation oraz
+obraz z CUDA nie kwalifikują wykonania przez Workspace. Pierwszy zakres to
+H1/P1 double strict time evolution i LLG-overdamped relaxation z typed
+`final_state` oraz opcjonalnym `total_energy`. Inne workloady zachowują
+kanoniczne ograniczenia plannera. Managed GPU/API, browser i kwalifikacja
+naukowa są oddzielnymi bramkami; bieżący etap pozostaje **NOT VERIFIED**
+runtime do uzyskania związanych ze źródłami receipts.
+
 ### LLG time-domain workflow ownership
 
 Contracts: `LLG-TD-POLICY-V1`, `LLG-TD-ATTEMPT-V1`, `LLG-TD-STIFF-V1`,
@@ -346,11 +366,12 @@ Własność pozostaje backends-first:
 
 - typowany import topologii, bazisy, kwadratura, Jacobiany, exchange, Poisson,
   recovery, energia, relaksacja i finalny preflight wykonawczy należą do
-  `backends/fem`; zaimplementowany i zakwalifikowany testami jednostkowymi
-  językowo neutralny silnik rekalkulacji i walidacji certyfikatu należy do
-  `crates/fullmag-ir/src/mixed_certificate.rs` i nie przejmuje generowania
-  mesha, MFEM ani solvera; jego typowany bridge PyO3 jest zaimplementowany i
-  zakwalifikowany na hostowym rozszerzeniu, natomiast produkcyjny caller,
+  `backends/fem`; zaimplementowane językowo
+  neutralne silniki rekalkulacji i walidacji certyfikatu należą do
+  `crates/fullmag-ir/src/mixed_certificate.rs` oraz
+  `crates/fullmag-ir/src/mixed_certificate_v2.rs` i nie przejmują generowania
+  mesha, MFEM ani solvera; istniejąca kwalifikacja hostowa i bridge PyO3
+  dotyczą v1 i nie kwalifikują v2. V2 ma dowód source/contract only; produkcyjny caller,
   integracja provenance z oracle Python, artifact receipt i użycie w managed
   FEM runtime pozostają niezweryfikowane;
 - runner posiada wyłącznie walidację planu przed startem, lowering typowanego
@@ -370,7 +391,15 @@ uniaxial i cubic anisotropy, ale DMI odrzuca fail-closed z tokenem
 twierdzenia o kwalifikacji runtime. FEM/BEM, PBC/Floquet, STT/thermal/
 magnetoelastic, regional projections, eigen/frequency-domain, DG0/material
 interfaces, order>1, arbitrary OCC, multi-body i multilayer pozostają
-fail-closed do osobnego zakresu.
+fail-closed w bieżącym certyfikacie v1. Implementowany source-contract v2
+obejmuje wyłącznie rozłączne ciała z dodatnią szczeliną: swept `prism6` dla
+warstwy oraz `tet4` dla odłączonego ciała, z body-owned nodal `Ms/Aex/alpha`
+i osobnymi markerami materiału. Demag pozostaje globalnym operatorem
+shared-domain, a exchange jest sumą operatorów body-local i nie przekracza
+szczeliny. Stykające lub nakładające się materiały oraz jawne interlayer
+exchange nadal pozostają fail-closed do czasu zdefiniowania operatora
+interfejsu. Managed runtime, operator execution, CPU/GPU parity i physics
+qualification v2 pozostają **NOT VERIFIED**.
 
 Obecny stan topologii, operatorów i rozszerzenia lokalnych interakcji jest
 `implemented`; dostępny dowód pozostaje wyłącznie source/contract. CPU obejmuje uniform/nodal
@@ -389,6 +418,41 @@ fallbacków zarówno w certyfikacie, jak i nadrzędnym build reporcie oraz
 `degraded=false`.
 Tetrahedralny FMMT v1 pozostaje wyłącznie readerem kompatybilności i nie może
 maskować ani obcinać komórek mieszanych.
+
+### 7.0.2 Multi-material mixed-P1 v2 — implemented source contract, runtime unverified
+
+Dokładny zakres `examples/permalloy_layer_cofeb_rings_relax_300nm.py` jest
+obsługiwany przez zaimplementowany source-contract v2, ponieważ certyfikat v1
+nadal zakłada jeden magnetic marker i magnetic `prism6`. V2 zachowuje per-body
+`object_id`, `material_id`, cell family, exact-sweep record i wynik pomiaru
+gap/contact. Stare czytniki v1 odrzucają v2 przed alokacją operatorów.
+Regionalne rekordy v2 rozszerzają wspólny proof v1: cell/facet marker counts,
+Jacobian i scaled-quality evidence, manifold/interface counters, shared-domain
+volume checks oraz topology fingerprint i node-order binding pozostają
+wymagane. Nie mogą zostać zastąpione samym skrótem per-body.
+
+W rozłącznym modelu wystarczają unikalne body-owned nodalne pola P1 dla
+`Ms`, `Aex`, `alpha`, `Ku1` i osi anisotropii. Interpolacja działa tylko w
+`\Omega_b`; nie wolno tworzyć globalnego pola, uśredniać wartości na air gap
+ani stosować ukrytego smoothingu. Dla kontaktu wspólny węzeł nie koduje dwóch
+granic materiałowych, więc planner i native muszą pozostać fail-closed do
+dedykowanego DG0/conforming interface operatora. CPU MFEM/hypre i GPU
+MFEM/libCEED/CUDA mają zachować ten sam weak form, markery, kwadraturę, znaki,
+jednostki i requested/resolved/executed provenance; forced GPU nie może spaść
+na CPU.
+
+Source-contract capability IDs to:
+
+```text
+mesh.topology.mixed_p1.v2.disconnected_bodies
+fem.cpu.exchange_demag.mixed_p1.disconnected_bodies
+fem.gpu.exchange_demag.mixed_p1.disconnected_bodies
+```
+
+Są to źródłowe kontrakty `implemented` bez dowodu executable/runtime/physics
+validation. Nie są promowane do `production_executable` ani `validated`, a
+managed runtime, operator execution, CPU/GPU parity i physics qualification
+pozostają **NOT VERIFIED**.
 
 ## 7.1 Architektura FEM Frequency-Domain I Eigenmodes
 

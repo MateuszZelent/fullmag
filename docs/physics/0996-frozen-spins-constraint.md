@@ -220,6 +220,103 @@ pozostać źródłem wartości sąsiada w stencilach swobodnych DOF.
 9. Direct minimizers PG-BB i NCG są indeksowane przez bezwymiarowe $k$; ich
    iteracji nie wolno raportować jako czasu ani pseudoczasu w sekundach.
 
+(frozen-spins-auxiliary-transport-time)=
+### 4.1. All-frozen z aktywnym transportem — prerejestracja
+
+**Stan: `planned_contract`, runtime `NOT VERIFIED`.** Ograniczenie
+$\mathbf m_F=\mathbf m_F^\star$ nie zamraża niemagnetycznych pól transportu.
+Czysto magnetyczny all-frozen zachowuje no-op oraz zero wykonanych kroków;
+TimeEvolution z aktywnym transportem wymaga istniejących fizycznych kroków
+coupled przy dokładnie odtwarzanym M. Dotyczy to także stałego benchmarku:
+nie wolno deklarować accepted transport na podstawie samego skoku zegara.
+
+Dla M1/M2 transport jest quasistatic względem aktualnego napędu, nie stały
+w czasie; M3 zachowuje niezależną historię spinową. Wspólny kontrakt błędu
+na free torque-target scope, w tym pusty support, należy do
+`0970-spin-hall-drift-diffusion-transport.md` →
+`spin-transport-frozen-free-error-support`. Nadal oblicza się pełne fizyczne
+pola, torque i bilanse; projekcja dotyczy wpływu błędu na swobodne M.
+
+Nie zmienia się API ani schematu: `FrozenSpins` i `constraints` etapu
+obniżają się do `magnetization_constraints` oraz resolved mask/reference;
+`StudyStagesBuilder.add_run` zachowuje `StudyIR::TimeEvolution`,
+`DynamicsIR::Llg`, `TimeStageContextIR` i istniejące solver policies.
+Requested intent i resolved execution muszą zachować te same identyfikatory
+stage/constraint/transport oraz lane. Validation errors/unsupported combinations
+nie mogą zamieniać M3 na steady, CPU na GPU ani Relax na TimeEvolution.
+
+| Solver | Device | Rozszerzenie all-frozen + transport |
+|---|---|---|
+| FDM | CPU | Prerejestrowane FP64: fixed Heun M1/M2 i ARS M3; wymagane osobne runtime gates, `NOT VERIFIED` |
+| FDM | GPU | Brak kwalifikacji tej kombinacji; brak dziedziczenia kwalifikacji samego constraintu |
+| FEM | CPU | Brak kwalifikacji tej kombinacji; brak dziedziczenia kwalifikacji samego constraintu |
+| FEM | GPU | Brak kwalifikacji tej kombinacji; brak fallbacku |
+
+Istniejące `accepted_steps/rejected_steps`, `step_count`, `StepStats.time/dt`
+i accepted snapshot wskazują prawdziwe fizyczne kroki, nie liczbę zmienionych
+magnetycznych DOF. Stage/harmonogram pozostaje jednym właścicielem czasu:
+source breakpoints, outputs, partial endpoint, pause/cancel oraz checkpoint
+muszą wskazywać ten sam zaakceptowany stan. Dokładne reguły są zapisane w
+`docs/specs/frozen-spins-v1.md::frozen-v1-all-frozen`.
+
+Relax z aktywnym niekonserwatywnym torque pozostaje odrzucony. Relax+M3,
+także bez torque, jest w tej prerejestracji unsupported do czasu osobnego
+kontraktu zbieżności transportu; zero free magnetic torque nie jest takim
+kryterium. Nie dodaje się minimizatorowi czasu ani nowego transport solvera.
+
+Wymagane dowody przed kwalifikacją: exact-fixed M we wszystkich candidates;
+accepted V/J/mu/Q i bilanse dla aktualnego źródła; M2 zero/partial free support;
+M3 spin-history i full/two-half LTE; pulse/PWL source/output event oraz
+niecałkowity endpoint/dt; late-failure/rollback; pause/cancel; restart maski,
+reference i historii. Osobno zachować regression no-transport all-frozen.
+
+(frozen-spins-composite-resume-v2)=
+### 4.2. Composite checkpoint v2 i ExactResume — prerejestracja
+
+**Stan: planned_contract; codec/integracja/runtime NOT VERIFIED.** Dokładny
+format nowych pól, strict ingress, hash, original frames i atomowy restore
+ma jednego właściciela w [§13 frozen spec](../specs/frozen-spins-v1.md#frozen-v2-composite-checkpoint).
+To nowa prerejestracja, bez zmian publicznego FrozenSpins/constraints i ich
+Python→ProblemIR lowering, bez nowej fizyki, Context lub schedulera.
+
+| Solver | Device | Composite v2 ExactResume |
+|---|---|---|
+| FDM | CPU | Planned reference FP64 M3 ARS fixed/adaptive; runtime NOT VERIFIED |
+| FDM | GPU | Unsupported tutaj: brak zgodnego composite ownera, bez fallbacku |
+| FEM | CPU | Unsupported tutaj: inne DOF/runtime, brak codec composite |
+| FEM | GPU | Unsupported tutaj: brak kwalifikacji tej kombinacji |
+
+Existing FrozenSpinsCheckpointV1 pozostaje ownerem packed mask/reference,
+source/topology, lane, M/time/dt/step i ich walidatorów. Nowy wrapper dodatkowo
+wymaga istniejącego FrozenSpinsActivationSet: historyczne epoki muszą przeżyć
+checkpoint z nieaktywnym stage. Nullable frozen child oznacza wyłącznie brak
+aktywnego resolved planu; nie oznacza braku historycznej activation set.
+Obecny runtime owner frozen_spins_activation_set oraz międzyetapowy
+ensure_interactive_preview_runtime przekazują ten set przy przebudowie runtime.
+Capture musi pobrać tę samą accepted rewizję co engine FrozenSpinsState;
+brak rzeczywistej historii, również w headless, daje odmowę ExactResume.
+
+Gdy child jest obecny, jego epoki/active IDs/set revision muszą być identyczne
+z top-level activation set. M, accepted time, step i rzeczywisty outer dt
+zgadzają się z M3/common state bitowo w FP64. Nie naprawia się mismatchu przez
+clamp, recapture, ponowną selekcję lub historyczne effective defaults.
+prepare_transition nie służy do odtworzenia bieżącego stage; dopiero przyszłe
+zwykłe przejście zwiększa epokę przez istniejącego ownera.
+
+Accepted spin history adaptive dotyczy drugiego rzeczywistego podkroku ARS,
+nie outer dt; szczegóły i output durability należą do specyfikacji oraz
+[noty transportu](0970-spin-hall-drift-diffusion-transport.md#spin-transport-composite-resume-v2).
+Same hash/count/cursory nie dowodzą committed prefixu. Brak dowodu daje
+composite_outputs_not_committed. Restore przygotowuje wszystkie istniejące
+stany lokalnie i publikuje je dopiero po walidacji całości; późna odmowa nie
+zmienia drugiego dziecka ani epok. Nie wznawia się tylko pure-frozen child,
+gdy transport wymaga composite.
+
+Przyszłe niewykonane gates: composite_v2_frozen_epochs,
+composite_v2_resume_transaction i pozostała macierz §13.7. Standalone V1
+zachowuje wcześniejsze przyjęcia i dowody; tymczasowa odmowa legacy transport
+resume pozostaje w mocy. Docs validation nie jest runtime/parity proof.
+
 (frozen-spins-python-api)=
 ## 5. Python API
 
@@ -412,7 +509,8 @@ IR i kompilatorów mają osobny status planner-implemented/runtime-unqualified.
 - `max_rhs_all` i `max_torque_all_Apm` z pełnego pre-constraint RHS/torque oraz
   odpowiadające redukcje `free` z tej samej rewizji;
 - TPI z essential true DOF;
-- all-frozen no-op bez NaN i z dokładnym stop reason;
+- czysto magnetyczny all-frozen no-op bez NaN i z dokładnym stop reason;
+- all-frozen + transport: osobne gates `frozen-spins-auxiliary-transport-time`, bez przenoszenia kwalifikacji constraintu;
 - restart odtwarza tę samą maskę, referencję i epokę bez recapture;
 - nieciągłe stage IDs oraz inactive-to-active tworzą nową epokę;
 - overlap referencji z różnych epok jest zgodny dokładnie albo aktywacja failuje
@@ -586,6 +684,40 @@ Szczegółowy ledger i wszystkie początkowe statusy `UNQUALIFIED` znajdują si�
 
 | Claim | Ścieżka | Symbol / anchor | Odpowiedzialność | Lane | Test / dowód | Status evidence | Immutable link |
 |---|---|---|---|---|---|---|---|
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-checkpoint` | Dokładny planned schema wrappera i required pola; codec niewdrożony. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `planned_contract` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-hash` | Strict ingress, kompletność nested codecs i kanoniczny outer hash. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `planned_contract` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-accepted-history` | Outer accepted dt i rzeczywiste inner ARS history, bez dopisywania timestampów. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `planned_contract` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-output-commit` | Binding istniejącego committed output manifestu i jawna odmowa braku trwałego prefixu. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `planned_contract` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v2-composite-atomic-restore` | Atomowy capture/restore w istniejących ownerach; bez recapture i implicit continuation. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `planned_contract` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `FdmCoupledCheckpoint` | Istniejący nested M3 V1, accepted/history/controller i własny payload digest. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `validate_complete_coupled_checkpoint` | Istniejąca pełna walidacja nested M3, bez zastępowania jej wrapperem. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/constraints/checkpoint.rs` | `FrozenSpinsCheckpointV1` | Istniejący mask/reference/activation codec i historyczne defaults niedozwolone jako brakujące dane V2. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/constraints/activation.rs` | `FrozenSpinsActivationSet` | Reuse istniejącej historycznej mapy epok i active set. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/interactive/runtime.rs` | `frozen_spins_activation_set` | Rzeczywisty runtime owner historycznej activation set między etapami. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `ensure_interactive_preview_runtime` | Przeniesienie historycznego activation set przy przebudowie stage runtime. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm_with_coupled_checkpoint` | Istniejący adaptive full/two-half acceptance oraz outer dt/history writer; nie dowód runtime. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/schedules.rs` | `OutputSchedule` | Istniejący pojedynczy owner next_time i last_sampled_time; brak checkpoint cursorów V2. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-session/src/types.rs` | `canonical_json_bytes` | Istniejąca rekursywna kanonizacja JSON; planowany reuse dla outer digest. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-quantities/src/accepted_state.rs` | `AcceptedStateRef` | Istniejąca tożsamość accepted clocks/state/generation bez nowego modelu. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-session/src/types.rs` | `FmsStudyOutputManifest` | Istniejący CAS-backed manifest z task/attempt/step i accepted-state reference. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-session/src/types.rs` | `FmsArtifactCatalog` | Istniejący katalog revision i immutable published entries, nie nowy receipt. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-runner/src/artifact_pipeline.rs` | `record_scalar` | Enqueue outputu nie potwierdza durable checkpoint prefixu. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-session/src/store.rs` | `commit_checkpoint` | Istniejący writer lease, common state, reachability oraz commit marker. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `crates/fullmag-session/src/capture.rs` | `capture_checkpoint` | Istniejący capture common M/backend payload przed publikacją markeru. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Composite checkpoint v2 | `docs/physics/0996-frozen-spins-constraint.md` | `DOC-ANCHOR:frozen-spins-composite-resume-v2` | Granica prerejestracji composite bez rozszerzania kwalifikacji legacy. | FDM CPU FP64; inne lane unsupported | prereg composite_v2_*; niewykonane | `planned_contract` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `docs/physics/0996-frozen-spins-constraint.md` | `DOC-ANCHOR:frozen-spins-auxiliary-transport-time` | Prerejestracja no-op M oraz aktywnego transportu w fizycznym czasie; runtime niezweryfikowany. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `planned_contract` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-all-frozen` | Executed steps, czas, pause/cancel i odmowa Relax+M3. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `planned_contract` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `docs/physics/0970-spin-hall-drift-diffusion-transport.md` | `DOC-ANCHOR:spin-transport-frozen-free-error-support` | Wspólny free-target support outer-error gate; bez zmiany bilansów. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `planned_contract` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm_with_coupled_checkpoint` | Istniejący owner czasu, counters, outputs i completion; shortcut/gates wymagają naprawy. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_coupled_heun_trial` | Istniejący transaction Heun evaluate/commit/rollback. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_coupled_ars_trial` | Istniejący transaction ARS i historia M3. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `heun_trial_with_external_stage_terms_and_lte` | Źródłowy raw embedded Heun estimator w borrowed k[2], mask/restore; typy i runtime NOT VERIFIED. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-engine/src/fdm/shared/types.rs` | `TransportStageErrorBudget` | Źródłowy borrowed per-cell estimator i resolved frozen mask; synchroniczny zakres callback/solve bez nowego stanu; runtime NOT VERIFIED. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs` | `CoupledTransportOuterErrorBudget` | Istniejący budżet outer-error z Gilbert-source delta; nie wprowadzać arbitralnego floor. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `FdmSpinTransportWorkflow` | Istniejący accepted/rejected counters, cache, snapshot i checkpoint. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin.rs` | `transport_torque_delta_l2` | Źródłowa wspólna redukcja obu norm po target∩free, empty support i finite guards; runtime NOT VERIFIED. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-runner/src/time_events.rs` | `build_resolved_stage_event_schedule_with_origin` | Istniejący owner zdarzeń; envelope current i fixed M3 clipping wymagają dowodów/naprawy. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
+| Prerejestracja frozen transport | `crates/fullmag-plan/src/validate.rs` | `validate_conservative_relaxation` | Istniejąca odmowa niekonserwatywnych torque; jawna odmowa Relax+M3 jeszcze niezaimplementowana. | FDM CPU FP64; inne lane niekwalifikowane | gates `frozen-spins-auxiliary-transport-time` | `source_only_unqualified` | `worktree/uncommitted`; path + symbol |
 | Ograniczenie $\mathbf m_F=\mathbf m_F^\star$ | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-constraint-model` | Zatwierdzony model V1 | wspólny | review Task 1 | planned_contract | `worktree/uncommitted`; path + anchor only |
 | Pełna energia | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-energy` | Energia constrained | wspólny | przyszły oracle energii | planned_contract | `worktree/uncommitted`; path + anchor only |
 | Final-RHS masking | `docs/specs/frozen-spins-v1.md` | `DOC-ANCHOR:frozen-v1-final-rhs` | Kolejność maskowania torque | wspólny | przyszłe STT/SOT/thermal fixtures | planned_contract | `worktree/uncommitted`; path + anchor only |

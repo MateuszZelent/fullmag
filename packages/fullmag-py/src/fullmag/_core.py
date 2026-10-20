@@ -135,6 +135,19 @@ class NativeMixedCertificateResult:
 
 
 @dataclass(frozen=True)
+class NativeMixedCertificateV2Result:
+    """Result of the schema-native mixed v2 Rust certifier."""
+
+    topology_fingerprint_version: str
+    topology_fingerprint: str
+    certificate_payload_sha256: str
+    algorithm_id: str
+    rayon_threads: int
+    elapsed_ns: int
+    validated_claimed_certificate: bool
+
+
+@dataclass(frozen=True)
 class NativeMixedPreflightResult:
     counts: dict[str, int]
     topology_fingerprint_v3: str
@@ -356,6 +369,58 @@ def certify_mixed_mesh_arrays(
         topology_fingerprint_v3=str(result["topology_fingerprint_v3"]),
         certificate_payload_sha256=result.get("certificate_payload_sha256"),
         algorithm_id=str(result["algorithm_id"]),
+        rayon_threads=int(result["rayon_threads"]),
+        elapsed_ns=int(result["elapsed_ns"]),
+        validated_claimed_certificate=bool(result["validated_claimed_certificate"]),
+    )
+
+
+def certify_mixed_mesh_arrays_v2(
+    *,
+    mesh: "MeshData",
+    metadata: Mapping[str, object],
+    certificate: Mapping[str, object],
+    require_native: bool,
+) -> NativeMixedCertificateV2Result | None:
+    """Certify a mixed v2 mesh with the schema-native Rust bridge.
+
+    V2 certificates are mandatory claims: accepting ``None`` here would
+    silently route a multi-body certificate through the v1 validator.  The
+    native extension remains optional only when the caller explicitly allows
+    a source-level fallback, in which case this function returns ``None``
+    before any certificate is treated as accepted.
+    """
+    if not isinstance(certificate, Mapping):
+        raise TypeError("v2 certificate must be a mapping")
+    function = _require_native_mixed_function(
+        "certify_mixed_mesh_arrays_v2", require_native=require_native
+    )
+    if function is None:
+        return None
+    wire = _build_native_mixed_mesh_wire(mesh, metadata)
+    result = json.loads(
+        function(
+            *wire.array_arguments(),
+            wire.metadata_json,
+            _canonical_json(certificate),
+        )
+    )
+    if result.get("schema_version") != "fullmag.mixed-certificate-v2-native-result.v1":
+        raise ValueError("native mixed v2 certificate result has an unsupported schema")
+    fingerprint_version = result.get("topology_fingerprint_version")
+    if fingerprint_version not in {"v2", "v3"}:
+        raise ValueError("native mixed v2 certificate result has an invalid fingerprint version")
+    payload_digest = result.get("certificate_payload_sha256")
+    if not isinstance(payload_digest, str) or not payload_digest.startswith("sha256:"):
+        raise ValueError("native mixed v2 certificate result has an invalid certificate digest")
+    algorithm_id = result.get("algorithm_id")
+    if algorithm_id != "fullmag.mixed-certificate-v2.rust-rayon.v1":
+        raise ValueError("native mixed v2 certificate result has an unsupported algorithm")
+    return NativeMixedCertificateV2Result(
+        topology_fingerprint_version=fingerprint_version,
+        topology_fingerprint=str(result["topology_fingerprint"]),
+        certificate_payload_sha256=payload_digest,
+        algorithm_id=algorithm_id,
         rayon_threads=int(result["rayon_threads"]),
         elapsed_ns=int(result["elapsed_ns"]),
         validated_claimed_certificate=bool(result["validated_claimed_certificate"]),

@@ -138,6 +138,11 @@ pub(crate) struct AppState {
     pub current_command_journal_revision: Arc<AtomicU64>,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     pub current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
+    /// Process-local proof installed only after explicit accepted-run
+    /// reattach validation. It authorizes the read-only projector to rebind
+    /// the durable run from an old API instance to this new process.
+    pub accepted_run_reattach_identity:
+        Arc<RwLock<Option<crate::development_accepted_restore::AcceptedRunReattachIdentity>>>,
     /// Lock order: current_live_session_transition precedes current-session state,
     /// resource, and realtime locks. It remains held through current-session publish.
     pub current_live_session_transition: Arc<Mutex<()>>,

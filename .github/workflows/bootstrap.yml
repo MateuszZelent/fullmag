@@ -26,6 +26,10 @@ on:
           - modal-phase-slepc
           - retention
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.contract_scope || 'default' }}
+  cancel-in-progress: true
+
 jobs:
   native-modal-cabi-contract:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
@@ -81,9 +85,12 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Install Python runtime dependencies
+      - name: Install Python runtime and mesh preparation dependencies
         id: install-python-runtime
-        run: python -m pip install -e packages/fullmag-py
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libglu1-mesa
+          python -m pip install -e 'packages/fullmag-py[meshing]'
 
       - name: Resolve storage for API artifact fixtures
         run: |
@@ -104,8 +111,52 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Run accepted explicit Compute start-gate contracts
+        run: |
+          cargo test -p fullmag-session --lib accepted_start_gate
+          cargo test -p fullmag-session --lib accepted_stage_receipt
+          cargo test -p fullmag-runtime-control --lib accepted_start
+          cargo test -p fullmag-runtime-control --lib accepted_recovery_requires_release
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker restored_manual_worker_requires_exact_compute_release
+
+      - name: Run Docker accepted workspace startup and projection contracts
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test -p fullmag-plan --lib preparation::tests::fdm_
+          cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
+          cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
+          cargo test -p fullmag-api --bin fullmag-api development_accepted_restore::tests
+          cargo test -p fullmag-runtime-control --lib scheduler::accepted_start_tests
+          cargo test -p fullmag-api --bin fullmag-api live_accepted_projection::tests
+          cargo test -p fullmag-api --bin fullmag-api accepted_fem_study_worker::source_contract_tests
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
+          cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests
+          cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api accepted_preparation_completion_keeps_reserved_record_after_mesh_revision_moves
+          cargo test -p fullmag-api --bin fullmag-api preparation_failure_and_stop_terminalize_only_their_reserved_records
+          cargo test -p fullmag-api --bin fullmag-api old_preparation_terminalization_does_not_mutate_replacement_session_ledger
+          cargo test -p fullmag-api --bin fullmag-api rejected_accepted_admission_does_not_reserve_a_run_command
+
+      - name: Run runtime service sampler and control contracts
+        run: cargo test -p fullmag-api --bin fullmag-runtime-service --no-fail-fast
+
+      - name: Run disconnected mixed-P1 v2 API summary contracts
+        run: cargo test -p fullmag-api --bin fullmag-api mixed_v2_summary_tests --no-fail-fast
+
       - name: Run complete session reachability and archive contracts
         run: cargo test -p fullmag-session --lib --no-fail-fast
+
+      - name: Verify accepted provenance archive export and read-only import
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test -p fullmag-session --lib accepted_provenance
+          cargo test -p fullmag-session --lib session_schema_guard_distinguishes_v1_and_readonly_v2_provenance
+          cargo test -p fullmag-api --bin fullmag-api accepted_fms_export_inspect_readonly_import_and_tamper_rejection
+          cargo test -p fullmag-api --bin fullmag-api context_bound_export_rejects_session_identity_before_script_read
 
       - name: Run fail-closed compact workspace import regression
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
@@ -229,7 +280,7 @@ jobs:
       - name: Run modal solver policy planning contracts
         run: |
           cargo test -p fullmag-plan fem_eigen_modal_solver_policy --lib
-          cargo test -p fullmag-plan fem_eigen_floquet_payload_tests --lib
+          cargo test -p fullmag-plan fem_eigen_floquet --lib
           cargo test -p fullmag-runner floquet_payload_tests --lib
           cargo test -p fullmag-runner terminal_action_after_completed_pool_does_not_interrupt_but_active_actions_do --lib
           cargo test -p fullmag-runner fem::eigen_progress::tests --lib
@@ -280,6 +331,38 @@ jobs:
 
       - name: Run native session writer lease contracts
         run: cargo test -p fullmag-session --lib writer --no-fail-fast
+
+      - name: Run Docker accepted FEM GPU and host admission contracts
+        run: |
+          cargo test -p fullmag-api --bin fullmag-api accepted_fem_
+          cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparer preparation_writer_retry_retries_typed_busy_but_not_other_errors
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_
+          cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler typed_writer_busy_retry_preserves_preparation_launch_identity
+          cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler pre_admission_snapshot_deferral_classifies_only_typed_busy
+          cargo test -p fullmag-api --bin fullmag-api common_host_launch_gate_
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker common_host_launch_gate_
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_worker_claim_retry_tests::
+          cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::reaped_child_receipt_survives_unacknowledged_final_heartbeat -- --exact
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_supervisor::tests::host_bound_pre_spawn_retries_writer_busy_without_re_admission -- --exact
+          cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler scheduler_writer_busy_tests
+          cargo test -p fullmag-api --bin fullmag-runtime-service orphan_teardown_
+          cargo test -p fullmag-runtime-control --lib claim::host_binding_tests::fresh_v2_host_claim_receives_the_canonical_runtime_generation_binding -- --exact
+          cargo test -p fullmag-runner --lib fem_gpu_execution_receipt_contract_tests
+          cargo test -p fullmag-session --lib host_resource_ledger
+          cargo test -p fullmag-runtime-control --lib compute_node_probe
+          cargo test -p fullmag-runtime-control --lib nvml_gpu_partition
+          cargo test -p fullmag-runtime-control --lib host_runtime
+
+      - name: Run native worker orphan teardown contracts
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test -p fullmag-session --lib worker_orphan_teardown_success_releases_capacity_and_reconciles_unknown
+          cargo test -p fullmag-session --lib worker_orphan_teardown_replays_exactly_and_rejects_changed_pins
+          cargo test -p fullmag-session --lib worker_orphan_teardown_replays_after_partial_proof_and_lease_publication
+          cargo test -p fullmag-session --lib worker_orphan_teardown_requires_inventory_quiescence
+          cargo test -p fullmag-session --lib worker_orphan_teardown_rejects_durable_started_receipt
+          cargo test -p fullmag-session --lib request_rejects_nil_uuid_and_unprefixed_store_identity
 
       - name: Run Rust quantity, API and CLI contracts
         env:
@@ -344,6 +427,9 @@ jobs:
         env:
           FULLMAG_CHECKPOINT_INSPECTOR_PYTHON: python
         run: cargo test -p fullmag-runner checkpoint_inspector_accepts_actual_persisted_manifest --lib -- --ignored
+
+      - name: Verify source-adjacent FMS publication on Windows
+        run: cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
 
   generated-api-determinism:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
@@ -432,6 +518,14 @@ jobs:
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify Tailwind source boundaries and incremental class discovery
+        env:
+          FULLMAG_TEST_NODE_MODULES_ROOT: ${{ github.workspace }}/apps/control-room/node_modules
+        run: node --test apps/control-room/scripts/tailwind-source-boundary.node-test.mjs
+
+      - name: Verify pinned Next development route discovery
+        run: python3 -B scripts/test_next_route_patch.py -v
 
       - name: Install architecture gate dependencies
         run: |
@@ -689,8 +783,36 @@ jobs:
       - name: Verify Docker storage probes and runtime lifecycle contracts
         run: |
           python -B scripts/test_fullmag_docker_runtime.py -v
+          python -B scripts/test_docker_container_runtime_recovery.py -v
+          python -B scripts/test_docker_volume_container_recovery.py -v
+          python -B scripts/test_docker_volume_dev_runtime_state.py -v
+          python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
+          python -B scripts/test_docker_volume_readiness_receipt.py -v
+          python -B scripts/test_docker_volume_stop_failed.py -v
+          python -B scripts/test_docker_volume_activation_reconcile.py -v
+          python -B scripts/test_docker_native_failed_recreate.py -v
+          python -B scripts/test_docker_retained_recovery_context.py -v
+          python -B scripts/test_runtime_service_successor.py -v
+          python -B scripts/test_runtime_service_recovery_busy_retry.py -v
+          python -B scripts/test_docker_dev_owned_control.py -v
+          python -B scripts/test_docker_dev_up.py -v
+          python -B scripts/test_docker_script_output_mounts.py -v
+          python -B scripts/test_docker_script_output_source.py -v
+          python -B scripts/test_docker_volume_idle_stop.py -v
+          python -B scripts/test_docker_dev_defaults.py -v
+          python -B scripts/test_docker_volume_receipts.py -v
+          python -B scripts/test_docker_volume_checks.py -v
+          python -B scripts/test_docker_accepted_reattach.py -v
+          python -B scripts/test_docker_volume_accepted_reattach.py -v
+          python -B scripts/test_docker_console_progress.py -v
+          python -B scripts/test_docker_volume_stop_unadmitted.py -v
+          python -B scripts/test_docker_startup_script.py -v
+          python -B scripts/test_docker_entrypoint_device_access.py -v
           python -B scripts/test_windows_folder_evidence.py -v
           python -B scripts/test_windows_folder_probe.py -v
+          python -B scripts/test_docker_orphan_recovery.py -v
+          python -B scripts/test_recover_docker_orphan.py -v
+          python -B scripts/test_just_orphan_recovery_shell.py -v
 
       - name: Audit managed FEM CPU-only verification configuration
         run: python scripts/test_audit_fem_cpu_only_runtime.py -v
@@ -708,6 +830,16 @@ jobs:
         run: |
           python -m pip install PyYAML==6.0.3
           python scripts/test_bootstrap_workflow_contract.py -v
+          python -B scripts/test_ci_workflow_policy.py -v
+
+      - name: Verify Docker host setup and GPU proof contracts
+        run: |
+          python -B scripts/test_setup_docker.py -v
+          python -B scripts/test_fullmag_storage.py -v
+          python -B scripts/test_docker_host_ledger.py -v
+          python -B scripts/test_verify_docker_all_runtime.py -v
+          python -B scripts/test_fem_toolchain_slepc_env.py
+          python -B scripts/test_verify_docker_fem_gpu_workspace.py -v
 
       - name: Install Python package
         run: |
@@ -734,9 +866,18 @@ jobs:
           packages/fullmag-py/tests/test_mesh_stl_fallback_owner_binding.py
           packages/fullmag-py/tests/test_execution_profile_authoring_roundtrip.py
           packages/fullmag-py/tests/test_scene_execution_config.py
+          packages/fullmag-py/tests/test_runtime_source_snapshot.py
 
       - name: Run FEM tested/runtime library identity contracts
-        run: python scripts/test_fem_modal_library_identity.py -v
+        run: |
+          python scripts/test_fem_modal_library_identity.py -v
+          python -B scripts/test_fem_mfem_hypre_stream_compat.py
+
+      - name: Run managed runtime startup identity contracts
+        run: python -B scripts/test_validate_managed_fem_runtime_bundle.py
+
+      - name: Run managed GPU device cubin requirement contracts
+        run: python -B -m pytest -q scripts/test_export_fem_gpu_runtime_copy_helpers.py -k "export_native_cubin_requirement_follows_expected_device or export_rejects_malformed_expected_device_capability"
 
       - name: Run managed runtime artifact root contracts
         run: python scripts/test_managed_runtime_artifact_root.py -v

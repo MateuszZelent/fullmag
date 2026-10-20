@@ -1,5 +1,6 @@
 #include "cpu/mfem/transport/conservative_current_view.hpp"
 #include "cpu/mfem/transport/affine_rt0_element.hpp"
+#include "cpu/mfem/transport/coincident_cut_v2.hpp"
 #include "cpu/mfem/transport/terminal_constrained_rt0_projection.hpp"
 
 #include <mfem.hpp>
@@ -652,7 +653,8 @@ PhysicalCertificate integrate_physical_certificate(
     const std::vector<FaceKey> &terminal_faces,
     const std::string &terminal_id,
     double physical_relative_gate,
-    double physical_absolute_gate_a)
+    double physical_absolute_gate_a,
+    bool strict_local_gates = false)
 {
     const auto &mesh = *field.FESpace()->GetMesh();
     std::vector<double> element_balance(mesh.GetNE(), 0.0);
@@ -814,37 +816,61 @@ PhysicalCertificate integrate_physical_certificate(
             std::abs(terminal_net_flux)) /
         std::max({pair_scale, terminal_scale, 1.0e-30});
     const auto gate = [&](double value, double scale) {
+        if (strict_local_gates) return std::isfinite(value) && std::isfinite(scale) &&
+            std::abs(value) <= 1.0e-18 + 1.0e-10 * scale;
         const double roundoff_floor = 128.0 *
             std::numeric_limits<double>::epsilon() * std::max(1.0, scale);
         return std::abs(value) <= std::max({physical_absolute_gate_a,
             physical_relative_gate * std::max(scale, 1.0e-30),
             roundoff_floor});
     };
+    std::string first_failed_gate;
+    const auto checked_gate = [&](const char *family, double value, double scale) {
+        const bool ok = gate(value, scale);
+        if (!ok && first_failed_gate.empty()) {
+            std::ostringstream detail;
+            detail << std::setprecision(17) << family
+                   << " value_a=" << value << " scale_a=" << scale;
+            first_failed_gate = detail.str();
+        }
+        return ok;
+    };
     bool elements_ok = true;
     for (const auto &row : result.elements) {
-        elements_ok = elements_ok && gate(row.residual_a, row.denominator_a);
+        elements_ok = elements_ok && checked_gate("element", row.residual_a, row.denominator_a);
     }
     bool faces_ok = true;
     for (const auto &row : result.faces) {
         if (row.side_count == 2) {
             const double scale = std::abs(row.side1_flux_a) +
                 std::abs(row.side2_flux_a);
-            const bool ok = gate(row.canonical_jump_a, scale);
+            const bool ok = checked_gate("internal_face", row.canonical_jump_a, scale);
             faces_ok = faces_ok && ok;
         }
     }
     bool pairs_ok = true;
     for (const auto &row : result.circuits) {
         if (row.kind == 2 || row.kind == 3) {
-            pairs_ok = pairs_ok && gate(row.mismatch_a,
+            pairs_ok = pairs_ok && checked_gate("paired_face", row.mismatch_a,
                 std::abs(row.flux_a) + std::abs(row.paired_flux_a));
+        } else if (strict_local_gates && row.kind == 4) {
+            pairs_ok = pairs_ok && checked_gate("outer_face", row.flux_a, std::abs(row.flux_a));
         }
     }
-    const bool terminals_ok = gate(terminal_net_flux, terminal_scale);
+    const bool terminals_ok = checked_gate("terminal", terminal_net_flux, terminal_scale);
     result.summary.closure_complete =
         elements_ok && faces_ok && pairs_ok && terminals_ok;
-    require(result.summary.closure_complete,
-        "physical Piola current certificate failed closed");
+    if (!result.summary.closure_complete) {
+        std::ostringstream message;
+        message << std::setprecision(17)
+                << "physical Piola current certificate failed closed: " << first_failed_gate
+                << "; strict_local_gates=" << strict_local_gates
+                << " physical_absolute_gate_a=" << physical_absolute_gate_a
+                << " physical_relative_gate=" << physical_relative_gate
+                << " elements_ok=" << elements_ok << " faces_ok=" << faces_ok
+                << " pairs_ok=" << pairs_ok << " terminals_ok=" << terminals_ok;
+        reject(message.str());
+    }
     return result;
 }
 
@@ -1219,7 +1245,8 @@ FinalizedViewData finalize_view_data(
     double physical_absolute_gate_a,
     bool global_and_broadcast,
     double scaled_kkt_residual = 0.0,
-    double correction_norm_mw = 0.0)
+    double correction_norm_mw = 0.0,
+    bool strict_local_gates = false)
 {
     FinalizedViewData data;
     data.mesh = std::move(mesh);
@@ -1236,7 +1263,7 @@ FinalizedViewData finalize_view_data(
         physical_absolute_gate_a, physical_relative_gate);
     auto physical = integrate_physical_certificate(
         *data.field, data.stable_ids, pairs, terminal_faces, terminal_id,
-        physical_relative_gate, physical_absolute_gate_a);
+        physical_relative_gate, physical_absolute_gate_a, strict_local_gates);
     data.balance = physical.summary;
     data.balance.scaled_kkt_residual = scaled_kkt_residual;
     data.balance.correction_norm_mw = correction_norm_mw;
@@ -1278,8 +1305,13 @@ ClosureTopology validate_closed_geometry_closure(
     const BoundaryTopology &boundaries,
     const ClosedGeometryCurrentClosure &closure)
 {
-    require(closure.operator_version == "fem_closed_current_geometry.v1",
+    const bool coincident = closure.operator_version == "fem_closed_current_geometry.v2";
+    require(closure.operator_version == "fem_closed_current_geometry.v1" || coincident,
         "unsupported closed-geometry closure operator");
+    if (coincident) {
+        require(closure.source_cuts.size() == 1, "coincident cut v2 requires exactly one source");
+        coincident_cut_v2::validate_mesh(mesh);
+    }
     validate_semantic_string(closure.revision, "closure revision");
     validate_semantic_string(closure.digest, "closure digest");
     require(!closure.source_cuts.empty(),
@@ -1298,8 +1330,9 @@ ClosureTopology validate_closed_geometry_closure(
             validate_finite(value, "source-cut translation");
             translation_norm2 += value * value;
         }
-        require(translation_norm2 > 0.0,
-            "source-cut translation must be nonzero");
+        if (coincident) require(cut.translation_m == std::array<double, 3>{} && cut.potential_drop_v != 0.0,
+            "coincident cut v2 requires zero translation and nonzero jump");
+        else require(translation_norm2 > 0.0, "source-cut translation must be nonzero");
         require(!cut.face_pairs.empty(), "source cut has no paired faces");
         for (const auto &pair : cut.face_pairs) {
             require(pair.minus_face_vertex_ids[0] < pair.minus_face_vertex_ids[1] &&
@@ -1323,12 +1356,15 @@ ClosureTopology validate_closed_geometry_closure(
             require(used.insert(pair.minus_face_vertex_ids).second &&
                     used.insert(pair.plus_face_vertex_ids).second,
                 "source-cut boundary face is paired more than once");
-            auto displacement = boundary_centroid(mesh, plus->second);
-            displacement -= boundary_centroid(mesh, minus->second);
-            for (int component = 0; component < 3; ++component) {
-                require(std::abs(displacement[component] -
-                            cut.translation_m[component]) <= kGeometryTolerance,
-                    "source-cut face geometry disagrees with authored translation");
+            if (coincident) {
+                (void)coincident_cut_v2::match_vertices(mesh, ids, minus->second, plus->second);
+            } else {
+                auto displacement = boundary_centroid(mesh, plus->second);
+                displacement -= boundary_centroid(mesh, minus->second);
+                for (int component = 0; component < 3; ++component) {
+                    require(std::abs(displacement[component] - cut.translation_m[component]) <= kGeometryTolerance,
+                        "source-cut face geometry disagrees with authored translation");
+                }
             }
             result.pairs.push_back(PairConstraint{
                 2, cut.id, pair.minus_face_vertex_ids,
@@ -2104,7 +2140,8 @@ WeightedRt0Result solve_weighted_rt0_projection(
             solver.SetPreconditioner(preconditioner);
             solver.SetOperator(kkt);
             solver.SetRelTol(1.0e-12);
-            solver.SetAbsTol(1.0e-14);
+            // A fixed absolute stop can exceed the local physical flux gate.
+            solver.SetAbsTol(0.0);
             solver.SetMaxIter(static_cast<int>(max_iterations));
             solver.SetPrintLevel(-1);
             solver.Mult(kkt_rhs, kkt_solution);
@@ -2965,10 +3002,18 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
     validate_identity_and_pins(request.identity, request.pins);
     validate_gates(request.algebraic_relative_tolerance,
         request.physical_relative_gate, request.physical_absolute_gate_a);
-    validate_affine_tetrahedral_mesh(*request.mesh);
+    const auto *closed_v2 = std::get_if<ClosedGeometryCurrentClosure>(&request.closure);
+    const bool coincident = closed_v2 && closed_v2->operator_version == "fem_closed_current_geometry.v2";
+    if (coincident) {
+        require(request.algebraic_relative_tolerance <= 1.0e-12 &&
+                request.physical_relative_gate <= 1.0e-10 && request.physical_absolute_gate_a <= 1.0e-18,
+            "coincident cut v2 solver/certificate policy exceeds preregistered gates");
+        coincident_cut_v2::validate_mesh(*request.mesh);
+    } else validate_affine_tetrahedral_mesh(*request.mesh);
     validate_stable_ids(*request.mesh, request.stable_vertex_identities);
 #if defined(MFEM_USE_MPI) && !defined(FULLMAG_OET0_DISABLE_MPI)
     if (auto *parallel_mesh = dynamic_cast<mfem::ParMesh *>(request.mesh)) {
+        require(!coincident, "coincident cut v2 currently requires serial CPU execution");
         require(request.reference_mpi_gather_broadcast,
             "ParMesh OE-T0 requires explicit rank-0 gather/solve/broadcast");
         return build_mpi_global_current_view(request, *parallel_mesh);
@@ -2993,7 +3038,7 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
                 snapshot.stable_vertex_identities().local_to_stable ==
                     request.stable_vertex_identities.local_to_stable,
             "periodic charge-potential stable vertex identities differ");
-        require(snapshot.operator_version() == "fem_charge_h1_periodic_jump.v1" &&
+        require(snapshot.operator_version() == (coincident ? "fem_charge_h1_periodic_jump.v2" : "fem_charge_h1_periodic_jump.v1") &&
                 snapshot.converged() &&
                 snapshot.algebraic_relative_residual() <=
                     request.algebraic_relative_tolerance,
@@ -3015,9 +3060,11 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
             "periodic charge-potential snapshot identity is stale");
         require(closed->source_cuts.size() == 1 &&
                 std::abs(snapshot.potential_jump_v() -
-                    closed->source_cuts.front().potential_drop_v) <= 1.0e-13,
+                    closed->source_cuts.front().potential_drop_v) <= (coincident
+                    ? 1.0e-12 + 128.0 * std::numeric_limits<double>::epsilon() * std::abs(closed->source_cuts.front().potential_drop_v)
+                    : 1.0e-13),
             "periodic potential jump differs from the authored source cut");
-        require(snapshot.max_paired_weak_flux_mismatch_a() <=
+        require(coincident || snapshot.max_paired_weak_flux_mismatch_a() <=
                 kCertificateToleranceA,
             "periodic potential failed its paired weak-flux certificate");
 
@@ -3041,7 +3088,7 @@ ConservativeCurrentView::Ptr ConservativeCurrentView::Build(
             request.algebraic_relative_tolerance,
             request.physical_relative_gate, request.physical_absolute_gate_a,
             request.reference_mpi_gather_broadcast,
-            weighted.scaled_kkt_residual, weighted.correction_norm_mw);
+            weighted.scaled_kkt_residual, weighted.correction_norm_mw, coincident);
     } else {
         const auto &external =
             std::get<ExternalLeadExtensionCurrentClosure>(request.closure);

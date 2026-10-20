@@ -12,10 +12,11 @@ use axum::{
     Json,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use chrono::Utc;
 use fullmag_application::{
     ApplicationError, BatchExpansionRequest, CreateProjectRequest, DocumentMode,
     FileProjectRepository, OpaqueDocument, ProjectApplication, ProjectId, ProjectSource,
-    RawJsonEnvelope, RunId, RunIntent, RunSpecification, SubmitDisposition,
+    RawJsonEnvelope, RunId, RunIntent, RunSpecification, SubmitDisposition, TaskId,
 };
 use fullmag_authoring::{
     validate_scene_document, validate_scene_document_for_authoring, SceneDocument, StudyPlan,
@@ -37,7 +38,7 @@ use crate::schemas::projects::{
     ProjectBatchExpansionState, ProjectBatchListQuery, ProjectBatchFailurePolicy,
     ProjectBatchListResource, ProjectBatchSummaryResource,
     ProjectBatchCommandAction, ProjectBatchCommandDisposition, ProjectBatchCommandRequest,
-    ProjectBatchCommandResource,
+    ProjectBatchCommandResource, ProjectBatchRetryResource,
     ProjectCreateRequest, ProjectDocumentMode, ProjectDocumentResource, ProjectMigrationResource,
     ProjectRunCatalogState, ProjectRunExecutionState, ProjectRunListQuery, ProjectRunListResource,
     ProjectRunMaterializationResource, ProjectRunMinimumResourceBudgetResource,
@@ -46,7 +47,8 @@ use crate::schemas::projects::{
     ProjectRunTaskCancellationDisposition, ProjectRunTaskCancellationIntentResource,
     ProjectRunTaskCancellationRequest, ProjectRunTaskCancellationResource,
     ProjectRunTaskCancellationState, ProjectRunTaskCancellationSummary, ProjectRunTaskLifecycle,
-    ProjectRunTaskResource, ProjectRunTaskStopResource, PROJECT_ARCHIVE_MAX_BYTES,
+    ProjectRunTaskResource, ProjectRunTaskRetryDisposition, ProjectRunTaskRetryRequest,
+    ProjectRunTaskRetryResource, ProjectRunTaskStopResource, PROJECT_ARCHIVE_MAX_BYTES,
 };
 use crate::types::AppState;
 
@@ -105,6 +107,7 @@ fn project_run_task_resource(
     run_id: &str,
     artifact_catalog: Option<&fullmag_session::FmsArtifactCatalog>,
     catalog_revision: u64,
+    execution: Option<crate::schemas::projects::ProjectRunTaskExecutionResource>,
     task: fullmag_session::FmsTaskCatalogEntry,
 ) -> Result<ProjectRunTaskResource, ApiError> {
     let accepted_state_ref = match (task.attempt_id.as_deref(), task.ownership_epoch) {
@@ -176,6 +179,7 @@ fn project_run_task_resource(
     }
     let mut resource = ProjectRunTaskResource::from(task);
     resource.accepted_state_ref = accepted_state_ref.map(Into::into);
+    resource.execution = execution;
     resource.cancellation_intent = cancellation.map(|intent| ProjectRunTaskCancellationSummary {
         cancellation_id: intent.cancellation_id,
         reason: intent.reason,
@@ -183,6 +187,102 @@ fn project_run_task_resource(
         created_at: intent.created_at.to_rfc3339(),
     });
     Ok(resource)
+}
+
+fn project_run_task_execution_by_id(
+    store: &fullmag_session::SessionStore,
+    intent: &fullmag_session::FmsRunIntent,
+    specification: &RunSpecification,
+) -> Result<
+    Option<
+        std::collections::BTreeMap<
+            String,
+            crate::schemas::projects::ProjectRunTaskExecutionResource,
+        >,
+    >,
+    ApiError,
+> {
+    let (Some(study_object_ref), Some(catalog_object_ref)) = (
+        intent.study_object_ref.as_deref(),
+        intent.study_catalog_object_ref.as_deref(),
+    ) else {
+        if intent.study_object_ref.is_none() && intent.study_catalog_object_ref.is_none() {
+            return Ok(None);
+        }
+        return Err(ApiError::internal(
+            "accepted run has an incomplete immutable StudyPlan/catalog reference pair",
+        ));
+    };
+    if study_object_ref != specification.study.plan_sha256.as_str()
+        || catalog_object_ref != specification.study_catalog_sha256.as_str()
+    {
+        return Err(ApiError::internal(
+            "accepted run StudyPlan/catalog references differ from RunSpec",
+        ));
+    }
+
+    let study_bytes = store
+        .cas()
+        .get(study_object_ref)
+        .map_err(|error| ApiError::internal(format!("read accepted StudyPlan: {error}")))?
+        .ok_or_else(|| ApiError::internal("accepted StudyPlan CAS object is missing"))?;
+    if fullmag_session::hex_sha256(&study_bytes) != study_object_ref {
+        return Err(ApiError::internal(
+            "accepted StudyPlan bytes differ from their immutable CAS reference",
+        ));
+    }
+    let study: fullmag_authoring::StudyPlan = serde_json::from_slice(&study_bytes).map_err(|error| {
+        ApiError::internal(format!("invalid accepted StudyPlan: {error}"))
+    })?;
+    study
+        .validate_for_execution()
+        .map_err(|error| ApiError::internal(format!("invalid accepted StudyPlan: {error}")))?;
+    let study_digest = study.canonical_sha256().map_err(|error| {
+        ApiError::internal(format!("hash accepted StudyPlan: {error}"))
+    })?;
+    if study.study_id.as_str() != specification.study.study_id.as_str()
+        || study.schema_version.as_str() != specification.study.plan_version.as_str()
+        || study_digest.as_str() != study_object_ref
+    {
+        return Err(ApiError::internal(
+            "accepted StudyPlan identity differs from the immutable RunSpec reference",
+        ));
+    }
+
+    let catalog_bytes = store
+        .cas()
+        .get(catalog_object_ref)
+        .map_err(|error| ApiError::internal(format!("read accepted StudyProblemCatalog: {error}")))?
+        .ok_or_else(|| ApiError::internal("accepted StudyProblemCatalog CAS object is missing"))?;
+    if fullmag_session::hex_sha256(&catalog_bytes) != catalog_object_ref {
+        return Err(ApiError::internal(
+            "accepted StudyProblemCatalog bytes differ from their immutable CAS reference",
+        ));
+    }
+    let catalog: StudyProblemCatalog = serde_json::from_slice(&catalog_bytes)
+        .map_err(|error| ApiError::internal(format!("invalid accepted StudyProblemCatalog: {error}")))?;
+    catalog.validate_for(&study).map_err(|error| {
+        ApiError::internal(format!("invalid accepted StudyProblemCatalog: {error}"))
+    })?;
+
+    let mut by_task_id = std::collections::BTreeMap::new();
+    for entry in catalog.entries() {
+        let task_id = fullmag_session::task_id_for_study_step(
+            specification.run_id.as_str(),
+            entry.step_id(),
+        )
+        .map_err(|error| ApiError::internal(format!("derive accepted Study task identity: {error}")))?;
+        let execution = crate::schemas::projects::ProjectRunTaskExecutionResource {
+            step_id: entry.step_id().to_owned(),
+            materialization: entry.execution_materialization().cloned(),
+        };
+        if by_task_id.insert(task_id, execution).is_some() {
+            return Err(ApiError::internal(
+                "accepted Study catalog maps multiple steps to one durable task",
+            ));
+        }
+    }
+    Ok(Some(by_task_id))
 }
 
 fn project_batch_case_published_run(
@@ -776,17 +876,8 @@ pub async fn command_batch(
         ProjectBatchCommandAction::CancelAdmission => {
             fullmag_session::FmsBatchCommandAction::CancelAdmission
         }
+        ProjectBatchCommandAction::Retry => fullmag_session::FmsBatchCommandAction::Retry,
     };
-    let command = fullmag_session::FmsBatchCommandIntent::new(
-        batch_id.clone(),
-        request.command_id,
-        request.expected_revision,
-        action,
-        request.reason,
-    );
-    command
-        .validate()
-        .map_err(|error| ApiError::bad_request(format!("invalid batch command: {error}")))?;
     let result = tokio::task::spawn_blocking(move || {
         let store_root = state
             .submit_store_root
@@ -805,26 +896,147 @@ pub async fn command_batch(
         {
             return Err(ApiError::conflict("batch belongs to another project"));
         }
-        let disposition = store.commit_batch_command(&command).map_err(|error| {
-            map_run_store_error(error, |error| {
-                if let Some(conflict) = error.downcast_ref::<fullmag_session::BatchCommandConflict>() {
-                    let code = match conflict {
-                        fullmag_session::BatchCommandConflict::Revision { .. } => {
-                            "batch_command_revision_conflict"
-                        }
-                        fullmag_session::BatchCommandConflict::Identity => {
-                            "batch_command_identity_conflict"
-                        }
-                        fullmag_session::BatchCommandConflict::InvalidTransition { .. } => {
-                            "batch_command_state_conflict"
-                        }
-                    };
-                    ApiError::conflict_with_code(code, format!("{error:#}"))
-                } else {
-                    ApiError::internal(format!("recording batch command: {error:#}"))
-                }
+        let retry_input = match (request.action, request.retry.as_ref()) {
+            (ProjectBatchCommandAction::Retry, Some(retry)) => Some(retry),
+            (ProjectBatchCommandAction::Retry, None) => {
+                return Err(ApiError::bad_request(
+                    "retry command requires a case, task, retry ID, and catalog revision",
+                ));
+            }
+            (_, Some(_)) => {
+                return Err(ApiError::bad_request(
+                    "retry target is only valid for a retry command",
+                ));
+            }
+            (_, None) => None,
+        };
+        let mut retry_case_id = None;
+        let mut retry_run_id = None;
+        let mut retry_task_id = None;
+        let mut retry_request = None;
+        let retry_target = if let Some(retry) = retry_input {
+            fullmag_session::repository_path::validate_store_id(&retry.case_id)
+                .map_err(|error| ApiError::bad_request(format!("invalid case_id: {error}")))?;
+            let task_id = TaskId::parse(retry.task_id.clone())
+                .map_err(|error| ApiError::bad_request(format!("invalid task_id: {error}")))?;
+            TaskId::parse(retry.retry_id.clone())
+                .map_err(|error| ApiError::bad_request(format!("invalid retry_id: {error}")))?;
+            if retry.expected_catalog_revision == 0 {
+                return Err(ApiError::bad_request(
+                    "expected_catalog_revision must be positive",
+                ));
+            }
+            let manifest_bytes = store
+                .cas()
+                .get(&intent.manifest_object_ref)
+                .map_err(|error| ApiError::internal(format!("read retry batch manifest: {error:#}")))?
+                .ok_or_else(|| ApiError::internal("durable retry batch manifest is missing"))?;
+            intent
+                .validate_manifest_bytes(&manifest_bytes)
+                .map_err(|error| ApiError::internal(format!("validate retry batch manifest: {error:#}")))?;
+            let manifest: fullmag_application::BatchExpansionManifest =
+                serde_json::from_slice(&manifest_bytes)
+                    .map_err(|error| ApiError::internal(format!("decode retry batch manifest: {error}")))?;
+            manifest
+                .validate_integrity()
+                .map_err(|error| ApiError::internal(format!("invalid retry batch manifest: {error}")))?;
+            let batch_case = manifest
+                .cases
+                .iter()
+                .find(|case| case.case_id == retry.case_id)
+                .ok_or_else(|| ApiError::not_found("batch case is missing from its immutable manifest"))?;
+            let run_id = batch_case.specification.run_id.clone();
+            let child_intent = store
+                .read_run_intent(run_id.as_str())
+                .map_err(|error| ApiError::internal(format!("read retry case run intent: {error:#}")))?
+                .ok_or_else(|| ApiError::conflict("batch case has not been published yet"))?;
+            let published_run = project_batch_case_published_run(
+                &store,
+                &intent,
+                &project_id,
+                batch_case,
+                child_intent,
+            )?;
+            if !matches!(published_run.catalog_state, ProjectRunCatalogState::Materialized) {
+                return Err(ApiError::conflict(
+                    "batch case task catalog must be materialized before retry",
+                ));
+            }
+            if !published_run.tasks.iter().any(|task| task.task_id == retry.task_id) {
+                return Err(ApiError::not_found("task is missing from the selected batch case"));
+            }
+            retry_case_id = Some(retry.case_id.clone());
+            retry_run_id = Some(run_id.clone());
+            retry_task_id = Some(task_id.clone());
+            retry_request = Some(ProjectRunTaskRetryRequest {
+                retry_id: retry.retry_id.clone(),
+                expected_catalog_revision: retry.expected_catalog_revision,
+            });
+            Some(fullmag_session::FmsBatchRetryTarget {
+                case_id: retry.case_id.clone(),
+                run_id: run_id.as_str().to_owned(),
+                task_id: task_id.as_str().to_owned(),
+                retry_id: retry.retry_id.clone(),
+                expected_catalog_revision: retry.expected_catalog_revision,
             })
-        })?;
+        } else {
+            None
+        };
+        let command = if let Some(target) = retry_target.clone() {
+            fullmag_session::FmsBatchCommandIntent::new_retry(
+                batch_id.clone(),
+                request.command_id.clone(),
+                request.expected_revision,
+                target,
+                request.reason.clone(),
+            )
+        } else {
+            fullmag_session::FmsBatchCommandIntent::new(
+                batch_id.clone(),
+                request.command_id.clone(),
+                request.expected_revision,
+                action,
+                request.reason.clone(),
+            )
+        };
+        command
+            .validate()
+            .map_err(|error| ApiError::bad_request(format!("invalid batch command: {error}")))?;
+
+        let mut retry_task_resource = None;
+        let _compound_writer = if retry_target.is_some() {
+            Some(
+                store
+                    .write_transaction()
+                    .map_err(|error| {
+                        map_run_store_error(error, |error| {
+                            ApiError::internal(format!("acquiring batch retry transaction: {error:#}"))
+                        })
+                    })?,
+            )
+        } else {
+            None
+        };
+        if let (Some(run_id), Some(task_id), Some(retry_request)) = (
+            retry_run_id.as_ref(),
+            retry_task_id.as_ref(),
+            retry_request.as_ref(),
+        ) {
+            store
+                .validate_batch_command(&command)
+                .map_err(batch_command_store_error)?;
+            let (_, task_retry) = retry_run_task_in_store(
+                &store,
+                &project_id,
+                run_id,
+                task_id,
+                retry_request,
+            )?;
+            retry_task_resource = Some(task_retry);
+        }
+        let disposition = store
+            .commit_batch_command(&command)
+            .map_err(batch_command_store_error)?;
         let progress = store
             .read_batch_expansion_progress(&batch_id)
             .map_err(|error| ApiError::internal(format!("read batch command state: {error:#}")))?
@@ -862,6 +1074,11 @@ pub async fn command_batch(
             command_revision: u64::try_from(progress.commands.len())
                 .map_err(|_| ApiError::internal("batch command revision exceeds u64"))?,
             expansion_state,
+            retry: match (retry_case_id, retry_task_resource) {
+                (Some(case_id), Some(task)) => Some(ProjectBatchRetryResource { case_id, task }),
+                (None, None) => None,
+                _ => return Err(ApiError::internal("batch retry response is incomplete")),
+            },
         };
         Ok::<_, ApiError>((status, response))
     })
@@ -883,7 +1100,29 @@ fn request_action_from_storage(
         fullmag_session::FmsBatchCommandAction::CancelAdmission => {
             ProjectBatchCommandAction::CancelAdmission
         }
+        fullmag_session::FmsBatchCommandAction::Retry => ProjectBatchCommandAction::Retry,
     }
+}
+
+fn batch_command_store_error(error: anyhow::Error) -> ApiError {
+    map_run_store_error(error, |error| {
+        if let Some(conflict) = error.downcast_ref::<fullmag_session::BatchCommandConflict>() {
+            let code = match conflict {
+                fullmag_session::BatchCommandConflict::Revision { .. } => {
+                    "batch_command_revision_conflict"
+                }
+                fullmag_session::BatchCommandConflict::Identity => {
+                    "batch_command_identity_conflict"
+                }
+                fullmag_session::BatchCommandConflict::InvalidTransition { .. } => {
+                    "batch_command_state_conflict"
+                }
+            };
+            ApiError::conflict_with_code(code, format!("{error:#}"))
+        } else {
+            ApiError::internal(format!("validating or recording batch command: {error:#}"))
+        }
+    })
 }
 
 #[utoipa::path(
@@ -1095,7 +1334,7 @@ pub async fn materialize_run(
             .read_run_intent(run_id.as_str())
             .map_err(|error| ApiError::internal(error.to_string()))?
             .ok_or_else(|| ApiError::not_found("accepted run intent is missing"))?;
-        let specification: RunSpecification = serde_json::from_value(intent.specification)
+        let specification: RunSpecification = serde_json::from_value(intent.specification.clone())
             .map_err(|error| ApiError::bad_request(format!("invalid accepted RunSpec: {error}")))?;
         if specification.snapshot.project_id != project_id {
             return Err(ApiError::conflict("run belongs to another project"));
@@ -1289,6 +1528,405 @@ pub async fn cancel_run_task(
     Ok((result.0, Json(result.1)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/retry",
+    params(
+        ("project_id" = String, Path, description = "Pinned project identity"),
+        ("run_id" = String, Path, description = "Accepted durable child run identity"),
+        ("task_id" = String, Path, description = "Exact durable task identity")
+    ),
+    request_body = ProjectRunTaskRetryRequest,
+    responses(
+        (status = 202, description = "A fresh attempt was durably queued after terminal reconciliation", body = ProjectRunTaskRetryResource),
+        (status = 200, description = "Identical retry request replayed", body = ProjectRunTaskRetryResource),
+        (status = 400, description = "Invalid retry identity or catalog revision"),
+        (status = 404, description = "Accepted run intent is missing"),
+        (status = 409, description = "Task is not retryable, the catalog changed, terminal proof or its exact lease release is missing, or a lease is still active")
+    ),
+    tag = "persistence"
+)]
+pub async fn retry_run_task(
+    Path((project_id, run_id, task_id)): Path<(String, String, String)>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ProjectRunTaskRetryRequest>,
+) -> Result<(StatusCode, Json<ProjectRunTaskRetryResource>), ApiError> {
+    let project_id = ProjectId::parse(project_id)
+        .map_err(|error| ApiError::bad_request(format!("invalid project_id: {error}")))?;
+    let run_id = RunId::parse(run_id)
+        .map_err(|error| ApiError::bad_request(format!("invalid run_id: {error}")))?;
+    let task_id = TaskId::parse(task_id)
+        .map_err(|error| ApiError::bad_request(format!("invalid task_id: {error}")))?;
+    let result = tokio::task::spawn_blocking(move || {
+        let store_root = state
+            .submit_store_root
+            .as_ref()
+            .ok_or_else(|| ApiError::internal("managed project run storage is not configured"))?;
+        let store = open_existing_run_store(store_root)?;
+        retry_run_task_in_store(&store, &project_id, &run_id, &task_id, &request)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("run task retry failed: {error}")))??;
+    Ok((result.0, Json(result.1)))
+}
+
+fn retry_run_task_in_store(
+    store: &fullmag_session::SessionStore,
+    project_id: &ProjectId,
+    run_id: &RunId,
+    task_id: &TaskId,
+    request: &ProjectRunTaskRetryRequest,
+) -> Result<(StatusCode, ProjectRunTaskRetryResource), ApiError> {
+    TaskId::parse(request.retry_id.clone())
+        .map_err(|error| ApiError::bad_request(format!("invalid retry_id: {error}")))?;
+    if request.expected_catalog_revision == 0 {
+        return Err(ApiError::bad_request(
+            "expected_catalog_revision must be positive",
+        ));
+    }
+    let run_intent = store
+        .read_run_intent(run_id.as_str())
+        .map_err(|error| ApiError::internal(format!("reading accepted run intent: {error:#}")))?
+        .ok_or_else(|| ApiError::not_found("accepted run intent is missing"))?;
+    let specification: RunSpecification = serde_json::from_value(run_intent.specification)
+        .map_err(|error| ApiError::internal(format!("invalid durable RunSpec: {error}")))?;
+    if specification.snapshot.project_id != *project_id {
+        return Err(ApiError::conflict("run belongs to another project"));
+    }
+
+    // Serialize the revision check, exit-proof check and durable decision
+    // with all scheduler/catalog writes. A retry never releases a lease.
+    let _writer = store
+        .write_transaction()
+        .map_err(|error| ApiError::internal(format!("acquiring task retry writer: {error:#}")))?;
+
+    if let Some(existing) = store
+        .read_retry_decision(run_id.as_str(), &request.retry_id)
+        .map_err(|error| ApiError::internal(format!("reading retry decision: {error:#}")))?
+    {
+        if existing.task_id != task_id.as_str()
+            || existing.action != fullmag_session::FmsRetryAction::Retry
+            || existing.trigger != fullmag_session::FmsRetryTrigger::ExplicitOperatorRequest
+        {
+            return Err(ApiError::conflict_with_code(
+                "run_task_retry_identity_conflict",
+                "retry_id is already bound to a different durable decision",
+            ));
+        }
+        ensure_retry_terminal_proof(&store, &existing)?;
+        let catalog = store
+            .read_run_catalog(run_id.as_str())
+            .map_err(|error| ApiError::internal(format!("reading retried run catalog: {error:#}")))?
+            .ok_or_else(|| ApiError::internal("retried run catalog disappeared"))?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == task_id.as_str())
+            .ok_or_else(|| ApiError::internal("retried task disappeared from its catalog"))?;
+        let decision_still_fences_task = task.attempt_id.as_deref()
+            == Some(existing.attempt_id.as_str())
+            && task.ownership_epoch == Some(existing.ownership_epoch);
+        if decision_still_fences_task {
+            if !matches!(
+                task.lifecycle,
+                fullmag_session::FmsTaskLifecycle::Failed
+                    | fullmag_session::FmsTaskLifecycle::Interrupted
+            ) {
+                return Err(ApiError::conflict_with_code(
+                    "run_task_retry_state_conflict",
+                    "the task changed state before its durable retry decision was applied",
+                ));
+            }
+            if store
+                .read_active_resource_lease_for_retry_decision(&existing)
+                .map_err(|error| ApiError::internal(format!("checking retry lease: {error:#}")))?
+                .is_some()
+            {
+                return Err(ApiError::conflict_with_code(
+                    "run_task_retry_lease_active",
+                    "the previous worker lease is still active; refresh after reconciliation",
+                ));
+            }
+            store
+                .apply_retry_decision(&existing)
+                .map_err(|error| ApiError::internal(format!(
+                    "recovering the durable retry decision: {error:#}"
+                )))?;
+        }
+        let catalog = store
+            .read_run_catalog(run_id.as_str())
+            .map_err(|error| ApiError::internal(format!("reading reconciled retry catalog: {error:#}")))?
+            .ok_or_else(|| ApiError::internal("reconciled retry catalog disappeared"))?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == task_id.as_str())
+            .ok_or_else(|| ApiError::internal("reconciled retry task disappeared"))?;
+        return Ok((
+            StatusCode::OK,
+            ProjectRunTaskRetryResource {
+                disposition: ProjectRunTaskRetryDisposition::Replayed,
+                run_id: run_id.as_str().into(),
+                task_id: task_id.as_str().into(),
+                retry_id: existing.decision_id,
+                previous_attempt_id: existing.attempt_id,
+                previous_ownership_epoch: existing.ownership_epoch,
+                lifecycle: ProjectRunTaskLifecycle::from(task.lifecycle),
+                catalog_revision: catalog.revision,
+            },
+        ));
+    }
+
+    let catalog = store
+        .read_run_catalog(run_id.as_str())
+        .map_err(|error| ApiError::internal(format!("reading run catalog for retry: {error:#}")))?
+        .ok_or_else(|| ApiError::conflict("task catalog has not been materialized"))?;
+    if catalog.revision != request.expected_catalog_revision {
+        return Err(ApiError::conflict_with_code(
+            "run_task_retry_revision_conflict",
+            format!(
+                "task catalog revision changed from {} to {}; refresh before retrying",
+                request.expected_catalog_revision, catalog.revision
+            ),
+        ));
+    }
+    let task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id.as_str())
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("task is missing from the run catalog"))?;
+    if !matches!(
+        task.lifecycle,
+        fullmag_session::FmsTaskLifecycle::Failed
+            | fullmag_session::FmsTaskLifecycle::Interrupted
+    ) {
+        return Err(ApiError::conflict_with_code(
+            "run_task_retry_state_conflict",
+            "only failed or interrupted tasks can be retried",
+        ));
+    }
+    let (Some(attempt_id), Some(ownership_epoch), Some(resource_id)) = (
+        task.attempt_id.as_deref(),
+        task.ownership_epoch,
+        task.resource_id.as_deref(),
+    ) else {
+        return Err(ApiError::conflict_with_code(
+            "run_task_retry_terminal_proof_required",
+            "retry requires a reconciled task attempt and resource identity",
+        ));
+    };
+
+    let mut matching_receipts = store
+        .list_worker_process_exit_receipts(run_id.as_str())
+        .map_err(|error| ApiError::internal(format!("reading worker exit receipts: {error:#}")))?
+        .into_iter()
+        .filter(|receipt| {
+            receipt.task_id == task_id.as_str()
+                && receipt.attempt_id == attempt_id
+                && receipt.ownership_epoch == ownership_epoch
+                && receipt.run_id == run_id.as_str()
+                && receipt.resource_id == resource_id
+        })
+        .collect::<Vec<_>>();
+    if matching_receipts.len() != 1 {
+        return Err(ApiError::conflict_with_code(
+            "run_task_retry_terminal_proof_required",
+            "retry requires one durable process-exit receipt for the current attempt",
+        ));
+    }
+    let receipt = matching_receipts
+        .pop()
+        .ok_or_else(|| ApiError::internal("matching worker exit receipt disappeared"))?;
+    receipt
+        .validate_for_task(&task)
+        .map_err(|error| ApiError::internal(format!("invalid worker exit receipt: {error:#}")))?;
+    if receipt.status_success || receipt.stop_requested {
+        return Err(ApiError::conflict_with_code(
+            "run_task_retry_terminal_proof_required",
+            "successful or operator-stopped attempts cannot be retried",
+        ));
+    }
+
+    let prior_attempt_decision = store
+        .list_retry_decisions(run_id.as_str())
+        .map_err(|error| ApiError::internal(format!("reading existing retry decisions: {error:#}")))?
+        .into_iter()
+        .find(|decision| {
+            decision.task_id == task_id.as_str()
+                && decision.attempt_id == attempt_id
+                && decision.ownership_epoch == ownership_epoch
+        });
+    if let Some(existing) = prior_attempt_decision {
+        if existing.action != fullmag_session::FmsRetryAction::Retry {
+            return Err(ApiError::conflict_with_code(
+                "run_task_retry_already_decided",
+                "a different durable decision already exists for the current attempt",
+            ));
+        }
+        ensure_retry_terminal_proof(&store, &existing)?;
+        if store
+            .read_active_resource_lease_for_retry_decision(&existing)
+            .map_err(|error| ApiError::internal(format!("checking recovered retry lease: {error:#}")))?
+            .is_some()
+        {
+            return Err(ApiError::conflict_with_code(
+                "run_task_retry_lease_active",
+                "the previous worker lease is still active; refresh after reconciliation",
+            ));
+        }
+        store
+            .apply_retry_decision(&existing)
+            .map_err(|error| ApiError::internal(format!(
+                "recovering the existing durable retry decision: {error:#}"
+            )))?;
+        let catalog = store
+            .read_run_catalog(run_id.as_str())
+            .map_err(|error| ApiError::internal(format!("reading recovered retry catalog: {error:#}")))?
+            .ok_or_else(|| ApiError::internal("recovered retry catalog disappeared"))?;
+        let task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == task_id.as_str())
+            .ok_or_else(|| ApiError::internal("recovered retry task disappeared"))?;
+        return Ok((
+            StatusCode::OK,
+            ProjectRunTaskRetryResource {
+                disposition: ProjectRunTaskRetryDisposition::Replayed,
+                run_id: run_id.as_str().into(),
+                task_id: task_id.as_str().into(),
+                retry_id: existing.decision_id,
+                previous_attempt_id: existing.attempt_id,
+                previous_ownership_epoch: existing.ownership_epoch,
+                lifecycle: ProjectRunTaskLifecycle::from(task.lifecycle),
+                catalog_revision: catalog.revision,
+            },
+        ));
+    }
+
+    let decision = fullmag_session::FmsRetryDecision {
+        schema_version: fullmag_session::FMS_RETRY_DECISION_SCHEMA.into(),
+        decision_id: request.retry_id.clone(),
+        run_id: run_id.as_str().into(),
+        task_id: task_id.as_str().into(),
+        attempt_id: attempt_id.into(),
+        ownership_epoch,
+        trigger: fullmag_session::FmsRetryTrigger::ExplicitOperatorRequest,
+        action: fullmag_session::FmsRetryAction::Retry,
+        reason: "explicit local operator retry".into(),
+        created_at: Utc::now(),
+    };
+    ensure_retry_terminal_proof(&store, &decision)?;
+    if store
+        .read_active_resource_lease_for_retry_decision(&decision)
+        .map_err(|error| ApiError::internal(format!("checking terminal retry lease: {error:#}")))?
+        .is_some()
+    {
+        return Err(ApiError::conflict_with_code(
+            "run_task_retry_lease_active",
+            "the previous worker lease is still active; refresh after reconciliation",
+        ));
+    }
+    store
+        .commit_retry_decision(&decision)
+        .map_err(|error| ApiError::internal(format!(
+            "persisting the durable retry decision: {error:#}"
+        )))?;
+    store
+        .apply_retry_decision(&decision)
+        .map_err(|error| ApiError::internal(format!("applying the durable retry decision: {error:#}")))?;
+    let retried_catalog = store
+        .read_run_catalog(run_id.as_str())
+        .map_err(|error| ApiError::internal(format!("reading queued retry catalog: {error:#}")))?
+        .ok_or_else(|| ApiError::internal("queued retry catalog disappeared"))?;
+    let retried_task = retried_catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id.as_str())
+        .ok_or_else(|| ApiError::internal("queued retry task disappeared"))?;
+    Ok((
+        StatusCode::ACCEPTED,
+        ProjectRunTaskRetryResource {
+            disposition: ProjectRunTaskRetryDisposition::Accepted,
+            run_id: run_id.as_str().into(),
+            task_id: task_id.as_str().into(),
+            retry_id: decision.decision_id,
+            previous_attempt_id: decision.attempt_id,
+            previous_ownership_epoch: decision.ownership_epoch,
+            lifecycle: ProjectRunTaskLifecycle::from(retried_task.lifecycle),
+            catalog_revision: retried_catalog.revision,
+        },
+    ))
+
+}
+
+fn ensure_retry_terminal_proof(
+    store: &fullmag_session::SessionStore,
+    decision: &fullmag_session::FmsRetryDecision,
+) -> Result<(), ApiError> {
+    let matching_receipts = store
+        .list_worker_process_exit_receipts(&decision.run_id)
+        .map_err(|error| ApiError::internal(format!("reading retry terminal proof: {error:#}")))?
+        .into_iter()
+        .filter(|receipt| {
+            receipt.run_id == decision.run_id
+                && receipt.task_id == decision.task_id
+                && receipt.attempt_id == decision.attempt_id
+                && receipt.ownership_epoch == decision.ownership_epoch
+        })
+        .collect::<Vec<_>>();
+    if matching_receipts.len() != 1 {
+        return Err(ApiError::conflict_with_code(
+            "run_task_retry_terminal_proof_required",
+            "retry requires one durable process-exit receipt for the previous attempt",
+        ));
+    }
+    let receipt = matching_receipts
+        .first()
+        .ok_or_else(|| ApiError::internal("matching worker exit receipt disappeared"))?;
+    receipt
+        .validate()
+        .map_err(|error| ApiError::internal(format!("invalid worker exit receipt: {error:#}")))?;
+    if receipt.status_success || receipt.stop_requested {
+        return Err(ApiError::conflict_with_code(
+            "run_task_retry_terminal_proof_required",
+            "successful or operator-stopped attempts cannot be retried",
+        ));
+    }
+
+    let lease = store
+        .read_resource_lease(&receipt.run_id, &receipt.resource_id, &receipt.lease_token)
+        .map_err(|error| ApiError::internal(format!("reading retry terminal lease: {error:#}")))?
+        .ok_or_else(|| {
+            ApiError::conflict_with_code(
+                "run_task_retry_lease_release_required",
+                "retry requires the exact previous resource lease to be durably released",
+            )
+        })?;
+    if !worker_exit_receipt_matches_released_lease(receipt, &lease) {
+        return Err(ApiError::conflict_with_code(
+            "run_task_retry_lease_release_required",
+            "retry requires the exact previous resource lease to be durably released",
+        ));
+    }
+    Ok(())
+}
+
+fn worker_exit_receipt_matches_released_lease(
+    receipt: &fullmag_session::FmsWorkerProcessExitReceipt,
+    lease: &fullmag_session::FmsResourceLease,
+) -> bool {
+    lease.state == fullmag_session::FmsResourceLeaseState::Released
+        && lease.released_at.is_some()
+        && lease.run_id == receipt.run_id
+        && lease.task_id == receipt.task_id
+        && lease.attempt_id == receipt.attempt_id
+        && lease.ownership_epoch == receipt.ownership_epoch
+        && lease.resource_id == receipt.resource_id
+        && lease.lease_token == receipt.lease_token
+        && lease.heartbeat_sequence == receipt.lease_heartbeat_sequence
+}
+
 fn open_existing_run_store(root: &FsPath) -> Result<fullmag_session::SessionStore, ApiError> {
     match std::fs::symlink_metadata(root) {
         Ok(_) => {}
@@ -1331,6 +1969,69 @@ mod materialization_store_tests {
         }
         assert!(!was_created, "the handler must not create a missing store");
     }
+
+    #[test]
+    fn retry_requires_the_exact_released_lease_for_its_exit_receipt() {
+        let receipt = fullmag_session::FmsWorkerProcessExitReceipt {
+            schema_version: fullmag_session::FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+            receipt_id: "receipt-1".into(),
+            run_id: "run-1".into(),
+            task_id: "task-1".into(),
+            attempt_id: "attempt-1".into(),
+            ownership_epoch: 1,
+            resource_id: "resource-1".into(),
+            lease_token: "lease-1".into(),
+            lease_heartbeat_sequence: 4,
+            process_id: 123,
+            process_start_token: None,
+            status_success: false,
+            exit_code: Some(1),
+            timed_out: false,
+            stop_requested: false,
+            failure_reason: Some("worker failed".into()),
+            observed_at: chrono::Utc::now(),
+        };
+        let now = chrono::Utc::now();
+        let lease = fullmag_session::FmsResourceLease {
+            schema_version: fullmag_session::FMS_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: receipt.resource_id.clone(),
+            kind: fullmag_session::FmsResourceKind::Cpu,
+            budget: fullmag_session::FmsResourceBudget {
+                cpu_millis: 1000,
+                memory_bytes: 0,
+                gpu_memory_bytes: 0,
+                storage_bytes: 0,
+            },
+            run_id: receipt.run_id.clone(),
+            task_id: receipt.task_id.clone(),
+            attempt_id: receipt.attempt_id.clone(),
+            ownership_epoch: receipt.ownership_epoch,
+            lease_token: receipt.lease_token.clone(),
+            state: fullmag_session::FmsResourceLeaseState::Released,
+            acquired_at: now.clone(),
+            heartbeat_at: now.clone(),
+            heartbeat_sequence: receipt.lease_heartbeat_sequence,
+            released_at: Some(now),
+            host_launch_binding: None,
+        };
+
+        assert!(worker_exit_receipt_matches_released_lease(&receipt, &lease));
+
+        let mut active_lease = lease.clone();
+        active_lease.state = fullmag_session::FmsResourceLeaseState::Active;
+        active_lease.released_at = None;
+        assert!(!worker_exit_receipt_matches_released_lease(
+            &receipt,
+            &active_lease
+        ));
+
+        let mut stale_lease = lease.clone();
+        stale_lease.heartbeat_sequence -= 1;
+        assert!(!worker_exit_receipt_matches_released_lease(
+            &receipt,
+            &stale_lease
+        ));
+    }
 }
 
 #[utoipa::path(
@@ -1369,7 +2070,7 @@ pub async fn get_run(
             .read_run_intent(run_id.as_str())
             .map_err(|error| ApiError::internal(error.to_string()))?
             .ok_or_else(|| ApiError::not_found("accepted run intent is missing"))?;
-        let specification: RunSpecification = serde_json::from_value(intent.specification)
+        let specification: RunSpecification = serde_json::from_value(intent.specification.clone())
             .map_err(|error| ApiError::internal(format!("invalid durable RunSpec: {error}")))?;
         if specification.snapshot.project_id != project_id {
             return Err(ApiError::conflict("run belongs to another project"));
@@ -1392,19 +2093,37 @@ pub async fn get_run(
             .map_err(|error| ApiError::internal(error.to_string()))?;
         let (catalog_state, catalog_revision, tasks) = match catalog {
             Some(catalog) => {
-                let tasks = catalog
-                    .tasks
-                    .into_iter()
-                    .map(|task| {
-                        project_run_task_resource(
-                            &store,
-                            run_id.as_str(),
-                            artifact_catalog.as_ref(),
-                            catalog.revision,
-                            task,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, ApiError>>()?;
+                let mut task_execution_by_id = project_run_task_execution_by_id(
+                    &store,
+                    &intent,
+                    &specification,
+                )?;
+                let has_immutable_study_refs = task_execution_by_id.is_some();
+                let mut tasks = Vec::with_capacity(catalog.tasks.len());
+                for task in catalog.tasks {
+                    let execution = task_execution_by_id
+                        .as_mut()
+                        .and_then(|entries| entries.remove(&task.task_id));
+                    if has_immutable_study_refs && execution.is_none() {
+                        return Err(ApiError::internal(format!(
+                            "durable task `{}` has no matching immutable Study step",
+                            task.task_id
+                        )));
+                    }
+                    tasks.push(project_run_task_resource(
+                        &store,
+                        run_id.as_str(),
+                        artifact_catalog.as_ref(),
+                        catalog.revision,
+                        execution,
+                        task,
+                    )?);
+                }
+                if task_execution_by_id.is_some_and(|entries| !entries.is_empty()) {
+                    return Err(ApiError::internal(
+                        "accepted Study catalog contains steps without durable run tasks",
+                    ));
+                }
                 (
                     ProjectRunCatalogState::Materialized,
                     Some(catalog.revision),

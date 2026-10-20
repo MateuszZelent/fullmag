@@ -53,6 +53,11 @@ impl ApiSidecar {
         let mut cmd = Command::new(&api_exe);
         cmd.current_dir(&repo_root)
             .env("FULLMAG_API_PORT", port.to_string())
+            .env("FULLMAG_API_BIND_IP", "127.0.0.1")
+            .env(
+                "FULLMAG_API_CORS_ALLOWED_ORIGIN",
+                format!("http://127.0.0.1:{port}"),
+            )
             .env(
                 "FULLMAG_LOCAL_COMPUTE_OPERATOR_TOKEN",
                 &local_compute_operator_capability,
@@ -111,7 +116,7 @@ impl ApiSidecar {
     }
 
     pub fn base_url(&self) -> String {
-        format!("http://localhost:{}/", self.port)
+        format!("http://127.0.0.1:{}/", self.port)
     }
 
     pub(crate) fn local_compute_operator_capability(&self) -> String {

@@ -3,9 +3,11 @@
 import { Check, Copy, RefreshCw } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
+import { isFlowMajorTensorDescriptor, normalizeTensorProjection, projectTensorField, tensorProjectionOptions } from "@/kernel/api/tensorFieldProjection";
 import { useDataPreviewFieldVector } from "@/kernel/resources/dataPreviewResources";
 import {
   useFieldCatalogResource,
+  useQuantityCatalogResource,
   useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { Button } from "@/shared/ui/Button";
@@ -66,12 +68,27 @@ export function DataPreviewDialog({
   const resolvedQuantityId = quantityId.trim() || "m";
   const solverStatus = useSolverStatusResource({ enabled: open });
   const fieldCatalog = useFieldCatalogResource({ enabled: open });
+  const quantityCatalog = useQuantityCatalogResource({ enabled: open });
+  const descriptor = quantityCatalog.data?.quantities.find((entry) => entry.id === resolvedQuantityId)?.tensor;
+  const isTensor = isFlowMajorTensorDescriptor(descriptor);
+  const componentOptions = isTensor
+    ? [{ value: "full", label: "Full tensor (all 9 components)" }, ...tensorProjectionOptions(descriptor)]
+    : COMPONENT_OPTIONS.map((value) => ({ value, label: value }));
+  const resolvedComponent = componentOptions.some((option) => option.value === component) ? component : "full";
   const { resource, resourceKey, resourceRevision } = useDataPreviewFieldVector({
-    component,
+    component: isTensor ? "full" : resolvedComponent,
     enabled: open,
     maxSamples: sampleCount,
     quantityId: resolvedQuantityId,
   });
+
+  const previewField = useMemo(() => {
+    if (!resource.data || resolvedComponent === "full") return resource.data;
+    const tensorDescriptor = quantityCatalog.data?.quantities.find((entry) => entry.id === resolvedQuantityId)?.tensor;
+    if (!isFlowMajorTensorDescriptor(tensorDescriptor)) return resource.data;
+    const token = normalizeTensorProjection(resolvedComponent);
+    return token ? projectTensorField(resource.data, tensorDescriptor, token) : null;
+  }, [resource.data, quantityCatalog.data, resolvedQuantityId, resolvedComponent]);
 
   const quantityOptions = useMemo(() => {
     const catalogQuantities = fieldCatalog.data?.quantities ?? [];
@@ -106,12 +123,12 @@ export function DataPreviewDialog({
   }, [fieldCatalog.data?.quantities, quantityId]);
 
   const rows = useMemo(
-    () => buildDataPreviewRows(resource.data, sampleCount),
-    [resource.data, sampleCount],
+    () => buildDataPreviewRows(previewField, sampleCount),
+    [previewField, sampleCount],
   );
   const signature = useMemo(
-    () => buildDataPreviewSignature(resource.data, sampleCount),
-    [resource.data, sampleCount],
+    () => buildDataPreviewSignature(previewField, sampleCount),
+    [previewField, sampleCount],
   );
   const stepSignature = useMemo(
     () => buildDataPreviewStepSignature(solverStatus.data),
@@ -125,18 +142,18 @@ export function DataPreviewDialog({
   const handleCopy = useCallback(() => {
     const metaLines = [
       `Quantity: ${resolvedQuantityId}`,
-      `Component: ${component}`,
+      `Component: ${resolvedComponent}`,
       `Samples: ${sampleCountInput}`,
       `Step: ${stepSignature}`,
       `Last step: ${stepTimestamp}`,
       `Revision: ${String(resource.revision ?? resourceRevision ?? "none")}`,
       `Signature: ${signature}`,
       `Shape: ${
-        resource.data
-          ? `${resource.data.pointCount} points x ${resource.data.nComp}`
+        previewField
+          ? `${previewField.pointCount} points x ${previewField.nComp}`
           : "no data"
       }`,
-      `Visible: ${resource.data ? `${rows.length} non-zero rows` : "no data"}`,
+      `Visible: ${previewField ? `${rows.length} non-zero rows` : "no data"}`,
       `Loaded: ${resource.status === "ready" ? "ready" : "waiting"}`,
     ];
 
@@ -174,13 +191,13 @@ export function DataPreviewDialog({
     }
   }, [
     resolvedQuantityId,
-    component,
+    resolvedComponent,
     sampleCountInput,
     stepSignature,
     stepTimestamp,
     resource.revision,
     resourceRevision,
-    resource.data,
+    previewField,
     resource.status,
     resource.error,
     signature,
@@ -245,12 +262,12 @@ export function DataPreviewDialog({
         <label>
           <span>Component</span>
           <select
-            value={component}
+            value={resolvedComponent}
             onChange={(event) => setComponent(event.target.value)}
           >
-            {COMPONENT_OPTIONS.map((option) => (
-              <option key={option} value={option}>
-                {option}
+            {componentOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
@@ -285,15 +302,15 @@ export function DataPreviewDialog({
         <div>
           <dt>Shape</dt>
           <dd>
-            {resource.data
-              ? `${resource.data.pointCount} points x ${resource.data.nComp}`
+            {previewField
+              ? `${previewField.pointCount} points x ${previewField.nComp}`
               : "no data"}
           </dd>
         </div>
         <div>
           <dt>Visible</dt>
           <dd>
-            {resource.data ? `${rows.length} non-zero rows` : "no data"}
+            {previewField ? `${rows.length} non-zero rows` : "no data"}
           </dd>
         </div>
         <div>

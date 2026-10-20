@@ -11,6 +11,7 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { parseProjectRunTaskExecution } from "./projectRunTaskExecution";
 
 export function ProjectRunsSection() {
   const project = useProjectDocumentSnapshot();
@@ -119,6 +120,7 @@ function ProjectRunsPage({ projectId }: { projectId: string }) {
                     <div className="truncate text-fm-muted" title={task.task_id}>
                       {task.task_id}
                     </div>
+                    <TaskExecutionDetails task={task} />
                     {!task.cancellation_intent && ["accepted", "queued", "preparing", "running"].includes(task.lifecycle) ? (
                       <Button
                         aria-label={`Cancel task ${task.task_id}`}
@@ -151,5 +153,63 @@ function ProjectRunsPage({ projectId }: { projectId: string }) {
         </Button>
       ) : null}
     </InspectorGroup>
+  );
+}
+
+function TaskExecutionDetails({ task }: { readonly task: unknown }) {
+  const execution = parseProjectRunTaskExecution(task);
+  if (!execution) {
+    const hasExecutionSnapshot =
+      typeof task === "object" && task !== null && Object.hasOwn(task, "execution");
+    return hasExecutionSnapshot ? (
+      <p className="text-fm-muted">Task execution snapshot could not be validated.</p>
+    ) : null;
+  }
+
+  return (
+    <div className="grid min-w-0 gap-1 rounded border border-fm-subtle px-2 py-1">
+      <div className="font-medium text-fm-primary">Pinned requested execution</div>
+      <div>Study step: {execution.stepId}</div>
+      {execution.materialization ? (
+        <>
+          {execution.materialization.profile ? (
+            <div>
+              Profile {execution.materialization.profile.id} v
+              {execution.materialization.profile.version}
+              {" · SHA-256 "}
+              <span title={execution.materialization.profile.sha256}>
+                {execution.materialization.profile.sha256.slice(0, 16)}…
+              </span>
+            </div>
+          ) : (
+            <div>No reusable profile is pinned in this snapshot.</div>
+          )}
+          <div>
+            Requested: {execution.materialization.backend} / {execution.materialization.device}
+            {` · ${execution.materialization.precision} · ${execution.materialization.mode}`}
+          </div>
+          <div className="grid min-w-0 gap-0.5">
+            <span>Requested resources</span>
+            {execution.materialization.resources.map((resource) => (
+              <span className="break-words text-fm-muted" key={resource}>
+                {resource}
+              </span>
+            ))}
+          </div>
+          <div className="grid min-w-0 gap-0.5 text-fm-muted">
+            <span>Field origins</span>
+            {execution.materialization.origins.length > 0
+              ? execution.materialization.origins.map((origin) => (
+                <span className="break-words" key={origin.field}>
+                  {origin.field}: {origin.kind} · {origin.location}
+                </span>
+              ))
+              : <span>No field origins were reported.</span>}
+          </div>
+        </>
+      ) : (
+        <div>Profile materialization is unavailable for this task.</div>
+      )}
+    </div>
   );
 }

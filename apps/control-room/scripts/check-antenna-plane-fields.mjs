@@ -1,0 +1,17 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
+import vm from "node:vm";
+const entry=new vm.SourceTextModule(stripTypeScriptTypes(readFileSync(new URL("../src/modules/inspector/panels/antenna/AntennaSamplingPlaneFieldsModel.ts",import.meta.url),"utf8")));
+await entry.link(()=>{throw new Error("Unexpected dependency");});await entry.evaluate();
+const {antennaVectorDraftCells:cells,buildAntennaPlaneVector:build,antennaPlaneOrientation:orientation,antennaPlaneOrientations:presets}=entry.namespace;
+let checks=0;const check=(name,run)=>{run();checks++;console.log(`PASS ${name}`);};
+for(const [name,text,expected] of [["blank draft","",["","",""]],["legacy whitespace","1 0 0",["1","0","0"]],["legacy semicolons","1;0;0",["1","0","0"]],["textual blanks and exponent",'["1e-","","0"]',["1e-","","0"]],["comma inside one cell",'["1,2","0","0"]',["1,2","0","0"]]])check(name,()=>assert.equal(JSON.stringify(cells(text)),JSON.stringify(expected)));
+for(const text of ["0,0,0,0",'["0","0"]',"[broken]",'[null,"0","0"]','[false,"0","0"]','[0,0,0]'])check("malformed legacy data remains explicit: "+text,()=>assert.equal(cells(text),null));
+for(const text of ['["1e-","0","0"]','["","0","0"]','["Infinity","0","0"]','["1,2","0","0"]'])check("invalid numeric cell is refused: "+text,()=>assert.throws(()=>build(text,"Vector"),/three finite/));
+check("ACK numeric-list formatting matches the visible textual draft cells",()=>assert.equal(JSON.stringify(cells("0, 1e-9, 2e-9")),JSON.stringify(cells('["0","1e-9","2e-9"]'))));
+check("canonical vector retains signs, SI scales and coordinate order",()=>assert.equal(JSON.stringify(build('["1e-9","-2e-9","3e-9"]',"Origin")),"[1e-9,-2e-9,3e-9]"));
+for(const preset of presets)check("orientation recognizes "+preset.id,()=>assert.equal(orientation({originM:"0,0,0",axisU:preset.axisU,axisV:preset.axisV}),preset.id));
+check("incomplete axes are not silently interpreted as zero",()=>assert.equal(orientation({originM:"",axisU:'["1","",""]',axisV:"0,1,0"}),"custom"));
+check("custom sign is never normalized to a different frame",()=>assert.equal(orientation({originM:"",axisU:"-1,0,0",axisV:"0,1,0"}),"custom"));
+console.log(JSON.stringify({state:"passed",checks,scope:"interpreted production coordinate draft/preset model; no unit builds or numerical solve"}));

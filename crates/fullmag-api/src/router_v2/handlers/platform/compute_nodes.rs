@@ -268,6 +268,20 @@ fn open_compute_node_ledger(
     explicit_config_path: Option<PathBuf>,
     node_id: &str,
 ) -> Result<HostResourceLedger, ApiError> {
+    let ledger = open_current_compute_node_ledger(store_root, explicit_config_path)?;
+    if ledger.node_id() != node_id {
+        return Err(ApiError::not_found_with_code(
+            "compute_node_not_found",
+            "The requested compute node is not configured.",
+        ));
+    }
+    Ok(ledger)
+}
+
+pub(super) fn open_current_compute_node_ledger(
+    store_root: Option<&std::path::Path>,
+    explicit_config_path: Option<PathBuf>,
+) -> Result<HostResourceLedger, ApiError> {
     let config_path = super::runtime_service::resolve_config_path(store_root, explicit_config_path)
         .ok_or_else(|| {
             ApiError::with_status_and_code(
@@ -285,14 +299,11 @@ fn open_compute_node_ledger(
             "No host policy is configured for this application.",
         )
     })?;
-    let ledger = HostResourceLedger::open(&binding.ledger_root, binding.policy)
-        .map_err(|error| policy_storage_error("open", error))?;
-    if ledger.node_id() != node_id {
-        return Err(ApiError::not_found_with_code(
-            "compute_node_not_found",
-            "The requested compute node is not configured.",
-        ));
-    }
+    let ledger = HostResourceLedger::open_for_current_application(
+        &binding.ledger_root,
+        binding.policy,
+    )
+    .map_err(|error| policy_storage_error("open", error))?;
     Ok(ledger)
 }
 
@@ -448,6 +459,15 @@ fn observe_compute_nodes(
     store_root: Option<&std::path::Path>,
     explicit_config_path: Option<PathBuf>,
 ) -> anyhow::Result<ComputeNodesResource> {
+    fullmag_runtime_control::retry_store_writer_busy(|| {
+        observe_compute_nodes_once(store_root, explicit_config_path.clone())
+    })
+}
+
+fn observe_compute_nodes_once(
+    store_root: Option<&std::path::Path>,
+    explicit_config_path: Option<PathBuf>,
+) -> anyhow::Result<ComputeNodesResource> {
     use fullmag_session::{
         host_resource_ledger::HostResourceLedger,
         runtime_service::RuntimeServiceConfig,
@@ -463,7 +483,10 @@ fn observe_compute_nodes(
     let Some(binding) = config.host_execution else {
         return Ok(ComputeNodesResource::not_probed());
     };
-    let ledger = HostResourceLedger::open(&binding.ledger_root, binding.policy.clone())?;
+    let ledger = HostResourceLedger::open_for_current_application(
+        &binding.ledger_root,
+        binding.policy.clone(),
+    )?;
     let Some(mut snapshot) = ledger.read_compute_node_snapshot()? else {
         return Ok(ComputeNodesResource::not_probed());
     };

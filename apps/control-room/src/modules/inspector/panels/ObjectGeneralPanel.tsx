@@ -26,6 +26,7 @@ import {
 } from "@/kernel/authoring/objectGeneralMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
+import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
@@ -198,9 +199,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   const object = resolveObjectGeneralPanelModel(selection, scene.data);
   const sceneObject = scene.data?.objects?.find((entry) => entry.id === object.objectId);
   const antennaWithoutMagnetization = sceneObject?.role === "antenna"
-    && sceneObject.magnetization_ref == null
-    && !sceneObject.physics_stack?.length
-    && !Object.keys(sceneObject.region_overrides ?? {}).length;
+    && hasEmptyObjectMagneticModel(sceneObject);
   const visualizationState = useVisualizationStateResource({
     enabled: object.mode === "committed",
   });

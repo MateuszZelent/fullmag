@@ -128,7 +128,7 @@ export {
 } from "../visualization/useVisualizationStateResource";
 
 import { useResource } from "./useResource";
-import { sessionScopedResourceKey } from "./sessionResourceIdentity";
+import { sessionRequestScopeKey, sessionScopedResourceKey } from "./sessionResourceIdentity";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import type { ResourceResult, ResourceStatus } from "./resourceTypes";
 
@@ -792,12 +792,13 @@ export function useSceneResource(options: ResourceHookOptions = {}) {
     [api],
   );
 
-  return useResource<SceneResource>({
+  const resource = useResource<SceneResource>({
     enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision: resolveSceneResourceRevision,
     resourceKey,
   });
+  return { ...resource, sessionScopeKey: sessionRequestScopeKey(sessionIdentity) };
 }
 
 export function useGeometryDiagnosticsResource(

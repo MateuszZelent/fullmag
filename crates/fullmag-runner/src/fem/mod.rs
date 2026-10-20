@@ -24,6 +24,7 @@ pub(crate) mod eigen_certificate;
 pub(crate) mod eigen_constants;
 pub(crate) mod eigen_digest;
 pub(crate) mod eigen_equilibrium;
+pub(crate) mod antenna_equilibrium;
 pub(crate) mod eigen_equilibrium_contract;
 pub(crate) mod eigen_execution;
 pub(crate) mod eigen_execution_resolution;
@@ -68,6 +69,7 @@ pub(crate) fn real_bounded_k0_problem(
 }
 pub(crate) mod eigen_types;
 pub mod engine;
+pub(crate) mod marker_policy;
 pub(crate) mod equilibrium_identity;
 pub(crate) mod execution_receipt;
 pub mod integrators;

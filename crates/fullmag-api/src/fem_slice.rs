@@ -107,11 +107,12 @@ fn fem_tetra_linear_slice_via_planar_engine(
         crate::field_projection::ComponentSelection::AbsIndex(0) => PlanarComponent::AbsWorldX,
         crate::field_projection::ComponentSelection::AbsIndex(1) => PlanarComponent::AbsWorldY,
         crate::field_projection::ComponentSelection::AbsIndex(2) => PlanarComponent::AbsWorldZ,
-        crate::field_projection::ComponentSelection::Index(0) => PlanarComponent::WorldX,
-        crate::field_projection::ComponentSelection::Index(1) => PlanarComponent::WorldY,
-        crate::field_projection::ComponentSelection::Index(2) => PlanarComponent::WorldZ,
-        crate::field_projection::ComponentSelection::AbsIndex(index)
-        | crate::field_projection::ComponentSelection::Index(index) => {
+        crate::field_projection::ComponentSelection::Index(index) => PlanarComponent::Index(index),
+        crate::field_projection::ComponentSelection::Frobenius => PlanarComponent::Frobenius,
+        crate::field_projection::ComponentSelection::SpinFlow(axis) => {
+            PlanarComponent::SpinFlow(axis)
+        }
+        crate::field_projection::ComponentSelection::AbsIndex(index) => {
             return Err(ApiError::bad_request(format!(
                 "invalid_component: FEM planar slice supports vector components 0..2, got {index}"
             )));
@@ -183,7 +184,7 @@ fn fem_tetra_linear_slice_via_planar_engine(
         min = min.min(value);
         max = max.max(value);
     }
-    let (arrow_values, arrow_count) = if q.include_arrows && field.n_comp >= 3 {
+    let (arrow_values, arrow_count) = if q.include_arrows && sampled.vector_values.is_some() {
         let vectors = sampled.vector_values.as_deref().unwrap_or(&[]);
         let raw_values = vectors
             .iter()

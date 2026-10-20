@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use fullmag_ir::{FemMeshPartSelector, FemPlanIR};
 
+use crate::fem::marker_policy::mixed_v2_body_markers;
 use crate::types::RunError;
 
 fn magnetic_markers_from_object_segments(plan: &FemPlanIR) -> BTreeSet<u32> {
@@ -78,7 +79,14 @@ fn magnetic_markers_from_mesh_parts(plan: &FemPlanIR) -> BTreeSet<u32> {
 
 pub(crate) fn normalized_runtime_element_markers(plan: &FemPlanIR) -> Result<Vec<u32>, RunError> {
     let markers = &plan.mesh.element_markers;
+    let certified_v2_markers = mixed_v2_body_markers(plan);
     if markers.is_empty() {
+        if certified_v2_markers.is_some() {
+            return Err(RunError {
+                message: "invalid FEM plan: mixed v2 certificate has no realized element markers"
+                    .to_string(),
+            });
+        }
         return Ok(Vec::new());
     }
 
@@ -88,6 +96,21 @@ pub(crate) fn normalized_runtime_element_markers(plan: &FemPlanIR) -> Result<Vec
         .filter(|marker| *marker != 0)
         .collect::<BTreeSet<_>>();
     let has_air = markers.contains(&0);
+
+    if let Some(expected_markers) = certified_v2_markers {
+        if expected_markers.is_empty()
+            || expected_markers.contains(&0)
+            || expected_markers != distinct_nonzero
+        {
+            return Err(RunError {
+                message: format!(
+                    "invalid FEM plan: mixed v2 certificate body markers {:?} disagree with realized non-zero element markers {:?}",
+                    expected_markers, distinct_nonzero
+                ),
+            });
+        }
+        return Ok(markers.clone());
+    }
 
     if !plan.region_materials.is_empty() {
         let magnetic_markers = plan

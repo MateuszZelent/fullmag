@@ -33,6 +33,15 @@ publicznego API ani kwalifikacji host execution v2.
 
 ## Granica trybu developerskiego
 
+Aktualizacja z 17.10.2026: [ADR 0061](0061-docker-development-build-and-runtime-container.md)
+zastępuje opis developerskiego buildu przez runner i gotowy pakiet opisany poniżej.
+Dev używa dwóch stałych usług, samodzielnego build → runtime oraz typed hostowej
+delegacji `development_build` dla aktualnego receipt/provenance. Dotychczasowe
+inwarianty storage, ownera, image/engine, no-follow i grantów pozostają wymagane.
+Exact binary/source pin bez delegacji nadal obowiązuje release/static. Nowy
+wariant i rzeczywisty restart pozostają **NOT VERIFIED** do kwalifikacji.
+
+
 Wersjonowanym źródłem topologii trybu developerskiego jest rootowy
 `compose.dev.yaml`. Kontrakt obejmuje dokładnie usługi `backend` i `frontend` oraz
 prywatną sieć Compose. `backend` nie publikuje portu hosta i udostępnia tylko

@@ -209,6 +209,34 @@ impl CasStore {
         Ok(Some(data))
     }
 
+    /// Read a complete immutable object with a caller budget enforced before allocation and during IO.
+    pub fn get_bounded(&self, hash: &str, max_bytes: u64) -> Result<Option<Vec<u8>>> {
+        if max_bytes == 0 { anyhow::bail!("CAS read budget must be positive"); }
+        let read_limit = max_bytes.checked_add(1).context("CAS read budget overflow")?;
+        usize::try_from(read_limit).context("CAS read budget exceeds address space")?;
+        let path = self.object_path(hash)?;
+        let file = match fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).with_context(|| format!("opening bounded CAS object {hash}")),
+        };
+        let metadata = file.metadata().context("read bounded CAS handle metadata")?;
+        if !metadata.is_file() || metadata.len() > max_bytes {
+            anyhow::bail!("CAS object {hash} exceeds its caller byte budget or is not a regular file");
+        }
+        let mut data = vec![0_u8; usize::try_from(metadata.len())?];
+        // A fixed buffer plus one stack byte avoids Vec growth even if this opened file grows.
+        let mut reader = file.take(read_limit);
+        reader.read_exact(&mut data).context("read bounded CAS object of pinned length")?;
+        let mut extra = [0_u8; 1];
+        if reader.read(&mut extra).context("check bounded CAS EOF")? != 0 {
+            anyhow::bail!("CAS object {hash} exceeded its byte budget or changed length while reading");
+        }
+        let actual = hex_sha256(&data);
+        if actual != hash { anyhow::bail!("CAS integrity error: expected {hash}, got {actual}"); }
+        Ok(Some(data))
+    }
+
     /// Verify one complete CAS object with bounded memory and return its
     /// stable byte length. No payload buffer is materialized.
     pub fn verified_length(&self, hash: &str) -> Result<Option<u64>> {
@@ -596,4 +624,23 @@ mod tests {
         assert!(cas.contains(&h1));
         assert!(cas.contains(&h2));
     }
+    #[test]
+    fn bounded_get_enforces_limit_and_full_digest() {
+        let dir=tempfile::tempdir().unwrap();let cas=CasStore::open(dir.path().join("objects")).unwrap();
+        let hash=cas.put(b"bounded").unwrap();
+        assert!(cas.get_bounded(&hash,6).is_err());
+        assert_eq!(cas.get_bounded(&hash,7).unwrap().unwrap(),b"bounded");
+        fs::write(cas.object_path(&hash).unwrap(),b"tamper!").unwrap();
+        assert!(cas.get_bounded(&hash,7).is_err());
+    }
+    #[test]
+    fn bounded_get_handles_empty_missing_and_invalid_budget() {
+        let dir=tempfile::tempdir().unwrap();let cas=CasStore::open(dir.path().join("objects")).unwrap();
+        let hash=cas.put(b"").unwrap();
+        assert_eq!(cas.get_bounded(&hash,1).unwrap().unwrap(),Vec::<u8>::new());
+        assert!(cas.get_bounded(&hash,0).is_err());
+        assert!(cas.get_bounded(&"0".repeat(64),1).unwrap().is_none());
+        assert!(cas.get_bounded("../escape",1).is_err());
+    }
+
 }

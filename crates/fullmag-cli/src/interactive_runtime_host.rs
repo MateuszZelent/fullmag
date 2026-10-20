@@ -1060,6 +1060,7 @@ impl InteractiveRuntimeHost {
 
 fn supports_dynamic_idle_preview(problem: &ProblemIR, backend_plan: &BackendPlanIR) -> bool {
     match backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => false,
         BackendPlanIR::Fem(fem) => {
             fem.domain_mesh_mode != FemDomainMeshModeIR::SharedDomainMeshWithAir
         }

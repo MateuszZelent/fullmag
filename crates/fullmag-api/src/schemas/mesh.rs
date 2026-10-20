@@ -453,6 +453,9 @@ pub struct MeshSharedDomainBuildReportResource {
     pub resolved_layered_policy: Option<MeshLayeredPolicyResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mixed_layer_topology_certificate: Option<MeshMixedLayerTopologyCertificateSummaryResource>,
+    /// Region-scoped evidence; never collapse multiple bodies into the v1 layer summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_layer_topology_certificate_v2: Option<MeshMixedLayerTopologyCertificateV2SummaryResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mixed_topology_provenance: Option<MeshMixedTopologyProvenanceResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -513,6 +516,35 @@ pub struct MeshMixedLayerTopologyCertificateSummaryResource {
     pub rejection_reason: Option<String>,
 }
 
+/// Thin v2 certificate summary. Numerical coefficients and mesh arrays stay in their owners.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshMixedLayerTopologyCertificateV2SummaryResource {
+    pub schema_version: String,
+    pub certificate_status: String,
+    pub topology_fingerprint: String,
+    pub gmsh_version: String,
+    pub magnetic_regions: Vec<MeshMixedMagneticRegionSummaryResource>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshMixedMagneticRegionSummaryResource {
+    pub object_id: String,
+    pub body_marker: u32,
+    pub material_marker: u32,
+    pub cell_family_counts: BTreeMap<String, u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exact_sweep: Option<MeshMixedExactSweepSummaryResource>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshMixedExactSweepSummaryResource {
+    pub sweep_direction_requested: String,
+    pub sweep_direction_resolved: String,
+    pub requested_layer_count: u32,
+    pub realized_layer_count: u32,
+    pub actual_node_plane_count: u32,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct MeshMixedLayerTopologyRejectionResource {
     pub schema_version: String,
@@ -561,9 +593,80 @@ pub struct MeshMixedTopologyProvenanceResource {
 
 impl MeshSharedDomainBuildReportResource {
     pub fn from_ir(report: &fullmag_ir::FemSharedDomainBuildReportIR) -> Option<Self> {
-        let mut resource: Self = serde_json::from_value(serde_json::to_value(report).ok()?).ok()?;
+        if report.mixed_layer_topology_certificate.is_some()
+            && report.mixed_layer_topology_certificate_v2.is_some()
+        {
+            return None;
+        }
+        // Project public metadata before serialization. In particular, never allocate
+        // a JSON copy of body_material_fields or exact-sweep coordinate arrays.
+        let mut serialized = serde_json::Map::new();
+        macro_rules! metadata_fields {
+            ($($field:ident),* $(,)?) => {
+                $(serialized.insert(stringify!($field).to_string(),
+                    serde_json::to_value(&report.$field).ok()?);)*
+            };
+        }
+        metadata_fields!(
+            build_mode, fallbacks_triggered, effective_airbox_target,
+            effective_airbox_hmax, effective_per_object_targets, region_markers,
+            object_region_markers, used_size_field_kinds, size_fields_realized,
+            operation_statuses, thin_film_diagnostics, selector_resolution,
+            orphan_entities, rejected_element_types, degraded,
+            authored_regions_count, realized_regions_count,
+        );
+        let mut resource: Self = serde_json::from_value(Value::Object(serialized)).ok()?;
+        if let Some(certificate) = report.mixed_layer_topology_certificate_v2.as_ref() {
+            resource.mixed_layer_topology_certificate_v2 = Some(
+                MeshMixedLayerTopologyCertificateV2SummaryResource {
+                    schema_version: certificate.schema_version.clone(),
+                    certificate_status: certificate.certificate_status.clone(),
+                    topology_fingerprint: certificate.topology_fingerprint.clone(),
+                    gmsh_version: certificate.gmsh_version.clone(),
+                    magnetic_regions: certificate.magnetic_regions.iter().map(|region| {
+                        Some(MeshMixedMagneticRegionSummaryResource {
+                            object_id: region.object_id.clone(),
+                            body_marker: region.body_marker,
+                            material_marker: region.material_marker,
+                            cell_family_counts: region.cell_family_counts.clone(),
+                            exact_sweep: match region.exact_sweep.as_ref() {
+                                Some(sweep) => Some(MeshMixedExactSweepSummaryResource {
+                                    sweep_direction_requested: sweep.sweep_direction_requested.clone(),
+                                    sweep_direction_resolved: sweep.sweep_direction_resolved.clone(),
+                                    requested_layer_count: sweep.requested_layer_count,
+                                    realized_layer_count: sweep.realized_layer_count,
+                                    actual_node_plane_count: u32::try_from(sweep.magnetic_plane_coordinates_m.len()).ok()?,
+                                }),
+                                None => None,
+                            },
+                        })
+                    }).collect::<Option<Vec<_>>>()?,
+                },
+            );
+            resource.topology_schema_version = Some(2);
+            resource.element_counts_by_type =
+                aggregate_family_counts(certificate.cell_family_counts_by_marker.values());
+            resource.facet_counts_by_type_and_role =
+                aggregate_facet_counts_by_role(&certificate.facet_family_counts_by_role_marker);
+            resource.gmsh_version = Some(certificate.gmsh_version.clone());
+            // A v2 region's layer count must never become a global policy for every body.
+            resource.requested_layered_policy = None;
+            resource.resolved_layered_policy = None;
+        }
         let certificate = report.mixed_layer_topology_certificate.as_ref();
         if let Some(certificate) = certificate {
+            resource.mixed_layer_topology_certificate = Some(
+                MeshMixedLayerTopologyCertificateSummaryResource {
+                    schema_version: certificate.schema_version.clone(),
+                    certificate_status: certificate.certificate_status.clone(),
+                    topology_fingerprint: certificate.topology_fingerprint.clone(),
+                    requested_layer_count: certificate.requested_layer_count,
+                    realized_layer_count: certificate.realized_layer_count,
+                    actual_node_plane_count: u32::try_from(certificate.magnetic_plane_coordinates_m.len()).ok()?,
+                    gmsh_version: certificate.gmsh_version.clone(),
+                    rejection_reason: None,
+                },
+            );
             resource.topology_schema_version = Some(2);
             resource.element_counts_by_type =
                 aggregate_family_counts(certificate.cell_family_counts_by_marker.values());
@@ -1113,6 +1216,9 @@ pub struct MeshSharedDomainManifestResource {
     pub resolved_layered_policy: Option<MeshLayeredPolicyResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mixed_layer_topology_certificate: Option<MeshMixedLayerTopologyCertificateSummaryResource>,
+    /// Region-scoped evidence; never collapse multiple bodies into the v1 layer summary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_layer_topology_certificate_v2: Option<MeshMixedLayerTopologyCertificateV2SummaryResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mixed_topology_provenance: Option<MeshMixedTopologyProvenanceResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1317,4 +1423,57 @@ pub struct MeshBuildCommandRequest {
     pub mesh_target: Option<MeshCommandTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_reason: Option<String>,
+}
+
+#[cfg(test)]
+mod mixed_v2_summary_tests {
+    use super::MeshSharedDomainBuildReportResource;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn v2_summary_keeps_exact_layers_regional_and_excludes_numerical_arrays() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        )).unwrap();
+        let mut certificate = fixture["certificate"].clone();
+        certificate["schema_version"] = json!("mixed_layer_topology_certificate.v2");
+        certificate["magnetic_regions"] = json!([
+            { "object_id": "layer", "body_marker": 1, "material_marker": 1,
+              "cell_family_counts": {"prism6": 12},
+              "exact_sweep": {
+                "sweep_direction_requested": "z", "sweep_direction_resolved": "z",
+                "requested_layer_count": 1, "realized_layer_count": 1,
+                "magnetic_plane_coordinates_m": [0.0, 1.6e-9], "plane_tolerance_m": 1e-15,
+                "topology_fingerprint_version": "v3", "topology_fingerprint": "test-fingerprint",
+                "node_order_digest": "test-node-order"
+              } },
+            { "object_id": "ring", "body_marker": 2, "material_marker": 2,
+              "cell_family_counts": {"tet4": 48} }
+        ]);
+        certificate["body_separation_pairs"] = json!([]);
+        certificate["body_material_fields"] = json!([{
+            "object_id": "ring", "field_basis": "body_owned_p1",
+            "coefficient_domains": ["Ms"], "air_interpolation_policy": "none",
+            "cross_body_interpolation_policy": "none", "node_order_digest": "test-node-order",
+            "field_digest": "test-field-digest", "values": {"Ms": [1.51e6, 1.51e6]}
+        }]);
+        let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
+            "build_mode": "shared_domain", "mixed_layer_topology_certificate_v2": certificate
+        })).unwrap();
+        let summary = MeshSharedDomainBuildReportResource::from_ir(&report).unwrap();
+        assert!(summary.requested_layered_policy.is_none());
+        assert!(summary.resolved_layered_policy.is_none());
+        assert!(summary.mixed_layer_topology_certificate.is_none());
+        let wire = serde_json::to_value(summary).unwrap();
+        let regions = &wire["mixed_layer_topology_certificate_v2"]["magnetic_regions"];
+        assert_eq!(regions[0]["exact_sweep"]["actual_node_plane_count"], 2);
+        assert!(regions[1].get("exact_sweep").is_none());
+        let encoded = wire.to_string();
+        assert!(!encoded.contains("body_material_fields"));
+        assert!(!encoded.contains("magnetic_plane_coordinates_m"));
+        report.mixed_layer_topology_certificate = Some(
+            serde_json::from_value(fixture["certificate"].clone()).unwrap()
+        );
+        assert!(MeshSharedDomainBuildReportResource::from_ir(&report).is_none());
+    }
 }

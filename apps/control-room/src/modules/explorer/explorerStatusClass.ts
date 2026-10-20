@@ -37,3 +37,29 @@ export function explorerStatusClassName(
   }
   return null;
 }
+
+const STATUS_LABELS: Readonly<Record<ExplorerNodeStatus, string>> = {
+  ready: "Ready",
+  "primitive-only": "Geometry only",
+  "mesh-stale": "Mesh outdated",
+  "mesh-building": "Meshing",
+  "mesh-ready": "Mesh ready",
+  "mesh-failed": "Meshing failed",
+  "validation-blocked": "Blocked",
+  stale: "Outdated",
+  queued: "Queued",
+  running: "Running",
+  paused: "Paused",
+  completed: "Completed",
+  skipped: "Skipped",
+  cancelled: "Cancelled",
+  failed: "Failed",
+  degraded: "Limited",
+  warning: "Needs review",
+  unavailable: "Unavailable",
+  unsupported: "Unsupported",
+};
+
+export function explorerStatusLabel(status: ExplorerNodeStatus): string {
+  return STATUS_LABELS[status];
+}

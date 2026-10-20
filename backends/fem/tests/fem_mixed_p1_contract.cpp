@@ -15,6 +15,7 @@
 #include "cpu/mfem/interactions/anisotropy_uniaxial.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
+#include "cpu/mfem/interactions/zeeman_energy.hpp"
 #include "cpu/mfem/interactions/zeeman_uniform_field.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
@@ -526,6 +527,64 @@ void mixed_p1_uniform_uniaxial_field_and_energy_use_mfem_mass_weights()
     check(std::abs(energy - (-6.0e4)) <= 1.0e-10,
           "mixed-P1 uniaxial energy must use the conserved 0.5 m3 MFEM mass weights");
     fullmag::fem::context_destroy_mfem(ctx);
+}
+
+void mixed_p1_body_owned_zeeman_and_uniaxial_sums_match_analytic_oracle()
+{
+    constexpr double mu0 = 1.2566370614359172953850573533118e-6;
+    fullmag::fem::Context ctx{};
+    ctx.mesh.n_nodes = 4u;
+    ctx.mesh.magnetic_node_mask = {1u, 1u, 1u, 1u};
+    ctx.integration_weights.mfem_lumped_mass = {0.1, 0.2, 0.3, 0.4};
+    ctx.material_fields.Ms_field = {1.60e6, 1.60e6, 1.51e6, 1.51e6};
+    ctx.material_fields.Ku_field = {1.0e5, 1.0e5, 1.0e6, 1.0e6};
+    ctx.anisotropy.uniaxial_enabled = true;
+    ctx.anisotropy.uniaxial_axis_x_field = {0.0, 0.0, 1.0, 1.0};
+    ctx.anisotropy.uniaxial_axis_y_field = {0.0, 0.0, 0.0, 0.0};
+    ctx.anisotropy.uniaxial_axis_z_field = {1.0, 1.0, 0.0, 0.0};
+    ctx.zeeman.has_external_field = true;
+    ctx.zeeman.h_ext_xyz = {
+        10.0, 20.0, 30.0,
+        10.0, 20.0, 30.0,
+        40.0, 50.0, 60.0,
+        40.0, 50.0, 60.0,
+    };
+    const std::vector<double> m_xyz = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    const double expected_zeeman = -mu0 * (
+        1.60e6 * 30.0 * (0.1 + 0.2) +
+        1.51e6 * 40.0 * (0.3 + 0.4));
+    check(
+        std::abs(fullmag::fem::zeeman_energy_from_field(ctx, m_xyz) - expected_zeeman) <=
+            256.0 * std::numeric_limits<double>::epsilon() * std::abs(expected_zeeman),
+        "body-owned Ms Zeeman energy must equal the sum over separated materials");
+
+    std::vector<double> h_ani;
+    double anisotropy_energy = 0.0;
+    fullmag::fem::compute_uniaxial_anisotropy_field(
+        ctx, m_xyz, h_ani, &anisotropy_energy);
+    const double expected_anisotropy = -1.0e5 * (0.1 + 0.2) - 1.0e6 * (0.3 + 0.4);
+    check(
+        std::abs(anisotropy_energy - expected_anisotropy) <=
+            256.0 * std::numeric_limits<double>::epsilon() * std::abs(expected_anisotropy),
+        "body-owned Ku1/axis anisotropy energy must equal the analytic material sum");
+    const double body_a_field = 2.0e5 / (mu0 * 1.60e6);
+    const double body_b_field = 2.0e6 / (mu0 * 1.51e6);
+    for (size_t node = 0; node < 4u; ++node) {
+        const size_t base = node * 3u;
+        const bool body_a = node < 2u;
+        const double expected = body_a ? body_a_field : body_b_field;
+        check(
+            std::abs(h_ani[base + (body_a ? 2u : 0u)] - expected) <=
+                256.0 * std::numeric_limits<double>::epsilon() * expected,
+            "body-owned anisotropy field must retain each body's axis and Ms");
+        check(h_ani[base + (body_a ? 0u : 2u)] == 0.0,
+              "body-owned anisotropy field must not leak across axes");
+    }
 }
 
 void mixed_p1_cpu_dmi_fields_and_energies_use_magnetic_prism6_mfem_oracle()
@@ -2124,6 +2183,7 @@ int main()
     mixed_p1_gpu_llg_overdamped_runs_every_explicit_rk_without_tet_geometry();
     mfem_mass_weights_cover_tet_prism_and_mixed_magnetic_domains();
     mixed_p1_uniform_uniaxial_field_and_energy_use_mfem_mass_weights();
+    mixed_p1_body_owned_zeeman_and_uniaxial_sums_match_analytic_oracle();
     mixed_p1_cpu_dmi_fields_and_energies_use_magnetic_prism6_mfem_oracle();
     distorted_prism_mass_weights_match_independent_mfem_oracle();
     mixed_core_measure_over_arity_is_not_published_as_runtime_node_volume();

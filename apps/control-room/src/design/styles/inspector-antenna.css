@@ -53,3 +53,84 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+.fm-antenna-points {
+  min-width: 0;
+}
+
+.fm-antenna-points__scroll {
+  overflow-x: auto;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+}
+
+.fm-antenna-points__table {
+  width: 100%;
+  min-width: 22rem;
+  border-collapse: collapse;
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-antenna-points__table th,
+.fm-antenna-points__table td {
+  padding: var(--fm-space-2);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--fm-border-subtle);
+}
+
+.fm-antenna-points__table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.fm-antenna-points__table input {
+  min-width: 6rem;
+  width: 100%;
+  font-family: var(--fm-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-antenna-points__error {
+  min-height: 2.6em;
+  margin: var(--fm-space-1) 0 0;
+  font-size: var(--fm-font-size-xs);
+  color: var(--fm-danger);
+}
+
+.fm-antenna-points__count {
+  color: var(--fm-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-antenna-readout {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-2);
+}
+
+.fm-antenna-readout .fm-inspector-field-row {
+  align-items: start;
+}
+
+.fm-antenna-readout .fm-inspector-field-row__label,
+.fm-antenna-readout .fm-inspector-field-row__value {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+
+.fm-antenna-readout .fm-inspector-field-row__value {
+  display: block;
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-antenna-readout__identity .fm-inspector-field-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--fm-space-1);
+}
+
+.fm-antenna-readout__identity .fm-inspector-field-row__value {
+  text-align: left;
+  user-select: text;
+}

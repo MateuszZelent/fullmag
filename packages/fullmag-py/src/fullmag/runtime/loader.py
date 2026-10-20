@@ -168,6 +168,24 @@ class LoadedProblem:
     auto_execute_stages: bool = False
     antenna_inventory: AntennaAuthoringInventory = field(default_factory=AntennaAuthoringInventory)
 
+    def has_declared_execution_profile(self) -> bool:
+        """Whether any lowered problem in this script uses typed execution intent.
+
+        A single launcher-wide runtime-device override cannot represent a
+        script whose independent stages declare different backends/devices.
+        The Rust execution-profile binder imports legacy environment values
+        per ProblemIR after export, so Python must not stamp a global override
+        onto any problem in such a script.
+        """
+        problems = [self.problem, *[stage.problem for stage in self.stages]]
+        if self.workspace_problem is not None:
+            problems.append(self.workspace_problem)
+        return any(
+            "execution_profile" in problem.runtime_metadata
+            or "execution_materialization" in problem.runtime_metadata
+            for problem in problems
+        )
+
     def pipeline_base_problem(self, problem: Problem | None = None) -> Problem:
         """Return persistent problem state before ordered action stages run."""
         candidate = self.antenna_inventory.execution_base(problem or self.problem)
@@ -315,20 +333,36 @@ def load_problem_from_script(
     path: str | Path,
     *,
     lightweight_assets: bool = False,
+    source_bytes: bytes | None = None,
 ) -> LoadedProblem:
     import fullmag.world as world
 
     source_path = Path(path).resolve()
-    spec = importlib.util.spec_from_file_location(f"fullmag_user_script_{uuid4().hex}", source_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load script from {source_path}")
+    if source_bytes is None:
+        spec = importlib.util.spec_from_file_location(
+            f"fullmag_user_script_{uuid4().hex}", source_path
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Could not load script from {source_path}")
+        module = importlib.util.module_from_spec(spec)
+    else:
+        try:
+            source_text = source_bytes.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise RuntimeError(f"Could not decode captured script {source_path}: {error}") from error
+        module = ModuleType(f"fullmag_user_script_{uuid4().hex}")
+        module.__file__ = str(source_path)
+        module.__package__ = ""
 
-    module = importlib.util.module_from_spec(spec)
     world.begin_script_capture(source_path.parent)
     world.set_script_capture_lightweight_assets(lightweight_assets)
     try:
-        spec.loader.exec_module(module)
-        script_source = source_path.read_text(encoding="utf-8")
+        if source_bytes is None:
+            spec.loader.exec_module(module)
+            script_source = source_path.read_text(encoding="utf-8")
+        else:
+            exec(compile(source_text, str(source_path), "exec"), module.__dict__)
+            script_source = source_text
         workspace_problem = world.capture_workspace_problem()
         extracted_entrypoint_kind = None
         if workspace_problem is None and not world.capture_executed_stages():

@@ -10,7 +10,6 @@ import tempfile
 import threading
 import time
 import uuid
-import warnings
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
@@ -82,7 +81,7 @@ from fullmag.model.structure import (
     ObjectRegion,
     Region,
 )
-from fullmag.model.study import AntennaFieldSolve, Eigenmodes, FrequencyResponse, Relaxation, TimeEvolution
+from fullmag.model.study import AntennaFieldSolve, Eigenmodes, FieldOnly, FrequencyResponse, Relaxation, TimeEvolution
 from fullmag.model.selection import SelectionDefinition
 
 IR_VERSION = "0.3.0"
@@ -98,7 +97,7 @@ _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 # v8 invalidated v7 source-face corner targets. v9 invalidates meshes generated
 # with alias-shadowed per-geometry hmax policies; reusing them could retain a
 # neighboring geometry's size field after canonical owner binding changes.
-_FEM_MESH_CACHE_VERSION = "v9"
+_FEM_MESH_CACHE_VERSION = "v10"
 _FEM_SHARED_DOMAIN_CACHE_SCHEMA = "fullmag.fem.shared-domain-cache.v1"
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -134,6 +133,7 @@ def _fem_resolved_mesh_policy_sha256(
     from fullmag.meshing._certification_receipt import (
         ARTIFACT_SCHEMA_V2,
         MIXED_CERTIFIER_ALGORITHM,
+        MIXED_CERTIFIER_ALGORITHM_V2,
         MIXED_REPAIR_ALGORITHM,
     )
     from fullmag.meshing._gmsh_types import MIXED_SHARED_GMSH_VERSION
@@ -154,9 +154,11 @@ def _fem_resolved_mesh_policy_sha256(
         "repair_algorithm_id": MIXED_REPAIR_ALGORITHM,
         "repair_method": "Relocate3D",
         "repair_iterations": 1,
-        "certifier_algorithm_id": MIXED_CERTIFIER_ALGORITHM,
+        "certifier_algorithm_ids": sorted(
+            (MIXED_CERTIFIER_ALGORITHM, MIXED_CERTIFIER_ALGORITHM_V2)
+        ),
         "artifact_schema": ARTIFACT_SCHEMA_V2,
-        "topology_fingerprint_version": "v3",
+        "topology_fingerprint_versions": ["v2", "v3"],
     }
     encoded = json.dumps(
         policy,
@@ -183,21 +185,25 @@ def _fem_cache_contract_identity(
     from fullmag.meshing._certification_receipt import (
         ARTIFACT_SCHEMA_V2,
         MIXED_CERTIFIER_ALGORITHM,
+        MIXED_CERTIFIER_ALGORITHM_V2,
         MIXED_REPAIR_ALGORITHM,
     )
     from fullmag.meshing._gmsh_types import MIXED_SHARED_GMSH_VERSION
 
     identity: dict[str, object] = {
         "source_snapshot_sha256": _fem_verified_source_snapshot_sha256(),
+        "antenna_bridge_realization": "exact_identity_noop.v1",
         "source_compatibility_epoch": "fullmag.fem.meshing.production-closure.2026-08-31.v1",
         "gmsh_version": MIXED_SHARED_GMSH_VERSION,
         "gmsh_threads": 1,
         "repair_algorithm_id": MIXED_REPAIR_ALGORITHM,
         "repair_method": "Relocate3D",
         "repair_iterations": 1,
-        "certifier_algorithm_id": MIXED_CERTIFIER_ALGORITHM,
+        "certifier_algorithm_ids": sorted(
+            (MIXED_CERTIFIER_ALGORITHM, MIXED_CERTIFIER_ALGORITHM_V2)
+        ),
         "artifact_schema": ARTIFACT_SCHEMA_V2,
-        "topology_fingerprint_version": "v3",
+        "topology_fingerprint_versions": ["v2", "v3"],
     }
     if resolved_policy_sha256 is not None:
         identity["resolved_policy_sha256"] = resolved_policy_sha256
@@ -705,6 +711,7 @@ def _fem_mesh_cache_key(
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None = None,
     owner_geometry_names: Sequence[str] | None = None,
     object_id: str | None = None,
+    _coincident_closure: object | None = None,
 ) -> str:
     resolved_owner_geometry_names = sorted(
         owner_geometry_names
@@ -725,6 +732,8 @@ def _fem_mesh_cache_key(
         },
         "cache_identity": _fem_cache_contract_identity(),
     }
+    if _coincident_closure is not None:
+        payload["coincident_closure"] = _coincident_closure.to_ir()
     return sha256(
         json.dumps(
             payload,
@@ -872,6 +881,7 @@ def build_geometry_assets_for_request(
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None = None,
     object_regions: Sequence[dict[str, object]] | None = None,
     geometry_object_ids: Mapping[str, str] | None = None,
+    body_material_fields: Mapping[str, Mapping[str, object]] | None = None,
     asset_cache: dict[str, dict[str, Any] | None] | None = None,
     _copy_cached_assets: bool = True,
     _include_domain_mesh_ir: bool = True,
@@ -879,6 +889,7 @@ def build_geometry_assets_for_request(
         tuple[object, list[dict[str, object]], object | None]
     ] | None = None,
     _realized_object_mesh_sink: dict[str, object] | None = None,
+    _coincident_closures: Mapping[str, object] | None = None,
 ) -> dict[str, Any] | None:
     if discretization is None:
         return None
@@ -897,8 +908,12 @@ def build_geometry_assets_for_request(
         per_object_recipes=per_object_recipes,
         object_regions=object_regions,
         geometry_object_ids=geometry_object_ids,
+        body_material_fields=body_material_fields,
         fdm_only=fdm_only,
     )
+    if _coincident_closures:
+        from fullmag.runtime.transport_identity import tagged_json_digest
+        asset_cache_key += tagged_json_digest({name: closure.to_ir() for name, closure in _coincident_closures.items()})
     if _realized_object_mesh_sink is None and asset_cache is not None and asset_cache_key in asset_cache:
         cached = asset_cache[asset_cache_key]
         return copy.deepcopy(cached) if _copy_cached_assets else cached
@@ -1069,6 +1084,7 @@ def build_geometry_assets_for_request(
                         per_object_recipes=per_object_recipes,
                         owner_geometry_names=owner_geometry_names,
                         object_id=(geometry_object_ids or {}).get(geometry.geometry_name),
+                        _coincident_closure=(_coincident_closures or {}).get(geometry.geometry_name),
                     )
                     cache_path = (
                         fem_mesh_cache_dir.joinpath(f"{mesh_cache_key}.npz")
@@ -1109,12 +1125,14 @@ def build_geometry_assets_for_request(
                             per_object_recipes=dict(per_object_recipes or {}),
                             _owner_geometry_names=owner_geometry_names,
                             object_id=(geometry_object_ids or {}).get(geometry.geometry_name),
+                            _coincident_closure=(_coincident_closures or {}).get(geometry.geometry_name),
                         )
-                        mesh = _drop_degenerate_tetrahedra(
-                            mesh,
-                            context=f"Generated FEM mesh for '{geometry.geometry_name}'",
-                            fallbacks_triggered=[],
-                        )
+                        if geometry.geometry_name not in (_coincident_closures or {}):
+                            mesh = _drop_degenerate_tetrahedra(
+                                mesh,
+                                context=f"Generated FEM mesh for '{geometry.geometry_name}'",
+                                fallbacks_triggered=[],
+                            )
                         if cache_path is not None and not imported_surface_only:
                             _save_fem_mesh_cache_atomically(mesh, cache_path)
                             emit_progress(
@@ -1222,6 +1240,9 @@ def build_geometry_assets_for_request(
                     getattr(_fullmag_core._native_core, "certify_mixed_mesh_arrays", None)
                 )
                 and callable(
+                    getattr(_fullmag_core._native_core, "certify_mixed_mesh_arrays_v2", None)
+                )
+                and callable(
                     getattr(_fullmag_core._native_core, "preflight_mixed_mesh_arrays", None)
                 )
             )
@@ -1294,7 +1315,10 @@ def build_geometry_assets_for_request(
                                     "fullmag.mixed-tet-repair.v1"
                                 ),
                                 expected_certifier_algorithm_id=(
-                                    "fullmag.mixed-certificate.rust-rayon.v1"
+                                    (
+                                        "fullmag.mixed-certificate.rust-rayon.v1",
+                                        "fullmag.mixed-certificate-v2.rust-rayon.v1",
+                                    )
                                 ),
                                 use_native_fingerprint=True,
                             )
@@ -1358,6 +1382,8 @@ def build_geometry_assets_for_request(
                         mesh_workflow=mesh_workflow,
                         per_object_recipes=dict(per_object_recipes or {}),
                         object_regions=authored_regions,
+                        body_material_fields=body_material_fields,
+                        geometry_object_ids=geometry_object_ids,
                     )
                 )
                 if shared_cache_path is not None:
@@ -1382,26 +1408,44 @@ def build_geometry_assets_for_request(
                         v2_cache_enabled
                         and domain_mesh.mixed_layer_topology_certificate is not None
                     ):
-                        from fullmag._core import certify_mixed_mesh_arrays
+                        from fullmag._core import (
+                            certify_mixed_mesh_arrays,
+                            certify_mixed_mesh_arrays_v2,
+                        )
                         from fullmag.meshing._certification_receipt import (
                             CertificationReceiptBindingsV1,
                             MIXED_CERTIFIER_ALGORITHM,
+                            MIXED_CERTIFIER_ALGORITHM_V2,
                             MIXED_REPAIR_ALGORITHM,
                         )
 
-                        native_certificate_result = certify_mixed_mesh_arrays(
-                            mesh=domain_mesh,
-                            metadata={"mesh_name": "study_domain"},
-                            certificate=(
-                                domain_mesh.mixed_layer_topology_certificate.to_dict()
-                            ),
-                            require_native=True,
-                        )
+                        certificate = domain_mesh.mixed_layer_topology_certificate
+                        if certificate is None:
+                            raise RuntimeError(
+                                "trusted shared-domain cache requires a mixed certificate"
+                            )
+                        from fullmag.meshing._gmsh_types import MixedLayerTopologyCertificateV2
+
+                        if isinstance(certificate, MixedLayerTopologyCertificateV2):
+                            native_certificate_result = certify_mixed_mesh_arrays_v2(
+                                mesh=domain_mesh,
+                                metadata={"mesh_name": "study_domain"},
+                                certificate=certificate.to_dict(),
+                                require_native=True,
+                            )
+                            certifier_algorithm_id = MIXED_CERTIFIER_ALGORITHM_V2
+                        else:
+                            native_certificate_result = certify_mixed_mesh_arrays(
+                                mesh=domain_mesh,
+                                metadata={"mesh_name": "study_domain"},
+                                certificate=certificate.to_dict(),
+                                require_native=True,
+                            )
+                            certifier_algorithm_id = MIXED_CERTIFIER_ALGORITHM
                         if native_certificate_result is None:
                             raise RuntimeError(
                                 "trusted shared-domain cache requires native mixed certification"
                             )
-                        certificate = domain_mesh.mixed_layer_topology_certificate
                         certification_bindings = CertificationReceiptBindingsV1(
                             resolved_policy_sha256=resolved_policy_sha256,
                             source_snapshot_sha256=verified_source_snapshot,
@@ -1410,7 +1454,7 @@ def build_geometry_assets_for_request(
                             repair_method="Relocate3D",
                             repair_iterations=1,
                             gmsh_threads=certificate.effective_gmsh_thread_count,
-                            certifier_algorithm_id=MIXED_CERTIFIER_ALGORITHM,
+                            certifier_algorithm_id=certifier_algorithm_id,
                             certifier_backend="rust_rayon",
                             certifier_threads=native_certificate_result.rayon_threads,
                         )
@@ -1529,6 +1573,7 @@ def _geometry_asset_cache_key(
     object_regions: Sequence[dict[str, object]] | None,
     fdm_only: bool,
     geometry_object_ids: Mapping[str, str] | None = None,
+    body_material_fields: Mapping[str, Mapping[str, object]] | None = None,
 ) -> str:
     """Build a cache identity for the products actually realized.
 
@@ -1544,6 +1589,10 @@ def _geometry_asset_cache_key(
     }
     if not fdm_only:
         payload["geometry_object_ids"] = dict(geometry_object_ids or {})
+        payload["body_material_fields"] = {
+            str(name): dict(values)
+            for name, values in (body_material_fields or {}).items()
+        }
         payload["mesh_workflow"] = mesh_workflow
         payload["per_object_recipes"] = {
             str(name): recipe.to_ir()
@@ -1879,14 +1928,23 @@ class RuntimeSelection:
         )
 
     def gpu(self, gpu_count: int = 1) -> "RuntimeSelection":
-        """Alias for :meth:`cuda`.  Deprecated — use ``.cuda()`` instead."""
-        warnings.warn(
-            "RuntimeSelection.gpu() is deprecated — use .cuda() instead; "
-            "'gpu' and 'cuda' are synonyms in Fullmag",
-            DeprecationWarning,
-            stacklevel=2,
+        """Select the canonical public GPU execution target.
+
+        ``cuda()`` remains the explicit legacy CUDA selector.  Keeping the
+        targets distinct lets public SceneDocument/run-intent payloads use the
+        canonical ``gpu`` vocabulary while preserving legacy ordinal input.
+        """
+        return RuntimeSelection(
+            backend_target=self.backend_target,
+            device_target=DeviceTarget.GPU,
+            gpu_count=gpu_count,
+            device_index=self.device_index,
+            cpu_threads=self.cpu_threads,
+            execution_mode=self.execution_mode,
+            execution_precision=self.execution_precision,
+            fdm_precision_policy=self.fdm_precision_policy,
+            parallel_execution=self.parallel_execution,
         )
-        return self.cuda(gpu_count=gpu_count)
 
     def threads(self, cpu_threads: int) -> "RuntimeSelection":
         return RuntimeSelection(
@@ -2485,6 +2543,7 @@ def _validate_authored_mixed_p1_scope(
     mesh_workflow: dict[str, object] | None,
     materials: Sequence[object],
     energy_terms: Sequence[object],
+    mixed_v2_candidate: bool = False,
 ) -> None:
     if (
         runtime_selection.get("backend") != "fem"
@@ -2576,7 +2635,10 @@ def _validate_authored_mixed_p1_scope(
         failed.append("unsupported_energy_term")
     if device in {"cuda", "gpu"} and has_dmi:
         failed.append("gpu_dmi_kernel_not_mixed_p1")
-    if len(material_payloads) != 1:
+    if mixed_v2_candidate:
+        if len(material_payloads) != 2:
+            failed.append("material_count_not_two_for_mixed_v2")
+    elif len(material_payloads) != 1:
         failed.append("material_count_not_one")
     if any(
         payload.get(key) is not None
@@ -2602,7 +2664,7 @@ class Problem:
     name: str
     magnets: Sequence[Ferromagnet]
     energy: Sequence[EnergyTerm]
-    study: AntennaFieldSolve | TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse | None = None
+    study: FieldOnly | AntennaFieldSolve | TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse | None = None
     dynamics: LLG | None = None
     outputs: Sequence[LegacyOutputSpec] | None = None
     discretization: DiscretizationHints | None = None
@@ -2702,9 +2764,17 @@ class Problem:
                 + ", ".join(unknown_ids)
             )
         object.__setattr__(self, "auxiliary_geometry_object_ids", auxiliary_object_ids)
-        if not self.magnets and not isinstance(self.study, AntennaFieldSolve):
+        field_only = isinstance(self.study, FieldOnly)
+        if not self.magnets and not (field_only or isinstance(self.study, AntennaFieldSolve)):
             raise ValueError("Problem requires at least one magnet")
-        if not isinstance(self.study, AntennaFieldSolve) and not self.energy and not any(
+        if field_only:
+            if not self.auxiliary_geometries:
+                raise ValueError("FieldOnly requires explicitly authored non-magnetic geometry")
+            if self.magnets or self.energy or self.field_drives or self.solved_antenna_drives:
+                raise ValueError("FieldOnly cannot contain magnetic state, energy or LLG drives")
+            if self.spin_torque is not None or self.spin_torques or self.spin_transports or self.magnetization_constraints:
+                raise ValueError("FieldOnly cannot contain magnetic torque, spin transport or constraints")
+        if not (field_only or isinstance(self.study, AntennaFieldSolve)) and not self.energy and not any(
             _material_has_anisotropy(magnet.material) for magnet in self.magnets
         ):
             raise IncompletePhysicsError(
@@ -3016,11 +3086,15 @@ class Problem:
                 **authored_runtime_selection,
                 "device": runtime_device_override,
             }
+        from fullmag.meshing._gmsh_swept import _disconnected_mixed_p1_pair
+
+        mixed_v2_candidate = _disconnected_mixed_p1_pair(geometries) is not None
         _validate_authored_mixed_p1_scope(
             runtime_selection=authored_runtime_selection,
             mesh_workflow=mesh_workflow,
             materials=materials,
             energy_terms=self.energy,
+            mixed_v2_candidate=mixed_v2_candidate,
         )
         study_universe = (
             runtime_metadata.get("study_universe")
@@ -3055,6 +3129,18 @@ class Problem:
                 for magnet in self.magnets
                 if isinstance(magnet.mesh, PerObjectMeshRecipe)
             }
+            body_material_fields = {
+                magnet.geometry.geometry_name: {
+                    "Ms": float(magnet.material.Ms),
+                    "Aex": float(magnet.material.A),
+                    "alpha": float(magnet.material.alpha),
+                    "Ku1": float(magnet.material.Ku1 or 0.0),
+                    "anisotropy_axis": list(
+                        magnet.material.anisU or (0.0, 0.0, 1.0)
+                    ),
+                }
+                for magnet in self.magnets
+            }
             owner_geometry_names = {
                 magnet.name: magnet.geometry.geometry_name for magnet in self.magnets
             }
@@ -3075,6 +3161,7 @@ class Problem:
                 per_object_recipes=per_object_recipes,
                 object_regions=object_region_mesh_specs,
                 geometry_object_ids=self._geometry_object_ids(),
+                body_material_fields=body_material_fields,
                 asset_cache=effective_asset_cache,
                 _copy_cached_assets=_copy_cached_geometry_assets,
             )
@@ -3194,6 +3281,12 @@ class Problem:
         if physics_objects:
             result["physics_objects"] = physics_objects
         if include_geometry_assets:
+            from fullmag.runtime.antenna_coincident_materialization import materialize_antenna_coincident_loops
+
+            materialize_antenna_coincident_loops(
+                self, result, geometries=geometries, discretization=discretization,
+                mesh_workflow=mesh_workflow, runtime_device_override=runtime_device_override,
+            )
             from fullmag.runtime.antenna_lead_materialization import materialize_antenna_lead_preparations
 
             materialize_antenna_lead_preparations(
@@ -3311,7 +3404,7 @@ class Problem:
             hybrid=self.discretization.hybrid,
         )
 
-    def _normalize_study(self) -> AntennaFieldSolve | TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse:
+    def _normalize_study(self) -> FieldOnly | AntennaFieldSolve | TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse:
         if self.study is not None and (self.dynamics is not None or self.outputs is not None):
             raise ValueError(
                 "Problem accepts either study=... or the legacy dynamics=... and outputs=... shape, not both"
@@ -3471,6 +3564,18 @@ class Problem:
                 magnet.geometry.geometry_name: magnet.mesh
                 for magnet in self.magnets
                 if isinstance(magnet.mesh, PerObjectMeshRecipe)
+            },
+            body_material_fields={
+                magnet.geometry.geometry_name: {
+                    "Ms": float(magnet.material.Ms),
+                    "Aex": float(magnet.material.A),
+                    "alpha": float(magnet.material.alpha),
+                    "Ku1": float(magnet.material.Ku1 or 0.0),
+                    "anisotropy_axis": list(
+                        magnet.material.anisU or (0.0, 0.0, 1.0)
+                    ),
+                }
+                for magnet in self.magnets
             },
             mesh_workflow=(
                 self.runtime_metadata.get("mesh_workflow")

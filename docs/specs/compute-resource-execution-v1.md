@@ -407,10 +407,11 @@ ale identyczna semantyka recovery pozostaje kontraktem.
   `HostResourceLedgerPolicy.total_budget.cpu_millis`. Liczą się wszystkie
   niezwolnione rezerwacje, również tentative i quarantined; limit jest ponownie
   sprawdzany przy promowaniu i wydaniu/zużyciu launch permit. Brak bieżącego
-  pomiaru effective capacity nie używa wartości last-known ani zera — pozostaje
-  jawny limit operatora, który sam nie dowodzi odczytu ani egzekwowania OS/cgroup
-  quota. Obniżenie zmierzonego limitu nie zwalnia ani nie przerywa już działających
-  procesów, a ścieżka release pozostaje dostępna.
+  pomiaru effective capacity nie używa wartości last-known ani zera i blokuje
+  nowe owner-bound rezerwacje CPU. Jawny limit operatora pozostaje górną granicą,
+  ale nie zastępuje bieżącego pomiaru OS/cgroup ani nie dowodzi egzekwowania
+  workerów. Obniżenie zmierzonego limitu nie zwalnia ani nie przerywa już
+  działających procesów, a ścieżka release pozostaje dostępna.
 - Oprócz bilansu jest świeży preflight wolnej RAM/VRAM/scratch. Konserwatywnie
   uwzględnia niewykorzystany jeszcze zapas z istniejących rezerwacji i obce
   procesy. Nieznana atrybucja lub pomiar blokuje automatyczne zwiększenie puli.
@@ -521,6 +522,17 @@ i CUDA allocations należą do pojedynczego workera.
   seed, canonical case ID i nazwanej polityki; nie z indeksu GPU ani PID.
 - Retry zachowuje run/task/case i tworzy nowy attempt, dopiero po terminalnym
   dowodzie poprzedniej próby i zgodnym zwolnieniu lease.
+- Batch retry używa tej samej komendy `POST .../batches/{batch_id}/commands`
+  z akcją `retry` i payloadem `{case_id, task_id, retry_id,
+  expected_catalog_revision}`. Serwer wiąże CaseId z RunId z immutable
+  manifestu; replay zachowuje command ID i retry ID. Rewizja katalogu,
+  terminalny exit receipt oraz dokładne zwolnienie lease są sprawdzane pod
+  writer lease przed ACK. Nieudana walidacja nie zapisuje komendy ani nie
+  zmienia pozostałych cases.
+- Trwały `batch_command.v2` dodaje opcjonalny, digestowany target retry.
+  Historyczne `batch_command.v1` bez targetu pozostaje czytelne i nie jest
+  przepisywane; nowe pause/resume/cancel i retry zapisują v2. Progress v2
+  zachowuje istniejącą listę komend oraz monotoniczny command revision.
 - OOM nie wywołuje automatycznie zmiany precision, siatki lub GPU→CPU.
   Można wybrać większą zgodną kartę w ramach requestu; zwiększenie żądanych
   limitów wymaga nowego jawnego requestu. Nauka retry z mniejszym timestep
@@ -568,14 +580,14 @@ wykonujący solver bez durable RunSpec.
 | `GET /v2/platform/compute/nodes/{node_id}` — istnieje dla skonfigurowanego lokalnego hosta | Snapshot węzła; zdalni providerzy pozostają proponowani |
 | `GET /v2/platform/compute/nodes/{node_id}/telemetry` | Bieżące bounded samples, per-resource freshness |
 | `GET/PUT /v2/platform/compute/nodes/{node_id}/policy` — istnieje dla lokalnego hosta | Typed policy; desktop operator capability, `If-Match`/ledger CAS i walidacja przed durable apply; brak lokalnej capability daje tylko odczyt |
-| `GET/POST /v2/platform/compute/profiles` | Katalog; POST tworzy nową immutable wersję, nie zmienia użytej |
+| `GET/POST /v2/platform/compute/profiles` | Katalog; POST wymaga bearer capability lokalnego operatora aplikacji desktopowej i tworzy nową immutable wersję, nie zmienia użytej |
 | `GET /v2/platform/compute/queue` | Stronicowany read-model istniejących schedulerów, bez drugiej kolejki |
 | `POST /v2/persistence/projects/{project_id}/execution-previews` | Plan legalności i szacowany placement bez lease/spawnu |
 | `POST /v2/persistence/projects/{project_id}/runs` — istnieje | Rozszerzony typowany request przyjęcia z profile/resource snapshot |
 | `GET /v2/persistence/projects/{project_id}/runs/{run_id}` — istnieje | Run/Tasks; rozszerzone references do allocation i executed receipt |
 | `POST/GET .../projects/{project_id}/batches` — parent przyjęcia/listy istnieje | Immutable przyjęcie i stronicowana lista kolekcji; idempotentny parent nie oznacza opublikowanych child runów |
 | `GET .../batches/{batch_id}/cases` — manifest projection istnieje | Stronicowane parametry z nazwami osi i jednostkami kanonicznymi oraz planowane RunIds; opublikowane child runy zwracają lifecycle tasków i informację o trwałym żądaniu anulowania przed claimem |
-| `POST .../batches/{batch_id}/commands` | Pause admission/resume/cancel/retry; ACK + command lifecycle |
+| `POST .../batches/{batch_id}/commands` | Pause admission/resume/cancel or retry one task in a stable case; ACK + command lifecycle |
 | `GET /v2/platform/compute/allocations/{allocation_id}` | Read-only szczegóły przydziału; bez tokenów operacyjnych |
 | `GET /v2/platform/compute/events/ws` | Proponowane platform-scoped invalidations; potrzebne bez aktywnej sesji |
 
@@ -676,6 +688,17 @@ powoduje lookup tego samego joba. Requeue zewnętrzny jest nowym uzgodnionym
 attemptem, nie równoległą drugą próbą. Polityka CPU/GPU/RAM jest przecięciem
 limitu klastra, operatora i requestu. Pierwsza integracja wielowęzłowa powinna
 przenosić niezależne cases; pojedynczy distributed solve ma dodatkową §11.
+
+Przed wywołaniem providera runtime zapisuje trwały submission record związany
+z `run_id`, `task_id`, `attempt_id`, `ownership_epoch` i admitted `resource_id`.
+Record przypina provider, target, scheduler, digest niezmiennego requestu oraz
+deterministyczny idempotency key. Początkowy stan `submission_unknown` oznacza
+„provider mógł przyjąć job”; po restarcie coordinator najpierw wyszukuje tę
+samą tożsamość, zanim podejmie dalszą akcję. Nieznany, wysłany, oczekujący ani działający job
+blokuje retry i admission kolejnego attemptu. Job ID nie może zmienić się w
+trakcie obserwacji, a status przechodzi tylko do przodu. Potwierdzona odmowa
+bez utworzenia joba (`rejected`) albo terminalny status istniejącego joba wraz
+z jawnym zwolnieniem lease pozwala skoordynować nowy attempt.
 
 ## 11. Jeden solve na wielu GPU/CPU — pełny kontrakt docelowy
 
@@ -795,6 +818,15 @@ pól. `from_entries` zachowuje v1 dla starych wpisów; użycie snapshotów
 przechodzi na v2 i wymaga ich dla całego katalogu. Nie dopisujemy originów
 historycznym runom. Binding tworzy nowy ProblemIR, nie mutuje oryginału.
 
+Szczegóły zaakceptowanego runu wiążą task z krokiem przez deterministyczne
+`task_id_for_study_step(run_id, step_id)` i odczytują `execution_materialization`
+z przypiętego StudyProblemCatalog. API nie rozwiązuje ponownie profilu z
+bieżących Settings ani hosta. Nowe katalogi zwracają na tasku pełny snapshot:
+profil i hash, warstwy, efektywny request oraz origin każdego pola. Starsze
+katalogi mogą zwrócić `step_id`, ale nie dopisują brakującej materializacji ani
+originów. Lista runów pozostaje podsumowaniem RunSpec; dla mieszanych kroków
+wybór per-task należy odczytywać ze szczegółów runu.
+
 Ten fragment nie zamyka E1: allowed lanes i failure policy, powiązanie
 profilu Settings ze Study/DSL/CLI/env oraz preview pozostają do połączenia
 z tym samym resolverem. Provider opisany w 13.2 przechowuje wersje; nie
@@ -817,6 +849,9 @@ lookup konkretnej wersji lub uzgodnienie publikacji. ETag obejmuje treść
 strony i instancję API.
 
 POST przyjmuje `expected_revision`, `client_intent_id` oraz typowany profil.
+Wymaga `Authorization: Bearer <capability>` wydanego lokalnej aplikacji
+desktopowej; sam `Origin` ani dostęp do sieciowego listenera nie uprawniają do
+zapisu katalogu. Zwykła przeglądarka zachowuje odczyt katalogu bez edycji.
 Application materializuje i sprawdza semantykę defaults przed zapisem.
 Publikacja dopisuje wersję z kanonicznym SHA-256, datą UTC i kolejną rewizją;
 odpowiedź 201 oznacza nowy zapis. Ten sam intent i ta sama treść zwracają 200
@@ -831,8 +866,9 @@ Nieznany wynik POST wymaga lookup po tym samym intent ID; retry zachowuje
 identyczną treść i tożsamość. Inherit pomija pole, Auto pozostaje jawne.
 Edytor podstawowych pól zachowuje pozostałe sparse resources skopiowanego
 profilu. Zapis nie przypisuje profilu do Study ani nie zmienia aktywnych runów.
-Uprawnienia operatora NodePolicy i pełna integracja authoring pozostają
-osobnymi bramkami E1/E4. Bieżące dowody implementacji są w checkpointcie planu.
+Uprawnienia operatora NodePolicy i profili korzystają z lokalnej capability;
+pełna integracja authoring pozostaje bramką E4. Bieżące dowody implementacji są
+w checkpointcie planu.
 
 ### 13.3 Powiązanie opublikowanej wersji z nowym Submit
 
@@ -1171,6 +1207,15 @@ native Writer; JSON owner descriptor nie zastępuje kernel lock. Policy
 initialize porównuje już utrwaloną konfigurację, zamiast ponownie próbkować
 free RAM lub resetować rezerwacje. Reader nie inicjuje brakującej polityki.
 
+Wspólny `FULLMAG_STATE_ROOT` lokalnej aplikacji zawiera bounded rejestr
+`host_id` → dokładny kanoniczny root ledgera. Rejestr używa native Writer,
+walidowanego JSON i atomowej publikacji. Jawna inicjalizacja operatora przypina
+pierwszy root; runtime open wymaga istniejącego, zgodnego wpisu i nigdy go nie
+tworzy. Druga ścieżka dla tego samego hosta, brak wpisu, brak rejestru lub jego
+corruption kończą się fail-closed przed otwarciem/admission. Istniejąca
+instalacja wymaga jawnej inicjalizacji lub uzgodnienia przez operatora;
+system nie scala ani nie migruje ledgerów automatycznie.
+
 Rezerwacje sumują host CPU/RAM/scratch oraz trzymają wyłączne pełne GPU UUIDs
 z osobnymi limitami VRAM. Nie mnożymy RAM przez liczbę GPU offers. Jawne
 CPU IDs są sprawdzane pod kątem dozwolonego zbioru i konfliktu; bez IDs
@@ -1183,9 +1228,34 @@ Dla admission przypiętego do aktywnego host inventory ownera bieżące
 niezwolnionych rezerwacji nie może przekroczyć mniejszej z pojemności
 skonfigurowanej i zmierzonej. Kontrola obejmuje dodanie rezerwacji, przejście
 `Tentative→Committed` oraz launch solvera i preparation. Brak pola effective
-capacity nie jest interpretowany jako zero ani last-known; działa wtedy wyłącznie
-jawny limit polityki. To ograniczenie admission nie kwalifikuje affinity,
-quota enforcement ani zachowania już działających workerów po zmianie OS limitu.
+capacity, `Unavailable` lub próbka `stale` nie otwierają nowego owner-bound
+admission CPU i nie są zastępowane limitem polityki, zerem ani wartością
+last-known. Jawny limit polityki nadal ogranicza przydział, gdy świeży pomiar
+jest dostępny. To ograniczenie admission nie kwalifikuje affinity, quota
+enforcement ani zachowania już działających workerów po zmianie OS limitu.
+
+Na Linuxie `enforcement.cpu_quota=Supported` wymaga działającej delegacji
+cgroup v2: bezwzględnego `FULLMAG_WORKER_CGROUP_ROOT`, dostępnego kontrolera
+`cpu` i jego aktywacji dla dzieci. Usługa nie włącza kontrolera ani nie tworzy
+hierarchii hosta. Probe tworzy krótko żyjące dziecko, ustawia i odczytuje
+`cpu.max`, a następnie usuwa dokładnie ten katalog. Brak konfiguracji lub
+delegacji oznacza `Unavailable` i blokuje owner-bound CPU admission na Linuxie;
+affinity ani zmienne środowiskowe nie zastępują quota. Każdy worker host-bound
+przed `exec` trafia do własnego dziecka z quota wyliczoną z przydziału, a
+supervisor sprawdza członkostwo procesu. Próbka hosta dowodzi jedynie
+dostępności adaptera; nie zastępuje trwałego worker receipt ani runtime proof
+rzeczywistego wykonania E3.
+
+Windows Job Object quota pozostaje `Unavailable`, jeśli proces należy do joba,
+którego pełnego łańcucha limitów nie można potwierdzić. `QueryInformationJobObject`
+z `hJob = NULL` odczytuje job bezpośredni procesu; w hierarchii zagnieżdżonej
+odczyt nie reprezentuje automatycznie całego łańcucha. Stawka CPU child joba
+jest względna wobec stawki przydzielonej parent jobowi. Adapter nie może
+traktować odczytu bezpośredniego joba jako efektywnej pojemności hosta;
+owner-bound admission pozostaje zamknięte do chwili uzyskania wiarygodnej
+pojemności z całego zakresu ograniczeń. Zob. Microsoft Learn:
+[QueryInformationJobObject](https://learn.microsoft.com/windows/win32/api/jobapi2/nf-jobapi2-queryinformationjobobject)
+oraz [JOBOBJECT_CPU_RATE_CONTROL_INFORMATION](https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-jobobject_cpu_rate_control_information).
 
 Ledger ma bounded document/record limits i checked arithmetic. Każdy zapis
 waliduje kompletny stan, a uszkodzony dokument blokuje admission. Nie
@@ -1628,6 +1698,155 @@ określa checkpoint; ten kontrakt sam nie dowodzi wykonania.
 Ograniczony odbiór operator initialization na przypiętym pakiecie opisuje
 [raport 26 kontroli natywnych](../plans/active/compute-execution-20261004/host-initialization-check-20261007.md).
 Nie odblokowuje on guardu v2 ani pozostałych bramek wykonania.
+
+### 13.30 Planowana generacja runtime i kontrolowany upgrade ABI backendu Docker
+
+**Status: PLANOWANE — NIEZAIMPLEMENTOWANE.** Ten kontrakt nie jest dowodem
+uruchomionego runtime, HMR ani kwalifikacji GPU. Ma przygotować bezpieczną
+migrację backendu Docker, gdy implementacja i odbiór będą osobno gotowe.
+
+#### 13.30.1 V4 dokumentu ledgera i bounded CAS
+
+V4 `HostResourceLedgerDocument` dodaje mały, typowany wskaźnik `runtime_state`:
+
+```json
+{
+  "schema_version": "host_runtime_state.v1",
+  "readiness_sha256": "<64-lowercase-hex>",
+  "snapshot_sha256": null
+}
+```
+
+`readiness_sha256` jest digestem kanonicznych bajtów immutable blobu świeżej
+GPU/runtime readiness. `snapshot_sha256` jest opcjonalnym digestem kanonicznych
+bajtów immutable blobu `ComputeNodeSnapshot`; `null` jest wymaganym stanem po
+ustanowieniu nowej generacji, zanim pierwszy snapshot zostanie zaakceptowany.
+Blob zawiera pełny typed payload i jest walidowany po odczycie; dokument zawiera
+wyłącznie referencje. `policy`, `reservations` i `node_policy` zachowują
+obecne pola oraz semantykę.
+
+Obowiązują dotychczasowe limity: readiness blob ma najwyżej 256 KiB, snapshot
+blob najwyżej 4 MiB. Limit dokumentu ledgera pozostaje niezmieniony; jego
+serializacja V4 musi sprawdzać jawnie rezerwę na mały blok wskaźników. Wskaźnik
+nie może stać się obejściem limitu przez inline JSON, nieograniczony tekst lub
+WAL.
+
+#### 13.30.2 Upgrade i publikacja
+
+Kontrolowany upgrade jest dozwolony tylko po spełnieniu wszystkich warunków:
+
+1. host writer jest zdobyty w istniejącym lock order;
+2. upgrade ma wyłączną bramkę inventory i nie ma aktywnego
+   `HostInventoryOwner`;
+3. wszystkie rezerwacje są `Released` (`allReleased`), bez `Active`, `Tentative`,
+   `Committed` lub `Quarantined`;
+4. nowa readiness jest zbudowana z aktualnego, jawnie zweryfikowanego GPU i
+   ABI, a jej typed blob został zapisany i potwierdzony przed zmianą dokumentu.
+
+Po tych warunkach następuje jedna atomiczna publikacja dokumentu V4 z nowym
+`runtime_state.readiness_sha256` oraz `snapshot_sha256: null`. Nie ma etapu,
+w którym dokument wskazuje nieopublikowany blob, ani etapu częściowego
+przenoszenia policy/reservations/node policy.
+
+Snapshot publikuje się w dwóch rozdzielonych, trwałych krokach: immutable CAS
+blob, potwierdzenie jego treści i durability, a potem jedna atomiczna publikacja
+pointera `snapshot_sha256` pod writerem oraz właściwą kontrolą ownera. Widoczny
+blob bez pointera jest osieroconym, nieszkodliwym kandydatem do retencji; pointer
+bez poprawnego blobu jest corruption i blokuje admission. Po publikacji można
+wykonać bounded GC pod tym samym writerem: obejmuje wyłącznie nieosiągalne,
+regularne pliki snapshot CAS o dokładnym 64-znakowym digest-nazewnictwie,
+zachowuje bieżący pointer oraz readiness CAS, a także legacy files i dane
+historyczne. Sprzątanie jest idempotentne po awarii i może być kontynuowane przy
+następnej publikacji lub inicjalizacji; nie usuwa wyników ani nie wykonuje
+globalnego prune storage.
+
+#### 13.30.3 Generacja jako fence wykonania
+
+`runtime_generation_sha256` musi być zapisany i sprawdzany w każdej nowej
+konfiguracji usługi, host bindingu, `HostReservationRequest`, local admission
+i worker launch permit. Jego wartością jest dokładnie `readiness_sha256` z
+runtime state oraz dokładnie 64 znaki lowercase hex, bez prefiksu `sha256:`.
+Żaden konsument nie może zastąpić go tagiem obrazu, numerem builda, ścieżką
+Windows ani chwilowym odczytem GPU.
+
+Stale generation, brak generation, niezgodny digest readiness/snapshot,
+missing/corrupt CAS, wrong GPU, brak aktywnego ownera albo ownerless v2 request
+kończą się odmową fail-closed. Rezerwacja nie może być zbudowana na snapshotcie
+z poprzedniej generacji, nawet jeśli jego czas mieści się w zwykłym freshness
+window. Worker odmawia przed native startem; nie ma cichego fallbacku CPU ani
+ponownego użycia starego permitu.
+
+#### 13.30.4 Wersje i ścieżka legacy
+
+Binaria V1–V3 muszą odrzucić dokument V4 jako nieobsługiwany schemat, zanim
+wykorzystają policy, reservations, node policy lub runtime state. Historyczne pliki readiness/snapshot oraz marker pozostają zachowane dla
+kontrolowanej diagnostyki. Dokument ledgera jest aktualizowany atomowo do V4
+z zachowaniem polityki, historii rezerwacji i NodePolicy. Nie są automatycznie
+traktowane jako bieżące dowody V4 i nie mogą otworzyć ownerless admission.
+Nowy czytnik może rozpoznać poprzedni format tylko przez jawny adapter
+kompatybilności, bez dopisywania brakującego generation digestu.
+
+#### 13.30.5 Wymagane źródła i odbiór
+
+Implementacja wymaga zmian w następujących granicach:
+
+- `crates/fullmag-session/src/host_resource_ledger.rs`;
+- `crates/fullmag-session/src/runtime_service_host.rs` i
+  `crates/fullmag-session/src/types.rs`;
+- `crates/fullmag-runtime-control/src/host_runtime.rs`;
+- `crates/fullmag-api/src/runtime_service_main.rs`;
+- worker/preparer i supervisor launch paths, w szczególności
+  `crates/fullmag-api/src/accepted_fem_preparer.rs` oraz powiązane worker
+  permit consumers;
+- Docker runtime helper `docker/all-in-one/runtime_service.py` oraz jego
+  konsument startu `docker/all-in-one/entrypoint.py`; generacja jest ustalana
+  przy inicjalizacji fizycznego hosta, nie podczas kompilacji obrazu.
+
+Odbiór musi obejmować idle upgrade i restart z zachowaniem Windows storage,
+sesji i wyników; odmowy dla aktywnych/quarantined reservations, wrong GPU,
+corrupt/missing CAS, stale config/generation/permit i ownerless v2; oraz
+fault-injection przed i po atomicznej publikacji pointera. Wymagany jest także
+test granicy małego dokumentu z zachowaną rezerwą oraz testów limitów 256 KiB
+i 4 MiB. Do czasu przejścia tych bramek status pozostaje PLANOWANE.
+
+### 13.31 Jawny teardown prywatnego środowiska osieroconego workera
+
+[ADR 0062](../adr/0062-worker-orphan-namespace-teardown.md) ustanawia oddzielny
+proof `WorkerOrphanTeardown`; nie jest to `Worker`, `WorkerNoSpawn` ani wynik
+symulacji. Zakres to jedna rezerwacja `Committed`, dokładny aktywny lease i
+bramka `Consumed`, gdy nie istnieje trwały worker exit receipt. Wynik pozostaje
+nieznany. Implementacja oraz rzeczywisty odbiór Docker: **NOT VERIFIED**.
+
+Request `host_worker_orphan_teardown_request.v1` przypina store/host,
+run/task/attempt/ownership epoch, resource/lease, runtime generation, token
+Consumed i digests rezerwacji oraz lease. Digests dokumentów typowanych liczy
+się z canonical JSON; zewnętrzne owner/config/launch i receipt są przypięte
+po surowych bajtach. Request nie zawiera własnego digestu. Zawiera też hostową
+autoryzację, storage certificate/mount attestation, Engine ID oraz dokładny
+container/image/config i mapowanie GPU prywatnego dedykowanego backendu.
+
+`begin_worker_orphan_teardown` pod host→store writerami zapisuje immutable
+intent, potem `Quarantined`. Capacity nadal jest zajęte. Powtórzenie tego
+samego requestu po awarii między zapisami kontynuuje jego intent; inny request
+nie może przejąć kwarantanny. Brak aktywnego inventory ownera i innych
+niezwolnionych rezerwacji jest wymagany pod writerem. Host sprawdza też brak
+innych działających klientów z RW mountem tego samego ledgeru.
+
+Po autorytatywnym zatrzymaniu dokładnego prywatnego PID namespace host tworzy
+`docker_namespace_teardown_attestation.v1`: ten sam Engine/container/image/
+config, rzeczywiste `exited`, PID 0, `FinishedAt`, zero potomków i odłączone
+dokładne mapowanie zasobu. Niepewny stop lub współdzielony/hostowy namespace
+nie uprawnia do zwolnienia. Native completion ponownie sprawdza request,
+immutable intent i attestation; zapisuje `AwaitReconciliation`, osobny v2
+release proof oraz zwalnia wyłącznie przypięty local lease i host reservation.
+
+Historyczny token pozostaje `Consumed`. Nie powstaje syntetyczny PID, worker
+exit receipt, Started ani heartbeat acknowledgement. Solve nie jest
+powtarzany. Exact replay kończy częściową publikację; już zwolniony lease
+wymaga dokładnego istniejącego proofu. Journale i wyniki pozostają zachowane.
+Przed publikacją nowego proofu wszyscy współdzieleni klienci wymagają upgrade;
+starszy reader ma odmówić odczytu nieznanego proofu. Nie deklarujemy zgodności
+wstecznej tej nowej operacji. Testy regresji i live Docker są osobnymi bramkami.
 
 ## Wspólna normalizacja authoring — ADR0057
 

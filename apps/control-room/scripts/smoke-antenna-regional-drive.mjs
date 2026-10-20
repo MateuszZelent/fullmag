@@ -1,0 +1,80 @@
+import assert from "node:assert/strict";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { resolve, relative, isAbsolute, sep } from "node:path";
+const output = process.env.FULLMAG_ANTENNA_REGIONAL_REPORT_DIR, storage = process.env.FULLMAG_PROJECT_STORAGE_ROOT, url = process.env.CONTROL_ROOM_URL;
+if (!output || !storage || !url || !isAbsolute(output)) throw new Error("Managed fixture paths required");
+await mkdir(output, { recursive: true });
+const suffix = relative(await realpath(storage), await realpath(output));
+if (!suffix || suffix === ".." || suffix.startsWith(`..${sep}`) || isAbsolute(suffix)) throw new Error("Output escaped storage");
+const checks = [], errors = [], screenshots = [];
+let browser, page, failure, failureEvidence;
+try {
+  let playwright; try { playwright = await import("playwright"); } catch { playwright = await import("@playwright/test"); }
+  const channel = process.env.FULLMAG_ANTENNA_REGIONAL_BROWSER_CHANNEL;
+  browser = await playwright.chromium.launch({ headless: true, ...(channel ? { channel } : {}) });
+  page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto(url);
+  const editor = page.getByTestId("regional-editor");
+  const create = () => editor.getByRole("button", { name: "Create regional field drive", exact: true });
+  await create().waitFor(); await page.waitForFunction(() => [...document.querySelectorAll("button")].some(b => b.textContent === "Create regional field drive" && !b.disabled));
+  await create().click();
+  const name = editor.getByRole("textbox", { name: "Name", exact: true });
+  await name.waitFor();
+  assert.equal(await editor.getByRole("combobox", { name: "Spatial profile", exact: true }).inputValue(), "geometry_mask");
+  assert.equal(await editor.getByRole("combobox", { name: "Mask geometry", exact: true }).inputValue(), "antenna-a");
+  assert.equal(await editor.getByRole("checkbox", { name: "Enabled", exact: true }).isChecked(), false);
+  assert.equal(await page.evaluate(() => window.__antennaRegionalFixture.read().calls.filter(c => c.method === "POST").length), 0);
+  checks.push("Antenna action opens the existing canonical create Inspector with explicit source mask, disabled field and no write");
+  await name.fill("Local regional draft"); await name.focus();
+  const root = await editor.elementHandle();
+  const before = await page.evaluate(() => window.__antennaRegionalFixture.read().calls.length);
+  await page.evaluate(() => window.__antennaRegionalFixture.refresh());
+  await page.waitForFunction(n => window.__antennaRegionalFixture.read().calls.length >= n + 2, before);
+  await page.waitForTimeout(250);
+  assert.equal(await name.inputValue(), "Local regional draft");
+  assert.equal(await name.evaluate(input => input === document.activeElement), true);
+  assert.equal(await editor.evaluate((element, previous) => element === previous, root), true);
+  checks.push("Unrelated scene/resource revision preserves the create draft, focused input and stable Inspector owner");
+  await editor.getByRole("textbox", { name: "Amplitude", exact: true }).fill("7");
+  const waveform = editor.getByRole("button", { name: "Waveform", exact: true });
+  if (await waveform.getAttribute("aria-expanded") === "false") await waveform.click();
+  await editor.getByRole("combobox", { name: "Kind", exact: true }).selectOption("sinusoidal");
+  await page.getByRole("button", { name: "Apply regional source", exact: true }).click();
+  await page.waitForFunction(() => window.__antennaRegionalFixture.read().pending === 1);
+  const unrelated = page.getByTestId("regional-unrelated"); await unrelated.focus();
+  assert.equal(await unrelated.isEnabled(), true); assert.equal(await unrelated.inputValue(), "untouched");
+  const pending = await page.evaluate(() => window.__antennaRegionalFixture.read());
+  const post = pending.calls.filter(c => c.method === "POST"); assert.equal(post.length, 1);
+  assert.ok(post[0].scope); assert.equal(post[0].body.base_revision, pending.scene.revision);
+  assert.equal(post[0].body.drive.amplitude_B_T, 0.007); assert.equal(post[0].body.drive.enabled, false);
+  assert.equal(post[0].body.drive.spatial_profile.object_id, "antenna-a"); assert.equal(post[0].body.drive.waveform.kind, "sinusoidal");
+  await page.evaluate(() => window.__antennaRegionalFixture.release());
+  await page.waitForFunction(() => window.__antennaRegionalFixture.read().scene.field_drives.drives.length === 1 && !window.__antennaRegionalFixture.read().selection.ref?.draft);
+  assert.equal(await unrelated.evaluate(input => input === document.activeElement), true);
+  assert.equal(await editor.evaluate((element, previous) => element === previous, root), true);
+  const done = await page.evaluate(() => window.__antennaRegionalFixture.read());
+  assert.equal(done.scene.field_drives.drives[0].name, "Local regional draft"); assert.equal(done.canUndo, true);
+  assert.deepEqual(done.unexpected, []);
+  assert.equal(await editor.locator('[data-slot="physics-inspector-diagnostics"]').getAttribute("data-state"), "inactive");
+  checks.push("One scoped typed API create preserves authored SI amplitude/mask/waveform and disabled state, records history, selects the saved resource and preserves unrelated focus through pending/ACK");
+  const firstShot = resolve(output, "regional-created.png"); await page.screenshot({ path: firstShot, fullPage: true }); screenshots.push(firstShot);
+  await page.evaluate(() => window.__antennaRegionalFixture.choose("antenna-b"));
+  await create().waitFor(); await create().click();
+  await page.waitForFunction(() => document.querySelector('select[aria-label="Mask geometry"]')?.value === "antenna-b");
+  assert.equal(await editor.getByRole("checkbox", { name: "Enabled", exact: true }).isChecked(), false);
+  assert.notEqual(await editor.getByRole("textbox", { name: "Name", exact: true }).inputValue(), "Local regional draft");
+  assert.equal(await page.evaluate(() => window.__antennaRegionalFixture.read().calls.filter(c => c.method === "POST").length), 1);
+  checks.push("A second antenna gets its own explicit source draft without leaking the previous object's values or creating a second field implicitly");
+  const lastShot = resolve(output, "regional-second-antenna-draft.png"); await page.screenshot({ path: lastShot, fullPage: true }); screenshots.push(lastShot);
+  assert.deepEqual(errors, []);
+} catch (error) {
+  failure = error.stack ?? String(error);
+  if (page) {
+    failureEvidence = await page.evaluate(() => ({ fixture: window.__antennaRegionalFixture?.read(), controls: [...document.querySelectorAll("input,select,button")].map(element => ({ tag: element.tagName, label: element.getAttribute("aria-label"), text: element.tagName === "BUTTON" ? element.textContent : undefined, hidden: !element.checkVisibility(), expanded: element.getAttribute("aria-expanded") })) })).catch(() => null);
+    const path = resolve(output, "regional-failure.png"); await page.screenshot({ path, fullPage: true }).then(() => screenshots.push(path)).catch(() => {});
+  }
+}
+finally { if (browser) await browser.close(); await writeFile(resolve(output, "antenna-regional-drive.json"), JSON.stringify({ passed: !failure, checks, errors, screenshots, failure, failureEvidence, qualification: "production_components_typed_client_controlled_HTTP_not_solver_qualification" }, null, 2)); }
+if (failure) throw new Error(failure);
+console.log(JSON.stringify({ passed: true, checks: checks.length }));

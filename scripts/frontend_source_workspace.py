@@ -326,9 +326,17 @@ def _read_dependency_manifest(
     )
 
 
-def _dependency_input_paths(repo: Path) -> list[Path]:
+def _dependency_input_paths(
+    repo: Path, *, patch_relatives: tuple[Path, ...] | None = None
+) -> list[Path]:
     paths = [repo / relative for relative in ROOT_DEPENDENCY_INPUTS]
     paths.append(repo / CONTROL_ROOM_PACKAGE)
+    if patch_relatives is None:
+        try:
+            patch_relatives = stage_workspace_frontend.patch_file_relatives(repo)
+        except (OSError, RuntimeError, ValueError, stage_workspace_frontend.StageError) as error:
+            raise SourceWorkspaceError(f"Cannot enumerate dependency patch inputs: {error}") from error
+    paths.extend(repo / relative for relative in patch_relatives)
     lock_importers = stage_workspace_frontend._parse_lock_importers(repo / "pnpm-lock.yaml")
     try:
         app_manifests = stage_workspace_frontend._direct_app_package_manifests(repo, lock_importers)
@@ -345,8 +353,30 @@ def _dependency_input_paths(repo: Path) -> list[Path]:
 
 
 def _compare_dependency_inputs(repo: Path, workspace: Path) -> dict[str, str | None]:
+    try:
+        source_patch_relatives = stage_workspace_frontend.patch_file_relatives(repo)
+        installed_patch_relatives = stage_workspace_frontend.patch_file_relatives(workspace)
+    except (OSError, RuntimeError, ValueError, stage_workspace_frontend.StageError) as error:
+        raise SourceWorkspaceError(f"Cannot enumerate dependency patch inputs: {error}") from error
+    source_patch_set = set(source_patch_relatives)
+    installed_patch_set = set(installed_patch_relatives)
+    if source_patch_set != installed_patch_set:
+        missing = sorted(source_patch_set - installed_patch_set, key=lambda path: path.as_posix())
+        extra = sorted(installed_patch_set - source_patch_set, key=lambda path: path.as_posix())
+
+        def describe(paths: list[Path]) -> str:
+            values = [path.as_posix() for path in paths[:8]]
+            if len(paths) > 8:
+                values.append(f"(+{len(paths) - 8} more)")
+            return ", ".join(values) or "<none>"
+
+        raise SourceWorkspaceError(
+            "Dependency patch inventory differs between checkout and native workspace: "
+            f"missing={describe(missing)} extra={describe(extra)}"
+        )
+
     hashes: dict[str, str | None] = {}
-    for source_path in _dependency_input_paths(repo):
+    for source_path in _dependency_input_paths(repo, patch_relatives=source_patch_relatives):
         relative = source_path.relative_to(repo)
         installed_path = workspace / relative
         optional = relative in OPTIONAL_DEPENDENCY_INPUTS

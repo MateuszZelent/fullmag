@@ -5,6 +5,7 @@
 #include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
+#include "gpu/cuda/integrators/llg/llg_rhs_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_transaction_device.hpp"
 #include "gpu/cuda/integrators/rk/rk_workspace_memory.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
@@ -13,6 +14,7 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -34,6 +36,18 @@ void check_cuda(cudaError_t status, const char *message)
         std::fprintf(stderr, "FAIL: %s: %s\n", message, cudaGetErrorString(status));
         std::exit(1);
     }
+}
+
+template <typename T>
+T *device_array(const T *host, std::size_t count, const char *message)
+{
+    void *raw = nullptr;
+    check_cuda(cudaMalloc(&raw, count * sizeof(T)), message);
+    auto *device = static_cast<T *>(raw);
+    check_cuda(
+        cudaMemcpy(device, host, count * sizeof(T), cudaMemcpyHostToDevice),
+        message);
+    return device;
 }
 
 template <typename T>
@@ -133,6 +147,82 @@ void inactive_airbox_vector_is_ignored()
     cudaFree(mz);
     cudaFree(mask);
     cudaFree(flag);
+}
+
+void gpu_llg_rhs_masks_air_nodes_and_metric() {
+    const double host_mx[2] = {1.0, 0.0};
+    const double host_my[2] = {0.0, 1.0};
+    const double host_mz[2] = {0.0, 0.0};
+    const double host_hx[2] = {0.0, 0.0};
+    const double host_hy[2] = {0.0, 0.0};
+    const double host_hz[2] = {2.0, 2000.0};
+    const uint8_t host_mask[2] = {1u, 0u};
+    double *mx = nullptr;
+    double *my = nullptr;
+    double *mz = nullptr;
+    double *hx = nullptr;
+    double *hy = nullptr;
+    double *hz = nullptr;
+    double *dmx = nullptr;
+    double *dmy = nullptr;
+    double *dmz = nullptr;
+    double *block_max = nullptr;
+    uint8_t *mask = nullptr;
+    mx = device_array(host_mx, 2, "GPU LLG m_x upload");
+    my = device_array(host_my, 2, "GPU LLG m_y upload");
+    mz = device_array(host_mz, 2, "GPU LLG m_z upload");
+    hx = device_array(host_hx, 2, "GPU LLG H_x upload");
+    hy = device_array(host_hy, 2, "GPU LLG H_y upload");
+    hz = device_array(host_hz, 2, "GPU LLG H_z upload");
+    mask = device_array(host_mask, 2, "GPU LLG magnetic mask upload");
+    check_cuda(cudaMalloc(&dmx, sizeof(host_mx)), "GPU LLG rhs x allocation");
+    check_cuda(cudaMalloc(&dmy, sizeof(host_my)), "GPU LLG rhs y allocation");
+    check_cuda(cudaMalloc(&dmz, sizeof(host_mz)), "GPU LLG rhs z allocation");
+    block_max = device_value(0.0);
+
+    fullmag::fem::fullmag_cuda_llg_rhs_fused(
+        mx, my, mz,
+        hx, hy, hz,
+        dmx, dmy, dmz,
+        block_max,
+        mask,
+        nullptr,
+        1.0,
+        0.0,
+        false,
+        true,
+        2,
+        nullptr);
+    check_cuda(cudaGetLastError(), "GPU LLG RHS launch");
+    check_cuda(cudaDeviceSynchronize(), "GPU LLG RHS synchronize");
+
+    double rhs_x[2] = {};
+    double rhs_y[2] = {};
+    double rhs_z[2] = {};
+    double metric = 0.0;
+    check_cuda(cudaMemcpy(rhs_x, dmx, sizeof(rhs_x), cudaMemcpyDeviceToHost), "GPU LLG rhs x download");
+    check_cuda(cudaMemcpy(rhs_y, dmy, sizeof(rhs_y), cudaMemcpyDeviceToHost), "GPU LLG rhs y download");
+    check_cuda(cudaMemcpy(rhs_z, dmz, sizeof(rhs_z), cudaMemcpyDeviceToHost), "GPU LLG rhs z download");
+    check_cuda(cudaMemcpy(&metric, block_max, sizeof(metric), cudaMemcpyDeviceToHost), "GPU LLG metric download");
+    check(std::abs(rhs_x[0]) < 1e-15, "GPU active RHS x");
+    check(std::abs(rhs_y[0] - 2.0) < 1e-15, "GPU active RHS y");
+    check(std::abs(rhs_z[0]) < 1e-15, "GPU active RHS z");
+    check(std::abs(rhs_x[1]) < 1e-15 && std::abs(rhs_y[1]) < 1e-15 &&
+              std::abs(rhs_z[1]) < 1e-15,
+          "GPU air RHS is zero despite nonzero m and H");
+    check(std::abs(metric - 2.0) < 1e-15, "GPU RHS metric excludes air");
+
+    cudaFree(mx);
+    cudaFree(my);
+    cudaFree(mz);
+    cudaFree(hx);
+    cudaFree(hy);
+    cudaFree(hz);
+    cudaFree(dmx);
+    cudaFree(dmy);
+    cudaFree(dmz);
+    cudaFree(block_max);
+    cudaFree(mask);
 }
 
 void valid_active_vector_is_normalized()
@@ -470,6 +560,7 @@ int main()
     active_invalid_vectors_fail_without_repair();
     inactive_airbox_vector_is_ignored();
     valid_active_vector_is_normalized();
+    gpu_llg_rhs_masks_air_nodes_and_metric();
     minimal_rk_transaction_restores_only_authoritative_gpu_state();
     rk_workspace_allocates_only_minimal_transaction_journal();
     committed_transaction_and_external_upload_update_observable_validity();

@@ -186,6 +186,7 @@ RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hyp
 # are CPU-only and bind a second, incompatible hypre, so build the qualified
 # pair from source into the shared managed prefix.
 COPY docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff /tmp/build/petsc-3.24.6-multiarch-nvcc.diff
+ARG FULLMAG_PETSC_CUDA_ARCHITECTURES="80,89,90"
 RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git /tmp/build/petsc && \
     test "$(git -C /tmp/build/petsc rev-parse HEAD)" = "${PETSC_SOURCE_COMMIT}" && \
     cd /tmp/build/petsc && \
@@ -206,7 +207,7 @@ RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git
       --with-precision=double \
       --with-cuda=1 \
       --with-cuda-dir=${CUDA_HOME} \
-      --with-cuda-arch=80,89,90 \
+      --with-cuda-arch="${FULLMAG_PETSC_CUDA_ARCHITECTURES}" \
       --with-hypre=1 \
       --with-hypre-dir=${INSTALL_PREFIX} && \
     make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda -j"$(nproc)" all && \
@@ -219,7 +220,27 @@ RUN git clone --depth 1 --branch ${SLEPC_REF} https://gitlab.com/slepc/slepc.git
     make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} -j"$(nproc)" all && \
     make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} install
 
-RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
+ARG FULLMAG_MFEM_BUILD_JOBS=1
+# Opt-in DEV tradeoff: faster MFEM GPU compilation may reduce kernel performance.
+# Keep 0 compatible with the default/release CUDA toolchain.
+ARG FULLMAG_MFEM_CUDA_FAST_COMPILE=0
+ENV FULLMAG_MFEM_CUDA_FAST_COMPILE=${FULLMAG_MFEM_CUDA_FAST_COMPILE}
+RUN [[ "${FULLMAG_MFEM_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] && \
+    case "${FULLMAG_MFEM_CUDA_FAST_COMPILE}" in \
+      0|min|mid|max) ;; \
+      *) echo "FULLMAG_MFEM_CUDA_FAST_COMPILE must be 0, min, mid or max" >&2; exit 2 ;; \
+    esac && \
+    cuda_compile_flags=() && \
+    if [[ "${FULLMAG_MFEM_CUDA_FAST_COMPILE}" != 0 ]]; then \
+      if ! nvcc_help="$(nvcc --help)"; then \
+        echo "Cannot inspect NVCC support for --Ofast-compile" >&2; exit 2; \
+      fi && \
+      if [[ "${nvcc_help}" != *"--Ofast-compile"* ]]; then \
+        echo "Selected NVCC does not support --Ofast-compile; select a supporting toolkit or FULLMAG_MFEM_CUDA_FAST_COMPILE=0" >&2; exit 2; \
+      fi && \
+      cuda_compile_flags=("-DCMAKE_CUDA_FLAGS=--Ofast-compile=${FULLMAG_MFEM_CUDA_FAST_COMPILE}"); \
+    fi && \
+    cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_STANDARD=17 \
@@ -235,8 +256,8 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -DCEED_DIR=${INSTALL_PREFIX} \
       -DMFEM_USE_HYPRE=YES \
       -DHYPRE_DIR=${INSTALL_PREFIX} \
-      -DMFEM_ENABLE_TESTING=OFF && \
-    cmake --build /tmp/build/mfem/build --target mfem -j"$(nproc)" && \
+      -DMFEM_ENABLE_TESTING=OFF "${cuda_compile_flags[@]}" && \
+    cmake --build /tmp/build/mfem/build --target mfem -j"${FULLMAG_MFEM_BUILD_JOBS}" && \
     cmake --install /tmp/build/mfem/build
 
 # CUDA-free MFEM requires a matching CUDA-free HYPRE; retain the GPU prefix.
@@ -275,10 +296,13 @@ RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
 RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu && \
     test "$(git -C /tmp/build/slepc-cpu rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
     cd /tmp/build/slepc-cpu && \
-    SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= \
+    unset PETSC_ARCH && \
+    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
       python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
-    make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= -j2 all && \
-    make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu PETSC_ARCH= install
+    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
+      make -j2 all && \
+    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
+      make install
 
 # The CPU FEM client is compiled with the host C++ compiler. Keep its MFEM
 # headers and library in a separate, CUDA-free prefix so SparseMatrix has the
@@ -301,7 +325,8 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
     cmake --build /tmp/build/mfem/build-cpu --target mfem -j2 && \
     cmake --install /tmp/build/mfem/build-cpu
 
-RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase deps --source-root /tmp/build --output "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
+RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase deps --source-root /tmp/build --output "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json" && \
+    python3 -c 'import json,os,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); value["declared"].setdefault("mfem", {})["cuda_fast_compile"]=os.environ["FULLMAG_MFEM_CUDA_FAST_COMPILE"]; p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
 
 FROM cuda-base-normalized AS fem-gpu-dev
 
@@ -393,16 +418,23 @@ RUN apt-get update && \
     && rm -f "/tmp/${node_archive}" \
     && rm -rf /var/lib/apt/lists/*
 
+# CPython's ordinary build includes test extensions and the embedding test helper.
+# The limited-API examples are outside TEST_MODULES and need Setup.local as well.
 RUN python_archive="Python-${PYTHON_VERSION}.tar.xz" && \
-    curl -fsSLo "/tmp/${python_archive}" \
+    echo "Downloading pinned Python ${PYTHON_VERSION} (connect timeout 30s, attempt timeout 600s)" && \
+    curl --connect-timeout 30 --max-time 600 --retry 2 --retry-delay 2 --retry-connrefused \
+      -fsSLo "/tmp/${python_archive}" \
       "https://www.python.org/ftp/python/${PYTHON_VERSION}/${python_archive}" && \
     echo "${PYTHON_SHA256}  /tmp/${python_archive}" | sha256sum -c - && \
     mkdir -p /tmp/python-build && \
     tar -xJf "/tmp/${python_archive}" -C /tmp/python-build --strip-components=1 && \
     cd /tmp/python-build && \
-    ./configure --prefix=/usr/local --enable-shared --with-ensurepip=install && \
-    make -j"$(nproc)" && \
-    make altinstall && \
+    printf '%s\n' '*disabled*' xxlimited xxlimited_35 > Modules/Setup.local && \
+    echo "Configuring pinned Python ${PYTHON_VERSION}" && \
+    ./configure --prefix=/usr/local --enable-shared --with-ensurepip=install --disable-test-modules && \
+    echo "Compiling pinned Python ${PYTHON_VERSION}" && \
+    make -j"$(nproc)" -o Programs/_testembed && \
+    make -o Programs/_testembed altinstall && \
     ldconfig && \
     ln -sfn /usr/local/bin/python3.10 /usr/local/bin/python3 && \
     ln -sfn /usr/local/bin/pip3.10 /usr/local/bin/pip3 && \

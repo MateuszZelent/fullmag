@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 pub const LEGACY_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v2";
 pub const RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v3";
+pub const CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v4";
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -297,6 +298,7 @@ impl ClaimIdentity {
 }
 
 pub const WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v3";
+pub const CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v4";
 
 /// Commands are at-least-once transport messages.  The ledger below makes a
 /// repeated message idempotent, while a new command must advance its sequence.
@@ -329,6 +331,11 @@ impl WorkerCommandEnvelope {
         match &self.command {
             WorkerCommand::Prepare { resolved_input } => {
                 resolved_input.validate()?;
+                if (self.schema_version == CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA)
+                    != (resolved_input.schema_version == CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA)
+                {
+                    return Err(ExecutionError::Invalid("worker protocol and operation input versions differ".into()));
+                }
                 if resolved_input.run_id != self.claim.run_id
                     || resolved_input.task_id != self.claim.task_id
                     || resolved_input.attempt_id != self.claim.attempt_id
@@ -617,6 +624,7 @@ impl WorkerCommandInbox {
 #[derive(Clone, Debug)]
 pub struct WorkerProtocolLedger {
     claim: ClaimIdentity,
+    protocol_schema: Option<String>,
     command_digests: BTreeMap<String, String>,
     event_digests: BTreeMap<String, String>,
     last_command_sequence: u64,
@@ -629,6 +637,7 @@ impl WorkerProtocolLedger {
     pub fn new(claim: &TaskClaim) -> Self {
         Self {
             claim: claim.identity(),
+            protocol_schema: None,
             command_digests: BTreeMap::new(),
             event_digests: BTreeMap::new(),
             last_command_sequence: 0,
@@ -697,6 +706,9 @@ impl WorkerProtocolLedger {
         envelope: &WorkerCommandEnvelope,
     ) -> Result<ProtocolDisposition, ExecutionError> {
         envelope.validate_for_claim(&self.claim)?;
+        if self.protocol_schema.as_deref().is_some_and(|schema| schema != envelope.schema_version) {
+            return Err(ExecutionError::Invalid("worker stream changed protocol schema".into()));
+        }
         let digest = protocol_message_digest(envelope)?;
         if let Some(previous) = self.command_digests.get(&envelope.message_id) {
             if previous == &digest {
@@ -718,6 +730,7 @@ impl WorkerProtocolLedger {
         if self.terminal && !matches!(envelope.command, WorkerCommand::Release) {
             return Err(ExecutionError::ProtocolTerminal);
         }
+        self.protocol_schema = Some(envelope.schema_version.clone());
         self.command_digests
             .insert(envelope.message_id.clone(), digest);
         self.last_command_sequence = envelope.sequence;
@@ -732,6 +745,9 @@ impl WorkerProtocolLedger {
         envelope: &WorkerEventEnvelope,
     ) -> Result<ProtocolDisposition, ExecutionError> {
         envelope.validate_for_claim(&self.claim)?;
+        if self.protocol_schema.as_deref().is_some_and(|schema| schema != envelope.schema_version) {
+            return Err(ExecutionError::Invalid("worker stream changed protocol schema".into()));
+        }
         let digest = protocol_message_digest(envelope)?;
         if let Some(previous) = self.event_digests.get(&envelope.message_id) {
             if previous == &digest {
@@ -762,6 +778,7 @@ impl WorkerProtocolLedger {
             return Ok(disposition);
         }
         let digest = protocol_message_digest(envelope)?;
+        self.protocol_schema = Some(envelope.schema_version.clone());
         self.event_digests
             .insert(envelope.message_id.clone(), digest);
         self.last_event_sequence = envelope.sequence;
@@ -1116,6 +1133,31 @@ impl TaskRecord {
         Ok(resolved)
     }
 
+    /// Resolve an accepted inspection using native source-mesh readiness, without LLG state.
+    pub fn resolved_closed_loop_study_input(
+        &self,
+        claim: &TaskClaim,
+        specification: &RunSpecification,
+        step: &fullmag_plan::StudyStepExecutionPlan,
+        problem: &fullmag_ir::ProblemIR,
+        receipt: &crate::closed_loop_preparation::ClosedLoopPreparationReceipt,
+    ) -> Result<ResolvedTaskInput, ExecutionError> {
+        receipt.validate_for(specification, self.task_id.as_str(), step, problem)
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        let fingerprint = study_task_input_fingerprint(specification, step)?;
+        let preparation = receipt.binding().map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        let mut resolved = self.resolve_input_with_fingerprint(
+            claim, specification, &fingerprint,
+            receipt.plan.carrier_fingerprint.trim_start_matches("sha256:"),
+            preparation, BTreeMap::new(),
+        )?;
+        resolved.schema_version = CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA.into();
+        resolved.requested_execution = specification.requested_execution.for_problem(problem)
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        resolved.validate()?;
+        Ok(resolved)
+    }
+
     /// For run-wide tasks. Materialized study tasks use resolved_study_input.
     pub fn resolved_input(
         &self,
@@ -1251,6 +1293,9 @@ fn is_supported_study_artifact_codec(data_kind: &str, codec_id: &str, version: &
         || (data_kind == "scalar"
             && codec_id == crate::study_artifact::STUDY_SCALAR_CODEC_ID
             && version == crate::study_artifact::STUDY_SCALAR_CODEC_VERSION)
+        || (data_kind == "artifact"
+            && codec_id == crate::antenna_inspection_bundle::ANTENNA_INSPECTION_BUNDLE_CODEC_ID
+            && version == crate::antenna_inspection_bundle::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION)
         || (data_kind == "artifact"
             && codec_id == crate::study_artifact::STUDY_ANTENNA_INSPECTION_CODEC_ID
             && version == crate::study_artifact::STUDY_ANTENNA_INSPECTION_CODEC_VERSION)
@@ -1393,6 +1438,7 @@ impl ResolvedTaskInput {
     pub fn validate(&self) -> Result<(), ExecutionError> {
         if self.schema_version != RESOLVED_TASK_INPUT_SCHEMA
             && self.schema_version != LEGACY_RESOLVED_TASK_INPUT_SCHEMA
+            && self.schema_version != CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA
         {
             return Err(ExecutionError::Invalid(format!(
                 "schema_version must be {RESOLVED_TASK_INPUT_SCHEMA} or {LEGACY_RESOLVED_TASK_INPUT_SCHEMA}"
@@ -1407,6 +1453,11 @@ impl ResolvedTaskInput {
         self.preparation
             .validate()
             .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        if (self.schema_version == CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA)
+            != (self.preparation.schema_version == crate::closed_loop_preparation::CLOSED_LOOP_PREPARATION_BINDING_SCHEMA)
+        {
+            return Err(ExecutionError::Invalid("resolved input and preparation operation versions differ".into()));
+        }
         for (name, input) in &self.inputs {
             validate_identifier(name, "resolved input name")?;
             input.validate()?;
@@ -1485,7 +1536,7 @@ fn validate_protocol_identity(
 ) -> Result<(), ExecutionError> {
     if !matches!(
         schema_version,
-        "worker_protocol.v2" | WORKER_PROTOCOL_SCHEMA
+        "worker_protocol.v2" | WORKER_PROTOCOL_SCHEMA | CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA
     ) {
         return Err(ExecutionError::Invalid(format!(
             "schema_version must be worker_protocol.v2 or {WORKER_PROTOCOL_SCHEMA}"
@@ -2089,6 +2140,39 @@ mod tests {
         assert_eq!(next.ownership_epoch.value(), 2);
         assert_ne!(next.attempt_id, claim.attempt_id);
     }
+    #[test]
+    fn protocol_v4_mixture_refuses_before_stream_or_inbox_commit() {
+        let mut task=TaskRecord::new(RunId::parse("mixed-protocol").unwrap(),"a".repeat(64)).unwrap();task.queue().unwrap();
+        let claim=task.claim(ResourceLease::new("cpu",ResourceKind::Cpu,ResourceBudget{cpu_millis:100,memory_bytes:1,gpu_memory_bytes:0,storage_bytes:1}).unwrap()).unwrap();
+        let mut ledger=WorkerProtocolLedger::new(&claim);
+        let first=WorkerCommandEnvelope{schema_version:CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA.into(),message_id:"start".into(),sequence:1,claim:claim.identity(),command:WorkerCommand::Start};
+        ledger.accept_command(&first).unwrap();let before=ledger.watermarks();
+        let mut foreign=first.clone();foreign.schema_version=WORKER_PROTOCOL_SCHEMA.into();foreign.sequence=2;foreign.message_id="foreign".into();
+        assert!(ledger.accept_command(&foreign).is_err());assert_eq!(ledger.watermarks(),before);
+        let event=WorkerEventEnvelope{schema_version:WORKER_PROTOCOL_SCHEMA.into(),message_id:"foreign-event".into(),sequence:1,claim:claim.identity(),event:WorkerEvent::Accepted};
+        assert!(ledger.accept_event(&event).is_err());assert_eq!(ledger.watermarks(),before);
+        assert!(WorkerProtocolLedger::restore(&claim,&[first.clone(),foreign],&[]).is_err());
+        assert_eq!(ledger.accept_command(&first).unwrap(),ProtocolDisposition::Replayed);
+    }
+
+    #[test]
+    fn inspection_artifact_registry_accepts_only_exact_tuple() {
+        let artifact=ResolvedStudyArtifact{artifact_id:"inspection".into(),object_ref:"a".repeat(64),data_kind:"artifact".into(),codec_id:crate::ANTENNA_INSPECTION_BUNDLE_CODEC_ID.into(),codec_version:crate::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION.into()};
+        artifact.validate().unwrap();
+        let mut invalid=artifact.clone();invalid.data_kind="state".into();assert!(invalid.validate().is_err());
+        let mut invalid=artifact;invalid.codec_version="v99".into();assert!(invalid.validate().is_err());
+    }
+    #[test]
+    fn resolved_operation_schema_and_preparation_binding_cannot_mix() {
+        let specification=specification("binding-pair");let mut task=TaskRecord::new(specification.run_id.clone(),specification.fingerprint().unwrap()).unwrap();task.queue().unwrap();
+        let claim=task.claim(ResourceLease::new("cpu",ResourceKind::Cpu,ResourceBudget{cpu_millis:100,memory_bytes:1,gpu_memory_bytes:0,storage_bytes:1}).unwrap()).unwrap();
+        let binding=crate::PreparationBinding::new("prep",format!("sha256:{}","e".repeat(64)),format!("sha256:{}","f".repeat(64))).unwrap();
+        let mut resolved=task.resolved_input(&claim,&specification,"c".repeat(64),binding,Default::default()).unwrap();
+        resolved.schema_version=CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA.into();assert!(resolved.validate().is_err());
+        resolved.preparation.schema_version=crate::CLOSED_LOOP_PREPARATION_BINDING_SCHEMA.into();resolved.validate().unwrap();
+        resolved.schema_version=RESOLVED_TASK_INPUT_SCHEMA.into();assert!(resolved.validate().is_err());
+    }
+
 }
 
 /// Stable materialization identity. Preserve task_input.v1 persisted bytes.

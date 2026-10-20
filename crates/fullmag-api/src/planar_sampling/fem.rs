@@ -257,6 +257,7 @@ fn sample_plane(
     let mut occupancy = vec![Occupancy::Empty; pixel_count];
     let mut scalar_values = vec![f64::NAN; pixel_count];
     let mut vector_values = vec![[f64::NAN; 3]; pixel_count];
+    let mut component_values = vec![f64::NAN; pixel_count * field.n_comp()];
     let mut source_entity_ids = vec![None; pixel_count];
     let du = (frame.bounds[1] - frame.bounds[0]) / request.resolution[0] as f64;
     let dv = (frame.bounds[3] - frame.bounds[2]) / request.resolution[1] as f64;
@@ -323,6 +324,8 @@ fn sample_plane(
                 };
                 occupancy[index] = Occupancy::Occupied;
                 source_entity_ids[index] = Some(element_index as u32);
+                component_values[index * field.n_comp()..(index + 1) * field.n_comp()]
+                    .copy_from_slice(&value);
                 scalar_values[index] = if field.n_comp() == 1 {
                     value[0]
                 } else {
@@ -332,7 +335,7 @@ fn sample_plane(
                         .sum::<f64>()
                         .sqrt()
                 };
-                if field.n_comp() >= 3 {
+                if field.n_comp() == 3 {
                     vector_values[index] = [value[0], value[1], value[2]];
                 }
             }
@@ -376,6 +379,8 @@ fn sample_plane(
         };
         occupancy[index] = Occupancy::Occupied;
         source_entity_ids[index] = Some(element_id);
+        component_values[index * field.n_comp()..(index + 1) * field.n_comp()]
+            .copy_from_slice(&value);
         scalar_values[index] = if field.n_comp() == 1 {
             value[0]
         } else {
@@ -385,7 +390,7 @@ fn sample_plane(
                 .sum::<f64>()
                 .sqrt()
         };
-        if field.n_comp() >= 3 {
+        if field.n_comp() == 3 {
             vector_values[index] = [value[0], value[1], value[2]];
         }
     }
@@ -400,8 +405,10 @@ fn sample_plane(
             1,
             0,
         ),
+        n_comp: field.n_comp(),
+        component_values,
         scalar_values,
-        vector_values: (field.n_comp() >= 3).then_some(vector_values),
+        vector_values: (field.n_comp() == 3).then_some(vector_values),
         occupancy,
         source_entity_ids,
         overlay: None,

@@ -87,6 +87,31 @@ Operational owner/lock/logs są poza naukowym grafem CAS i eksportem FMS;
 import nadal wymaga pustego, izolowanego store. Ten fragment nie uruchamia usługi
 automatycznie z obecnego launchera i nie zmienia działającej sesji 3104.
 
+### Źródło konfiguracji podczas recovery
+
+Jawna konfiguracja operatora pozostaje pojedynczym źródłem prawdy także dla
+kontenerowego recovery. Odczyt przez `prepare_application_config(Some(...))`
+nie publikuje `runtime-services/APPLICATION.json`, dlatego recovery nie tworzy
+tego pliku tylko po to, aby przejąć nieznanego ownera.
+
+Manifest `runtime_service_recovery_archive.v1` zapisuje
+`application_binding.mode` (`external_only` albo `persisted`) oraz
+`application_binding.raw_sha256`. W trybie `external_only` hash musi wskazywać
+na przypięte surowe `config_sha256`, a `APPLICATION.json` musi pozostać
+nieobecny. W trybie `persisted` plik musi istnieć i mieć dokładnie ten sam hash.
+Stare manifesty bez tego pola zachowują wcześniejszy wymóg obecności pliku.
+Walidacja odbywa się pod recovery lockami przed archiwizacją i prepared intent;
+Logiczny inventory nadal ma 12 obowiązkowych wpisów oraz trwały hash manifestu.
+Jeżeli końcowy summary schedulera potwierdza `drained`, żądanie shutdown i
+sekwencję checkpointu `0`, nieopublikowany checkpoint może być opisany wyłącznie
+przez `archived_absent_sources` z powodem `scheduler_checkpoint_not_published`;
+nie wolno tworzyć dla niego pliku ani syntetycznego hasha. Suma wpisów
+`archived_files` i takich poświadczeń nieobecności musi pokrywać cały inventory;
+brak po sekwencji większej od zera jest odrzucany. Archiwum może ponadto
+zawierać wyłącznie rzeczywiście istniejące, bounded regular logs z jawnej listy
+publisherów i schedulerów; każdy wpis jest odczytywany bez podążania za linkiem
+i zachowany z raw SHA-256, a wildcard oraz nieznane nazwy pozostają odrzucane.
+
 Dokładny kontrakt: [native-runtime-service-v1](../specs/native-runtime-service-v1.md).
 
 HTTP API ma osobny UUID procesu. Opcjonalny pin żądania odrzuca replacement
@@ -122,3 +147,56 @@ obserwacja, nie pełny lease; brak runtime proof nie pozwala ogłosić cutover.
 Tauri `api_sidecar.rs` i `main.rs`. Source/parser/review nie zastępują buildu,
 prób fault/shutdown ani Windows bez Docker/WSL. Regresje Rust pozostają
 NOT COMPILED/NOT RUN zgodnie z aktualną instrukcją operatora.
+
+## Jawne odzyskanie pustego, zakończonego runtime — Docker development
+
+Stan 16.10.2026: kontrakt wymagany dla trasy Docker; implementacja i runtime
+pozostają NOT VERIFIED do osobnych dowodów. Zwykłe `service-ensure` nadal
+odmawia przejęcia `unknown`. Nie usuwamy ownera, blokad, sesji ani wyników.
+
+Dopuszczamy jawną lokalną operację operatora wyłącznie dla pustego store,
+którego poprzedni owner ma dokładnie przypiętą tożsamość i oba schedulery
+zakończyły pracę z potwierdzonymi eventami `drained` oraz `exited_success`.
+Operacja wymaga wolnej natywnej blokady ownera, serializacji startup/launch,
+transakcji writera store i właściwego host ledgeru. Brak pracy musi zostać
+udowodniony z bieżącego store i ledgeru, a nie z wieku heartbeat lub numeru PID.
+
+Wszystkie piny konfiguracji, ownera, jego procesu, targetu, historycznego
+buildu i generacji pozostają zgodne. Nowy program wykonujący recovery ma
+odrębną zapisaną tożsamość; nie udaje poprzedniego buildu. Przed mutacją
+zachowujemy oryginalne bajty i trwały intent z digestem żądania. Wynikiem
+jest `Failed`, nigdy syntetyczne `Drained` ani `Ready`. Identyczne ponowienie
+może odczytać lub dokończyć swój własny wynik; mismatch pozostawia admission
+zamknięte. Niepewna publikacja wymaga odczytu dowodów pod tymi samymi blokadami.
+
+Doprecyzowanie 17.10.2026: pusty runtime store nie wymaga skasowania historii
+host ledgeru. Dopuszczamy zachowanie wyłącznie rekordów `released`, których
+przypięte trwałe dowody zwolnienia zostały zweryfikowane pod host writerem.
+Niezwolniona rezerwacja lub aktywny inventory owner nadal blokuje operację.
+Writer pozostaje trzymany przez całą operację, a recovery nie zmienia ani
+nie usuwa historycznych rezerwacji, dowodów czy rekordów innych store.
+
+To nie jest odzyskiwanie trwających zadań ani zgoda na automatyczny restart.
+Store zawierający pracę, aktywne lease lub niezwolnione rezerwacje wymaga właściwego
+recovery tej pracy. Po zakończeniu tej operacji nowy start nadal przechodzi
+pełne probe/readiness i kontrole generacji z ADR 0052. Szczegóły oraz bramki
+są w kontrakcie native-runtime-service-v1. Publiczny OpenAPI i fizyka solverów
+nie zmieniają się przez tę lokalną operację.
+
+## Boot-relative ordering of compute-node samples
+
+Doprecyzowanie 17.10.2026: korekta zegara ściennego nie może odrzucić nowszej
+próbki hosta tylko dlatego, że `collected_at` cofnął się. Snapshot zachowuje
+schemat JSON bez pola watermarku, a ledger przechowuje bootowy czas
+monotoniczny w osobnym immutable CAS `compute_node_sample_order.v2` pod
+`runtime-state/cas/snapshot-order-v2`, związanym
+z digestem snapshotu, `node_id` i `boot_id`. Rekord jest publikowany przed
+przesunięciem bieżącego pointera i podlega temu samemu fail-closed GC. Brak
+rekordu starego writera zachowuje ścisłą regułę UTC; starszy rekord z katalogu
+`snapshot-order` jest ignorowany. Rekord v2 obecny, lecz
+uszkodzony, podlinkowany lub niedopasowany odmawia odczytu. Nie ma syntetycznego
+watermarku ani porównania próbek różnych bootów, a owner stamp pozostaje
+zweryfikowany przez pełny digest snapshotu.
+Dowód bieżącej ścieżki Docker dotyczy Linux `CLOCK_BOOTTIME`; natywna ścieżka
+Windows pozostaje osobną kwalifikacją i nie jest przez ten kontrakt ogłaszana
+równoważną bez własnego dowodu.

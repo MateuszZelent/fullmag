@@ -205,7 +205,8 @@ bool context_snapshot_stats_mfem(
             ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
             ctx.base_plan.precession_enabled,
             rhs_current,
-            max_rhs_current);
+            max_rhs_current,
+            &ctx.mesh.magnetic_node_mask);
         add_stt_rhs_aos(ctx, ctx.state.m_xyz, rhs_current, max_rhs_current);
         add_sot_rhs_aos(
             ctx,
@@ -215,7 +216,7 @@ bool context_snapshot_stats_mfem(
             ctx.state.current_time,
             ctx.zeeman.stage_start_time_s);
         zero_non_magnetic_nodes_aos(rhs_current, ctx.mesh.magnetic_node_mask);
-        max_rhs_current = max_norm_aos(rhs_current);
+        max_rhs_current = max_norm_aos_masked(rhs_current, ctx.mesh.magnetic_node_mask);
     }
 
     stats.step = ctx.state.step_count;

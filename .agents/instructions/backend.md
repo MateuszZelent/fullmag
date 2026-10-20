@@ -257,12 +257,33 @@ Rules:
 
 ## 24. Canonical build and run entrypoints
 
-Prefer `just` recipes when they exist.
-For build tasks, the repository `justfile` is the first place to look. If a
-managed/container recipe exists, use that recipe as the default build path
-instead of assembling an equivalent-looking host-side `cargo`, `cmake`, Docker,
-or shell command. Host-only commands are diagnostics unless the user explicitly
-asks for them.
+For daily Docker development, use `scripts/docker_dev.py` and the `justfile`
+wrappers. First bind the selected registered checkout to its Compose project:
+`fullmag-master` or `fullmag-worktree-<worktree_id>`. All builds for that checkout
+must run within that project, never on the host, in another project, in an
+independent build container, or through the old runner. A missing compliant
+recipe is a route to fix, not permission for a fallback.
+
+The persistent `backend` service owns compilation and runtime. On every start,
+including an ordinary Docker Desktop restart, it checks current mounted sources
+and dependencies, prepares consistent build inputs in the Compose group's named
+Docker volumes, compiles only what is needed using the persistent volume/BuildKit
+cache, validates the result, and starts API/native runtime in that same container.
+Unchanged inputs reuse the existing result. Build staging, packages, build logs,
+receipts, and provenance must stay in those technical volumes; host `storage` is
+reserved for user sessions, simulation results, projects, settings, history, and
+explicit operational infrastructure. No separate host manifest-refresh command
+is required. The persistent `frontend` service keeps Next.js HMR running. Preserve
+native drain, recovery, user data, and receipts. The code/runtime compliance of
+this volume-only boundary is **NOT VERIFIED** until mounts and a live restart are
+observed.
+See [ADR 0061](../../docs/adr/0061-docker-development-build-and-runtime-container.md).
+
+For managed/container build tasks outside that daily Docker workspace, the
+repository `justfile` is the first place to look. If a managed/container recipe
+exists, use that recipe as the default build path instead of assembling an
+equivalent-looking host-side `cargo`, `cmake`, Docker, or shell command.
+Host-only commands are diagnostics unless the user explicitly asks for them.
 
 For FEM/MFEM/CUDA/hypre/libCEED work, the canonical build and runtime proof is
 container-backed `just`, not host-only build commands. Treat the container
@@ -283,33 +304,62 @@ If a matching `just` recipe is missing, state that explicitly before using a
 host-side diagnostic command. Do not silently promote the diagnostic path into
 the build path.
 
-### Canonical build entrypoints
+### Canonical daily Docker development recipes
 
-For a host enrolled with `Fullmag_build_runner`, full builds of master and
-worktrees use the single queue (`local-build-runner` skill). This takes precedence
-over the direct heavy-build entrypoints below. Select the source checkout and
-configured profile explicitly; a missing client/profile or unhealthy coordinator
-is a blocker, not an implicit host/CPU fallback. Run and scientific qualification
-recipes remain separate and must not be relabeled as build jobs.
+- `python -B scripts/setup_docker.py` — configure user storage, sources and port;
+  it does not place build cache or staging in that host storage.
+- `just docker-dev-toolchain` — prepare pinned dependencies through BuildKit and
+  the selected group's technical volumes; it must not stage them in host storage.
+- `just docker-dev "<checkout>" <port> ["<script.py>"]` — start frontend and the
+  single backend service, which builds and then runs API/native runtime in place.
+- Restart the selected backend after saving the project and finishing active
+  simulations; it checks current sources and builds as needed by itself.
+
+Do not use the old separate build/assembly/recreate cycle for daily iteration.
+Treat the new lifecycle as `NOT VERIFIED` until actual runtime evidence exists.
+
+### Canonical managed entrypoints outside daily Docker development
+
+The explicitly requested native Windows installer/FEM release qualification is
+separate from daily Docker development. Its scoped authority is
+[ADR 0053](../../docs/adr/0053-native-windows-fem-build-environment.md): use the
+closed `windows-installer-build`, `windows-full-workspace-build` and
+`windows-full-workspace` recipes with the resolver, native heavy slot and
+terminal receipts. The container-backed defaults in this section continue to
+apply to Linux and to other managed profiles. This exception does not authorize
+host compiler commands or restore native daily DEV as an alternative.
+
+For release and other non-development builds outside the Docker development
+workspace, a host enrolled with `Fullmag_build_runner` uses the single managed
+queue (`local-build-runner` skill). This precedence applies only to that
+non-development route and does not override the Docker development recipes
+above. Select the source checkout and configured profile explicitly; a missing
+client/profile or unhealthy coordinator is a blocker, not an implicit host/CPU
+fallback. Run and scientific qualification recipes remain separate and must not
+be relabeled as build jobs. Repository CI follows its own workflow and is not
+proved by a local runner receipt.
 
 - `just build fullmag`
 - `just build fem-gpu-runtime-host`
 - `just package fullmag`
 
-### Canonical run entrypoints
+### Canonical run entrypoints outside daily Docker development
+
 - `just run ...`
 - `just run-py-layer-hole`
 - `just control-room`
 
-`make` is a compatibility/developer fallback.
-Raw `cargo`, `docker compose`, and similar commands are debugging tools, not the default user guidance.
+`make` is a historical compatibility fallback for non-development workflows;
+it is not a daily Docker development entrypoint. Raw `cargo`, `docker compose`,
+and similar commands are debugging tools, not default user guidance.
 
 ---
 
 ## Reguły z korekt projektu
 
 - Obowiązującym kontraktem ścieżek worktree, buildów, cache, runtime’ów i runów jest [Fullmag build-storage governance](../../docs/guides/fullmag-build-storage-governance.md). Project root wyprowadza się ze wspólnego katalogu Git głównego checkoutu; `storage` i `worktrees` są jego rodzeństwem. Nie używaj `cwd.parent` ani nazwy worktree jako substytutu resolvera. Rejestr własności i stan końcowy zasobu są obowiązkowe.
-- Windows używa FULLMAG_PROJECT_STORAGE_ROOT z pliku .env głównego checkoutu przez resolver. `CARGO_TARGET_DIR`, store pnpm/npm, cache narzędzi, TEMP/TMP, CUDA i Playwright muszą pochodzić z zaakceptowanego profilu pod `storage`; `FULLMAG_WINDOWS_*_ROOT` jest tylko zwalidowanym adapterem zgodności. Natywny tryb `just fullmag ...` używa `scripts/windows/run_fullmag.ps1`, a FEM CPU/GPU natywnego `scripts/windows/run_fullmag_fem.ps1` zgodnie z [ADR 0053](../../docs/adr/0053-native-windows-fem-build-environment.md). Pełny pakiet czterech realizacji korzysta z `just windows-full-workspace-build` i `just windows-full-workspace`; Docker Desktop wymaga jawnego `FULLMAG_FORCE_WINDOWS_FEM_DOCKER=1` i osobnej kwalifikacji storage/runtime; żadna Windowsowa trasa nie używa `wsl.exe` jako ukrytego fallbacku.
+- Windows używa FULLMAG_PROJECT_STORAGE_ROOT z pliku .env głównego checkoutu przez resolver. Codzienny development korzysta ze ścieżki Docker dev opisanej w `AGENTS.md`; natywna trasa pozostaje legacy/non-development: `just fullmag ...` używa `scripts/windows/run_fullmag.ps1`, a FEM CPU/GPU `scripts/windows/run_fullmag_fem.ps1` i Docker Desktop. `CARGO_TARGET_DIR`, store pnpm/npm, cache narzędzi, TEMP/TMP, CUDA i Playwright muszą pochodzić z zaakceptowanego profilu pod `storage`; `FULLMAG_WINDOWS_*_ROOT` jest tylko zwalidowanym adapterem zgodności i żadna Windowsowa trasa nie używa `wsl.exe` jako ukrytego fallbacku.
+- Jawna kwalifikacja wydania instalatora i natywnego pakietu FEM Windows jest odrębną trasą z [ADR 0053](../../docs/adr/0053-native-windows-fem-build-environment.md): `just windows-installer-build`, `just windows-full-workspace-build` oraz `just windows-full-workspace`. Natywny `scripts/windows/run_fullmag_fem.ps1` obsługuje FEM CPU/GPU z resolverem, heavy slotem i terminalnym receiptem; Docker wymaga jawnego wyboru zgodności. Ta trasa nie zastępuje codziennego Docker DEV ani nie dopuszcza ręcznych kompilatorów.
 - Wyjątek zatwierdzony 05.10.2026: `FULLMAG_WINDOWS_VOLATILE_ROOT` w lokalnym `.env` głównego checkoutu może kierować wyłącznie odtwarzalną kopię wejść kompilatora oraz jego `TEMP`/`TMP`/`TMPDIR` na lokalny RAM-disk. Natywny launcher sprawdza oznaczenie projektu/worktree/profilu i przywraca zmienne po Cargo. Kopia źródeł na RAM-disku wymaga obsługi Windows `GetFinalPathNameByHandleW`; przy `ERROR_INVALID_FUNCTION` launcher jawnie zachowuje jedną trwałą kopię źródeł dla backendu i desktopu, pozostawiając TEMP na RAM-disku. Trwałe snapshoty, target/cache Cargo, pakiety, logi, receipts i sesje pozostają w kanonicznym storage. Brak skonfigurowanego dysku blokuje nowy build; nie blokuje uruchomienia istniejącego zgodnego pakietu z `build=false`. Wyjątek nie dotyczy Linuxa ani kontenerowego FEM. Szczegóły: [Windows-first development](../../docs/guides/windows-first-development.md#ulotne-dane-kompilacji-na-ram-disku).
 - Linux używa trwałego `storage` projektu oraz container-backed `just` dla ciężkich FEM/MFEM/CUDA/hypre/libCEED. Ochrona ext4/mount pozostaje wymagana; bezpośredni duży zapis na CIFS jest odrzucany. Backing images nowych wdrożeń kieruje się do `storage/build-volumes`; aktywnych istniejących obrazów nie przenosi się w ramach tej polityki. Zatwierdzony mount view nie jest storage rootem, a `/tmp` służy wyłącznie małemu stagingowi.
 - Każda recepta `just`, także ręcznie uruchomiona, musi wykonać resolver/preflight przed pierwszym zapisem, używać przypisanego profilu i zapisać stan końcowy. Brak podpięcia danej recepty oznacz `NOT VERIFIED`; hostowy `cargo`/`cmake`/Docker pozostaje diagnostyką, gdy istnieje zarządzana recepta. Nie wykonuj automatycznego `fetch`/`pull`/bootstrapu ani nie twórz nowych płaskich rootów po odmowie ścieżki.

@@ -96,7 +96,7 @@ int main()
     check(
         hypre_stream_interop.find("HYPRE_RELEASE_NUMBER == 30100") !=
                 std::string::npos &&
-            hypre_stream_interop.find("MFEM_VERSION != 40900") !=
+            hypre_stream_interop.find("MFEM_VERSION != 41000") !=
                 std::string::npos &&
             hypre_stream_interop.find("cudaEventRecord(interop.fullmag_ready, fullmag_stream)") !=
                 std::string::npos &&

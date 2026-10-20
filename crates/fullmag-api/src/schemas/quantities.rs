@@ -48,6 +48,7 @@ pub enum QuantityPublicationCapability {
 #[serde(rename_all = "snake_case")]
 pub enum FieldPayloadState {
     Current,
+    Historical,
     LegacyUnverified,
     Unmaterialized,
 }
@@ -113,7 +114,7 @@ mirror_enum_from_runner!(fullmag_runner::QuantityPublicationCapability, Quantity
     Interactive, ExportOnly, Hidden
 });
 mirror_enum_from_runner!(fullmag_runner::FieldPayloadState, FieldPayloadState, {
-    Current, LegacyUnverified, Unmaterialized
+    Current, Historical, LegacyUnverified, Unmaterialized
 });
 
 impl From<fullmag_runner::FieldCarrierDescriptor> for FieldCarrierDescriptor {
@@ -152,6 +153,27 @@ impl From<fullmag_runner::ResolvedQuantityCapability> for ResolvedQuantityCapabi
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct QuantityTensorDescriptor {
+    pub rank: u8,
+    pub shape: Vec<u8>,
+    pub layout: String,
+    pub axes: Vec<String>,
+    pub component_labels: Vec<String>,
+}
+
+impl From<fullmag_quantities::QuantityTensorDescriptor> for QuantityTensorDescriptor {
+    fn from(value: fullmag_quantities::QuantityTensorDescriptor) -> Self {
+        Self {
+            rank: value.rank,
+            shape: value.shape,
+            layout: value.layout,
+            axes: value.axes,
+            component_labels: value.component_labels,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct QuantityCatalogEntry {
     pub id: String,
     pub label: String,
@@ -161,6 +183,8 @@ pub struct QuantityCatalogEntry {
     pub location: String,
     pub domain: String,
     pub n_comp: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tensor: Option<QuantityTensorDescriptor>,
     pub normalization_hint: String,
     pub interactive_preview: bool,
     pub supports_preview_2d: bool,
@@ -214,6 +238,7 @@ impl From<fullmag_quantities::QuantityDescriptorWire> for QuantityCatalogEntry {
             location: value.location,
             domain: value.domain,
             n_comp: value.n_comp,
+            tensor: value.tensor.map(Into::into),
             normalization_hint: value.normalization_hint,
             interactive_preview: value.interactive_preview,
             supports_preview_2d: value.supports_preview_2d,

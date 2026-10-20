@@ -1,0 +1,49 @@
+# Release/frozen source overlay. DEV uses compose.backend-build-live.yaml so
+# this archive contract remains available for explicit reproducible builds.
+# Apply to compose.dev.yaml and compose.backend-cache.yaml for an explicit build.
+# Application compilers run in this backend service, outside the legacy queue.
+services:
+  backend:
+    entrypoint: ["/usr/local/bin/python3", "/opt/fullmag/backend_dev.py"]
+    command:
+      - prepare
+      - --source-tar
+      - /input/backend-source.tar
+      - --manifest
+      - /input/manifest.json
+      - --output
+      - /opt/fullmag/package
+    healthcheck: {disable: true}
+    environment:
+      HOME: /build/home
+      CARGO_HOME: /build/cargo
+      FULLMAG_TOOLCHAIN_IMAGE_ID: ${FULLMAG_TOOLCHAIN_IMAGE_ID:?Pin the toolchain identity}
+    volumes:
+      # The build must never write the durable workspace database or the
+      # Windows session/history bind inherited from compose.dev.  User data is
+      # visible for dependency/config reads; build state is run-owned scratch.
+      - type: bind
+        source: ${FULLMAG_WORKSPACE_STATE_ROOT:?Managed group user-data namespace is required}
+        target: /user-data
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_BACKEND_BUILD_STATE_ROOT:?Select this build's scratch state root}
+        target: /state
+        read_only: false
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_BACKEND_SOURCE_TAR:?Capture the selected checkout first}
+        target: /input/backend-source.tar
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_BACKEND_SOURCE_MANIFEST:?Capture the selected checkout first}
+        target: /input/manifest.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FULLMAG_BACKEND_PACKAGE:?Select this build's output directory}
+        target: /opt/fullmag/package
+        read_only: false
+        bind: {create_host_path: false}

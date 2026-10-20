@@ -16,6 +16,10 @@ import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import type { ResourceResult } from "./resourceTypes";
 
 const FIELD_AVAILABILITY_QUERY_ORDER = [
+  "stage_id",
+  "carrier_id",
+  "expected_carrier_revision",
+  "view",
   "target_id",
   "scope_kind",
   "scope_id",
@@ -104,6 +108,10 @@ export function resolveFieldAvailabilityResultState(
 
 export function useFieldAvailabilityResource({
   enabled = true,
+  stage_id = null,
+  carrier_id = null,
+  expected_carrier_revision = null,
+  view = null,
   owner_object_id = null,
   scope_id = null,
   scope_kind = null,
@@ -117,6 +125,10 @@ export function useFieldAvailabilityResource({
   );
   const query = useMemo<FieldAvailabilityQuery>(
     () => ({
+      stage_id: normalizeAvailabilityQueryValue("stage_id", stage_id),
+      carrier_id: normalizeAvailabilityQueryValue("carrier_id", carrier_id),
+      expected_carrier_revision: normalizeAvailabilityQueryValue("expected_carrier_revision", expected_carrier_revision),
+      view: normalizeAvailabilityQueryValue("view", view),
       owner_object_id: normalizeAvailabilityQueryValue(
         "owner_object_id",
         owner_object_id,
@@ -125,7 +137,7 @@ export function useFieldAvailabilityResource({
       scope_kind: normalizeAvailabilityQueryValue("scope_kind", scope_kind),
       target_id: normalizeAvailabilityQueryValue("target_id", target_id),
     }),
-    [owner_object_id, scope_id, scope_kind, target_id],
+    [stage_id, carrier_id, expected_carrier_revision, view, owner_object_id, scope_id, scope_kind, target_id],
   );
   const resourceKey = useMemo(
     () => resolveFieldAvailabilityResourceKey(resolvedQuantityId, query),

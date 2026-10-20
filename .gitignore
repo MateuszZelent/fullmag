@@ -19,6 +19,7 @@ apps/desktop/src-tauri/gen/
 !scripts/windows/installer/Fullmag.Setup.UI/README.md
 *.zip
 *.patch
+!patches/**/*.patch
 *.orig
 *.rej
 *.tar.gz

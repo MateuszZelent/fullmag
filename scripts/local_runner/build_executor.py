@@ -33,6 +33,7 @@ PROFILES = {
     'fem-cpu-current-contracts-v1': ('fem', 'cpu'),
     'fem-gpu-current-contracts-v1': ('fem', 'gpu'),
     'fem-cpu-slepc-modal-v1': ('fem', 'cpu'),
+    'boris-cpu-v1': ('external-reference', 'cpu'),
     'fem-cpu-slepc-runtime-v1': ('fem', 'cpu'),
     'fem-cpu-slepc-runtime-v2': ('fem', 'cpu'),
 }
@@ -548,6 +549,8 @@ def profile_lane(profile):
 
 
 def configure_build(layout, profile, image_digest, *, owner, cpus=2, memory_bytes=8 * 1024**3, call=docker):
+    from local_runner.boris_transition import assert_no_pending
+    assert_no_pending(layout['storage_root'])
     profile_lane(profile)
     if not re.fullmatch('sha256:[a-f0-9]{64}', image_digest):
         raise ValueError('An immutable local image ID is required')
@@ -560,6 +563,10 @@ def configure_build(layout, profile, image_digest, *, owner, cpus=2, memory_byte
     storage = Path(layout['storage_root'])
     path = validate_path(storage / 'index' / 'local-runner-build-config.json', storage)
     with file_lock(storage / 'locks' / 'local-runner-coordinator.lock', 'build configuration'):
+        from local_runner.coordinator_replacement import assert_no_pending
+        assert_no_pending(storage)
+        from local_runner.boris_transition import assert_no_pending
+        assert_no_pending(storage)
         config = json.loads(path.read_text()) if path.exists() else {'schema': 'fullmag.runner-build-config.v1', 'operator': owner, 'profiles': {}}
         if config.get('schema') != 'fullmag.runner-build-config.v1' or config.get('operator') != owner:
             raise ValueError('Build configuration owner/schema mismatch')
@@ -569,6 +576,8 @@ def configure_build(layout, profile, image_digest, *, owner, cpus=2, memory_byte
 
 
 def configured_build(layout, owner, profile):
+    from local_runner.boris_transition import assert_no_pending
+    assert_no_pending(layout['storage_root'])
     profile_lane(profile)
     storage = Path(layout['storage_root'])
     path = validate_path(storage / 'index' / 'local-runner-build-config.json', storage)
@@ -600,7 +609,10 @@ def capsule_path(storage, job):
 
 def trusted_identity(run_root, journal, storage):
     for name, expected in journal['trusted_hashes'].items():
-        if name not in ('build_entrypoint.py', 'worker_entrypoint.py', 'context.json'):
+        allowed = ('build_entrypoint.py', 'worker_entrypoint.py', 'context.json')
+        if journal.get('profile') == 'boris-cpu-v1':
+            allowed += ('boris_cpu.py',)
+        if name not in allowed:
             raise ValueError('Unknown trusted input')
         path = validate_path(run_root / 'trusted' / name, storage)
         if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
@@ -626,6 +638,8 @@ def prepare_worker_directory(path, storage):
 
 
 def dependency_cache_paths(storage, profile):
+    if profile == 'boris-cpu-v1':
+        raise ValueError('BORIS external reference uses private execution paths, no shared solver cache')
     backend, device = profile_lane(profile)
     lane = backend + '-' + device
     base = Path(storage) / 'cache' / 'windows' / lane
@@ -713,10 +727,13 @@ def validate_build_receipt(artifacts, job, journal):
     entries = receipt.get('artifacts')
     if not isinstance(entries, list) or not entries:
         raise ValueError('Build receipt has no artifacts')
-
     runtime = RUNTIME_PROFILE_CONTRACTS.get(job['profile'])
     contract = PROFILE_CONTRACTS.get(job['profile'])
-    if runtime is not None:
+    if job['profile'] == 'boris-cpu-v1':
+        required = {'outputs/boris/' + name for name in required_outputs_for_profile(job['profile'])}
+        if not required.issubset({entry.get('path') for entry in entries}):
+            raise ValueError('Required BORIS build outputs missing')
+    elif runtime is not None:
         if receipt.get('runtime_only') is not True:
             raise ValueError('SLEPc runtime receipt is not marked runtime-only')
         if receipt.get('runtime_contract') != runtime:
@@ -1120,6 +1137,9 @@ def validate_build_receipt(artifacts, job, journal):
         digest = artifact_sha256(artifact)
         if digest != entry['sha256']:
             raise ValueError('Artifact hash mismatch')
+    if job["profile"] == "boris-cpu-v1":
+        from local_runner.boris_cpu import validate_outputs
+        validate_outputs(Path(artifacts), receipt)
     return receipt
 
 
@@ -1186,6 +1206,9 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
                 build_storage_root=browser_build_storage_root)
                for item in running):
             return {'state': 'waiting_for_existing_fullmag_container'}
+        from local_runner.coordinator_replacement import is_pending
+        if is_pending(storage):
+            return {'state': 'waiting_for_coordinator_replacement'}
         job = queue.claim('local-host', owner=owner, expected_job_id=expected_job_id)
         if job is None:
             return None
@@ -1230,9 +1253,11 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
             run_root = validate_path(storage / 'runs' / job['worktree_id'] / job['job_id'], storage)
             run_root.mkdir(exist_ok=False)
             profile_key = 'runner-' + job['profile'] + '-' + config['image_digest'][7:19]
+            caches = ({name: run_root / ('unused-' + name) for name in ('cargo', 'rustup', 'pnpm')}
+                      if job['profile'] == 'boris-cpu-v1' else dependency_cache_paths(storage, job['profile']))
             paths = {'source': capsule, 'workspace': run_root / 'execution', 'artifacts': run_root / 'artifacts',
                      'trusted': run_root / 'trusted', 'build': storage / 'builds' / job['worktree_id'] / profile_key,
-                     **dependency_cache_paths(storage, job['profile'])}
+                     **caches}
             for key, path in paths.items():
                 validate_path(path, storage)
                 if layout.get('container_coordinator') and key in ('cargo', 'rustup', 'pnpm'):
@@ -1246,7 +1271,10 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
                 for key in ('workspace', 'artifacts', 'build'):
                     prepare_worker_directory(paths[key], storage)
             trusted_hashes = {}
-            for filename in ('build_entrypoint.py', 'worker_entrypoint.py'):
+            trusted_files = ('build_entrypoint.py', 'worker_entrypoint.py')
+            if job['profile'] == 'boris-cpu-v1':
+                trusted_files += ('boris_cpu.py',)
+            for filename in trusted_files:
                 content = (Path(__file__).parent / filename).read_bytes()
                 (paths['trusted'] / filename).write_bytes(content)
                 trusted_hashes[filename] = hashlib.sha256(content).hexdigest()

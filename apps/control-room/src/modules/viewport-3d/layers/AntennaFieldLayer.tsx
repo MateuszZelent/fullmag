@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import { BufferAttribute, BufferGeometry, DoubleSide, LineBasicMaterial, MeshBasicMaterial, PointsMaterial } from "three";
+import { antennaColorCoordinate, resolveAntennaColorRange } from "@/kernel/visualization/antennaColorRange";
 import { antennaFieldDisplayLabel } from "@/kernel/visualization/antennaFieldIntent";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import { scalarColorRgb } from "@/shared/visualization/scalarColorPalette";
@@ -24,10 +25,9 @@ export function AntennaFieldLayer({ model, colors, tracker, sessionIdentity }: {
   const rgb = useMemo(() => {
     if (!model) return null;
     const rgb = new Float32Array(model.count * 3);
-    const scale = Math.max(Math.abs(model.minimum), Math.abs(model.maximum)) || 1;
-    const minimum = model.minimum / scale, range = model.maximum / scale - minimum;
+    const range = resolveAntennaColorRange(model, model.intent.colorRange);
     for (let index = 0; index < model.count; index += 1) {
-      rgb.set(scalarColorRgb(range > 0 ? (model.scalarValues[index] / scale - minimum) / range : 0.5, model.intent.palette), index * 3);
+      rgb.set(scalarColorRgb(antennaColorCoordinate(model.scalarValues[index], range), model.intent.palette), index * 3);
     }
     return rgb;
   }, [model]);
@@ -102,14 +102,14 @@ export function AntennaFieldLayer({ model, colors, tracker, sessionIdentity }: {
     topologyRevision: `sample-carrier:${model.intent.contentDigest}`,
   } : null, [model]);
   if (!model || !geometries || !materials || !rgb) return null;
-  return <group name="antenna-scientific-field" userData={{ quantity: model.intent.quantity, label: antennaFieldDisplayLabel(model.intent), normalization: model.intent.kind === "basis" ? "per_ampere" : "raw_authored_current", sampleCount: model.count, minimum: model.minimum, maximum: model.maximum }}>
+  return <group name="antenna-scientific-field" userData={{ quantity: model.intent.quantity, label: antennaFieldDisplayLabel(model.intent), normalization: model.intent.kind === "basis" || model.intent.quantity.endsWith("_per_ampere") ? "per_ampere" : "raw_authored_current", sampleCount: model.count, minimum: model.minimum, maximum: model.maximum, colorRange: resolveAntennaColorRange(model, model.intent.colorRange), surfaceVectorScale: model.surfaceVectorScale ?? 1 }}>
     {model.intent.surface && geometries.surface && materials.surfaceMaterial ? <mesh name="antenna-field-surface" geometry={geometries.surface} material={materials.surfaceMaterial} dispose={null} /> : null}
     {model.intent.wireframe && geometries.wireframe && materials.wireMaterial ? <lineSegments name="antenna-field-wireframe" geometry={geometries.wireframe} material={materials.wireMaterial} dispose={null} /> : null}
     {model.intent.points ? <points name="antenna-field-samples" geometry={geometries.geometry} material={materials.material} dispose={null} /> : null}
     {model.intent.vectors && model.vectorSegments ? <VectorFieldLayer
       segments={model.vectorSegments} buildReference={reference} carrierId={`antenna:${model.intent.sourceObjectId}:${model.intent.portModeId}`}
       fieldBufferId={model.key} colors={colors} colorMode="magnitude" glyphColorsOverride={rgb}
-      tracker={tracker} sessionIdentity={sessionIdentity} renderOnTop={false}
+      style={{ thickness: model.intent.vectorThickness ?? 1 }} tracker={tracker} sessionIdentity={sessionIdentity} renderOnTop={model.intent.vectorsOnTop ?? false}
     /> : null}
   </group>;
 }

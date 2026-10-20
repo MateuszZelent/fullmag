@@ -1,3 +1,4 @@
+use fullmag_engine::fdm::TransportStageErrorBudget;
 use fullmag_engine::{
     CellSize, EffectiveFieldTerms, EngineError, EngineErrorCode, EvaluationRequest,
     ExchangeLlgProblem, ExternalStageTerms, GridShape, LlgConfig, MaterialParameters,
@@ -188,7 +189,9 @@ fn coupled_heun_final_stage_failure_rolls_back_state_and_thermal_interval() {
         "failed coupled step consumed RNG"
     );
 
-    let zero_terms = |magnetization: &[[f64; 3]], _time_s, _budget| {
+    let zero_terms = |magnetization: &[[f64; 3]],
+                      _time_s: f64,
+                      _budget: Option<TransportStageErrorBudget<'_>>| {
         Ok(ExternalStageTerms {
             additional_field_apm: vec![[0.0; 3]; magnetization.len()],
             direct_torque_per_s: vec![[0.0; 3]; magnetization.len()],

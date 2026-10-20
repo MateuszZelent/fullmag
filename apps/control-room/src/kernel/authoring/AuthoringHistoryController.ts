@@ -164,13 +164,6 @@ export class AuthoringHistoryController {
   clear(): void {
     // Even an empty stack can have an immediate mutation awaiting its ACK.
     this.historyGeneration += 1;
-    if (
-      this.undoStack.length === 0 &&
-      this.redoStack.length === 0 &&
-      !this.pending
-    ) {
-      return;
-    }
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this.notify();

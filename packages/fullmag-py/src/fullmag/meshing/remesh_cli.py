@@ -42,6 +42,7 @@ from fullmag.meshing.quality import (
 )
 from fullmag.meshing.fmmq import _canonical_json, build_fmmq_v2_spec, write_fmmq_v2
 from fullmag.meshing._gmsh_types import (
+    MixedLayerTopologyCertificateV2,
     _build_mesh_statistics_report,
     _mesh_statistics_report_to_ir,
 )
@@ -67,6 +68,17 @@ _QUALITY_DATA_KIND_F64 = 1
 _QUALITY_DATA_FLAG_SICN = 1 << 0
 _QUALITY_DATA_FLAG_GAMMA = 1 << 1
 _QUALITY_DATA_FLAG_VOLUME = 1 << 2
+
+
+def _mixed_certificate_wire_fields(mesh_data: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Keep legacy and schema-native v2 certificates on separate wire fields."""
+    certificate = getattr(mesh_data, "mixed_layer_topology_certificate", None)
+    if certificate is None:
+        return None, None
+    payload = certificate.to_dict()
+    if isinstance(certificate, MixedLayerTopologyCertificateV2):
+        return None, payload
+    return payload, None
 
 
 def _geometry_from_ir(entry: dict[str, Any]) -> Any:
@@ -406,6 +418,7 @@ def _write_topology_artifact_if_needed(
     # reader-facing atomic publication point.
     artifact_stem = temporary_path.name.removeprefix(".").removesuffix(".json.tmp")
     artifact_path = target_dir / f"{artifact_stem}.json"
+    mixed_certificate_v1, mixed_certificate_v2 = _mixed_certificate_wire_fields(mesh_data)
     payload = {
         "schema_version": 2,
         "mesh_name": mesh_name,
@@ -425,11 +438,8 @@ def _write_topology_artifact_if_needed(
         "periodic_boundary_pairs": list(mesh_data.periodic_boundary_pairs),
         "periodic_node_pairs": list(mesh_data.periodic_node_pairs),
         "periodic_mesh_certificate": mesh_data.periodic_mesh_certificate,
-        "mixed_layer_topology_certificate": (
-            mesh_data.mixed_layer_topology_certificate.to_dict()
-            if mesh_data.mixed_layer_topology_certificate is not None
-            else None
-        ),
+        "mixed_layer_topology_certificate": mixed_certificate_v1,
+        "mixed_layer_topology_certificate_v2": mixed_certificate_v2,
     }
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as fp:
@@ -712,6 +722,7 @@ def _mesh_result_payload(
         adjacent_growth_report=growth_report,
     )
     inline_topology = topology_artifact is None
+    mixed_certificate_v1, mixed_certificate_v2 = _mixed_certificate_wire_fields(mesh)
     result: dict[str, Any] = {
         "mesh_name": mesh_name,
         "nodes": mesh.nodes.tolist() if inline_topology else [],
@@ -731,9 +742,10 @@ def _mesh_result_payload(
         "periodic_node_pairs": list(mesh.periodic_node_pairs) if inline_topology else [],
         "periodic_mesh_certificate": mesh.periodic_mesh_certificate,
         "mixed_layer_topology_certificate": (
-            mesh.mixed_layer_topology_certificate.to_dict()
-            if inline_topology and mesh.mixed_layer_topology_certificate is not None
-            else None
+            mixed_certificate_v1 if inline_topology else None
+        ),
+        "mixed_layer_topology_certificate_v2": (
+            mixed_certificate_v2 if inline_topology else None
         ),
         "generation_mode": generation_mode,
         "mesh_provenance": mesh_provenance,
@@ -910,6 +922,47 @@ def main() -> None:
                     raise ValueError(
                         "shared_domain_manual_remesh mode requires a declared_universe payload"
                     )
+                raw_body_material_fields = config.get("body_material_fields")
+                if raw_body_material_fields is not None:
+                    if not isinstance(raw_body_material_fields, dict):
+                        raise ValueError(
+                            "shared_domain_manual_remesh body_material_fields must be an object"
+                        )
+                    body_material_fields: dict[str, dict[str, object]] = {}
+                    for geometry_name, fields in raw_body_material_fields.items():
+                        if (
+                            not isinstance(geometry_name, str)
+                            or not geometry_name.strip()
+                            or not isinstance(fields, dict)
+                        ):
+                            raise ValueError(
+                                "shared_domain_manual_remesh body_material_fields must map "
+                                "non-empty geometry names to objects"
+                            )
+                        body_material_fields[geometry_name] = dict(fields)
+                else:
+                    body_material_fields = None
+                raw_geometry_object_ids = config.get("geometry_object_ids")
+                if raw_geometry_object_ids is not None:
+                    if not isinstance(raw_geometry_object_ids, dict):
+                        raise ValueError(
+                            "shared_domain_manual_remesh geometry_object_ids must be an object"
+                        )
+                    geometry_object_ids: dict[str, str] = {}
+                    for geometry_name, object_id in raw_geometry_object_ids.items():
+                        if (
+                            not isinstance(geometry_name, str)
+                            or not geometry_name.strip()
+                            or not isinstance(object_id, str)
+                            or not object_id.strip()
+                        ):
+                            raise ValueError(
+                                "shared_domain_manual_remesh geometry_object_ids must map "
+                                "non-empty geometry names to non-empty object IDs"
+                            )
+                        geometry_object_ids[geometry_name] = object_id
+                else:
+                    geometry_object_ids = None
                 geometries = [_geometry_from_ir(entry) for entry in raw_geometries]
                 mesh_workflow = {
                     "mesh_options": mesh_opts_dict,
@@ -926,6 +979,8 @@ def main() -> None:
                         study_universe=declared_universe,
                         mesh_workflow=mesh_workflow,
                         object_regions=object_regions,
+                        body_material_fields=body_material_fields,
+                        geometry_object_ids=geometry_object_ids,
                     )
                 )
             elif mode == "manual_remesh":

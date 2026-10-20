@@ -190,7 +190,10 @@ class BuildExecutorTests(unittest.TestCase):
                 self.assertEqual(
                     entrypoint.required_outputs_for_profile(profile_name),
                     (
-                        entrypoint.REQUIRED_OUTPUTS
+                        ("BorisLin", "source_manifest.json", "compile_flags.h", "cuda_flags.h",
+                         "cpu_abi_witness.cpp", "cpu_abi_witness", "cpu_abi_witness.json")
+                        if profile_name == "boris-cpu-v1"
+                        else entrypoint.REQUIRED_OUTPUTS
                         if profile_name in entrypoint.RELEASE_PROFILE_NAMES
                         else entrypoint.BASE_REQUIRED_OUTPUTS
                     ),

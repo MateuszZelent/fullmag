@@ -1,0 +1,17 @@
+# DEV checkout context: only image-owned helpers, never application data or secrets.
+**
+!docker/
+!docker/all-in-one/
+!scripts/
+!docker/all-in-one/Dockerfile.backend
+!docker/all-in-one/Dockerfile.backend.dockerignore
+!docker/all-in-one/backend_dev.py
+!docker/all-in-one/backend_source.py
+!docker/all-in-one/backend_volume_cache_maintenance.py
+
+# Explicit frozen release/legacy contexts keep these same helpers at their root.
+!Dockerfile.backend
+!Dockerfile.backend.dockerignore
+!backend_dev.py
+!backend_source.py
+!backend_volume_cache_maintenance.py

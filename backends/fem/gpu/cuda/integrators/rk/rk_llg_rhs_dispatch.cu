@@ -53,6 +53,7 @@ bool gpu_rk_compute_llg_rhs(
         gpu.fields.h_eff.x, gpu.fields.h_eff.y, gpu.fields.h_eff.z,
         rhs.x, rhs.y, rhs.z,
         compute_metric ? gpu.reductions.scalar_workspace : nullptr,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.materials.alpha,
         ctx.material_fields.material.gyromagnetic_ratio,
         ctx.material_fields.material.damping,

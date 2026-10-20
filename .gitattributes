@@ -17,3 +17,5 @@ docs/raports/assets/de-air-matrix-20261004/manifest.json text eol=lf
 docs/raports/assets/de-air-matrix-20261004/air-matrix231-*.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # Preserve exact bytes validated by this audit package manifest.
 /docs/plans/active/frontned_10_2026/fullmag_frontend_audit_v2_2026-10-12/** -text
+# pnpm hashes patch bytes; preserve LF across Windows checkouts.
+patches/**/*.patch text eol=lf

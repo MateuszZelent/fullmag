@@ -120,6 +120,7 @@ impl From<&ResolvedFdmMembership> for FdmCellMembership {
 
 #[derive(Debug, Clone)]
 pub(crate) enum SpatialFieldCarrier<'a> {
+    ArtifactSamples(std::sync::Arc<super::artifact_field_carrier::ArtifactSampleCarrier>),
     FdmCells {
         cells: [u32; 3],
         origin_m: Option<[f64; 3]>,
@@ -199,6 +200,11 @@ pub(crate) fn full_field_publication_carrier_identity(
     field: &ResolvedSpatialField<'_>,
 ) -> Option<FieldPublicationCarrierIdentity> {
     let identity = match &field.carrier {
+        SpatialFieldCarrier::ArtifactSamples(carrier) => FieldPublicationCarrierIdentity {
+            scope_kind: carrier.carrier_scope_kind.clone(), scope_id: carrier.carrier_scope_id.clone(),
+            carrier_id: format!("artifact:{}:{}", carrier.carrier_digest, carrier.indexing.as_str()),
+            carrier_fingerprint: carrier.carrier_digest.clone(), topology_hash: carrier.carrier_digest.clone(),
+        },
         SpatialFieldCarrier::FdmCells {
             grid_fingerprint: Some(fingerprint),
             ..
@@ -263,6 +269,27 @@ pub(crate) fn full_field_publication_carrier_identity(
 }
 
 impl ResolvedSpatialField<'static> {
+    pub(crate) fn from_artifact_samples(
+        quantity_id: &str, values: Vec<f64>,
+        carrier: std::sync::Arc<super::artifact_field_carrier::ArtifactSampleCarrier>,
+        quantity_revision: u64,
+    ) -> Result<Self, ApiError> {
+        let spec = quantity_spec(quantity_id).ok_or_else(|| ApiError::not_found("unknown artifact quantity"))?;
+        carrier.validate(values.len(), spec.n_comp as usize)?;
+        if values.iter().any(|value| !value.is_finite()) {return Err(ApiError::conflict("nonfinite artifact field payload"));}
+        let field = Self {
+            quantity_id: quantity_id.into(), quantity_kind: spec.shape, canonical_unit: spec.unit.into(),
+            component_count: spec.n_comp as usize, default_component: spec.default_component,
+            source_kind: SpatialFieldSourceKind::Persisted,
+            provenance: SpatialFieldProvenance {backend: None, device: None, precision: None},
+            field_generation: Some(carrier.owner.content_digest.clone()), quantity_revision,
+            mesh_or_grid_revision: carrier.carrier_revision, source_grid: None, values,
+            carrier: SpatialFieldCarrier::ArtifactSamples(carrier),
+        };
+        field.validate_contract()?;
+        Ok(field)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_artifact_linear(
         quantity_id: &str,
@@ -408,6 +435,7 @@ impl ResolvedSpatialField<'_> {
         }
         let local_count = self.values.len() / self.component_count;
         match &self.carrier {
+            SpatialFieldCarrier::ArtifactSamples(carrier) => carrier.validate(self.values.len(), self.component_count)?,
             SpatialFieldCarrier::FdmCells {
                 cells,
                 origin_m,

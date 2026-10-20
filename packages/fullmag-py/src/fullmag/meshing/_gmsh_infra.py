@@ -12,7 +12,12 @@ from numpy.typing import NDArray
 from fullmag._progress import emit_progress
 from fullmag.model.geometry import Geometry, Translate
 
-from ._gmsh_types import MeshData, _rebuild_mixed_layer_topology_certificate
+from ._gmsh_types import (
+    MeshData,
+    MixedLayerTopologyCertificateV2,
+    _rebuild_mixed_layer_topology_certificate,
+    _rebuild_mixed_layer_topology_certificate_v2,
+)
 
 
 def _peel_translate_chain(
@@ -109,6 +114,12 @@ def _scale_mesh_nodes(mesh: MeshData, scale_xyz: NDArray[np.float64]) -> MeshDat
         realization_report=mesh.realization_report,
     )
     if certificate is not None:
+        if isinstance(certificate, MixedLayerTopologyCertificateV2):
+            return _rebuild_mixed_layer_topology_certificate_v2(
+                scaled,
+                certificate,
+                authored_scale=float(scale_xyz[0]),
+            )
         return _rebuild_mixed_layer_topology_certificate(
             scaled,
             certificate,

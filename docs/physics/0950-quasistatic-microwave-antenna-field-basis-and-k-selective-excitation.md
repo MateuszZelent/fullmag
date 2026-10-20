@@ -1013,6 +1013,25 @@ skale residualu w weighted KKT nadal wymagają oddzielnej analizy
 conditioning oraz dowodu wykonania w SI. Zmiana shape preflight nie
 kwalifikuje sama solvera dla dowolnej skali lub kontrastu przewodności.
 
+Dla rzadkiej projekcji RT0 sparse MINRES nie używa stałego progu
+bezwzględnego: `SetAbsTol(0.0)` zachowuje względne kryterium `1e-12`.
+Poprzedni próg `1e-14` mógł zakończyć iteracje przed spełnieniem lokalnego
+bilansu strumienia w amperach. Ta zmiana dotyczy wyłącznie zakończenia
+rozwiązania algebraicznego; nie zmienia więzów KKT ani niezależnego
+certyfikatu fizycznego `1e-18 A + 1e-10 * scale_A`. Zerowy RHS nadal
+podlega istniejącej obsłudze solvera. Globalna norma KKT nie zastępuje
+certyfikatu każdego elementu, również wiersza pominiętego jako zależny.
+Zarządzany build 93 (`8cd0f267d22c45cab01f59c64e227541`) zakończył się
+sukcesem dla zamrożonych źródeł sprzed integracji mastera. Rzeczywista próba
+pełnego obwodu `ea21876f779342dfbb00922ad3a90574` odrzuciła publikację:
+lokalny residual elementu wyniósł $-2.3634108111867357\times10^{-15}\,\mathrm A$
+przy skali $1.516892541918217\times10^{-5}\,\mathrm A$, przekraczając
+niezmieniony certyfikat fizyczny. Bramka zgłosiła `elements_ok=0`,
+`faces_ok=1`, `pairs_ok=1`. V/J/H nie zostały zaakceptowane; dodatni odczyt
+HTTP i zimny odczyt pozostają NOT VERIFIED. Sukces kompilacji nie kwalifikuje
+rozwiązania fizycznego ani późniejszego połączenia gałęzi z masterem.
+
+
 | Prywatne wejście | Typ/default | Jednostka SI | Walidacja |
 |---|---|---|---|
 | `AcceptedTerminalChargeRequest.mesh` | `mfem::Mesh*`, wymagany | współrzędne w $\mathrm m$ | borrowed tylko podczas snapshotu, serial straight conforming tet4 |
@@ -1649,9 +1668,7 @@ If no equilibrium resource is supplied, only explicit Cartesian or local-frame
 components are legal; `transverse` must fail closed.
 `equilibrium_ref` is only meaningful for `transverse` and is rejected for every
 other component, rather than silently ignored. Even with a reference,
-`transverse` remains unsupported until a certified equilibrium is loaded and
-projected onto the exact sampling lattice. Python authoring and both ProblemIR
-validators reject it even when an equilibrium reference is present. Python also
+`transverse` wymaga certyfikowanego equilibrium i projekcji na dokładną sampling lattice. Python i oba walidatory ProblemIR akceptują wyłącznie jawne poprawne referencje; runtime FEM CPU pozostaje source-only i niekwalifikowany, zgodnie z E9b poniżej. Python also
 rejects `mode_basis_ref` until a verified modal analysis exists. The publishable
 runner entry point
 also rejects manually supplied equilibrium arrays and ignored mode references;
@@ -2633,6 +2650,57 @@ from legacy Zeeman masks and legacy antenna-current sources. These source-level
 guards do not establish finite RHS, energy or torque for every native
 integrator and do not qualify T13.
 
+(antenna-nonmagnetic-field-only-contract)=
+### 8.2.1 Niemagnetyczny field-only — kontrakt wykonania E4B
+
+Field-only może mieć przewodniki i niemagnetyczny obiekt próbkowania bez
+magnetycznych stopni swobody. Publiczny authoring nie wymaga wtedy `Ms`, `Aex`,
+`alpha`, początkowej magnetyzacji ani sztucznej interakcji Zeemana. Fizyczna
+akcja AntennaFieldSolve jest jawna; nazwa, kolor, rola i prezentacyjny typ obiektu
+nie aktywują transportu ani magnetyzmu. Snapshot przygotowywany podczas dodawania
+pierwszego stage musi zachować tę akcję, zanim znajdzie się ona w pipeline.
+
+Kanoniczny `ProblemIR` i plan rozróżniają field-only od magnetycznego study.
+Authoring draft może jeszcze nie zawierać stage, lecz wykonanie wymaga poprawnego,
+rozwiązanego AntennaFieldSolve. Bez magnetów Relax, Run, eigenmodes, torque oraz
+output magnetyzacji są odrzucane. Nie wypełnia się istniejącego planu FEM zerowym
+materiałem lub sztuczną magnetyzacją. Plan nośników jest jawną realizacją wspólnego
+kontraktu, a numeryczny solve nadal należy do obecnego workflow antenowego.
+
+Nośniki pozostają osobne: potencjał na przewodniku, zachowawczy cell-local RT0
+prądu, pole na niezależnej siatce próbkowania i opcjonalna późniejsza projekcja
+na rzeczywisty magnetyczny target. Stan sesji publikuje siatki/topologię oraz
+istniejące zasoby inspection bez `m`; availability nie reklamuje brakującego
+pola i nie zastępuje go zerami. Field-only nie wykonuje RHS LLG.
+
+Publiczny `FieldOnly` nie definiuje dynamiki ani czasu integracji. Wyniki
+statycznego stage i domain sampling należą do istniejącego
+`AntennaFieldSolveStage`; study nie duplikuje tych parametrów.
+
+| Parametr Python | Typ | Default | SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| FieldOnly.outputs | Sequence[TimeOutputSpec] | () | $1$ | wyłącznie pusta sekwencja, nonempty odrzucane | brak time evolution outputs | backend-neutral authoring; FEM CPU/double inspection implementation unqualified; forced GPU refused | study.sampling.outputs |
+| FieldOnly.constraints | Sequence[FrozenSpins] | () | $1$ | wyłącznie pusta sekwencja, nonempty odrzucane | brak magnetic frozen DOFs | backend-neutral authoring; FEM CPU/double inspection implementation unqualified; forced GPU refused | constraints |
+
+Pierwsza bramka obejmuje istniejącą FEM CPU inspekcję na niezależnym Object
+Tet4/P1. Region/point-cloud i dowolne non-Tet4 nie otrzymują automatycznie support.
+Requested engine/device/mode pozostają w provenance; wymuszone GPU bez realizacji
+jest odrzucane, nie zamieniane na CPU. FDM CPU, FDM GPU i FEM GPU nie uzyskują
+kwalifikacji field-only wskutek samej zmiany IR.
+
+Python study→ProblemIR→planner→publiczny stage→archiwum/API musi zachować
+niemagnetyczny inventory, sampling identity, V w $\mathrm V$, J w
+$\mathrm{A\,m^{-2}}$ i H w $\mathrm{A\,m^{-1}}$. SceneDocument→canonical Python
+zachowuje te same moduły transportu i geometrię bez tworzenia magnetic handles.
+Zwykła zmiana geometrii źródła lub sampling invaliduje właściwe zależności.
+
+Odbiór wymaga wykonania publicznego fixture bez magnetycznych parametrów,
+rzeczywistych V/J/H przez API, braku dostępności `m`, odmowy akcji magnetycznych
+oraz osobnego procesu cold-load. Warm HTTP i fixture nie zastępują tych bramek.
+Ucięte doprowadzenia pozostają inspection-only także w niemagnetycznej scenie;
+nie odblokowuje to per-A basis, FFT ani LLG. Stan kontraktu: plan wdrożenia,
+jeszcze nie dowód wykonania E4B.
+
 ### 8.3 Validation and normalization
 
 Validation requires:
@@ -2962,8 +3030,8 @@ pozostaje **NOT VERIFIED** do odrębnego uruchomienia właściwych bramek.
 | `SolvedAntennaDrive.peak_current_a` | `float` | required | `$\mathrm A$` | finite; zero disables the drive without invalidating the spatial basis | signed peak multiplying the immutable per-ampere field basis | lane-specific artifact consumer | `solved_antenna_drives[].peak_current_a` |
 | `AntennaSpectrumRequest.sampling_plane` | `AntennaSpectrumSamplingPlane` | required | m for origin/extents; 1 for counts and frame | orthonormal in-plane axes, positive extents, at least two samples per axis; current executable lane requires valid tet4 P1 topology or unique identity-coordinate carrier matches and fails closed for unsupported interpolation | centred physical lattice on which the per-ampere source field is sampled before the spatial Fourier transform | immutable FEM antenna asset with tet4 P1 or legacy identity sampling; FDM trilinear, direct RT0 evaluation, mixed topology, and native MFEM transfer remain explicitly unsupported | `antenna_spectrum_requests[].sampling_plane` |
 | `AntennaSpectrumRequest.port_mode_id` | `str | None` | `None` | `$1$` | when present, nonempty and bound to the solve stage; omission is valid only when the solve has exactly one port | selects the immutable per-ampere field basis used by source-spectrum analysis | immutable FEM antenna asset; multi-port assets require explicit selection | `antenna_spectrum_requests[].port_mode_id` |
-| `AntennaSpectrumRequest.component` | `str` | required | `$1$` | one of `x`, `y`, `z`, `u`, `v`, `normal`, `vector_power`, `transverse`; Python and ProblemIR reject `transverse` until certified equilibrium loading and projection exist | selects the analysed field component or vector power | Cartesian/local-frame source spectra supported for certified FEM carrier; `transverse` unsupported | `antenna_spectrum_requests[].component` |
-| `AntennaSpectrumRequest.equilibrium_ref` | `str | None` | `None` | `$1$` | valid only for `component="transverse"`; Python and ProblemIR reject that component until certified equilibrium loading and projection exist | identifies the equilibrium needed for the pointwise transverse source-field projection | unsupported in executable spectrum lane | `antenna_spectrum_requests[].equilibrium_ref` |
+| `AntennaSpectrumRequest.component` | `str` | required | `$1$` | one of `x`, `y`, `z`, `u`, `v`, `normal`, `vector_power`, `transverse`; transverse requires an explicit valid equilibrium reference; runtime requires canonical verified owner context | selects the analysed field component or vector power | Cartesian/local-frame source spectra supported for certified FEM carrier; transverse source-only FEM CPU Tet4/double; native qualification NOT VERIFIED | `antenna_spectrum_requests[].component` |
+| `AntennaSpectrumRequest.equilibrium_ref` | `EquilibriumStageOutputRef \| EquilibriumArtifactRef \| str \| None` | `None` | `$1$` | valid only for `component="transverse"`; typed stage_output/artifact or immutable legacy identity; v7 runtime refuses without canonical owner context | identifies the equilibrium needed for the pointwise transverse source-field projection | source-only FEM CPU Tet4/double; other lanes unsupported | `antenna_spectrum_requests[].equilibrium_ref` |
 | `AntennaSpectrumRequest.mode_basis_ref` | `str | None` | `None` | `$1$` | any nonempty value is rejected by Python and ProblemIR until verified modal analysis exists | reserved identity of a future modal basis, not a source-field spectrum coefficient | unsupported in executable spectrum lane | `antenna_spectrum_requests[].mode_basis_ref` |
 
 (The optional `AntennaSpectrumRequest.port_mode_id` selects the immutable
@@ -6183,6 +6251,989 @@ te testy pozostają **niekompilowane i niewykonane**. Source-only
 publisher/loader nie stanowią runtime albo scientific PASS. Future test
 execution wymaga jawnego storage root z resolvera, bez stałej ścieżki hosta.
 
+
+(antenna-coincident-cut-loop-design)=
+### Zatwierdzony kontrakt projektowy: pełna pętla microstrip 3D i coincident cut
+
+**Stan: `planned_contract`, bez kwalifikacji publikacyjnej i runtime.** Użytkownik
+zatwierdził zachowanie sygnałowego przewodnika z istniejącymi stations/taper oraz
+szerokiej return plate, przewodzące połączenia na obu końcach i idealny skok
+potencjału na przekroju połączenia wejściowego. Cały prąd musi krążyć w jednej
+pełnej objętości przewodzącej $\Omega_c$. Nie wolno zastąpić płyty return cienkim
+przewodnikiem, zmieniać taper na 2.5D ani awansować inspection stubs do basis.
+Ta sekcja jest kontraktem przed implementacją; nie przedstawia dostępnego
+publicznego przykładu Python ani wyników solvera v2.
+
+#### Fizyczne źródło i zachowanie pełnej objętości
+
+$\Gamma_c$ jest przekrojem o **zerowej grubości**: rozcięcie jest topologiczne,
+nie usuwa materiału. Obie kopie wierzchołków mają bitowo identyczne współrzędne
+światowe, różne stable IDs i oddzielne DOF potencjału. Trójkąty minus/plus mają
+bijekcję wierzchołków oraz przeciwne normalne. Każdy oryginalny Tet4 należy do
+wyniku dokładnie raz, ze swoim materiałem i dodatnią objętością. Nie wolno
+usuwać slab, przesuwać powierzchni o epsilon ani nakładać dwóch objętości.
+
+```{math}
+:label: antenna-coincident-loop-jump
+V_c^+ - V_c^- = \Delta V_c .
+```
+
+```{math}
+:label: antenna-coincident-loop-continuity
+\mathbf J_c^+\!\cdot\!\mathbf n_c^+
++\mathbf J_c^-\!\cdot\!\mathbf n_c^- = 0,
+\qquad \mathbf n_c^+=-\mathbf n_c^- \quad\text{na }\Gamma_c .
+```
+
+Znaki plus/minus identyfikują ślady źródła, a nie konwencję zasilacza DC
+odgadywaną z nazwy obiektu. Potencjał jest nieciągły; normalny prąd jest ciągły.
+Pole magnetyczne obejmuje signal, return i **oba pełne mostki**, także objętość
+przy źródle. Idealny zerowej grubości przekrój nie dodaje objętościowego prądu
+ani dodatkowego arkusza prądowego. Nie dodajemy do Biota–Savarta sztucznej
+interpolacji przez brakujący materiał.
+
+Obecne wersje to `fem_charge_h1_periodic_jump.v1` oraz
+`fem_closed_current_geometry.v1`. `ConservativeCurrentSourceCut` odrzuca zerową
+`translation_m`; obecny native v1 paruje zewnętrzne ściany z niezerowym
+przesunięciem. `DirectTetraQuadrature::Evaluate` całkuje istniejące Tet4 view,
+więc v1 z fizyczną luką nie zawiera jej nieistniejącego prądu. Samo zmniejszenie
+luki nie realizuje zatwierdzonego kontraktu. Planowane nazwy
+`fem_charge_h1_periodic_jump.v2`, `fem_closed_current_geometry.v2` i
+`structured_current_closure.v2` oznaczają nowe walidacje coincident seam;
+**nie są istniejącymi capabilities**. V1 pozostaje bez reinterpretacji.
+
+#### Geometria autora, transform i materializer
+
+Układ obiektu ma oś długości u, szerokości v i wysokości w. Zachowujemy
+`length_m`, `thickness_m`, `conductivity_s_per_m`, wszystkie
+`MicrostripWidthStation(s,signal_width_m)`, `return_width_m`, `return_offset_m`,
+`signal_part_id`, `return_part_id`, `name` oraz `RigidTransform`. Istniejące
+walidacje długości, grubości, przewodności i szerokości dodatnich, skończonych
+stations, różnych part IDs i jawnej sztywnej transformacji obowiązują nadal.
+Dla pętli clearance `return_offset_m` musi być ściśle dodatni; stary kontrakt
+geometrii dopuszczający zero nie uprawnia do źródła w zerowym clearance.
+
+Mostek inlet zajmuje u od minus `inlet_connection_length_m` do zera, outlet
+od `length_m` do `length_m + outlet_connection_length_m`. Ich przedział v jest
+zadany przez offset środka i szerokość. Zakres w łączy dolną powierzchnię
+return z górną powierzchnią signal; dotyka obu przewodników dodatnim polem.
+Materiał każdego mostka i part ID są jawne. To parametry planowane, bez
+domyślnego cienkiego powrotu lub ukrytej rezystancji źródła.
+
+Przekrój źródła przechodzi przez pełną szerokość i długość mostka inlet,
+między dolną ścianą signal (`-thickness_m/2`) a górną return
+(`-thickness_m/2-return_offset_m`). Jawne `axis=z`, `offset_m`, `normal` i
+planowane `coordinate_frame=object` określają tę płaszczyznę. Materializer
+stosuje ten sam `RigidTransform` do siatki i płaszczyzny oraz jej normalnej;
+nie zakłada orientacji światowej po obrocie obiektu. V1 axis x/y/z i jego
+FDM interpretacja nie mogą otrzymać cichej zmiany układu odniesienia.
+
+Połączenia muszą zostać fuse/fragment z conforming kontaktami i zachowaniem
+semantycznych materiałów. Obecny mesher exterior terminal caps nie jest
+materializerem wewnętrznych sourcecut faces. Nowa materializacja najpierw
+wymusza konformującą triangulację przekroju, potem duplikuje jego topologiczne
+wierzchołki i DOF, zachowując wszystkie komórki. Region źródła odwołuje się do
+inlet part istniejącego object_id; face pairs, stable IDs, revision i
+geometry digest powstają z rzeczywistej siatki, nie z nearest-face heurystyki.
+Obserwacyjne przekroje signal/return są pomiarami wewnętrznymi, nie zewnętrznymi
+equipotential BC ani actuator currents. Port weights nie wyznaczają prądu.
+
+#### Parametry authored kontraktu i Python → ProblemIR → materializer
+
+Poniższe nowe parametry geometrii i `coordinate_frame` są **planowane**;
+pozostałe nazwy StructuredCurrentClosure/SourceCut/Plane/ImpressedPotentialJump
+istnieją w v1, ale pełna ścieżka FEM loop nadal wymaga nowego lowering. Brak
+obecnego executable przykładu dla v2 jest jawnym blockerem publikacji.
+
+| Python parameter | Typ | Domyślna wartość | SI | Walidacja | Znaczenie | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| MicrostripAntennaLayout.inlet_connection_length_m | float | required when loop enabled | $\mathrm{m}$ | finite > 0; jawna długość poza zakresem signal/return | długość przewodzącego mostka | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.inlet_connection_length_m |
+| MicrostripAntennaLayout.inlet_connection_width_m | float | required when loop enabled | $\mathrm{m}$ | finite > 0; dodatnie pole styku z signal oraz return | szerokość mostka | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.inlet_connection_width_m |
+| MicrostripAntennaLayout.inlet_connection_offset_v_m | float | required when loop enabled | $\mathrm{m}$ | finite; sprawdzany overlap z oboma przewodnikami | poprzeczne położenie środka mostka | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.inlet_connection_offset_v_m |
+| MicrostripAntennaLayout.inlet_connection_part_id | str | required when loop enabled | $1$ | nonempty; unique względem wszystkich części | stabilna semantyczna tożsamość części | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.inlet_connection_part_id |
+| MicrostripAntennaLayout.inlet_connection_conductivity_s_per_m | float | required when loop enabled | $\mathrm{S}\,\mathrm{m}^{-1}$ | finite > 0; bez cichego dziedziczenia | jawna przewodność mostka | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.inlet_connection_conductivity_s_per_m |
+| MicrostripAntennaLayout.outlet_connection_length_m | float | required when loop enabled | $\mathrm{m}$ | finite > 0; jawna długość poza zakresem signal/return | długość przewodzącego mostka | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.outlet_connection_length_m |
+| MicrostripAntennaLayout.outlet_connection_width_m | float | required when loop enabled | $\mathrm{m}$ | finite > 0; dodatnie pole styku z signal oraz return | szerokość mostka | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.outlet_connection_width_m |
+| MicrostripAntennaLayout.outlet_connection_offset_v_m | float | required when loop enabled | $\mathrm{m}$ | finite; sprawdzany overlap z oboma przewodnikami | poprzeczne położenie środka mostka | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.outlet_connection_offset_v_m |
+| MicrostripAntennaLayout.outlet_connection_part_id | str | required when loop enabled | $1$ | nonempty; unique względem wszystkich części | stabilna semantyczna tożsamość części | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.outlet_connection_part_id |
+| MicrostripAntennaLayout.outlet_connection_conductivity_s_per_m | float | required when loop enabled | $\mathrm{S}\,\mathrm{m}^{-1}$ | finite > 0; bez cichego dziedziczenia | jawna przewodność mostka | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.outlet_connection_conductivity_s_per_m |
+| MicrostripAntennaLayout.closed_loop | bool | False | $1$ | explicit True enables both bridges; missing bridge rejected | jawna aktywacja fizycznej pętli | planned FEM CPU v2; pozostałe lane niekwalifikowane | geometry.antenna_layout.loop.enabled |
+| StructuredCutPlane.coordinate_frame | str | world for v1; required object for loop v2 | $1$ | v2 object only; reference must resolve unique antenna transform | układ odniesienia płaszczyzny | planned FEM CPU v2; pozostałe lane niekwalifikowane | current_transport.structured_closure.source_cuts[].plane.coordinate_frame |
+| StructuredCurrentClosure.closure_id | str | required | $1$ | nonempty | tożsamość authored zamknięcia | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.closure_id |
+| StructuredCurrentClosure.source_cuts | tuple[StructuredCurrentSourceCut, ...] | required | $1$ | exactly one for bounded microstrip loop; unique source_cut_id/circuit_id/drive_id | lista źródeł pętli | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts |
+| StructuredCurrentClosure.schema_version | str | structured_current_closure.v1 existing; v2 planned | $1$ | v1 unchanged; v2 explicitly selected for FEM loop | wersja authored kontraktu | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.schema_version |
+| StructuredCurrentClosure.kind | str | closed_geometry | $1$ | closed_geometry only | fizycznie zamknięta geometria | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.kind |
+| StructuredCurrentSourceCut.source_cut_id | str | required | $1$ | nonempty and unique | tożsamość źródła | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].source_cut_id |
+| StructuredCurrentSourceCut.circuit_id | str | required | $1$ | nonempty and unique; one connected conductive loop | tożsamość obwodu | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].circuit_id |
+| StructuredCurrentSourceCut.region | RegionRef | required | $1$ | resolves inlet connection part of the same object | zakres materializacji źródła | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].region |
+| StructuredCurrentSourceCut.plane | StructuredCutPlane | required | $1$ | strictly inside inlet bridge; conforming triangulated full section | przekrój źródła | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].plane |
+| StructuredCurrentSourceCut.drive | ImpressedPotentialJump | required | $1$ | one finite nonzero static jump; no terminal-current actuator | idealne wymuszenie | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].drive |
+| StructuredCutPlane.axis | str | required | $1$ | x/y/z existing; z in object frame for bounded loop | oś normalna przekroju | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].plane.axis |
+| StructuredCutPlane.offset_m | float | required | $\mathrm{m}$ | finite; -thickness_m/2-return_offset_m < offset_m < -thickness_m/2 | lokalne położenie przekroju między płytami | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].plane.offset_m |
+| StructuredCutPlane.normal | str | positive_axis | $1$ | positive_axis/negative_axis; orientation saved explicitly | orientacja źródła i podpisanych pomiarów | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].plane.normal |
+| ImpressedPotentialJump.drive_id | str | required | $1$ | nonempty and unique | tożsamość wymuszenia | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].drive.drive_id |
+| ImpressedPotentialJump.potential_jump_V | float | required | $\mathrm{V}$ | finite nonzero; V_plus minus V_minus | podpisany idealny skok potencjału | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].drive.potential_jump_V |
+| ImpressedPotentialJump.schema_version | str | impressed_potential_jump.v1 | $1$ | existing v1 unchanged | wersja istniejącego wymuszenia | existing authoring v1; FEM loop lowering planned | current_transport.structured_closure.source_cuts[].drive.schema_version |
+| MicrostripAntennaLayout.name | str | required | $1$ | nonempty | nazwa authored layout | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.name |
+| MicrostripAntennaLayout.length_m | float \| None | None; canonical or alias required | $\mathrm{m}$ | finite > 0; conflicting alias rejected | długość signal i return | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.length_m |
+| MicrostripAntennaLayout.thickness_m | float \| None | None; canonical or alias required | $\mathrm{m}$ | finite > 0; conflicting alias rejected | wspólna grubość signal i return | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.thickness_m |
+| MicrostripAntennaLayout.conductivity_s_per_m | float \| None | None; canonical or alias required | $\mathrm{S}\,\mathrm{m}^{-1}$ | finite > 0; conflicting alias rejected | przewodność istniejących części | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.conductivity_s_per_m |
+| MicrostripAntennaLayout.stations | Sequence[MicrostripWidthStation] | () | $1$ | at least two; strictly increasing s; endpoints 0 and 1; positive widths | pełny jawny taper 3D | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.stations |
+| MicrostripAntennaLayout.transform | RigidTransform \| None | None resolves identity | $1$ | typed finite right-handed rigid transform | wspólna transformacja wszystkich części | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.transform |
+| MicrostripAntennaLayout.return_width_m | float \| None | None; canonical or alias required | $\mathrm{m}$ | finite > 0; conflicting alias rejected | pełna szerokość return plate | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.return_width_m |
+| MicrostripAntennaLayout.return_offset_m | float \| None | None resolves thickness_m | $\mathrm{m}$ | finite >= 0 existing; strictly > 0 for planned loop sourcecut | clearance dolnej signal i górnej return | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.return_offset_m |
+| MicrostripAntennaLayout.signal_part_id | str | signal | $1$ | nonempty; differs from return_part_id | tożsamość signal | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.conductors[].id |
+| MicrostripAntennaLayout.return_part_id | str | return | $1$ | nonempty; differs from signal_part_id | tożsamość return | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.conductors[].id |
+| MicrostripAntennaLayout.length | float \| None | None | $\mathrm{m}$ | same validation as length_m; conflicting values rejected | alias normalizowany do length_m | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.length_m |
+| MicrostripAntennaLayout.thickness | float \| None | None | $\mathrm{m}$ | same validation as thickness_m; conflicting values rejected | alias normalizowany do thickness_m | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.thickness_m |
+| MicrostripAntennaLayout.conductivity | float \| None | None | $\mathrm{S}\,\mathrm{m}^{-1}$ | same validation as conductivity_s_per_m; conflicting values rejected | alias normalizowany do conductivity_s_per_m | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.conductivity_s_per_m |
+| MicrostripAntennaLayout.return_width | float \| None | None | $\mathrm{m}$ | same validation as return_width_m; conflicting values rejected | alias normalizowany do return_width_m | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.return_width_m |
+| MicrostripWidthStation.s | float | required | $1$ | finite in [0,1]; sequence endpoint/sort rules | bezwymiarowe położenie u=s*length_m | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.stations[].s |
+| MicrostripWidthStation.signal_width_m | float \| None | None; canonical or alias required | $\mathrm{m}$ | finite > 0; conflicting alias rejected | szerokość signal w station | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.stations[].signal_width_m |
+| MicrostripWidthStation.signal_width | float \| None | None | $\mathrm{m}$ | same validation as signal_width_m; conflicting values rejected | alias szerokości | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.stations[].signal_width_m |
+| RigidTransform.rotation_matrix | Sequence[Sequence[float]] \| None | None resolves identity | $1$ | finite 3x3; Gram and determinant +1 within 1e-9; conflicting alias rejected | obrót obiektu, cut i normalnych | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.transform.rotation_matrix |
+| RigidTransform.translation_m | Sequence[float] \| None | None resolves (0,0,0) | $\mathrm{m}$ | finite vector3; conflicting alias rejected | przesunięcie obiektu i cut; nie translation_m par v1 | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.transform.translation_m |
+| RigidTransform.rotation | Sequence[Sequence[float]] \| None | None | $1$ | same validation as rotation_matrix; conflicting values rejected | alias obrotu | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.transform.rotation_matrix |
+| RigidTransform.translation | Sequence[float] \| None | None | $\mathrm{m}$ | same validation as translation_m; conflicting values rejected | alias przesunięcia | existing geometry authoring; full FEM loop materializer planned v2 | geometry.antenna_layout.transform.translation_m |
+
+UI i Python mają tworzyć jeden authored `CurrentTransport.structured_closure`,
+z jawną wersją v2, pojedynczym regionem/źródłem/drive. UI nie zapisuje gotowych
+face pairs ani conservative view jako domyślnej fizyki. Scene import/export
+musi zachować wszystkie powyższe wartości; JSON autora jest odrębny od
+materializowanego wyniku. Planner rozwiązuje ten sam intent do FEM CPU strict
+`double`, H1/P1 Tet4 i RT0. Obecny planner odrzuca structured closure na FEM;
+zmiana tej bramki wymaga kompletnego v2, nie usunięcia sprawdzenia.
+
+Materializer obniża authored cut do `ConservativeCurrentClosureIR::ClosedGeometry`
+z planowanym operator_version v2, translation_m dokładnie zero, pełnymi
+face pairs i jednym `ConservativeCurrentSourceCutIR`. Revision/digest wiążą
+geometrię, materiały, transform, topology, sourcecut i mesh. Nie rozwiązuje
+wymuszenia przez `ExternalLeadPreparation` ani `CurrentSourceDrive`:
+izolowane straight stubs pozostają inspection-only. Gauge jest jawnie
+`zero_mean` dla pojedynczego połączonego obwodu; skok jest statyczny, ohmic,
+one-way. Nie dopuszczamy jednocześnie terminal-current BC i impressed jump.
+
+Requested intent zapisuje authored geometrię/źródło/solver policy; resolved
+execution zapisuje wersje materializera/operatorów, stable mesh/sourcecut
+bindings, gauge, precision, backend/device i certificate. Nie wolno eksportować
+materializowanego view zamiast authored intent. Reimport, UI Apply i skrypt
+muszą przejść identyczne walidacje. Nieobsługiwane kombinacje kończą się
+jawną odmową bez fallback do v1, stubs, 2.5D lub innego urządzenia.
+
+#### Jeden zaakceptowany owner V/J/H i normalizacja
+
+Istniejący punkt oparcia to `PeriodicChargePotentialSnapshot` przyjmowany przez
+`ConservativeCurrentView::Build`: view posiada potencjał, RT0, canonical face
+flux records i tożsamość, a `DirectTetraQuadrature::Evaluate` otrzymuje dokładnie
+ten view. `NativeFemSteadyTransportRt0Result` przenosi snapshot potencjału,
+RT0 i H. Rozszerzenie v2 musi zachować ten ownership, wersjonując snapshot i
+ABI, jeżeli to konieczne. `AcceptedExternalLeadCurrentSource` nie stanowi
+zaakceptowanego ownera pełnej pętli. Osobny legacy H1 solve/terminal reaction
+nie może dostarczać normalizacji do innego RT0/H.
+
+```{math}
+:label: antenna-coincident-loop-current
+I_c=\sum_{f\in\mathcal F_c^-}s_f q_f .
+```
+
+```{math}
+:label: antenna-coincident-loop-normalization
+\mathbf h_c=\frac{\mathbf H_c}{I_c},\qquad
+\mathbf j_c=\frac{\mathbf J_c}{I_c},\qquad
+v_c=\frac{V_c}{I_c} .
+```
+
+$I_c$ pochodzi z zaakceptowanych podpisanych RT0 face records. Orientacja
+$s_f$ jest zapisana względem jawnej normalnej minus; nigdy nie używamy
+absolutnej wartości, sumy port weights lub net outer flux (który wynosi zero).
+Niezależny pomiar wewnętrznych przekrojów signal i return musi potwierdzić
+jeden ciągły prąd z odpowiednimi znakami. Jedna skala $1/I_c$ obowiązuje V/J/H;
+zapisujemy surowy prąd, znaki i gauge. Obecny legacy writer wymagający
+positive terminal current nie reprezentuje automatycznie takiego signed
+source current: adapter/wersjonowany manifest wymaga jawnej walidacji.
+Inspection może pokazać raw V/J/H, ale basis nie powstaje dla prądu nierozróżnialnego
+od zera. LLG, FFT i `antenna_completion` pozostają blokowane przed kwalifikacją.
+
+#### Tolerancje i bramki ustalone przed wynikami
+
+Poniższe limity są **prerejestrowanym planem v2**, nie pomiarem lub obecnym PASS.
+Nie zmieniamy ich po obejrzeniu wyników. Zmiana wymaga nowej jawnej rewizji
+kontraktu i powtórzenia wszystkich zależnych kwalifikacji.
+
+| Kontrola | Warunek akceptacji v2 przed solve/publikacją |
+|---|---|
+| Topologia seam | exactly one connected circuit; każda para bijektywna; różne IDs i bitowo identyczne xyz; brak zewnętrznej nieparowanej sourcecut face |
+| Pełna objętość | każdy Tet4 dokładnie raz; zero usuniętych/nałożonych komórek; dodatni determinant; względna zmiana sumy objętości najwyżej $10^{-12}$ |
+| Jakość Tet4 | $|\det(A_c)|/\ell_c^3 > 10^{-12}$, gdzie $A_c$ jest macierzą krawędzi, a $\ell_c$ największą długością krawędzi; kontrola bezwymiarowa, nie absolutna w metrach |
+| Parowanie powierzchni | względna różnica pól najwyżej $10^{-12}$; norma sumy jednostkowych normalnych najwyżej $10^{-10}$; brak tolerancji pozwalającej utworzyć lukę |
+| H1 solve | relative algebraic residual najwyżej $10^{-12}$; skończony jawny iteration budget; brak akceptacji unconverged snapshot |
+| Jump/gauge | błąd skoku najwyżej $10^{-12}\,\mathrm V +128\epsilon_c|\Delta V_c|$; volume-weighted mean potencjału najwyżej $10^{-12}\,\mathrm V+128\epsilon_c$ razy największy moduł zaakceptowanego potencjału; residual gauge raportowany oddzielnie |
+| RT0 continuity | każdy cell balance, paired-face balance i różnica source/observation current najwyżej $10^{-18}\,\mathrm A+10^{-10}$ razy suma modułów strumieni właściwej kontroli |
+| Normalizacja | $|I_c|$ większe niż 100 razy powyższy prądowy limit kontroli przekroju; zachowany podpisany prąd i niezmieniona wspólna skala V/J/H |
+| Niezależny oracle H | przy prerejestrowanych punktach i geometry exact fixture błąd normy najwyżej $10^{-3}\,\mathrm{A}\,\mathrm m^{-1}+10^{-3}$ razy norma oracle; osobna zbieżność quadrature i mesh |
+
+W tabeli $A_c$ oznacza macierz trzech krawędzi tetraedru w metrach, $\ell_c$ jego
+największą długość krawędzi w metrach, $\epsilon_c$ maszynowe epsilon `double` ($1$).
+Tabela podaje nierówności kontrolne, a nie dodatkowy model fizyczny.
+Obecne v1 ma inne progi: `geometry_tolerance` periodic solve to
+256 razy epsilon razy max(1,moduł współrzędnej), `kGeometryTolerance=1e-12`
+w conservative view oraz `kCertificateToleranceA=1e-12 A`. Nie wolno
+przedstawiać ich jako skalowo kwalifikowanej walidacji nanoskopowego v2 ani
+obchodzić przez epsilon-gap. Nowy test geometrii musi poprzedzać solver i H.
+
+Niezależna walidacja obejmuje: zmianę położenia cut wewnątrz tego samego
+jednorodnego mostka (J/H niezmienione w zadanej tolerancji; V gauge może się
+zmienić), reversal/scaling jump, ciągłość na obu mostkach, obrót/translation
+obiektu, pełne pokrycie wszystkich komórek przez Biota–Savarta, oracle
+objętościowy 3D i refinement mesh/quadrature. Punktów bliskich źródłu nie
+usuwamy z testu bez zapisanej granicy ważności. Limit par i globalny target
+error budget pozostają obowiązkowe. Walidacja struktury noty nie zastępuje
+native FEM runtime, current certificate ani naukowej kwalifikacji pola.
+
+#### Cztery backend lanes, invalidacja i status produktu
+
+| Solver/device | Stan tego kontraktu pętli | Różnica realizacji i wymagany dowód |
+|---|---|---|
+| FEM CPU | planned v2; v1 istnieje, ale nie implementuje coincident cut | pełna Tet4 H1/P1 double, accepted RT0 i direct volume Biot–Savart; managed container runtime, oracle, mesh/quad convergence i immutable artifact |
+| FEM GPU | unsupported loop solve; consumer basis osobną niekwalifikowaną ścieżką | brak dowodu GPU coincident operatora; bez silent CPU fallback; przyszły consumer wymaga device identity/parity |
+| FDM CPU | existing structured closure v1, ale niekwalifikowana realizacja tej geometrii | harmonic-face FV i osobna voxel/topology convergence; nie uznajemy staircased płyty za równoważną bez dowodu |
+| FDM GPU | brak kwalifikacji tej pętli | double parity z CPU, jawny runtime/device i pełna trajectory evidence wymagane niezależnie |
+
+Zmiana dowolnej geometrii, materiału, transform, mesh policy, cut/drive,
+gauge, solver/RT0/quad policy lub operator version unieważnia mesh binding,
+V/J/H, current certificate, field basis i zależne spectrum/LLG artifacts.
+UI pokazuje invalidację przed Compute; explicit Apply zapisuje authored
+transakcję, nie kasuje geometrii. Odrzucenie materializera nie zachowuje starego
+wyniku jako aktualnego. Observation-only changes nie aktywują actuator.
+Każdy reuse wymaga pełnego intent/resolved digest i wersji, nie nazwy obiektu.
+
+Kryterium ukończenia E2: round-trip nowych jawnych parametrów, poprawna pełna
+siatka i sourcecut, zaakceptowany owner V/J/H, podpisany pomiar RT0 i powyższe
+brane pod uwagę gates. Ta dokumentacja nie spełnia jeszcze E2: materializer,
+Python/IR v2, native operator, signed artifact adapter i production browser
+proof pozostają do implementacji. Osobne E3/E4/E6 gate w tej nocie obowiązują
+nadal; żadna tabela planned nie nadaje `antenna_completion=true`.
+
+#### Symbole kontraktu coincident cut
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\Omega_c$ | pełna objętość przewodzącej pętli wraz z oboma mostkami | $\mathrm{m}^3$ |
+| $\Gamma_c$ | przekrój źródła o zerowej grubości | $\mathrm{m}^2$ |
+| $\Delta V_c$ | zadany skok potencjału plus minus | $\mathrm{V}$ |
+| $V_c^+$ | ślad potencjału po stronie plus | $\mathrm{V}$ |
+| $V_c^-$ | ślad potencjału po stronie minus | $\mathrm{V}$ |
+| $\mathbf J_c^+$ | ślad zaakceptowanej gęstości prądu po stronie plus | $\mathrm{A}\,\mathrm{m}^{-2}$ |
+| $\mathbf J_c^-$ | ślad zaakceptowanej gęstości prądu po stronie minus | $\mathrm{A}\,\mathrm{m}^{-2}$ |
+| $\mathbf n_c^+$ | zewnętrzna jednostkowa normalna strony plus po rozcięciu topologicznym | $1$ |
+| $\mathbf n_c^-$ | zewnętrzna jednostkowa normalna strony minus po rozcięciu topologicznym | $1$ |
+| $\mathcal F_c^-$ | zorientowane trójkąty strony minus źródła | $1$ |
+| $f$ | indeks zaakceptowanego trójkąta RT0 | $1$ |
+| $q_f$ | kanoniczny podpisany strumień RT0 przez trójkąt | $\mathrm{A}$ |
+| $s_f$ | znak mapowania kanonicznej orientacji RT0 na normalną strony minus | $1$ |
+| $I_c$ | zmierzony podpisany prąd źródła RT0 | $\mathrm{A}$ |
+| $\mathbf H_c$ | pole Biota–Savarta wspólnego zaakceptowanego view | $\mathrm{A}\,\mathrm{m}^{-1}$ |
+| $\mathbf h_c$ | baza pola na jednostkę podpisanego prądu źródła | $\mathrm{m}^{-1}$ |
+| $\mathbf j_c$ | gęstość prądu na jednostkę podpisanego prądu źródła | $\mathrm{m}^{-2}$ |
+| $v_c$ | potencjał w zapisanej gauge na jednostkę podpisanego prądu źródła | $\mathrm{V}\,\mathrm{A}^{-1}$ |
+| $V_c$ | zaakceptowany potencjał w zapisanej gauge | $\mathrm{V}$ |
+| $\mathbf J_c$ | zaakceptowana objętościowa gęstość prądu RT0 | $\mathrm{A}\,\mathrm{m}^{-2}$ |
+
+| $A_c$ | macierz trzech krawędzi tetraedru do kontroli jakości v2 | $\mathrm{m}$ |
+| $\ell_c$ | największa długość krawędzi tetraedru do kontroli jakości v2 | $\mathrm{m}$ |
+| $\epsilon_c$ | maszynowe epsilon arytmetyki double | $1$ |
+
+
+(antenna-prepared-accepted-loop-contract)=
+### E2/E3: publiczne prepared → accepted dla pełnej pętli — prerejestrowany kontrakt
+
+**Stan: prerejestrowany kontrakt z integracją `source_only`, `inspection_only`; runtime, typecheck i kwalifikacja naukowa `NOT VERIFIED`.**
+Poniższe tabele zachowują wymagania zapisane przed implementacją; aktualne
+źródłowe punkty realizacji i granice dowodu zestawia końcowa podsekcja.
+Słowo „planowany” w historycznych tabelach nie oznacza dowodu wykonania.
+Ta sekcja doprecyzowuje kontrakt `antenna-coincident-cut-loop-design`; wszystkie
+jego prerejestrowane tolerancje pozostają bez zmian. Nie wprowadza drugiego
+równania przewodnictwa, dodatkowego źródła ani alternatywnej normalizacji.
+Zakres pierwszej realizacji to strict FEM CPU `double`, straight Tet4, jedna
+połączona pełna pętla i jeden statyczny coincident cut. FDM CPU, FDM GPU i FEM
+GPU odmawiają tego nowego wariantu wykonania; obecność osobnych konsumentów
+pola lub structured closure v1 nie dowodzi obsługi wariantu v2.
+
+#### Authoring, materiały i wykonawcza kopia ProblemIR
+
+`Problem.to_ir` ma zachować authored `CurrentTransport.structured_closure`
+w requested intent i eksporcie round-trip. Materializacja wykonawcza może
+wygenerować osobny typowany wariant `ConservativeCurrentSourceIR` z planowanymi
+`schema_version=conservative_current_source.v2` oraz
+`kind=closed_geometry_potential_jump`. Nie zastępuje deklaracji gotowym
+`ConservativeCurrentViewIR` ani nie wymaga od autora `source_field_digest`.
+Prepared oznacza wyłącznie sprawdzone wejście, nigdy zaakceptowane rozwiązanie.
+Exact planowany input-only DTO ma revision, object_id, geometry_id, mesh_digest,
+authored_input_digest, materials_digest, stable_vertex_ids, closure, material_parts
+i terminal_observations. Full closure ma fem_closed_current_geometry.v2. Nie
+zawiera sigma array, accepted pins ani source_field_digest; scalar conductivity
+powstaje dopiero z owning charge.materials. Dodatkowe input revision/scope/policy
+w tabeli należą do pełnego receipt, a nie nowych authored parametrów.
+Legacy `ExternalLeadCurrent` v1 i dotychczasowe symbole pozostają odrębne.
+
+Jedynym źródłem prawdy dla przewodności jest `charge.materials` danego modułu
+current transport. Planowane `material_parts` mapuje każdą rzeczywistą komórkę
+na `material_assignment_index:u32` rozwiązywany w tej samej kolekcji assignments;
+nie zawiera drugiej autorytatywnej tablicy materiałów. Każdy ordinal komórki
+musi wystąpić dokładnie raz, bez luk, duplikatów i nieistniejących referencji.
+Po materializacji każda przewodność jest skończona i dodatnia. Jawne authored
+przewodności mostków są obowiązkowym crosscheck z rozwiązaną assignment,
+a rozbieżność kończy się odmową; nie wolno wybrać jednej wartości po cichu.
+Ta sama mapa pokrywa signal, szeroką return plate oraz oba pełne mostki,
+łącznie z komórkami po obu stronach źródła.
+
+Internal terminal observations są przekrojami `local_u_min`/`local_u_max`
+części signal i return. Zachowują uporządkowane stable face IDs, rzeczywisty
+`part_cell_ordinal` i `bridge_cell_ordinal`. Orientację `outward_from_part`
+wyznacza się z actual xyz i właścicieli komórki po obu stronach interfejsu,
+po zastosowaniu transform obiektu. Wagi portu wyłącznie opisują obserwację:
+nie zadają terminal current, nie tworzą equipotential BC i nie zmieniają solve.
+Nie wolno wybierać przekrojów przez nearest-face, nazwę ani kolejność markerów.
+ID observation musi pochodzić z istniejącej authored terminal reference; jej brak
+kończy się odmową, bez generowania nazw terminali. Whole-object material assignment
+może pokryć wszystkie cztery części tylko przy zgodnych jawnych przewodnościach
+mostków. Jawna part assignment używa region_id identycznego z actual part_id.
+Mieszanie whole-object i part assignments, overlaps i duplicates są odrzucane.
+Revision wynika z canonical input hash obejmującego mesh, pełną closure, ordered
+material mapping, observations i object owner; nie może być stałą etykietą.
+
+Planowany `AntennaPortMode` v3 ma jawny wariant normalizacji
+`source_cut_rt0`, referencję do tego samego source cut oraz orientację
+`minus_outward`. Normalizacja używa podpisanego prądu z rzeczywistych RT0
+records zgodnie z `antenna-coincident-loop-current` i
+`antenna-coincident-loop-normalization`. `normalization_current_a` lub suma
+obserwacyjnych weights nie zastępują zmierzonego prądu. Każdy wymagany pomiar
+signal/return musi przejść wcześniej ustaloną kontrolę ciągłości i znaków.
+
+#### Kompletny internal generated payload — plan, nie publiczne konstruktory
+
+Nazwy poniżej są **planowanymi polami** wariantu prepared/accepted. `required`
+oznacza generowane obowiązkowo przez wskazanego właściciela, bez domyślnej
+wartości autora. Tabela nie przedstawia obecnego serializowanego wyniku ani
+wykonywalnego przykładu Python. Wszystkie wiersze dotyczą wyłącznie opisanego
+FEM CPU `double`; pozostałe urządzenia/solvery odmawiają tego wariantu.
+
+| Planowane pole i etap | Typ / default | SI | Znaczenie i właściciel | Walidacja / powiązanie |
+|---|---|---|---|---|
+| prepared.schema_version, kind | str / required | $1$ | execution-only lowering; conservative_current_source.v2, closed_geometry_potential_jump | exact wersje; unknown fields i mieszanie z accepted view odrzucone |
+| prepared.revision, object_id, geometry_id | str / required | $1$ | lowering: jawne tożsamości autora i rewizji | niepuste; resolved object/module tego samego intent |
+| prepared.mesh_revision, mesh_digest, geometry_digest | str / required | $1$ | materializer: actual pełna siatka i geometria; mesh_revision/geometry_digest są składnikami receipt | digest pełnej uporządkowanej topologii, bit xyz, scope, transform i wersji; nie tylko count |
+| prepared.stable_vertex_ids | list[uint64] / required | $1$ | materializer: tożsamości actual wierzchołków | pełna długość; unique; różne IDs kopii seam, bitowo identyczne xyz |
+| prepared.material_parts[].part_id | str / required | $1$ | semantyczna część actual volume | jawny signal/return/mostek; unique part ID i zgodny zakres |
+| prepared.material_parts[].element_ordinals | list[uint64] / required | $1$ | uporządkowane actual komórki części | pełne jednokrotne coverage wszystkich Tet4; zakres i mesh binding |
+| prepared.material_parts[].material_assignment_index | uint32 / required | $1$ | referencja do charge.materials | indeks uint32 w ordered charge.materials tego modułu; brak alternatywnego materiału |
+| native resolved conductivity (nie pole DTO) | list[float64] / required | $\mathrm{S}\,\mathrm{m}^{-1}$ | lowering charge.materials w kolejności komórek | finite > 0; pełna długość; authored bridge conductivity crosscheck |
+| prepared.materials_digest | str / required | $1$ | tożsamość powyższych assignments i resolved conductivity | obejmuje pełne coverage, indeksy, kolejność i wartości; zmiana unieważnia solve |
+| prepared.source_cut_id, circuit_id, drive_id | str / required | $1$ | authored source w resolved execution | dokładnie jeden cut/drive/connected circuit; zgodne z authored closure |
+| prepared.source_cut.face_pairs | list[paired ordered uint64[3]] / required | $1$ | actual triangulated minus/plus faces | bijekcja, różne stable IDs, bit xyz, przeciwne normalne; bez usuwania Tet4 |
+| prepared.source_cut.translation_m | float64[3] / required | $\mathrm{m}$ | coincident topologiczny seam | dokładnie zero; żadnego epsilon-gap |
+| prepared.source_cut.potential_jump_v | float64 / required | $\mathrm{V}$ | authored plus minus skok | finite nonzero; bez terminal current/equipotential actuator |
+| prepared.source_cut_digest | str / required | $1$ | actual cut geometry/orientation/drive binding | ordered pary, IDs, bit xyz, jump i wersja; zgodny mesh |
+| prepared.gauge | str / required | $1$ | zero_mean dla jednego obwodu | jawny exact wariant; native volume-weighted kontrola z istniejącego kontraktu |
+| prepared.operator_versions, solver_policy, lane | typed metadata / required | $1$ | H1/RT0/Oersted, budżety i strict CPU double | exact wspierane wersje; finite prerejestrowane tolerancje i bounded budgets; żadnego fallback |
+| prepared.authored_input_digest | str / required | $1$ | tożsamość sprawdzonego wejścia przed solve | pełne mesh/geometry/material/cut/gauge/policy/wersje; nie accepted field ani view digest |
+| prepared.terminal_observations[].id, part_id, selector | str / required | $1$ | internal signal/return local_u_min/max | unique, jawny part i przekrój; bez zewnętrznego electrode selector |
+| prepared.terminal_observations[].faces[].face_vertex_ids | list[uint64[3]] / required | $1$ | actual wspólny interfejs part/bridge | pełne faces, stable order, brak duplicate/foreign face |
+| prepared.terminal_observations[].faces[].part_cell_ordinal, bridge_cell_ordinal | uint64 per face / required | $1$ | obaj actual Tet4 właściciele interfejsu | poprawny zakres, właściwe material_parts i wspólny face; nie guessed owner |
+| prepared.terminal_observations[].normal_convention | str / required | $1$ | outward_from_part | obliczona z actual xyz/owners w world frame; zapisana i sprawdzona |
+| port.schema_version, normalization.kind | str / required | $1$ | planowany antenna_port_mode.v3, source_cut_rt0 | jawny v3; v1/v2 nie reinterpretowane |
+| port.normalization.source_cut_ref, orientation | str / required | $1$ | ten sam cut, minus_outward | exact resolved referencja i znak, nie port weight |
+| port.branches[].signed_weight | float64 / required | $1$ | waga wyłącznie obserwacyjna | finite; przypisana jawnej observation; nie actuator ani skala pola |
+| accepted.electric_potential_v | list[float64] / required | $\mathrm{V}$ | owned H1 snapshot po zaakceptowanej gauge | actual stable-ID order; finite; residual/jump/gauge przechodzą istniejące gates |
+| accepted.accepted_charge_field_digest | str / required | $1$ | native po H1, z rzeczywistego snapshotu | authored_input_digest + stable IDs + bit xyz + owned gauged V + jump + resolved conductivity + H1 operator; nie caller hash |
+| accepted.rt0_face_flux_records | list[ordered face IDs, float64] / required | $\mathrm{A}$ dla strumienia | accepted RT0 owner | complete actual face carrier; finite; continuity i balance certificate |
+| accepted.paired_weak_reactions | list[paired IDs, float64, float64] / required | $\mathrm{A}$ dla reakcji | oryginalny K tego samego H1 solve | local paired ledger; finite; zachowany prerejestrowany weak-balance gate |
+| accepted.cell_local_j | typed Tet4 samples / required | $\mathrm{A}\,\mathrm{m}^{-2}$ | sampling tego samego accepted RT0 | actual cell order/IDs/bit xyz; vertex traces i centers, finite, bez rekonstrukcji z innego solve |
+| accepted.source_current_a, source_absolute_flux_a | float64 / required | $\mathrm{A}$ | minus_outward i suma modułów accepted RT0 | finite; signed current; absolute flux tylko skala kontroli, nie normalizacja |
+| accepted.observation_currents_a | map[str, float64] / required | $\mathrm{A}$ | signed internal pomiary actual RT0 | complete observations; orientacja i continuity gate z wcześniejszej tabeli |
+| accepted.accepted_source_state_digest | str / required | $1$ | native dopiero po RT0 certificate i sampling | accepted charge + actual RT0 records/certificate/J/carrier/observations + wersje; bez kołowego view digest |
+| accepted.view_identity_digest | str / required | $1$ | tożsamość pełnego immutable ownera | wyprowadzona po accepted source state; nie wejściowa przesłanka własnego digestu |
+| accepted.h_xyz_apm | list[float64[3]] / required | $\mathrm{A}\,\mathrm{m}^{-1}$ | direct volume quadrature tego samego view | actual target carrier; finite; pełny scope signal/return/obu mostków i quad evidence |
+| solution.signed_normalization_a, scale_per_a | float64 / required | $\mathrm{A}$, $\mathrm{A}^{-1}$ | source current i wspólne 1/Ic | istniejący próg rozróżnialności od zera; zachowany znak; jedna skala V/J/H |
+| solution.v_per_a, j_per_a, h_per_a | typed samples / required | $\mathrm{V}\,\mathrm{A}^{-1}$, $\mathrm{m}^{-2}$, $\mathrm{m}^{-1}$ | normalizacja tego samego owned V/J/H | finite; pełne carrier/digest bindings; żadnego abs(Ic) |
+| solution.schema_version, direct_evidence.schema_version | str / required | $1$ | planowane antenna_field_solution.v2 i fem_direct_oersted_evidence.v2 | osobna wersja writer/readers; v1 nie przyjmuje signed v2 przez reinterpretację |
+| solution.requested_intent, resolved_execution, full_closure | typed metadata / required | $1$ | trwała authored deklaracja i actual execution | pełne geometry/material/cut/policy/versions; cache nie usuwa ani nie skraca closure |
+| solution.publication_status, qualification_receipt | typed metadata / required | $1$ | oddzielna bramka naukowa | inspection/materialized/solved nie nadaje ready/basis_qualified/antenna_completion; receipt dokładnie tego samego operatora i scope |
+
+Prepared `authored_input_digest` i `materials_digest` używają istniejącego
+codec `fullmag.transport_tagged_json.v1`, z prefix
+`fullmag:transport-tagged-json:v1`, a nie decimal JSON float serialization.
+Tagi N/T/F/D/S/A/O rozróżniają null, booleans, liczby, string, array i object.
+Liczby są finite binary64 little-endian, minus zero normalizuje się do plus
+zero; integer poza zakresem dokładnie reprezentowalnym ±2^53 jest odrzucany.
+String to UTF-8 z długością uint64 little-endian; array zachowuje długość i
+kolejność; object ma długość i klucze uporządkowane po UTF-8. Stable IDs i mesh
+ordinals uint64 wiąże istniejący canonical mesh v3 oraz dokładna reprezentacja
+string w preimage, bez utraty bitów przez JSON number. Istniejący encoder ma
+punkt integracji `tagged_json_digest` w `artifact_identity.rs`; wspólny encoder jest już istniejącym symbolem
+`fullmag_ir::transport_identity::tagged_json_digest`, po promocji tych samych
+byte operations. Jest to źródłowa implementacja codec, nie dowód native runtime. Native prepared execution i postsolve accepted digests użyją odrębnego
+`canonical_named_fields_be_bits.v2`, opartego na istniejącym
+`frequency_domain::CanonicalDigestBuilder`. Każdy rekord ma: długość nazwy
+uint64 BE, nazwę UTF-8, tag uint8, długość payload uint64 BE i payload.
+Istniejące tagi to string=1, uint64=2, bytes=3, double=4. Constructor zawsze
+zapisuje pierwszy rekord string `schema`. Physics float64 xyz/V/J i pozostałe
+scalar values zapisuje się jako tag 2 z **raw IEEE-754 bits** uint64 BE,
+bez `add_double` i bez normalizowania minus zero; NaN/Inf są odrzucane przed
+hashowaniem. Stable IDs mają pełne uint64 BE, również powyżej 2^53. Stringi są
+exact bounded UTF-8; arrays zapisują count i kolejne nazwane rekordy w ustalonej
+kolejności. Nested digest jest tag 3 z dokładnie 32 decoded bytes; authored,
+materials i mesh labels pozostają stringiem `sha256:` plus lowercase hex.
+SHA-256 zwraca 64 lowercase hex w ABI char[65]; receipt może dodać `sha256:`,
+lecz prefix nie należy do nested digest preimage. Expected digest nigdy nie
+wchodzi do własnego preimage. Nie wolno zastąpić tego codec JSON hashing,
+opaque caller hash ani digestem input udającym accepted output.
+
+Planowany native descriptor ma domain/schema
+`prepared_closed_loop_execution_input.v2`. Poniższa lista jest exact order
+rekordów, nie istniejącym executable API. Powtarzane nazwy wewnątrz arrays
+zachowują kolejność i count; nie dodajemy nieudokumentowanych indeksów nazwy.
+
+| Kolejność preimage prepared execution | Typ i pełny zakres |
+|---|---|
+| schema | string prepared_closed_loop_execution_input.v2 |
+| source_revision, object_id, geometry_id, source_module_id, mesh_revision, topology_revision, mesh_digest, authored_input_digest, materials_digest, closure_revision, closure_digest, envelope_revision, envelope_digest | kolejne bounded UTF-8 strings; actual revisions/owners i canonical labels |
+| stage_identity, evaluation_time_s_bits, evaluated_envelope_multiplier_bits | kolejne uint64; czas $\mathrm{s}$, multiplier $1$; finite scalar raw bits |
+| stable_vertex_id_version, periodic_operator_version, closure_operator_version | kolejne strings exact wspieranych wersji |
+| execution_lane, charge_gauge, maximum_iterations, charge_relative_tolerance_bits, charge_absolute_tolerance_bits, rt0_algebraic_tolerance_bits, physical_relative_gate_bits, physical_absolute_gate_a_bits | kolejne uint64; CPU_DOUBLE, ZERO_MEAN, bounded budget i niezmienione prerejestrowane gates; charge_absolute_tolerance_bits i physical_absolute_gate_a_bits mają SI $\mathrm{A}$; charge_absolute_tolerance_bits wymagane dokładnie 0 (wyłączona absolute CG gate); pozostałe tolerancje $1$ |
+| vertex_count; każdy vertex_id, vertex_x_bits, vertex_y_bits, vertex_z_bits | uint64 count, następnie rekordy każdego actual vertex w original local order; xyz $\mathrm{m}$ |
+| element_count; każdy cell_vertex_0_id, cell_vertex_1_id, cell_vertex_2_id, cell_vertex_3_id, conductivity_spm_bits | uint64 count; original runtime ordinal i Tet4 local order; conductivity $\mathrm{S}\,\mathrm{m}^{-1}$ |
+| material_assignment_count, material_part_count; każdy part_id, material_assignment_index, part_element_count, part_element_ordinal | counts uint64; parts po UTF-8 part_id; ID string, index/count/ordinals uint64; ordinals strict sorted; jednokrotne pełne coverage i index w owning ordered materials |
+| boundary_face_count; każda boundary_vertex_0_id, boundary_vertex_1_id, boundary_vertex_2_id, boundary_role, boundary_circuit_id | count/IDs/role uint64; faces po canonical ascending stable-ID triple; circuit string, pusty tylko dla insulation; roles actual mesh/cut crosscheck |
+| source_cut_count, source_cut_id, translation_x_bits, translation_y_bits, translation_z_bits, potential_drop_v_bits | count uint64 dokładnie 1; ID string; uint64 raw bits zero translation ($\mathrm{m}$) i finite nonzero jump ($\mathrm{V}$) |
+| source_pair_count; każda minus_vertex_0_id, minus_vertex_1_id, minus_vertex_2_id, plus_vertex_0_id, plus_vertex_1_id, plus_vertex_2_id | count i IDs uint64; pairs lexicographic minus/plus ascending triples; bijektywna bit-coincident geometry |
+| observation_count; każda observation_id, observation_part_id, observation_selector, normal_convention, observation_face_count | count uint64; observations po UTF-8 id; strings i face count uint64; exact outward_from_part |
+| każda observation_vertex_0_id, observation_vertex_1_id, observation_vertex_2_id, part_cell_ordinal, bridge_cell_ordinal | uint64; faces lexicographic outward triple i owner ordinals; cyclic rotate minimum ID first zachowuje orientację, bez reverse |
+
+Oersted targets i quadrature nie należą do prepared **current** descriptor,
+aby immutable current state mógł obsłużyć inne actual target carriers. Pełny
+field-solution/evidence digest musi jednak wiązać actual targets, quadrature
+policy i geometry/material scope; ich zmiana unieważnia H i jego kwalifikację.
+Rust i native niezależnie tworzą prepared execution preimage i porównują digest
+przed solve; są to dane rzeczywistego request, nie hash arbitralnego foreign IR.
+
+
+Nominal SI absolutnej tolerancji charge CG to ampery: oryginalny unscaled
+DiffusionIntegrator przewodności tworzy K w siemensach, a K V i RHS mają SI A.
+Istniejący charge_trace_workspace używa SetAbsTol(0.0), zaś C API odrzuca
+absolute_tolerance != 0. Nie aktywujemy absolutnej bramki H1: pozostaje zero,
+a accepted relative residual pozostaje dimensionless i najwyżej 1e-12.
+To korekta jednostki metadanych, bez zmiany solvera lub tolerancji.
+
+#### Exact accepted preimages — planowane native output identities
+
+Domain/schema `accepted_closed_loop_charge_field.v2` ma poniższą kolejność.
+Digest powstaje po accepted H1 i paired weak/jump/gauge gates, **przed**
+utworzeniem immutable periodic snapshot. `source_field_digest` tego snapshotu
+jest actual native accepted hash, bez caller field digest lub accepted pin.
+
+| Kolejność charge preimage | Typ, jednostki i walidacja |
+|---|---|
+| schema; prepared_execution_digest | string domain, następnie tag 3 decoded 32 bytes actual prepared digest |
+| periodic_operator_version, stable_vertex_id_version | string fem_charge_h1_periodic_jump.v2 i actual stable-ID version |
+| vertex_count; każdy vertex_id, vertex_x_bits, vertex_y_bits, vertex_z_bits, potential_v_bits | uint64 count i raw values; original local order; xyz $\mathrm{m}$, owned volume-gauged V $\mathrm{V}$; finite |
+| element_count; każdy cell_vertex_0_id, cell_vertex_1_id, cell_vertex_2_id, cell_vertex_3_id, conductivity_spm_bits | uint64 count; actual original Tet4 local/ordinal order; resolved conductivity $\mathrm{S}\,\mathrm{m}^{-1}$, finite > 0 |
+| potential_drop_v_bits, measured_potential_jump_v_bits, gauge_mean_v_bits, charge_relative_residual_bits | uint64 raw finite bits; pierwsze trzy $\mathrm{V}$, residual $1$; niezmienione accepted gates |
+
+Domain/schema `accepted_closed_loop_source_state.v2` powstaje dopiero po
+RT0 certificate oraz sampling tych samych `AffineRt0Element`, przed publikacją
+immutable accepted source receipt. Exact order:
+
+| Kolejność source-state preimage | Typ, jednostki i walidacja |
+|---|---|
+| schema; prepared_execution_digest, accepted_charge_field_digest | string domain, następnie dwa tag 3 decoded 32-byte digests |
+| conservative_current_operator_version, sampling_policy, source_current_orientation | strings fem_conservative_current_rt0_view.v1, cell_center_and_cell_local_vertices.v1, authored_minus_outward.v1 |
+| source_current_a_bits, source_absolute_flux_a_bits | uint64 raw finite bits, $\mathrm{A}$; signed current i nieujemna skala |
+| canonical_face_count; każda face_vertex_0_id, face_vertex_1_id, face_vertex_2_id, flux_a_bits | uint64 count; records lexicographic ascending-ID triples; actual canonical finite flux $\mathrm{A}$ |
+| canonical_balance_certificate | tag 3: exact existing canonical_balance_certificate_bytes() payload, długość w bajtach; jego wewnętrzny LE codec pozostaje bez reinterpretacji |
+| weak_reaction_ledger_version; paired_weak_reaction_count | string original_k_paired_vertex_reactions.v2, uint64 count |
+| każdy minus_vertex_id, plus_vertex_id, minus_reaction_a_bits, plus_reaction_a_bits | uint64; rows lexicographic minus/plus ID; actual original-K finite reactions $\mathrm{A}$ |
+| max_paired_weak_flux_mismatch_a_bits; sampled_cell_count | uint64 raw finite mismatch $\mathrm{A}$, następnie uint64 count actual komórek |
+| każdy source_element_index; lokalne vertex_id, vertex_x_bits, vertex_y_bits, vertex_z_bits, current_x_apm2_bits, current_y_apm2_bits, current_z_apm2_bits | uint64 original runtime ordinal; po nim dokładnie cztery vertices w original cell order; xyz $\mathrm{m}$ i actual finite RT0 J $\mathrm{A}\,\mathrm{m}^{-2}$ |
+| center_x_bits, center_y_bits, center_z_bits, center_current_x_apm2_bits, center_current_y_apm2_bits, center_current_z_apm2_bits | uint64 raw bits po vertices każdej komórki; actual center $\mathrm{m}$ i finite RT0 J $\mathrm{A}\,\mathrm{m}^{-2}$ |
+
+Source-state preimage nie zawiera H, target carrier, time quadrature ani
+final view digest lub własnego source-state digest. Ich brak usuwa cykl, a nie
+obowiązek pełnego binding pola: H/targets/quad pozostają w odrębnej tożsamości
+field-solution/evidence. Trzy exact preimages i certificate bytes są retained
+jako bounded evidence; native/Rust muszą sprawdzić limit alokacji, typowane
+lengths i exact byte agreement. Przekroczenie limitu lub rozbieżność jest odmową,
+nie obciętym preimage. Codec/spec pozostaje `planned_contract` do wykonanej
+niezależnej walidacji natywnej; source symbol lub interpreter test nie nadają
+statusu runtime qualified.
+
+Planowane rozszerzenie receipt zachowuje dotychczasowy 728-byte prefix v2,
+32-byte weak reaction record i 280-byte cell record. Append-only tail zawiera
+char[65] prepared_execution_digest, accepted_charge_field_digest,
+accepted_source_state_digest; char[96] digest_encoding_version,
+prepared_digest_version, accepted_charge_digest_version,
+accepted_source_digest_version; output uint8 pointer
+canonical_balance_certificate_bytes oraz uint64 capacity/len. Na LP64
+pointer offset wynosi 1312, a całkowity rozmiar 1336 bajtów. To **planowany**
+layout nowej niezależnie wersjonowanej granicy; stare entrypoints/layouty nie
+mogą go traktować jako istniejące 728-byte v2. Każdy nowy range podlega pełnemu
+alias preflight (także identyczna baza i partial overlap), checked-size i
+bezpieczny reset length przy odmowie dopiero po poprawnym alias preflight.
+Wczesna odmowa błędnego nagłówka lub aliasu oznacza **zero zapisów**, także do
+length/capacity/metadata: reset mógłby zmienić pamięć wejściową. Caller odrzuca
+status błędu przed dekodowaniem. Metadata zawiera cztery exact domain/codec strings,
+a hashes są raw lowercase hex[64] plus NUL.
+
+Prerejestrowany limit raw certificate capacity wynosi 128 MiB. Jest to
+**resource bound**, nie tolerancja fizyczna. Preimage alokacje są checked i
+bounded z wcześniej ograniczonych input counts przed encode; nie ustalamy
+dodatkowego niezatwierdzonego stałego limitu preimage. Istniejący max 1 048 576
+komórek oraz bounded vertices/face/part/observation counts nadal obowiązują.
+Overflow lub przekroczenie limitu certificate kończy się odmową, bez obcięcia
+certificate/preimage. Immutable getters zwracają retained bytes/digests bez
+ponownego kodowania, naprawiania metadanych lub zmiany zaakceptowanego stanu.
+
+Planowany `fullmag_fem_prepared_closed_loop_request_v2` używa istniejącego
+**pure charge** `fullmag_fem_charge_transport_request_v1` jako base, a nie
+steady-spin request. Nie uruchamia wcześniejszego legacy charge solve;
+wewnętrzna konwersja wspólnego RT0 prefix jest tylko adapterem tego samego
+owned solve. Poniższe nazwy native są proposed, nie istniejącymi deklaracjami:
+
+| Planowany descriptor | Pełne pola / validation |
+|---|---|
+| fullmag_fem_prepared_closed_loop_binding_v2 | uint32 abi_version=2/reserved_flags=0, uint64 struct_size; bounded const string source_revision/object_id/geometry_id/source_module_id/mesh_revision/topology_revision/mesh_digest/authored_input_digest/materials_digest/envelope_revision/envelope_digest/expected_prepared_execution_digest; uint64 stage_identity; finite double evaluation_time_s ($\mathrm{s}$), evaluated_envelope_multiplier ($1$). Closure revision/digest/version pochodzą z actual closed_geometry, bez kopii tych labels |
+| fullmag_fem_prepared_closed_loop_material_part_v2 | bounded const string part_id; uint32 material_assignment_index/reserved=0; const uint64 element_ordinals i uint64 element_count; ordered materials owner i pełne disjoint coverage |
+| fullmag_fem_prepared_closed_loop_observation_face_v2 | uint64 face_vertex_ids[3], part_cell_ordinal, bridge_cell_ordinal; actual interfejs, outward oriented triple i obaj właściciele |
+| fullmag_fem_prepared_closed_loop_observation_v2 | bounded const strings id/part_id/selector/normal_convention; const observation_face pointer i uint64 face_count; existing authored terminal reference, actual part, local_u_min/max, outward_from_part |
+| fullmag_fem_prepared_closed_loop_request_v2 | uint32 abi_version=2/reserved_flags=0, uint64 struct_size; pure charge base; binding; existing stable_vertex_identities; existing boundary_faces pointer/count; existing closed_geometry pointer z required operator v2; uint64 material_assignment_count; material_parts pointer/count; observations pointer/count; finite positive double algebraic_relative_tolerance/physical_relative_gate ($1$) i physical_absolute_gate_a ($\mathrm{A}$), z istniejących niezmienionych limits |
+| prepared Oersted wrapper v2 | powyższy request oraz exact istniejące RT0 Oersted v1 target/quad controls: actual target_points_xyz i len ($\mathrm{m}$), base_quadrature_order, maximum_subdivision_depth, absolute_tolerance_apm ($\mathrm{A}\,\mathrm{m}^{-1}$), relative_tolerance ($1$), maximum_source_target_pairs; bez accepted identity/pins |
+
+Każdy const pointer/count ma null wtedy i tylko wtedy, gdy count=0;
+obowiązkowe parts, cut i observations są niepuste. Pure charge base musi
+przejść CPU double, zero-mean, empty Dirichlet, finite positive conductivity i
+finite nonzero static jump. Nowy request nie ma GPU/MPI/external-lead branch.
+Istniejące layouts i symbols v1 pozostają bez zmiany. Nowe prepared Oersted
+entrypoint owija request v2 z własnym uint32 abi_version/reserved_flags,
+uint64 struct_size i exact dotychczasowymi target/quad controls. Append-only
+receipt fields i ich ponowne hash verification są obowiązkowe wyłącznie dla
+nowych prepared entrypoints; istniejące accepted-input RT0/v1/v2 entrypoints
+zachowują dawną semantykę i zerowe/nieobecne extension fields. Rust admission
+musi jawnie odróżnić prepared od legacy, bez silent fallback. Legacy
+source_field_digest pozostaje dotychczasowym input binding; tylko nowy
+prepared snapshot przypisuje actual accepted charge digest po solve. Dokładne sizes/offsets
+nowych input descriptors muszą być checked niezależnie Rust/native przed
+runtime; dokumentacja nie przypisuje im niezmierzonego ABI PASS.
+
+#### Kolejność accepted state, ABI i publikacja
+
+Append-only prepared native ABI musi mieć własną wersję, sizes/capacities,
+pełne input identity i jawne odmowy unsupported lanes/overlaps. Nie zmienia
+layoutów ani znaczenia v1. Dokładny przyszły symbol ABI jest planowany i nie
+jest tu przedstawiany jako istniejąca funkcja. Po H1 native wylicza rzeczywisty
+`accepted_charge_field_digest`; dopiero po certyfikacji RT0 i sampling tworzy
+`accepted_source_state_digest`. Python/materializer nie wpisują placeholdera
+accepted field digest i nie przepuszczają source_field_digest autora jako
+dowodu rozwiązania. Ostateczny view digest zależy od accepted state, a accepted
+state nie zależy od tego samego view digest; graf tożsamości jest acykliczny.
+Direct quadrature H otrzymuje dokładnie ten owner V/RT0/J, nie drugi charge
+solve. Nowy writer/read API muszą weryfikować oba accepted digests, payloads,
+carrier, pełny material/geometry scope i wersje oraz signed normalizację.
+
+**Bramka publikacji v2 jest oddzielna od poprawności zapisu.** Raw owned loop
+snapshot może mieć status inspection, materialized albo solved. Status ready,
+basis_qualified i `antenna_completion=true` wymagają prerejestrowanych dowodów
+scientific qualification dla identycznych operatorów, materiałów, geometry
+scope i tolerancji. Sam signed normalization pass, current certificate lub
+udany zapis manifestu nie nadają kwalifikacji. Istniejący writer v1 z `ready`
+nie jest uprawnieniem dla writer v2. Konsumenci LLG i source FFT odrzucają
+niekwalifikowaną bazę; inspekcja raw wyników nie omija tej bramki.
+
+Cache zachowuje pełną authored closure i actual prepared/accepted bindings.
+Zmiana materiału, komórki, transform, cut, gauge, solver/RT0/quad policy albo
+wersji unieważnia wszystkie zależne digests i kwalifikację. Nie wolno usuwać
+full closure z klucza tylko po to, by cache hit wyglądał na zgodny. Dowody
+wymagane przed zmianą statusu obejmują public round-trip i lowering, odmowy
+foreign mesh/material/observation/input digest, wykonanie jednego owned solve,
+signed reversal/scaling, niezależne current/field oracles oraz managed CPU
+runtime z utrwaloną source capsule. Gate struktury noty nie jest science PASS.
+
+(antenna-prepared-accepted-source-integration)=
+#### Aktualna integracja źródłowa prepared → accepted — bez kwalifikacji runtime
+
+**Stan: `source_only`, wynik `inspection_only`, kwalifikacja `NOT VERIFIED`.**
+Publiczny authoring wykonawczo materializuje input-only source v2 i observation-only
+port v3. `crates/fullmag-plan/src/antenna_current_source.rs::materialize_antenna_closed_loop_current_input`
+wiąże actual mesh v3, ordered charge.materials, cztery parts, pojedynczy bit-coincident
+cut i rzeczywiste interfejsy part/bridge; zachowuje exact `authored_input_preimage`
+w `crates/fullmag-ir/src/antenna_current_source.rs::ResolvedAntennaClosedLoopCurrentInputIR`.
+To wewnętrzny retained input, nie nowy authored parametr ani payload thin manifestu.
+`crates/fullmag-plan/src/antenna_field_solve.rs::plan_antenna_field_solve_execution`
+wybiera `ClosedLoopInspection`; wybór nie nadaje statusu qualified.
+
+`crates/fullmag-runner/src/antenna_field_solution/closed_loop_execution.rs::execute_antenna_closed_loop_inspection`
+sprawdza właścicieli source/stage/port/output, strict FEM CPU/auto double i niezmienione
+prerejestrowane solver gates. `execute_native` buduje żądanie pure charge i pobiera
+V, RT0 J oraz direct H z jednego ownera. Native append-only entrypoints są obecnie
+źródłowo zadeklarowane: `backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp::fullmag_fem_solve_prepared_closed_loop_rt0_v2`
+i `fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2`. Native `prepared_closed_loop_v2::execution_digest`
+oraz `charge_digest` w `prepared_closed_loop_digest_v2.hpp` i
+`closed_loop_source_snapshot.hpp::export_closed_loop_source_snapshot` realizują
+trzy domeny i kolejność z powyższych tabel. Jest to obecność kodu, nie sprawdzony
+native ABI ani dowód wykonania solve. Observations mają finite/overflow guards;
+nie są equipotential BC ani aktuatorami charge.
+
+Dodatkowe generated bindings poniżej są obowiązkowe dla tej statycznej realizacji.
+Nie dodają parametrów użytkownika ani tolerancji fizycznych.
+
+| Wewnętrzne pole / typ | Wartość, codec, jednostka SI | Walidacja i właściciel |
+|---|---|---|
+| static envelope / tagged JSON object | schema=`antenna_closed_loop_static_envelope.v2`, source_module_id, source_revision, multiplier=1.0; multiplier $1$ | `closed_loop_execution.rs::static_envelope_digest`: istniejący tagged-json v1 SHA256; envelope_revision=envelope_digest; cold verifier przelicza z owning source |
+| stage identity / u64 | schema=`antenna_closed_loop_stage_identity.v2`, pełne stage_id/port_mode_id/output_id/source_revision; pierwsze 8 bajtów tagged-json SHA256 jako BE u64; $1$ | `closed_loop_execution.rs::prepared_stage_identity`; manifest zachowuje pełne string IDs, verifier przelicza identyczny hash; resolved stage_identity jest exact decimal JSON string, bez utraty u64 przez binary64 |
+| static evaluation / f64 | evaluation_time_s=0.0 ($\mathrm{s}$), evaluated_envelope_multiplier=1.0 ($1$) | exact finite raw-bit binding do named-BE prepared preimage; brak authored waveform/fake time integration |
+| mesh_revision/topology_revision / string | oba równe input mesh_digest; $1$ | owning actual mesh v3, nie foreign mesh labels ani arbitralny revision |
+| authored_input_json / bounded UTF-8 bytes | osobny payload `authoring_receipt`, encoding=`utf8_json_input.v1`; $1$ | exact retained hashed input body; strict unambiguous JSON, finite tagged-json digest musi odpowiadać authored_input_digest; nie hashuje floatów przez decimal JSON text |
+| requested_intent / compact object | exact source/geometry/material/mesh labels i requested_execution; $1$ | `closed_loop_identity_v2.rs::verify` wiąże labels do prepared BE oraz requested_execution do retained hashed input; ordered materials digest pozostaje owning charge.materials |
+| resolved_execution / compact object | mesh/topology/envelope/stable-ID versions, stage identity, CPU lane/gauge, solver iterations i wcześniej ustalone scalar gates; czas $\mathrm{s}$, absolute charge tolerance $\mathrm{A}$, physical absolute gate $\mathrm{A}$, pozostałe $1$ | exact map i finite raw-bit/scalar kontrola względem prepared BE; nominal charge absolute tolerance pozostaje dokładnie 0, wyłączona |
+
+`crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs::build` zapisuje
+`antenna_field_solution.v2` i direct evidence v2, raw oraz signed per-ampere V/J/H,
+trzy retained preimages, canonical certificate i receipt authored input jako
+oddzielne bounded payloads. Frozen v2 ma dokładnie **22 payloads**, w tym
+`sample_cells` z layout=`sample_tet4_u32_le`, unit=`1`: 16 bajtów na Tet4,
+cztery actual local node indices u32 LE. Manifest `sample_cell_count` jest
+niezerowy i najwyżej 1 048 576. `closed_loop_v2.rs::validate_sampling_mesh`
+sprawdza FEM node carrier, finite actual xyz, nonempty sampling mesh, indices
+w zakresie i dodatni oriented Tet4 volume; `sampling_cells` dekoduje exact
+connectivity przy cold read. Current public closed-v2 H ma **SampleNodes z
+rzeczywistą owned sampling mesh**, nigdy fallback PointSamples przy brakującej
+Tet4 connectivity. Original MeshIR topology_digest pozostaje planner provenance;
+nie udajemy przeliczenia go z ograniczonego carriera. Actual xyz/cells są
+niezależnie przypięte do field signature i payload closure.
+`verify` ponownie wiąże payload hashes, rekordy,
+preimages, provenance i direct evidence; `closed_loop_identity_v2.rs::verify`
+sprawdza actual geometry, zero-mean gauge, affine RT0 samples/face flux oraz
+wyżej opisane source/stage bindings. Te kontrole strukturalne nie zastępują
+niezależnego scientific oracle. `require_qualified` nadal odmawia użycia tej
+wersji przez konsumentów wymagających qualified basis; signed normalization
+ani ważny current certificate nie zmieniają `inspection_only`.
+
+**Sygnatury dotyczące wyłącznie v2.**
+`crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs::field_signature`
+wylicza SHA256 z domeną exact bytes `antenna_closed_loop_native_field.v2`, następnie
+pięcioma members, każdy poprzedzony własną długością u64 LE: decoded raw 32-byte
+accepted_source_state_digest, serde JSON bytes `AntennaSampleCarrier`, ordered
+pozycje targetów jako finite f64 LE raw bits, actual sampling Tet4 connectivity
+jako ordered u32 LE, oraz exact bytes
+`direct_quadrature_v2.rs::DirectQuadratureEvidenceV2::encode`. Ramkowanie rozróżnia
+members; targets, carrier i pełna direct evidence należą do jednej tożsamości.
+Live `build` i cold `verify` niezależnie przeliczają tę sygnaturę i odrzucają
+niezgodny field_solution_signature. current_solution_signature musi być dokładnie
+`sha256:` plus accepted_source_state_digest. Raw inspection nie publikuje
+projekcji target: target_projection_signatures jest pustą mapą, a
+dependency_signatures jest None. To nie zmiana kontraktu ani codec legacy v1.
+
+`crates/fullmag-cli/src/orchestrator/antenna_closed_loop_inspection.rs::execute`
+obsługuje publiczny etap bez fake m ani spin solve. Istniejący
+`crates/fullmag-cli/src/orchestrator.rs::publish_antenna_artifacts_atomically`
+publikuje cały zbiór payloadów i manifest immutable; osobny stage record
+`antenna_closed_loop_stage_output.v2` zachowuje pełne IDs, manifest_ref,
+source metadata, jednostki i status inspection_only/NOT VERIFIED. `crates/fullmag-cli/src/orchestrator/antenna_closed_loop_inspection.rs::write_record`
+ma jeden terminalny commit: hard_link z fsyncowanego temporary file do named
+`antenna_closed_loop_stage_output.v2.json`. Anulowanie przed tym punktem daje
+failed/cancelled i puste outputs; kompletny opublikowany bundle, jeśli powstał,
+pozostaje wskazany w diagnostic bez stage handoff. Późne anulowanie po tym punkcie
+nie cofa committed result. Nowa gałąź nie zapisuje synthetic_stage.json ani nie
+ma drugiego terminalnego zapisu. Continuation magnetyzacji korzysta z
+dotychczasowego stanu etapu; wykonanie inspekcji nie tworzy dowodu LLG.
+
+Nie wykonano tutaj managed native runtime, typecheck, cold public launch,
+browser readback ani niezależnej kwalifikacji current/field. FDM CPU, FDM GPU
+oraz wymuszony FEM GPU dla tego solve pozostają odmową. Prerejestrowany plan
+validation i publication gate pozostają obowiązkowe; source presence i codec
+checks nie uprawniają ready, basis_qualified ani antenna_completion.
+
+(antenna-closed-loop-qualification-receipt-gap)=
+#### Jawna luka kwalifikacji full closed-loop v2
+
+**Stan: brak zatwierdzonego scientific qualification receipt; `NOT VERIFIED`.**
+`closed_loop_v2.rs::require_qualified` nadal bezwarunkowo odmawia. Existing legacy
+`antenna_field_solution.rs::load_solved_antenna_drive_basis_projected` oraz
+`load_antenna_field_solution_samples_for_spectrum` wymagają własnego ready/basis
+kontraktu; inspection v2 nie może otrzymać tej authority przez zmianę flagi.
+Brakuje wersjonowanego publicznego receiptu wiążącego exact source/accepted/field
+identities, actual sampling carrier, metodę/lane/material/geometry scope oraz
+immutable niezależne scientific evidence i rzeczywisty managed execution receipt.
+
+Przed kwalifikacją wymagane są prerejestrowane fixed target sets far/near/inside
+oraz osobne face/edge scope lub jawna odmowa tych zakresów, co najmniej **trzy
+conductor-mesh levels** i osobna zbieżność mesh oraz quadrature. Niezależny oracle
+H, current balance, signed reversal/scaling i cut relocation pozostają wymagane
+przez powyższy kontrakt; żaden próg nie zmienia się po obejrzeniu wyników.
+Dotychczasowy H gate i charge/RT0/jump/gauge/normalization budgets pozostają bez
+zmiany. Konkretną metodę, zakres i dodatkowe progi fixed fixture prerejestruje
+poniższy anchor `antenna-closed-loop-independent-qualification-prereg-v1`;
+nie jest to scientific PASS ani wykonany qualification receipt.
+
+`tests/antenna/verify_field_convergence.py::verify` sprawdza trzy mesh levels dla
+finite straight-wire reference i jawnie zwraca producer_provenance_qualified=False;
+nie nadaje closed-v2 qualification. `scripts/antenna_current_source_oracle.py::prism_field`
+sprawdza niezależną 3D całkę jednolitego prądu tylko poza slabem rozłącznych prismów;
+nie jest oracle całej pętli ani inside/face/edge. Far-field check filamentu nie
+zastępuje volume reference w pobliżu źródła. Brak kompletnego receiptu i niezależnego
+scope evidence nadal blokuje qualified basis, source FFT, LLG i antenna_completion.
+Publiczny przykład jest obecnie zapisany w
+`examples/fem_antenna_closed_loop_nonmagnetic.py::study` (SHA256
+`16904540d169037480b563ec05e4cdb786c772caefba8c3e5a9b66365aa22a62`).
+Flat module-level study używa publicznego `study.stages.add_antenna_field_solve`
+z jednym etapem inspect_loop, strict FEM CPU double, taper/wide return plate i
+obu mostków, structured closure v2 z inlet_cut/jump $0.25\,\mathrm{V}$ oraz port v3
+source_cut_rt0/minus_outward. Sampling jest osobnym nonmagnetic Box; przykład
+nie dodaje m, Ms, Aex, magnetic material ani energy. W interpretowanym sprawdzeniu
+E2 public loader → authored IR → Gmsh execution IR materializacja źródła miała
+682 węzły i 1870 dodatnio zorientowanych Tet4, a sampling 14 węzłów i 24 dodatnie
+Tet4. Są to counts tego pinned przypadku, nie uniwersalny invariant generatora.
+**Source materialized, nie solved:** nie wykonano native solve/publication;
+inspection_only i native/runtime scientific qualification NOT VERIFIED pozostają.
+
+Existing `packages/fullmag-py/src/fullmag/runtime/scene_document.py::build_builder_from_scene_document`
+usuwa explicit null conservative_current_view_ref dla public antenna_field_solve
+przed odtworzeniem buildera; zachowuje structured closure zamiast fake accepted
+view. Dwa actual public round-trip sprawdzenia tej korekty przeszły w kontroli
+źródłowej roota; nie jest to native runtime ani common HTTP/browser readback.
+
+(antenna-closed-loop-independent-qualification-prereg-v1)=
+#### Prerejestracja niezależnej kwalifikacji pętli RT0/H v1
+
+**Prerejestrowano 2026-10-11 przed wynikami solve. Algorytm oracle: SOURCE PLANNED;
+implementacja i scientific qualification: NOT VERIFIED.** Ustalamy metodę, fixed
+fixture, 18 punktów, trzy meshes, progi i odmowy. `closed_loop_v2.rs::require_qualified`
+nadal odmawia; nie aktywujemy nowego publicznego API, receiptu, basis, FFT, LLG
+ani antenna_completion. Przed pierwszym solve utrwalić hash noty, mapy i wejść.
+Wykonanie eksperymentu jest już autoryzowane w zadaniu; nie wymaga nowej zgody.
+Zmiany po danych wymagają nowej jawnej rewizji; wcześniejsze failures pozostają.
+
+| Solver/device | Kwalifikacja tego scope | Realizacja i brakujący dowód |
+|---|---|---|
+| FEM CPU | NOT VERIFIED, SOURCE PLANNED oracle | CPU/double H1/P1 + retained RT0 + direct tetra H; niezależne A/B/C i managed runtime wymagane |
+| FEM GPU | niekwalifikowane | brak device realization i dowodu tego charge/field solve; CPU precompute nie dowodzi GPU |
+| FDM CPU | poza zakresem | nie realizuje full-volume Tet4 charge/RT0 eksperymentu; projected consumer nie uzyskuje kwalifikacji |
+| FDM GPU | poza zakresem | brak device eksperymentu; implicit CPU fallback nie dostarcza dowodu |
+
+##### Fizyczny zakres i parametry
+
+Ta prerejestracja uzupełnia powyższą lukę dla dokładnego fixture. Wspólna fizyka i publiczny kontrakt pozostają w tej nocie; nie powstaje drugi model.
+
+| Parametr | Ustalona wartość, jednostka, znaczenie |
+|---|---|
+| Publiczny fixture | `examples/fem_antenna_closed_loop_nonmagnetic.py::study`; pełna 3D pętla, strict FEM CPU double |
+| Signal | długość $2.0\,\mu\mathrm m$, grubość $0.2\,\mu\mathrm m$, szerokości stacji $0.3,0.1,0.3\,\mu\mathrm m$ przy $x/L=0,0.5,1$ |
+| Return | szerokość $1.0\,\mu\mathrm m$, grubość $0.2\,\mu\mathrm m$, **szczelina** `return_offset_m` $0.4\,\mu\mathrm m$ |
+| Położenie return | środek $z=-0.6\,\mu\mathrm m$, zakres $[-0.7,-0.5]\,\mu\mathrm m$; offset nie jest współrzędną środka |
+| Mostki | inlet $x\in[-0.2,0]$, outlet $x\in[2,2.2]\,\mu\mathrm m$; $y\in[-0.2,0.2]$, $z\in[-0.7,0.1]\,\mu\mathrm m$ |
+| Przewodność | signal/return $5.8\cdot10^7\,\mathrm{S\,m^{-1}}$; inlet/outlet $3.0\cdot10^7\,\mathrm{S\,m^{-1}}$ |
+| Źródło | inlet, płaszczyzna $z=-0.3\,\mu\mathrm m$, jump $+0.25\,\mathrm V$, minus_outward; zero_mean volume-weighted gauge |
+| Carrier publiczny | osobny niemagnetyczny Tet4 Box $0.08^3\,\mu\mathrm m^3$, środek $(1,0,0.3)\,\mu\mathrm m$ |
+| H1 | relative tolerance $10^{-12}$, absolute $0\,\mathrm V$, maksimum 10000 iteracji, P1 |
+| Mesh source | trzy obowiązkowe niezależnie wygenerowane conforming Tet4: max=min $0.15,0.10,0.075\,\mu\mathrm m$, order 1; geometria bez zmian |
+| Native quadrature | order 4, depth 6, atol $10^{-9}\,\mathrm{A\,m^{-1}}$, rtol $10^{-5}$, obowiązujący globalny budżet i zero unconverged |
+
+Każda źródłowa Tet4 uczestniczy w całce dokładnie raz. Sourcecut ma coincident xyz i rozłączne parowane DOF; nie stosujemy epsilon-gap, przesunięcia geometrii ani translated v1. Przepływ jest jeden: native V → retained conservative RT0 J → H. Oracle nie dostarcza podmienionego prądu do produkcyjnego H.
+
+Założenia: stacjonarne przewodnictwo omowe, zadana stała przewodność, jednorodne magnetycznie otoczenie, jednostronne coupling; brak skin effect, displacement current, indukcyjnego sprzężenia i magnetyzacji. Kwalifikacja nie obejmuje odpowiedzi mikrofalowej w czasie ani innych geometrii/materials. FDM CPU/FDM GPU: ten eksperyment nie kwalifikuje tych realizacji. FEM GPU: brak dowodu device i realizacji, NOT VERIFIED. FEM CPU: docelowy zakres kwalifikacji, obecnie NOT VERIFIED.
+
+##### Równania i niezależność oracle
+
+```{math}
+:label: antenna-loop-prereg-charge
+\mathbf J=-\sigma\nabla V,\quad \nabla\cdot\mathbf J=0,\quad
+[V]_{\rm cut}=\Delta V,\quad \int_\Omega V\,d\Omega=0,\quad
+\mathbf H(\mathbf r)=\frac1{4\pi}\int_\Omega
+\frac{\mathbf J(\mathbf x)\times(\mathbf r-\mathbf x)}{|\mathbf r-\mathbf x|^3}\,d\Omega.
+```
+
+Oracle A stosuje **własne poniższe wyprowadzenie**, odmienną redukcję powierzchniową i 1D Gauss–Legendre; nie kopiuje Duffy/native ani kodu pracy referencyjnej. Dla każdej RT0 Tet4 $T$, $\mathbf J(\mathbf x)=\mathbf a+b\mathbf x$ ze skalarnym $b$, więc $\mathbf J(\mathbf x)\times(\mathbf r-\mathbf x)=\mathbf J(\mathbf r)\times(\mathbf r-\mathbf x)$. Ponieważ $\nabla_{\mathbf x}(1/R)=(\mathbf r-\mathbf x)/R^3$, twierdzenie Gaussa daje:
+
+```{math}
+:label: antenna-loop-prereg-surface-oracle
+\mathbf H_T(\mathbf r)=\frac1{4\pi}\mathbf J_T(\mathbf r)\times
+\sum_{F\subset\partial T}\mathbf n_F\int_F\frac{dS}{R},\qquad R=|\mathbf r-\mathbf x|.
+```
+
+Dla zorientowanej ściany $(\mathbf v_0,\mathbf v_1,\mathbf v_2)$, zewnętrznej normalnej $\mathbf n$, $h=\mathbf n\cdot(\mathbf r-\mathbf v_0)$ i rzutu $\mathbf q=\mathbf r-h\mathbf n$ dzielimy ją na trzy **podpisane** fan triangles. Dla krawędzi i→j, $\mathbf e_i=\mathbf v_i-\mathbf q$, $\mathbf e_j=\mathbf v_j-\mathbf q$, $A_{ij}=\mathbf n\cdot(\mathbf e_i\times\mathbf e_j)$:
+
+```{math}
+:label: antenna-loop-prereg-fan-oracle
+\int_F\frac{dS}{R}=\sum_{(i,j)=(0,1),(1,2),(2,0)}
+ A_{ij}\int_0^1\frac{dv}{\sqrt{h^2+|\mathbf e_i+v(\mathbf e_j-\mathbf e_i)|^2}+|h|}.
+```
+
+Wynika to z parametryzacji $\mathbf x=\mathbf q+u(\mathbf e_i+v(\mathbf e_j-\mathbf e_i))$, Jacobian $uA_{ij}$ i analitycznej całki po $u$. To własny dowód planowanego oracle; publikacja wymaga oddzielnego review poprawności. Dla target na face/edge/vertex wkład fan o dokładnym $A_{ij}=0$ pomijamy **przed** dzieleniem; nie wprowadzamy epsilon przesunięcia. Dla target na krawędzi pozostałe fan są regularne lub całkowalne. Jeśli klasyfikacja nie daje się rozstrzygnąć na exact input binary64/high precision, odmawiamy zamiast zmieniać punkt.
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $\Omega,T,F$ | pełny conductor domain, Tet4, face | $\mathrm{m^3},\mathrm{m^3},\mathrm{m^2}$ jako miary |
+| $\mathbf r,\mathbf x,\mathbf v_i,\mathbf q,\mathbf e_i,R,h$ | target, source, vertex, projection, edge vector, distance, signed height | $\mathrm m$ |
+| $V,\Delta V$ | potencjał, zadany skok | $\mathrm V$ |
+| $\sigma$ | lokalna przewodność | $\mathrm{S\,m^{-1}}$ |
+| $\mathbf J,\mathbf a,b$ | RT0 current, stały wektor, skalarny slope | $\mathrm{A\,m^{-2}},\mathrm{A\,m^{-2}},\mathrm{A\,m^{-3}}$ |
+| $\mathbf H,I_c$ | pole, podpisany prąd sourcecut | $\mathrm{A\,m^{-1}},\mathrm A$ |
+| $\mathbf n,u,v,i,j$ | unit normal, parametr, indeks | $1$ |
+| $A_{ij}$ | podpisany podwójny obszar fan | $\mathrm{m^2}$ |
+| $\epsilon$ | binary64 machine epsilon | $1$ |
+| $\mathbf c,\ell,\boldsymbol\xi_i$ | centering, długość skalująca i scaled vertex | odpowiednio $\mathrm m$, $\mathrm m$, $1$ |
+| $\boldsymbol\alpha,\beta$ | trzy centered current components i jeden scalar scaled slope | $\mathrm{A\,m^{-2}}$ |
+| $P,\mathcal D$ | moc Joule i funkcjonał połowy mocy dyssypacji | $\mathrm W$ |
+| $P_h,\mathcal D_h,V_h,I_{\mathrm{H1}},I_{\mathrm{RT0}}$ | dyskretna moc i funkcjonał, potencjał P1, słaba reakcja H1 i strumień zachowawczy RT0 | odpowiednio $\mathrm W$, $\mathrm W$, $\mathrm V$, $\mathrm A$, $\mathrm A$ |
+| $F_+,F_-,\mathbf n_+,\mathbf n_-$ | plus/minus sourcecut faces i outward unit normals | odpowiednio $\mathrm{m^2}$ jako miara i $1$ |
+| $\mathbf J_{\mathrm{H1}},\mathbf J_{\mathrm{RT0}},\eta$ | raw H1 current, conservative projection i względna weighted correction | odpowiednio $\mathrm{A\,m^{-2}}$, $\mathrm{A\,m^{-2}}$, $1$ |
+| $\nabla,\int,\partial,\times,\lVert\cdot\rVert,\pi$ | gradient, całka, pochodna, cross product, norma euklidesowa i stała | operatory zachowują jednostki argumentów; $\pi$ ma $1$ |
+| $K_{ij},\phi_i,\phi_j,\|T\|$ | stiffness matrix entry, barycentric P1 basis i objętość Tet4 | odpowiednio $\mathrm{S}$, $1$, $1$, $\mathrm{m^3}$ |
+| $\mathbf J_i,V_{\mathrm{H1}}$ | retained cell-local vertex current i niezależny potencjał H1 | odpowiednio $\mathrm{A\,m^{-2}}$, $\mathrm V$ |
+| $\mathcal C,\operatorname{argmin},\mathbb R$ | RT0 pola z wymaganymi constraints, minimizer i liczby rzeczywiste | $1$ jako zbiór lub operator; pola w $\mathcal C$ mają $\mathrm{A\,m^{-2}}$ |
+| $\lVert\mathbf J\rVert_{\sigma^{-1}}$ | pierwiastek całki sigma-inverse razy current norm squared | $\mathrm{W^{1/2}}$ |
+| $d\Omega,dS$ | miara objętości i powierzchni | $\mathrm{m^3},\mathrm{m^2}$ |
+
+##### Oracle A: fixed precision, work i odmowy
+
+```{math}
+:label: antenna-loop-prereg-rt0-fit
+\mathbf c=\frac14\sum_{i=0}^3\mathbf v_i,\quad
+\boldsymbol\xi_i=\frac{\mathbf v_i-\mathbf c}{\ell},\quad
+(\boldsymbol\alpha,\beta)=\underset{\boldsymbol\alpha\in\mathbb R^3,\beta\in\mathbb R}{\operatorname{argmin}}
+\sum_{i=0}^3\lVert\mathbf J_i-\boldsymbol\alpha-\beta\boldsymbol\xi_i\rVert^2,\quad
+b=\frac\beta\ell,\quad\mathbf a=\boldsymbol\alpha-b\mathbf c.
+```
+
+
+Wczytać exact binary64 retained vertices i cztery cell-local wektory J (12 skalarów). Centering: c = arithmetic mean czterech vertices; scaling ℓ = największa długość krawędzi Tet4, ξ_i=(x_i−c)/ℓ. Własny overdetermined LS 12×4 przez Householder QR rozwiązuje J_i = α + β ξ_i, z trzema składowymi α i **jednym skalarnym** β (dla wiersza i,k kolumny to trzy unit selectors i ξ_i,k). Następnie b=β/ℓ i a=α−bc; H liczyć stabilnie J(r)=α+β(r−c)/ℓ. Nie dopasowywać pełnej macierzy gradientu 3×3. Gate max_i ||J_i−α−βξ_i|| ≤256epsilon max(max_i||J_i||,||α||,|β|), bez absolutnego floor w A/m²; zerowy field wymaga exact zero residual. Własny QR powtórzyć na 120 digits i sprawdzić ten sam roundoff gate; brak rank4 lub naruszenie affine consistency → FAIL. Odzyskane a,b nie naprawiają retained J ani nie służą wygładzaniu. Współrzędne różniące się identity nie są scalane. Wszystkie sumy podpisane, żadnego abs na normalizacji.
+
+* Kolejność reguł 16/32/64/128 na tych samych panelach. Panele inicjalnie [0,1]; podział najgorszego panelu deterministycznie midpoint, tie po cell/face/edge/panel ID. Maksymalna głębokość 12, maksimum 4096 paneli na fan.
+* Binary64: compensated component sums; finalny wynik sprawdzany 80 i 120 cyframi dziesiętnymi (mpmath lub własny Decimal implementujący tę samą regułę). Generowanie węzłów i wag przy danej precyzji, bez użycia native kernel lub jego wyników. Brak dostępnego high precision → NOT VERIFIED, bez instalacji SciPy w tej fazie.
+* Dla pełnego targetu delta 64→128 i różnica 80→120 cyfr każda ≤ $10^{-6}\,\mathrm{A\,m^{-1}}+10^{-6}\|H_{120}\|$. Dodatkowo suma norm lokalnych delta ≤ ten sam limit: brak akceptacji przez znoszenie błędów. Jest to empiryczna zbieżność, nie rygorystyczny certyfikat błędu.
+* Cancellation condition $\kappa=\sum\|H_{fan}\|/\max(\|H\|,10^{-6}\,\mathrm{A\,m^{-1}})$ raportowany. Dla binary64 $\kappa>10^8$ wymaga wyniku high precision; dla high precision $\kappa>10^{40}$ odmowa. Nie zwiększać atol ani usuwać takich targetów. Bound roundoff $64\epsilon\sum\|H_{fan}\|$ musi mieścić się w oracle budget lub obowiązuje wynik 120 cyfr.
+* Limit 100 milionów ocen 1D integrandu na target, 2 miliardy na cały przypadek, 2 GiB RAM, 60 minut na target, 8 godzin na przypadek. Liczyć attempted evaluations, high precision i nieudane reguły. Wyczerpanie limitu = INCONCLUSIVE/NOT VERIFIED; nie PASS. Zeroarea skip nie nalicza dzielenia.
+
+###### Geometry-only preflight wykonalności, przed pierwszym solve
+
+Case oznacza jedną geometry/cut/mesh/jump konfigurację i obejmuje cały public sampling carrier oraz 18 scientific probes. Najpierw zamrozić trzy geometrie-only meshes .15/.10/.075 µm i wszystkie carriery, zarejestrować actual N_T, free H1 DOF, flux DOF, unique physical triangular faces, target counts i predicted bounds. Counts nie są wynikami scientific qualification. Nie wolno wybierać mesh po obejrzeniu V/J/H; przekroczenie budżetu powoduje refusal tej prereg, nie dopasowanie progów. Szacunek 1870×8≈14960 finest Tet4 jest wyłącznie geometry planning; actual counts rozstrzygają admission.
+
+Oracle oblicza scalar face potential raz dla **identycznego physical triangle** per target i reuse opposite normal signs w sąsiednich cell contributions. Face key: posortowane exact xyz vertex triples; dodatkowo sprawdzić physical adjacency, winding i zgodność geometry. Coincident sourcecut physical faces mogą współdzielić scalar potential; J, cell/DOF identities i oba ślady pozostają rozłączne. Nie scalać current, nie uśredniać ani nie usuwać cell contribution. Scalar reuse musi zachować wcześniej zadeklarowaną sumę local norm error (każde użycie z własnym J coefficient), nie sumę samych unique-face errors.
+
+Przed solve bound minimalnego oracle work na **jeden target** = 3 precision passes ×(16+32+64+128)×3 fans×N_unique_faces =2160×N_unique_faces i musi być ≤100 mln. Bound dla **całego case** to powyższy bound razy N_targets i musi być ≤2 mld; zeroarea nie daje preflight discount; te same liczniki obejmują później refinements. Zarezerwować pozostałą pulę dla refinement, nie zakładać convergence. Jeżeli już fixed passes nie mieszczą się w limicie, odmówić **przed** solve; bez zmiany order/precision/scopes/thresholds. Native actual N_T×N_targets każdego requestu musi mieścić się w resolved limit, w tym istniejącym 1 mln source-target pairs; public i scientific carrier counts jawnie zapisać, bez cichego rozbijania lub usuwania targetów w celu obejścia admission. H1/RT0 DOF limity i ≤2GiB RAM także przed solve. Budżety time/work nadal mogą odmówić w trakcie; preflight nie gwarantuje convergence.
+
+Budget oracle jest 1000× mniejszy od existing gate H; zachowuje margines do rozróżnienia niezależnej całki od native. Progi work ograniczają eksperyment, nie opisują fizycznej dokładności i nie mogą być przyczyną cichego downgrade scope.
+
+##### Zamrożone targety i carrier
+
+Zbiór scientific zawiera dokładnie **18** punktów: 3 far +4 near +4 inside +3 boundary face +3 boundary edge +1 sourcecut. Poniższe xyz są w lokalnym frame nieprzekształconego obiektu, w $\mu\mathrm m$, i mnożone przez $10^{-6}$ przy serializacji SI. Ordered IDs i exact binary64 bytes utrwalić przed solve. Zachować oba zbiory: pełny actual public sampling carrier i poniższy scientific point carrier; nie zastępować public nodes ich centrami.
+
+| Scope/ID | Ordered xyz |
+|---|---|
+| far F1,F2,F3 | (1,0,3), (-2,1,1), (4,-1,1) |
+| near N1,N2,N3,N4 | (1,0,.11), (1,.06,0), (1,0,-.49), (-.21,0,-.3) |
+| inside I1,I2,I3,I4 | (.5,0,0), (1,0,-.6), (-.1,0,-.2), (2.1,0,-.3) |
+| boundary face S1,S2,S3 | (1,0,.1), (1,.5,-.6), (-.2,0,-.2) |
+| boundary edge E1,E2,E3 | (1,.05,.1), (1,.5,-.5), (-.2,.2,-.2) |
+| sourcecut C1 | (-.1,0,-.3), oba ślady DOF pozostają rozłączne, H jedna wartość |
+
+Literalne współrzędne tabeli określają niezmienny zamierzony punkt fizyczny; dla boundary używamy prereg **wyrażeń semantic plane/edge**, a nie niezależnie zaokrąglonego literalnego dziesiętnego. Constants bierzemy z tej samej authored geometry expression i jej actual retained mesh: Zs=signal top=t/2, Yr=return side=return_width/2, ZrTop=-(t+offset)+t/2, Xin=-inlet_length, Yin=inlet_width/2, Xmid=station[1].u×L, YsMid=station[1].width/2. S1=(Xmid,0,Zs), S2=(Xmid,Yr,return center), S3=(Xin,0,-.2µm); E1=(Xmid,YsMid,Zs), E2=(Xmid,Yr,ZrTop), E3=(Xin,Yin,-.2µm). C1=(-.1µm,0,sourcecut semantic plane). Free coordinates -.2µm i -.1µm pozostają wcześniej fixed SI literals; bound axes korzystają dokładnie z zamrożonych semantic constants, nigdy z nearest point.
+
+Przed solve w każdym mesh manifest zapisać derived exact binary64 constants i target bytes. Wymagać bitwise equal constant bound axes dla **wszystkich** vertices należących do danej semantycznej płaszczyzny; odmówić drift/skew, braku semantic ownership lub niejednoznacznej authored-vs-retained plane equality. Exact rational predicates na binary64 bytes muszą potwierdzić point-in-triangle dla face i point-on-segment z przynależnością obu fizycznych boundary planes dla edge (E1 leży na spotkaniu taper faces i top w stacji). Żadnego nearest/project/epsilon/snap ani przesuwania targetu po solve. Jeśli generator nie zachowa exact planes, face/edge scope jest NOT VERIFIED, nie automatycznie relabelled near. Pozostałe far/near/inside targety zachowują literalne bytes; ich exact cell classification i sourcecut C1 również są zamrożone przed solve.
+
+Każdy point otrzymuje prereg classification względem exact polyhedral geometry i wszystkich Tet4. Punkt na wewnętrznej mesh face/edge nie zmienia H ani physics scope; oracle sumuje wszystkie source cells. Na conductor boundary H jest objętościowym finite limit, bez surface-current sheet. Jeśli native nie obsługuje boundary evaluation, oddzielna odmowa face/edge jest zgodna ze stanem implementation, lecz **nie kwalifikuje pełnego zadeklarowanego scope**.
+
+##### Trzy rozłączne bramki naukowe
+
+A — integrator H na tym samym retained RT0: dla każdego mesh i każdego target porównać raw native H z oracle A. Existing gate **bez zmiany**: $\|H_n-H_o\|\le10^{-3}\,\mathrm{A\,m^{-1}}+10^{-3}\|H_o\|$. Zamrożona native policy order4/depth6/atol1e-9/rtol1e-5 obowiązuje baseline. Osobna quadrature study na tym samym V/RT0: order 6,8, depth6, atol1e-10/1e-11, rtol1e-6/1e-7; brak ponownego charge solve. Każda polityka musi być rzeczywiście obsługiwana, a nie dopisana do receiptu. Delta 6→8 ≤ $10^{-5}\,\mathrm{A\,m^{-1}}+10^{-4}\|H_o\|$ i delta 4→6 ≥ delta 6→8 poza floor $10^{-5}\,\mathrm{A\,m^{-1}}$. Oracle musi spełnić własną zbieżność niezależnie.
+
+B — source/current: własne H1 assembly na **actual** Tet4 (własne barycentric gradients, $K_{ij}=\sum_T\sigma_T|T|\nabla\phi_i\cdot\nabla\phi_j$), affine elimination coincident cut i własny volume-weighted gauge. Nie korzystać z native stiffness/RHS/solution. Solve własnego układu przez PCG po symetrycznym elimination, max 100000 free DOF, 100000 iteracji, residual ≤1e-13; budget exhaustion odmawia. Gauge następnie przesunąć do zero_mean. Prąd niezależny i jego znak wynikają z własnej wariacji, nie z fit do native: ΔV=Vplus−Vminus. W kontinuum oraz dla zachowawczego RT0 obowiązuje Ic=∫Fminus J·nminus dS (`minus_outward`). Dla dyskretnego P1 definiujemy natomiast $I_{\mathrm{H1}}=d\mathcal D_h/d\Delta V=P_h/\Delta V$ jako własną słabą reakcję sourcecut z nieeliminowanego własnego stiffness; nie jest to surowy strumień $-\sigma\nabla V_h$ przez ścianę. Dla $\mathcal D(\Delta V)=\frac12P$ i własnego stationarity $d\mathcal D/d\Delta V=I_c$ (jednostka $\mathrm{W/V}=\mathrm A$), wariacja daje ∫σ∇V·∇(∂V/∂ΔV) =−∫Fplus J·nplus =∫Fminus J·nminus=Ic; można wybrać variation trace +1 na plus i 0 na minus, a gauge variation ma zerowy wkład przez stationarity. W liniowym problemie P∝(ΔV)², zatem Ic=P/ΔV dla ΔV≠0, również dla reversal. Powyższa tożsamość Gaussa dotyczy kontinuum; w dyskretnym H1 obowiązuje wariacja funkcjonału i słaba reakcja, bez utożsamiania jej z surowym face flux. Własny sourcecut weak reaction musi potwierdzić tę orientację; odmówić mismatch zamiast arbitralnie odwracać znak. $I_{\mathrm{RT0}}$ oznacza niezależny podpisany strumień zachowawczego prądu przez cut, porównywany ze słabą reakcją $I_{\mathrm{H1}}$. Wspólna kontrola $|I_{RT0}-I_{H1}|\le10^{-18}\,\mathrm A+10^{-8}|I_{H1}|$; zbieżność własnego solve i residual wykluczają dopasowanie do native. V porównać w samej gauge: max delta ≤1e-10 V +1e-8 max|V_oracle|. To dodatkowe budżety porównania, **nie zastępują** stricter existing continuity gate.
+
+
+Tożsamość z całkami powierzchniowymi poniżej dotyczy kontinuum; ostatni wiersz definiuje dyskretną reakcję H1. Indeks $h$ oznacza własną dyskretyzację P1.
+
+```{math}
+:label: antenna-loop-prereg-source-power
+P=\int_\Omega\sigma|\nabla V|^2\,d\Omega,\quad \mathcal D=\frac12P,\quad
+\frac{d\mathcal D}{d\Delta V}=\int_\Omega\sigma\nabla V\cdot\nabla\frac{\partial V}{\partial\Delta V}\,d\Omega
+=-\int_{F_+}\mathbf J\cdot\mathbf n_+\,dS
+=\int_{F_-}\mathbf J\cdot\mathbf n_-\,dS=I_c,\quad I_c=\frac P{\Delta V},
+\qquad P_h=\int_\Omega\sigma|\nabla V_h|^2\,d\Omega,\quad
+\mathcal D_h=\frac12P_h,\quad I_{\mathrm{H1}}=\frac{d\mathcal D_h}{d\Delta V}=\frac{P_h}{\Delta V}.
+```
+
+C — projekcja i conductor mesh: odtworzyć własny constrained weighted RT0 projection z H1 oracle, minimalizujący $\int\sigma^{-1}|J_{RT0}+\sigma\nabla V|^2$, constraints divergence/paired faces/insulating/source reactions jak jawne równania, bez wczytywania native matrix. Własna sparse assembly i solver, własne residuals; max 400000 flux DOF, 100000 iterations, scaled KKT ≤1e-11. Względna weighted-L2 delta własnego i retained RT0 ≤1e-7, liczona exact degree2 tetra integrals. Jeśli implementacja oracle nie spełnia budżetu, projekcja NOT VERIFIED.
+
+
+```{math}
+:label: antenna-loop-prereg-independent-h1-rt0
+K_{ij}=\sum_T\sigma_T|T|\nabla\phi_i\cdot\nabla\phi_j,\qquad
+\mathbf J_{\mathrm{H1}}=-\sigma\nabla V_{\mathrm{H1}},\qquad
+\mathbf J_{\mathrm{RT0}}=\underset{\mathbf J\in\mathcal C}{\operatorname{argmin}}
+\int_\Omega\sigma^{-1}|\mathbf J-\mathbf J_{\mathrm{H1}}|^2\,d\Omega,\qquad
+\eta=\frac{\lVert\mathbf J_{\mathrm{RT0}}-\mathbf J_{\mathrm{H1}}\rVert_{\sigma^{-1}}}
+{\lVert\mathbf J_{\mathrm{H1}}\rVert_{\sigma^{-1}}}.
+```
+
+Trzy mesh levels bez zmiany geometry/source/probe points. Dla **raw** source current i raw H każdego fixed target: delta fine–medium ≤ 0.01|I_fine| +1e-18 A dla I oraz ≤ $5\cdot10^{-4}\,\mathrm{A\,m^{-1}}+5\cdot10^{-4}\|H_{fine}\|$ dla H. Dla normalized H/I obowiązuje ta sama względna granica i floor przeliczony przez |I_fine|, bez niezależnej zmiany skali. Delta medium–fine ≤ delta coarse–medium poza odpowiednim absolute floor. Nie ekstrapolować pozornej asymptoty jako PASS.
+
+Relative weighted projection correction $\eta=\|J_{RT0}-J_{H1}\|_{\sigma^{-1}}/\|J_{H1}\|_{\sigma^{-1}}$ ≤0.05 na finest i maleje: eta_fine ≤0.8 eta_medium oraz eta_medium ≤0.8 eta_coarse, wyjątek tylko gdy oba ≤1e-6. Wymogi 5% i contraction 0.8 są **proposed heuristic gates dla tego fixed fixture i tych trzech nierówno odległych mesh levels**, nie uniwersalnym prawem zbieżności RT0 ani przewidywanym rzędem metody. PASS daje wyłącznie kwalifikację warunkową tego scope; niespełnienie oznacza brak kwalifikacji według tej prereg, nawet gdy independent integrator i charge są poprawne. Nie dopasować 0.8/5% po danych ani twierdzić, że ich naruszenie samo dowodzi błędu fizyki. Maksimum 5% to jawny budget dyskretyzacji current dla fixture z ostrymi narożami, nie algebraiczny RT0 certificate; mesh H 0.05% celowo bardziej restrykcyjny od gate integratora 0.1%. Brak zbieżności narożnego current nie pozwala „naprawić” gate przez wybór samego far-field.
+
+##### Zachowane mandatory gates i metamorphic cases
+
+Existing geometry/volume/face-pair quality gates z tabeli noty 0950 pozostają w całości. H1 relative residual ≤1e-12. Jump/gauge ≤1e-12 V +128epsilon razy odpowiednia istniejąca skala. Każda local cell, pair i source/observation continuity kontrola ≤1e-18 A +1e-10 sum|flux|, bez globalnej cancellation. Signed |I_c| **>100×** dokładny próg przekroju; jedna signed skala 1/I_c dla V/J/H.
+
+Na **każdym** z trzech mesh levels: jump -0.25 V oraz +0.125 V; native raw V/J/H i I odpowiadają -1 i +.5 z delta ≤1e-10 względnie (V floor1e-12 V, J floor1e-6 A/m², H floor1e-6 A/m, I floor1e-18 A). H oracle też wykonać, nie porównać wyłącznie native do native. Reversal port orientation przy niezmienionym source odwraca I_c i per-A V/J/H, raw V/J/H bez zmian.
+
+Cut relocation: z=-.25 i -.35 µm, nadal w tym samym jednorodnym inlet, new mesh dla każdej pozycji na trzech levels. V może zmienić gauge/jump placement; I oraz H na fixed points porównać do baseline finest w powyższych mesh budgets, retained J weighted L2 na geometric common refinement ≤1%, wykluczając **wyłącznie** DOF potential jump z porównania V, nigdy usuwając objętości lub targetów H. Dodatkowo obrót 90° wokół z oraz translation (3,-2,1) µm z transformacją targetów: raw H/J vector covariant, signed current invariant; gate oracle H i existing continuity zachowane.
+
+##### Python → IR → native, failure semantics
+
+Preregistered controls to parametry eksperymentu z ustalonymi wartościami,
+nie nowe parametry Python/IR. Pełne publiczne defaults, walidacja i SI pozostają
+w istniejących tabelach tej noty. Kopiowalny stage-first fixture:
+`examples/fem_antenna_closed_loop_nonmagnetic.py::study`.
+
+| Publiczne authoring | Canonical IR i normalizacja | Native/artifact impact |
+|---|---|---|
+| `MicrostripAntennaLayout`, `MicrostripWidthStation` | geometry.antenna_layout, ordered stations, SI i loop | actual Tet4, regions, bez epsilon-gap |
+| `ChargeTransportMaterialAssignment`, `ChargeTransportMaterial` | ChargeTransportDefinitionIR.materials, dodatnie sigma SI | actual per-element sigma w prepared identity |
+| `StructuredCurrentClosure`, `StructuredCurrentSourceCut` | ChargeTransportDefinitionIR.structured_current_closure, plane/jump, schema v2 | coincident cut pairs i prepared preimage |
+| `ChargePotentialGauge`, `ChargeSolverPolicy` | ChargeTransportDefinitionIR.gauge/solver | zero_mean V, charge identity, separate residual |
+| `AntennaPortMode`, `AntennaSourceCutRt0` | AntennaPortModeIR, v3 source_cut_rt0/minus_outward | signed Ic i jedna skala V/J/H |
+| `AntennaFieldSolveStage` | AntennaFieldSolveStageIR.field_sampling_domain/target_refs/outputs | oddzielny actual sampling carrier i field signature |
+
+
+
+Publiczny skrypt pozostaje flat module-level `study`, port v3 source_cut_rt0/minus_outward, structured_current_closure.v2, named output H_ant_basis o stanie inspection_only. Nie tworzymy nowego publicznego buildera, fake receipt, accepted view lub ręcznie zgadniętego serialized IR. Przed eksperymentem utrwalić actual public lowering, Gmsh materialization i execution IR, source stable IDs, region σ, coincident cut pairs oraz resolved stage/field sampling. Oracle B/C może odczytać dokładne geometry, σ, cut pairs i gauge z retained prepared preimage zamiast odtwarzać wejście przez zgadywanie geometrii. To współdzielenie danych wejściowych, nie algorytmu native solve/projection. Named-field framing BE w `closed_loop_identity_v2.rs::Fields` i `verify` wiąże przygotowanie z accepted bytes. Publiczne payloady `prepared_preimage`, `charge_preimage`, `source_preimage` muszą przejść tę samą kontrolę tożsamości wraz z actual source/sample cells. Mapowanie constructors → canonical IR znajduje się w nocie 0950; porównać actual bytes, requested intent i resolved FEM CPU/double runtime. Jeden właściciel snapshot V/RT0 i trzy natywne identities: prepared_execution_digest, accepted_charge_field_digest, accepted_source_state_digest; field signature wiąże carrier i quadrature oddzielnie.
+
+Każdy failure/finiteness/geometry/oracle/limit zapisujemy z target/cell ID i mierzoną wartością. Nie wolno usuwać prób po wynikach. Wymiana algorytmu, dodatkowy mesh level, zwiększenie work albo zmiana progów wymaga nowej prereg revision; stara próba pozostaje w historii. Wczesne zakończenie przez cancel nie publikuje PASS/ready.
+
+##### Projekt receipt i dowody
+
+Proposed scientific receipt (nazwa/schemat do oddzielnego review, nie istniejący API) wiąże:
+
+* hash prereg exact bytes, prereg-finalization record roota i timestamp sprzed wyników;
+* pełny Git SHA **oraz** source-tree manifest hash dla dirty źródeł, przykład/IR/mesh/material/cut hashes, fixture dimensions i scope;
+* trzy powyższe native hashes oraz view identity i current certificate; wszystkich payloadów digest/byte length;
+* exact ordered actual carrier xyz/Tet4 topology i fixed point carrier IDs/coordinates/scope; raw H i wspólna signed normalization;
+* metodę oracle, własne source hashes, precision/order/panel/roundoff/cancellation/work counters, każdą deltę i odmowę; native policy i zero unconverged;
+* wszystkie trzy mesh levels i A/B/C evidence, reversal/scaling/orientation/relocation/rigid-transform evidence;
+* rzeczywisty managed execution receipt: komenda repo `just`, runtime binary + bibliotek hash/ABI, lane CPU double, host, start/stop/exit, log hashes i resolved storage preflight. Build nie jest tu wykonywany; host cargo/cmake ani source check nie mogą zastąpić runtime proof.
+
+DAG bez circular digest: immutable source/current/field payloads → evidence records → scientific receipt → osobny publication reference. Field signature nie zawiera receipt, który dopiero go cytuje. Nie nadawać qualification przez zmianę flagi inspection manifest. Po all-PASS potrzebne jest review scope i odrębne wdrożenie consumption gate; ta prerejestracja nie upoważnia do bypass `require_qualified`.
+
+
+##### Źródła metody i granice dowodu
+
+[Carley (2007), Evaluation of Biot-Savart integrals on tetrahedral meshes](https://arxiv.org/abs/0712.1695)
+opisuje inną quadrature tetrahedral Biot–Savart; kontekst nie dowodzi własnej
+surface/fan redukcji i nie jest kodem oracle.
+[Werner i Scheeres (1996), Exterior gravitation of a polyhedron](https://link.springer.com/article/10.1007/BF00053511)
+ma publisher date 1996 i exterior constant-density scope; dostępny abstrakt
+nie dowodzi interior/face/edge RT0. Surface/fan i wariacja power są własnymi
+wyprowadzeniami powyżej. SOURCE PLANNED wymaga independent implementation,
+review i executed evidence; prereg nie jest rigorous error certificate.
+
 ### 12.2 Rozszerzenia przyszłe
 
 1. Harmonic complex MQS bases and multi-frequency interpolation.
@@ -6203,8 +7254,360 @@ The source index distinguishes executable evidence from planned composition
 contracts. A documentation anchor marked `planned_contract` is not runtime
 evidence and cannot promote a capability lane.
 
+(antenna-accepted-equilibrium-transverse-contract)=
+### E9b: publiczny accepted Relax → transverse source spectrum — implementacja źródłowa
+
+**Stan bieżący: implementacja zintegrowana; kompilacja pakietu Windows i 50
+kontroli integracji API VERIFIED. Publiczny native FEM Relax→source→transverse,
+połączenie przeglądarki z rzeczywistym wynikiem, cold reopen oraz scientific
+qualification NOT VERIFIED.** Typed Python references, IR, canonical accepted
+Relax wrapper/context, projekcja P1, manifest v3 i API readers mają implementacje
+źródłowe w wydzielonym pakiecie. Build Windows API/CLI/desktop potwierdza
+kompilację tego pakietu, nie build ani wykonanie natywnego solvera FEM.
+Archive inventory nie jest częścią tego pakietu. Nie wykonano publicznego
+native FEM Relax→source→transverse benchmarku ani kwalifikacji wydania. Istniejący source_not_qualified gate nadal odmawia niekwalifikowanej
+bazie; samo poprawne autorstwo reference nie odblokowuje basis ani LLG.
+
+Celem jest podpisane źródłowe widmo pola jednej zaakceptowanej per-ampere
+bazy anteny, poprzeczne do rzeczywistej zaakceptowanej równowagi magnetycznego
+targetu. Nie jest to odpowiedź magnetyzacji, susceptibility, eigenmode overlap,
+LLG ani certyfikat pełnego obwodu. Zachowane zostają istniejące source basis,
+port selection, units, window, phase i bounded FFT/direct-k gates.
+
+#### Canonical owner, akceptacja i publication boundary
+
+Bezpośredni Relax → spectrum korzysta z rzeczywistego
+`AcceptedFemRelaxStageHandoff.v3`, kompletnego
+`CertifiedFemEquilibriumFields.v1` i
+`RecomputedFemLinearizationCertificate.v1`, utworzonych z wykonanego
+zaakceptowanego Relax i owning `FemPlanIR`/`StageFemMeshAsset`.
+Istniejący source-only publisher wytwarza immutable wrapper
+`antenna_accepted_equilibrium.v1` z własnym domain-separated content digest;
+nie nadaje mu `accepted_for_linearization` ani schematu v7. Wrapper zachowuje
+oryginalne source run/stage/kind, completion, acceptance, m0 i field digests,
+recompute provider, pełne podpisy owning physics i actual mesh association.
+Ciężkie m0, certified fields, mesh i plan input pozostają w immutable artifact
+data plane; wrapper/reference metadata nie zawierają tablic numerycznych.
+
+Niezależność pól sprzed i po odświeżeniu jest warunkiem naukowym E9b.
+V3 receipt przechowuje refreshed `certified_fields`; te same dane podane
+ponownie jako accepted baseline nie stanowią niezależnego replay. Istniejący
+`AcceptedFemRelaxStageHandoff.verified_replay` zachowuje accepted snapshot
+oraz jego dokładne bajty `accepted_fields_json` z provenance producenta.
+`accepted_antenna_equilibrium_artifacts` wymaga tego replay, strict-dekoduje
+baseline, porównuje go z typed accepted fields oraz wiąże refreshed fields
+i recomputed certificate z tym samym receiptem. Brak replay, puste bajty,
+przekroczenie 256 MiB lub rozbieżne wartości oznaczają odmowę publikacji;
+nie ma baseline odtwarzanego z refreshed fields ani implicit defaultu.
+
+W unpublished wrapperze `antenna_accepted_equilibrium.v1` pole
+`AcceptedEquilibriumManifest.accepted_fields` jest **wymaganym czwartym**
+`InputRef`: `path="accepted_fields.json"`, `sha256` oraz `byte_count`.
+Payload zachowuje dokładne bajty producenta z `replay.accepted_fields_json`,
+bez ich ponownej serializacji. SHA i count obejmują właśnie te bajty; manifest
+wiąże wszystkie cztery input refs własnym domain-separated content digest.
+Strict `deny_unknown_fields` i wymagane pole nie dopuszczają starego wrappera
+pozbawionego baseline przez zgadywanie lub domyślne uzupełnienie.
+
+Canonical `validate_inputs` przekazuje do
+`validate_recomputed_fem_linearization_certificate` sześć osobnych argumentów:
+owning plan, actual mesh, equilibrium M, accepted baseline, refreshed certified
+fields i recomputed certificate. Walidator sprawdza obydwa content digests,
+shape/schema, owning signatures oraz zapisane różnice pól przez niezależne
+porównanie w istniejących tolerancjach. Odbudowa całego v3 receipt pozostaje
+dodatkową bramką. Ten kontrakt nie dodaje fizyki, publicznego API ani nowych
+progów akceptacji; implementacja źródłowa nie jest runtime qualification.
+
+Legacy składnia `equilibrium_artifact.v7` pozostaje dopuszczona w authoringu,
+ale loader transverse jawnie odmawia jej do dostarczenia canonical owner
+validation context. Taki input może być użyty tylko wtedy,
+gdy pochodzi z rzeczywistego kanonicznego ownera v7. Loader
+`load_certified_equilibrium_artifact` jest kanonicznym parserem v7/v8;
+obsługa v8 w parserze nie dopuszcza jej automatycznie do transverse.
+Pełną zgodność planu, pól, static-demag, materiału i boundaries potwierdza
+kanoniczna walidacja wykorzystująca owning plan/mesh; sam hash pliku,
+`accepted_for_linearization=true` lub liczba m0 nie wystarczają. Wydzielenie
+shared publisher/validator nie może stworzyć pozornego `FemEigenPlanIR`,
+dodatkowego solvera, ukrytego Eigen stage ani surowego JSON parsera m0.
+
+Istniejący `VerifiedAntennaEquilibriumContext` jest prywatnym execution inputem
+z prywatnym konstruktorem dostępnym wyłącznie canonical loaderowi/validatorowi.
+Retains producer contract, exact receipt/content identity, owning plan,
+static-demag certificate i pola, magnetic membership oraz pełny mesh binding.
+Nie można go skonstruować z ręcznej tablicy ani ostatniego live m.
+`execute_antenna_spectrum_requests` rozwiązuje context **przed cache lookup**;
+przekazanie surowego `Option<&[[f64;3]]>` nie autoryzuje publikacji transverse.
+
+Tolerancje pozostają własnością producenta: native Relax recompute używa
+absolute H $10^{-6}\,\mathrm{A\,m^{-1}}$, relative $10^{-8}$ i absolute phi
+$10^{-12}\,\mathrm{A}$ oraz relative $10^{-8}$ razy
+max(amplituda phi, $1\,\mathrm{A}$), dokładnie jak istniejący producent.
+Nie jest to absolute-only phi comparison. Owner
+v7/eigen ma odrębne comparison gates: m0 $10^{-12}$, H
+$10^{-8}\,\mathrm{A\,m^{-1}}$, phi $10^{-10}\,\mathrm A$.
+Adapter zachowuje konkretny typ certyfikatu i wartości; nie ujednolica tych
+progów i nie wystawia akceptacji na podstawie nowych łagodniejszych limitów.
+Nodal m0 w magnetycznym domain spełnia istniejący norm gate $10^{-8}$.
+
+#### Publiczny Python, ProblemIR i pending-stage lifecycle
+
+Poniższe typed referencje istnieją w publicznym Python i round-trip. Pełne obecne
+parametry `AntennaSpectrumRequest`, plane, window i k-grid pozostają w tabelach
+API tej noty; poniższa tabela podaje wyłącznie zmianę referencji equilibrium.
+
+| Python (source implemented) | Typ | Default | SI | Validation/failure | Znaczenie | Backend | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| AntennaSpectrumRequest.equilibrium_ref | EquilibriumStageOutputRef \| EquilibriumArtifactRef \| str \| None | None | $1$ | required only for transverse; exact typed dependency or immutable registered identity; unresolved, blank and ignored refs rejected | jawnie wybrane zaakceptowane equilibrium; niekwalifikowana source basis nadal odrzucona | source-only FEM CPU Tet4/double; other lanes unsupported; no runtime qualification | antenna_spectrum_requests[].equilibrium_ref; typed tagged reference or exact immutable legacy ID |
+| EquilibriumStageOutputRef.stage_id | str | required | $1$ | nonempty; executable spectrum materialization requires one uniquely identified earlier Relax with matching authored stage identity; runtime resolves the published accepted_equilibrium pin; target and producer eligibility require separate validation | tożsamość producenta accepted equilibrium | source-only FEM CPU; other lanes unsupported | antenna_spectrum_requests[].equilibrium_ref.stage_id |
+| EquilibriumStageOutputRef.output_id | str | accepted_equilibrium | $1$ | constructor and IR require a nonempty string; executable spectrum materialization and runtime loader accept only accepted_equilibrium and reject other output names | symboliczny output rozwiązywany dopiero po akceptacji Relax | source-only FEM CPU; other lanes unsupported | antenna_spectrum_requests[].equilibrium_ref.output_id |
+| EquilibriumArtifactRef.asset_id | str | required | $1$ | exact 64 lowercase hex; managed artifact registry entry; not a filesystem path | jawny istniejący asset equilibrium | source-only FEM CPU; other lanes unsupported | antenna_spectrum_requests[].equilibrium_ref.asset_id |
+| EquilibriumArtifactRef.equilibrium_id | str | required | $1$ | canonical antenna_accepted_equilibrium.v1 or equilibrium_artifact.v7 prefix plus 64 lowercase hex; v7 runtime refusal without owner context | niezmienna tożsamość equilibrium, odrębna od nazwy stage | source-only FEM CPU; other lanes unsupported | antenna_spectrum_requests[].equilibrium_ref.equilibrium_id |
+| EquilibriumArtifactRef.content_digest | str | required | $1$ | sha256 prefix and 64 lowercase hex digits; exact verified canonical manifest digest | pin zawartości assetu i receiptu | source-only FEM CPU; other lanes unsupported | antenna_spectrum_requests[].equilibrium_ref.content_digest |
+
+
+Istniejący tag `stage_output` zawiera stage_id/output_id i zachowuje symboliczną
+referencję podczas authoringu oraz eksportu. Nie planuje ani nie uruchamia Relax
+niejawnie. Obecne Python i ProblemIR sprawdzają składnię referencji oraz wymagają
+jej wyłącznie dla transverse. Runtime rozwiązuje opublikowane powiązanie etapu,
+wymaga output_id=`accepted_equilibrium` i weryfikuje authored stage identity oraz
+pełny kontekst zaakceptowanego Relax. Materializer wykonawczy
+`crates/fullmag-application/src/script_stage_materialization.rs::validate_antenna_equilibrium_dependencies`
+weryfikuje rzeczywistą akcję widma i jej jednoznaczny request, nazwę outputu
+`accepted_equilibrium`, dokładnie jednego wykonawczego producenta Relax o zgodnym
+authored stage identity oraz jego pozycję przed konsumentem. Inherited inventory
+nie aktywuje tej kontroli; odwołania artifact i legacy nadal podlegają swoim
+weryfikatorom runtime. Helper nie kwalifikuje magnetycznego targetu, domeny,
+siatki, materiałów ani eligibility producenta FEM CPU/Tet4/P1/double. Te bramki
+pozostają wymagane; nie należy przedstawiać kontroli kolejności jako pełnej
+walidacji fizycznej ani jako kwalifikacji plannera.
+Dopiero ukończony i zbieżny Relax z zaakceptowanym kryterium zatrzymania publikuje
+niezmienny wrapper. Przy materializacji referencja zachowuje authored stage pin
+oraz dodaje dokładną tożsamość asset/content/equilibrium. Ponowne powiązanie jest jawne.
+
+Stan weryfikacji integracji: natywny build Windows API/CLI/desktop zakończył się
+powodzeniem; managed API check `7f68d6fab11f4eedab639473b8e71339` zakończył się
+exit 0 i 50 kontrolami, w tym odrzucaniem niepoprawnego selektora etapu w katalogach
+pól i wielkości. To dowód integracji pakietu i badanego kontraktu HTTP, a nie
+wykonania poprawnej ścieżki accepted Relax → transverse, kwalifikacji naukowej,
+pozytywnego odczytu rzeczywistych V/J/H ani cold reopen. Sama kompilacja helpera
+nie zastępuje wykonanych regresji jego odmów i poprawnego przepływu.
+
+Istniejący tag `artifact` wymaga asset_id/equilibrium_id/content_digest.
+Dotychczasowy `str` może oznaczać jedynie dokładną immutable identity
+zasobu w canonical registry; ścieżka pliku i stage label nie są autoryzacją.
+Brak reference dla transverse oraz reference przy innym komponencie to
+validation errors. `mode_basis_ref` pozostaje unsupported combination.
+Python export i UI import odtwarzają tę samą typed reference; symbolic input
+nie zostaje po eksporcie przypadkowo przywiązany do innego ostatniego m0.
+Requested intent i resolved execution są zapisane osobno. Wymuszony GPU
+nie powoduje cichego CPU fallbacku; niedostępna lane jest jawnie odrzucana.
+
+Python→IR→script export→eval→IR wymaga dowodu przypiętego do wydzielonego pakietu; wcześniejsze wyniki szerokiego WIP nie są dowodem jego kwalifikacji. Nie zastępuje to prawdziwego
+publicznego stage-first Relax → qualified source solve →
+`add_antenna_spectrum_request` z actual native runtime. Ten benchmark,
+canonical generated OpenAPI/TypeScript, browser readback i cold archive reopen
+pozostają NOT VERIFIED; nie publikujemy niewykonanego solver example jako PASS.
+
+#### Actual target cells, mesh identity i transform frames
+
+Target resolution używa `FieldTargetIR` i immutable object_id/region_id,
+nie nazw/type. Reference wiąże generation/topology, node indexing i part
+registry z owning StageFemMeshAsset oraz geometry/domain-frame/rigid-transform
+identity. `mesh_revision` UI nie zastępuje tych digestów. Zmiana material,
+static physics, boundary, static demag albo mesh/indexing odrzuca receipt.
+
+Istniejący `resolve_fem_antenna_transverse_cell_mask` rozwiązuje Object przez
+actual element segments i Region przez volume selector, przecinając scope z
+Ms > 0. Nodal `resolve_fem_antenna_projection_mask` nie zastępuje tej bramki:
+wybrany punkt musi leżeć w rzeczywistej magnetycznej komórce objętościowej
+należącej do targetu. Komórka częściowo wybrana tylko przez wspólne węzły,
+boundary-only selector lub niejednoznaczne membership powoduje odmowę.
+`global` również wymaga, aby każda próbka miała equilibrium w magnetic domain.
+Air-node extension stosowane przez eigen nie jest equilibrium powietrza.
+Próbka poza ROI jest błędem **także przy outside_policy=zero i zerowym H**.
+
+H i m0 mają osobne immutable carriers. Oba interpolujemy w identycznych
+world-space punktach existing centered lattice; nie wymagamy identycznych
+numerów węzłów obu siatek. Rozwiązane transforms stosujemy dokładnie raz:
+translację wyłącznie do pozycji, proper rotation do pozycji i wektorów.
+No nearest-node, extrapolation, silently filled air m0 ani stored preview reuse.
+Pierwszy scope to rzeczywiste Tet4/P1; mixed prism/hex nie są automatycznie
+zamieniane na Tet4. Samplery zachowują istniejący deterministic cell locator,
+coordinate-resolution, degeneracy, overflow, cancellation i budget gates.
+
+#### Dyskretna projekcja i signed vector Fourier transform
+
+| Symbol | Znaczenie | SI |
+| --- | --- | --- |
+| $p,q,K,a$ | indeksy lattice, rzeczywistej komórki Tet4 i lokalnego węzła $a=0,1,2,3$ | $1$ |
+| $\mathbf r_{pq},\mathbf x_a$ | world-space punkt lattice i rzeczywisty węzeł equilibrium mesh | $\mathrm m$ |
+| $\lambda_a(\mathbf r_{pq})$ | podpisane barycentryczne funkcje P1 należącej do ROI komórki | $1$ |
+| $\mathbf m_{0,a},\mathbf m_{pq}^{\mathrm{P1}},\widehat{\mathbf m}_{0,pq},n_{pq}$ | zaakceptowane nodal m0, interpolant, jego kierunek jednostkowy i norma | $1$ |
+| $n_{\min}$ | prerejestrowany próg odmowy normalizacji, dokładnie $10^{-12}$ | $1$ |
+| $\mathbf h_{pq},\mathbf h_{\perp,pq}$ | podpisane per-ampere pole źródła przed i po projekcji | $\mathrm{m^{-1}}$ |
+| $w_{pq}$ | jawne próbki istniejącego okna przestrzennego | $1$ |
+| $k_u,k_v$ | angular wave numbers w lokalnej płaszczyźnie u/v | $\mathrm{rad\,m^{-1}}$ |
+| $\Delta u,\Delta v,u_p,v_q$ | rozstaw lattice i lokalne współrzędne przy centered phase | $\mathrm m$ |
+| $\widetilde h_{\perp,b},W_{\perp},b$ | zespolona amplituda integral_si, suma jej mocy oraz indeks $b=x,y,z$ | odpowiednio $\mathrm m$, $\mathrm{m^2}$ i $1$ |
+
+
+```{math}
+:label: antenna-transverse-receipt-interpolation
+\mathbf m_{pq}^{\mathrm{P1}}
+ =\sum_{a=0}^{3}\lambda_a(\mathbf r_{pq})\mathbf m_{0,a},\qquad
+n_{pq}=\lVert\mathbf m_{pq}^{\mathrm{P1}}\rVert_2,\qquad
+\widehat{\mathbf m}_{0,pq}=\mathbf m_{pq}^{\mathrm{P1}}/n_{pq},\qquad
+n_{pq}>n_{\min}=10^{-12}.
+```
+
+Próg $n_{\min}$ jest prerejestrowany dla tego adaptera. Niefinitywna próbka
+lub $n_{pq}\leq n_{\min}$ odmawia przed FFT; nie wybieramy zastępczego kierunku.
+Normalizacja dotyczy interpolowanego kierunku, nie certyfikowanych nodal m0.
+Interpolacja unit vectors może mieć normę mniejszą od jeden i nie jest sama
+w sobie błędem. Normalized sample musi spełnić existing kernel gate
+$\lvert\widehat{\mathbf m}_{0,pq}\cdot\widehat{\mathbf m}_{0,pq}-1\rvert\leq10^{-8}$.
+
+```{math}
+:label: antenna-transverse-receipt-projection
+\mathbf h_{\perp,pq}=\mathbf h_{pq}
+ -(\mathbf h_{pq}\cdot\widehat{\mathbf m}_{0,pq})\widehat{\mathbf m}_{0,pq}.
+```
+
+```{math}
+:label: antenna-transverse-receipt-fourier
+\widetilde h_{\perp,b}(k_u,k_v)
+ =\Delta u\Delta v\sum_{p,q}w_{pq}h_{\perp,b,pq}
+   \exp[-i(k_uu_p+k_vv_q)],\qquad
+W_{\perp}=\sum_{b\in\{x,y,z\}}\lvert\widetilde h_{\perp,b}\rvert^2.
+```
+
+Ostatnie równanie pokazuje `integral_si`. Existing `unitary_discrete` stosuje
+własną existing DFT normalization; jej amplituda ma $\mathrm{m^{-1}}$, moc
+$\mathrm{m^{-2}}$. Obie realizacje zachowują trzy podpisane komponenty i ich
+zespoloną fazę. FFT scalar magnitude lub sumy mocy przed FFT jest zabronione.
+Local u/v frame określa k i fazę; global xyz labels określają komponenty H.
+
+#### Manifest, read API i cache
+
+Source-only publikacja transverse używa `antenna_source_spectrum_artifact.v3`;
+Cartesian v2 zachowuje reader i semantykę. Thin v3 ma typed equilibrium
+binding: producer contract, asset/equilibrium/content identity, source run/stage,
+completion/acceptance/recompute digests, owning mesh generation/topology/indexing/
+part-registry/transform digests, material/static-physics/boundary/static-demag
+identity, target, equilibrium interpolation/mapping digest, normalization rule
+`p1_direction_normalized.v1`, norm floor i projection version. Wszystkie
+numeryczne payloady i ich SHA/layout/count/unit pozostają binary data plane.
+
+Canonical verifier wymaga kompletnego binding przy transverse i zabrania go
+przy Cartesian. API reader wykonuje ten sam verifier oraz payload integrity;
+nie wyprowadza equilibrium z shape ani component label. Readback nie aktywuje
+solver capabilities i nie kwalifikuje native execution.
+
+Nie dodano nowego transverse fast cache. Istniejący fast cache pozostaje
+wyłącznie Cartesian v2; transverse ponownie rozwiązuje verified context,
+actual projection i FFT, a następnie sprawdza immutable publication collision.
+Canonical binding zachowuje verified source solution/content/port, oba
+carriers/mapping digests, target/frame/lattice/window/normalization/transform/
+k-grid. Inny m0, revision, receipt, indexing, transform lub brak pinned
+dependency odrzuca binding; identyczny request_id nie wystarcza. Inspection source jest odrzucany przez
+istniejący source_not_qualified gate **przed** equilibrium interpolation/FFT.
+
+
+Source-only immutable namespace `antenna/accepted_equilibria/<asset>/` zachowuje
+cztery inputy: owning_plan.json, relax_receipt.v3.json,
+recomputed_certificate.v1.json i accepted_fields.json, oraz manifest.v1.json.
+Zamknięty zestaw publish ma dokładnie sześć artefaktów w kolejności:
+`0` owning plan, `1` v3 receipt, `2` recomputed certificate,
+`3` exact accepted baseline, `4` manifest, `5` stage pin identycznego
+manifestu. Atomic directory publication obejmuje indeksy `0`, `1`, `2`, `3` i `4`.
+Stage pin `stage_outputs/<sha256(authored_stage_id)>.v1.json` powstaje
+**na końcu**, po canonical reopen całego ownera; reference trafia do completed
+stage_execution. Reopen wymaga osobnego accepted_fields.json, sprawdza jego
+nazwę, SHA, byte count i bound 256 MiB, strict-dekoduje baseline oraz ponawia
+niezależny accepted-versus-refreshed replay i rebuild v3 receipt. Brak,
+przekroczenie budżetu lub korupcja baseline odmawiają execution authority;
+sam manifest digest ani odtworzenie refreshed jako baseline nie wystarczają.
+Session inventory i archive reachability są osobną zależnością poza wydzielonym pakietem. Ich integracja i cold reopen pozostają NOT VERIFIED.
+Authored active_stage_id i producer stage-000 są odrębnymi
+zapisanymi tożsamościami. Source-ref StageOutput pozostaje symbolic pending;
+Published/ResolvedAsset wymaga exact existing basis inventory owner closure.
+API metadata i binary reader ponownie otwierają pełny equilibrium i source
+owning closure oraz porównują pełny binding; raw arrays nie są authority.
+Pełny archive typed inventory, SHA/count oraz cold reopen wymagają oddzielnej integracji session ownera; bieżący pakiet nie dowodzi ich obsługi.
+
+#### Oddzielne realizacje i prerejestrowana walidacja
+
+| Solver | Device | Zakres tego kontraktu | Stan |
+|---|---|---|---|
+| FEM | CPU | native double, actual accepted Relax owner, rzeczywiste Tet4/P1 i magnetic ROI | source-only implemented; runtime/native/science NOT VERIFIED |
+| FEM | GPU | bieżący accepted-equilibrium publisher wymaga fem_cpu_native; brak GPU realizacji i dowodu nowego adaptera | unsupported until explicit qualification; no silent fallback |
+| FDM | CPU | brak certified equilibrium grid/interpolator/binding dla tego adaptera | unsupported |
+| FDM | GPU | brak powyższego oraz device evidence | unsupported |
+
+Wymagany, nadal niewykonany gate obejmuje również actual producer z odrębnymi
+accepted/refreshed polami w canonical tolerancji, zachowanie exact baseline
+bytes, odmowę missing/corrupt/oversized baseline i digest mismatch, wszystkie
+sześć pozycji publication, cold reopen oraz store/archive inventory SHA+count.
+Parser i source guards z poprawki integracji kompilatora nie uruchamiają tych
+funkcji Rust ani nie zastępują native dowodu niezależnego replay.
+
+RED→GREEN musi obejmować cały publiczny Relax workflow, typed reference round
+trip i cache invalidation, H parallel → zero, H perpendicular → unchanged,
+niejednorodne m0/P1 normalization, rigid-transform covariance, norm floor,
+outside ROI (także zero H), nonfinite/degenerate samples, oraz tampering
+mesh/index/part/material/physics/boundary/static-demag/receipt/payload.
+Actual native source basis musi przejść własną wcześniejszą kwalifikację;
+nie zastępujemy jej syntetycznymi samples. Wykonane source FFT/direct parity
+sprawdza complex signed amplitudes i power, nie odpowiedź magnetyzacji.
+Managed runtime, exact receipts i API readback pozostają osobnymi bramkami.
+
+Completeness: równania/SI, parametry/Python→IR, lifecycle, owner certificates,
+backend separation, cache/API i failure semantics mają source implementation;
+Bramki dokumentacji, source-map i build wydzielonego pakietu nie były uruchamiane przez autora tego kandydata.
+Wykonany publiczny native benchmark, browser i cold archive proof pozostają
+NOT VERIFIED. Deferred: FDM grid,
+GPU FFT, mixed-cell interpolation, mode overlap i magnetic response; żadna z
+tych funkcji nie uzyskuje capability przez niniejszy kontrakt.
+
+
 (antenna-source-code-index)=
 ### 13.1 Source-code index
+
+Uzupełnienie E9b (mapping implementacji; build Windows i API50 nie stanowią kwalifikacji naukowej ani pełnego przepływu runtime):
+
+| Path | Symbol / anchor | Responsibility / evidence |
+|---|---|---|
+| `crates/fullmag-application/src/script_stage_materialization.rs` | `validate_antenna_equilibrium_dependencies` | jednoznaczny wcześniejszy wykonawczy Relax i accepted_equilibrium; skompilowane w natywnym Windows, regresje wykonania helpera oraz target/eligibility NOT VERIFIED |
+| `packages/fullmag-py/src/fullmag/model/antenna.py` | `class EquilibriumStageOutputRef` | Istniejąca typed symbolic accepted Relax reference; public round-trip sprawdzony, runtime NOT VERIFIED. |
+| `packages/fullmag-py/src/fullmag/model/antenna.py` | `class EquilibriumArtifactRef` | Istniejący exact asset/equilibrium/content pin; v7 runtime wymaga canonical owner context. |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_antenna_spectrum_request_expr` | Typed reference export i odmowa unknown keys; source-only. |
+| `crates/fullmag-ir/src/antenna.rs` | `EquilibriumReferenceIR` | Tagged deny-unknown typed refs; source-only. |
+| `crates/fullmag-ir/src/antenna.rs` | `validate_transverse_equilibrium_ref` | Required transverse ref i Cartesian ignored-ref refusal; source-only. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `VerifiedAntennaEquilibriumContext` | Prywatny verified accepted Relax/owning-plan context; nie raw m0 authority. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `AcceptedEquilibriumManifest` | Required fourth accepted_fields InputRef; exact-byte SHA/count closure; source-only, unqualified. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `validate_inputs` | Independent accepted baseline versus refreshed fields through six-argument canonical validator and v3 rebuild; runtime NOT VERIFIED. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `accepted_antenna_equilibrium_artifacts` | Actual CPU native accepted Relax wrapper; required verified replay and exact accepted_fields_json baseline retained with SHA/count, bounded at 256 MiB; runtime NOT VERIFIED. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `publish_accepted_antenna_equilibrium` | Closed six-artifact publication: four inputs, manifest index4, stage pin index5 last after full canonical reopen; cold runtime NOT VERIFIED. |
+| `crates/fullmag-runner/src/fem/antenna_equilibrium.rs` | `load_verified_antenna_equilibrium` | Full owner closure including required accepted baseline SHA/count and independent replay versus refreshed fields; v3 rebuild and explicit v7 refusal; runtime NOT VERIFIED. |
+| `crates/fullmag-plan/src/antenna_projection.rs` | `resolve_fem_antenna_transverse_cell_mask` | Actual volume cell Object/Region membership intersect Ms>0; source-only. |
+| `crates/fullmag-runner/src/antenna_spectrum.rs` | `compute_antenna_source_spectrum_with_equilibrium` | Private-context public dispatch, qualified source gate; source-only. |
+| `crates/fullmag-runner/src/antenna_spectrum.rs` | `compute_spectrum_artifact` | Actual P1/projection/FFT, transverse v3 and Cartesian v2; no transverse fast cache. |
+| `crates/fullmag-runner/src/antenna_spectrum.rs` | `verify_antenna_source_spectrum_equilibrium_binding` | Full canonical equilibrium/source binding on readback; source-only. |
+| `crates/fullmag-runner/src/antenna_spectrum.rs` | `validate_antenna_source_spectrum_manifest_semantics` | v3 required transverse binding, Cartesian v2 unchanged; source-only. |
+| `crates/fullmag-api/src/schemas/authoring.rs` | `EquilibriumReferenceResource` | Typed API authoring refs; generated OpenAPI/TS NOT VERIFIED. |
+| `crates/fullmag-api/src/router_v2/handlers/data/antenna.rs` | `get_antenna_source_spectrum` | Metadata reopens owner closure and checks binding; API runtime NOT VERIFIED. |
+| `crates/fullmag-api/src/router_v2/handlers/data/antenna.rs` | `get_antenna_source_spectrum_payload` | Binary read repeats canonical binding and payload integrity; browser NOT VERIFIED. |
+| `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md` | `DOC-ANCHOR:antenna-accepted-equilibrium-transverse-contract` | Historyczny prerejestrowany E9b contract; typed Relax/P1/manifestv3 source-only implemented, runtime/native/browser/cold/science NOT VERIFIED. |
+| `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` | `AcceptedFemRelaxStageHandoff` | Istniejący canonical accepted Relax v3 używany przez source-only transverse adapter, bez fake eigen plan. |
+| `crates/fullmag-runner/src/fem_eigen.rs` | `validate_recomputed_fem_linearization_certificate` | Istniejąca walidacja native recompute receiptu związana z actual FemPlanIR. |
+| `crates/fullmag-runner/src/fem/eigen_equilibrium.rs` | `load_certified_equilibrium_artifact` | Kanoniczny ścisły parser v7/v8; samo parsowanie v7 nie dowodzi target binding ani dopuszczenia v8 do transverse. |
+| `crates/fullmag-runner/src/fem/eigen_shared_domain.rs` | `build_shared_domain_linearization_state` | Istniejące pełne podpisy i comparison gates v7; planned shared validation boundary zachowuje ownera. |
+| `crates/fullmag-runner/src/fem/eigen_native_artifacts.rs` | `native_modal_artifacts` | Obecna publikacja v7 wyłącznie z rzeczywistego accepted linearization state. |
+| `crates/fullmag-plan/src/antenna_projection.rs` | `resolve_fem_antenna_projection_mask` | Istniejące nodal membership; actual transverse używa osobnego volume-cell gate resolve_fem_antenna_transverse_cell_mask. |
+| `crates/fullmag-runner/src/antenna_spectrum.rs` | `selected_components` | Istniejąca pointwise projekcja trzech komponentów; nie publiczny certificate. |
+| `crates/fullmag-cli/src/orchestrator.rs` | `execute_antenna_spectrum_requests` | Istniejący dispatch rozwiązuje canonical verified context i completed-stage pins; runtime NOT VERIFIED. |
+
+
 
 | Ścieżka | Symbol / anchor | Odpowiedzialność i dowód |
 |---|---|---|
@@ -6520,12 +7923,13 @@ evidence and cannot promote a capability lane.
 | `crates/fullmag-runner/src/antenna_fields.rs` | `dynamic_antenna_drive_terms` | FEM CPU reference-stage clock mapping for solved, prescribed and legacy antenna waveforms; regression source exists but is not executed under the worktree test ban |
 | `crates/fullmag-runner/src/fem_reference.rs` | `reference_antenna_drive_maps_stage_clock_to_waveform_origin` | source regression for nonzero sinusoidal phase/offset and distinct stage-local/absolute clocks at a nonzero stage start; not executed under the worktree test ban |
 | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class AntennaPortMode` | current public names, normalization and branch validation for the thin port contract |
+| `packages/fullmag-py/src/fullmag/model/study.py` | `class FieldOnly` | publiczny niemagnetyczny study bez dynamiki; outputs/constraints wyłącznie puste, native execution jeszcze nieweryfikowane |
 | `packages/fullmag-py/src/fullmag/model/antenna_inventory.py` | `class AntennaAuthoringInventory` | typowany immutable owner deklaracji i rozdzielenie execution base; źródłowe WIP, nie runtime proof |
 | `packages/fullmag-py/src/fullmag/world.py` | `declare_antenna_field_solve` | publiczna deklaracja bez action; odpowiadające projection/drive/spectrum używają tego samego oddzielnego ownera |
 | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_antenna_inventory_declarations` | zachowanie niewykorzystanych deklaracji w skrypcie, bez syntetycznego wykonania |
 | `packages/fullmag-py/tests/test_antenna_authoring_inventory.py` | `class AntennaAuthoringInventoryTests` | 11 interpretowanych kontroli authoringu, nie naukowa kwalifikacja pola lub LLG |
-| `packages/fullmag-py/src/fullmag/model/antenna.py` | `class AntennaSpectrumRequest` | current source-spectrum authoring fields and Python validation, including rejection of `equilibrium_ref` outside `transverse`, and fail-closed `transverse` and `mode_basis_ref` |
-| `crates/fullmag-ir/src/antenna.rs` | `validate_transverse_equilibrium_ref` | both IR versions reject ignored equilibrium references and keep `transverse` unsupported until certified projection exists |
+| `packages/fullmag-py/src/fullmag/model/antenna.py` | `class AntennaSpectrumRequest` | current source-spectrum authoring fields and Python validation, including rejection of `equilibrium_ref` outside `transverse`, explicit typed transverse equilibrium references and fail-closed `mode_basis_ref` |
+| `crates/fullmag-ir/src/antenna.rs` | `validate_transverse_equilibrium_ref` | both IR versions reject ignored equilibrium references and require an explicit valid transverse equilibrium reference; runtime requires canonical verified context |
 | `packages/fullmag-py/tests/test_antenna_stage_workflow.py` | `test_antenna_solve_returns_symbolic_output_and_preserves_authoring_intent` | stage-first symbolic-reference round trip; not a field-solve runtime gate |
 | `crates/fullmag-runner/src/antenna_spectrum.rs` | `coordinate_tolerance` | lokalna tolerancja próbkowania i odmowa pracy poniżej rozdzielczości współrzędnych; regresje `identity_plane_sampling_distinguishes_micrometre_samples_far_from_origin` i `identity_plane_sampling_rejects_spacing_below_coordinate_resolution` nieuruchomione z powodu zakazu testów w worktree |
 | `crates/fullmag-runner/src/antenna_spectrum.rs` | `compute_nonuniform_k_antenna_source_spectrum_interruptible` | odrzucenie przepełnionej fazy oraz niefinitywnej amplitudy/mocy; regresja `spectrum_rejects_overflow_from_finite_inputs` pozostaje nieuruchomiona z powodu zakazu testów |
@@ -6607,6 +8011,112 @@ w audycie E9c; typed authoring i pełny round-trip nie są tą poprawką domkni�
 FDM CPU/GPU: obecny request reader nieobsługiwany. FEM CPU/GPU: wspólny
 postprocessor, ale oba runtime'y i parytet nadal niezakwalifikowane.
 Naprawa nie kwalifikuje snapshotów, anteny, meshu, cold HTTP ani UI.
+
+(antenna-finite-k-authoring-monitor-contract)=
+### Kontrakt authoring i monitorów finite-k — projekt E9c
+
+Status: kontrakt projektowanej poprawki, bez kwalifikacji runtime. Analiza
+odpowiedzi finite-k nie jest FFT samego pola anteny i nie jest automatycznie
+podatnością magnetyczną. Istniejący reader przetwarza osobno wybrany komponent
+magnetyzacji oraz ten sam komponent `H_drive`; nie zastępuje wektora źródła
+jego modułem. Preprocessing odejmuje pierwszą próbkę, a okna przestrzeni
+i czasu są Hann. Nie należy przenosić do tego modelu Gamma `detrend=linear`.
+
+Walidacja finite-k odrzuca jawnie opcje Gamma `detrend`, `window`,
+`weighting` i `susceptibility_floor_fraction`, zamiast przyjmować je bez
+wykonania. Podany `response_component` musi być łańcuchem `mx`, `my` albo
+`mz`; wartość domyślna `my` obowiązuje tylko przy braku klucza. Niełańcuchowa
+wartość nie jest normalizowana do `my`. Metadane legacy absorberów pozostają
+odrębne od tych opcji i nie stają się przez to maską zastosowaną w FFT.
+
+Projektowany typowany request zachowuje istniejący klucz
+`ProblemIR.problem_meta.runtime_metadata.spin_wave_response` i wersję
+`spin_wave_response.request.v1`. Nie dodaje alternatywnego modelu fizyki ani
+endpointu. Publiczna sygnatura i jej eksport muszą zostać zweryfikowane
+przed opisaniem ich jako działającego API. Dotychczasowe wywołanie Gamma
+zachowuje domyślne parametry i zachowanie.
+
+| Klucz requestu | Typ i domyślność | Jednostka SI | Walidacja i znaczenie |
+|---|---|---|---|
+| `analysis` | string, jawne `finite_k` | $1$ | Wybór analizy przestrzennej odpowiedzi, nie Gamma. |
+| `response_component` | string, `my` | $1$ | `mx`, `my` albo `mz`; określa też komponent próbkowanego źródła. |
+| `probe_count` | integer, 128 | $1$ | 4..2048; bool nie jest liczbą próbek. Nieparzyste liczby są dozwolone. |
+| `analysis_x_min_m` | optional real, inferencja domeny magnetycznej | $\mathrm{m}$ | Skończona dolna granica przekrojów. |
+| `analysis_x_max_m` | optional real, inferencja domeny magnetycznej | $\mathrm{m}$ | Skończona górna granica; po rozwiązaniu obu granic max > min. |
+
+Kandydat API `fm.FiniteKResponseAnalysis` ma dokładnie cztery parametry:
+
+| Parametr Python | Typ | Default | SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `FiniteKResponseAnalysis.response_component` | `str` | `my` | $1$ | mx/my/mz; niełańcuchowy request IR odrzucony | komponent m i tego samego H_drive | authoring source-only; FEM tet4/f64 niezakwalifikowany; FDM unsupported | `problem_meta.runtime_metadata.spin_wave_response.response_component` |
+| `FiniteKResponseAnalysis.probe_count` | `int` | `128` | $1$ | int nie bool; 4..2048; odd/even dozwolone | liczba sond przekrojowych x | authoring source-only; FEM tet4/f64 niezakwalifikowany; FDM unsupported | `problem_meta.runtime_metadata.spin_wave_response.probe_count` |
+| `FiniteKResponseAnalysis.analysis_x_min_m` | `float | None` | `None` | $\mathrm{m}$ | None pomijane; inne float conversion, nie bool, finite; przy obu max > min | dolna granica przekrojów, None oznacza inferencję domeny | authoring source-only; FEM tet4/f64 niezakwalifikowany; FDM unsupported | `problem_meta.runtime_metadata.spin_wave_response.analysis_x_min_m` |
+| `FiniteKResponseAnalysis.analysis_x_max_m` | `float | None` | `None` | $\mathrm{m}$ | None pomijane; inne float conversion, nie bool, finite; przy obu max > min | górna granica przekrojów, None oznacza inferencję domeny | authoring source-only; FEM tet4/f64 niezakwalifikowany; FDM unsupported | `problem_meta.runtime_metadata.spin_wave_response.analysis_x_max_m` |
+
+`response_component="my"`, `probe_count=128`, `analysis_x_min_m=None`,
+`analysis_x_max_m=None`. `to_runtime_metadata` wpisuje dwa stałe klucze
+`schema_version` i `analysis`, przekazuje komponent i liczbę sond oraz
+pomija granice `None`. Podane granice normalizuje przez `float`; odrzuca
+bool, wartości nieskończone i NaN. Konwersja niepoprawnych typów zgłasza
+TypeError/ValueError; nieprawidłowy zakres liczby sond i kolejność obu
+granic zgłaszają ValueError. Liczba sond musi być int, nie bool.
+
+`StudyStagesBuilder.fft_response` przyjmuje ten obiekt jako argument
+`response_component`; zwykły string nadal wybiera Gamma. Dla obiektu
+finite-k domyślne argumenty Gamma są zachowane wyłącznie dla zgodności
+sygnatury, nie są serializowane ani wykonywane; inne ich wartości są
+odrzucane. `enabled=False` usuwa request dla następnych etapów.
+`stage_id` określa tożsamość akcji, nie zmienia parametrów FFT. Interpretowany
+test odtworzenia skryptu potwierdza request dla 15/16 sond i Gamma; nie jest
+to dowód przejścia native IR/planner ani wykonania Run.
+
+Inferencja zakresu nie stanowi gwarancji poprawnych przekrojów: reader
+odrzuca nieważne wiersze operatora. `excluded_absorber_ranges_m` w obecnej
+implementacji jest metadanymi wyniku, nie zastosowaną maską FFT; UI nie może
+przedstawiać go jako skutecznego wyłączenia absorberów.
+
+Monitor czasowy wymaga dwóch rzeczywistych outputów pól, `m` i `H_drive`.
+Tabela skalarnych my/mz ani końcowy snapshot nie zastępują tych outputów.
+UI kontroluje aktywne deklaracje obu monitorów przed konkretnym Run oraz
+zgodność ich kadencji; OFF/clearAll usuwa ich gotowość. Reader kontroluje
+rzeczywiste osie czasu i wymaga zgodności próbek obu pól. Nie wolno
+samoczynnie włączać fizyki, dodawać pozornego RegionalFieldDrive ani ukrywać
+kosztu dodatkowego zapisu.
+
+| Realizacja | Stan analizy finite-k i warunek |
+|---|---|
+| FDM CPU | Unsupported w obecnym readerze; jawna odmowa, bez fallbacku. |
+| FDM GPU | Unsupported w obecnym readerze; jawna odmowa, bez fallbacku CPU/FEM. |
+| FEM CPU | Ograniczona ścieżka x/tet4/f64; runtime całego workflow pozostaje niekwalifikowany. |
+| FEM GPU | Obecność wspólnego readera nie dowodzi wykonania na GPU; workflow niekwalifikowany. |
+
+Mapowanie istniejących źródeł: `crates/fullmag-runner/src/spin_wave_sampling.rs`
+— `requested_finite_k_artifacts`, `dynamic_structure_factor_1d_with_axes`;
+`packages/fullmag-py/src/fullmag/model/study.py` — `FiniteKResponseAnalysis`;
+`packages/fullmag-py/src/fullmag/world.py` — `StudyStagesBuilder.fft_response`;
+`packages/fullmag-py/src/fullmag/runtime/script_builder.py` — `_render_stages`, `_render_scene_stage_bootstrap`;
+`apps/control-room/src/modules/inspector/panels/stages/studyWorkflowState.ts`
+— `validateStudyWorkflow`. Symbole kandydata authoring nie dowodzą
+ukończenia integracji ani runtime.
+
+| Kontrakt kandydata | Ścieżka + symbol | Dowód i ograniczenie |
+|---|---|---|
+| Aktywne źródło bieżącego etapu | `crates/fullmag-plan/src/lib.rs` + `has_active_finite_k_source` | Prąd skończony i niezerowy oraz aktywacja; nie certyfikuje przyjęcia artefaktu bazy. |
+| Regresja źródła | `crates/fullmag-plan/src/lib.rs` + `finite_k_source_gate_respects_antenna_stage_and_current` | Zapisany test helpera; niekompilowany i niewykonany. |
+| Opcje i typy requestu | `crates/fullmag-ir/src/validation.rs` + `validate_spin_wave_response_request` | Jawna odmowa ignorowanych Gamma-only opcji i non-string komponentu. |
+| Regresja opcji i typów | `crates/fullmag-ir/src/validation.rs` + `finite_k_request_rejects_ignored_gamma_options_and_nonstring_components` | Zapisany test; niekompilowany i niewykonany. |
+
+Bramki: Python request i eksport round-trip, UI parse/edit/serialize,
+walidacja aktywności drive i outputów, rzeczywisty Run z odczytem obu Zarr,
+analiza wyników oraz browser qualification. Testy zapisane, lecz niewykonane,
+nie zamykają żadnej bramki runtime ani urządzenia.
+
+Eksport SceneDocument zachowuje `analysis`, `response_component`, `probe_count`
+oraz obie granice SI finite-k. Parametry finite-k przekazane do Gamma oraz
+nieznane analizy lub pola są odrzucane zamiast pomijane. Reader
+`requested_finite_k_artifacts` uwzględnia niezerową solved basis aktywną
+w bieżącym stage przez `resolved_solved_antenna_drive_is_active`; nie zastępuje
+to walidacji accepted basis, rzeczywistych monitorów ani kwalifikacji runtime.
 
 (antenna-scientific-bibliography)=
 ## 14. References

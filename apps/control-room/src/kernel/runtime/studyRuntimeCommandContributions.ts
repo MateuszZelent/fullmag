@@ -1486,6 +1486,13 @@ function resolveImportStateInput(input: unknown): ImportStateInput | null {
   };
 }
 
+function resolveSessionSaveTarget(input: unknown): string | undefined {
+  const candidate = asRecord(input);
+  const value = asString(candidate?.target_path) ?? asString(candidate?.targetPath);
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function pickFmsFileBase64(): Promise<string | null> {
   if (
     typeof document === "undefined" ||
@@ -2630,6 +2637,46 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
 
       return {
         message: `Field state loaded from ${artifactRef}.`,
+        status: "completed",
+      };
+    },
+  },
+  {
+    id: "study.save-state",
+    title: "Save State",
+    category: "Study",
+    group: "study-recovery",
+    scope: "runtime",
+    isEnabled: (context) => exportStateDisabledReason(context) === null,
+    disabledReason: exportStateDisabledReason,
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+
+      assertCurrentSessionScope(context);
+      const targetPath = resolveSessionSaveTarget(context.input);
+      const response = await context.api.persistence.exports.create({
+        profile: "resume",
+        ...(targetPath ? { target_path: targetPath } : {}),
+        save_to_source: true,
+        ui_state: exportControlRoomUiState(context),
+      }, sessionRequestOptions(context));
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      context.resources?.invalidate(PERSISTENCE_EXPORTS_PATH, response.session_id);
+
+      if (!response.saved_path) {
+        return {
+          message: "State was not saved to the source directory.",
+          status: "failed",
+        };
+      }
+
+      return {
+        message: response.filename
+          ? `State saved as ${response.filename}.`
+          : "State saved.",
         status: "completed",
       };
     },

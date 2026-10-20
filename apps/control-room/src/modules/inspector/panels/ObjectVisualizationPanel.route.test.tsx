@@ -77,8 +77,12 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
       status: testState.fieldCatalog ? testState.fieldCatalogStatus : "idle",
     };
   },
-  useQuantityCatalogResource: ({ enabled }: { enabled: boolean }) => {
+  useQuantityCatalogResource: ({ enabled = true }: { enabled?: boolean } = {}) => {
     resourceCall("quantity-catalog", enabled);
+    return { data: null, error: null, revision: null, status: "idle" };
+  },
+  useFieldMetaResource: ({ enabled = true }: { enabled?: boolean }) => {
+    resourceCall("field-meta", enabled);
     return { data: null, error: null, revision: null, status: "idle" };
   },
   useSolverStatusResource: ({ enabled }: { enabled: boolean }) => {
@@ -233,6 +237,7 @@ vi.mock("@/kernel/layout/useLayout", () => ({
 }));
 vi.mock("@/modules/viewport-3d/public", () => ({
   manifestRenderableCarriers: () => [],
+  useViewport3DArtifactInspectionPresentation: () => null,
 }));
 vi.mock("../primitives/FieldRow", () => ({
   FieldRow: ({ label, value }: { label: React.ReactNode; value: React.ReactNode }) => (
@@ -695,16 +700,18 @@ describe("ObjectVisualizationPanel lane routing", () => {
     const html = renderToStaticMarkup(<ObjectVisualizationPanel selection={selection} />);
 
     expect(html).not.toContain("Structured grid cells");
-    // Owner identity must still resolve independently of the numerical lane.
+    // An explicit object visualization remains addressable while the lane is
+    // pending, but lane-specific resources stay disabled until status resolves.
+    expect(html).toContain("Target ID:object:film");
     expect(testState.resourceCalls.find((call) => call.name === "scene")).toMatchObject({
       enabled: true,
     });
-    for (const name of [
-      "domain-meta",
-      "fdm-membership",
-      "visualization-state",
-      "shared-domain-manifest",
-    ]) {
+    expect(
+      testState.resourceCalls.find((call) => call.name === "visualization-state"),
+    ).toMatchObject({
+      enabled: true,
+    });
+    for (const name of ["domain-meta", "fdm-membership", "shared-domain-manifest"]) {
       expect(testState.resourceCalls.find((call) => call.name === name)).toMatchObject({
         enabled: false,
       });

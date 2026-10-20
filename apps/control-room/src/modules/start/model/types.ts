@@ -1,6 +1,8 @@
 import type {
   ComputeNodePolicyUpdateRequest,
   ComputeNodesState,
+  PublishExecutionProfileRequest,
+  PublishExecutionProfileResource,
 } from "@/kernel/api/apiTypes";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 
@@ -38,6 +40,12 @@ export interface ComputeRuntimeLane {
   readonly availability: "available" | "unavailable" | "unknown";
   readonly precisions: readonly string[];
   readonly reason?: string;
+  /** Display-only qualification; never used for selection or admission. */
+  readonly diagnostic?: {
+    readonly kind: "experimental";
+    readonly state: "available" | "unavailable";
+    readonly reason?: string;
+  };
 }
 
 export interface ComputeEnvironment {
@@ -93,6 +101,14 @@ export interface ComputeNodeCpuTopologySummary {
 
 export type ComputeNodeEnforcementStatus = "supported" | "advisory" | "unavailable";
 
+export type ComputeNodeObservationUnavailableReason =
+  | "not_reported"
+  | "permission_denied"
+  | "unsupported"
+  | "probe_failed"
+  | "source_unavailable"
+  | "future_timestamp";
+
 export interface ComputeNodeSnapshotSummary {
   readonly nodeId: string;
   readonly inventoryRevision: number;
@@ -106,6 +122,7 @@ export interface ComputeNodeSnapshotSummary {
     readonly allowedLogicalProcessorIds: ComputeNodeFact<readonly number[]>;
     readonly effectiveCapacityMillis: number | null;
     readonly effectiveCapacityAvailable: boolean;
+    readonly effectiveCapacityReason: ComputeNodeObservationUnavailableReason | null;
     readonly quota: ComputeNodeFact<
       | { readonly mode: "unlimited" }
       | { readonly mode: "limited"; readonly capacityMillis: number }
@@ -174,6 +191,7 @@ export interface ComputeProbeController {
   readonly compute: ComputeProbeState;
   readonly nodeInventory: ComputeNodeInventorySummary;
   readonly canEditNodePolicy: boolean;
+  readonly canPublishExecutionProfiles: boolean;
   readonly refreshing: boolean;
   readonly stale: boolean;
   readonly error: string | null;
@@ -183,6 +201,9 @@ export interface ComputeProbeController {
     expectedRevision: number,
     request: ComputeNodePolicyUpdateRequest,
   ) => Promise<ComputeNodePolicySummary>;
+  readonly publishExecutionProfile: (
+    request: PublishExecutionProfileRequest,
+  ) => Promise<PublishExecutionProfileResource>;
 }
 
 export type DocumentMode = "read_write" | "read_only";

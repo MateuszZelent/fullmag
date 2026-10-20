@@ -81,9 +81,47 @@ def validate_periodic_mesh_options(options: "MeshOptions", *, context: str) -> N
 
 
 def _mixed_deterministic_inputs() -> dict[str, object]:
+    """Return the frozen deterministic policy for the historical v1 route."""
     return {
         "algorithm_2d": 6,
         "algorithm_3d": 1,
+        "element_order": 1,
+        "gmsh_version": MIXED_SHARED_GMSH_VERSION,
+        "random_factor": 0.0,
+        "thread_count": 1,
+        "transition_partition": "cartesian_3x3x3_minus_magnetic_center",
+        "transition_volume_count": 26,
+        "pyramid_apex_optimizer": "bounded_per_apex_outward_scale_line_search",
+        "pyramid_apex_scale_step": MIXED_PYRAMID_APEX_SCALE_STEP,
+        "pyramid_apex_scale_max": MIXED_PYRAMID_APEX_SCALE_MAX,
+        "scaled_jacobian_p05_min": MIXED_SCALED_JACOBIAN_P05_MIN,
+    }
+
+
+def _mixed_v2_deterministic_inputs(
+    *,
+    requested_algorithm_3d: int = 1,
+    transition_algorithm_3d: int = 1,
+    tetrahedral_algorithm_3d: int = 1,
+    optimizer: str | None = None,
+    optimizer_iterations: int = 0,
+) -> dict[str, object]:
+    """Return the complete deterministic policy for a mixed v2 realization.
+
+    The historical v2 route used Delaunay (1) for every volume.  The hybrid
+    route keeps that algorithm for the structured Box/transition stage while
+    using the authored HXT policy for the annulus and far-air tetrahedra.  The
+    explicit fields prevent consumers from inferring a single algorithm from
+    the legacy ``algorithm_3d`` key.
+    """
+    return {
+        "algorithm_2d": 6,
+        "algorithm_3d": int(requested_algorithm_3d),
+        "requested_algorithm_3d": int(requested_algorithm_3d),
+        "transition_algorithm_3d": int(transition_algorithm_3d),
+        "tetrahedral_algorithm_3d": int(tetrahedral_algorithm_3d),
+        "optimizer": optimizer,
+        "optimizer_iterations": int(optimizer_iterations),
         "element_order": 1,
         "gmsh_version": MIXED_SHARED_GMSH_VERSION,
         "random_factor": 0.0,
@@ -1202,8 +1240,706 @@ class MixedLayerTopologyCertificate:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ExactSweepEvidenceV2:
+    sweep_direction_requested: str
+    sweep_direction_resolved: str
+    requested_layer_count: int
+    realized_layer_count: int
+    magnetic_plane_coordinates_m: tuple[float, ...]
+    plane_tolerance_m: float
+    topology_fingerprint_version: str
+    topology_fingerprint: str
+    node_order_digest: str
+
+    def __post_init__(self) -> None:
+        if self.sweep_direction_requested not in {"auto", "x", "y", "z"}:
+            raise ValueError("mixed v2 exact sweep requested direction must be auto, x, y, or z")
+        if self.sweep_direction_resolved not in {"x", "y", "z"}:
+            raise ValueError("mixed v2 exact sweep resolved direction must be x, y, or z")
+        if (
+            isinstance(self.requested_layer_count, bool)
+            or not isinstance(self.requested_layer_count, int)
+            or self.requested_layer_count not in {1, 2, 3}
+            or self.realized_layer_count != self.requested_layer_count
+            or len(self.magnetic_plane_coordinates_m) != self.realized_layer_count + 1
+            or any(not isinstance(value, float) or not math.isfinite(value) for value in self.magnetic_plane_coordinates_m)
+            or any(right <= left for left, right in zip(self.magnetic_plane_coordinates_m, self.magnetic_plane_coordinates_m[1:], strict=False))
+            or not math.isfinite(self.plane_tolerance_m)
+            or self.plane_tolerance_m <= 0.0
+            or self.topology_fingerprint_version not in {"v2", "v3"}
+            or not _is_sha256_digest(self.topology_fingerprint)
+            or not _is_sha256_digest(self.node_order_digest)
+        ):
+            raise ValueError("mixed v2 exact sweep evidence is invalid")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "sweep_direction_requested": self.sweep_direction_requested,
+            "sweep_direction_resolved": self.sweep_direction_resolved,
+            "requested_layer_count": self.requested_layer_count,
+            "realized_layer_count": self.realized_layer_count,
+            "magnetic_plane_coordinates_m": list(self.magnetic_plane_coordinates_m),
+            "plane_tolerance_m": self.plane_tolerance_m,
+            "topology_fingerprint_version": self.topology_fingerprint_version,
+            "topology_fingerprint": self.topology_fingerprint,
+            "node_order_digest": self.node_order_digest,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "ExactSweepEvidenceV2":
+        required = (
+            "sweep_direction_requested",
+            "sweep_direction_resolved",
+            "requested_layer_count",
+            "realized_layer_count",
+            "magnetic_plane_coordinates_m",
+            "plane_tolerance_m",
+            "topology_fingerprint_version",
+            "topology_fingerprint",
+            "node_order_digest",
+        )
+        if set(payload) != set(required):
+            raise ValueError("mixed v2 exact sweep evidence has an unexpected field set")
+        planes = payload["magnetic_plane_coordinates_m"]
+        if not isinstance(planes, list) or any(type(value) is not float for value in planes):
+            raise TypeError("mixed v2 exact sweep magnetic_plane_coordinates_m must contain floats")
+        if (
+            not isinstance(payload["sweep_direction_requested"], str)
+            or not isinstance(payload["sweep_direction_resolved"], str)
+            or type(payload["requested_layer_count"]) is not int
+            or type(payload["realized_layer_count"]) is not int
+            or type(payload["plane_tolerance_m"]) is not float
+            or not isinstance(payload["topology_fingerprint_version"], str)
+            or not isinstance(payload["topology_fingerprint"], str)
+            or not isinstance(payload["node_order_digest"], str)
+        ):
+            raise TypeError("mixed v2 exact sweep evidence has invalid field types")
+        return cls(
+            sweep_direction_requested=payload["sweep_direction_requested"],
+            sweep_direction_resolved=payload["sweep_direction_resolved"],
+            requested_layer_count=payload["requested_layer_count"],
+            realized_layer_count=payload["realized_layer_count"],
+            magnetic_plane_coordinates_m=tuple(planes),
+            plane_tolerance_m=payload["plane_tolerance_m"],
+            topology_fingerprint_version=payload["topology_fingerprint_version"],
+            topology_fingerprint=payload["topology_fingerprint"],
+            node_order_digest=payload["node_order_digest"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MagneticRegionV2:
+    object_id: str
+    body_marker: int
+    material_marker: int
+    cell_family_counts: dict[str, int]
+    exact_sweep: ExactSweepEvidenceV2 | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "object_id": self.object_id,
+            "body_marker": self.body_marker,
+            "material_marker": self.material_marker,
+            "cell_family_counts": dict(self.cell_family_counts),
+            "exact_sweep": self.exact_sweep.to_dict() if self.exact_sweep is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "MagneticRegionV2":
+        if set(payload) != {"object_id", "body_marker", "material_marker", "cell_family_counts", "exact_sweep"}:
+            raise ValueError("mixed v2 magnetic region has an unexpected field set")
+        counts = payload["cell_family_counts"]
+        if not isinstance(counts, dict) or any(type(key) is not str or type(value) is not int or value <= 0 for key, value in counts.items()):
+            raise TypeError("mixed v2 magnetic region cell_family_counts is invalid")
+        sweep = payload["exact_sweep"]
+        if sweep is not None and not isinstance(sweep, dict):
+            raise TypeError("mixed v2 magnetic region exact_sweep must be an object or null")
+        if not isinstance(payload["object_id"], str) or type(payload["body_marker"]) is not int or type(payload["material_marker"]) is not int:
+            raise TypeError("mixed v2 magnetic region has invalid scalar fields")
+        return cls(
+            object_id=payload["object_id"],
+            body_marker=payload["body_marker"],
+            material_marker=payload["material_marker"],
+            cell_family_counts=dict(counts),
+            exact_sweep=ExactSweepEvidenceV2.from_dict(sweep) if sweep is not None else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BodySeparationPairV2:
+    body_a: str
+    body_b: str
+    min_gap_m: float
+    contact_state: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "body_a": self.body_a,
+            "body_b": self.body_b,
+            "min_gap_m": self.min_gap_m,
+            "contact_state": self.contact_state,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "BodySeparationPairV2":
+        if set(payload) != {"body_a", "body_b", "min_gap_m", "contact_state"}:
+            raise ValueError("mixed v2 separation pair has an unexpected field set")
+        if any(not isinstance(payload[name], str) for name in ("body_a", "body_b", "contact_state")) or type(payload["min_gap_m"]) is not float:
+            raise TypeError("mixed v2 separation pair has invalid field types")
+        return cls(
+            body_a=payload["body_a"],
+            body_b=payload["body_b"],
+            min_gap_m=payload["min_gap_m"],
+            contact_state=payload["contact_state"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BodyMaterialFieldV2:
+    object_id: str
+    field_basis: str
+    coefficient_domains: tuple[str, ...]
+    air_interpolation_policy: str
+    cross_body_interpolation_policy: str
+    node_order_digest: str
+    field_digest: str
+    values: dict[str, object]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "object_id": self.object_id,
+            "field_basis": self.field_basis,
+            "coefficient_domains": list(self.coefficient_domains),
+            "air_interpolation_policy": self.air_interpolation_policy,
+            "cross_body_interpolation_policy": self.cross_body_interpolation_policy,
+            "node_order_digest": self.node_order_digest,
+            "field_digest": self.field_digest,
+            "values": dict(self.values),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "BodyMaterialFieldV2":
+        expected = {"object_id", "field_basis", "coefficient_domains", "air_interpolation_policy", "cross_body_interpolation_policy", "node_order_digest", "field_digest", "values"}
+        if set(payload) != expected:
+            raise ValueError("mixed v2 body material field has an unexpected field set")
+        domains = payload["coefficient_domains"]
+        values = payload["values"]
+        if not isinstance(domains, list) or any(not isinstance(value, str) for value in domains) or not isinstance(values, dict):
+            raise TypeError("mixed v2 body material field has invalid domains or values")
+        if any(not isinstance(payload[name], str) for name in ("object_id", "field_basis", "air_interpolation_policy", "cross_body_interpolation_policy", "node_order_digest", "field_digest")):
+            raise TypeError("mixed v2 body material field has invalid scalar fields")
+        return cls(
+            object_id=payload["object_id"],
+            field_basis=payload["field_basis"],
+            coefficient_domains=tuple(domains),
+            air_interpolation_policy=payload["air_interpolation_policy"],
+            cross_body_interpolation_policy=payload["cross_body_interpolation_policy"],
+            node_order_digest=payload["node_order_digest"],
+            field_digest=payload["field_digest"],
+            values=dict(values),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MixedLayerTopologyCertificateV2:
+    """Disconnected-body mixed-P1 evidence; v1 remains single-body/prism-only."""
+
+    certificate_status: str
+    magnetic_regions: tuple[MagneticRegionV2, ...]
+    body_separation_pairs: tuple[BodySeparationPairV2, ...]
+    body_material_fields: tuple[BodyMaterialFieldV2, ...]
+    # A mixed shared-domain mesh may need two 3D algorithms: Gmsh HXT cannot
+    # consume the quad faces required by the exact swept Box/transition stage,
+    # while the annulus and far-air tetrahedral stage can retain the authored
+    # HXT policy.  Keep all stages explicit in the certificate rather than
+    # collapsing them to one misleading effective value.
+    requested_algorithm_3d: int
+    transition_algorithm_3d: int
+    tetrahedral_algorithm_3d: int
+    optimizer: str | None
+    optimizer_iterations: int
+    # The v2 extension is additive.  These fields deliberately retain the
+    # complete v1 shared-domain proof at the top level so existing consumers
+    # can read quality, volume, marker and deterministic-input evidence
+    # without inventing a second interpretation for multi-body meshes.
+    requested_sweep_direction: str
+    resolved_sweep_direction: str
+    requested_layer_count: int
+    realized_layer_count: int
+    magnetic_plane_coordinates_m: tuple[float, ...]
+    plane_tolerance_m: float
+    transition_shell_thickness_m: float
+    transition_shell_interface_tri3_count: int
+    interface_marker: int
+    outer_boundary_marker: int
+    magnetic_bounds_min_m: tuple[float, float, float]
+    magnetic_bounds_max_m: tuple[float, float, float]
+    airbox_bounds_min_m: tuple[float, float, float]
+    airbox_bounds_max_m: tuple[float, float, float]
+    magnetic_bounds_relative_error: float
+    airbox_bounds_relative_error: float
+    jacobian_minima_m3_by_family: dict[str, float]
+    quality_metric: str
+    scaled_jacobian_minima_by_family: dict[str, float]
+    scaled_jacobian_p05_by_family: dict[str, float]
+    magnetic_volume_m3: float
+    expected_magnetic_volume_m3: float
+    magnetic_relative_volume_error: float
+    air_volume_m3: float
+    shared_domain_volume_m3: float
+    expected_shared_domain_volume_m3: float
+    shared_domain_relative_volume_error: float
+    marker_coverage_complete: bool
+    nonconforming_face_count: int
+    orphan_face_count: int
+    nonmanifold_face_count: int
+    coincident_interface_face_count: int
+    deterministic_inputs: dict[str, object]
+    topology_fingerprint_version: str
+    topology_fingerprint: str
+    gmsh_version: str
+    strategy: str
+    effective_gmsh_thread_count: int
+    fallbacks_triggered: tuple[str, ...] = ()
+    cell_family_counts_by_marker: dict[str, dict[str, int]] = field(default_factory=dict)
+    cell_family_counts_by_part: dict[str, dict[str, int]] = field(default_factory=dict)
+    facet_family_counts_by_role_marker: dict[str, dict[str, int]] = field(default_factory=dict)
+    schema_version: str = "mixed_layer_topology_certificate.v2"
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        if self.schema_version != "mixed_layer_topology_certificate.v2":
+            raise ValueError("mixed v2 certificate schema_version is invalid")
+        if self.certificate_status != "accepted":
+            raise ValueError("mixed v2 certificate must be accepted")
+        if not self.magnetic_regions:
+            raise ValueError("mixed v2 certificate requires magnetic_regions")
+        object_ids = [region.object_id for region in self.magnetic_regions]
+        if any(not object_id.strip() for object_id in object_ids) or len(set(object_ids)) != len(object_ids):
+            raise ValueError("mixed v2 certificate magnetic region object IDs are invalid")
+        if len({region.body_marker for region in self.magnetic_regions}) != len(self.magnetic_regions) or any(region.body_marker <= 0 for region in self.magnetic_regions):
+            raise ValueError("mixed v2 certificate body markers are invalid")
+        if len({region.material_marker for region in self.magnetic_regions}) != len(self.magnetic_regions) or any(region.material_marker <= 0 for region in self.magnetic_regions):
+            raise ValueError("mixed v2 certificate material markers are invalid")
+        for region in self.magnetic_regions:
+            if not region.cell_family_counts or any(family not in {"prism6", "tet4"} or count <= 0 for family, count in region.cell_family_counts.items()):
+                raise ValueError(f"mixed v2 certificate region {region.object_id!r} has invalid cell families")
+        expected_pairs = len(object_ids) * (len(object_ids) - 1) // 2
+        if len(self.body_separation_pairs) != expected_pairs:
+            raise ValueError("mixed v2 certificate separation pair coverage is incomplete")
+        pairs: set[tuple[str, str]] = set()
+        for pair in self.body_separation_pairs:
+            if pair.body_a >= pair.body_b or (pair.body_a, pair.body_b) in pairs or pair.body_a not in object_ids or pair.body_b not in object_ids or pair.contact_state != "separated" or not math.isfinite(pair.min_gap_m) or pair.min_gap_m <= 0.0:
+                raise ValueError("mixed v2 certificate separation pair is invalid")
+            pairs.add((pair.body_a, pair.body_b))
+        required_domains = ("Ms", "Aex", "alpha", "Ku1", "anisotropy_axis")
+        required_domain_set = set(required_domains)
+        material_objects: set[str] = set()
+        for material in self.body_material_fields:
+            if (
+                material.object_id not in object_ids
+                or material.object_id in material_objects
+                or material.field_basis != "body_owned_p1"
+                or material.coefficient_domains != required_domains
+                or set(material.values) != required_domain_set
+                or material.air_interpolation_policy != "forbidden"
+                or material.cross_body_interpolation_policy != "forbidden"
+                or not _is_sha256_digest(material.node_order_digest)
+                or not _is_sha256_digest(material.field_digest)
+            ):
+                raise ValueError(f"mixed v2 certificate material fields for {material.object_id!r} are invalid")
+            material_objects.add(material.object_id)
+        if material_objects != set(object_ids):
+            raise ValueError("mixed v2 certificate material field coverage is incomplete")
+        if self.fallbacks_triggered:
+            raise ValueError("mixed v2 certificate must not contain fallbacks")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value not in {1, 10}
+            for value in (
+                self.requested_algorithm_3d,
+                self.transition_algorithm_3d,
+                self.tetrahedral_algorithm_3d,
+            )
+        ):
+            raise ValueError("mixed v2 certificate has invalid 3D meshing algorithms")
+        if self.requested_algorithm_3d == 10:
+            if self.transition_algorithm_3d != 1 or self.tetrahedral_algorithm_3d != 10:
+                raise ValueError(
+                    "mixed v2 HXT realization must use algorithm 1 for the "
+                    "structured transition stage and algorithm 10 for tetrahedra"
+                )
+        elif (
+            self.transition_algorithm_3d != 1
+            or self.tetrahedral_algorithm_3d != 1
+        ):
+            raise ValueError(
+                "mixed v2 Delaunay realization must use algorithm 1 for all stages"
+            )
+        if self.optimizer is not None and (
+            not isinstance(self.optimizer, str) or self.optimizer != "Gmsh"
+        ):
+            raise ValueError("mixed v2 certificate optimizer must be None or 'Gmsh'")
+        if (
+            isinstance(self.optimizer_iterations, bool)
+            or not isinstance(self.optimizer_iterations, int)
+            or self.optimizer_iterations < 0
+            or (self.optimizer is None and self.optimizer_iterations != 0)
+            or (self.optimizer == "Gmsh" and self.optimizer_iterations < 1)
+        ):
+            raise ValueError("mixed v2 certificate optimizer iteration policy is invalid")
+        if self.requested_sweep_direction not in {"auto", "x", "y", "z"} or self.resolved_sweep_direction not in {"x", "y", "z"}:
+            raise ValueError("mixed v2 certificate has invalid shared sweep direction")
+        if self.requested_sweep_direction != "auto" and self.requested_sweep_direction != self.resolved_sweep_direction:
+            raise ValueError("mixed v2 certificate cannot change requested sweep direction")
+        if (
+            isinstance(self.requested_layer_count, bool)
+            or not isinstance(self.requested_layer_count, int)
+            or self.requested_layer_count not in {1, 2, 3}
+            or self.realized_layer_count != self.requested_layer_count
+            or len(self.magnetic_plane_coordinates_m) != self.realized_layer_count + 1
+            or any(not isinstance(value, float) or not math.isfinite(value) for value in self.magnetic_plane_coordinates_m)
+            or any(right <= left for left, right in zip(self.magnetic_plane_coordinates_m, self.magnetic_plane_coordinates_m[1:], strict=False))
+            or not math.isfinite(self.plane_tolerance_m)
+            or self.plane_tolerance_m <= 0.0
+        ):
+            raise ValueError("mixed v2 certificate has invalid shared exact-layer evidence")
+        if not math.isfinite(self.transition_shell_thickness_m) or self.transition_shell_thickness_m <= 0.0:
+            raise ValueError("mixed v2 certificate transition shell thickness must be positive")
+        if self.transition_shell_interface_tri3_count < 1:
+            raise ValueError("mixed v2 certificate transition shell must contain tri3 facets")
+        for name in ("interface_marker", "outer_boundary_marker"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"mixed v2 certificate {name} must be positive")
+        if self.interface_marker == self.outer_boundary_marker:
+            raise ValueError("mixed v2 certificate interface and boundary markers must differ")
+        for prefix in ("magnetic", "airbox"):
+            minimum = _strict_bounds_vector(getattr(self, f"{prefix}_bounds_min_m"), f"{prefix}_bounds_min_m")
+            maximum = _strict_bounds_vector(getattr(self, f"{prefix}_bounds_max_m"), f"{prefix}_bounds_max_m")
+            if any(right <= left for left, right in zip(minimum, maximum, strict=True)):
+                raise ValueError(f"mixed v2 certificate {prefix} bounds must increase")
+            object.__setattr__(self, f"{prefix}_bounds_min_m", minimum)
+            object.__setattr__(self, f"{prefix}_bounds_max_m", maximum)
+        for name in ("magnetic_volume_m3", "expected_magnetic_volume_m3", "air_volume_m3", "shared_domain_volume_m3", "expected_shared_domain_volume_m3"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"mixed v2 certificate {name} must be positive")
+        for name in ("magnetic_relative_volume_error", "shared_domain_relative_volume_error", "magnetic_bounds_relative_error", "airbox_bounds_relative_error"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0.0 or value > 1.0e-8:
+                raise ValueError(f"mixed v2 certificate {name} exceeds 1e-8")
+        if not self.marker_coverage_complete:
+            raise ValueError("mixed v2 certificate marker coverage is incomplete")
+        if any(getattr(self, name) != 0 for name in ("nonconforming_face_count", "orphan_face_count", "nonmanifold_face_count", "coincident_interface_face_count")):
+            raise ValueError("mixed v2 certificate interface proof contains invalid faces")
+        for name, mapping in (("jacobian_minima_m3_by_family", self.jacobian_minima_m3_by_family), ("scaled_jacobian_minima_by_family", self.scaled_jacobian_minima_by_family), ("scaled_jacobian_p05_by_family", self.scaled_jacobian_p05_by_family)):
+            if not isinstance(mapping, dict) or not mapping or any(not isinstance(key, str) or type(value) is not float or not math.isfinite(value) or value <= 0.0 for key, value in mapping.items()):
+                raise ValueError(f"mixed v2 certificate {name} must map families to positive floats")
+        if self.quality_metric != MIXED_QUALITY_METRIC:
+            raise ValueError(f"mixed v2 certificate quality_metric must be {MIXED_QUALITY_METRIC}")
+        if any(value < MIXED_SCALED_JACOBIAN_P05_MIN for value in self.scaled_jacobian_p05_by_family.values()):
+            raise ValueError("mixed v2 certificate scaled Jacobian p05 is below the qualified minimum")
+        if not isinstance(self.deterministic_inputs, dict) or self.deterministic_inputs != _mixed_v2_deterministic_inputs(
+            requested_algorithm_3d=self.requested_algorithm_3d,
+            transition_algorithm_3d=self.transition_algorithm_3d,
+            tetrahedral_algorithm_3d=self.tetrahedral_algorithm_3d,
+            optimizer=self.optimizer,
+            optimizer_iterations=self.optimizer_iterations,
+        ):
+            raise ValueError("mixed v2 certificate deterministic_inputs are stale")
+        if self.topology_fingerprint_version not in {"v2", "v3"}:
+            raise ValueError("mixed v2 certificate topology fingerprint version is invalid")
+        if not _is_sha256_digest(self.topology_fingerprint):
+            raise ValueError("mixed v2 certificate topology fingerprint is invalid")
+        if self.gmsh_version != MIXED_SHARED_GMSH_VERSION or self.strategy != MIXED_SHARED_GEO_STRATEGY or self.effective_gmsh_thread_count != 1:
+            raise ValueError("mixed v2 certificate has unqualified Gmsh realization")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "certificate_status": self.certificate_status,
+            "magnetic_regions": [region.to_dict() for region in self.magnetic_regions],
+            "body_separation_pairs": [pair.to_dict() for pair in self.body_separation_pairs],
+            "body_material_fields": [field.to_dict() for field in self.body_material_fields],
+            "requested_algorithm_3d": self.requested_algorithm_3d,
+            "transition_algorithm_3d": self.transition_algorithm_3d,
+            "tetrahedral_algorithm_3d": self.tetrahedral_algorithm_3d,
+            "optimizer": self.optimizer,
+            "optimizer_iterations": self.optimizer_iterations,
+            "requested_sweep_direction": self.requested_sweep_direction,
+            "resolved_sweep_direction": self.resolved_sweep_direction,
+            "requested_layer_count": self.requested_layer_count,
+            "realized_layer_count": self.realized_layer_count,
+            "magnetic_plane_coordinates_m": list(self.magnetic_plane_coordinates_m),
+            "plane_tolerance_m": self.plane_tolerance_m,
+            "transition_shell_thickness_m": self.transition_shell_thickness_m,
+            "transition_shell_interface_tri3_count": self.transition_shell_interface_tri3_count,
+            "interface_marker": self.interface_marker,
+            "outer_boundary_marker": self.outer_boundary_marker,
+            "magnetic_bounds_min_m": list(self.magnetic_bounds_min_m),
+            "magnetic_bounds_max_m": list(self.magnetic_bounds_max_m),
+            "airbox_bounds_min_m": list(self.airbox_bounds_min_m),
+            "airbox_bounds_max_m": list(self.airbox_bounds_max_m),
+            "magnetic_bounds_relative_error": self.magnetic_bounds_relative_error,
+            "airbox_bounds_relative_error": self.airbox_bounds_relative_error,
+            "jacobian_minima_m3_by_family": self.jacobian_minima_m3_by_family,
+            "quality_metric": self.quality_metric,
+            "scaled_jacobian_minima_by_family": self.scaled_jacobian_minima_by_family,
+            "scaled_jacobian_p05_by_family": self.scaled_jacobian_p05_by_family,
+            "magnetic_volume_m3": self.magnetic_volume_m3,
+            "expected_magnetic_volume_m3": self.expected_magnetic_volume_m3,
+            "magnetic_relative_volume_error": self.magnetic_relative_volume_error,
+            "air_volume_m3": self.air_volume_m3,
+            "shared_domain_volume_m3": self.shared_domain_volume_m3,
+            "expected_shared_domain_volume_m3": self.expected_shared_domain_volume_m3,
+            "shared_domain_relative_volume_error": self.shared_domain_relative_volume_error,
+            "marker_coverage_complete": self.marker_coverage_complete,
+            "nonconforming_face_count": self.nonconforming_face_count,
+            "orphan_face_count": self.orphan_face_count,
+            "nonmanifold_face_count": self.nonmanifold_face_count,
+            "coincident_interface_face_count": self.coincident_interface_face_count,
+            "deterministic_inputs": self.deterministic_inputs,
+            "fallbacks_triggered": list(self.fallbacks_triggered),
+            "topology_fingerprint_version": self.topology_fingerprint_version,
+            "topology_fingerprint": self.topology_fingerprint,
+            "gmsh_version": self.gmsh_version,
+            "strategy": self.strategy,
+            "effective_gmsh_thread_count": self.effective_gmsh_thread_count,
+            "cell_family_counts_by_marker": self.cell_family_counts_by_marker,
+            "cell_family_counts_by_part": self.cell_family_counts_by_part,
+            "facet_family_counts_by_role_marker": self.facet_family_counts_by_role_marker,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "MixedLayerTopologyCertificateV2":
+        policy_fields = {
+            "requested_algorithm_3d",
+            "transition_algorithm_3d",
+            "tetrahedral_algorithm_3d",
+            "optimizer",
+            "optimizer_iterations",
+        }
+        expected = {"schema_version", "certificate_status", "magnetic_regions", "body_separation_pairs", "body_material_fields", *policy_fields, "requested_sweep_direction", "resolved_sweep_direction", "requested_layer_count", "realized_layer_count", "magnetic_plane_coordinates_m", "plane_tolerance_m", "transition_shell_thickness_m", "transition_shell_interface_tri3_count", "interface_marker", "outer_boundary_marker", "magnetic_bounds_min_m", "magnetic_bounds_max_m", "airbox_bounds_min_m", "airbox_bounds_max_m", "magnetic_bounds_relative_error", "airbox_bounds_relative_error", "jacobian_minima_m3_by_family", "quality_metric", "scaled_jacobian_minima_by_family", "scaled_jacobian_p05_by_family", "magnetic_volume_m3", "expected_magnetic_volume_m3", "magnetic_relative_volume_error", "air_volume_m3", "shared_domain_volume_m3", "expected_shared_domain_volume_m3", "shared_domain_relative_volume_error", "marker_coverage_complete", "nonconforming_face_count", "orphan_face_count", "nonmanifold_face_count", "coincident_interface_face_count", "topology_fingerprint_version", "topology_fingerprint", "gmsh_version", "strategy", "effective_gmsh_thread_count", "deterministic_inputs", "fallbacks_triggered", "cell_family_counts_by_marker", "cell_family_counts_by_part", "facet_family_counts_by_role_marker"}
+        required = expected - policy_fields
+        if not required.issubset(payload) or set(payload) - expected:
+            raise ValueError("mixed v2 certificate has an unexpected field set")
+        legacy_policy = not policy_fields.intersection(payload)
+        requested_algorithm_3d = int(payload.get("requested_algorithm_3d", 1))
+        transition_algorithm_3d = int(payload.get("transition_algorithm_3d", 1))
+        tetrahedral_algorithm_3d = int(payload.get("tetrahedral_algorithm_3d", 1))
+        optimizer = payload.get("optimizer")
+        optimizer_iterations = int(payload.get("optimizer_iterations", 0))
+        deterministic_inputs = dict(payload["deterministic_inputs"])
+        if legacy_policy and deterministic_inputs == _mixed_deterministic_inputs():
+            # Rust's V2 wire type keeps defaults for readers of pre-hybrid V2
+            # artifacts.  Normalize that old all-Delaunay evidence to the
+            # explicit policy before constructing the strict Python object.
+            deterministic_inputs = _mixed_v2_deterministic_inputs(
+                requested_algorithm_3d=1,
+                transition_algorithm_3d=1,
+                tetrahedral_algorithm_3d=1,
+                optimizer=None,
+                optimizer_iterations=0,
+            )
+        regions = payload["magnetic_regions"]
+        pairs = payload["body_separation_pairs"]
+        materials = payload["body_material_fields"]
+        if not isinstance(regions, list) or not isinstance(pairs, list) or not isinstance(materials, list) or not isinstance(payload["fallbacks_triggered"], list):
+            raise TypeError("mixed v2 certificate array fields are invalid")
+        mappings = ("cell_family_counts_by_marker", "cell_family_counts_by_part", "facet_family_counts_by_role_marker")
+        if any(not isinstance(payload[name], dict) for name in mappings):
+            raise TypeError("mixed v2 certificate count fields are invalid")
+        def counts(value: object) -> dict[str, dict[str, int]]:
+            assert isinstance(value, dict)
+            result: dict[str, dict[str, int]] = {}
+            for outer, inner in value.items():
+                if not isinstance(outer, str) or not isinstance(inner, dict) or any(not isinstance(key, str) or type(count) is not int or count < 0 for key, count in inner.items()):
+                    raise TypeError("mixed v2 certificate nested counts are invalid")
+                result[outer] = dict(inner)
+            return result
+        scalar_required = ("topology_fingerprint_version", "topology_fingerprint", "gmsh_version", "strategy")
+        if any(not isinstance(payload[name], str) for name in scalar_required) or type(payload["effective_gmsh_thread_count"]) is not int:
+            raise TypeError("mixed v2 certificate realization fields are invalid")
+        if any(
+            type(payload[name]) is not int
+            for name in (
+                "requested_algorithm_3d",
+                "transition_algorithm_3d",
+                "tetrahedral_algorithm_3d",
+                "optimizer_iterations",
+            )
+            if name in payload
+        ) or (
+            optimizer is not None
+            and (not isinstance(optimizer, str) or optimizer != "Gmsh")
+        ):
+            raise TypeError("mixed v2 certificate algorithm/optimizer fields are invalid")
+        def vector(name: str) -> tuple[float, float, float]:
+            value = payload[name]
+            if not isinstance(value, list) or len(value) != 3 or any(type(item) is not float for item in value):
+                raise TypeError(f"mixed v2 certificate {name} must contain three floats")
+            return tuple(value)  # type: ignore[return-value]
+        planes = payload["magnetic_plane_coordinates_m"]
+        if not isinstance(planes, list) or any(type(item) is not float for item in planes):
+            raise TypeError("mixed v2 certificate magnetic planes must contain floats")
+        if any(not isinstance(value, dict) for value in (*regions, *pairs, *materials)):
+            raise TypeError("mixed v2 certificate nested records must be objects")
+        if any(type(value) is not str for value in payload["fallbacks_triggered"]):
+            raise TypeError("mixed v2 certificate fallbacks_triggered must contain strings")
+        return cls(
+            schema_version=payload["schema_version"],
+            certificate_status=payload["certificate_status"],
+            magnetic_regions=tuple(MagneticRegionV2.from_dict(value) for value in regions),  # type: ignore[arg-type]
+            body_separation_pairs=tuple(BodySeparationPairV2.from_dict(value) for value in pairs),  # type: ignore[arg-type]
+            body_material_fields=tuple(BodyMaterialFieldV2.from_dict(value) for value in materials),  # type: ignore[arg-type]
+            requested_algorithm_3d=requested_algorithm_3d,
+            transition_algorithm_3d=transition_algorithm_3d,
+            tetrahedral_algorithm_3d=tetrahedral_algorithm_3d,
+            optimizer=optimizer,
+            optimizer_iterations=optimizer_iterations,
+            requested_sweep_direction=payload["requested_sweep_direction"],
+            resolved_sweep_direction=payload["resolved_sweep_direction"],
+            requested_layer_count=payload["requested_layer_count"],
+            realized_layer_count=payload["realized_layer_count"],
+            magnetic_plane_coordinates_m=tuple(planes),  # type: ignore[arg-type]
+            plane_tolerance_m=payload["plane_tolerance_m"],
+            transition_shell_thickness_m=payload["transition_shell_thickness_m"],
+            transition_shell_interface_tri3_count=payload["transition_shell_interface_tri3_count"],
+            interface_marker=payload["interface_marker"],
+            outer_boundary_marker=payload["outer_boundary_marker"],
+            magnetic_bounds_min_m=vector("magnetic_bounds_min_m"),
+            magnetic_bounds_max_m=vector("magnetic_bounds_max_m"),
+            airbox_bounds_min_m=vector("airbox_bounds_min_m"),
+            airbox_bounds_max_m=vector("airbox_bounds_max_m"),
+            magnetic_bounds_relative_error=payload["magnetic_bounds_relative_error"],
+            airbox_bounds_relative_error=payload["airbox_bounds_relative_error"],
+            jacobian_minima_m3_by_family=dict(payload["jacobian_minima_m3_by_family"]),  # type: ignore[arg-type]
+            quality_metric=payload["quality_metric"],
+            scaled_jacobian_minima_by_family=dict(payload["scaled_jacobian_minima_by_family"]),  # type: ignore[arg-type]
+            scaled_jacobian_p05_by_family=dict(payload["scaled_jacobian_p05_by_family"]),  # type: ignore[arg-type]
+            magnetic_volume_m3=payload["magnetic_volume_m3"],
+            expected_magnetic_volume_m3=payload["expected_magnetic_volume_m3"],
+            magnetic_relative_volume_error=payload["magnetic_relative_volume_error"],
+            air_volume_m3=payload["air_volume_m3"],
+            shared_domain_volume_m3=payload["shared_domain_volume_m3"],
+            expected_shared_domain_volume_m3=payload["expected_shared_domain_volume_m3"],
+            shared_domain_relative_volume_error=payload["shared_domain_relative_volume_error"],
+            marker_coverage_complete=payload["marker_coverage_complete"],
+            nonconforming_face_count=payload["nonconforming_face_count"],
+            orphan_face_count=payload["orphan_face_count"],
+            nonmanifold_face_count=payload["nonmanifold_face_count"],
+            coincident_interface_face_count=payload["coincident_interface_face_count"],
+            deterministic_inputs=deterministic_inputs,  # type: ignore[arg-type]
+            fallbacks_triggered=tuple(payload["fallbacks_triggered"]),  # type: ignore[arg-type]
+            topology_fingerprint_version=payload["topology_fingerprint_version"],
+            topology_fingerprint=payload["topology_fingerprint"],
+            gmsh_version=payload["gmsh_version"],
+            strategy=payload["strategy"],
+            effective_gmsh_thread_count=payload["effective_gmsh_thread_count"],
+            cell_family_counts_by_marker=counts(payload["cell_family_counts_by_marker"]),
+            cell_family_counts_by_part=counts(payload["cell_family_counts_by_part"]),
+            facet_family_counts_by_role_marker=counts(payload["facet_family_counts_by_role_marker"]),
+        )
+
+
+MixedLayerTopologyCertificateLike = MixedLayerTopologyCertificate | MixedLayerTopologyCertificateV2
+
+
+def _is_sha256_digest(value: object) -> bool:
+    return isinstance(value, str) and value.startswith("sha256:") and len(value) == len("sha256:") + 64 and all(
+        character in "0123456789abcdef" for character in value[len("sha256:") :]
+    )
+
+
+def _mixed_v2_node_order_digest(node_ids: object) -> str:
+    """Hash the sorted local node ownership using the native v2 encoding."""
+    ordered = np.asarray(node_ids, dtype=np.int64).reshape(-1)
+    if ordered.size and np.any(ordered[1:] < ordered[:-1]):
+        ordered = np.sort(ordered)
+    payload = b"fullmag:fem-body-node-order:v1" + struct.pack(
+        "<I", int(ordered.size)
+    )
+    payload += b"".join(struct.pack("<Q", int(node)) for node in ordered.tolist())
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _mixed_v2_material_values_are_valid(values: Mapping[str, object]) -> bool:
+    def finite_scalar(value: object) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+    axis = values.get("anisotropy_axis")
+    return all(finite_scalar(values.get(name)) for name in ("Ms", "Aex", "alpha", "Ku1")) and (
+        isinstance(axis, (list, tuple))
+        and len(axis) == 3
+        and all(finite_scalar(value) for value in axis)
+    )
+
+
+def _body_material_field_digest(
+    field_value: BodyMaterialFieldV2,
+    *,
+    topology_fingerprint_version: str,
+    topology_fingerprint: str,
+    body_marker: int,
+    material_marker: int,
+    component_units: Mapping[str, str] | None = None,
+) -> str:
+    # The native v2 contract deliberately does not hash JSON serialization.
+    # Keep a deterministic, typed length-delimited representation here until
+    # the Rust bridge supplies the same preimage for non-constant nodal arrays.
+    # Values are still canonicalized by key and type, so a language serializer
+    # cannot alter the digest accidentally.
+    def encode(value: object) -> bytes:
+        if value is None:
+            return b"n"
+        if isinstance(value, bool):
+            return b"b1" if value else b"b0"
+        if isinstance(value, int) and not isinstance(value, bool):
+            return b"i" + struct.pack("<q", value)
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError("mixed v2 material field values must be finite")
+            return b"f" + struct.pack("<d", value)
+        if isinstance(value, str):
+            encoded_value = value.encode("utf-8")
+            return b"s" + struct.pack("<I", len(encoded_value)) + encoded_value
+        if isinstance(value, (list, tuple)):
+            return b"a" + struct.pack("<I", len(value)) + b"".join(encode(item) for item in value)
+        if isinstance(value, Mapping):
+            items = sorted((str(key), item) for key, item in value.items())
+            encoded_items = []
+            for key, item in items:
+                encoded_key = key.encode("utf-8")
+                encoded_items.append(struct.pack("<I", len(encoded_key)) + encoded_key + encode(item))
+            return b"m" + struct.pack("<I", len(encoded_items)) + b"".join(encoded_items)
+        raise TypeError(f"unsupported mixed v2 material field value {type(value).__name__}")
+
+    fields = {
+        "object_id": field_value.object_id,
+        "field_basis": field_value.field_basis,
+        "coefficient_domains": list(field_value.coefficient_domains),
+        "air_interpolation_policy": field_value.air_interpolation_policy,
+        "cross_body_interpolation_policy": field_value.cross_body_interpolation_policy,
+        "node_order_digest": field_value.node_order_digest,
+        "topology_fingerprint_version": topology_fingerprint_version,
+        "topology_fingerprint": topology_fingerprint,
+        "body_marker": body_marker,
+        "material_marker": material_marker,
+        "component_units": dict(component_units or {}),
+        "values": field_value.values,
+    }
+    encoded = b"fullmag:fem-body-material-field:v1"
+    for key in sorted(fields):
+        key_bytes = key.encode("utf-8")
+        encoded += struct.pack("<I", len(key_bytes)) + key_bytes + encode(fields[key])
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
 def _certificate_payload_sha256(
-    certificate: MixedLayerTopologyCertificate,
+    certificate: MixedLayerTopologyCertificateLike,
 ) -> str:
     encoded = json.dumps(
         certificate.to_dict(),
@@ -1378,7 +2114,7 @@ class MeshData:
     quality: MeshQualityReport | None = None
     per_domain_quality: dict[int, MeshQualityReport] | None = None
     realization_report: MeshRealizationReport | None = None
-    mixed_layer_topology_certificate: MixedLayerTopologyCertificate | None = None
+    mixed_layer_topology_certificate: MixedLayerTopologyCertificateLike | None = None
     # Retained mesh-owner labels, not authentication or a solved-field certificate.
     vertex_identity: Mapping[str, object] | None = None
 
@@ -1423,10 +2159,10 @@ class MeshData:
             raise TypeError("realization_report must be a MeshRealizationReport")
         if self.mixed_layer_topology_certificate is not None and not isinstance(
             self.mixed_layer_topology_certificate,
-            MixedLayerTopologyCertificate,
+            (MixedLayerTopologyCertificate, MixedLayerTopologyCertificateV2),
         ):
             raise TypeError(
-                "mixed_layer_topology_certificate must be a MixedLayerTopologyCertificate"
+                "mixed_layer_topology_certificate must be a supported mixed certificate"
             )
 
         # A native mixed certificate is emitted only after the Rust bridge has
@@ -1625,6 +2361,9 @@ class MeshData:
         certificate = self.mixed_layer_topology_certificate
         if certificate is None:
             return
+        if isinstance(certificate, MixedLayerTopologyCertificateV2):
+            self._validate_mixed_layer_topology_certificate_v2(certificate)
+            return
 
         # The production certificate is minted by the native mixed-mesh
         # certifier when the managed runtime ships the optional extension.  A
@@ -1700,6 +2439,193 @@ class MeshData:
             workspace=workspace,
             _bound_context=context,
         )
+
+    def _validate_mixed_layer_topology_certificate_v2(
+        self,
+        certificate: MixedLayerTopologyCertificateV2,
+    ) -> None:
+        """Validate the schema-native v2 mixed-body proof fail-closed.
+
+        The native bridge is the authoritative expensive geometry proof when
+        available.  The Python path deliberately checks the same ownership,
+        exact-layer, material-field and separation bindings so a source-only
+        environment cannot accidentally accept a v2 claim by routing it
+        through the legacy single-body certifier.
+        """
+        certificate.validate()
+        actual = (
+            self.topology_fingerprint_v2()
+            if certificate.topology_fingerprint_version == "v2"
+            else self.topology_fingerprint_v3()
+        )
+        if certificate.topology_fingerprint != actual:
+            raise ValueError(
+                "mixed v2 certificate topology fingerprint is stale: "
+                f"certificate={certificate.topology_fingerprint}, actual={actual}"
+            )
+
+        # Prefer the schema-native Rust proof.  A present native extension that
+        # rejects the claim must not be downgraded to the permissive Python
+        # path; only an unavailable v2 entrypoint permits the source fallback.
+        from fullmag import _core
+
+        native = _core.certify_mixed_mesh_arrays_v2(
+            mesh=self,
+            metadata={},
+            certificate=certificate.to_dict(),
+            require_native=False,
+        )
+        if native is not None:
+            expected_payload = _certificate_payload_sha256(certificate)
+            if (
+                not native.validated_claimed_certificate
+                or native.topology_fingerprint_version
+                != certificate.topology_fingerprint_version
+                or native.topology_fingerprint != actual
+                or native.certificate_payload_sha256 != expected_payload
+            ):
+                raise ValueError("native mixed v2 certificate result does not match certificate")
+            return
+
+        marker_counts: dict[str, dict[str, int]] = {}
+        part_counts: dict[str, dict[str, int]] = {}
+        for family, marker, part in zip(
+            self.cell_types.tolist(),
+            self.element_markers.tolist(),
+            self.cell_mesh_parts.tolist(),
+            strict=True,
+        ):
+            marker_counts.setdefault(str(int(marker)), {})[str(family)] = (
+                marker_counts.setdefault(str(int(marker)), {}).get(str(family), 0) + 1
+            )
+            part_counts.setdefault(str(part), {})[str(family)] = (
+                part_counts.setdefault(str(part), {}).get(str(family), 0) + 1
+            )
+        if marker_counts != certificate.cell_family_counts_by_marker:
+            raise ValueError("mixed v2 certificate cell_family_counts_by_marker does not match mesh")
+        if part_counts != certificate.cell_family_counts_by_part:
+            raise ValueError("mixed v2 certificate cell_family_counts_by_part does not match mesh")
+        facet_counts = _facet_counts_by_role_marker(self)
+        if facet_counts != certificate.facet_family_counts_by_role_marker:
+            raise ValueError(
+                "mixed v2 certificate facet_family_counts_by_role_marker does not match mesh"
+            )
+        region_by_marker = {region.body_marker: region for region in certificate.magnetic_regions}
+        body_nodes: dict[int, np.ndarray] = {}
+        for marker, region in region_by_marker.items():
+            realized = marker_counts.get(str(marker), {})
+            if realized != region.cell_family_counts:
+                raise ValueError(
+                    f"mixed v2 certificate magnetic region {region.object_id!r} cell counts do not match mesh"
+                )
+            ordinals = np.flatnonzero(self.element_markers == marker)
+            if not len(ordinals):
+                raise ValueError(f"mixed v2 certificate body marker {marker} has no cells")
+            body_nodes[marker] = np.unique(
+                np.concatenate([self.cell_node_ids(int(index)) for index in ordinals])
+            ).astype(np.int64, copy=False)
+        magnetic_markers = set(region_by_marker)
+        if not magnetic_markers or any(
+            marker in magnetic_markers and part != "magnetic"
+            for marker, part in zip(self.element_markers.tolist(), self.cell_mesh_parts.tolist(), strict=True)
+        ):
+            raise ValueError("mixed v2 certificate magnetic marker ownership is invalid")
+
+        # A P1 body field owns precisely the realized magnetic nodes.  This
+        # check also catches a stale digest after pack_mesh_by_analysis remaps
+        # topology, which a top-level fingerprint alone cannot establish.
+        fields_by_object = {
+            field.object_id: field for field in certificate.body_material_fields
+        }
+        regions_by_object = {
+            region.object_id: region for region in certificate.magnetic_regions
+        }
+        for object_id, field in fields_by_object.items():
+            region = regions_by_object[object_id]
+            nodes = body_nodes[region.body_marker]
+            expected_nodes = _mixed_v2_node_order_digest(nodes)
+            if field.node_order_digest != expected_nodes:
+                raise ValueError(f"mixed v2 body material node order for {object_id!r} is stale")
+            if not _mixed_v2_material_values_are_valid(field.values):
+                raise ValueError(f"mixed v2 body material values for {object_id!r} are invalid")
+            expected_field_digest = _body_material_field_digest(
+                field,
+                topology_fingerprint_version=certificate.topology_fingerprint_version,
+                topology_fingerprint=actual,
+                body_marker=region.body_marker,
+                material_marker=region.material_marker,
+            )
+            if field.field_digest != expected_field_digest:
+                raise ValueError(f"mixed v2 body material digest for {object_id!r} is stale")
+
+        # Exactly one body carries the authored exact sweep.  Its regional
+        # evidence must be derived from that body's actual node coordinates and
+        # agree with the shared top-level proof.
+        exact_regions = [
+            region for region in certificate.magnetic_regions if region.exact_sweep is not None
+        ]
+        if len(exact_regions) != 1:
+            raise ValueError("mixed v2 certificate requires one exact swept region")
+        for region in exact_regions:
+            sweep = region.exact_sweep
+            assert sweep is not None
+            axis = {"x": 0, "y": 1, "z": 2}[sweep.sweep_direction_resolved]
+            coordinates = sorted(float(self.nodes[int(node), axis]) for node in body_nodes[region.body_marker])
+            planes: list[float] = []
+            for coordinate in coordinates:
+                if not planes or coordinate - planes[-1] > sweep.plane_tolerance_m:
+                    planes.append(coordinate)
+            if (
+                tuple(planes) != sweep.magnetic_plane_coordinates_m
+                or sweep.requested_layer_count != sweep.realized_layer_count
+                or len(planes) != sweep.realized_layer_count + 1
+                or sweep.sweep_direction_requested != certificate.requested_sweep_direction
+                or sweep.sweep_direction_resolved != certificate.resolved_sweep_direction
+                or sweep.realized_layer_count != certificate.realized_layer_count
+                or sweep.magnetic_plane_coordinates_m != certificate.magnetic_plane_coordinates_m
+                or not math.isclose(
+                    sweep.plane_tolerance_m,
+                    certificate.plane_tolerance_m,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-30,
+                )
+                or sweep.topology_fingerprint_version != certificate.topology_fingerprint_version
+                or sweep.topology_fingerprint != actual
+                or sweep.node_order_digest != _mixed_v2_node_order_digest(body_nodes[region.body_marker])
+            ):
+                raise ValueError(f"mixed v2 exact sweep evidence for {region.object_id!r} is stale")
+
+        # Native admission uses the realized mesh body AABB distance.  Keep
+        # Python fallback semantics identical so a claimed CAD gap cannot be
+        # substituted for the actual discretized geometry.
+        bounds: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for region in certificate.magnetic_regions:
+            points = self.nodes[body_nodes[region.body_marker]]
+            bounds[region.object_id] = (np.min(points, axis=0), np.max(points, axis=0))
+            if len({tuple(float(value) for value in point) for point in points}) != len(points):
+                raise ValueError(f"mixed v2 body {region.object_id!r} has duplicate coordinates")
+        for pair in certificate.body_separation_pairs:
+            left_min, left_max = bounds[pair.body_a]
+            right_min, right_max = bounds[pair.body_b]
+            separation = np.maximum(
+                np.maximum(left_min - right_max, right_min - left_max), 0.0
+            )
+            gap = float(np.linalg.norm(separation))
+            if not math.isfinite(gap) or gap <= 0.0 or not math.isclose(
+                pair.min_gap_m, gap, rel_tol=1.0e-12, abs_tol=1.0e-30
+            ):
+                raise ValueError(
+                    f"mixed v2 body separation pair {pair.body_a!r}/{pair.body_b!r} disagrees with mesh"
+                )
+
+        # Distinct magnetic bodies must not alias a P1 node unless an explicit
+        # interface operator exists; this certificate has no such operator.
+        owners: dict[int, set[int]] = {}
+        for marker, nodes in body_nodes.items():
+            for node in nodes.tolist():
+                owners.setdefault(int(node), set()).add(marker)
+        if any(len(markers) > 1 for markers in owners.values()):
+            raise ValueError("mixed v2 magnetic bodies share a mesh node without an interface operator")
 
     def _validate_mixed_layer_topology_certificate_binding(
         self,
@@ -2050,7 +2976,7 @@ class MeshData:
         quality: MeshQualityReport | None = None,
         per_domain_quality: dict[int, MeshQualityReport] | None = None,
         realization_report: MeshRealizationReport | None = None,
-        mixed_layer_topology_certificate: MixedLayerTopologyCertificate | None = None,
+        mixed_layer_topology_certificate: MixedLayerTopologyCertificateLike | None = None,
         vertex_identity: Mapping[str, object] | None = None,
     ) -> "MeshData":
         """Normalize the explicit legacy tet4/tri3 boundary into canonical CSR."""
@@ -2401,6 +3327,27 @@ class MeshData:
         try:
             from fullmag import _core
 
+            if isinstance(certificate, MixedLayerTopologyCertificateV2):
+                native = _core.certify_mixed_mesh_arrays_v2(
+                    mesh=self,
+                    metadata={},
+                    certificate=certificate.to_dict(),
+                    require_native=False,
+                )
+                if native is None or not native.validated_claimed_certificate:
+                    return False
+                expected_fingerprint = (
+                    self.topology_fingerprint_v2()
+                    if certificate.topology_fingerprint_version == "v2"
+                    else self.topology_fingerprint_v3()
+                )
+                return (
+                    native.topology_fingerprint_version
+                    == certificate.topology_fingerprint_version
+                    and native.topology_fingerprint == expected_fingerprint
+                    and native.certificate_payload_sha256
+                    == _certificate_payload_sha256(certificate)
+                )
             native = _core.certify_mixed_mesh_arrays(
                 mesh=self,
                 metadata={},
@@ -2743,8 +3690,8 @@ class MeshData:
                         "serialized mixed_layer_topology_certificate must be "
                         "an object or null"
                     )
-                mixed_layer_topology_certificate = (
-                    MixedLayerTopologyCertificate.from_dict(raw_certificate)
+                mixed_layer_topology_certificate = _mixed_layer_topology_certificate_from_serialized(
+                    raw_certificate
                 )
         payload = {name: data[name] for name in data.files if not name.endswith("_json")}
         payload.update(
@@ -2922,13 +3869,20 @@ def _mesh_realization_report_from_serialized(
 
 def _mixed_layer_topology_certificate_from_serialized(
     value: object,
-) -> MixedLayerTopologyCertificate | None:
+) -> MixedLayerTopologyCertificateLike | None:
     if value is None:
         return None
-    if isinstance(value, MixedLayerTopologyCertificate):
+    if isinstance(value, (MixedLayerTopologyCertificate, MixedLayerTopologyCertificateV2)):
         return value
     if isinstance(value, dict):
-        return MixedLayerTopologyCertificate.from_dict(value)
+        schema_version = value.get("schema_version")
+        if schema_version == "mixed_layer_topology_certificate.v1":
+            return MixedLayerTopologyCertificate.from_dict(value)
+        if schema_version == "mixed_layer_topology_certificate.v2":
+            return MixedLayerTopologyCertificateV2.from_dict(value)
+        raise ValueError(
+            "serialized mixed_layer_topology_certificate has an unsupported schema_version"
+        )
     raise TypeError(
         "serialized mixed_layer_topology_certificate must be an object or null"
     )
@@ -4356,6 +5310,107 @@ def _rebuild_mixed_layer_topology_certificate(
         airbox_bounds_min_m=airbox_bounds_min_m,
         airbox_bounds_max_m=airbox_bounds_max_m,
         **evidence,
+    )
+    return replace(mesh, mixed_layer_topology_certificate=certificate)
+
+
+def _rebuild_mixed_layer_topology_certificate_v2(
+    mesh: MeshData,
+    template: MixedLayerTopologyCertificateV2,
+    *,
+    authored_scale: float = 1.0,
+) -> MeshData:
+    """Rebind a v2 certificate after a qualified isotropic coordinate scale.
+
+    Imported meshes may be authored in a source unit and converted to SI after
+    extraction.  The topology and body node ownership remain identical under
+    an isotropic scale, but every metric carrying a length or volume and the
+    topology fingerprint/material-field digests must be rebound.  Keep this
+    operation explicit so a v2 certificate is never accidentally sent through
+    the single-body v1 rebuild path.
+    """
+    scale = float(authored_scale)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("mixed v2 certificate scale must be finite and positive")
+    volume_scale = scale**3
+
+    def scale_vector(values: tuple[float, float, float]) -> tuple[float, float, float]:
+        return tuple(float(value * scale) for value in values)  # type: ignore[return-value]
+
+    topology_fingerprint_version = template.topology_fingerprint_version
+    topology_fingerprint = (
+        mesh.topology_fingerprint_v2()
+        if topology_fingerprint_version == "v2"
+        else mesh.topology_fingerprint_v3()
+    )
+    regions: list[MagneticRegionV2] = []
+    for region in template.magnetic_regions:
+        sweep = region.exact_sweep
+        if sweep is not None:
+            sweep = replace(
+                sweep,
+                magnetic_plane_coordinates_m=tuple(
+                    float(value * scale)
+                    for value in sweep.magnetic_plane_coordinates_m
+                ),
+                plane_tolerance_m=float(sweep.plane_tolerance_m * scale),
+                topology_fingerprint_version=topology_fingerprint_version,
+                topology_fingerprint=topology_fingerprint,
+            )
+        regions.append(replace(region, exact_sweep=sweep))
+
+    pairs = tuple(
+        replace(pair, min_gap_m=float(pair.min_gap_m * scale))
+        for pair in template.body_separation_pairs
+    )
+    material_fields: list[BodyMaterialFieldV2] = []
+    region_by_object_id = {
+        region.object_id: region for region in template.magnetic_regions
+    }
+    for field in template.body_material_fields:
+        region = region_by_object_id[field.object_id]
+        material_fields.append(
+            replace(
+                field,
+                field_digest=_body_material_field_digest(
+                    field,
+                    topology_fingerprint_version=topology_fingerprint_version,
+                    topology_fingerprint=topology_fingerprint,
+                    body_marker=region.body_marker,
+                    material_marker=region.material_marker,
+                ),
+            )
+        )
+
+    certificate = replace(
+        template,
+        magnetic_regions=tuple(regions),
+        body_separation_pairs=pairs,
+        body_material_fields=tuple(material_fields),
+        magnetic_plane_coordinates_m=tuple(
+            float(value * scale) for value in template.magnetic_plane_coordinates_m
+        ),
+        plane_tolerance_m=float(template.plane_tolerance_m * scale),
+        transition_shell_thickness_m=float(template.transition_shell_thickness_m * scale),
+        magnetic_bounds_min_m=scale_vector(template.magnetic_bounds_min_m),
+        magnetic_bounds_max_m=scale_vector(template.magnetic_bounds_max_m),
+        airbox_bounds_min_m=scale_vector(template.airbox_bounds_min_m),
+        airbox_bounds_max_m=scale_vector(template.airbox_bounds_max_m),
+        jacobian_minima_m3_by_family={
+            family: float(value * volume_scale)
+            for family, value in template.jacobian_minima_m3_by_family.items()
+        },
+        magnetic_volume_m3=float(template.magnetic_volume_m3 * volume_scale),
+        expected_magnetic_volume_m3=float(
+            template.expected_magnetic_volume_m3 * volume_scale
+        ),
+        air_volume_m3=float(template.air_volume_m3 * volume_scale),
+        shared_domain_volume_m3=float(template.shared_domain_volume_m3 * volume_scale),
+        expected_shared_domain_volume_m3=float(
+            template.expected_shared_domain_volume_m3 * volume_scale
+        ),
+        topology_fingerprint_version=topology_fingerprint_version,
+        topology_fingerprint=topology_fingerprint,
     )
     return replace(mesh, mixed_layer_topology_certificate=certificate)
 

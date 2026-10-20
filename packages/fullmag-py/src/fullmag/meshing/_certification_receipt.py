@@ -14,6 +14,8 @@ RECEIPT_SCHEMA_V2 = "fullmag.mesh-certification-receipt.v2"
 ARTIFACT_SCHEMA_V2 = "fullmag.mesh-artifact.v2"
 MIXED_CERTIFICATE_SCHEMA = "fullmag.mixed-layer-topology-certificate.v1"
 MIXED_CERTIFIER_ALGORITHM = "fullmag.mixed-certificate.rust-rayon.v1"
+MIXED_CERTIFICATE_SCHEMA_V2 = "mixed_layer_topology_certificate.v2"
+MIXED_CERTIFIER_ALGORITHM_V2 = "fullmag.mixed-certificate-v2.rust-rayon.v1"
 MIXED_REPAIR_ALGORITHM = "fullmag.mixed-tet-repair.v1"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -87,10 +89,14 @@ class CertificateBindingV1:
     algorithm_id: str
 
     def __post_init__(self) -> None:
-        if self.schema != MIXED_CERTIFICATE_SCHEMA:
+        supported = {
+            MIXED_CERTIFICATE_SCHEMA: MIXED_CERTIFIER_ALGORITHM,
+            MIXED_CERTIFICATE_SCHEMA_V2: MIXED_CERTIFIER_ALGORITHM_V2,
+        }
+        if self.schema not in supported:
             raise ValueError("certificate schema is unsupported")
         _require_sha256(self.payload_sha256, label="certificate.payload_sha256")
-        if self.algorithm_id != MIXED_CERTIFIER_ALGORITHM:
+        if self.algorithm_id != supported[self.schema]:
             raise ValueError("certificate algorithm_id is unsupported")
 
     @classmethod
@@ -100,16 +106,20 @@ class CertificateBindingV1:
             {"schema", "payload_sha256", "algorithm_id"},
             label="certificate",
         )
-        if value["schema"] != MIXED_CERTIFICATE_SCHEMA:
+        supported = {
+            MIXED_CERTIFICATE_SCHEMA: MIXED_CERTIFIER_ALGORITHM,
+            MIXED_CERTIFICATE_SCHEMA_V2: MIXED_CERTIFIER_ALGORITHM_V2,
+        }
+        if value["schema"] not in supported:
             raise ValueError("certificate schema is unsupported")
-        if value["algorithm_id"] != MIXED_CERTIFIER_ALGORITHM:
+        if value["algorithm_id"] != supported[value["schema"]]:
             raise ValueError("certificate algorithm_id is unsupported")
         return cls(
-            schema=MIXED_CERTIFICATE_SCHEMA,
+            schema=value["schema"],
             payload_sha256=_require_sha256(
                 value["payload_sha256"], label="certificate.payload_sha256"
             ),
-            algorithm_id=MIXED_CERTIFIER_ALGORITHM,
+            algorithm_id=value["algorithm_id"],
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -309,7 +319,10 @@ class CertificationReceiptBindingsV1:
                 "certifier_threads": self.certifier_threads,
             }
         )
-        if self.certifier_algorithm_id != MIXED_CERTIFIER_ALGORITHM:
+        if self.certifier_algorithm_id not in {
+            MIXED_CERTIFIER_ALGORITHM,
+            MIXED_CERTIFIER_ALGORITHM_V2,
+        }:
             raise ValueError("certifier_algorithm_id is unsupported")
 
     def producer(self) -> ProducerBindingV1:
@@ -434,7 +447,11 @@ def _receipt_common_from_components(
         ),
         "certificate": CertificateBindingV1.from_dict(
             {
-                "schema": MIXED_CERTIFICATE_SCHEMA,
+                "schema": (
+                    MIXED_CERTIFICATE_SCHEMA_V2
+                    if bindings.certifier_algorithm_id == MIXED_CERTIFIER_ALGORITHM_V2
+                    else MIXED_CERTIFICATE_SCHEMA
+                ),
                 "payload_sha256": certificate_payload_sha256.removeprefix("sha256:"),
                 "algorithm_id": bindings.certifier_algorithm_id,
             }

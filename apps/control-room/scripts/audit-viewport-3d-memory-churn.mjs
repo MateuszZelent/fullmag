@@ -152,7 +152,7 @@ try {
   auditLog("waiting for viewport canvas");
   await canvas.waitFor({ state: "visible", timeout: 15_000 });
   await waitForCanvasReady(canvas);
-  auditLog("waiting for diagnostics hud");
+  auditLog("waiting for render diagnostics");
   await waitForDiagnostics(viewport);
 
   for (const quantity of WARM_QUANTITIES) {
@@ -1096,6 +1096,9 @@ async function reportAuditFailure(
       const hud = Array.from(
         document.querySelectorAll(".fm-viewport-3d__hud span"),
       ).map((node) => node.textContent?.trim() ?? "");
+      const renderDiagnostics = document.querySelector(
+        '[role="dialog"][aria-label="Render diagnostics"]',
+      )?.textContent ?? null;
       const menuItems = Array.from(
         document.querySelectorAll('[role="menuitemradio"]'),
       ).map((node) => ({
@@ -1132,6 +1135,7 @@ async function reportAuditFailure(
         auditEvents: window.__FM_VIEWPORT_AUDIT_EVENTS__ ?? [],
         auditStep: window.__FM_VIEWPORT_AUDIT_STEP__ ?? null,
         hud,
+        renderDiagnostics,
         menuItems,
         url: window.location.href,
       };
@@ -1189,31 +1193,25 @@ async function waitForCanvasReady(canvas) {
 }
 
 async function waitForDiagnostics(viewport) {
-  await viewport.evaluate((node) =>
-    new Promise((resolve, reject) => {
-      const deadline = performance.now() + 15_000;
-      const tick = () => {
-        const spans = Array.from(node.querySelectorAll(".fm-viewport-3d__hud span"));
-        if (spans.some((span) => span.textContent?.includes("geo:"))) {
-          resolve(undefined);
-          return;
-        }
-        if (performance.now() > deadline) {
-          reject(new Error("Timed out waiting for viewport diagnostics HUD."));
-          return;
-        }
-        setTimeout(tick, 100);
-      };
-      tick();
-    }),
+  const trigger = viewport.getByRole("button", { name: "Render details", exact: true });
+  if (await trigger.getAttribute("aria-expanded") !== "true") {
+    await trigger.click();
+  }
+  // PopoverContent is portalled outside the viewport root.
+  const details = viewport.page().getByRole("dialog", { name: "Render diagnostics", exact: true });
+  await details.waitFor({ state: "visible", timeout: 15_000 });
+  await waitForCondition(
+    async () => (await details.textContent())?.includes("geo:"),
+    15_000,
+    "Timed out waiting for viewport render diagnostics.",
   );
+  return details;
 }
 
 async function readDiagnostics(viewport) {
-  const value = await viewport.evaluate((node) => {
-    const spans = Array.from(node.querySelectorAll(".fm-viewport-3d__hud span"));
-    return spans.find((span) => span.textContent?.includes("geo:"))?.textContent ?? "";
-  });
+  // Toolbar interactions and viewport remounts may dismiss the popover.
+  const details = await waitForDiagnostics(viewport);
+  const value = await details.textContent() ?? "";
   return {
     cacheBytes: parseCacheBytes(readDiagnosticToken(value, "cache")),
     frames: Number(readDiagnosticToken(value, "frames") ?? 0),

@@ -248,6 +248,8 @@ pub(crate) struct RemeshCliResponse {
     pub periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
     pub periodic_mesh_certificate: Option<serde_json::Value>,
     pub mixed_layer_topology_certificate: Option<fullmag_ir::MixedLayerTopologyCertificateV1IR>,
+    pub mixed_layer_topology_certificate_v2:
+        Option<fullmag_ir::MixedLayerTopologyCertificateV2IR>,
     pub shared_domain_build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
     pub quality: Option<RemeshQualitySummary>,
     pub generation_mode: Option<String>,
@@ -385,6 +387,9 @@ struct RemeshCliResponseWire {
     periodic_mesh_certificate: Option<serde_json::Value>,
     #[serde(default)]
     mixed_layer_topology_certificate: Option<fullmag_ir::MixedLayerTopologyCertificateV1IR>,
+    #[serde(default)]
+    mixed_layer_topology_certificate_v2:
+        Option<fullmag_ir::MixedLayerTopologyCertificateV2IR>,
     quality: Option<RemeshQualitySummary>,
     #[serde(default)]
     generation_mode: Option<String>,
@@ -435,6 +440,7 @@ impl<'de> serde::Deserialize<'de> for RemeshCliResponse {
             periodic_node_pairs: wire.periodic_node_pairs,
             periodic_mesh_certificate: wire.periodic_mesh_certificate,
             mixed_layer_topology_certificate: wire.mixed_layer_topology_certificate,
+            mixed_layer_topology_certificate_v2: wire.mixed_layer_topology_certificate_v2,
             shared_domain_build_report,
             quality: wire.quality,
             generation_mode: wire.generation_mode,
@@ -470,6 +476,9 @@ struct RemeshTopologyArtifactPayload {
     periodic_mesh_certificate: Option<serde_json::Value>,
     #[serde(default)]
     mixed_layer_topology_certificate: Option<fullmag_ir::MixedLayerTopologyCertificateV1IR>,
+    #[serde(default)]
+    mixed_layer_topology_certificate_v2:
+        Option<fullmag_ir::MixedLayerTopologyCertificateV2IR>,
 }
 
 impl RemeshCliResponse {
@@ -494,6 +503,12 @@ impl RemeshCliResponse {
             .shared_domain_build_report
             .as_ref()
             .and_then(|report| report.mixed_layer_topology_certificate.as_ref());
+        let report_certificate_v2 = self
+            .shared_domain_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate_v2.as_ref());
+        let artifact_certificate_v1 = topology.mixed_layer_topology_certificate.as_ref();
+        let artifact_certificate_v2 = topology.mixed_layer_topology_certificate_v2.as_ref();
         if let (Some(inline), Some(in_report)) = (
             self.mixed_layer_topology_certificate.as_ref(),
             report_certificate,
@@ -503,13 +518,34 @@ impl RemeshCliResponse {
                 "mixed layer topology certificate differs between inline topology and build report"
             );
         }
+        if let (Some(inline), Some(in_report)) = (
+            self.mixed_layer_topology_certificate_v2.as_ref(),
+            report_certificate_v2,
+        ) {
+            anyhow::ensure!(
+                inline == in_report,
+                "mixed v2 layer topology certificate differs between inline topology and build report"
+            );
+        }
         anyhow::ensure!(
-            topology.mixed_layer_topology_certificate.is_some()
+            !(self.mixed_layer_topology_certificate.is_some()
+                || report_certificate.is_some()
+                || artifact_certificate_v1.is_some())
+                || !(self.mixed_layer_topology_certificate_v2.is_some()
+                    || report_certificate_v2.is_some()
+                    || artifact_certificate_v2.is_some()),
+            "mixed layer topology certificates v1 and v2 cannot be carried together"
+        );
+        anyhow::ensure!(
+            (topology.mixed_layer_topology_certificate.is_some()
+                || topology.mixed_layer_topology_certificate_v2.is_some())
                 || (self.mixed_layer_topology_certificate.is_none()
-                    && report_certificate.is_none()),
+                    && self.mixed_layer_topology_certificate_v2.is_none()
+                    && report_certificate.is_none()
+                    && report_certificate_v2.is_none()),
             "topology artifact is missing a mixed layer topology certificate carried by inline topology or the shared-domain build report"
         );
-        if let Some(in_artifact) = topology.mixed_layer_topology_certificate.as_ref() {
+        if let Some(in_artifact) = artifact_certificate_v1 {
             if let Some(inline) = self.mixed_layer_topology_certificate.as_ref() {
                 anyhow::ensure!(
                     inline == in_artifact,
@@ -523,6 +559,25 @@ impl RemeshCliResponse {
                 );
             }
         }
+        if let Some(in_artifact) = artifact_certificate_v2 {
+            if let Some(inline) = self.mixed_layer_topology_certificate_v2.as_ref() {
+                anyhow::ensure!(
+                    inline == in_artifact,
+                    "mixed v2 layer topology certificate differs between inline topology and artifact"
+                );
+            }
+            if let Some(in_report) = report_certificate_v2 {
+                anyhow::ensure!(
+                    in_report == in_artifact,
+                    "mixed v2 layer topology certificate differs between build report and artifact"
+                );
+            }
+        }
+        anyhow::ensure!(
+            !(topology.mixed_layer_topology_certificate.is_some()
+                && topology.mixed_layer_topology_certificate_v2.is_some()),
+            "topology artifact cannot carry mixed layer topology certificates v1 and v2 together"
+        );
         let (cells, facets) = topology.topology.normalize().map_err(anyhow::Error::msg)?;
         self.nodes = topology.nodes;
         self.cells = cells;
@@ -533,6 +588,7 @@ impl RemeshCliResponse {
         self.periodic_node_pairs = topology.periodic_node_pairs;
         self.periodic_mesh_certificate = topology.periodic_mesh_certificate;
         self.mixed_layer_topology_certificate = topology.mixed_layer_topology_certificate;
+        self.mixed_layer_topology_certificate_v2 = topology.mixed_layer_topology_certificate_v2;
         Ok(self)
     }
 
@@ -549,7 +605,54 @@ impl RemeshCliResponse {
     }
 
     fn retain_mixed_certificate_in_provenance(&mut self) -> Result<()> {
+        let report_certificate = self
+            .shared_domain_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref());
+        let report_certificate_v2 = self
+            .shared_domain_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate_v2.as_ref());
+        anyhow::ensure!(
+            !(self.mixed_layer_topology_certificate.is_some()
+                || report_certificate.is_some())
+                || !(self.mixed_layer_topology_certificate_v2.is_some()
+                    || report_certificate_v2.is_some()),
+            "mixed layer topology certificates v1 and v2 cannot be carried together"
+        );
         let Some(certificate) = self.mixed_layer_topology_certificate.clone() else {
+            if let Some(certificate) = self.mixed_layer_topology_certificate_v2.clone() {
+                let typed_report = self.shared_domain_build_report.as_mut().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "mixed v2 layer topology certificate requires a shared-domain build report"
+                    )
+                })?;
+                match typed_report.mixed_layer_topology_certificate_v2.as_ref() {
+                    Some(in_report) => anyhow::ensure!(
+                        in_report == &certificate,
+                        "mixed v2 layer topology certificate differs between topology and build report"
+                    ),
+                    None => {
+                        typed_report.mixed_layer_topology_certificate_v2 =
+                            Some(certificate.clone())
+                    }
+                }
+                let report = self
+                    .mesh_provenance
+                    .as_mut()
+                    .and_then(|value| value.get_mut("shared_domain_build_report"))
+                    .and_then(serde_json::Value::as_object_mut)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "mixed v2 layer topology certificate requires a shared-domain build report in provenance"
+                        )
+                    })?;
+                report.insert(
+                    "mixed_layer_topology_certificate_v2".to_string(),
+                    serde_json::to_value(certificate)
+                        .expect("typed v2 certificate must serialize"),
+                );
+            }
             return Ok(());
         };
         let typed_report = self.shared_domain_build_report.as_mut().ok_or_else(|| {
@@ -586,6 +689,10 @@ impl RemeshCliResponse {
             .shared_domain_build_report
             .as_ref()
             .and_then(|report| report.mixed_layer_topology_certificate.as_ref());
+        let report_certificate_v2 = self
+            .shared_domain_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate_v2.as_ref());
         if let (Some(top_level), Some(in_report)) = (
             self.mixed_layer_topology_certificate.as_ref(),
             report_certificate,
@@ -595,10 +702,31 @@ impl RemeshCliResponse {
                 "mixed layer topology certificate differs between topology and build report"
             );
         }
+        if let (Some(top_level), Some(in_report)) = (
+            self.mixed_layer_topology_certificate_v2.as_ref(),
+            report_certificate_v2,
+        ) {
+            anyhow::ensure!(
+                top_level == in_report,
+                "mixed v2 layer topology certificate differs between topology and build report"
+            );
+        }
+        anyhow::ensure!(
+            !(self.mixed_layer_topology_certificate.is_some()
+                || report_certificate.is_some())
+                || !(self.mixed_layer_topology_certificate_v2.is_some()
+                    || report_certificate_v2.is_some()),
+            "mixed layer topology certificates v1 and v2 cannot be carried together"
+        );
         if self
             .mixed_layer_topology_certificate
             .as_ref()
             .or(report_certificate)
+            .is_none()
+            && self
+                .mixed_layer_topology_certificate_v2
+                .as_ref()
+                .or(report_certificate_v2)
             .is_none()
         {
             return Ok(());
@@ -971,6 +1099,23 @@ pub(crate) fn run_python_helper_with_interpreter(
     args: &[String],
     progress_callback: Option<PythonProgressCallback>,
 ) -> Result<std::process::Output> {
+    run_python_helper_with_interpreter_and_bound(root, interpreter, args, progress_callback, None)
+}
+
+pub(crate) fn run_python_capture_helper(args: &[String], max_bytes: usize) -> Result<std::process::Output> {
+    let root = repo_root();
+    let interpreter = fullmag_runtime_control::python_runtime::resolve_interpreter(&root)
+        .map_err(|error| anyhow!("{error}"))?;
+    run_python_helper_with_interpreter_and_bound(&root, &interpreter, args, None, Some(max_bytes))
+}
+
+fn run_python_helper_with_interpreter_and_bound(
+    root: &Path,
+    interpreter: &fullmag_runtime_control::python_runtime::ResolvedInterpreter,
+    args: &[String],
+    progress_callback: Option<PythonProgressCallback>,
+    capture_bound: Option<usize>,
+) -> Result<std::process::Output> {
     let uses_bundle = interpreter.isolated;
 
     let pythonpath = root.join("packages").join("fullmag-py").join("src");
@@ -986,6 +1131,12 @@ pub(crate) fn run_python_helper_with_interpreter(
         let mut command = interpreter
             .command(root)
             .context("bundled Python runtime is incomplete or invalid")?;
+        if capture_bound.is_some() {
+            command.env_clear();
+            if let Some(parent) = interpreter.path.parent() { command.env("PATH", parent); }
+            command.env("PYTHONHASHSEED", "0");
+            command.env("PYTHONDONTWRITEBYTECODE", "1");
+        }
         command.args(args);
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -993,7 +1144,7 @@ pub(crate) fn run_python_helper_with_interpreter(
         if progress_callback.is_some() {
             command.env("FULLMAG_PROGRESS", "1");
         }
-        command.env("FULLMAG_FEM_MESH_CACHE_DIR", &fem_mesh_cache_dir);
+        if capture_bound.is_none() { command.env("FULLMAG_FEM_MESH_CACHE_DIR", &fem_mesh_cache_dir); }
         let mut python_paths = Vec::new();
         if pythonpath.is_dir() {
             python_paths.push(pythonpath.display().to_string());
@@ -1004,12 +1155,12 @@ pub(crate) fn run_python_helper_with_interpreter(
         if python_extension_root.is_dir() {
             python_paths.push(python_extension_root.display().to_string());
         }
-        if let Some(existing) = &inherited_pythonpath {
+        if let Some(existing) = inherited_pythonpath.as_ref().filter(|_| capture_bound.is_none()) {
             if !existing.is_empty() {
                 python_paths.push(existing.clone());
             }
         }
-        if !uses_bundle && !python_paths.is_empty() {
+        if capture_bound.is_none() && !uses_bundle && !python_paths.is_empty() {
             command.env(
                 "PYTHONPATH",
                 python_paths.join(if cfg!(windows) { ";" } else { ":" }),
@@ -1033,11 +1184,37 @@ pub(crate) fn run_python_helper_with_interpreter(
         let stdout_thread = std::thread::spawn(move || -> Result<Vec<u8>> {
             let mut stdout = stdout;
             let mut bytes = Vec::new();
-            stdout.read_to_end(&mut bytes)?;
+            if let Some(limit) = capture_bound {
+                // Drain overflow before reporting it, so a full pipe cannot deadlock wait().
+                let mut block = [0u8; 8192];
+                let mut overflow = false;
+                loop {
+                    let count = stdout.read(&mut block)?;
+                    if count == 0 { break; }
+                    if bytes.len().checked_add(count).is_some_and(|n| n <= limit) {
+                        bytes.extend_from_slice(&block[..count]);
+                    } else { overflow = true; }
+                }
+                if overflow { bail!("accepted source capture stdout budget"); }
+            } else { stdout.read_to_end(&mut bytes)?; }
             Ok(bytes)
         });
         let stderr_progress = progress_callback.clone();
         let stderr_thread = std::thread::spawn(move || -> Result<Vec<u8>> {
+            if capture_bound.is_some() {
+                let mut stderr = stderr;
+                let mut bytes = Vec::new();
+                let mut block = [0u8; 8192];
+                let mut overflow = false;
+                loop {
+                    let count = stderr.read(&mut block)?;
+                    if count == 0 { break; }
+                    if bytes.len() + count <= 1024 * 1024 { bytes.extend_from_slice(&block[..count]); }
+                    else { overflow = true; }
+                }
+                if overflow { bail!("accepted source capture stderr budget"); }
+                return Ok(bytes);
+            }
             let mut reader = BufReader::new(stderr);
             let mut collected = Vec::new();
             loop {
@@ -1176,11 +1353,7 @@ pub(crate) fn export_script_execution_config_via_python_with_options(
     let json_str = extract_json_from_stdout(&stdout)?;
     let mut config = serde_json::from_str(json_str)
         .context("failed to deserialize script execution config from python helper")?;
-    bind_script_execution_profiles(
-        &mut config,
-        &script_cli_execution_layers(args)?,
-        managed_device,
-    )?;
+    bind_script_execution_profiles(&mut config, &script_cli_execution_layers(args)?)?;
     Ok(config)
 }
 
@@ -1222,17 +1395,54 @@ pub(crate) fn script_cli_execution_layers(
 }
 
 fn script_legacy_environment_execution_layers(
+    problem: &fullmag_ir::ProblemIR,
+    backend: fullmag_ir::BackendTarget,
 ) -> Result<Vec<fullmag_ir::ExecutionRequestLayerIR>> {
     // This allow-list imports a Fullmag-owned request. Library pool sizes and
     // device visibility remain runtime/operator constraints, not user intent.
-    let raw_threads = match std::env::var("FULLMAG_CPU_THREADS") {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => return Ok(Vec::new()),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            bail!("FULLMAG_CPU_THREADS must be valid Unicode")
+    let mut layers = Vec::new();
+    if !has_legacy_environment_origin(problem, "env:FULLMAG_CPU_THREADS") {
+        if let Some(raw_threads) = read_script_environment_value("FULLMAG_CPU_THREADS")? {
+            layers.push(legacy_cpu_threads_execution_layer(&raw_threads)?);
         }
-    };
-    Ok(vec![legacy_cpu_threads_execution_layer(&raw_threads)?])
+    }
+
+    if !has_legacy_device_environment_layer(problem) {
+        let device_layers = match backend {
+            fullmag_ir::BackendTarget::Fem => legacy_device_execution_layers_for_backend(
+                backend,
+                read_script_environment_value("FULLMAG_FEM_EXECUTION")?.as_deref(),
+                None,
+            )?,
+            fullmag_ir::BackendTarget::Fdm => legacy_device_execution_layers_for_backend(
+                backend,
+                None,
+                read_script_environment_value("FULLMAG_FDM_EXECUTION")?.as_deref(),
+            )?,
+            fullmag_ir::BackendTarget::Auto | fullmag_ir::BackendTarget::Hybrid => {
+                let fem_value = read_script_environment_value("FULLMAG_FEM_EXECUTION")?;
+                let fdm_value = read_script_environment_value("FULLMAG_FDM_EXECUTION")?;
+                legacy_device_execution_layers_for_backend(
+                    backend,
+                    fem_value.as_deref(),
+                    fdm_value.as_deref(),
+                )?
+            }
+        };
+        layers.extend(device_layers);
+    }
+
+    Ok(layers)
+}
+
+fn read_script_environment_value(name: &str) -> Result<Option<String>> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("{name} must be valid Unicode")
+        }
+    }
 }
 
 fn legacy_cpu_threads_execution_layer(
@@ -1268,54 +1478,47 @@ fn legacy_cpu_threads_execution_layer(
 pub(crate) fn bind_script_execution_profiles(
     config: &mut ScriptExecutionConfig,
     layers: &[fullmag_ir::ExecutionRequestLayerIR],
-    managed_device: Option<&str>,
 ) -> Result<()> {
-    let should_import_environment = std::iter::once(&config.ir)
-        .chain(config.stages.iter().map(|stage| &stage.ir))
-        .any(|problem| has_execution_profile(problem) && !has_legacy_environment_layer(problem));
-    // Keep ordinary legacy scripts on their byte-compatible path, and do not
-    // append the same environment origin again when a pinned materialization is
-    // validated later in the CLI pipeline.
-    let legacy_environment_layers = if should_import_environment {
-        script_legacy_environment_execution_layers()?
-    } else {
-        Vec::new()
-    };
     for problem in
         std::iter::once(&mut config.ir).chain(config.stages.iter_mut().map(|stage| &mut stage.ir))
     {
         let has_profile = has_execution_profile(problem);
-        let mut request_layers = layers.to_vec();
-        if has_profile && !has_legacy_environment_layer(problem) {
-            request_layers.extend(legacy_environment_layers.clone());
-        }
-        let bound = fullmag_application::bind_declared_execution(
-            problem,
-            if has_profile {
-                request_layers.clone()
-            } else {
-                vec![]
-            },
-        )
-        .map_err(anyhow::Error::msg)?;
         if has_profile {
-            if let Some(device) = managed_device {
-                let snapshot: fullmag_ir::MaterializedExecutionRequestIR = serde_json::from_value(
-                    bound.problem_meta.runtime_metadata["execution_materialization"].clone(),
-                )?;
-                let forced = match snapshot.requested.device {
-                    fullmag_ir::ExecutionDevice::Auto => None,
-                    fullmag_ir::ExecutionDevice::Cpu => Some("cpu"),
-                    fullmag_ir::ExecutionDevice::Gpu => Some("gpu"),
-                };
-                if forced.is_some_and(|requested| requested != device) {
-                    bail!("execution_intent_conflict: bound profile device {:?} conflicts with managed execution lane {device}", snapshot.requested.device);
-                }
+            // Resolve the script/CLI layers first so the legacy FEM/FDM
+            // variable is selected from this ProblemIR's effective backend,
+            // not once from the command line for every stage in the script.
+            let mut bound = fullmag_application::bind_declared_execution(problem, layers.to_vec())
+                .map_err(anyhow::Error::msg)?;
+            let backend = materialized_execution_backend(&bound)?;
+            let legacy_layers = script_legacy_environment_execution_layers(&bound, backend)?;
+            if !legacy_layers.is_empty() {
+                bound = fullmag_application::bind_declared_execution(&bound, legacy_layers)
+                    .map_err(anyhow::Error::msg)?;
             }
+            *problem = bound;
+        } else {
+            *problem = fullmag_application::bind_declared_execution(problem, vec![])
+                .map_err(anyhow::Error::msg)?;
         }
-        *problem = bound;
     }
     Ok(())
+}
+
+fn materialized_execution_backend(
+    problem: &fullmag_ir::ProblemIR,
+) -> Result<fullmag_ir::BackendTarget> {
+    let materialization = problem
+        .problem_meta
+        .runtime_metadata
+        .get("execution_materialization")
+        .cloned()
+        .ok_or_else(|| anyhow!("execution profile binding did not produce a materialization"))?;
+    let snapshot: fullmag_ir::MaterializedExecutionRequestIR =
+        serde_json::from_value(materialization)?;
+    snapshot
+        .validate_shape()
+        .map_err(anyhow::Error::msg)?;
+    Ok(snapshot.requested.backend)
 }
 
 fn has_execution_profile(problem: &fullmag_ir::ProblemIR) -> bool {
@@ -1324,7 +1527,7 @@ fn has_execution_profile(problem: &fullmag_ir::ProblemIR) -> bool {
         || metadata.contains_key("execution_materialization")
 }
 
-fn has_legacy_environment_layer(problem: &fullmag_ir::ProblemIR) -> bool {
+fn has_legacy_environment_origin(problem: &fullmag_ir::ProblemIR, location: &str) -> bool {
     problem
         .problem_meta
         .runtime_metadata
@@ -1333,12 +1536,16 @@ fn has_legacy_environment_layer(problem: &fullmag_ir::ProblemIR) -> bool {
         .and_then(Value::as_array)
         .is_some_and(|layers| {
             layers.iter().any(|layer| {
-                layer
-                    .pointer("/origin/kind")
-                    .and_then(Value::as_str)
-                    == Some("legacy_env")
+                layer.pointer("/origin/kind").and_then(Value::as_str) == Some("legacy_env")
+                    && layer.pointer("/origin/location").and_then(Value::as_str)
+                        == Some(location)
             })
         })
+}
+
+fn has_legacy_device_environment_layer(problem: &fullmag_ir::ProblemIR) -> bool {
+    has_legacy_environment_origin(problem, "env:FULLMAG_FEM_EXECUTION")
+        || has_legacy_environment_origin(problem, "env:FULLMAG_FDM_EXECUTION")
 }
 
 pub(crate) fn managed_fem_execution_device(value: Option<&str>) -> Option<&'static str> {
@@ -1349,17 +1556,96 @@ pub(crate) fn managed_fem_execution_device(value: Option<&str>) -> Option<&'stat
     }
 }
 
+fn typed_profile_device_environment(
+    environment_name: &str,
+    value: Option<&str>,
+) -> Result<Option<&'static str>> {
+    let Some(raw) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    match raw.to_ascii_lowercase().as_str() {
+        "auto" => Ok(None),
+        "cpu" => Ok(Some("cpu")),
+        "gpu" | "cuda" | "all_in_gpu" => Ok(Some("gpu")),
+        _ => bail!(
+            "{environment_name} must be 'auto', 'cpu', 'gpu', 'cuda', or 'all_in_gpu' for a typed execution profile; got {raw:?}"
+        ),
+    }
+}
+
+fn managed_execution_device_source(
+    backend: Option<BackendArg>,
+    fem_value: Option<&str>,
+    fdm_value: Option<&str>,
+) -> Option<(&'static str, &'static str)> {
+    match backend {
+        Some(BackendArg::Fdm) => {
+            managed_fem_execution_device(fdm_value).map(|device| ("FULLMAG_FDM_EXECUTION", device))
+        }
+        Some(BackendArg::Fem | BackendArg::Hybrid) => {
+            managed_fem_execution_device(fem_value).map(|device| ("FULLMAG_FEM_EXECUTION", device))
+        }
+        Some(BackendArg::Auto) | None => managed_fem_execution_device(fem_value)
+            .map(|device| ("FULLMAG_FEM_EXECUTION", device))
+            .or_else(|| {
+                managed_fem_execution_device(fdm_value)
+                    .map(|device| ("FULLMAG_FDM_EXECUTION", device))
+            }),
+    }
+}
+
+fn legacy_device_execution_layer(
+    environment_name: &'static str,
+    value: Option<&str>,
+) -> Result<Option<fullmag_ir::ExecutionRequestLayerIR>> {
+    let Some(device) = typed_profile_device_environment(environment_name, value)? else {
+        return Ok(None);
+    };
+    let request: fullmag_ir::ExecutionRequestPatchIR =
+        serde_json::from_value(serde_json::json!({ "device": device }))?;
+    Ok(Some(fullmag_ir::ExecutionRequestLayerIR {
+        origin: fullmag_ir::ExecutionFieldOriginIR {
+            kind: fullmag_ir::ExecutionOriginKindIR::LegacyEnv,
+            location: format!("env:{environment_name}"),
+        },
+        request,
+    }))
+}
+
+fn legacy_device_execution_layers_for_backend(
+    backend: fullmag_ir::BackendTarget,
+    fem_value: Option<&str>,
+    fdm_value: Option<&str>,
+) -> Result<Vec<fullmag_ir::ExecutionRequestLayerIR>> {
+    let fem = legacy_device_execution_layer("FULLMAG_FEM_EXECUTION", fem_value)?;
+    let fdm = legacy_device_execution_layer("FULLMAG_FDM_EXECUTION", fdm_value)?;
+    let selected = match backend {
+        fullmag_ir::BackendTarget::Fem => fem,
+        fullmag_ir::BackendTarget::Fdm => fdm,
+        fullmag_ir::BackendTarget::Auto | fullmag_ir::BackendTarget::Hybrid => match (fem, fdm) {
+            (Some(fem), Some(fdm)) => {
+                if &fem.request.device != &fdm.request.device {
+                    bail!(
+                        "execution_intent_conflict: FULLMAG_FEM_EXECUTION and FULLMAG_FDM_EXECUTION request different devices while the declared backend is {backend:?}; choose a concrete backend"
+                    );
+                }
+                // Preserve the historical FEM-first provenance when both
+                // lanes agree; either layer expresses the same device value.
+                Some(fem)
+            }
+            (Some(layer), None) | (None, Some(layer)) => Some(layer),
+            (None, None) => None,
+        },
+    };
+    Ok(selected.into_iter().collect())
+}
+
 pub(crate) fn managed_execution_device(
     backend: Option<BackendArg>,
     fem_value: Option<&str>,
     fdm_value: Option<&str>,
 ) -> Option<&'static str> {
-    match backend {
-        Some(BackendArg::Fdm) => managed_fem_execution_device(fdm_value),
-        Some(BackendArg::Fem | BackendArg::Hybrid) => managed_fem_execution_device(fem_value),
-        Some(BackendArg::Auto) | None => managed_fem_execution_device(fem_value)
-            .or_else(|| managed_fem_execution_device(fdm_value)),
-    }
+    managed_execution_device_source(backend, fem_value, fdm_value).map(|(_, device)| device)
 }
 
 pub(crate) fn read_magnetization_state(
@@ -1607,6 +1893,8 @@ pub(crate) fn invoke_shared_domain_remesh_full(
     geometry_entries: &[fullmag_ir::GeometryEntryIR],
     object_regions: &[serde_json::Value],
     declared_universe: &serde_json::Value,
+    body_material_fields: &serde_json::Value,
+    geometry_object_ids: &serde_json::Value,
     hmax: f64,
     fe_order: u32,
     mesh_options: &serde_json::Value,
@@ -1617,6 +1905,8 @@ pub(crate) fn invoke_shared_domain_remesh_full(
         "geometries": geometry_entries,
         "object_regions": object_regions,
         "declared_universe": declared_universe,
+        "body_material_fields": body_material_fields,
+        "geometry_object_ids": geometry_object_ids,
         "hmax": hmax,
         "order": fe_order,
         "mesh_name": "study_domain",
@@ -1737,6 +2027,67 @@ mod tests {
     }
 
     #[test]
+    fn legacy_device_environment_layer_keeps_the_selected_backend_origin() {
+        let fdm = legacy_device_execution_layers_for_backend(
+            fullmag_ir::BackendTarget::Fdm,
+            Some("gpu"),
+            Some(" CPU "),
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        assert_eq!(fdm.origin.location, "env:FULLMAG_FDM_EXECUTION");
+        assert_eq!(
+            serde_json::to_value(fdm.request).unwrap()["device"],
+            "cpu"
+        );
+
+        let fem = legacy_device_execution_layers_for_backend(
+            fullmag_ir::BackendTarget::Fem,
+            Some("cuda"),
+            Some("cpu"),
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        assert_eq!(fem.origin.location, "env:FULLMAG_FEM_EXECUTION");
+        assert_eq!(
+            serde_json::to_value(fem.request).unwrap()["device"],
+            "gpu"
+        );
+    }
+
+    #[test]
+    fn auto_backend_uses_a_single_explicit_lane_device() {
+        let layer = legacy_device_execution_layers_for_backend(
+            fullmag_ir::BackendTarget::Auto,
+            Some("auto"),
+            Some("gpu"),
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        assert_eq!(layer.origin.location, "env:FULLMAG_FDM_EXECUTION");
+        assert_eq!(
+            serde_json::to_value(layer.request).unwrap()["device"],
+            "gpu"
+        );
+    }
+
+    #[test]
+    fn auto_backend_rejects_conflicting_lane_devices() {
+        let error = legacy_device_execution_layers_for_backend(
+            fullmag_ir::BackendTarget::Auto,
+            Some("gpu"),
+            Some("cpu"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("execution_intent_conflict"));
+        assert!(error.contains("choose a concrete backend"));
+    }
+
+    #[test]
     fn managed_fem_execution_device_maps_only_explicit_cpu_or_gpu_modes() {
         assert_eq!(managed_fem_execution_device(Some("cpu")), Some("cpu"));
         assert_eq!(managed_fem_execution_device(Some("gpu")), Some("gpu"));
@@ -1747,6 +2098,45 @@ mod tests {
         );
         assert_eq!(managed_fem_execution_device(Some("auto")), None);
         assert_eq!(managed_fem_execution_device(None), None);
+    }
+
+    #[test]
+    fn typed_profile_device_environment_accepts_auto_and_rejects_unknown_values() {
+        for value in [None, Some(""), Some("  auto  ")] {
+            assert_eq!(
+                typed_profile_device_environment("FULLMAG_FEM_EXECUTION", value).unwrap(),
+                None
+            );
+        }
+        assert_eq!(
+            typed_profile_device_environment("FULLMAG_FEM_EXECUTION", Some(" CPU ")).unwrap(),
+            Some("cpu")
+        );
+        assert_eq!(
+            typed_profile_device_environment("FULLMAG_FEM_EXECUTION", Some("CUDA")).unwrap(),
+            Some("gpu")
+        );
+        assert_eq!(
+            typed_profile_device_environment(
+                "FULLMAG_FEM_EXECUTION",
+                Some("all_in_gpu")
+            )
+            .unwrap(),
+            Some("gpu")
+        );
+
+        let error = legacy_device_execution_layers_for_backend(
+            fullmag_ir::BackendTarget::Fem,
+            Some("hybrid_legacy_sparse"),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("FULLMAG_FEM_EXECUTION"));
+        assert!(error.contains("hybrid_legacy_sparse"));
+        // The launcher-wide legacy reader remains permissive for scripts
+        // without a typed execution profile.
+        assert_eq!(managed_fem_execution_device(Some("hybrid_legacy_sparse")), None);
     }
 
     fn valid_mixed_remesh_payload() -> serde_json::Value {

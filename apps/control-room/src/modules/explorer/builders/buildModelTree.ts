@@ -259,6 +259,7 @@ export function filterExplorerNodes(
     );
     const selfMatches =
       node.label.toLowerCase().includes(normalizedQuery) ||
+      node.antennaResourceId?.toLowerCase().includes(normalizedQuery) ||
       node.kind.toLowerCase().includes(normalizedQuery) ||
       node.badge?.toLowerCase().includes(normalizedQuery);
     const pinned = node.id === pinnedNodeId;

@@ -102,8 +102,11 @@ class StructuredCutPlane:
     axis: str
     offset_m: float
     normal: str = "positive_axis"
+    coordinate_frame: str = "world"
 
     def __post_init__(self) -> None:
+        if self.coordinate_frame not in {"world", "object"}:
+            raise ValueError("coordinate_frame must be world or object")
         if self.axis not in STRUCTURED_CUT_AXES:
             raise ValueError("axis must be one of 'x', 'y', or 'z'")
         if self.normal not in STRUCTURED_CUT_NORMALS:
@@ -112,6 +115,7 @@ class StructuredCutPlane:
 
     def to_ir(self) -> dict[str, object]:
         return {
+            **({"coordinate_frame": self.coordinate_frame} if self.coordinate_frame != "world" else {}),
             "axis": self.axis,
             "offset_m": self.offset_m,
             "normal": self.normal,
@@ -196,8 +200,8 @@ class StructuredCurrentClosure:
         kind: str = "closed_geometry",
     ) -> None:
         object.__setattr__(self, "closure_id", require_non_empty(closure_id, "closure_id"))
-        if schema_version != STRUCTURED_CURRENT_CLOSURE_SCHEMA_VERSION:
-            raise ValueError("schema_version must be 'structured_current_closure.v1'")
+        if schema_version not in {STRUCTURED_CURRENT_CLOSURE_SCHEMA_VERSION, "structured_current_closure.v2"}:
+            raise ValueError("schema_version must be structured_current_closure.v1 or structured_current_closure.v2")
         if kind != "closed_geometry":
             raise ValueError("kind must be 'closed_geometry'")
         cuts = tuple(source_cuts)
@@ -205,6 +209,11 @@ class StructuredCurrentClosure:
             raise ValueError(
                 "source_cuts must contain at least one StructuredCurrentSourceCut"
             )
+        if schema_version == "structured_current_closure.v2":
+            if len(cuts) != 1 or cuts[0].plane.coordinate_frame != "object" or cuts[0].plane.axis != "z":
+                raise ValueError("structured closure v2 requires exactly one object-frame z cut")
+        elif any(cut.plane.coordinate_frame != "world" for cut in cuts):
+            raise ValueError("structured closure v1 requires world-frame planes")
         for field_name, values in (
             ("source_cut_id", [cut.source_cut_id for cut in cuts]),
             ("circuit_id", [cut.circuit_id for cut in cuts]),
@@ -215,6 +224,11 @@ class StructuredCurrentClosure:
         object.__setattr__(self, "source_cuts", cuts)
         object.__setattr__(self, "schema_version", schema_version)
         object.__setattr__(self, "kind", kind)
+
+    def prepare(self, *, geometry, object_id: str, hmax_m: float):
+        """Materialize a v2 full-volume loop; this does not qualify a field basis."""
+        from fullmag.meshing._antenna_coincident_cut import prepare_antenna_coincident_loop
+        return prepare_antenna_coincident_loop(self, geometry=geometry, object_id=object_id, hmax_m=hmax_m)
 
     def to_ir(self) -> dict[str, object]:
         return {
@@ -666,6 +680,8 @@ class ConservativeCurrentSourceCut:
         translation_m: Sequence[float],
         potential_drop_v: float,
         face_pairs: Sequence[ConservativeCurrentSourceCutFacePair],
+        *,
+        closure_operator_version: str = "fem_closed_current_geometry.v1",
     ) -> None:
         normalized_pairs = tuple(face_pairs)
         if not normalized_pairs or not all(
@@ -674,8 +690,11 @@ class ConservativeCurrentSourceCut:
             raise ValueError("face_pairs must contain at least one ConservativeCurrentSourceCutFacePair")
         object.__setattr__(self, "id", require_non_empty(id, "id"))
         object.__setattr__(self, "translation_m", _finite_vector3(translation_m, "translation_m"))
-        if all(value == 0.0 for value in self.translation_m):
-            raise ValueError("translation_m must be non-zero")
+        if closure_operator_version not in {"fem_closed_current_geometry.v1", "fem_closed_current_geometry.v2"}:
+            raise ValueError("unsupported sourcecut closure_operator_version")
+        coincident = all(value == 0.0 for value in self.translation_m)
+        if coincident != (closure_operator_version == "fem_closed_current_geometry.v2"):
+            raise ValueError("v1 requires nonzero translation_m; v2 requires exactly zero translation_m")
         object.__setattr__(self, "potential_drop_v", require_finite(potential_drop_v, "potential_drop_v"))
         object.__setattr__(self, "face_pairs", normalized_pairs)
 
@@ -708,11 +727,25 @@ class ConservativeCurrentClosedGeometry:
         ):
             raise ValueError("source_cuts must contain at least one ConservativeCurrentSourceCut")
         object.__setattr__(self, "operator_version", require_non_empty(operator_version, "operator_version"))
-        if operator_version != _FEM_CLOSED_GEOMETRY_OPERATOR_VERSION:
+        if operator_version not in {_FEM_CLOSED_GEOMETRY_OPERATOR_VERSION, "fem_closed_current_geometry.v2"}:
             raise ValueError(
                 "closed-geometry operator_version must be "
                 f"{_FEM_CLOSED_GEOMETRY_OPERATOR_VERSION!r}"
             )
+        if operator_version == "fem_closed_current_geometry.v2" and len(normalized_cuts) != 1:
+            raise ValueError("closed geometry v2 requires exactly one sourcecut")
+        for cut in normalized_cuts:
+            coincident = all(value == 0.0 for value in cut.translation_m)
+            if coincident != (operator_version == "fem_closed_current_geometry.v2"):
+                raise ValueError("sourcecut translation does not match closed geometry version")
+            if operator_version == "fem_closed_current_geometry.v2":
+                if cut.potential_drop_v == 0.0:
+                    raise ValueError("closed geometry v2 requires a nonzero potential jump")
+                minus = {v for pair in cut.face_pairs for v in pair.minus_face_vertex_ids}
+                plus = {v for pair in cut.face_pairs for v in pair.plus_face_vertex_ids}
+                if minus & plus:
+                    raise ValueError("coincident sourcecut traces require disjoint stable IDs")
+
         object.__setattr__(self, "revision", require_non_empty(revision, "revision"))
         object.__setattr__(self, "digest", require_non_empty(digest, "digest"))
         object.__setattr__(self, "source_cuts", normalized_cuts)
@@ -1542,6 +1575,9 @@ class CurrentTransport:
             raise ValueError(
                 "conservative_current_view currently requires model='ohmic_poisson' and coupling='one_way'"
             )
+        if structured_current_closure is not None and structured_current_closure.schema_version == "structured_current_closure.v2":
+            if normalized_boundaries or time_envelope is not None or gauge is None or gauge.kind != "zero_mean":
+                raise ValueError("structured closure v2 requires empty boundaries, zero_mean gauge and static precompute")
         if structured_current_closure is not None and (
             normalized_model != "ohmic_poisson" or normalized_coupling != "one_way"
         ):
@@ -1550,7 +1586,8 @@ class CurrentTransport:
             )
         if structured_current_closure is not None and (
             solver is None
-            or solver.operator_version != FDM_STRUCTURED_CURRENT_OPERATOR_VERSION
+            or solver.operator_version != (FDM_STRUCTURED_CURRENT_OPERATOR_VERSION
+                if structured_current_closure.schema_version == "structured_current_closure.v1" else _FEM_CHARGE_OPERATOR_VERSION)
         ):
             raise ValueError(
                 "structured_current_closure requires "
@@ -1594,7 +1631,8 @@ class CurrentTransport:
         elif (
             not normalized_domain
             or not normalized_materials
-            or (not normalized_boundaries and conservative_current_source is None and external_lead_preparation is None)
+            or (not normalized_boundaries and conservative_current_source is None and external_lead_preparation is None
+                and (structured_current_closure is None or structured_current_closure.schema_version != "structured_current_closure.v2"))
             or gauge is None
             or solver is None
         ):

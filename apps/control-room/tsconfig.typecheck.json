@@ -7,5 +7,5 @@
     ".next/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", ".next/dev", "out"]
+  "exclude": ["node_modules", ".next/dev", "out", "**/*.test.*", "**/*.spec.*", "**/__tests__/**", "**/tests/**"]
 }

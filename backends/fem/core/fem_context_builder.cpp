@@ -79,6 +79,9 @@ bool build_context_from_plan(
 
     initialize_anisotropy_plan_fields(ctx, plan);
     initialize_dmi_plan_fields(ctx, plan);
+    if (!validate_material_field_spans(plan, error)) {
+        return false;
+    }
     initialize_material_plan_fields(ctx, plan);
     if (!initialize_stt_plan_fields(ctx, plan, error)) {
         return false;

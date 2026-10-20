@@ -3,7 +3,7 @@ name: eigensolve-damping-oracle
 on:
   workflow_dispatch:
   push:
-    branches: ['codex/**']
+    branches: [master, main]
     paths:
       - 'scripts/test_eigensolve_complex_damping_oracle.py'
       - '.github/workflows/eigensolve-damping-oracle.yml'
@@ -14,6 +14,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   independent-algebra:

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import type {
   ProjectBatchCommandRequest,
@@ -15,6 +15,7 @@ import type {
 } from "../api/apiTypes";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { useKernel } from "../KernelContext";
+import { projectRunResourceKey } from "./projectRunResources";
 import { useResource } from "./useResource";
 
 const DEFAULT_PAGE_LIMIT = 50;
@@ -312,6 +313,103 @@ export function useCommandProjectBatch(projectId: string) {
       resources.invalidatePrefix(projectBatchesResourcePrefix(projectId), revision);
       resources.invalidatePrefix(projectBatchCasesResourcePrefix(projectId, batchId), revision);
       return accepted;
+    },
+    [api, projectId, resources],
+  );
+}
+
+/**
+ * Retry one task through its immutable parent batch command. Both identities
+ * remain stable across an uncertain ACK so the caller can safely replay.
+ */
+export function useRetryProjectBatchCaseTask(projectId: string) {
+  const { api, resources } = useKernel();
+  const requests = useRef(new Map<string, ProjectBatchCommandRequest>());
+
+  return useCallback(
+    async (
+      batchId: string,
+      caseId: string,
+      runId: string,
+      taskId: string,
+      expectedBatchRevision: number,
+      expectedCatalogRevision: number,
+    ) => {
+      if (!Number.isSafeInteger(expectedBatchRevision) || expectedBatchRevision < 0) {
+        throw new Error("Refresh the batch before retrying this task.");
+      }
+      if (!Number.isSafeInteger(expectedCatalogRevision) || expectedCatalogRevision < 1) {
+        throw new Error("Refresh run details before retrying this task.");
+      }
+
+      const key = JSON.stringify([projectId, batchId, caseId, runId, taskId]);
+      const previous = requests.current.get(key);
+      const previousCatalogRevision = previous?.retry?.expected_catalog_revision;
+      if (
+        previous &&
+        previousCatalogRevision !== undefined &&
+        expectedCatalogRevision > previousCatalogRevision
+      ) {
+        // A newer task catalog proves this request belongs to an older attempt.
+        // Preserve its identity only while the same failed attempt is observed.
+        requests.current.delete(key);
+      }
+      let request = requests.current.get(key);
+      if (!request) {
+        const commandId = globalThis.crypto?.randomUUID?.();
+        const retryId = globalThis.crypto?.randomUUID?.();
+        if (!commandId || !retryId) {
+          throw new Error("This browser cannot create secure retry identities; reload the local application and try again.");
+        }
+        request = {
+          action: "retry",
+          command_id: commandId,
+          expected_revision: expectedBatchRevision,
+          reason: "Batch case task retry from the project inspector",
+          retry: {
+            case_id: caseId,
+            task_id: taskId,
+            retry_id: retryId,
+            expected_catalog_revision: expectedCatalogRevision,
+          },
+        };
+        requests.current.set(key, request);
+      }
+
+      let accepted: ProjectBatchCommandResource;
+      try {
+        accepted = await api.persistence.projects.commandBatch(projectId, batchId, request);
+      } catch (error) {
+        if (error instanceof ControlRoomApiError && error.status >= 400 && error.status < 500) {
+          requests.current.delete(key);
+          throw new ProjectBatchCommandRejectedError(error.message, error.status);
+        }
+        throw error;
+      }
+
+      const task = accepted.retry?.task;
+      const retry = request.retry;
+      if (
+        !task ||
+        !retry ||
+        accepted.action !== "retry" ||
+        accepted.batch_id !== batchId ||
+        accepted.command_id !== request.command_id ||
+        accepted.retry?.case_id !== caseId ||
+        task.run_id !== runId ||
+        task.task_id !== taskId ||
+        task.retry_id !== retry.retry_id
+      ) {
+        throw new Error("The batch retry response did not match the submitted command; replay the same request to reconcile it.");
+      }
+
+      const revision = nextLocalInvalidationRevision();
+      resources.invalidate(projectRunResourceKey(projectId, runId), task.catalog_revision);
+      resources.invalidatePrefix(`project-runs:${encodeURIComponent(projectId)}:`, task.catalog_revision);
+      resources.invalidatePrefix(projectBatchesResourcePrefix(projectId), revision);
+      resources.invalidatePrefix(projectBatchCasesResourcePrefix(projectId, batchId), revision);
+      requests.current.delete(key);
+      return task;
     },
     [api, projectId, resources],
   );

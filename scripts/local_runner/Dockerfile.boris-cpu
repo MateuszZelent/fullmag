@@ -1,0 +1,9 @@
+# Offline source provisioning only; native compilation belongs to the queue.
+ARG TOOLCHAIN_IMAGE
+FROM ${TOOLCHAIN_IMAGE}
+USER 65532:65532
+COPY --chown=65532:65532 source/ /opt/fullmag-boris/source/
+COPY --chown=65532:65532 source_manifest.json source_context.json toolchain_proof.json toolchain_inspect.json toolchain_context.json toolchain_container.json boris_cpu.py /opt/fullmag-boris/
+RUN --network=none python3 -B /opt/fullmag-boris/boris_cpu.py validate-image-source
+ENV PYTHONDONTWRITEBYTECODE=1
+LABEL org.fullmag.local-runner.boris-contract="boris-cpu-v1"

@@ -671,6 +671,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         current_command_journal_store_root: None,
         current_command_journal_revision: Arc::new(AtomicU64::new(0)),
         current_live_state: Arc::new(RwLock::new(None)),
+        accepted_run_reattach_identity: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         request_scope_instance_id: "test-api-instance".to_string(),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
@@ -1028,6 +1029,7 @@ fn public_m1_fem_run_fixture() -> (fullmag_ir::ProblemIR, fullmag_runner::FemMes
         constitutive_version: "transport_constitutive.one_way.fullmag.v1".into(),
     }];
     match &mut problem.study {
+        StudyIR::FieldOnly { .. } => panic!("magnetic fixture cannot use FieldOnly"),
         StudyIR::TimeEvolution { sampling, .. }
         | StudyIR::Relaxation { sampling, .. }
         | StudyIR::Eigenmodes { sampling, .. }
@@ -2223,11 +2225,18 @@ async fn internal_idle_heartbeat_restores_connectivity_without_resource_revision
             snapshot.field_samples_revision,
         )
     };
+    let publisher_scope = {
+        let current = state.current_live_state.read().await;
+        crate::current_live_publisher_scope_header(&state, current.as_ref().expect("live session"))
+    };
     let app = axum::Router::new()
         .route(
             "/heartbeat",
             axum::routing::post(crate::sync_current_live_heartbeat),
         )
+        .route_layer(axum::middleware::from_fn(
+            crate::router_v2::middleware::session_scope::session_scope_middleware,
+        ))
         .with_state(state.clone());
     let response = app
         .oneshot(
@@ -2235,6 +2244,10 @@ async fn internal_idle_heartbeat_restores_connectivity_without_resource_revision
                 .method("POST")
                 .uri("/heartbeat")
                 .header("content-type", "application/json")
+                .header(
+                    crate::router_v2::middleware::session_scope::HEADER_NAME,
+                    publisher_scope,
+                )
                 .body(Body::from(
                     serde_json::json!({ "session_id": "test-session" }).to_string(),
                 ))
@@ -3149,6 +3162,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         current_command_journal_store_root: None,
         current_command_journal_revision: Arc::new(AtomicU64::new(0)),
         current_live_state: Arc::new(RwLock::new(None)),
+        accepted_run_reattach_identity: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         request_scope_instance_id: "test-api-instance".to_string(),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
@@ -12561,7 +12575,9 @@ async fn fdm_grid_refresh_command_rejects_missing_authoring_scene_without_queuei
                 .method("POST")
                 .uri("/v2/sessions/current/simulation/commands")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"kind":"fdm_grid_refresh"}"#))
+                .body(Body::from(
+                    r#"{"kind":"fdm_grid_refresh","mesh_options":{"scene_problem_patch":{"forged":true}}}"#
+                ))
                 .unwrap(),
         )
         .await
@@ -12575,6 +12591,12 @@ async fn fdm_grid_refresh_command_rejects_missing_authoring_scene_without_queuei
         "FDM grid refresh requires a materialized authoring scene."
     );
     assert!(state.current_control_queue.lock().await.is_empty());
+    assert!(state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.scene_document.is_none()));
     assert_eq!(
         state
             .current_command_ledger
@@ -28097,7 +28119,7 @@ async fn solver_energies_history_endpoint_honors_limit() {
 }
 
 #[tokio::test]
-async fn object_metrics_endpoint_returns_zero_energies_before_solver_sample() {
+async fn object_metrics_endpoint_returns_null_energies_before_solver_sample() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(sample_scene_document());
@@ -28123,7 +28145,12 @@ async fn object_metrics_endpoint_returns_zero_energies_before_solver_sample() {
     assert_eq!(json["magnetization_average"]["mx"], 1.0);
     assert_eq!(json["magnetization_average"]["my"], 0.0);
     assert_eq!(json["magnetization_average"]["mz"], 0.0);
-    assert_eq!(json["energies"]["total"], 0.0);
+    for key in ["total", "exchange", "demag", "zeeman", "anisotropy", "dmi"] {
+        let value = json["energies"]
+            .get(key)
+            .expect("energy key must remain present");
+        assert!(value.is_null(), "missing {key} must not become zero");
+    }
 }
 
 #[tokio::test]
@@ -28184,9 +28211,10 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
         });
         snapshot.scalar_revision = 21;
     }
-    let app = build_v2_router().with_state(state);
+    let app = build_v2_router().with_state(state.clone());
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -28205,6 +28233,40 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
     assert_eq!(json["magnetization_average"]["mx"], 0.25);
     assert_eq!(json["energies"]["exchange"], 11.0);
     assert_eq!(json["energies"]["total"], 65.0);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let values = snapshot
+            .live_state
+            .as_mut()
+            .unwrap()
+            .latest_step
+            .per_object_scalars
+            .get_mut("body")
+            .unwrap();
+        values.remove("e_dmi");
+        values.insert("e_ext".into(), f64::NAN);
+        values.insert("e_total".into(), 0.0);
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/objects/body/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let partial = body_json(response).await;
+    assert_eq!(partial["energies"]["total"], 0.0);
+    assert_eq!(partial["energies"]["exchange"], 11.0);
+    for key in ["zeeman", "dmi"] {
+        assert!(partial["energies"]
+            .get(key)
+            .expect("nullable energy key")
+            .is_null());
+    }
 }
 
 #[tokio::test]

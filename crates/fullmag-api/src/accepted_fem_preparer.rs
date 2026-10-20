@@ -1,7 +1,7 @@
 //! One-shot native FEM preparation for an immutable accepted study task.
 
 use anyhow::{bail, Context, Result};
-use fullmag_application::{RunId, RunSpecification};
+use fullmag_application::{AcceptedPreparationReceipt, ClosedLoopPreparationReceipt, RunId, RunSpecification};
 use fullmag_ir::{BackendPlanIR, BackendTarget};
 use fullmag_plan::StudyStepLoweringStatus;
 use fullmag_session::{
@@ -76,11 +76,24 @@ pub(crate) fn prepare_accepted_fem_task(
     if let Some(binding) = &preparation_lease.host_launch_binding {
         let token = std::env::var("FULLMAG_HOST_PREPARATION_LAUNCH_TOKEN")
             .context("host-bound FEM preparer requires its supervisor launch permit")?;
-        let ledger = fullmag_session::host_resource_ledger::HostResourceLedger::open(
-            &binding.ledger_root,
-            binding.policy.clone(),
-        )?;
-        ledger.validate_preparation_launch(store, &preparation_lease, &token)?;
+        let ledger = retry_preparation_store_writer_busy(|| {
+            fullmag_session::host_resource_ledger::HostResourceLedger::open_for_current_application(
+                &binding.ledger_root,
+                binding.policy.clone(),
+            )
+        })
+        .context("open host resource ledger for accepted FEM preparation")?;
+        if binding.policy.requires_runtime_readiness() {
+            let expected_generation = binding.require_runtime_generation_sha256()?;
+            retry_preparation_store_writer_busy(|| {
+                ledger.validate_runtime_generation(expected_generation)
+            })
+            .context("validate host runtime generation for accepted FEM preparation")?;
+        }
+        retry_preparation_store_writer_busy(|| {
+            ledger.validate_preparation_launch(store, &preparation_lease, &token)
+        })
+        .context("validate host preparation launch for accepted FEM preparation")?;
     }
 
     let step = accepted
@@ -102,21 +115,30 @@ pub(crate) fn prepare_accepted_fem_task(
     if execution_plan.common.resolved_backend != BackendTarget::Fem {
         bail!("accepted FEM preparer requires a task resolved to the FEM backend");
     }
-    let (mesh, fe_order) = accepted_preparation_mesh(&execution_plan.backend_plan)?;
+    let entry = accepted.catalog.entries().iter().find(|entry| entry.step_id() == step.step_id)
+        .context("native preparation has no captured ProblemIR")?;
+    let (mesh, fe_order) = match (&step.kind, &execution_plan.backend_plan) {
+        (fullmag_authoring::StudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id }, BackendPlanIR::AntennaFieldOnly(_)) => {
+            let operation = fullmag_plan::validate_closed_loop_operation(entry.problem(), stage_id, port_mode_id, output_id)?;
+            let fullmag_plan::AntennaFieldSolveExecutionPlan::ClosedLoopInspection { input, .. } = operation else { bail!("native preparation operation mismatch"); };
+            (input.source_mesh, 1)
+        }
+        (_, plan) => {
+            let (mesh, order) = accepted_preparation_mesh(plan)?;
+            (mesh.clone(), order)
+        }
+    };
 
     if let Some(existing) = store.read_task_preparation_receipt(run_id.as_str(), task_id)? {
         let receipt = accepted
-            .read_task_preparation_receipt(store, task_id)
+            .read_task_preparation(store, task_id)
             .context("validate replayed accepted FEM preparation receipt")?;
-        if receipt.plan.resolved_backend != BackendTarget::Fem {
-            bail!("existing task preparation receipt is not a FEM receipt");
-        }
         return Ok(AcceptedFemPreparationResult {
             run_id: run_id.as_str().to_owned(),
             task_id: task_id.to_owned(),
             step_id: existing.step_id,
-            preparation_id: receipt.preparation_id,
-            plan_fingerprint: receipt.plan_fingerprint,
+            preparation_id: receipt.preparation_id().to_owned(),
+            plan_fingerprint: receipt.plan_fingerprint().to_owned(),
             replayed: true,
         });
     }
@@ -136,56 +158,52 @@ pub(crate) fn prepare_accepted_fem_task(
         bail!("new accepted FEM preparation requires an active resource lease");
     }
 
-    let native = produce_native_fem_evidence(mesh, fe_order)?;
+    let native = produce_native_fem_evidence(&mesh, fe_order)?;
     let preparation_id = format!("prep-{task_id}");
-    let receipt = match &execution_plan.backend_plan {
-        BackendPlanIR::Fem(_) => accepted.materialize_fem_preparation_receipt(
-            preparation_id,
-            &step.step_id,
-            &native,
-        ),
-        BackendPlanIR::AntennaExternalLeadInspection(_) => accepted
-            .materialize_antenna_external_lead_inspection_preparation_receipt(
-                preparation_id,
-                &step.step_id,
-                &native,
-            ),
-        _ => bail!("accepted FEM preparer requires a time-domain FEM or antenna inspection plan"),
-    }
-    .with_context(|| {
-        format!(
-            "materialize accepted FEM preparation for `{}`",
-            step.step_id
-        )
-    })?;
-    let payload =
-        serde_json::to_value(&receipt).context("serialize accepted FEM preparation receipt")?;
+    let receipt = if matches!(step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) {
+        AcceptedPreparationReceipt::ClosedLoop(ClosedLoopPreparationReceipt::ready(
+            &specification, task_id, step, entry.problem(), native)?)
+    } else {
+        let solver = match &execution_plan.backend_plan {
+            BackendPlanIR::Fem(_) => accepted.materialize_fem_preparation_receipt(
+                preparation_id, &step.step_id, &native),
+            BackendPlanIR::AntennaExternalLeadInspection(_) => accepted
+                .materialize_antenna_external_lead_inspection_preparation_receipt(
+                    preparation_id, &step.step_id, &native),
+            _ => bail!("accepted FEM preparer requires a FEM or typed inspection plan"),
+        }.with_context(|| format!("materialize accepted preparation for `{}`", step.step_id))?;
+        AcceptedPreparationReceipt::Solver(solver)
+    };
+    let payload = receipt.payload().context("serialize accepted native preparation receipt")?;
     let durable = FmsTaskPreparationReceipt::new(
         run_id.as_str(),
         step.step_id.clone(),
         task.input_fingerprint.clone(),
-        receipt.preparation_id.clone(),
-        receipt.plan_fingerprint.clone(),
+        receipt.preparation_id().to_owned(),
+        receipt.plan_fingerprint().to_owned(),
         payload,
     )?;
     let replayed = matches!(
-        store.commit_task_preparation_receipt_with_preparation_lease(
-            &durable,
-            resource_id,
-            preparation_attempt_id,
-            lease_token,
-        )?,
+        retry_preparation_store_writer_busy(|| {
+            store.commit_task_preparation_receipt_with_preparation_lease(
+                &durable,
+                resource_id,
+                preparation_attempt_id,
+                lease_token,
+            )
+        })
+        .context("publish accepted FEM preparation receipt")?,
         PreparationReceiptCommitDisposition::Replayed
     );
     let verified = accepted
-        .read_task_preparation_receipt(store, task_id)
+        .read_task_preparation(store, task_id)
         .context("verify published accepted FEM preparation receipt")?;
     Ok(AcceptedFemPreparationResult {
         run_id: run_id.as_str().to_owned(),
         task_id: task_id.to_owned(),
         step_id: step.step_id.clone(),
-        preparation_id: verified.preparation_id,
-        plan_fingerprint: verified.plan_fingerprint,
+        preparation_id: verified.preparation_id().to_owned(),
+        plan_fingerprint: verified.plan_fingerprint().to_owned(),
         replayed,
     })
 }
@@ -200,6 +218,12 @@ fn accepted_preparation_mesh(plan: &BackendPlanIR) -> Result<(&fullmag_ir::MeshI
         }
         _ => bail!("accepted FEM preparer requires a time-domain FEM or antenna inspection plan"),
     }
+}
+
+/// Retry only one idempotent store/host-writer operation. Native FEM evidence
+/// must never be repeated merely because a shared writer is temporarily busy.
+fn retry_preparation_store_writer_busy<T>(operation: impl FnMut() -> Result<T>) -> Result<T> {
+    fullmag_runtime_control::retry_store_writer_busy(operation)
 }
 
 #[cfg(feature = "fem-native")]
@@ -223,6 +247,7 @@ fn produce_native_fem_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Error;
 
     #[test]
     fn mesh_selection_preserves_magnetic_mesh_order_and_rejects_fdm() {
@@ -242,5 +267,30 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("time-domain FEM or antenna inspection"));
+    }
+
+    #[test]
+    fn preparation_writer_retry_retries_typed_busy_but_not_other_errors() {
+        let mut typed_attempts = 0;
+        let value = retry_preparation_store_writer_busy(|| {
+            typed_attempts += 1;
+            if typed_attempts == 1 {
+                Err(Error::new(fullmag_session::StoreWriterBusy))
+            } else {
+                Ok("validated")
+            }
+        })
+        .unwrap();
+        assert_eq!(value, "validated");
+        assert_eq!(typed_attempts, 2);
+
+        let mut ordinary_attempts = 0;
+        let error = retry_preparation_store_writer_busy(|| {
+            ordinary_attempts += 1;
+            Err::<(), _>(anyhow::anyhow!("invalid launch token"))
+        })
+        .unwrap_err();
+        assert_eq!(ordinary_attempts, 1);
+        assert!(error.to_string().contains("invalid launch token"));
     }
 }

@@ -1947,6 +1947,54 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
     }
 }
 
+#[cfg(test)]
+#[test]
+fn finite_k_request_rejects_invalid_count_types_and_ranges() {
+    let mut problem = ProblemIR::bootstrap_example();
+    for count in [
+        serde_json::json!(true), serde_json::json!("128"),
+        serde_json::json!(4.5), serde_json::json!(-1),
+        serde_json::json!(3), serde_json::json!(2049),
+    ] {
+        problem.problem_meta.runtime_metadata.insert("spin_wave_response".into(), serde_json::json!({
+            "schema_version": "spin_wave_response.request.v1", "analysis": "finite_k", "probe_count": count,
+        }));
+        let mut errors = Vec::new();
+        validate_spin_wave_response_request(&problem, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("probe_count")), "{errors:?}");
+    }
+    for count in [4, 15, 16, 2048] {
+        problem.problem_meta.runtime_metadata.insert("spin_wave_response".into(), serde_json::json!({
+            "schema_version": "spin_wave_response.request.v1", "analysis": "finite_k", "probe_count": count,
+        }));
+        let mut errors = Vec::new();
+        validate_spin_wave_response_request(&problem, &mut errors);
+        assert!(!errors.iter().any(|error| error.contains("probe_count")), "{errors:?}");
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn finite_k_request_rejects_ignored_gamma_options_and_nonstring_components() {
+    let mut problem = ProblemIR::bootstrap_example();
+    for key in ["detrend", "window", "weighting", "susceptibility_floor_fraction"] {
+        let mut request = serde_json::json!({ "schema_version": "spin_wave_response.request.v1", "analysis": "finite_k" });
+        request[key] = serde_json::Value::Null;
+        problem.problem_meta.runtime_metadata.insert("spin_wave_response".into(), request);
+        let mut errors = Vec::new();
+        validate_spin_wave_response_request(&problem, &mut errors);
+        assert!(errors.iter().any(|error| error.contains(&format!("Gamma option '{key}'"))), "{errors:?}");
+    }
+    for component in [serde_json::json!(["mx"]), serde_json::json!({"value": "mx"}), serde_json::json!(true), serde_json::Value::Null] {
+        problem.problem_meta.runtime_metadata.insert("spin_wave_response".into(), serde_json::json!({
+            "schema_version": "spin_wave_response.request.v1", "analysis": "finite_k", "response_component": component,
+        }));
+        let mut errors = Vec::new();
+        validate_spin_wave_response_request(&problem, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("response_component must be a string")), "{errors:?}");
+    }
+}
+
 pub(crate) fn validate_spin_wave_response_request(problem: &ProblemIR, errors: &mut Vec<String>) {
     let Some(request) = problem
         .problem_meta
@@ -1976,6 +2024,9 @@ pub(crate) fn validate_spin_wave_response_request(problem: &ProblemIR, errors: &
         .get("response_component")
         .and_then(|value| value.as_str())
         .unwrap_or("my");
+    if request.get("response_component").is_some_and(|value| !value.is_string()) {
+        errors.push("runtime_metadata.spin_wave_response.response_component must be a string".into());
+    }
     if analysis == Some("gamma") && !matches!(response_component, "my" | "mz") {
         errors.push("runtime_metadata.spin_wave_response.response_component must be my or mz for transverse S_Gamma".into());
     } else if analysis == Some("finite_k") && !matches!(response_component, "mx" | "my" | "mz") {
@@ -2012,12 +2063,30 @@ pub(crate) fn validate_spin_wave_response_request(problem: &ProblemIR, errors: &
             .push("gamma spin-wave analysis requires an enabled global uniform field drive".into());
     }
     if analysis == Some("finite_k") {
-        if request
-            .get("probe_count")
-            .and_then(|value| value.as_u64())
-            .is_some_and(|value| !(4..=2048).contains(&value))
-        {
+        for key in ["detrend", "window", "weighting", "susceptibility_floor_fraction"] {
+            if request.contains_key(key) {
+                errors.push(format!("finite_k does not support Gamma option '{key}'; preprocessing is fixed to first-snapshot subtraction and Hann windows"));
+            }
+        }
+        if request.get("probe_count").is_some_and(|value| {
+            value.as_u64().is_none_or(|count| !(4..=2048).contains(&count))
+        }) {
             errors.push("finite_k spin-wave analysis probe_count must be in 4..=2048".into());
+        }
+        for key in ["analysis_x_min_m", "analysis_x_max_m"] {
+            if request.get(key).is_some_and(|value| {
+                value.as_f64().is_none_or(|bound| !bound.is_finite())
+            }) {
+                errors.push(format!("finite_k {key} must be a finite number in metres"));
+            }
+        }
+        if let (Some(lower), Some(upper)) = (
+            request.get("analysis_x_min_m").and_then(|value| value.as_f64()),
+            request.get("analysis_x_max_m").and_then(|value| value.as_f64()),
+        ) {
+            if upper <= lower {
+                errors.push("finite_k analysis_x_max_m must exceed analysis_x_min_m".into());
+            }
         }
         if !problem.field_drives.iter().any(|drive| {
             drive.enabled
@@ -2026,8 +2095,10 @@ pub(crate) fn validate_spin_wave_response_request(problem: &ProblemIR, errors: &
                         drive.spatial_profile,
                         FieldSpatialProfileIR::GeometryMask { .. }
                     ))
+        }) && !problem.solved_antenna_drives.iter().any(|drive| {
+            drive.peak_current_a.is_finite() && drive.peak_current_a != 0.0
         }) {
-            errors.push("finite_k spin-wave analysis requires an enabled localized field drive target or geometry mask".into());
+            errors.push("finite_k spin-wave analysis requires a localized field drive or a nonzero solved antenna drive".into());
         }
     }
 }
@@ -2514,7 +2585,7 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
             } => {
                 if definition
                     .as_ref()
-                    .is_some_and(|definition| definition.conservative_current_source.is_some())
+                    .is_some_and(|definition| definition.conservative_current_source.is_some() || matches!(&definition.structured_current_closure, Some(crate::StructuredCurrentClosureIR::ClosedGeometry {schema_version,..}) if schema_version=="structured_current_closure.v2"))
                     && (*model != CurrentTransportModelIR::OhmicPoisson
                         || *coupling != crate::TransportCouplingIR::OneWay
                         || time_envelope.is_some())
@@ -2701,6 +2772,18 @@ fn validate_charge_transport_definition(
     errors: &mut Vec<String>,
 ) {
     let prefix = format!("current_modules[{index}] current_transport");
+    let prepared_loop = matches!(&definition.conservative_current_source, Some(crate::ConservativeCurrentSourceIR::ClosedGeometryPotentialJump(_)));
+    let authored_loop = matches!(&definition.structured_current_closure, Some(crate::StructuredCurrentClosureIR::ClosedGeometry {schema_version, ..}) if schema_version=="structured_current_closure.v2");
+    let closed_loop = prepared_loop || authored_loop;
+    if closed_loop {
+        let whole=definition.materials.len()==1 && definition.materials[0].region.region_id.is_none();
+        let parts=definition.materials.len()==4 && definition.materials.iter().all(|assignment|assignment.region.region_id.is_some())
+            && definition.materials.iter().map(|assignment|assignment.region.region_id.as_ref()).collect::<BTreeSet<_>>().len()==4;
+        if definition.domain.len()!=1 || definition.domain[0].region_id.is_some() || !(whole||parts)
+            || definition.materials.iter().any(|assignment|assignment.region.object_id!=definition.domain[0].object_id) {
+            errors.push(format!("{prefix} closed loop requires one complete owner and either one whole-object material or four distinct parts"));
+        }
+    }
     if let Some(preparation) = &definition.external_lead_preparation {
         errors.extend(preparation.validation_errors(&format!("{prefix}.external_lead_preparation")));
         if reciprocal || !definition.boundaries.is_empty()
@@ -2727,11 +2810,12 @@ fn validate_charge_transport_definition(
         errors.extend(source.validation_errors(&format!("{prefix}.conservative_current_source")));
         if reciprocal
             || !definition.boundaries.is_empty()
-            || definition.gauge != crate::ChargePotentialGaugeIR::TerminalReference
+            || definition.gauge != if prepared_loop { crate::ChargePotentialGaugeIR::ZeroMean } else { crate::ChargePotentialGaugeIR::TerminalReference }
             || definition.conservative_current_view.is_some()
             || definition.structured_current_closure.is_some()
+            || definition.external_lead_preparation.is_some()
         {
-            errors.push(format!("{prefix}.conservative_current_source requires one-way transport, empty boundaries, terminal_reference gauge and no other source/view"));
+            errors.push(format!("{prefix}.conservative_current_source requires one-way transport, empty boundaries, source-specific gauge (v1 terminal_reference; v2 zero_mean) and no other source/view"));
         }
         if !matches!(
             requested_backend,
@@ -2767,12 +2851,17 @@ fn validate_charge_transport_definition(
                 "{prefix}.structured_current_closure supports one-way ohmic transport only"
             ));
         }
-        if requested_backend == crate::BackendTarget::Fem {
+        if !authored_loop && requested_backend == crate::BackendTarget::Fem {
             errors.push(format!(
                 "{prefix}.structured_current_closure requires FDM discretization"
             ));
         }
-        if definition.solver.operator_version != "fv_charge_harmonic_source_cut_v1" {
+        if authored_loop {
+            if !matches!(requested_backend, crate::BackendTarget::Fem | crate::BackendTarget::Auto) || definition.gauge!=crate::ChargePotentialGaugeIR::ZeroMean || !definition.boundaries.is_empty()
+                || definition.solver.engine!="cg" || definition.solver.operator_version!="fem_charge_conforming_h1_p1.transparent.v1" {
+                errors.push(format!("{prefix}.structured closure v2 requires pending FEM H1 cg zero_mean with empty boundaries"));
+            }
+        } else if definition.solver.operator_version != "fv_charge_harmonic_source_cut_v1" {
             errors.push(format!(
                 "{prefix}.structured_current_closure requires solver.operator_version='fv_charge_harmonic_source_cut_v1'"
             ));
@@ -2815,7 +2904,7 @@ fn validate_charge_transport_definition(
                 "{prefix}.materials[{material_index}] anisotropic conductivity is valid only for magnetoresistive_poisson"
             ));
         }
-        if !definition.domain.contains(&assignment.region) {
+        if !definition.domain.contains(&assignment.region) && !(closed_loop && definition.domain.iter().any(|region| region.object_id==assignment.region.object_id && region.region_id.is_none())) {
             errors.push(format!(
                 "{prefix}.materials[{material_index}].region must belong to the authored charge domain"
             ));
@@ -2827,7 +2916,7 @@ fn validate_charge_transport_definition(
             .iter()
             .filter(|assignment| &assignment.region == region)
             .count();
-        if assignments != 1 {
+        if assignments != 1 && !(closed_loop && region.region_id.is_none() && definition.materials.iter().all(|assignment| assignment.region.object_id==region.object_id && assignment.region.region_id.is_some())) {
             errors.push(format!(
                 "{prefix} each charge domain region requires exactly one material assignment"
             ));
@@ -4209,7 +4298,9 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
             let DynamicsIR::Llg { mechanics, .. } = dynamics;
             mechanics.as_ref()
         }),
-        crate::StudyIR::AntennaFieldSolve { .. } | crate::StudyIR::Hysteresis { .. } => None,
+        crate::StudyIR::Hysteresis { .. }
+        | crate::StudyIR::FieldOnly { .. }
+        | crate::StudyIR::AntennaFieldSolve { .. } => None,
     };
     if mechanics.is_some() && !has_magnetoelastic {
         errors.push("llg.mechanics requires a Magnetoelastic energy term".to_string());

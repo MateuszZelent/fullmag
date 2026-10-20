@@ -21,6 +21,7 @@ export interface MixedTopologyPresentation {
   facetCounts: readonly { familyAndRole: string; count: unknown }[];
   fallback: string;
   gmshVersion: string;
+  hasSingleLayer: boolean;
   layers: number | null;
   nodePlanes: number | null;
   orphanEntities: readonly MixedTopologyOrphanEntity[];
@@ -38,6 +39,7 @@ export interface MixedTopologyPresentation {
   } | null;
   resolvedExactLayers: boolean | null;
   resolvedLayers: number | null;
+  regionFields: readonly { label: string; value: string }[];
   resolvedTopology: string;
   topologySchemaVersion: string;
   transitionPolicy: string;
@@ -164,11 +166,30 @@ export function resolveMixedTopologyPresentation({
   const certificate = firstRecord(
     rejectionEvidence,
     report?.mixed_layer_topology_rejection,
+    report?.mixed_layer_topology_certificate_v2,
     report?.mixed_layer_topology_certificate,
     report?.mixed_layer_topology_certificate_summary,
+    manifestRecord?.mixed_layer_topology_certificate_v2,
     manifestRecord?.mixed_layer_topology_certificate,
     manifestRecord?.mixed_layer_topology_certificate_summary,
   );
+  const regionFields = Array.isArray(certificate?.magnetic_regions)
+    ? certificate.magnetic_regions.flatMap((value) => {
+        const region = asRecord(value);
+        if (!region) return [];
+        const objectId = firstString(region.object_id);
+        const sweep = asRecord(region.exact_sweep);
+        const families = flattenedCounts(asRecord(region.cell_family_counts))
+          .map(({ key, count }) => `${key}: ${formatCount(count)}`).join(", ");
+        return [
+          { label: `Body ${objectId}`, value: `body ${firstPositiveInteger(region.body_marker) ?? "not published"}, material ${firstPositiveInteger(region.material_marker) ?? "not published"}` },
+          { label: `${objectId} cells`, value: families || "not published" },
+          { label: `${objectId} exact layers`, value: sweep
+            ? `${firstPositiveInteger(sweep.requested_layer_count) ?? "not published"} requested / ${firstPositiveInteger(sweep.realized_layer_count) ?? "not published"} realized; ${firstPositiveInteger(sweep.actual_node_plane_count) ?? "not published"} node planes`
+            : "not swept" },
+        ];
+      })
+    : [];
   const rejectionRecord = asRecord(rejectionEvidence);
   const missingCapabilities = Array.isArray(rejectionRecord?.missing_capabilities)
     ? rejectionRecord.missing_capabilities.filter(
@@ -218,12 +239,15 @@ export function resolveMixedTopologyPresentation({
   const nodePlanes =
     publishedNodePlanes ??
     (effectiveLayers === null ? null : effectiveLayers + 1);
-  const certificateStatus = firstString(
+  const publishedCertificateStatus = firstString(
     certificate?.certificate_status,
     certificate?.status,
     certificate?.accepted === true ? "accepted" : undefined,
     certificate?.accepted === false ? "rejected" : undefined,
   );
+  const certificateStatus = publishedCertificateStatus === "accepted" || publishedCertificateStatus === "rejected"
+    ? publishedCertificateStatus
+    : "unavailable";
   const requestedTopology = firstString(
     provenance?.requested_topology,
     requestedPolicy?.topology,
@@ -264,6 +288,11 @@ export function resolveMixedTopologyPresentation({
         ? fallbacks.join(", ")
         : "none (strict)",
     gmshVersion: firstString(report?.gmsh_version, manifestRecord?.gmsh_version),
+    hasSingleLayer: requestedLayers === 1 || (
+      Array.isArray(certificate?.magnetic_regions) && certificate.magnetic_regions.some(
+        (value) => firstPositiveInteger(asRecord(asRecord(value)?.exact_sweep)?.requested_layer_count) === 1,
+      )
+    ),
     layers: requestedLayers,
     nodePlanes,
     orphanEntities: orphanEvidence.entities,
@@ -289,6 +318,7 @@ export function resolveMixedTopologyPresentation({
       : null,
     resolvedExactLayers: firstBoolean(resolvedPolicy?.exact_layer_count),
     resolvedLayers,
+    regionFields,
     resolvedTopology,
     topologySchemaVersion: String(
       report?.topology_schema_version ??
@@ -328,6 +358,12 @@ export function MixedTopologyProvenanceSection({
       collapsible
       defaultOpen
     >
+      {model.certificateStatus === "unavailable" ? (
+        <FeedbackBanner
+          kind="warning"
+          message="Mixed-topology certificate is unavailable or has an unrecognized status. Execution and quality are not confirmed."
+        />
+      ) : null}
       {rejected ? (
         <FeedbackBanner
           kind="error"
@@ -361,7 +397,7 @@ export function MixedTopologyProvenanceSection({
           />
         </>
       ) : null}
-      {model.layers === 1 ? (
+      {model.hasSingleLayer ? (
         <FeedbackBanner
           kind="warning"
           message="One exact prism layer requires layer-convergence evidence before scientific qualification."
@@ -390,6 +426,7 @@ export function MixedTopologyProvenanceSection({
                   .join("; ")
               : "none",
           },
+          ...model.regionFields,
           ...model.elementCounts.map(({ family, count }) => ({
             label: `Family ${family}`,
             value: formatCount(count),

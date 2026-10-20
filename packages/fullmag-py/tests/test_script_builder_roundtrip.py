@@ -2021,5 +2021,35 @@ study.stages.add_run(stage_id='third', until=1e-11)
         self.assertIn('study.save("mx", every="auto")', source)
 
 
+class ClosedLoopNonmagneticRoundTripTests(unittest.TestCase):
+    def test_original_full_3d_circuit_survives_both_export_routes(self) -> None:
+        source = Path(__file__).resolve().parents[3] / "examples/fem_antenna_closed_loop_nonmagnetic.py"
+        loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+        expected = loaded.problem.to_ir(include_geometry_assets=False, source_root=source.parent)
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        scripts = {
+            "python": render_loaded_problem_as_script(loaded),
+            "scene_document": render_scene_document_as_script(scene),
+        }
+        with TemporaryDirectory() as tmp_dir:
+            for route, script in scripts.items():
+                with self.subTest(route=route):
+                    replay = _load_text(script, Path(tmp_dir), f"{route}.py")
+                    actual = replay.problem.to_ir(include_geometry_assets=False, source_root=source.parent)
+                    for key in (
+                        "current_modules", "antenna_port_modes", "antenna_field_solve_stages",
+                        "geometry", "backend_policy", "validation_profile",
+                    ):
+                        self.assertIn(key, expected)
+                        self.assertIn(key, actual)
+                        self.assertEqual(expected[key], actual[key], key)
+                    self.assertEqual(loaded.problem.discretization, replay.problem.discretization)
+                    self.assertFalse(replay.problem.magnets)
+                    self.assertIn("closed_loop=True", script)
+                    self.assertIn("fm.AntennaSourceCutRt0(", script)
+                    self.assertNotIn("add_run(", script)
+                    self.assertNotIn("add_relax(", script)
+
+
 if __name__ == "__main__":
     unittest.main()

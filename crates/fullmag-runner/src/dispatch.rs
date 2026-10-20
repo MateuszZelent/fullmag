@@ -25,6 +25,7 @@ use crate::fdm::cpu::reference as cpu_reference;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
+use crate::fem::marker_policy::mixed_v2_body_markers;
 #[cfg(feature = "fem-gpu")]
 use crate::fem::relax::scalars::ensure_fem_object_scalars;
 use crate::fem_baseline;
@@ -436,6 +437,7 @@ fn magnetic_markers_from_mesh_parts(plan: &FemPlanIR) -> BTreeSet<u32> {
 
 pub(crate) fn normalized_runtime_element_markers(plan: &FemPlanIR) -> Result<Vec<u32>, RunError> {
     let markers = &plan.mesh.element_markers;
+    let certified_v2_markers = mixed_v2_body_markers(plan);
     if markers.len() != plan.mesh.cell_count() {
         return Err(RunError {
             message: format!(
@@ -452,6 +454,21 @@ pub(crate) fn normalized_runtime_element_markers(plan: &FemPlanIR) -> Result<Vec
         .filter(|marker| *marker != 0)
         .collect::<BTreeSet<_>>();
     let has_air = markers.contains(&0);
+
+    if let Some(expected_markers) = certified_v2_markers {
+        if expected_markers.is_empty()
+            || expected_markers.contains(&0)
+            || expected_markers != distinct_nonzero
+        {
+            return Err(RunError {
+                message: format!(
+                    "invalid FEM plan: mixed v2 certificate body markers {:?} disagree with realized non-zero element markers {:?}",
+                    expected_markers, distinct_nonzero
+                ),
+            });
+        }
+        return Ok(markers.clone());
+    }
 
     if !plan.region_materials.is_empty() {
         let magnetic_markers = plan
@@ -1518,6 +1535,7 @@ pub(crate) fn resolve_with_registry_for_plan(
 ) -> Result<DispatchEngineResolution, RunError> {
     match registry {
         Some(registry) => match &plan.backend_plan {
+            BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
             BackendPlanIR::Fdm(fdm) => resolve_fdm_engine_with_registry(
                 problem,
                 registry,
@@ -1563,6 +1581,7 @@ pub(crate) fn resolve_with_registry_for_plan(
             }
         },
         None => match &plan.backend_plan {
+            BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
             BackendPlanIR::Fdm(fdm) => {
                 let resolution = resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
                 Ok(DispatchEngineResolution {
@@ -1851,6 +1870,9 @@ pub fn stage_step_time_frame(
     plan: &ExecutionPlanIR,
 ) -> Result<StageStepTimeFrame, RunError> {
     let frame = match &plan.backend_plan {
+        BackendPlanIR::AntennaFieldOnly(_) => {
+            return Err(crate::field_only_plan_not_executable_as_llg())
+        }
         BackendPlanIR::Fdm(_) => {
             let runtime = crate::resolve_planned_runtime_engine(problem, plan)?;
             fdm_stage_step_time_frame(&runtime.engine_id)?
@@ -2201,14 +2223,7 @@ pub(crate) fn runtime_precision(problem: &ProblemIR) -> &str {
 }
 
 pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
-    match std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref() {
-        Some("cpu") => "cpu".to_string(),
-        Some("cuda") => "gpu".to_string(),
-        Some("auto") | None => runtime_device(problem)
-            .unwrap_or("auto")
-            .replace("cuda", "gpu"),
-        Some(other) => other.replace("cuda", "gpu"),
-    }
+    crate::solver_runtime::selection::requested_registry_device_for_fdm(problem)
 }
 
 pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
@@ -9716,6 +9731,97 @@ mod tests {
 
         assert_eq!(resolution.engine, FemEngine::NativeGpu);
         assert!(resolution.fallback.is_none());
+    }
+
+    #[test]
+    fn normalized_runtime_markers_preserve_v2_body_identity_and_keep_legacy_binary_mask() {
+        let mut plan = tiny_fem_plan();
+        plan.mesh.nodes.push([0.0, 0.0, -1.0]);
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+        plan.mesh.element_markers = vec![7, 11];
+        let material = plan.material.clone();
+        plan.region_materials = vec![
+            fullmag_ir::FemRegionMaterialIR {
+                object_id: "body_a".to_string(),
+                material: material.clone(),
+                element_marker: 7,
+            },
+            fullmag_ir::FemRegionMaterialIR {
+                object_id: "body_b".to_string(),
+                material,
+                element_marker: 11,
+            },
+        ];
+        plan.initial_magnetization.push([1.0, 0.0, 0.0]);
+
+        let fingerprint = format!("sha256:{}", "0".repeat(64));
+        plan.mesh_build_report = Some(serde_json::from_value(serde_json::json!({
+            "build_mode": "mixed",
+            "mixed_layer_topology_certificate_v2": {
+                "schema_version": "mixed_layer_topology_certificate.v2",
+                "certificate_status": "accepted",
+                "magnetic_regions": [
+                    {"object_id": "body_a", "body_marker": 7, "material_marker": 7, "cell_family_counts": {"tet4": 1}},
+                    {"object_id": "body_b", "body_marker": 11, "material_marker": 11, "cell_family_counts": {"tet4": 1}}
+                ],
+                "body_separation_pairs": [{"body_a": "body_a", "body_b": "body_b", "min_gap_m": 1.0, "contact_state": "separated"}],
+                "body_material_fields": [],
+                "requested_algorithm_3d": 10,
+                "transition_algorithm_3d": 1,
+                "tetrahedral_algorithm_3d": 10,
+                "optimizer": null,
+                "optimizer_iterations": 0,
+                "requested_sweep_direction": "auto",
+                "resolved_sweep_direction": "z",
+                "requested_layer_count": 1,
+                "realized_layer_count": 1,
+                "magnetic_plane_coordinates_m": [0.0, 1.0],
+                "plane_tolerance_m": 1.0e-12,
+                "transition_shell_thickness_m": 1.0,
+                "transition_shell_interface_tri3_count": 1,
+                "interface_marker": 99,
+                "outer_boundary_marker": 100,
+                "magnetic_bounds_min_m": [0.0, 0.0, 0.0],
+                "magnetic_bounds_max_m": [1.0, 1.0, 1.0],
+                "airbox_bounds_min_m": [0.0, 0.0, 0.0],
+                "airbox_bounds_max_m": [1.0, 1.0, 1.0],
+                "magnetic_bounds_relative_error": 0.0,
+                "airbox_bounds_relative_error": 0.0,
+                "jacobian_minima_m3_by_family": {"tet4": 1.0},
+                "quality_metric": "mixed_topology_scaled_jacobian.v1",
+                "scaled_jacobian_minima_by_family": {"tet4": 1.0},
+                "scaled_jacobian_p05_by_family": {"tet4": 1.0},
+                "magnetic_volume_m3": 1.0,
+                "expected_magnetic_volume_m3": 1.0,
+                "magnetic_relative_volume_error": 0.0,
+                "air_volume_m3": 1.0,
+                "shared_domain_volume_m3": 2.0,
+                "expected_shared_domain_volume_m3": 2.0,
+                "shared_domain_relative_volume_error": 0.0,
+                "marker_coverage_complete": true,
+                "nonconforming_face_count": 0,
+                "orphan_face_count": 0,
+                "nonmanifold_face_count": 0,
+                "coincident_interface_face_count": 0,
+                "deterministic_inputs": {},
+                "fallbacks_triggered": [],
+                "topology_fingerprint_version": "v3",
+                "topology_fingerprint": fingerprint,
+                "gmsh_version": "4.15.2",
+                "strategy": "shared_geo_extrusion_partitioned_pyramid_tet.v2",
+                "effective_gmsh_thread_count": 1
+            }
+        }))
+        .expect("mixed v2 marker fixture"));
+
+        let normalized = normalized_fem_plan_for_runtime(&plan)
+            .expect("accepted mixed v2 markers must reach native unchanged");
+        assert_eq!(normalized.mesh.element_markers, vec![7, 11]);
+
+        plan.mesh_build_report = None;
+        let legacy = normalized_fem_plan_for_runtime(&plan)
+            .expect("legacy plans retain binary runtime markers");
+        assert_eq!(legacy.mesh.element_markers, vec![1, 1]);
     }
 
     #[test]

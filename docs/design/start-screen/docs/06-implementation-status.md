@@ -1,8 +1,7 @@
 # Implementation status
 
 What of this design is built, what was verified and how, and what is left.
-Updated on 2026-10-05, after the merges of PR #128 (workspace UI) and #129
-(script prerequisites). "Verified" names the evidence actually collected;
+Updated on 2026-10-16. "Verified" names the evidence actually collected;
 anything not named there was **not** verified.
 
 Standing limitations: building Rust unit tests is suspended by `AGENTS.md`, so
@@ -32,11 +31,40 @@ against real project archives.
 | 4 | Thumbnails, card grid, result preview, LRU | Done in the renderer | typecheck, lint, browser. **No frame scrubber**: not built, see section 3 for the exact reason. Result folders show the stored preview of their source project (labelled "project preview"), never a render of the result. The thumbnail is now written: a finished run records its outcome and a viewport thumbnail into the open project (`project_record_outcome`, `project/preview/thumb.png`, a PNG up to 256 kB) and the index reads it. Writer verified by `cargo check` and a mocked-host browser check, **not** in a packaged app |
 | 5 | Authors, History, Runs, BibTeX | Done: read side and writer | browser (three tabs, mocked host); `cargo check`. Writer records edit saves only, see §3 |
 | 6 | Continue card | Done in the renderer. Discard checkpoint works for an open project through the runtime route `DELETE /v2/sessions/current/persistence/checkpoints/{id}` (inline two-step confirmation, command `study.discard-checkpoint`) | browser (resumable / not / host error) for the card; Rust handler tests, session store test and vitest for Discard; **no browser run of Discard and no run against a real project**. `resume_run` and the host `discard_checkpoint` do not exist |
-| 7 | Compute environment | Widget, szczegóły Settings oraz częściowa edycja lokalnej NodePolicy przez typed v2 API | Odczytowy UI: browser proof z 2026-10-04 dla rzeczywistego RTX 4080 SUPER, 48 wątków CPU i 10 kontroli stanów/motywów/układu. Edytor polityki: managed OpenAPI codegen, statyczna higiena API i diff check PASS; testy nieuruchomione zgodnie z AGENTS.md. Brakują ESLint (pakiet @eslint/compat) i wynik React Doctor; browser proof edycji pozostaje NOT VERIFIED. Szczegóły w [09-compute-environment.md](09-compute-environment.md) |
+| 7 | Compute environment | Widget, szczegóły Settings oraz częściowa edycja lokalnej NodePolicy przez typed v2 API | Odczytowy UI: browser proof z 2026-10-04 oraz managed Windows dev browser proof z 2026-10-16. Szczegóły bieżącego dowodu i otwarte bramki pod tabelą. Edycja polityki przez capability lokalnej aplikacji operatora pozostaje NOT VERIFIED. Szczegóły w [09-compute-environment.md](09-compute-environment.md) |
 | 8 | Templates gallery | Gallery plus a validated canonical Python script per template (save, copy) | each script loads to ProblemIR with the repository Python package (loader only, no solver). **Create script from template…** (desktop only) saves the script through the host command `script_save_new` (native Save dialog, no overwrite without the dialog's confirmation, atomic UTF-8 write, first-line origin comment, `create` + `open` events), then Home selects it so Run in new window is next. Outside the desktop host the button is disabled with its reason; Download and Copy script work everywhere. **Create project...** (browser and desktop) runs the script once after a consent dialog, through `POST /v2/persistence/projects/from-script`, and opens a project with the exported scene, the original script embedded (`project/source/script.py`, `script.json`) and an `import` history entry; a banner reports the fidelity verdict (`08-script-open.md`, "Phase 3 as built"). The scene is an approximation: of 27 surveyed scripts 8 are `verified`, 15 `failed` (mostly stage output declarations that the scene render refuses to drop, or a field changed between stages) and 4 are refused at export (survey in `08-script-open.md`, section 8; was 2 / 21 / 4 before the round-trip fixes of 2026-10-05) |
 | 9 | Import | `.fms`; `.mx3` as a reported subset translator | translator tests and a Python load of every generated fixture script. **Save translated script…** (desktop only) goes through the same `script_save_new` (event `import`); the report of untranslated statements stays visible before saving, and an incomplete translation can be saved (the report says it stops when run). Download and Copy script work everywhere. **Create project...** on the report does the same as for templates, from the translated script. No other importer |
 | 10 | Learn, Settings, About | Done | browser |
 | 11 | Sphinx documentation (this folder, `05-…`) | Done, not bundled by builds | browser against the real built site; `sphinx-build -W -n` of the site with the embed assets succeeds locally (exit 0) |
+
+### Compute environment — managed Windows browser verification (2026-10-16)
+
+The managed `windows-native-fdm-cpu-dev` build completed with exit code 0 for
+the dirty `master` source snapshot. The development workspace then served the
+Start screen at `http://127.0.0.1:3197/workspace`; the page returned HTTP 200
+and the browser exposed both the Compute Environment widget and Settings →
+Compute → Overview. The live reading showed an NVIDIA GeForce RTX 4080 SUPER,
+48 logical CPU threads, and approximately 4.5/17.2 GB VRAM. CPU load and system
+RAM were unavailable; all four solver lanes were `Not reported`. The node
+snapshot was `Not probed`, matching the fact that this workspace had not yet
+published a desktop-host inventory snapshot. Settings → Compute → Resources
+showed the empty stable-inventory state. The regular browser had no local
+desktop-operator capability, so this run did not verify NodePolicy editing.
+
+After this managed build snapshot, a source-HMR update added an explicit
+empty-inventory card to Home and Settings → Compute → Overview. A fresh browser
+tab confirmed that its `Not probed` label and explanation match the host
+inventory status; an actual empty node list and a failed read retain separate
+messages. This UI correction was compiled and rendered by Next.js dev HMR, not
+by the native build above.
+
+This is read-side browser/runtime evidence only. It does not verify the local
+desktop operator editor, node admission, solver execution, CPU/GPU parity, or
+release qualification. Unit tests remain uncompiled and unrun under the
+current `AGENTS.md` rule. The API also logged Windows error 158 while releasing
+an already-unlocked native writer lock during startup; the workspace
+continued and the inspected resources loaded, but the error's broader impact
+has not been established.
 
 Additions beyond the original ten steps:
 
@@ -291,3 +319,30 @@ shows the same lists and details as the desktop app.
   layout (364 px right column, preview, title row, tabs, sections, action bar)
   and WCAG AA of every text they draw in both themes. Not verified against a
   real backend serving the routes, and nothing ran in a packaged desktop app.
+
+---
+
+## 7. Compute Environment: local operator boundary and current verification
+
+The selected write authority for host `NodePolicy` is the operator of the local
+Fullmag desktop application. The desktop API sidecar creates a per-process
+capability, binds to `127.0.0.1`, and allows the exact renderer origin only;
+only the Tauri command exposes the token to the trusted renderer. The API
+requires the matching bearer value for policy writes and fails closed when it
+is absent. The renderer exposes the editor only when that command returns a
+valid capability. Browser-only access stays read-only. The solver child
+processes do not inherit the capability. The general API server's existing
+bind/CORS behavior is unchanged when sidecar-specific settings are absent.
+
+The authorization path and the sidecar loopback/CORS restriction compiled in
+the managed Windows `backend-dev` build on 2026-10-16. The build included
+`fullmag-api`, `fullmag-cli`, and the Tauri `fullmag-ui` binary, with source
+identity checks passing. Managed OpenAPI generation, TypeScript client
+generation, and API hygiene also passed after the earlier storage-access
+failure. This is compile and source-contract evidence only: no packaged desktop
+runtime check has confirmed the listener address/origin or exercised a
+`NodePolicy` write. Admission, solver execution, CPU/GPU parity, and release
+qualification remain unverified. Unit tests remain uncompiled and unrun under
+the current `AGENTS.md` rule. See the dated implementation checkpoint for
+receipts, the React Doctor warning, the lint dependency failure, and exact
+runtime-status evidence.

@@ -2,23 +2,6 @@ name: eigensolve-authoring-policy-contracts
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['codex/**']
-    paths:
-      - 'crates/fullmag-authoring/src/adapters.rs'
-      - 'crates/fullmag-authoring/src/validation.rs'
-      - 'crates/fullmag-ir/src/execution_profile*.rs'
-      - 'crates/fullmag-ir/src/parallel_execution.rs'
-      - 'crates/fullmag-application/src/execution_profile.rs'
-      - 'packages/fullmag-py/src/fullmag/model/study.py'
-      - 'packages/fullmag-py/src/fullmag/runtime/scene_document.py'
-      - 'packages/fullmag-py/src/fullmag/runtime/scene_document_ir.py'
-      - 'packages/fullmag-py/tests/test_scene_document_problem_ir.py'
-      - 'packages/fullmag-py/tests/test_api.py'
-      - 'packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py'
-      - 'docs/physics/0600-fem-eigenmodes-linearized-llg*'
-      - '.github/workflows/eigensolve-authoring-policy-contracts.yml'
-
 permissions:
   contents: read
 

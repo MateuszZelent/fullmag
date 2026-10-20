@@ -52,6 +52,9 @@ struct PeriodicChargePotentialSolveRequest {
     std::vector<ConservativeCurrentBoundaryFace> boundary_faces;
     PeriodicCurrentSourceCut source_cut;
     std::string operator_version;
+    // Prepared admission contains only input binding; accepted digest is generated after H1.
+    std::string prepared_execution_digest;
+    std::vector<double> prepared_conductivity_spm_per_element;
     std::string source_module_id;
     std::string source_state_revision;
     std::string source_field_digest;
@@ -67,6 +70,11 @@ struct PeriodicChargePotentialSolveRequest {
     double algebraic_relative_tolerance = 1.0e-12;
     int maximum_iterations = 1000;
     bool reference_mpi_gather_rank0_broadcast = false;
+};
+
+struct PairedChargeWeakReactionV2 {
+    std::uint64_t minus_vertex_id, plus_vertex_id;
+    double minus_reaction_a, plus_reaction_a;
 };
 
 class PeriodicChargePotentialSnapshot {
@@ -88,6 +96,9 @@ public:
     double potential_jump_v() const;
     double gauge_mean_v() const;
     double max_paired_weak_flux_mismatch_a() const;
+    const std::vector<PairedChargeWeakReactionV2> &paired_weak_reactions_v2() const;
+    const std::string &prepared_execution_digest() const;
+    const std::string &accepted_charge_field_digest() const;
     const std::string &mesh_revision() const;
     const std::string &geometry_digest() const;
     const std::string &conductivity_digest() const;

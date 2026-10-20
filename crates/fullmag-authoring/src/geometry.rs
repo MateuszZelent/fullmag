@@ -1086,12 +1086,20 @@ fn derive_object_bounds(object: &SceneObject) -> Option<([f64; 3], [f64; 3])> {
     Some((world_min, world_max))
 }
 
+#[derive(Clone, Copy)]
+struct MicrostripConnection {
+    length_m: f64,
+    width_m: f64,
+    offset_v_m: f64,
+}
+
 struct MicrostripLayout {
     length_m: f64,
     thickness_m: f64,
     return_width_m: f64,
     return_offset_m: f64,
     stations: Vec<(f64, f64)>,
+    connections: Option<[MicrostripConnection; 2]>,
     rotation: [[f64; 3]; 3],
     translation: [f64; 3],
 }
@@ -1140,6 +1148,63 @@ fn parse_microstrip_layout(params: &Value) -> Result<MicrostripLayout, &'static 
         return Err("stations must start at s=0 and end at s=1");
     }
 
+    let connections = if let Some(raw) = params.get("loop") {
+        let fields = raw.as_object().ok_or("microstrip loop must be an object")?;
+        if fields.keys().any(|key| !matches!(key.as_str(), "enabled"
+            | "inlet_connection_length_m" | "inlet_connection_width_m" | "inlet_connection_offset_v_m"
+            | "inlet_connection_part_id" | "inlet_connection_conductivity_s_per_m"
+            | "outlet_connection_length_m" | "outlet_connection_width_m" | "outlet_connection_offset_v_m"
+            | "outlet_connection_part_id" | "outlet_connection_conductivity_s_per_m")) {
+            return Err("microstrip loop contains unsupported authored fields");
+        }
+        let enabled = match raw.get("enabled") {None => false, Some(Value::Bool(value)) => *value,
+            _ => return Err("microstrip loop.enabled must be boolean")};
+        if !enabled {
+            if fields.iter().any(|(key,value)| key != "enabled" && !value.is_null()) {
+                return Err("connection parameters require loop.enabled=true");
+            }
+            None
+        } else {
+            if return_offset_m <= 0.0 {return Err("closed_loop requires positive return_offset_m");}
+            let conductor_id = |kind: &str| -> Result<String, &'static str> {
+                match params.get("conductors").and_then(Value::as_array) {
+                    Some(entries) if !entries.is_empty() => entries.iter()
+                        .find(|entry| entry.get("kind").and_then(Value::as_str)==Some(kind))
+                        .and_then(|entry| entry.get("id")).and_then(Value::as_str)
+                        .filter(|id| !id.trim().is_empty()).map(str::to_string)
+                        .ok_or("closed_loop requires explicit signal and return part IDs"),
+                    _ => Ok(kind.to_string()),
+                }
+            };
+            let mut ids = vec![conductor_id("signal")?, conductor_id("return")?];
+            let mut connections = Vec::with_capacity(2);
+            for (side, signal_width) in [("inlet",stations[0].1),("outlet",stations[stations.len()-1].1)] {
+                let positive = |suffix: &str| -> Result<f64, &'static str> {
+                    number_param(raw,&format!("{side}_connection_{suffix}"))
+                        .filter(|value|value.is_finite() && *value>0.0)
+                        .ok_or("closed_loop requires explicit positive connection dimensions and conductivity")
+                };
+                let length_m=positive("length_m")?;
+                let width_m=positive("width_m")?;
+                positive("conductivity_s_per_m")?;
+                let offset_v_m=number_param(raw,&format!("{side}_connection_offset_v_m"))
+                    .filter(|value|value.is_finite()).ok_or("closed_loop requires finite explicit connection offset")?;
+                let id=raw.get(format!("{side}_connection_part_id")).and_then(Value::as_str)
+                    .filter(|id|!id.trim().is_empty()).ok_or("closed_loop requires explicit connection part ID")?;
+                ids.push(id.to_string());
+                for target in [signal_width,return_width_m] {
+                    if (offset_v_m+width_m/2.0).min(target/2.0) <= (offset_v_m-width_m/2.0).max(-target/2.0) {
+                        return Err("connection must contact signal and return with positive area");
+                    }
+                }
+                connections.push(MicrostripConnection {length_m,width_m,offset_v_m});
+            }
+            if ids.iter().collect::<std::collections::BTreeSet<_>>().len()!=4 {
+                return Err("closed_loop part IDs must be distinct");
+            }
+            Some([connections[0],connections[1]])
+        }
+    } else {None};
     let (rotation, translation) = parse_antenna_layout_transform(params)?;
     Ok(MicrostripLayout {
         length_m,
@@ -1147,6 +1212,7 @@ fn parse_microstrip_layout(params: &Value) -> Result<MicrostripLayout, &'static 
         return_width_m,
         return_offset_m,
         stations,
+        connections,
         rotation,
         translation,
     })
@@ -1324,6 +1390,23 @@ fn microstrip_layout_bounds(params: &Value) -> Option<([f64; 3], [f64; 3])> {
                             + layout.translation[axis];
                         min[axis] = min[axis].min(world);
                         max[axis] = max[axis].max(world);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(connections) = layout.connections {
+        for (side, connection) in connections.iter().enumerate() {
+            let ends = if side==0 {[-connection.length_m,0.0]} else {[layout.length_m,layout.length_m+connection.length_m]};
+            for u in ends {
+                for v in [connection.offset_v_m-connection.width_m/2.0,connection.offset_v_m+connection.width_m/2.0] {
+                    for z in [-1.5*layout.thickness_m-layout.return_offset_m,layout.thickness_m/2.0] {
+                        let local=[u,v,z];
+                        for axis in 0..3 {
+                            let world=(0..3).map(|component|layout.rotation[axis][component]*local[component])
+                                .sum::<f64>()+layout.translation[axis];
+                            min[axis]=min[axis].min(world);max[axis]=max[axis].max(world);
+                        }
                     }
                 }
             }

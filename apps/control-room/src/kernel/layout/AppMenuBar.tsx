@@ -68,6 +68,7 @@ import {
   resolveApiConnectionErrorDetails,
   resolveHeaderSessionDisplay,
   resolveHydrationSafeHeaderSessionSource,
+  resolveNoSessionSubtitle,
   selectHeaderSessionSource,
 } from "./AppMenuBarHeaderModel";
 import { CommunicationPolicyDialog } from "./CommunicationPolicyDialog";
@@ -168,11 +169,17 @@ function HeaderDropdown({
   menu: AppMenuNode;
   onCommand: (commandId: string, input?: unknown) => void;
 }) {
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    clientHydratedSnapshot,
+    serverHydratedSnapshot,
+  );
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           className="fm-header__nav-item"
+          disabled={!hydrated}
           size="sm"
           type="button"
           variant="ghost"
@@ -467,13 +474,7 @@ function NoSessionAppMenuBar({
   return (
     <header className="fm-header">
       <HeaderBrand
-        subtitle={
-          state === "no-session"
-            ? "No active session"
-            : state === "loading"
-              ? "Checking sessions"
-              : "Session list unavailable"
-        }
+        subtitle={resolveNoSessionSubtitle(state)}
       />
       <nav className="fm-header__nav" aria-label="Main menu">
         <StartNavItem

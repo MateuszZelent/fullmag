@@ -7,7 +7,7 @@ odpowiedzialności i luki potwierdzone w kodzie na bazie
 `f693a2f7f58be6516ce074c76abce2d18787c6e2`. „Docelowe” nie oznacza wdrożonego.
 Nie jest to kwalifikacja publikacji naukowej ani certyfikacja czterech backendów.
 Kanoniczne równania i semantyka anten pozostają w istniejącej dokumentacji
-fizyki; UI nie może ich redefiniować. Każdy kolejny etap wymaga własnych dowodów.
+fizyki; UI nie może ich redefiniować. Każdy kolejny etap wymaga własnych dowodów. Tabela poniżej uwzględnia aktualizacje źródeł do 17.10.2026; historyczne oględziny w dalszych sekcjach zachowują swój pierwotny zakres.
 
 ## Diagnoza sceny użytkownika
 
@@ -42,15 +42,15 @@ snapshotem; zmiana wejść nie może uczynić go pozornie aktualnym.
 | Węzeł | Co przedstawia | Czym zarządza docelowo | Stan i brakujące elementy |
 |---|---|---|---|
 | Nazwa anteny / `object.root` | Nazwa, notatki, ID, jawna rola, typ geometrii, widoczność, readiness | Tożsamość, notatki, usunięcie z kontrolą referencji, kolor prezentacyjny | Istniejący ObjectGeneral; nie może prezentować średniej m i energii magnetycznych niemagnetycznego przewodnika. Moduły fizyki pozostają osobnymi węzłami. |
-| Geometry / `object.antenna.geometry` | CPW/microstrip, części, rzeczywiste wymiary i stacje, transformacja, odstęp od odbiorcy | Długość/grubość, szerokości/szczeliny, return geometry, stacje, transformacja i ustawienie nad/pod celem | Dedykowany routing dodawany w tym etapie. Istniejący edytor obsługuje stacje i placement; pełna edycja pozostałych wymiarów nadal do wykonania. |
-| Antenna / `object.antenna` | Grupuje Conductor, porty, solve, projections, drives, spectra | Nawigacja i tworzenie dzieci | Obecnie nieselektowalny kontener. Jego historyczny route do Regional field drive nie jest podsumowaniem kompozycji; trzeba rozdzielić przy usunięciu legacy routingu. |
-| Conductor / `object.antenna.conductor` | Przewodność, materiał, signal/return IDs, terminale, siatka przewodnika i transport | Materiał/przewodność, terminale i polityka siatki; przejście do geometrii | Obecnie pokazuje geometrię i edytory stacji/placement. Pozostają skrótem zgodności do czasu migracji istniejących workflow; docelowym właścicielem geometrii jest Geometry. Nie dublować nowych edytorów. |
-| Port / `object.antenna.port` | Port ID, transport, normalizacja, wszystkie gałęzie, terminale, signed weights, walidacja | Dodawanie/edycja/usuwanie portów i gałęzi, wybór istniejących terminali | Obecny dedykowany panel jest read-only. Wymagany autorujący formularz oraz walidacja referencji i bilansu. |
+| Geometry / `object.antenna.geometry` | CPW/microstrip, części, rzeczywiste wymiary i stacje, transformacja, odstęp od odbiorcy | Długość/grubość, szerokości/szczeliny, return geometry, stacje, transformacja i ustawienie nad/pod celem | Dedykowany panel edytuje stacje i placement, długość/grubość oraz właściwe dla microstripu wymiary powrotu i pełny obwód 3D ze źródłem w wejściu. CPW ma osobny zestaw parametrów. Kontrole authoringu i geometrii nie kwalifikują obliczonego prądu ani pola. |
+| Antenna / `object.antenna` | Grupuje Conductor, porty, solve, projections, drives, spectra | Nawigacja i tworzenie dzieci | Wybieralny węzeł z własnym podsumowaniem kompozycji i nawigacją do dedykowanych paneli. Tworzenie dzieci pozostaje w Conductor i Field solve; Regional field drive ma osobną trasę. Dowody zakresu poniżej z 17.10.2026. |
+| Conductor / `object.antenna.conductor` | Przewodność, materiał, signal/return IDs, terminale, siatka przewodnika i transport | Materiał/przewodność, terminale i polityka siatki; przejście do geometrii | Dedykowany widok pokazuje części i materiały; AntennaConductorAuthoring zawiera przypisania materiałowe i tworzenie portu, z osobnymi szkicami i wspólną ochroną nawigacji. Geometria i placement mają własny panel, dostępny przez Open Geometry; polityka siatki przez Open Mesh Policy. Zapis konfiguracji nie jest dowodem aktualności siatki ani solve. |
+| Port / `object.antenna.port` | Port ID, transport, normalizacja, wszystkie gałęzie, terminale, signed weights, walidacja | Dodawanie/edycja/usuwanie portów i gałęzi, wybór istniejących terminali | Jeden dedykowany edytor gałęzi korzysta z inventory terminali. Osobna akcja usunięcia nie przejmuje sesji Apply/Discard i odmawia przy szkicu, pending lub zależnościach. Kontrolowane regresje authoringu nie kwalifikują fizycznego bilansu źródła. |
 | Field solve / `object.antenna.solution` | Model, porty, transport, sampling domain, targets, mesh/solver policy, outputy, runtime i provenance | Konfiguracja i samodzielne obliczenie anteny bez LLG; publikacja i reuse zgodnie z runtime | Edycja targets i kompozytory istnieją; większość konfiguracji jest read-only. Sampling domain nie jest tym samym co target list. Wymagany rzeczywisty lifecycle komendy i pole błędu. |
-| Projection / `object.antenna.projection` | Powiązanie opublikowanej bazy z konkretnym targetem/regionem, carrier identity, podpisy | Wybór/edycja odbiorcy i jawna publikacja zgodnej projekcji | Obecnie read-only; tworzenie projection+drive jest skrótem przy Solution. Nie nazywać samej definicji gotowym wynikiem. |
-| Drive / `object.antenna.drive` | Projection/port, prąd, waveform, pasmo, aktywacja w etapach i jednostki | Prąd i funkcja czasu; powiązania, aktywacja, włącz/wyłącz | Edytor waveform istnieje. Powiązania projection/port wymagają pełnej edycji. Prąd nie jest amplitudą B regionalnego źródła. |
-| Spectrum / `object.antenna.spectrum` | Source FFT, siatka k, komponent, okno, sampling plane, normalizacja, piki, provenance | Konfiguracja/edycja requestu, wykonanie analizy, wybór widoku/eksport | Heatmap payloadu istnieje; tworzenie requestu jest przy Solution, edycja istniejącego requestu do wdrożenia. Nie utożsamiać FFT źródła z odpowiedzią spinową. |
-| Visualization / `object.antenna.visualization` | Wybrany wynik, quantity, komponent/moduł, carrier, jednostka, czas/port, legenda | Te same grupy display co inne obiekty: powierzchnia, wektory, zakres, paleta, clipping, widoczność i kamera | Obecnie tylko bounded preview ośmiu próbek. Wspólny pełny renderer V/J/H i dostosowanie katalogu do owner/carrier nadal do wdrożenia. |
+| Projection / `object.antenna.projection` | Powiązanie opublikowanej bazy z konkretnym targetem/regionem, carrier identity, podpisy | Wybór/edycja odbiorcy i jawna publikacja zgodnej projekcji | Edytor istniejącej projekcji obsługuje target, jawne Source binding oraz usunięcie bez kaskady. Model odmawia zmiany źródła przy niezgodnym porcie zależnego drive. Tworzenie projection+drive pozostaje przy Solution. Regresja dwóch anten jest przygotowana, ale jeszcze niewykonana; definicja nie jest gotowym wynikiem. |
+| Drive / `object.antenna.drive` | Projection/port, prąd, waveform, pasmo, aktywacja w etapach i jednostki | Prąd i funkcja czasu; powiązania, aktywacja, włącz/wyłącz | Edytor obsługuje waveform, prąd, aktywację i jawną parę projection/port; wcześniejszy smoke rzeczywistego authoringu obejmuje jej zmianę. Nie jest to dowód wykonania Relax/Run ani poprawności pola. Prąd nie jest amplitudą B regionalnego źródła. |
+| Spectrum / `object.antenna.spectrum` | Source FFT, siatka k, komponent, okno, sampling plane, normalizacja, piki, provenance | Konfiguracja/edycja requestu, wykonanie analizy, wybór widoku/eksport | Istniejący request spatial_fft ma edytor targetu, Source binding, płaszczyzny, próbkowania, okna, komponentu i normalizacji oraz usuwanie. Wykres obsługuje dane zespolone i unieważnia payload po zmianie konfiguracji. Pozostałe tryby mają jawne ograniczenia; rzeczywisty Relax→widmo poprzeczne pozostaje niezweryfikowany. FFT źródła nie jest odpowiedzią spinową. |
+| Visualization / `object.antenna.visualization` | Wybrany wynik, quantity, komponent/moduł, carrier, jednostka, czas/port, legenda | Te same grupy display co inne obiekty: powierzchnia, wektory, zakres, paleta, clipping, widoczność i kamera | Panel korzysta ze wspólnego VisualizationInspectorOverview; istnieją wybór wyniku, rozróżnienie raw/per-A, kontrola owner/carrier oraz historyczna ścieżka artifact-field. Kontrolowane regresje nie zastępują pozytywnego odczytu V/J/H z rzeczywistego solve, końcowych kadrów WebGL i zimnego otwarcia. Te bramki pozostają otwarte. |
 | Regional field drive / `object.antenna.regional` | Jawnie narzucone regionalne pole i jego waveform | Edycja regionalnego źródła, migracja legacy | Oddzielny model źródła. Nie zastępuje portu, current solve ani rozwiązania pola przewodnika; UI musi to wyraźnie nazwać. |
 | Physics / dzieci jawnego grafu | Faktycznie skonfigurowane moduły i ich parametry | Wyłącznie parametry danego modułu | Nie dodawać magnetyzacji, LLG ani transportu przez domysł z nazwy/typu. |
 
@@ -195,3 +195,57 @@ zero. Ten punkt pozostaje otwarty i wymaga regresji wyboru antena ↔ ferromagne
 
 Cały kontrakt inspektorów oraz pełna wizualizacja V/J/H pozostają nieukończone.
 Ten etap nie zamyka sześciu bramek wymienionych powyżej.
+
+## Dowody etapu kompozycji i pojedynczego edytora portu — 17.10.2026
+
+Główny węzeł Antenna otwiera teraz własny Inspector z grupami Conductor,
+Ports, Field solves, Projections, Current drives i Source spectra. Linki
+pochodzą z kanonicznego buildera Explorera, a kliknięcie ponownie sprawdza
+aktualną scenę i scope. Regional field drive zachowuje oddzielny model i panel.
+Podsumowanie pokazuje konfigurację, bez sugerowania opublikowanego wyniku.
+
+Port ma dokładnie jeden formularz edycji. Akcja usunięcia obserwuje jego
+sesję, ale jej nie rejestruje: globalne Apply/Discard nadal należą do edytora.
+Szkic, trwający zapis i istniejące zależności blokują usunięcie bez kaskady.
+Regresja potwierdza zachowanie nowszego szkicu, fokusu, przewinięcia i tożsamości
+panelu przez pending/ACK, bez zmian disabled/opacity niepowiązanych pól.
+
+Dowody w `storage/builds/antenna-equilibrium-integration--8af052fe52d9cfb4`:
+
+| Kontrola | Receipt / wynik | Zakres |
+|---|---|---|
+| Produkcyjne źródła TypeScript | `windows-control-room-source-check/production-source/d0e8e8dc44ae46b686e484b01d5c00d4/receipt.json` — PASS | Bez kompilowania testów jednostkowych; późniejsze zmiany fixture i smoke mają odrębną kontrolę lint/browser |
+| Port | `windows-control-room-browser-fixture/antenna-port-editor-browser/cedd8dfd96d241b78541fabfbfbb9d14/receipt.json` — 26 kontroli PASS | Pojedynczy edytor, inventory, globalne Apply/Discard, pending/ACK i usuwanie bez kaskady |
+| Kompozycja, CPW i microstrip | `windows-control-room-browser-fixture/antenna-microstrip-stations-browser/b753c31151c4481da98ddf244306b75e/receipt.json` — 45 kontroli PASS | Kanoniczny routing kompozycji, Conductor/Regional/Geometry i istniejący authoring; kontrolowany transport |
+
+Końcowy ukierunkowany ESLint ośmiu zmienionych plików TS zakończył się exit 0,
+bez ostrzeżeń, na kopii bajtowo identycznej z checkoutem. Kontrole przeglądarkowe
+potwierdzają niezmienność źródeł i zamknięcie własnych serwerów. Nie są dowodem
+wykonania solvera, rzeczywistych pól V/J/H, kontekstu WebGL ani cold reopen.
+
+Nowe mapowanie źródeł: `AntennaCompositionSummaryPanel` w
+`apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionSummaryPanel.tsx`
+korzysta z `antennaNavigationLinks` w
+`apps/control-room/src/modules/explorer/antennaNavigation.ts`;
+`AntennaResourceEditor` i jego prywatny `AntennaResourceEditSession` zachowują
+jednego właściciela sesji edycji portu.
+
+
+## Nawigacja przewodnika podczas odświeżania — 17.10.2026
+
+Przyciski Open Geometry i Open Mesh Policy korzystają z kanonicznych tras
+Explorera. Handler ponownie sprawdza bieżącą scenę i scope; unieważniona
+rewizja nie pozwala przejść do zachowanego celu przed potwierdzeniem GET.
+Nie dodano osobnego loadera ani modelu selekcji.
+
+Regresja CPW/microstrip zakończyła się 49 kontrolami PASS:
+`windows-control-room-browser-fixture/antenna-microstrip-stations-browser/2499e328e47445c39c3d832e10b6c164/receipt.json`
+w tym samym storage worktree co dowody powyżej. Nowe przypadki obejmują
+kliknięcie bezpośrednio po invalidacji przed renderem React, blokadę obu
+przycisków podczas wstrzymanego GET, niezmienioną selekcję i brak POST,
+a następnie działającą nawigację Geometry oraz kanoniczny wybór Mesh.
+To kontrolowany transport, bez dowodu rzeczywistej zmiany sesji ani solvera.
+
+Produkcyjne typy: `windows-control-room-source-check/production-source/07f4590399eb46c1a042a0500a5100e1/receipt.json`
+— PASS. Ukierunkowany ESLint panelu na bajtowo zgodnej kopii źródeł: exit 0,
+zero ostrzeżeń; testów jednostkowych nie kompilowano.

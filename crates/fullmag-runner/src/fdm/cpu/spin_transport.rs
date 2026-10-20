@@ -978,7 +978,7 @@ impl FdmSpinTransportWorkflow {
         &mut self,
         magnetization: &[[f64; 3]],
         stage_time_s: f64,
-        stage_error_budget: Option<TransportStageErrorBudget>,
+        stage_error_budget: Option<TransportStageErrorBudget<'_>>,
         previous_stage: Option<&FdmSpinTransportEvaluation>,
     ) -> Result<FdmSpinTransportEvaluation, RunError> {
         self.evaluate_stage_internal(
@@ -1011,7 +1011,7 @@ impl FdmSpinTransportWorkflow {
         &mut self,
         magnetization: &[[f64; 3]],
         stage_time_s: f64,
-        stage_error_budget: Option<TransportStageErrorBudget>,
+        stage_error_budget: Option<TransportStageErrorBudget<'_>>,
         previous_stage: Option<&FdmSpinTransportEvaluation>,
         coupled_stage: Option<(CoupledImexArk2Stage, f64)>,
     ) -> Result<FdmSpinTransportEvaluation, RunError> {
@@ -1908,7 +1908,7 @@ fn solve_coupled_module(
     magnetization: &[[f64; 3]],
     stage_time_s: f64,
     accepted: Option<&FdmSpinTransportModuleSnapshot>,
-    stage_error_budget: Option<TransportStageErrorBudget>,
+    stage_error_budget: Option<TransportStageErrorBudget<'_>>,
     previous_stage: Option<&FdmSpinTransportModuleSnapshot>,
 ) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
     let state_revision = state_revision(magnetization);
@@ -1999,7 +1999,8 @@ fn solve_coupled_module(
                 warm_start.as_ref(),
                 &CoupledTransportOuterErrorBudget {
                     dt_s: budget.dt_s,
-                    embedded_lte_m: budget.embedded_lte_m,
+                    embedded_error_m: budget.embedded_error_m,
+                    frozen_cells: budget.frozen_cells,
                     eta_transport: descriptor.nonlinear_solver.eta_transport,
                     previous_transport_torque_per_s: previous.transport_torque_per_s.clone(),
                 },
@@ -5675,7 +5676,8 @@ mod tests {
                 1e-12,
                 Some(TransportStageErrorBudget {
                     dt_s: 1e-12,
-                    embedded_lte_m: 1.0,
+                    embedded_error_m: &vec![[1.0, 0.0, 0.0]; plan.initial_magnetization.len()],
+                    frozen_cells: None,
                 }),
                 Some(&predictor),
             )

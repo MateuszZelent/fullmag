@@ -2,6 +2,7 @@ import configparser
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import unittest
 from unittest.mock import mock_open, patch
@@ -228,15 +229,41 @@ jobs:
 
     def test_rust_contracts_install_python_runtime_dependencies(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
-        rust_job = workflow.split("  rust-contracts:\n", 1)[1].split(
-            "\n  generated-api-determinism:", 1
-        )[0]
+        rust_steps = yaml.safe_load(workflow)["jobs"]["rust-contracts"]["steps"]
 
-        self.assertIn("uses: actions/setup-python@v7", rust_job)
-        install = "python -m pip install -e packages/fullmag-py"
-        run = "./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts"
-        self.assertIn(install, rust_job)
-        self.assertLess(rust_job.index(install), rust_job.index(run))
+        self.assertIn(
+            "actions/setup-python@v7",
+            [step.get("uses") for step in rust_steps],
+        )
+        install_index = next(
+            index
+            for index, step in enumerate(rust_steps)
+            if step.get("id") == "install-python-runtime"
+        )
+        run_index = next(
+            index
+            for index, step in enumerate(rust_steps)
+            if "rust-quantity-api-cli-contracts" in step.get("run", "")
+        )
+        self.assertLess(install_index, run_index)
+
+        install_commands = [
+            line.strip()
+            for line in rust_steps[install_index].get("run", "").splitlines()
+            if line.strip().startswith("python -m pip install ")
+        ]
+        self.assertEqual(len(install_commands), 1)
+        self.assertEqual(
+            shlex.split(install_commands[0]),
+            [
+                "python",
+                "-m",
+                "pip",
+                "install",
+                "-e",
+                "packages/fullmag-py[meshing]",
+            ],
+        )
 
     def test_rust_contracts_resolve_artifact_storage_before_running_tests(self) -> None:
         workflow = yaml.safe_load((ROOT / ".github/workflows/bootstrap.yml").read_text())

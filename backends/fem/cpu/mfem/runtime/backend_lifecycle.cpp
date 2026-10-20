@@ -12,6 +12,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
+#include "core/fem_mesh.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -22,8 +23,12 @@ namespace fullmag::fem {
 bool initialize_backend_runtime(
     Context &ctx,
     const fullmag_fem_plan_desc &plan,
-    std::string &error)
+    std::string &error,
+    const fullmag_fem_mixed_body_certificate_v2 *mixed_body_certificate_v2)
 {
+    if (!validate_mixed_body_certificate_v2(plan, mixed_body_certificate_v2, error)) {
+        return false;
+    }
     if (!context_from_plan(ctx, plan, error)) {
         return false;
     }

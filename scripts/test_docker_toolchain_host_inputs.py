@@ -1,0 +1,75 @@
+"""Exercise Compose dotenv interpolation without a daemon or image build."""
+from pathlib import Path
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+from docker_dev_host import docker_argv
+
+
+class ToolchainHostInputsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if shutil.which("docker") is None:
+            raise unittest.SkipTest("Docker CLI is unavailable")
+        try:
+            version = subprocess.run(docker_argv("compose", "version", "--short"),
+                                     text=True, capture_output=True, timeout=20)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+            raise unittest.SkipTest(f"Docker Compose parser is unavailable: {error}") from error
+        if version.returncode:
+            raise unittest.SkipTest("Docker Compose parser is unavailable: " + version.stderr.strip())
+        cls.compose = Path(__file__).resolve().parents[1] / "compose.toolchain.yaml"
+        # Clear only inputs interpolated by this recipe. Preserve DOCKER_HOST,
+        # DOCKER_CONTEXT and other endpoint settings selected by the operator.
+        cls.inputs = set(re.findall(r"\$\{(FULLMAG_[A-Z0-9_]+)", cls.compose.read_text()))
+
+    def configuration(self, overrides):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            values = {
+                "FULLMAG_COMPOSE_PROJECT": "fullmag-toolchain-input-test",
+                "FULLMAG_TOOLCHAIN_IMAGE": "fullmag/toolchain-input-test:local",
+                "FULLMAG_TOOLCHAIN_CONTEXT": str(fixture),
+                "FULLMAG_BUILD_CONTROL_VOLUME": "fullmag-toolchain-input-test-control",
+                "FULLMAG_PROJECT_STORAGE_ROOT": str(fixture / "synthetic-storage"),
+                **overrides,
+            }
+            (fixture / ".env").write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+            environment = {key: value for key, value in os.environ.items() if key not in self.inputs}
+            configured = subprocess.run(
+                docker_argv("compose", "--project-directory", str(fixture),
+                            "-f", str(self.compose), "--profile", "toolchain",
+                            "config", "--format", "json"),
+                cwd=fixture, env=environment, text=True, capture_output=True, timeout=30)
+            self.assertEqual(configured.returncode, 0, configured.stderr)
+            return json.loads(configured.stdout)["services"]["fem-gpu-toolchain"]["build"]["args"]
+
+    def test_default_mfem_concurrency_and_cuda_architectures(self):
+        args = self.configuration({})
+        self.assertEqual(args["FULLMAG_MFEM_BUILD_JOBS"], "1")
+        self.assertEqual(args["FULLMAG_MFEM_CUDA_FAST_COMPILE"], "0")
+        self.assertEqual(args["FULLMAG_CUDA_ARCHITECTURES"], "80-real;89-real;90-real;90-virtual")
+        self.assertEqual(args["FULLMAG_PETSC_CUDA_ARCHITECTURES"], "80,89,90")
+
+    def test_dotenv_passes_selected_gpu_targets_and_jobs_to_builder(self):
+        selected = {
+            "FULLMAG_CUDA_ARCHITECTURES": "120-real;120-virtual",
+            "FULLMAG_HYPRE_GPU_ARCHITECTURES": "120",
+            "FULLMAG_PETSC_CUDA_ARCHITECTURES": "120",
+            "FULLMAG_MFEM_BUILD_JOBS": "2",
+            "FULLMAG_MFEM_CUDA_FAST_COMPILE": "mid",
+            "FULLMAG_HYPRE_MEMORY_VARIANT": "cuda_async",
+            "FULLMAG_CUDA_BASE_IMAGE": "example/cuda@sha256:" + "a" * 64,
+            "FULLMAG_CUDA_BASE_IMAGE_DIGEST": "a" * 64,
+        }
+        args = self.configuration(selected)
+        self.assertEqual({key: args[key] for key in selected}, selected)
+
+
+if __name__ == "__main__":
+    unittest.main()

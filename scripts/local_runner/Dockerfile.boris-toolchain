@@ -1,0 +1,11 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER 0
+COPY wheel-bundle/ /opt/fullmag-boris-toolchain/wheel-bundle/
+COPY bundle/ /opt/fullmag-boris-toolchain/bundle/
+COPY context.json boris_toolchain.py Dockerfile /opt/fullmag-boris-toolchain/
+ENV PYTHONDONTWRITEBYTECODE=1 MPLBACKEND=Agg MPLCONFIGDIR=/tmp/fullmag-matplotlib PYTHONPATH=/opt/fullmag-boris-python
+RUN --network=none python3 -B /opt/fullmag-boris-toolchain/boris_toolchain.py install-apt
+RUN --network=none python3 -B /opt/fullmag-boris-toolchain/boris_toolchain.py install-wheels
+RUN --network=none python3 -B /opt/fullmag-boris-toolchain/boris_toolchain.py runtime-preflight --output-dir /tmp/fullmag-toolchain-proof
+USER 65532:65532

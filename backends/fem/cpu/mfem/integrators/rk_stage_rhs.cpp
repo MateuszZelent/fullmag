@@ -15,6 +15,7 @@
 #include "cpu/mfem/interactions/transport_stage.hpp"
 #include "cpu/mfem/integrators/llg_rhs.hpp"
 #include "cpu/mfem/runtime/phase_timings.hpp"
+#include "cpu/mfem/runtime/step_metrics.hpp"
 #include "fem_common.hpp"
 
 namespace fullmag::fem {
@@ -63,7 +64,7 @@ bool evaluate_rk_stage_rhs(
                     ctx.material_fields.material.gyromagnetic_ratio, ctx.material_fields.material.damping,
                     ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
                     ctx.base_plan.precession_enabled,
-                    out_k, max_rhs);
+                    out_k, max_rhs, &ctx.mesh.magnetic_node_mask);
         add_stt_rhs_aos(ctx, m_state, out_k, max_rhs, ws.stt);
         add_sot_rhs_aos(
             ctx, m_state, out_k, max_rhs, evaluation_time_s, ctx.zeeman.stage_start_time_s);
@@ -72,6 +73,7 @@ bool evaluate_rk_stage_rhs(
         if (ctx.frozen_spins.enabled()) {
             ctx.frozen_spins.zero_frozen_rhs(out_k);
         }
+        max_rhs = max_norm_aos_masked(out_k, ctx.mesh.magnetic_node_mask);
     }
     if (out_max_rhs != nullptr) {
         *out_max_rhs = max_rhs;

@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -159,6 +160,50 @@ const char *first_unsupported_elementwise_ms_cpu_owner(const Context &ctx)
 }
 
 } // namespace
+
+bool validate_material_field_spans(
+    const fullmag_fem_plan_desc &plan,
+    std::string &error)
+{
+    struct Span {
+        const double *pointer;
+        uint64_t length;
+        const char *name;
+    };
+    const Span spans[] = {
+        {plan.ms_field, plan.ms_field_len, "Ms_field"},
+        {plan.a_field, plan.a_field_len, "A_field"},
+        {plan.alpha_field, plan.alpha_field_len, "alpha_field"},
+        {plan.ku_field, plan.ku_field_len, "Ku_field"},
+        {plan.ku2_field, plan.ku2_field_len, "Ku2_field"},
+        {plan.anisotropy_axis_x_field, plan.anisotropy_axis_x_field_len,
+         "anisotropy_axis_x_field"},
+        {plan.anisotropy_axis_y_field, plan.anisotropy_axis_y_field_len,
+         "anisotropy_axis_y_field"},
+        {plan.anisotropy_axis_z_field, plan.anisotropy_axis_z_field_len,
+         "anisotropy_axis_z_field"},
+        {plan.dind_field, plan.dind_field_len, "Dind_field"},
+        {plan.dbulk_field, plan.dbulk_field_len, "Dbulk_field"},
+        {plan.kc1_field, plan.kc1_field_len, "Kc1_field"},
+        {plan.kc2_field, plan.kc2_field_len, "Kc2_field"},
+        {plan.kc3_field, plan.kc3_field_len, "Kc3_field"},
+        {plan.ms_element_field, plan.ms_element_field_len, "Ms_element_field"},
+        {plan.a_element_field, plan.a_element_field_len, "A_element_field"},
+    };
+    for (const Span &span : spans) {
+        if (span.length > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            error = std::string("material field '") + span.name +
+                " length exceeds addressable memory";
+            return false;
+        }
+        if (span.length != 0u && span.pointer == nullptr) {
+            error = std::string("material field '") + span.name +
+                "' pointer is null for non-zero length";
+            return false;
+        }
+    }
+    return true;
+}
 
 void initialize_material_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan) {
     ctx.material_fields.material = plan.material;

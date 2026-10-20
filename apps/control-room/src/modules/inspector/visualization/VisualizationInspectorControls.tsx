@@ -1,6 +1,6 @@
 "use client";
 
-import { EyeOff } from "lucide-react";
+import { ArrowUpRight, EyeOff } from "lucide-react";
 import React, { type ReactNode } from "react";
 
 import { nextVisualizationRadioValue } from "../panels/ObjectVisualizationPanelAccessibility";
@@ -12,8 +12,10 @@ export type VisualizationRenderModeValue =
   | "points"
   | "off";
 
+type RenderModeOption = VisualizationRenderModeValue | "vectors";
+
 const RENDER_MODE_LABELS: Record<
-  VisualizationRenderModeValue,
+  RenderModeOption,
   { label: string; subLabel?: string }
 > = {
   surface: { label: "Shaded" },
@@ -21,6 +23,7 @@ const RENDER_MODE_LABELS: Record<
   wireframe: { label: "Wireframe" },
   points: { label: "Points" },
   off: { label: "Off" },
+  vectors: { label: "Vectors" },
 };
 
 export interface VisualizationDisplayPassItem {
@@ -58,16 +61,16 @@ export function VisualizationDisplayPassesControl({
   );
 }
 
-export function VisualizationRenderModeControl({
+export function VisualizationRenderModeControl<T extends RenderModeOption>({
   disabled,
   options,
   value,
   onValueChange,
 }: {
   disabled: boolean;
-  options: readonly VisualizationRenderModeValue[];
-  value: VisualizationRenderModeValue;
-  onValueChange: (value: VisualizationRenderModeValue) => void;
+  options: readonly T[];
+  value: T;
+  onValueChange: (value: T) => void;
 }) {
   const activeIndex = options.indexOf(value);
   const tabStopIndex = activeIndex >= 0 ? activeIndex : 0;
@@ -131,8 +134,9 @@ function VisualizationRenderModeIcon({
   mode,
 }: {
   active: boolean;
-  mode: VisualizationRenderModeValue;
+  mode: RenderModeOption;
 }) {
+  if (mode === "vectors") return <ArrowUpRight size={20} strokeWidth={1.5} />;
   if (mode === "off") return <EyeOff size={20} strokeWidth={1.5} />;
   if (mode === "points") {
     return (

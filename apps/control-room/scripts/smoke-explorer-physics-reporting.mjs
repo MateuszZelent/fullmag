@@ -231,6 +231,45 @@ try {
     await capture("explorer-physics-reporting-explicit-overrides.png");
   });
 
+  await step("antenna-readiness-reasons-and-source-spectrum", async () => {
+    await page.getByRole("button", { name: "Antenna readiness and source spectrum", exact: true }).click();
+    const row = suffix => tree.locator(`[data-node-id="model:object:antenna:antenna:${suffix}"]`);
+    const description = row => row.locator(".fm-explorer-tree-row__description").innerText();
+    const configured = row("port:configured-port"), broken = row("port:broken-port"), solve = row("solution:blocked-solve");
+    await configured.waitFor();
+    const regional = row("regional");
+    assert.equal(await regional.getAttribute("data-status"), "unavailable");
+    assert.equal(await regional.locator(".fm-explorer-tree-row__badge").innerText(), "not configured");
+    assert.match(await description(regional), /No regional field source is assigned/);
+    assert.equal(await configured.getAttribute("aria-describedby"), await configured.locator(".fm-explorer-tree-row__description").getAttribute("id"));
+    assert.equal(await configured.getAttribute("data-status"), "ready");
+    assert.match(await description(configured), /qualification still require execution/);
+    assert.match(await configured.locator(".fm-explorer-tree-row__badge").innerText(), /configured/);
+    assert.equal(await broken.getAttribute("data-status"), "warning");
+    assert.equal(await broken.locator(".fm-explorer-tree-row__status").textContent(), "Needs review");
+    assert.match(await description(broken), /missing-transport.*missing or ambiguous/);
+    assert.equal(await solve.getAttribute("data-status"), "validation-blocked");
+    assert.equal(await solve.locator(".fm-explorer-tree-row__status").textContent(), "Blocked");
+    assert.match(await description(solve), /missing current transport/);
+    assert.equal(await row("spectrum:source-k").locator(".fm-explorer-tree-row__label").innerText(), "Source spectrum 1");
+    assert.match(await description(row("spectrum:source-k")), /Spectrum request ID: source-k/);
+    assert.match(await description(row("spectrum:source-k")), /not a measured magnetization response/);
+    await solve.scrollIntoViewIfNeeded();
+    await capture("explorer-antenna-readiness.png");
+  });
+
+  await step("regional-source-status-requires-explicit-binding", async () => {
+    await page.getByRole("button", { name: "Explicit regional source bindings", exact: true }).click();
+    for (const [objectId, status, badge] of [["active", "ready", "configured"], ["disabled", "degraded", "disabled"], ["legacy", "warning", "migration required"]]) {
+      const row = tree.locator(`[data-node-id="model:object:${objectId}:antenna:regional"]`);
+      await row.waitFor();
+      assert.equal(await row.getAttribute("data-status"), status);
+      assert.equal(await row.locator(".fm-explorer-tree-row__badge").innerText(), badge);
+      assert.match(await row.locator(".fm-explorer-tree-row__description").textContent(), objectId === "legacy" ? /migrate it explicitly/ : /does not solve conductor current/);
+    }
+    await capture("explorer-explicit-regional-sources.png");
+  });
+
   assert.ok(report.api_requests.some((request) => request.path === "/v2/sessions"));
   report.session_status_get_count = report.api_requests.filter(
     (request) => request.path === "/v2/sessions/current/status",

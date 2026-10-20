@@ -3,7 +3,7 @@ name: eigensolve-ui-method-contracts
 on:
   workflow_dispatch:
   push:
-    branches: ['codex/**']
+    branches: [master, main]
     paths:
       - 'apps/control-room/src/shared/analysis-charts/frequencyRenderModels*'
       - 'apps/control-room/src/shared/analysis-charts/chartRenderer*'
@@ -112,6 +112,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   modal-observables:

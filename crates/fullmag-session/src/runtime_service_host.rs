@@ -34,6 +34,11 @@ pub struct RuntimeServiceHostExecution {
     pub schema_version: String,
     pub ledger_root: PathBuf,
     pub policy: HostResourceLedgerPolicy,
+    /// Digest of the canonical immutable host-readiness blob used by every
+    /// strict runtime-readiness admission and launch. Legacy bindings may
+    /// omit it so old archives remain readable; v2/v3 execution cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_generation_sha256: Option<String>,
     pub compute_max_concurrency: usize,
     pub preparation_max_concurrency: usize,
     pub compute_placements: BTreeMap<String, RuntimeServiceHostPlacement>,
@@ -58,6 +63,11 @@ impl RuntimeServiceHostExecution {
             bail!("host ledger root must be absolute without parent traversal");
         }
         self.policy.validate()?;
+        if let Some(digest) = self.runtime_generation_sha256.as_deref() {
+            crate::types::validate_runtime_generation_sha256(digest)?;
+        } else if self.policy.requires_runtime_readiness() {
+            bail!("runtime-readiness host execution requires its pinned runtime_generation_sha256");
+        }
         if !(1..=MAX_HOST_SCHEDULER_CONCURRENCY).contains(&self.compute_max_concurrency)
             || !(1..=MAX_HOST_SCHEDULER_CONCURRENCY).contains(&self.preparation_max_concurrency)
         {

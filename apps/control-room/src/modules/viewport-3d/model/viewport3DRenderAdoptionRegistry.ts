@@ -94,6 +94,10 @@ export interface Viewport3DRenderAdoptionRegistry {
   clearTarget(targetId: string): void;
   getLifecycleStats(): Viewport3DRenderAdoptionRegistryLifecycleStats;
   latestActiveAdoption(input: {
+    carrierId?: string;
+    fieldBufferId?: string;
+    vectorBuildKey?: string;
+    requestScopeEpoch?: string;
     sessionEpoch: string;
     sessionId: string;
   }): Viewport3DRenderAdoptionReceipt | null;
@@ -388,7 +392,7 @@ export function createViewport3DRenderAdoptionRegistry({
         targetReceiptCount,
       };
     },
-    latestActiveAdoption({ sessionEpoch, sessionId }) {
+    latestActiveAdoption({ sessionEpoch, sessionId, carrierId, fieldBufferId, vectorBuildKey, requestScopeEpoch }) {
       let latest: Viewport3DRenderAdoptionReceipt | null = null;
       for (const owners of activePasses.values()) {
         for (const owned of owners.values()) {
@@ -396,6 +400,10 @@ export function createViewport3DRenderAdoptionRegistry({
           if (
             receipt.sessionEpoch !== sessionEpoch ||
             receipt.sessionId !== sessionId ||
+            (requestScopeEpoch !== undefined && receipt.requestScopeEpoch !== requestScopeEpoch) ||
+            (carrierId !== undefined && receipt.carrierId !== carrierId) ||
+            (fieldBufferId !== undefined && receipt.fieldBufferId !== fieldBufferId) ||
+            (vectorBuildKey !== undefined && receipt.vectorBuildKey !== vectorBuildKey) ||
             !receipt.fieldBufferId ||
             !receipt.resourceKey
           ) {

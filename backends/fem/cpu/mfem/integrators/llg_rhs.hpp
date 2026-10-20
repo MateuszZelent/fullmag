@@ -24,8 +24,11 @@ void normalize_aos_field(std::vector<double> &m_xyz);
  *   dm/dt = -gamma/(1+alpha_i^2) [p m x H + alpha_i m x (m x H)]
  *
  * where `p` is 1 when `precession_enabled` is true and 0 for pure damping
- * relaxation. Optional per-node damping is read from `alpha_field`. The
- * function returns the largest RHS vector norm through `max_rhs`.
+ * relaxation. Optional per-node damping is read from `alpha_field`. When
+ * `magnetic_node_mask` is non-empty, inactive nodes receive a zero RHS and
+ * are excluded from `max_rhs`; an empty mask means that every node is active.
+ * The function returns the largest active-node RHS vector norm through
+ * `max_rhs`.
  */
 void llg_rhs_aos(
     const std::vector<double> &m_xyz,
@@ -35,7 +38,8 @@ void llg_rhs_aos(
     const std::vector<double> *alpha_field,
     bool precession_enabled,
     std::vector<double> &rhs_xyz,
-    double &max_rhs);
+    double &max_rhs,
+    const std::vector<uint8_t> *magnetic_node_mask = nullptr);
 
 /*
  * Zero an AOS vector field on nodes marked nonmagnetic.

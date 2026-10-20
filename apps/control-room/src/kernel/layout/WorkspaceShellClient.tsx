@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 
 import {
   SimulationStartupOverlayView,
   useSimulationStartupOverlayState,
 } from "./SimulationStartupOverlay";
 import { useSessionCollection } from "../resources/useSessionCollection";
-import { useSessionResourceIdentity } from "../resources/useSessionStatus";
+import { useSessionBootstrapStatus } from "../resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 import { WorkspaceRenderProfiler } from "../performance/reactRenderProfiler";
 import { SlotHost } from "./SlotHost";
@@ -22,10 +22,43 @@ import { useLayoutSelector } from "./useLayout";
 export function WorkspaceShellClient() {
   const sessions = useSessionCollection();
   const project = useProjectDocumentSnapshot();
-  const identity = useSessionResourceIdentity();
-  const sessionState = sessions.state === "ready" && !identity ? "loading" : sessions.state;
+  const sessionStatus = useSessionBootstrapStatus({
+    collection: sessions.resource.data,
+    enabled: sessions.state === "ready",
+  });
+  const identity = sessionStatus.identity;
+  const statusError =
+    sessions.state === "ready" &&
+    sessionStatus.status === "error" &&
+    !identity;
+  const statusInconsistent =
+    sessions.state === "ready" &&
+    sessionStatus.status === "ready" &&
+    (sessions.resource.data?.sessions.length ?? 0) > 0 &&
+    !identity;
+  const sessionState = statusError
+    ? "status-error"
+    : statusInconsistent
+      ? "status-inconsistent"
+      : sessions.state === "ready" && !identity
+        ? "loading"
+        : sessions.state;
   const sessionScopeKey = sessionRequestScopeKey(identity);
   const startOwnsPage = sessionState !== "ready" && project.state !== "ready";
+  const refetchSessions = sessions.resource.refetch;
+  const refetchStatus = sessionStatus.refetch;
+  const retryStatusAndCollection = useCallback(() => {
+    refetchSessions();
+    refetchStatus();
+  }, [refetchSessions, refetchStatus]);
+  const onRetry =
+    sessionState === "status-error"
+      ? refetchStatus
+      : sessionState === "status-inconsistent"
+        ? retryStatusAndCollection
+        : sessionState === "loading" && sessions.state === "ready"
+          ? refetchStatus
+          : refetchSessions;
 
   // The overlay is a visit, not a mode: starting or opening something, or the
   // workspace going away, ends it so it cannot reappear on top of the next one.
@@ -34,36 +67,30 @@ export function WorkspaceShellClient() {
   }, [sessionScopeKey, startOwnsPage]);
 
   if (sessionState !== "ready" && project.state === "ready") {
-    return <ProjectWorkspaceShell sessionState={sessionState} />;
+    return <ProjectWorkspaceShell sessionState={sessionState} onRetry={onRetry} />;
   }
 
-  if (sessionState !== "ready") return (
-    <>
-      <SlotHost slotId="app-menu" />
-      {sessionState === "no-session" ? (
-        <div className="fm-start-host" data-state="no-session">
-          <SlotHost slotId="start-screen" />
-        </div>
-      ) : sessionState === "error" ? (
-        <SessionCollectionError onRetry={sessions.resource.refetch} />
-      ) : (
-        <SessionCollectionLoading />
-      )}
-      {sessionState === "loading" ? null : (
-        <div className="fm-workspace-overlay-host">
-          <SlotHost slotId="overlay" />
-        </div>
-      )}
-    </>
-  );
+  // Home is the entry surface, not a session-loading state. Keep its module
+  // mounted while collection/status requests retry so a backend interruption
+  // cannot replace the page with a full-screen loading/error gate.
+  if (sessionState !== "ready") {
+    return (
+      <>
+        <SlotHost slotId="app-menu" />
+        <HomeShell state={sessionState} onRetry={onRetry} />
+      </>
+    );
+  }
 
   return <ActiveWorkspaceShell />;
 }
 
 function ProjectWorkspaceShell({
   sessionState,
+  onRetry,
 }: {
-  sessionState: "loading" | "error" | "no-session";
+  sessionState: "loading" | "error" | "status-error" | "status-inconsistent" | "no-session";
+  onRetry: () => void;
 }) {
   const kernel = useKernel();
   const panels = useLayoutSelector((layout) => layout.panelVisible);
@@ -72,7 +99,12 @@ function ProjectWorkspaceShell({
     ? "No active session. Saved project results are available independently."
     : sessionState === "error"
       ? "Session list unavailable. Saved project results remain available."
-      : "Checking for sessions. Saved project results remain available.";
+      : sessionState === "status-error"
+        ? "Current session status unavailable. Saved project results remain available."
+        : sessionState === "status-inconsistent"
+          ? "Current session does not match the session list. Saved project results remain available."
+          : "Checking for sessions. Saved project results remain available.";
+  const isError = sessionState === "error" || sessionState === "status-error" || sessionState === "status-inconsistent";
   return (
     <WorkspaceContentScopeProvider scope="project">
       <SlotHost slotId="app-menu" />
@@ -83,9 +115,10 @@ function ProjectWorkspaceShell({
       >
         <div>
           <h1 className="m-0 text-fm-sm font-semibold text-fm-primary">Saved project results</h1>
-          <p className="m-0 text-fm-xs text-fm-muted" role={sessionState === "error" ? "alert" : "status"}>{detail}</p>
+          <p className="m-0 text-fm-xs text-fm-muted" role={isError ? "alert" : "status"}>{detail}</p>
         </div>
         <div className="flex gap-2">
+          {isError ? <Button size="sm" variant="secondary" onClick={onRetry}>Retry</Button> : null}
           {!panels.left ? <Button size="sm" variant="secondary" onClick={() => kernel.layout.togglePanel("left")}>Show saved results</Button> : null}
           {!panels.right ? <Button size="sm" variant="secondary" onClick={() => kernel.layout.togglePanel("right")}>Show Inspector</Button> : null}
         </div>
@@ -98,44 +131,65 @@ function ProjectWorkspaceShell({
   );
 }
 
-function SessionCollectionLoading() {
+function HomeShell({
+  state,
+  onRetry,
+}: {
+  readonly state:
+    | "loading"
+    | "error"
+    | "status-error"
+    | "status-inconsistent"
+    | "no-session";
+  readonly onRetry: () => void;
+}) {
+  const sessionUnavailable = state !== "no-session";
+  const startScreenFallback = (
+    <StartScreenLoadingFallback mode={sessionUnavailable ? "reconnecting" : "empty"} />
+  );
+
   return (
-    <main
-      className="grid min-h-0 flex-1 place-items-center p-8"
-      id="fm-main-content" tabIndex={-1} data-state="session-loading"
-      role="status"
+    <div
+      className="fm-start-host"
+      data-state={state === "no-session" ? "no-session" : "home-session-reconnecting"}
     >
-      <section className="grid max-w-md gap-2 text-center">
-        <h1 className="font-fm-ui text-lg font-semibold text-fm-primary">
-          Checking for sessions
-        </h1>
-        <p className="text-fm-secondary">Reading the local session collection.</p>
-      </section>
-    </main>
+      {sessionUnavailable ? (
+        <div
+          className="fm-start-session-status"
+          data-session-connection="reconnecting"
+          role="status"
+        >
+          <span>Session services are reconnecting. Home remains available.</span>
+          <Button size="sm" type="button" variant="ghost" onClick={onRetry}>Retry</Button>
+        </div>
+      ) : null}
+      <SlotHost loadingFallback={startScreenFallback} slotId="start-screen" />
+      <div className="fm-workspace-overlay-host">
+        <SlotHost slotId="overlay" />
+      </div>
+    </div>
   );
 }
 
-function SessionCollectionError({ onRetry }: { readonly onRetry: () => void }) {
+function StartScreenLoadingFallback({
+  mode,
+}: {
+  readonly mode: "reconnecting" | "empty" | "overlay";
+}) {
+  const detail = mode === "reconnecting"
+    ? "Session services are reconnecting. Home remains available."
+    : mode === "empty"
+      ? "Start from an empty FDM or FEM problem, or open a project archive."
+      : "Home remains available while its module finishes loading.";
   return (
-    <div className="fm-start-host" data-state="session-error">
-      <section
-        className="border-b border-fm-border bg-fm-surface px-6 py-3"
-        role="alert"
-      >
-        <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="font-fm-ui text-lg font-semibold text-fm-danger">
-              Session list unavailable
-            </h1>
-            <p className="text-fm-secondary">
-              Fullmag could not confirm whether a local session exists. Project files remain available independently.
-            </p>
-          </div>
-          <Button type="button" onClick={onRetry}>Retry</Button>
-        </div>
-      </section>
-      <SlotHost slotId="start-screen" />
-    </div>
+    <main
+      className="grid h-full min-h-0 place-content-center gap-2 bg-fm-app p-8 text-center text-fm-primary"
+      data-start-screen-fallback={mode}
+      id="fm-main-content"
+    >
+      <h1 className="m-0 font-fm-ui text-fm-lg font-semibold">Welcome to Fullmag</h1>
+      <p className="m-0 text-fm-secondary">{detail}</p>
+    </main>
   );
 }
 
@@ -168,7 +222,10 @@ function ActiveWorkspaceShell() {
 function HomeOverlay() {
   return (
     <div className="fm-home-overlay" data-state="home-overlay">
-      <SlotHost slotId="start-screen" />
+      <SlotHost
+        loadingFallback={<StartScreenLoadingFallback mode="overlay" />}
+        slotId="start-screen"
+      />
     </div>
   );
 }

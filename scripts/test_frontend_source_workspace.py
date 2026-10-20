@@ -21,6 +21,7 @@ import fullmag_storage
 from windows import stage_workspace_frontend
 from frontend_source_workspace import (
     SourceWorkspaceError,
+    _dependency_input_paths,
     prepare_source_workspace,
     validate_dependency_workspace,
 )
@@ -372,12 +373,31 @@ class FrontendSourceWorkspaceTests(unittest.TestCase):
         source_package.write_bytes(original_source + b"\n")
         with self.assertRaises(SourceWorkspaceError):
             validate_dependency_workspace(self.repo, self.layout, self.native_workspace)
+
         source_package.write_bytes(original_source)
 
         installed_lock = self.native_workspace / "pnpm-lock.yaml"
         original_lock = installed_lock.read_bytes()
         installed_lock.write_bytes(original_lock + b"\n")
         with self.assertRaises(SourceWorkspaceError):
+            validate_dependency_workspace(self.repo, self.layout, self.native_workspace)
+
+    def test_patch_files_are_dependency_inputs(self) -> None:
+        patch = self.repo / "patches" / "next.patch"
+        patch.parent.mkdir()
+        patch.write_text("patch input\n", encoding="utf-8")
+        self.assertIn(patch, _dependency_input_paths(self.repo))
+
+    def test_removed_source_patch_rejects_orphaned_installed_patch(self) -> None:
+        source_patch = self.repo / "patches" / "next.patch"
+        source_patch.parent.mkdir()
+        source_patch.write_text("patch input\n", encoding="utf-8")
+        installed_patch = self.native_workspace / "patches" / "next.patch"
+        installed_patch.parent.mkdir()
+        installed_patch.write_text("patch input\n", encoding="utf-8")
+        source_patch.unlink()
+
+        with self.assertRaisesRegex(SourceWorkspaceError, "patch inventory.*extra=patches/next.patch"):
             validate_dependency_workspace(self.repo, self.layout, self.native_workspace)
 
     def test_workspace_from_foreign_worktree_is_rejected(self) -> None:

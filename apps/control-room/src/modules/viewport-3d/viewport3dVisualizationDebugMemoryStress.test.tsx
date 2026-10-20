@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { QuantityCatalogResource } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { EventBus } from "@/kernel/events/EventBus";
@@ -165,7 +167,7 @@ describe("Visualization Debug integrated React lifecycle stress", () => {
             carrier.samples.map((sample) => sample.componentValues.length),
           ),
         ),
-      ).toBe(8);
+      ).toBe(9);
       assertNoBinaryCarrier(snapshots);
       assertNoBinaryCarrier(observedModels);
 
@@ -530,7 +532,41 @@ function makeKernel(): KernelApi {
   };
   return {
     api: {
+      resourceCacheScope: randomUUID(),
       data: {
+        quantities: {
+          catalog: async (): Promise<QuantityCatalogResource> => ({
+            schema_version: "2.0.0",
+            quantities: [
+              ...Array.from({ length: 50 }, (_, cycle) =>
+                cycle % 2 === 0 ? `m-${cycle}` : `h-demag-${cycle}`,
+              ),
+              "m-late",
+            ].map((id) => ({
+              capability_state: "available",
+              description: "Synthetic lifecycle fixture field",
+              domain: "magnetic",
+              id,
+              interactive_preview: false,
+              label: id,
+              location: "node",
+              materializable: false,
+              materialization_state: "materialized",
+              n_comp: 16,
+              normalization_hint: "none",
+              publication_state: "interactive",
+              renderable: false,
+              requestable: true,
+              shape: "multicomponent",
+              solver_capability: "available",
+              supports_export: true,
+              supports_history: true,
+              supports_preview_2d: false,
+              supports_preview_3d: false,
+              unit: "A/m",
+            })),
+          }),
+        },
         fields: {
           meta: async (quantityId: string) => ({
             components: 16,

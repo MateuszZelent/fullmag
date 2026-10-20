@@ -218,6 +218,8 @@ void gpu_cuda_llg_rhs_kernels_are_owned_by_cuda_llg_integrator_module() {
             llg_header.find("fullmag_cuda_llg_rhs_fused(") !=
                 std::string::npos &&
             llg_header.find("bool precession_enabled") !=
+                std::string::npos &&
+            llg_header.find("const uint8_t *magnetic_node_mask") !=
                 std::string::npos,
         "GPU CUDA LLG RHS kernels header must own fused LLG RHS declarations");
     check(
@@ -236,6 +238,10 @@ void gpu_cuda_llg_rhs_kernels_are_owned_by_cuda_llg_integrator_module() {
             llg_source.find("BlockReduce<double, 256>") !=
                 std::string::npos &&
             llg_source.find("fullmag_cuda_llg_rhs_fused(") !=
+                std::string::npos &&
+            llg_source.find("magnetic_node_mask[i] == 0u") !=
+                std::string::npos &&
+            llg_source.find("dmx[i] = 0.0") !=
                 std::string::npos,
         "GPU CUDA LLG RHS kernels source must own fused RHS and block max reduction");
     check(
@@ -1014,6 +1020,8 @@ void gpu_rk_rhs_runtime_is_owned_by_cuda_rk_module() {
             llg_source.find("ctx.material_fields.material.gyromagnetic_ratio") !=
                 std::string::npos &&
             llg_source.find("ctx.material_fields.material.damping") !=
+                std::string::npos &&
+            llg_source.find("gpu.mesh_regions.magnetic_node_mask") !=
                 std::string::npos,
         "GPU CUDA RK LLG RHS dispatch source must own fused LLG RHS launch and gamma/damping/precession arguments");
     check(

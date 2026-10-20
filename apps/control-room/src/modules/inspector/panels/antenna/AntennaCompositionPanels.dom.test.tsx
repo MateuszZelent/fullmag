@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
     status: "idle" as "idle" | "loading" | "ready" | "stale" | "error",
   },
   scene: {
+    sessionScopeKey: "session=session-1&epoch=epoch-1&request_scope_epoch=instance-1%3A7",
     data: null as SceneResource | null,
     error: null as Error | null,
     refetch: vi.fn(),
@@ -104,6 +105,12 @@ vi.mock("@/kernel/resources/antennaResources", () => ({
   useAntennaSourceSpectrumResource: () => mocks.sourceSpectrum,
 }));
 
+// Related-resource navigation has its own real-browser ownership proof.
+// Keep these composition fixtures independent of the complete Explorer graph.
+vi.mock("./AntennaRelatedResources", () => ({
+  AntennaRelatedResources: () => null,
+}));
+
 // The inspection panel has its own real-browser resource/identity proof.
 vi.mock("./AntennaExternalLeadInspectionPanel", () => ({
   AntennaExternalLeadInspectionPanel: ({ authoredStageId }: { authoredStageId: string }) => (
@@ -112,10 +119,11 @@ vi.mock("./AntennaExternalLeadInspectionPanel", () => ({
 }));
 
 import { AntennaCompositionPanel } from "./AntennaCompositionPanels";
+import { AntennaGeometryPanel } from "./AntennaGeometryPanel";
 
 function committedDriveAck(transaction: {
   base_revision: number;
-  merge_patch: { solved_antenna_drives: SceneResource["solved_antenna_drives"] };
+  merge_patch: Partial<SceneResource>;
 }) {
   const revision = transaction.base_revision + 1;
   return {
@@ -142,17 +150,18 @@ afterEach(() => {
 describe("AntennaCompositionPanel runtime results", () => {
   it("authors the per-ampere source FFT from a symbolic solve output", async () => {
     mocks.scene.data = {
+      ...sceneFixture(),
       revision: 15,
-      objects: [{ id: "antenna-1" }, { id: "magnet-1" }],
+      objects: [{ id: "antenna-1", role: "antenna" }, { id: "magnet-1" }],
       antenna_field_solve_stages: [{
         id: "solve-1", source_object_id: "antenna-1", current_transport_id: "current-1",
         port_mode_ids: ["port-1"], outputs: [{ id: "basis-1", quantity: "H_ant_basis" }],
-        field_sampling_domain: { kind: "global" }, target_refs: [],
+        field_sampling_domain: { kind: "global" }, target_refs: [{ kind: "global" }],
       }],
-      antenna_port_modes: [{ id: "port-1", source_object_id: "antenna-1", current_transport_id: "current-1" }],
+      antenna_port_modes: sceneFixture().antenna_port_modes,
       antenna_spectrum_requests: [],
     } as unknown as SceneResource;
-    mocks.commitTransaction.mockResolvedValue({ scene_revision: 16 });
+    mocks.commitTransaction.mockImplementation(async transaction => committedDriveAck(transaction));
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
@@ -174,7 +183,9 @@ describe("AntennaCompositionPanel runtime results", () => {
       target.value = "magnet-1";
       await act(async () => target.dispatchEvent(new TestEvent("change", { bubbles: true })));
       for (const [label, value] of [
-        ["Plane origin", "0,0,0"], ["Axis u", "1,0,0"], ["Axis v", "0,1,0"],
+        ["Plane origin X", "0"], ["Plane origin Y", "0"], ["Plane origin Z", "0"],
+        ["Axis u X", "1"], ["Axis u Y", "0"], ["Axis u Z", "0"],
+        ["Axis v X", "0"], ["Axis v Y", "1"], ["Axis v Z", "0"],
         ["Extent u", "2e-7"], ["Extent v", "1e-7"], ["Samples u", "33"], ["Samples v", "17"],
       ]) {
         const input = find("INPUT", label);
@@ -190,7 +201,7 @@ describe("AntennaCompositionPanel runtime results", () => {
           transform: "spatial_fft",
           sampling_plane: expect.objectContaining({ sample_count_u: 33, sample_count_v: 17, interpolation: "fem_element" }),
         })] },
-      });
+      }, { sessionScopeKey: "session=session-1&epoch=epoch-1&request_scope_epoch=instance-1%3A7" });
       await act(async () => find("BUTTON", "Create source FFT request").dispatchEvent(new TestEvent("click", { bubbles: true })));
       expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
     } finally {
@@ -200,18 +211,19 @@ describe("AntennaCompositionPanel runtime results", () => {
   });
   it("creates a projection and drive atomically from the selected solve stage", async () => {
     mocks.scene.data = {
+      ...sceneFixture(),
       revision: 11,
-      objects: [{ id: "antenna-1", name: "Conductor" }, { id: "magnet-1", name: "Magnet" }],
+      objects: [{ id: "antenna-1", name: "Conductor", role: "antenna" }, { id: "magnet-1", name: "Magnet" }],
       study: { stages: [{ kind: "run", stage_id: "run-1" }] },
       antenna_field_solve_stages: [{
         id: "solve-1", source_object_id: "antenna-1", current_transport_id: "current-1",
         port_mode_ids: ["port-1"], outputs: [{ id: "basis-1", quantity: "H_ant_basis" }],
-        field_sampling_domain: { kind: "global" }, target_refs: [],
+        field_sampling_domain: { kind: "global" }, target_refs: [{ kind: "global" }],
       }],
-      antenna_port_modes: [{ id: "port-1", source_object_id: "antenna-1", current_transport_id: "current-1" }],
+      antenna_port_modes: sceneFixture().antenna_port_modes,
       antenna_target_projections: [], solved_antenna_drives: [],
     } as unknown as SceneResource;
-    mocks.commitTransaction.mockResolvedValue({ scene_revision: 12 });
+    mocks.commitTransaction.mockImplementation(async transaction => committedDriveAck(transaction));
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
@@ -228,10 +240,13 @@ describe("AntennaCompositionPanel runtime results", () => {
     };
     try {
       await act(async () => root.render(<AntennaCompositionPanel kind="solution" selection={solutionSelection()} />));
-      await act(async () => find("BUTTON", "Create projection and drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      await act(async () => find("BUTTON", "Create projection").dispatchEvent(new TestEvent("click", { bubbles: true })));
       expect(mocks.commitTransaction).not.toHaveBeenCalled();
-      const target = find("SELECT", "Target object");
-      target.value = "magnet-1";
+      const composition = find("SELECT", "Projection composition");
+      composition.value = "drive";
+      await act(async () => composition.dispatchEvent(new TestEvent("change", { bubbles: true })));
+      const target = find("SELECT", "Projection target");
+      target.value = JSON.stringify(["object", "magnet-1"]);
       await act(async () => target.dispatchEvent(new TestEvent("change", { bubbles: true })));
       const run = find("SELECT", "Run stage");
       run.value = "run-1";
@@ -254,18 +269,21 @@ describe("AntennaCompositionPanel runtime results", () => {
             activation: { kind: "stage_ids", stage_ids: ["run-1"] },
           })],
         },
-      });
+      }, { sessionScopeKey: "session=session-1&epoch=epoch-1&request_scope_epoch=instance-1%3A7" });
       await act(async () => find("BUTTON", "Create projection and drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
       expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
       mocks.scene.data = { ...mocks.scene.data!, revision: 12 } as SceneResource;
       mocks.commitTransaction.mockRejectedValueOnce({ status: 409 });
       await act(async () => root.render(<AntennaCompositionPanel kind="solution" selection={solutionSelection()} />));
+      const peak = find("INPUT", "Peak current");
+      Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(peak, "0.02");
+      await act(async () => peak.dispatchEvent(new TestEvent("input", { bubbles: true })));
       await act(async () => find("BUTTON", "Create projection and drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
-      expect(container.textContent).toContain("Scene revision conflict");
+      expect(container.textContent).toContain("Scene changed or the previous write was not confirmed");
       await act(async () => find("BUTTON", "Create projection and drive").dispatchEvent(new TestEvent("click", { bubbles: true })));
       expect(mocks.commitTransaction).toHaveBeenCalledTimes(2);
-      await act(async () => find("BUTTON", "Refetch Scene").dispatchEvent(new TestEvent("click", { bubbles: true })));
-      expect(mocks.scene.refetch).toHaveBeenCalledTimes(1);
+      await act(async () => find("BUTTON", "Refresh projection source").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(mocks.scene.refetch).toHaveBeenCalledTimes(2);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -273,6 +291,7 @@ describe("AntennaCompositionPanel runtime results", () => {
   });
   it("rejects activation on a Relax stage before the scene transaction", async () => {
     mocks.scene.data = {
+      ...ownedDriveSceneFixture(),
       scene: { id: "session-1" },
       revision: 3,
       study: { stages: [{ kind: "relax", stage_id: "relax-1" }, { kind: "run", stage_id: "run-1" }] },
@@ -294,7 +313,7 @@ describe("AntennaCompositionPanel runtime results", () => {
     try {
       await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
       visit(container);
-      expect(container.textContent).toContain("Run run-1");
+      expect(container.textContent).toContain("Executable stage ID: run-1");
       expect(container.textContent).not.toContain("Run relax-1");
       await act(async () => buttons[0]?.dispatchEvent(new TestEvent("click", { bubbles: true })));
       expect(container.textContent).toContain("not a Run stage");
@@ -306,6 +325,7 @@ describe("AntennaCompositionPanel runtime results", () => {
   });
   it("commits the edited drive with the scene revision and preserves other drives", async () => {
     mocks.scene.data = {
+      ...ownedDriveSceneFixture(),
       scene: { id: "session-1" },
       revision: 7,
       solved_antenna_drives: [
@@ -347,7 +367,7 @@ describe("AntennaCompositionPanel runtime results", () => {
           expect.objectContaining({ id: "drive-1", peak_current_a: 3 }),
           expect.objectContaining({ id: "drive-2", peak_current_a: 2 }),
         ] }),
-        8, undefined, true,
+        8, undefined, false,
         "session=session-1&epoch=epoch-1&request_scope_epoch=instance-1%3A7", undefined,
       );
       expect(mocks.invalidate).toHaveBeenCalled();
@@ -359,6 +379,7 @@ describe("AntennaCompositionPanel runtime results", () => {
 
   it("preserves only edited drive fields on refresh and blocks a same-field overwrite", async () => {
     mocks.scene.data = {
+      ...ownedDriveSceneFixture(),
       scene: { id: "session-1" },
       revision: 7,
       solved_antenna_drives: [
@@ -450,6 +471,7 @@ describe("AntennaCompositionPanel runtime results", () => {
 
   it("keeps the drive draft and blocks another save after a scene revision conflict", async () => {
     mocks.scene.data = {
+      ...ownedDriveSceneFixture(),
       scene: { id: "session-1" },
       revision: 4,
       solved_antenna_drives: [{
@@ -508,6 +530,7 @@ describe("AntennaCompositionPanel runtime results", () => {
 
   it("rebases only edited drive fields after refetch and retries with the new revision", async () => {
     mocks.scene.data = {
+      ...ownedDriveSceneFixture(),
       scene: { id: "session-1" },
       revision: 4,
       solved_antenna_drives: [{
@@ -582,6 +605,7 @@ describe("AntennaCompositionPanel runtime results", () => {
   });
   it("shows missing transport and port references for an incomplete solve stage", async () => {
     mocks.scene.data = {
+      objects: [{ id: "antenna-1" }],
       antenna_field_solve_stages: [{
         id: "solve-1",
         source_object_id: "antenna-1",
@@ -645,7 +669,7 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
-  it("shows missing solve and target references for an incomplete projection", async () => {
+  it("blocks an unowned projection before reporting target errors in an owned scene", async () => {
     mocks.scene.data = {
       antenna_target_projections: [{
         id: "projection-1",
@@ -665,8 +689,15 @@ describe("AntennaCompositionPanel runtime results", () => {
           <AntennaCompositionPanel kind="projection" selection={projectionSelection()} />,
         ),
       );
+      expect(container.textContent).toContain("Select the resource again in Explorer.");
+      expect(container.textContent).not.toContain("Validation");
+      expect(mocks.commitTransaction).not.toHaveBeenCalled();
+      mocks.scene.data = {
+        ...mocks.scene.data!, objects: [{ id: "antenna-1" }],
+        antenna_field_solve_stages: [{ ...sceneFixture().antenna_field_solve_stages![0], id: "missing-stage" }],
+      } as SceneResource;
+      await act(async () => root.render(<AntennaCompositionPanel kind="projection" selection={projectionSelection()} />));
       expect(container.textContent).toContain("Validation");
-      expect(container.textContent).toContain("missing solve stage");
       expect(container.textContent).toContain("missing target object");
       expect(findGroupBadge(container, "invalid · result pending")).toBeDefined();
     } finally {
@@ -677,6 +708,7 @@ describe("AntennaCompositionPanel runtime results", () => {
 
   it("accepts a symbolic stage output without requiring a published asset", async () => {
     mocks.scene.data = {
+      objects: [{ id: "antenna-1" }],
       antenna_target_projections: [{
         id: "projection-1",
         output_id: "field-1",
@@ -684,7 +716,7 @@ describe("AntennaCompositionPanel runtime results", () => {
         target: { kind: "global" },
       }],
       antenna_field_solve_stages: [{
-        id: "solve-1",
+        id: "solve-1", source_object_id: "antenna-1",
         outputs: [{ id: "field-1", quantity: "H_ant_basis" }],
       }],
     } as unknown as SceneResource;
@@ -707,7 +739,7 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
-  it("shows missing references and invalid drive parameters without inventing a stage catalog", async () => {
+  it("blocks an unowned drive before reporting invalid parameters in an owned scene", async () => {
     mocks.scene.data = {
       solved_antenna_drives: [{
         id: "drive-1",
@@ -732,9 +764,16 @@ describe("AntennaCompositionPanel runtime results", () => {
           <AntennaCompositionPanel kind="drive" selection={driveSelection()} />,
         ),
       );
+      expect(container.textContent).toContain("Select the resource again in Explorer.");
+      expect(container.textContent).not.toContain("Validation");
+      expect(mocks.commitTransaction).not.toHaveBeenCalled();
+      mocks.scene.data = {
+        ...mocks.scene.data!, ...ownedDriveSceneFixture(),
+        solved_antenna_drives: mocks.scene.data!.solved_antenna_drives!.map(drive => ({ ...drive, projection_ref: "projection-1" })),
+      } as SceneResource;
+      await act(async () => root.render(<AntennaCompositionPanel kind="drive" selection={driveSelection()} />));
       expect(container.textContent).toContain("Validation");
       expect(container.textContent).toContain("missing port mode");
-      expect(container.textContent).toContain("missing projection");
       expect(container.textContent).toContain("sinusoidal frequency must be finite and > 0 Hz");
       expect(container.textContent).toContain("activation stage ids must be non-empty and unique");
       expect(container.textContent).not.toContain("missing activation stage");
@@ -745,7 +784,7 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
-  it("shows invalid references and sampling parameters for a spectrum request", async () => {
+  it("blocks an unowned spectrum before reporting invalid sampling in an owned scene", async () => {
     mocks.scene.data = {
       antenna_spectrum_requests: [{
         id: "spectrum-1",
@@ -788,8 +827,15 @@ describe("AntennaCompositionPanel runtime results", () => {
           <AntennaCompositionPanel kind="spectrum" selection={spectrumSelection()} />,
         ),
       );
+      expect(container.textContent).toContain("Select the resource again in Explorer.");
+      expect(container.textContent).not.toContain("Validation");
+      expect(mocks.commitTransaction).not.toHaveBeenCalled();
+      mocks.scene.data = {
+        ...mocks.scene.data!, objects: [{ id: "antenna-1" }],
+        antenna_field_solve_stages: [{ ...sceneFixture().antenna_field_solve_stages![0], id: "missing-stage" }],
+      } as SceneResource;
+      await act(async () => root.render(<AntennaCompositionPanel kind="spectrum" selection={spectrumSelection()} />));
       expect(container.textContent).toContain("Validation");
-      expect(container.textContent).toContain("missing solve stage");
       expect(container.textContent).toContain("missing target object");
       expect(container.textContent).toContain("missing port mode");
       expect(container.textContent).toContain("invalid sampling frame");
@@ -802,6 +848,7 @@ describe("AntennaCompositionPanel runtime results", () => {
 
   it("keeps a valid structured spectrum request explicitly pending", async () => {
     mocks.scene.data = {
+      objects: [{ id: "antenna-1" }],
       antenna_spectrum_requests: [{
         id: "spectrum-1",
         component: "x",
@@ -831,9 +878,9 @@ describe("AntennaCompositionPanel runtime results", () => {
         },
         nonuniform_k_grid: null,
       }],
-      antenna_port_modes: [{ id: "port-1" }],
+      antenna_port_modes: [{ id: "port-1", source_object_id: "antenna-1" }],
       antenna_field_solve_stages: [{
-        id: "solve-1",
+        id: "solve-1", source_object_id: "antenna-1",
         port_mode_ids: ["port-1"],
         outputs: [{ id: "h-ant-1", quantity: "H_ant_basis" }],
       }],
@@ -851,12 +898,19 @@ describe("AntennaCompositionPanel runtime results", () => {
       expect(container.textContent).not.toContain("Stage catalog result");
       expect(findGroupBadge(container, "configured · result pending")).toBeDefined();
       mocks.sourceSpectrum.status = "ready";
+      const request = (mocks.scene.data as SceneResource).antenna_spectrum_requests![0];
       mocks.sourceSpectrum.data = {
+        component: request.component,
+        normalization: request.normalization,
+        port_mode_id: request.port_mode_id,
+        source_object_id: "antenna-1",
         output_id: "fft-1",
         request_id: "spectrum-1",
         solution_id: "h-ant-1",
         solution_content_digest: "other-digest",
-        sampling: { solution_id: "h-ant-1" },
+        sampling: { ...request.sampling_plane, target: request.target,
+          transform: request.transform, window: request.window,
+          solution_id: "h-ant-1", source_object_id: "antenna-1", port_mode_id: request.port_mode_id },
       } as AntennaSourceSpectrumResource;
       await act(async () => root.render(
         <AntennaCompositionPanel kind="spectrum" selection={spectrumSelection()} />,
@@ -870,8 +924,9 @@ describe("AntennaCompositionPanel runtime results", () => {
     }
   });
 
-  it("marks unsupported transverse and modal spectra invalid before execution", async () => {
+  it("rejects malformed transverse equilibrium references and unsupported modal spectra before execution", async () => {
     mocks.scene.data = {
+      objects: [{ id: "antenna-1" }],
       antenna_spectrum_requests: [{
         id: "spectrum-1",
         component: "transverse",
@@ -890,10 +945,10 @@ describe("AntennaCompositionPanel runtime results", () => {
         },
       }],
       antenna_field_solve_stages: [{
-        id: "solve-1", port_mode_ids: ["port-1"],
+        id: "solve-1", source_object_id: "antenna-1", port_mode_ids: ["port-1"],
         outputs: [{ id: "basis", quantity: "H_ant_basis" }],
       }],
-      antenna_port_modes: [{ id: "port-1" }],
+      antenna_port_modes: [{ id: "port-1", source_object_id: "antenna-1" }],
     } as unknown as SceneResource;
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -902,7 +957,7 @@ describe("AntennaCompositionPanel runtime results", () => {
       await act(async () => root.render(
         <AntennaCompositionPanel kind="spectrum" selection={spectrumSelection()} />,
       ));
-      expect(container.textContent).toContain("transverse spectrum is unsupported");
+      expect(container.textContent).toContain("transverse spectrum requires a valid equilibrium_ref");
       expect(container.textContent).toContain("mode_basis_ref is unsupported");
       expect(findGroupBadge(container, "invalid · result pending")).toBeDefined();
       const scene = mocks.scene.data as unknown as { antenna_spectrum_requests: Array<Record<string, unknown>> };
@@ -926,6 +981,7 @@ describe("AntennaCompositionPanel runtime results", () => {
 
   it("shows concrete port validation diagnostics", async () => {
     mocks.scene.data = {
+      objects: [{ id: "antenna-1" }],
       antenna_port_modes: [{
         id: "invalid-port",
         schema_version: "antenna_port_mode.v2",
@@ -980,14 +1036,14 @@ describe("AntennaCompositionPanel runtime results", () => {
           <AntennaCompositionPanel kind="conductor" selection={conductorSelection()} />,
         ),
       );
-      expect(container.textContent).toContain("GeometryBox");
+      expect(container.textContent).toContain("LayoutBox");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
     }
   });
 
-  it("shows the authored microstrip dimensions and width stations", async () => {
+  it("keeps conductor materials separate from geometry dimensions", async () => {
     mocks.scene.data = {
       objects: [{
         id: "antenna-1",
@@ -1018,17 +1074,19 @@ describe("AntennaCompositionPanel runtime results", () => {
           <AntennaCompositionPanel kind="conductor" selection={conductorSelection()} />,
         ),
       );
-      expect(container.textContent).toContain("GeometryMicrostripAntennaLayout");
-      expect(container.textContent).toContain("Length1.0000e-6 m");
-      expect(container.textContent).toContain("Station 1s=0.0000e+0, signal width=5.0000e-8 m");
-      expect(container.textContent).toContain("Station 2s=1.0000e+0, signal width=2.5000e-8 m");
+      expect(container.textContent).toContain("LayoutMicrostripAntennaLayout");
+      expect(container.textContent).toContain("Layout conductivity58 MS/m");
+      expect(container.textContent).toContain("No explicit current module is assigned to this object.");
+      expect(container.textContent).not.toContain("Station 1");
+      expect(container.textContent).not.toContain("Return width");
+      expect(mocks.commitTransaction).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       dom.restore();
     }
   });
 
-  it("keeps the conductor Inspector stable while saving a width station", async () => {
+  it("keeps the Geometry Inspector stable while saving a width station", async () => {
     const geometry = {
       geometry_kind: "MicrostripAntennaLayout",
       geometry_params: {
@@ -1056,20 +1114,20 @@ describe("AntennaCompositionPanel runtime results", () => {
       return found[0];
     };
     try {
-      await act(async () => root.render(<AntennaCompositionPanel kind="conductor" selection={conductorSelection()} />));
-      const panel = find("DIV", "Antenna conductor");
+      await act(async () => root.render(<AntennaGeometryPanel selection={{ ...conductorSelection(), kind: "object.antenna.geometry" }} />));
+      const panel = find("DIV", "Antenna geometry");
       const input = find("INPUT", "Station 1 signal width");
       const unrelatedInput = find("INPUT", "Station 2 signal width");
       Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, "60e-9");
       await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
-      await act(async () => find("BUTTON", "Save width stations").dispatchEvent(new TestEvent("click", { bubbles: true })));
+      await act(async () => find("BUTTON", "Save conductor authoring").dispatchEvent(new TestEvent("click", { bubbles: true })));
       expect(mocks.commitTransaction).toHaveBeenCalledWith(expect.objectContaining({
         kind: "patch_object_geometry", object_id: "antenna-1", base_revision: 4,
         geometry: expect.objectContaining({ geometry_params: expect.objectContaining({
           stations: [{ s: 0, signal_width_m: 60e-9 }, { s: 1, signal_width_m: 25e-9 }],
         }) }),
       }), { sessionScopeKey: "session=session-1&epoch=epoch-1&request_scope_epoch=instance-1%3A7" });
-      expect(find("DIV", "Antenna conductor")).toBe(panel);
+      expect(find("DIV", "Antenna geometry")).toBe(panel);
       expect(find("INPUT", "Station 1 signal width")).toBe(input);
       expect(unrelatedInput.disabled).toBe(false);
       await act(async () => acknowledge?.({ scene_revision: 5, committed_scene: { ...mocks.scene.data, revision: 5 } }));
@@ -1104,20 +1162,20 @@ describe("AntennaCompositionPanel runtime results", () => {
       return found[0];
     };
     try {
-      await act(async () => root.render(<AntennaCompositionPanel kind="conductor" selection={conductorSelection()} />));
+      await act(async () => root.render(<AntennaGeometryPanel selection={{ ...conductorSelection(), kind: "object.antenna.geometry" }} />));
       const input = find("INPUT", "Station 1 signal width");
       Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set?.call(input, "60e-9");
       await act(async () => input.dispatchEvent(new TestEvent("input", { bubbles: true })));
       mocks.scene.data = { revision: 5, objects: [{ id: "antenna-1", geometry: {
         ...geometry, geometry_params: { ...geometry.geometry_params, return_width_m: 400e-9 },
       } }] } as unknown as SceneResource;
-      await act(async () => root.render(<AntennaCompositionPanel kind="conductor" selection={conductorSelection()} />));
+      await act(async () => root.render(<AntennaGeometryPanel selection={{ ...conductorSelection(), kind: "object.antenna.geometry" }} />));
       expect(container.textContent).toContain("Conductor geometry changed on the server");
-      expect(find("BUTTON", "Save width stations").disabled).toBe(true);
+      expect(find("BUTTON", "Save conductor authoring").disabled).toBe(true);
       expect(mocks.commitTransaction).not.toHaveBeenCalled();
       expect(input.value).toBe("60e-9");
       await act(async () => find("BUTTON", "Rebase draft").dispatchEvent(new TestEvent("click", { bubbles: true })));
-      expect(find("BUTTON", "Save width stations").disabled).toBe(false);
+      expect(find("BUTTON", "Save conductor authoring").disabled).toBe(false);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -1150,8 +1208,8 @@ describe("AntennaCompositionPanel runtime results", () => {
       expect(container.textContent).toContain("Requested executionbackend=fem · device=auto · precision=double · mode=strict");
       expect(container.textContent).toContain("Resolved executionbackend=fem · device=cpu · precision=double · mode=strict");
       expect(container.textContent).toContain("Gauge policyzero_mean");
-      expect(container.textContent).toContain("Port port-1 measured current2.0000e+0 A");
-      expect(container.textContent).toContain("Port port-1 normalization1.0000e+0 A");
+      expect(container.textContent).toContain("Port port-1 measured current2 A");
+      expect(container.textContent).toContain("Port port-1 normalization1 A");
       expect(container.textContent).toContain("Port port-1 current certificatesha256:certificate");
       expect(container.textContent).toContain("Port port-1 magnetic basisA/m/A · 6 values");
       expect(container.textContent).toContain("Oersted field H/I");
@@ -1184,13 +1242,49 @@ describe("AntennaCompositionPanel runtime results", () => {
 
 function sceneFixture(): SceneResource {
   return {
+    scene: { id: "session-1" },
+    objects: [{ id: "antenna-1", role: "antenna" }],
+    current_transports: [{
+      name: "current-1", kind: "current_transport", model: "ohmic_poisson",
+      domain: [{ object_id: "antenna-1" }],
+      boundaries: ["signal-in", "signal-out", "return-in", "return-out"].map(id => ({
+        id, kind: "equipotential_current_terminal",
+        surfaces: [{ object_id: "antenna-1", surface_id: id, orientation: [0, 1, 0] }],
+      })),
+      // Structural authoring fixture only; this does not qualify a native current view.
+      conservative_current_view: {
+        stable_vertex_ids: [1], boundary_faces: [{}], identity: {}, pins: {}, closure: {},
+      },
+    }],
+    antenna_port_modes: [{
+      id: "port-1", schema_version: "antenna_port_mode.v2", source_object_id: "antenna-1",
+      current_transport_id: "current-1", normalization_current_a: 1,
+      branches: [
+        { id: "signal", inlet_terminal_ref: "signal-in", outlet_terminal_ref: "signal-out", signed_weight: 1 },
+        { id: "return", inlet_terminal_ref: "return-in", outlet_terminal_ref: "return-out", signed_weight: -1 },
+      ],
+    }],
     antenna_field_solve_stages: [
       {
-        id: "solve-1",
+        id: "solve-1", source_object_id: "antenna-1", current_transport_id: "current-1",
+        port_mode_ids: ["port-1"], target_refs: [{ kind: "global" }],
+        field_sampling_domain: { kind: "global" },
         outputs: [{ id: "solution-1", quantity: "H_ant_basis" }],
       },
     ],
   } as unknown as SceneResource;
+}
+
+/** Explicit source graph for drive-edit tests; invalid-reference cases author their own graph. */
+function ownedDriveSceneFixture(): Partial<SceneResource> {
+  return {
+    ...sceneFixture(),
+    antenna_target_projections: [{
+      id: "projection-1", output_id: "field-1",
+      solution: { kind: "stage_output", stage_id: "solve-1", output_id: "solution-1" },
+      target: { kind: "global" },
+    }],
+  };
 }
 
 function fieldSolutionFixture(): AntennaFieldSolutionResource {

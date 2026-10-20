@@ -154,3 +154,72 @@ pub fn resolve_fem_antenna_projection_mask(
     }
     Ok(Some(mask))
 }
+
+/// Exact volume-cell membership for an equilibrium projection. Boundary and
+/// node selectors cannot manufacture a volume ROI at shared interfaces.
+pub fn resolve_fem_antenna_transverse_cell_mask(
+    plan: &FemPlanIR, target: &FieldTargetIR,
+) -> Result<Vec<bool>, PlanError> {
+    let mut mask = vec![matches!(target, FieldTargetIR::Global {}); plan.mesh.cells.len()];
+    let mark = |mask: &mut [bool], selector: &FemMeshPartSelector| -> Result<(), PlanError> {
+        match selector {
+            FemMeshPartSelector::ElementRange { start, count } => {
+                mark_range(mask, *start, *count, "equilibrium volume ROI")
+            },
+            FemMeshPartSelector::ElementMarkerSet { markers } => {
+                if plan.mesh.element_markers.len() != mask.len() {
+                    return Err(PlanError { reasons: vec!["equilibrium volume ROI requires complete element markers".into()] });
+                }
+                for (selected, marker) in mask.iter_mut().zip(&plan.mesh.element_markers) {
+                    *selected |= markers.contains(marker);
+                }
+                Ok(())
+            },
+            _ => Err(PlanError { reasons: vec!["equilibrium ROI requires a volume-element selector".into()] }),
+        }
+    };
+    if let FieldTargetIR::Object { object_id } = target {
+        for segment in plan.object_segments.iter().filter(|s| &s.object_id == object_id) {
+            mark_range(&mut mask, segment.element_start, segment.element_count, "equilibrium object ROI")?;
+        }
+    }
+    for part in &plan.mesh_parts {
+        let selected = match target {
+            FieldTargetIR::Object { object_id } => part.object_id.as_ref() == Some(object_id),
+            FieldTargetIR::Region { object_id, region_id } => part.object_id.as_ref() == Some(object_id) && &part.id == region_id,
+            FieldTargetIR::Global {} => false,
+        };
+        if selected { mark(&mut mask, &part.element_selector)?; }
+    }
+    let mut magnetic = vec![false; mask.len()];
+    if !plan.region_materials.is_empty() {
+        let markers: std::collections::BTreeSet<_> = plan.region_materials.iter()
+            .filter(|region| region.material.saturation_magnetisation > 0.0)
+            .map(|region| region.element_marker).collect();
+        if plan.mesh.element_markers.len() != mask.len() {
+            return Err(PlanError { reasons: vec!["equilibrium magnetic regions require complete element markers".into()] });
+        }
+        for (selected, marker) in magnetic.iter_mut().zip(&plan.mesh.element_markers) {
+            *selected = markers.contains(marker);
+        }
+    } else if !plan.mesh_parts.is_empty() {
+        for part in &plan.mesh_parts {
+            if part.role == fullmag_ir::FemMeshPartRole::MagneticObject { mark(&mut magnetic, &part.element_selector)?; }
+        }
+    } else if plan.material.saturation_magnetisation > 0.0
+        && plan.material.ms_field.as_ref().is_none_or(|values| values.iter().all(|value| *value > 0.0))
+        && plan.mesh.element_markers.iter().all(|marker| Some(marker) == plan.mesh.element_markers.first())
+    {
+        // A homogeneous resolved magnetic plan has no auxiliary subdomains.
+        magnetic.fill(true);
+    }
+    if let Some(values) = &plan.ms_element_field {
+        if values.len() != magnetic.len() { return Err(PlanError { reasons: vec!["equilibrium element MS shape mismatch".into()] }); }
+        for (selected, value) in magnetic.iter_mut().zip(values) { *selected &= value.is_finite() && *value > 0.0; }
+    }
+    for (selected, magnetic) in mask.iter_mut().zip(magnetic) { *selected &= magnetic; }
+    if !mask.iter().any(|selected| *selected) {
+        return Err(PlanError { reasons: vec!["equilibrium target has no unambiguous magnetic volume cells".into()] });
+    }
+    Ok(mask)
+}

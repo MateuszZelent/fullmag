@@ -104,6 +104,39 @@ function sameGridTuple(
   });
 }
 
+function normalizeMembershipObjectId(value: string): string | null {
+  const normalized = value.trim().replace(/^object:/, "");
+  return normalized || null;
+}
+
+function resolveSoleActiveUnassignedOwner(
+  membership: FdmRegionMembershipResource | null | undefined,
+): string | null {
+  if (!membership) return null;
+
+  const objectIds = new Set<string>();
+  for (const objectId of membership.object_ids ?? []) {
+    const normalizedObjectId = normalizeMembershipObjectId(objectId);
+    if (!normalizedObjectId) return null;
+    objectIds.add(normalizedObjectId);
+  }
+  return objectIds.size === 1
+    ? (objectIds.values().next().value ?? null)
+    : null;
+}
+
+function hasSoleActiveUnassignedOwner(
+  membership: FdmRegionMembershipResource | null | undefined,
+  objectId: string | null | undefined,
+  normalizedRegionId: string | null,
+): boolean {
+  if (normalizedRegionId) return false;
+  const ownerId = resolveSoleActiveUnassignedOwner(membership);
+  const selectedObjectId =
+    typeof objectId === "string" ? normalizeMembershipObjectId(objectId) : null;
+  return ownerId !== null && selectedObjectId === ownerId;
+}
+
 function statusModel(
   status: FdmObjectMeshInspectorStatus,
   fields: Omit<FdmObjectMeshInspectorModel, "status">,
@@ -223,7 +256,14 @@ export function resolveFdmObjectMeshInspectorModel({
       resources.membership.status === "ready" &&
       resources.domain.status === "ready",
   );
-  const regionIds = new Set(metadata.map((entry) => entry.numericId));
+  const regionIds = new Set(
+    metadata
+      .map((entry) => entry.numericId)
+      .filter((numericId) => numericId !== FMRM_INACTIVE_REGION_ID),
+  );
+  if (hasSoleActiveUnassignedOwner(membership, objectId, normalizedRegionId)) {
+    regionIds.add(0);
+  }
   const activeCellCount = canonicalMaskReady
     ? binary!.regionIds.reduce(
         (count, regionId) => count + (regionIds.has(regionId) ? 1 : 0),

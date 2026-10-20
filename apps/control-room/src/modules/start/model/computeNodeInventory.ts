@@ -8,6 +8,7 @@ import type {
   ComputeNodeGpuPartition,
   ComputeNodeGpuSummary,
   ComputeNodeInventorySummary,
+  ComputeNodeObservationUnavailableReason,
   ComputeNodeParallelismPattern,
   ComputeNodePolicySummary,
   ComputeNodeSnapshotSummary,
@@ -52,11 +53,29 @@ function readReported<T>(input: unknown, parse: ValueParser<T>): ComputeNodeFact
   return { status: "unavailable", value: null };
 }
 
-function readObservation(input: unknown): { readonly available: boolean; readonly value: number | null } {
+function readObservation(input: unknown): {
+  readonly available: boolean;
+  readonly value: number | null;
+  readonly reason: ComputeNodeObservationUnavailableReason | null;
+} {
   const observation = asRecord(input);
-  if (observation?.status !== "available") return { available: false, value: null };
+  if (observation?.status === "unavailable") {
+    const reasons: readonly ComputeNodeObservationUnavailableReason[] = [
+      "not_reported",
+      "permission_denied",
+      "unsupported",
+      "probe_failed",
+      "source_unavailable",
+      "future_timestamp",
+    ];
+    const reason = reasons.find((candidate) => candidate === observation.reason) ?? null;
+    return { available: false, value: null, reason };
+  }
+  if (observation?.status !== "available") {
+    return { available: false, value: null, reason: null };
+  }
   const value = nonNegativeInteger(observation.value);
-  return { available: value !== null, value };
+  return { available: value !== null, value, reason: null };
 }
 
 function optionalNonNegativeInteger(record: RecordValue, key: string): number | null | undefined {
@@ -373,6 +392,7 @@ export function parseComputeNodeSnapshot(
       allowedLogicalProcessorIds: allowedLogicalProcessors,
       effectiveCapacityMillis,
       effectiveCapacityAvailable: effectiveCapacity.available,
+      effectiveCapacityReason: effectiveCapacity.reason,
       quota: readReported(osConstraints.quota, parseCpuQuota),
     },
     memory: {
@@ -392,7 +412,7 @@ export function parseComputeNodeSnapshot(
 
 export function summarizeComputeNodeInventory(
   resource: Pick<ResourceResult<ComputeNodesResource>, "data" | "refreshError" | "status">,
-  nowUnixMs = Date.now(),
+  elapsedSinceReceiptMs = 0,
 ): ComputeNodeInventorySummary {
   const staleAfterSeconds = resource.data?.stale_after_seconds;
   const usableStaleAfterSeconds = typeof staleAfterSeconds === "number" &&
@@ -402,7 +422,11 @@ export function summarizeComputeNodeInventory(
   const nodes = resource.data?.nodes.map((node) => {
     const parsedSnapshot = parseComputeNodeSnapshot(node.node_id, node.snapshot);
     let sampleFreshness = parsedSnapshot
-      ? currentSampleFreshness(parsedSnapshot.sample, usableStaleAfterSeconds, nowUnixMs)
+      ? currentSampleFreshness(
+        parsedSnapshot.sample,
+        usableStaleAfterSeconds,
+        elapsedSinceReceiptMs,
+      )
       : null;
     let state = parsedSnapshot ? node.state : "unavailable";
     if (
@@ -439,14 +463,16 @@ export function summarizeComputeNodeInventory(
 function currentSampleFreshness(
   sample: ComputeNodeSnapshotSummary["sample"],
   staleAfterSeconds: number | null,
-  nowUnixMs: number,
+  elapsedSinceReceiptMs: number,
 ): string | null {
-  if (sample.freshness !== "current" || staleAfterSeconds === null || sample.collectedAt === null) {
+  if (sample.freshness !== "current" || staleAfterSeconds === null) {
     return sample.freshness;
   }
-  const collectedAt = Date.parse(sample.collectedAt);
-  if (!Number.isFinite(collectedAt) || nowUnixMs < collectedAt) return "unavailable";
-  return nowUnixMs - collectedAt > staleAfterSeconds * 1000 ? "stale" : "current";
+  // `collected_at` is a server wall-clock timestamp. The browser cannot
+  // compare it with its own wall clock safely, so age the response only with
+  // elapsed time from the browser receipt anchor.
+  if (!Number.isFinite(elapsedSinceReceiptMs) || elapsedSinceReceiptMs < 0) return "current";
+  return elapsedSinceReceiptMs > staleAfterSeconds * 1000 ? "stale" : "current";
 }
 
 function aggregateNodeState(

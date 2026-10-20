@@ -135,6 +135,40 @@ function buildAuthoredAntennaGeometry(kind: "microstrip" | "cpw", paramsValue: u
     indices.push(end, end + 1, end + 2, end, end + 2, end + 3);
     parts.push({ id, indexStart, indexCount: indices.length - indexStart });
   }
+  const loop = params.loop === undefined ? null : record(params.loop);
+  if (kind === "microstrip" && loop?.enabled === true) {
+    if (returnOffset <= 0) throw new Error("A closed microstrip requires positive return clearance.");
+    const bridgeIds = [partId(loop.inlet_connection_part_id), partId(loop.outlet_connection_part_id)];
+    if (new Set([...conductorIds, ...bridgeIds]).size !== 4) throw new Error("All four circuit part IDs must differ.");
+    for (const [endIndex, end] of (["inlet", "outlet"] as const).entries()) {
+      const bridgeLength = number(loop[`${end}_connection_length_m`], `${end} bridge length`, true);
+      const width = number(loop[`${end}_connection_width_m`], `${end} bridge width`, true);
+      const center = number(loop[`${end}_connection_offset_v_m`], `${end} bridge offset`);
+      number(loop[`${end}_connection_conductivity_s_per_m`], `${end} bridge conductivity`, true);
+      for (const conductorWidth of [stations[endIndex === 0 ? 0 : stations.length - 1].width, returnWidth]) {
+        if (!(Math.min(center + width / 2, conductorWidth / 2) > Math.max(center - width / 2, -conductorWidth / 2))) {
+          throw new Error(`${end} bridge must contact signal and return with positive area.`);
+        }
+      }
+      const base = positions.length / 3;
+      const indexStart = indices.length;
+      for (const u of endIndex === 0 ? [-bridgeLength, 0] : [length, length + bridgeLength]) {
+        for (const [v, z] of [[center - width / 2, -1.5 * thickness - returnOffset], [center + width / 2, -1.5 * thickness - returnOffset], [center + width / 2, thickness / 2], [center - width / 2, thickness / 2]]) {
+          const point = worldPoint([u, v, z]);
+          if (point.some((value) => !Number.isFinite(value))) throw new Error("Antenna transformed vertices exceed finite coordinate range.");
+          positions.push(...point);
+          for (let axis = 0; axis < 3; axis++) { min[axis] = Math.min(min[axis], point[axis]); max[axis] = Math.max(max[axis], point[axis]); }
+        }
+      }
+      for (let side = 0; side < 4; side++) {
+        const a = base + side, b = base + (side + 1) % 4;
+        indices.push(a, b, b + 4, a, b + 4, a + 4);
+      }
+      indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
+      indices.push(base + 4, base + 5, base + 6, base + 4, base + 6, base + 7);
+      parts.push({ id: bridgeIds[endIndex], indexStart, indexCount: indices.length - indexStart });
+    }
+  }
   if (max.some((value, axis) => value <= min[axis] || !Number.isFinite(Math.fround(value - min[axis])))) {
     throw new Error("Antenna authored preview exceeds resolved floating-point coordinate range.");
   }

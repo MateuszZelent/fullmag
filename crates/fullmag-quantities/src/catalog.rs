@@ -1,8 +1,31 @@
 //! Canonical quantity catalog — the single source of truth for all quantity metadata.
 
-use crate::descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, QuantitySpec};
+use crate::descriptor::{
+    NormalizationHint, QuantityDomain, QuantityLocation, QuantitySpec, QuantityTensorDescriptor,
+};
 use crate::id::{normalize_quantity_id, QuantityId};
 use crate::{QuantityComponent, QuantityShape};
+
+impl QuantitySpec {
+    /// Explicit canonical tensor semantics, never inferred from component count.
+    pub fn tensor_descriptor(&self) -> Option<QuantityTensorDescriptor> {
+        match self.id {
+            QuantityId::SpinCurrentTensor => Some(QuantityTensorDescriptor {
+                rank: 2,
+                shape: vec![3, 3],
+                layout: "flow_major".to_string(),
+                axes: vec!["flow".to_string(), "spin".to_string()],
+                component_labels: [
+                    "Q_xx", "Q_xy", "Q_xz", "Q_yx", "Q_yy", "Q_yz", "Q_zx", "Q_zy", "Q_zz",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            }),
+            _ => None,
+        }
+    }
+}
 
 const CATALOG: [QuantitySpec; 56] = [
     QuantitySpec {

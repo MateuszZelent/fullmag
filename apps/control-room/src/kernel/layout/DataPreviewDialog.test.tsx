@@ -26,6 +26,7 @@ vi.mock("@/kernel/resources/dataPreviewResources", () => ({
 }));
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
+  useQuantityCatalogResource: () => ({ data: { quantities: [] } }),
   useSolverStatusResource: () => ({
     data: {
       step: 123,

@@ -23,6 +23,27 @@ const timestampFormat = new Intl.DateTimeFormat("en-US", {
   timeZone: "UTC",
 });
 
+function unavailableCapacityLabel(
+  reason: ComputeNodeSnapshotSummary["cpu"]["effectiveCapacityReason"],
+): string {
+  switch (reason) {
+    case "not_reported":
+      return "Unavailable · not reported";
+    case "permission_denied":
+      return "Unavailable · permission denied";
+    case "unsupported":
+      return "Unavailable · unsupported on this host";
+    case "probe_failed":
+      return "Unavailable · probe failed";
+    case "source_unavailable":
+      return "Unavailable · source unavailable";
+    case "future_timestamp":
+      return "Unavailable · sample timestamp is invalid";
+    default:
+      return "Unavailable";
+  }
+}
+
 export function ComputeNodeInventoryDetails({
   summary,
   canEditNodePolicy = false,
@@ -139,7 +160,7 @@ function NodeSnapshotCard({
             ? `${cpuFormat.format(snapshot.cpu.effectiveCapacityMillis / 1000)} CPU equivalents`
             : snapshot.cpu.effectiveCapacityAvailable
               ? "Not safely displayable"
-              : "Unavailable"}
+              : unavailableCapacityLabel(snapshot.cpu.effectiveCapacityReason)}
         />
         <InventoryMetric label="OS CPU quota" value={factText(snapshot.cpu.quota, describeCpuQuota)} />
         <InventoryMetric label="Total memory" value={formatOptionalBytes(snapshot.memory.totalBytes)} />

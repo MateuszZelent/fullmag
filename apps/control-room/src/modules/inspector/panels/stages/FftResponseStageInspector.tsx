@@ -25,7 +25,13 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
   const effectiveState = nextRunIndex >= 0
     ? resolveStudyWorkflowStateBefore(pipelineDrafts, nextRunIndex)
     : stateBefore;
-  const effectiveSampling = effectiveState.tableAutosave;
+  const finiteK = draft?.fftResponse.analysis === "finite_k";
+  const unsupported = draft?.fftResponse.analysis === "unsupported";
+  const rawComponent = draft?.fftResponse.rawRequest?.response_component;
+  const unrecognizedComponent = Boolean(draft?.fftResponse.readOnly && (unsupported || (rawComponent !== undefined && rawComponent !== "my" && rawComponent !== "mz" && !(finiteK && rawComponent === "mx"))));
+  const effectiveSampling = unsupported ? null : finiteK
+    ? effectiveState.outputs.find((output) => output.quantity === "m" && output.outputKind === "field") ?? null
+    : effectiveState.tableAutosave;
   const durationS = positiveNumber(nextRun?.untilSeconds);
   const disabled = !draft || draft.fftResponse.readOnly;
 
@@ -37,7 +43,7 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
         kindLabel="FFT Response"
       />
       <InspectorGroup
-        title="Gamma Response FFT"
+        title={unsupported ? "Unrecognized Response Analysis" : finiteK ? "Finite-k Response FFT" : "Gamma Response FFT"}
         badge={draft?.fftResponse.enabled ? "ON" : "OFF"}
       >
         <FieldRow label="Physical duration" value="0 s" />
@@ -57,21 +63,53 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
         />
         <FormField
           disabled={disabled || !draft?.fftResponse.enabled}
+          label="Analysis"
+          type="select"
+          value={draft?.fftResponse.analysis ?? "gamma"}
+          onChange={(event) => draft && props.onUpdateDraft({
+            fftResponse: {
+              ...draft.fftResponse,
+              analysis: event.target.value as "gamma" | "finite_k",
+              responseComponent: event.target.value === "gamma" && draft.fftResponse.responseComponent === "mx" ? "my" : draft.fftResponse.responseComponent,
+            },
+          })}
+        >
+          <option value="gamma">Gamma (k=0)</option>
+          <option value="finite_k">Finite-k (FEM x cross-sections)</option>
+          {unsupported ? <option value="unsupported">Unrecognized imported analysis</option> : null}
+        </FormField>
+        <FormField
+          disabled={disabled || !draft?.fftResponse.enabled}
           label="Response component"
           type="select"
-          value={draft?.fftResponse.responseComponent ?? "my"}
+          value={unrecognizedComponent ? "unsupported" : draft?.fftResponse.responseComponent ?? "my"}
           onChange={(event) =>
             draft && props.onUpdateDraft({
               fftResponse: {
                 ...draft.fftResponse,
-                responseComponent: event.target.value as "my" | "mz",
+                responseComponent: event.target.value as "mx" | "my" | "mz",
               },
             })
           }
         >
+            {finiteK ? <option value="mx">mx</option> : null}
+            {unrecognizedComponent ? <option value="unsupported">Unrecognized imported component</option> : null}
             <option value="my">my</option>
             <option value="mz">mz</option>
         </FormField>
+        {finiteK ? (
+          <>
+            <FormField disabled={disabled || !draft?.fftResponse.enabled} label="Spatial probes" type="number" min="4" max="2048" step="1" value={draft?.fftResponse.probeCount ?? "128"}
+              onChange={(event) => draft && props.onUpdateDraft({ fftResponse: { ...draft.fftResponse, probeCount: event.target.value } })} />
+            <FormField disabled={disabled || !draft?.fftResponse.enabled} label="Lower x bound (m; blank = infer)" type="number" step="any" value={draft?.fftResponse.analysisXMinM ?? ""}
+              onChange={(event) => draft && props.onUpdateDraft({ fftResponse: { ...draft.fftResponse, analysisXMinM: event.target.value } })} />
+            <FormField disabled={disabled || !draft?.fftResponse.enabled} label="Upper x bound (m; blank = infer)" type="number" step="any" value={draft?.fftResponse.analysisXMaxM ?? ""}
+              onChange={(event) => draft && props.onUpdateDraft({ fftResponse: { ...draft.fftResponse, analysisXMaxM: event.target.value } })} />
+            <FieldRow label="Preprocessing" value="Subtract first snapshot; Hann in space and time" />
+            <FeedbackBanner kind="warning" message="Requires FEM tet4/f64 snapshots of m and H_drive on matching time axes. This is response analysis, not the antenna source FFT or a qualified susceptibility." />
+          </>
+        ) : unsupported ? null : (
+          <>
         <FormField
           disabled={disabled || !draft?.fftResponse.enabled}
           label="Detrend"
@@ -108,18 +146,20 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
             })
           }
         />
+          </>
+        )}
         <FieldRow
           label="Effect"
           value={
             draft?.fftResponse.enabled
-              ? "enable Gamma response analysis for following Run stages until changed"
+              ? unsupported ? "Unrecognized imported analysis; inspect the preserved raw request" : `enable ${finiteK ? "finite-k" : "Gamma"} response analysis for following Run stages until changed`
               : "disable response FFT for following Run stages until changed"
           }
         />
         {draft?.fftResponse.readOnly ? (
           <FeedbackBanner
             kind="warning"
-            message="This imported analysis request is unsupported by the Gamma editor. Its payload is preserved losslessly and remains read-only."
+            message="This imported analysis request is unsupported by this editor. Its payload is preserved losslessly and remains read-only."
           />
         ) : null}
       </InspectorGroup>
@@ -129,18 +169,19 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
         badge={effectiveSampling?.sourceStageId ?? "missing t_sampling"}
       >
         <FieldRow
-          label="t_sampling source"
-          value={effectiveSampling?.sourceStageId ?? "no Table autosave ON stage before the following Run"}
+          label={finiteK ? "m field clock source" : "t_sampling source"}
+          value={unsupported ? "not inferred for unrecognized analysis" : effectiveSampling?.sourceStageId ?? (finiteK ? "no m field autosave before the following Run" : "no Table autosave ON stage before the following Run")}
         />
+        {finiteK ? <FieldRow label="H_drive field clock source" value={effectiveState.outputs.find((output) => output.quantity === "H_drive" && output.outputKind === "field")?.sourceStageId ?? "missing H_drive field autosave"} /> : null}
         <FieldRow label="Following Run" value={nextRun?.stageId ?? "none"} />
         <SamplingDiagnostics
           durationS={durationS}
           sampling={effectiveSampling}
         />
-        {draft?.fftResponse.enabled && !effectiveSampling ? (
+        {draft?.fftResponse.enabled && !unsupported && !effectiveSampling ? (
           <FeedbackBanner
             kind="warning"
-            message="FFT response needs a preceding Table autosave ON instruction to define t_sampling. The workflow remains invalid until that stage is added or enabled."
+            message={finiteK ? "Finite-k requires preceding field autosave instructions for m and H_drive with matching clocks." : "FFT response needs a preceding Table autosave ON instruction to define t_sampling. The workflow remains invalid until that stage is added or enabled."}
           />
         ) : null}
       </InspectorGroup>

@@ -498,6 +498,20 @@ pub struct AntennaSpectrumKGridResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EquilibriumReferenceResource {
+    StageOutput { stage_id: String, output_id: String },
+    Artifact { asset_id: String, equilibrium_id: String, content_digest: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum EquilibriumRefResource {
+    Reference(EquilibriumReferenceResource),
+    LegacyId(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AntennaSpectrumRequestResource {
     pub id: String,
@@ -513,7 +527,7 @@ pub struct AntennaSpectrumRequestResource {
     pub nonuniform_k_grid: Option<AntennaSpectrumKGridResource>,
     pub component: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub equilibrium_ref: Option<String>,
+    pub equilibrium_ref: Option<EquilibriumRefResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode_basis_ref: Option<String>,
     pub output_id: String,

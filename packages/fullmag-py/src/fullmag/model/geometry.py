@@ -485,6 +485,17 @@ class MicrostripAntennaLayout(_AntennaLayoutGeometry):
     return_offset_m: float
     signal_part_id: str
     return_part_id: str
+    closed_loop: bool
+    inlet_connection_length_m: float | None
+    inlet_connection_width_m: float | None
+    inlet_connection_offset_v_m: float | None
+    inlet_connection_part_id: str | None
+    inlet_connection_conductivity_s_per_m: float | None
+    outlet_connection_length_m: float | None
+    outlet_connection_width_m: float | None
+    outlet_connection_offset_v_m: float | None
+    outlet_connection_part_id: str | None
+    outlet_connection_conductivity_s_per_m: float | None
 
     def __init__(
         self,
@@ -499,6 +510,17 @@ class MicrostripAntennaLayout(_AntennaLayoutGeometry):
         signal_part_id: str = "signal",
         return_part_id: str = "return",
         *,
+        closed_loop: bool = False,
+        inlet_connection_length_m: float | None = None,
+        inlet_connection_width_m: float | None = None,
+        inlet_connection_offset_v_m: float | None = None,
+        inlet_connection_part_id: str | None = None,
+        inlet_connection_conductivity_s_per_m: float | None = None,
+        outlet_connection_length_m: float | None = None,
+        outlet_connection_width_m: float | None = None,
+        outlet_connection_offset_v_m: float | None = None,
+        outlet_connection_part_id: str | None = None,
+        outlet_connection_conductivity_s_per_m: float | None = None,
         length: float | None = None,
         thickness: float | None = None,
         conductivity: float | None = None,
@@ -536,6 +558,44 @@ class MicrostripAntennaLayout(_AntennaLayoutGeometry):
         object.__setattr__(self, "return_offset_m", normalized_offset)
         object.__setattr__(self, "signal_part_id", signal_id)
         object.__setattr__(self, "return_part_id", return_id)
+        if not isinstance(closed_loop, bool):
+            raise TypeError("closed_loop must be boolean")
+        object.__setattr__(self, "closed_loop", closed_loop)
+        loop_values = {
+            "inlet_connection_length_m": inlet_connection_length_m,
+            "inlet_connection_width_m": inlet_connection_width_m,
+            "inlet_connection_offset_v_m": inlet_connection_offset_v_m,
+            "inlet_connection_part_id": inlet_connection_part_id,
+            "inlet_connection_conductivity_s_per_m": inlet_connection_conductivity_s_per_m,
+            "outlet_connection_length_m": outlet_connection_length_m,
+            "outlet_connection_width_m": outlet_connection_width_m,
+            "outlet_connection_offset_v_m": outlet_connection_offset_v_m,
+            "outlet_connection_part_id": outlet_connection_part_id,
+            "outlet_connection_conductivity_s_per_m": outlet_connection_conductivity_s_per_m,
+        }
+        if not closed_loop and any(value is not None for value in loop_values.values()):
+            raise ValueError("connection parameters require closed_loop=True")
+        if closed_loop and normalized_offset <= 0.0:
+            raise ValueError("closed_loop requires positive return_offset_m")
+        for field, value in loop_values.items():
+            if closed_loop:
+                if value is None:
+                    raise ValueError(f"closed_loop requires explicit {field}")
+                value = (require_non_empty(value, field) if field.endswith("part_id")
+                         else _antenna_real(value, field) if field.endswith("offset_v_m")
+                         else _antenna_positive(value, field))
+            object.__setattr__(self, field, value)
+        if closed_loop:
+            ids = (signal_id, return_id, inlet_connection_part_id, outlet_connection_part_id)
+            if len(set(ids)) != 4:
+                raise ValueError("closed_loop part IDs must be distinct")
+            for side, station in (("inlet", normalized_stations[0]), ("outlet", normalized_stations[-1])):
+                width = getattr(self, f"{side}_connection_width_m")
+                offset = getattr(self, f"{side}_connection_offset_v_m")
+                for target_width in (station.signal_width_m, normalized_return_width):
+                    if min(offset + width / 2, target_width / 2) <= max(offset - width / 2, -target_width / 2):
+                        raise ValueError(f"{side} connection must contact signal and return with positive area")
+
 
     @property
     def geometry_name(self) -> str:
@@ -580,10 +640,51 @@ class MicrostripAntennaLayout(_AntennaLayoutGeometry):
             )
         return tuple(sections)
 
+    def connection_sections(self) -> dict[str, tuple[dict[str, object], ...]]:
+        """Full volumetric bridge sections, preserving authored rigid transform."""
+        if not self.closed_loop:
+            return {}
+        result = {}
+        for side in ("inlet", "outlet"):
+            length = getattr(self, f"{side}_connection_length_m")
+            width = getattr(self, f"{side}_connection_width_m")
+            offset = getattr(self, f"{side}_connection_offset_v_m")
+            part = getattr(self, f"{side}_connection_part_id")
+            bounds = (-length, 0.0) if side == "inlet" else (self.length_m, self.length_m + length)
+            height = 2 * self.thickness_m + self.return_offset_m
+            center = -(self.thickness_m + self.return_offset_m) / 2
+            result[part] = tuple({"u_m": u, "conductors": {part: _section_vertices(
+                self.transform, u, offset, width, center, height)}, "vertices": _section_vertices(
+                self.transform, u, offset, width, center, height)} for u in bounds)
+        return result
+
+    def solid_segments(self) -> tuple[dict[str, object], ...]:
+        return _AntennaLayoutGeometry.solid_segments(self) + tuple({"from": sections[0], "to": sections[1]}
+                                               for sections in self.connection_sections().values())
+
+    def world_bounds(self) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        vertices = [v for section in self._sections() for v in section["vertices"]]
+        vertices.extend(v for sections in self.connection_sections().values()
+                        for section in sections for v in section["vertices"])
+        return (tuple(min(v[i] for v in vertices) for i in range(3)),
+                tuple(max(v[i] for v in vertices) for i in range(3)))
+
     def to_ir(self) -> dict[str, object]:
         return {
             "name": self.name,
             "kind": "microstrip",
+            **({"loop": {"enabled": True,
+                "inlet_connection_length_m": self.inlet_connection_length_m,
+                "inlet_connection_width_m": self.inlet_connection_width_m,
+                "inlet_connection_offset_v_m": self.inlet_connection_offset_v_m,
+                "inlet_connection_part_id": self.inlet_connection_part_id,
+                "inlet_connection_conductivity_s_per_m": self.inlet_connection_conductivity_s_per_m,
+                "outlet_connection_length_m": self.outlet_connection_length_m,
+                "outlet_connection_width_m": self.outlet_connection_width_m,
+                "outlet_connection_offset_v_m": self.outlet_connection_offset_v_m,
+                "outlet_connection_part_id": self.outlet_connection_part_id,
+                "outlet_connection_conductivity_s_per_m": self.outlet_connection_conductivity_s_per_m,
+            }} if self.closed_loop else {}),
             "length_m": self.length_m,
             "thickness_m": self.thickness_m,
             "conductivity_s_per_m": self.conductivity_s_per_m,
@@ -605,6 +706,9 @@ class MicrostripAntennaLayout(_AntennaLayoutGeometry):
     def from_ir(cls, value: Mapping[str, object]) -> "MicrostripAntennaLayout":
         if value.get("kind") != "microstrip":
             raise ValueError("microstrip layout kind is required")
+        loop = value.get("loop", {})
+        if not isinstance(loop, Mapping) or set(loop) - {"enabled", 'inlet_connection_length_m', 'inlet_connection_width_m', 'inlet_connection_offset_v_m', 'inlet_connection_part_id', 'inlet_connection_conductivity_s_per_m', 'outlet_connection_length_m', 'outlet_connection_width_m', 'outlet_connection_offset_v_m', 'outlet_connection_part_id', 'outlet_connection_conductivity_s_per_m'}:
+            raise ValueError("microstrip loop contains unsupported authored fields")
         stations = tuple(MicrostripWidthStation(**station) for station in value["stations"])
         signal_id, return_id = _antenna_conductor_ids(
             value.get("conductors", ()), ("signal", "return"),
@@ -620,6 +724,17 @@ class MicrostripAntennaLayout(_AntennaLayoutGeometry):
             return_offset_m=value.get("return_offset_m"),
             signal_part_id=signal_id,
             return_part_id=return_id,
+            closed_loop=loop.get("enabled", False),
+            inlet_connection_length_m=loop.get("inlet_connection_length_m"),
+            inlet_connection_width_m=loop.get("inlet_connection_width_m"),
+            inlet_connection_offset_v_m=loop.get("inlet_connection_offset_v_m"),
+            inlet_connection_part_id=loop.get("inlet_connection_part_id"),
+            inlet_connection_conductivity_s_per_m=loop.get("inlet_connection_conductivity_s_per_m"),
+            outlet_connection_length_m=loop.get("outlet_connection_length_m"),
+            outlet_connection_width_m=loop.get("outlet_connection_width_m"),
+            outlet_connection_offset_v_m=loop.get("outlet_connection_offset_v_m"),
+            outlet_connection_part_id=loop.get("outlet_connection_part_id"),
+            outlet_connection_conductivity_s_per_m=loop.get("outlet_connection_conductivity_s_per_m"),
         )
 
 

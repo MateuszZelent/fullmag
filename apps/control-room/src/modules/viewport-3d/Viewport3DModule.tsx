@@ -1,4 +1,10 @@
 "use client";
+import { hasViewport3DQuantityData } from "./model/viewport3DQuantityData";
+import { Viewport3DFieldLabel } from "./Viewport3DFieldLabel";
+import { artifactRenderedSurfaceRanges } from "./model/artifactFieldOverlayModel";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
+import type { ArtifactFieldOverlayModel } from "./model/artifactFieldOverlayModel";
+import { useArtifactFieldOverlay } from "./hooks/useArtifactFieldOverlay";
 import { useAntennaFieldOverlay } from "./hooks/useAntennaFieldOverlay";
 import { antennaFieldDisplayLabel } from "@/kernel/visualization/antennaFieldIntent";
 
@@ -26,6 +32,7 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import {
+  isScalarSpatialQuantityId,
   quantityUnitForColorbar,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
@@ -73,6 +80,7 @@ import {
   type VisualizationDataAdoptionIdentity,
 } from "@/kernel/visualization/useVisualizationClientAck";
 import { Button } from "@/shared/ui/Button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/Popover";
 import {
   displayUnitItemsForSourceUnit,
   formatDisplayUnitValue,
@@ -586,6 +594,20 @@ export function resolveViewport3DMeshQualityLegend(
   if (!visible || !range) return null;
   const metricLabel = metric === "sicn" ? "SICN" : metric;
   return `Mesh quality ${metricLabel} ${formatLegendValue(range.min)} to ${formatLegendValue(range.max)}`;
+}
+
+/** Each historical pass uses its own actual projection and finite payload range. */
+export function resolveArtifactFieldColorbars(model: ArtifactFieldOverlayModel | null): Viewport3DScopedColorbarLegend[] {
+  if (!model || !model.settings.visible || !model.settings.viewportColorbarVisible) return [];
+  const result: Viewport3DScopedColorbarLegend[] = [];
+  const append = (pass: string, mode: string, min: number, max: number) => {
+    const legend = resolveViewport3DColorbarLegend({ colorMode: mode, colorPalette: model.settings.scalarColorPalette,
+      quantityId: model.quantityId, unit: model.unit, range: { min, max } });
+    if (legend) result.push({ key: `${model.key}:${pass}`, legend: { ...legend, labelPrefix: `Historical ${pass}: ` } });
+  };
+  if (model.settings.shaderVisible && model.settings.surfaceColorSource !== "solid") append("surface", model.scalar ? "scalar" : model.settings.shaderColorMode, model.minimum, model.maximum);
+  if (!model.scalar && model.settings.vectorsVisible && model.glyphCount > 0 && model.settings.vectorColorMode === "magnitude") append("vectors", "magnitude", 0, model.maximumVectorNorm);
+  return result;
 }
 
 export function resolveViewport3DColorbarLegend({
@@ -1353,6 +1375,7 @@ interface Viewport3DFrameProps
     | "orbitDebugCommitRevision"
     | "orbitDebugRevision"
   > {
+  artifactInspectionDefinitions: ReadonlyArray<{ id?: string; source_object_id?: string }>;
   cameraDialogOpen: boolean;
   cameraDialogState: Viewport3DSceneProps["cameraState"];
   cameraResource: VisualizationStateResource["camera"] | null;
@@ -1984,6 +2007,7 @@ function useViewport3DSelectionHandlers({
 }
 
 const Viewport3DFrame = memo(function Viewport3DFrame({
+  artifactInspectionDefinitions,
   captureRevision,
   cameraDialogOpen,
   cameraDialogState,
@@ -2025,6 +2049,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
 }: Viewport3DFrameProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const antennaFieldOverlay = useAntennaFieldOverlay();
+  const artifactTarget = sceneProps.primitiveModel?.objects.find(object => object.objectId === sceneProps.selectedObjectId);
+  const artifactSettings = artifactTarget ? sceneProps.getObjectSettings(artifactTarget) : sceneProps.fdmSettings;
+  const artifactField = useArtifactFieldOverlay(quantityId, sceneProps.selectedObjectId, artifactSettings, Boolean(antennaFieldOverlay), artifactInspectionDefinitions);
+  const liveQuantityDataAvailable = hasViewport3DQuantityData(quantityId, {
+    fieldModel: sceneProps.fieldModel,
+    fieldVectors: [visualizationDebugSource.fullFieldVector, sceneProps.fdmAirboxFieldVector, sceneProps.fdmMultilayerAirboxView?.fieldVector,
+      ...sceneProps.fdmTargetViews.map(view => view.fieldVector), ...sceneProps.fdmNativeLayerViews.map(view => view.fieldVector)],
+    fieldBuffers: [sceneProps.fdmMultilayerAirboxView?.fieldBuffer, ...sceneProps.fdmTargetViews.map(view => view.fieldBuffer)],
+    scalarColors: [sceneProps.fdmSurfaceColors, sceneProps.fdmVectorColors, sceneProps.fdmVectorGlyphColors,
+      sceneProps.fdmMultilayerAirboxView?.surfaceColors, ...sceneProps.fdmTargetViews.map(view => view.surfaceColors),
+      ...sceneProps.fdmNativeLayerViews.map(view => view.surfaceColors)],
+  });
   const antennaFieldSourceLabel = antennaFieldOverlay
     ? sceneProps.primitiveModel?.objects.find(
         (object) => object.objectId === antennaFieldOverlay.intent.sourceObjectId,
@@ -2310,8 +2346,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       }),
     [colorbarLabelByTargetId, colorbarPlans],
   );
+  const displayedColorbarLegends = artifactField.historical ? resolveArtifactFieldColorbars(artifactField.model) : colorbarLegends;
   const renderedScalarRanges = useMemo(
-    () =>
+    () => artifactField.historical ? artifactRenderedSurfaceRanges(artifactField.model) :
       initialColorbarPlans.flatMap((plan) => {
         const range = colorbarRangeStates.get(plan.groupKey)?.range;
         if (!range) return [];
@@ -2331,7 +2368,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             : null,
         });
       }),
-    [colorbarParts, colorbarRangeStates, initialColorbarPlans],
+    [artifactField.historical, artifactField.model, colorbarParts, colorbarRangeStates, initialColorbarPlans],
   );
   useEffect(() => {
     setRetainedViewport3DColorbarPlans(
@@ -2709,10 +2746,17 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             </Button>
           </fieldset>
         ) : null}
-        <span data-quantity-id={quantityId}>{antennaFieldOverlay ? antennaFieldDisplayLabel(antennaFieldOverlay.intent) : quantityLabel}</span>
+        <Viewport3DFieldLabel quantityId={antennaFieldOverlay?.intent.quantity ?? quantityId} label={antennaFieldOverlay ? antennaFieldDisplayLabel(antennaFieldOverlay.intent) : quantityLabel} historical={!antennaFieldOverlay && artifactField.historical} model={artifactField.model} error={artifactField.error} liveDataAvailable={antennaFieldOverlay ? undefined : liveQuantityDataAvailable} />
         <span>{antennaFieldSourceLabel ?? selectedLabel}</span>
         {hysteresisReplayLabel ? <span>{hysteresisReplayLabel}</span> : null}
-        <span>{antennaFieldOverlay ? `${antennaFieldOverlay.count} samples` : domainSummary}</span>
+        <span>{artifactField.model ? `${artifactField.model.count} owned samples · historical inspection · ${artifactField.model.unit}` : antennaFieldOverlay ? `${antennaFieldOverlay.count} samples` : domainSummary}</span>
+        {!antennaFieldOverlay && artifactField.candidates.length > 0 ? (
+          <Select value={artifactField.selectedStageId} onValueChange={artifactField.select}>
+            <SelectTrigger aria-label="Field inspection source and execution" className="fm-viewport-artifact-owner-select"><SelectValue placeholder="Select source and execution" /></SelectTrigger>
+            <SelectContent>{artifactField.candidates.map(candidate => <SelectItem key={candidate.runtimeStageId} value={candidate.runtimeStageId}>{candidate.sourceObjectId} · {candidate.authoredStageId} · {candidate.runtimeStageId} · {candidate.status}</SelectItem>)}</SelectContent>
+          </Select>
+        ) : null}
+        {artifactField.error ? <span role="status">{artifactField.error}</span> : null}
         {antennaFieldOverlay?.intent.kind === "inspection" ? (
           <span>inspection only · external electrode truncation · not qualified for LLG</span>
         ) : null}
@@ -2861,7 +2905,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           </fieldset>
         ) : null}
         <Viewport3DFieldRefreshCountdown refresh={fieldRefresh} />
-        <span>{diagnostics}</span>
+        {!savedViewportActive ? (
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button className="fm-viewport-3d__render-details-trigger" size="sm" type="button" variant="secondary">Render details</Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" aria-label="Render diagnostics" className="fm-viewport-3d__render-details">
+              {diagnostics}
+            </PopoverContent>
+          </Popover>
+        ) : null}
       </div>
       {clientReady && colors ? (
         <Viewport3DCanvas
@@ -2884,6 +2937,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           <Viewport3DScene
             {...sceneProps}
             antennaFieldOverlay={antennaFieldOverlay}
+            artifactFieldOverlay={artifactField.model}
+            fieldModel={artifactField.historical ? null : sceneProps.fieldModel}
+            fdmVectorSegments={artifactField.historical ? null : sceneProps.fdmVectorSegments}
+            fdmVectorColors={artifactField.historical ? null : sceneProps.fdmVectorColors}
             adoptionRegistry={visualizationDebugAdoptionRegistry}
             colors={colors}
             savedViewportActive={savedViewportActive}
@@ -2917,9 +2974,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           {discretizationKind}
         </div>
       )}
-      {colorbarLegends.length > 0 ? (
+      {displayedColorbarLegends.length > 0 ? (
         <div className="fm-viewport-3d__colorbar-stack">
-          {colorbarLegends.map(({ key, legend }) => (
+          {displayedColorbarLegends.map(({ key, legend }) => (
             <Viewport3DColorbar key={key} legend={legend} />
           ))}
         </div>
@@ -3133,7 +3190,7 @@ function Viewport3DRendererProfile({
   return null;
 }
 
-const Viewport3DColorbar = memo(function Viewport3DColorbar({
+export const Viewport3DColorbar = memo(function Viewport3DColorbar({
   legend,
 }: {
   legend: Viewport3DColorbarLegend;
@@ -3191,7 +3248,9 @@ const Viewport3DColorbar = memo(function Viewport3DColorbar({
         )
       : legend.maxLabel;
   const targetLabel = legend.labelPrefix?.replace(/:\s*$/, "") ?? "";
-  const componentLabel = viewport3DColorbarComponentLabel(legend.colorMode);
+  const componentLabel = legend.quantityId && isScalarSpatialQuantityId(legend.quantityId)
+    ? null
+    : viewport3DColorbarComponentLabel(legend.colorMode);
   const unitLabel = effectiveDisplayUnit || legend.sourceUnit || "1";
   const rangeLabel = range ? "Rendered range" : "Loading field range";
   return (

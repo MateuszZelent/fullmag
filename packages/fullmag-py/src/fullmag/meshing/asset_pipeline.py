@@ -46,9 +46,14 @@ from ._gmsh_swept import (
     THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON,
     _SCOPED_LAYER_PLANE_PROOF_KEY,
     _coincident_ring_airbox_bounds,
+    _disconnected_mixed_p1_pair,
     _fresh_scoped_layer_plane_attempt_options,
     _has_component_scoped_size_fields,
     _is_box_cylinder_ring,
+    _mixed_v2_transition_shell_parameters_m,
+    _mixed_v2_body_aabb,
+    attach_disconnected_mixed_p1_certificate_v2,
+    generate_disconnected_mixed_p1_mesh,
     _supports_scoped_layer_partitioned_box,
 )
 from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS
@@ -1266,6 +1271,11 @@ def _sanitize_surface_mesh_for_stl_export(surface: object) -> object:
     return mesh
 
 
+def _export_surface_for_gmsh(surface: Any, destination: Path) -> None:
+    """Export a surface in the ASCII STL form accepted by the Gmsh bridge."""
+    surface.export(destination, file_type="stl_ascii")
+
+
 def _surface_preview_to_mesh_data(preview: dict[str, object]) -> MeshData:
     nodes = np.asarray(preview.get("nodes", []), dtype=np.float64)
     if nodes.ndim != 2 or nodes.shape[1] != 3:
@@ -1298,6 +1308,7 @@ def realize_fem_mesh_asset(
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
     _owner_geometry_names: Sequence[str] | None = None,
     object_id: str | None = None,
+    _coincident_closure: object | None = None,
 ) -> MeshData:
     """Resolve a FEM mesh asset from either a prebuilt mesh or geometry source.
 
@@ -1330,6 +1341,15 @@ def realize_fem_mesh_asset(
         owner_geometry_names=_owner_geometry_names,
         per_object_recipes=per_object_recipes,
     )
+
+    if _coincident_closure is not None:
+        if hints.mesh is not None or target.order != 1 or mesh_options.periodic_pair_ids:
+            raise ValueError("coincident source requires generated nonperiodic P1 geometry mesh")
+        from ._antenna_coincident_cut import realize_antenna_coincident_loop_mesh
+        return realize_antenna_coincident_loop_mesh(
+            _coincident_closure, geometry=geometry, object_id=object_id,
+            hmax_m=target.hmax, mesh_options=mesh_options,
+        )
 
     preview = build_surface_preview_payload(geometry)
     if preview is not None:
@@ -2517,6 +2537,37 @@ def _qualified_mixed_per_geometry_body_hmax(
     return body_hmax
 
 
+def _resolve_mixed_v2_body_hmaxes(
+    components: tuple[Box, Geometry, Cylinder, Cylinder, tuple[float, float, float]],
+    hints: FEM,
+    *,
+    mesh_workflow: Mapping[str, object] | None,
+    per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None,
+) -> tuple[float, float]:
+    """Resolve the independent Box and annulus targets without merging them."""
+    box, ring_geometry, _outer, _inner, _offset = components
+    owner_names = (box.geometry_name, ring_geometry.geometry_name)
+    values: list[float] = []
+    for geometry in (box, ring_geometry):
+        target = resolve_object_preview_target(
+            geometry,
+            hints,
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=dict(per_object_recipes or {}),
+            owner_geometry_names=owner_names,
+        )
+        if target.order != 1:
+            raise ValueError(
+                "mixed_v2_mesh_policy_rejects: every magnetic body must use order=1"
+            )
+        if not math.isfinite(float(target.hmax)) or float(target.hmax) <= 0.0:
+            raise ValueError(
+                f"mixed_v2_mesh_policy_rejects: {geometry.geometry_name!r} hmax is invalid"
+            )
+        values.append(float(target.hmax))
+    return values[0], values[1]
+
+
 def _realize_fem_domain_mesh_asset_from_components_impl(
     geometries: list[Geometry],
     hints: FEM,
@@ -2526,6 +2577,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
     assembly_policy: SharedMeshAssemblyPolicy | None = None,
     object_regions: list[dict[str, object]] | None = None,
+    body_material_fields: Mapping[str, Mapping[str, object]] | None = None,
+    geometry_object_ids: Mapping[str, str] | None = None,
 ) -> tuple[MeshData, list[dict[str, object]], SharedDomainBuildReport]:
     """Component-aware shared FEM domain mesh with stable geometry identity.
 
@@ -2642,8 +2695,124 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         surface_mesh_options,
         context="shared-domain mesh planner",
     )
+    mixed_v2_components = _disconnected_mixed_p1_pair(geometries)
+    mixed_v2_candidate = mixed_v2_components is not None
+    mixed_v2_box_requests_sweep = (
+        surface_mesh_options.mesh_strategy == "swept_prism"
+    )
+    if mixed_v2_components is not None and not mixed_v2_box_requests_sweep:
+        mixed_box, mixed_ring, _mixed_outer, _mixed_inner, _mixed_offset = (
+            mixed_v2_components
+        )
+        resolved_mixed_overrides = _resolve_per_geometry_overrides(
+            mesh_workflow.get("per_geometry")
+            if isinstance(mesh_workflow, Mapping)
+            else None,
+            geometries=[mixed_box, mixed_ring],
+            owner_geometry_names=(
+                mixed_box.geometry_name,
+                mixed_ring.geometry_name,
+            ),
+            missing_error_code="mesh_geometry_owner_binding_missing",
+        )
+        box_override = resolved_mixed_overrides.get(mixed_box.geometry_name)
+        mixed_v2_box_requests_sweep = bool(
+            isinstance(box_override, Mapping)
+            and box_override.get("mesh_strategy") == "swept_prism"
+        )
+    mixed_v2_direct = (
+        mixed_v2_components is not None
+        and airbox is not None
+        and mixed_v2_box_requests_sweep
+        and frozen_payload is None
+        and not conformal_object_regions
+        and hints.order == 1
+    )
+    mixed_v2_hmaxes: tuple[float, float] | None = None
+    mixed_v2_layers: int | None = None
+    if mixed_v2_direct:
+        assert mixed_v2_components is not None
+        mixed_v2_hmaxes = _resolve_mixed_v2_body_hmaxes(
+            mixed_v2_components,
+            hints,
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=per_object_recipes,
+        )
+        mixed_v2_layers = int(surface_mesh_options.through_thickness_elements or 1)
+        if mixed_v2_layers not in (1, 2, 3):
+            raise ValueError(
+                "mixed_v2_mesh_policy_rejects: exact layer count must be 1, 2 or 3"
+            )
+        if surface_mesh_options.algorithm_2d != 6:
+            raise ValueError(
+                "mixed_v2_mesh_policy_rejects: algorithm_2d must be 6"
+            )
+        if surface_mesh_options.algorithm_3d not in (1, 10):
+            raise ValueError(
+                "mixed_v2_mesh_policy_rejects: algorithm_3d must be 1 or 10"
+            )
+        if surface_mesh_options.optimize not in (None, "Gmsh"):
+            raise ValueError(
+                "mixed_v2_mesh_policy_rejects: optimizer must be None or 'Gmsh'"
+            )
+        if surface_mesh_options.periodic_pair_ids:
+            raise ValueError(
+                "mixed_v2_mesh_policy_rejects: periodic pairs are unsupported"
+            )
+        for recipe_name, recipe in (per_object_recipes or {}).items():
+            if recipe.size_fields or recipe.operations:
+                raise ValueError(
+                    "mixed_v2_mesh_policy_rejects: explicit size fields/operations "
+                    f"for {recipe_name!r} are not part of the certified route"
+                )
+            for field_name in ("algorithm_2d", "algorithm_3d"):
+                value = getattr(recipe, field_name)
+                expected_value = (
+                    6
+                    if field_name == "algorithm_2d"
+                    else int(surface_mesh_options.algorithm_3d)
+                )
+                if value is not None and int(value) != expected_value:
+                    raise ValueError(
+                        "mixed_v2_mesh_policy_rejects: per-object algorithm differs "
+                        f"for {recipe_name!r}"
+                    )
+            if recipe.optimize not in (None, surface_mesh_options.optimize):
+                raise ValueError(
+                    "mixed_v2_mesh_policy_rejects: per-object optimizer differs "
+                    f"for {recipe_name!r}"
+                )
+            if recipe.boundary_layer_count is not None:
+                raise ValueError(
+                    "mixed_v2_mesh_policy_rejects: per-object boundary layer"
+                )
+        raw_mesh_options = (
+            mesh_workflow.get("mesh_options", {})
+            if isinstance(mesh_workflow, Mapping)
+            else {}
+        )
+        if isinstance(raw_mesh_options, Mapping) and raw_mesh_options.get("size_fields"):
+            raise ValueError(
+                "mixed_v2_mesh_policy_rejects: explicit size fields are unsupported"
+            )
+        resolved_mixed_overrides = _resolve_per_geometry_overrides(
+            mesh_workflow.get("per_geometry")
+            if isinstance(mesh_workflow, Mapping)
+            else None,
+            geometries=[mixed_v2_components[0], mixed_v2_components[1]],
+            owner_geometry_names=(
+                mixed_v2_components[0].geometry_name,
+                mixed_v2_components[1].geometry_name,
+            ),
+            missing_error_code="mesh_geometry_owner_binding_missing",
+        )
     qualified_mixed_body_hmax: float | None = None
-    if surface_mesh_options.mesh_strategy == "swept_prism":
+    if mixed_v2_candidate and not mixed_v2_direct:
+        raise ValueError(
+            "mixed_v2_mesh_policy_requires: the Box body must request the "
+            "qualified swept_prism shared-domain route"
+        )
+    if surface_mesh_options.mesh_strategy == "swept_prism" and not mixed_v2_candidate:
         qualified_mixed_body_hmax = _qualified_mixed_per_geometry_body_hmax(
             mesh_workflow,
             geometries,
@@ -2781,7 +2950,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 b_max = tuple(float(v) for v in verts.max(axis=0))
                 bounds_by_name[geometry.geometry_name] = (b_min, b_max)
                 comp_path = Path(tmp_dir) / f"{geometry.geometry_name}.stl"
-                comp_mesh.export(comp_path)
+                _export_surface_for_gmsh(comp_mesh, comp_path)
                 component_descriptors.append(
                     ComponentDescriptor(
                         geometry_name=geometry.geometry_name,
@@ -2889,7 +3058,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             per_object_recipes=per_object_recipes,
         )
         used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
-        if mixed_shared_geo_direct:
+        if mixed_v2_direct:
+            planned_build_mode = "multi_geometry_geo_mixed_v2"
+        elif mixed_shared_geo_direct:
             planned_build_mode = "single_geometry_geo_mixed"
         elif ring_shared_geo_direct:
             planned_build_mode = "single_geometry_geo_ring"
@@ -2985,9 +3156,13 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 )
 
             effective_hmax = (
-                qualified_mixed_body_hmax
-                if mixed_shared_geo_direct and qualified_mixed_body_hmax is not None
-                else float(hints.hmax)
+                max(mixed_v2_hmaxes)
+                if mixed_v2_direct and mixed_v2_hmaxes is not None
+                else (
+                    qualified_mixed_body_hmax
+                    if mixed_shared_geo_direct and qualified_mixed_body_hmax is not None
+                    else float(hints.hmax)
+                )
             )
             if (
                 len(geometries) == 1
@@ -3029,20 +3204,169 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         owner_hmax_candidates.append(owner_field_hmax)
                 effective_hmax = max(owner_hmax_candidates)
             if (
-                not (mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct)
+                not (
+                    mixed_v2_direct
+                    or mixed_shared_geo_direct
+                    or ring_shared_geo_direct
+                    or box_layered_geo_direct
+                )
                 and airbox is not None
                 and airbox.maximum_element_size is not None
                 and float(airbox.maximum_element_size) > effective_hmax
             ):
                 effective_hmax = float(airbox.maximum_element_size)
-            if not (mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct):
+            if not (
+                mixed_v2_direct
+                or mixed_shared_geo_direct
+                or ring_shared_geo_direct
+                or box_layered_geo_direct
+            ):
                 for field in mesh_options.size_fields:
                     vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
                     if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
                         effective_hmax = float(vin)
 
             latest_mesh_phase = "meshing"
-            if single_geometry_occ_direct:
+            if mixed_v2_direct:
+                assert mixed_v2_components is not None
+                assert mixed_v2_hmaxes is not None
+                assert mixed_v2_layers is not None
+                build_mode = "multi_geometry_geo_mixed_v2"
+                emit_progress_event(
+                    {
+                        "kind": "mesh_build_phase",
+                        "phase": "meshing",
+                        "message": (
+                            "Generating shared-domain mixed-P1 mesh for Box prism "
+                            "and disconnected annulus tetrahedra"
+                        ),
+                    }
+                )
+                box, ring_geometry, outer, inner, offset = mixed_v2_components
+                # The v2 route consumes only the deterministic body targets;
+                # generated background fields would change the certified
+                # topology and are therefore rejected before this point.
+                mixed_options = _dc_replace(
+                    mesh_options,
+                    size_fields=[],
+                    lower_bound_fields=list(mesh_options.lower_bound_fields),
+                )
+                mesh = generate_disconnected_mixed_p1_mesh(
+                    box,
+                    ring_geometry,
+                    outer,
+                    inner,
+                    offset,
+                    box_hmax=mixed_v2_hmaxes[0],
+                    ring_hmax=mixed_v2_hmaxes[1],
+                    n_layers=mixed_v2_layers,
+                    airbox=airbox,
+                    options=mixed_options,
+                )
+                box_size = np.asarray(box.size, dtype=np.float64)
+                ring_axis = np.asarray(outer.axis, dtype=np.float64)
+                ring_center = np.asarray(offset, dtype=np.float64)
+                ring_min, ring_max = _mixed_v2_body_aabb(
+                    center=ring_center,
+                    axis=ring_axis,
+                    radius=float(outer.radius),
+                    height=float(outer.height),
+                )
+                box_min = -0.5 * box_size
+                box_max = 0.5 * box_size
+                body_min = np.minimum(box_min, ring_min)
+                body_max = np.maximum(box_max, ring_max)
+                separation_components = np.maximum(
+                    np.maximum(box_min - ring_max, ring_min - box_max),
+                    0.0,
+                )
+                body_gap = float(np.linalg.norm(separation_components))
+                body_volume = float(
+                    np.prod(box_size)
+                    + math.pi
+                    * (float(outer.radius) ** 2 - float(inner.radius) ** 2)
+                    * float(outer.height)
+                )
+                air_size = (
+                    (body_max - body_min) * float(airbox.padding_factor)
+                    if airbox.size is None
+                    else np.asarray(airbox.size, dtype=np.float64)
+                )
+                air_center = (
+                    np.zeros(3, dtype=np.float64)
+                    if airbox.center is None
+                    else np.asarray(airbox.center, dtype=np.float64)
+                )
+                air_min = air_center - 0.5 * air_size
+                air_max = air_center + 0.5 * air_size
+                if body_material_fields is None:
+                    raise ValueError(
+                        "mixed_v2_material_fields_missing: every magnetic body "
+                        "requires explicit body-owned FEM coefficients"
+                    )
+                box_object_id = str(
+                    (geometry_object_ids or {}).get(box.geometry_name, box.geometry_name)
+                )
+                ring_object_id = str(
+                    (geometry_object_ids or {}).get(
+                        ring_geometry.geometry_name,
+                        ring_geometry.geometry_name,
+                    )
+                )
+                material_fields_by_object: dict[str, Mapping[str, object]] = {}
+                for geometry, object_id in (
+                    (box, box_object_id),
+                    (ring_geometry, ring_object_id),
+                ):
+                    fields = body_material_fields.get(geometry.geometry_name)
+                    if not isinstance(fields, Mapping):
+                        raise ValueError(
+                            "mixed_v2_material_fields_missing: "
+                            f"geometry {geometry.geometry_name!r} has no field payload"
+                        )
+                    material_fields_by_object[object_id] = dict(fields)
+                requested_axis = (
+                    {"x": 0, "y": 1, "z": 2}.get(str(mixed_options.sweep_direction))
+                    if mixed_options.sweep_direction != "auto"
+                    else int(np.argmin(box_size))
+                )
+                if requested_axis is None:
+                    requested_axis = int(np.argmin(box_size))
+                shell_thickness_m, _shell_target_m = (
+                    _mixed_v2_transition_shell_parameters_m(
+                        box_size_m=box_size,
+                        airbox_size_m=air_size,
+                        gap_m=body_gap,
+                        box_hmax_m=mixed_v2_hmaxes[0],
+                        ring_hmax_m=mixed_v2_hmaxes[1],
+                        airbox=airbox,
+                    )
+                )
+                mesh = attach_disconnected_mixed_p1_certificate_v2(
+                    mesh,
+                    body_object_ids=(box_object_id, ring_object_id),
+                    body_bounds_min_m=tuple(float(value) for value in body_min),
+                    body_bounds_max_m=tuple(float(value) for value in body_max),
+                    expected_magnetic_volume_m3=body_volume,
+                    airbox_bounds_min_m=tuple(float(value) for value in air_min),
+                    airbox_bounds_max_m=tuple(float(value) for value in air_max),
+                    requested_axis=int(requested_axis),
+                    requested_layers=mixed_v2_layers,
+                    requested_direction=mixed_options.sweep_direction,
+                    body_gap_m=body_gap,
+                    transition_shell_thickness_m=shell_thickness_m,
+                    body_material_fields=material_fields_by_object,
+                    requested_algorithm_3d=int(mixed_options.algorithm_3d),
+                    transition_algorithm_3d=1,
+                    tetrahedral_algorithm_3d=int(mixed_options.algorithm_3d),
+                    optimizer=mixed_options.optimize,
+                    optimizer_iterations=(
+                        int(mixed_options.optimize_iters)
+                        if mixed_options.optimize is not None
+                        else 0
+                    ),
+                )
+            elif single_geometry_occ_direct:
                 build_mode = (
                     "single_geometry_geo_mixed"
                     if mixed_shared_geo_direct
@@ -3376,7 +3700,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             trimesh.util.concatenate(component_meshes)
                         )
                         surface_path = Path(tmp_dir) / "shared_domain_surface.stl"
-                        combined_surface.export(surface_path)
+                        _export_surface_for_gmsh(combined_surface, surface_path)
                         from .gmsh_bridge import generate_mesh_from_file
                         fallback_geometry_binding = (
                             {"geometry_name": geometries[0].geometry_name}
@@ -3432,7 +3756,19 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         assigned_markers = np.zeros(mesh.n_elements, dtype=np.int32)
         region_markers: list[dict[str, object]] = []
         object_region_markers: list[dict[str, object]] = []
-        if result is not None:
+        if mixed_v2_direct:
+            assert mixed_v2_components is not None
+            box, ring_geometry, _outer, _inner, _offset = mixed_v2_components
+            if not np.all(np.isin(source_markers, np.asarray([0, 1, 2], dtype=np.int32))):
+                raise ValueError(
+                    "mixed_v2_marker_coverage_invalid: expected air=0 and body markers 1/2"
+                )
+            assigned_markers = np.asarray(source_markers, dtype=np.int32).copy()
+            region_markers = [
+                {"geometry_name": box.geometry_name, "marker": 1},
+                {"geometry_name": ring_geometry.geometry_name, "marker": 2},
+            ]
+        elif result is not None:
             for used_marker, geometry in enumerate(geometries, start=1):
                 source_marker = result.component_marker_tags.get(geometry.geometry_name)
                 if source_marker is None:
@@ -3587,10 +3923,18 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             magnetic_submesh_signatures=magnetic_submesh_signatures,
         )
         if classified_mesh.mixed_layer_topology_certificate is not None:
+            certificate_payload = classified_mesh.mixed_layer_topology_certificate.to_dict()
+            is_v2 = (
+                certificate_payload.get("schema_version")
+                == "mixed_layer_topology_certificate.v2"
+            )
             report = _dc_replace(
                 report,
                 mixed_layer_topology_certificate=(
-                    classified_mesh.mixed_layer_topology_certificate.to_dict()
+                    None if is_v2 else certificate_payload
+                ),
+                mixed_layer_topology_certificate_v2=(
+                    certificate_payload if is_v2 else None
                 ),
             )
         if object_regions is not None:
@@ -3633,6 +3977,8 @@ def realize_fem_domain_mesh_asset_from_components(
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
     assembly_policy: SharedMeshAssemblyPolicy | None = None,
     object_regions: list[dict[str, object]] | None = None,
+    body_material_fields: Mapping[str, Mapping[str, object]] | None = None,
+    geometry_object_ids: Mapping[str, str] | None = None,
 ) -> tuple[MeshData, list[dict[str, object]]]:
     mesh, region_markers, _report = _realize_fem_domain_mesh_asset_from_components_impl(
         geometries,
@@ -3642,6 +3988,8 @@ def realize_fem_domain_mesh_asset_from_components(
         per_object_recipes=per_object_recipes,
         assembly_policy=assembly_policy,
         object_regions=object_regions,
+        body_material_fields=body_material_fields,
+        geometry_object_ids=geometry_object_ids,
     )
     return mesh, region_markers
 
@@ -3655,6 +4003,8 @@ def realize_fem_domain_mesh_asset_from_components_with_report(
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
     assembly_policy: SharedMeshAssemblyPolicy | None = None,
     object_regions: list[dict[str, object]] | None = None,
+    body_material_fields: Mapping[str, Mapping[str, object]] | None = None,
+    geometry_object_ids: Mapping[str, str] | None = None,
 ) -> tuple[MeshData, list[dict[str, object]], SharedDomainBuildReport]:
     return _realize_fem_domain_mesh_asset_from_components_impl(
         geometries,
@@ -3664,6 +4014,8 @@ def realize_fem_domain_mesh_asset_from_components_with_report(
         per_object_recipes=per_object_recipes,
         assembly_policy=assembly_policy,
         object_regions=object_regions,
+        body_material_fields=body_material_fields,
+        geometry_object_ids=geometry_object_ids,
     )
 
 

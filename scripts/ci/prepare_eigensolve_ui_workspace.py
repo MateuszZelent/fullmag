@@ -12,6 +12,13 @@ import tempfile
 from pathlib import Path
 
 
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_ROOT))
+
+from windows.stage_workspace_frontend import patch_file_relatives
+
+
 class WorkspacePreparationError(RuntimeError):
     pass
 
@@ -141,6 +148,11 @@ def _manifest_sources(repo: Path) -> list[tuple[str, bytes]]:
         repo / "pnpm-lock.yaml",
         repo / "pnpm-workspace.yaml",
     ]
+    try:
+        patch_relatives = patch_file_relatives(repo)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise WorkspacePreparationError(f"Cannot enumerate pnpm patch inputs: {error}") from error
+    paths.extend(repo / relative for relative in patch_relatives)
     apps_root = repo / "apps"
     if apps_root.is_symlink() or not apps_root.is_dir():
         raise WorkspacePreparationError("apps must be a regular directory in the checkout")

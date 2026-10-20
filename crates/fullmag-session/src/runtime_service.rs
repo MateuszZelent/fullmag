@@ -7,15 +7,20 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use std::fs::{File, OpenOptions, TryLockError};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use uuid::Uuid;
 
-use crate::repository_path::{checked_path, create_parent, validate_store_id};
+use crate::repository_path::{
+    checked_path, create_parent, reject_link, validate_relative_path, validate_store_id,
+};
+use crate::host_resource_ledger::{
+    DockerNamespaceTeardownAttestation, HostResourceLedgerSnapshot,
+};
 use crate::runtime_service_host::RuntimeServiceHostExecution;
 use crate::runtime_service_startup::RuntimeServiceStartupGuard;
 use crate::store::SessionStore;
@@ -31,6 +36,15 @@ pub const RUNTIME_SERVICE_CONFIG_SCHEMA_V2: &str = "runtime_service_config.v2";
 pub const RUNTIME_SERVICE_OWNER_PROTOCOL: &str = "stdin-v1";
 pub const RUNTIME_SERVICE_OWNER_LOCK_PATH: &str = "runtime-services/OWNER.lock";
 pub const RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH: &str = "runtime-services/OWNER.json";
+pub const RUNTIME_SERVICE_RECOVERY_REQUEST_SCHEMA: &str = "runtime_service_recovery_request.v1";
+pub const RUNTIME_SERVICE_RECOVERY_SCHEMA: &str = "runtime_service_recovery.v1";
+/// Separate operator contract for recovering a stopped Docker runtime
+/// namespace. The legacy Unknown-owner recovery remains v1 and is not
+/// widened to accept a Ready owner or a Docker teardown attestation.
+pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA: &str =
+    "runtime_service_container_recovery_request.v1";
+pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_SCHEMA: &str =
+    "runtime_service_container_recovery.v1";
 
 const LOCK_DESCRIPTOR: &[u8] = b"fullmag.runtime-service-owner.lock.v1\n";
 const MAX_DESCRIPTOR_BYTES: usize = 256 * 1024;
@@ -40,6 +54,14 @@ const MAX_STATUS_BYTES: usize = 128;
 const MAX_CONTROL_ADDRESS_BYTES: usize = 128;
 const RUNTIME_SERVICE_COMPUTE_ROLE: &str = "compute";
 const RUNTIME_SERVICE_PREPARATION_ROLE: &str = "preparation";
+const MAX_RECOVERY_REQUEST_BYTES: usize = 256 * 1024;
+const MAX_RECOVERY_RECEIPT_BYTES: usize = 256 * 1024;
+const MAX_RECOVERY_LOG_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RECOVERY_ARCHIVED_FILES: usize = 32;
+const RECOVERY_MANDATORY_ARCHIVED_FILES: usize = 12;
+const RECOVERY_ARCHIVED_CONFIGURATION_KEY: &str = "configuration.json";
+const CONTAINER_RECOVERY_ARCHIVED_CONFIGURATION_KEY: &str = "configuration.json";
+const CONTAINER_RECOVERY_MAX_TEXT_BYTES: usize = 255;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +72,520 @@ pub enum RuntimeServiceState {
     Drained,
     Failed,
     Unknown,
+}
+
+/// A scheduler checkpoint may be absent when the scheduler drained before
+/// publishing its first completed-worker checkpoint. This is an attested
+/// state, never a synthetic file or digest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeServiceRecoveryAbsentSourceReason {
+    SchedulerCheckpointNotPublished,
+}
+
+/// Operator authorization for recovering one specific runtime owner whose
+/// outcome is still unknown.  The request is intentionally a complete typed
+/// snapshot of the old owner; a PID, timestamp, or age is never sufficient.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeServiceRecoveryRequest {
+    pub schema_version: String,
+    pub request_id: String,
+    pub config_sha256: String,
+    pub owner_sha256: String,
+    pub launch_sha256: String,
+    pub expected_owner: RuntimeServiceOwnerDescriptor,
+}
+
+impl RuntimeServiceRecoveryRequest {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != RUNTIME_SERVICE_RECOVERY_REQUEST_SCHEMA {
+            bail!("unsupported runtime service recovery request schema");
+        }
+        validate_canonical_uuid(&self.request_id, "runtime service recovery request id")?;
+        validate_lower_hex(&self.config_sha256, "runtime service recovery config SHA-256", 64)?;
+        validate_lower_hex(&self.owner_sha256, "runtime service recovery owner SHA-256", 64)?;
+        validate_lower_hex(&self.launch_sha256, "runtime service recovery launch SHA-256", 64)?;
+        validate_descriptor(&self.expected_owner)?;
+        validate_canonical_uuid(
+            &self.expected_owner.owner_token,
+            "runtime service recovery owner token",
+        )?;
+        validate_canonical_uuid(
+            &self.expected_owner.process_start_token,
+            "runtime service recovery process-start token",
+        )?;
+        if self.expected_owner.state != RuntimeServiceState::Unknown {
+            bail!("runtime service recovery requires an unknown expected owner");
+        }
+        Ok(())
+    }
+}
+
+/// Durable result of a controlled recovery.  `status=prepared` is an
+/// intermediate crash-recovery marker; successful public completion is always
+/// `status=recovered` and `outcome=failed` because an Unknown owner cannot be
+/// retroactively proven Drained.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeServiceRecoveryReceipt {
+    pub schema_version: String,
+    pub request_id: String,
+    pub request_sha256: String,
+    pub status: String,
+    pub outcome: String,
+    pub target_id: String,
+    pub config_sha256: String,
+    pub owner_sha256_before: String,
+    pub owner_state_after: String,
+    pub owner_sha256_after: String,
+    pub archived_evidence_path: String,
+    pub archived_evidence_sha256: String,
+    pub archived_files: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub archived_absent_sources: BTreeMap<String, RuntimeServiceRecoveryAbsentSourceReason>,
+    pub historical_build_commit: String,
+    pub historical_build_snapshot: String,
+    pub executor_build_commit: String,
+    pub executor_build_snapshot: String,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Identifies which immutable application configuration was observed while
+/// recovering a stopped runtime namespace. The bytes are pinned separately
+/// from the parsed configuration because JSON formatting is part of the
+/// operator authorization boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimeServiceApplicationPin {
+    ExternalOnly { raw_sha256: String },
+    Persisted { raw_sha256: String },
+}
+
+impl RuntimeServiceApplicationPin {
+    fn validate(&self) -> Result<()> {
+        let digest = match self {
+            Self::ExternalOnly { raw_sha256 } | Self::Persisted { raw_sha256 } => raw_sha256,
+        };
+        validate_lower_hex(digest, "runtime service application SHA-256", 64)
+    }
+}
+
+/// One container in the operator's Docker inspection manifest. The native
+/// service does not infer service identity from a container name; all fields
+/// are explicitly pinned and matched against the teardown attestation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeServiceContainerPin {
+    pub container_id: String,
+    pub image_id: String,
+    pub config_sha256: String,
+    pub service: String,
+    pub compose_project: String,
+    pub private_pid_namespace: bool,
+    pub host_pid: bool,
+    pub device_requests_sha256: String,
+}
+
+impl RuntimeServiceContainerPin {
+    fn validate(&self) -> Result<()> {
+        validate_lower_hex(
+            &self.container_id,
+            "runtime service container id",
+            64,
+        )?;
+        let image_digest = self
+            .image_id
+            .strip_prefix("sha256:")
+            .context("runtime service container image id must use sha256 identity")?;
+        validate_lower_hex(
+            image_digest,
+            "runtime service container image digest",
+            64,
+        )?;
+        validate_lower_hex(
+            &self.config_sha256,
+            "runtime service container config SHA-256",
+            64,
+        )?;
+        validate_text(
+            &self.service,
+            "runtime service container service",
+            CONTAINER_RECOVERY_MAX_TEXT_BYTES,
+        )?;
+        validate_text(
+            &self.compose_project,
+            "runtime service container Compose project",
+            CONTAINER_RECOVERY_MAX_TEXT_BYTES,
+        )?;
+        validate_lower_hex(
+            &self.device_requests_sha256,
+            "runtime service container device request SHA-256",
+            64,
+        )?;
+        if !self.private_pid_namespace || self.host_pid {
+            bail!(
+                "runtime service container recovery requires a private PID namespace without host PID"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Operator-authorized proof request for an already stopped Docker runtime
+/// namespace. This is intentionally independent from
+/// `RuntimeServiceRecoveryRequest`: a Ready owner is never accepted by the
+/// legacy Unknown-owner path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeServiceContainerRecoveryRequest {
+    pub schema_version: String,
+    pub request_id: String,
+    pub config_sha256: String,
+    pub owner_sha256: String,
+    pub launch_sha256: String,
+    pub expected_owner: RuntimeServiceOwnerDescriptor,
+    pub store_root_sha256: String,
+    pub application: RuntimeServiceApplicationPin,
+    pub ledger_root_sha256: String,
+    pub ledger_snapshot_sha256: String,
+    pub docker_engine_id_sha256: String,
+    pub docker_manifest_sha256: String,
+    /// Digest of the immutable stop journal that records the prior owner
+    /// proof. The native core never invents this evidence after teardown.
+    pub prior_ready_owner_proof_sha256: String,
+    pub device_release_resource_id: String,
+    pub device_release_mapping_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_release_gpu_uuid: Option<String>,
+    pub containers: Vec<RuntimeServiceContainerPin>,
+}
+
+impl RuntimeServiceContainerRecoveryRequest {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA {
+            bail!("unsupported runtime service container recovery request schema");
+        }
+        validate_canonical_uuid(&self.request_id, "runtime service container recovery request id")?;
+        for (digest, field) in [
+            (&self.config_sha256, "runtime service container recovery config SHA-256"),
+            (&self.owner_sha256, "runtime service container recovery owner SHA-256"),
+            (&self.launch_sha256, "runtime service container recovery launch SHA-256"),
+            (&self.store_root_sha256, "runtime service container recovery store-root SHA-256"),
+            (&self.ledger_root_sha256, "runtime service container recovery ledger-root SHA-256"),
+            (
+                &self.ledger_snapshot_sha256,
+                "runtime service container recovery ledger snapshot SHA-256",
+            ),
+            (
+                &self.docker_engine_id_sha256,
+                "runtime service container recovery Docker engine SHA-256",
+            ),
+            (
+                &self.docker_manifest_sha256,
+                "runtime service container recovery Docker manifest SHA-256",
+            ),
+            (
+                &self.prior_ready_owner_proof_sha256,
+                "runtime service container recovery prior-ready proof SHA-256",
+            ),
+            (
+                &self.device_release_mapping_sha256,
+                "runtime service container recovery device mapping SHA-256",
+            ),
+        ] {
+            validate_lower_hex(digest, field, 64)?;
+        }
+        self.application.validate()?;
+        validate_descriptor(&self.expected_owner)?;
+        validate_canonical_uuid(
+            &self.expected_owner.owner_token,
+            "runtime service container recovery owner token",
+        )?;
+        validate_canonical_uuid(
+            &self.expected_owner.process_start_token,
+            "runtime service container recovery process-start token",
+        )?;
+        if !matches!(
+            self.expected_owner.state,
+            RuntimeServiceState::Ready | RuntimeServiceState::Unknown
+        ) {
+            bail!(
+                "runtime service container recovery requires a Ready or Unknown expected owner"
+            );
+        }
+        require_recoverable_owner_identity(&self.expected_owner)?;
+        validate_text(
+            &self.device_release_resource_id,
+            "runtime service container recovery device resource id",
+            CONTAINER_RECOVERY_MAX_TEXT_BYTES,
+        )?;
+        if let Some(gpu_uuid) = self.device_release_gpu_uuid.as_deref() {
+            validate_text(
+                gpu_uuid,
+                "runtime service container recovery GPU UUID",
+                CONTAINER_RECOVERY_MAX_TEXT_BYTES,
+            )?;
+        }
+        if self.containers.len() != 2 {
+            bail!(
+                "runtime service container recovery requires exactly backend and frontend containers"
+            );
+        }
+        let mut ids = BTreeSet::new();
+        let mut services = BTreeSet::new();
+        let mut compose_project: Option<&str> = None;
+        for container in &self.containers {
+            container.validate()?;
+            if let Some(expected_project) = compose_project {
+                if expected_project != container.compose_project {
+                    bail!(
+                        "runtime service container recovery spans multiple Compose projects"
+                    );
+                }
+            } else {
+                compose_project = Some(container.compose_project.as_str());
+            }
+            if !ids.insert(container.container_id.as_str()) {
+                bail!("runtime service container recovery repeats a container id");
+            }
+            if !services.insert(container.service.as_str()) {
+                bail!("runtime service container recovery repeats a Compose service");
+            }
+        }
+        if !services.contains("backend") || !services.contains("frontend") {
+            bail!(
+                "runtime service container recovery must pin exactly backend and frontend services"
+            );
+        }
+        Ok(())
+    }
+
+    /// Digest of the canonical request value. The recovery entry point also
+    /// receives the digest of the exact request file bytes, so formatting
+    /// changes cannot replay an earlier operator authorization.
+    pub fn canonical_sha256(&self) -> Result<String> {
+        self.validate()?;
+        Ok(crate::canonical_json_sha256(&serde_json::to_value(self)?))
+    }
+}
+
+/// Durable result of a Docker namespace recovery. `failed` is the resulting
+/// owner state; it means the previous owner is no longer admitted, never that
+/// the old children were observed to drain successfully.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeServiceContainerRecoveryReceipt {
+    pub schema_version: String,
+    pub request_id: String,
+    pub request_sha256: String,
+    pub status: String,
+    pub outcome: String,
+    pub target_id: String,
+    pub config_sha256: String,
+    pub owner_state_before: String,
+    pub owner_sha256_before: String,
+    pub owner_state_after: String,
+    pub owner_sha256_after: String,
+    pub store_root_sha256: String,
+    pub application: RuntimeServiceApplicationPin,
+    pub ledger_root_sha256: String,
+    pub ledger_snapshot_sha256: String,
+    pub attestation_sha256: String,
+    pub docker_manifest_sha256: String,
+    pub prior_ready_owner_proof_sha256: String,
+    pub device_release_mapping_sha256: String,
+    pub archived_evidence_path: String,
+    pub archived_evidence_sha256: String,
+    pub archived_files: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub archived_absent_sources: BTreeMap<String, RuntimeServiceRecoveryAbsentSourceReason>,
+    pub historical_build_commit: String,
+    pub historical_build_snapshot: String,
+    pub executor_build_commit: String,
+    pub executor_build_snapshot: String,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+impl RuntimeServiceContainerRecoveryReceipt {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != RUNTIME_SERVICE_CONTAINER_RECOVERY_SCHEMA {
+            bail!("unsupported runtime service container recovery receipt schema");
+        }
+        validate_canonical_uuid(&self.request_id, "runtime service container recovery receipt id")?;
+        validate_store_id(&self.target_id).context("runtime service container recovery target id")?;
+        validate_lower_hex(&self.request_sha256, "runtime service container recovery request SHA-256", 64)?;
+        validate_lower_hex(&self.config_sha256, "runtime service container recovery config SHA-256", 64)?;
+        validate_lower_hex(&self.owner_sha256_before, "runtime service container recovery owner SHA-256", 64)?;
+        validate_lower_hex(&self.owner_sha256_after, "runtime service container recovery result owner SHA-256", 64)?;
+        validate_lower_hex(&self.store_root_sha256, "runtime service container recovery store-root SHA-256", 64)?;
+        validate_lower_hex(&self.ledger_root_sha256, "runtime service container recovery ledger-root SHA-256", 64)?;
+        validate_lower_hex(&self.ledger_snapshot_sha256, "runtime service container recovery ledger snapshot SHA-256", 64)?;
+        validate_lower_hex(&self.attestation_sha256, "runtime service container recovery attestation SHA-256", 64)?;
+        validate_lower_hex(&self.docker_manifest_sha256, "runtime service container recovery Docker manifest SHA-256", 64)?;
+        validate_lower_hex(
+            &self.prior_ready_owner_proof_sha256,
+            "runtime service container recovery prior-ready proof SHA-256",
+            64,
+        )?;
+        validate_lower_hex(
+            &self.device_release_mapping_sha256,
+            "runtime service container recovery device mapping SHA-256",
+            64,
+        )?;
+        validate_lower_hex(&self.archived_evidence_sha256, "runtime service container recovery archive SHA-256", 64)?;
+        validate_lower_hex(&self.historical_build_commit, "runtime service historical build commit", 40)?;
+        validate_lower_hex(&self.historical_build_snapshot, "runtime service historical build snapshot", 64)?;
+        validate_lower_hex(&self.executor_build_commit, "runtime service recovery executor build commit", 40)?;
+        validate_lower_hex(&self.executor_build_snapshot, "runtime service recovery executor build snapshot", 64)?;
+        self.application.validate()?;
+        if !matches!(self.owner_state_before.as_str(), "ready" | "unknown") {
+            bail!("runtime service container recovery has an unsupported owner-before state");
+        }
+        if self.owner_state_after != "failed" {
+            bail!("runtime service container recovery owner state must be failed");
+        }
+        if self.outcome != "empty_namespace_recovered" {
+            bail!("runtime service container recovery has an unsupported outcome");
+        }
+        if !matches!(self.status.as_str(), "prepared" | "recovered") {
+            bail!("runtime service container recovery receipt has unsupported status");
+        }
+        if (self.status == "recovered") != self.completed_at.is_some() {
+            bail!("runtime service container recovery completion timestamp mismatch");
+        }
+        let archive_path = Path::new(&self.archived_evidence_path);
+        if !archive_path.is_absolute()
+            || archive_path.components().any(|component| {
+                matches!(component, std::path::Component::ParentDir)
+            })
+            || self.archived_evidence_path.chars().any(char::is_control)
+        {
+            bail!("runtime service container recovery archive path must be absolute and bounded");
+        }
+        if self.archived_files.is_empty()
+            || self.archived_files.len() + self.archived_absent_sources.len()
+                > MAX_RECOVERY_ARCHIVED_FILES
+        {
+            bail!("runtime service container recovery archive inventory is invalid");
+        }
+        for source in self.archived_absent_sources.keys() {
+            validate_recovery_absent_source_path(source)?;
+        }
+        for (source, digest) in &self.archived_files {
+            validate_recovery_archived_source_path(source)?;
+            validate_lower_hex(digest, "runtime service container archived file SHA-256", 64)?;
+        }
+        if self.archived_files.keys().any(|source| {
+            self.archived_absent_sources.contains_key(source)
+        }) {
+            bail!("runtime service container archive source is both present and absent");
+        }
+        if !self
+            .archived_files
+            .contains_key(CONTAINER_RECOVERY_ARCHIVED_CONFIGURATION_KEY)
+        {
+            bail!("runtime service container archive is missing raw configuration bytes");
+        }
+        Ok(())
+    }
+}
+
+impl RuntimeServiceRecoveryReceipt {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != RUNTIME_SERVICE_RECOVERY_SCHEMA {
+            bail!("unsupported runtime service recovery receipt schema");
+        }
+        validate_canonical_uuid(&self.request_id, "runtime service recovery receipt id")?;
+        validate_lower_hex(&self.request_sha256, "runtime service recovery request SHA-256", 64)?;
+        validate_lower_hex(&self.config_sha256, "runtime service recovery config SHA-256", 64)?;
+        validate_lower_hex(
+            &self.owner_sha256_before,
+            "runtime service recovery owner SHA-256",
+            64,
+        )?;
+        if self.owner_state_after != "failed" {
+            bail!("runtime service recovery owner state must be failed");
+        }
+        validate_lower_hex(
+            &self.owner_sha256_after,
+            "runtime service recovery result SHA-256",
+            64,
+        )?;
+        validate_lower_hex(
+            &self.archived_evidence_sha256,
+            "runtime service recovery archive SHA-256",
+            64,
+        )?;
+        validate_lower_hex(
+            &self.historical_build_commit,
+            "runtime service historical build commit",
+            40,
+        )?;
+        validate_lower_hex(
+            &self.historical_build_snapshot,
+            "runtime service historical build snapshot",
+            64,
+        )?;
+        validate_lower_hex(
+            &self.executor_build_commit,
+            "runtime service recovery executor build commit",
+            40,
+        )?;
+        validate_lower_hex(
+            &self.executor_build_snapshot,
+            "runtime service recovery executor build snapshot",
+            64,
+        )?;
+        let archive_path = Path::new(&self.archived_evidence_path);
+        if !archive_path.is_absolute()
+            || archive_path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+            || self.archived_evidence_path.chars().any(char::is_control)
+        {
+            bail!("runtime service recovery archive path must be absolute and bounded");
+        }
+        if !matches!(self.status.as_str(), "prepared" | "recovered") {
+            bail!("runtime service recovery receipt has unsupported status");
+        }
+        if self.outcome != "failed" {
+            bail!("runtime service recovery outcome must be failed");
+        }
+        if (self.status == "recovered") != self.completed_at.is_some() {
+            bail!("runtime service recovery receipt completion timestamp mismatch");
+        }
+        if self.archived_files.len() + self.archived_absent_sources.len()
+            < RECOVERY_MANDATORY_ARCHIVED_FILES
+            || self.archived_files.len() + self.archived_absent_sources.len()
+                > MAX_RECOVERY_ARCHIVED_FILES
+        {
+            bail!("runtime service recovery archive evidence has an incomplete inventory");
+        }
+        if self
+            .archived_files
+            .keys()
+            .any(|source| self.archived_absent_sources.contains_key(source))
+        {
+            bail!("runtime recovery archive source is both present and absent");
+        }
+        for source in self.archived_absent_sources.keys() {
+            validate_recovery_absent_source_path(source)?;
+        }
+        if !self
+            .archived_files
+            .contains_key(RECOVERY_ARCHIVED_CONFIGURATION_KEY)
+        {
+            bail!("runtime service recovery archive is missing raw configuration bytes");
+        }
+        for (relative, digest) in &self.archived_files {
+            validate_recovery_archived_source_path(relative)?;
+            validate_lower_hex(digest, "runtime service archived file SHA-256", 64)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +634,21 @@ pub struct RuntimeServiceOwner {
     _lock: File,
     descriptor_path: PathBuf,
     descriptor: RuntimeServiceOwnerDescriptor,
+}
+
+/// Holds the existing owner lock while a guarded terminal operation observes
+/// and reconciles the matching owner descriptor. A missing or corrupt lock is
+/// an error; `None` means another process still owns the native lock.
+pub struct RuntimeServiceOwnerLockGuard {
+    _lock: File,
+}
+
+impl RuntimeServiceOwnerLockGuard {
+    /// Try to hold the existing owner lock without creating it.
+    pub fn try_acquire_existing(root: &Path) -> Result<Option<Self>> {
+        let path = checked_path(root, RUNTIME_SERVICE_OWNER_LOCK_PATH)?;
+        Ok(try_open_existing_owner_lock(&path)?.map(|lock| Self { _lock: lock }))
+    }
 }
 
 impl RuntimeServiceOwner {
@@ -340,6 +891,37 @@ fn open_owner_lock(path: &Path) -> Result<(File, bool)> {
     Ok((file, created))
 }
 
+fn open_existing_owner_lock(path: &Path) -> Result<File> {
+    try_open_existing_owner_lock(path)?.context("runtime service owner is already active")
+}
+
+fn try_open_existing_owner_lock(path: &Path) -> Result<Option<File>> {
+    reject_link(path)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening existing runtime service owner lock {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(None),
+        Err(TryLockError::Error(error)) => {
+            return Err(error).context("acquiring native runtime service owner lock")
+        }
+    }
+    let descriptor = read_bounded_from_file(
+        &mut file,
+        LOCK_DESCRIPTOR.len(),
+        "runtime service owner lock descriptor",
+    )?;
+    if descriptor != LOCK_DESCRIPTOR {
+        bail!(
+            "runtime service owner lock descriptor is missing or corrupt; controlled recovery required"
+        );
+    }
+    Ok(Some(file))
+}
+
 fn read_descriptor(path: &Path) -> Result<Option<RuntimeServiceOwnerDescriptor>> {
     let parent = path
         .parent()
@@ -523,6 +1105,120 @@ pub fn validate_descriptor(descriptor: &RuntimeServiceOwnerDescriptor) -> Result
     Ok(())
 }
 
+fn require_recoverable_owner_identity(owner: &RuntimeServiceOwnerDescriptor) -> Result<()> {
+    if owner.children.len() != 2 {
+        bail!("runtime service container recovery requires exactly two owner children");
+    }
+    expected_child_role(owner, RUNTIME_SERVICE_COMPUTE_ROLE)?;
+    expected_child_role(owner, RUNTIME_SERVICE_PREPARATION_ROLE)?;
+    if owner.state == RuntimeServiceState::Unknown
+        && owner
+            .children
+            .iter()
+            .any(|child| !matches!(child.status.as_str(), "running" | "unknown"))
+    {
+        bail!("unknown runtime service owner has a terminal child status");
+    }
+    if owner.build_commit.is_none()
+        || owner.build_snapshot.is_none()
+        || owner.compute_pool_generation.is_none()
+        || owner.preparation_pool_generation.is_none()
+        || owner.compute_pool_id.is_none()
+        || owner.preparation_pool_id.is_none()
+    {
+        bail!("runtime service container recovery requires complete owner identity");
+    }
+    Ok(())
+}
+
+fn expected_child_role<'a>(
+    owner: &'a RuntimeServiceOwnerDescriptor,
+    role: &str,
+) -> Result<&'a RuntimeServiceChild> {
+    let children = owner
+        .children
+        .iter()
+        .filter(|child| child.role == role)
+        .collect::<Vec<_>>();
+    if children.len() != 1 {
+        bail!("runtime service container recovery requires exactly one child role {role}");
+    }
+    Ok(children[0])
+}
+
+fn absolute_path_sha256(path: &Path) -> Result<String> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("pinned path must be absolute without parent traversal");
+    }
+    Ok(crate::hex_sha256(path.to_string_lossy().as_bytes()))
+}
+
+fn application_pin_from_binding(binding: &RecoveryApplicationBinding) -> RuntimeServiceApplicationPin {
+    match binding {
+        RecoveryApplicationBinding::ExternalOnly { raw_sha256 } => {
+            RuntimeServiceApplicationPin::ExternalOnly {
+                raw_sha256: raw_sha256.clone(),
+            }
+        }
+        RecoveryApplicationBinding::Persisted { raw_sha256 } => {
+            RuntimeServiceApplicationPin::Persisted {
+                raw_sha256: raw_sha256.clone(),
+            }
+        }
+    }
+}
+
+fn validate_container_recovery_attestation(
+    request: &RuntimeServiceContainerRecoveryRequest,
+    request_sha256: &str,
+    attestation: &DockerNamespaceTeardownAttestation,
+) -> Result<()> {
+    if attestation.request_sha256 != request_sha256 {
+        bail!("Docker namespace teardown attestation belongs to another request");
+    }
+    if attestation.docker_engine_id_sha256 != request.docker_engine_id_sha256 {
+        bail!("Docker namespace teardown attestation belongs to another Docker engine");
+    }
+    if attestation.manifest_sha256 != request.docker_manifest_sha256 {
+        bail!("Docker namespace teardown attestation manifest differs from the request pin");
+    }
+    if attestation.device_release.resource_id != request.device_release_resource_id
+        || attestation.device_release.gpu_uuid != request.device_release_gpu_uuid
+        || attestation.device_release.mapping_sha256 != request.device_release_mapping_sha256
+        || !attestation.device_release.mapping_detached
+    {
+        bail!("Docker namespace teardown attestation device release differs from the request");
+    }
+    if attestation.containers.len() != request.containers.len() {
+        bail!("Docker namespace teardown attestation container count differs from the request");
+    }
+    let mut observed_ids = BTreeSet::new();
+    for observed in &attestation.containers {
+        if !observed_ids.insert(observed.container_id.as_str()) {
+            bail!("Docker namespace teardown attestation repeats a container");
+        }
+        let requested = request
+            .containers
+            .iter()
+            .find(|container| container.container_id == observed.container_id)
+            .context("Docker namespace teardown attestation has an unknown container")?;
+        if observed.image_id != requested.image_id
+            || observed.config_sha256 != requested.config_sha256
+            || observed.before.private_pid_namespace != requested.private_pid_namespace
+            || observed.before.host_pid != requested.host_pid
+            || observed.before.device_requests_sha256 != requested.device_requests_sha256
+            || observed.after.device_requests_sha256 != requested.device_requests_sha256
+        {
+            bail!("Docker namespace teardown attestation container identity differs from request");
+        }
+    }
+    Ok(())
+}
+
 fn validate_build_identity(descriptor: &RuntimeServiceOwnerDescriptor) -> Result<()> {
     match (&descriptor.build_commit, &descriptor.build_snapshot) {
         (None, None) => Ok(()),
@@ -552,6 +1248,25 @@ fn validate_pool_identity(descriptor: &RuntimeServiceOwnerDescriptor) -> Result<
 fn validate_full_hash(value: &str, field: &str, length: usize) -> Result<()> {
     if value.len() != length || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         bail!("{field} must be a full {length}-character hexadecimal hash");
+    }
+    Ok(())
+}
+
+fn validate_lower_hex(value: &str, field: &str, length: usize) -> Result<()> {
+    if value.len() != length
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        bail!("{field} must be a lowercase {length}-character hexadecimal hash");
+    }
+    Ok(())
+}
+
+fn validate_canonical_uuid(value: &str, field: &str) -> Result<()> {
+    let uuid = Uuid::parse_str(value).with_context(|| format!("{field} is not a UUID"))?;
+    if uuid.is_nil() || uuid.to_string() != value {
+        bail!("{field} must be a canonical nonzero UUID");
     }
     Ok(())
 }
@@ -680,6 +1395,25 @@ mod tests {
         let _owner = RuntimeServiceOwner::acquire(&store, "desktop-local").unwrap();
         let reopened = SessionStore::open_existing(store.root()).unwrap();
         assert!(RuntimeServiceOwner::acquire(&reopened, "other-target").is_err());
+    }
+
+    #[test]
+    fn existing_owner_lock_guard_blocks_terminal_observation_without_mutation() {
+        let directory = tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let owner = RuntimeServiceOwner::acquire(&store, "desktop-local").unwrap();
+        let descriptor_path = store.root().join(RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH);
+        let before = std::fs::read(&descriptor_path).unwrap();
+
+        assert!(RuntimeServiceOwnerLockGuard::try_acquire_existing(store.root())
+            .unwrap()
+            .is_none());
+        assert_eq!(std::fs::read(&descriptor_path).unwrap(), before);
+        drop(owner);
+
+        assert!(RuntimeServiceOwnerLockGuard::try_acquire_existing(store.root())
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -1102,7 +1836,11 @@ impl RuntimeServiceConfig {
     /// ledger initialization so no launcher can publish a launch record in
     /// between. A ledger failure leaves the exact application configuration
     /// pinned for a safe retry.
-    pub fn initialize_host_application(store: &SessionStore, candidate: &Self) -> Result<Self> {
+    pub fn initialize_host_application(
+        store: &SessionStore,
+        candidate: &Self,
+        application_state_root: &Path,
+    ) -> Result<Self> {
         candidate.validate()?;
         if candidate.schema_version != RUNTIME_SERVICE_CONFIG_SCHEMA_V2
             || candidate.host_execution.is_none()
@@ -1134,11 +1872,271 @@ impl RuntimeServiceConfig {
             .host_execution
             .as_ref()
             .context("persisted host application has no host execution binding")?;
-        crate::host_resource_ledger::HostResourceLedger::initialize(
+        crate::host_resource_ledger::HostResourceLedger::initialize_for_application(
+            application_state_root,
             &host_execution.ledger_root,
             host_execution.policy.clone(),
         )?;
         Ok(persisted)
+    }
+
+    /// Recover exactly one pinned `Unknown` owner after proving that the
+    /// session and host stores are empty and quiescent.  This operation is
+    /// explicit and operator-authorized; `ensure` never calls it implicitly.
+    ///
+    /// `request_sha256` is the SHA-256 of the exact request file bytes.  It is
+    /// used as the durable idempotency key, so a changed request with the same
+    /// request id cannot replay an earlier recovery.
+    pub fn recover_unknown_empty(
+        store: &SessionStore,
+        candidate: &Self,
+        configuration_bytes: &[u8],
+        request: &RuntimeServiceRecoveryRequest,
+        request_sha256: &str,
+        recovery_build_commit: &str,
+        recovery_build_snapshot: &str,
+    ) -> Result<RuntimeServiceRecoveryReceipt> {
+        candidate.validate()?;
+        request.validate()?;
+        if configuration_bytes.len() > MAX_RECOVERY_REQUEST_BYTES {
+            bail!("runtime service recovery configuration exceeds its byte budget");
+        }
+        if crate::hex_sha256(configuration_bytes) != request.config_sha256 {
+            bail!("runtime service recovery configuration bytes differ from the request pin");
+        }
+        let raw_candidate: Self = serde_json::from_slice(configuration_bytes)
+            .context("parse raw runtime service recovery configuration")?;
+        raw_candidate.validate()?;
+        if raw_candidate != *candidate {
+            bail!("raw runtime service recovery configuration differs from its typed value");
+        }
+        validate_lower_hex(request_sha256, "runtime service recovery request SHA-256", 64)?;
+        validate_lower_hex(
+            recovery_build_commit,
+            "runtime service recovery build commit",
+            40,
+        )?;
+        validate_lower_hex(
+            recovery_build_snapshot,
+            "runtime service recovery build snapshot",
+            64,
+        )?;
+        candidate.require_application_binding(store, &request.expected_owner.target_id)?;
+        if request.expected_owner.target_id != candidate.target_id {
+            bail!("runtime service recovery target differs from application configuration");
+        }
+        // The CLI verifies the SHA-256 of the exact configuration bytes before
+        // entering this locked core.  The native core must carry that raw
+        // digest through the recovery receipt; canonicalizing the parsed JSON
+        // here would silently accept a different on-disk configuration
+        // representation than the operator authorized.
+        let config_sha256 = request.config_sha256.clone();
+        let host_execution = candidate
+            .host_execution
+            .as_ref()
+            .context("runtime service recovery requires a host execution binding")?;
+
+        let recovery_relative = format!(
+            "runtime-services/recovery/{request_sha256}/receipt.json"
+        );
+        let recovery_path = checked_path(store.root(), &recovery_relative)?;
+        if let Some(receipt_bytes) = read_optional_stable_regular_path(
+            &recovery_path,
+            MAX_RECOVERY_RECEIPT_BYTES,
+            "runtime service recovery receipt",
+        )? {
+            let receipt: RuntimeServiceRecoveryReceipt = serde_json::from_slice(&receipt_bytes)
+                .context("parse runtime service recovery receipt")?;
+            receipt.validate()?;
+            validate_receipt_for_request(
+                &receipt,
+                request,
+                request_sha256,
+                &config_sha256,
+            )?;
+            // A completed receipt is not sufficient by itself for replay:
+            // the current owner, launch record, and empty-store proof are
+            // rechecked under the same native guards below.  This prevents a
+            // stale request from being reported as successful after a later
+            // owner generation replaced the recovered one.
+        }
+
+        // Recovery is only valid for a store that already has the stable
+        // guard inodes and old launch/owner evidence.  In particular, this
+        // operation never creates a missing lock as a substitute for proof.
+        for relative in [
+            RUNTIME_SERVICE_OWNER_LOCK_PATH,
+            RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
+            "runtime-services/LAUNCH.lock",
+            "runtime-services/LAUNCH.json",
+            "runtime-services/STARTUP-GATE.lock",
+        ] {
+            require_existing_regular_path(store.root(), relative)?;
+        }
+
+        let _startup_guard = RuntimeServiceStartupGuard::try_acquire(store.root())?
+            .context("runtime service startup gate is busy during controlled recovery")?;
+        let _launch_guard = RuntimeServiceLaunchGuard::try_acquire(store.root())?
+            .context("runtime service launch gate is busy during controlled recovery")?;
+        let owner_lock_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_LOCK_PATH)?;
+        let owner_lock = open_existing_owner_lock(&owner_lock_path)?;
+
+        let ledger = crate::host_resource_ledger::HostResourceLedger::open(
+            &host_execution.ledger_root,
+            host_execution.policy.clone(),
+        )?;
+
+        let result = ledger.with_runtime_recovery_quiescence(|_| {
+            let _store_writer = store.write_transaction()?;
+            recover_unknown_empty_locked(
+                store,
+                candidate,
+                configuration_bytes,
+                request,
+                request_sha256,
+                &config_sha256,
+                recovery_build_commit,
+                recovery_build_snapshot,
+                &recovery_relative,
+                &owner_lock,
+            )
+        })?;
+        drop(owner_lock);
+        Ok(result)
+    }
+
+    /// Recover a stopped Docker runtime namespace whose previous owner was
+    /// Ready or Unknown, without touching a healthy foreign inventory owner.
+    ///
+    /// The caller must provide the exact bytes and digest of the operator
+    /// request plus an authoritative Docker namespace teardown attestation.
+    /// This method never synthesizes a drained event and never releases a
+    /// host reservation; the host ledger guard only admits an already empty
+    /// reservation set.
+    pub fn recover_container_empty(
+        store: &SessionStore,
+        candidate: &Self,
+        configuration_bytes: &[u8],
+        request: &RuntimeServiceContainerRecoveryRequest,
+        request_sha256: &str,
+        attestation: &DockerNamespaceTeardownAttestation,
+        recovery_build_commit: &str,
+        recovery_build_snapshot: &str,
+    ) -> Result<RuntimeServiceContainerRecoveryReceipt> {
+        candidate.validate()?;
+        request.validate()?;
+        attestation.validate_without_request()?;
+        if configuration_bytes.len() > MAX_RECOVERY_REQUEST_BYTES {
+            bail!("runtime service container recovery configuration exceeds its byte budget");
+        }
+        if crate::hex_sha256(configuration_bytes) != request.config_sha256 {
+            bail!("runtime service container recovery configuration bytes differ from the request pin");
+        }
+        let raw_candidate: Self = serde_json::from_slice(configuration_bytes)
+            .context("parse raw runtime service container recovery configuration")?;
+        raw_candidate.validate()?;
+        if raw_candidate != *candidate {
+            bail!("raw runtime service container recovery configuration differs from its typed value");
+        }
+        validate_lower_hex(
+            request_sha256,
+            "runtime service container recovery request SHA-256",
+            64,
+        )?;
+        validate_lower_hex(
+            recovery_build_commit,
+            "runtime service container recovery build commit",
+            40,
+        )?;
+        validate_lower_hex(
+            recovery_build_snapshot,
+            "runtime service container recovery build snapshot",
+            64,
+        )?;
+        if request.expected_owner.target_id != candidate.target_id {
+            bail!("runtime service container recovery target differs from application configuration");
+        }
+        candidate.require_application_binding(store, &request.expected_owner.target_id)?;
+        validate_container_recovery_attestation(request, request_sha256, attestation)?;
+
+        let store_root_sha256 = absolute_path_sha256(store.root())?;
+        if request.store_root_sha256 != store_root_sha256 {
+            bail!("runtime service container recovery store root differs from the request pin");
+        }
+        let host_execution = candidate
+            .host_execution
+            .as_ref()
+            .context("runtime service container recovery requires a host execution binding")?;
+        let canonical_ledger_root = fs::canonicalize(&host_execution.ledger_root)
+            .context("canonicalize runtime service container recovery ledger root")?;
+        let ledger_root_sha256 = absolute_path_sha256(&canonical_ledger_root)?;
+        if request.ledger_root_sha256 != ledger_root_sha256 {
+            bail!("runtime service container recovery ledger root differs from the request pin");
+        }
+
+        let recovery_relative = format!(
+            "runtime-services/container-recovery/{request_sha256}/receipt.json"
+        );
+        let recovery_path = checked_path(store.root(), &recovery_relative)?;
+        if let Some(receipt_bytes) = read_optional_stable_regular_path(
+            &recovery_path,
+            MAX_RECOVERY_RECEIPT_BYTES,
+            "runtime service container recovery receipt",
+        )? {
+            let receipt: RuntimeServiceContainerRecoveryReceipt =
+                serde_json::from_slice(&receipt_bytes)
+                    .context("parse runtime service container recovery receipt")?;
+            receipt.validate()?;
+            validate_container_receipt_for_request(
+                &receipt,
+                request,
+                request_sha256,
+                &store_root_sha256,
+                &ledger_root_sha256,
+                &attestation.sha256()?,
+                recovery_build_commit,
+                recovery_build_snapshot,
+            )?;
+        }
+
+        for relative in [
+            RUNTIME_SERVICE_OWNER_LOCK_PATH,
+            RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
+            "runtime-services/LAUNCH.lock",
+            "runtime-services/LAUNCH.json",
+            "runtime-services/STARTUP-GATE.lock",
+        ] {
+            require_existing_regular_path(store.root(), relative)?;
+        }
+
+        let _startup_guard = RuntimeServiceStartupGuard::try_acquire(store.root())?
+            .context("runtime service startup gate is busy during container recovery")?;
+        let _launch_guard = RuntimeServiceLaunchGuard::try_acquire(store.root())?
+            .context("runtime service launch gate is busy during container recovery")?;
+        let owner_lock_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_LOCK_PATH)?;
+        let owner_lock = open_existing_owner_lock(&owner_lock_path)?;
+        let ledger = crate::host_resource_ledger::HostResourceLedger::open(
+            &host_execution.ledger_root,
+            host_execution.policy.clone(),
+        )?;
+        let result = ledger.with_container_runtime_recovery_quiescence(|ledger_snapshot| {
+            let _store_writer = store.write_transaction()?;
+            recover_container_empty_locked(
+                store,
+                candidate,
+                configuration_bytes,
+                request,
+                request_sha256,
+                recovery_build_commit,
+                recovery_build_snapshot,
+                attestation,
+                ledger_snapshot,
+                &recovery_relative,
+                &owner_lock,
+            )
+        })?;
+        drop(owner_lock);
+        Ok(result)
     }
 
     fn acquire_host_application_ledger_guard(
@@ -1315,6 +2313,2218 @@ impl RuntimeServiceConfig {
     }
 }
 
+fn require_existing_regular_path(root: &Path, relative: &str) -> Result<PathBuf> {
+    let path = checked_path(root, relative)?;
+    let metadata = fs::symlink_metadata(&path)
+        .with_context(|| format!("required runtime recovery evidence is missing: {relative}"))?;
+    reject_link(&path)?;
+    if !metadata.is_file() {
+        bail!("runtime recovery evidence is not a regular file: {relative}");
+    }
+    Ok(path)
+}
+
+fn read_stable_regular_path(path: &Path, maximum: usize, context: &str) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("{context} is missing: {}", path.display()))?;
+    reject_link(path)?;
+    if !metadata.is_file() {
+        bail!("{context} is not a regular file: {}", path.display());
+    }
+    let parent = path.parent().context("bounded file has no parent")?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("bounded file name is not UTF-8")?;
+    let first = crate::repository_path::read_bounded_regular_file(parent, name, maximum)
+        .with_context(|| format!("read {context}"))?;
+    let second = crate::repository_path::read_bounded_regular_file(parent, name, maximum)
+        .with_context(|| format!("re-read {context}"))?;
+    if first != second {
+        bail!("{context} changed during recovery admission");
+    }
+    Ok(first)
+}
+
+fn read_optional_stable_regular_path(
+    path: &Path,
+    maximum: usize,
+    context: &str,
+) -> Result<Option<Vec<u8>>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            reject_link(path)?;
+            if !metadata.is_file() {
+                bail!("{context} is not a regular file: {}", path.display());
+            }
+            Ok(Some(read_stable_regular_path(path, maximum, context)?))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("observe {context}")),
+    }
+}
+
+fn require_empty_store_namespace(store: &SessionStore, relative: &str) -> Result<()> {
+    let path = checked_path(store.root(), relative)?;
+    let metadata = fs::symlink_metadata(&path)
+        .with_context(|| format!("runtime recovery namespace is missing: {relative}"))?;
+    reject_link(&path)?;
+    if !metadata.is_dir() {
+        bail!("runtime recovery namespace is not a directory: {relative}");
+    }
+    let mut entries = fs::read_dir(&path)?;
+    if let Some(entry) = entries.next() {
+        let entry = entry?;
+        bail!(
+            "runtime recovery requires an empty namespace; found {} in {relative}",
+            entry.file_name().to_string_lossy()
+        );
+    }
+    Ok(())
+}
+
+fn require_empty_batch_namespace(store: &SessionStore) -> Result<()> {
+    let path = checked_path(store.root(), "batches")?;
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("observe batch namespace during recovery"),
+        Ok(metadata) => {
+            reject_link(&path)?;
+            if !metadata.is_dir() {
+                bail!("runtime recovery batch namespace is not a directory");
+            }
+        }
+    }
+    if !store.list_batch_intents()?.is_empty() {
+        bail!("runtime recovery requires no durable batch intents");
+    }
+    Ok(())
+}
+
+fn require_empty_runtime_store(store: &SessionStore, config: &RuntimeServiceConfig) -> Result<()> {
+    for relative in [
+        "runs",
+        "manifests",
+        "live_command_journals",
+        "recovery",
+        "temp",
+        "objects/pins",
+    ] {
+        require_empty_store_namespace(store, relative)?;
+    }
+    if !store.list_run_intents()?.is_empty() {
+        bail!("runtime recovery requires no durable run intents");
+    }
+    require_empty_batch_namespace(store)?;
+
+    let scheduler_root = checked_path(store.root(), "scheduler_pools")?;
+    reject_link(&scheduler_root)?;
+    let expected_names = [
+        format!("{}.resources.json", config.compute_pool_id),
+        format!("{}.preparation-resources.json", config.preparation_pool_id),
+        format!("{}.json", config.compute_pool_id),
+        format!("{}.preparation.json", config.preparation_pool_id),
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    for entry in fs::read_dir(&scheduler_root)? {
+        let entry = entry?;
+        reject_link(&entry.path())?;
+        if !entry.file_type()?.is_file() {
+            bail!("scheduler pool namespace contains a non-file entry");
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("scheduler pool entry is not UTF-8"))?;
+        if !expected_names.contains(&name) {
+            bail!("scheduler pool namespace contains an unexpected entry {name}");
+        }
+    }
+
+    let compute = store
+        .read_scheduler_resource_pool(&config.compute_pool_id)?
+        .context("runtime recovery compute resource pool is missing")?;
+    let preparation = store
+        .read_preparation_resource_pool(&config.preparation_pool_id)?
+        .context("runtime recovery preparation resource pool is missing")?;
+    if compute.resources != config.compute_resources
+        || preparation.resources != config.preparation_resources
+    {
+        bail!("scheduler resource pools differ from the pinned application configuration");
+    }
+    if let Some(checkpoint) = store.read_scheduler_pool_checkpoint(&config.compute_pool_id)? {
+        if !checkpoint.run_ids.is_empty() || checkpoint.next_run_id.is_some() {
+            bail!("compute scheduler checkpoint still references work");
+        }
+    }
+    if let Some(checkpoint) =
+        store.read_preparation_scheduler_pool_checkpoint(&config.preparation_pool_id)?
+    {
+        if !checkpoint.run_ids.is_empty() || checkpoint.next_run_id.is_some() {
+            bail!("preparation scheduler checkpoint still references work");
+        }
+    }
+    Ok(())
+}
+
+fn expected_child<'a>(
+    owner: &'a RuntimeServiceOwnerDescriptor,
+    role: &str,
+) -> Result<&'a RuntimeServiceChild> {
+    let children = owner
+        .children
+        .iter()
+        .filter(|child| child.role == role)
+        .collect::<Vec<_>>();
+    if children.len() != 1 {
+        bail!("runtime recovery requires exactly one child role {role}");
+    }
+    let child = children[0];
+    if child.status != "exited_success" {
+        bail!("runtime recovery requires the child role {role} to have exited successfully");
+    }
+    Ok(child)
+}
+
+fn require_scheduler_drained_event(
+    bytes: &[u8],
+    role: &str,
+    child: &RuntimeServiceChild,
+    owner: &RuntimeServiceOwnerDescriptor,
+    pool_id: &str,
+    generation: u64,
+) -> Result<()> {
+    let expected_commit = owner
+        .build_commit
+        .as_deref()
+        .context("unknown runtime owner is missing its historical build commit")?;
+    let expected_snapshot = owner
+        .build_snapshot
+        .as_deref()
+        .context("unknown runtime owner is missing its historical build snapshot")?;
+    let mut found = false;
+    for line in bytes.split(|byte| *byte == b'\n') {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value["schema_version"] != "scheduler_owner_event.v1"
+            || value["event"] != "drained"
+        {
+            continue;
+        }
+        let pool_identity_matches = match (
+            value["pool_id"].as_str(),
+            value["generation"].as_u64(),
+        ) {
+            // The current scheduler owner-control producer emits null pool
+            // fields for its terminal drain event.  The durable owner
+            // descriptor and resource-pool records above still pin both
+            // scheduler identities; accept the producer's versioned shape
+            // while validating optional future pool fields when present.
+            (None, None) => true,
+            (Some(event_pool), Some(event_generation)) => {
+                event_pool == pool_id && event_generation == generation
+            }
+            _ => false,
+        };
+        if value["role"] != role
+            || value["pid"].as_u64() != Some(u64::from(child.pid))
+            || value["protocol"] != RUNTIME_SERVICE_OWNER_PROTOCOL
+            || value["owner_token"] != owner.owner_token
+            || value["git_commit"] != expected_commit
+            || value["source_snapshot_sha256"] != expected_snapshot
+            || !pool_identity_matches
+        {
+            bail!("runtime recovery scheduler role {role} drained evidence identity mismatch");
+        }
+        found = true;
+    }
+    if !found {
+        bail!("runtime recovery scheduler role {role} has no drained evidence");
+    }
+    Ok(())
+}
+
+fn recovery_log_sources(owner: &RuntimeServiceOwnerDescriptor) -> BTreeSet<String> {
+    let log_relative = format!("runtime-services/{}", owner.owner_token);
+    [
+        "compute.stdout.jsonl",
+        "compute.stderr.log",
+        "preparation.stdout.jsonl",
+        "preparation.stderr.log",
+        "compute-publisher.stdout.jsonl",
+        "compute-publisher.stderr.log",
+        "preparation-publisher.stdout.jsonl",
+        "preparation-publisher.stderr.log",
+    ]
+    .into_iter()
+    .map(|name| format!("{log_relative}/{name}"))
+    .collect()
+}
+
+fn recovery_mandatory_log_sources(owner: &RuntimeServiceOwnerDescriptor) -> BTreeSet<String> {
+    let log_relative = format!("runtime-services/{}", owner.owner_token);
+    [
+        "compute.stdout.jsonl",
+        "preparation.stdout.jsonl",
+    ]
+    .into_iter()
+    .map(|name| format!("{log_relative}/{name}"))
+    .collect()
+}
+
+fn observe_recovery_log_sources(
+    store: &SessionStore,
+    owner: &RuntimeServiceOwnerDescriptor,
+) -> Result<BTreeSet<String>> {
+    let log_relative = format!("runtime-services/{}", owner.owner_token);
+    let log_root = checked_path(store.root(), &log_relative)?;
+    let metadata = fs::symlink_metadata(&log_root)
+        .context("runtime recovery scheduler log directory is missing")?;
+    reject_link(&log_root)?;
+    if !metadata.is_dir() {
+        bail!("runtime recovery scheduler log namespace is not a directory");
+    }
+    let allowed_logs = recovery_log_sources(owner);
+    let mandatory_logs = recovery_mandatory_log_sources(owner);
+    let mut observed_logs = BTreeSet::new();
+    for entry in fs::read_dir(&log_root)? {
+        let entry = entry?;
+        reject_link(&entry.path())?;
+        if !entry.file_type()?.is_file() {
+            bail!("runtime scheduler evidence contains a non-file entry");
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("runtime scheduler evidence file is not UTF-8"))?;
+        let source = format!("{log_relative}/{name}");
+        if !allowed_logs.contains(&source) || !observed_logs.insert(source.clone()) {
+            bail!("runtime scheduler evidence contains an unexpected entry {name}");
+        }
+    }
+    if !observed_logs.is_superset(&mandatory_logs) {
+        bail!("runtime scheduler evidence is missing a mandatory journal");
+    }
+    Ok(observed_logs)
+}
+
+fn recovery_mandatory_sources(owner: &RuntimeServiceOwnerDescriptor) -> Result<BTreeSet<String>> {
+    let compute_pool_id = owner
+        .compute_pool_id
+        .as_deref()
+        .context("runtime recovery owner is missing its compute pool id")?;
+    let preparation_pool_id = owner
+        .preparation_pool_id
+        .as_deref()
+        .context("runtime recovery owner is missing its preparation pool id")?;
+    let mut sources = BTreeSet::new();
+    for source in [
+        RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH.to_owned(),
+        RUNTIME_SERVICE_OWNER_LOCK_PATH.to_owned(),
+        "runtime-services/LAUNCH.json".to_owned(),
+        "runtime-services/LAUNCH.lock".to_owned(),
+        "runtime-services/STARTUP-GATE.lock".to_owned(),
+        format!(
+            "runtime-services/{}/compute.stdout.jsonl",
+            owner.owner_token
+        ),
+        format!(
+            "runtime-services/{}/preparation.stdout.jsonl",
+            owner.owner_token
+        ),
+        format!("scheduler_pools/{compute_pool_id}.resources.json"),
+        format!("scheduler_pools/{preparation_pool_id}.preparation-resources.json"),
+        RECOVERY_ARCHIVED_CONFIGURATION_KEY.to_owned(),
+    ] {
+        if !sources.insert(source.clone()) {
+            bail!("runtime recovery mandatory archive source is duplicated: {source}");
+        }
+    }
+    sources.extend(recovery_checkpoint_sources(owner)?);
+    Ok(sources)
+}
+
+fn validate_recovery_absent_source_path(source: &str) -> Result<()> {
+    validate_relative_path(source)?;
+    let name = source
+        .strip_prefix("scheduler_pools/")
+        .context("runtime recovery absent source is not a scheduler checkpoint")?;
+    if name.is_empty()
+        || name.ends_with(".resources.json")
+        || name.ends_with(".preparation-resources.json")
+    {
+        bail!("runtime recovery absent source is not a checkpoint path: {source}");
+    }
+    let pool_id = name
+        .strip_suffix(".preparation.json")
+        .or_else(|| name.strip_suffix(".json"))
+        .filter(|value| !value.is_empty())
+        .context("runtime recovery absent source is not a checkpoint path")?;
+    validate_store_id(pool_id)
+}
+
+fn validate_recovery_archived_source_path(source: &str) -> Result<()> {
+    validate_relative_path(source)?;
+    if source == RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH
+        || source == RUNTIME_SERVICE_OWNER_LOCK_PATH
+        || source == "runtime-services/LAUNCH.json"
+        || source == "runtime-services/LAUNCH.lock"
+        || source == "runtime-services/STARTUP-GATE.lock"
+        || source == RECOVERY_ARCHIVED_CONFIGURATION_KEY
+    {
+        return Ok(());
+    }
+    if let Some(rest) = source.strip_prefix("runtime-services/") {
+        let mut components = rest.split('/');
+        let owner_token = components
+            .next()
+            .context("runtime recovery archived log is missing its owner token")?;
+        let name = components
+            .next()
+            .context("runtime recovery archived log is missing its file name")?;
+        if components.next().is_some() {
+            bail!("runtime recovery archived log has unexpected path components: {source}");
+        }
+        validate_store_id(owner_token)?;
+        if matches!(
+            name,
+            "compute.stdout.jsonl"
+                | "compute.stderr.log"
+                | "preparation.stdout.jsonl"
+                | "preparation.stderr.log"
+                | "compute-publisher.stdout.jsonl"
+                | "compute-publisher.stderr.log"
+                | "preparation-publisher.stdout.jsonl"
+                | "preparation-publisher.stderr.log"
+        ) {
+            return Ok(());
+        }
+        bail!("runtime recovery archived log is not on the producer allowlist: {source}");
+    }
+    if let Some(name) = source.strip_prefix("scheduler_pools/") {
+        let pool_id = name
+            .strip_suffix(".preparation-resources.json")
+            .or_else(|| name.strip_suffix(".resources.json"))
+            .or_else(|| name.strip_suffix(".preparation.json"))
+            .or_else(|| name.strip_suffix(".json"))
+            .filter(|value| !value.is_empty())
+            .context("runtime recovery scheduler source is not a recognized file")?;
+        validate_store_id(pool_id)?;
+        return Ok(());
+    }
+    bail!("runtime recovery archived source is not on the allowlist: {source}");
+}
+
+fn recovery_checkpoint_sources(owner: &RuntimeServiceOwnerDescriptor) -> Result<BTreeSet<String>> {
+    let compute_pool_id = owner
+        .compute_pool_id
+        .as_deref()
+        .context("runtime recovery owner is missing its compute pool id")?;
+    let preparation_pool_id = owner
+        .preparation_pool_id
+        .as_deref()
+        .context("runtime recovery owner is missing its preparation pool id")?;
+    let sources = [
+        format!("scheduler_pools/{compute_pool_id}.json"),
+        format!("scheduler_pools/{preparation_pool_id}.preparation.json"),
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    for source in &sources {
+        validate_recovery_absent_source_path(source)?;
+    }
+    Ok(sources)
+}
+
+fn scheduler_checkpoint_sequence(bytes: &[u8], role: &str, pool_id: &str) -> Result<u64> {
+    let mut sequence = None;
+    for line in bytes.split(|byte| *byte == b'\n') {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("pool_checkpoint_sequence").is_none()
+            || value.get("pool_id").and_then(serde_json::Value::as_str) != Some(pool_id)
+        {
+            continue;
+        }
+        if value.get("status").and_then(serde_json::Value::as_str) != Some("drained")
+            || value
+                .get("shutdown_requested")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+        {
+            bail!("runtime recovery scheduler {role} summary is not a terminal drain");
+        }
+        let current = value
+            .get("pool_checkpoint_sequence")
+            .and_then(serde_json::Value::as_u64)
+            .context("runtime recovery scheduler summary has no checkpoint sequence")?;
+        if current == 0
+            && (value
+                .get("scheduled_count")
+                .and_then(serde_json::Value::as_u64)
+                != Some(0)
+                || value
+                    .get("executed")
+                    .and_then(serde_json::Value::as_array)
+                    .map_or(true, |executed| !executed.is_empty()))
+        {
+            bail!(
+                "runtime recovery scheduler {role} zero-checkpoint summary reports completed work"
+            );
+        }
+        if sequence.replace(current).is_some() {
+            bail!("runtime recovery scheduler {role} emitted duplicate summaries");
+        }
+    }
+    sequence.with_context(|| {
+        format!(
+            "runtime recovery scheduler {role} emitted no terminal checkpoint summary"
+        )
+    })
+}
+
+fn observe_recovery_checkpoint_absences(
+    store: &SessionStore,
+    owner: &RuntimeServiceOwnerDescriptor,
+) -> Result<BTreeMap<String, RuntimeServiceRecoveryAbsentSourceReason>> {
+    let compute_pool_id = owner
+        .compute_pool_id
+        .as_deref()
+        .context("runtime recovery owner is missing its compute pool id")?;
+    let preparation_pool_id = owner
+        .preparation_pool_id
+        .as_deref()
+        .context("runtime recovery owner is missing its preparation pool id")?;
+    let observations = [
+        (
+            RUNTIME_SERVICE_COMPUTE_ROLE,
+            compute_pool_id,
+            format!("scheduler_pools/{compute_pool_id}.json"),
+        ),
+        (
+            RUNTIME_SERVICE_PREPARATION_ROLE,
+            preparation_pool_id,
+            format!("scheduler_pools/{preparation_pool_id}.preparation.json"),
+        ),
+    ];
+    let mut absent = BTreeMap::new();
+    for (role, pool_id, checkpoint_relative) in observations {
+        let log_relative = format!(
+            "runtime-services/{}/{}.stdout.jsonl",
+            owner.owner_token, role
+        );
+        let log = read_stable_regular_path(
+            &checked_path(store.root(), &log_relative)?,
+            MAX_RECOVERY_LOG_BYTES,
+            "runtime recovery scheduler summary",
+        )?;
+        let sequence = scheduler_checkpoint_sequence(&log, role, pool_id)?;
+        let checkpoint = checked_path(store.root(), &checkpoint_relative)?;
+        match fs::symlink_metadata(&checkpoint) {
+            Ok(metadata) => {
+                reject_link(&checkpoint)?;
+                if !metadata.is_file() {
+                    bail!("runtime recovery scheduler checkpoint is not a regular file");
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if sequence != 0 {
+                    bail!(
+                        "runtime recovery scheduler {role} omitted checkpoint sequence {sequence}"
+                    );
+                }
+                absent.insert(
+                    checkpoint_relative,
+                    RuntimeServiceRecoveryAbsentSourceReason::SchedulerCheckpointNotPublished,
+                );
+            }
+            Err(error) => return Err(error).context("observe runtime recovery checkpoint"),
+        }
+    }
+    Ok(absent)
+}
+
+fn archive_exact_file(
+    root: &Path,
+    archive_relative: &str,
+    source_relative: &str,
+    maximum: usize,
+    archived: &mut BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    validate_relative_path(source_relative)?;
+    let source = checked_path(root, source_relative)?;
+    let bytes = read_stable_regular_path(&source, maximum, source_relative)?;
+    let digest = crate::hex_sha256(&bytes);
+    let name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("runtime recovery source file name is not UTF-8")?;
+    validate_store_id(name)?;
+    let destination_relative = format!("{archive_relative}/{name}");
+    let destination_path = checked_path(root, &destination_relative)?;
+    let destination = if destination_path.exists() {
+        destination_path
+    } else {
+        create_parent(root, &destination_relative)?
+    };
+    if destination.exists() {
+        let existing = read_stable_regular_path(
+            &destination,
+            maximum,
+            "runtime recovery archive evidence",
+        )?;
+        if existing != bytes {
+            bail!("runtime recovery archive evidence changed for {source_relative}");
+        }
+    } else {
+        crate::durability::atomic_write_owner(&destination, &bytes)?;
+    }
+    if archived
+        .insert(source_relative.to_owned(), digest.clone())
+        .is_some()
+    {
+        bail!("runtime recovery archive source was duplicated");
+    }
+    Ok(bytes)
+}
+
+fn archive_exact_bytes(
+    root: &Path,
+    archive_relative: &str,
+    archive_name: &str,
+    source_key: &str,
+    bytes: &[u8],
+    maximum: usize,
+    archived: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    validate_relative_path(source_key)?;
+    validate_store_id(archive_name)?;
+    if bytes.len() > maximum {
+        bail!("runtime recovery archive source exceeds its byte budget");
+    }
+    let digest = crate::hex_sha256(bytes);
+    let destination_relative = format!("{archive_relative}/{archive_name}");
+    let destination_path = checked_path(root, &destination_relative)?;
+    let destination = if destination_path.exists() {
+        destination_path
+    } else {
+        create_parent(root, &destination_relative)?
+    };
+    if destination.exists() {
+        let existing = read_stable_regular_path(
+            &destination,
+            maximum,
+            "runtime recovery archive evidence",
+        )?;
+        if existing != bytes {
+            bail!("runtime recovery archive evidence changed for {source_key}");
+        }
+    } else {
+        crate::durability::atomic_write_owner(&destination, bytes)?;
+    }
+    if archived.insert(source_key.to_owned(), digest).is_some() {
+        bail!("runtime recovery archive source was duplicated");
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RecoveryApplicationBinding {
+    ExternalOnly { raw_sha256: String },
+    Persisted { raw_sha256: String },
+}
+
+fn validate_recovery_application_configuration(
+    store: &SessionStore,
+    candidate: &RuntimeServiceConfig,
+    external_config_sha256: &str,
+) -> Result<RecoveryApplicationBinding> {
+    let application_path = checked_path(store.root(), "runtime-services/APPLICATION.json")?;
+    match fs::symlink_metadata(&application_path) {
+        Ok(_) => {
+            let application_bytes = read_stable_regular_path(
+                &application_path,
+                MAX_RECOVERY_REQUEST_BYTES,
+                "persisted runtime service application configuration",
+            )?;
+            let persisted: RuntimeServiceConfig = serde_json::from_slice(&application_bytes)
+                .context("parse persisted runtime service application configuration")?;
+            persisted.validate()?;
+            persisted.require_application_binding(store, &candidate.target_id)?;
+            if persisted != *candidate {
+                bail!("persisted application configuration differs from recovery request");
+            }
+            Ok(RecoveryApplicationBinding::Persisted {
+                raw_sha256: crate::hex_sha256(&application_bytes),
+            })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(RecoveryApplicationBinding::ExternalOnly {
+                raw_sha256: external_config_sha256.into(),
+            })
+        }
+        Err(error) => Err(error)
+            .context("observe persisted runtime service application configuration"),
+    }
+}
+
+fn application_binding_manifest_value(
+    binding: &RecoveryApplicationBinding,
+) -> serde_json::Value {
+    match binding {
+        RecoveryApplicationBinding::ExternalOnly { raw_sha256 } => serde_json::json!({
+            "mode": "external_only",
+            "raw_sha256": raw_sha256,
+        }),
+        RecoveryApplicationBinding::Persisted { raw_sha256 } => serde_json::json!({
+            "mode": "persisted",
+            "raw_sha256": raw_sha256,
+        }),
+    }
+}
+
+fn archive_runtime_evidence(
+    store: &SessionStore,
+    owner: &RuntimeServiceOwnerDescriptor,
+    request_sha256: &str,
+    config_sha256: &str,
+    configuration_bytes: &[u8],
+    application_binding: &RecoveryApplicationBinding,
+) -> Result<(
+    String,
+    String,
+    BTreeMap<String, String>,
+    BTreeMap<String, RuntimeServiceRecoveryAbsentSourceReason>,
+)> {
+    let archive_relative = format!("runtime-services/recovery/{request_sha256}/archive");
+    let mandatory_sources = recovery_mandatory_sources(owner)?;
+    if crate::hex_sha256(configuration_bytes) != config_sha256 {
+        bail!("runtime recovery raw configuration bytes differ from the request pin");
+    }
+    let observed_logs = observe_recovery_log_sources(store, owner)?;
+    let absent_sources = observe_recovery_checkpoint_absences(store, owner)?;
+    let mut archive_sources = mandatory_sources.clone();
+    for source in absent_sources.keys() {
+        if !archive_sources.remove(source) {
+            bail!("runtime recovery absent source is not mandatory: {source}");
+        }
+    }
+    archive_sources.extend(observed_logs);
+    let mut archived = BTreeMap::new();
+    for source in &archive_sources {
+        if source == RECOVERY_ARCHIVED_CONFIGURATION_KEY {
+            continue;
+        }
+        archive_exact_file(
+            store.root(),
+            &archive_relative,
+            source,
+            if source.ends_with(".jsonl") || source.ends_with(".log") {
+                MAX_RECOVERY_LOG_BYTES
+            } else {
+                MAX_RECOVERY_REQUEST_BYTES
+            },
+            &mut archived,
+        )?;
+    }
+    archive_exact_bytes(
+        store.root(),
+        &archive_relative,
+        RECOVERY_ARCHIVED_CONFIGURATION_KEY,
+        RECOVERY_ARCHIVED_CONFIGURATION_KEY,
+        configuration_bytes,
+        MAX_RECOVERY_REQUEST_BYTES,
+        &mut archived,
+    )?;
+    if archived.len() != archive_sources.len()
+        || archived.len() + absent_sources.len() < mandatory_sources.len()
+        || archived.len() + absent_sources.len() > MAX_RECOVERY_ARCHIVED_FILES
+    {
+        bail!("runtime recovery evidence has an incomplete inventory");
+    }
+    let manifest_relative = format!("{archive_relative}/manifest.json");
+    let manifest_path = create_parent(store.root(), &manifest_relative)?;
+    let manifest_value = serde_json::json!({
+        "schema_version": "runtime_service_recovery_archive.v1",
+        "request_sha256": request_sha256,
+        "config_sha256": config_sha256,
+        "application_binding": application_binding_manifest_value(application_binding),
+        "files": archived.clone(),
+        "absent_sources": absent_sources.clone(),
+    });
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest_value)?;
+    if manifest_bytes.len() > MAX_RECOVERY_RECEIPT_BYTES {
+        bail!("runtime recovery archive manifest exceeds its byte budget");
+    }
+    let published_manifest = match read_optional_stable_regular_path(
+        &manifest_path,
+        MAX_RECOVERY_RECEIPT_BYTES,
+        "runtime recovery archive manifest",
+    )? {
+        Some(existing) if existing != manifest_bytes => {
+            bail!("runtime recovery archive manifest changed during recovery")
+        }
+        Some(existing) => existing,
+        None => {
+            crate::durability::atomic_write_owner(&manifest_path, &manifest_bytes)?;
+            manifest_bytes
+        }
+    };
+    let archive_path = manifest_path
+        .to_str()
+        .context("runtime recovery archive path is not UTF-8")?
+        .to_owned();
+    Ok((
+        archive_path,
+        crate::hex_sha256(&published_manifest),
+        archived,
+        absent_sources,
+    ))
+}
+
+fn validate_receipt_for_request(
+    receipt: &RuntimeServiceRecoveryReceipt,
+    request: &RuntimeServiceRecoveryRequest,
+    request_sha256: &str,
+    config_sha256: &str,
+) -> Result<()> {
+    if receipt.request_id != request.request_id
+        || receipt.request_sha256 != request_sha256
+        || receipt.config_sha256 != config_sha256
+        || receipt.target_id != request.expected_owner.target_id
+    {
+        bail!("runtime recovery receipt does not match the pinned request");
+    }
+    if receipt.historical_build_commit
+        != request
+            .expected_owner
+            .build_commit
+            .as_deref()
+            .context("recovery request is missing historical build commit")?
+        || receipt.historical_build_snapshot
+            != request
+                .expected_owner
+                .build_snapshot
+                .as_deref()
+                .context("recovery request is missing historical build snapshot")?
+    {
+        bail!("runtime recovery receipt historical build identity mismatch");
+    }
+    Ok(())
+}
+
+fn verify_archived_application_binding(
+    store: &SessionStore,
+    receipt: &RuntimeServiceRecoveryReceipt,
+    manifest: &serde_json::Value,
+) -> Result<()> {
+    let application_path = checked_path(store.root(), "runtime-services/APPLICATION.json")?;
+    let Some(binding) = manifest.get("application_binding") else {
+        // Archives written before the binding metadata existed retain the old
+        // strict rule: an application configuration must already be present.
+        require_existing_regular_path(store.root(), "runtime-services/APPLICATION.json")?;
+        return Ok(());
+    };
+    let object = binding
+        .as_object()
+        .context("runtime recovery application binding is not an object")?;
+    if object.len() != 2 {
+        bail!("runtime recovery application binding contains unknown fields");
+    }
+    let mode = object
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .context("runtime recovery application binding mode is missing")?;
+    let raw_sha256 = object
+        .get("raw_sha256")
+        .and_then(serde_json::Value::as_str)
+        .context("runtime recovery application binding raw SHA-256 is missing")?;
+    validate_lower_hex(
+        raw_sha256,
+        "runtime recovery application binding raw SHA-256",
+        64,
+    )?;
+    match mode {
+        "external_only" => {
+            if raw_sha256 != receipt.config_sha256.as_str() {
+                bail!("external-only application binding is not pinned to the recovery configuration");
+            }
+            match fs::symlink_metadata(&application_path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Ok(_) => bail!(
+                    "external-only recovery requires APPLICATION.json to remain absent"
+                ),
+                Err(error) => Err(error)
+                    .context("observe external-only application configuration"),
+            }
+        }
+        "persisted" => {
+            let application_bytes = read_stable_regular_path(
+                &application_path,
+                MAX_RECOVERY_REQUEST_BYTES,
+                "persisted runtime service application configuration",
+            )?;
+            if crate::hex_sha256(&application_bytes) != raw_sha256 {
+                bail!("persisted application configuration digest differs from the archive binding");
+            }
+            Ok(())
+        }
+        _ => bail!("unsupported runtime recovery application binding mode"),
+    }
+}
+
+fn verify_archived_evidence(
+    store: &SessionStore,
+    receipt: &RuntimeServiceRecoveryReceipt,
+) -> Result<()> {
+    let manifest_path = recovery_archive_manifest_path(store, receipt)?;
+    let manifest_bytes = read_stable_regular_path(
+        &manifest_path,
+        MAX_RECOVERY_RECEIPT_BYTES,
+        "runtime recovery archive manifest",
+    )?;
+    if crate::hex_sha256(&manifest_bytes) != receipt.archived_evidence_sha256 {
+        bail!("runtime recovery archive manifest digest differs from the receipt");
+    }
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+        .context("parse runtime recovery archive manifest")?;
+    let manifest_absent_sources = manifest
+        .get("absent_sources")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if manifest["schema_version"] != "runtime_service_recovery_archive.v1"
+        || manifest["request_sha256"] != receipt.request_sha256
+        || manifest["config_sha256"] != receipt.config_sha256
+        || manifest["files"]
+            != serde_json::to_value(&receipt.archived_files)
+                .context("serialize runtime recovery archive inventory")?
+        || manifest_absent_sources
+            != serde_json::to_value(&receipt.archived_absent_sources)
+                .context("serialize runtime recovery absent-source inventory")?
+    {
+        bail!("runtime recovery archive manifest does not match the receipt");
+    }
+    verify_archived_application_binding(store, receipt, &manifest)?;
+    let owner_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
+    let current_owner_bytes = read_stable_regular_path(
+        &owner_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime recovery owner descriptor",
+    )?;
+    let current_owner: RuntimeServiceOwnerDescriptor = serde_json::from_slice(&current_owner_bytes)
+        .context("parse runtime recovery owner descriptor for archive inventory")?;
+    validate_descriptor(&current_owner)?;
+    let mandatory_sources = recovery_mandatory_sources(&current_owner)?;
+    let mut allowed_sources = mandatory_sources.clone();
+    allowed_sources.extend(recovery_log_sources(&current_owner));
+    let archived_sources = receipt
+        .archived_files
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let absent_sources = receipt
+        .archived_absent_sources
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let checkpoint_sources = recovery_checkpoint_sources(&current_owner)?;
+    let coverage = archived_sources
+        .union(&absent_sources)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !absent_sources.is_subset(&checkpoint_sources)
+        || !archived_sources.is_disjoint(&absent_sources)
+        || !archived_sources.is_subset(&allowed_sources)
+        || !coverage.is_superset(&mandatory_sources)
+        || !coverage.is_subset(&allowed_sources)
+    {
+        bail!("runtime recovery archive inventory is missing or contains unexpected evidence");
+    }
+    let observed_logs = observe_recovery_log_sources(store, &current_owner)?;
+    let observed_absent_sources = observe_recovery_checkpoint_absences(store, &current_owner)?
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if observed_absent_sources != absent_sources {
+        bail!("runtime recovery absent checkpoint inventory differs from the live namespace");
+    }
+    let expected_sources = mandatory_sources
+        .union(&observed_logs)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if coverage != expected_sources {
+        bail!("runtime recovery archive inventory is incomplete or contains unexpected evidence");
+    }
+    let log_prefix = format!("runtime-services/{}/", current_owner.owner_token);
+    let archived_logs = archived_sources
+        .iter()
+        .filter(|source| source.starts_with(&log_prefix))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if observed_logs != archived_logs {
+        bail!("runtime recovery archive scheduler evidence inventory differs from the live namespace");
+    }
+    if receipt.archived_files.get(RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)
+        .map(String::as_str)
+        != Some(receipt.owner_sha256_before.as_str())
+    {
+        bail!("runtime recovery archive does not pin the pre-recovery owner descriptor");
+    }
+    let archive_root = manifest_path
+        .parent()
+        .context("runtime recovery archive manifest has no parent")?;
+    for (source_relative, expected_digest) in &receipt.archived_files {
+        if source_relative == RECOVERY_ARCHIVED_CONFIGURATION_KEY {
+            if expected_digest != &receipt.config_sha256 {
+                bail!("runtime recovery raw configuration archive digest is not pinned");
+            }
+            let archive = checked_path(archive_root, RECOVERY_ARCHIVED_CONFIGURATION_KEY)?;
+            let archive_bytes = read_stable_regular_path(
+                &archive,
+                MAX_RECOVERY_REQUEST_BYTES,
+                "runtime recovery raw configuration archive",
+            )?;
+            if crate::hex_sha256(&archive_bytes) != *expected_digest {
+                bail!("runtime recovery raw configuration archive digest changed");
+            }
+            continue;
+        }
+        let source = checked_path(store.root(), source_relative)?;
+        let maximum =
+            if source_relative.ends_with(".jsonl") || source_relative.ends_with(".log") {
+                MAX_RECOVERY_LOG_BYTES
+            } else {
+                MAX_RECOVERY_REQUEST_BYTES
+            };
+        let name = source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .context("runtime recovery evidence file name is not UTF-8")?;
+        let archive = checked_path(archive_root, name)?;
+        let archive_bytes =
+            read_stable_regular_path(&archive, maximum, "runtime recovery archive")?;
+        if crate::hex_sha256(&archive_bytes) != *expected_digest {
+            bail!("runtime recovery archive digest changed for {source_relative}");
+        }
+        let source_bytes = read_stable_regular_path(&source, maximum, source_relative)?;
+        if source_relative == RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH {
+            let current_digest = crate::hex_sha256(&source_bytes);
+            if current_digest != receipt.owner_sha256_before
+                && current_digest != receipt.owner_sha256_after
+            {
+                bail!("runtime recovery owner descriptor changed outside the pinned transition");
+            }
+        } else if archive_bytes != source_bytes {
+            bail!("runtime recovery archive evidence does not match {source_relative}");
+        }
+    }
+    Ok(())
+}
+
+fn recovery_archive_manifest_path(
+    store: &SessionStore,
+    receipt: &RuntimeServiceRecoveryReceipt,
+) -> Result<PathBuf> {
+    let path = Path::new(&receipt.archived_evidence_path);
+    let root = fs::canonicalize(store.root())?;
+    let relative = path
+        .strip_prefix(&root)
+        .context("runtime recovery archive is outside the session store")?;
+    let relative = relative
+        .to_str()
+        .context("runtime recovery archive path is not UTF-8")?;
+    let checked = checked_path(store.root(), relative)?;
+    if checked != path {
+        bail!("runtime recovery archive path is not canonical");
+    }
+    Ok(checked)
+}
+
+fn container_recovery_archive_manifest_path(
+    store: &SessionStore,
+    receipt: &RuntimeServiceContainerRecoveryReceipt,
+) -> Result<PathBuf> {
+    let path = Path::new(&receipt.archived_evidence_path);
+    let root = fs::canonicalize(store.root())?;
+    let relative = path
+        .strip_prefix(&root)
+        .context("runtime service container recovery archive is outside the session store")?;
+    let relative = relative
+        .to_str()
+        .context("runtime service container recovery archive path is not UTF-8")?;
+    let checked = checked_path(store.root(), relative)?;
+    if checked != path {
+        bail!("runtime service container recovery archive path is not canonical");
+    }
+    Ok(checked)
+}
+
+fn observe_container_recovery_checkpoint_absences(
+    store: &SessionStore,
+    owner: &RuntimeServiceOwnerDescriptor,
+) -> Result<BTreeMap<String, RuntimeServiceRecoveryAbsentSourceReason>> {
+    let mut absent = BTreeMap::new();
+    for source in recovery_checkpoint_sources(owner)? {
+        let path = checked_path(store.root(), &source)?;
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                reject_link(&path)?;
+                if !metadata.is_file() {
+                    bail!("runtime service container recovery checkpoint is not a regular file");
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                absent.insert(
+                    source,
+                    RuntimeServiceRecoveryAbsentSourceReason::SchedulerCheckpointNotPublished,
+                );
+            }
+            Err(error) => {
+                return Err(error).context("observe runtime service container recovery checkpoint")
+            }
+        }
+    }
+    Ok(absent)
+}
+
+fn archive_container_runtime_evidence(
+    store: &SessionStore,
+    owner: &RuntimeServiceOwnerDescriptor,
+    request_sha256: &str,
+    config_sha256: &str,
+    configuration_bytes: &[u8],
+    application: &RuntimeServiceApplicationPin,
+    attestation_sha256: &str,
+    ledger_snapshot_sha256: &str,
+    prior_ready_owner_proof_sha256: &str,
+) -> Result<(
+    String,
+    String,
+    BTreeMap<String, String>,
+    BTreeMap<String, RuntimeServiceRecoveryAbsentSourceReason>,
+)> {
+    let archive_relative = format!(
+        "runtime-services/container-recovery/{request_sha256}/archive"
+    );
+    if crate::hex_sha256(configuration_bytes) != config_sha256 {
+        bail!("runtime service container recovery configuration bytes differ from the request pin");
+    }
+    let mandatory_sources = recovery_mandatory_sources(owner)?;
+    let observed_logs = observe_recovery_log_sources(store, owner)?;
+    let absent_sources = observe_container_recovery_checkpoint_absences(store, owner)?;
+    let mut archive_sources = mandatory_sources.clone();
+    for source in absent_sources.keys() {
+        if !archive_sources.remove(source) {
+            bail!("runtime service container recovery absent source is not mandatory: {source}");
+        }
+    }
+    archive_sources.extend(observed_logs);
+    let mut archived = BTreeMap::new();
+    for source in &archive_sources {
+        if source == CONTAINER_RECOVERY_ARCHIVED_CONFIGURATION_KEY {
+            continue;
+        }
+        archive_exact_file(
+            store.root(),
+            &archive_relative,
+            source,
+            if source.ends_with(".jsonl") || source.ends_with(".log") {
+                MAX_RECOVERY_LOG_BYTES
+            } else {
+                MAX_RECOVERY_REQUEST_BYTES
+            },
+            &mut archived,
+        )?;
+    }
+    archive_exact_bytes(
+        store.root(),
+        &archive_relative,
+        CONTAINER_RECOVERY_ARCHIVED_CONFIGURATION_KEY,
+        CONTAINER_RECOVERY_ARCHIVED_CONFIGURATION_KEY,
+        configuration_bytes,
+        MAX_RECOVERY_REQUEST_BYTES,
+        &mut archived,
+    )?;
+    if archived.len() + absent_sources.len() < mandatory_sources.len()
+        || archived.len() + absent_sources.len() > MAX_RECOVERY_ARCHIVED_FILES
+    {
+        bail!("runtime service container recovery evidence has an incomplete inventory");
+    }
+    let manifest_value = serde_json::json!({
+        "schema_version": "runtime_service_container_recovery_archive.v1",
+        "request_sha256": request_sha256,
+        "config_sha256": config_sha256,
+        "application": application,
+        "attestation_sha256": attestation_sha256,
+        "ledger_snapshot_sha256": ledger_snapshot_sha256,
+        "prior_ready_owner_proof_sha256": prior_ready_owner_proof_sha256,
+        "files": archived.clone(),
+        "absent_sources": absent_sources.clone(),
+    });
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest_value)?;
+    if manifest_bytes.len() > MAX_RECOVERY_RECEIPT_BYTES {
+        bail!("runtime service container recovery archive manifest exceeds its byte budget");
+    }
+    let manifest_relative = format!("{archive_relative}/manifest.json");
+    let manifest_path = create_parent(store.root(), &manifest_relative)?;
+    let published_manifest = match read_optional_stable_regular_path(
+        &manifest_path,
+        MAX_RECOVERY_RECEIPT_BYTES,
+        "runtime service container recovery archive manifest",
+    )? {
+        Some(existing) if existing != manifest_bytes => {
+            bail!("runtime service container recovery archive manifest changed")
+        }
+        Some(existing) => existing,
+        None => {
+            crate::durability::atomic_write_owner(&manifest_path, &manifest_bytes)?;
+            manifest_bytes
+        }
+    };
+    let archive_path = manifest_path
+        .to_str()
+        .context("runtime service container recovery archive path is not UTF-8")?
+        .to_owned();
+    Ok((
+        archive_path,
+        crate::hex_sha256(&published_manifest),
+        archived,
+        absent_sources,
+    ))
+}
+
+fn validate_container_receipt_for_request(
+    receipt: &RuntimeServiceContainerRecoveryReceipt,
+    request: &RuntimeServiceContainerRecoveryRequest,
+    request_sha256: &str,
+    store_root_sha256: &str,
+    ledger_root_sha256: &str,
+    attestation_sha256: &str,
+    recovery_build_commit: &str,
+    recovery_build_snapshot: &str,
+) -> Result<()> {
+    if receipt.request_id != request.request_id
+        || receipt.request_sha256 != request_sha256
+        || receipt.config_sha256 != request.config_sha256
+        || receipt.target_id != request.expected_owner.target_id
+        || receipt.store_root_sha256 != store_root_sha256
+        || receipt.application != request.application
+        || receipt.ledger_root_sha256 != ledger_root_sha256
+        || receipt.ledger_snapshot_sha256 != request.ledger_snapshot_sha256
+        || receipt.attestation_sha256 != attestation_sha256
+        || receipt.docker_manifest_sha256 != request.docker_manifest_sha256
+        || receipt.prior_ready_owner_proof_sha256 != request.prior_ready_owner_proof_sha256
+        || receipt.device_release_mapping_sha256 != request.device_release_mapping_sha256
+        || receipt.historical_build_commit
+            != request
+                .expected_owner
+                .build_commit
+                .as_deref()
+                .context("container recovery request is missing historical build commit")?
+        || receipt.historical_build_snapshot
+            != request
+                .expected_owner
+                .build_snapshot
+                .as_deref()
+                .context("container recovery request is missing historical build snapshot")?
+        || receipt.executor_build_commit != recovery_build_commit
+        || receipt.executor_build_snapshot != recovery_build_snapshot
+    {
+        bail!("runtime service container recovery receipt does not match the pinned request");
+    }
+    if receipt.owner_sha256_before != request.owner_sha256 {
+        bail!("runtime service container recovery receipt owner pin differs from request");
+    }
+    if receipt.owner_state_before != state_name(request.expected_owner.state) {
+        bail!("runtime service container recovery receipt owner state differs from request");
+    }
+    Ok(())
+}
+
+fn verify_container_recovery_archive(
+    store: &SessionStore,
+    candidate: &RuntimeServiceConfig,
+    request: &RuntimeServiceContainerRecoveryRequest,
+    receipt: &RuntimeServiceContainerRecoveryReceipt,
+) -> Result<()> {
+    let manifest_path = container_recovery_archive_manifest_path(store, receipt)?;
+    let expected_manifest_path = checked_path(
+        store.root(),
+        &format!(
+            "runtime-services/container-recovery/{}/archive/manifest.json",
+            receipt.request_sha256
+        ),
+    )?;
+    if manifest_path != expected_manifest_path {
+        bail!("runtime service container recovery archive path is not request-scoped");
+    }
+    let manifest_bytes = read_stable_regular_path(
+        &manifest_path,
+        MAX_RECOVERY_RECEIPT_BYTES,
+        "runtime service container recovery archive manifest",
+    )?;
+    if crate::hex_sha256(&manifest_bytes) != receipt.archived_evidence_sha256 {
+        bail!("runtime service container recovery archive manifest digest changed");
+    }
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+        .context("parse runtime service container recovery archive manifest")?;
+    if manifest["schema_version"] != "runtime_service_container_recovery_archive.v1"
+        || manifest["request_sha256"] != receipt.request_sha256
+        || manifest["config_sha256"] != request.config_sha256
+        || manifest["attestation_sha256"] != receipt.attestation_sha256
+        || manifest["ledger_snapshot_sha256"] != request.ledger_snapshot_sha256
+        || manifest["prior_ready_owner_proof_sha256"]
+            != request.prior_ready_owner_proof_sha256
+        || manifest["files"] != serde_json::to_value(&receipt.archived_files)?
+        || manifest["absent_sources"]
+            != serde_json::to_value(&receipt.archived_absent_sources)?
+        || manifest["application"] != serde_json::to_value(&receipt.application)?
+    {
+        bail!("runtime service container recovery archive manifest does not match receipt");
+    }
+    let owner_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
+    let owner_bytes = read_stable_regular_path(
+        &owner_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime service container recovery owner descriptor",
+    )?;
+    let owner: RuntimeServiceOwnerDescriptor = serde_json::from_slice(&owner_bytes)
+        .context("parse runtime service container recovery owner descriptor")?;
+    validate_descriptor(&owner)?;
+    let mandatory_sources = recovery_mandatory_sources(&owner)?;
+    let mut allowed_sources = mandatory_sources.clone();
+    allowed_sources.extend(recovery_log_sources(&owner));
+    let archived_sources = receipt
+        .archived_files
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let absent_sources = receipt
+        .archived_absent_sources
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let coverage = archived_sources
+        .union(&absent_sources)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !absent_sources.is_subset(&recovery_checkpoint_sources(&owner)?)
+        || !archived_sources.is_disjoint(&absent_sources)
+        || !archived_sources.is_subset(&allowed_sources)
+        || !coverage.is_superset(&mandatory_sources)
+    {
+        bail!("runtime service container recovery archive inventory is incomplete");
+    }
+    if receipt
+        .archived_files
+        .get(RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)
+        .map(String::as_str)
+        != Some(request.owner_sha256.as_str())
+    {
+        bail!("runtime service container recovery archive does not pin the original owner");
+    }
+    let observed_logs = observe_recovery_log_sources(store, &owner)?;
+    let observed_absent = observe_container_recovery_checkpoint_absences(store, &owner)?
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if observed_absent != absent_sources {
+        bail!("runtime service container recovery checkpoint inventory changed");
+    }
+    let expected_sources = mandatory_sources
+        .union(&observed_logs)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if coverage != expected_sources {
+        bail!("runtime service container recovery archive inventory changed");
+    }
+    let archive_root = manifest_path
+        .parent()
+        .context("runtime service container recovery archive has no parent")?;
+    for (source_relative, expected_digest) in &receipt.archived_files {
+        let name = if source_relative == CONTAINER_RECOVERY_ARCHIVED_CONFIGURATION_KEY {
+            CONTAINER_RECOVERY_ARCHIVED_CONFIGURATION_KEY
+        } else {
+            Path::new(source_relative)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .context("runtime service container recovery source name is not UTF-8")?
+        };
+        let archive = checked_path(archive_root, name)?;
+        let maximum = if source_relative.ends_with(".jsonl") || source_relative.ends_with(".log") {
+            MAX_RECOVERY_LOG_BYTES
+        } else {
+            MAX_RECOVERY_REQUEST_BYTES
+        };
+        let archive_bytes = read_stable_regular_path(
+            &archive,
+            maximum,
+            "runtime service container recovery archive source",
+        )?;
+        if crate::hex_sha256(&archive_bytes) != *expected_digest {
+            bail!("runtime service container recovery archive source digest changed");
+        }
+        if source_relative == RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH {
+            let current_digest = crate::hex_sha256(&owner_bytes);
+            if current_digest != request.owner_sha256 && current_digest != receipt.owner_sha256_after {
+                bail!("runtime service container recovery owner changed outside the pinned transition");
+            }
+        } else if source_relative == CONTAINER_RECOVERY_ARCHIVED_CONFIGURATION_KEY {
+            if *expected_digest != request.config_sha256 {
+                bail!("runtime service container recovery configuration archive is not pinned");
+            }
+        } else {
+            let source = checked_path(store.root(), source_relative)?;
+            let source_bytes = read_stable_regular_path(&source, maximum, source_relative)?;
+            if source_bytes != archive_bytes {
+                bail!("runtime service container recovery archive source changed: {source_relative}");
+            }
+        }
+    }
+    let application_binding = validate_recovery_application_configuration(
+        store,
+        candidate,
+        &request.config_sha256,
+    )?;
+    if application_pin_from_binding(&application_binding) != receipt.application {
+        bail!("runtime service container recovery application binding changed");
+    }
+    Ok(())
+}
+
+fn canonical_container_recovery_failed_owner(
+    expected_owner: &RuntimeServiceOwnerDescriptor,
+    heartbeat_at: DateTime<Utc>,
+) -> Result<RuntimeServiceOwnerDescriptor> {
+    let mut descriptor = expected_owner.clone();
+    descriptor.state = RuntimeServiceState::Failed;
+    descriptor.heartbeat_at = heartbeat_at;
+    descriptor.control_address = None;
+    // Empty children records that the container teardown did not provide
+    // native child-exit evidence. It must never be presented as a drain.
+    descriptor.children.clear();
+    validate_descriptor(&descriptor)?;
+    Ok(descriptor)
+}
+
+fn recover_container_empty_locked(
+    store: &SessionStore,
+    candidate: &RuntimeServiceConfig,
+    configuration_bytes: &[u8],
+    request: &RuntimeServiceContainerRecoveryRequest,
+    request_sha256: &str,
+    recovery_build_commit: &str,
+    recovery_build_snapshot: &str,
+    attestation: &DockerNamespaceTeardownAttestation,
+    ledger_snapshot: &HostResourceLedgerSnapshot,
+    recovery_relative: &str,
+    owner_lock: &File,
+) -> Result<RuntimeServiceContainerRecoveryReceipt> {
+    owner_lock
+        .metadata()
+        .context("runtime service owner lock disappeared during container recovery")?;
+    require_empty_runtime_store(store, candidate)?;
+    if ledger_snapshot.stable_sha256()? != request.ledger_snapshot_sha256 {
+        bail!("runtime service container recovery ledger snapshot changed");
+    }
+    validate_container_recovery_attestation(request, request_sha256, attestation)?;
+    let attestation_sha256 = attestation.sha256()?;
+    let owner_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
+    let owner_bytes = read_stable_regular_path(
+        &owner_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime service container recovery owner descriptor",
+    )?;
+    let current_owner: RuntimeServiceOwnerDescriptor = serde_json::from_slice(&owner_bytes)
+        .context("parse runtime service container recovery owner descriptor")?;
+    validate_descriptor(&current_owner)?;
+    let current_owner_sha256 = crate::hex_sha256(&owner_bytes);
+    let launch_path = checked_path(store.root(), "runtime-services/LAUNCH.json")?;
+    let launch_bytes = read_stable_regular_path(
+        &launch_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime service container recovery launch record",
+    )?;
+    if crate::hex_sha256(&launch_bytes) != request.launch_sha256 {
+        bail!("runtime service container recovery launch record differs from request");
+    }
+    let launch: RuntimeServiceLaunchRecord = serde_json::from_slice(&launch_bytes)
+        .context("parse runtime service container recovery launch record")?;
+    if launch.schema_version != "runtime_service_launch.v1"
+        || !matches!(launch.state.as_str(), "spawned" | "ready")
+        || launch.pid != Some(request.expected_owner.pid)
+    {
+        bail!("runtime service container recovery launch state is not an exact stopped-owner pin");
+    }
+    let application_binding = validate_recovery_application_configuration(
+        store,
+        candidate,
+        &request.config_sha256,
+    )?;
+    if application_pin_from_binding(&application_binding) != request.application {
+        bail!("runtime service container recovery application binding differs from request");
+    }
+    if current_owner_sha256 != request.owner_sha256
+        && current_owner.state != RuntimeServiceState::Failed
+    {
+        bail!("runtime service container recovery owner differs from request");
+    }
+    if current_owner.state == RuntimeServiceState::Failed {
+        let receipt_bytes = read_stable_regular_path(
+            &checked_path(store.root(), recovery_relative)?,
+            MAX_RECOVERY_RECEIPT_BYTES,
+            "runtime service container recovery receipt",
+        )?;
+        let receipt: RuntimeServiceContainerRecoveryReceipt = serde_json::from_slice(&receipt_bytes)
+            .context("parse existing runtime service container recovery receipt")?;
+        receipt.validate()?;
+        validate_container_receipt_for_request(
+            &receipt,
+            request,
+            request_sha256,
+            &request.store_root_sha256,
+            &request.ledger_root_sha256,
+            &attestation_sha256,
+            recovery_build_commit,
+            recovery_build_snapshot,
+        )?;
+        let canonical_failed = canonical_container_recovery_failed_owner(
+            &request.expected_owner,
+            receipt.created_at.clone(),
+        )?;
+        let canonical_failed_bytes = serde_json::to_vec_pretty(&canonical_failed)?;
+        let canonical_failed_sha256 = crate::hex_sha256(&canonical_failed_bytes);
+        if owner_bytes != canonical_failed_bytes
+            || current_owner != canonical_failed
+            || current_owner_sha256 != canonical_failed_sha256
+            || receipt.owner_sha256_after != canonical_failed_sha256
+        {
+            bail!(
+                "runtime service container recovery failed owner is not the canonical pinned transition"
+            );
+        }
+        verify_container_recovery_archive(store, candidate, request, &receipt)?;
+        if receipt.status == "recovered" {
+            return Ok(receipt);
+        }
+        let mut completed = receipt;
+        completed.status = "recovered".into();
+        completed.completed_at = Some(Utc::now());
+        completed.validate()?;
+        let bytes = serde_json::to_vec_pretty(&completed)?;
+        crate::durability::atomic_write_owner(
+            &checked_path(store.root(), recovery_relative)?,
+            &bytes,
+        )?;
+        return Ok(completed);
+    }
+    if current_owner != request.expected_owner {
+        bail!("runtime service container recovery owner changed before publication");
+    }
+    if !matches!(current_owner.state, RuntimeServiceState::Ready | RuntimeServiceState::Unknown) {
+        bail!("runtime service container recovery owner is not Ready or Unknown");
+    }
+    let receipt_path = checked_path(store.root(), recovery_relative)?;
+    let prepared = read_optional_stable_regular_path(
+        &receipt_path,
+        MAX_RECOVERY_RECEIPT_BYTES,
+        "runtime service container recovery receipt",
+    )?
+    .map(|bytes| {
+        serde_json::from_slice::<RuntimeServiceContainerRecoveryReceipt>(&bytes)
+            .context("parse prepared runtime service container recovery receipt")
+    })
+    .transpose()?;
+    if let Some(receipt) = &prepared {
+        receipt.validate()?;
+        validate_container_receipt_for_request(
+            receipt,
+            request,
+            request_sha256,
+            &request.store_root_sha256,
+            &request.ledger_root_sha256,
+            &attestation_sha256,
+            recovery_build_commit,
+            recovery_build_snapshot,
+        )?;
+        verify_container_recovery_archive(store, candidate, request, receipt)?;
+    }
+    let created_at = prepared
+        .as_ref()
+        .map(|receipt| receipt.created_at.clone())
+        .unwrap_or_else(Utc::now);
+    let failed = canonical_container_recovery_failed_owner(
+        &request.expected_owner,
+        created_at.clone(),
+    )?;
+    let failed_bytes = serde_json::to_vec_pretty(&failed)?;
+    let owner_sha256_after = crate::hex_sha256(&failed_bytes);
+    let (archived_evidence_path, archived_evidence_sha256, archived_files, archived_absent_sources) =
+        match prepared.as_ref() {
+            Some(receipt) => (
+                receipt.archived_evidence_path.clone(),
+                receipt.archived_evidence_sha256.clone(),
+                receipt.archived_files.clone(),
+                receipt.archived_absent_sources.clone(),
+            ),
+            None => archive_container_runtime_evidence(
+                store,
+                &request.expected_owner,
+                request_sha256,
+                &request.config_sha256,
+                configuration_bytes,
+                &request.application,
+                &attestation_sha256,
+                &request.ledger_snapshot_sha256,
+                &request.prior_ready_owner_proof_sha256,
+            )?,
+        };
+    let historical_build_commit = request
+        .expected_owner
+        .build_commit
+        .clone()
+        .context("runtime service container recovery owner has no build commit")?;
+    let historical_build_snapshot = request
+        .expected_owner
+        .build_snapshot
+        .clone()
+        .context("runtime service container recovery owner has no build snapshot")?;
+    let was_prepared = prepared.is_some();
+    let mut receipt = prepared.unwrap_or(RuntimeServiceContainerRecoveryReceipt {
+        schema_version: RUNTIME_SERVICE_CONTAINER_RECOVERY_SCHEMA.into(),
+        request_id: request.request_id.clone(),
+        request_sha256: request_sha256.into(),
+        status: "prepared".into(),
+        outcome: "empty_namespace_recovered".into(),
+        target_id: request.expected_owner.target_id.clone(),
+        config_sha256: request.config_sha256.clone(),
+        owner_state_before: state_name(request.expected_owner.state).into(),
+        owner_sha256_before: request.owner_sha256.clone(),
+        owner_state_after: "failed".into(),
+        owner_sha256_after: owner_sha256_after.clone(),
+        store_root_sha256: request.store_root_sha256.clone(),
+        application: request.application.clone(),
+        ledger_root_sha256: request.ledger_root_sha256.clone(),
+        ledger_snapshot_sha256: request.ledger_snapshot_sha256.clone(),
+        attestation_sha256: attestation_sha256.clone(),
+        docker_manifest_sha256: request.docker_manifest_sha256.clone(),
+        prior_ready_owner_proof_sha256: request.prior_ready_owner_proof_sha256.clone(),
+        device_release_mapping_sha256: request.device_release_mapping_sha256.clone(),
+        archived_evidence_path,
+        archived_evidence_sha256,
+        archived_files,
+        archived_absent_sources,
+        historical_build_commit,
+        historical_build_snapshot,
+        executor_build_commit: recovery_build_commit.into(),
+        executor_build_snapshot: recovery_build_snapshot.into(),
+        created_at,
+        completed_at: None,
+    });
+    receipt.validate()?;
+    if receipt.owner_sha256_after != owner_sha256_after {
+        bail!("prepared runtime service container recovery transition differs from request");
+    }
+    verify_container_recovery_archive(store, candidate, request, &receipt)?;
+    let receipt_bytes = serde_json::to_vec_pretty(&receipt)?;
+    if receipt_bytes.len() > MAX_RECOVERY_RECEIPT_BYTES {
+        bail!("runtime service container recovery receipt exceeds its byte budget");
+    }
+    if !was_prepared {
+        create_parent(store.root(), recovery_relative)?;
+        crate::durability::atomic_write_owner(&receipt_path, &receipt_bytes)?;
+    }
+    let owner_before_publish = read_stable_regular_path(
+        &owner_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime service container recovery owner before publication",
+    )?;
+    if crate::hex_sha256(&owner_before_publish) != request.owner_sha256
+        || owner_before_publish != owner_bytes
+    {
+        bail!("runtime service container recovery owner changed before publication");
+    }
+    persist_descriptor(&owner_path, &failed)?;
+    let published = read_stable_regular_path(
+        &owner_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime service container recovery failed owner",
+    )?;
+    if crate::hex_sha256(&published) != owner_sha256_after || published != failed_bytes {
+        bail!("runtime service container recovery owner publication could not be verified");
+    }
+    receipt.status = "recovered".into();
+    receipt.completed_at = Some(Utc::now());
+    receipt.validate()?;
+    let completed_bytes = serde_json::to_vec_pretty(&receipt)?;
+    crate::durability::atomic_write_owner(&receipt_path, &completed_bytes)?;
+    Ok(receipt)
+}
+
+fn recover_unknown_empty_locked(
+    store: &SessionStore,
+    candidate: &RuntimeServiceConfig,
+    configuration_bytes: &[u8],
+    request: &RuntimeServiceRecoveryRequest,
+    request_sha256: &str,
+    config_sha256: &str,
+    recovery_build_commit: &str,
+    recovery_build_snapshot: &str,
+    recovery_relative: &str,
+    owner_lock: &File,
+) -> Result<RuntimeServiceRecoveryReceipt> {
+    owner_lock
+        .metadata()
+        .context("runtime service owner lock disappeared during recovery")?;
+    require_empty_runtime_store(store, candidate)?;
+
+    let owner_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
+    let launch_path = checked_path(store.root(), "runtime-services/LAUNCH.json")?;
+    let owner_bytes = read_stable_regular_path(
+        &owner_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime service owner descriptor",
+    )?;
+    let owner_sha256 = crate::hex_sha256(&owner_bytes);
+    let current_owner: RuntimeServiceOwnerDescriptor = serde_json::from_slice(&owner_bytes)
+        .context("parse runtime service owner descriptor during recovery")?;
+    validate_descriptor(&current_owner)?;
+    let launch_bytes = read_stable_regular_path(
+        &launch_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime service launch record",
+    )?;
+    if crate::hex_sha256(&launch_bytes) != request.launch_sha256 {
+        bail!("runtime service launch record differs from the pinned launch SHA-256");
+    }
+    let launch: RuntimeServiceLaunchRecord =
+        serde_json::from_slice(&launch_bytes).context("parse runtime service launch record")?;
+    validate_canonical_uuid(&launch.launch_id, "runtime service launch id")?;
+    if launch.schema_version != "runtime_service_launch.v1"
+        || !matches!(launch.state.as_str(), "spawned" | "ready")
+        || launch.pid != Some(request.expected_owner.pid)
+    {
+        bail!("runtime service launch record is new or uncertain; recovery refused");
+    }
+
+    let expected = &request.expected_owner;
+    validate_canonical_uuid(&expected.owner_token, "runtime service owner token")?;
+    validate_canonical_uuid(
+        &expected.process_start_token,
+        "runtime service process-start token",
+    )?;
+    if expected.build_commit.is_none()
+        || expected.build_snapshot.is_none()
+        || expected.compute_pool_id.is_none()
+        || expected.preparation_pool_id.is_none()
+        || expected.compute_pool_generation.is_none()
+        || expected.preparation_pool_generation.is_none()
+    {
+        bail!("unknown runtime owner lacks historical build or scheduler identity");
+    }
+    if current_owner != *expected && current_owner.state != RuntimeServiceState::Failed {
+        bail!("runtime service owner differs from the pinned unknown owner");
+    }
+    if owner_sha256 != request.owner_sha256 && current_owner.state != RuntimeServiceState::Failed {
+        bail!("runtime service owner descriptor differs from the pinned owner SHA-256");
+    }
+    let compute_child = expected_child(expected, RUNTIME_SERVICE_COMPUTE_ROLE)?;
+    let preparation_child = expected_child(expected, RUNTIME_SERVICE_PREPARATION_ROLE)?;
+    if expected.children.len() != 2 {
+        bail!("runtime recovery requires exactly compute and preparation children");
+    }
+    let compute_pool_id = expected
+        .compute_pool_id
+        .as_deref()
+        .context("missing historical compute pool id")?;
+    let preparation_pool_id = expected
+        .preparation_pool_id
+        .as_deref()
+        .context("missing historical preparation pool id")?;
+    let compute_generation = expected
+        .compute_pool_generation
+        .context("missing historical compute pool generation")?;
+    let preparation_generation = expected
+        .preparation_pool_generation
+        .context("missing historical preparation pool generation")?;
+    if compute_pool_id != candidate.compute_pool_id
+        || preparation_pool_id != candidate.preparation_pool_id
+    {
+        bail!("runtime owner scheduler pools differ from the application configuration");
+    }
+    let compute_pool = store
+        .read_scheduler_resource_pool(compute_pool_id)?
+        .context("runtime recovery compute resource pool disappeared")?;
+    let preparation_pool = store
+        .read_preparation_resource_pool(preparation_pool_id)?
+        .context("runtime recovery preparation resource pool disappeared")?;
+    if compute_pool.generation != compute_generation
+        || preparation_pool.generation != preparation_generation
+    {
+        bail!("runtime owner scheduler generations differ from the durable pools");
+    }
+
+    let compute_log_relative = format!(
+        "runtime-services/{}/compute.stdout.jsonl",
+        expected.owner_token
+    );
+    let preparation_log_relative = format!(
+        "runtime-services/{}/preparation.stdout.jsonl",
+        expected.owner_token
+    );
+    let compute_log = read_stable_regular_path(
+        &checked_path(store.root(), &compute_log_relative)?,
+        MAX_RECOVERY_LOG_BYTES,
+        "compute scheduler drained log",
+    )?;
+    let preparation_log = read_stable_regular_path(
+        &checked_path(store.root(), &preparation_log_relative)?,
+        MAX_RECOVERY_LOG_BYTES,
+        "preparation scheduler drained log",
+    )?;
+    require_scheduler_drained_event(
+        &compute_log,
+        RUNTIME_SERVICE_COMPUTE_ROLE,
+        compute_child,
+        expected,
+        compute_pool_id,
+        compute_generation,
+    )?;
+    require_scheduler_drained_event(
+        &preparation_log,
+        RUNTIME_SERVICE_PREPARATION_ROLE,
+        preparation_child,
+        expected,
+        preparation_pool_id,
+        preparation_generation,
+    )?;
+
+    let recovery_bytes = read_optional_stable_regular_path(
+        &checked_path(store.root(), recovery_relative)?,
+        MAX_RECOVERY_RECEIPT_BYTES,
+        "runtime service recovery receipt",
+    )?;
+    let prepared = recovery_bytes
+        .as_deref()
+        .map(serde_json::from_slice::<RuntimeServiceRecoveryReceipt>)
+        .transpose()
+        .context("parse prepared runtime service recovery receipt")?;
+    // This observation is performed under all recovery guards and the store
+    // writer, before any new archive or prepared intent mutation.
+    let application_binding =
+        validate_recovery_application_configuration(store, candidate, config_sha256)?;
+    if let Some(receipt) = &prepared {
+        receipt.validate()?;
+        validate_receipt_for_request(receipt, request, request_sha256, config_sha256)?;
+        verify_archived_evidence(store, receipt)?;
+        if receipt.owner_sha256_before != request.owner_sha256 {
+            bail!("prepared runtime recovery receipt has a different owner pin");
+        }
+    }
+    if current_owner.state == RuntimeServiceState::Failed && prepared.is_none() {
+        bail!("failed runtime owner has no prepared recovery receipt");
+    }
+
+    let (
+        archived_evidence_path,
+        archived_evidence_sha256,
+        archived_files,
+        archived_absent_sources,
+    ) = match prepared.as_ref() {
+        Some(receipt) => (
+            receipt.archived_evidence_path.clone(),
+            receipt.archived_evidence_sha256.clone(),
+            receipt.archived_files.clone(),
+            receipt.archived_absent_sources.clone(),
+        ),
+        None => archive_runtime_evidence(
+            store,
+            expected,
+            request_sha256,
+            config_sha256,
+            configuration_bytes,
+            &application_binding,
+        )?,
+    };
+    let historical_build_commit = expected
+        .build_commit
+        .clone()
+        .context("missing historical runtime service build commit")?;
+    let historical_build_snapshot = expected
+        .build_snapshot
+        .clone()
+        .context("missing historical runtime service build snapshot")?;
+    let recovery_created_at = prepared
+        .as_ref()
+        .map(|receipt| receipt.created_at.clone())
+        .unwrap_or_else(Utc::now);
+    let mut failed = expected.clone();
+    failed.state = RuntimeServiceState::Failed;
+    failed.heartbeat_at = recovery_created_at;
+    failed.control_address = None;
+    validate_descriptor(&failed)?;
+    let failed_bytes = serde_json::to_vec_pretty(&failed)?;
+    let after_owner_sha256 = crate::hex_sha256(&failed_bytes);
+    let was_prepared = prepared.is_some();
+    let mut receipt = prepared.unwrap_or(RuntimeServiceRecoveryReceipt {
+        schema_version: RUNTIME_SERVICE_RECOVERY_SCHEMA.into(),
+        request_id: request.request_id.clone(),
+        request_sha256: request_sha256.into(),
+        status: "prepared".into(),
+        outcome: "failed".into(),
+        target_id: expected.target_id.clone(),
+        config_sha256: config_sha256.into(),
+        owner_sha256_before: request.owner_sha256.clone(),
+        owner_state_after: "failed".into(),
+        owner_sha256_after: after_owner_sha256.clone(),
+        archived_evidence_path,
+        archived_evidence_sha256,
+        archived_files,
+        archived_absent_sources,
+        historical_build_commit,
+        historical_build_snapshot,
+        executor_build_commit: recovery_build_commit.into(),
+        executor_build_snapshot: recovery_build_snapshot.into(),
+        created_at: recovery_created_at,
+        completed_at: None,
+    });
+    receipt.validate()?;
+    if receipt.owner_sha256_after != after_owner_sha256 {
+        bail!("prepared runtime recovery result differs from the pinned transition");
+    }
+    if receipt.executor_build_commit != recovery_build_commit
+        || receipt.executor_build_snapshot != recovery_build_snapshot
+    {
+        bail!("prepared runtime recovery executor identity differs from this binary");
+    }
+    verify_archived_evidence(store, &receipt)?;
+    let receipt_path = checked_path(store.root(), recovery_relative)?;
+    let receipt_bytes = serde_json::to_vec_pretty(&receipt)?;
+    if receipt_bytes.len() > MAX_RECOVERY_RECEIPT_BYTES {
+        bail!("runtime recovery receipt exceeds its byte budget");
+    }
+    if !was_prepared {
+        create_parent(store.root(), recovery_relative)?;
+        crate::durability::atomic_write_owner(&receipt_path, &receipt_bytes)?;
+    }
+
+    if current_owner.state == RuntimeServiceState::Failed {
+        if !was_prepared || owner_sha256 != receipt.owner_sha256_after {
+            bail!("failed runtime owner exists without a matching prepared recovery receipt");
+        }
+        if receipt.status == "recovered" {
+            return Ok(receipt);
+        }
+        receipt.status = "recovered".into();
+        receipt.completed_at = Some(Utc::now());
+        receipt.validate()?;
+        let completed_bytes = serde_json::to_vec_pretty(&receipt)?;
+        crate::durability::atomic_write_owner(&receipt_path, &completed_bytes)?;
+        return Ok(receipt);
+    }
+
+    let owner_before_publish = read_stable_regular_path(
+        &owner_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime service owner descriptor before recovery publication",
+    )?;
+    if crate::hex_sha256(&owner_before_publish) != request.owner_sha256
+        || owner_before_publish != owner_bytes
+    {
+        bail!("runtime service owner changed before recovery publication");
+    }
+    let launch_before_publish = read_stable_regular_path(
+        &launch_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime service launch record before recovery publication",
+    )?;
+    if crate::hex_sha256(&launch_before_publish) != request.launch_sha256
+        || launch_before_publish != launch_bytes
+    {
+        bail!("runtime service launch record changed before recovery publication");
+    }
+    if current_owner.state != RuntimeServiceState::Unknown {
+        bail!("runtime recovery owner is no longer unknown before publication");
+    }
+    persist_descriptor(&owner_path, &failed)?;
+    let published = read_stable_regular_path(
+        &owner_path,
+        MAX_RECOVERY_REQUEST_BYTES,
+        "runtime service failed owner descriptor",
+    )?;
+    if crate::hex_sha256(&published) != after_owner_sha256 || published != failed_bytes {
+        bail!("runtime service failed owner publication could not be verified");
+    }
+    receipt.status = "recovered".into();
+    receipt.completed_at = Some(Utc::now());
+    receipt.validate()?;
+    let completed_bytes = serde_json::to_vec_pretty(&receipt)?;
+    if completed_bytes.len() > MAX_RECOVERY_RECEIPT_BYTES {
+        bail!("completed runtime recovery receipt exceeds its byte budget");
+    }
+    crate::durability::atomic_write_owner(&receipt_path, &completed_bytes)?;
+    Ok(receipt)
+}
+
+#[cfg(test)]
+mod recovery_contract_tests {
+    use super::*;
+
+    fn request() -> RuntimeServiceRecoveryRequest {
+        RuntimeServiceRecoveryRequest {
+            schema_version: RUNTIME_SERVICE_RECOVERY_REQUEST_SCHEMA.into(),
+            request_id: "00000000-0000-4000-8000-000000000001".into(),
+            config_sha256: "a".repeat(64),
+            owner_sha256: "b".repeat(64),
+            launch_sha256: "c".repeat(64),
+            expected_owner: RuntimeServiceOwnerDescriptor {
+                schema_version: RUNTIME_SERVICE_OWNER_SCHEMA.into(),
+                owner_token: "00000000-0000-4000-8000-000000000002".into(),
+                process_start_token: "00000000-0000-4000-8000-000000000003".into(),
+                pid: 1,
+                host: "host".into(),
+                target_id: "target".into(),
+                protocol: RUNTIME_SERVICE_OWNER_PROTOCOL.into(),
+                state: RuntimeServiceState::Unknown,
+                acquired_at: Utc::now(),
+                heartbeat_at: Utc::now(),
+                compute_pool_generation: None,
+                preparation_pool_generation: None,
+                control_address: None,
+                build_commit: None,
+                build_snapshot: None,
+                compute_pool_id: None,
+                preparation_pool_id: None,
+                children: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn recovery_request_requires_canonical_lowercase_pins() {
+        let mut request_with_bad_pin = request();
+        assert!(request_with_bad_pin.validate().is_ok());
+        request_with_bad_pin.config_sha256 = "A".repeat(64);
+        assert!(request_with_bad_pin.validate().is_err());
+        let mut uppercase_request = request();
+        uppercase_request.request_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_uppercase();
+        assert!(uppercase_request.validate().is_err());
+    }
+
+    #[test]
+    fn recovery_rejects_nonempty_batch_namespace() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let batch_directory = store.root().join("batches").join("batch-001");
+        std::fs::create_dir_all(&batch_directory).unwrap();
+        std::fs::write(batch_directory.join("batch_intent.json"), b"{}\n").unwrap();
+
+        assert!(require_empty_batch_namespace(&store).is_err());
+    }
+
+    #[test]
+    fn recovery_log_allowlist_covers_all_runtime_service_producers() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let owner = request().expected_owner;
+        let log_root = store
+            .root()
+            .join("runtime-services")
+            .join(&owner.owner_token);
+        std::fs::create_dir_all(&log_root).unwrap();
+        for name in [
+            "compute.stdout.jsonl",
+            "compute.stderr.log",
+            "preparation.stdout.jsonl",
+            "preparation.stderr.log",
+            "compute-publisher.stdout.jsonl",
+            "compute-publisher.stderr.log",
+            "preparation-publisher.stdout.jsonl",
+            "preparation-publisher.stderr.log",
+        ] {
+            std::fs::write(log_root.join(name), b"evidence\n").unwrap();
+        }
+        let observed = observe_recovery_log_sources(&store, &owner).unwrap();
+        assert_eq!(observed, recovery_log_sources(&owner));
+        std::fs::write(log_root.join("publisher-other.log"), b"unexpected\n").unwrap();
+        assert!(observe_recovery_log_sources(&store, &owner).is_err());
+    }
+
+    #[test]
+    fn recovery_checkpoint_absence_requires_terminal_zero_summary() {
+        let drained_without_checkpoint = br#"{"status":"drained","shutdown_requested":true,"pool_id":"compute","pool_checkpoint_sequence":0,"scheduled_count":0,"executed":[]}"#;
+        assert_eq!(
+            scheduler_checkpoint_sequence(drained_without_checkpoint, "compute", "compute")
+                .unwrap(),
+            0
+        );
+        let drained_after_work = br#"{"status":"drained","shutdown_requested":true,"pool_id":"compute","pool_checkpoint_sequence":1,"scheduled_count":1,"executed":[{}]}"#;
+        assert_eq!(
+            scheduler_checkpoint_sequence(drained_after_work, "compute", "compute").unwrap(),
+            1
+        );
+        let idle = br#"{"status":"idle","shutdown_requested":false,"pool_id":"compute","pool_checkpoint_sequence":0,"scheduled_count":0,"executed":[]}"#;
+        assert!(scheduler_checkpoint_sequence(idle, "compute", "compute").is_err());
+    }
+
+    #[test]
+    fn recovery_archive_allows_only_the_pinned_owner_transition() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let request_sha256 = "d".repeat(64);
+        let mut owner = request().expected_owner;
+        owner.build_commit = Some("a".repeat(40));
+        owner.build_snapshot = Some("b".repeat(64));
+        owner.compute_pool_generation = Some(1);
+        owner.preparation_pool_generation = Some(1);
+        owner.compute_pool_id = Some("compute".into());
+        owner.preparation_pool_id = Some("preparation".into());
+        owner.children = vec![
+            RuntimeServiceChild {
+                role: "compute".into(),
+                pid: 11,
+                status: "exited_success".into(),
+            },
+            RuntimeServiceChild {
+                role: "preparation".into(),
+                pid: 12,
+                status: "exited_success".into(),
+            },
+        ];
+        validate_descriptor(&owner).unwrap();
+        let owner_before = serde_json::to_vec_pretty(&owner).unwrap();
+        let mut failed = owner.clone();
+        failed.state = RuntimeServiceState::Failed;
+        failed.heartbeat_at = Utc::now();
+        let owner_after = serde_json::to_vec_pretty(&failed).unwrap();
+        validate_descriptor(&failed).unwrap();
+        let owner_relative = RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH;
+        let owner_path = store.root().join(owner_relative);
+        std::fs::create_dir_all(owner_path.parent().unwrap()).unwrap();
+        std::fs::write(&owner_path, &owner_before).unwrap();
+
+        let archive_root = store
+            .root()
+            .join("runtime-services")
+            .join("recovery")
+            .join(&request_sha256)
+            .join("archive");
+        std::fs::create_dir_all(&archive_root).unwrap();
+        let mut archived_files = BTreeMap::new();
+        archived_files.insert(owner_relative.to_owned(), crate::hex_sha256(&owner_before));
+        std::fs::write(archive_root.join("OWNER.json"), &owner_before).unwrap();
+        let mut evidence_sources = recovery_mandatory_sources(&owner).unwrap();
+        let optional_sources = recovery_log_sources(&owner)
+            .difference(&evidence_sources)
+            .cloned()
+            .collect::<Vec<_>>();
+        evidence_sources.extend(optional_sources);
+        for source in evidence_sources {
+            if source == owner_relative || source == RECOVERY_ARCHIVED_CONFIGURATION_KEY {
+                continue;
+            }
+            let source_path = store.root().join(&source);
+            std::fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+            let bytes = if source == "runtime-services/00000000-0000-4000-8000-000000000002/compute.stdout.jsonl" {
+                br#"{"status":"drained","shutdown_requested":true,"pool_id":"compute","pool_checkpoint_sequence":0,"scheduled_count":0,"executed":[]}"#.to_vec()
+            } else if source == "runtime-services/00000000-0000-4000-8000-000000000002/preparation.stdout.jsonl" {
+                br#"{"status":"drained","shutdown_requested":true,"pool_id":"preparation","pool_checkpoint_sequence":0,"scheduled_count":0,"executed":[]}"#.to_vec()
+            } else {
+                source.as_bytes().to_vec()
+            };
+            std::fs::write(&source_path, &bytes).unwrap();
+            let archive_name = Path::new(&source).file_name().unwrap();
+            std::fs::write(archive_root.join(archive_name), &bytes).unwrap();
+            let source_digest = crate::hex_sha256(&bytes);
+            archived_files.insert(source, source_digest);
+        }
+        let configuration_bytes = br#"{"schema_version":"runtime_service_config.v2"}"#;
+        std::fs::write(
+            archive_root.join(RECOVERY_ARCHIVED_CONFIGURATION_KEY),
+            configuration_bytes,
+        )
+        .unwrap();
+        archived_files.insert(
+            RECOVERY_ARCHIVED_CONFIGURATION_KEY.into(),
+            crate::hex_sha256(configuration_bytes),
+        );
+        let manifest_bytes = serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "runtime_service_recovery_archive.v1",
+            "request_sha256": request_sha256.clone(),
+            "config_sha256": crate::hex_sha256(configuration_bytes),
+            "application_binding": {
+                "mode": "external_only",
+                "raw_sha256": crate::hex_sha256(configuration_bytes),
+            },
+            "files": archived_files.clone(),
+        }))
+        .unwrap();
+        let manifest_path = archive_root.join("manifest.json");
+        std::fs::write(&manifest_path, &manifest_bytes).unwrap();
+        let receipt = RuntimeServiceRecoveryReceipt {
+            schema_version: RUNTIME_SERVICE_RECOVERY_SCHEMA.into(),
+            request_id: "00000000-0000-4000-8000-000000000010".into(),
+            request_sha256: "d".repeat(64),
+            status: "recovered".into(),
+            outcome: "failed".into(),
+            target_id: "target".into(),
+            config_sha256: crate::hex_sha256(configuration_bytes),
+            owner_sha256_before: crate::hex_sha256(&owner_before),
+            owner_state_after: "failed".into(),
+            owner_sha256_after: crate::hex_sha256(&owner_after),
+            archived_evidence_path: manifest_path.to_str().unwrap().into(),
+            archived_evidence_sha256: crate::hex_sha256(&manifest_bytes),
+            archived_files: archived_files.clone(),
+            archived_absent_sources: BTreeMap::new(),
+            historical_build_commit: "a".repeat(40),
+            historical_build_snapshot: "b".repeat(64),
+            executor_build_commit: "c".repeat(40),
+            executor_build_snapshot: "f".repeat(64),
+            created_at: Utc::now(),
+            completed_at: Some(Utc::now()),
+        };
+        receipt.validate().unwrap();
+        verify_archived_evidence(&store, &receipt).unwrap();
+
+        let application_path =
+            create_parent(store.root(), "runtime-services/APPLICATION.json").unwrap();
+        std::fs::write(&application_path, b"foreign application").unwrap();
+        assert!(verify_archived_evidence(&store, &receipt).is_err());
+        std::fs::remove_file(&application_path).unwrap();
+
+        let legacy_manifest_bytes = serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "runtime_service_recovery_archive.v1",
+            "request_sha256": request_sha256.clone(),
+            "config_sha256": crate::hex_sha256(configuration_bytes),
+            "files": archived_files.clone(),
+        }))
+        .unwrap();
+        std::fs::write(&manifest_path, &legacy_manifest_bytes).unwrap();
+        let mut legacy_receipt = receipt.clone();
+        legacy_receipt.archived_evidence_sha256 = crate::hex_sha256(&legacy_manifest_bytes);
+        assert!(verify_archived_evidence(&store, &legacy_receipt).is_err());
+        std::fs::write(&manifest_path, &manifest_bytes).unwrap();
+
+        std::fs::write(&owner_path, &owner_after).unwrap();
+        verify_archived_evidence(&store, &receipt).unwrap();
+
+        let mut missing = receipt.clone();
+        missing
+            .archived_files
+            .remove(RECOVERY_ARCHIVED_CONFIGURATION_KEY);
+        assert!(missing.validate().is_err());
+        let mut extra = receipt.clone();
+        extra.archived_files.insert("extra.json".into(), "1".repeat(64));
+        assert!(extra.validate().is_err());
+
+        std::fs::write(&owner_path, b"unrelated-owner").unwrap();
+        assert!(verify_archived_evidence(&store, &receipt).is_err());
+    }
+}
+
 #[cfg(test)]
 mod application_configuration_tests {
     use super::*;
@@ -1379,6 +4589,7 @@ mod application_configuration_tests {
                 gpu_vram_bytes_by_uuid: [(GPU_A.into(), 4096)].into_iter().collect(),
                 allowed_cpu_ids: [0, 1, 2, 3].into_iter().collect(),
             },
+            runtime_generation_sha256: None,
             compute_max_concurrency: 2,
             preparation_max_concurrency: 1,
             compute_placements: config
@@ -1407,6 +4618,23 @@ mod application_configuration_tests {
         config.schema_version = RUNTIME_SERVICE_CONFIG_SCHEMA_V2.into();
         config.host_execution = Some(host_execution(&config));
         config
+    }
+
+    fn application_state_root(store: &SessionStore) -> PathBuf {
+        let root = store.root().join("test-application-state");
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn initialize_host_application(
+        store: &SessionStore,
+        candidate: &RuntimeServiceConfig,
+    ) -> Result<RuntimeServiceConfig> {
+        RuntimeServiceConfig::initialize_host_application(
+            store,
+            candidate,
+            &application_state_root(store),
+        )
     }
 
     fn gpu_v2_config(store: &SessionStore) -> RuntimeServiceConfig {
@@ -1753,7 +4981,7 @@ mod application_configuration_tests {
             .clone();
         assert!(!ledger_root.exists());
 
-        let first = RuntimeServiceConfig::initialize_host_application(&store, &candidate).unwrap();
+        let first = initialize_host_application(&store, &candidate).unwrap();
         let application_path = store.root().join("runtime-services/APPLICATION.json");
         let application_bytes = std::fs::read(&application_path).unwrap();
         let marker_path = ledger_root.join("HOST_RESOURCE_LEDGER.init.json");
@@ -1761,14 +4989,14 @@ mod application_configuration_tests {
         let marker_bytes = std::fs::read(&marker_path).unwrap();
         let document_bytes = std::fs::read(&document_path).unwrap();
         assert_eq!(first, candidate);
-        assert!(HostResourceLedger::open(
+        assert!(HostResourceLedger::open_for_application(
+            &application_state_root(&store),
             &ledger_root,
             candidate.host_execution.as_ref().unwrap().policy.clone(),
         )
         .is_ok());
 
-        let repeated =
-            RuntimeServiceConfig::initialize_host_application(&store, &candidate).unwrap();
+        let repeated = initialize_host_application(&store, &candidate).unwrap();
         assert_eq!(repeated, candidate);
         assert_eq!(std::fs::read(application_path).unwrap(), application_bytes);
         assert_eq!(std::fs::read(marker_path).unwrap(), marker_bytes);
@@ -1795,16 +5023,16 @@ mod application_configuration_tests {
 
         let mut changed = candidate.clone();
         changed.host_execution.as_mut().unwrap().policy.revision += 1;
-        assert!(RuntimeServiceConfig::initialize_host_application(&store, &changed).is_err());
+        assert!(initialize_host_application(&store, &changed).is_err());
         assert!(!ledger_root.exists());
         assert_eq!(std::fs::read(&application_path).unwrap(), application_bytes);
 
-        RuntimeServiceConfig::initialize_host_application(&store, &candidate).unwrap();
+        initialize_host_application(&store, &candidate).unwrap();
         let marker_path = ledger_root.join("HOST_RESOURCE_LEDGER.init.json");
         let document_path = ledger_root.join("HOST_RESOURCE_LEDGER.json");
         let marker_bytes = std::fs::read(&marker_path).unwrap();
         let document_bytes = std::fs::read(&document_path).unwrap();
-        assert!(RuntimeServiceConfig::initialize_host_application(&store, &changed).is_err());
+        assert!(initialize_host_application(&store, &changed).is_err());
         assert_eq!(std::fs::read(marker_path).unwrap(), marker_bytes);
         assert_eq!(std::fs::read(document_path).unwrap(), document_bytes);
     }
@@ -1814,7 +5042,7 @@ mod application_configuration_tests {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path()).unwrap();
         let legacy = config(&store);
-        assert!(RuntimeServiceConfig::initialize_host_application(&store, &legacy).is_err());
+        assert!(initialize_host_application(&store, &legacy).is_err());
         assert!(!store
             .root()
             .join("runtime-services/APPLICATION.json")
@@ -1825,7 +5053,7 @@ mod application_configuration_tests {
         let application_path = store.root().join("runtime-services/APPLICATION.json");
         let application_bytes = std::fs::read(&application_path).unwrap();
         let candidate = v2_config(&store);
-        assert!(RuntimeServiceConfig::initialize_host_application(&store, &candidate).is_err());
+        assert!(initialize_host_application(&store, &candidate).is_err());
         assert_eq!(std::fs::read(application_path).unwrap(), application_bytes);
         assert!(!candidate
             .host_execution
@@ -1850,7 +5078,7 @@ mod application_configuration_tests {
         let marker_path = ledger_root.join("HOST_RESOURCE_LEDGER.init.json");
         std::fs::write(&marker_path, b"existing partial marker").unwrap();
 
-        assert!(RuntimeServiceConfig::initialize_host_application(&store, &candidate).is_err());
+        assert!(initialize_host_application(&store, &candidate).is_err());
         let application_path = store.root().join("runtime-services/APPLICATION.json");
         assert_eq!(
             RuntimeServiceConfig::read(&application_path).unwrap(),
@@ -1861,7 +5089,7 @@ mod application_configuration_tests {
             b"existing partial marker"
         );
         assert!(!ledger_root.join("HOST_RESOURCE_LEDGER.json").exists());
-        assert!(RuntimeServiceConfig::initialize_host_application(&store, &candidate).is_err());
+        assert!(initialize_host_application(&store, &candidate).is_err());
         assert_eq!(
             std::fs::read(&marker_path).unwrap(),
             b"existing partial marker"
@@ -1882,7 +5110,7 @@ mod application_configuration_tests {
             let record_path = create_parent(store.root(), record).unwrap();
             std::fs::write(&record_path, b"preserve owner evidence").unwrap();
 
-            assert!(RuntimeServiceConfig::initialize_host_application(&store, &candidate).is_err());
+            assert!(initialize_host_application(&store, &candidate).is_err());
             assert_eq!(
                 std::fs::read(record_path).unwrap(),
                 b"preserve owner evidence"
@@ -1908,7 +5136,7 @@ mod application_configuration_tests {
         let fence = store
             .acquire_development_idle_fence("owner-init", "nonce-init")
             .unwrap();
-        assert!(RuntimeServiceConfig::initialize_host_application(&store, &candidate).is_err());
+        assert!(initialize_host_application(&store, &candidate).is_err());
         assert_eq!(store.read_development_idle_fence().unwrap(), Some(fence));
         assert!(!store
             .root()
@@ -1987,6 +5215,112 @@ mod application_configuration_tests {
     }
 
     #[test]
+    fn recovery_rejects_mismatched_or_corrupt_persisted_application() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let candidate = v2_config(&store);
+        let application_path =
+            create_parent(store.root(), "runtime-services/APPLICATION.json").unwrap();
+
+        let mut mismatch = candidate.clone();
+        mismatch
+            .host_execution
+            .as_mut()
+            .unwrap()
+            .policy
+            .revision += 1;
+        std::fs::write(&application_path, serde_json::to_vec(&mismatch).unwrap()).unwrap();
+        assert!(validate_recovery_application_configuration(
+            &store,
+            &candidate,
+            &"a".repeat(64),
+        )
+        .is_err());
+
+        std::fs::write(&application_path, b"not-json").unwrap();
+        assert!(validate_recovery_application_configuration(
+            &store,
+            &candidate,
+            &"a".repeat(64),
+        )
+        .is_err());
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn recovery_rejects_persisted_application_symlink() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let candidate = v2_config(&store);
+        let target = directory.path().join("foreign-application.json");
+        std::fs::write(&target, serde_json::to_vec(&candidate).unwrap()).unwrap();
+        let application_path =
+            create_parent(store.root(), "runtime-services/APPLICATION.json").unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &application_path).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&target, &application_path).unwrap();
+
+        assert!(validate_recovery_application_configuration(
+            &store,
+            &candidate,
+            &"a".repeat(64),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn recovery_application_binding_distinguishes_external_and_persisted_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let candidate = v2_config(&store);
+        let external_sha256 = "a".repeat(64);
+        let external = validate_recovery_application_configuration(
+            &store,
+            &candidate,
+            &external_sha256,
+        )
+        .unwrap();
+        assert_eq!(
+            external,
+            RecoveryApplicationBinding::ExternalOnly {
+                raw_sha256: external_sha256.clone()
+            }
+        );
+        assert_eq!(
+            application_binding_manifest_value(&external)["mode"],
+            "external_only"
+        );
+        assert_eq!(
+            application_binding_manifest_value(&external)["raw_sha256"],
+            external_sha256
+        );
+
+        let application_path =
+            create_parent(store.root(), "runtime-services/APPLICATION.json").unwrap();
+        let application_bytes = serde_json::to_vec(&candidate).unwrap();
+        std::fs::write(&application_path, &application_bytes).unwrap();
+        let persisted =
+            validate_recovery_application_configuration(&store, &candidate, &external_sha256)
+                .unwrap();
+        assert_eq!(
+            persisted,
+            RecoveryApplicationBinding::Persisted {
+                raw_sha256: crate::hex_sha256(&application_bytes)
+            }
+        );
+        assert_eq!(
+            application_binding_manifest_value(&persisted)["mode"],
+            "persisted"
+        );
+        assert_eq!(
+            application_binding_manifest_value(&persisted)["raw_sha256"],
+            crate::hex_sha256(&application_bytes)
+        );
+    }
+
+    #[test]
     fn wrong_store_candidate_is_rejected_before_publication() {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path()).unwrap();
@@ -1999,5 +5333,525 @@ mod application_configuration_tests {
             .root()
             .join("runtime-services/APPLICATION.json")
             .exists());
+    }
+}
+
+#[cfg(test)]
+mod container_recovery_contract_tests {
+    use super::*;
+    use crate::host_resource_ledger::{
+        DockerContainerAfterObservation, DockerContainerBeforeObservation,
+        DockerContainerTeardownObservation, DockerDeviceReleaseObservation,
+        DockerNamespaceTeardownResult, HostResourceLedger, HostResourceLedgerPolicy,
+        DOCKER_NAMESPACE_TEARDOWN_ATTESTATION_SCHEMA,
+        HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1,
+    };
+    use crate::runtime_service_host::{
+        RuntimeServiceHostExecution, RuntimeServiceHostPlacement,
+        RUNTIME_SERVICE_HOST_EXECUTION_SCHEMA_V1,
+    };
+    use crate::{
+        FmsPreparationResourcePool, FmsResourceBudget, FmsResourceKind,
+        FmsSchedulerResourcePool, FMS_PREPARATION_RESOURCE_POOL_SCHEMA,
+        FMS_SCHEDULER_RESOURCE_POOL_SCHEMA,
+    };
+    use tempfile::TempDir;
+
+    fn ready_owner() -> RuntimeServiceOwnerDescriptor {
+        let now = Utc::now();
+        RuntimeServiceOwnerDescriptor {
+            schema_version: RUNTIME_SERVICE_OWNER_SCHEMA.into(),
+            owner_token: "00000000-0000-4000-8000-000000000001".into(),
+            process_start_token: "00000000-0000-4000-8000-000000000002".into(),
+            pid: 123,
+            host: "fullmag-test".into(),
+            target_id: "desktop".into(),
+            protocol: RUNTIME_SERVICE_OWNER_PROTOCOL.into(),
+            state: RuntimeServiceState::Ready,
+            acquired_at: now,
+            heartbeat_at: now,
+            compute_pool_generation: Some(1),
+            preparation_pool_generation: Some(1),
+            control_address: Some("127.0.0.1:8081".into()),
+            build_commit: Some("a".repeat(40)),
+            build_snapshot: Some("b".repeat(64)),
+            compute_pool_id: Some("compute".into()),
+            preparation_pool_id: Some("preparation".into()),
+            children: vec![
+                RuntimeServiceChild {
+                    role: RUNTIME_SERVICE_COMPUTE_ROLE.into(),
+                    pid: 124,
+                    status: "running".into(),
+                },
+                RuntimeServiceChild {
+                    role: RUNTIME_SERVICE_PREPARATION_ROLE.into(),
+                    pid: 125,
+                    status: "running".into(),
+                },
+            ],
+        }
+    }
+
+    fn request() -> RuntimeServiceContainerRecoveryRequest {
+        RuntimeServiceContainerRecoveryRequest {
+            schema_version: RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA.into(),
+            request_id: "00000000-0000-4000-8000-000000000010".into(),
+            config_sha256: "c".repeat(64),
+            owner_sha256: "d".repeat(64),
+            launch_sha256: "e".repeat(64),
+            expected_owner: ready_owner(),
+            store_root_sha256: "f".repeat(64),
+            application: RuntimeServiceApplicationPin::ExternalOnly {
+                raw_sha256: "c".repeat(64),
+            },
+            ledger_root_sha256: "1".repeat(64),
+            ledger_snapshot_sha256: "2".repeat(64),
+            docker_engine_id_sha256: "3".repeat(64),
+            docker_manifest_sha256: "4".repeat(64),
+            prior_ready_owner_proof_sha256: "8".repeat(64),
+            device_release_resource_id: "runtime-gpu".into(),
+            device_release_mapping_sha256: "7".repeat(64),
+            device_release_gpu_uuid: Some("GPU-00000000-0000-4000-8000-000000000003".into()),
+            containers: vec![
+                RuntimeServiceContainerPin {
+                    container_id: "1".repeat(64),
+                    image_id: format!("sha256:{}", "2".repeat(64)),
+                    config_sha256: "5".repeat(64),
+                    service: "backend".into(),
+                    compose_project: "fullmag-worktree".into(),
+                    private_pid_namespace: true,
+                    host_pid: false,
+                    device_requests_sha256: "6".repeat(64),
+                },
+                RuntimeServiceContainerPin {
+                    container_id: "3".repeat(64),
+                    image_id: format!("sha256:{}", "4".repeat(64)),
+                    config_sha256: "7".repeat(64),
+                    service: "frontend".into(),
+                    compose_project: "fullmag-worktree".into(),
+                    private_pid_namespace: true,
+                    host_pid: false,
+                    device_requests_sha256: "8".repeat(64),
+                },
+            ],
+        }
+    }
+
+    fn executable_config(store: &SessionStore) -> RuntimeServiceConfig {
+        let budget = FmsResourceBudget {
+            cpu_millis: 1000,
+            memory_bytes: 1024,
+            gpu_memory_bytes: 0,
+            storage_bytes: 1024,
+        };
+        let mut compute_placements = std::collections::BTreeMap::new();
+        compute_placements.insert(
+            "compute.cpu".into(),
+            RuntimeServiceHostPlacement {
+                cpu_ids: [0].into_iter().collect(),
+                gpu_uuid: None,
+            },
+        );
+        let mut preparation_cpu_ids = std::collections::BTreeMap::new();
+        preparation_cpu_ids.insert("preparation.cpu".into(), [0].into_iter().collect());
+        RuntimeServiceConfig {
+            schema_version: RUNTIME_SERVICE_CONFIG_SCHEMA_V2.into(),
+            store_root: store.root().to_path_buf(),
+            target_id: "desktop".into(),
+            compute_pool_id: "compute".into(),
+            preparation_pool_id: "preparation".into(),
+            compute_resources: vec![FmsSchedulerResourceOffer {
+                resource_id: "compute.cpu".into(),
+                kind: FmsResourceKind::Cpu,
+                budget: budget.clone(),
+            }],
+            preparation_resources: vec![FmsPreparationResourceOffer {
+                resource_id: "preparation.cpu".into(),
+                budget,
+            }],
+            worker_timeout_seconds: 10,
+            preparation_timeout_seconds: 10,
+            heartbeat_interval_milliseconds: 100,
+            startup_timeout_seconds: 10,
+            drain_timeout_seconds: 10,
+            host_execution: Some(RuntimeServiceHostExecution {
+                schema_version: RUNTIME_SERVICE_HOST_EXECUTION_SCHEMA_V1.into(),
+                ledger_root: store.root().join("host-ledger"),
+                policy: HostResourceLedgerPolicy {
+                    schema_version: HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1.into(),
+                    host_id: "host:test-container-recovery".into(),
+                    topology_sha256: "a".repeat(64),
+                    revision: 1,
+                    owner_epoch: 1,
+                    total_budget: FmsResourceBudget {
+                        cpu_millis: 4000,
+                        memory_bytes: 8192,
+                        gpu_memory_bytes: 0,
+                        storage_bytes: 8192,
+                    },
+                    gpu_vram_bytes_by_uuid: std::collections::BTreeMap::new(),
+                    allowed_cpu_ids: [0, 1, 2, 3].into_iter().collect(),
+                },
+                runtime_generation_sha256: None,
+                compute_max_concurrency: 1,
+                preparation_max_concurrency: 1,
+                compute_placements,
+                preparation_cpu_ids,
+            }),
+        }
+    }
+
+    struct ExecutableRecoveryFixture {
+        _directory: TempDir,
+        store: SessionStore,
+        config: RuntimeServiceConfig,
+        configuration_bytes: Vec<u8>,
+        request: RuntimeServiceContainerRecoveryRequest,
+        request_sha256: String,
+        attestation: DockerNamespaceTeardownAttestation,
+        recovery_build_commit: String,
+        recovery_build_snapshot: String,
+    }
+
+    fn executable_fixture() -> ExecutableRecoveryFixture {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let config = executable_config(&store);
+        let application_state_root = store.root().join("application-state");
+        std::fs::create_dir_all(&application_state_root).unwrap();
+        RuntimeServiceConfig::initialize_host_application(
+            &store,
+            &config,
+            &application_state_root,
+        )
+        .unwrap();
+        store
+            .commit_scheduler_resource_pool(
+                0,
+                &FmsSchedulerResourcePool {
+                    schema_version: FMS_SCHEDULER_RESOURCE_POOL_SCHEMA.into(),
+                    pool_id: config.compute_pool_id.clone(),
+                    generation: 1,
+                    resources: config.compute_resources.clone(),
+                },
+            )
+            .unwrap();
+        store
+            .commit_preparation_resource_pool(
+                0,
+                &FmsPreparationResourcePool {
+                    schema_version: FMS_PREPARATION_RESOURCE_POOL_SCHEMA.into(),
+                    pool_id: config.preparation_pool_id.clone(),
+                    generation: 1,
+                    resources: config.preparation_resources.clone(),
+                },
+            )
+            .unwrap();
+
+        let historical_commit = "a".repeat(40);
+        let historical_snapshot = "b".repeat(64);
+        let (expected_owner, owner_token, owner_pid) = {
+            let mut owner = RuntimeServiceOwner::acquire(&store, &config.target_id).unwrap();
+            owner
+                .set_execution_identity(
+                    &historical_commit,
+                    &historical_snapshot,
+                    &config.compute_pool_id,
+                    &config.preparation_pool_id,
+                )
+                .unwrap();
+            owner
+                .publish_with_control_address(
+                    RuntimeServiceState::Ready,
+                    Some(1),
+                    Some(1),
+                    vec![
+                        RuntimeServiceChild {
+                            role: RUNTIME_SERVICE_COMPUTE_ROLE.into(),
+                            pid: 1001,
+                            status: "running".into(),
+                        },
+                        RuntimeServiceChild {
+                            role: RUNTIME_SERVICE_PREPARATION_ROLE.into(),
+                            pid: 1002,
+                            status: "running".into(),
+                        },
+                    ],
+                    Some("127.0.0.1:8081".into()),
+                )
+                .unwrap();
+            (
+                owner.descriptor().clone(),
+                owner.owner_token().to_owned(),
+                owner.descriptor().pid,
+            )
+        };
+        let owner_path = store.root().join(RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH);
+        let owner_bytes = std::fs::read(&owner_path).unwrap();
+        assert_eq!(serde_json::from_slice::<RuntimeServiceOwnerDescriptor>(&owner_bytes).unwrap(), expected_owner);
+        let owner_sha256 = crate::hex_sha256(&owner_bytes);
+
+        let launch = RuntimeServiceLaunchGuard::try_acquire(store.root())
+            .unwrap()
+            .unwrap();
+        let launch_id = Uuid::new_v4().to_string();
+        launch.begin(&launch_id, true).unwrap();
+        launch.publish(&launch_id, "ready", Some(owner_pid)).unwrap();
+        drop(launch);
+        let launch_bytes = std::fs::read(store.root().join("runtime-services/LAUNCH.json")).unwrap();
+        let launch_sha256 = crate::hex_sha256(&launch_bytes);
+
+        let log_root = store.root().join("runtime-services").join(&owner_token);
+        std::fs::create_dir_all(&log_root).unwrap();
+        for name in ["compute.stdout.jsonl", "preparation.stdout.jsonl"] {
+            std::fs::write(log_root.join(name), b"{\"status\":\"stopped\"}\n").unwrap();
+        }
+
+        let configuration_bytes = std::fs::read(
+            store
+                .root()
+                .join("runtime-services/APPLICATION.json"),
+        )
+        .unwrap();
+        let config_sha256 = crate::hex_sha256(&configuration_bytes);
+        let application = RuntimeServiceApplicationPin::Persisted {
+            raw_sha256: config_sha256.clone(),
+        };
+        let host_execution = config.host_execution.as_ref().unwrap();
+        let ledger = HostResourceLedger::open(
+            &host_execution.ledger_root,
+            host_execution.policy.clone(),
+        )
+        .unwrap();
+        let ledger_snapshot = ledger.read().unwrap();
+        let ledger_snapshot_sha256 = ledger_snapshot.stable_sha256().unwrap();
+        let ledger_root_sha256 = absolute_path_sha256(
+            &std::fs::canonicalize(&host_execution.ledger_root).unwrap(),
+        )
+        .unwrap();
+        let store_root_sha256 = absolute_path_sha256(store.root()).unwrap();
+        let device_mapping_sha256 = "8".repeat(64);
+        let backend_config_sha256 = "5".repeat(64);
+        let frontend_config_sha256 = "6".repeat(64);
+        let device_requests_sha256 = "7".repeat(64);
+        let request = RuntimeServiceContainerRecoveryRequest {
+            schema_version: RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA.into(),
+            request_id: "00000000-0000-4000-8000-000000000012".into(),
+            config_sha256,
+            owner_sha256,
+            launch_sha256,
+            expected_owner,
+            store_root_sha256,
+            application,
+            ledger_root_sha256,
+            ledger_snapshot_sha256,
+            docker_engine_id_sha256: "3".repeat(64),
+            docker_manifest_sha256: "4".repeat(64),
+            prior_ready_owner_proof_sha256: "9".repeat(64),
+            device_release_resource_id: "runtime-device".into(),
+            device_release_mapping_sha256: device_mapping_sha256.clone(),
+            device_release_gpu_uuid: None,
+            containers: vec![
+                RuntimeServiceContainerPin {
+                    container_id: "1".repeat(64),
+                    image_id: format!("sha256:{}", "2".repeat(64)),
+                    config_sha256: backend_config_sha256,
+                    service: "backend".into(),
+                    compose_project: "fullmag-test".into(),
+                    private_pid_namespace: true,
+                    host_pid: false,
+                    device_requests_sha256: device_requests_sha256.clone(),
+                },
+                RuntimeServiceContainerPin {
+                    container_id: "3".repeat(64),
+                    image_id: format!("sha256:{}", "4".repeat(64)),
+                    config_sha256: frontend_config_sha256,
+                    service: "frontend".into(),
+                    compose_project: "fullmag-test".into(),
+                    private_pid_namespace: true,
+                    host_pid: false,
+                    device_requests_sha256: device_requests_sha256.clone(),
+                },
+            ],
+        };
+        let request_sha256 = request.canonical_sha256().unwrap();
+        let observed_containers = request
+            .containers
+            .iter()
+            .map(|container| DockerContainerTeardownObservation {
+                container_id: container.container_id.clone(),
+                image_id: container.image_id.clone(),
+                config_sha256: container.config_sha256.clone(),
+                before: DockerContainerBeforeObservation {
+                    private_pid_namespace: true,
+                    host_pid: false,
+                    device_requests_sha256: container.device_requests_sha256.clone(),
+                },
+                after: DockerContainerAfterObservation {
+                    state: "exited".into(),
+                    pid: 0,
+                    finished_at: "2026-10-19T12:00:00Z".into(),
+                    descendant_count: 0,
+                    private_pid_namespace: true,
+                    host_pid: false,
+                    device_requests_sha256: container.device_requests_sha256.clone(),
+                },
+            })
+            .collect();
+        let attestation = DockerNamespaceTeardownAttestation {
+            schema_version: DOCKER_NAMESPACE_TEARDOWN_ATTESTATION_SCHEMA.into(),
+            request_sha256: request_sha256.clone(),
+            docker_engine_id_sha256: request.docker_engine_id_sha256.clone(),
+            containers: observed_containers,
+            device_release: DockerDeviceReleaseObservation {
+                resource_id: request.device_release_resource_id.clone(),
+                gpu_uuid: None,
+                mapping_sha256: device_mapping_sha256,
+                mapping_detached: true,
+            },
+            manifest_sha256: request.docker_manifest_sha256.clone(),
+            result: DockerNamespaceTeardownResult::AuthoritativeTeardown,
+        };
+        request.validate().unwrap();
+        attestation.validate_without_request().unwrap();
+        ExecutableRecoveryFixture {
+            _directory: directory,
+            store,
+            config,
+            configuration_bytes,
+            request,
+            request_sha256,
+            attestation,
+            recovery_build_commit: "c".repeat(40),
+            recovery_build_snapshot: "d".repeat(64),
+        }
+    }
+
+    #[test]
+    fn container_recovery_request_accepts_complete_ready_owner_pin() {
+        let request = request();
+        request.validate().unwrap();
+        assert_eq!(request.canonical_sha256().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn container_recovery_request_rejects_host_pid_container() {
+        let mut request = request();
+        request.containers[0].host_pid = true;
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn container_recovery_request_rejects_noncanonical_docker_identity() {
+        let mut short_id = request();
+        short_id.containers[0].container_id = "backend".into();
+        assert!(short_id.validate().is_err());
+
+        let mut non_digest_image = request();
+        non_digest_image.containers[0].image_id = "backend-image".into();
+        assert!(non_digest_image.validate().is_err());
+    }
+
+    #[test]
+    fn container_recovery_request_requires_backend_and_frontend_services() {
+        let mut missing_frontend = request();
+        missing_frontend.containers[1].service = "backend".into();
+        assert!(missing_frontend.validate().is_err());
+
+        let mut missing_container = request();
+        missing_container.containers.pop();
+        assert!(missing_container.validate().is_err());
+    }
+
+    #[test]
+    fn container_recovery_request_rejects_unknown_owner_with_terminal_child() {
+        let mut request = request();
+        request.expected_owner.state = RuntimeServiceState::Unknown;
+        request.expected_owner.children[0].status = "exited_failure".into();
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_unknown_recovery_request_rejects_ready_owner() {
+        let owner = ready_owner();
+        let request = RuntimeServiceRecoveryRequest {
+            schema_version: RUNTIME_SERVICE_RECOVERY_REQUEST_SCHEMA.into(),
+            request_id: "00000000-0000-4000-8000-000000000011".into(),
+            config_sha256: "a".repeat(64),
+            owner_sha256: "b".repeat(64),
+            launch_sha256: "c".repeat(64),
+            expected_owner: owner,
+        };
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn container_recovery_executes_ready_to_failed_and_replays_without_mutation() {
+        let fixture = executable_fixture();
+        let owner_path = fixture
+            .store
+            .root()
+            .join(RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH);
+        let receipt_path = fixture.store.root().join(format!(
+            "runtime-services/container-recovery/{}/receipt.json",
+            fixture.request_sha256
+        ));
+        let first = RuntimeServiceConfig::recover_container_empty(
+            &fixture.store,
+            &fixture.config,
+            &fixture.configuration_bytes,
+            &fixture.request,
+            &fixture.request_sha256,
+            &fixture.attestation,
+            &fixture.recovery_build_commit,
+            &fixture.recovery_build_snapshot,
+        )
+        .unwrap();
+        assert_eq!(first.status, "recovered");
+        assert_eq!(first.owner_state_before, "ready");
+        assert_eq!(first.owner_state_after, "failed");
+        let owner_after = std::fs::read(&owner_path).unwrap();
+        let owner_after_descriptor: RuntimeServiceOwnerDescriptor =
+            serde_json::from_slice(&owner_after).unwrap();
+        assert_eq!(owner_after_descriptor.state, RuntimeServiceState::Failed);
+        assert!(owner_after_descriptor.children.is_empty());
+        assert_eq!(crate::hex_sha256(&owner_after), first.owner_sha256_after);
+        let receipt_before_replay = std::fs::read(&receipt_path).unwrap();
+        let owner_before_replay = owner_after.clone();
+
+        let replay = RuntimeServiceConfig::recover_container_empty(
+            &fixture.store,
+            &fixture.config,
+            &fixture.configuration_bytes,
+            &fixture.request,
+            &fixture.request_sha256,
+            &fixture.attestation,
+            &fixture.recovery_build_commit,
+            &fixture.recovery_build_snapshot,
+        )
+        .unwrap();
+        assert_eq!(replay, first);
+        assert_eq!(std::fs::read(&owner_path).unwrap(), owner_before_replay);
+        assert_eq!(std::fs::read(&receipt_path).unwrap(), receipt_before_replay);
+
+        let mut changed_request = fixture.request.clone();
+        changed_request.ledger_snapshot_sha256 = "9".repeat(64);
+        let changed_request_sha256 = changed_request.canonical_sha256().unwrap();
+        let mut changed_attestation = fixture.attestation.clone();
+        changed_attestation.request_sha256 = changed_request_sha256.clone();
+        let error = RuntimeServiceConfig::recover_container_empty(
+            &fixture.store,
+            &fixture.config,
+            &fixture.configuration_bytes,
+            &changed_request,
+            &changed_request_sha256,
+            &changed_attestation,
+            &fixture.recovery_build_commit,
+            &fixture.recovery_build_snapshot,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("ledger snapshot"));
+        assert_eq!(std::fs::read(&owner_path).unwrap(), owner_before_replay);
+        assert_eq!(std::fs::read(&receipt_path).unwrap(), receipt_before_replay);
     }
 }

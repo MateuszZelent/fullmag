@@ -25,6 +25,14 @@ std::array<double, 3> average_magnetization_components(const Context &ctx);
 double max_norm_aos(const std::vector<double> &field_xyz);
 
 /*
+ * Compute the maximum vector norm over magnetic nodes only. Empty masks mean
+ * that every node is eligible; malformed extents fail closed with infinity.
+ */
+double max_norm_aos_masked(
+    const std::vector<double> &field_xyz,
+    const std::vector<uint8_t> &magnetic_node_mask);
+
+/*
  * Compute the maximum vector norm of `a x b` over two AOS vector fields.
  */
 double max_cross_norm_aos(

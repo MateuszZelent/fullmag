@@ -1,17 +1,6 @@
 name: README version dashboard
 
 on:
-  push:
-    branches: [master, main]
-    paths:
-      - ".node-version"
-      - "Cargo.toml"
-      - "rust-toolchain.toml"
-      - "packages/fullmag-py/pyproject.toml"
-      - "apps/control-room/package.json"
-      - "docker/fem-gpu/Dockerfile"
-      - "scripts/update_readme_version_dashboard.py"
-      - ".github/workflows/readme-version-dashboard.yml"
   workflow_dispatch:
 
 permissions:
