@@ -380,6 +380,17 @@ def test_source_keeps_zero_web_port_out_of_script_cli_and_scopes_fem_api_ownersh
     assert 'SetEnvironmentVariable("FULLMAG_REQUIRE_OWN_API", $previousScriptRequireOwnedApi, "Process")' in tail
 
 
+def test_explicit_gpu_superset_reuse_keeps_auto_origin_and_requires_aggregate_proof() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8-sig")
+    assert '$env:FULLMAG_FEM_FULL_SUPERSET_RUNTIME -eq "1"' in source
+    assert '$env:FULLMAG_FEM_FULL_SUPERSET_BUILD_ID' in source
+    assert '$env:FULLMAG_FEM_FULL_SUPERSET_ORIGIN_SHA256' in source
+    assert 'Assert-FullmagFullRuntimeManifest' in source
+    assert '[string]$originForSuperset.native_fem.requested_device -ne "auto"' in source
+    assert 'Explicit FEM GPU reuse is not bound to the current full workspace aggregate' in source
+    assert '([string]$manifest.native_fem.requested_device -ne $NativeFemRequestedDevice -and' in source
+
+
 @pytest.mark.parametrize(
     ("run_mode", "backend", "web_port"),
     [

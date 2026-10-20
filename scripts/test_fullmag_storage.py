@@ -702,6 +702,208 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(cli_calls[-1][-1], expected)
 
+    def _write_native_fem_origin_for_superset_test(self, layout, *, requested_device):
+        origin_path = Path(layout["build_root"]) / "windows-fem-runtime" / "build-manifest.json"
+        origin_path.parent.mkdir(parents=True, exist_ok=True)
+        origin_path.write_text(json.dumps({
+            "schema_version": 1,
+            "state": "completed",
+            "backend": "fem",
+            "cuda": True,
+            "native_fem": {
+                "device": "gpu",
+                "requested_device": requested_device,
+                "strict_gpu": True,
+            },
+            "native_fem_attempt_id": "a" * 32,
+        }), encoding="utf-8")
+        aggregate_path = Path(layout["build_root"]) / "windows-full-runtime" / "build-manifest.json"
+        aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+        aggregate_path.write_bytes(b"aggregate manifest fixture\n")
+        return origin_path, aggregate_path
+
+    def test_explicit_gpu_reuses_verified_auto_origin_full_superset(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        origin_path, aggregate_path = self._write_native_fem_origin_for_superset_test(
+            layout, requested_device="auto",
+        )
+        origin_sha256 = hashlib.sha256(origin_path.read_bytes()).hexdigest()
+        aggregate_sha256 = hashlib.sha256(aggregate_path.read_bytes()).hexdigest()
+        with patch.object(
+            storage, "validate_full_workspace_handoff", return_value={
+                "requested_backend": "auto",
+                "requested_device": "auto",
+                "origin_manifest_path": str(origin_path),
+                "origin_manifest_sha256": origin_sha256,
+            },
+        ) as validate_handoff:
+            identity = storage._native_fem_full_workspace_runtime_identity(
+                layout, resolved_device="gpu", requested_device="gpu",
+            )
+
+        validate_handoff.assert_called_once_with(layout, aggregate_sha256)
+        self.assertEqual(identity["full_workspace_build_id"], aggregate_sha256)
+        self.assertEqual(identity["origin_manifest_sha256"], origin_sha256)
+        self.assertEqual(identity["origin_requested_device"], "auto")
+        self.assertEqual(identity["runtime_requested_device"], "gpu")
+
+    def test_explicit_gpu_preserves_existing_single_lane_gpu_origin(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        self._write_native_fem_origin_for_superset_test(layout, requested_device="gpu")
+        with patch.object(storage, "validate_full_workspace_handoff") as validate_handoff:
+            identity = storage._native_fem_full_workspace_runtime_identity(
+                layout, resolved_device="gpu", requested_device="gpu",
+            )
+        self.assertIsNone(identity)
+        validate_handoff.assert_not_called()
+
+    def test_explicit_gpu_rejects_auto_to_single_lane_origin_drift(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        origin_path, _ = self._write_native_fem_origin_for_superset_test(
+            layout, requested_device="auto",
+        )
+        origin_sha256 = hashlib.sha256(origin_path.read_bytes()).hexdigest()
+        with patch.object(
+            storage, "validate_full_workspace_handoff", return_value={
+                "requested_backend": "auto",
+                "requested_device": "auto",
+                "origin_manifest_path": str(origin_path),
+                "origin_manifest_sha256": origin_sha256,
+            },
+        ):
+            identity = storage._native_fem_full_workspace_runtime_identity(
+                layout, resolved_device="gpu", requested_device="gpu",
+            )
+        origin = json.loads(origin_path.read_text(encoding="utf-8"))
+        origin["native_fem"]["requested_device"] = "gpu"
+        origin_path.write_text(json.dumps(origin), encoding="utf-8")
+        with self.assertRaisesRegex(storage.StorageError, "identity changed"):
+            storage._native_fem_full_workspace_runtime_identity(
+                layout,
+                resolved_device="gpu",
+                requested_device="gpu",
+                expected_identity=identity,
+            )
+
+    def test_explicit_gpu_rejects_non_gpu_single_lane_origin(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        self._write_native_fem_origin_for_superset_test(layout, requested_device="cpu")
+        with self.assertRaisesRegex(storage.StorageError, "requested_device=auto"):
+            storage._native_fem_full_workspace_runtime_identity(
+                layout, resolved_device="gpu", requested_device="gpu",
+            )
+
+    def test_explicit_gpu_rejects_tampered_full_superset_proof(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        self._write_native_fem_origin_for_superset_test(layout, requested_device="auto")
+        with patch.object(
+            storage, "validate_full_workspace_handoff",
+            side_effect=storage.StorageError("tampered component proof"),
+        ):
+            with self.assertRaisesRegex(storage.StorageError, "tampered component proof"):
+                storage._native_fem_full_workspace_runtime_identity(
+                    layout, resolved_device="gpu", requested_device="gpu",
+                )
+
+    def test_explicit_gpu_script_passes_verified_superset_identity_to_managed_runtime(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        origin_path, aggregate_path = self._write_native_fem_origin_for_superset_test(
+            layout, requested_device="auto",
+        )
+        origin_sha256 = hashlib.sha256(origin_path.read_bytes()).hexdigest()
+        aggregate_sha256 = hashlib.sha256(aggregate_path.read_bytes()).hexdigest()
+        launcher = self.repo / "scripts" / "windows" / "run_fullmag.ps1"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("# native FEM fixture\n", encoding="utf-8")
+        script = self.repo / "examples" / "fixture.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("# FEM fixture\n", encoding="utf-8")
+        calls = []
+
+        def fake_managed(_layout, command, **kwargs):
+            calls.append((command, kwargs))
+            return 0
+
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "_native_fem_authored_script", return_value=(
+                 script, hashlib.sha256(script.read_bytes()).hexdigest(),
+             )), \
+             patch.object(storage, "validate_full_workspace_handoff", return_value={
+                 "requested_backend": "auto",
+                 "requested_device": "auto",
+                 "origin_manifest_path": str(origin_path),
+                 "origin_manifest_sha256": origin_sha256,
+             }), \
+             patch.object(storage, "_run_managed_command", side_effect=fake_managed):
+            result = storage.run_windows_fem(
+                layout, "static", "gpu", "headless", script_path=script,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 1)
+        command, options = calls[0]
+        self.assertEqual(command[command.index("-Device") + 1], "gpu")
+        self.assertNotIn("-BuildOnly", command)
+        self.assertEqual(options["fem_full_workspace_identity"], {
+            "full_workspace_build_id": aggregate_sha256,
+            "origin_manifest_path": str(origin_path),
+            "origin_manifest_sha256": origin_sha256,
+            "origin_requested_device": "auto",
+            "runtime_requested_device": "gpu",
+        })
+
+    def test_managed_explicit_gpu_runtime_sets_superset_flags_and_validates_auto_terminal(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        origin_path, aggregate_path = self._write_native_fem_origin_for_superset_test(
+            layout, requested_device="auto",
+        )
+        identity = {
+            "full_workspace_build_id": hashlib.sha256(aggregate_path.read_bytes()).hexdigest(),
+            "origin_manifest_path": str(origin_path),
+            "origin_manifest_sha256": hashlib.sha256(origin_path.read_bytes()).hexdigest(),
+            "origin_requested_device": "auto",
+            "runtime_requested_device": "gpu",
+        }
+        captured_env = []
+
+        def fake_git(_repo, *args):
+            if args == ("rev-parse", "HEAD"):
+                return "0" * 40
+            if args == ("status", "--porcelain", "--untracked-files=normal"):
+                return ""
+            raise AssertionError(args)
+
+        def fake_logged(command, _repo, child_env, _log_path, *, cancelled=None):
+            captured_env.append(dict(child_env))
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "git", side_effect=fake_git), \
+             patch.object(storage, "_native_fem_full_workspace_runtime_identity", return_value=identity), \
+             patch.object(storage, "_run_logged_command", side_effect=fake_logged), \
+             patch.object(storage, "validate_fem_terminal_manifest") as validate_terminal:
+            result = storage._run_managed_command(
+                layout,
+                ["powershell.exe", "-File", "run_fullmag.ps1"],
+                acquire_heavy_slot=False,
+                native_fem_paths=True,
+                fem_device="gpu",
+                fem_requested_device="gpu",
+                fem_frontend="static",
+                execution_mode="windows-fem",
+                native_manifest_relative="windows-fem-runtime/build-manifest.json",
+                fem_full_workspace_identity=identity,
+                attempt_id="b" * 32,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(captured_env), 1)
+        self.assertEqual(captured_env[0]["FULLMAG_FEM_REQUESTED_DEVICE"], "gpu")
+        self.assertEqual(captured_env[0]["FULLMAG_FEM_FULL_SUPERSET_RUNTIME"], "1")
+        self.assertEqual(captured_env[0]["FULLMAG_FEM_FULL_SUPERSET_BUILD_ID"], identity["full_workspace_build_id"])
+        self.assertEqual(captured_env[0]["FULLMAG_FEM_FULL_SUPERSET_ORIGIN_SHA256"], identity["origin_manifest_sha256"])
+        self.assertEqual(validate_terminal.call_args.args[3], "auto")
+
     def test_workspace_build_only_uses_closed_profile_lock_and_terminal_receipt(self):
         layout = self.resolve(profile="windows-native-fdm-cpu-dev")
         launcher = self.repo / "scripts" / "windows" / "run_fullmag.ps1"

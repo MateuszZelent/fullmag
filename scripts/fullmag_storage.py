@@ -1541,6 +1541,7 @@ def _run_managed_command(
     fem_frontend=None,
     full_origin_attempt_id=None,
     installer_bootstrap_mode=None,
+    fem_full_workspace_identity=None,
 ):
     if attempt_id is None:
         attempt_id = uuid.uuid4().hex
@@ -1578,6 +1579,14 @@ def _run_managed_command(
             "windows-fem", "windows-fem-build", "windows-fem-workspace-build"
         ):
             raise StorageError("Native FEM builds require the closed Windows FEM operation")
+        if fem_full_workspace_identity is not None and (
+            native_user_build or execution_mode != "windows-fem"
+            or fem_device != "gpu" or fem_requested_device != "gpu"
+            or fem_frontend != "static"
+        ):
+            raise StorageError("Full workspace compatibility is only valid for explicit FEM GPU runtime")
+    elif fem_full_workspace_identity is not None:
+        raise StorageError("Full workspace compatibility requires the native FEM runtime")
     if native_full_workspace_paths:
         if (
             not _is_native_windows()
@@ -1673,6 +1682,27 @@ def _run_managed_command(
                 raise StorageError("Native FEM requested device must be auto, cpu or gpu")
             child_env["FULLMAG_FEM_REQUESTED_DEVICE"] = requested_device
             child_env["FULLMAG_NATIVE_FEM_ATTEMPT_ID"] = attempt_id
+            child_env.pop("FULLMAG_FEM_FULL_SUPERSET_RUNTIME", None)
+            child_env.pop("FULLMAG_FEM_FULL_SUPERSET_BUILD_ID", None)
+            child_env.pop("FULLMAG_FEM_FULL_SUPERSET_ORIGIN_SHA256", None)
+            if (
+                not native_user_build
+                and execution_mode == "windows-fem"
+                and fem_device == "gpu"
+                and requested_device == "gpu"
+                and fem_frontend == "static"
+            ):
+                fem_full_workspace_identity = _native_fem_full_workspace_runtime_identity(
+                    layout,
+                    resolved_device=fem_device,
+                    requested_device=requested_device,
+                    frontend=fem_frontend,
+                    expected_identity=fem_full_workspace_identity,
+                )
+                if fem_full_workspace_identity is not None:
+                    child_env["FULLMAG_FEM_FULL_SUPERSET_RUNTIME"] = "1"
+                    child_env["FULLMAG_FEM_FULL_SUPERSET_BUILD_ID"] = fem_full_workspace_identity["full_workspace_build_id"]
+                    child_env["FULLMAG_FEM_FULL_SUPERSET_ORIGIN_SHA256"] = fem_full_workspace_identity["origin_manifest_sha256"]
         if native_full_workspace_paths:
             child_env["FULLMAG_FEM_REQUESTED_DEVICE"] = "auto"
             child_env["FULLMAG_NATIVE_FEM_ATTEMPT_ID"] = full_origin_attempt_id or attempt_id
@@ -1733,6 +1763,19 @@ def _run_managed_command(
             state.update(state="completed" if result.returncode == 0 else "failed", exit_code=result.returncode)
             terminal_returncode = result.returncode
             if (native_user_build or native_fem_paths or native_full_workspace_paths) and result.returncode == 0:
+                if (
+                    native_fem_paths
+                    and not native_user_build
+                    and execution_mode == "windows-fem"
+                    and fem_full_workspace_identity is not None
+                ):
+                    fem_full_workspace_identity = _native_fem_full_workspace_runtime_identity(
+                        layout,
+                        resolved_device=fem_device,
+                        requested_device=fem_requested_device or fem_device,
+                        frontend=fem_frontend,
+                        expected_identity=fem_full_workspace_identity,
+                    )
                 manifest_relative = native_manifest_relative or (
                     "windows-runtime/build-manifest.json"
                 )
@@ -1780,9 +1823,12 @@ def _run_managed_command(
                             terminal_returncode = 1
                     elif native_fem_paths:
                         try:
+                            terminal_requested_device = fem_requested_device or fem_device
+                            if fem_full_workspace_identity is not None:
+                                terminal_requested_device = "auto"
                             validate_fem_terminal_manifest(
                                 layout, json.loads(raw_manifest), fem_device,
-                                fem_requested_device or fem_device,
+                                terminal_requested_device,
                                 attempt_id if native_user_build else None,
                                 browser_workspace=fem_browser_workspace,
                                 browser_frontend=fem_frontend,
@@ -2592,6 +2638,89 @@ def validate_full_workspace_handoff(layout, expected_build_id):
     return manifest
 
 
+def _native_fem_full_workspace_runtime_identity(
+    layout, *, resolved_device, requested_device, frontend=None, expected_identity=None,
+):
+    """Authorize explicit FEM GPU use of a verified all-backends package.
+
+    The physical FEM manifest is deliberately produced with ``requested_device``
+    set to ``auto`` by the all-backends builder.  That provenance is immutable;
+    this helper only adds a narrowly scoped runtime identity for an explicit
+    GPU script run after the complete aggregate handoff has passed its existing
+    origin, component, artifact and receipt validators.
+    """
+    if requested_device != "gpu" or resolved_device != "gpu":
+        return None
+    if frontend is not None and frontend != "static":
+        raise StorageError("Full workspace compatibility requires the pinned static FEM frontend")
+
+    origin_path = validate_path(
+        Path(layout["build_root"]) / "windows-fem-runtime" / "build-manifest.json",
+        layout["build_root"],
+        "native FEM origin manifest",
+    )
+    if is_link(origin_path) or not origin_path.is_file():
+        raise StorageError("Native FEM origin manifest is missing or is not a regular file")
+    try:
+        origin = json.loads(origin_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise StorageError("Native FEM origin manifest is unreadable") from error
+    origin_fem = origin.get("native_fem") if isinstance(origin, dict) else None
+    if (
+        not isinstance(origin, dict)
+        or origin.get("schema_version") != 1
+        or origin.get("state") != "completed"
+        or origin.get("backend") != "fem"
+        or origin.get("cuda") is not True
+        or not isinstance(origin_fem, dict)
+        or origin_fem.get("device") != "gpu"
+        or origin_fem.get("strict_gpu") is not True
+    ):
+        raise StorageError("Native FEM origin is not a completed strict GPU manifest")
+    origin_requested_device = origin_fem.get("requested_device")
+    if origin_requested_device == "gpu":
+        # Preserve the established single-lane GPU runtime.  The aggregate
+        # compatibility handoff is needed only for an all-backends origin
+        # whose immutable build request is explicitly ``auto``.
+        if expected_identity is not None:
+            raise StorageError("Full workspace compatibility identity changed before FEM launch")
+        return None
+    if origin_requested_device != "auto":
+        raise StorageError("Native FEM origin must retain requested_device=auto for aggregate reuse")
+
+    origin_sha256 = _sha256_file(origin_path)
+    aggregate_path = _full_workspace_manifest_path(layout)
+    if is_link(aggregate_path) or not aggregate_path.is_file():
+        raise StorageError("Verified all-backends aggregate manifest is missing")
+    aggregate_build_id = _sha256_file(aggregate_path)
+    aggregate = validate_full_workspace_handoff(layout, aggregate_build_id)
+    if not isinstance(aggregate, dict):
+        raise StorageError("Full workspace handoff validator returned an invalid manifest")
+    if (
+        aggregate.get("requested_backend") != "auto"
+        or aggregate.get("requested_device") != "auto"
+        or not _same_path(aggregate.get("origin_manifest_path", ""), origin_path)
+        or aggregate.get("origin_manifest_sha256") != origin_sha256
+    ):
+        raise StorageError("Full workspace aggregate is not bound to the auto FEM origin")
+    if _sha256_file(origin_path) != origin_sha256:
+        raise StorageError("Native FEM origin changed while validating the full workspace handoff")
+
+    identity = {
+        "full_workspace_build_id": aggregate_build_id,
+        "origin_manifest_path": str(origin_path),
+        "origin_manifest_sha256": origin_sha256,
+        "origin_requested_device": "auto",
+        "runtime_requested_device": "gpu",
+    }
+    if expected_identity is not None:
+        if not isinstance(expected_identity, dict) or any(
+            expected_identity.get(key) != value for key, value in identity.items()
+        ):
+            raise StorageError("Full workspace compatibility identity changed before FEM launch")
+    return identity
+
+
 def _read_installer_sidecar(path, label):
     """Read one bounded regular installer sidecar without following links."""
     if is_link(path) or not path.is_file():
@@ -2892,6 +3021,18 @@ def run_windows_fem(
             layout["storage_root"],
             "native FEM output",
         )
+    full_workspace_identity = None
+    origin_probe = Path(layout["build_root"]) / "windows-fem-runtime" / "build-manifest.json"
+    if (build_mode == "false" and not build_only and frontend == "static" and device == "gpu"
+            and resolved_device == "gpu" and origin_probe.is_file() and not is_link(origin_probe)):
+        # Admit an explicit GPU script against an all-backends package only
+        # after the aggregate and its immutable origin have passed the strict
+        # handoff validator.  The managed command repeats this under the build
+        # lock immediately before launch.
+        full_workspace_identity = _native_fem_full_workspace_runtime_identity(
+            layout, resolved_device=resolved_device, requested_device=device,
+            frontend=frontend,
+        )
     # Initialize the canonical storage tree before creating a run directory;
     # no output is allowed to appear before the managed marker and layout have
     # passed their final mutation-boundary checks.
@@ -2940,10 +3081,12 @@ def run_windows_fem(
             native_fem_paths=True,
             fem_device=resolved_device,
             fem_requested_device=device,
+            fem_frontend=frontend,
             execution_mode=phase_execution_mode,
             native_manifest_relative="windows-fem-runtime/build-manifest.json",
             result_record=phase_record,
             attempt_id=phase_attempt_id,
+            fem_full_workspace_identity=full_workspace_identity,
         )
 
     active_execution_mode = "windows-fem-build" if build_only else "windows-fem"

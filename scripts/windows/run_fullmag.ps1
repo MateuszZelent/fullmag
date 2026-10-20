@@ -2618,6 +2618,45 @@ else {
       [string]$manifest.static_web_sha256 -ne (Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom))) {
     throw "Existing static Control Room assets do not match the build manifest; rerun with build=True"
   }
+  $fullSupersetRuntimeAuthorized = $false
+  if ($Backend -eq "fem" -and -not $AllBackendsRequested -and
+      $NativeFemRequestedDevice -eq "gpu" -and
+      [string]$manifest.native_fem.requested_device -eq "auto" -and
+      $env:FULLMAG_FEM_FULL_SUPERSET_RUNTIME -eq "1") {
+    $fullSupersetBuildId = [string]$env:FULLMAG_FEM_FULL_SUPERSET_BUILD_ID
+    $fullSupersetOriginSha256 = [string]$env:FULLMAG_FEM_FULL_SUPERSET_ORIGIN_SHA256
+    if ($fullSupersetBuildId -notmatch '^[0-9a-f]{64}$' -or
+        $fullSupersetOriginSha256 -notmatch '^[0-9a-f]{64}$') {
+      throw "Explicit FEM GPU reuse requires lowercase aggregate and origin SHA256 identities"
+    }
+    $fullSupersetManifestPath = Assert-FullmagStoragePath `
+      -Layout $StorageLayout `
+      -Path (Join-Path $BuildRoot "windows-full-runtime\build-manifest.json") `
+      -Label "full workspace compatibility manifest" -Parent $BuildRoot
+    if (-not (Test-Path -LiteralPath $fullSupersetManifestPath -PathType Leaf) -or
+        (Get-Sha256File $fullSupersetManifestPath) -ne $fullSupersetBuildId) {
+      throw "Explicit FEM GPU reuse is not bound to the current full workspace aggregate"
+    }
+    if ((Get-Sha256File $PhysicalManifestPath) -ne $fullSupersetOriginSha256) {
+      throw "Explicit FEM GPU reuse is not bound to the current FEM origin manifest"
+    }
+    $originForSuperset = Get-Content -LiteralPath $PhysicalManifestPath -Raw | ConvertFrom-Json
+    if ([string]$originForSuperset.native_fem.requested_device -ne "auto") {
+      throw "Full workspace compatibility requires the FEM origin requested_device=auto"
+    }
+    $nativeFdmDll = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fdm.dll"
+    $nativeFemDll = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fem.dll"
+    $null = Assert-FullmagFullRuntimeManifest `
+      -ManifestPath $fullSupersetManifestPath -OriginManifestPath $PhysicalManifestPath `
+      -FullmagExe $FullmagExe -FullmagApiExe $FullmagApiExe `
+      -NativeFdmDll $nativeFdmDll -NativeFemDll $nativeFemDll `
+      -ExpectedBuildId $fullSupersetBuildId `
+      -SourceCommit ([string]$originForSuperset.source_commit_after) `
+      -SourceSnapshotSha256 ([string]$originForSuperset.source_snapshot_sha256_after) `
+      -AttemptId ([string]$originForSuperset.native_fem_attempt_id) `
+      -BuildRoot $BuildRoot -ToolsRoot (Get-WindowsBuildToolsRoot)
+    $fullSupersetRuntimeAuthorized = $true
+  }
   if ($Backend -eq "fem" -and -not $AllBackendsRequested) {
     if ([string]$manifest.backend -ne "fem" -or -not $manifest.native_fem -or
         [string]$manifest.native_fem.device -ne $Device) {
@@ -2628,7 +2667,8 @@ else {
         $manifest.cuda -isnot [bool] -or [bool]$manifest.cuda -ne $useCuda -or
         $manifest.native_fem.strict_gpu -isnot [bool] -or
         [bool]$manifest.native_fem.strict_gpu -ne $useCuda -or
-        [string]$manifest.native_fem.requested_device -ne $NativeFemRequestedDevice) {
+        ([string]$manifest.native_fem.requested_device -ne $NativeFemRequestedDevice -and
+          -not $fullSupersetRuntimeAuthorized)) {
       throw "Existing Windows runtime has inconsistent native FEM GPU or request provenance; rerun with build=True"
     }
     $nativeFemDll = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fem.dll"
