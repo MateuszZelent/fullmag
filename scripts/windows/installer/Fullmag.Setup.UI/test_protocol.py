@@ -8,6 +8,7 @@ actual win-x64 application.
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -161,6 +162,22 @@ def main() -> None:
     require(xaml, 'AutomationProperties.AutomationId="{Binding AutomationId}"', "wizard step and field automation binding")
     require(wizard_models, 'AutomationId => $"wizard-step-{Id.ToString().ToLowerInvariant()}"', "wizard step automation IDs")
     require(wizard_models, "environment-field-{Key.ToLowerInvariant().Replace('_', '-')}", "environment field automation IDs")
+    require(
+        wizard_models,
+        'public bool IsReadOnly => string.Equals(Key, "FULLMAG_PROJECT_STORAGE_ROOT", StringComparison.OrdinalIgnoreCase);',
+        "storage-root environment field is the only readonly managed field",
+    )
+    require(wizard_models, "if (IsReadOnly)", "readonly environment setter guard")
+    require(wizard_models, "_isDirty = IsReadOnly ? false : isDirty;", "readonly fields cannot become dirty during construction")
+    value_start = wizard_models.index("public string Value")
+    value_end = wizard_models.index("\n    }\n}\n\npublic sealed class RequirementCheckViewModel", value_start)
+    value_body = wizard_models[value_start:value_end]
+    require_order(
+        value_body,
+        "if (IsReadOnly)",
+        "var next = value ?? string.Empty",
+        "readonly setter rejects programmatic changes before dirty tracking",
+    )
     require(wizard_models, "NestedString", "nested init provenance reader")
     require(xaml, 'MinWidth="800"', "small-window width")
     require(xaml, 'MinHeight="600"', "small-window height")
@@ -191,8 +208,16 @@ def main() -> None:
         require(app + xaml, f"DynamicResource {key}", "dynamic application palette usage")
     require(xaml, 'VerticalScrollBarVisibility="Auto"', "responsive content scroll")
     require(xaml, 'ScrollViewer.VerticalScrollBarVisibility="Auto"', "Avalonia TextBox scroll attachment")
+    try:
+        ET.fromstring(xaml)
+    except ET.ParseError as exception:
+        raise AssertionError(f"installer XAML must remain well-formed: {exception}") from exception
+    if xaml.count('IsReadOnly="{Binding IsReadOnly}"') != 2:
+        raise AssertionError("both environment TextBox templates must bind the readonly storage state")
+    require(xaml, 'Text="Change this folder on the Paths page."', "storage-root edit hint")
+    require(xaml, 'IsVisible="{Binding IsReadOnly}"', "storage-root edit hint visibility")
     require(xaml, 'IsEnabled="{Binding Owner.CanEditInputs}"', "freeze path inputs during operations")
-    require(xaml, 'IsEnabled="{Binding DataContext.CanEditInputs, RelativeSource={RelativeSource AncestorType=Window}}"', "freeze environment inputs during operations")
+    require(xaml, 'IsEnabled="{Binding DataContext.CanEditEnvironmentInputs, RelativeSource={RelativeSource AncestorType=Window}}"', "freeze environment inputs until requirements are ready")
     require(xaml, 'IsEnabled="{Binding CanCancel}"', "cancel stays available during operations")
     require(xaml, 'Click="BrowseCheckout"', "source folder picker")
     require(xaml, 'Click="BrowseStorage"', "storage folder picker")
@@ -295,7 +320,8 @@ def main() -> None:
     require(view_model, "cancel_requested = true", "cancel broker operation")
     require(view_model, "A save attempt was in flight; its final write state is not confirmed", "ambiguous cancel status")
     require(view_model, "CanEditInputs", "freeze inputs during operation")
-    require(view_model, "WizardPageId.Environment => HasAdmission && EnvironmentFields.Count > 0,", "review remains available after an environment edit")
+    require(view_model, "CanEditEnvironmentInputs", "environment inputs require a ready admitted session")
+    require(view_model, "WizardPageId.Environment => RequirementsReady && HasAdmission && EnvironmentFields.Count > 0,", "review requires completed prerequisites")
     if "WizardPageId.Environment => PreviewReady," in view_model:
         raise AssertionError("Review cannot require the preview that the action creates")
     require(view_model, "public bool CanCancel => !_shuttingDown && !IsCanceled && !_cancelInFlight;", "cancel available while idle and busy")
@@ -456,6 +482,41 @@ def main() -> None:
     if "preserveEnvironmentEditsOnSessionRebind" in view_model:
         raise AssertionError("session rebind must finish before the editable environment page")
 
+    invalidate_start = view_model.index("private void InvalidateAdmission()")
+    invalidate_end = view_model.index("private void Block(", invalidate_start)
+    invalidate = view_model[invalidate_start:invalidate_end]
+    require(
+        invalidate,
+        "_highestVisitedIndex = Steps.IndexOf(_stepsByPage[WizardPageId.Paths]);",
+        "path changes reset the wizard frontier to Paths",
+    )
+    require_order(
+        invalidate,
+        "_highestVisitedIndex = Steps.IndexOf(_stepsByPage[WizardPageId.Paths]);",
+        "UpdateStepState();",
+        "path invalidation updates step navigation state",
+    )
+
+    navigate_start = view_model.index("private void NavigateTo(WizardPageId page")
+    navigate_end = view_model.index("private bool CanNavigateTo", navigate_start)
+    navigate = view_model[navigate_start:navigate_end]
+    require(navigate, "if (page == WizardPageId.Environment && !CanEnterEnvironment)", "central environment navigation guard")
+
+    can_navigate_start = view_model.index("private bool CanNavigateTo(WizardPageId page)")
+    can_navigate_end = view_model.index("private void UpdateStepState", can_navigate_start)
+    can_navigate = view_model[can_navigate_start:can_navigate_end]
+    require(can_navigate, "page == WizardPageId.Environment && !CanEnterEnvironment", "sidebar cannot enter an unready environment page")
+
+    update_steps_start = view_model.index("private void UpdateStepState()")
+    update_steps_end = view_model.index("private void RaiseNavigationProperties()", update_steps_start)
+    update_steps = view_model[update_steps_start:update_steps_end]
+    require(update_steps, "step.Id != WizardPageId.Environment || CanEnterEnvironment", "environment step visibility follows readiness")
+
+    back_start = view_model.index("private async Task BackAsync()")
+    back_end = view_model.index("private async Task CancelAsync()", back_start)
+    back = view_model[back_start:back_end]
+    require(back, "CanNavigateTo(Steps[previousIndex].Id)", "Back skips blocked environment navigation")
+
     require_order(
         view_model,
         'new WizardStepViewModel(4, WizardPageId.Requirements',
@@ -474,6 +535,7 @@ def main() -> None:
     preview_start = view_model.index("private async Task PreviewEnvironmentAsync()")
     preview_end = view_model.index("private async Task PrepareRequirementsAsync()", preview_start)
     preview = view_model[preview_start:preview_end]
+    require(preview, "if (!RequirementsReady)", "environment preview requires completed prerequisites")
     require(preview, "PreviewReady = response.Ok &&", "preview requires a valid broker response")
     if "if (RequirementsReady)" in preview:
         raise AssertionError("preview must not silently advance past the visible redacted proposal")

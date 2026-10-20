@@ -120,3 +120,9 @@ Natywne interpretowane testy edytora `.env` i embedded helper potwierdziły rzec
 
 - Poprawiony przepływ zachowuje świeżohostowy `Preadmission` przed odczytem Git, następnie `Requirements → Discover → Prerequisites` na związanej sesji. Pola są udostępniane dopiero po tym przygotowaniu. Edycja unieważnia preview, ale nie powoduje ponownego bootstrapu; jawne Continue po widocznym podglądzie prowadzi do Progress. Pierwszy bootstrap Git/Python i późniejszy idempotentny check związanej sesji mają odrębne wymagane guardy; nie pomijamy pierwszego na nowym hoście.
 - Interpretowana kontrola `Fullmag.Setup.UI/test_protocol.py` oraz `git diff --check` przeszły dla tej poprawki. Nie jest to jeszcze dowód wykonania nowej maszyny stanów: wymagane są build EXE i ponowny rzeczywisty GUI. Osobny wykryty błąd edytowalnego, później nadpisywanego pola storage w Environment wymaga poprawki readonly, z zachowaniem edycji na Paths.
+
+### Blokady konfiguracji i nawigacji kreatora — 20.10.2026
+
+- Pole `FULLMAG_PROJECT_STORAGE_ROOT` na Environment jest readonly; wybór katalogu pozostaje na Paths. Setter nie przyjmuje ignorowanych edycji i nie oznacza tego pola jako dirty.
+- Environment wymaga gotowych prerequisites, związanej sesji i pól. Zmiana Paths cofa frontier nawigacji, a Back pomija niedostępne kroki.
+- Interpretowana regresja protokołu, parser XML oraz kontrola diff przeszły; niezależny bounded review nie wykazał Blocker/Required. Nie kwalifikuje to wykonania GUI. Następny wymagany etap to czysty producent EXE, rzeczywisty Install/Ready, pełny pakiet i oryginalny FEM GPU.

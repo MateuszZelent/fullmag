@@ -94,7 +94,7 @@ public sealed class EnvironmentFieldViewModel : ObservableObject
         IsSecret = secret;
         IsPresent = present;
         _value = value ?? string.Empty;
-        _isDirty = isDirty;
+        _isDirty = IsReadOnly ? false : isDirty;
     }
 
     public string Key { get; }
@@ -102,6 +102,7 @@ public sealed class EnvironmentFieldViewModel : ObservableObject
     public string AutomationId => $"environment-field-{Key.ToLowerInvariant().Replace('_', '-')}";
     public bool IsSecret { get; }
     public bool IsPresent { get; }
+    public bool IsReadOnly => string.Equals(Key, "FULLMAG_PROJECT_STORAGE_ROOT", StringComparison.OrdinalIgnoreCase);
     public char PasswordChar => IsSecret ? '●' : '\0';
     public bool IsDirty => _isDirty;
 
@@ -110,6 +111,10 @@ public sealed class EnvironmentFieldViewModel : ObservableObject
         get => _value;
         set
         {
+            if (IsReadOnly)
+            {
+                return;
+            }
             var next = value ?? string.Empty;
             if (SetProperty(ref _value, next))
             {

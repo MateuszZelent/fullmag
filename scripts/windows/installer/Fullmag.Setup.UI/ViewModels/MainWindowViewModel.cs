@@ -280,6 +280,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     public bool CanEditInputs => !_shuttingDown && !IsBusy && !IsCanceled && !_cancelRequested;
+    private bool CanEnterEnvironment => RequirementsReady && HasAdmission && EnvironmentFields.Count > 0;
+    public bool CanEditEnvironmentInputs => CanEditInputs && CanEnterEnvironment;
 
     public bool CanCancel => !_shuttingDown && !IsCanceled && !_cancelInFlight;
 
@@ -352,7 +354,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         WizardPageId.Welcome => true,
         WizardPageId.License => LicenseAvailable && LicenseAccepted,
         WizardPageId.Paths => HasRequiredPaths && HasInstallationScope,
-        WizardPageId.Environment => HasAdmission && EnvironmentFields.Count > 0,
+        WizardPageId.Environment => RequirementsReady && HasAdmission && EnvironmentFields.Count > 0,
         WizardPageId.Requirements => (HasAdmission || HasRequiredPaths) &&
                                      (!RequirementsReady || EnvironmentFields.Count == 0 ||
                                       (RequirementsReady && PreviewReady)),
@@ -475,9 +477,15 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         await RunOperationAsync(() =>
         {
             var currentIndex = Steps.IndexOf(_stepsByPage[CurrentPage.Id]);
-            if (currentIndex > 0)
+            for (var previousIndex = currentIndex - 1; previousIndex >= 0; previousIndex--)
             {
-                NavigateTo(Steps[currentIndex - 1].Id);
+                if (!CanNavigateTo(Steps[previousIndex].Id))
+                {
+                    continue;
+                }
+
+                NavigateTo(Steps[previousIndex].Id);
+                break;
             }
             return Task.CompletedTask;
         }).ConfigureAwait(true);
@@ -673,6 +681,11 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private async Task PreviewEnvironmentAsync()
     {
+        if (!RequirementsReady)
+        {
+            Block("Complete the requirements check before reviewing environment values.");
+            return;
+        }
         if (!HasAdmission)
         {
             Block("The selected checkout must be checked again before previewing values.");
@@ -1636,6 +1649,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         DiagnosticDetails = string.Empty;
         Requirements.Clear();
         ClearEnvironmentFields();
+        _highestVisitedIndex = Steps.IndexOf(_stepsByPage[WizardPageId.Paths]);
+        UpdateStepState();
         RaisePropertyChanged(nameof(HasRequirements));
         RaisePropertyChanged(nameof(HasAdmission));
         StatusMessage = "The selected checkout or storage changed. Check paths again before continuing.";
@@ -1731,6 +1746,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void NavigateTo(WizardPageId page, bool allowForwardJump = false)
     {
+        if (page == WizardPageId.Environment && !CanEnterEnvironment)
+        {
+            return;
+        }
         if (!_pages.TryGetValue(page, out var pageViewModel))
         {
             return;
@@ -1754,6 +1773,10 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private bool CanNavigateTo(WizardPageId page)
     {
+        if (page == WizardPageId.Environment && !CanEnterEnvironment)
+        {
+            return false;
+        }
         var pageIndex = Steps.IndexOf(_stepsByPage[page]);
         return pageIndex >= 0 && pageIndex <= _highestVisitedIndex;
     }
@@ -1763,7 +1786,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         foreach (var step in Steps)
         {
             var index = Steps.IndexOf(step);
-            step.CanNavigate = index <= _highestVisitedIndex;
+            step.CanNavigate = index <= _highestVisitedIndex &&
+                               (step.Id != WizardPageId.Environment || CanEnterEnvironment);
             step.IsCompleted = index < _highestVisitedIndex;
         }
     }
@@ -1780,6 +1804,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         RaisePropertyChanged(nameof(HasAdmission));
         RaisePropertyChanged(nameof(IsProgressIndeterminate));
         RaisePropertyChanged(nameof(CanEditInputs));
+        RaisePropertyChanged(nameof(CanEditEnvironmentInputs));
         RaisePropertyChanged(nameof(CanCancel));
         RaisePropertyChanged(nameof(CanLaunchWorkspace));
         RaisePropertyChanged(nameof(ReadyHeading));
