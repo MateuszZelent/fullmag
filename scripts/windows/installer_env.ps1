@@ -819,6 +819,9 @@ function Test-FullmagInstallerEnvPathProposal {
     if (-not [string]::Equals($existing, $storage, [System.StringComparison]::OrdinalIgnoreCase)) {
       throw "Existing FULLMAG_PROJECT_STORAGE_ROOT conflicts with the proposed path"
     }
+    # A canonically identical path is not an edit. Keep the original line
+    # byte-for-byte, including its slash spelling, quoting and whitespace.
+    $Changes.Remove($storageKey)
     $Effective[$storageKey] = $currentStorage
   }
   $volatileKey = "FULLMAG_WINDOWS_VOLATILE_ROOT"

@@ -530,6 +530,33 @@ try {{
   }} else {{ 0 }}
   Require ($unchangedAfterBackups -eq $unchangedBeforeBackups) 'unchanged commit created a backup'
 
+  # A storage path written with the other Windows slash spelling is the same
+  # canonical directory.  Preview and commit must treat that as a no-op too:
+  # no hidden textual rewrite, backup, or byte/hash change is allowed.
+  $slashStorage = $storage.Replace('\\', '/')
+  $slashVariantText = $oldText.Replace([string]$storage, [string]$slashStorage)
+  [System.IO.File]::WriteAllText($envPath, $slashVariantText, $utf8Bom)
+  $slashBeforeHash = BytesHash ([System.IO.File]::ReadAllBytes($envPath))
+  $slashBackupRoot = Join-Path (Join-Path $storage 'tmp') 'host-config-backups'
+  $slashBeforeBackups = if (Test-Path -LiteralPath $slashBackupRoot) {{
+    @((Get-ChildItem -LiteralPath $slashBackupRoot -File -Filter '.env.backup.*' -Force)).Count
+  }} else {{ 0 }}
+  $slashSession = Get-FullmagInstallerEnvSession -CheckoutPath $repo
+  $slashPreview = Get-FullmagInstallerEnvPreview -Session $slashSession -Values @{{ FULLMAG_PROJECT_STORAGE_ROOT = $storage }}
+  Require ($slashPreview.valid -and $slashPreview.can_commit) 'slash-equivalent storage preview was not admissible'
+  Require (-not $slashPreview.write_required) 'slash-equivalent storage preview unexpectedly required a write'
+  Require (@($slashPreview.changed_fields).Count -eq 0 -and
+    [string]::IsNullOrEmpty([string]$slashPreview.redacted_diff)) 'slash-equivalent storage preview exposed no-op text as a change'
+  $slashCommit = Commit-FullmagInstallerEnvProposal -Session $slashSession -Values @{{ FULLMAG_PROJECT_STORAGE_ROOT = $storage }}
+  Require ($slashCommit.valid -and $slashCommit.state -eq 'unchanged' -and -not $slashCommit.wrote) 'slash-equivalent storage commit rewrote .env'
+  Require (-not $slashCommit.write_required -and [string]::IsNullOrWhiteSpace([string]$slashCommit.backup_path)) 'slash-equivalent storage commit created a write or backup'
+  Require ((BytesHash ([System.IO.File]::ReadAllBytes($envPath))) -eq $slashBeforeHash) 'slash-equivalent storage commit changed .env bytes'
+  $slashAfterBackups = if (Test-Path -LiteralPath $slashBackupRoot) {{
+    @((Get-ChildItem -LiteralPath $slashBackupRoot -File -Filter '.env.backup.*' -Force)).Count
+  }} else {{ 0 }}
+  Require ($slashAfterBackups -eq $slashBeforeBackups) 'slash-equivalent storage commit created a backup'
+  [System.IO.File]::WriteAllBytes($envPath, $beforeBytes)
+
   # Invalid input remains fail-closed even when the caller supplies no edits.
   # Use a non-registered storage root in the fixture, then restore the exact
   # original bytes before the ordinary changed-path transaction below.

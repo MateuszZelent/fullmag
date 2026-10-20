@@ -144,3 +144,9 @@ Natywne interpretowane testy edytora `.env` i embedded helper potwierdziły rzec
 - Rodzic użył zwykłego Cancel po potwierdzeniu blokady. Końcowy błąd automatu o niedostępnym oknie wynika z tego Cancel. Nie rozpoczęto pełnego buildu Fullmaga. Gotowy all4 runtime, Ready, FEM GPU, browser i integracja nadal NOT VERIFIED. Cache i dowody pozostają zachowane.
 
 - Kontrola źródłowego protokołu po rozróżnieniu katalog/pliki: 22 PASS; diff check PASS. Niezależny review bez Blocker/Required. Poprawiony zachowany automat ma parser PowerShell PASS i wykrywa ponownie aktywne Install po odrzuconym setupie zamiast czekać pełny timeout. Natywny pozytywny przebieg tej poprawki nadal wymagany; nie kompilowano testów jednostkowych.
+
+### Spójny no-op konfiguracji i świeży storage — 20.10.2026
+
+- Ukryta zmiana slashy wynikała z rozbieżnych map Effective/Changes. Przy kanonicznie równoważnej ścieżce usuwamy klucz z Changes, pozostawiając istniejącą wartość w Effective. Dzięki temu nie przepisujemy oryginalnej linii, także przy odstępach, quoting i komentarzach.
+- Rzeczywisty interpretowany RED/GREEN Windows zakończył się kodem 0 (sesja 81800, `verify-env-slash-red-green.py` w zachowanym katalogu kwalifikacji): oryginalny moduł wymagał ukrytego zapisu, poprawiony przeszedł test transakcyjny z pustym diffem, write_required=false, wrote=false, niezmienionymi bajtami/hashem i bez backupu. Wcześniejszy błąd escapowania fixture oraz niepełna korekta przypisująca tę samą wartość zostały odrzucone przez tę regresję; nie są dowodami sukcesu. Niezależny review końcowej korekty bez Blocker/Required.
+- Trace nowego hosta wykazał odrębny brak: prerequisites zwraca storage_resolver=not_run, a preview/commit używają readonly resolve. Po zatwierdzonym commit trzeba jawnie wywołać managed resolve --create i sprawdzić jego wynik przed Burn; nie tworzyć katalogów poza resolverem. Implementacja tego kroku trwa; pełny runtime/Ready/FEM GPU/browser pozostają NOT VERIFIED.
