@@ -4322,20 +4322,39 @@ def _mixed_v2_reference_derivative_samples(
     return samples
 
 
+def _mixed_v2_tet4_volume_determinant(
+    coordinates: NDArray[np.float64],
+) -> float:
+    """Return the native mixed-v2 Tet4 volume determinant column tuple."""
+    return _mixed_v2_det3(
+        (
+            _mixed_v2_sub3(coordinates[1], coordinates[0]),
+            _mixed_v2_sub3(coordinates[2], coordinates[0]),
+            _mixed_v2_sub3(coordinates[3], coordinates[0]),
+        )
+    )
+
+
+def _mixed_v2_tet4_jacobian_determinant(
+    coordinates: NDArray[np.float64],
+) -> float:
+    """Return the native mesh-hints Tet4 physical-row Jacobian determinant."""
+    origin = coordinates[0]
+    return _mixed_v2_det3(
+        (
+            tuple(float(coordinates[index, 0] - origin[0]) for index in (1, 2, 3)),
+            tuple(float(coordinates[index, 1] - origin[1]) for index in (1, 2, 3)),
+            tuple(float(coordinates[index, 2] - origin[2]) for index in (1, 2, 3)),
+        )
+    )
+
+
 def _mixed_v2_cell_jacobian_determinants(
     family: str, coordinates: NDArray[np.float64]
 ) -> NDArray[np.float64]:
     if family == "tet4":
         return np.asarray(
-            [
-                _mixed_v2_det3(
-                    (
-                        _mixed_v2_sub3(coordinates[1], coordinates[0]),
-                        _mixed_v2_sub3(coordinates[2], coordinates[0]),
-                        _mixed_v2_sub3(coordinates[3], coordinates[0]),
-                    )
-                )
-            ],
+            [_mixed_v2_tet4_jacobian_determinant(coordinates)],
             dtype=np.float64,
         )
     if family in {"prism6", "pyramid5"}:
@@ -4374,9 +4393,9 @@ def _mixed_v2_cell_scaled_jacobians(
 
 def _mixed_v2_cell_volume(family: str, coordinates: NDArray[np.float64]) -> float:
     """Compute a positive geometric cell volume without a topology downgrade."""
-    jacobians = _mixed_v2_cell_jacobian_determinants(family, coordinates)
     if family == "tet4":
-        return abs(float(jacobians[0])) / 6.0
+        return abs(_mixed_v2_tet4_volume_determinant(coordinates)) / 6.0
+    jacobians = _mixed_v2_cell_jacobian_determinants(family, coordinates)
     if family == "prism6":
         # The reference triangular prism has unit volume.  The quadrature
         # samples used by the quality proof therefore integrate det(J)

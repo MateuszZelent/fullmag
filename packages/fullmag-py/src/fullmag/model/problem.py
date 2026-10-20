@@ -748,6 +748,56 @@ def _fem_mesh_cache_key(
     ).hexdigest()
 
 
+def _mixed_v2_volume_reduction_contract_for_request(
+    geometries: Sequence[object],
+    hints: FEM,
+    *,
+    study_universe: Mapping[str, object] | None,
+    mesh_workflow: Mapping[str, object] | None,
+    object_regions: Sequence[Mapping[str, object]] | None,
+) -> str | None:
+    """Return the mixed-v2 cache contract only for the producer's direct route."""
+    from fullmag.meshing._gmsh_occ import _region_uses_conformal_occ_realization
+    from fullmag.meshing._gmsh_swept import _disconnected_mixed_p1_pair
+    from fullmag.meshing.asset_pipeline import (
+        _mesh_options_from_runtime_metadata,
+        _mixed_v2_direct_route_selected,
+        _study_universe_airbox_options,
+        _validate_domain_mesh_workflow,
+    )
+
+    geometry_list = list(geometries)
+    if _disconnected_mixed_p1_pair(geometry_list) is None:
+        return None
+
+    frozen_payload = _validate_domain_mesh_workflow(mesh_workflow)
+    airbox = _study_universe_airbox_options(geometry_list, study_universe)
+    surface_mesh_options = _mesh_options_from_runtime_metadata(
+        mesh_workflow,
+        geometries=geometry_list,
+        default_hmax=float(hints.hmax),
+        bounds_by_name=None,
+        include_size_fields=False,
+    )
+    conformal_object_regions = [
+        region
+        for region in (object_regions or [])
+        if region.get("enabled", True)
+        and _region_uses_conformal_occ_realization(region)
+    ]
+    if _mixed_v2_direct_route_selected(
+        geometry_list,
+        hints,
+        airbox=airbox,
+        surface_mesh_options=surface_mesh_options,
+        frozen_payload=frozen_payload,
+        conformal_object_regions=conformal_object_regions,
+        mesh_workflow=mesh_workflow,
+    ):
+        return _FEM_MIXED_V2_VOLUME_REDUCTION_CONTRACT
+    return None
+
+
 def _fem_shared_domain_cache_document(
     geometries: Sequence[object],
     hints: FEM,
@@ -1222,12 +1272,12 @@ def build_geometry_assets_for_request(
                 }
         elif study_universe is not None:
             authored_regions = list(object_regions or [])
-            from fullmag.meshing._gmsh_swept import _disconnected_mixed_p1_pair
-
-            mixed_v2_volume_reduction_contract = (
-                _FEM_MIXED_V2_VOLUME_REDUCTION_CONTRACT
-                if _disconnected_mixed_p1_pair(geometries) is not None
-                else None
+            mixed_v2_volume_reduction_contract = _mixed_v2_volume_reduction_contract_for_request(
+                geometries,
+                discretization.fem,
+                study_universe=study_universe,
+                mesh_workflow=mesh_workflow,
+                object_regions=authored_regions,
             )
 
             # A generated shared-domain mesh is much more expensive than the
