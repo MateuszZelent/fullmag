@@ -36,6 +36,7 @@ KEY = "2" * 64
 
 
 class Control:
+    namespace = ""
     project = PROJECT
     volume = VOLUME
     identity = {
@@ -360,6 +361,7 @@ class UnknownActivationTests(unittest.TestCase):
 
     def test_lease_protocol_is_single_sourced_for_recovery_authentication(self) -> None:
         control = object.__new__(BuildControl)
+        control.namespace = ""
         script = control.operation_script("activation", ATTEMPT)
         self.assertIn("printf 'READY\\n'", script)
         self.assertIn("printf 'LOGGED\\n'", script)

@@ -443,7 +443,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
             };
 
             let observables = observe_multilayer(&contexts, &states, demag_runtime.as_ref())?;
-            let latest_stats = make_step_stats(
+            let mut latest_stats = make_step_stats(
                 step_count,
                 current_time(&states),
                 dt_step,

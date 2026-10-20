@@ -90,7 +90,7 @@ export function resolvePrimitiveSurfaceColor(
   const requestedPaletteIndex = requested
     ? paletteIndexForToken(requested)
     : undefined;
-  if (requestedPaletteIndex !== undefined) {
+  if (requested && requestedPaletteIndex !== undefined) {
     return {
       color: requested,
       paletteIndex: requestedPaletteIndex,
