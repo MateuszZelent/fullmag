@@ -101,8 +101,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             new WizardStepViewModel(1, WizardPageId.Welcome, "Welcome", "Choose how Fullmag will be prepared."),
             new WizardStepViewModel(2, WizardPageId.License, "License", "Review the terms before continuing."),
             new WizardStepViewModel(3, WizardPageId.Paths, "Paths", "Select the checkout and private storage root."),
-            new WizardStepViewModel(4, WizardPageId.Environment, "Environment", "Review the proposed environment values."),
-            new WizardStepViewModel(5, WizardPageId.Requirements, "Requirements", "Check tools and prepare all four realizations."),
+            new WizardStepViewModel(4, WizardPageId.Requirements, "Requirements", "Check tools and prepare all four realizations."),
+            new WizardStepViewModel(5, WizardPageId.Environment, "Environment", "Review the proposed environment values."),
             new WizardStepViewModel(6, WizardPageId.Progress, "Progress", "Run setup and build preparation."),
             new WizardStepViewModel(7, WizardPageId.Ready, "Ready", "Launch the workspace when setup is complete.")
         });
@@ -340,7 +340,7 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         WizardPageId.License => "Accept and continue",
         WizardPageId.Paths => "Install prerequisites",
         WizardPageId.Environment => "Review changes",
-        WizardPageId.Requirements => "Prepare environment",
+        WizardPageId.Requirements => RequirementsReady && PreviewReady ? "Continue" : "Prepare environment",
         WizardPageId.Progress => SetupCompleted ? "Continue" : "Install Fullmag",
         WizardPageId.Ready => LaunchRequested ? "Finish" :
             CanLaunchWorkspace ? "Launch Fullmag" : "Finish",
@@ -354,7 +354,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         WizardPageId.Paths => HasRequiredPaths && HasInstallationScope,
         WizardPageId.Environment => HasAdmission && EnvironmentFields.Count > 0,
         WizardPageId.Requirements => (HasAdmission || HasRequiredPaths) &&
-                                     (!RequirementsReady || EnvironmentFields.Count == 0),
+                                     (!RequirementsReady || EnvironmentFields.Count == 0 ||
+                                      (RequirementsReady && PreviewReady)),
         WizardPageId.Progress => SetupCompleted || HasCommittedSession,
         // A setup-only run finishes here.  A completed initial build first
         // offers launch, then keeps the same button enabled as Finish after
@@ -634,16 +635,18 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (!sourceAdmitted || !ReadinessConfirmed(response.Payload, allowFreshHost: true))
         {
             StatusMessage = "The selected folders are ready. Check the required tools before loading environment fields.";
-            RequirementsReady = false;
-            NavigateTo(WizardPageId.Requirements, allowForwardJump: true);
-            return;
         }
-
-        if (!await DiscoverAsync().ConfigureAwait(true))
+        else
         {
-            return;
+            StatusMessage = "The source is accepted. Install the required tools before loading environment fields.";
         }
-        NavigateTo(WizardPageId.Environment);
+        // Preadmission only prepares the minimum Git/Python tools and does
+        // not create the editable environment session. Discover creates that
+        // session; PrepareRequirementsAsync then performs the bound,
+        // all-realizations prerequisite check once.
+        RequirementsReady = false;
+        PreviewReady = false;
+        NavigateTo(WizardPageId.Requirements, allowForwardJump: true);
     }
 
     private async Task<bool> DiscoverAsync()
@@ -701,6 +704,8 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
                        JsonPayload.Bool(response.Payload, "can_commit");
         if (PreviewReady)
         {
+            // Keep the redacted proposal visible. Continue on Requirements is
+            // the explicit user acknowledgement before entering Progress.
             NavigateTo(WizardPageId.Requirements);
         }
     }
@@ -712,12 +717,43 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             Block("The installer must authorize all four runtime realizations before setup can continue.");
             return;
         }
+
+        // Discover admits the source and creates the first environment session.
+        // The prerequisite operation then performs the one fresh-host
+        // bootstrap and may rebind that session before the environment is
+        // editable. Once it has succeeded, a return to Requirements must only
+        // acknowledge the current preview; running prerequisites again would
+        // create another session and invalidate the user's reviewed values.
+        if (RequirementsReady && EnvironmentFields.Count > 0)
+        {
+            if (PreviewReady)
+            {
+                NavigateTo(WizardPageId.Progress);
+            }
+            else
+            {
+                StatusMessage = "Review the environment proposal before continuing.";
+                NavigateTo(WizardPageId.Environment);
+            }
+            return;
+        }
+
         if (!ValidateEnvironmentValues())
         {
             return;
         }
 
         var editEpoch = CurrentEditEpoch();
+        if (!await DiscoverAsync().ConfigureAwait(true))
+        {
+            return;
+        }
+
+        if (IsStaleOrCanceled(editEpoch))
+        {
+            return;
+        }
+
         var response = await SendAsync(
             BrokerOperations.Prerequisites,
             new
@@ -748,11 +784,6 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        if (EnvironmentFields.Count == 0 && !await DiscoverAsync().ConfigureAwait(true))
-        {
-            return;
-        }
-
         if (IsStaleOrCanceled(editEpoch))
         {
             return;
@@ -765,6 +796,14 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        RequirementsReady = true;
+        if (EnvironmentFields.Count == 0)
+        {
+            RequirementsReady = false;
+            StatusMessage = "The accepted checkout returned no editable environment fields; setup remains blocked.";
+            return;
+        }
+
         if (!PreviewReady)
         {
             StatusMessage = "Requirements are ready. Review the environment proposal before saving settings.";
@@ -772,7 +811,6 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        RequirementsReady = true;
         NavigateTo(WizardPageId.Progress);
     }
 
@@ -1365,7 +1403,6 @@ public sealed class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
         AdvanceLocalEditEpoch();
         PreviewReady = false;
-        RequirementsReady = false;
         SetupCompleted = false;
         LaunchRequested = false;
         _environmentCommitted = false;

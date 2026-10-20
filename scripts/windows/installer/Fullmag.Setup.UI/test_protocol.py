@@ -315,7 +315,7 @@ def main() -> None:
     require(view_model, 'JsonPayload.String(response.Payload, "state")', "commit payload state")
     require(view_model, "ResetSessionDerivedState", "session rebind invalidates stale preview")
     require(view_model, "preserveConfirmedCommit", "confirmed commit session rebind")
-    require(view_model, "source_admitted", "source admission report gate")
+    require(view_model, "BrokerOperations.Discover", "source admission uses the trusted discover operation")
     require(view_model, 'private const string InstallationScope = "all";', "fixed all-realizations scope")
     require(view_model, "HasInstallationScope", "all-realizations admission gate")
     require(view_model, "IsAllInstallationScope", "init scope validation")
@@ -420,6 +420,84 @@ def main() -> None:
         "var preserveUserValue = preserved.TryGetValue",
         "metadata is normalized before dirty-value preservation",
     )
+
+    prepare_start = view_model.index("private async Task PrepareRequirementsAsync()")
+    prepare_end = view_model.index("private async Task CommitAndSetupAsync()", prepare_start)
+    prepare = view_model[prepare_start:prepare_end]
+    require(prepare, "if (RequirementsReady && EnvironmentFields.Count > 0)", "ready prerequisites avoid a second session rebind")
+    require(
+        prepare,
+        'if (PreviewReady)\n            {\n                NavigateTo(WizardPageId.Progress);',
+        "ready requirements continue only after a valid preview",
+    )
+    require(
+        prepare,
+        'StatusMessage = "Review the environment proposal before continuing.";',
+        "ready requirements route back to editable environment without a preview",
+    )
+    if "await PreviewEnvironmentAsync().ConfigureAwait(true)" in prepare:
+        raise AssertionError("requirements preparation must not auto-preview or auto-commit edited values")
+    require_order(
+        prepare,
+        "if (RequirementsReady && EnvironmentFields.Count > 0)",
+        "BrokerOperations.Prerequisites",
+        "already-ready path precedes prerequisite bootstrap",
+    )
+    require_order(
+        prepare,
+        "await DiscoverAsync().ConfigureAwait(true)",
+        "BrokerOperations.Prerequisites",
+        "source session discovery precedes the single prerequisite bootstrap",
+    )
+    require(prepare, "RequirementsReady = true;", "tool readiness survives the environment review")
+    require(prepare, "NavigateTo(WizardPageId.Environment)", "environment opens only after prerequisites and discover")
+    if "BrokerOperations.Commit" in prepare:
+        raise AssertionError("preparation must never auto-commit the environment")
+    if "preserveEnvironmentEditsOnSessionRebind" in view_model:
+        raise AssertionError("session rebind must finish before the editable environment page")
+
+    require_order(
+        view_model,
+        'new WizardStepViewModel(4, WizardPageId.Requirements',
+        'new WizardStepViewModel(5, WizardPageId.Environment',
+        "requirements precedes editable environment in the seven-step wizard",
+    )
+
+    admit_start = view_model.index("private async Task AdmitPathsAsync()")
+    admit_end = view_model.index("private async Task<bool> DiscoverAsync()", admit_start)
+    admit = view_model[admit_start:admit_end]
+    require(admit, "BrokerOperations.Preadmission", "fresh-host Git/Python admission precedes source discovery")
+    if "await DiscoverAsync().ConfigureAwait(true)" in admit:
+        raise AssertionError("paths admission must not expose editable fields before prerequisites")
+    require(admit, "NavigateTo(WizardPageId.Requirements, allowForwardJump: true)", "paths admission enters requirements first")
+
+    preview_start = view_model.index("private async Task PreviewEnvironmentAsync()")
+    preview_end = view_model.index("private async Task PrepareRequirementsAsync()", preview_start)
+    preview = view_model[preview_start:preview_end]
+    require(preview, "PreviewReady = response.Ok &&", "preview requires a valid broker response")
+    if "if (RequirementsReady)" in preview:
+        raise AssertionError("preview must not silently advance past the visible redacted proposal")
+    require(
+        preview,
+        "NavigateTo(WizardPageId.Requirements)",
+        "valid preview keeps the redacted proposal visible for explicit acknowledgement",
+    )
+    require(
+        view_model,
+        'WizardPageId.Requirements => RequirementsReady && PreviewReady ? "Continue" : "Prepare environment"',
+        "requirements action label distinguishes preview acknowledgement",
+    )
+    require(
+        view_model,
+        "(RequirementsReady && PreviewReady)",
+        "requirements Continue is enabled only after ready prerequisites and valid preview",
+    )
+
+    edit_start = view_model.index("private void OnEnvironmentFieldChanged")
+    edit_end = view_model.index("private void OnBrokerEvent", edit_start)
+    edit_body = view_model[edit_start:edit_end]
+    if "RequirementsReady = false;" in edit_body:
+        raise AssertionError("environment edits must not invalidate already-installed prerequisites")
 
     installer_env = (ROOT.parent.parent / "installer_env.ps1").read_text(encoding="utf-8")
     env_example = (ROOT.parents[3] / ".env.example").read_text(encoding="utf-8")
