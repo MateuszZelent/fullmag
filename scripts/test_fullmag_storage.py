@@ -904,6 +904,63 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(captured_env[0]["FULLMAG_FEM_FULL_SUPERSET_ORIGIN_SHA256"], identity["origin_manifest_sha256"])
         self.assertEqual(validate_terminal.call_args.args[3], "auto")
 
+    def test_managed_gpu_post_runtime_identity_failure_is_failed_not_interrupted(self):
+        layout = self.resolve(profile="windows-native-fem-gpu")
+        origin_path, aggregate_path = self._write_native_fem_origin_for_superset_test(
+            layout, requested_device="auto",
+        )
+        identity = {
+            "full_workspace_build_id": hashlib.sha256(aggregate_path.read_bytes()).hexdigest(),
+            "origin_manifest_path": str(origin_path),
+            "origin_manifest_sha256": hashlib.sha256(origin_path.read_bytes()).hexdigest(),
+            "origin_requested_device": "auto",
+            "runtime_requested_device": "gpu",
+        }
+        helper_calls = []
+        result_record = {}
+
+        def fake_git(_repo, *args):
+            if args == ("rev-parse", "HEAD"):
+                return "0" * 40
+            if args == ("status", "--porcelain", "--untracked-files=normal"):
+                return ""
+            raise AssertionError(args)
+
+        def fake_identity(*_args, **_kwargs):
+            helper_calls.append(True)
+            if len(helper_calls) == 1:
+                return identity
+            raise storage.StorageError("post-runtime compatibility drift")
+
+        def fake_logged(command, _repo, _child_env, _log_path, *, cancelled=None):
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(storage, "_is_native_windows", return_value=True), \
+             patch.object(storage, "git", side_effect=fake_git), \
+             patch.object(storage, "_native_fem_full_workspace_runtime_identity", side_effect=fake_identity), \
+             patch.object(storage, "_run_logged_command", side_effect=fake_logged), \
+             patch.object(storage, "validate_fem_terminal_manifest") as validate_terminal:
+            result = storage._run_managed_command(
+                layout,
+                ["powershell.exe", "-File", "run_fullmag.ps1"],
+                acquire_heavy_slot=False,
+                native_fem_paths=True,
+                fem_device="gpu",
+                fem_requested_device="gpu",
+                fem_frontend="static",
+                execution_mode="windows-fem",
+                native_manifest_relative="windows-fem-runtime/build-manifest.json",
+                fem_full_workspace_identity=identity,
+                result_record=result_record,
+                attempt_id="c" * 32,
+            )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(len(helper_calls), 2)
+        self.assertEqual(result_record["state"], "failed")
+        self.assertEqual(result_record["exit_code"], 1)
+        validate_terminal.assert_not_called()
+
     def test_workspace_build_only_uses_closed_profile_lock_and_terminal_receipt(self):
         layout = self.resolve(profile="windows-native-fdm-cpu-dev")
         launcher = self.repo / "scripts" / "windows" / "run_fullmag.ps1"

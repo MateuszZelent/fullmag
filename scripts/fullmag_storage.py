@@ -1763,19 +1763,6 @@ def _run_managed_command(
             state.update(state="completed" if result.returncode == 0 else "failed", exit_code=result.returncode)
             terminal_returncode = result.returncode
             if (native_user_build or native_fem_paths or native_full_workspace_paths) and result.returncode == 0:
-                if (
-                    native_fem_paths
-                    and not native_user_build
-                    and execution_mode == "windows-fem"
-                    and fem_full_workspace_identity is not None
-                ):
-                    fem_full_workspace_identity = _native_fem_full_workspace_runtime_identity(
-                        layout,
-                        resolved_device=fem_device,
-                        requested_device=fem_requested_device or fem_device,
-                        frontend=fem_frontend,
-                        expected_identity=fem_full_workspace_identity,
-                    )
                 manifest_relative = native_manifest_relative or (
                     "windows-runtime/build-manifest.json"
                 )
@@ -1823,6 +1810,18 @@ def _run_managed_command(
                             terminal_returncode = 1
                     elif native_fem_paths:
                         try:
+                            if (
+                                not native_user_build
+                                and execution_mode == "windows-fem"
+                                and fem_full_workspace_identity is not None
+                            ):
+                                fem_full_workspace_identity = _native_fem_full_workspace_runtime_identity(
+                                    layout,
+                                    resolved_device=fem_device,
+                                    requested_device=fem_requested_device or fem_device,
+                                    frontend=fem_frontend,
+                                    expected_identity=fem_full_workspace_identity,
+                                )
                             terminal_requested_device = fem_requested_device or fem_device
                             if fem_full_workspace_identity is not None:
                                 terminal_requested_device = "auto"
