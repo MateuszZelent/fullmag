@@ -151,6 +151,68 @@
       ]
     },
     {
+      "id": "eq-mixed-p1-volume-node-support-weights",
+      "symbols": [
+        "stateNodeSet",
+        "domainNodeSet",
+        "magneticNodeSet",
+        "airNodeSet",
+        "volumeCells",
+        "magneticCells",
+        "stateIndex",
+        "volumeCell",
+        "basisNi",
+        "visualWeight",
+        "nodalWeight"
+      ],
+      "sources": [
+        "mixed-volume-node-compaction",
+        "node-volumes",
+        "demag-recovery",
+        "demag-gpu-recovery-node-support"
+      ]
+    },
+    {
+      "id": "eq-mixed-p1-volume-node-support-invariants",
+      "symbols": [
+        "stateNodeSet",
+        "domainNodeSet",
+        "magneticNodeSet",
+        "airNodeSet",
+        "stateIndex",
+        "visualWeight",
+        "nodalWeight",
+        "domainD",
+        "OmegaM"
+      ],
+      "sources": [
+        "mixed-volume-node-compaction",
+        "node-volumes",
+        "demag-recovery",
+        "demag-gpu-recovery-node-support"
+      ]
+    },
+    {
+      "id": "eq-mixed-p1-canonical-0410-recovery",
+      "symbols": [
+        "visualRecoveryField",
+        "magneticRecoveryField",
+        "volumeCells",
+        "magneticCells",
+        "basisNi",
+        "phi",
+        "visualWeight",
+        "nodalWeight",
+        "stateIndex",
+        "domainNodeSet",
+        "magneticNodeSet"
+      ],
+      "sources": [
+        "demag-recovery",
+        "demag-gpu-recovery-node-support"
+      ]
+    },
+    {
       "id": "eq-mixed-p1-average-magnetization",
       "symbols": [
         "m",
@@ -390,6 +452,54 @@
       "si_unit": "\\mathrm{m^3}"
     },
     {
+      "id": "volumeCells",
+      "latex": "\\mathcal T_D",
+      "meaning": "volume-cell index set of the shared domain $D$",
+      "si_unit": "1"
+    },
+    {
+      "id": "magneticCells",
+      "latex": "\\mathcal T_m",
+      "meaning": "volume-cell index set carrying the magnetic material marker",
+      "si_unit": "1"
+    },
+    {
+      "id": "stateNodeSet",
+      "latex": "\\mathcal I_{\\mathrm{state}}",
+      "meaning": "canonical P1 state-node index set after volume compaction",
+      "si_unit": "1"
+    },
+    {
+      "id": "domainNodeSet",
+      "latex": "\\mathcal I_D",
+      "meaning": "global P1 nodes incident to at least one cell in $\\mathcal T_D$",
+      "si_unit": "1"
+    },
+    {
+      "id": "magneticNodeSet",
+      "latex": "\\mathcal I_m",
+      "meaning": "global P1 nodes incident to at least one magnetic cell in $\\mathcal T_m$",
+      "si_unit": "1"
+    },
+    {
+      "id": "airNodeSet",
+      "latex": "\\mathcal I_{\\mathrm{air}}",
+      "meaning": "volume-supported nodes in $\\mathcal I_D\\setminus\\mathcal I_m$",
+      "si_unit": "1"
+    },
+    {
+      "id": "stateIndex",
+      "latex": "i",
+      "meaning": "global P1 state-node index",
+      "si_unit": "1"
+    },
+    {
+      "id": "volumeCell",
+      "latex": "K",
+      "meaning": "volume-cell index",
+      "si_unit": "1"
+    },
+    {
       "id": "testV",
       "latex": "v",
       "meaning": "scalar H1 test function",
@@ -493,9 +603,27 @@
     },
     {
       "id": "nodalWeight",
-      "latex": "w_i",
-      "meaning": "magnetic nodal volume weight",
+      "latex": "w_i^{\\mathrm{mag}}",
+      "meaning": "magnetic-cell nodal volume/recovery weight",
       "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "visualWeight",
+      "latex": "w_i^{\\mathrm{vis}}",
+      "meaning": "full shared-domain visual-recovery nodal volume weight",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "visualRecoveryField",
+      "latex": "\\mathbf H_{\\mathrm{demag},i}^{\\mathrm{vis}}",
+      "meaning": "unmasked full-domain visual demagnetizing field recovered at state node $i$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "magneticRecoveryField",
+      "latex": "\\mathbf H_{\\mathrm{demag},i}^{\\mathrm{mag}}",
+      "meaning": "magnetic-only physical demagnetizing field recovered at state node $i$",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
     },
     {
       "id": "OmegaLayer",
@@ -993,7 +1121,7 @@
       "id": "demag-recovery",
       "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp",
       "symbol": "recover_demag_poisson_field",
-      "responsibility": "Recover the demagnetizing field on magnetic cells."
+      "responsibility": "Recover the physical magnetic demagnetizing field on magnetic cells and the unmasked full-domain visual demagnetizing field with separate support and weight vectors."
     },
     {
       "id": "demag-energy",
@@ -1217,6 +1345,18 @@
       "symbol": "llg_rhs_fused_kernel",
       "responsibility": "Zero LLG RHS on nonmagnetic nodes and exclude them from RHS maxima while retaining body-local damping on active nodes.",
       "evidence_status": "source_implementation_under_review_runtime_not_verified"
+    },
+    {
+      "id": "mixed-volume-node-compaction",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py",
+      "symbol": "_compact_volume_node_space",
+      "responsibility": "Canonicalize volume-supported state nodes and remap retained topology and identity references before certificate and cache publication."
+    },
+    {
+      "id": "demag-gpu-recovery-node-support",
+      "path": "backends/fem/gpu/cuda/demag_poisson/operators.cpp",
+      "symbol": "build_p1_demag_operators",
+      "responsibility": "Keep full-domain positive visual recovery support distinct from magnetic-only recovery support and reject orphan P1 state nodes."
     }
   ],
   "public_api": {

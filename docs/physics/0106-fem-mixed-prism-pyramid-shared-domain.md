@@ -2,7 +2,7 @@
 
 - Status: bounded FEM CPU/GPU double mixed-P1 relaxation lanes `implemented`; evidence is source/contract only, no runtime qualification is asserted, and wider scopes fail closed. The proposed disjoint multi-body/material-field extension in Section 7.1 is not implemented or qualified.
 - Owners: Fullmag core
-- Last updated: 2026-10-19
+- Last updated: 2026-10-20
 - Related ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`,
   `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 - Related specs:
@@ -167,6 +167,14 @@ Prism, pyramid, and tetrahedron assembly must reproduce these signs exactly.
 | $\Omega_m$ | magnetic domain | $\mathrm{m^3}$ |
 | $\Omega_{\mathrm{air}}$ | air domain | $\mathrm{m^3}$ |
 | $D$ | conforming shared domain | $\mathrm{m^3}$ |
+| $\mathcal T_D$ | volume-cell index set of the shared domain $D$ | $1$ |
+| $\mathcal T_m$ | volume-cell index set carrying the magnetic material marker | $1$ |
+| $\mathcal I_{\mathrm{state}}$ | canonical P1 state-node index set after volume compaction | $1$ |
+| $\mathcal I_D$ | global P1 nodes incident to at least one cell in $\mathcal T_D$ | $1$ |
+| $\mathcal I_m$ | global P1 nodes incident to at least one magnetic cell in $\mathcal T_m$ | $1$ |
+| $\mathcal I_{\mathrm{air}}$ | volume-supported nodes in $\mathcal I_D\setminus\mathcal I_m$ | $1$ |
+| $i$ | global P1 state-node index | $1$ |
+| $K$ | volume-cell index | $1$ |
 | $v$ | scalar H1 test function | $1$ |
 | $E_{\mathrm{ex}}$ | exchange energy | $\mathrm{J}$ |
 | $E_{\mathrm Z}$ | Zeeman energy | $\mathrm{J}$ |
@@ -184,7 +192,10 @@ Prism, pyramid, and tetrahedron assembly must reproduce these signs exactly.
 | $J_K$ | element-map Jacobian determinant | $\mathrm{m^3}$ |
 | $N_i$ | scalar P1 nodal basis function | $1$ |
 | $M_{ij}$ | scalar mass-matrix entry | $\mathrm{m^3}$ |
-| $w_i$ | magnetic nodal volume weight | $\mathrm{m^3}$ |
+| $w_i^{\mathrm{mag}}$ | magnetic-cell nodal volume/recovery weight | $\mathrm{m^3}$ |
+| $w_i^{\mathrm{vis}}$ | full shared-domain visual-recovery nodal volume weight | $\mathrm{m^3}$ |
+| $\mathbf H_{\mathrm{demag},i}^{\mathrm{vis}}$ | unmasked full-domain visual demagnetizing field recovered at state node $i$ | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{demag},i}^{\mathrm{mag}}$ | magnetic-only physical demagnetizing field recovered at state node $i$ | $\mathrm{A\,m^{-1}}$ |
 | $\Omega_\ell$ | magnetic layer region | $\mathrm{m^3}$ |
 | $\Omega_r$ | magnetic ring region | $\mathrm{m^3}$ |
 | $N_a^{(r)}$ | regional scalar P1 nodal basis function | $1$ |
@@ -293,7 +304,7 @@ MFEM scalar mass matrix assembled only over magnetic volume attributes:
 
 M_{ij}=\int_{\Omega_m}N_iN_j\,\mathrm dV,
 \qquad
-w_i=\sum_jM_{ij}=\int_{\Omega_m}N_i\,\mathrm dV.
+w_i^{\mathrm{mag}}=\sum_jM_{ij}=\int_{\Omega_m}N_i\,\mathrm dV.
 ```
 
 The runtime must assemble this operator with the geometry-specific MFEM basis,
@@ -304,7 +315,7 @@ wedge or pyramid. Partition of unity gives the required conservation check:
 ```{math}
 :label: eq-mixed-p1-volume-conservation
 
-\sum_i w_i=\operatorname{vol}(\Omega_m).
+\sum_i w_i^{\mathrm{mag}}=\operatorname{vol}(\Omega_m).
 ```
 
 The canonical runtime weight vector is the MFEM mass-row-sum result. Any
@@ -318,7 +329,7 @@ magnetization keeps the existing lumped material/volume policy:
 :label: eq-mixed-p1-average-magnetization
 
 \langle\mathbf m\rangle
-=\frac{\sum_i M_{s,i}w_i\mathbf m_i}{\sum_i M_{s,i}w_i}.
+=\frac{\sum_i M_{s,i}w_i^{\mathrm{mag}}\mathbf m_i}{\sum_i M_{s,i}w_i^{\mathrm{mag}}}.
 ```
 
 The first mixed qualification uses uniform `Ms`, for which this reduction is
@@ -761,6 +772,104 @@ only algorithm ID is derived deterministically from the fallback method and
 iteration count so evidence for distinct Gmsh policies cannot collide with the
 immutable production ID. Gmsh remains fixed at one thread until the separate
 thread determinism and quality qualification passes.
+
+(mixed-p1-volume-node-support)=
+##### Canonical volume-node support
+
+Before constructing a shared-domain `MeshData`, the producer must make the
+canonical coordinate array exactly the nodes referenced by volume-cell
+connectivity. Every canonical P1 state-node index must occur in at least one
+volume cell. Gmsh can return auxiliary CAD construction points from
+`getNodes()` even when no volume cell or boundary facet uses them; those points
+are not finite-element state DOFs.
+
+`_compact_volume_node_space` preserves the original order and coordinates of
+used nodes and deterministically remaps cell connectivity, facet connectivity,
+periodic node pairs, and retained `vertex_identity` entries. Cell and facet
+ordinals, region and boundary markers, typed cell families, and the geometry
+and ownership of every retained cell remain unchanged. A facet or periodic
+pair referencing a node outside volume support rejects instead of being
+silently removed. Certificates, fingerprints, counts, and cached assets are
+produced after compaction; a producer cache-contract revision prevents reuse
+of a pre-compaction node space.
+
+The recovery contract remains the one documented in
+[the MFEM Poisson GPU owner](0410-fem-exchange-demag-zeeman-mfem-gpu.md): visual
+recovery integrates over the full shared domain, while physical magnetic
+recovery integrates over magnetic cells. A valid air-only node therefore has
+positive visual support and may have zero magnetic support. An auxiliary
+point with no incident volume cell has neither support and cannot be treated
+as an air-only state node. The strict GPU positive-visual-weight guard remains
+unchanged. Compaction does not clamp weights, change quadrature, invent a
+magnetic mask, alter the Poisson operator, or introduce a CPU fallback.
+
+The support sets and the two recovery weights are defined independently of the
+element family:
+
+```{math}
+:label: eq-mixed-p1-volume-node-support-weights
+
+\mathcal I_D
+=\left\{i\;\middle|\;\exists K\in\mathcal T_D:\ i\in K\right\},
+\qquad
+\mathcal I_m
+=\left\{i\;\middle|\;\exists K\in\mathcal T_m:\ i\in K\right\},
+\qquad
+\mathcal I_{\mathrm{air}}
+=\mathcal I_D\setminus\mathcal I_m,
+\qquad
+w_i^{\mathrm{vis}}
+=\sum_{K\in\mathcal T_D}\int_KN_i\,\mathrm dV,
+\qquad
+w_i^{\mathrm{mag}}
+=\sum_{K\in\mathcal T_m}\int_KN_i\,\mathrm dV.
+```
+
+After compaction, the state space contains exactly the volume-supported nodes.
+Consequently, the producer and both recovery implementations must satisfy the
+following invariants. They distinguish a valid air-only node from an orphan CAD
+point, while preserving the full-domain conservation check:
+
+```{math}
+:label: eq-mixed-p1-volume-node-support-invariants
+
+\mathcal I_{\mathrm{state}}=\mathcal I_D,
+\qquad
+i\in\mathcal I_D\Longrightarrow
+0<w_i^{\mathrm{vis}}<\infty,
+\qquad
+i\in\mathcal I_m\Longleftrightarrow w_i^{\mathrm{mag}}>0,
+\qquad
+i\in\mathcal I_{\mathrm{air}}\Longrightarrow w_i^{\mathrm{mag}}=0,
+\qquad
+\sum_{i\in\mathcal I_D}w_i^{\mathrm{vis}}=\operatorname{vol}(D),
+\qquad
+\sum_{i\in\mathcal I_D}w_i^{\mathrm{mag}}=\operatorname{vol}(\Omega_m).
+```
+
+The canonical recovery/output contract from the MFEM Poisson note uses these
+weights as separate denominators:
+
+```{math}
+:label: eq-mixed-p1-canonical-0410-recovery
+
+\mathbf H_{\mathrm{demag},i}^{\mathrm{vis}}
+=\frac{\displaystyle\sum_{K\in\mathcal T_D}
+\int_KN_i\,(-\nabla\phi)\,\mathrm dV}{w_i^{\mathrm{vis}}}
+\quad(i\in\mathcal I_D),
+\qquad
+\mathbf H_{\mathrm{demag},i}^{\mathrm{mag}}
+=\frac{\displaystyle\sum_{K\in\mathcal T_m}
+\int_KN_i\,(-\nabla\phi)\,\mathrm dV}{w_i^{\mathrm{mag}}}
+\quad(i\in\mathcal I_m).
+```
+
+The visual field is retained on every $i\in\mathcal I_D$ for the full-domain
+output. The physical magnetic field is evaluated only for
+$i\in\mathcal I_m$ and is then zeroed on $\mathcal I_{\mathrm{air}}$ by the
+magnetic-node mask; no division by a zero $w_i^{\mathrm{mag}}$ is permitted.
+Thus the GPU guard requires finite positive $w_i^{\mathrm{vis}}$ for every
+state node and finite positive $w_i^{\mathrm{mag}}$ only for magnetic nodes.
 
 #### 3.4.2 Language-neutral topology fingerprint v3
 
@@ -2046,3 +2155,5 @@ It is a proposal for a staged source implementation and qualification path.
 | CUDA regional coefficient upload | `backends/fem/gpu/cuda/state/runtime_coefficients_upload.cpp` | `gpu_runtime_coefficients_upload` | uploads regional material arrays to device memory | FEM GPU | proposed residency gate |
 | CUDA PG-BB tangent kernel | `backends/fem/gpu/cuda/relaxation/pgbb_kernels.hpp` | `fullmag_cuda_relax_tangent_gradient_and_norm_blocks` | owns the strict GPU projected-gradient tangent kernel boundary | FEM GPU | proposed residency/parity gate |
 | CPU tangent-gradient reference | `backends/fem/cpu/mfem/relaxation/relaxation_math.hpp` | `tangent_gradient_from_field` | supplies the CPU reference operation for derivative and parity gates | FEM CPU | proposed reference gate |
+| Canonical volume-node support | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_compact_volume_node_space` | Removes only nodes outside all volume connectivity and remaps every retained index-space reference before mesh certificates | FEM CPU/GPU shared meshing contract | Source/contract regression required; managed execution after correction remains not verified |
+| Strict visual recovery node support | `backends/fem/gpu/cuda/demag_poisson/operators.cpp` | `build_p1_demag_operators` | Dispatches the mixed-P1 operator path that requires positive full-domain visual recovery weight for every P1 state node, distinct from magnetic-only recovery support | FEM GPU | Existing fail-closed guard preserved; observed rejecting two orphan nodes in the Windows authored-model run |

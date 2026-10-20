@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -331,6 +331,153 @@ def _meshio_cell_markers(mesh: Any, *, cell_type: str, fallback: int = 1) -> NDA
     return markers
 
 
+def _compact_volume_node_space(
+    nodes: object,
+    cell_nodes: object,
+    facet_nodes: object,
+    *,
+    vertex_identity: Mapping[str, object] | None = None,
+    periodic_node_pairs: Sequence[Mapping[str, object]] | None = None,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.int32],
+    NDArray[np.int32],
+    dict[str, object] | None,
+    list[dict[str, object]],
+]:
+    """Remove global nodes that are not referenced by any volume cell.
+
+    Gmsh may publish auxiliary geometry points in ``getNodes()`` that are not
+    vertices of a volume element. FEM P1 state space is vertex based, so
+    retaining those points creates rows with no shape-function support. The
+    volume connectivity is the authoritative support set; all other topology
+    is remapped against that deterministic, sorted set and references to a
+    removed node fail closed.
+
+    The function deliberately knows nothing about magnetic/air ownership. A
+    node used by any volume cell is retained, including interface and air-only
+    nodes. Cell and facet order, and therefore their ordinal metadata, are
+    unchanged. Mapping arguments are copied so producer metadata is not
+    mutated in place.
+    """
+
+    node_array = np.asarray(nodes, dtype=np.float64)
+    if node_array.ndim != 2 or node_array.shape[1] != 3:
+        raise ValueError(
+            "volume node compaction requires nodes with shape (N, 3)"
+        )
+    if not np.all(np.isfinite(node_array)):
+        raise ValueError("volume node compaction requires finite node coordinates")
+    node_count = int(node_array.shape[0])
+
+    def _indices(value: object, *, label: str) -> NDArray[np.int64]:
+        raw = np.asarray(value)
+        if raw.ndim != 1:
+            raise ValueError(
+                f"volume node compaction requires {label} as a flat index array"
+            )
+        if raw.size == 0:
+            return np.zeros(0, dtype=np.int64)
+        if raw.dtype.kind not in "iu":
+            raise ValueError(
+                f"volume node compaction requires integer {label} indices"
+            )
+        return raw.astype(np.int64, copy=False)
+
+    cell_array = _indices(cell_nodes, label="volume")
+    facet_array = _indices(facet_nodes, label="facet")
+    if cell_array.size == 0:
+        raise ValueError(
+            "volume node compaction requires at least one volume node"
+        )
+
+    for label, array in (("volume", cell_array), ("facet", facet_array)):
+        invalid = array[(array < 0) | (array >= node_count)]
+        if invalid.size:
+            raise ValueError(
+                f"volume node compaction found {label} node index "
+                f"{int(invalid[0])} outside [0, {node_count})"
+            )
+
+    used = np.unique(cell_array)
+    old_to_new = np.full(node_count, -1, dtype=np.int64)
+    old_to_new[used] = np.arange(used.size, dtype=np.int64)
+    compact_facet_nodes = old_to_new[facet_array]
+    orphan_facet = facet_array[compact_facet_nodes < 0]
+    if orphan_facet.size:
+        raise ValueError(
+            "volume node compaction cannot remove facet-referenced orphan "
+            f"node {int(orphan_facet[0])}"
+        )
+
+    compact_periodic_pairs: list[dict[str, object]] = []
+    pair_sequence = () if periodic_node_pairs is None else periodic_node_pairs
+    for pair_index, raw_pair in enumerate(pair_sequence):
+        if not isinstance(raw_pair, Mapping):
+            raise ValueError(
+                "volume node compaction requires periodic_node_pairs entries "
+                f"to be mappings (entry {pair_index})"
+            )
+        pair = dict(raw_pair)
+        for key in ("node_a", "node_b"):
+            raw_node = pair.get(key)
+            if isinstance(raw_node, (bool, np.bool_)) or not isinstance(
+                raw_node, (int, np.integer)
+            ):
+                raise ValueError(
+                    "volume node compaction requires periodic node pair "
+                    f"{key} to be an integer (entry {pair_index})"
+                )
+            node_index = int(raw_node)
+            if node_index < 0 or node_index >= node_count:
+                raise ValueError(
+                    "volume node compaction found periodic node pair index "
+                    f"{node_index} outside [0, {node_count})"
+                )
+            remapped = int(old_to_new[node_index])
+            if remapped < 0:
+                raise ValueError(
+                    "volume node compaction cannot remove "
+                    f"periodic_node_pairs orphan node {node_index}"
+                )
+            pair[key] = remapped
+        compact_periodic_pairs.append(pair)
+
+    compact_vertex_identity: dict[str, object] | None = None
+    if vertex_identity is not None:
+        if not isinstance(vertex_identity, Mapping):
+            raise ValueError("volume node compaction requires vertex_identity mapping")
+        raw_vertex_ids = vertex_identity.get("vertex_ids")
+        if raw_vertex_ids is None:
+            raise ValueError(
+                "volume node compaction requires vertex_identity.vertex_ids"
+            )
+        try:
+            vertex_id_count = len(raw_vertex_ids)  # type: ignore[arg-type]
+        except TypeError as exc:
+            raise ValueError(
+                "volume node compaction requires vertex_identity.vertex_ids sequence"
+            ) from exc
+        if vertex_id_count != node_count:
+            raise ValueError(
+                "volume node compaction vertex_identity.vertex_ids length "
+                f"{vertex_id_count} does not match node count {node_count}"
+            )
+        compact_vertex_identity = dict(vertex_identity)
+        compact_vertex_identity["vertex_ids"] = [
+            raw_vertex_ids[int(index)]  # type: ignore[index]
+            for index in used
+        ]
+
+    return (
+        node_array[used].copy(),
+        old_to_new[cell_array].astype(np.int32, copy=False),
+        compact_facet_nodes.astype(np.int32, copy=False),
+        compact_vertex_identity,
+        compact_periodic_pairs,
+    )
+
+
 def _read_mesh_file(path: Path) -> MeshData:
     meshio = _import_meshio()
     mesh = meshio.read(path)
@@ -343,6 +490,9 @@ def _read_mesh_file(path: Path) -> MeshData:
     facet_types, facet_offsets, facet_nodes, boundary_markers = _meshio_typed_topology(
         mesh,
         _MESHIO_FACET_TYPES,
+    )
+    nodes, cell_nodes, facet_nodes, _vertex_identity, _periodic_node_pairs = (
+        _compact_volume_node_space(nodes, cell_nodes, facet_nodes)
     )
     facet_roles = _derive_facet_roles(
         cell_types,
@@ -1123,6 +1273,34 @@ def _extract_mesh_data(
             provisional_interface_markers,
         )
 
+    # Gmsh's node list can contain construction points that are not vertices
+    # of any volume element. Compact before quality/orientation work so every
+    # downstream P1 index, including periodic pairs, uses the same state space.
+    periodic_boundary_pairs, periodic_node_pairs = _extract_periodic_pairs(
+        gmsh,
+        node_index,
+        periodic_pair_specs or [],
+    )
+    vertex_identity = {
+        "schema_version": "mesh_vertex_identity.v1",
+        "issuer": "gmsh_node_tags.v1",
+        "vertex_ids": list(node_tags),
+    }
+    (
+        nodes,
+        cell_nodes_array,
+        facet_nodes_array,
+        compact_vertex_identity,
+        periodic_node_pairs,
+    ) = _compact_volume_node_space(
+        nodes,
+        cell_nodes_array,
+        facet_nodes_array,
+        vertex_identity=vertex_identity,
+        periodic_node_pairs=periodic_node_pairs,
+    )
+    assert compact_vertex_identity is not None
+
     aligned_quality = _align_quality_report_to_element_tags(
         quality,
         extracted_element_tags,
@@ -1155,12 +1333,6 @@ def _extract_mesh_data(
             boundary_markers,
             periodic_pair_specs,
         )
-    periodic_boundary_pairs, periodic_node_pairs = _extract_periodic_pairs(
-        gmsh,
-        node_index,
-        periodic_pair_specs or [],
-    )
-
     facet_roles = _derive_facet_roles(
         cell_types,
         cell_offsets_array,
@@ -1180,11 +1352,7 @@ def _extract_mesh_data(
     )
     return MeshData(
         nodes=nodes,
-        vertex_identity={
-            "schema_version": "mesh_vertex_identity.v1",
-            "issuer": "gmsh_node_tags.v1",
-            "vertex_ids": list(node_tags),
-        },
+        vertex_identity=compact_vertex_identity,
         cell_types=cell_types,
         cell_offsets=cell_offsets_array,
         cell_nodes=cell_nodes_array,

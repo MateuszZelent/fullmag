@@ -136,6 +136,11 @@ from ._size_field_plan import (
     _resolve_per_object_mesh_options as _resolve_per_object_mesh_options,
 )
 
+# This producer contract is part of every FEM cache identity. Bumping it is
+# required whenever extraction changes the global P1 node space; old artifacts
+# remain on disk but cannot be admitted as meshes for the new producer.
+FEM_VOLUME_NODE_SPACE_CONTRACT = "fullmag.fem.volume-node-space.compaction.v1"
+
 _DEFAULT_AIRBOX_GROWTH_RATE = 1.3
 _DEFAULT_AIRBOX_GRADING = "geometric"
 _SIZE_DISTRIBUTION_HISTOGRAM_BINS = 30

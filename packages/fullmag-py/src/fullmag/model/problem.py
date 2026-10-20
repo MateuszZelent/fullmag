@@ -97,7 +97,10 @@ _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 # v8 invalidated v7 source-face corner targets. v9 invalidates meshes generated
 # with alias-shadowed per-geometry hmax policies; reusing them could retain a
 # neighboring geometry's size field after canonical owner binding changes.
-_FEM_MESH_CACHE_VERSION = "v10"
+# v11 invalidates every FEM artifact produced before volume-node compaction;
+# the producer can otherwise leave a P1 row for a Gmsh construction point that
+# has no volume support.
+_FEM_MESH_CACHE_VERSION = "v11"
 _FEM_SHARED_DOMAIN_CACHE_SCHEMA = "fullmag.fem.shared-domain-cache.v1"
 _FEM_MIXED_V2_VOLUME_REDUCTION_CONTRACT = (
     "fullmag.mixed-certificate-v2.volume.det3-neumaier.v1"
@@ -192,6 +195,7 @@ def _fem_cache_contract_identity(
         MIXED_REPAIR_ALGORITHM,
     )
     from fullmag.meshing._gmsh_types import MIXED_SHARED_GMSH_VERSION
+    from fullmag.meshing.asset_pipeline import FEM_VOLUME_NODE_SPACE_CONTRACT
 
     identity: dict[str, object] = {
         "source_snapshot_sha256": _fem_verified_source_snapshot_sha256(),
@@ -207,6 +211,7 @@ def _fem_cache_contract_identity(
         ),
         "artifact_schema": ARTIFACT_SCHEMA_V2,
         "topology_fingerprint_versions": ["v2", "v3"],
+        "volume_node_space_contract": FEM_VOLUME_NODE_SPACE_CONTRACT,
     }
     if resolved_policy_sha256 is not None:
         identity["resolved_policy_sha256"] = resolved_policy_sha256

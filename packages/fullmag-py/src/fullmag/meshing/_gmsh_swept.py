@@ -78,6 +78,7 @@ from ._gmsh_infra import (
     _GmshProgressLogger,
 )
 from ._gmsh_extraction import (
+    _compact_volume_node_space,
     _extract_mesh_data,
     _extract_quality_metrics,
     certify_extracted_periodic_mesh,
@@ -3437,6 +3438,7 @@ def _generate_coincident_ring_airbox_mesh(
                 )
         result = MeshData(
             nodes=nodes,
+            vertex_identity=raw_mesh.vertex_identity,
             cell_types=raw_mesh.cell_types,
             cell_offsets=raw_mesh.cell_offsets,
             cell_nodes=raw_mesh.cell_nodes,
@@ -3859,6 +3861,7 @@ def generate_swept_box_cylinder_ring_mesh(
 
         result = MeshData(
             nodes=nodes,
+            vertex_identity=raw_mesh.vertex_identity,
             cell_types=raw_mesh.cell_types,
             cell_offsets=raw_mesh.cell_offsets,
             cell_nodes=raw_mesh.cell_nodes,
@@ -4113,6 +4116,28 @@ def generate_swept_cylinder_mesh(
             boundary_faces = np.vstack(boundary_faces_list)
         else:
             boundary_faces = np.zeros((0, 3), dtype=np.int32)
+
+        element_shape = elements.shape
+        boundary_face_shape = boundary_faces.shape
+        (
+            nodes,
+            compact_element_nodes,
+            compact_boundary_nodes,
+            compact_vertex_identity,
+            _periodic_node_pairs,
+        ) = _compact_volume_node_space(
+            nodes,
+            elements.reshape(-1),
+            boundary_faces.reshape(-1),
+            vertex_identity={
+                "schema_version": "mesh_vertex_identity.v1",
+                "issuer": "gmsh_node_tags.v1",
+                "vertex_ids": list(node_tags),
+            },
+        )
+        assert compact_vertex_identity is not None
+        elements = compact_element_nodes.reshape(element_shape)
+        boundary_faces = compact_boundary_nodes.reshape(boundary_face_shape)
         boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
 
         quality = None
@@ -4134,6 +4159,7 @@ def generate_swept_cylinder_mesh(
                 element_markers=element_markers,
                 boundary_faces=boundary_faces,
                 boundary_markers=boundary_markers,
+                vertex_identity=compact_vertex_identity,
                 quality=quality,
             )
             all_boundary_pairs, all_node_pairs = _infer_axis_aligned_periodic_pairs(
@@ -4193,6 +4219,7 @@ def generate_swept_cylinder_mesh(
             periodic_node_pairs=periodic_node_pairs,
             quality=quality,
             realization_report=realization_report,
+            vertex_identity=compact_vertex_identity,
         )
     finally:
         gmsh.finalize()
@@ -5280,7 +5307,7 @@ def generate_disconnected_mixed_p1_mesh(
         with indeterminate_progress_phase(phase="meshing", progress_label="optimizing mixed-pyramid apices", message="Optimizing mixed-pyramid apices"):
             _optimize_mixed_pyramid_apices(gmsh, initial_tet_report=mixed_tet_report)
         raw = _extract_mesh_data(gmsh, has_physical_groups=True, boundary_role_markers=(MIXED_INTERFACE_MARKER, int(airbox.boundary_marker)))
-        mesh = MeshData(nodes=np.asarray(raw.nodes, dtype=np.float64) / scale, cell_types=raw.cell_types, cell_offsets=raw.cell_offsets, cell_nodes=raw.cell_nodes, element_markers=raw.element_markers, facet_types=raw.facet_types, facet_roles=raw.facet_roles, facet_offsets=raw.facet_offsets, facet_nodes=raw.facet_nodes, boundary_markers=raw.boundary_markers, cell_global_ordinals=raw.cell_global_ordinals, facet_global_ordinals=raw.facet_global_ordinals, cell_mesh_parts=_gmsh_cell_parts_in_extraction_order(gmsh, {"magnetic": [box_volume, ring_volume], "transition_air": [int(tag) for tag in transition_volumes], "far_air": [far_air_volume]}))
+        mesh = MeshData(nodes=np.asarray(raw.nodes, dtype=np.float64) / scale, vertex_identity=raw.vertex_identity, cell_types=raw.cell_types, cell_offsets=raw.cell_offsets, cell_nodes=raw.cell_nodes, element_markers=raw.element_markers, facet_types=raw.facet_types, facet_roles=raw.facet_roles, facet_offsets=raw.facet_offsets, facet_nodes=raw.facet_nodes, boundary_markers=raw.boundary_markers, cell_global_ordinals=raw.cell_global_ordinals, facet_global_ordinals=raw.facet_global_ordinals, cell_mesh_parts=_gmsh_cell_parts_in_extraction_order(gmsh, {"magnetic": [box_volume, ring_volume], "transition_air": [int(tag) for tag in transition_volumes], "far_air": [far_air_volume]}))
         if mesh.cell_mesh_parts.shape != (mesh.n_elements,):
             raise RuntimeError("mixed v2 cell mesh-part identity is incomplete")
         mesh = mesh.oriented_copy()
@@ -5744,6 +5771,7 @@ def generate_swept_box_mesh(
                 )
             mesh = MeshData(
                 nodes=np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE,
+                vertex_identity=raw_mesh.vertex_identity,
                 cell_types=raw_mesh.cell_types,
                 cell_offsets=raw_mesh.cell_offsets,
                 cell_nodes=raw_mesh.cell_nodes,
@@ -5889,6 +5917,7 @@ def _extract_swept_mesh_data(
         )
     mesh = MeshData(
         nodes=nodes,
+        vertex_identity=mesh.vertex_identity,
         cell_types=mesh.cell_types,
         cell_offsets=mesh.cell_offsets,
         cell_nodes=mesh.cell_nodes,
