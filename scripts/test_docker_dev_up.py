@@ -58,7 +58,15 @@ def _group(*, backend_running=True, frontend_running=True, healthy=True):
         },
         backend_id="c" * 64,
         frontend_id="d" * 64,
-        backend={"State": backend_state},
+        # Retained backend identity bindings are required before the
+        # reconciliation path can inspect the pinned include-untracked value.
+        backend={
+            "State": backend_state,
+            "Config": {"Env": [
+                "FULLMAG_TOOLCHAIN_IMAGE_ID=sha256:" + "e" * 64,
+                "FULLMAG_RUNTIME_IMAGE_ID=sha256:" + "f" * 64,
+            ]},
+        },
         frontend={"State": {"Running": frontend_running}},
     )
 
