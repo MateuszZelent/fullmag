@@ -516,11 +516,12 @@ $mirror = Assert-CompilerInputMirror -RecordPath ([string]$mirror.record_path) -
 $ba = Join-Path $baBuild 'Release\FullmagBootstrapperApplication.dll'
 $hostExe = Join-Path $hostBuild 'Release\fullmag-installer-environment.exe'
 $license = Join-Path $source 'LICENSE'
+$notice = Join-Path $source 'NOTICE'
 $setupBuildEnvironmentScript = Join-Path $source 'scripts\windows\setup_build_environment.ps1'
 $runtimeBuildRequirementsManifest = Join-Path $source 'windows_build_requirements.json'
 $installerBuildRequirementsManifest = Join-Path $source 'windows_installer_build_requirements.json'
 $productVersion = Get-InstallerProductVersion $source
-foreach ($file in @($ba,$hostExe,$license,$setupBuildEnvironmentScript,$runtimeBuildRequirementsManifest,$installerBuildRequirementsManifest)) {
+foreach ($file in @($ba,$hostExe,$license,$notice,$setupBuildEnvironmentScript,$runtimeBuildRequirementsManifest,$installerBuildRequirementsManifest)) {
   $null = Assert-ProducerPath $file $buildRoot
   if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required producer artifact is missing: $file" }
 }
@@ -529,6 +530,7 @@ $bundle = Assert-ProducerPath (Join-Path $runsRoot ('windows-installer-source-' 
 $wrapper = Join-Path $source 'scripts\windows\build_windows_installer_exe.ps1'
 & $wrapper -RepoRoot $repo -FrozenSourceRecord $record -StorageProfile $profile -Route source-first -WixRoot $wix `
   -LicenseFile $license -LicenseFileSha256 (Get-FileHash $license -Algorithm SHA256).Hash `
+  -NoticeFile $notice -NoticeFileSha256 (Get-FileHash $notice -Algorithm SHA256).Hash `
   -SetupBuildEnvironmentScript $setupBuildEnvironmentScript -SetupBuildEnvironmentScriptSha256 (Get-FileHash $setupBuildEnvironmentScript -Algorithm SHA256).Hash `
   -BuildRequirementsManifest $runtimeBuildRequirementsManifest -BuildRequirementsManifestSha256 (Get-FileHash $runtimeBuildRequirementsManifest -Algorithm SHA256).Hash `
   -InstallerBuildRequirementsManifest $installerBuildRequirementsManifest -InstallerBuildRequirementsManifestSha256 (Get-FileHash $installerBuildRequirementsManifest -Algorithm SHA256).Hash `

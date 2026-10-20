@@ -70,6 +70,12 @@ DLL:
 * `installer_env.ps1` — the transactional helper;
 * the approved license text (`LICENSE.txt`, `license.txt`, `LICENSE`, or
   `Fullmag-LICENSE.txt`);
+* `NOTICE` — the product notice text;
+* `THIRD_PARTY_NOTICES` and `THIRD_PARTY_NOTICES.json` — the generated,
+  hash-bound third-party legal texts and package inventory. The inventory
+  declares `inventory_scope=restored_dependency_superset+runtime_packs`; it
+  covers the restored dependency superset and runtime packs, rather than
+  claiming an exact graph of libraries loaded by every payload;
 * `fullmag-installer-provenance.json` — the source and route provenance input.
 
 The source-first chain additionally supplies `setup_build_environment.ps1`,

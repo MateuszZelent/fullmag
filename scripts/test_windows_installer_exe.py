@@ -50,6 +50,9 @@ def test_bundle_is_wix3_burn_and_has_no_placeholder_ba():
 def test_bundle_carries_license_env_module_and_stage_provenance():
     source = BUNDLE.read_text(encoding="utf-8")
     assert '<Payload SourceFile="$(var.LicenseFile)" Name="$(var.LicenseFileName)" />' in source
+    assert '<Payload SourceFile="$(var.ProductNoticeFile)" Name="NOTICE" />' in source
+    assert '<Payload SourceFile="$(var.ThirdPartyNoticesFile)" Name="THIRD_PARTY_NOTICES" />' in source
+    assert '<Payload SourceFile="$(var.ThirdPartyInventoryFile)" Name="THIRD_PARTY_NOTICES.json" />' in source
     assert '<Payload SourceFile="$(var.InstallerEnvModule)" Name="installer_env.ps1" />' in source
     assert '<Payload SourceFile="$(var.SetupBuildEnvironmentScript)" Name="scripts\\windows\\setup_build_environment.ps1" />' in source
     assert '<Payload SourceFile="$(var.BuildRequirementsManifest)" Name="windows_build_requirements.json" />' in source
@@ -449,7 +452,7 @@ def test_stage_tree_guard_executes_actual_helper_and_rejects_empty_unadmitted_di
                 helper,
                 "$root = Join-Path $PSScriptRoot 'stage'",
                 "[IO.Directory]::CreateDirectory((Join-Path $root 'FullmagInstallerUi')) | Out-Null",
-                "@('fullmag.exe','fullmag-installer-provenance.json','fullmag-installer-receipt.json','Fullmag.Bundle.wixobj','fullmag.wixpdb') | ForEach-Object { Set-Content -LiteralPath (Join-Path $root $_) -Value $_ -NoNewline }",
+                "@('fullmag.exe','fullmag-installer-provenance.json','fullmag-installer-receipt.json','NOTICE','THIRD_PARTY_NOTICES','THIRD_PARTY_NOTICES.json','Fullmag.Bundle.wixobj','fullmag.wixpdb') | ForEach-Object { Set-Content -LiteralPath (Join-Path $root $_) -Value $_ -NoNewline }",
                 "Set-Content -LiteralPath (Join-Path $root 'FullmagInstallerUi\\FullmagInstallerUi.exe') -Value 'MZ' -NoNewline",
                 "$null = Assert-InstallerStageTree -Root $root",
                 "[IO.Directory]::CreateDirectory((Join-Path $root 'empty-unadmitted')) | Out-Null",
@@ -706,7 +709,7 @@ def test_builder_requires_verified_payload_license_and_external_ba():
     parameter_block = source.split("$ErrorActionPreference", 1)[0]
     for name in (
         "$MsiPath", "$StageManifestPath", "$MsiSha256", "$StageManifestSha256", "$LicenseFile",
-        "$LicenseFileSha256", "$BootstrapperApplicationDll",
+        "$LicenseFileSha256", "$NoticeFile", "$NoticeFileSha256", "$BootstrapperApplicationDll",
         "$BootstrapperApplicationSha256", "$BundleUpgradeCode", "$WixRoot",
         "$InstallerStorageProfile", "$FrozenSourceRecord", "$SetupBuildEnvironmentScript",
         "$SetupBuildEnvironmentScriptSha256", "$BuildRequirementsManifest",
@@ -988,6 +991,8 @@ def test_builder_records_verified_prerequisite_and_wix_license_payloads():
         "prerequisite_manifest",
         "producer_manifest",
         "license_sha256",
+        "NoticeFile",
+        "legal",
     ):
         assert field in source
 
@@ -1307,6 +1312,7 @@ def test_bundle_variables_are_all_supplied_by_builder():
     supplied = {
         "SourceFirst", "ProductVersion", "BundleUpgradeCode", "MsiPath", "StageManifestPath",
         "BootstrapperApplicationDll", "LicenseFile", "LicenseFileName",
+        "ProductNoticeFile", "ThirdPartyNoticesFile", "ThirdPartyInventoryFile",
         "InstallerEnvModule", "SetupBuildEnvironmentScript", "BuildRequirementsManifest",
         "WixLicenseFile", "EnvironmentBootstrapExe", "FullmagSetupUiPayload", "InstallerProvenancePath",
     }

@@ -31,6 +31,21 @@ udziela opinii prawnej i nie zastępuje potwierdzenia łańcucha praw autorskich
   `scripts/windows/build_windows_msi.ps1` kopiuje wybrane teksty licencji
   Node/Python, ale sam opisuje inwentarz jako niepełny i nie generuje pełnego
   rejestru zależności.
+- Źródłowy producer Windows używa
+  `scripts/windows/installer/generate_third_party_notices.py` do generowania
+  `THIRD_PARTY_NOTICES` i `THIRD_PARTY_NOTICES.json` z dokładnych,
+  hash-bound archiwów przywróconego supersetu zależności i runtime packów
+  (plus źródłowego archiwum WiX) oraz pliku root `NOTICE`. Pole
+  `inventory_scope=restored_dependency_superset+runtime_packs` opisuje zakres
+  wejścia i nie twierdzi, że jest to dokładny graf bibliotek faktycznie
+  załadowanych przez każdy payload. Helper nie
+  interpretuje samego pola SPDX/license expression i zatrzymuje staging, gdy
+  archiwum nie niesie rzeczywistego tekstu licencji, chyba że wpis w
+  `third_party_license_fallbacks.json` wiąże dokładny package/version z
+  hash-bound tekstem upstream, pełnym repository commit, source URL, plikiem
+  źródłowym i deklarowanym SPDX expression zweryfikowanym względem `.nuspec`.
+  Staging zatrzymuje się także, gdy hash wejścia albo którekolwiek z tych
+  mapowań się zmieni.
 
 Przed tą zmianą repozytorium nie miało root kontraktu licencyjnego. Obecna
 decyzja ustanawia go dla kodu własnego; nie zmienia praw ani warunków
@@ -152,9 +167,12 @@ spełniają jeszcze tego wymagania.
 1. Każdy plik zewnętrzny jest sklasyfikowany jako kod własny, vendored code,
    gitlink, osobny proces, binary/runtime, fixture albo dokumentacja; źródła
    i modyfikacje zachowują upstreamowe nagłówki.
-2. Dla dokładnych pinów checkoutów i lockfile generowany jest kompletny
-   `THIRD_PARTY_NOTICES`/`share/licenses` z hashami. Brak tekstu licencji lub
-   nieznany właściciel zatrzymuje redystrybucję.
+2. Dla dokładnych pinów checkoutów i lockfile producer generuje hash-bound
+   `THIRD_PARTY_NOTICES`/`THIRD_PARTY_NOTICES.json` dla zakresu
+   `restored_dependency_superset+runtime_packs`. Jest to jawny superset
+   przywróconych zależności i runtime packów, a nie deklaracja exact bundled
+   graph. Brak tekstu licencji lub nieznany właściciel zatrzymuje
+   redystrybucję.
 3. Build MSI/Burn i GUI `fullmag.exe` pokazują zatwierdzoną licencję produktu
    oraz dostęp do licencji komponentów. Ekran instalatora nie może sam ustanawiać
    ani zmieniać warunków licencji.

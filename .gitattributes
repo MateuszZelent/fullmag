@@ -26,3 +26,6 @@ windows_build_requirements.json text eol=lf
 scripts/fullmag_storage.py text eol=lf
 scripts/windows/installer_env.ps1 text eol=lf
 scripts/windows/setup_build_environment.ps1 text eol=lf
+
+# Preserve immutable upstream legal texts and their recorded SHA-256 bytes.
+/scripts/windows/installer/licenses/** -text

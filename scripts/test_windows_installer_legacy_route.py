@@ -16,10 +16,10 @@ class LegacyRouteGuard(unittest.TestCase):
         self.assertFalse(absent.exists(), "The read-only probe path must not exist")
         args = [PS, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                 "-File", str(ROOT / "scripts/windows/build_windows_installer_exe.ps1")]
-        for key in ("LicenseFile", "BootstrapperApplicationDll", "SetupBuildEnvironmentScript",
+        for key in ("LicenseFile", "NoticeFile", "BootstrapperApplicationDll", "SetupBuildEnvironmentScript",
                     "BuildRequirementsManifest", "InstallerBuildRequirementsManifest", "WixRoot"):
             args += ["-" + key, str(absent)]
-        for key in ("LicenseFileSha256", "BootstrapperApplicationSha256",
+        for key in ("LicenseFileSha256", "NoticeFileSha256", "BootstrapperApplicationSha256",
                     "SetupBuildEnvironmentScriptSha256", "BuildRequirementsManifestSha256",
                     "InstallerBuildRequirementsManifestSha256"):
             args += ["-" + key, "a" * 64]

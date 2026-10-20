@@ -25,6 +25,9 @@
 
     <BootstrapperApplication SourceFile="$(var.BootstrapperApplicationDll)">
       <Payload SourceFile="$(var.LicenseFile)" Name="$(var.LicenseFileName)" />
+      <Payload SourceFile="$(var.ProductNoticeFile)" Name="NOTICE" />
+      <Payload SourceFile="$(var.ThirdPartyNoticesFile)" Name="THIRD_PARTY_NOTICES" />
+      <Payload SourceFile="$(var.ThirdPartyInventoryFile)" Name="THIRD_PARTY_NOTICES.json" />
       <Payload SourceFile="$(var.InstallerEnvModule)" Name="installer_env.ps1" />
       <Payload SourceFile="$(var.SetupBuildEnvironmentScript)" Name="scripts\windows\setup_build_environment.ps1" />
       <Payload SourceFile="$(var.BuildRequirementsManifest)" Name="windows_build_requirements.json" />

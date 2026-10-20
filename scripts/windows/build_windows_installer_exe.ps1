@@ -6,6 +6,8 @@ param(
   [Parameter()][string]$StageManifestSha256,
   [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$LicenseFile,
   [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$LicenseFileSha256,
+  [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$NoticeFile,
+  [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$NoticeFileSha256,
   [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$BootstrapperApplicationDll,
   [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$BootstrapperApplicationSha256,
   [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$SetupBuildEnvironmentScript,
@@ -1003,6 +1005,7 @@ function Publish-SetupUi {
     sdk_tree_manifest_sha256 = [string]$Dotnet.tree_manifest_sha256
     sdk_tree_inventory_sha256 = [string]$Dotnet.tree_inventory_sha256
     nuget_restore = $nugetRestore
+    nuget_cache_root = $nugetRoot
   }
 }
 
@@ -1019,6 +1022,9 @@ function Assert-InstallerStageTree {
     'fullmag.exe',
     'fullmag-installer-provenance.json',
     'fullmag-installer-receipt.json',
+    'NOTICE',
+    'THIRD_PARTY_NOTICES',
+    'THIRD_PARTY_NOTICES.json',
     'Fullmag.Bundle.wixobj',
     'fullmag.wixpdb',
     'FullmagInstallerUi/FullmagInstallerUi.exe'
@@ -1145,6 +1151,8 @@ function Assert-VerifiedWixRoot {
     bal_extension = [string]$paths['bal']
     ui_extension = [string]$paths['ui']
     version = [string]$tool.version
+    archive = $archive
+    archive_sha256 = Get-Sha256 -Path $archive
     license_file = $licensePath
     license_sha256 = Get-Sha256 -Path $licensePath
     source_url = [string]$tool.url
@@ -1259,6 +1267,266 @@ function Get-PythonExecutable {
     }
   }
   throw 'Python is required to verify a frozen installer source record'
+}
+
+function Read-ThirdPartyLicenseFallbackManifest {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Root
+  )
+  $manifestPath = Assert-RegularFile -Path $Path -Label 'third-party license fallback manifest' -Extension '.json'
+  $manifestPath = Assert-Inside -Path $manifestPath -Root $Root -Label 'third-party license fallback manifest'
+  $manifest = Read-JsonFile -Path $manifestPath -Label 'third-party license fallback manifest'
+  if ([string]$manifest.schema -ne 'fullmag.windows-installer-license-fallbacks.v1') {
+    throw 'Third-party license fallback manifest has an unsupported schema'
+  }
+  $entries = @{}
+  $rawEntries = @($manifest.entries)
+  if ($rawEntries.Count -eq 0) {
+    throw 'Third-party license fallback manifest has no entries'
+  }
+  foreach ($entry in $rawEntries) {
+    $kind = [string]$entry.kind
+    $packageId = [string]$entry.id
+    $packageVersion = [string]$entry.version
+    if ($kind -ne 'nuget' -or $packageId -notmatch '^[A-Za-z0-9_.-]+$' -or
+        $packageVersion -notmatch '^[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?$') {
+      throw "Third-party license fallback manifest contains an invalid package identity: $kind/$packageId/$packageVersion"
+    }
+    $key = ('{0}|{1}|{2}' -f $kind.ToLowerInvariant(), $packageId.ToLowerInvariant(), $packageVersion.ToLowerInvariant())
+    if ($entries.ContainsKey($key)) {
+      throw "Third-party license fallback manifest repeats package identity: $key"
+    }
+    $relativePath = ([string]$entry.relative_path).Replace('/', '\')
+    if ([string]::IsNullOrWhiteSpace($relativePath) -or [IO.Path]::IsPathRooted($relativePath) -or
+        $relativePath -match '(^|[\\])\.\.([\\]|$)') {
+      throw "Third-party license fallback path is not a safe relative source path: $packageId/$packageVersion"
+    }
+    $licensePath = Assert-Inside -Path (Join-Path $Root $relativePath) -Root $Root `
+      -Label "third-party license fallback $packageId $packageVersion"
+    $licensePath = Assert-RegularFile -Path $licensePath -Label "third-party license fallback $packageId $packageVersion"
+    $sha256 = Assert-Sha256Value -Value ([string]$entry.sha256) -Label "third-party license fallback hash $packageId"
+    $null = Assert-ExpectedHash -Path $licensePath -Expected $sha256 -Label "third-party license fallback $packageId $packageVersion"
+    $repository = [string]$entry.repository
+    $commit = [string]$entry.commit
+    $sourceFile = ([string]$entry.source_file).Replace('\', '/')
+    $sourceUrl = [string]$entry.source_url
+    $licenseExpression = [string]$entry.license_expression
+    if ($repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or
+        $commit -notmatch '^[0-9a-fA-F]{40}$' -or
+        [string]::IsNullOrWhiteSpace($sourceFile) -or [IO.Path]::IsPathRooted($sourceFile) -or
+        $sourceFile -match '(^|/)\.\.(/|$)' -or $sourceFile -match '(^|/)/(?:/|$)' -or
+        $sourceUrl -notmatch '^https://\S+$' -or
+        $licenseExpression -notmatch '^[A-Za-z0-9][A-Za-z0-9.+()|&\- ]*$') {
+      throw "Third-party license fallback source mapping is invalid: $packageId/$packageVersion"
+    }
+    $entries[$key] = [ordered]@{
+      kind = $kind.ToLowerInvariant()
+      id = $packageId
+      version = $packageVersion
+      path = $licensePath
+      sha256 = $sha256
+      repository = $repository
+      commit = $commit.ToLowerInvariant()
+      source_file = $sourceFile
+      source_url = $sourceUrl
+      license_expression = $licenseExpression
+    }
+  }
+  return [pscustomobject]@{
+    path = $manifestPath
+    sha256 = Get-Sha256 -Path $manifestPath
+    filename = $manifestPath.Substring($Root.TrimEnd('\','/').Length + 1).Replace('\','/')
+    schema = [string]$manifest.schema
+    entries = $entries
+  }
+}
+
+function New-ThirdPartyLegalArtifacts {
+  param(
+    [Parameter(Mandatory = $true)]$Gui,
+    [Parameter(Mandatory = $true)][string]$Notice,
+    [Parameter(Mandatory = $true)]$Wix,
+    [Parameter(Mandatory = $true)][string]$StagingRoot,
+    [Parameter(Mandatory = $true)]$FallbackManifest
+  )
+  $nugetRoot = Convert-ToFullmagAbsolutePath -Path ([string]$Gui.nuget_cache_root) -Label 'managed NuGet cache root'
+  $null = Assert-Directory -Path $nugetRoot -Label 'managed NuGet cache root'
+  $archives = New-Object System.Collections.Generic.List[object]
+  $fallbackUsed = @{}
+  foreach ($package in @($Gui.nuget_restore.package_inventory)) {
+    $packageId = [string]$package.id
+    $packageVersion = [string]$package.version
+    if ($packageId -notmatch '^[A-Za-z0-9_.-]+$' -or
+        $packageVersion -notmatch '^[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?$') {
+      throw "NuGet legal inventory contains an invalid package identity: $packageId/$packageVersion"
+    }
+    $packageRoot = Assert-Inside -Path (Join-Path $nugetRoot ($packageId.ToLowerInvariant() + '\' + $packageVersion.ToLowerInvariant())) `
+      -Root $nugetRoot -Label "NuGet legal archive root $packageId"
+    $archive = Assert-RegularFile -Path (Join-Path $packageRoot ($packageId + '.' + $packageVersion + '.nupkg')) `
+      -Label "NuGet legal archive $packageId $packageVersion" -Extension '.nupkg'
+    $expected = Assert-Sha256Value -Value ([string]$package.nupkg_sha256) -Label "NuGet legal archive hash $packageId"
+    $actual = Assert-ExpectedHash -Path $archive -Expected $expected -Label "NuGet legal archive $packageId"
+    $key = ('nuget|{0}|{1}' -f $packageId.ToLowerInvariant(), $packageVersion.ToLowerInvariant())
+    $archiveRecord = [ordered]@{
+        kind = 'nuget'
+        id = $packageId
+        version = $packageVersion
+        path = $archive
+        sha256 = $actual
+      }
+    if ($FallbackManifest.entries.ContainsKey($key)) {
+      $fallback = $FallbackManifest.entries[$key]
+      $fallbackUsed[$key] = $true
+      $archiveRecord['fallback_license'] = [ordered]@{
+        path = [string]$fallback.path
+        sha256 = [string]$fallback.sha256
+        repository = [string]$fallback.repository
+        commit = [string]$fallback.commit
+        source_file = [string]$fallback.source_file
+        source_url = [string]$fallback.source_url
+        license_expression = [string]$fallback.license_expression
+      }
+    }
+    [void]$archives.Add($archiveRecord)
+  }
+  foreach ($runtime in @($Gui.nuget_restore.runtime_pack_inventory)) {
+    $packageId = [string]$runtime.id
+    $packageVersion = [string]$runtime.version
+    $relativeCachePath = ([string]$runtime.relative_cache_path).Replace('/', '\')
+    if ($packageId -notmatch '^[A-Za-z0-9_.-]+$' -or
+        $packageVersion -notmatch '^[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?$' -or
+        [string]::IsNullOrWhiteSpace($relativeCachePath) -or
+        [IO.Path]::IsPathRooted($relativeCachePath) -or
+        $relativeCachePath -match '(^|[\\])\.\.([\\]|$)') {
+      throw "SDK runtime-pack legal inventory contains an invalid package identity: $packageId/$packageVersion"
+    }
+    $packageRoot = Assert-Inside -Path (Join-Path $nugetRoot $relativeCachePath) -Root $nugetRoot `
+      -Label "SDK runtime-pack legal archive root $packageId"
+    $archive = Assert-RegularFile -Path (Join-Path $packageRoot ($packageId + '.' + $packageVersion + '.nupkg')) `
+      -Label "SDK runtime-pack legal archive $packageId $packageVersion" -Extension '.nupkg'
+    $expected = Assert-Sha256Value -Value ([string]$runtime.nupkg_sha256) -Label "SDK runtime-pack legal archive hash $packageId"
+    $actual = Assert-ExpectedHash -Path $archive -Expected $expected -Label "SDK runtime-pack legal archive $packageId"
+    [void]$archives.Add([ordered]@{
+        kind = 'runtime_pack'
+        id = $packageId
+        version = $packageVersion
+        path = $archive
+        sha256 = $actual
+      })
+  }
+  foreach ($fallbackKey in $FallbackManifest.entries.Keys) {
+    if (-not $fallbackUsed.ContainsKey([string]$fallbackKey)) {
+      throw "Third-party license fallback manifest contains an unused package identity: $fallbackKey"
+    }
+  }
+  $wixArchive = Assert-RegularFile -Path ([string]$Wix.archive) -Label 'WiX legal source archive' -Extension '.zip'
+  $wixArchiveSha256 = Assert-Sha256Value -Value ([string]$Wix.archive_sha256) -Label 'WiX legal source archive hash'
+  $wixArchiveSha256 = Assert-ExpectedHash -Path $wixArchive -Expected $wixArchiveSha256 -Label 'WiX legal source archive'
+  [void]$archives.Add([ordered]@{
+      kind = 'wix'
+      id = 'WiXToolset.WiX'
+      version = [string]$Wix.version
+      path = $wixArchive
+      sha256 = $wixArchiveSha256
+      required_member_sha256 = [string]$Wix.license_sha256
+    })
+
+  $requestPath = Join-Path $StagingRoot '.fullmag-third-party-legal-input.json'
+  $noticesPath = Join-Path $StagingRoot 'THIRD_PARTY_NOTICES'
+  $inventoryPath = Join-Path $StagingRoot 'THIRD_PARTY_NOTICES.json'
+  # The Python helper validates fallback mappings against each NuGet .nuspec.
+  $request = [ordered]@{
+    schema = 'fullmag.windows-installer-legal-input.v1'
+    root_notice = [ordered]@{ path = $Notice; sha256 = Get-Sha256 -Path $Notice }
+    fallback_manifest = [ordered]@{
+      schema = [string]$FallbackManifest.schema
+      filename = [string]$FallbackManifest.filename
+      sha256 = [string]$FallbackManifest.sha256
+    }
+    archives = @($archives)
+  }
+  $helper = Assert-RegularFile -Path (Join-Path $PSScriptRoot 'installer\generate_third_party_notices.py') `
+    -Label 'third-party notices generator' -Extension '.py'
+  $python = Get-PythonExecutable
+  try {
+    Write-AtomicUtf8NoBom -Path $requestPath -Text ($request | ConvertTo-Json -Depth 20)
+    $inputManifestSha256 = Get-Sha256 -Path $requestPath
+    $previous = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = 'Continue'
+      $helperOutput = (& $python -B $helper --request $requestPath --notices-output $noticesPath --inventory-output $inventoryPath `
+        --input-manifest-sha256 $inputManifestSha256 2>&1 | Out-String).Trim()
+      $helperExitCode = $LASTEXITCODE
+    }
+    finally {
+      $ErrorActionPreference = $previous
+    }
+    if ($helperExitCode -ne 0) {
+      throw "Third-party notices generator failed with exit code ${helperExitCode}: $helperOutput"
+    }
+  }
+  finally {
+    if (Test-Path -LiteralPath $requestPath) {
+      Remove-Item -LiteralPath $requestPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+  $noticesPath = Assert-RegularFile -Path $noticesPath -Label 'generated third-party notices'
+  $inventoryPath = Assert-RegularFile -Path $inventoryPath -Label 'generated third-party notices inventory' -Extension '.json'
+  $inventory = Read-JsonFile -Path $inventoryPath -Label 'generated third-party notices inventory'
+  if ([string]$inventory.schema -ne 'fullmag.windows-installer-third-party-inventory.v1' -or
+      [string]$inventory.inventory_scope -ne 'restored_dependency_superset+runtime_packs' -or
+      [string]$inventory.input_manifest_sha256 -ne $inputManifestSha256 -or
+      [string]$inventory.fallback_manifest.schema -ne [string]$FallbackManifest.schema -or
+      [string]$inventory.fallback_manifest.filename -ne [string]$FallbackManifest.filename -or
+      [string]$inventory.fallback_manifest.sha256 -ne [string]$FallbackManifest.sha256 -or
+      [string]$inventory.third_party_notices_filename -ne 'THIRD_PARTY_NOTICES' -or
+      [string]$inventory.third_party_notices_sha256 -ne (Get-Sha256 -Path $noticesPath) -or
+      [string]$inventory.root_notice.sha256 -ne (Get-Sha256 -Path $Notice) -or
+      [int]$inventory.archive_count -ne @($archives).Count -or
+      @($inventory.archives).Count -ne @($archives).Count) {
+    throw 'Generated third-party notices inventory is incomplete or not hash-bound to its outputs'
+  }
+  $expectedByIdentity = @{}
+  foreach ($expectedArchive in $archives) {
+    $expectedKey = ('{0}|{1}|{2}' -f ([string]$expectedArchive.kind).ToLowerInvariant(),
+      ([string]$expectedArchive.id).ToLowerInvariant(), ([string]$expectedArchive.version).ToLowerInvariant())
+    if ($expectedByIdentity.ContainsKey($expectedKey)) {
+      throw "Duplicate expected third-party archive identity: $expectedKey"
+    }
+    $expectedByIdentity[$expectedKey] = $expectedArchive
+  }
+  $actualByIdentity = @{}
+  foreach ($actualArchive in @($inventory.archives)) {
+    $actualKind = [string]$actualArchive.kind
+    $actualId = [string]$actualArchive.id
+    $actualVersion = [string]$actualArchive.version
+    $actualHash = Assert-Sha256Value -Value ([string]$actualArchive.archive_sha256) -Label 'generated third-party archive hash'
+    $actualKey = ('{0}|{1}|{2}' -f $actualKind.ToLowerInvariant(), $actualId.ToLowerInvariant(), $actualVersion.ToLowerInvariant())
+    if ([string]::IsNullOrWhiteSpace($actualKind) -or [string]::IsNullOrWhiteSpace($actualId) -or
+        [string]::IsNullOrWhiteSpace($actualVersion) -or $actualByIdentity.ContainsKey($actualKey)) {
+      throw "Generated third-party inventory has an invalid or duplicate archive identity: $actualKey"
+    }
+    if (-not $expectedByIdentity.ContainsKey($actualKey)) {
+      throw "Generated third-party inventory contains an unexpected archive: $actualKey"
+    }
+    $expectedArchive = $expectedByIdentity[$actualKey]
+    if (-not [string]::Equals($actualKind, [string]$expectedArchive.kind, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals($actualId, [string]$expectedArchive.id, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals($actualVersion, [string]$expectedArchive.version, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals($actualHash, [string]$expectedArchive.sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "Generated third-party archive does not match its expected input: $actualKey"
+    }
+    $actualByIdentity[$actualKey] = $actualArchive
+  }
+  if ($actualByIdentity.Count -ne $expectedByIdentity.Count) {
+    throw 'Generated third-party inventory is missing an expected archive'
+  }
+  return [pscustomobject]@{
+    notices_path = $noticesPath
+    inventory_path = $inventoryPath
+    inventory = $inventory
+  }
 }
 
 function Get-VerifiedFrozenSource {
@@ -1589,6 +1857,9 @@ if (-not [string]::Equals($producerBuildRequirementsManifest,
     [System.StringComparison]::OrdinalIgnoreCase)) {
   throw 'installer producer requirements manifest must be the frozen canonical source input'
 }
+$fallbackManifest = Read-ThirdPartyLicenseFallbackManifest `
+  -Path (Join-Path $authoringRoot 'scripts\windows\installer\third_party_license_fallbacks.json') `
+  -Root $authoringRoot
 $null = Assert-ExpectedHash -Path $setupBuildEnvironmentScript -Expected $SetupBuildEnvironmentScriptSha256 -Label 'setup build environment script'
 $null = Assert-ExpectedHash -Path $runtimeBuildRequirementsManifest -Expected $BuildRequirementsManifestSha256 -Label 'runtime build requirements manifest'
 $null = Assert-ExpectedHash -Path $producerBuildRequirementsManifest -Expected $InstallerBuildRequirementsManifestSha256 -Label 'installer producer requirements manifest'
@@ -1643,6 +1914,9 @@ foreach ($package in @($nugetRequirements.direct_packages)) {
 $license = Assert-RegularFile -Path $LicenseFile -Label 'approved LicenseFile'
 $license = Assert-Inside -Path $license -Root $authoringRoot -Label 'approved LicenseFile'
 $null = Assert-ExpectedHash -Path $license -Expected $LicenseFileSha256 -Label 'approved LicenseFile'
+$notice = Assert-RegularFile -Path $NoticeFile -Label 'approved NoticeFile'
+$notice = Assert-Inside -Path $notice -Root $authoringRoot -Label 'approved NoticeFile'
+$null = Assert-ExpectedHash -Path $notice -Expected $NoticeFileSha256 -Label 'approved NoticeFile'
 if ($frozenSnapshotId -notmatch '^[0-9a-fA-F]{64}$') {
   throw 'Installer route did not retain a verified frozen snapshot identity'
 }
@@ -1713,6 +1987,13 @@ try {
   $wixObjPath = Join-Path $stagingRoot 'Fullmag.Bundle.wixobj'
   $guiOutputRoot = Join-Path $stagingRoot 'FullmagInstallerUi'
   $gui = Publish-SetupUi -Dotnet $dotnet -Gui $guiRequirements -Nuget $nugetRequirements -ProjectPath $guiProjectPath -OutputRoot $guiOutputRoot -StorageLayout $StorageLayout
+  $stagedNotice = Join-Path $stagingRoot 'NOTICE'
+  [IO.File]::Copy($notice, $stagedNotice, $false)
+  $stagedNotice = Assert-RegularFile -Path $stagedNotice -Label 'staged product notice'
+  $null = Assert-ExpectedHash -Path $stagedNotice -Expected $NoticeFileSha256 -Label 'staged product notice'
+  $legal = New-ThirdPartyLegalArtifacts -Gui $gui -Notice $stagedNotice -Wix $wix `
+    -StagingRoot $stagingRoot -FallbackManifest $fallbackManifest
+  $legalInventory = $legal.inventory
 
   $provenance = [ordered]@{
     schema = 'fullmag.windows-installer-provenance.v1'
@@ -1732,6 +2013,24 @@ try {
     }
     bootstrapper_application = [ordered]@{ filename = [System.IO.Path]::GetFileName($ba); sha256 = (Get-Sha256 -Path $ba) }
     license = [ordered]@{ filename = [System.IO.Path]::GetFileName($license); sha256 = (Get-Sha256 -Path $license) }
+    legal = [ordered]@{
+      root_notice = [ordered]@{ filename = 'NOTICE'; sha256 = Get-Sha256 -Path $stagedNotice }
+      third_party_notices = [ordered]@{ filename = 'THIRD_PARTY_NOTICES'; sha256 = Get-Sha256 -Path ([string]$legal.notices_path) }
+      third_party_inventory = [ordered]@{
+        filename = 'THIRD_PARTY_NOTICES.json'
+        sha256 = Get-Sha256 -Path ([string]$legal.inventory_path)
+        schema = [string]$legalInventory.schema
+        scope = [string]$legalInventory.inventory_scope
+        input_manifest_sha256 = [string]$legalInventory.input_manifest_sha256
+        fallback_manifest = [ordered]@{
+          schema = [string]$legalInventory.fallback_manifest.schema
+          filename = [string]$legalInventory.fallback_manifest.filename
+          sha256 = [string]$legalInventory.fallback_manifest.sha256
+        }
+        archive_count = [int]$legalInventory.archive_count
+        legal_file_count = [int]$legalInventory.legal_file_count
+      }
+    }
     installer_env_module = [ordered]@{ filename = 'installer_env.ps1'; sha256 = (Get-Sha256 -Path $installerEnvModule) }
     prerequisite_setup = [ordered]@{ filename = 'scripts/windows/setup_build_environment.ps1'; sha256 = (Get-Sha256 -Path $setupBuildEnvironmentScript) }
     prerequisite_manifest = [ordered]@{ filename = 'windows_build_requirements.json'; sha256 = (Get-Sha256 -Path $runtimeBuildRequirementsManifest) }
@@ -1751,7 +2050,14 @@ try {
       sdk_tree_inventory_sha256 = [string]$gui.sdk_tree_inventory_sha256
       nuget_restore = $gui.nuget_restore
     }
-    wix = [ordered]@{ version = [string]$wix.version; license_filename = 'WiX-3.14.1-LICENSE.TXT'; license_sha256 = $wixLicenseSha256; source_url = [string]$wix.source_url }
+    wix = [ordered]@{
+      version = [string]$wix.version
+      archive_filename = [System.IO.Path]::GetFileName([string]$wix.archive)
+      archive_sha256 = [string]$wix.archive_sha256
+      license_filename = 'WiX-3.14.1-LICENSE.TXT'
+      license_sha256 = $wixLicenseSha256
+      source_url = [string]$wix.source_url
+    }
     pe_contract = [ordered]@{
       format = 'PE'
       machine = 'x86'
@@ -1797,6 +2103,9 @@ try {
     "-dBootstrapperApplicationDll=$ba",
     "-dLicenseFile=$license",
     "-dLicenseFileName=$([System.IO.Path]::GetFileName($license))",
+    "-dProductNoticeFile=$stagedNotice",
+    "-dThirdPartyNoticesFile=$($legal.notices_path)",
+    "-dThirdPartyInventoryFile=$($legal.inventory_path)",
     "-dInstallerEnvModule=$installerEnvModule",
     "-dSetupBuildEnvironmentScript=$setupBuildEnvironmentScript",
     "-dBuildRequirementsManifest=$runtimeBuildRequirementsManifest",
@@ -1836,6 +2145,7 @@ try {
     wix_version = [string]$wix.version
     installer_tool_profile = [string]$InstallerStorageLayout.profile
     license_sha256 = Get-Sha256 -Path $license
+    legal = $provenance.legal
     avalonia_ui = $provenance.avalonia_ui
     pe_validation = $peEvidence
   }
@@ -1847,9 +2157,27 @@ try {
   $expectedUiInventory = @($gui.payload_inventory)
   $verifiedNuget = $verifiedUi.nuget_restore
   $expectedNuget = $gui.nuget_restore
+  $verifiedLegal = $verifiedReceipt.legal
+  $expectedLegal = $provenance.legal
+  $verifiedLegalInventory = Read-JsonFile -Path ([string]$legal.inventory_path) -Label 'verified third-party notices inventory'
   if ([string]$verifiedReceipt.schema -ne 'fullmag.windows-installer-receipt.v1' -or
       [string]$verifiedReceipt.output_sha256 -ne (Get-Sha256 -Path $output) -or
       [string]$verifiedReceipt.provenance_sha256 -ne (Get-Sha256 -Path $provenancePath) -or
+      $null -eq $verifiedLegal -or
+      (ConvertTo-Json -InputObject $verifiedLegal -Depth 20 -Compress) -ne
+        (ConvertTo-Json -InputObject $expectedLegal -Depth 20 -Compress) -or
+      [string]$verifiedLegal.root_notice.sha256 -ne (Get-Sha256 -Path $stagedNotice) -or
+      [string]$verifiedLegal.third_party_notices.sha256 -ne (Get-Sha256 -Path ([string]$legal.notices_path)) -or
+      [string]$verifiedLegal.third_party_inventory.sha256 -ne (Get-Sha256 -Path ([string]$legal.inventory_path)) -or
+      [string]$verifiedLegalInventory.schema -ne 'fullmag.windows-installer-third-party-inventory.v1' -or
+      [string]$verifiedLegalInventory.inventory_scope -ne 'restored_dependency_superset+runtime_packs' -or
+      [string]$verifiedLegalInventory.input_manifest_sha256 -ne [string]$legalInventory.input_manifest_sha256 -or
+      [string]$verifiedLegalInventory.fallback_manifest.schema -ne [string]$legalInventory.fallback_manifest.schema -or
+      [string]$verifiedLegalInventory.fallback_manifest.filename -ne [string]$legalInventory.fallback_manifest.filename -or
+      [string]$verifiedLegalInventory.fallback_manifest.sha256 -ne [string]$legalInventory.fallback_manifest.sha256 -or
+      [string]$verifiedLegalInventory.third_party_notices_sha256 -ne (Get-Sha256 -Path ([string]$legal.notices_path)) -or
+      [int]$verifiedLegalInventory.archive_count -ne [int]$legalInventory.archive_count -or
+      [int]$verifiedLegalInventory.legal_file_count -ne [int]$legalInventory.legal_file_count -or
       $null -eq $verifiedPe -or
       [string]$verifiedPe.format -ne 'PE' -or
       [string]$verifiedPe.machine -ne 'x86' -or
