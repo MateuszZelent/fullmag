@@ -56,45 +56,58 @@ actual `inc`/Burn header directory as `WIX3_SDK_ROOT` or
 
 This DLL has no Rust, Cargo, MFEM, CUDA, product MSI, or FEM runtime build
 dependency. Building the BA source is therefore a separate x86/MSVC/WiX SDK
-step. The current release bundle may still require a verified MSI payload;
-the source environment bootstrap variant must author a separate Burn chain or
-approved payload route so a fresh checkout can prepare `.env` and the first
-managed build without already having a Fullmag product installed.
+step. The public source-first route is the supported Burn chain: it carries the
+environment helper and prepares `.env` plus the first managed build from an
+admitted checkout. It does not require a product MSI or an already installed
+Fullmag. Historical MSI wrapping remains an internal, fail-closed variant until
+its all-capability contract is qualified.
 
 ## Payload contract
 
-The BA expects Burn to materialize these payloads beside the loaded BA DLL:
+The BA expects Burn to materialize these common payloads beside the loaded BA
+DLL:
 
 * `installer_env.ps1` — the transactional helper;
 * the approved license text (`LICENSE.txt`, `license.txt`, `LICENSE`, or
   `Fullmag-LICENSE.txt`);
-* `fullmag-msi-stage-manifest.json` and
-  `fullmag-installer-provenance.json` — lane/provenance inputs.
+* `fullmag-installer-provenance.json` — the source and route provenance input.
 
-The source-first chain also supplies `fullmag-installer-environment.exe` and
-the persisted Burn variables `FullmagStorageProfile`, `FullmagBootstrapMode`,
-and `FullmagReceiptPath`. The BA verifies the source-first provenance and
-helper hash, accepts a preselected runtime profile when Burn supplied one, or
-requires the operator to choose `native`, `fem-cpu`, or `fem-gpu` in the GUI.
-It keeps the editor's `windows-setup` validation profile separate from the
-selected runtime profile (`windows-native-fdm-cpu`, `windows-native-fem-cpu`,
-or `windows-native-fem-gpu`). Immediately before Burn planning it binds
-`FullmagSourceCheckout`, `FullmagStorageRoot`, `FullmagStorageProfile`,
-`FullmagBootstrapMode`, and `FullmagReceiptPath` from the committed admission,
-and requires the receipt path to remain below the resolver-owned `runs_root` for
-the committed storage layout. After
-Apply it accepts the route only when the helper receipt has the expected
-schema, state, lane profile, storage identity, and sanitized-output marker.
-The source-first payload therefore does not depend on the release MSI or an
+The source-first chain additionally supplies `setup_build_environment.ps1`,
+`windows_build_requirements.json`, and `fullmag-installer-environment.exe`.
+The historical MSI route supplies `fullmag-msi-stage-manifest.json` instead of
+the source-first environment helper. The source-first chain also receives the
+persisted Burn variables `FullmagStorageProfile`, `FullmagBootstrapMode`, and
+`FullmagReceiptPath`.
+
+Source-first admission has one fixed installation scope, `all`, covering FDM
+CPU, FDM GPU, FEM CPU, and FEM GPU. The BA never asks the operator to choose
+`native`, `fem-cpu`, or `fem-gpu`. The editor and preadmission session use the
+`windows-setup` profile for Git/Python prerequisite handling. After the
+checkout is admitted, the setup report and the Burn `FullmagStorageProfile`
+use the physical superset profile `windows-native-fem-gpu`; its terminal
+receipt must be bound to the aggregate
+`windows-full-runtime/build-manifest.json` with all four component proofs.
+`windows-installer-source` is only the managed producer's storage/lease
+profile, not a runtime choice.
+
+Immediately before Burn planning the BA binds `FullmagSourceCheckout`,
+`FullmagStorageRoot`, `FullmagStorageProfile`, `FullmagBootstrapMode`, and
+`FullmagReceiptPath` from the committed admission, and requires the receipt
+path to remain below the resolver-owned `runs_root` for the committed storage
+layout. After Apply it accepts the source-first route only when the helper
+receipt has the expected schema, state, fixed `all` scope, physical superset
+profile, aggregate proofs, storage identity, and sanitized-output marker. The
+source-first payload therefore does not depend on the release MSI or an
 installed product.
 
-The BA fails closed when the license/helper/setup script or either
-provenance-checked manifest payload is missing, when the admitted main checkout or setup script
-changes, when the manifest and provenance select different lanes, or when the
-dependency report selects another lane. On the release MSI route it also
-fails closed when WebView2 or the installed UI executable cannot be verified.
-The source-first route instead requires its admitted environment helper and a
-matching completed setup receipt before it can launch the browser workspace.
+The BA fails closed when the license, helper, setup input, or provenance
+payload is missing; when the admitted main checkout or setup script changes;
+or when the source-first report, provenance, and receipt disagree about the
+fixed `all` scope, the physical superset profile, storage identity, or
+aggregate proofs. On the historical release MSI route it also fails closed
+when WebView2 or the installed UI executable cannot be verified. The
+source-first route requires its admitted environment helper and a matching
+completed setup receipt before it can launch the browser workspace.
 The BA does not invoke WSL, set User/Machine environment variables, or modify
 `PATH`.
 

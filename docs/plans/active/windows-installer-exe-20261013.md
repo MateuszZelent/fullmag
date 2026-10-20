@@ -25,8 +25,23 @@ w workflow release. Istniejący `fullmag.msi` i `Route release` pozostają
 historycznym wariantem wewnętrznym i są fail-closed do czasu dostarczenia
 rzeczywistego agregatu all-capability z czterema component proofs; nie są
 wymaganiem source-first ani drugim publicznym artefaktem. Po przygotowaniu
-środowiska kolejne przebudowy deweloperskie pozostają obsługiwane przez
-zarządzane recepty `just windows-build` i resolver storage.
+narzędzi kolejne buildy publicznego EXE wykonuje się przez:
+
+```powershell
+just windows-installer-build initial-build
+```
+
+Pełny pakiet installed-support buduje się i uruchamia przez:
+
+```powershell
+just windows-full-workspace-build static 0
+just windows-full-workspace static 0
+```
+
+Recepty przekazują `backend=auto` i `device=auto` jako wewnętrzne flagi
+zarządzanego launchera; nie są to publiczne parametry tych poleceń `just`.
+`just windows-build` pozostaje ręczną, pojedynczokomponentową ścieżką
+diagnostyczną i nie zastępuje pełnego agregatu.
 
 ## Kontrakt gotowości wszystkich backendów
 
@@ -44,10 +59,13 @@ mismatch proofu blokuje agregat, a stare single-lane receipts nie wystarczają.
 Wymuszone GPU musi zgłosić błąd bez CPU fallbacku.
 
 Rootowe recepty `windows-full-workspace-build` i `windows-full-workspace`
-przyjmują `backend=auto device=auto`; nie przypinają backendu w instalatorze.
-Pusty unified workspace pozwala aplikacji wybrać backend i urządzenie dla
-modelu przez istniejące API. Nie zmieniamy DSL, ProblemIR ani publicznego
-planera. Agregat i integracja recept są **NOT VERIFIED**.
+wywołują zarządzany launcher z wewnętrznym `backend=auto device=auto`.
+`windows-full-workspace-build` przyjmuje publicznie `frontend port`, na
+przykład `static 0`; `windows-full-workspace` przyjmuje `frontend port` oraz opcjonalny `expected_build_id`, na przykład `static 0` albo `static 0 <expected_build_id>`.
+Nie przypinają backendu w instalatorze. Pusty unified workspace pozwala
+aplikacji wybrać backend i urządzenie dla modelu przez istniejące API. Nie
+zmieniamy DSL, ProblemIR ani publicznego planera. Agregat i integracja recept są
+**NOT VERIFIED**.
 
 ### Decyzja interfejsu instalatora
 
@@ -182,12 +200,18 @@ ma otrzymać od BA następujący jawny kontrakt:
 fullmag-installer-environment.exe
   --checkout <absolutny checkout Git>
   --storage-root <jawny lokalny root storage>
-  --profile <windows-native-fdm-cpu|windows-native-fem-cpu|windows-native-fem-gpu>
+  --profile <windows-native-fem-gpu>
   --mode <setup-only|initial-build|launch-ui>
   --receipt <ścieżka receipt w zaakceptowanym storage>
   --admission-path <prywatna ścieżka rekordu admission w runs storage>
   --admission-sha256 <64-znakowy hash rekordu admission>
 ```
+
+W source-first zakres instalacji jest stały i wynosi `all`: FDM CPU, FDM GPU,
+FEM CPU oraz FEM GPU. `--profile` nie jest wyborem użytkownika; BA zawsze
+przekazuje fizyczny profil supersetowy `windows-native-fem-gpu`. Profil
+`windows-setup` służy editorowi i preadmission do obsługi Git/Python, a
+`windows-installer-source` jest wyłącznie profilem storage/lease producenta.
 
 Tryb `launch-ui` jest prywatnym uruchomieniem po ukończonym buildzie: `--receipt`
 jest wtedy istniejącym wejściem, którego helper nie nadpisuje. Nie jest to tryb
@@ -199,18 +223,21 @@ Helper wywołuje przypięty setup producenta, a dla `initial-build` uruchamia
 konkretną zarządzaną receptę pierwszego buildu. `setup-only` jest jawną opcją
 diagnostyczną: zapisuje receipt z `mode=setup-only`, nie udaje zbudowanego
 produktu i nie odblokowuje instalacji desktopu. `initial-build` może zakończyć
-się sukcesem tylko z receiptem zawierającym wejściowy checkout, profil, pełny
-hash źródeł, polecenie/receptę, hash artefaktu i terminalny status; brak albo
-niezgodność receipt zatrzymuje łańcuch.
+się sukcesem tylko z receiptem zawierającym wejściowy checkout, stały zakres
+`all`, fizyczny profil supersetowy, pełny hash źródeł, polecenie/receptę, hash
+artefaktu, agregat
+`windows-full-runtime/build-manifest.json` z czterema component proofs oraz
+terminalny status. Pojedynczy receipt FDM/FEM lub CPU/GPU nie odblokowuje
+łańcucha; brak albo niezgodność któregokolwiek proofu zatrzymuje `Ready`.
 
 Profil `windows-installer-source` jest osobnym, zamkniętym profilem resolvera
-dla storage, lease i artefaktów producenta. Nie wolno utożsamiać go z profilem
-runtime ani traktować go jako wyboru lane. Source-first używa jednego
-supersetowego bundle'u `windows-native-fem-gpu`; agregat
+dla storage, lease i artefaktów producenta. Nie jest profilem runtime ani
+wyborem zakresu instalacji. Source-first używa jednego supersetowego bundle'u
+`windows-native-fem-gpu` w stałym zakresie `all`; agregat
 `windows-full-runtime/build-manifest.json` zapisuje cztery component proofs
 FDM CPU/GPU i FEM CPU/GPU oraz ich wspólną tożsamość. GUI nie wybiera backendu;
 receipt buildu opisuje installed support, a osobny execution receipt zachowuje
-requested/resolved execution.
+requested/resolved execution dla konkretnego modelu.
 
 `Fullmag.Bundle.wxs` dla tej trasy ma zawierać wyłącznie ten `ExePackage` oraz
 payloady BA/helpera potrzebne do konfiguracji. Nie może wymagać istniejącego
@@ -406,13 +433,13 @@ ze sobą utożsamiane ani nadpisywać się podczas stagingu.
 
 | Przyrost | Zakres | Wymagana weryfikacja |
 | --- | --- | --- |
-| A. Source-first helper | Zweryfikowany `ExePackage`, parametry checkout/storage/profile/mode/receipt oraz admission path/hash, przypięty setup i rzeczywisty initial build albo jawny `setup-only`. | Parser authoringu, mocked commandline/receipt checks, a potem czysty Windows z profilem CPU i GPU; żaden no-op nie kwalifikuje trasy. |
+| A. Source-first helper | Zweryfikowany `ExePackage`, parametry checkout/storage/profile/mode/receipt oraz admission path/hash, stały zakres `all`, fizyczny profil `windows-native-fem-gpu`, przypięty setup i rzeczywisty initial build albo jawny `setup-only`. | Parser authoringu, mocked commandline/receipt checks, a potem czysty Windows z pełnym zakresem `all`; żaden no-op ani pojedynczy receipt lane nie kwalifikuje trasy. |
 | B. MSI contract | Usunięcie globalnego `PATH`, potwierdzenie identyfikatorów i zachowania upgrade/uninstall istniejącego MSI. | WiX 3 compile/link oraz czysta maszyna Windows; do tego czasu MSI `NOT VERIFIED`. |
 | C. Burn authoring | `Fullmag.Bundle.wxs`, build wrapper i zewnętrzna zweryfikowana BA DLL WiX 3 dla obu tras; publiczny output `fullmag.exe`. | Run `40782` potwierdził parser/compile/link z `candle/light`, `WixBalExtension`, payload inventory i publiczny bundle; runtime Burn, install i upgrade pozostają osobne. |
 | D. `installer_env.ps1` + BA bridge | Discover/preview/commit, resolver storage, maskowanie, zachowanie komentarzy/nieznanych wpisów, backup i atomowość. | Source/interpreted checks helpera i osobno mocked BA bridge: cancel, invalid path, reparse/UNC, conflict, write error i sekret w logu; żadna ścieżka błędu nie zmienia `.env`. |
-| E. BA orchestration | Kolejność `.env` → prerequisites → source-first ExePackage albo release MSI, brak sekretów w command line/logach, zachowanie elevation i rollback. | Mocked detect/plan/apply, receipt validation i testy anulowania WebView2; po nich testy na czystym Windows. |
+| E. BA orchestration | Kolejność Preadmission/Requirements → Environment preview/commit → managed layout → Burn source-first ExePackage albo release MSI, brak sekretów w command line/logach, zachowanie elevation i rollback. | Mocked detect/plan/apply, receipt validation i testy anulowania WebView2; po nich testy na czystym Windows. |
 | F. Modern UI Avalonia | Self-contained `win-x64`, Avalonia/Fluent, payload manifest, IPC z x86 BA, bez globalnego .NET i bez starego formularza Win32. | Najnowszy producer PASS/0 potwierdził manifest, EXE/UI i provenance; smoke `96454` oraz fault tests `54268` potwierdziły ograniczone przejścia i diagnostykę. Pełny Burn render `39129` zakończył się PASS/0 (evidence `f4836bb88b434fe9ae6840e78b20dad3`), a `paths.png` (`1196x799`) z nowymi kontrolkami combobox i uczciwym opisem zostało obejrzane. Render light/dark, DPI 100/150/200, Tab/focus, accessibility i pełny runtime pozostają NOT VERIFIED. |
-| G. Release qualification | Apache-2.0 dla kodu własnego, third-party notices, WebView2, install/repair/upgrade/uninstall/rollback i Tauri. | Czysta maszyna bez WSL/Docker, online/offline prerequisite, non-admin/admin, rzeczywisty start `fullmag-ui.exe`; osobno runtime i physics gates. |
+| G. Source-first release qualification | Apache-2.0 dla kodu własnego, kompletny third-party notices/inventory dla bundlowanych zależności oraz clean-host source-first setup/initial-build z terminalnym receiptem i zachowaniem cancel/recovery. WebView2/Tauri i MSI install/repair/upgrade/uninstall/rollback dotyczą wyłącznie historycznej trasy release. | Czysty Windows bez WSL/Docker, online/offline prerequisite i non-admin/admin dla source-first; osobno runtime i physics gates. Podpis wydawcy oraz publikacja GitHub Release nie są założeniem tej kwalifikacji. |
 
 Historyczny producer run `40782` potwierdził C#/XAML publish, self-contained single-file
 payload, hash/size inventory, Candle/Light i końcowy wrapper. Nadal nie wolno
@@ -433,9 +460,13 @@ ani działającego produktu.
    kontroli natywnych oraz read-only admission/receipt validation realnego
    providera `61949` zakończyły się terminalnym PASS; aggregate, uruchomienie
    FEM, brak fallbacku i runtime pozostają `NOT VERIFIED`.
-4. **P1 — MSI, notices i clean-host.** Kwalifikacja istniejącego MSI,
-   kompletnego inwentarza zależności, WebView2/Tauri oraz końcowego cyklu
-   wydania wymaga osobnych dowodów.
+4. **P1 — notices i clean-host source-first.** Publiczna trasa source-first
+   wymaga kompletnego inwentarza notices zależności oraz dowodu na czystym
+   Windows obejmującego admission checkoutu, transakcję `.env`, setup/initial-build,
+   terminalny receipt i zachowanie cancel/recovery. Kwalifikacja MSI oraz
+   WebView2/Tauri pozostaje osobną, historyczną trasą release i nie jest bramką
+   source-first. Podpis wydawcy ani publikacja w GitHub Releases nie są wymagane
+   przez ten plan bez osobnej decyzji zakresowej.
 5. **P2 — tool-cache.** Eksperymentalna migracja cache została odłożona; obecna
    ścieżka zachowuje wcześniejszą ekstrakcję. Kandydat i ograniczenia są
    archiwizowane w `/tmp/fullmag-tool-cache-candidate-20261015/`.
