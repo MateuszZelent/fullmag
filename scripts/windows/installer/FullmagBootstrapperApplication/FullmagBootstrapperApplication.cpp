@@ -3827,7 +3827,7 @@ bool FullmagBootstrapperApplication::PrepareSourceFirstBurnVariables() {
     }
     receiptPath_ = JoinPath(committedRunsRoot_, L"installer-source\\" +
                             std::wstring(receiptGuid) + L".json");
-    auto safeLocalPath = [](const std::wstring& path) {
+    auto safeLocalPath = [](const std::wstring& path, bool directory = false) {
         if (path.size() < 3 || path[1] != L':' || path.rfind(L"\\\\", 0) == 0 ||
             path.rfind(L"//", 0) == 0) return false;
         for (size_t index = 0; index < path.size();) {
@@ -3846,8 +3846,12 @@ bool FullmagBootstrapperApplication::PrepareSourceFirstBurnVariables() {
             cursor.resize(separator);
         }
         const DWORD attributes = GetFileAttributesW(path.c_str());
-        return attributes == INVALID_FILE_ATTRIBUTES ||
-               (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+            const DWORD error = GetLastError();
+            return !directory && (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND);
+        }
+        const bool isDirectory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        return directory == isDirectory;
     };
     std::wstring storageRoot = committedStorageRoot_;
     while (storageRoot.size() > 3 && (storageRoot.back() == L'\\' || storageRoot.back() == L'/')) storageRoot.pop_back();
@@ -3856,7 +3860,7 @@ bool FullmagBootstrapperApplication::PrepareSourceFirstBurnVariables() {
     const bool runsInsideStorage = runsRoot.size() > storageRoot.size() &&
         _wcsnicmp(runsRoot.c_str(), storageRoot.c_str(), storageRoot.size()) == 0 &&
         (runsRoot[storageRoot.size()] == L'\\' || runsRoot[storageRoot.size()] == L'/');
-    if (!safeLocalPath(runsRoot) || !runsInsideStorage || !safeLocalPath(receiptPath_) ||
+    if (!safeLocalPath(runsRoot, true) || !runsInsideStorage || !safeLocalPath(receiptPath_) ||
         receiptPath_.size() <= runsRoot.size() ||
         _wcsnicmp(receiptPath_.c_str(), runsRoot.c_str(), runsRoot.size()) != 0 ||
         (receiptPath_[runsRoot.size()] != L'\\' && receiptPath_[runsRoot.size()] != L'/')) {
