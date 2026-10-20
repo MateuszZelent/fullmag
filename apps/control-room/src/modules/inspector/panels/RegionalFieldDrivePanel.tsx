@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
@@ -295,7 +295,9 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     ? `${sessionScopeKey ?? "no-session"}:create:${sourceObjectId ?? "global"}`
     : `${sessionScopeKey ?? "no-session"}:drive:${drive?.id ?? model.driveId ?? "none"}`;
   const transactionIdentityKeyRef = useRef(transactionIdentityKey);
-  transactionIdentityKeyRef.current = transactionIdentityKey;
+  useLayoutEffect(() => {
+    transactionIdentityKeyRef.current = transactionIdentityKey;
+  }, [transactionIdentityKey]);
   const [pendingOperation, setPendingOperation] = useState<{
     identityKey: string;
     id: number;

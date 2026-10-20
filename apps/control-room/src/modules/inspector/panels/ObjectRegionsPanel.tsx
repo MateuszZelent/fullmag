@@ -832,15 +832,18 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
 
   return (
     <QuantityFieldDraftScope store={fieldDrafts.store}>
-      {renderObjectRegionSubPanel(selection.kind, subProps)}
+      <ObjectRegionSubPanel kind={selection.kind} subProps={subProps} />
     </QuantityFieldDraftScope>
   );
 }
 
-function renderObjectRegionSubPanel(
-  kind: InspectorPanelProps["selection"]["kind"],
-  subProps: RegionSubPanelProps,
-) {
+function ObjectRegionSubPanel({
+  kind,
+  subProps,
+}: {
+  kind: InspectorPanelProps["selection"]["kind"];
+  subProps: RegionSubPanelProps;
+}) {
   switch (kind) {
     case "object.region.geometry":
     case "object.region.shape":
