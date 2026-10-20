@@ -413,6 +413,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Run Windows installer source EOL contract
+        run: python -B scripts/test_windows_installer_eol.py -v
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
