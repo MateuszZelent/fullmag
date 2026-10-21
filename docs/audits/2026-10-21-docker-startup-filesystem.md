@@ -437,3 +437,25 @@ do istniejącego browser fixture CI. Niezależny przegląd nie wykazał P1.
 Managed Node --check obu plików przeszedł ze stabilnymi wejściami; lokalnie
 nie uruchamiano testu jednostkowego. Rzeczywisty browser gate po tej zmianie
 pozostaje do potwierdzenia w CI.
+
+
+## CSS HMR — poprawka błędu odłączonego linku
+
+Rzeczywisty test w uruchomionej grupie potwierdził zmianę i przywrócenie CSS
+bez wymiany dokumentu, elementu DOM, sesji ani restartu usług. Zachowany wynik
+zawierał jednak późny wyjątek z callbacku ładowania CSS w przypiętym Next.js:
+`Cannot read properties of null (reading 'removeChild')`. Ten przebieg nie
+kwalifikuje bezbłędnego HMR, mimo wcześniejszego oznaczenia sukcesu przez helper.
+
+Wersjonowana łatka Next.js osłania usunięcie starego linku zarówno po `load`,
+jak i po `error`: React może wcześniej odłączyć ten sam element. Hash łatki
+i referencje w lockfile zostały zaktualizowane razem. Regresja CI ładuje
+rzeczywisty zainstalowany moduł i obejmuje oba zdarzenia, podpięty/odłączony
+link oraz powtórne zakończenie. Niezależny review nie wykazał P1/P2.
+
+Potwierdzono bez zapisu do zależności: nowy hunk stosuje się do zainstalowanego
+modułu, wynik ma poprawną składnię JavaScript, a oryginalny plik pozostaje
+niezmieniony. Lokalnie nie uruchamiano testów jednostkowych JS; regresję wykona
+istniejąca bramka CI. Instalacja nowego dependency seed we frontendzie oraz
+ponowny test bezbłędnego HMR pozostają NOT VERIFIED. Backend i istniejący run
+pozostają zachowane.

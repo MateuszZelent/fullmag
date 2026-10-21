@@ -820,7 +820,9 @@ jobs:
           python -B scripts/test_docker_volume_pending_resume.py -v
           python -B scripts/test_docker_prestart_resume.py -v
           python -B scripts/test_docker_dev_browser_qa.py -v
+          python -B scripts/test_docker_dev_hmr_qa.py -v
           python -B scripts/test_docker_volume_receipts.py -v
+          python -B scripts/test_docker_package_retention.py -v
           python -B scripts/test_docker_volume_checks.py -v
           python -B scripts/test_docker_accepted_reattach.py -v
           python -B scripts/test_docker_volume_accepted_reattach.py -v

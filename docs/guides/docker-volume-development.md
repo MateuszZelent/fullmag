@@ -344,6 +344,27 @@ automatycznie ponawiać `docker update`. Limit 200 GiB wymaga VM większej niż
 200 GiB z zapasem dla innych usług; komenda nie restartuje Docker/WSL ani innych grup.
 Odbiór uruchomienia API, meshu i solvera jest osobnym dowodem.
 
+## Sprawdzenie HMR bez restartu usług
+
+Opcjonalna kontrola istniejącej, zdrowej grupy:
+
+```powershell
+just docker-dev-hmr-qa "<wybrany-checkout>" "<port-frontendu>"
+```
+
+Komenda tworzy własną tymczasową stronę i moduł CSS w wybranych źródłach,
+sprawdza zmianę i przywrócenie stylu w tej samej otwartej stronie, a następnie
+usuwa wyłącznie własne pliki po sprawdzeniu ich tożsamości i zawartości.
+Obcy zapis blokuje sprzątanie; nie jest nadpisywany. Kontrola zachowuje sesję,
+element DOM, dokument oraz identyfikatory i czasy startu obu usług. Nie uruchamia
+Compute, buildu ani restartu. Browser helper należy do tej samej grupy,
+a receipty i diagnostyka pozostają w jej wolumenie kontroli.
+
+Błąd kompilatora, websocketu lub przeglądarki odrzuca sukces także wtedy, gdy
+styl zdążył się zmienić. Wynik nie kwalifikuje solvera ani CUDA. Nieznana
+obserwacja zachowuje zasoby i dokładny attempt do kontrolowanej rekoncyliacji;
+nie uruchamiaj kolejnej próby, zanim poprzednia nie zostanie rozstrzygnięta.
+
 ## Granica zapisu i retencja
 
 | Dane | Miejsce |
@@ -354,6 +375,15 @@ Odbiór uruchomienia API, meshu i solvera jest osobnym dowodem.
 | Konfiguracje, provenance, receipty, manifesty, logi BuildKit i dowody kontroli | build-control named volume |
 | Warstwy zależności/helperów | Docker image store / BuildKit |
 | Sesje, wyniki, ustawienia, historia, ledger | skonfigurowany storage hosta Windows albo Linux/WSL |
+
+Codzienna trasa `docker_volume_dev` zachowuje frontendowy profil v1:
+`fullmag-dev-frontend-v1-<24 znaki klucza>`. Pełny klucz jest SHA-256
+kanonicznego `{project, dependencies, tools}`; zgodny klucz ponownie używa
+tego samego named volume i cache. Przed sprawdzeniem etykiet, enumeracją
+konsumentów i zapisem helpera launcher wymaga lokalnego drivera bez opcji,
+zakresu `local` (albo nieobecnego) oraz kanonicznego linuksowego mountpointu;
+aliasy hosta są odrzucane. Ten profil v1 nie przełącza codziennej trasy na
+oddzielny overlay `frontend-cache-v2`.
 
 Źródła są readonly. Krótkie helpery utrzymania należą do tej samej grupy;
 nie budują ani nie uruchamiają aplikacji i nie mają Docker socketu.

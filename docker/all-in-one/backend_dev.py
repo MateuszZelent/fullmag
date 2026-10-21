@@ -87,6 +87,8 @@ PACKAGE_CANDIDATE_SCHEMA = "fullmag.direct-compose.package-candidate.v1"
 PACKAGE_CANDIDATE_NAME_RE = re.compile(r"^\.backend-package-candidate-[A-Za-z0-9._-]+$")
 PACKAGE_ROTATION_JOURNAL_NAME = "rotation.pending.json"
 PACKAGE_ROTATION_JOURNAL_SCHEMA = "fullmag.direct-compose.package-rotation-journal.v1"
+PACKAGE_RETENTION_JOURNAL_NAME = "retention.pending.json"
+PACKAGE_RETENTION_JOURNAL_SCHEMA = "fullmag.direct-compose.package-retention-journal.v1"
 MAX_PACKAGE_ROTATION_CHILDREN = 256
 MAX_PACKAGE_CANDIDATES = 4
 MAX_LEGACY_INSTALL_STAGE_ENTRIES = 65536
@@ -111,12 +113,16 @@ FAILED_CANDIDATE_DIAGNOSTIC_FILES = frozenset(
 )
 MAX_RETENTION_ARCHIVES = 64
 MAX_BUILD_LOG_BYTES = 64 * 1024 * 1024
+MAX_RETENTION_MEASURED_ENTRIES = 65536
+RETENTION_MEASUREMENT_BLOCK_SIZE = 512
 PACKAGE_CACHE_CONTROL_DIRNAME = "cache-maintenance"
 PACKAGE_CACHE_MARKER_NAME = ".fullmag-backend-cache-owner.json"
 PACKAGE_CACHE_READBACK_NAME = ".fullmag-backend-cache-readback"
 PACKAGE_RETENTION_SCHEMA = "fullmag.direct-compose.package-retention.v1"
 PACKAGE_RETENTION_ARCHIVE_COUNT_LIMIT = 8
 PACKAGE_RETENTION_ARCHIVE_BYTES_LIMIT = 64 * 1024 * 1024
+PACKAGE_RETENTION_OPERATION_SCHEMA = "fullmag.direct-compose.package-retention-operation.v1"
+PACKAGE_RETENTION_REPORT_NAME = "package-retention-last.json"
 FAILED_MAKE_DIAGNOSTICS_DIRNAME = "failed-candidate-diagnostics"
 FAILED_MAKE_RECEIPT_NAME = "attempt.json"
 FAILED_MAKE_LOG_NAME = "direct-backend-build.log"
@@ -195,6 +201,14 @@ def _canonical(value: object) -> bytes:
     return (
         json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
         + "\n"
+    ).encode("utf-8")
+
+
+def _canonical_cas(value: object) -> bytes:
+    """Serialize a cross-process CAS value without a record terminator."""
+
+    return json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     ).encode("utf-8")
 
 
@@ -428,6 +442,72 @@ def _assert_safe_tree(path: Path, name: str) -> None:
                 _fail(f"{name} contains a special file: {child}")
 
 
+def _filesystem_available_bytes(path: Path, name: str) -> int:
+    """Return unprivileged available bytes for the one named-volume mount."""
+
+    path = _absolute(path, name)
+    try:
+        usage = os.statvfs(path)
+    except OSError as error:
+        _fail(f"cannot inspect filesystem availability at {path}: {error}")
+    if usage.f_frsize <= 0 or usage.f_bavail < 0:
+        _fail(f"filesystem availability probe returned invalid values at {path}")
+    return int(usage.f_bavail) * int(usage.f_frsize)
+
+
+def _allocated_bytes_for_tree(path: Path, name: str) -> int:
+    """Measure allocated blocks for one already-owned, bounded package tree.
+
+    The caller supplies an exact, receipt-validated backup root. The walk is
+    still bounded and rejects links, reparse points, special files, and an
+    unexpected entry count, so retention never turns into an open-ended scan
+    of the package volume. ``st_blocks`` is physical allocation in the Linux
+    container; hard-linked files are counted once.
+    """
+
+    path = _absolute(path, name)
+    pending = [path]
+    seen_files: set[tuple[int, int]] = set()
+    allocated = 0
+    entries = 0
+    while pending:
+        current = pending.pop()
+        entries += 1
+        if entries > MAX_RETENTION_MEASURED_ENTRIES:
+            _fail(
+                f"{name} exceeds the retention allocation measurement bound "
+                f"({MAX_RETENTION_MEASURED_ENTRIES} entries)"
+            )
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            _fail(f"{name} changed during allocation measurement: {current}")
+        except OSError as error:
+            _fail(f"cannot inspect {name}: {error}")
+        if stat.S_ISLNK(metadata.st_mode) or bool(
+            getattr(metadata, "st_file_attributes", 0) & 0x400
+        ):
+            _fail(f"{name} contains a link or reparse point: {current}")
+        blocks = getattr(metadata, "st_blocks", None)
+        if isinstance(blocks, bool) or not isinstance(blocks, int) or blocks < 0:
+            _fail(f"{name} has no valid allocated-block measurement: {current}")
+        if stat.S_ISDIR(metadata.st_mode):
+            allocated += blocks * RETENTION_MEASUREMENT_BLOCK_SIZE
+            try:
+                children = sorted(current.iterdir(), key=lambda child: child.name)
+            except OSError as error:
+                _fail(f"cannot inspect {name}: {error}")
+            pending.extend(children)
+        elif stat.S_ISREG(metadata.st_mode):
+            identity = (int(metadata.st_dev), int(metadata.st_ino))
+            if identity not in seen_files:
+                seen_files.add(identity)
+                allocated += blocks * RETENTION_MEASUREMENT_BLOCK_SIZE
+        else:
+            _fail(f"{name} contains a special file: {current}")
+    return allocated
+
+
 def _fsync_directory(path: Path, name: str) -> None:
     """Make directory-entry publication durable on the package mount."""
 
@@ -504,6 +584,7 @@ def _ensure_package_development_root(output: Path) -> Path:
         PACKAGE_RETENTION_ARCHIVE_DIRNAME,
         PACKAGE_CACHE_CONTROL_DIRNAME,
         PACKAGE_ROTATION_JOURNAL_NAME,
+        PACKAGE_RETENTION_JOURNAL_NAME,
     }
     try:
         entries = tuple(control.iterdir())
@@ -520,6 +601,11 @@ def _ensure_package_development_root(output: Path) -> Path:
         metadata = journal.lstat()
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             _fail("backend package rotation journal is not one regular file")
+    retention_journal = control / PACKAGE_RETENTION_JOURNAL_NAME
+    if retention_journal.exists() or retention_journal.is_symlink():
+        metadata = retention_journal.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            _fail("backend package retention journal is not one regular file")
     _ensure_directory(cache_control, "backend cache maintenance control directory")
     try:
         cache_entries = tuple(cache_control.iterdir())
@@ -2149,13 +2235,7 @@ def _preflight_candidate_storage(build_root: Path, receipt: Mapping[str, Any]) -
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
             _fail(f"verified backend receipt artifact {index} has an invalid size")
         estimated_bytes += size
-    try:
-        usage = os.statvfs(build_root)
-    except OSError as error:
-        _fail(f"cannot inspect backend cache space at {build_root}: {error}")
-    if usage.f_frsize <= 0 or usage.f_bavail < 0:
-        _fail(f"backend cache space probe returned invalid values at {build_root}")
-    free_bytes = usage.f_bavail * usage.f_frsize
+    free_bytes = _filesystem_available_bytes(build_root, "backend cache space")
     _log_phase(
         "space",
         "preflight",
@@ -4227,24 +4307,271 @@ def _archive_retired_backup(
         raise
 
 
+def _validate_existing_package_development_root(output: Path) -> Path:
+    """Validate the package control tree without creating or changing it."""
+
+    output = _absolute(output, "backend output")
+    control = output / PACKAGE_DEVELOPMENT_DIRNAME
+    _assert_safe_tree(control, "backend package development control directory")
+    allowed = {
+        PACKAGE_DEVELOPMENT_OWNER,
+        PACKAGE_CANDIDATES_DIRNAME,
+        PACKAGE_BACKUPS_DIRNAME,
+        PACKAGE_RETENTION_ARCHIVE_DIRNAME,
+        PACKAGE_CACHE_CONTROL_DIRNAME,
+        PACKAGE_ROTATION_JOURNAL_NAME,
+        PACKAGE_RETENTION_JOURNAL_NAME,
+    }
+    entries = tuple(control.iterdir())
+    if any(entry.name not in allowed for entry in entries):
+        _fail("backend package development control has an unknown entry")
+    owner = control / PACKAGE_DEVELOPMENT_OWNER
+    try:
+        metadata = owner.lstat()
+    except FileNotFoundError:
+        _fail("backend package development owner marker is missing")
+    except OSError as error:
+        _fail(f"cannot inspect backend package development owner marker: {error}")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        _fail("backend package development owner marker is not one regular file")
+    document, _ = _read_json(
+        owner, "backend package development owner marker", 16 * 1024
+    )
+    if (
+        document.get("schema") != PACKAGE_DEVELOPMENT_SCHEMA
+        or document.get("state") != "owned"
+        or document.get("package_root") != str(output)
+    ):
+        _fail("backend package development owner marker does not match this mount")
+    for name in (
+        PACKAGE_CANDIDATES_DIRNAME,
+        PACKAGE_BACKUPS_DIRNAME,
+        PACKAGE_RETENTION_ARCHIVE_DIRNAME,
+        PACKAGE_CACHE_CONTROL_DIRNAME,
+    ):
+        child = control / name
+        try:
+            child_metadata = child.lstat()
+        except FileNotFoundError:
+            _fail(f"backend package development control entry is missing: {name}")
+        except OSError as error:
+            _fail(f"cannot inspect backend package development control entry {name}: {error}")
+        if not stat.S_ISDIR(child_metadata.st_mode):
+            _fail(f"backend package development control entry is not a directory: {name}")
+    retention_journal = control / PACKAGE_RETENTION_JOURNAL_NAME
+    if retention_journal.exists() or retention_journal.is_symlink():
+        metadata = retention_journal.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            _fail("backend package retention journal is not one regular file")
+    cache_control = control / PACKAGE_CACHE_CONTROL_DIRNAME
+    cache_names = {entry.name for entry in cache_control.iterdir()}
+    cache_allowed = {PACKAGE_CACHE_MARKER_NAME, PACKAGE_CACHE_READBACK_NAME}
+    if not cache_names.issubset(cache_allowed) or cache_names not in (set(), cache_allowed):
+        _fail("backend cache maintenance control has an incomplete or unknown record pair")
+    return control
+
+
+def _retention_scope_allocation(obsolete: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Measure only the exact obsolete backup trees selected by the chain."""
+
+    targets: list[dict[str, Any]] = []
+    for node in obsolete:
+        path = node.get("path")
+        if not isinstance(path, Path):
+            _fail("backend package retention target has no owned path")
+        allocated = _allocated_bytes_for_tree(
+            path, f"obsolete backend package backup {path.name}"
+        )
+        targets.append({"name": path.name, "allocated_bytes": allocated})
+    return {
+        "scope": "obsolete-backup-trees",
+        "unit": "filesystem-allocated-bytes",
+        "block_size": RETENTION_MEASUREMENT_BLOCK_SIZE,
+        "targets": targets,
+        "allocated_bytes_before": sum(
+            int(target["allocated_bytes"]) for target in targets
+        ),
+    }
+
+
+def _retention_scope_after(
+    control_root: Path, allocation: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Measure the same named targets after an apply, without widening scope."""
+
+    targets = allocation.get("targets")
+    if not isinstance(targets, list):
+        _fail("retention allocation scope has no target list")
+    backups_root = _absolute(
+        control_root / PACKAGE_BACKUPS_DIRNAME,
+        "backend package retention backup directory",
+    )
+    measured: list[dict[str, Any]] = []
+    for index, target in enumerate(targets):
+        if not isinstance(target, Mapping):
+            _fail(f"retention allocation target {index} is invalid")
+        name = target.get("name")
+        if not isinstance(name, str) or not re.fullmatch(
+            r"\.backend-package-backup-[A-Za-z0-9._-]+", name
+        ):
+            _fail(f"retention allocation target {index} has an unsafe name")
+        path = backups_root / name
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            allocated = 0
+        except OSError as error:
+            _fail(f"cannot inspect retention allocation target {name}: {error}")
+        else:
+            allocated = _allocated_bytes_for_tree(
+                path, f"retention allocation target {name}"
+            )
+        measured.append({"name": name, "allocated_bytes": allocated})
+    return {
+        "scope": allocation.get("scope"),
+        "unit": allocation.get("unit"),
+        "block_size": allocation.get("block_size"),
+        "targets": measured,
+        "allocated_bytes_after": sum(
+            int(target["allocated_bytes"]) for target in measured
+        ),
+    }
+
+
+def _retention_measurement(
+    plan: Mapping[str, Any],
+    control_root: Path,
+    filesystem_before: int,
+    filesystem_after: int,
+) -> dict[str, Any]:
+    """Combine scoped package allocation with separately observed FS space."""
+
+    allocation = plan.get("allocation")
+    if not isinstance(allocation, Mapping):
+        _fail("retention plan has no allocation measurement")
+    after = _retention_scope_after(control_root, allocation)
+    before = allocation.get("allocated_bytes_before")
+    after_bytes = after.get("allocated_bytes_after")
+    if (
+        isinstance(before, bool)
+        or not isinstance(before, int)
+        or before < 0
+        or isinstance(after_bytes, bool)
+        or not isinstance(after_bytes, int)
+        or after_bytes < 0
+    ):
+        _fail("retention allocation measurement has invalid byte counts")
+    if (
+        isinstance(filesystem_before, bool)
+        or not isinstance(filesystem_before, int)
+        or filesystem_before < 0
+        or isinstance(filesystem_after, bool)
+        or not isinstance(filesystem_after, int)
+        or filesystem_after < 0
+    ):
+        _fail("retention filesystem measurement has invalid byte counts")
+    return {
+        "scope": allocation.get("scope"),
+        "scope_targets_before": allocation.get("targets"),
+        "scope_targets_after": after["targets"],
+        "scope_allocated_bytes_before": before,
+        "scope_allocated_bytes_after": after_bytes,
+        "scope_allocated_bytes_delta": before - after_bytes,
+        "filesystem_available_path": str(PACKAGE_ROOT),
+        "filesystem_available_bytes_before": filesystem_before,
+        "filesystem_available_bytes_after": filesystem_after,
+        "filesystem_available_bytes_delta": filesystem_after - filesystem_before,
+        "filesystem_available_delta_is_observed_only": True,
+    }
+
+
+def _package_retention_plan(
+    output: Path,
+    current_sha256: str,
+    direct: Mapping[str, Any] | None,
+    obsolete: list[Mapping[str, Any]],
+    archives: list[Mapping[str, Any]],
+    archives_to_remove: int,
+    *,
+    archive_policy: str,
+) -> dict[str, Any]:
+    """Return the stable compare-and-swap document for one retention pass."""
+
+    def backup_identity(node: Mapping[str, Any]) -> dict[str, Any]:
+        receipt = node["receipt"]
+        artifacts = receipt.get("artifacts")
+        if not isinstance(artifacts, list):
+            _fail("backend package backup artifact inventory is invalid")
+        children = node.get("children")
+        if not isinstance(children, Mapping):
+            _fail("backend package backup child inventory is missing")
+        return {
+            "name": Path(str(node["path"])).name,
+            "receipt_sha256": str(node["receipt_sha256"]),
+            "rotation_sha256": str(node["rotation_sha256"]),
+            "artifact_manifest_sha256": _sha256_bytes(_canonical(artifacts)),
+            "children_sha256": _sha256_bytes(
+                _canonical({
+                    str(name): list(signature)
+                    for name, signature in sorted(children.items())
+                })
+            ),
+            "old_children": list(node["old_children"]),
+            "new_children": list(node["new_children"]),
+        }
+
+    allocation = _retention_scope_allocation(obsolete)
+    return {
+        "schema": PACKAGE_RETENTION_OPERATION_SCHEMA,
+        "state": "planned",
+        "package_root": str(output),
+        "current_receipt_sha256": current_sha256,
+        "direct_rollback": backup_identity(direct) if direct is not None else None,
+        "obsolete_backups": [backup_identity(node) for node in obsolete],
+        "allocation": allocation,
+        "archives": {
+            "count": len(archives),
+            "bytes": sum(int(record["size"]) for record in archives),
+            "prune": archive_policy,
+            "would_remove": archives_to_remove,
+        },
+    }
+
+
 def _retain_package_backups(
     output: Path,
     control_root: Path,
     current_receipt: Mapping[str, Any],
     current_receipt_bytes: bytes,
-) -> None:
+    *,
+    dry_run: bool = False,
+    maintenance: bool = False,
+) -> dict[str, Any]:
     """Retain the direct rollback and retire only a verified older chain."""
 
     output = _absolute(output, "backend output")
     control_root = _absolute(control_root, "backend package development control directory")
     if control_root != output / PACKAGE_DEVELOPMENT_DIRNAME:
         _fail("backend package retention control directory is not under the package mount")
-    _ensure_package_development_root(output)
+    if dry_run:
+        _validate_existing_package_development_root(output)
+    else:
+        _ensure_package_development_root(output)
     archive_root = control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME
     backups_root = control_root / PACKAGE_BACKUPS_DIRNAME
     candidates_root = control_root / PACKAGE_CANDIDATES_DIRNAME
-    _ensure_directory(archive_root, "backend package retention archive directory")
-    _ensure_directory(backups_root, "backend package backup directory")
+    if dry_run:
+        for directory, name in (
+            (archive_root, "backend package retention archive directory"),
+            (backups_root, "backend package backup directory"),
+            (candidates_root, "backend package candidate directory"),
+        ):
+            metadata = directory.lstat()
+            if not stat.S_ISDIR(metadata.st_mode):
+                _fail(f"{name} is not a directory")
+    else:
+        _ensure_directory(archive_root, "backend package retention archive directory")
+        _ensure_directory(backups_root, "backend package backup directory")
     try:
         if any(candidates_root.iterdir()):
             _fail("backend package candidate staging is not empty during retention")
@@ -4253,7 +4580,7 @@ def _retain_package_backups(
     _fsync_directory(output, "backend package output directory")
     _fsync_directory(control_root, "backend package development control directory")
     _fsync_directory(backups_root, "backend package backup directory")
-    _validate_retention_archives(archive_root, verify_disposable_logs=False)
+    archives = _validate_retention_archives(archive_root, verify_disposable_logs=False)
     current_mode, current_build, current_toolchain = _retention_receipt_identity(
         current_receipt, "current backend package"
     )
@@ -4271,8 +4598,16 @@ def _retain_package_backups(
     except OSError as error:
         _fail(f"cannot inspect backend package backups: {error}")
     if not entries:
-        _prune_retention_archives(archive_root)
-        return
+        archives_to_remove = 0 if (dry_run or maintenance) else _prune_retention_archives(archive_root)
+        plan = _package_retention_plan(
+            output, current_sha256, None, [], archives, archives_to_remove,
+            archive_policy="deferred" if maintenance else "bounded",
+        )
+        if dry_run:
+            return plan
+        plan["state"] = "applied"
+        plan["archives"]["removed"] = archives_to_remove
+        return plan
     nodes: list[dict[str, Any]] = []
     by_new: dict[str, dict[str, Any]] = {}
     for backup in entries:
@@ -4325,6 +4660,7 @@ def _retain_package_backups(
             "receipt_sha256": old_sha256,
             "new_receipt_sha256": new_sha256,
             "rotation_sha256": _sha256_bytes(rotation_bytes),
+            "children": children,
             "old_children": old_children,
             "new_children": new_children,
         }
@@ -4353,6 +4689,16 @@ def _retain_package_backups(
     for newer, older in zip(chain_nodes, chain_nodes[1:]):
         if set(newer["old_children"]) != set(older["new_children"]):
             _fail("backend package backup chain child sets do not match")
+    obsolete = list(reversed(chain_nodes[1:]))
+    # The separate maintenance operation preserves existing retired archives;
+    # the legacy direct call retains its established bounded archive behavior.
+    archives_to_remove = 0 if (dry_run or maintenance) else _prune_retention_archives(archive_root)
+    plan = _package_retention_plan(
+        output, current_sha256, direct, obsolete, archives, archives_to_remove,
+        archive_policy="deferred" if maintenance else "bounded",
+    )
+    if dry_run:
+        return plan
     # The current package and its direct rollback are the two versions that
     # must survive a crash while older backups are removed.  Sync only these
     # small verified trees; the mutable build/cache trees are out of scope.
@@ -4364,7 +4710,6 @@ def _retain_package_backups(
     _fsync_owned_tree(direct["path"], "direct backend package rollback retained tree")
     # Walk current -> direct -> older and remove the tail first.  If a later
     # deletion fails, the remaining backups still form a complete chain.
-    obsolete = list(reversed(chain_nodes[1:]))
     for node in obsolete:
         _archive_retired_backup(
             node["path"],
@@ -4375,7 +4720,7 @@ def _retain_package_backups(
         )
         _remove_owned_tree(node["path"])
         _fsync_directory(backups_root, "backend package backup directory")
-    removed_archives = _prune_retention_archives(archive_root)
+    removed_archives = 0 if maintenance else _prune_retention_archives(archive_root)
     if obsolete or removed_archives:
         _log_phase(
             "retention",
@@ -4383,6 +4728,733 @@ def _retain_package_backups(
             files=len(obsolete),
             archives_removed=removed_archives,
         )
+    plan["state"] = "applied"
+    plan["archives"]["removed"] = removed_archives
+    return plan
+
+
+def _retention_plan_sha256(plan: Mapping[str, Any]) -> str:
+    """Hash only the stable plan document used by the apply CAS."""
+
+    return _sha256_bytes(_canonical(plan))
+
+
+def _retention_group_plan_sha256(
+    backend_plan_sha256: str, operation_inputs_sha256: str
+) -> str:
+    """Bind the backend package plan to the selected Compose-group inputs."""
+
+    if not SHA256_RE.fullmatch(backend_plan_sha256) or not SHA256_RE.fullmatch(
+        operation_inputs_sha256
+    ):
+        _fail("retention group-plan inputs must be lowercase SHA-256 digests")
+    return _sha256_bytes(
+        _canonical_cas(
+            {
+                "backend_plan_sha256": backend_plan_sha256,
+                "operation_inputs_sha256": operation_inputs_sha256,
+            }
+        )
+    )
+
+
+def _emit_retention_report(report: Mapping[str, Any]) -> None:
+    output = _canonical(report)
+    stream = getattr(sys.stdout, "buffer", sys.stdout)
+    stream.write(output)
+    stream.flush()
+
+
+def _retention_journal_path(control_root: Path) -> Path:
+    return _absolute(
+        control_root / PACKAGE_RETENTION_JOURNAL_NAME,
+        "backend package retention journal",
+    )
+
+
+def _read_retention_journal(control_root: Path) -> dict[str, Any] | None:
+    path = _retention_journal_path(control_root)
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        _fail(f"cannot inspect backend package retention journal: {error}")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        _fail("backend package retention journal is not one regular file")
+    document, _ = _read_json(path, "backend package retention journal", 16 * 1024 * 1024)
+    return document
+
+
+def _write_retention_journal(control_root: Path, document: Mapping[str, Any]) -> None:
+    path = _retention_journal_path(control_root)
+    _assert_no_links(path.parent, "backend package retention journal parent")
+    if path.exists() or path.is_symlink():
+        _fail("backend package retention journal already exists")
+    _write_json(path, document, "backend package retention journal")
+    _fsync_directory(path.parent, "backend package retention journal directory")
+
+
+def _clear_retention_journal(control_root: Path) -> None:
+    path = _retention_journal_path(control_root)
+    _assert_no_links(path.parent, "backend package retention journal parent")
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        _fail(f"cannot inspect backend package retention journal: {error}")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        _fail("backend package retention journal is not one regular file")
+    try:
+        path.unlink()
+    except OSError as error:
+        _fail(f"cannot remove backend package retention journal: {error}")
+    _fsync_directory(path.parent, "backend package retention journal directory")
+
+
+def _retention_journal_document(
+    output: Path,
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+    operation_inputs_sha256: str | None,
+    group_plan_sha256: str | None,
+    filesystem_available_bytes_before: int,
+) -> dict[str, Any]:
+    return {
+        "schema": PACKAGE_RETENTION_JOURNAL_SCHEMA,
+        "state": "prepared",
+        "package_root": str(_absolute(output, "backend output")),
+        "plan_sha256": plan_sha256,
+        "plan": dict(plan),
+        "operation_inputs_sha256": operation_inputs_sha256,
+        "group_plan_sha256": group_plan_sha256,
+        "filesystem_available_bytes_before": filesystem_available_bytes_before,
+    }
+
+
+def _validate_retention_journal(
+    document: Mapping[str, Any],
+    output: Path,
+    *,
+    expected_plan_sha256: str,
+    expected_operation_inputs_sha256: str | None,
+    expected_group_plan_sha256: str | None,
+) -> dict[str, Any]:
+    required = {
+        "schema",
+        "state",
+        "package_root",
+        "plan_sha256",
+        "plan",
+        "operation_inputs_sha256",
+        "group_plan_sha256",
+        "filesystem_available_bytes_before",
+    }
+    if set(document) != required:
+        _fail("backend package retention journal fields are invalid")
+    if (
+        document.get("schema") != PACKAGE_RETENTION_JOURNAL_SCHEMA
+        or document.get("state") != "prepared"
+        or document.get("package_root") != str(_absolute(output, "backend output"))
+    ):
+        _fail("backend package retention journal identity differs")
+    plan_sha256 = document.get("plan_sha256")
+    plan = document.get("plan")
+    if (
+        not isinstance(plan_sha256, str)
+        or not SHA256_RE.fullmatch(plan_sha256)
+        or plan_sha256 != expected_plan_sha256
+        or not isinstance(plan, Mapping)
+        or _retention_plan_sha256(plan) != plan_sha256
+        or plan.get("schema") != PACKAGE_RETENTION_OPERATION_SCHEMA
+        or plan.get("state") != "planned"
+        or plan.get("package_root") != str(_absolute(output, "backend output"))
+    ):
+        _fail("backend package retention journal plan differs")
+    operation_inputs_sha256 = document.get("operation_inputs_sha256")
+    group_plan_sha256 = document.get("group_plan_sha256")
+    if operation_inputs_sha256 != expected_operation_inputs_sha256:
+        _fail("backend package retention journal group inputs differ")
+    if group_plan_sha256 != expected_group_plan_sha256:
+        _fail("backend package retention journal group plan differs")
+    if operation_inputs_sha256 is not None:
+        if not isinstance(operation_inputs_sha256, str) or not SHA256_RE.fullmatch(
+            operation_inputs_sha256
+        ):
+            _fail("backend package retention journal operation inputs are invalid")
+        expected_group = _retention_group_plan_sha256(plan_sha256, operation_inputs_sha256)
+        if group_plan_sha256 != expected_group:
+            _fail("backend package retention journal group plan is invalid")
+    elif group_plan_sha256 is not None:
+        _fail("backend package retention journal has group plan without inputs")
+    filesystem_before = document.get("filesystem_available_bytes_before")
+    if (
+        isinstance(filesystem_before, bool)
+        or not isinstance(filesystem_before, int)
+        or filesystem_before < 0
+    ):
+        _fail("backend package retention journal filesystem measurement is invalid")
+    return dict(document)
+
+
+def _retention_backup_identity_matches(
+    backup: Path, expected: Mapping[str, Any], name: str
+) -> None:
+    """Revalidate one journaled backup before allowing its removal."""
+
+    receipt, receipt_bytes, children = _validated_package(backup, name)
+    _assert_exact_backup_inventory(backup, receipt, name)
+    rotation, rotation_bytes = _read_json(
+        backup / "rotation.json", f"{name} rotation metadata", 1024 * 1024
+    )
+    artifacts = receipt.get("artifacts")
+    if not isinstance(artifacts, list):
+        _fail(f"{name} artifact inventory is invalid")
+    observed = {
+        "name": backup.name,
+        "receipt_sha256": _sha256_bytes(receipt_bytes),
+        "rotation_sha256": _sha256_bytes(rotation_bytes),
+        "artifact_manifest_sha256": _sha256_bytes(_canonical(artifacts)),
+        "children_sha256": _sha256_bytes(
+            _canonical(
+                {
+                    str(child): list(signature)
+                    for child, signature in sorted(children.items())
+                }
+            )
+        ),
+        "old_children": rotation.get("old_children"),
+        "new_children": rotation.get("new_children"),
+    }
+    if observed != dict(expected):
+        _fail(f"{name} differs from the retention journal")
+
+
+def _retention_archive_matches(
+    archive_root: Path,
+    name: str,
+    expected: Mapping[str, Any],
+    current_receipt_sha256: str,
+) -> None:
+    manifest, _ = _read_json(
+        archive_root / name / "retention.json",
+        f"backend package retention archive {name} manifest",
+        1024 * 1024,
+    )
+    if (
+        manifest.get("schema") != PACKAGE_RETENTION_SCHEMA
+        or manifest.get("state") != "succeeded"
+        or manifest.get("backup_name") != name
+        or manifest.get("receipt_sha256") != expected.get("receipt_sha256")
+        or manifest.get("rotation_sha256") != expected.get("rotation_sha256")
+        or manifest.get("current_receipt_sha256") != current_receipt_sha256
+    ):
+        _fail(f"backend package retention archive {name} differs from the retention journal")
+
+
+def _resume_retention_deletions(
+    output: Path, control_root: Path, journal: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Finish exactly the backup deletions named by a durable journal."""
+
+    plan = journal["plan"]
+    current, current_bytes, _ = _validated_package(
+        output, "current backend package", exclude_development_control=True
+    )
+    if _sha256_bytes(current_bytes) != plan["current_receipt_sha256"]:
+        _fail("backend package changed while retention recovery was pending")
+    backups_root = control_root / PACKAGE_BACKUPS_DIRNAME
+    archive_root = control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME
+    try:
+        entries = tuple(sorted(backups_root.iterdir(), key=lambda path: path.name))
+    except OSError as error:
+        _fail(f"cannot inspect backend package backups during retention recovery: {error}")
+    direct = plan.get("direct_rollback")
+    obsolete = plan.get("obsolete_backups")
+    if not isinstance(obsolete, list):
+        _fail("backend package retention journal obsolete list is invalid")
+    expected_names = {
+        str(direct["name"]) if isinstance(direct, Mapping) else ""
+    } | {
+        str(node.get("name")) for node in obsolete if isinstance(node, Mapping)
+    }
+    expected_names.discard("")
+    if {entry.name for entry in entries} - expected_names:
+        _fail("backend package backups changed while retention recovery was pending")
+    if isinstance(direct, Mapping):
+        direct_path = backups_root / str(direct.get("name"))
+        if not direct_path.exists() or direct_path.is_symlink():
+            _fail("direct backend package rollback disappeared during retention recovery")
+        _retention_backup_identity_matches(
+            direct_path, direct, "direct backend package rollback"
+        )
+    archive_records = _validate_retention_archives(
+        archive_root, verify_disposable_logs=False
+    )
+    archive_names = {record["path"].name for record in archive_records}
+    for node in obsolete:
+        if not isinstance(node, Mapping):
+            _fail("backend package retention journal backup identity is invalid")
+        name = node.get("name")
+        if not isinstance(name, str) or not re.fullmatch(
+            r"\.backend-package-backup-[A-Za-z0-9._-]+", name
+        ):
+            _fail("backend package retention journal backup name is invalid")
+        backup = backups_root / name
+        if backup.exists() or backup.is_symlink():
+            if backup.is_symlink():
+                _fail(f"journaled backend package backup is a symlink: {name}")
+            _retention_backup_identity_matches(
+                backup, node, f"journaled backend package backup {name}"
+            )
+            _archive_retired_backup(
+                backup,
+                archive_root,
+                str(plan["current_receipt_sha256"]),
+                str(node["receipt_sha256"]),
+                str(node["rotation_sha256"]),
+            )
+            _retention_archive_matches(
+                archive_root,
+                name,
+                node,
+                str(plan["current_receipt_sha256"]),
+            )
+            _remove_owned_tree(backup)
+            _fsync_directory(backups_root, "backend package backup directory")
+        elif name not in archive_names:
+            _fail(f"journaled backend package backup has no archived evidence: {name}")
+        else:
+            _retention_archive_matches(
+                archive_root,
+                name,
+                node,
+                str(plan["current_receipt_sha256"]),
+            )
+    return dict(plan)
+
+
+def _retention_report_for_journal(
+    plan: Mapping[str, Any],
+    control_root: Path,
+    filesystem_before: int,
+    operation_inputs_sha256: str | None,
+    group_plan_sha256: str | None,
+) -> dict[str, Any]:
+    plan_sha256 = _retention_plan_sha256(plan)
+    report = {
+        **plan,
+        "state": "applied",
+        "plan_sha256": plan_sha256,
+        "applied_at_ns": time.time_ns(),
+        "archives": {**dict(plan["archives"]), "removed": 0},
+    }
+    filesystem_after = _filesystem_available_bytes(
+        Path(str(plan["package_root"])), "backend package filesystem availability"
+    )
+    report.update(
+        _retention_measurement(
+            plan, control_root, filesystem_before, filesystem_after
+        )
+    )
+    if operation_inputs_sha256 is not None:
+        report.update(
+            operation_inputs_sha256=operation_inputs_sha256,
+            group_plan_sha256=group_plan_sha256,
+        )
+    return report
+
+
+def _read_matching_retention_report(
+    output: Path,
+    *,
+    plan_sha256: str,
+    operation_inputs_sha256: str | None,
+    group_plan_sha256: str | None,
+) -> dict[str, Any] | None:
+    path = BACKEND_CONTROL_ROOT / PACKAGE_RETENTION_REPORT_NAME
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        _fail(f"cannot inspect backend package retention report: {error}")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        _fail("backend package retention report is not one regular file")
+    report, _ = _read_json(path, "backend package retention report", 16 * 1024 * 1024)
+    if (
+        report.get("schema") != PACKAGE_RETENTION_OPERATION_SCHEMA
+        or report.get("state") != "applied"
+        or report.get("package_root") != str(_absolute(output, "backend output"))
+    ):
+        _fail("existing backend package retention report is invalid")
+    report_plan_sha256 = report.get("plan_sha256")
+    report_inputs_sha256 = report.get("operation_inputs_sha256")
+    report_group_plan_sha256 = report.get("group_plan_sha256")
+    if not isinstance(report_plan_sha256, str) or not SHA256_RE.fullmatch(
+        report_plan_sha256
+    ):
+        _fail("existing backend package retention report has an invalid plan")
+    if report_inputs_sha256 is not None and (
+        not isinstance(report_inputs_sha256, str)
+        or not SHA256_RE.fullmatch(report_inputs_sha256)
+    ):
+        _fail("existing backend package retention report has invalid group inputs")
+    if report_group_plan_sha256 is not None and (
+        not isinstance(report_group_plan_sha256, str)
+        or not SHA256_RE.fullmatch(report_group_plan_sha256)
+    ):
+        _fail("existing backend package retention report has an invalid group plan")
+    if report_inputs_sha256 is None and report_group_plan_sha256 is not None:
+        _fail("existing backend package retention report has an unbound group plan")
+    if report_inputs_sha256 is not None:
+        if report_group_plan_sha256 != _retention_group_plan_sha256(
+            report_plan_sha256, report_inputs_sha256
+        ):
+            _fail(
+                "existing backend package retention report has a mismatched group plan"
+            )
+    # A complete report from the preceding maintenance operation may still be
+    # present when this journal was written.  It is stale for the pending CAS
+    # operation, so recovery must replace it only after revalidating the
+    # journaled package/archives; an invalid record remains fail-closed above.
+    if (
+        report_plan_sha256 != plan_sha256
+        or report_inputs_sha256 != operation_inputs_sha256
+        or report_group_plan_sha256 != group_plan_sha256
+    ):
+        return None
+    return report
+
+
+def _recover_retention_journal(
+    output: Path,
+    control_root: Path,
+    journal_document: Mapping[str, Any],
+    *,
+    expected_plan_sha256: str,
+    expected_operation_inputs_sha256: str | None,
+    expected_group_plan_sha256: str | None,
+) -> dict[str, Any]:
+    journal = _validate_retention_journal(
+        journal_document,
+        output,
+        expected_plan_sha256=expected_plan_sha256,
+        expected_operation_inputs_sha256=expected_operation_inputs_sha256,
+        expected_group_plan_sha256=expected_group_plan_sha256,
+    )
+    report = _read_matching_retention_report(
+        output,
+        plan_sha256=expected_plan_sha256,
+        operation_inputs_sha256=expected_operation_inputs_sha256,
+        group_plan_sha256=expected_group_plan_sha256,
+    )
+    if report is None:
+        plan = _resume_retention_deletions(output, control_root, journal)
+        report = _retention_report_for_journal(
+            plan,
+            control_root,
+            int(journal["filesystem_available_bytes_before"]),
+            expected_operation_inputs_sha256,
+            expected_group_plan_sha256,
+        )
+        _write_bound_json(
+            BACKEND_CONTROL_ROOT / PACKAGE_RETENTION_REPORT_NAME,
+            report,
+            "backend package retention report",
+        )
+    _clear_retention_journal(control_root)
+    return report
+
+
+def _recover_automatic_retention_journal(
+    output: Path, control_root: Path, journal_document: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Recover only an interrupted automatic retention operation.
+
+    Automatic retention deliberately has no external Compose-group binding;
+    its journal records both binding fields explicitly as ``null``.  A
+    manually requested operation, or a malformed/partially bound record, must
+    remain on the explicit exact-plan recovery path and must never be guessed
+    into this startup recovery.
+    """
+
+    if not isinstance(journal_document, Mapping):
+        _fail("automatic backend package retention journal is not an object")
+    if (
+        "operation_inputs_sha256" not in journal_document
+        or "group_plan_sha256" not in journal_document
+        or journal_document.get("operation_inputs_sha256") is not None
+        or journal_document.get("group_plan_sha256") is not None
+    ):
+        _fail(
+            "backend package retention recovery is pending; "
+            "run retention apply with its exact plan before start"
+        )
+    plan_sha256 = journal_document.get("plan_sha256")
+    if not isinstance(plan_sha256, str) or not SHA256_RE.fullmatch(plan_sha256):
+        _fail("automatic backend package retention journal has an invalid plan")
+    return _recover_retention_journal(
+        output,
+        control_root,
+        journal_document,
+        expected_plan_sha256=plan_sha256,
+        expected_operation_inputs_sha256=None,
+        expected_group_plan_sha256=None,
+    )
+
+
+def _run_automatic_package_retention(
+    output: Path,
+    control_root: Path,
+    current_receipt: Mapping[str, Any],
+    current_receipt_bytes: bytes,
+) -> dict[str, Any] | None:
+    """Retire proven obsolete package backups after a new publication.
+
+    The caller already owns ``_runtime_build_lock``.  This path deliberately
+    reuses the journal/recovery/report helpers used by the explicit retention
+    command and never acquires a second lock.  A cache hit does not call this
+    helper, so ordinary restarts do not scan historical backups.
+    """
+
+    started = time.monotonic()
+    _log_phase("retention", "begin", mode="automatic")
+    try:
+        filesystem_before = _filesystem_available_bytes(
+            output, "backend package filesystem availability"
+        )
+        plan = _retain_package_backups(
+            output,
+            control_root,
+            current_receipt,
+            current_receipt_bytes,
+            dry_run=True,
+            maintenance=True,
+        )
+        plan_sha256 = _retention_plan_sha256(plan)
+        journal = _retention_journal_document(
+            output,
+            plan,
+            plan_sha256,
+            None,
+            None,
+            filesystem_before,
+        )
+        _write_retention_journal(control_root, journal)
+        report = _recover_retention_journal(
+            output,
+            control_root,
+            journal,
+            expected_plan_sha256=plan_sha256,
+            expected_operation_inputs_sha256=None,
+            expected_group_plan_sha256=None,
+        )
+    except (BackendBuildError, OSError) as error:
+        # Publication remains usable and the direct rollback is untouched. A
+        # durable automatic journal is recovered under the startup lock before
+        # a later start can publish another package.
+        _log_phase(
+            "retention",
+            "deferred",
+            mode="automatic",
+            reason=type(error).__name__,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        return None
+
+    obsolete = report.get("obsolete_backups")
+    files = len(obsolete) if isinstance(obsolete, list) else 0
+    reclaimed = report.get("scope_allocated_bytes_delta")
+    _log_phase(
+        "retention",
+        "complete",
+        mode="automatic",
+        files=files,
+        bytes=(
+            reclaimed
+            if isinstance(reclaimed, int) and not isinstance(reclaimed, bool)
+            else 0
+        ),
+        duration_ms=round((time.monotonic() - started) * 1000),
+    )
+    return report
+
+
+def _retention(args: argparse.Namespace) -> int:
+    """Run package-backup maintenance without entering the API process."""
+
+    output = _absolute(Path(args.output), "backend output")
+    build_root = _absolute(Path(args.build_root), "build root")
+    if output != PACKAGE_ROOT or build_root != BUILD_ROOT:
+        _fail("package retention is restricted to the canonical named-volume mounts")
+    operation_inputs_sha256 = getattr(args, "operation_input_sha256", None)
+    requested_group_plan_sha256 = getattr(args, "group_plan_sha256", None)
+    if bool(args.apply) and not isinstance(args.plan_sha256, str):
+        _fail("--apply requires the plan sha256 from a preceding dry-run")
+    if args.plan_sha256 is not None and not SHA256_RE.fullmatch(args.plan_sha256):
+        _fail("--plan-sha256 must be a lowercase SHA-256 digest")
+    if operation_inputs_sha256 is not None and not SHA256_RE.fullmatch(
+        operation_inputs_sha256
+    ):
+        _fail("--operation-input-sha256 must be a lowercase SHA-256 digest")
+    if requested_group_plan_sha256 is not None and not SHA256_RE.fullmatch(
+        requested_group_plan_sha256
+    ):
+        _fail("--group-plan-sha256 must be a lowercase SHA-256 digest")
+    if requested_group_plan_sha256 is not None and operation_inputs_sha256 is None:
+        _fail("--group-plan-sha256 requires --operation-input-sha256")
+    if (
+        args.apply
+        and operation_inputs_sha256 is not None
+        and requested_group_plan_sha256 is None
+    ):
+        _fail("--apply with operation inputs requires --group-plan-sha256")
+
+    control_root = output / PACKAGE_DEVELOPMENT_DIRNAME
+    _validate_existing_package_development_root(output)
+    pending = _read_rotation_journal(output, control_root)
+    if pending is not None:
+        _fail("package retention requires a completed package rotation; pending journal remains")
+    retention_journal = _read_retention_journal(control_root)
+    if retention_journal is not None and not args.apply:
+        _fail("package retention has a pending apply journal; rerun apply with its exact plan")
+
+    _log_phase("retention", "begin", mode="maintenance", apply=bool(args.apply))
+    with _runtime_build_lock(build_root):
+        # Re-read the journal and current package after acquiring the lock. A
+        # stopped group is a launcher precondition, but the lock is the final
+        # protection against a concurrent backend maintenance/build process.
+        if _read_rotation_journal(output, control_root) is not None:
+            _fail("package rotation became pending before retention validation")
+        retention_journal = _read_retention_journal(control_root)
+        if retention_journal is not None:
+            if not args.apply or not isinstance(args.plan_sha256, str):
+                _fail("package retention recovery requires the exact apply plan")
+            report = _recover_retention_journal(
+                output,
+                control_root,
+                retention_journal,
+                expected_plan_sha256=args.plan_sha256,
+                expected_operation_inputs_sha256=operation_inputs_sha256,
+                expected_group_plan_sha256=requested_group_plan_sha256,
+            )
+            _emit_retention_report(report)
+            return 0
+        current, current_bytes, _ = _validated_package(
+            output, "current backend package", exclude_development_control=True
+        )
+        filesystem_before = _filesystem_available_bytes(
+            output, "backend package filesystem availability"
+        )
+        plan = _retain_package_backups(
+            output,
+            control_root,
+            current,
+            current_bytes,
+            dry_run=True,
+            maintenance=True,
+        )
+        plan_sha256 = _retention_plan_sha256(plan)
+        if not args.apply:
+            filesystem_after = _filesystem_available_bytes(
+                output, "backend package filesystem availability"
+            )
+            report = {
+                **plan,
+                "state": "dry-run",
+                "plan_sha256": plan_sha256,
+                **_retention_measurement(
+                    plan, control_root, filesystem_before, filesystem_after
+                ),
+            }
+            if operation_inputs_sha256 is not None:
+                group_plan_sha256 = _retention_group_plan_sha256(
+                    plan_sha256, operation_inputs_sha256
+                )
+                if (
+                    requested_group_plan_sha256 is not None
+                    and requested_group_plan_sha256 != group_plan_sha256
+                ):
+                    _fail("retention group plan changed before dry-run report")
+                report.update(
+                    operation_inputs_sha256=operation_inputs_sha256,
+                    group_plan_sha256=group_plan_sha256,
+                )
+            _emit_retention_report(report)
+            return 0
+        if args.plan_sha256 != plan_sha256:
+            _fail(
+                "retention plan changed; rerun dry-run and pass its plan sha256 "
+                "before apply"
+            )
+        filesystem_before = _filesystem_available_bytes(
+            output, "backend package filesystem availability"
+        )
+        group_plan_sha256 = (
+            _retention_group_plan_sha256(plan_sha256, operation_inputs_sha256)
+            if operation_inputs_sha256 is not None
+            else None
+        )
+        if (
+            requested_group_plan_sha256 is not None
+            and requested_group_plan_sha256 != group_plan_sha256
+        ):
+            _fail("retention group plan changed before apply deletion")
+        _write_retention_journal(
+            control_root,
+            _retention_journal_document(
+                output,
+                plan,
+                plan_sha256,
+                operation_inputs_sha256,
+                group_plan_sha256,
+                filesystem_before,
+            ),
+        )
+        applied = _retain_package_backups(
+            output,
+            control_root,
+            current,
+            current_bytes,
+            dry_run=False,
+            maintenance=True,
+        )
+        report = {
+            **applied,
+            "plan_sha256": plan_sha256,
+            "applied_at_ns": time.time_ns(),
+        }
+        filesystem_after = _filesystem_available_bytes(
+            output, "backend package filesystem availability"
+        )
+        report.update(
+            _retention_measurement(
+                plan, control_root, filesystem_before, filesystem_after
+            )
+        )
+        if operation_inputs_sha256 is not None:
+            group_plan_sha256 = _retention_group_plan_sha256(
+                plan_sha256, operation_inputs_sha256
+            )
+            if (
+                requested_group_plan_sha256 is not None
+                and requested_group_plan_sha256 != group_plan_sha256
+            ):
+                _fail("retention group plan changed before apply report")
+            report.update(
+                operation_inputs_sha256=operation_inputs_sha256,
+                group_plan_sha256=group_plan_sha256,
+            )
+        _write_bound_json(
+            BACKEND_CONTROL_ROOT / PACKAGE_RETENTION_REPORT_NAME,
+            report,
+            "backend package retention report",
+        )
+        _clear_retention_journal(control_root)
+        _emit_retention_report(report)
+        return 0
 
 
 def _copy_package(
@@ -4854,6 +5926,20 @@ def _write_bound_bytes(path: Path, data: bytes, name: str) -> None:
 
 
 def _write_bound_json(path: Path, value: Mapping[str, Any], name: str) -> None:
+    path = _absolute(path, name)
+    if path == BACKEND_CONTROL_ROOT / PACKAGE_RETENTION_REPORT_NAME:
+        # This record lives in the group control volume rather than in an
+        # existing bind-mounted file.  Use the established atomic writer so
+        # the first apply can create it and a retry can replace one complete
+        # regular record without truncating a mount.
+        _assert_no_links(path.parent, f"{name} parent")
+        if path.exists() or path.is_symlink():
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                _fail(f"{name} is not one regular file")
+        _write_json(path, value, name)
+        _fsync_directory(path.parent, f"{name} parent")
+        return
     _write_bound_bytes(path, _canonical(value), name)
 
 
@@ -4903,6 +5989,40 @@ def _start(args: argparse.Namespace) -> int:
         try:
             control_root = _ensure_package_development_root(output)
             _recover_pending_package_rotation(output, control_root, build_root)
+            retention_journal = _read_retention_journal(control_root)
+            if retention_journal is not None:
+                if (
+                    "operation_inputs_sha256" in retention_journal
+                    and "group_plan_sha256" in retention_journal
+                    and retention_journal.get("operation_inputs_sha256") is None
+                    and retention_journal.get("group_plan_sha256") is None
+                ):
+                    recovery_started = time.monotonic()
+                    report = _recover_automatic_retention_journal(
+                        output, control_root, retention_journal
+                    )
+                    obsolete = report.get("obsolete_backups")
+                    reclaimed = report.get("scope_allocated_bytes_delta")
+                    _log_phase(
+                        "retention",
+                        "recovered",
+                        mode="automatic",
+                        files=len(obsolete) if isinstance(obsolete, list) else 0,
+                        bytes=(
+                            reclaimed
+                            if isinstance(reclaimed, int)
+                            and not isinstance(reclaimed, bool)
+                            else 0
+                        ),
+                        duration_ms=round(
+                            (time.monotonic() - recovery_started) * 1000
+                        ),
+                    )
+                else:
+                    _fail(
+                        "backend package retention recovery is pending; "
+                        "run retention apply with its exact plan before start"
+                    )
             previous_receipt: tuple[dict[str, Any], bytes, dict[str, tuple[int, int, int, int, int]]] | None
             existing_children = _package_children(
                 output,
@@ -5056,10 +6176,17 @@ def _start(args: argparse.Namespace) -> int:
                         promotion_spec,
                         promoted_current,
                     )
-                # Historical rollback validation is maintenance, not a startup
-                # prerequisite. Preserve every backup here; _serve still verifies
-                # the current package before starting the API.
-                _log_phase("retention", "deferred", reason="outside-startup", backups="retained")
+                published_current = _validated_package(
+                    output,
+                    "published backend package before automatic retention",
+                    exclude_development_control=True,
+                )
+                _run_automatic_package_retention(
+                    output,
+                    control_root,
+                    published_current[0],
+                    published_current[1],
+                )
             else:
                 _log_phase("retention", "skipped", reason="pending-rotation-journal")
         except (BackendBuildError, OSError) as error:
@@ -5485,6 +6612,32 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--output", default=PACKAGE_ROOT, type=Path)
     start.add_argument("--build-root", default=BUILD_ROOT, type=Path)
     start.add_argument("--jobs", default=int(os.environ.get("CARGO_BUILD_JOBS", "2")), type=int)
+    retention = subparsers.add_parser(
+        "retention",
+        help=(
+            "preview or apply verified obsolete backend package-backup retention; "
+            "the API is never started"
+        ),
+    )
+    retention.add_argument("--output", default=PACKAGE_ROOT, type=Path)
+    retention.add_argument("--build-root", default=BUILD_ROOT, type=Path)
+    retention.add_argument(
+        "--apply",
+        action="store_true",
+        help="apply only the exact plan named by --plan-sha256; default is dry-run",
+    )
+    retention.add_argument(
+        "--plan-sha256",
+        help="CAS hash returned by a preceding dry-run in this same package volume",
+    )
+    retention.add_argument(
+        "--operation-input-sha256",
+        help="digest of the trusted Compose-group inputs supplied by the launcher",
+    )
+    retention.add_argument(
+        "--group-plan-sha256",
+        help="external group-plan CAS supplied by the launcher for apply",
+    )
     subparsers.add_parser("serve", help="serve the receipt-validated package")
     return parser
 
@@ -5501,6 +6654,10 @@ def main(argv: list[str] | None = None) -> int:
             if extra:
                 parser.error(f"unexpected arguments for start: {' '.join(extra)}")
             return _start(args)
+        if args.operation == "retention":
+            if extra:
+                parser.error(f"unexpected arguments for retention: {' '.join(extra)}")
+            return _retention(args)
         return _serve(extra)
     except BackendBuildError as error:
         print(f"backend-dev: {error}", file=sys.stderr)

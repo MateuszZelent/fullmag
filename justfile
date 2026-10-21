@@ -52,12 +52,25 @@ docker-dev-stop-unadmitted attempt config_sha256 source_root backend_container_i
 docker-dev-control-checks source_root:
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_checks.py" --source-root {{quote(source_root)}}
 
+# Preview or apply the bounded package-retention operation inside the selected
+# stopped Compose group. The helper owns its trusted image/config discovery;
+# it never enters the legacy runner or writes technical data to host storage.
+docker-dev-package-retention source_root apply="false" plan_sha256="" group_plan_sha256="" reconcile_attempt="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_package_retention.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} {{if apply == "true" { "--apply --plan-sha256 " + quote(plan_sha256) + " --group-plan-sha256 " + quote(group_plan_sha256) } else if apply == "false" { "" } else { error("apply must be true or false") }}} {{if reconcile_attempt == "" { "" } else { "--reconcile-attempt " + quote(reconcile_attempt) }}}
+
 # Probe the already-running volume DEV frontend with an image-owned browser.
 # Reuse the exact pinned image or acquire it through this Compose group's
 # BuildControl operation; no browser install or source/build/cache write happens
 # on the host.
 docker-dev-browser-qa source_root="" port="" browser_image="" timeout="180" pull_timeout="1800":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev_browser_qa.py" --repo-root "{{repo_root}}" {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} {{if port == "" { "" } else { "--port " + quote(port) }}} --timeout {{quote(timeout)}} --pull-timeout {{quote(pull_timeout)}} {{if browser_image == "" { "" } else { "--browser-image " + quote(browser_image) }}}
+
+# Probe one reversible CSS custom-property HMR transition in a nonce-scoped
+# temporary App Router page in the already-running volume DEV frontend. The
+# caller reuses the selected Compose group and BuildControl; it never restarts
+# services, builds, runs Compute, or writes technical receipts to host storage.
+docker-dev-hmr-qa source_root="" port="" browser_image="" timeout="120" pull_timeout="1800" reconcile_attempt="" expected_receipt_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_hmr_qa.py" --repo-root "{{repo_root}}" {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} {{if port == "" { "" } else { "--port " + quote(port) }}} --timeout {{quote(timeout)}} --pull-timeout {{quote(pull_timeout)}} {{if browser_image == "" { "" } else { "--browser-image " + quote(browser_image) }}} {{if reconcile_attempt == "" { "" } else { "--reconcile-attempt " + quote(reconcile_attempt) + " --expected-receipt-sha256 " + quote(expected_receipt_sha256) }}}
 
 # Resume observation of one retained volume DEV start without restarting backend.
 docker-dev-resume attempt config_sha256 source_root port="3197" restart_backend="false":

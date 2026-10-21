@@ -17,6 +17,10 @@ from docker_build_control import (BuildControl, BuildControlError, canonical, co
                                   compose_capture, build_volume_toolchain, build_volume_runtime_images, bounded_capture,
                                   mirror_console)
 from docker_dev_host import docker_argv, require_host, local_volume, validate_host_path
+from docker_named_volume_safety import (
+    DockerNamedVolumeSafetyError,
+    validate_local_named_volume,
+)
 
 INCLUDE_UNTRACKED_ENV = "FULLMAG_DEV_INCLUDE_UNTRACKED"
 _MAX_INCLUDE_UNTRACKED_FILES = 10000
@@ -476,6 +480,12 @@ def _owned_volume(control, role, key):
     if len(records) != 1:
         raise BuildControlError("Ambiguous build-data volume")
     observed = records[0]
+    try:
+        validate_local_named_volume(observed, name)
+    except DockerNamedVolumeSafetyError as error:
+        raise BuildControlError(
+            "Build-data volume has unsafe Docker backing; retained: " + str(error)
+        ) from error
     if (observed.get("Name") != name or observed.get("Driver") != "local"
             or observed.get("Options")
             or any((observed.get("Labels") or {}).get(k) != v for k, v in labels.items())):

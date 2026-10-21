@@ -4,8 +4,16 @@ Decyzja użytkownika z 17.10.2026: [ADR 0061](../adr/0061-docker-development-bui
 Kontrakt: dwa stałe kontenery aplikacji; backend buduje i uruchamia kod w tej
 samej instancji. Dane techniczne procesu budowania są izolowane w nazwanych
 wolumenach Docker/BuildKit przypisanych do grupy Compose. Sesje, projekty,
-ustawienia i wyniki symulacji pozostają w fizycznym storage Windows. Wdrożenie
-i dowody tego wariantu: **NOT VERIFIED**.
+ustawienia i wyniki symulacji pozostają w fizycznym storage hosta wybranego
+profilu Windows lub Linux/WSL. Pełny odbiór tego wariantu nie jest zakończony.
+
+Potwierdzono build i start API w tej samej usłudze backend, prywatną sieć oraz
+jeden port frontendu, Home, Workspace i canvas WebGL. Edycja CSS dociera przez
+HMR bez wymiany dokumentu, lecz ujawniono błąd odłączonego linku w Next.js;
+wersjonowana poprawka przeszła regresję CI, a jej odbiór w działającej grupie
+pozostaje **NOT VERIFIED**. Restart cache-hit, pomiar kompilacji przyrostowej,
+wykonanie wskazanych skryptów i retencja rzeczywistych pakietów nadal wymagają
+odrębnych dowodów. Szczegóły: [audyt uruchomienia](../audits/2026-10-21-docker-startup-filesystem.md).
 
 ## Źródła i usługi
 
@@ -66,10 +74,11 @@ metadane rotacji. Warstwy obrazów i ich BuildKit context pozostają w magazynie
 obrazu/BuildKit Dockera. Mały hostowy run root może zawierać wyłącznie dane
 operacyjne sesji i handoffu; nie jest stagingiem, cache'em ani magazynem
 receiptów buildu.
-Frontend ma analogiczny nazwany wolumen cache/control. Przygotowanie wolumenów
-i migracja technicznych markerów mają dowód częściowy; cold build, API, mounty,
-brak zapisu buildu do hosta oraz pomiary restartu i kompilacji przyrostowej
-pozostają **NOT VERIFIED**. Stare cache zachowujemy do osobnej kontroli użycia
+Frontend używa named volume `fullmag-dev-frontend-v1-<24hex>` dla cache oraz
+readonly subpath `frontend` wolumenu kontroli grupy. Zwykła edycja aplikacji
+nie zmienia klucza zależności. Build/start API i rzeczywiste mounty potwierdzono
+w aktywnej grupie; pełny build na świeżym hoście, restart bez launchera oraz
+pomiary restartu i kompilacji przyrostowej pozostają **NOT VERIFIED**. Stare cache zachowujemy do osobnej kontroli użycia
 i rollbacku. Nie usuwaj ani nie przenoś aktywnego cache ręcznie.
 
 Niezmienione pliki cienia zachowują zawartość i metadane potrzebne kompilacji
@@ -429,27 +438,22 @@ Szczegóły: [ADR 0049](../adr/0049-native-runtime-owner-control.md),
 
 ### Retencja pakietów developerskich
 
-Korekta z 20.10.2026 odracza automatyczną retencję z decyzji 17.10.2026:
-start zachowuje bieżący pakiet i wszystkie historyczne rollbacki, raportując
-`phase=retention state=deferred`. Pełne hashowanie starych kopii nie blokuje API.
-Obowiązkowa walidacja aktualnego pakietu pozostaje. Każda nowa publikacja może
-dodać pełny backup; obecnie brak limitu liczby kopii i osobnej udostępnionej
-operacji konserwacyjnej. Istniejący preflight mierzy build/cache volume;
-nie gwarantuje miejsca w osobnym package volume. Przed kolejnym buildem
-należy ocenić również miejsce dla pakietów i rollbacków. Szczegóły:
-[ADR 0061](../adr/0061-docker-development-build-and-runtime-container.md#korekta-20102026--retencja-poza-startem-api).
+Po rzeczywistej publikacji nowego pakietu backend wykonuje automatyczną
+retencję pod posiadaną już blokadą cache. Najpierw muszą zakończyć się rotacja,
+provenance i usunięcie journalu rotacji; aktualny pakiet jest sprawdzany ponownie.
+Dokładny plan i journal retencji poprzedzają usunięcie zweryfikowanego ogona
+łańcucha backupów. Bieżący pakiet, bezpośredni rollback i archiwa metadanych
+pozostają. Brak zgodnych dowodów zachowuje dane i daje diagnostykę.
 
-Zachowana w źródłach funkcja retencji wymaga blokady cache i trwałej,
-zweryfikowanej publikacji nowego pakietu, lecz nie jest wywoływana przez start.
-Jej kontrakt archiwum retired zachowuje tylko receipt i
-rotację, bez kolejnych kopii pełnego build logu. Zostawia najwyżej 8 archiwów
-i 64 MiB łącznego rozmiaru plików; zachowuje najnowsze według zapisanego
-`retired_at_ns` (dla starszych wpisów kolejność wyznacza czas pliku manifestu).
-Archiwa legacy z logiem są usuwane, jeśli przekraczają ten limit; log jest
-sprawdzany hashem, gdy pozostaje w zachowanym archiwum. Nieznane, niespójne lub
-używane dane pozostają z diagnostyką. Niepowodzenie sprzątania nie unieważnia
-poprawnie opublikowanego pakietu. Limity tej funkcji nie są obecnie egzekwowane
-przez ścieżkę startu; nie usunięto istniejących archiwów ani backupów.
+Restart z niezmienionymi wejściami pomija historyczny skan retencji. Pierwsza
+nowa publikacja może nadrobić wiele starych kopii i potrwać dłużej; log podaje
+czas oraz zmierzone bajty. Przerwany journal wymaga dokładnego recovery przed
+kolejną rotacją, bez ponawiania Solve. Osobna zarządzana recepta
+`just docker-dev-package-retention "<wybrany-checkout>"` daje domyślny dry-run
+zatrzymanej grupy i zapisuje plan w jej control volume. Nie usuwa named volumes,
+cache ani danych użytkownika. Nie zmierzono jeszcze odzysku rzeczywistych
+pakietów; pełny odbiór retencji pozostaje **NOT VERIFIED**. Szczegóły:
+[ADR 0061](../adr/0061-docker-development-build-and-runtime-container.md#korekta-21102026--retencja-po-nowej-publikacji).
 
 Retencja nie obejmuje cache Cargo/CMake/CUDA, źródeł, sesji, projektów, wyników,
 bazy grupy ani historii rezerwacji. Restart używający aktualnego pakietu nie

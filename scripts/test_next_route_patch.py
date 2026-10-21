@@ -53,6 +53,7 @@ class NextRoutePatchTests(unittest.TestCase):
             f"patched Next fixture failed:\nstdout={completed.stdout}\nstderr={completed.stderr}",
         )
         self.assertIn("metadata included", completed.stdout)
+        self.assertIn("CSS HMR fixture PASS", completed.stdout)
 
 
 if __name__ == "__main__":

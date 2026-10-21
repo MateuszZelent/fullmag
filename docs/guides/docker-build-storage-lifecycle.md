@@ -68,7 +68,7 @@ Git/resolvera; `<run-id>` jest tożsamością uruchomienia, nie kluczem cache.
 | Rust/CMake | `/build/workspace/.fullmag-build/cargo-targets/direct/<cargo-profile>`; osobne `fullmag-fdm-sys-stable/out/native-build` i `fullmag-fem-sys-stable/out/native-build` pod `build/`; `CARGO_HOME=/build/cargo` | Zachowany cache. W komendach Cargo `/workspace` jest aliasem workspace; nie osobną kopią na hoście |
 | Zainstalowany wynik kompilacji daily DEV | Kandydat w `.development/candidates/` pod `/opt/fullmag/package`, wybrany przez kontroler | Make zapisuje bezpośrednio do named package volume; brak dodatkowej pełnej kopii w `/build/workspace/.fullmag/local`. Istniejący legacy stage pozostaje zachowany |
 | Backend: pakiet v2 | Named volume `fullmag-backend-v2-<24hex>-package` → `/opt/fullmag/package` | Bieżący zweryfikowany pakiet, kontrola publikacji i rollback; bez transferu przez Windows |
-| Frontend: zależności, Next i HMR state | Named volume `<compose-project>-fullmag-frontend-dev-v2-<key>` → `/state/development`; control namespace → `/opt/fullmag/control` | Named volume grupy Compose dla pnpm, `node_modules`, Next cache, logów i diagnostycznej kopii receiptu; brak zapisu do Windows storage w ścieżce v2 (**NOT VERIFIED** runtime) |
+| Frontend: zależności, Next i HMR state | Daily `docker_volume_dev`: named volume `fullmag-dev-frontend-v1-<24hex>` → `/state/development`; readonly subpath `frontend` control volume → `/opt/fullmag/control` | Klucz wiąże grupę, dependency seed i narzędzia; źródłowe edycje nie tworzą nowego wolumenu. pnpm, `node_modules`, Next cache i logi pozostają w Dockerze. Oddzielny adapter `frontend-cache-v2` nie jest profilem codziennej trasy |
 | Frontend: bieżący owner procesu | `/run/fullmag/frontend-owner/receipt.json` w prywatnym tmpfs 1 MiB, UID/GID 65532, tryb 0700 | Ulotny autorytet procesu i wejście healthchecka; znika po zatrzymaniu kontenera. `/state/development/frontend-dev-receipt.json` zachowuje wyłącznie historię/cache, nie dowodzi żywego ownera. Wdrożenie źródłowe: [ADR 0061](../adr/0061-docker-development-build-and-runtime-container.md); restart runtime **NOT VERIFIED** |
 | Frontend: live kod | `app`, `src`, `public`, `scripts` z checkoutu → readonly pod `/state/development/workspace/apps/control-room` | HMR czyta pliki Windows. Wygenerowane pliki i Linux `node_modules` nie trafiają do checkoutu |
 | Uruchomienie, sesje i wyniki daily DEV | `<storage>/runs/<worktree-id>/docker-dev/<run-id>/state` → `/state` backendu; frontend dostaje jego `development` | Fizyczne pliki Windows. Restart istniejącego kontenera zachowuje mount; nowy run ma własny namespace |
@@ -149,8 +149,10 @@ Nie są to nowe archiwa źródeł wykonywane przy każdym restarcie bezpośredni
    kompilacji natywnej. To znana granica obecnej optymalizacji.
 6. Nowy pakiet powstaje w prywatnym kandydacie named package volume. Po
    walidacji i trwałej publikacji poprzedni staje się rollbackiem. Dopiero
-   potem start przechodzi do sprawdzenia aktualnego pakietu i API. Retencja
-   historycznych kopii jest odroczona; wszystkie backupy pozostają. Błąd kompilacji nie uruchamia
+   potem start przechodzi do sprawdzenia aktualnego pakietu i API. Po takiej
+   nowej publikacji pod tą samą blokadą wykonywana jest automatyczna retencja
+   starszych, dokładnie zweryfikowanych backupów; cache hit zwykłego restartu
+   tej ścieżki nie uruchamia. Błąd kompilacji nie uruchamia
    nowego API; poprzedni zweryfikowany pakiet zostaje zachowany. W daily
    live-shadow assembly/provenance i receipty pozostają w control/package
    volumes, a `startup-provenance`, `runtime-recovery-consumed`, host-ledger i
@@ -202,8 +204,8 @@ nie jest etapem codziennego startu DEV.
 
 | Klasa danych | Obecny mechanizm | Granica / ryzyko wzrostu |
 | --- | --- | --- |
-| Binarne pakiety backendu | Bieżący pakiet i wszystkie historyczne rollbacki pozostają w named package volume; start raportuje `retention deferred` | Automatyczna retencja podczas startu jest odroczona. Każda nowa publikacja może dodać pełny backup; brak bieżącego limitu liczby kopii. Istniejący preflight mierzy build/cache volume, nie gwarantuje miejsca w osobnym package volume |
-| Dowody wcześniej usuniętych pakietów | Istniejące receipty i rotacje w `/opt/fullmag/package/.development/retired` pozostają | Odroczenie retencji nie uruchamia archiwizacji ani prune. Limity 8 archiwów / 64 MiB w funkcji retencji nie są obecnie egzekwowane przez ścieżkę startu |
+| Binarne pakiety backendu | Bieżący pakiet i bezpośredni rollback pozostają w named package volume; po nowej publikacji start uruchamia automatyczną retencję dokładnie przypiętych starszych backupów | Cache hit zwykłego restartu pomija skan historyczny; `docker_package_retention.py` pozostaje ścieżką dry-run/apply i exact-plan recovery, nie kasuje cache |
+| Dowody wcześniej usuniętych pakietów | Metadane w `/opt/fullmag/package/.development/retired` pozostają | Operacja pakietowa archiwizuje nowe usunięte backupy, ale zachowuje istniejące archiwa. Ich przyszłe usuwanie wymaga osobnego planu z dokładnymi hashami, nie count/bytes |
 | Logi stdout/stderr kontenerów DEV | Compose używa `json-file`, `max-size=10m`, `max-file=3` dla usług grupy | Do 30 MiB na kontener dla kopii logów Dockera; nie ogranicza plików logów w named volumes ani BuildKit |
 | Log Next.js | Stały `/state/development/next.log` oraz najwyżej jeden `/state/development/next.log.rollback` w frontend cache volume; po przejęciu istniejącego runtime locka pełny regularny `next.log` jest atomowo obracany i katalog jest synchronizowany przed utworzeniem świeżego pliku | Retencja bieżącej i jednej poprzedniej generacji ma limit 64 MiB na plik; stdout ponad limit pozostaje w rotowanym driverze Docker. Ścieżki nieznane, dowiązania, hardlinki i pliki nieregularne są zachowywane/fail-closed, bez ogólnego GC |
 | Staging kandydata daily live-shadow | Named package volume; usuwanie tylko znanych, oznaczonych kandydatów po potwierdzonym błędzie albo publikacji | Dziennik `rotation.pending.json` pozwala odzyskać dokładną przerwaną rotację przy kolejnym starcie. Nieznane, zmienione lub niekompletne dowody pozostają zachowane; brak ogólnego sweepu |
@@ -217,12 +219,17 @@ nie jest etapem codziennego startu DEV.
 | Sesje, projekty, wyniki, `workspace.db` | Trwałe dane użytkownika | Wyłączone ze sprzątania technicznego |
 | Obrazy / BuildKit / stare grupy | Brak automatycznego globalnego czyszczenia Fullmaga | Zatrzymany kontener nadal może referencjonować obraz/cache; inna grupa może go używać |
 
-Funkcja retencji pakietów i jej historyczne regresje pozostają w źródłach,
-ale nie są wywoływane podczas startu; osobna operacja konserwacyjna nie jest
-obecnie udostępniona. Nie uruchamiano testów. Nowa ścieżka bez retencji wymaga
-odbioru runtime (**NOT VERIFIED**). Nie wolno deklarować, że pakiety lub cały
-storage są ograniczone automatycznym limitem. Powód i granice odroczenia:
-[ADR 0061](../adr/0061-docker-development-build-and-runtime-container.md#korekta-20102026--retencja-poza-startem-api).
+Funkcja retencji pakietów i jej historyczne regresje są wywoływane po nowej
+publikacji pod istniejącą blokadą; cache hit zwykłego restartu nie skanuje
+historycznych backupów. Journal przerwanej automatycznej retencji jest
+odzyskiwany przy kolejnym starcie pod tą blokadą, a osobna operacja konserwacyjna
+pozostaje dostępna przez jawny launcher dla dry-run/apply i journalów związanych
+z dokładnym planem grupy. Interpretowane regresje
+publikacji pakietów oraz retencji przeszły w helperze wybranej grupy. Nie
+wykonano operacji na rzeczywistych backupach; ścieżka wymaga odbioru runtime
+(**NOT VERIFIED**). Nie wolno deklarować, że pakiety lub cały storage są
+ograniczone automatycznym limitem. Granice i zachowanie po nowej publikacji:
+[ADR 0061](../adr/0061-docker-development-build-and-runtime-container.md#korekta-21102026--retencja-po-nowej-publikacji).
 
 Osobny `just prune-managed-fem-runtimes apply=0 keep_per_family=2` jest
 dry-runem retencji zarządzanych runtime'ów FEM. Nie czyści automatycznie
@@ -313,10 +320,126 @@ raport nie jest deklaracją zajętości/retencji na innym komputerze.
 - [`backend_dev.py`](../../docker/all-in-one/backend_dev.py)
   `_start`, `_build_environment`, `_retain_package_backups` — build, publikacja,
   rollback i retencja;
-- [`docker_frontend_cache.py`](../../scripts/docker_frontend_cache.py)
-  `cache_key`, `prepare`, `validate_container` — frontend v2 named volume;
-  historyczny ext4 adapter pozostaje poniżej jako compatibility-only;
+- [`docker_volume_dev.py`](../../scripts/docker_volume_dev.py)
+  `_owned_volume` — aktywny cache frontendu `fullmag-dev-frontend-v1-<24hex>`;
+  osobny adapter [`docker_frontend_cache.py`](../../scripts/docker_frontend_cache.py)
+  obsługuje profil v2, a historyczny ext4 adapter pozostaje compatibility-only;
 - [`host_resource_ledger.rs`](../../crates/fullmag-session/src/host_resource_ledger.rs)
   — ograniczone sprzątanie technicznych CAS, bez kasowania rezerwacji;
 - [`test_docker_backend_dev.py`](../../scripts/test_docker_backend_dev.py)
   — wykonywalne regresje publikacji i retencji.
+
+## 8. Zarządzana retencja pakietów backendu DEV
+
+Po rzeczywistej nowej publikacji backend automatycznie wykonuje retencję pod
+już posiadaną blokadą builda, korzystając z tego samego obrazu, usługi i
+named package volume. Zwykły restart z niezmienionym pakietem przechodzi
+cache hit i nie skanuje historycznych backupów. Ręczna operacja pozostaje
+potrzebna do dry-run/apply oraz do odzyskania journalu z przypiętym planem grupy.
+Jeśli automatyczna retencja zostanie przerwana po zapisaniu journalu, kolejny
+start backendu odzyskuje wyłącznie journal z oboma polami group binding jawnie
+ustawionymi na `null`, pod tym samym flockiem, przed cache-hit albo nową
+publikacją. Niepełny lub związany z grupą journal nadal zatrzymuje start i wymaga
+exact-plan apply. Operacja nie tworzy drugiego locka ani procesu w tle.
+
+```powershell
+# Grupa musi być zatrzymana; helper nie kończy aktywnej symulacji.
+python -B scripts/docker_package_retention.py `
+  --repo-root "<wybrany-checkout>" `
+  --source-root "<wybrany-checkout>"
+```
+
+Polecenie jest domyślnie dry-run. Weryfikuje dokładny receipt grupy,
+tożsamość source/worktree, obrazy z `toolchain/verified.json`,
+`image-dev/verified.json` i `image-backend/verified.json`, pełny digest
+Compose, wszystkie named volumes, etykiety oraz zatrzymanie obu usług aplikacji
+(`backend` i `frontend`). Nie przyjmuje `--image`: helper control jest wyprowadzany
+z przypiętej konfiguracji toolchaina, tak jak w istniejącej ścieżce DEV.
+Następnie przejmuje istniejący `BuildControl.operation` lease i uruchamia
+`backend retention` jako dokładnie nazwany, jednorazowy kontener przez
+`docker compose run --name <przypięta-nazwa> --no-deps backend`. Launcher nie
+używa `--rm`: przed startem zapisuje `daemon_pending` i pełną tożsamość
+kontenera, a po odpowiedzi Docker najpierw potwierdza stan terminalny, obraz,
+mounty, sieć i etykiety, potem usuwa kontener i potwierdza jego brak. Przy
+utracie transportu kontener oraz lease pozostają zachowane do jawnego
+`--reconcile-attempt <attempt>`; nie startuje frontend/API i nie tworzy
+`backend-build`. `daemon_pending` pozostaje w receipcie do wspólnej finalizacji
+`BuildControl`; ta publikuje `current`/`verified`, a marker `terminal.json`
+zapisuje jako ostatni. Potwierdzona nieobecność po błędzie Compose nie oznacza
+braku skutków i pozostaje oznaczona jako `effects_unknown` oraz `NOT VERIFIED`.
+
+Raport dry-run zawiera `plan_sha256`, bieżący receipt, bezpośredni rollback i
+listę zastąpionych backupów. Apply wymaga jawnego przekazania tego hasha:
+
+```powershell
+python -B scripts/docker_package_retention.py `
+  --repo-root C:/git/fullmag/fullmag `
+  --source-root C:/git/fullmag/fullmag `
+  --apply `
+  --plan-sha256 <hash-z-dry-run> `
+  --group-plan-sha256 <group-plan-z-dry-run>
+```
+
+Backend ponownie waliduje receipt, inwentarz, tożsamość i pełny łańcuch
+rotacji pod `/.fullmag-backend-runtime.lock`. Jeżeli plan zmienił się albo
+pojawił się pending rotation, operacja kończy się bez usuwania danych. Usuwane
+są wyłącznie starsze, dowiedzione elementy łańcucha; plan przypina każdy
+backup przez jego receipt, rotację, manifest artefaktów i digest inwentarza.
+Bieżący pakiet i jego bezpośredni rollback pozostają. Metadane nowych
+usuniętych pakietów są archiwizowane, ale istniejące archiwa `.development/retired`
+nie są kasowane przez tę operację; ich osobna retencja wymaga dokładnego planu
+CAS.
+
+Jeżeli klient utracił wynik `compose run`, nie wolno uruchamiać drugiej próby
+ani ręcznie zatrzymywać kontenera. Odczytaj `attempt` z trwałego receiptu i
+uruchom dokładne wznowienie:
+
+```powershell
+python -B scripts/docker_package_retention.py `
+  --repo-root C:/git/fullmag/fullmag `
+  --source-root C:/git/fullmag/fullmag `
+  --reconcile-attempt <attempt>
+```
+
+Wznowienie akceptuje wyłącznie przypięty projekt, usługę `backend`, nazwę,
+obraz, etykiety, mounty i sieć. Nieznany stan pozostaje zatrzymany i zachowuje
+lease; raport nie może oznaczyć operacji jako `succeeded`, zanim raport backendu
+nie zostanie trwale zapisany i kontener nie zostanie usunięty z potwierdzeniem.
+
+Przed pierwszym usunięciem apply zapisuje i synchronizuje w package volume
+`retention.pending.json`, zawierający dokładny plan CAS, tożsamość grupy i
+pomiar początkowy. Raport jest publikowany dopiero po zakończeniu usuwania i
+jest zapisywany atomowo w control volume. Jeśli proces zakończy się pomiędzy
+tymi krokami, ponowne apply z tym samym planem wznawia wyłącznie wskazane
+backupy albo rozpoznaje już opublikowany raport; zmieniony pakiet, archiwum lub
+plan kończy się fail-closed. Jeżeli journal pozostaje po przerwaniu apply,
+start backendu zatrzymuje się przed buildem i API, aby nie zmienić bieżącego
+receiptu; operator musi ponowić apply z tym samym planem.
+
+Raport apply jest zapisywany jako
+`/opt/fullmag/control/backend/package-retention-last.json` w nazwanym control
+volume grupy. Dry-run nie publikuje raportu i nie zapisuje nic w hostowym
+`storage`; sesje, wyniki, ustawienia i historia pozostają poza zakresem tej
+operacji. Cargo/CMake/BuildKit cache oraz dane użytkownika nigdy nie są
+obejmowane tym helperem.
+
+Raport dry-run i apply mierzy wyłącznie dokładne, zweryfikowane drzewa
+starszych backupów wskazane przez plan. Pola `scope_allocated_bytes_before`,
+`scope_allocated_bytes_after` i `scope_allocated_bytes_delta` używają
+fizycznej alokacji `st_blocks * 512` w kontenerze i mają limit 65536 wpisów na
+mierzone drzewo. `scope_allocated_bytes_delta` jest odzyskiem w tym konkretnym
+zakresie pakietów. Osobne pola `filesystem_available_bytes_before/after` oraz
+`filesystem_available_bytes_delta` są tylko obserwacją wspólnego filesystemu
+named volume; różnica wolnego miejsca może obejmować inne grupy i nie jest
+raportowana jako odzysk pakietu.
+
+Launcher przekazuje backendowi digest pełnych, zaufanych wejść grupy. Backendowy
+`plan_sha256` pozostaje CAS-em pakietu, a receipt operacji dodatkowo zapisuje
+`group_plan_sha256 = SHA256({backend_plan_sha256, operation_inputs_sha256})`.
+Apply wymaga obu hashy z tego samego dry-run i ponownie sprawdza tę granicę
+przed zapisem receiptu.
+
+Nie jest to globalny prune ani retencja przy cache hit zwykłego restartu.
+Automatyczna ścieżka działa wyłącznie po nowej publikacji i używa istniejącego
+journalu oraz exact-plan recovery; nie wprowadza nowego publicznego API ani
+zmiany kontraktu solvera.

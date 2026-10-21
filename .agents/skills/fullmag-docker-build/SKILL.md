@@ -68,6 +68,14 @@ zapisu, ale same nie gwarantują ograniczonego zużycia dysku. Nie deklaruj
 pełnej kontroli retencji, dopóki brakujący mechanizm nie zostanie wdrożony i
 zweryfikowany. Nie używaj globalnego prune ani compose down -v.
 
+Kod retencji pakietów uruchamia sprzątanie po nowej, trwałej publikacji:
+zachowuje current, bezpośredni rollback i metadane, a usuwa tylko zweryfikowany
+ogon łańcucha pod blokadą oraz journalem. Cache hit pomija ten skan. Ręczny
+`docker-dev-package-retention` daje dry-run i kontrolowane recovery zatrzymanej
+grupy. Nie rozszerzaj tej polityki na cache, obrazy, wolumeny ani dane użytkownika.
+Sprawdź wersję obrazu i rzeczywisty report; fixture lub sam kod nie dowodzi
+odzyskania bajtów w działającej grupie.
+
 ## Wdrożona trasa DEV
 
 `docker-dev-toolchain`, `docker-dev-images`, `docker-dev` i `docker-dev-build`

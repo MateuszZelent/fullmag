@@ -222,10 +222,11 @@ egzekwuje. Nie sumuj współdzielonych warstw obrazów jako niezależnych kopii.
 
 Retencja ma odróżniać:
 
-- **pakiety:** bieżący + jeden zweryfikowany rollback; starsze binaria dopiero
-  po trwałej publikacji i pod blokadą. Retired zachowuje receipt i rotację, bez
-  pełnych kopii logów; limit wynosi 8 archiwów i 64 MiB plików. Legacy logi
-  są hashowane tylko dla wpisów, które pozostaną w budżecie;
+- **pakiety:** po nowej publikacji automatyczny plan/journal usuwa wyłącznie
+  zweryfikowany ogon backupów pod blokadą; bieżący pakiet, bezpośredni rollback
+  i archiwa receipt/rotation pozostają. Cache hit nie uruchamia skanu historii.
+  `just docker-dev-package-retention "<wybrany-checkout>"` daje osobny dry-run
+  zatrzymanej grupy. Wynik rzeczywistej retencji nadal wymaga reportu i pomiaru;
 - **aktywny cache przyrostowy:** pozostaje dla kolejnego buildu;
 - **nieaktywne generacje:** kandydaci do osobnego bounded cleanup po ustaleniu
   właścicieli, mountów, lease, rollbacku i referencji wyników;
@@ -234,9 +235,10 @@ Retencja ma odróżniać:
 - **logi i metadane:** stdout/stderr usługi Compose ma obecnie rotację
   `json-file` `10m × 3`; `next.log` ma limit 64 MiB i przy kolejnym starcie
   pełny log jest atomowo obracany do jednej poprzedniej kopii pod runtime
-  lockiem. Nadmiar trafia do Docker stdout; `/retired` ogranicza duplikację
-  do 8 wpisów / 64 MiB, ale
-  Cargo/CMake/BuildKit i stare wolumeny nadal nie mają ogólnego GC;
+  lockiem. Nadmiar trafia do Docker stdout. Aktualna operacja pakietowa
+  zachowuje archiwa dowodowe; nie traktuj historycznego limitu 8/64 MiB jako
+  aktywnego GC metadanych. Cargo/CMake/BuildKit i stare wolumeny również
+  nie mają ogólnego GC;
 - **sesje/wyniki/settings/ledger:** poza cleanupem builda.
 
 Nie wykonuj globalnego `docker system prune`, `volume prune`, kasowania targetu

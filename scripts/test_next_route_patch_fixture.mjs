@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { runInNewContext } from "node:vm";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -117,3 +118,54 @@ try {
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true });
 }
+
+// Exercise the installed patched CSS HMR callback. React/App Router can
+// detach the old link while its replacement stylesheet is still loading.
+// Both load and error must tolerate that race and retain the replacement.
+const cssHmrSource = await readFile(join(nextRoot, "dist/compiled/mini-css-extract-plugin/hmr/hotModuleReplacement.js"), "utf8");
+for (const event of ["load", "error"]) {
+  for (const detached of [false, true]) {
+    let replacement;
+    let removed = 0;
+    const parent = {
+      appendChild(link) { link.parentNode = this; replacement = link; },
+      removeChild(link) {
+        assert.equal(link.parentNode, this);
+        link.parentNode = null;
+        removed += 1;
+      },
+    };
+    const listeners = new Map();
+    const old = {
+      href: "http://localhost/example.css",
+      parentNode: parent,
+      cloneNode() {
+        return { addEventListener(name, listener) { listeners.set(name, listener); } };
+      },
+    };
+    const module = { exports: {} };
+    runInNewContext(cssHmrSource, {
+      module,
+      __dirname: nextRoot,
+      document: {
+        currentScript: { src: "http://localhost/app.js" },
+        querySelectorAll() { return [old]; },
+      },
+      console: { log() {} },
+      setTimeout(callback) { callback(); return 1; },
+      clearTimeout() {},
+    });
+    module.exports(7, { locals: true })();
+    assert.ok(replacement, "CSS HMR must insert the replacement link");
+    assert.equal(replacement.isLoaded, false);
+    if (detached) parent.removeChild(old);
+    assert.doesNotThrow(() => listeners.get(event)());
+    assert.equal(replacement.isLoaded, true);
+    assert.equal(replacement.parentNode, parent);
+    assert.equal(old.parentNode, null);
+    assert.equal(removed, 1);
+    assert.doesNotThrow(() => listeners.get(event)());
+    assert.equal(removed, 1, "a repeated completion must not remove a second node");
+  }
+}
+process.stdout.write("patched Next CSS HMR fixture PASS (load/error; attached/detached link)\n");
