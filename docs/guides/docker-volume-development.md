@@ -355,6 +355,15 @@ Odbiór uruchomienia API, meshu i solvera jest osobnym dowodem.
 | Warstwy zależności/helperów | Docker image store / BuildKit |
 | Sesje, wyniki, ustawienia, historia, ledger | skonfigurowany storage hosta Windows albo Linux/WSL |
 
+Codzienna trasa `docker_volume_dev` zachowuje frontendowy profil v1:
+`fullmag-dev-frontend-v1-<24 znaki klucza>`. Pełny klucz jest SHA-256
+kanonicznego `{project, dependencies, tools}`; zgodny klucz ponownie używa
+tego samego named volume i cache. Przed sprawdzeniem etykiet, enumeracją
+konsumentów i zapisem helpera launcher wymaga lokalnego drivera bez opcji,
+zakresu `local` (albo nieobecnego) oraz kanonicznego linuksowego mountpointu;
+aliasy hosta są odrzucane. Ten profil v1 nie przełącza codziennej trasy na
+oddzielny overlay `frontend-cache-v2`.
+
 Źródła są readonly. Krótkie helpery utrzymania należą do tej samej grupy;
 nie budują ani nie uruchamiają aplikacji i nie mają Docker socketu.
 Helper utrzymania cache ma wyłącznie `CHOWN` i `DAC_OVERRIDE`, aby inicjalizować

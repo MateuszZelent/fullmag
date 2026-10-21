@@ -273,12 +273,43 @@ class VolumeReceiptTests(unittest.TestCase):
         name = 'fullmag-dev-frontend-v1-' + key[:24]
         labels = {k: v for k, v in control.labels.items() if k.startswith('org.fullmag.')}
         labels.update({'org.fullmag.build.role': 'frontend', 'org.fullmag.build.cache-key': key})
-        volume = {'Name': name, 'Driver': 'local', 'Options': None, 'Labels': labels}
+        volume = {'Name': name, 'Driver': 'local', 'Options': None, 'Scope': 'local',
+                  'Mountpoint': '/var/lib/docker/volumes/' + name + '/_data', 'Labels': labels}
         with mock.patch.object(dev, 'docker_capture', return_value=CompletedProcess([], 0, json.dumps([volume]).encode(), b'')) as docker, \
              mock.patch.object(dev, 'consumers', return_value=[]), \
              mock.patch.object(dev, 'bounded_capture', return_value=CompletedProcess([], 0, b'', b'')):
             self.assertEqual(dev._owned_volume(control, 'frontend', key), name)
             docker.assert_called_once_with('volume', 'inspect', name, allow_failure=True)
+
+    def test_frontend_volume_rejects_unsafe_backing_before_consumer_enumeration(self):
+        import json
+        from subprocess import CompletedProcess
+        import docker_volume_dev as dev
+        with mock.patch('docker_control_namespace.resolve_namespace', return_value=None):
+            control = BuildControl({'project_name': 'fullmag-master', 'worktree_id': 'owned', 'project_id': 'test-project', 'checkout_kind': 'master'}, 'sha256:' + 'a' * 64)
+        key = 'b' * 64
+        name = 'fullmag-dev-frontend-v1-' + key[:24]
+        labels = {k: v for k, v in control.labels.items() if k.startswith('org.fullmag.')}
+        labels.update({'org.fullmag.build.role': 'frontend', 'org.fullmag.build.cache-key': key})
+        base = {'Name': name, 'Driver': 'local', 'Options': None, 'Scope': 'local',
+                'Mountpoint': '/var/lib/docker/volumes/' + name + '/_data', 'Labels': labels}
+        cases = []
+        host_alias = dict(base)
+        host_alias['Mountpoint'] = '/run/desktop/mnt/host/c/fullmag/cache'
+        cases.append(('host-alias', host_alias))
+        global_scope = dict(base)
+        global_scope['Scope'] = 'global'
+        cases.append(('global-scope', global_scope))
+        missing_mountpoint = dict(base)
+        missing_mountpoint.pop('Mountpoint')
+        cases.append(('missing-mountpoint', missing_mountpoint))
+        for case, volume in cases:
+            with self.subTest(case=case), \
+                 mock.patch.object(dev, 'docker_capture', return_value=CompletedProcess([], 0, json.dumps([volume]).encode(), b'')), \
+                 mock.patch.object(dev, 'consumers', side_effect=AssertionError('consumer enumeration must not run')), \
+                 mock.patch.object(dev, 'bounded_capture', side_effect=AssertionError('helper must not run')):
+                with self.assertRaisesRegex(BuildControlError, 'unsafe Docker backing'):
+                    dev._owned_volume(control, 'frontend', key)
 
     def test_build_control_accepts_canonical_bootstrap_labels_and_rejects_foreign_project(self):
         identity = {'project_name': 'fullmag-master', 'worktree_id': 'test-worktree', 'project_id': 'test-project', 'checkout_kind': 'master'}
