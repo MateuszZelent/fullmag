@@ -497,4 +497,17 @@ fn profile_binding_preserves_authored_auto_device() {
         bound.problem_meta.runtime_metadata["runtime_selection"]["device"],
         "auto"
     );
+
+    profile.defaults.precision = FieldPatch::Value(ExecutionPrecision::Single);
+    let error = super::materialize_input(
+        ProblemIR::bootstrap_example(),
+        &reference,
+        vec![],
+        |_, _| Ok(profile.clone()),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("device='auto' with execution_precision='single'"),
+        "{error}"
+    );
 }
