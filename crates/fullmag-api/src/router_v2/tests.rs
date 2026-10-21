@@ -3031,12 +3031,9 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
     let artifact_dir = std::env::temp_dir().join(format!(
         "fullmag-api-router-v1-assets-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time before unix epoch")
-            .as_nanos(),
+        uuid::Uuid::new_v4().simple(),
     ));
-    fs::create_dir_all(&artifact_dir).expect("failed to create artifact dir");
+    fs::create_dir(&artifact_dir).expect("failed to create unique artifact dir");
 
     let session = SessionManifest {
         session_id: "test-session".into(),
