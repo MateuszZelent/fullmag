@@ -59,6 +59,13 @@ docker-dev-control-checks source_root:
 docker-dev-browser-qa source_root="" port="" browser_image="" timeout="180" pull_timeout="1800":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev_browser_qa.py" --repo-root "{{repo_root}}" {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} {{if port == "" { "" } else { "--port " + quote(port) }}} --timeout {{quote(timeout)}} --pull-timeout {{quote(pull_timeout)}} {{if browser_image == "" { "" } else { "--browser-image " + quote(browser_image) }}}
 
+# Probe one reversible CSS custom-property HMR transition in a nonce-scoped
+# temporary App Router page in the already-running volume DEV frontend. The
+# caller reuses the selected Compose group and BuildControl; it never restarts
+# services, builds, runs Compute, or writes technical receipts to host storage.
+docker-dev-hmr-qa source_root="" port="" browser_image="" timeout="120" pull_timeout="1800" reconcile_attempt="" expected_receipt_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_hmr_qa.py" --repo-root "{{repo_root}}" {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} {{if port == "" { "" } else { "--port " + quote(port) }}} --timeout {{quote(timeout)}} --pull-timeout {{quote(pull_timeout)}} {{if browser_image == "" { "" } else { "--browser-image " + quote(browser_image) }}} {{if reconcile_attempt == "" { "" } else { "--reconcile-attempt " + quote(reconcile_attempt) + " --expected-receipt-sha256 " + quote(expected_receipt_sha256) }}}
+
 # Resume observation of one retained volume DEV start without restarting backend.
 docker-dev-resume attempt config_sha256 source_root port="3197" restart_backend="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" resume-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} {{if restart_backend == "true" { "--restart-backend" } else if restart_backend == "false" { "" } else { error("restart_backend must be true or false") }}}

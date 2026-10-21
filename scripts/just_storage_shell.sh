@@ -188,6 +188,22 @@ case "${recipe}" in
     fi
     exec "${python_cmd}" -B "${script_dir}/docker_dev_browser_qa.py" "${browser_qa_args[@]}"
     ;;
+  *"scripts/docker_dev_hmr_qa.py"*)
+    hmr_qa_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_hmr_qa.py\" --repo-root \"[^\"]+\"[[:space:]]+(--source-root '([^']+)'[[:space:]]+)?(--port '([0-9]{1,5})'[[:space:]]+)?--timeout '([0-9]{2,3})'[[:space:]]+--pull-timeout '([0-9]{2,4})'([[:space:]]+--browser-image '([^']+)')?([[:space:]]+--reconcile-attempt '([0-9a-f]{32})'[[:space:]]+--expected-receipt-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${hmr_qa_pattern} ]]; then
+      echo "[fullmag just] invalid managed Docker DEV HMR QA recipe" >&2
+      exit 2
+    fi
+    hmr_qa_args=(--repo-root "${repo_root}")
+    if [[ -n "${BASH_REMATCH[2]:-}" ]]; then hmr_qa_args+=(--source-root "${BASH_REMATCH[2]}"); fi
+    if [[ -n "${BASH_REMATCH[4]:-}" ]]; then hmr_qa_args+=(--port "${BASH_REMATCH[4]}"); fi
+    hmr_qa_args+=(--timeout "${BASH_REMATCH[5]}" --pull-timeout "${BASH_REMATCH[6]}")
+    if [[ -n "${BASH_REMATCH[8]:-}" ]]; then hmr_qa_args+=(--browser-image "${BASH_REMATCH[8]}"); fi
+    if [[ -n "${BASH_REMATCH[10]:-}" ]]; then
+      hmr_qa_args+=(--reconcile-attempt "${BASH_REMATCH[10]}" --expected-receipt-sha256 "${BASH_REMATCH[11]}")
+    fi
+    exec "${python_cmd}" -B "${script_dir}/docker_dev_hmr_qa.py" "${hmr_qa_args[@]}"
+    ;;
   *"scripts/docker_dev.py"*" stop-unadmitted "*)
     volume_stop_unadmitted_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" stop-unadmitted --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --backend-container-id '([0-9a-f]{64})' --frontend-container-id '([0-9a-f]{64})' --image-id '(sha256:[0-9a-f]{64})' --failure-marker-sha256 '([0-9a-f]{64})' --process-receipt-sha256 '([0-9a-f]{64})' --source-sha256 '([0-9a-f]{64})' --request-id '([^']+)' --session-id '([^']+)'[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${volume_stop_unadmitted_pattern} ]]; then

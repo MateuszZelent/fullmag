@@ -4,8 +4,16 @@ Decyzja użytkownika z 17.10.2026: [ADR 0061](../adr/0061-docker-development-bui
 Kontrakt: dwa stałe kontenery aplikacji; backend buduje i uruchamia kod w tej
 samej instancji. Dane techniczne procesu budowania są izolowane w nazwanych
 wolumenach Docker/BuildKit przypisanych do grupy Compose. Sesje, projekty,
-ustawienia i wyniki symulacji pozostają w fizycznym storage Windows. Wdrożenie
-i dowody tego wariantu: **NOT VERIFIED**.
+ustawienia i wyniki symulacji pozostają w fizycznym storage hosta wybranego
+profilu Windows lub Linux/WSL. Pełny odbiór tego wariantu nie jest zakończony.
+
+Potwierdzono build i start API w tej samej usłudze backend, prywatną sieć oraz
+jeden port frontendu, Home, Workspace i canvas WebGL. Edycja CSS dociera przez
+HMR bez wymiany dokumentu, lecz ujawniono błąd odłączonego linku w Next.js;
+wersjonowana poprawka przeszła regresję CI, a jej odbiór w działającej grupie
+pozostaje **NOT VERIFIED**. Restart cache-hit, pomiar kompilacji przyrostowej,
+wykonanie wskazanych skryptów i retencja rzeczywistych pakietów nadal wymagają
+odrębnych dowodów. Szczegóły: [audyt uruchomienia](../audits/2026-10-21-docker-startup-filesystem.md).
 
 ## Źródła i usługi
 
@@ -66,10 +74,11 @@ metadane rotacji. Warstwy obrazów i ich BuildKit context pozostają w magazynie
 obrazu/BuildKit Dockera. Mały hostowy run root może zawierać wyłącznie dane
 operacyjne sesji i handoffu; nie jest stagingiem, cache'em ani magazynem
 receiptów buildu.
-Frontend ma analogiczny nazwany wolumen cache/control. Przygotowanie wolumenów
-i migracja technicznych markerów mają dowód częściowy; cold build, API, mounty,
-brak zapisu buildu do hosta oraz pomiary restartu i kompilacji przyrostowej
-pozostają **NOT VERIFIED**. Stare cache zachowujemy do osobnej kontroli użycia
+Frontend używa named volume `fullmag-dev-frontend-v1-<24hex>` dla cache oraz
+readonly subpath `frontend` wolumenu kontroli grupy. Zwykła edycja aplikacji
+nie zmienia klucza zależności. Build/start API i rzeczywiste mounty potwierdzono
+w aktywnej grupie; pełny build na świeżym hoście, restart bez launchera oraz
+pomiary restartu i kompilacji przyrostowej pozostają **NOT VERIFIED**. Stare cache zachowujemy do osobnej kontroli użycia
 i rollbacku. Nie usuwaj ani nie przenoś aktywnego cache ręcznie.
 
 Niezmienione pliki cienia zachowują zawartość i metadane potrzebne kompilacji
