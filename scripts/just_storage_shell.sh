@@ -218,6 +218,27 @@ case "${recipe}" in
       --source-sha256 "${BASH_REMATCH[9]}" --request-id "${BASH_REMATCH[10]}" \
       --session-id "${BASH_REMATCH[11]}"
     ;;
+  *"scripts/docker_package_retention.py"*)
+    package_retention_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_package_retention.py\" --repo-root \"[^\"]+\" --source-root '([^']+)'( --apply --plan-sha256 '([0-9a-f]{64})' --group-plan-sha256 '([0-9a-f]{64})')?( --reconcile-attempt '([0-9a-f]{32})')?[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${package_retention_pattern} ]]; then
+      echo "[fullmag just] invalid Docker package-retention recipe" >&2
+      exit 2
+    fi
+    package_retention_args=(--repo-root "${repo_root}" --source-root "${BASH_REMATCH[1]}")
+    if [[ -n "${BASH_REMATCH[3]:-}" ]]; then
+      package_retention_args+=(
+        --apply
+        --plan-sha256 "${BASH_REMATCH[3]}"
+        --group-plan-sha256 "${BASH_REMATCH[4]}"
+      )
+    fi
+    if [[ -n "${BASH_REMATCH[6]:-}" ]]; then
+      package_retention_args+=(--reconcile-attempt "${BASH_REMATCH[6]}")
+    fi
+    # The launcher performs the stopped-group, receipt, image, volume, and
+    # BuildControl admission checks; this shell only supplies fixed argv.
+    exec "${python_cmd}" -B "${script_dir}/docker_package_retention.py" "${package_retention_args[@]}"
+    ;;
   *"scripts/docker_dev.py"*)
     docker_dev_build_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" build --gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?[[:space:]]*$"
     docker_dev_up_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" up[ ]+(--port '([0-9]{4,5})'[ ]+)?--gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?( --script '([^']+)')?[[:space:]]*$"

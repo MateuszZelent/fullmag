@@ -52,6 +52,12 @@ docker-dev-stop-unadmitted attempt config_sha256 source_root backend_container_i
 docker-dev-control-checks source_root:
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_checks.py" --source-root {{quote(source_root)}}
 
+# Preview or apply the bounded package-retention operation inside the selected
+# stopped Compose group. The helper owns its trusted image/config discovery;
+# it never enters the legacy runner or writes technical data to host storage.
+docker-dev-package-retention source_root apply="false" plan_sha256="" group_plan_sha256="" reconcile_attempt="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_package_retention.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} {{if apply == "true" { "--apply --plan-sha256 " + quote(plan_sha256) + " --group-plan-sha256 " + quote(group_plan_sha256) } else if apply == "false" { "" } else { error("apply must be true or false") }}} {{if reconcile_attempt == "" { "" } else { "--reconcile-attempt " + quote(reconcile_attempt) }}}
+
 # Probe the already-running volume DEV frontend with an image-owned browser.
 # Reuse the exact pinned image or acquire it through this Compose group's
 # BuildControl operation; no browser install or source/build/cache write happens

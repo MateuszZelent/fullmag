@@ -438,27 +438,22 @@ Szczegóły: [ADR 0049](../adr/0049-native-runtime-owner-control.md),
 
 ### Retencja pakietów developerskich
 
-Korekta z 20.10.2026 odracza automatyczną retencję z decyzji 17.10.2026:
-start zachowuje bieżący pakiet i wszystkie historyczne rollbacki, raportując
-`phase=retention state=deferred`. Pełne hashowanie starych kopii nie blokuje API.
-Obowiązkowa walidacja aktualnego pakietu pozostaje. Każda nowa publikacja może
-dodać pełny backup; obecnie brak limitu liczby kopii i osobnej udostępnionej
-operacji konserwacyjnej. Istniejący preflight mierzy build/cache volume;
-nie gwarantuje miejsca w osobnym package volume. Przed kolejnym buildem
-należy ocenić również miejsce dla pakietów i rollbacków. Szczegóły:
-[ADR 0061](../adr/0061-docker-development-build-and-runtime-container.md#korekta-20102026--retencja-poza-startem-api).
+Po rzeczywistej publikacji nowego pakietu backend wykonuje automatyczną
+retencję pod posiadaną już blokadą cache. Najpierw muszą zakończyć się rotacja,
+provenance i usunięcie journalu rotacji; aktualny pakiet jest sprawdzany ponownie.
+Dokładny plan i journal retencji poprzedzają usunięcie zweryfikowanego ogona
+łańcucha backupów. Bieżący pakiet, bezpośredni rollback i archiwa metadanych
+pozostają. Brak zgodnych dowodów zachowuje dane i daje diagnostykę.
 
-Zachowana w źródłach funkcja retencji wymaga blokady cache i trwałej,
-zweryfikowanej publikacji nowego pakietu, lecz nie jest wywoływana przez start.
-Jej kontrakt archiwum retired zachowuje tylko receipt i
-rotację, bez kolejnych kopii pełnego build logu. Zostawia najwyżej 8 archiwów
-i 64 MiB łącznego rozmiaru plików; zachowuje najnowsze według zapisanego
-`retired_at_ns` (dla starszych wpisów kolejność wyznacza czas pliku manifestu).
-Archiwa legacy z logiem są usuwane, jeśli przekraczają ten limit; log jest
-sprawdzany hashem, gdy pozostaje w zachowanym archiwum. Nieznane, niespójne lub
-używane dane pozostają z diagnostyką. Niepowodzenie sprzątania nie unieważnia
-poprawnie opublikowanego pakietu. Limity tej funkcji nie są obecnie egzekwowane
-przez ścieżkę startu; nie usunięto istniejących archiwów ani backupów.
+Restart z niezmienionymi wejściami pomija historyczny skan retencji. Pierwsza
+nowa publikacja może nadrobić wiele starych kopii i potrwać dłużej; log podaje
+czas oraz zmierzone bajty. Przerwany journal wymaga dokładnego recovery przed
+kolejną rotacją, bez ponawiania Solve. Osobna zarządzana recepta
+`just docker-dev-package-retention "<wybrany-checkout>"` daje domyślny dry-run
+zatrzymanej grupy i zapisuje plan w jej control volume. Nie usuwa named volumes,
+cache ani danych użytkownika. Nie zmierzono jeszcze odzysku rzeczywistych
+pakietów; pełny odbiór retencji pozostaje **NOT VERIFIED**. Szczegóły:
+[ADR 0061](../adr/0061-docker-development-build-and-runtime-container.md#korekta-21102026--retencja-po-nowej-publikacji).
 
 Retencja nie obejmuje cache Cargo/CMake/CUDA, źródeł, sesji, projektów, wyników,
 bazy grupy ani historii rezerwacji. Restart używający aktualnego pakietu nie

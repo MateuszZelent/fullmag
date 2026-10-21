@@ -244,22 +244,26 @@ Wymaga dowodu retain-current/rollback, ochrony nieudanej publikacji,
 zachowania nieznanych danych oraz rzeczywistego odzyskania miejsca w kontenerze.
 Do wykonania tych bramek automatyczna ścieżka pozostaje **NOT VERIFIED**.
 
-### Korekta 20.10.2026 — retencja poza startem API
+### Korekta 21.10.2026 — retencja po nowej publikacji
 
-Synchroniczna walidacja wszystkich historycznych rollbacków nie jest warunkiem
-uruchomienia opublikowanego pakietu. Zaobserwowany start `fullmag-master`
-ukończył Make i publikację, lecz pozostał w hashowaniu 14 kopii przed `_serve`.
-Ścieżka `start` zachowuje teraz wszystkie kopie i raportuje
-`phase=retention state=deferred reason=outside-startup backups=retained`.
-Obowiązkowe sprawdzenie aktualnego pakietu w `_serve`, rotacja, provenance,
-admission storage oraz reguły właściciela i ponownego Solve pozostają wymagane.
+Retencja jest automatyczna wyłącznie po rzeczywistej, nowej publikacji pakietu.
+Po provenance, wyczyszczeniu `rotation.pending.json` i ponownej walidacji
+bieżącego pakietu `_start` wykonuje pod już posiadaną blokadą cache dokładny
+dry-run planu, zapisuje `retention.pending.json`, a następnie używa istniejącej
+ścieżki journal/recovery/report do usunięcia tylko zweryfikowanych, starszych
+backupów. Nie powstaje drugi lock, proces w tle ani osobny build.
 
-Automatyczne usuwanie starszych pakietów podczas startu jest odroczone.
-Samo istnienie funkcji retencji nie oznacza wdrożonej osobnej operacji
-konserwacyjnej. Nie dodajemy procesu w tle ani nowego mechanizmu anulowania.
-Nie zwolniono miejsca; aktualny pakiet, rollbacki, cache i dane sesji pozostają
-zachowane. Zmiana wymaga nowego obrazu przez właściwy launcher; nie zmienia
-działającego procesu i przed takim uruchomieniem pozostaje **NOT VERIFIED**.
+Cache hit zachowuje szybką ścieżkę: zwykły restart z niezmienionym pakietem nie
+skanuje historycznych backupów i nie uruchamia retencji. Jednorazowe nadrobienie
+historii może potrwać podczas pierwszej nowej publikacji; logi `retention begin`,
+`complete` lub `deferred` zawierają czas, liczbę drzew i zmierzony zakres bajtów.
+
+Bieżący pakiet, bezpośredni rollback, wszystkie archiwa metadanych, cache,
+źródła i dane użytkownika są zachowane. Pending rotation, kandydat, zmieniony
+inwentarz lub niespójny łańcuch zatrzymują usuwanie fail-closed. Jeśli przerwanie
+pozostawi journal, istniejąca operacja exact-plan recovery pozostaje wymagana
+przed kolejną zmianą pakietu; poprawna publikacja i ostatni rollback nie są
+cofane.
 
 ### Budżet zasobów aktywnego startu — 20.10.2026
 
@@ -696,3 +700,50 @@ nie wymaga nowego certyfikatu i zachowuje swój dokładny zestaw pól oraz błę
 Gdy istnieje `pre-ack-retry.json`, walidowany jest pełny przypięty dowód, bez
 fallbacku do legacy po błędzie lub nieznanym stanie. Żaden wariant nie zmienia
 niezmiennych archiwów, aktualnego ownera ani uprawnień Solve.
+
+### Addendum — zarządzana retencja pakietów
+
+Zachowujemy również jawną operację `backend_dev.py retention` dla ręcznego
+dry-run, apply oraz odzyskania journalu z przypiętym planem grupy. Jest uruchamiana przez
+istniejącą usługę `backend` wybranej grupy Compose z `--no-deps`, przejmuje
+istniejący `BuildControl.operation` lease oraz backendowy flock cache i nigdy
+nie wykonuje `execvpe` do API. Automatyczna ścieżka publikacji wywołuje te same
+wewnętrzne helpery bez przejmowania drugiej blokady. Jeżeli automatyczna retencja
+zapisze journal i zostanie przerwana, kolejny start backendu odzyskuje wyłącznie
+journal z oboma polami group binding ustawionymi jawnie na `null`, pod tym samym
+flockiem i przed cache-hit albo nową publikacją. Launcher nie przyjmuje
+ręcznego `--image`: helper control jest wyprowadzany z przypiętej konfiguracji
+toolchaina, a obraz backendu z `image-backend/verified.json` i retained Compose
+document.
+
+Dry-run jest domyślny i nie usuwa ani nie publikuje danych. Zwraca kanoniczny
+plan oraz jego SHA-256. Plan wiąże project/config/source, toolchain/dev/backend/
+frontend image IDs i labels, exact volume/network pins oraz development
+receipt. Każdy usuwany backup ma receipt, rotation, artifact-manifest i child
+inventory digest. Apply wymaga backendowego planu i związanego z nim group planu;
+backend tworzy plan ponownie pod
+flockiem i kończy się fail-closed, gdy zmienił się receipt, inwentarz, łańcuch
+lub bieżący pakiet. Istniejące retired archives są zachowane przez tę
+operację; nie usuwa się ich na podstawie count/bytes. Receipt apply trafia do
+istniejącego backendowego named control volume. Receipt plan/apply zawiera
+oddzielnie zakresowy pomiar `scope_allocated_bytes_before/after/delta` dla
+dokładnych, zweryfikowanych drzew backupów oraz obserwację
+`filesystem_available_bytes_before/after/delta`; globalnej różnicy wolnego
+miejsca nie interpretuje się jako odzysku pakietu. Jest to wewnętrzny rekord
+utrzymania, a nie nowy publiczny kontrakt API ani kontrakt solvera.
+Backendowy `plan_sha256` jest związany z digestem wejść grupy w
+`group_plan_sha256`, aby receipt nie mógł zostać przeniesiony między obrazem,
+Compose, mountami, siecią lub checkoutem.
+
+Operacja mutująca uruchamia dokładnie nazwany kontener `backend` bez `--rm`.
+Przed mutacją zapisuje `daemon_pending` oraz kontrakt nazwy, projektu, obrazu,
+etykiet, mountów i sieci. Po odpowiedzi musi potwierdzić terminalny exit code,
+pełny kontrakt i usunięcie kontenera; nieznany wynik zachowuje lease oraz
+kontener do wznowienia przez istniejący `BuildControl.operation` z dokładnym
+`attempt`. Wznowienie nie wykonuje drugiego uruchomienia, cancel ani prune.
+`daemon_pending` pozostaje trwałe do wspólnej finalizacji; `current` i
+`verified` są publikowane przed markerem `terminal.json`, który jest ostatnim
+zapisem wybudzającym lease holdera. Potwierdzona nieobecność po błędzie
+uruchomienia zachowuje `effects_unknown` i `NOT VERIFIED`; nie jest dowodem
+braku zmian. Receipt operacji może przyjąć `succeeded` dopiero po trwałym
+zapisie raportu backendu.

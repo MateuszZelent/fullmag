@@ -37,7 +37,9 @@ CACHE_CONTROL_DOCUMENTS_PER_ATTEMPT = 6
 MIN_FREE_CONTROL_BYTES = CACHE_CONTROL_ATTEMPT_WINDOW * (
     MAX_LOG_BYTES + CACHE_CONTROL_DOCUMENTS_PER_ATTEMPT * MAX_DOCUMENT_BYTES
 )
-CACHE_ONLY_PHASES = frozenset(("toolchain", "image-dev", "image-backend"))
+# Package retention uses the same durable control lease as builds, but only
+# reads/removes verified package backups and does not reserve build capacity.
+CACHE_ONLY_PHASES = frozenset(("toolchain", "image-dev", "image-backend", "package-retention"))
 LABEL_SCHEMA = "fullmag.build-control.v1"
 
 
@@ -159,6 +161,18 @@ def mirror_console(data):
 
 class ControlOutcomeUnknown(BuildControlError):
     """The client observation ended without proving a daemon-side outcome."""
+
+
+def _publish_operation_records(control, phase, root, receipt):
+    """Publish a terminal operation with the wake-up marker written last."""
+
+    control.write(root + "/receipt.json", receipt)
+    control.write(phase + "/current.json", receipt)
+    if receipt.get("state") == "succeeded":
+        control.write(phase + "/verified.json", receipt)
+    # The control helper waits for this marker.  It must be the last durable
+    # record so a woken lease holder observes current/verified consistently.
+    control.write(root + "/terminal.json", receipt)
 
 
 def bounded_capture(command, *, data=None, timeout=90, env=None, maximum=MAX_DOCUMENT_BYTES):
@@ -579,11 +593,12 @@ class BuildControl:
                     raise BuildControlError("Build log was not durably acknowledged")
                 receipt["finished_at"] = time.time()
                 receipt["filesystem_after"] = self.space()
-                self.write(root + "/receipt.json", receipt)
-                self.write(root + "/terminal.json", receipt)
-                self.write(phase + "/current.json", receipt)
-                if receipt["state"] == "succeeded":
-                    self.write(phase + "/verified.json", receipt)
+                if "daemon_pending" in receipt:
+                    # The managed daemon is known terminal only at this
+                    # finalization boundary.  Retention keeps this true until
+                    # the operation has reached the shared publisher below.
+                    receipt["daemon_pending"] = False
+                _publish_operation_records(self, phase, root, receipt)
                 if logger.wait(timeout=30) != 0:
                     raise BuildControlError("Control lease finalization failed")
             summary = {key: receipt[key] for key in ("phase", "state", "attempt", "compose_project",
