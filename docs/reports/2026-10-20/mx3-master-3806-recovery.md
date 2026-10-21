@@ -2036,3 +2036,29 @@ ledgera. Złożone pytanie o rozszerzenie zgody obejmuje ich skoordynowany
 drain/recovery i pozostawienie starych klientów zatrzymanych do aktualizacji.
 Bez odpowiedzi nie zatrzymuje się tych grup ani nie publikuje v5. Backend
 mastera nadal nie udostępnia API; materializacja, mesh i browser są NOT VERIFIED.
+
+## 68. Wznowienie: aktualne obrazy DEV gotowe, przełączenie oczekuje
+
+Na polecenie użytkownika „To zrób to” ponownie odczytano master
+`ac8f72ffdb6ee346c34c066b6e17040ba509165a` i stan Dockera. Zastane dwa
+cudze pliki audytu pozostawiono nietknięte. Zarządzana komenda
+`bootstrap_docker_toolchain.py --direct-development --prepare-development-images`
+zakończyła się exit 0 w grupie `fullmag-master`:
+
+- toolchain: `6e23a0cc286e4953a601fa14809c1551`, cache hit, obraz `9ceb0d68…`;
+- image-dev: `142e48fcbb4748c7a6c88d2cd6287ef5`, obraz `sha256:369f9394520757834e490967c3bc31855af40943b07d688ad53c205a5b21ca77`;
+- image-backend: `8d8a3288473a4dbd8181f208aee7cb37`, obraz `sha256:3c2554a5248c33983bbc0aa1686cf933e0bf0b1398dbf280ed38e06e41c4d353`.
+
+To build obrazów z aktualnymi helperami Python, bez kompilacji aplikacji Rust,
+testów i Solve. Stary pakiet/cache zachowano: brak zweryfikowanego następcy
+aplikacji nie pozwala uznać ich za zbędne. Nowe obrazy są wejściem następnego
+zarządzanego recreate; nie usuwano żadnych danych.
+
+Master backend nadal exited1, frontend healthy. Wciąż działają dokładnie
+konsumenci ledgera `177b9c65…` i `bc2c9636…` z §67. Nowe pytanie o rozszerzenie
+zgody na ich drain/recovery i pozostawienie starych klientów zatrzymanych
+pozostaje bez odpowiedzi; zależnej migracji ani restartu nie rozpoczęto.
+Port 3198 nasłuchuje na 127.0.0.1. Log frontendu pokazuje `ENOTFOUND backend`
+przy proxy do `backend:8081`, zgodnie z zatrzymanym backendem tej grupy.
+Nawigacja przeglądarki do workspace przekroczyła czas; nie zastąpiono jej
+fikcyjnym dowodem renderu. API, materializacja, mesh i Airbox/H_demag NOT VERIFIED.

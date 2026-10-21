@@ -6,26 +6,42 @@ and failure after READY with a ready identity pin. None of these observations
 releases resources or rewrites owner state.
 """
 import argparse
+import base64
+import binascii
 import hashlib
+import io
 import json
+import subprocess
+import tarfile
+import time
+import uuid
 from collections.abc import Mapping
 from pathlib import Path
 import re
 import sys
 
 import fullmag_storage as storage
-from docker_build_control import BuildControl, BuildControlError, docker_capture
+from docker_build_control import BuildControl, BuildControlError, MAX_DOCUMENT_BYTES, canonical, docker_capture
 from docker_compose_identity import compose_project_identity, validate_source_labels
 
 
 CANONICAL_PROCESS_RECEIPT = "/opt/fullmag/runtime-control/runtime-service/process-tree.json"
+CANONICAL_RUNTIME_OWNER = "/opt/fullmag/runtime-control/runtime-services/OWNER.json"
 CANONICAL_HOST_LEDGER_ROOT = "/host-ledger/ledger"
 NATIVE_FAILURE_PROBE_SCHEMA = "fullmag.docker-native-start-failure-stop-probe.v1"
 NATIVE_AFTER_READY_FAILURE_PROBE_SCHEMA = (
     "fullmag.docker-native-after-ready-failure-stop-probe.v1"
 )
+QUIESCENT_UNKNOWN_OWNER_PROBE_SCHEMA = "fullmag.docker-quiescent-unknown-owner-stop-probe.v1"
+QUIESCENT_UNKNOWN_OWNER_JOURNAL_SCHEMA = "fullmag.docker-quiescent-unknown-owner-stop.v1"
+QUIESCENT_UNKNOWN_OWNER_RECEIPT_MAX_BYTES = 4 * 1024 * 1024
 API_START_FAILURE_MODE = "api-start-failure"
 API_START_FAILURE_ERROR_PREFIX = "API binding did not become ready:"
+QUIESCENT_AFTER_READY_ERROR_PATTERN = (
+    r"runtime observation stayed degraded for [0-9]+s: "
+    r"API identity probe failed during supervision: "
+    r"API loopback probe failed for /v2/platform/openapi\.json: timed out"
+)
 
 
 def _validate_native_failed_owner(
@@ -596,6 +612,860 @@ def _capture_native_failure_probe(container_id: str) -> dict[str, object]:
     return probe
 
 
+def _quiescent_unknown_owner_probe_script() -> str:
+    """Return a read-only proof limited to the retained unknown-owner incident."""
+
+    return r'''import base64, fcntl, hashlib, json, os, pathlib, re, stat, sys, time
+MAX=8*1024*1024
+MAX_RECEIPT=4*1024*1024
+MAX_ENTRIES=8192
+MAX_RUNS=8192
+PROBE_MARKER='FULLMAG_QUIESCENT_UNKNOWN_OWNER_STOP_PROBE_V1'
+ERROR_PATTERN=r'runtime observation stayed degraded for [0-9]+s: API identity probe failed during supervision: API loopback probe failed for /v2/platform/openapi\.json: timed out'
+CANONICAL_RECEIPT='/opt/fullmag/runtime-control/runtime-service/process-tree.json'
+CANONICAL_OWNER='/opt/fullmag/runtime-control/runtime-services/OWNER.json'
+CANONICAL_LEDGER='/host-ledger/ledger'
+ENTRYPOINT_PID=7
+
+def read_raw(path, label, maximum=MAX):
+    path=pathlib.Path(path)
+    if not path.is_absolute() or '..' in path.parts:
+        raise RuntimeError(label+' path is unsafe')
+    fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))
+    try:
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size>maximum:
+            raise RuntimeError(label+' is not a bounded regular file')
+        data=os.read(fd,maximum+1)
+        if len(data)>maximum:
+            raise RuntimeError(label+' exceeds bound')
+        return data
+    finally:
+        os.close(fd)
+
+def read_document(raw,label):
+    try:
+        value=json.loads(raw.decode('utf-8'))
+    except (UnicodeDecodeError,json.JSONDecodeError) as error:
+        raise RuntimeError(label+' is invalid JSON') from error
+    if not isinstance(value,dict):
+        raise RuntimeError(label+' is not an object')
+    return value
+
+def lock_file(path,label):
+    path=pathlib.Path(path)
+    if not path.is_file() or path.is_symlink():
+        raise RuntimeError(label+' is missing')
+    fd=os.open(path,os.O_RDWR|getattr(os,'O_NOFOLLOW',0))
+    try:
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(label+' is not a regular file')
+        deadline=time.monotonic()+5
+        while True:
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                return fd
+            except BlockingIOError as error:
+                if time.monotonic()>=deadline:
+                    raise RuntimeError(label+' remained busy within the observation budget') from error
+                time.sleep(.025)
+            except OSError as error:
+                raise RuntimeError(label+' lock outcome is unknown') from error
+    except Exception:
+        os.close(fd)
+        raise
+
+def scan_ledger():
+    if os.environ.get('FULLMAG_HOST_LEDGER_ROOT',CANONICAL_LEDGER)!=CANONICAL_LEDGER:
+        raise RuntimeError('host ledger root override differs from the canonical mount')
+    root=pathlib.Path(CANONICAL_LEDGER)
+    fd=lock_file(root/'WRITER.lock','host ledger writer lock')
+    try:
+        raw=read_raw(root/'HOST_RESOURCE_LEDGER.json','host resource ledger')
+        document=read_document(raw,'host resource ledger')
+        rows=document.get('reservations')
+        if not isinstance(rows,list) or len(rows)>MAX_ENTRIES:
+            raise RuntimeError('host ledger reservation inventory is missing or unbounded')
+        states=[]
+        for row in rows:
+            if not isinstance(row,dict) or not isinstance(row.get('state'),str):
+                raise RuntimeError('host ledger reservation is invalid')
+            states.append(row['state'])
+        return states
+    finally:
+        fcntl.flock(fd,fcntl.LOCK_UN)
+        os.close(fd)
+
+def scan_leases(store):
+    root=pathlib.Path(store)
+    fd=lock_file(root/'WRITER.lock','accepted-store writer lock')
+    try:
+        runs=root/'runs'
+        if not runs.is_dir() or runs.is_symlink():
+            raise RuntimeError('accepted store runs directory is missing')
+        states=[]; entries=0; run_count=0
+        for run in os.scandir(runs):
+            run_count+=1
+            entries+=1
+            if entries>MAX_ENTRIES or run_count>MAX_RUNS or run.is_symlink() or not run.is_dir(follow_symlinks=False):
+                raise RuntimeError('accepted store run inventory is invalid or unbounded')
+            for directory_name in ('resource_leases','preparation_resource_leases'):
+                lease_root=pathlib.Path(run.path)/directory_name
+                if not os.path.lexists(lease_root):
+                    continue
+                if lease_root.is_symlink() or not lease_root.is_dir():
+                    raise RuntimeError('accepted store lease root is invalid')
+                for resource in os.scandir(lease_root):
+                    entries+=1
+                    if entries>MAX_ENTRIES:
+                        raise RuntimeError('accepted store lease inventory is unbounded')
+                    if resource.is_symlink() or not resource.is_dir(follow_symlinks=False):
+                        raise RuntimeError('accepted store lease resource entry is invalid')
+                    for entry in os.scandir(resource.path):
+                        entries+=1
+                        if entries>MAX_ENTRIES or entry.is_symlink() or not entry.is_file(follow_symlinks=False) or not entry.name.endswith('.json'):
+                            raise RuntimeError('accepted store lease record inventory is invalid or unbounded')
+                        record=read_document(read_raw(entry.path,'accepted store lease record'),'accepted store lease record')
+                        state=record.get('state')
+                        if state not in {'released','active'}:
+                            raise RuntimeError('accepted store lease state is unknown')
+                        states.append(state)
+        return states
+    finally:
+        fcntl.flock(fd,fcntl.LOCK_UN)
+        os.close(fd)
+
+def read_proc_file(path,label,maximum=256*1024):
+    fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))
+    try:
+        data=os.read(fd,maximum+1)
+        if len(data)>maximum:
+            raise RuntimeError(label+' exceeds its observation bound')
+        return data
+    finally:
+        os.close(fd)
+
+def proc_status(pid):
+    raw=read_proc_file('/proc/'+str(pid)+'/status','process status',64*1024)
+    parent=None; state=None
+    for line in raw.decode('ascii','strict').splitlines():
+        if line.startswith('PPid:'):
+            parent=int(line.split(':',1)[1].strip())
+        elif line.startswith('State:'):
+            state=line.split(':',1)[1].strip().split()[0]
+    if parent is None or state is None:
+        raise RuntimeError('process parent or state identity is unavailable')
+    return parent,state
+
+def process_inventory(api_pid):
+    proc=pathlib.Path('/proc')
+    try:
+        entries=[]
+        with os.scandir(proc) as iterator:
+            for entry in iterator:
+                entries.append(entry.name)
+                if len(entries)>4096:
+                    raise RuntimeError('private process namespace inventory is unbounded')
+    except OSError as error:
+        raise RuntimeError('cannot enumerate private process namespace') from error
+    pids=[]
+    for name in entries:
+        if name.isdigit():
+            pids.append(int(name))
+            if len(pids)>1024:
+                raise RuntimeError('private process namespace inventory is unbounded')
+    probe_pid=os.getpid()
+    expected={1,ENTRYPOINT_PID,probe_pid}
+    if (type(api_pid) is not int or api_pid<=0 or api_pid in expected
+            or len(expected)!=3 or set(pids) not in (expected,expected|{api_pid})):
+        raise RuntimeError('private process namespace differs from init, entrypoint, this probe, and optional pinned API zombie')
+    observed=[]
+    for pid in sorted(pids):
+        base='/proc/'+str(pid)
+        try:
+            raw=read_proc_file(base+'/cmdline','process command line')
+            argv=[part.decode('utf-8','strict') for part in raw.split(b'\0') if part]
+            parent,state=proc_status(pid)
+        except (OSError,UnicodeDecodeError,ValueError) as error:
+            raise RuntimeError('private process namespace identity is incomplete') from error
+        if pid==api_pid:
+            try:
+                os.readlink(base+'/exe')
+            except FileNotFoundError:
+                executable=None
+            except OSError as error:
+                raise RuntimeError('pinned API process executable observation failed') from error
+            else:
+                raise RuntimeError('pinned API process is still live')
+            if state!='Z' or parent!=ENTRYPOINT_PID or raw!=b'':
+                raise RuntimeError('extra API PID is not the exact exited-child zombie')
+        else:
+            try:
+                executable=os.readlink(base+'/exe')
+            except OSError as error:
+                raise RuntimeError('private process executable identity is incomplete') from error
+            if state=='Z':
+                raise RuntimeError('an unexpected private process is a zombie')
+        if pid==1:
+            if executable!='/usr/sbin/docker-init' or parent!=0:
+                raise RuntimeError('PID 1 is not the expected private docker-init')
+        elif pid==ENTRYPOINT_PID:
+            if (executable!='/usr/local/bin/python3.10' or parent!=1
+                    or argv!=['/usr/local/bin/python3','/opt/fullmag/entrypoint.py']):
+                raise RuntimeError('entrypoint process identity differs from the retained backend')
+        elif pid==api_pid:
+            # This exact already-exited API child may remain a zombie until
+            # the entrypoint reaps it. Its identity was checked above; no other zombie
+            # or missing executable is admitted here.
+            pass
+        else:
+            if (executable!='/usr/local/bin/python3.10' or len(argv)!=4
+                    or argv[0]!='/usr/local/bin/python3' or argv[1:3]!=['-B','-c']
+                    or PROBE_MARKER not in argv[3]):
+                raise RuntimeError('the sole extra process is not this bounded managed probe')
+        observed.append({'pid':pid,'ppid':parent,'state':state,'exe':executable,'argv':argv})
+    return observed
+
+if os.environ.get('FULLMAG_HOST_LEDGER_ROOT',CANONICAL_LEDGER)!=CANONICAL_LEDGER:
+    raise RuntimeError('host ledger root override differs from the canonical mount')
+if os.environ.get('FULLMAG_RUNTIME_PROCESS_RECEIPT',CANONICAL_RECEIPT)!=CANONICAL_RECEIPT:
+    raise RuntimeError('runtime process receipt override differs from the canonical path')
+sys.path.insert(0,'/opt/fullmag')
+import runtime_service
+paths=runtime_service.canonical_paths()
+receipt_path=runtime_service.process_receipt_path(paths)
+owner_path=runtime_service.runtime_services_root(paths)/'OWNER.json'
+if str(receipt_path)!=CANONICAL_RECEIPT or str(owner_path)!=CANONICAL_OWNER:
+    raise RuntimeError('runtime service returned a noncanonical receipt or owner path')
+receipt_raw=read_raw(receipt_path,'runtime process receipt',MAX_RECEIPT)
+receipt=read_document(receipt_raw,'runtime process receipt')
+if (receipt.get('schema')!='fullmag.docker-process-tree.v1'
+        or receipt.get('state')!='failed_outcome_retained'
+        or receipt.get('api_shutdown')!='unknown'
+        or 'api_exit_code' in receipt
+        or receipt.get('runtime_pid') is not None
+        or 'terminal_service_owner' in receipt
+        or 'startup_activation' in receipt):
+    raise RuntimeError('process receipt is outside the exact unknown-owner retained failure state')
+error=receipt.get('error')
+if not isinstance(error,str) or re.fullmatch(ERROR_PATTERN,error) is None:
+    raise RuntimeError('process receipt does not prove the exact after-READY API supervision timeout')
+api_pid=receipt.get('api_pid')
+if type(api_pid) is not int or api_pid<=0:
+    raise RuntimeError('retained process receipt has no positive API pid')
+ready_owner=receipt.get('service_owner')
+if not isinstance(ready_owner,dict):
+    raise RuntimeError('unknown-owner route has no retained Ready identity')
+runtime_service._validate_terminal_owner(ready_owner,state='ready',name='retained ready service owner')
+owner_raw=read_raw(owner_path,'runtime service OWNER')
+owner=read_document(owner_raw,'runtime service OWNER')
+if (owner.get('schema_version')!='runtime_service_owner.v1'
+        or owner.get('protocol')!='stdin-v1'
+        or owner.get('state')!='unknown'
+        or owner.get('target_id')!='docker-all'):
+    raise RuntimeError('current OWNER is not the exact retained unknown owner')
+children=owner.get('children')
+if not isinstance(children,list) or len(children)!=2:
+    raise RuntimeError('unknown OWNER does not contain exactly two terminal children')
+roles=set(); child_pids=set()
+for child in children:
+    if not isinstance(child,dict):
+        raise RuntimeError('unknown OWNER child is invalid')
+    role=child.get('role'); pid=child.get('pid'); status=child.get('status')
+    if (role not in {'compute','preparation'} or role in roles
+            or type(pid) is not int or pid<=0 or pid in child_pids
+            or status not in {'exited_success','exited_failure'}):
+        raise RuntimeError('unknown OWNER child identity or terminal status is invalid')
+    roles.add(role); child_pids.add(pid)
+if roles!={'compute','preparation'}:
+    raise RuntimeError('unknown OWNER is missing a scheduler child')
+owner_ready=dict(owner)
+owner_ready['state']='ready'
+owner_ready['children']=[dict(child,status='running') for child in children]
+runtime_service._validate_terminal_owner(owner_ready,state='ready',name='retained unknown owner identity')
+if (runtime_service._owner_identity(ready_owner)!=runtime_service._owner_identity(owner)
+        or runtime_service._owner_child_identity(ready_owner)!=runtime_service._owner_child_identity(owner)):
+    raise RuntimeError('unknown OWNER identity differs from the retained Ready identity')
+if os.environ.get('FULLMAG_STARTUP_ENABLED')=='1' or os.path.lexists('/state/.fullmag/docker-startup/activation.json'):
+    raise RuntimeError('startup activation is outside the quiescent unknown-owner route')
+processes=process_inventory(api_pid)
+namespace_pids={item['pid'] for item in processes}
+if owner['pid'] in namespace_pids or child_pids.intersection(namespace_pids):
+    raise RuntimeError('owner or scheduler child PID appears in the private namespace')
+api_pid_zombie=any(item['pid']==api_pid and item['state']=='Z' for item in processes)
+reservation_states=scan_ledger()
+lease_states=scan_leases(paths.store)
+if (any(state!='released' for state in reservation_states)
+        or any(state!='released' for state in lease_states)):
+    raise RuntimeError('host resource reservations or accepted-store leases are not all released')
+print(json.dumps({
+ 'schema':'fullmag.docker-quiescent-unknown-owner-stop-probe.v1',
+ 'process_receipt_sha256':hashlib.sha256(receipt_raw).hexdigest(),
+ 'process_receipt_raw_base64':base64.b64encode(receipt_raw).decode('ascii'),
+ 'api_pid':api_pid,
+ 'owner_sha256':hashlib.sha256(owner_raw).hexdigest(),
+ 'owner':owner,
+ 'ready_owner':ready_owner,
+ 'api_pid_exists':api_pid in namespace_pids,
+ 'api_pid_live':False,
+ 'api_pid_zombie':api_pid_zombie,
+ 'owner_pid_exists':False,
+ 'child_pids_exist':False,
+ 'process_inventory':processes,
+ 'startup_enabled':os.environ.get('FULLMAG_STARTUP_ENABLED'),
+ 'legacy_activation_marker_exists':False,
+ 'reservation_states':reservation_states,
+ 'lease_states':lease_states,
+ 'writer_locks':['host-ledger-writer','accepted-store-writer'],
+},sort_keys=True))
+'''
+
+
+def _capture_quiescent_unknown_owner_probe(container_id: str) -> dict[str, object]:
+    result = docker_capture(
+        'exec', container_id, '/usr/local/bin/python3', '-B', '-c',
+        _quiescent_unknown_owner_probe_script(), timeout=90,
+    )
+    if result.returncode:
+        raise BuildControlError(
+            'quiescent unknown-owner proof probe failed: '
+            + result.stderr.decode('utf-8', 'replace')[-4096:]
+        )
+    try:
+        probe = json.loads(result.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError('quiescent unknown-owner probe returned invalid JSON') from error
+    if not isinstance(probe, dict):
+        raise BuildControlError('quiescent unknown-owner probe is not an object')
+    return probe
+
+
+def _validate_quiescent_unknown_owner_probe(
+    probe: Mapping[str, object], expected_process_receipt_sha256: str,
+) -> dict[str, object]:
+    if probe.get('schema') != QUIESCENT_UNKNOWN_OWNER_PROBE_SCHEMA:
+        raise BuildControlError('quiescent unknown-owner probe schema differs')
+    receipt_sha = probe.get('process_receipt_sha256')
+    owner_sha = probe.get('owner_sha256')
+    if (receipt_sha != expected_process_receipt_sha256
+            or not isinstance(owner_sha, str) or re.fullmatch(r'[0-9a-f]{64}', owner_sha) is None):
+        raise BuildControlError('quiescent unknown-owner raw receipt pins differ')
+    receipt_raw_b64 = probe.get('process_receipt_raw_base64')
+    owner = probe.get('owner')
+    ready_owner = probe.get('ready_owner')
+    if not isinstance(receipt_raw_b64, str) or not isinstance(owner, Mapping):
+        raise BuildControlError('quiescent unknown-owner probe omitted raw documents')
+    try:
+        receipt_raw = base64.b64decode(receipt_raw_b64, validate=True)
+        receipt = json.loads(receipt_raw.decode('utf-8'))
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise BuildControlError('quiescent unknown-owner process receipt raw bytes are invalid') from error
+    if (len(receipt_raw) > QUIESCENT_UNKNOWN_OWNER_RECEIPT_MAX_BYTES
+            or base64.b64encode(receipt_raw).decode('ascii') != receipt_raw_b64
+            or hashlib.sha256(receipt_raw).hexdigest() != receipt_sha
+            or not isinstance(receipt, dict)):
+        raise BuildControlError('quiescent unknown-owner raw process receipt pins differ')
+    if (receipt.get('schema') != 'fullmag.docker-process-tree.v1'
+            or receipt.get('state') != 'failed_outcome_retained'
+            or receipt.get('api_shutdown') != 'unknown'
+            or 'api_exit_code' in receipt
+            or receipt.get('runtime_pid') is not None
+            or 'terminal_service_owner' in receipt
+            or 'startup_activation' in receipt
+            or receipt.get('service_owner') != ready_owner):
+        raise BuildControlError('process receipt is outside the exact unknown-owner state')
+    error = receipt.get('error')
+    if (not isinstance(error, str)
+            or re.fullmatch(QUIESCENT_AFTER_READY_ERROR_PATTERN, error) is None):
+        raise BuildControlError('process receipt does not prove the exact after-READY API supervision timeout')
+    if type(receipt.get('api_pid')) is not int or receipt['api_pid'] <= 0:
+        raise BuildControlError('quiescent process receipt has no positive API pid')
+    if not isinstance(ready_owner, Mapping):
+        raise BuildControlError('quiescent process receipt has no retained Ready owner')
+    ready = _validate_native_ready_owner(ready_owner)
+    unknown = dict(owner)
+    if (unknown.get('schema_version') != 'runtime_service_owner.v1'
+            or unknown.get('protocol') != 'stdin-v1'
+            or unknown.get('state') != 'unknown'
+            or unknown.get('target_id') != 'docker-all'):
+        raise BuildControlError('current OWNER is not the expected unknown owner')
+    children = unknown.get('children')
+    if not isinstance(children, list) or len(children) != 2:
+        raise BuildControlError('unknown OWNER does not have exactly two terminal children')
+    roles: set[object] = set()
+    child_pids: set[int] = set()
+    for child in children:
+        if not isinstance(child, Mapping):
+            raise BuildControlError('unknown OWNER child is invalid')
+        role = child.get('role')
+        pid = child.get('pid')
+        if (role not in {'compute', 'preparation'} or role in roles
+                or type(pid) is not int or pid <= 0 or pid in child_pids
+                or child.get('status') not in {'exited_success', 'exited_failure'}):
+            raise BuildControlError('unknown OWNER child identity or terminal status is invalid')
+        roles.add(role)
+        child_pids.add(pid)
+    if roles != {'compute', 'preparation'}:
+        raise BuildControlError('unknown OWNER child roles are incomplete')
+    normalized_unknown = dict(unknown)
+    normalized_unknown['state'] = 'ready'
+    normalized_unknown['children'] = [dict(child, status='running') for child in children]
+    normalized_unknown = _validate_native_ready_owner(normalized_unknown)
+    if _owner_identity_key(ready, 'retained Ready owner') != _owner_identity_key(
+            normalized_unknown, 'current unknown owner'):
+        raise BuildControlError('unknown OWNER identity differs from retained Ready identity')
+    if probe.get('owner_pid_exists') is not False or probe.get('child_pids_exist') is not False:
+        raise BuildControlError('owner or scheduler child is still live')
+    if probe.get('startup_enabled') == '1' or probe.get('legacy_activation_marker_exists') is not False:
+        raise BuildControlError('startup activation is outside the quiescent unknown-owner route')
+    if probe.get('writer_locks') != ['host-ledger-writer', 'accepted-store-writer']:
+        raise BuildControlError('quiescent proof did not acquire both writer locks')
+    reservations = probe.get('reservation_states')
+    leases = probe.get('lease_states')
+    if not isinstance(reservations, list) or any(state != 'released' for state in reservations):
+        raise BuildControlError('host resource reservations are not all released')
+    if not isinstance(leases, list) or any(state != 'released' for state in leases):
+        raise BuildControlError('accepted-store leases are not all released')
+    inventory = probe.get('process_inventory')
+    api_pid = receipt.get('api_pid')
+    if (not isinstance(inventory, list) or len(inventory) not in {3, 4}
+            or type(api_pid) is not int or probe.get('api_pid') != api_pid):
+        raise BuildControlError('private process inventory is not exact init, entrypoint, probe, and optional pinned API zombie')
+    by_pid: dict[int, Mapping[str, object]] = {}
+    for process in inventory:
+        if not isinstance(process, Mapping) or type(process.get('pid')) is not int or process['pid'] in by_pid:
+            raise BuildControlError('private process inventory has an invalid PID record')
+        if (type(process.get('ppid')) is not int or not isinstance(process.get('state'), str)
+                or not isinstance(process.get('argv'), list)
+                or any(not isinstance(argument, str) for argument in process['argv'])):
+            raise BuildControlError('private process inventory record has invalid types')
+        if process['pid'] == api_pid:
+            if (process.get('state') != 'Z' or process.get('ppid') != 7
+                    or process.get('exe') is not None or process.get('argv') != []):
+                raise BuildControlError('extra API PID is not the exact pinned child zombie')
+        elif not isinstance(process.get('exe'), str) or process.get('state') == 'Z':
+            raise BuildControlError('non-API private process is missing its executable or is a zombie')
+        by_pid[process['pid']] = process
+    if not {1, 7}.issubset(by_pid):
+        raise BuildControlError('private process inventory is missing PID 1 or entrypoint PID 7')
+    api_pid_zombie = api_pid in by_pid
+    if (probe.get('api_pid_exists') is not api_pid_zombie
+            or probe.get('api_pid_zombie') is not api_pid_zombie
+            or probe.get('api_pid_live') is not False):
+        raise BuildControlError('pinned API PID liveness differs from the process inventory')
+    if (by_pid[1].get('exe') != '/usr/sbin/docker-init'
+            or by_pid[1].get('ppid') != 0
+            or by_pid[7].get('exe') != '/usr/local/bin/python3.10'
+            or by_pid[7].get('ppid') != 1
+            or by_pid[7].get('argv') != ['/usr/local/bin/python3', '/opt/fullmag/entrypoint.py']):
+        raise BuildControlError('private PID 1 or entrypoint identity differs')
+    probe_processes = [process for pid, process in by_pid.items() if pid not in {1, 7}]
+    probe_processes = [process for process in probe_processes if process.get('pid') != api_pid]
+    if len(probe_processes) != 1:
+        raise BuildControlError('private process inventory has another non-API process')
+    probe_process = probe_processes[0]
+    probe_argv = probe_process.get('argv')
+    if (probe_process.get('exe') != '/usr/local/bin/python3.10'
+            or not isinstance(probe_argv, list) or len(probe_argv) != 4
+            or probe_argv[:3] != ['/usr/local/bin/python3', '-B', '-c']
+            or not isinstance(probe_argv[3], str)
+            or 'FULLMAG_QUIESCENT_UNKNOWN_OWNER_STOP_PROBE_V1' not in probe_argv[3]):
+        raise BuildControlError('private namespace extra process is not the managed probe')
+    pids = set(by_pid)
+    owner_pid = unknown.get('pid')
+    if type(owner_pid) is not int or owner_pid in pids or child_pids.intersection(pids):
+        raise BuildControlError('owner or scheduler child PID appears in the private namespace')
+    return {
+        'receipt': dict(receipt),
+        'receipt_raw': receipt_raw,
+        'owner': unknown,
+        'ready_owner': ready,
+        'probe': dict(probe),
+    }
+
+
+def _quiescent_unknown_owner_probe_cas(probe: Mapping[str, object]) -> str:
+    """Compare all proof pins while allowing the short-lived probe PID to change."""
+
+    stable = dict(probe)
+    inventory = stable.get('process_inventory')
+    if not isinstance(inventory, list):
+        raise BuildControlError('quiescent process inventory is missing during CAS')
+    stable_inventory=[]
+    for item in inventory:
+        if not isinstance(item, Mapping):
+            continue
+        pid=item.get('pid')
+        if pid in {1,7}:
+            stable_process=dict(item)
+            stable_process.pop('state',None)
+            stable_inventory.append(stable_process)
+        elif pid==probe.get('api_pid'):
+            stable_inventory.append(dict(item))
+    stable['process_inventory']=stable_inventory
+    return json.dumps(stable, sort_keys=True, separators=(',', ':'))
+
+
+def _inspect_quiescent_backend(container_id: str, image_id: str, identity: Mapping[str, object], started_at: str | None = None, *, running: bool | None = True) -> dict[str, object]:
+    result = docker_capture('inspect', container_id, timeout=5)
+    try:
+        records = json.loads(result.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError('Docker inspect returned invalid backend identity') from error
+    if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
+        raise BuildControlError('Docker inspect did not return exactly one backend')
+    actual = records[0]
+    state = actual.get('State')
+    labels = (actual.get('Config') or {}).get('Labels') or {}
+    if (actual.get('Id') != container_id or actual.get('Image') != image_id
+            or labels.get('com.docker.compose.project') != identity['project_name']
+            or labels.get('com.docker.compose.service') != 'backend'):
+        raise BuildControlError('quiescent stop Docker identity or Compose service differs')
+    validate_source_labels(actual, identity)
+    if (not isinstance(state, dict) or type(state.get('Running')) is not bool
+            or (running is not None and state.get('Running') is not running)
+            or state.get('OOMKilled') is not False):
+        raise BuildControlError('quiescent stop requires the exact non-OOM backend state')
+    actual_started = state.get('StartedAt')
+    if not isinstance(actual_started, str) or not actual_started or (started_at is not None and actual_started != started_at):
+        raise BuildControlError('quiescent stop backend StartedAt changed or is missing')
+    if (actual.get('HostConfig') or {}).get('PidMode') not in {'', 'private'}:
+        raise BuildControlError('quiescent stop requires the private Docker PID namespace')
+    pid = state.get('Pid')
+    if type(pid) is not int or (state['Running'] and pid <= 0) or (not state['Running'] and pid != 0):
+        raise BuildControlError('quiescent stop backend PID does not match its Docker state')
+    return actual
+
+
+def _require_quiescent_failure_log(container_id: str, started_at: str) -> str:
+    result = docker_capture('logs', '--since', started_at, '--tail', '100', container_id, timeout=15)
+    logs = (result.stdout + result.stderr).decode('utf-8', 'replace')
+    if 'Startup or runtime failed; admission closed:' not in logs:
+        raise BuildControlError('this exact backend incarnation has no confirmed failed-admission event')
+    return hashlib.sha256((result.stdout + result.stderr)).hexdigest()
+
+
+def _copy_stopped_container_file(container_id: str, path: str, label: str) -> bytes:
+    result = docker_capture('cp', f'{container_id}:{path}', '-', timeout=30)
+    if result.returncode:
+        raise BuildControlError(f'could not read stopped {label} from its exact container')
+    if len(result.stdout) > 8 * 1024 * 1024:
+        raise BuildControlError(f'stopped {label} archive exceeds its bound')
+    try:
+        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode='r:') as archive:
+            members = archive.getmembers()
+            if len(members) != 1:
+                raise BuildControlError(f'stopped {label} archive has an unexpected member set')
+            member = members[0]
+            clean_name = member.name.removeprefix('./')
+            clean_parts = clean_name.split('/')
+            if (not member.isreg() or member.size > 8 * 1024 * 1024
+                    or clean_parts[-1] != path.rsplit('/', 1)[-1]
+                    or any(part in {'', '.', '..'} for part in clean_parts)):
+                raise BuildControlError(f'stopped {label} archive member is not the exact bounded file')
+            stream = archive.extractfile(member)
+            if stream is None:
+                raise BuildControlError(f'stopped {label} archive member cannot be read')
+            raw = stream.read(member.size + 1)
+            if len(raw) != member.size:
+                raise BuildControlError(f'stopped {label} archive member size differs')
+            return raw
+    except (tarfile.TarError, OSError) as error:
+        raise BuildControlError(f'stopped {label} archive is invalid') from error
+
+
+def _validate_quiescent_post_documents(
+    process_raw: bytes, owner_raw: bytes, before: Mapping[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    try:
+        receipt = json.loads(process_raw.decode('utf-8'))
+        owner = json.loads(owner_raw.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError('stopped process receipt or OWNER is invalid JSON') from error
+    before_receipt = before['receipt']
+    before_receipt_raw = before.get('receipt_raw')
+    before_owner = before['owner']
+    if not isinstance(receipt, dict) or not isinstance(owner, dict):
+        raise BuildControlError('stopped process receipt or OWNER is not an object')
+    if not isinstance(before_receipt_raw, bytes):
+        raise BuildControlError('pre-stop process receipt raw bytes are unavailable')
+    unchanged_receipt = process_raw == before_receipt_raw
+    natural_shutdown_receipt = False
+    if not unchanged_receipt:
+        api_exit_code = receipt.get('api_exit_code')
+        shutdown_error = receipt.get('shutdown_error')
+        expected_receipt = dict(before_receipt)
+        expected_receipt.update(
+            state='shutdown_unknown',
+            api_exit_code=api_exit_code,
+            shutdown_error=shutdown_error,
+        )
+        natural_shutdown_receipt = (
+            type(api_exit_code) is int
+            and isinstance(shutdown_error, str)
+            and bool(shutdown_error)
+            and receipt == expected_receipt
+        )
+    if not (unchanged_receipt or natural_shutdown_receipt):
+        raise BuildControlError('stopped process receipt no longer preserves its historical unknown outcome')
+    if (owner.get('schema_version') != 'runtime_service_owner.v1'
+            or owner.get('protocol') != 'stdin-v1'
+            or owner.get('state') != 'unknown'
+            or owner != before_owner
+            or _owner_identity_key(owner, 'stopped unknown OWNER') != _owner_identity_key(before_owner, 'before unknown OWNER')
+            or owner.get('children') != before_owner.get('children')):
+        raise BuildControlError('stopped OWNER no longer preserves the historical unknown owner')
+    return receipt, owner
+
+
+def _start_quiescent_control_lock(control: BuildControl, inputs: Mapping[str, object]) -> dict[str, object]:
+    phase = 'quiescent-stop'
+    token = uuid.uuid4().hex
+    root = f'{phase}/attempts/{token}'
+    name = 'fullmag-control-' + token
+    receipt: dict[str, object] = {
+        'schema': 'fullmag.docker-build-operation.v1',
+        'phase': phase,
+        'state': 'starting',
+        'attempt': token,
+        'compose_project': control.project,
+        'control_volume': control.volume,
+        'helper_container': name,
+        'inputs': dict(inputs),
+        'started_at': time.time(),
+        'build_data_qualification': 'NOT VERIFIED',
+        'purpose': 'bounded quiescent unknown-owner namespace stop; no restart',
+    }
+    if control.namespace:
+        receipt.update(control_namespace=control.namespace,
+                       namespace_registry_sha256=control.namespace_registry_sha256)
+    logger = subprocess.Popen(
+        control.helper_args(control.operation_script(phase, token), name=name),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    line = BuildControl._line(logger)
+    if line != 'READY':
+        try:
+            logger.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        raise BuildControlError('managed stop-operation serialization was not admitted')
+    operation = {'root': root, 'logger': logger, 'receipt': receipt, 'daemon_pending': False}
+    try:
+        control.write(root + '/receipt.json', receipt)
+    except Exception as error:
+        try:
+            _finish_quiescent_control_lock(control, operation, succeeded=False, error=str(error))
+        except Exception:
+            pass
+        raise
+    return operation
+
+
+def _finish_quiescent_control_lock(
+    control: BuildControl, operation: Mapping[str, object], *, succeeded: bool, error: str | None = None,
+) -> None:
+    receipt = operation['receipt']
+    logger = operation['logger']
+    if not isinstance(receipt, dict) or not isinstance(logger, subprocess.Popen):
+        raise BuildControlError('managed stop-operation lock state is invalid')
+    receipt['state'] = 'succeeded' if succeeded else 'failed-confirmed'
+    receipt['finished_at'] = time.time()
+    if error:
+        receipt['error'] = error[:2048]
+    if logger.stdin is not None and not logger.stdin.closed:
+        logger.stdin.close()
+    if BuildControl._line(logger) != 'LOGGED':
+        raise BuildControlError('managed stop-operation log was not acknowledged')
+    control.write(operation['root'] + '/receipt.json', receipt)
+    control.write(operation['root'] + '/terminal.json', receipt)
+    if logger.wait(timeout=30) != 0:
+        raise BuildControlError('managed stop-operation lock did not finalize')
+
+
+def _retain_unknown_quiescent_outcome(control: BuildControl, operation: Mapping[str, object], error: BaseException) -> None:
+    receipt = operation.get('receipt')
+    if isinstance(receipt, dict):
+        receipt['state'] = 'outcome-unknown-resources-retained'
+        receipt['error'] = str(error)[:2048]
+        receipt['finished_at'] = time.time()
+        try:
+            control.write(operation['root'] + '/receipt.json', receipt)
+        except Exception:
+            pass
+    journal_path = operation.get('journal_path')
+    if isinstance(journal_path, str):
+        try:
+            journal = control.read(journal_path, optional=True)
+            if isinstance(journal, dict) and journal.get('state') != 'stopped-confirmed':
+                journal['state'] = 'stop-outcome-unknown'
+                journal['signal_outcome'] = journal.get('signal_outcome', 'unknown')
+                journal['observation_error'] = str(error)[:2048]
+                control.write(journal_path, journal)
+        except Exception:
+            pass
+    # Keep the image-owned active marker and advisory lock. A later invocation
+    # must observe and reconcile the existing intent; it must never re-send TERM.
+
+
+def _stop_quiescent_unknown_owner(args: argparse.Namespace, selected: Path, identity: Mapping[str, object], initial: dict[str, object]) -> int:
+    container_id = args.container_id
+    image_id = args.image_id
+    initial_state = initial.get('State')
+    if not isinstance(initial_state, dict):
+        raise BuildControlError('quiescent stop backend has no Docker state')
+    started_at = initial_state.get('StartedAt')
+    if not isinstance(started_at, str) or not started_at:
+        raise BuildControlError('quiescent stop backend has no StartedAt pin')
+    _inspect_quiescent_backend(container_id, image_id, identity, started_at, running=True)
+    initial_log_sha = _require_quiescent_failure_log(container_id, started_at)
+    first_probe = _capture_quiescent_unknown_owner_probe(container_id)
+    first = _validate_quiescent_unknown_owner_probe(first_probe, args.process_receipt_sha256)
+    from docker_build_control import toolchain_configuration
+    config = toolchain_configuration(selected, identity)
+    control = BuildControl(identity, config['services']['fem-gpu-toolchain']['build']['args']['FULLMAG_CUDA_BASE_IMAGE'])
+    journal_path = 'verification/quiescent-unknown-owner-stop-' + container_id + '.json'
+    journal = {
+        'schema': QUIESCENT_UNKNOWN_OWNER_JOURNAL_SCHEMA,
+        'state': 'term-signal-armed',
+        'stop_kind': 'quiescent_unknown_owner_namespace_stop',
+        'container_id': container_id,
+        'image_id': image_id,
+        'started_at': started_at,
+        'failure_log_sha256': initial_log_sha,
+        'process_receipt_before_sha256': first_probe['process_receipt_sha256'],
+        'owner_before_sha256': first_probe['owner_sha256'],
+        'quiescent_unknown_owner_probe': {
+            key: value for key, value in first_probe.items()
+            if key not in {'process_receipt_raw_base64', 'owner', 'ready_owner'}
+        },
+        'historical_process_receipt_raw_base64': base64.b64encode(first['receipt_raw']).decode('ascii'),
+        'retained_ready_owner': first['ready_owner'],
+        'historical_unknown_owner': first['owner'],
+        'authenticated_native_drain': False,
+        'restart_performed': False,
+        'signal': 'SIGTERM',
+    }
+    operation = _start_quiescent_control_lock(control, {
+        'container_id': container_id,
+        'image_id': image_id,
+        'started_at': started_at,
+        'process_receipt_sha256': args.process_receipt_sha256,
+        'owner_sha256': first_probe['owner_sha256'],
+    })
+    try:
+        if control.read(journal_path, optional=True) is not None:
+            raise BuildControlError('quiescent stop journal already exists; signal replay is forbidden')
+        # Repeat Docker, failure-log, OWNER/receipt, lease, ledger, and exact
+        # private-namespace inventory checks immediately before arming TERM.
+        _inspect_quiescent_backend(container_id, image_id, identity, started_at, running=True)
+        rechecked_log_sha = _require_quiescent_failure_log(container_id, started_at)
+        second_probe = _capture_quiescent_unknown_owner_probe(container_id)
+        second = _validate_quiescent_unknown_owner_probe(second_probe, args.process_receipt_sha256)
+        if (_quiescent_unknown_owner_probe_cas(second_probe) != _quiescent_unknown_owner_probe_cas(first_probe)
+                or second['owner'] != first['owner']
+                or second['ready_owner'] != first['ready_owner'] or rechecked_log_sha != initial_log_sha):
+            raise BuildControlError('quiescent proof changed during pre-signal revalidation')
+        pinned = _inspect_quiescent_backend(container_id, image_id, identity, started_at, running=True)
+        journal['docker_before'] = {
+            'id': pinned.get('Id'), 'image': pinned.get('Image'), 'started_at': started_at,
+            'pid_mode': (pinned.get('HostConfig') or {}).get('PidMode'),
+        }
+        journal['term_command_armed'] = True
+        journal['signal_outcome'] = 'unknown-until-observed'
+        serialized_journal = canonical(journal) + b'\n'
+        if len(serialized_journal) > MAX_DOCUMENT_BYTES:
+            raise BuildControlError('quiescent stop journal exceeds the BuildControl document limit')
+        control.write(journal_path, journal)
+        operation['daemon_pending'] = True
+        operation['journal_path'] = journal_path
+        try:
+            signal_result = docker_capture('kill', '--signal', 'TERM', container_id, timeout=30)
+        except Exception as error:
+            journal['state'] = 'stop-outcome-unknown'
+            journal['signal_error'] = str(error)[:2048]
+            try:
+                control.write(journal_path, journal)
+            finally:
+                raise BuildControlError('SIGTERM outcome is unknown; no retry was attempted') from error
+        if signal_result.returncode != 0:
+            journal['state'] = 'stop-outcome-unknown'
+            journal['signal_outcome'] = 'client-reported-failure-or-unknown'
+            journal['signal_error'] = signal_result.stderr.decode('utf-8', 'replace')[-2048:]
+            control.write(journal_path, journal)
+            raise BuildControlError('SIGTERM was not confirmed; no retry was attempted')
+        journal['state'] = 'term-signal-accepted'
+        journal['signal_outcome'] = 'accepted'
+        journal['signal_accepted'] = True
+        control.write(journal_path, journal)
+        deadline = time.monotonic() + 45
+        after = None
+        while time.monotonic() < deadline:
+            observed = _inspect_quiescent_backend(container_id, image_id, identity, started_at, running=None)
+            if observed['State'].get('Running') is False:
+                after = observed
+                break
+            time.sleep(.25)
+        if after is None:
+            journal['state'] = 'stop-outcome-unknown'
+            journal['observation_error'] = 'bounded TERM observation expired while backend remained running'
+            control.write(journal_path, journal)
+            raise BuildControlError('backend did not stop within the bounded TERM window; no retry was attempted')
+        state = after['State']
+        exit_code = state.get('ExitCode')
+        if (state.get('Running') is not False or state.get('Status') != 'exited' or state.get('OOMKilled') is not False
+                or state.get('Pid') != 0 or type(exit_code) is not int or exit_code == 137):
+            journal['state'] = 'stop-outcome-unknown'
+            journal['observation_error'] = 'stopped backend did not satisfy exact non-OOM/non-137 Docker evidence'
+            control.write(journal_path, journal)
+            raise BuildControlError('stopped backend does not meet the confirmed namespace-stop contract')
+        process_raw = _copy_stopped_container_file(container_id, CANONICAL_PROCESS_RECEIPT, 'process receipt')
+        owner_raw = _copy_stopped_container_file(container_id, CANONICAL_RUNTIME_OWNER, 'OWNER')
+        post_receipt, post_owner = _validate_quiescent_post_documents(process_raw, owner_raw, first)
+        process_after_sha = hashlib.sha256(process_raw).hexdigest()
+        owner_after_sha = hashlib.sha256(owner_raw).hexdigest()
+        final_after = _inspect_quiescent_backend(container_id, image_id, identity, started_at, running=False)
+        final_state = final_after['State']
+        if (final_state.get('Status') != 'exited' or final_state.get('OOMKilled') is not False
+                or final_state.get('Pid') != 0 or final_state.get('ExitCode') != exit_code
+                or final_state.get('FinishedAt') != state.get('FinishedAt')):
+            raise BuildControlError('backend Docker state changed after stopped receipt/OWNER capture')
+        journal.update(
+            state='stopped-confirmed',
+            exit_code=exit_code,
+            process_receipt_after_sha256=process_after_sha,
+            owner_after_sha256=owner_after_sha,
+            process_receipt_after=post_receipt,
+            owner_after=post_owner,
+            container_state={
+                'id': final_after.get('Id'), 'image': final_after.get('Image'),
+                'started_at': final_state.get('StartedAt'), 'finished_at': final_state.get('FinishedAt'),
+                'pid': final_state.get('Pid'), 'oom_killed': final_state.get('OOMKilled'),
+                'exit_code': exit_code,
+            },
+            authenticated_native_drain=False,
+            restart_performed=False,
+        )
+        control.write(journal_path, journal)
+        operation['receipt'].update(state='succeeded', stop_journal=journal_path,
+                                    process_receipt_after_sha256=process_after_sha,
+                                    owner_after_sha256=owner_after_sha)
+        _finish_quiescent_control_lock(control, operation, succeeded=True)
+        print(json.dumps({'state': 'stopped-confirmed', 'container_id': container_id,
+                          'authenticated_native_drain': False, 'restart_performed': False}))
+        return 0
+    except BaseException as error:
+        if operation.get('daemon_pending'):
+            _retain_unknown_quiescent_outcome(control, operation, error)
+        else:
+            try:
+                _finish_quiescent_control_lock(control, operation, succeeded=False, error=str(error))
+            except Exception:
+                pass
+        raise
+
+
 def _native_failure_probe_cas(probe: Mapping[str, object]) -> tuple[object, ...]:
     """Return the receipt/OWNER raw-byte CAS pins used by pre-stop revalidation."""
 
@@ -613,6 +1483,8 @@ def main():
     parser.add_argument('--container-id',required=True)
     parser.add_argument('--image-id',required=True)
     parser.add_argument('--process-receipt-sha256',required=True)
+    parser.add_argument('--quiescent-unknown-owner', action='store_true',
+                        help='use the explicit read-only-quiescence plus SIGTERM namespace-stop variant')
     args=parser.parse_args()
     if not re.fullmatch('[0-9a-f]{64}',args.container_id) or not re.fullmatch('sha256:[0-9a-f]{64}',args.image_id) or not re.fullmatch('[0-9a-f]{64}',args.process_receipt_sha256):
         raise BuildControlError('Stop requires complete immutable container/image/receipt identities')
@@ -626,6 +1498,8 @@ def main():
     labels=actual.get('Config',{}).get('Labels',{})
     if labels.get('com.docker.compose.project')!=identity['project_name'] or labels.get('com.docker.compose.service')!='backend' or not actual.get('State',{}).get('Running'):
         raise BuildControlError('Stop requires this exact running DEV backend')
+    if args.quiescent_unknown_owner:
+        return _stop_quiescent_unknown_owner(args, selected, identity, actual)
     log_result = docker_capture('logs','--since',actual['State']['StartedAt'],'--tail','100',args.container_id)
     logs = (log_result.stdout + log_result.stderr).decode('utf-8','replace')
     if 'Startup or runtime failed; admission closed:' not in logs:

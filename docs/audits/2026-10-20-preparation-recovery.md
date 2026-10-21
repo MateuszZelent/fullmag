@@ -1,5 +1,55 @@
 # Recovery przygotowania symulacji — master, 20.10.2026
 
+## Bieżący checkpoint po integracji
+
+Aktualizacja 21.10.2026: bezpośredni odczyt potwierdził HEAD
+`8a290d6e5e425f0bd42a38db6734148a0b66bfdb` oraz działający kontener backendu
+`c007e2f1e113`. Docker HostConfig: Memory=137438953472 (128 GiB),
+NanoCpus=16000000000 (16 CPU), MemorySwap=146028888064 (136 GiB łącznie,
+czyli 8 GiB swap ponad RAM). Właściciel lifecycle przekazał receipt
+`174138824a3d4777a9834b165f500b53` ze stanem succeeded i potwierdzenie cgroup;
+tego receiptu nie odczytywano niezależnie w tym kroku. Według jego checkpointu
+ten sam PID 7 nadal sprawdzał stare kopie przed API (6/14), bez replay/retry/Solve
+runu 04. Zwiększenie limitów nie jest dowodem READY ani wdrożenia nowego helpera
+do już uruchomionego procesu. Odbiór runtime i okna nadal pozostaje otwarty.
+
+Zmiany zostały zachowane w checkpointcie `5c072bd16628354060ff5b1c2345e24013e1039c`
+i merge `b724373654c95ea73ea058738a09bd90cc5e7441`. Porównanie objętych tym
+zadaniem plików pomiędzy checkpointem i merge nie wykazało różnic.
+Następny managed build używa HEAD `d2a4bdfb7a685da587954f1dbb57ea828f8a4e6b`.
+Backend `c007e2f1e113b82deaf205cc9cf1e2a97d45ed63d5a454e57d911ceb16935d26`:
+dwa odczyty 9143 plików zakończone poprawnie, capture 256106 ms,
+sync 8607 ms. Bezpośredni odczyt logu potwierdził `make` exit 0
+po 217249 ms oraz pakiet 24 plików po 2289 ms. Gotowość API tej próby
+pozostaje niepotwierdzona; poniższe starsze próby zachowano jako historię.
+
+Limity nowej generacji frontendu ponownie potwierdzone odczytowo:
+`31f1035340db9d12ec8252f424ed7521c1d463c6e8bdb02bd0e933f71cbc0e12`,
+image `sha256:fec961feca1292383edf6fb4104b36c4eb55ca1c0458b6746b57b140822fb978`.
+Docker i cgroup: 17179869184 bajtów RAM, 4 CPU (`cpu.max=400000 100000`).
+Rzeczywiste procesy Next PID 28/44 mają old space 6144 MiB.
+Ten odczyt nie dowodzi dostępności API ani wykonania symulacji.
+
+Kolejny ustalony bloker startu: po publikacji poprawnego pakietu proces
+`backend_dev` synchronicznie waliduje 14 kopii rollbacku w
+`_retain_package_backups`, zanim wejdzie do `_serve`. Odczyty FD/IO
+potwierdzają postęp po kolejnych plikach i kopiach; API nie zostało jeszcze
+uruchomione. Statyczny trace nie wykazał rekurencyjnie zagnieżdżonych kopii:
+to oddzielne katalogi, każdy ponownie hashowany. Próba zwolnienia cache RAM
+przez właściciela lifecycle nie wykazała istotnej poprawy i nie potwierdza
+cache jako głównej przyczyny opóźnienia.
+
+Właściciel launchera zapisał minimalną poprawkę w
+`01cb8ed197e066fd25d2d9db26c52d6bf9d3d154`: opcjonalna retencja nie blokuje
+startu; wszystkie kopie pozostają, a obowiązkowa walidacja aktualnego
+pakietu w `_serve` jest zachowana. Kontrola składni i review przeszły.
+Bieżący proces wykonuje jednak wcześniej załadowany helper, więc ten
+commit nie jest dowodem wdrożenia zmiany do tej operacji. Nadal otwarte:
+READY API, widoczny odtworzony failed preparation resource w przeglądarce,
+checkpoint braku nowego launch/exit/start_release przed jawnym retry oraz
+runtime scenariusza odroczonej finalizacji. Nie deklarujemy ukończenia
+całego zadania na podstawie samego poprawnego buildu.
+
 ## Cel i stan
 
 Cel użytkownika: aplikacja pozostaje dostępna po błędzie przygotowania, finalizacja

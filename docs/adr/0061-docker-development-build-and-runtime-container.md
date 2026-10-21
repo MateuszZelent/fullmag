@@ -798,3 +798,30 @@ hosta nie może zmieniać storage policy; H1 nie mierzy fizycznej pojemności st
 Przy porównaniu konfiguracji tylko cpu_millis i memory_bytes są zmienne
 w budżetach ofert. storage_bytes, gpu_memory_bytes i nieznane dodatkowe pola
 pozostają dokładne; nie wynikają z pomiaru CPU/RAM deskryptora H1.
+
+### Zatrzymanie konsumentów przed migracją wspólnego hosta
+
+Zgoda operatora na skoordynowane zatrzymanie grup obejmuje również model
+przywrócony jako `held_pending_restore`. Nie jest on globalnie bezczynny:
+ma nieterminalny accepted intent, ale manualna bramka Compute pozostaje
+zamknięta. Ścieżka stop-only może zweryfikować dokładny request/proof/ACK,
+bieżące API i nienaruszony held katalog, po zamknięciu prywatnego frontendu.
+Nie przepisuje dowodu anulowania innego runu. Zwykły restart zachowuje swoje
+dotychczasowe ograniczenia. Zatrzymanie kończy się istniejącym
+`service-drain-confirmed` i zapisem successor drain; nie wysyła Compute.
+
+Osobny, jawny tryb zakończenia nadzorcy po awarii obserwacji API może zachować
+owner `unknown` i niekompletny historyczny zapis API exit. Wymaga ponownego
+dowodu, że prywatna przestrzeń PID zawiera wyłącznie init, nadzorcę i samą sondę
+oraz ewentualny zombie API wskazany dokładnie w historycznym receipcie.
+Zombie musi mieć stan Z, rodzica będącego nadzorcą, pusty cmdline i brak
+executable; żywy lub ponownie użyty PID jest odrzucany. API/native/children
+nie wykonują pracy, a ledger i store nie mają aktywnych lease'ów.
+Sygnał jest jednorazowy i ograniczony do SIGTERM; brak potwierdzonego wyjścia
+zachowuje wynik nieznany, bez wymuszonego SIGKILL ani automatycznego ponowienia.
+Zakończenie przestrzeni kontenera nie jest authenticated native drain.
+Nie zmienia OWNER, nie fabrykuje kodu wyjścia API ani nie zwalnia rezerwacji.
+
+Oba warianty pozostawiają starsze grupy zatrzymane. Przyszły start nadal wymaga
+ich własnej aktualizacji lub recovery; zgoda na migrację hosta nie usuwa tego
+obowiązku. Implementacja i dowód runtime tych wariantów są zapisywane osobno.

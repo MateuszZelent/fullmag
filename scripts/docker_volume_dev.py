@@ -3053,6 +3053,688 @@ def _validate_cancelled_activation_preflight(
     return {"proof_sha256": proof_sha256, "probe": fresh_probe, "runtime": fresh_probe}
 
 
+def _held_accepted_run_stop_probe_script() -> str:
+    """Read-only proof that a restored accepted run is still held before stop."""
+    return r'''import fcntl,hashlib,json,os,pathlib,re,stat,sys,time,urllib.error,urllib.request
+
+MAX=8*1024*1024
+MAX_TASKS=100
+MAX_RECORDS=256
+MAX_EVIDENCE_BYTES=MAX
+MAX_SESSION_RUNS=4096
+MAX_GLOBAL_LEASE_RECORDS=4096
+MAX_GLOBAL_LEASE_BYTES=32*1024*1024
+MAX_GLOBAL_LEASE_ENTRIES=16384
+sys.path.insert(0,"/opt/fullmag")
+import runtime_service as service
+if pathlib.Path(service.__file__).resolve()!=pathlib.Path("/opt/fullmag/runtime_service.py"):
+    raise RuntimeError("runtime service import is not the pinned image module")
+
+def fail(message): raise RuntimeError(message)
+def digest(raw): return hashlib.sha256(raw).hexdigest()
+def canon(value): return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(",",":"),allow_nan=False).encode("utf-8")
+def unique(pairs):
+    result={}
+    for key,value in pairs:
+        if key in result: fail("JSON contains a duplicate key")
+        result[key]=value
+    return result
+def strict_obj(raw,label):
+    try: value=json.loads(raw.decode("utf-8"),object_pairs_hook=unique)
+    except (UnicodeDecodeError,json.JSONDecodeError) as error: raise RuntimeError(label+" is invalid JSON") from error
+    if not isinstance(value,dict): fail(label+" is not an object")
+    return value
+expected=strict_obj(sys.argv[1].encode("utf-8"),"admitted accepted-run pins")
+def no_links(path,label):
+    path=pathlib.Path(path)
+    if not path.is_absolute() or ".." in path.parts: fail(label+" path is unsafe")
+    for candidate in (path,*path.parents):
+        try:
+            if candidate.is_symlink(): fail(label+" path contains a symbolic link")
+        except OSError as error: raise RuntimeError(label+" path cannot be inspected") from error
+    return path
+def regular(path,label,maximum=MAX,optional=False):
+    path=no_links(path,label)
+    try: fd=os.open(path,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+    except FileNotFoundError:
+        if optional: return None
+        raise RuntimeError(label+" is missing")
+    except OSError as error: raise RuntimeError(label+" cannot be opened") from error
+    try:
+        meta=os.fstat(fd)
+        if not stat.S_ISREG(meta.st_mode) or meta.st_size>maximum: fail(label+" is not a bounded regular file")
+        chunks=[]; total=0
+        while total<=maximum:
+            chunk=os.read(fd,min(65536,maximum+1-total))
+            if not chunk: break
+            chunks.append(chunk); total+=len(chunk)
+        if total>maximum: fail(label+" exceeds its size bound")
+        return b"".join(chunks)
+    finally: os.close(fd)
+def obj(raw,label): return strict_obj(raw,label)
+def lock(path,label):
+    path=no_links(path,label)
+    try: fd=os.open(path,os.O_RDWR|getattr(os,"O_NOFOLLOW",0))
+    except OSError as error: raise RuntimeError(label+" cannot be opened") from error
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode): fail(label+" is not a regular file")
+        deadline=time.monotonic()+5
+        while True:
+            try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB); return fd
+            except BlockingIOError as error:
+                if time.monotonic()>=deadline: raise RuntimeError(label+" remained busy") from error
+                time.sleep(0.05)
+            except OSError as error: raise RuntimeError(label+" lock outcome is unknown") from error
+    except BaseException:
+        os.close(fd)
+        raise
+def real_dir(path,label,optional=False):
+    path=no_links(path,label)
+    if not path.exists():
+        if optional: return False
+        fail(label+" is missing")
+    if not path.is_dir(): fail(label+" is not a directory")
+    return True
+def flat_json_records(root,label,budget):
+    root=pathlib.Path(root)
+    if not real_dir(root,label,optional=True): return []
+    records=[]
+    try:
+        with os.scandir(root) as iterator:
+            entries=[]
+            for entry in iterator:
+                if len(entries)>=MAX_RECORDS: fail(label+" exceeds its file-count bound")
+                entries.append(entry)
+        entries.sort(key=lambda entry:entry.name)
+    except OSError as error: raise RuntimeError(label+" cannot be enumerated") from error
+    for entry in entries:
+        path=pathlib.Path(entry.path)
+        if entry.is_symlink() or not entry.is_file(follow_symlinks=False) or path.suffix!=".json":
+            fail(label+" contains a non-regular or unexpected entry")
+        raw=regular(path,label+" record")
+        budget[0]+=1; budget[1]+=len(raw)
+        if budget[0]>MAX_RECORDS or budget[1]>MAX_EVIDENCE_BYTES: fail("preparation evidence exceeds its bound")
+        records.append({"path":path.name,"value":strict_obj(raw,label+" record"),"raw":raw})
+    return records
+def ensure_empty_tree(root,label):
+    root=pathlib.Path(root)
+    if not real_dir(root,label,optional=True): return
+    stack=[root]; visited=0
+    while stack:
+        current=stack.pop()
+        try:
+            with os.scandir(current) as iterator:
+                entries=[]
+                for entry in iterator:
+                    visited+=1
+                    if visited>MAX_RECORDS*4: fail(label+" exceeds its directory-entry bound")
+                    entries.append(entry)
+        except OSError as error: raise RuntimeError(label+" cannot be inspected") from error
+        for entry in entries:
+            path=pathlib.Path(entry.path)
+            if entry.is_symlink(): fail(label+" contains a symbolic link")
+            if entry.is_dir(follow_symlinks=False): stack.append(path)
+            elif entry.is_file(follow_symlinks=False): fail(label+" contains a durable record")
+            else: fail(label+" contains an invalid entry")
+def tree_json_records(root,label,budget,*,max_records=MAX_RECORDS,max_bytes=MAX_EVIDENCE_BYTES,
+                      entry_budget=None,max_entries=MAX_RECORDS*4):
+    root=pathlib.Path(root)
+    if not real_dir(root,label,optional=True): return []
+    found=[]; stack=[root]; visited=0
+    while stack:
+        current=stack.pop()
+        try:
+            with os.scandir(current) as iterator:
+                entries=[]
+                for entry in iterator:
+                    visited+=1
+                    if visited>max_entries: fail(label+" exceeds its directory-entry bound")
+                    if entry_budget is not None:
+                        entry_budget[0]+=1
+                        if entry_budget[0]>max_entries: fail(label+" exceeds its total directory-entry bound")
+                    entries.append(entry)
+        except OSError as error: raise RuntimeError(label+" cannot be enumerated") from error
+        for entry in entries:
+            path=pathlib.Path(entry.path)
+            if entry.is_symlink(): fail(label+" contains a symbolic link")
+            if entry.is_dir(follow_symlinks=False): stack.append(path)
+            elif entry.is_file(follow_symlinks=False) and path.suffix==".json":
+                raw=regular(path,label+" record")
+                budget[0]+=1; budget[1]+=len(raw)
+                if budget[0]>max_records or budget[1]>max_bytes: fail(label+" exceeds its evidence bound")
+                found.append({"path":path.relative_to(root).as_posix(),"value":strict_obj(raw,label+" record"),"raw":raw})
+            else: fail(label+" contains a non-regular or unexpected file")
+    found.sort(key=lambda record:record["path"])
+    return found
+def api_get(path,label):
+    request=urllib.request.Request("http://127.0.0.1:8081"+path,headers={"Accept":"application/json","Host":"localhost"})
+    try:
+        with urllib.request.urlopen(request,timeout=5) as response:
+            raw=response.read(MAX+1)
+            if len(raw)>MAX or response.status!=200: fail(label+" response is not bounded HTTP 200")
+            value=strict_obj(raw,label+" response")
+            api_id=service._accepted_reattach_api_id(response.headers.get("x-fullmag-api-instance"),label+" API instance")
+            return value,api_id,digest(raw)
+    except urllib.error.HTTPError as error:
+        try: error.read(MAX+1)
+        except OSError: pass
+        fail(label+" returned HTTP "+str(error.code))
+    except (OSError,urllib.error.URLError) as error:
+        raise RuntimeError(label+" cannot be read") from error
+def sha(value,label):
+    if not isinstance(value,str) or len(value)!=64 or any(char not in "0123456789abcdef" for char in value):
+        fail(label+" is not a SHA-256 digest")
+    return value
+def prefixed_sha(value,label):
+    if not isinstance(value,str) or not value.startswith("sha256:"): fail(label+" is not a prefixed SHA-256 digest")
+    sha(value[7:],label)
+    return value
+
+paths=service.canonical_paths()
+store=pathlib.Path(paths.store)
+ledger=pathlib.Path(os.environ.get("FULLMAG_HOST_LEDGER_ROOT","/host-ledger/ledger"))
+if not store.is_absolute() or not ledger.is_absolute(): fail("probe roots are not absolute")
+store_fd=None; ledger_fd=None
+evidence_budget=[0,0]
+preparation_evidence=[]
+try:
+    ledger_fd=lock(ledger/"WRITER.lock","host ledger writer lock")
+    store_fd=lock(store/"WRITER.lock","accepted store writer lock")
+    if not real_dir(store,"accepted store") or not real_dir(ledger,"host resource ledger"): fail("writer roots are unavailable")
+
+    process_raw=regular(service.process_receipt_path(paths),"current process receipt")
+    process_receipt=strict_obj(process_raw,"current process receipt")
+    if process_receipt.get("schema")!="fullmag.docker-process-tree.v1" or process_receipt.get("state")!="ready":
+        fail("current backend process receipt is not ready")
+    metadata=process_receipt.get("accepted_reattach")
+    environment,request,proof_raw=service._accepted_reattach_documents(paths)
+    if request is None or proof_raw is None or not isinstance(metadata,dict): fail("accepted-run reattach records are unavailable")
+    service._validate_accepted_reattach_runtime_metadata(
+        metadata,request=request,request_sha256=environment[service.ACCEPTED_REATTACH_DIGEST_ENV]
+    )
+    if metadata.get("restore_mode")!="held_pending_restore" or metadata.get("previous_ack_sha256") is not None:
+        fail("accepted-run stop supports only the initial held restore acknowledgement")
+    request_relative=environment[service.ACCEPTED_REATTACH_REQUEST_ENV]
+    request_path=service._reattach_relative(paths.state_root,request_relative,"accepted-run request")
+    request_raw=regular(request_path,"accepted-run request",64*1024)
+    request_sha=digest(request_raw)
+    proof_sha=digest(proof_raw)
+    request_sha=sha(request_sha,"accepted-run request raw digest")
+    proof_sha=sha(proof_sha,"accepted-run proof raw digest")
+    request_sha_expected=sha(expected.get("request_sha256"),"admitted request digest")
+    proof_sha_expected=sha(expected.get("proof_sha256"),"admitted proof digest")
+    if (request_relative!=expected.get("request_relative")
+            or request_sha!=request_sha_expected
+            or proof_sha!=proof_sha_expected
+            or environment[service.ACCEPTED_REATTACH_DIGEST_ENV]!=request_sha
+            or request.get("proof_sha256")!=proof_sha):
+        fail("accepted-run request/proof bytes differ from the admitted pins")
+    proof=service._accepted_reattach_json(proof_raw,"accepted-run backing proof")
+    if proof.get("schema")!="fullmag.development-accepted-run-reattach-proof.v1":
+        fail("accepted-run backing proof schema differs")
+    for key in ("run_id","project_id","source_request_id","source_sha256","startup_provenance_sha256","config_sha256"):
+        if request.get(key)!=expected.get(key) or proof.get(key)!=expected.get(key):
+            fail("accepted-run request/proof differs from admitted "+key)
+    if request.get("proof_path")!=expected.get("proof_relative"):
+        fail("accepted-run proof path differs from the admitted pin")
+    for key in ("activation_attempt","reconciliation_attempt","logical_session_id","session_epoch",
+                "compose_project","control_volume","development_attempt","backend_container","image_id","source_root"):
+        if proof.get(key)!=expected.get(key):
+            fail("accepted-run backing proof differs from admitted "+key)
+    if (metadata.get("run_id")!=request["run_id"]
+            or metadata.get("project_id")!=request["project_id"]
+            or metadata.get("source_request_id")!=request["source_request_id"]
+            or metadata.get("source_sha256")!=request["source_sha256"]
+            or metadata.get("proof_sha256")!=proof_sha):
+        fail("current process receipt metadata differs from accepted-run pins")
+    api_instance_id=service._accepted_reattach_api_id(metadata.get("api_instance_id"),"current process receipt API instance")
+    ack_relative=service._accepted_reattach_record_relative(
+        request,service.ACCEPTED_REATTACH_ACK_PREFIX+api_instance_id+".json"
+    )
+    if metadata.get("ack_relative")!=ack_relative: fail("current ACK path differs from its process receipt")
+    ack_path=service._reattach_relative(paths.state_root,ack_relative,"native restore acknowledgement")
+    ack_raw=regular(ack_path,"native restore acknowledgement",64*1024)
+    ack_sha=digest(ack_raw)
+    if ack_sha!=sha(metadata.get("ack_sha256"),"current process receipt ACK digest"):
+        fail("native restore acknowledgement bytes differ from the current process receipt")
+    ack=service._validate_accepted_reattach_ack(
+        request,proof,ack_raw,
+        request_sha256=request_sha,
+        expected_previous_ack_sha256=None,
+        expected_restore_mode="held_pending_restore",
+        expected_api_instance_id=api_instance_id,
+    )
+    if ack.get("restore_mode")!="held_pending_restore": fail("native acknowledgement is not a held restore")
+
+    run_id=request["run_id"]
+    project_id=request["project_id"]
+    if not isinstance(run_id,str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}",run_id):
+        fail("accepted run id is not a portable store identity")
+    run=store/"runs"/run_id
+    if not real_dir(store/"runs","accepted runs root") or not real_dir(run,"accepted run"): fail("accepted run is unavailable")
+    intent_path=run/"run_intent.json"
+    catalog_path=run/"run_catalog.json"
+    intent_raw=regular(intent_path,"accepted RunIntent")
+    catalog_raw=regular(catalog_path,"accepted run catalog")
+    intent=strict_obj(intent_raw,"accepted RunIntent")
+    catalog=strict_obj(catalog_raw,"accepted run catalog")
+    if intent.get("schema_version")!="run_intent.v1" or intent.get("run_id")!=run_id:
+        fail("accepted RunIntent schema/identity differs from its proof")
+    specification=intent.get("specification")
+    if not isinstance(specification,dict) or intent.get("payload_sha256")!=digest(canon(specification)):
+        fail("accepted RunIntent payload digest differs")
+    if specification.get("schema_version")!="run_spec.v2" or specification.get("run_id")!=run_id:
+        fail("accepted RunSpecification schema/identity differs")
+    snapshot=specification.get("snapshot")
+    parameters=specification.get("parameters")
+    if not isinstance(snapshot,dict) or snapshot.get("project_id")!=project_id or not isinstance(parameters,dict):
+        fail("accepted RunIntent project or parameters differ from the backing proof")
+    specification_sha="sha256:"+digest(canon(specification))
+    live=parameters.get("live_workspace")
+    policy=parameters.get("fullmag.accepted_run_start")
+    if (not isinstance(policy,dict) or policy.get("schema_version")!="accepted_run_start_policy.v1"
+            or policy.get("mode")!="manual" or not isinstance(live,dict)):
+        fail("accepted RunIntent is not held by the manual start gate")
+    session_id=live.get("session_id")
+    session_epoch=live.get("session_epoch")
+    scene_revision=live.get("scene_revision")
+    if (live.get("request_idempotency_key")!=request["source_request_id"]
+            or live.get("startup_source_sha256")!=request["source_sha256"]
+            or live.get("command_id")!=request["source_request_id"]
+            or not isinstance(live.get("command"),dict)
+            or live["command"].get("kind")!="startup_script"
+            or live["command"].get("request_id")!=request["source_request_id"]
+            or live["command"].get("source_sha256")!=request["source_sha256"]
+            or session_id!=proof.get("logical_session_id")
+            or session_epoch!=proof.get("session_epoch")
+            or type(session_epoch) is not int or session_epoch<=0
+            or type(scene_revision) is not int or scene_revision<0
+            or snapshot.get("definition_revision")!=scene_revision):
+        fail("accepted RunIntent live-workspace binding differs from the backing proof")
+    if intent.get("idempotency_key")!="live-http-"+digest(request["source_request_id"].encode("utf-8")):
+        fail("accepted RunIntent idempotency key differs from the original request")
+    if catalog.get("schema_version")!="run_catalog.v1" or catalog.get("run_id")!=run_id:
+        fail("accepted run catalog schema/identity differs")
+    revision=catalog.get("revision")
+    tasks=catalog.get("tasks")
+    if (type(expected.get("catalog_revision")) is not int or expected["catalog_revision"]<=0
+            or type(expected.get("task_count")) is not int
+            or not 1<=expected["task_count"]<=MAX_TASKS
+            or type(revision) is not int or revision<=0 or revision!=expected.get("catalog_revision")
+            or not isinstance(tasks,list) or not tasks or len(tasks)>MAX_TASKS
+            or len(tasks)!=expected.get("task_count")):
+        fail("accepted run catalog revision/task count differs from the admitted pins")
+    task_rows={}
+    expected_queue=set()
+    for task in tasks:
+        if not isinstance(task,dict): fail("accepted run catalog contains a malformed task")
+        task_id=task.get("task_id")
+        readiness=task.get("readiness")
+        reason=readiness.get("reason") if isinstance(readiness,dict) else None
+        if (not isinstance(task_id,str) or not task_id or task_id in task_rows
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}",task_id)
+                or not isinstance(task.get("input_fingerprint"),str)
+                or len(task["input_fingerprint"])!=64
+                or any(char not in "0123456789abcdef" for char in task["input_fingerprint"])
+                or task.get("lifecycle")!="accepted"
+                or not isinstance(readiness,dict) or readiness.get("state")!="blocked"
+                or not isinstance(reason,str) or not reason.strip()
+                or task.get("attempt_id") is not None or task.get("ownership_epoch") is not None
+                or task.get("resource_id") is not None or task.get("resolved_input_fingerprint") is not None
+                or task.get("coordinator_watermark") is not None or task.get("coordinator_genesis") is not None
+                or task.get("artifact_ids",[])!=[] or task.get("outputs",[])!=[]):
+            fail("accepted run task is not unclaimed, blocked, and output-free")
+        task_rows[task_id]=task
+        expected_queue.add((run_id,project_id,task_id,"accepted",reason))
+    if not task_rows: fail("accepted run has no held tasks")
+    if os.path.lexists(run/"start_release.json"): fail("accepted run start gate has already been released")
+    for relative,label in (
+        ("task_admissions","task admissions"),
+        ("preparation_resource_leases","preparation resource leases"),
+        ("preparation_process_launches","preparation process launches"),
+        ("preparation_process_exit_receipts","preparation process exits"),
+        ("worker_process_launches","worker process launches"),
+        ("worker_process_exit_receipts","worker process exits"),
+    ):
+        ensure_empty_tree(run/relative,label)
+
+    anchor_raw=regular(run/"preparation_receipt.json","run preparation anchor",MAX,optional=True)
+    if anchor_raw is not None:
+        anchor=strict_obj(anchor_raw,"run preparation anchor")
+        payload=anchor.get("payload")
+        if (set(anchor)!={"schema_version","preparation_id","run_id","plan_fingerprint",
+                          "payload_sha256","payload","created_at"}
+                or anchor.get("schema_version")!="preparation_receipt.v1" or anchor.get("run_id")!=run_id
+                or not isinstance(payload,dict) or payload.get("schema_version")!="preparation_receipt.v1"
+                or anchor.get("preparation_id")!=payload.get("preparation_id")
+                or anchor.get("plan_fingerprint")!=payload.get("plan_fingerprint")
+                or prefixed_sha(anchor.get("plan_fingerprint"),"run preparation plan fingerprint") is None
+                or not isinstance(anchor.get("created_at"),str)
+                or anchor.get("payload_sha256")!=digest(canon(payload))):
+            fail("run preparation anchor is not bound to the accepted run")
+        preparation_evidence.append({"path":"preparation_receipt.json","sha256":digest(anchor_raw)})
+    task_records=flat_json_records(run/"task_preparation_receipts","task preparation receipts",evidence_budget)
+    stage_records=flat_json_records(run/"accepted_stage_preparation_receipts","accepted stage preparation receipts",evidence_budget)
+    spec_fingerprint=specification_sha
+    prep_by_task={}
+    for record in task_records:
+        receipt=record["value"]
+        task_id=record["path"][:-5]
+        task=task_rows.get(task_id)
+        payload=receipt.get("payload")
+        if (record["path"]!=task_id+".json" or task is None or task_id in prep_by_task
+                or set(receipt)!={"schema_version","run_id","task_id","step_id","input_fingerprint",
+                                  "preparation_id","plan_fingerprint","payload_sha256","payload","created_at"}
+                or receipt.get("schema_version")!="task_preparation_receipt.v1"
+                or receipt.get("run_id")!=run_id or receipt.get("task_id")!=task_id
+                or receipt.get("input_fingerprint")!=task.get("input_fingerprint")
+                or not isinstance(receipt.get("step_id"),str) or not receipt["step_id"]
+                or not isinstance(receipt.get("created_at"),str)
+                or receipt.get("preparation_id")!="prep-"+task_id
+                or prefixed_sha(receipt.get("plan_fingerprint"),"task preparation plan fingerprint") is None
+                or not isinstance(payload,dict) or receipt.get("payload_sha256")!=digest(canon(payload))
+                or payload.get("preparation_id")!=receipt.get("preparation_id")
+                or payload.get("plan_fingerprint")!=receipt.get("plan_fingerprint")
+                or not isinstance(payload.get("plan"),dict)):
+            fail("task preparation receipt is not bound to its accepted task")
+        step_id=receipt["step_id"]
+        if task_id!="task-"+digest((run_id+"\0"+step_id).encode("utf-8")):
+            fail("task preparation receipt step identity differs")
+        plan=payload["plan"]
+        source=plan.get("source")
+        if payload.get("schema_version")=="preparation_receipt.v1":
+            accepted_source=payload.get("accepted_run_source")
+            if (not isinstance(source,dict) or source.get("kind")!="accepted_run_step"
+                    or source.get("run_id")!=run_id or source.get("step_id")!=step_id
+                    or source.get("specification_fingerprint")!=spec_fingerprint
+                    or not isinstance(accepted_source,dict)
+                    or accepted_source.get("schema_version")!="accepted_run_preparation_source.v1"
+                    or accepted_source.get("run_id")!=run_id or accepted_source.get("step_id")!=step_id
+                    or accepted_source.get("specification_fingerprint")!=spec_fingerprint):
+                fail("task preparation receipt source differs from the accepted RunIntent")
+        elif payload.get("schema_version")=="closed_loop_preparation_receipt.v1":
+            if (not isinstance(source,dict) or source.get("schema_version")!="accepted_run_preparation_source.v1"
+                    or source.get("run_id")!=run_id or source.get("step_id")!=step_id
+                    or source.get("specification_fingerprint")!=spec_fingerprint):
+                fail("closed-loop task preparation receipt source differs from the accepted RunIntent")
+        else: fail("task preparation receipt schema is unsupported")
+        prep_by_task[task_id]=receipt
+        preparation_evidence.append({"path":"task_preparation_receipts/"+record["path"],"sha256":digest(record["raw"])})
+    stage_by_task={}
+    for record in stage_records:
+        stage=record["value"]
+        task_id=record["path"][:-5]
+        receipt=prep_by_task.get(task_id)
+        if (record["path"]!=task_id+".json" or receipt is None or task_id in stage_by_task
+                or set(stage)!={"schema_version","run_id","step_id","task_id","input_fingerprint",
+                                "preparation_id","plan_fingerprint","task_receipt_payload_sha256"}
+                or stage.get("schema_version")!="accepted_stage_preparation_receipt.v1"
+                or stage.get("run_id")!=run_id or stage.get("task_id")!=task_id
+                or stage.get("step_id")!=receipt.get("step_id")
+                or stage.get("input_fingerprint")!=receipt.get("input_fingerprint")
+                or stage.get("preparation_id")!=receipt.get("preparation_id")
+                or stage.get("plan_fingerprint")!=receipt.get("plan_fingerprint")
+                or stage.get("task_receipt_payload_sha256")!=receipt.get("payload_sha256")):
+            fail("accepted-stage preparation receipt differs from its task receipt")
+        stage_by_task[task_id]=stage
+        preparation_evidence.append({"path":"accepted_stage_preparation_receipts/"+record["path"],"sha256":digest(record["raw"])})
+    preparation_evidence.sort(key=lambda row:row["path"])
+    runs_root=store/"runs"
+    if not real_dir(runs_root,"accepted runs root"): fail("accepted runs root is unavailable")
+    lease_budget=[0,0]
+    lease_entry_budget=[0]
+    lease_manifest=[]
+    run_entries=[]
+    try:
+        with os.scandir(runs_root) as iterator:
+            for entry in iterator:
+                if len(run_entries)>=MAX_SESSION_RUNS: fail("accepted runs root exceeds its run-count bound")
+                if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                    fail("accepted runs root contains a non-directory or symbolic link")
+                run_entries.append(entry)
+    except OSError as error: raise RuntimeError("accepted runs root cannot be enumerated") from error
+    run_entries.sort(key=lambda entry:entry.name)
+    for run_entry in run_entries:
+        lease_root=pathlib.Path(run_entry.path)/"resource_leases"
+        records=tree_json_records(
+            lease_root,"session-store solver resource leases",lease_budget,
+            max_records=MAX_GLOBAL_LEASE_RECORDS,max_bytes=MAX_GLOBAL_LEASE_BYTES,
+            entry_budget=lease_entry_budget,max_entries=MAX_GLOBAL_LEASE_ENTRIES,
+        )
+        for record in records:
+            lease=record["value"]
+            if lease.get("state")!="released":
+                fail("session store contains an active or uncertain solver lease")
+            lease_manifest.append({
+                "path":"runs/"+run_entry.name+"/resource_leases/"+record["path"],
+                "sha256":digest(record["raw"]),
+            })
+    lease_manifest.sort(key=lambda row:row["path"])
+    lease_snapshot_sha256=digest(canon(lease_manifest))
+
+    ledger_raw=regular(ledger/"HOST_RESOURCE_LEDGER.json","host resource ledger")
+    ledger_doc=strict_obj(ledger_raw,"host resource ledger")
+    reservations=ledger_doc.get("reservations")
+    if not isinstance(reservations,list): fail("host resource ledger reservations are missing")
+    reservation_count=0
+    reservation_snapshot=[]
+    for row in reservations:
+        if not isinstance(row,dict): fail("host resource ledger contains a malformed reservation")
+        identity=row.get("identity")
+        if not isinstance(identity,dict): fail("host reservation identity is missing")
+        if row.get("state")!="released":
+            fail("host resource ledger contains an active or uncertain reservation")
+        if identity.get("run_id")==run_id:
+            if identity.get("task_id") not in task_rows: fail("host reservation references a task outside the accepted catalog")
+            reservation_count+=1
+            if "worker_launch_gate" in row or "worker_launch_owner" in row:
+                fail("accepted task retains an active reservation or worker launch")
+            reservation_snapshot.append({
+                "identity":identity,
+                "sha256":digest(canon(row)),
+            })
+    reservation_snapshot.sort(key=lambda row:canon(row["identity"]))
+    fcntl.flock(store_fd,fcntl.LOCK_UN); os.close(store_fd); store_fd=None
+    fcntl.flock(ledger_fd,fcntl.LOCK_UN); os.close(ledger_fd); ledger_fd=None
+
+    status,status_api,status_sha=api_get("/v2/sessions/current/status","current session status")
+    session=status.get("session")
+    solver=status.get("solver")
+    if (not isinstance(session,dict) or session.get("session_id")!=proof.get("logical_session_id")
+            or session.get("request_scope_epoch")!=api_instance_id+":"+str(proof.get("session_epoch"))
+            or not isinstance(solver,dict) or solver.get("state") not in {"awaiting_command","idle"}):
+        fail("live session or solver state differs from the held accepted run")
+    current,current_api,current_sha=api_get("/v2/sessions/current","current session")
+    if current.get("current") is not True or current.get("session_id")!=proof.get("logical_session_id"):
+        fail("current session identity differs from the accepted-run acknowledgement")
+    scene,scene_api,scene_sha=api_get("/v2/sessions/current/model/scene","current live scene")
+    observed_revision=scene.get("revision")
+    if observed_revision is None: observed_revision=scene.get("scene_revision")
+    if type(observed_revision) is not int or observed_revision!=scene_revision:
+        fail("current scene revision differs from the accepted RunIntent")
+    queue,queue_api,queue_sha=api_get("/v2/platform/compute/queue?limit=100","compute queue")
+    items=queue.get("items")
+    if (queue.get("schema_version")!="compute_queue.v1" or not isinstance(items,list)
+            or not isinstance(queue.get("revision"),str) or not queue["revision"]
+            or queue.get("next_cursor") is not None or len(items)!=len(expected_queue)):
+        fail("compute queue is incomplete or contains another page")
+    observed_queue=set()
+    for item in items:
+        if not isinstance(item,dict): fail("compute queue contains a malformed item")
+        key=(item.get("run_id"),item.get("project_id"),item.get("task_id"),item.get("state"),item.get("blocking_reason"))
+        if key in observed_queue: fail("compute queue contains a duplicate task")
+        observed_queue.add(key)
+    if observed_queue!=expected_queue: fail("compute queue is not exactly the accepted held task set")
+    runtime,runtime_api,runtime_sha=api_get("/v2/platform/runtime-service","native runtime service")
+    reason=runtime.get("reason")
+    if (runtime.get("configured") is not True or runtime.get("state")!="ready"
+            or not isinstance(reason,dict) or reason.get("code")!="service_ready"):
+        fail("native runtime service is not ready")
+    health,health_api,health_sha=api_get("/v2/platform/health","platform health")
+    if health.get("status")!="ok" or health.get("active_session") is not True:
+        fail("backend health does not report the pinned active session")
+    if any(value!=api_instance_id for value in (status_api,current_api,scene_api,queue_api,runtime_api,health_api)):
+        fail("live API instance differs from the native accepted-run acknowledgement")
+
+    preparation_evidence.sort(key=lambda row:row["path"])
+    static={
+        "request_sha256":request_sha,"proof_sha256":proof_sha,"ack_sha256":ack_sha,
+        "process_receipt_sha256":digest(process_raw),"run_intent_sha256":digest(intent_raw),
+        "run_catalog_sha256":digest(catalog_raw),"host_ledger_sha256":digest(ledger_raw),
+        "catalog_revision":revision,"task_ids":sorted(task_rows),"preparation_evidence":preparation_evidence,
+        "host_reservation_count":reservation_count,"host_reservations":reservation_snapshot,
+        "resource_lease_count":lease_budget[0],"resource_lease_snapshot_sha256":lease_snapshot_sha256,
+    }
+    probe={
+        "schema":"fullmag.docker-held-accepted-run-stop-proof.v1","state":"held-and-quiescent",
+        "run_id":run_id,"project_id":project_id,"request_relative":request_relative,
+        "proof_relative":request.get("proof_path"),"ack_relative":ack_relative,
+        "restore_mode":ack["restore_mode"],
+        "request_sha256":request_sha,"proof_sha256":proof_sha,"ack_sha256":ack_sha,
+        "process_receipt_sha256":digest(process_raw),"run_intent_sha256":digest(intent_raw),
+        "run_catalog_sha256":digest(catalog_raw),"host_ledger_sha256":digest(ledger_raw),
+        "catalog_revision":revision,"task_ids":sorted(task_rows),
+        "preparation_evidence":preparation_evidence,"host_reservation_count":reservation_count,
+        "host_reservations":reservation_snapshot,"resource_lease_count":lease_budget[0],
+        "resource_lease_snapshot_sha256":lease_snapshot_sha256,
+        "static_snapshot_sha256":digest(canon(static)),
+        "api":{
+            "instance_id":api_instance_id,"logical_session_id":proof["logical_session_id"],
+            "session_epoch":proof["session_epoch"],"scene_revision":observed_revision,
+            "solver_state":solver["state"],"queue_revision":queue.get("revision"),
+            "queue_sha256":queue_sha,"queue_items_sha256":digest(canon(items)),
+            "runtime_service_state":runtime.get("state"),"health_status":health.get("status"),
+            "active_session":health.get("active_session"),
+            "status_sha256":status_sha,"current_sha256":current_sha,"scene_sha256":scene_sha,
+            "runtime_service_sha256":runtime_sha,"health_sha256":health_sha,
+        },
+    }
+    print(json.dumps(probe,sort_keys=True,separators=(",",":")))
+finally:
+    if ledger_fd is not None:
+        try: fcntl.flock(ledger_fd,fcntl.LOCK_UN)
+        finally: os.close(ledger_fd)
+    if store_fd is not None:
+        try: fcntl.flock(store_fd,fcntl.LOCK_UN)
+        finally: os.close(store_fd)
+'''
+
+
+def _held_accepted_run_stop_preflight(
+    control, backend_id, previous, document, selected,
+):
+    """Bind the guest read-only proof to this admitted start and Compose group."""
+    pins = previous.get("accepted_reattach")
+    if not isinstance(pins, Mapping):
+        raise BuildControlError("Held accepted-run stop has no admitted reattach pins")
+    backend_environment = document["services"]["backend"]["environment"]
+    environment = _validate_accepted_reattach_environment({
+        key: backend_environment.get(key)
+        for key in _ACCEPTED_REATTACH_ENVIRONMENT_KEYS
+    })
+    pins = _validate_accepted_reattach_metadata(pins, environment)
+    inputs = previous.get("inputs")
+    if not isinstance(inputs, Mapping) or inputs.get("accepted_reattach") != pins:
+        raise BuildControlError("Held accepted-run pins differ from the admitted operation inputs")
+    for key, value in {
+        "compose_project": control.project,
+        "control_volume": control.volume,
+        "source_root": str(selected),
+    }.items():
+        if pins.get(key) != value:
+            raise BuildControlError("Held accepted-run admitted " + key + " differs")
+    result = docker_capture(
+        "exec", "-i", backend_id, "/usr/local/bin/python3", "-B", "-",
+        json.dumps(dict(pins), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False),
+        data=_held_accepted_run_stop_probe_script().encode("utf-8"),
+        timeout=90, allow_failure=True,
+    )
+    if result.returncode:
+        raise BuildControlError(
+            "Held accepted-run stop preflight failed: "
+            + result.stderr.decode("utf-8", "replace")[-4096:]
+        )
+    if len(result.stdout) > 256 * 1024:
+        raise BuildControlError("Held accepted-run stop preflight proof exceeds its bound")
+
+    def reject_duplicate_keys(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise BuildControlError("Held accepted-run stop proof contains a duplicate key")
+            value[key] = item
+        return value
+
+    try:
+        proof = json.loads(result.stdout.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError("Held accepted-run stop preflight returned invalid JSON") from error
+    if (not isinstance(proof, Mapping)
+            or set(proof) != {
+                "schema", "state", "run_id", "project_id", "request_relative", "proof_relative",
+                "ack_relative", "restore_mode", "request_sha256", "proof_sha256", "ack_sha256",
+                "process_receipt_sha256", "run_intent_sha256", "run_catalog_sha256",
+                "host_ledger_sha256", "catalog_revision", "task_ids", "preparation_evidence",
+                "resource_lease_count", "resource_lease_snapshot_sha256",
+                "host_reservation_count", "host_reservations", "static_snapshot_sha256", "api",
+            }
+            or proof.get("schema") != "fullmag.docker-held-accepted-run-stop-proof.v1"
+            or proof.get("state") != "held-and-quiescent"
+            or proof.get("restore_mode") != "held_pending_restore"
+            or proof.get("run_id") != pins.get("run_id")
+            or proof.get("project_id") != pins.get("project_id")
+            or proof.get("request_sha256") != pins.get("request_sha256")
+            or proof.get("proof_sha256") != pins.get("proof_sha256")
+            or proof.get("catalog_revision") != pins.get("catalog_revision")
+            or not isinstance(proof.get("task_ids"), list)
+            or len(proof["task_ids"]) != pins.get("task_count")
+            or not all(isinstance(task_id, str) for task_id in proof["task_ids"])
+            or proof["task_ids"] != sorted(set(proof["task_ids"]))
+            or proof.get("request_relative") != pins.get("request_relative")
+            or proof.get("proof_relative") != pins.get("proof_relative")):
+        raise BuildControlError("Held accepted-run stop preflight returned a proof for another run")
+    for key in (
+        "request_sha256", "proof_sha256", "ack_sha256", "process_receipt_sha256",
+        "run_intent_sha256", "run_catalog_sha256", "host_ledger_sha256",
+        "resource_lease_snapshot_sha256", "static_snapshot_sha256",
+    ):
+        if re.fullmatch(r"[0-9a-f]{64}", proof.get(key, "")) is None:
+            raise BuildControlError("Held accepted-run stop proof has an invalid " + key)
+    if (type(proof.get("resource_lease_count")) is not int
+            or not 0 <= proof["resource_lease_count"] <= 4096):
+        raise BuildControlError("Held accepted-run stop proof has an invalid resource_lease_count")
+    api = proof.get("api")
+    if (not isinstance(api, Mapping)
+            or set(api) != {
+                "instance_id", "logical_session_id", "session_epoch", "scene_revision",
+                "solver_state", "queue_revision", "queue_sha256", "queue_items_sha256",
+                "runtime_service_state", "health_status", "active_session", "status_sha256",
+                "current_sha256", "scene_sha256", "runtime_service_sha256", "health_sha256",
+            }
+            or not isinstance(api.get("instance_id"), str)
+            or re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                api.get("instance_id", ""),
+            ) is None
+            or api.get("logical_session_id") != pins.get("logical_session_id")
+            or api.get("session_epoch") != pins.get("session_epoch")
+            or type(api.get("scene_revision")) is not int
+            or not isinstance(api.get("queue_revision"), str)
+            or proof.get("restore_mode") != "held_pending_restore"
+            or api.get("solver_state") not in {"awaiting_command", "idle"}
+            or api.get("runtime_service_state") != "ready"
+            or api.get("health_status") != "ok"
+            or api.get("active_session") is not True):
+        raise BuildControlError("Held accepted-run stop proof does not describe a ready held session")
+    for key in (
+        "queue_sha256", "queue_items_sha256", "status_sha256", "current_sha256",
+        "scene_sha256", "runtime_service_sha256", "health_sha256",
+    ):
+        if re.fullmatch(r"[0-9a-f]{64}", api.get(key, "")) is None:
+            raise BuildControlError("Held accepted-run API proof has an invalid " + key)
+    return dict(proof)
+
+
 def _retained_startup_enabled(container):
     """Match the image entrypoint's opt-in startup rule using effective env."""
     environment = dict(item.split("=", 1) for item in container.get("Config", {}).get("Env", []) if "=" in item)
@@ -4428,14 +5110,46 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 if active_session is True:
                     if startup_enabled:
                         raise BuildControlError("Backend has an active session; idle restart refused")
-                    cancelled_activation = _validate_cancelled_activation_preflight(
-                        control, previous_root, previous, document, selected, args.config_sha256,
-                        ids["backend"], environment, require_quiesced_activation=False,
-                    )
-                    health = cancelled_activation["probe"]["health"]
-                    operation["receipt"]["accepted_then_cancelled_proof_sha256"] = (
-                        cancelled_activation["proof_sha256"]
-                    )
+                    if stop_after_drain and "accepted_reattach" in previous:
+                        held_first = _held_accepted_run_stop_preflight(
+                            control, ids["backend"], previous, document, selected,
+                        )
+                        held_before_stop = _held_accepted_run_stop_preflight(
+                            control, ids["backend"], previous, document, selected,
+                        )
+                        if (held_first["static_snapshot_sha256"]
+                                != held_before_stop["static_snapshot_sha256"]
+                                or any(
+                                    held_first["api"].get(key) != held_before_stop["api"].get(key)
+                                    for key in (
+                                        "instance_id", "logical_session_id", "session_epoch",
+                                        "scene_revision", "solver_state", "queue_revision",
+                                        "queue_items_sha256", "runtime_service_state",
+                                        "health_status", "active_session",
+                                    )
+                                )):
+                            raise BuildControlError(
+                                "Held accepted-run bytes or live API changed before backend stop"
+                            )
+                        health = {
+                            "status": held_before_stop["api"]["health_status"],
+                            "active_session": held_before_stop["api"]["active_session"],
+                        }
+                        operation["receipt"]["held_accepted_run_stop"] = {
+                            "schema": "fullmag.docker-held-accepted-run-stop-preflight.v1",
+                            "state": "pre-stop-rechecked",
+                            "static_snapshot_sha256": held_before_stop["static_snapshot_sha256"],
+                            "proof": held_before_stop,
+                        }
+                    else:
+                        cancelled_activation = _validate_cancelled_activation_preflight(
+                            control, previous_root, previous, document, selected, args.config_sha256,
+                            ids["backend"], environment, require_quiesced_activation=False,
+                        )
+                        health = cancelled_activation["probe"]["health"]
+                        operation["receipt"]["accepted_then_cancelled_proof_sha256"] = (
+                            cancelled_activation["proof_sha256"]
+                        )
                 elif active_session is not False:
                     raise BuildControlError("Backend has an active or unknown session; idle restart refused")
             except Exception:
@@ -4447,6 +5161,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             control.write(operation["root"] + "/compose.json", document)
             operation["receipt"].update(state="restarting-idle-backend", state_root=str(state),
                 backend_volumes=previous["backend_volumes"], frontend_volume=previous["frontend_volume"])
+            control.write(operation["root"] + "/receipt.json", operation["receipt"])
             operation["daemon_pending"] = True
             docker_capture("stop", "--time", "60", ids["backend"], timeout=90)
             stopped = json.loads(docker_text("inspect", ids["backend"]))[0]
