@@ -352,3 +352,149 @@ fn captured_input_does_not_drop_carried_layers() {
     .expect("an omitted authored layer must block capture");
     assert!(error.contains("execution_intent_conflict"));
 }
+
+#[test]
+fn profile_binding_validates_the_materialized_solver_input() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.backend_policy.execution_precision = ExecutionPrecision::Single;
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        json!({"backend": "fdm", "device": "auto", "execution_precision": "single"}),
+    );
+    let mut gpu_profile = profile();
+    gpu_profile.defaults.device = FieldPatch::Value(ExecutionDevice::Gpu);
+    gpu_profile.defaults.precision = FieldPatch::Value(ExecutionPrecision::Single);
+    problem.problem_meta.runtime_metadata.insert(
+        "execution_profile".into(),
+        serde_json::to_value(&gpu_profile).unwrap(),
+    );
+    assert!(problem.validate().unwrap_err().iter().any(|error| {
+        error.contains("device='auto' with execution_precision='single'")
+    }));
+    let original = problem.clone();
+    let reference = study().steps[0].execution_profile.clone();
+    let (bound, snapshot) = super::materialize_input(
+        problem.clone(),
+        &reference,
+        vec![],
+        |_, _| Ok(gpu_profile.clone()),
+    )
+    .unwrap();
+    bound.validate().unwrap();
+    assert_eq!(problem, original);
+    assert_eq!(snapshot.requested.device, ExecutionDevice::Gpu);
+    assert_eq!(snapshot.requested.precision, ExecutionPrecision::Single);
+    assert_eq!(snapshot.profile.as_ref(), Some(&gpu_profile));
+    assert_eq!(
+        snapshot.profile_sha256,
+        Some(gpu_profile.canonical_sha256().unwrap())
+    );
+    assert_eq!(snapshot.origins["device"].location, "profile:exec:shared@v7");
+    assert_eq!(
+        bound.problem_meta.runtime_metadata["runtime_selection"]["device"],
+        "gpu"
+    );
+    assert_eq!(
+        bound.problem_meta.runtime_metadata["execution_materialization"],
+        serde_json::to_value(&snapshot).unwrap()
+    );
+
+    let mut invalid_physics = problem.clone();
+    invalid_physics.materials[0].saturation_magnetisation = -1.0;
+    let error = super::materialize_input(
+        invalid_physics,
+        &reference,
+        vec![],
+        |_, _| Ok(gpu_profile.clone()),
+    )
+    .unwrap_err();
+    assert!(error.contains("saturation_magnetisation"), "{error}");
+    let mut invalid_selection = problem.clone();
+    invalid_selection
+        .problem_meta
+        .runtime_metadata
+        .insert("runtime_selection".into(), json!(null));
+    let error = super::materialize_input(
+        invalid_selection,
+        &reference,
+        vec![],
+        |_, _| Ok(gpu_profile.clone()),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("runtime_selection must be an object"),
+        "{error}"
+    );
+    let error =
+        super::materialize_input(problem, &reference, vec![], |_, _| Ok(profile())).unwrap_err();
+    assert!(error.contains("execution_intent_conflict"), "{error}");
+}
+
+#[test]
+fn legacy_gpu_layer_binds_unresolved_single_precision_input() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.backend_policy.execution_precision = ExecutionPrecision::Single;
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        json!({"backend": "fdm", "device": "auto", "execution_precision": "single"}),
+    );
+    let profile = crate::legacy_live_execution_profile();
+    problem.problem_meta.runtime_metadata.insert(
+        "execution_profile".into(),
+        serde_json::to_value(&profile).unwrap(),
+    );
+    let migration = crate::migrate_legacy_live_execution(
+        &problem,
+        &crate::RequestedExecution {
+            backend: "fdm".into(),
+            device: "gpu".into(),
+            precision: "single".into(),
+            mode: "strict".into(),
+            minimum_resources: None,
+        },
+        ExecutionOriginKindIR::Study,
+        "study.requested_execution",
+    )
+    .unwrap();
+    let reference = StudyExecutionProfileReference {
+        profile_id: profile.profile_id.clone(),
+        version: profile.version.clone(),
+    };
+    let (bound, snapshot) = super::materialize_input(
+        problem,
+        &reference,
+        vec![migration.layer.clone()],
+        |_, _| Ok(profile.clone()),
+    )
+    .unwrap();
+    bound.validate().unwrap();
+    assert_eq!(snapshot, migration.materialized);
+    assert_eq!(snapshot.requested.device, ExecutionDevice::Gpu);
+    assert_eq!(snapshot.requested.precision, ExecutionPrecision::Single);
+    assert_eq!(snapshot.origins["device"].kind, ExecutionOriginKindIR::Study);
+    assert_eq!(
+        bound.problem_meta.runtime_metadata["runtime_selection"]["device"],
+        "gpu"
+    );
+}
+
+#[test]
+fn profile_binding_preserves_authored_auto_device() {
+    let mut profile = profile();
+    profile.defaults.device = FieldPatch::Value(ExecutionDevice::Auto);
+    let reference = study().steps[0].execution_profile.clone();
+    let (bound, snapshot) = super::materialize_input(
+        ProblemIR::bootstrap_example(),
+        &reference,
+        vec![],
+        |_, _| Ok(profile.clone()),
+    )
+    .unwrap();
+    bound.validate().unwrap();
+    assert_eq!(snapshot.requested.device, ExecutionDevice::Auto);
+    assert_eq!(snapshot.requested.precision, ExecutionPrecision::Double);
+    assert_eq!(
+        bound.problem_meta.runtime_metadata["runtime_selection"]["device"],
+        "auto"
+    );
+}
