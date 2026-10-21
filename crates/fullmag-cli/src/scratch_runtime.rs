@@ -1235,8 +1235,6 @@ fn spawn_attached_runtime(
         .arg(backend)
         .arg("--mode")
         .arg("strict")
-        .arg("--precision")
-        .arg("double")
         .env("FULLMAG_API_PORT", api_port.to_string())
         .env("FULLMAG_ATTACHED_SESSION_ID", session_id)
         .env(crate::control_room::live_publisher_scope::ATTACHED_SCOPE_ENV, publisher_scope)

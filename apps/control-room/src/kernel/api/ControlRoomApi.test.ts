@@ -1295,10 +1295,10 @@ describe("ControlRoomApi", () => {
     type CreateScratchSessionInput = Parameters<typeof api.sessions.create>[0];
     expectTypeOf<CreateScratchSessionInput>().toEqualTypeOf<{
       backend: "fdm" | "fem";
-      device: "cpu";
+      device: "cpu" | "gpu";
       name: string;
       output_storage?: OutputStorageSettings | null;
-      precision: "double";
+      precision: "double" | "single";
       replace_current?: boolean;
     }>();
     expectTypeOf<typeof created.scene_document.schema_version>().toEqualTypeOf<"0.3">();

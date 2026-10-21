@@ -1735,6 +1735,61 @@ async fn scratch_session_status_and_domain_meta_follow_resolved_lane_before_mesh
 }
 
 #[tokio::test]
+async fn create_scratch_session_preserves_fdm_gpu_precision_without_runtime_claims() {
+    for precision in ["single", "double"] {
+        let state = test_app_state();
+        let app = build_v2_router().with_state(state.clone());
+        let response = app.oneshot(Request::builder()
+            .method("POST")
+            .uri("/v2/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::json!({
+                "name": "Scratch GPU", "backend": "fdm", "device": "gpu",
+                "precision": precision,
+            }).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = body_json(response).await;
+        assert_eq!(body["status"]["requested_execution"]["device"], "gpu");
+        assert_eq!(body["status"]["requested_execution"]["precision"], precision);
+        assert!(body["status"]["fallback"].is_null());
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().unwrap();
+        assert_eq!(snapshot.session.requested_precision, precision);
+        assert_eq!(snapshot.session.authored_requested_device, "gpu");
+        assert!(snapshot.session.resolved_runtime_family.is_none());
+        assert!(snapshot.session.resolved_engine_id.is_none());
+        assert!(snapshot.session.resolved_fallback.is_none());
+        assert_eq!(snapshot.capabilities.as_ref().unwrap().engine_id.as_str(), "fdm_cuda");
+        let study = &snapshot.scene_document.as_ref().unwrap().study;
+        assert_eq!(study.requested_device, "gpu");
+        assert_eq!(study.requested_precision, precision);
+        assert_eq!(study.requested_mode, "strict");
+    }
+}
+
+#[tokio::test]
+async fn create_scratch_session_rejects_unsupported_precision_lanes_without_state() {
+    for (backend, device, precision) in [
+        ("fdm", "cpu", "single"), ("fem", "cpu", "single"),
+        ("fem", "gpu", "single"), ("fem", "gpu", "double"),
+        ("fdm", "gpu", "mixed"), ("fdm", "auto", "single"),
+    ] {
+        let state = test_app_state();
+        let app = build_v2_router().with_state(state.clone());
+        let response = app.oneshot(Request::builder()
+            .method("POST")
+            .uri("/v2/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::json!({
+                "name": "Unsupported", "backend": backend,
+                "device": device, "precision": precision,
+            }).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(state.current_live_state.read().await.is_none());
+    }
+}
+
+#[tokio::test]
 async fn create_scratch_session_rejects_unknown_execution_and_implicit_replacement() {
     let app = test_router();
 
@@ -46914,11 +46969,11 @@ fn openapi_session_creation_declares_typed_request_and_outcomes() {
     );
     assert_eq!(
         schemas["ScratchSessionDevice"]["enum"],
-        serde_json::json!(["cpu"])
+        serde_json::json!(["cpu", "gpu"])
     );
     assert_eq!(
         schemas["ScratchSessionPrecision"]["enum"],
-        serde_json::json!(["double"])
+        serde_json::json!(["double", "single"])
     );
 
     let scene_document = &schemas["ScratchSceneDocumentResource"];

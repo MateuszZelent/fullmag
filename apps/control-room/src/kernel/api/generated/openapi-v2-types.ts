@@ -14587,9 +14587,9 @@ export interface components {
         /** @enum {string} */
         ScratchSessionBackend: "fdm" | "fem";
         /** @enum {string} */
-        ScratchSessionDevice: "cpu";
+        ScratchSessionDevice: "cpu" | "gpu";
         /** @enum {string} */
-        ScratchSessionPrecision: "double";
+        ScratchSessionPrecision: "double" | "single";
         ScratchSessionRevisionsResource: {
             /** Format: int64 */
             scene_revision: number;
