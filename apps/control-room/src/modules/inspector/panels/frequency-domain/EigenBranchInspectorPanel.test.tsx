@@ -17,10 +17,15 @@ import type { EigenBranchPoint } from "@/shared/domain/analysis/frequencyDomainC
 const panelMocks = vi.hoisted(() => ({
   branchArtifact: null as unknown,
   branchStatus: "ready" as string,
+  copyTextToClipboard: vi.fn(async (_text: string): Promise<void> => undefined),
   executeCommand: vi.fn(),
   manifest: null as unknown,
   manifestStatus: "ready" as string,
   setSelection: vi.fn(),
+}));
+
+vi.mock("@/shared/browser/copyTextToClipboard", () => ({
+  copyTextToClipboard: panelMocks.copyTextToClipboard,
 }));
 
 vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
@@ -406,6 +411,8 @@ describe("EigenBranchInspectorPanel point model", () => {
 afterEach(() => {
   panelMocks.branchArtifact = null;
   panelMocks.branchStatus = "ready";
+  panelMocks.copyTextToClipboard.mockReset();
+  panelMocks.copyTextToClipboard.mockResolvedValue(undefined);
   panelMocks.manifest = null;
   panelMocks.manifestStatus = "ready";
   panelMocks.executeCommand.mockClear();
@@ -526,12 +533,199 @@ describe("EigenBranchInspectorPanel open mode owner binding", () => {
   );
 });
 
+describe("EigenBranchInspectorPanel branch CSV clipboard feedback", () => {
+  it("shows pending feedback and reports a rejected clipboard write", async () => {
+    configurePanelResources();
+    const copy = deferredPromise<void>();
+    panelMocks.copyTextToClipboard.mockReturnValue(copy.promise);
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <EigenBranchInspectorPanel selection={branchInspectorSelection()} />,
+        ),
+      );
+
+      const copyButton = findButton(container, "Copy branch CSV");
+      await act(async () => copyButton.click());
+
+      expect(
+        findRoleMessage(container, "status", "Copying branch CSV…"),
+      ).not.toBeNull();
+      expect(copyButton.disabled).toBe(true);
+
+      await act(async () => {
+        copy.reject(new Error("Clipboard permission denied"));
+        await copy.promise.catch(() => undefined);
+      });
+
+      expect(
+        findRoleMessage(
+          container,
+          "alert",
+          "Could not copy branch CSV. Check clipboard permissions and try again.",
+        ),
+      ).not.toBeNull();
+      expect(findRoleMessage(container, "status", "Branch CSV copied.")).toBeNull();
+      expect(findButton(container, "Copy branch CSV").disabled).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("reports when branch CSV has been copied", async () => {
+    configurePanelResources();
+    panelMocks.copyTextToClipboard.mockResolvedValue(undefined);
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <EigenBranchInspectorPanel selection={branchInspectorSelection()} />,
+        ),
+      );
+
+      await act(async () =>
+        findButton(container, "Copy branch CSV").click(),
+      );
+
+      expect(
+        findRoleMessage(container, "status", "Branch CSV copied."),
+      ).not.toBeNull();
+      expect(
+        findRoleMessage(
+          container,
+          "alert",
+          "Could not copy branch CSV. Check clipboard permissions and try again.",
+        ),
+      ).toBeNull();
+      expect(panelMocks.copyTextToClipboard).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "branch_id,sample_index,sample_id,raw_mode_index,mode_id",
+        ),
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores a late clipboard %s after the artifact and dataset identity change",
+    async (settlement) => {
+      configurePanelResources();
+      const copy = deferredPromise<void>();
+      panelMocks.copyTextToClipboard.mockReturnValue(copy.promise);
+      const dom = installSimulationPreparationTestDom();
+      const container = dom.document.createElement("div");
+      const root = createRoot(container as unknown as Element);
+      try {
+        await act(async () =>
+          root.render(
+            <EigenBranchInspectorPanel selection={branchInspectorSelection()} />,
+          ),
+        );
+
+        await act(async () =>
+          findButton(container, "Copy branch CSV").click(),
+        );
+        expect(
+          findRoleMessage(container, "status", "Copying branch CSV…"),
+        ).not.toBeNull();
+
+        configurePanelResources({
+          artifactRevision: "sha256:branches-revision-next",
+          manifestRunId: "run-next",
+          manifestSessionId: "session-next",
+          manifestStageId: "eigen-stage-next",
+          runId: "run-next",
+          sessionId: "session-next",
+          stageId: "eigen-stage-next",
+        });
+        await act(async () =>
+          root.render(
+            <EigenBranchInspectorPanel
+              selection={branchInspectorSelection({
+                datasetId: "dataset-next",
+                datasetRevision: "sha256:dataset-revision-next",
+              })}
+            />,
+          ),
+        );
+
+        expect(
+          findRoleMessage(container, "status", "Copying branch CSV…"),
+        ).toBeNull();
+        expect(
+          findRoleMessage(container, "status", "Branch CSV copied."),
+        ).toBeNull();
+        expect(
+          findRoleMessage(
+            container,
+            "alert",
+            "Could not copy branch CSV. Check clipboard permissions and try again.",
+          ),
+        ).toBeNull();
+        expect(findButton(container, "Copy branch CSV").disabled).toBe(false);
+
+        await act(async () => {
+          if (settlement === "resolve") {
+            copy.resolve(undefined);
+          } else {
+            copy.reject(new Error("Clipboard permission denied"));
+          }
+          await copy.promise.catch(() => undefined);
+        });
+
+        expect(
+          findRoleMessage(container, "status", "Copying branch CSV…"),
+        ).toBeNull();
+        expect(
+          findRoleMessage(container, "status", "Branch CSV copied."),
+        ).toBeNull();
+        expect(
+          findRoleMessage(
+            container,
+            "alert",
+            "Could not copy branch CSV. Check clipboard permissions and try again.",
+          ),
+        ).toBeNull();
+        expect(findButton(container, "Copy branch CSV").disabled).toBe(false);
+      } finally {
+        await act(async () => root.unmount());
+        dom.restore();
+      }
+    },
+  );
+});
+
 function configurePanelResources(options: {
+  artifactRevision?: string;
   branchStatus?: string;
+  manifestRunId?: string;
+  manifestSessionId?: string;
+  manifestStageId?: string;
   modeFieldAvailable?: boolean;
   runId?: string;
+  sessionId?: string;
+  stageId?: string;
 } = {}): void {
-  panelMocks.manifest = modalManifestResource();
+  const sessionId = options.sessionId ?? "session-7";
+  const runId = options.runId ?? "run-7";
+  const stageId = options.stageId ?? "eigen-stage-7";
+  panelMocks.manifest = modalManifestResource({
+    ...(options.manifestRunId ? { run_id: options.manifestRunId } : {}),
+    ...(options.manifestSessionId
+      ? { session_id: options.manifestSessionId }
+      : {}),
+    ...(options.manifestStageId
+      ? { stage_id: options.manifestStageId }
+      : {}),
+  });
   panelMocks.manifestStatus = "ready";
   panelMocks.branchStatus = options.branchStatus ?? "ready";
   panelMocks.branchArtifact = {
@@ -570,16 +764,19 @@ function configurePanelResources(options: {
       ],
     },
     resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
-    revision: "sha256:branches-revision-7",
-    run_id: options.runId ?? "run-7",
+    revision: options.artifactRevision ?? "sha256:branches-revision-7",
+    run_id: runId,
     schema_version: "frequency_domain_eigen_branches.v2",
-    session_id: "session-7",
-    stage_id: "eigen-stage-7",
+    session_id: sessionId,
+    stage_id: stageId,
     status: "ready",
   } as unknown as FrequencyDomainJsonArtifactResource;
 }
 
-function branchInspectorSelection(): Parameters<
+function branchInspectorSelection(identity: {
+  datasetId?: string;
+  datasetRevision?: string;
+} = {}): Parameters<
   typeof EigenBranchInspectorPanel
 >[0]["selection"] {
   const nodeId = "results:eigen:branch:acoustic";
@@ -591,8 +788,8 @@ function branchInspectorSelection(): Parameters<
     objectId: null,
     ref: {
       branchId: "acoustic",
-      datasetId: "dataset-canonical",
-      datasetRevision: "sha256:dataset-revision",
+      datasetId: identity.datasetId ?? "dataset-canonical",
+      datasetRevision: identity.datasetRevision ?? "sha256:dataset-revision",
       kind: "results.eigen.branch",
       nodeId,
       type: "frequency-domain",
@@ -612,6 +809,19 @@ function findButton(root: TestNode, text: string): TestElement {
   return button;
 }
 
+function findRoleMessage(
+  root: TestNode,
+  role: string,
+  message: string,
+): TestElement | null {
+  return findElements(
+    root,
+    (element) =>
+      element.getAttribute("role") === role &&
+      element.textContent === message,
+  )[0] ?? null;
+}
+
 function findElements(
   root: TestNode,
   predicate: (element: TestElement) => boolean,
@@ -623,4 +833,18 @@ function findElements(
   };
   visit(root);
   return found;
+}
+
+function deferredPromise<T>() {
+  let resolvePromise!: (value: T | PromiseLike<T>) => void;
+  let rejectPromise!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return {
+    promise,
+    resolve: resolvePromise,
+    reject: rejectPromise,
+  };
 }

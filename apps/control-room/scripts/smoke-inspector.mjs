@@ -3348,7 +3348,30 @@ async function selectInspectorResultBranch(
 
 async function exportBranchSampleCsv(page, inspector, sampleIndex, rawModeIndex) {
   await page.evaluate(() => navigator.clipboard.writeText(""));
-  await inspector.getByRole("button", { name: "Export branch CSV" }).click();
+  const copyButton = inspector.getByRole("button", { name: "Copy branch CSV" });
+  await page.evaluate(() => {
+    window.__inspectorBranchClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async () => { throw new Error("fixture branch clipboard rejection"); } },
+    });
+  });
+  try {
+    await copyButton.click();
+    await inspector.getByRole("alert").filter({ hasText: "Could not copy branch CSV." }).waitFor({ state: "visible" });
+    assert(await inspector.getByRole("status").filter({ hasText: "Branch CSV copied." }).count() === 0,
+      "Rejected branch CSV copy announced success.");
+  } finally {
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: window.__inspectorBranchClipboard,
+      });
+      delete window.__inspectorBranchClipboard;
+    });
+  }
+  await copyButton.click();
+  await inspector.getByRole("status").filter({ hasText: "Branch CSV copied." }).waitFor({ state: "visible" });
   await page.waitForFunction(
     async ({ sampleIndex: expectedSampleIndex, rawModeIndex: expectedModeIndex }) =>
       (await navigator.clipboard.readText()).includes(

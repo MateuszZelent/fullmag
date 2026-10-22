@@ -1,6 +1,7 @@
 "use client";
 
-import { Activity, Download, Eye } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Activity, Copy, Eye } from "lucide-react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
@@ -12,6 +13,7 @@ import {
   useFrequencyDomainEigenDispersionResource,
   useFrequencyDomainManifestResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import { copyTextToClipboard } from "@/shared/browser/copyTextToClipboard";
 import {
   buildEigenBranchDetailChartModel,
   buildEigenBranchPointModeSelectionRef,
@@ -482,10 +484,6 @@ function BranchSampleTable({
       handoff.commandInput,
     );
   };
-  const exportBranchCsv = (): void => {
-    void navigator.clipboard.writeText(branchSamplesCsv(branch));
-  };
-
   return (
     <div className="fm-frequency-domain-table-wrap">
       <table
@@ -588,22 +586,92 @@ function BranchSampleTable({
           })}
         </tbody>
       </table>
-      <div className="fm-frequency-domain-table__actions">
-        <Button
-          aria-label="Export branch CSV"
-          className="fm-inspector-action-button"
-          size="sm"
-          title="Export branch CSV"
-          type="button"
-          variant="secondary"
-          onClick={exportBranchCsv}
-        >
-          <Download aria-hidden="true" size={13} />
-          <span>Export branch CSV</span>
-        </Button>
-      </div>
+      <BranchCsvCopyAction
+        key={branchCsvCopyIdentityKey(
+          artifact,
+          datasetIdentity,
+          branch.branchId,
+        )}
+        branch={branch}
+      />
     </div>
   );
+}
+
+function BranchCsvCopyAction({ branch }: { branch: EigenBranch }) {
+  const [copyState, setCopyState] = useState<
+    "idle" | "pending" | "success" | "error"
+  >("idle");
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const copyBranchCsv = async (): Promise<void> => {
+    setCopyState("pending");
+    try {
+      await copyTextToClipboard(branchSamplesCsv(branch));
+    } catch {
+      if (mountedRef.current) setCopyState("error");
+      return;
+    }
+    if (mountedRef.current) setCopyState("success");
+  };
+
+  return (
+    <div className="fm-frequency-domain-table__actions">
+      <Button
+        aria-label="Copy branch CSV"
+        className="fm-inspector-action-button"
+        disabled={copyState === "pending"}
+        size="sm"
+        title="Copy branch CSV"
+        type="button"
+        variant="secondary"
+        onClick={() => void copyBranchCsv()}
+      >
+        <Copy aria-hidden="true" size={13} />
+        <span>Copy branch CSV</span>
+      </Button>
+      {copyState === "pending" ? (
+        <span className="text-fm-xs text-fm-muted" role="status">
+          Copying branch CSV…
+        </span>
+      ) : copyState === "success" ? (
+        <span className="text-fm-xs text-fm-muted" role="status">
+          Branch CSV copied.
+        </span>
+      ) : null}
+      {copyState === "error" ? (
+        <span className="text-fm-xs text-fm-danger" role="alert">
+          Could not copy branch CSV. Check clipboard permissions and try again.
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function branchCsvCopyIdentityKey(
+  artifact: FrequencyDomainJsonArtifactResource | null,
+  datasetIdentity: FrequencyDomainDatasetIdentity,
+  branchId: string,
+): string {
+  return JSON.stringify([
+    artifact?.artifact_set_id ?? null,
+    artifact?.artifact_path ?? null,
+    artifact?.content_digest ?? null,
+    artifact?.session_id ?? null,
+    artifact?.run_id ?? null,
+    artifact?.stage_id ?? null,
+    artifact?.revision ?? null,
+    datasetIdentity.datasetId ?? null,
+    datasetIdentity.datasetRevision ?? null,
+    branchId,
+  ]);
 }
 
 function branchSamplesCsv(branch: EigenBranch): string {
