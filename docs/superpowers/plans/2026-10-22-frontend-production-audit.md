@@ -588,3 +588,13 @@ Składnia i lint helperów PASS, receipty stabilnych źródeł:
 `03bc6ee2c080400992d31642db3f779a` (responsive),
 `0fdbaa2e50734aae9de2581532a52d9b` (Explorer), pod
 `verification/frontend-production-source-<id>.json` w tym samym wolumenie.
+
+Log joba `120150551642` (HEAD cf3da9d72, workflow zastąpiony przez nowszy)
+zawiera wynik testów: 8780 PASS, 2 FAIL, 13 pominiętych. Wszystkie nowe testy
+parsera, raw ownera i pary zakresu przeszły; oba błędy pochodzą z istniejącego
+testu stabilności Object/Airbox, który oczekiwał zapisu natychmiast po input.
+Test uzupełniono o asercję braku zapisu po input i jawne zatwierdzenie Enter,
+z zachowaniem kontroli fokusu, scrolla oraz liczby mutacji. Zmiany produkcji
+nie były potrzebne. Scoped ESLint PASS, stabilne źródła:
+`verification/frontend-production-source-d462f6709ce3473baa772ee43dba1723.json`.
+Lokalnie nie kompilowano ani nie uruchamiano testów TS; wynik poprawki czeka na CI.

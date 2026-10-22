@@ -506,6 +506,8 @@ describe("PlanarVisualizationSection", () => {
         const initialMaskCalls = mocks.maskCalls;
 
         await act(async () => change(wireframeOpacity, "0.2"));
+        expect(mocks.queuePlanarTargetOverride).not.toHaveBeenCalled();
+        await act(async () => wireframeOpacity.dispatchEvent(new TestEvent("keydown", { bubbles: true, key: "Enter" })));
         expect(mocks.queuePlanarTargetOverride).toHaveBeenCalledTimes(1);
         expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
           kind: "upsert",
