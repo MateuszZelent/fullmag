@@ -16,9 +16,9 @@ Ukończenie pojedynczego etapu nie oznacza ukończenia całego celu.
 - Cudze zmiany i pozostałe grupy Docker pozostają pod swoimi właścicielami.
 - Jeden workspace, klient API i warstwa resource hooks; zachowany system
   Catppuccin Mocha/Latte, tokeny `--fm-*` i współdzielone prymitywy.
-- Zakaz kompilowania testów jednostkowych pozostaje w mocy. Weryfikacja
+- Zakaz lokalnego kompilowania testów jednostkowych pozostaje w mocy. Weryfikacja
   używa kontroli źródeł, lint, TypeScript bez testów oraz regresji przeglądarkowych.
-  Pełna bramka testów pozostaje jawnie niewykonana, dopóki obowiązuje zakaz.
+  Automatyczne CI PR wykonuje własne obowiązkowe bramki; jego wyniki są poniżej.
 - Buildy i dane techniczne wyłącznie w wolumenach wskazanej grupy Compose.
 
 ## Kierunek
@@ -159,3 +159,68 @@ repozytorium pozostaje osobną bramką. Brak browser proof oznacza status draft.
   regresje modelu zapisane, bez kompilacji i uruchomienia testów jednostkowych.
 - Chrome, menu i browser harness stanowią trzeci logiczny commit. Końcowy HEAD
   oraz URL PR zostaną zapisane w rejestrze worktree.
+
+## PR i checkpoint po pierwszym CI
+
+PR do `master`: [#249](https://github.com/MateuszZelent/fullmag/pull/249), **draft**.
+Commit trzeciego etapu: `4f08d271a3a2e287850e1d04490560feeb9b1605`.
+Poprawki zdarzeń wektorów, scroll anchoring i harnessu:
+`535e26cabd316e4c346a390da6c543f00ee148ea` — typy, architektura i lint
+potwierdzone wskazanymi poniżej receiptami; pełny browser nadal oczekuje.
+Automatyczne kontrole `contract-guard` i `eigensolve-ui-method-contracts`
+przeszły. Workflow `bootstrap` zakończył się błędem; integracja pozostaje
+**NOT VERIFIED**. Lokalne testy jednostkowe nie były kompilowane ani uruchamiane.
+
+- CI frontend: trzy nieudane testy przy 8729 udanych. Dwa przypadki dotyczyły
+  obsługi wektorów w Scratch i Antenna po zmianie wspólnego `Vector3Field`.
+  Kontrolka używa teraz pojedynczego `onInput`, zgodnie z produkcyjnym
+  `FormField`; nie wywołuje równolegle `onChange`. Trzeci przypadek był
+  nieaktualną nazwą funkcji w asercji źródłowej regionów. Poprawki wymagają
+  potwierdzenia kolejnym CI.
+- CI Python: fixture retained recovery nie zawierał tożsamości próby.
+  Poprawka `5e28a83a0169474e7d8adad3e8090a437529b72f`; 12/12 interpretowanych
+  testów Python przeszło, bez kompilacji testów.
+- CI browser: wykryte ucięcie wymaganej kontrolki Analysis przy 360 px.
+  Dotychczasowy komunikat nie zawierał konkretnego elementu ani jego rectu.
+  Diagnoza i pomiar pozostają do wykonania; hipoteza dotycząca stopki nie
+  stanowi dowodu przyczyny.
+- CI Rust: test retry admission zmienia jawną konfigurację polityki,
+  pozostawiając zapisany marker i dokument zgodne ze sobą. Źródła ledgera
+  wskazują zatem błąd `stored host resource policy differs from explicit ledger configuration`,
+  a test oczekiwał `marker differs`. Poprawiono wyłącznie oczekiwanie i dodano
+  wypisanie rzeczywistego błędu przy awarii; limit czasu i retry pozostają.
+  Kod produkcyjny nie zmienia się. Weryfikacja wykonania oczekuje na CI;
+  lokalnie nie kompilowano ani nie uruchamiano testów Rust.
+
+Własne próby browser potwierdziły filtr i Refresh oraz wykazały rzeczywisty
+konflikt natywnego scroll anchoring z wirtualizacją drzewa: po End przeglądarka
+cofała offset i usuwała fokusowany wiersz. `overflow-anchor: none` pozwoliło
+dojść do odległego obiektu i wrócić Home. Pełna rodzina scenariuszy nadal nie
+przeszła. Skorygowano błędne założenia harnessu: Collapse All zwija Session,
+nazwa obiektu jest w polu Name, a pierwsze ArrowLeft na rozwiniętym dziecku
+zwija dziecko. Rodziny browser zbierają teraz osobne raporty także po awarii
+jednej rodziny; dowód końcowy nadal wymaga powodzenia wszystkich rodzin.
+
+Aktualne dowody źródłowe w wolumenie kontrolnym grupy:
+
+- `verification/frontend-production-source-d9d5b7ad61f6440cab1a63205809e28a.json`
+  — produkcyjne typy, architecture hygiene i scoped lint PASS, stabilne źródła.
+- `verification/frontend-production-source-cf4c7c035bcf452b984a3bbaea6289e5.json`
+  — lint po ostatnich poprawkach harnessu PASS, zero ostrzeżeń, stabilne źródła.
+- `verification/frontend-production-source-a5fc9936e95f4016825319e12f05815c.json`
+  — składnia i lint diagnostyki Analysis PASS; asercje i progi bez zmian.
+
+Runtime: oba kontenery zakończyły pracę równocześnie 22.10 o 21:29:58 UTC,
+exit 255, bez OOM; przyczyna zewnętrzna nie została ustalona. Zarządzane
+wznowienie `e841490673114facbf2c7c068d4893a8` zbudowało pakiet, ale admission
+zakończył się `native service target/build mismatch; attach refused`.
+Usługi i dane zachowano. Nie resetowano ownera ani cudzych grup. Nowy
+browser/WebGL proof jest **NOT VERIFIED** do rozwiązania tej blokady.
+
+Odczyt potwierdził, że `target_id=docker-all` jest zgodny, lecz OWNER nadal
+ma commit bazy i snapshot `c0da3e03…`, a nowy CLI oczekuje `5e28a83…` /
+`d6151738…`. PID ownera 20430 nie istnieje w bieżącym kontenerze, ale sam
+ten fakt nie kwalifikuje resetu. `restart-idle` wymaga zdrowego API,
+`stop-failed` wymaga ownera `failed`, a zachowany owner ma `ready`.
+Recepta container recovery wymaga osobnych dowodów namespace, teardown i
+przypiętej autoryzacji. Nie wykonano jej ani kolejnego ślepego resume.

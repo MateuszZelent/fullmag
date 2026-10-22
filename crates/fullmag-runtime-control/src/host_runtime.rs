@@ -273,7 +273,12 @@ mod recovery_tests {
             started.elapsed() < std::time::Duration::from_secs(1),
             "permanent host policy error was retried for too long: {error:#}"
         );
-        assert!(format!("{error:#}").contains("marker differs"));
+        assert!(
+            format!("{error:#}").contains(
+                "stored host resource policy differs from explicit ledger configuration"
+            ),
+            "unexpected host policy error: {error:#}"
+        );
     }
 
     #[test]
