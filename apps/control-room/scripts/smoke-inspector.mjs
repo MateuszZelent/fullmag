@@ -441,6 +441,30 @@ if (process.env.CONTROL_ROOM_INSPECTOR_MESH_ONLY === "1") {
   process.exit(0);
 }
 
+if (process.env.CONTROL_ROOM_FRONTEND_AUDIT === "1") {
+  try {
+    const { qualifyFrontendProductionBrowser } = await import("./lib/frontend-production-browser.mjs");
+    await qualifyFrontendProductionBrowser({
+      consoleErrorEvents,
+      fulfillJson,
+      fixture,
+      outputDir,
+      page,
+      workspaceUrl,
+    });
+    const { qualifyFrontendResponsiveBrowser } = await import("./lib/frontend-responsive-browser.mjs");
+    await qualifyFrontendResponsiveBrowser({ page, fixture, outputDir, workspaceUrl });
+    const { qualifyFrontendRegionBrowser } = await import("./lib/frontend-region-browser.mjs");
+    await qualifyFrontendRegionBrowser({ page, fixture, outputDir, workspaceUrl, fulfillJson });
+    resetInspectorDocumentBudget(fixture.requestBudget, "frontend-object-airbox-mutation-stability");
+    const { qualifyMeshPolicyEditing } = await import("./lib/mesh-policy-browser.mjs");
+    await qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology });
+  } finally {
+    await browser.close();
+  }
+  process.exit(0);
+}
+
 try {
   await gotoInspectorDocument(page, fixture, workspaceUrl, {
     waitUntil: "domcontentloaded",

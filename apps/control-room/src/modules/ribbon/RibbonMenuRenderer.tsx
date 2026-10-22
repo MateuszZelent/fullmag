@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type MouseEvent,
   type ReactNode,
 } from "react";
 
@@ -232,6 +231,7 @@ function SliderMenuItem({
         step={node.step}
         value={draftValue}
         disabled={node.disabled}
+        aria-label={node.label}
         style={{ "--pct": `${pct}%` } as CSSProperties}
         onChange={(e) => {
           const next = Number(e.target.value);
@@ -318,18 +318,9 @@ function ColorMenuItem({
   node: ColorNode;
   onCommand?: (commandId: string, input?: unknown) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
   const pickerValue = isColorPickerValue(node.value)
     ? node.value
     : colorInputValue(255, 255, 255);
-
-  const handleSwatchClick = useCallback(
-    (e: MouseEvent) => {
-      e.stopPropagation();
-      if (!node.disabled) inputRef.current?.click();
-    },
-    [node.disabled],
-  );
 
   return (
     <div
@@ -340,39 +331,34 @@ function ColorMenuItem({
       <span
         className="fm-dropdown-color__swatch"
         style={{ background: node.value }}
-        onClick={handleSwatchClick}
-        role="button"
-        aria-label={`Pick color: ${node.label}`}
-        tabIndex={node.disabled ? -1 : 0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            e.stopPropagation();
-            if (!node.disabled) inputRef.current?.click();
-          }
-        }}
       >
-        <input
-          ref={inputRef}
-          type="color"
-          className="fm-dropdown-color__input"
-          value={pickerValue}
+        <DropdownMenuItem
+          asChild
           disabled={node.disabled}
-          readOnly={!node.commandId}
-          tabIndex={-1}
-          onChange={(e) => {
-            const next = e.target.value;
-            if (node.commandId) {
-              onCommand?.(
-                node.commandId,
-                resolveCommandInput(node.commandInput, next),
-              );
-              return;
-            }
-            onCommand?.(node.id, resolveCommandInput(node.commandInput, next));
-          }}
-          onClick={(e) => e.stopPropagation()}
-        />
+          textValue={node.label}
+          onSelect={(event) => event.preventDefault()}
+        >
+          <input
+            type="color"
+            className="fm-dropdown-color__input"
+            aria-label={`Pick color: ${node.label}`}
+            value={pickerValue}
+            disabled={node.disabled}
+            readOnly={!node.commandId}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (node.commandId) {
+                onCommand?.(
+                  node.commandId,
+                  resolveCommandInput(node.commandInput, next),
+                );
+                return;
+              }
+              onCommand?.(node.id, resolveCommandInput(node.commandInput, next));
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </DropdownMenuItem>
       </span>
     </div>
   );

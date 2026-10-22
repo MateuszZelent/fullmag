@@ -7,6 +7,7 @@ import { GripVertical } from "lucide-react";
 import {
   DEFAULT_WORKSPACE_LAYOUT,
   moveWorkspaceColumn,
+  resolveWorkspaceInspectorWidthConstraints,
   restoreWorkspaceLayout,
   serializeWorkspaceLayout,
   WORKSPACE_LAYOUT_RESTORED_EVENT,
@@ -32,6 +33,11 @@ interface SortableWorkspaceColumnProps {
 interface WorkspaceDockState {
   layout: typeof DEFAULT_WORKSPACE_LAYOUT;
   restored: boolean;
+}
+
+interface WorkspaceColumnGroupMetrics {
+  groupWidth: number;
+  separatorWidthPerHandle: number;
 }
 
 function WorkspaceColumnContent({ slotId }: { slotId: WorkspaceColumnLayout["slotId"] }) {
@@ -97,9 +103,11 @@ export function WorkspaceDockLayout() {
     layout: DEFAULT_WORKSPACE_LAYOUT,
     restored: false,
   });
+  const workspaceBodyRef = useRef<HTMLDivElement | null>(null);
   const inspectorPanelRef = useRef<PanelImperativeHandle | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
-  const [inspectorMaxWidth, setInspectorMaxWidth] = useState(560);
+  const [columnGroupMetrics, setColumnGroupMetrics] =
+    useState<WorkspaceColumnGroupMetrics | null>(null);
 
   useEffect(() => {
     const restoreFromStorage = () => {
@@ -132,31 +140,14 @@ export function WorkspaceDockLayout() {
     }
   }, [dockState.layout, dockState.restored]);
 
-  useEffect(() => {
-    const updateInspectorMaximum = () => {
-      if (resizeFrameRef.current !== null) return;
-      resizeFrameRef.current = window.requestAnimationFrame(() => {
-        resizeFrameRef.current = null;
-        const maximum = Math.max(
-          360,
-          Math.min(560, Math.floor(window.innerWidth * 0.38)),
-        );
-        setInspectorMaxWidth(maximum);
-        if ((inspectorPanelRef.current?.getSize().inPixels ?? 0) > maximum) {
-          inspectorPanelRef.current?.resize(`${maximum}px`);
-        }
-      });
-    };
-
-    updateInspectorMaximum();
-    window.addEventListener("resize", updateInspectorMaximum);
-    return () => {
-      window.removeEventListener("resize", updateInspectorMaximum);
+  useEffect(
+    () => () => {
       if (resizeFrameRef.current !== null) {
         window.cancelAnimationFrame(resizeFrameRef.current);
       }
-    };
-  }, []);
+    },
+    [],
+  );
 
   function handleMoveColumn(activeId: string, overId: string): void {
     setDockState((currentState) => {
@@ -179,14 +170,93 @@ export function WorkspaceDockLayout() {
     if (column.slotId === "panel-right") return panelVisible.right;
     return true;
   });
+  const visibleColumnSignature = visibleColumns
+    .map((column) => column.slotId)
+    .join("|");
+  const expectedSeparatorCount = Math.max(0, visibleColumns.length - 1);
+  useEffect(() => {
+    const body = workspaceBodyRef.current;
+    if (!body) return;
+
+    let measureFrame: number | null = null;
+    const measure = () => {
+      measureFrame = null;
+      const group =
+        body.querySelector<HTMLElement>("[data-workspace-column-group]") ??
+        body;
+      const groupWidth = group.getBoundingClientRect().width;
+      if (!Number.isFinite(groupWidth) || groupWidth <= 0) return;
+
+      const handles = Array.from(
+        group.querySelectorAll<HTMLElement>(".fm-resize-handle--vertical"),
+      );
+      const tokenWidth = Number.parseFloat(
+        window.getComputedStyle(body).getPropertyValue("--fm-space-1"),
+      );
+      const fallbackHandleWidth = Number.isFinite(tokenWidth) ? tokenWidth : 4;
+      const separatorWidthPerHandle =
+        expectedSeparatorCount > 0 &&
+        handles.length === expectedSeparatorCount
+          ? handles.reduce(
+              (total, handle) => total + handle.getBoundingClientRect().width,
+              0,
+            ) / expectedSeparatorCount
+          : fallbackHandleWidth;
+
+      setColumnGroupMetrics((current) =>
+        current &&
+        Math.abs(current.groupWidth - groupWidth) < 0.25 &&
+        Math.abs(current.separatorWidthPerHandle - separatorWidthPerHandle) <
+          0.25
+          ? current
+          : { groupWidth, separatorWidthPerHandle },
+      );
+    };
+    const scheduleMeasure = () => {
+      if (measureFrame !== null) return;
+      measureFrame = window.requestAnimationFrame(measure);
+    };
+
+    measure();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(scheduleMeasure);
+    observer?.observe(body);
+    const group = body.querySelector<HTMLElement>(
+      "[data-workspace-column-group]",
+    );
+    if (group) observer?.observe(group);
+    if (!observer) window.addEventListener("resize", scheduleMeasure);
+
+    return () => {
+      observer?.disconnect();
+      if (!observer) window.removeEventListener("resize", scheduleMeasure);
+      if (measureFrame !== null) {
+        window.cancelAnimationFrame(measureFrame);
+      }
+    };
+  }, [expectedSeparatorCount, restored, visibleColumnSignature]);
+  const inspectorConstraints = resolveWorkspaceInspectorWidthConstraints(
+    visibleColumns,
+    columnGroupMetrics?.groupWidth ?? 0,
+    expectedSeparatorCount *
+      (columnGroupMetrics?.separatorWidthPerHandle ?? 0),
+  );
   const mainPanelCount = bottomVisible ? 2 : 1;
   const mainAutoSaveId = `fullmag-workspace-main:${mainPanelCount}`;
   const columnAutoSaveId = `fullmag-workspace-columns:${visibleColumns
     .map((column) => column.slotId)
     .join("|")}`;
-  if (!restored) {
+  if (!restored || !columnGroupMetrics) {
     return (
-      <div className="fm-workspace-body" data-dock-hydration-pending="true" id="fm-main-content" tabIndex={-1}>
+      <div
+        ref={workspaceBodyRef}
+        className="fm-workspace-body"
+        data-dock-hydration-pending="true"
+        id="fm-main-content"
+        tabIndex={-1}
+      >
         {panelVisible.left ? (
           <div className="fm-dock-column">
             <div className="fm-dock-column__handle">
@@ -231,7 +301,12 @@ export function WorkspaceDockLayout() {
   }
 
   return (
-    <div className="fm-workspace-body" id="fm-main-content" tabIndex={-1}>
+    <div
+      ref={workspaceBodyRef}
+      className="fm-workspace-body"
+      id="fm-main-content"
+      tabIndex={-1}
+    >
       <ResizablePanelGroup
         autoSaveId={mainAutoSaveId}
         direction="vertical"
@@ -249,6 +324,7 @@ export function WorkspaceDockLayout() {
           >
             <ResizablePanelGroup
               autoSaveId={columnAutoSaveId}
+              data-workspace-column-group="true"
               direction="horizontal"
               onLayoutChanged={() => {
                 if (resizeFrameRef.current !== null) return;
@@ -268,10 +344,14 @@ export function WorkspaceDockLayout() {
                     id={column.slotId}
                     maxSize={
                       column.slotId === "panel-right"
-                        ? `${inspectorMaxWidth}px`
+                        ? inspectorConstraints.maxSize
                         : column.maxSize
                     }
-                    minSize={column.minSize}
+                    minSize={
+                      column.slotId === "panel-right"
+                        ? inspectorConstraints.minSize
+                        : column.minSize
+                    }
                     panelRef={
                       column.slotId === "panel-right"
                         ? inspectorPanelRef

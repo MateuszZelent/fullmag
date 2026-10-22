@@ -23,6 +23,11 @@ export interface WorkspaceLayout {
 export const WORKSPACE_LAYOUT_STORAGE_KEY = "fullmag.workspace.layout.v2";
 export const WORKSPACE_LAYOUT_RESTORED_EVENT = "fullmag:workspace-layout-restored";
 
+export interface WorkspaceInspectorWidthConstraints {
+  minSize: string;
+  maxSize: string;
+}
+
 export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
   columns: [
     {
@@ -55,6 +60,62 @@ export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
   bottomDockDefaultSize: 22,
   bottomDockMinSize: 12,
 };
+
+/**
+ * Keep the dock's preferred percentage minima while fitting the Inspector to
+ * the measured panel group. Separator pixels are outside the panel budget.
+ */
+export function resolveWorkspaceInspectorWidthConstraints(
+  columns: readonly WorkspaceColumnLayout[],
+  groupWidth: number,
+  separatorWidth: number,
+): WorkspaceInspectorWidthConstraints {
+  const inspector = columns.find((column) => column.slotId === "panel-right");
+  if (!inspector || !Number.isFinite(groupWidth) || groupWidth <= 0) {
+    return {
+      minSize: inspector?.minSize ?? "360px",
+      maxSize: inspector?.maxSize ?? "560px",
+    };
+  }
+
+  const separators = Number.isFinite(separatorWidth)
+    ? Math.max(0, separatorWidth)
+    : 0;
+  const panelWidth = Math.max(0, groupWidth - separators);
+  const otherMinimums = columns
+    .filter((column) => column.slotId !== "panel-right")
+    .reduce(
+      (minimum, column) => minimum + resolvePanelMinimum(column.minSize, groupWidth),
+      0,
+    );
+  const inspectorBudget = Math.floor(
+    Math.max(0, panelWidth - otherMinimums),
+  );
+  const minimumWidth = Math.min(360, inspectorBudget);
+  const preferredMaximum = Math.max(
+    360,
+    Math.min(560, panelWidth * 0.38),
+  );
+  const maximumWidth = Math.max(
+    minimumWidth,
+    Math.min(inspectorBudget, Math.floor(preferredMaximum)),
+  );
+
+  return {
+    minSize: `${minimumWidth}px`,
+    maxSize: `${maximumWidth}px`,
+  };
+}
+
+function resolvePanelMinimum(minSize: string, groupWidth: number): number {
+  const percentage = /^(\d+(?:\.\d+)?)%$/.exec(minSize);
+  if (percentage) return (Number(percentage[1]) / 100) * groupWidth;
+
+  const pixels = /^(\d+(?:\.\d+)?)px$/.exec(minSize);
+  if (pixels) return Number(pixels[1]);
+
+  return 0;
+}
 
 function isWorkspaceColumnId(slotId: unknown): slotId is WorkspaceColumnId {
   return DEFAULT_WORKSPACE_LAYOUT.columns.some((column) => column.slotId === slotId);

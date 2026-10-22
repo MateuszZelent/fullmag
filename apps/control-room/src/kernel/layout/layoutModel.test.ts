@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   DEFAULT_WORKSPACE_LAYOUT,
   moveWorkspaceColumn,
+  resolveWorkspaceInspectorWidthConstraints,
   restoreWorkspaceLayout,
   serializeWorkspaceLayout,
   resetWorkspaceLayout,
@@ -65,6 +66,70 @@ describe("workspace layout model", () => {
       minSize: "360px",
       resizeBehavior: "preserve-pixel-size",
     });
+  });
+
+  it.each([
+    { groupWidth: 640, withAuxiliary: false },
+    { groupWidth: 899, withAuxiliary: false },
+    { groupWidth: 1024, withAuxiliary: true },
+    { groupWidth: 1280, withAuxiliary: true },
+  ])(
+    "fits Inspector minimums and separators at $groupWidth px (auxiliary: $withAuxiliary)",
+    ({ groupWidth, withAuxiliary }) => {
+      const columns = DEFAULT_WORKSPACE_LAYOUT.columns.filter(
+        (column) => withAuxiliary || column.slotId !== "viewport-aux",
+      );
+      const separatorWidth = (columns.length - 1) * 4;
+      const constraints = resolveWorkspaceInspectorWidthConstraints(
+        columns,
+        groupWidth,
+        separatorWidth,
+      );
+      const minimumWidth = (minSize: string) => {
+        const percentage = /^(\d+(?:\.\d+)?)%$/.exec(minSize);
+        if (percentage) return (Number(percentage[1]) / 100) * groupWidth;
+        return Number.parseFloat(minSize);
+      };
+      const minimumTotal =
+        separatorWidth +
+        columns.reduce(
+          (total, column) =>
+            total +
+            minimumWidth(
+              column.slotId === "panel-right"
+                ? constraints.minSize
+                : column.minSize,
+            ),
+          0,
+        );
+
+      expect(minimumTotal).toBeLessThanOrEqual(groupWidth);
+      expect(minimumWidth(constraints.maxSize)).toBeGreaterThanOrEqual(
+        minimumWidth(constraints.minSize),
+      );
+    },
+  );
+
+  it("adapts the Inspector only when the other dock minima consume its desktop width", () => {
+    const narrowColumns = DEFAULT_WORKSPACE_LAYOUT.columns.filter(
+      (column) => column.slotId !== "viewport-aux",
+    );
+    const narrow = resolveWorkspaceInspectorWidthConstraints(
+      narrowColumns,
+      640,
+      8,
+    );
+    const desktop = resolveWorkspaceInspectorWidthConstraints(
+      narrowColumns,
+      1280,
+      8,
+    );
+
+    expect(Number.parseFloat(narrow.minSize)).toBeLessThan(360);
+    expect(narrow.maxSize).toBe(narrow.minSize);
+    expect(desktop.minSize).toBe("360px");
+    expect(Number.parseFloat(desktop.maxSize)).toBeGreaterThanOrEqual(360);
+    expect(Number.parseFloat(desktop.maxSize)).toBeLessThanOrEqual(560);
   });
 
   it("resets to the default workspace column order", () => {
