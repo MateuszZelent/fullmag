@@ -56,6 +56,10 @@ import {
   type SceneRegionConflictPolicy,
   type SceneRegionFrame,
 } from "./ObjectRegionMaterialFieldsModel";
+import {
+  RegionIntegerField,
+  regionMaterialOverridePriorityDraftKey,
+} from "./RegionIntegerField";
 
 type LocalFeedback =
   | {
@@ -66,6 +70,7 @@ type LocalFeedback =
 
 const MATERIAL_FIELD_DRAFT_PARTS = [
   "Value",
+  "Priority",
   "Base",
   "Gradient X",
   "Gradient Y",
@@ -565,14 +570,11 @@ function useObjectRegionMagneticParametersPanelView({
                   updateMaterialOverride(index, { unit: event.target.value })
                 }
               />
-              <FormField
+              <RegionIntegerField
+                draftKey={regionMaterialOverridePriorityDraftKey(override.uiKey)}
                 label="Override priority"
-                type="number"
-                step={1}
-                value={String(override.priority)}
-                onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                  updateMaterialOverride(index, { priority: Number(event.target.value) })
-                }
+                value={override.priority}
+                onValueChange={(priority) => updateMaterialOverride(index, { priority })}
               />
               <FormField
                 label="Conflict"
@@ -795,14 +797,11 @@ function useObjectRegionMagneticParametersPanelView({
                 updateMaterialFieldDraft(index, { unit: event.target.value })
               }
             />
-            <FormField
+            <RegionIntegerField
+              draftKey={materialFieldTextDraftKey(field.assignmentId, "Priority")}
               label="Priority"
-              type="number"
-              step={1}
-              value={String(field.priority)}
-              onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                updateMaterialFieldDraft(index, { priority: Number(event.target.value) })
-              }
+              value={field.priority}
+              onValueChange={(priority) => updateMaterialFieldDraft(index, { priority })}
             />
             <FormField
               label="Conflict"

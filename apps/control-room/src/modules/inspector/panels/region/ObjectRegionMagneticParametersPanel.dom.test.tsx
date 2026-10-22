@@ -3,9 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   installSimulationPreparationTestDom,
+  TestEvent,
   TestElement,
   TestNode,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import { QuantityFieldDraftScope } from "../../primitives/QuantityField";
+import { createQuantityFieldDraftStore } from "../../primitives/quantityFieldDraftStore";
 
 const sessionA = {
   sessionId: "A",
@@ -102,6 +105,169 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
       await act(async () => findButton(container, "Apply Fields").click());
       expect(mocks.readScene).not.toHaveBeenCalled();
       expect(mocks.patchMaterialFields).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps empty and sign-only field priorities as invalid raw drafts", async () => {
+    const draftStore = createQuantityFieldDraftStore();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <QuantityFieldDraftScope store={draftStore}>
+            <ObjectRegionMagneticParametersPanel {...panelProps()} />
+          </QuantityFieldDraftScope>,
+        ),
+      );
+      await act(async () => findButton(container, "Add Field").click());
+
+      const priority = findPriorityInputs(container)[0];
+      if (!priority) throw new Error("Missing material field priority input");
+      expect(priority.value).toBe("5");
+
+      await act(async () => editInput(priority, ""));
+      expect(priority.value).toBe("");
+      expect(draftStore.getSummary().invalidLabels).toEqual(["Priority"]);
+      expect(findButton(container, "Apply Fields").disabled).toBe(true);
+
+      await act(async () => editInput(priority, "-"));
+      expect(priority.value).toBe("-");
+      expect(draftStore.getSummary().invalidLabels).toEqual(["Priority"]);
+      expect(findButton(container, "Apply Fields").disabled).toBe(true);
+      expect(mocks.readScene).not.toHaveBeenCalled();
+      expect(mocks.patchMaterialFields).not.toHaveBeenCalled();
+
+      await act(async () => findButton(container, "Revert Fields").click());
+      expect(draftStore.getSummary().pendingCount).toBe(0);
+      expect(findPriorityInputs(container)).toHaveLength(0);
+      expect(findButton(container, "Apply Fields").disabled).toBe(true);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("commits explicit zero and negative field priorities without changing their meaning", async () => {
+    const draftStore = createQuantityFieldDraftStore();
+    mocks.sceneData = {
+      objects: [
+        {
+          id: "object-a",
+          material_parameter_fields: [
+            materialFieldAssignment("field-a", 1),
+            materialFieldAssignment("field-b", 2),
+          ],
+        },
+      ],
+      materials: [],
+    } as never;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <QuantityFieldDraftScope store={draftStore}>
+            <ObjectRegionMagneticParametersPanel {...panelProps()} />
+          </QuantityFieldDraftScope>,
+        ),
+      );
+      const priorities = findPriorityInputs(container);
+      expect(priorities).toHaveLength(2);
+      const negativePriority = priorities[0];
+      const zeroPriority = priorities[1];
+      if (!negativePriority || !zeroPriority) {
+        throw new Error("Missing field priority inputs");
+      }
+
+      await act(async () => {
+        editInput(negativePriority, "-2");
+        negativePriority.dispatchEvent(new TestEvent("focusout", { bubbles: true }));
+      });
+      await act(async () => {
+        editInput(zeroPriority, "0");
+        zeroPriority.dispatchEvent(new TestEvent("focusout", { bubbles: true }));
+      });
+      expect(draftStore.getSummary().pendingCount).toBe(0);
+      await act(async () => findButton(container, "Apply Fields").click());
+
+      expect(mocks.patchMaterialFields).toHaveBeenCalledOnce();
+      const submittedFields = mocks.patchMaterialFields.mock.calls[0]?.[1];
+      expect(submittedFields).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ priority: -2 }),
+          expect.objectContaining({ priority: 0 }),
+        ]),
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("removing one field clears only its raw priority draft and Revert clears the remainder", async () => {
+    const draftStore = createQuantityFieldDraftStore();
+    mocks.sceneData = {
+      objects: [
+        {
+          id: "object-a",
+          material_parameter_fields: [
+            materialFieldAssignment("field-a", 1),
+            materialFieldAssignment("field-b", 2),
+          ],
+        },
+      ],
+      materials: [],
+    } as never;
+    const props = {
+      ...panelProps(),
+      removeQuantityFieldDraftKeys: (keys: readonly string[]) => {
+        for (const key of keys) draftStore.remove(key);
+      },
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <QuantityFieldDraftScope store={draftStore}>
+            <ObjectRegionMagneticParametersPanel {...props} />
+          </QuantityFieldDraftScope>,
+        ),
+      );
+      await act(async () => findButton(container, "Add Field").click());
+
+      const priorities = findPriorityInputs(container);
+      expect(priorities).toHaveLength(3);
+      const firstPriority = priorities[0];
+      const secondPriority = priorities[1];
+      if (!firstPriority || !secondPriority) {
+        throw new Error("Missing material field priority inputs");
+      }
+      await act(async () => editInput(firstPriority, "-"));
+      await act(async () => editInput(secondPriority, "1e+"));
+      expect(findButton(container, "Apply Fields").disabled).toBe(true);
+      expect(draftStore.getSummary().pendingCount).toBe(2);
+
+      await act(async () => findButton(container, "Remove Field").click());
+      expect(findPriorityInputs(container)).toHaveLength(2);
+      expect(findPriorityInputs(container)[0]?.value).toBe("1e+");
+      expect(findButton(container, "Apply Fields").disabled).toBe(true);
+      expect(draftStore.getSummary().pendingCount).toBe(1);
+
+      await act(async () => findButton(container, "Revert Fields").click());
+      expect(draftStore.getSummary().pendingCount).toBe(0);
+      expect(findPriorityInputs(container).map((input) => input.value)).toEqual(["1", "2"]);
+      expect(findButton(container, "Apply Fields").disabled).toBe(true);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -227,6 +393,7 @@ function panelProps(): RegionSubPanelProps {
       materialRef: "material-a",
       materialOverrideCount: 0,
       materialFieldCount: 0,
+      priority: 5,
     } as RegionSubPanelProps["model"],
     draft: { materialOverrides: [] } as unknown as RegionSubPanelProps["draft"],
     pending: false,
@@ -250,6 +417,32 @@ function panelProps(): RegionSubPanelProps {
     revert: () => undefined,
     feedback: null,
   };
+}
+
+function materialFieldAssignment(assignmentId: string, priority: number) {
+  return {
+    assignment_id: assignmentId,
+    conflict_policy: "higher_priority_wins",
+    owner_object_id: "object-a",
+    parameter: "ms",
+    priority,
+    region_id: "region-a",
+    value: { kind: "constant", unit: "A/m", value: 800e3 },
+  };
+}
+
+function editInput(input: TestElement, value: string): void {
+  input.value = value;
+  input.dispatchEvent(new TestEvent("input", { bubbles: true }));
+}
+
+function findPriorityInputs(root: TestNode): TestElement[] {
+  return findElements(
+    root,
+    (element) =>
+      element.tagName === "INPUT" &&
+      element.getAttribute("aria-label") === "Priority",
+  );
 }
 
 function findButton(root: TestNode, text: string): TestElement {

@@ -73,6 +73,7 @@ import { ObjectRegionNestedRegionsPanel as ObjectRegionNestedRegionsPanelImpl } 
 import { ObjectRegionOverviewPanel as ObjectRegionOverviewPanelImpl } from "./region/ObjectRegionOverviewPanel";
 import { ObjectRegionTexturePanel as ObjectRegionTexturePanelImpl } from "./region/ObjectRegionTexturePanel";
 import { ObjectRegionVisualizationPanel as ObjectRegionVisualizationPanelImpl } from "./region/ObjectRegionVisualizationPanel";
+import { regionMaterialOverridePriorityDraftKey } from "./region/RegionIntegerField";
 import type {
   RegionAuxiliaryDraftSession,
   RegionSubPanelProps,
@@ -413,6 +414,11 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   }
 
   function removeMaterialOverride(index: number): void {
+    const removedOverride = draft.materialOverrides[index];
+    if (!removedOverride) return;
+    fieldDrafts.store.remove(
+      regionMaterialOverridePriorityDraftKey(removedOverride.uiKey),
+    );
     updateDraft({
       materialOverrides: draft.materialOverrides.filter(
         (_override, overrideIndex) => overrideIndex !== index,

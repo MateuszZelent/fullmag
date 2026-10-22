@@ -73,6 +73,9 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
       if (await target.getAttribute("aria-expanded") === "false") await target.locator(".fm-explorer-tree-row__branch").click();
     }
     await page.locator(`[data-node-id="${id}"]`).click();
+    await page.waitForFunction((expectedId) =>
+      document.querySelector(`[data-node-id="${expectedId}"]`)?.getAttribute("data-active") === "true",
+    id, { timeout: 10_000 });
   }
   async function capture(name) {
     const file = `frontend-region-${name}.png`;
@@ -86,6 +89,31 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
     await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: 90_000 });
     const inspector = page.locator(".fm-inspector");
     await inspector.waitFor({ state: "visible", timeout: 60_000 });
+    async function verifyPriorityDraft({ input, applyLabel, revertLabel, context }) {
+      const baselineText = await input.inputValue();
+      const mutationCount = evidence.mutations.length;
+      const apply = inspector.getByRole("button", { name: applyLabel, exact: true });
+      const revert = inspector.locator(".fm-inspector-panel").getByRole("button", { name: revertLabel, exact: true });
+      for (const raw of ["", "-", "1e-"]) {
+        await input.fill(raw);
+        await input.press("Tab");
+        assert.equal(await input.inputValue(), raw, `${context}: incomplete text was replaced by a number.`);
+        assert.equal(await input.getAttribute("aria-invalid"), "true");
+        if (!(await apply.isDisabled())) await apply.click();
+        await page.waitForTimeout(100);
+        assert.equal(evidence.mutations.length, mutationCount, `${context}: incomplete priority reached the API.`);
+      }
+      for (const raw of ["0", "-2"]) {
+        await input.fill(raw);
+        await input.press("Enter");
+        assert.equal(await input.inputValue(), raw, `${context}: legal signed integer was not committed to the local draft.`);
+        assert.notEqual(await input.getAttribute("aria-invalid"), "true");
+      }
+      await revert.click();
+      assert.equal(await input.inputValue(), baselineText, `${context}: Revert did not restore the original integer.`);
+      assert.equal(evidence.mutations.length, mutationCount, `${context}: draft edits or Revert unexpectedly wrote to the API.`);
+      evidence.scenarios.push({ name: `${context}-integer-raw-draft`, incompleteTextPreserved: true, invalidApplyBlocked: true, explicitZeroAndNegativeAllowed: true, revertRestoresBaseline: true });
+    }
     await page.getByRole("tab", { name: "Model", exact: true }).click();
     await page.getByRole("searchbox", { name: "Filter explorer" }).fill("");
     await selectNode(nodeId);
@@ -146,6 +174,8 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
     assert.deepEqual(object.regions[0].material_overrides, overrides);
     evidence.scenarios.push({ name: "rename-preserves-csg-overrides-and-inspector", pendingState, ackState });
 
+    await verifyPriorityDraft({ input: inspector.getByRole("textbox", { name: "Priority", exact: true }), applyLabel: "Apply Region", revertLabel: "Revert", context: "region-priority" });
+
     await selectNode(`${nodeId}:magnetic-parameters`);
     const scalar = inspector.getByRole("textbox", { name: "Local override", exact: true }).first();
     await scalar.waitFor();
@@ -202,6 +232,9 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
     await capture("material-fields-preserved");
     evidence.scenarios.push({ name: "field-edit-retains-vector-and-optional-metadata", fields });
 
+    await verifyPriorityDraft({ input: inspector.getByRole("textbox", { name: "Override priority", exact: true }).first(), applyLabel: "Apply Region", revertLabel: "Revert", context: "override-priority" });
+    await verifyPriorityDraft({ input: inspector.getByRole("textbox", { name: "Priority", exact: true }).first(), applyLabel: "Apply Fields", revertLabel: "Revert Fields", context: "material-field-priority" });
+
     async function verifyRemovalDraftIdentity({ label, removeLabel, revertLabel, applyLabel }) {
       const inputs = inspector.getByRole("textbox", { name: label, exact: true });
       const rows = inspector.locator(".fm-region-override").filter({ has: page.getByRole("textbox", { name: label, exact: true }) });
@@ -243,6 +276,14 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
   } catch (error) {
     evidence.status = "failed";
     evidence.error = error?.stack ?? String(error);
+    evidence.failure_ui = await page.evaluate(() => ({
+      activeRows: Array.from(document.querySelectorAll('.fm-explorer-tree-row[data-active="true"]'), (row) => row.getAttribute("data-node-id")),
+      inspectorTitle: document.querySelector(".fm-inspector__title")?.textContent,
+      inspectorOwner: document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner"),
+      visibleInputs: Array.from(document.querySelectorAll(".fm-inspector input"), (input) => ({ label: input.getAttribute("aria-label"), type: input.type, visible: input.getClientRects().length > 0 })),
+      dialogs: Array.from(document.querySelectorAll('[role="dialog"]'), (dialog) => dialog.textContent?.slice(0, 1200)),
+    })).catch(() => null);
+    console.error("Region audit failure state: " + JSON.stringify(evidence.failure_ui));
     throw error;
   } finally {
     acknowledge?.();
