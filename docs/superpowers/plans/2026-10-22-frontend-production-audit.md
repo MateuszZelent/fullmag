@@ -598,3 +598,27 @@ z zachowaniem kontroli fokusu, scrolla oraz liczby mutacji. Zmiany produkcji
 nie były potrzebne. Scoped ESLint PASS, stabilne źródła:
 `verification/frontend-production-source-d462f6709ce3473baa772ee43dba1723.json`.
 Lokalnie nie kompilowano ani nie uruchamiano testów TS; wynik poprawki czeka na CI.
+
+### Dalszy audyt — brakujące skalary wyników
+
+W `FrequencyDomainResultInspectors` parser `Number(value)` traktował null,
+false, pusty tekst i pustą tablicę jak opublikowane zero. Potwierdzony skutek:
+`residualNorm: null` w punkcie bez surowego residuum pokazywał `0`, a błędne
+surowe residuum mogło przesłonić poprawne `5e-5` w podsumowaniu. Ten sam
+parser obsługuje pola częstotliwości, amplitudy i metadanych.
+Zastosowano istniejący `finiteModalScalar`, używany już przez EigenMode:
+liczby i niepuste legacy numeric strings pozostają obsługiwane, zero zostaje
+zerem, a brak danych uruchamia fallback albo jawną niedostępność.
+Nie zmieniono fizyki, obliczeń ani API. Regresje sprawdzają eksportowany
+builder residuów, przypadki brakujące/nieprawidłowe i zachowanie prawdziwego
+zera oraz legacy stringów; wykonanie w CI oczekuje.
+
+Review wszystkich wywołań parsera i pośrednich helperów: bez P1/P2.
+Produkcja typów, architecture hygiene i scoped lint PASS, stabilne źródła:
+`verification/frontend-production-source-901389be260046deaed7e934614c103c.json`.
+React Doctor przeanalizował zmieniony plik bez pominięć, 0 błędów:
+`verification/frontend-production-source-58f0dad70034433f91f717e06e266e75.json`.
+Dwa istniejące ostrzeżenia: indeks jako ostatni składnik klucza stateless
+karty peak oraz statyczna tablica przycisków 3D tworzona przy renderze.
+Nie potwierdzono utraty draftu w karcie (brak edytowanych pól); poprawka
+parsera nie zmienia obu miejsc. Nie kompilowano lokalnie testów jednostkowych.
