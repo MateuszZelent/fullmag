@@ -809,7 +809,8 @@ def _image_input_manifest(
 
 def _toolchain_identity(group: RetainedGroup) -> Mapping[str, object]:
     try:
-        configured = toolchain_configuration(group.source_root, group.identity)
+        configured = toolchain_configuration(group.source_root, group.identity,
+                                             require_cuda_selection=True)
         service = configured["services"]["fem-gpu-toolchain"]
         build = service["build"]
         build_args = build["args"]
