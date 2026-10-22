@@ -41,8 +41,8 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
     return route.fallback();
   });
   const targets = [
-    { name: "object", path: objectPath, node: "model:object:film:mesh", parents: ["model:session", "model:objects", "model:object:film"], jsonLabel: "Policy JSON", jsonGroup: "Advanced JSON", configKey: "maximum_element_size", apply: "Apply Policy", success: "Policy saved. Current solver mesh is stale until a mesh build completes." },
-    { name: "airbox", path: airboxPath, node: "model:airbox:mesh:parameters", parents: ["model:session", "model:universe", "model:airbox", "model:airbox:mesh"], jsonLabel: "Advanced universe policy JSON", jsonGroup: "Advanced Authored Policy JSON", configKey: "airbox_hmax", apply: "Apply Airbox Policy", success: "Canonical Airbox policy saved. The realized shared-domain mesh is stale until rebuilt." },
+    { name: "object", path: objectPath, node: "model:object:film:mesh", parents: ["model:session", "model:objects", "model:object:film"], jsonLabel: "Policy JSON", jsonGroup: "Advanced JSON", configKey: "maximum_element_size", expectedWireValue: "4e-8", apply: "Apply Policy", success: "Policy saved. Current solver mesh is stale until a mesh build completes." },
+    { name: "airbox", path: airboxPath, node: "model:airbox:mesh:parameters", parents: ["model:session", "model:universe", "model:airbox", "model:airbox:mesh"], jsonLabel: "Advanced universe policy JSON", jsonGroup: "Advanced Authored Policy JSON", configKey: "airbox_hmax", expectedWireValue: 4e-8, apply: "Apply Airbox Policy", success: "Canonical Airbox policy saved. The realized shared-domain mesh is stale until rebuilt." },
   ];
   try {
     if (auditViewport && (auditViewport.width !== originalViewport.width || auditViewport.height !== originalViewport.height)) {
@@ -131,7 +131,7 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
       assert.equal(ackResponse.status(), 200, `${target.name}: PUT did not return success`);
       assert.equal(await ackResponse.finished(), null, `${target.name}: PUT response did not finish cleanly`);
       const ackBody = await ackResponse.json();
-      assert.equal(ackBody.config?.[target.configKey], 4e-8, `${target.name}: acknowledged response contains a stale size value`);
+      assert.equal(ackBody.config?.[target.configKey], target.expectedWireValue, `${target.name}: acknowledged response violates the authored wire value`);
       await waitUntil(() => pendingRequest === null, `${target.name}: PUT did not acknowledge`);
       await page.waitForFunction(({ applyLabel, successText }) => {
         const panel = document.querySelector(".fm-inspector-panel");
@@ -144,7 +144,7 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
       assert.equal(await maxSize.isDisabled(), false, `${target.name}: size control remained disabled after ACK`);
       assert.equal(Number(await maxSize.inputValue()), 4e-8, `${target.name}: ACK lost the applied value`);
       assert.equal(evidence.mutations.length - mutationStart, 1, `${target.name}: apply issued duplicate PUTs`);
-      assert.equal(evidence.mutations.at(-1).body.config[target.configKey], 4e-8, `${target.name}: PUT contained a stale size value`);
+      assert.equal(evidence.mutations.at(-1).body.config[target.configKey], target.expectedWireValue, `${target.name}: PUT violates the authored wire value`);
       const mutationRequests = evidence.requests.slice(requestStart);
       assert.ok(mutationRequests.length <= 20, `${target.name}: request budget exceeded: ${JSON.stringify(mutationRequests)}`);
       assert.ok(after.renderCount <= 8, `${target.name}: render budget exceeded: ${after.renderCount}`);

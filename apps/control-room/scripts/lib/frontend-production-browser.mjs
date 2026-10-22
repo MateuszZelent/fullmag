@@ -87,6 +87,99 @@ export async function qualifyFrontendProductionBrowser({
     return page.evaluate(() => document.activeElement?.getAttribute("data-node-id") ?? null);
   }
 
+  async function installExplorerNavigationProbe(tree) {
+    await tree.evaluate((element) => {
+      const events = [];
+      const maxEvents = 200;
+      const snapshot = () => {
+        const rows = Array.from(element.querySelectorAll('[role="treeitem"]'));
+        const rowHeight = rows[0]?.getBoundingClientRect().height ?? 0;
+        const describeRow = (row) => {
+          if (!row) return null;
+          const rect = row.getBoundingClientRect();
+          return {
+            id: row.getAttribute("data-node-id"),
+            top: rect.top,
+            bottom: rect.bottom,
+            height: rect.height,
+            tabIndex: row.tabIndex,
+          };
+        };
+        const spacers = Array.from(element.children)
+          .map((child, index) => ({ child, index }))
+          .filter(({ child }) => child.getAttribute("aria-hidden") === "true")
+          .map(({ child, index }) => {
+            const rect = child.getBoundingClientRect();
+            return {
+              childIndex: index,
+              styleHeight: child.style.height,
+              top: rect.top,
+              bottom: rect.bottom,
+              height: rect.height,
+            };
+          });
+        const leadingSpacer = element.firstElementChild?.getAttribute("aria-hidden") === "true"
+          ? element.firstElementChild
+          : null;
+        return {
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          scrollTop: element.scrollTop,
+          maxScrollTop: Math.max(0, element.scrollHeight - element.clientHeight),
+          mountedRowCount: rows.length,
+          rowHeight,
+          virtualStart: rowHeight > 0 && leadingSpacer
+            ? Math.round(leadingSpacer.getBoundingClientRect().height / rowHeight)
+            : 0,
+          virtualEnd: rowHeight > 0 && leadingSpacer
+            ? Math.round(leadingSpacer.getBoundingClientRect().height / rowHeight) + rows.length
+            : rows.length,
+          firstMountedRow: describeRow(rows[0]),
+          lastMountedRow: describeRow(rows.at(-1)),
+          virtualSpacers: spacers,
+        };
+      };
+      const record = (details) => {
+        events.push({ ...snapshot(), ...details });
+        if (events.length > maxEvents) events.shift();
+      };
+      const listeners = [];
+      for (const eventName of ["keydown", "focusin", "scroll"]) {
+        const listener = (event) => record({
+          type: event.type,
+          key: event.key ?? null,
+          target: event.target?.getAttribute?.("data-node-id") ?? null,
+          focused: document.activeElement?.getAttribute("data-node-id") ?? null,
+        });
+        element.addEventListener(eventName, listener);
+        listeners.push([eventName, listener]);
+      }
+      const resizeObserver = new ResizeObserver((entries) => {
+        record({
+          type: "resize",
+          observedSizes: entries.map((entry) => ({
+            width: entry.contentRect.width,
+            height: entry.contentRect.height,
+          })),
+        });
+      });
+      resizeObserver.observe(element);
+      window.__frontendAuditNavigationEvents = events;
+      window.__frontendAuditNavigationProbeCleanup = () => {
+        for (const [eventName, listener] of listeners) {
+          element.removeEventListener(eventName, listener);
+        }
+        resizeObserver.disconnect();
+        delete window.__frontendAuditNavigationProbeCleanup;
+      };
+      record({ type: "probe-installed" });
+    });
+  }
+
+  async function cleanupExplorerNavigationProbe() {
+    await page.evaluate(() => window.__frontendAuditNavigationProbeCleanup?.());
+  }
+
   async function waitForInspectorName(expectedName) {
     const name = page.locator(".fm-inspector").getByRole("textbox", { name: "Name", exact: true });
     await name.waitFor({ state: "visible" });
@@ -270,16 +363,7 @@ export async function qualifyFrontendProductionBrowser({
 
       const farSelectedId = "model:object:audit-copy-30";
       await tree.locator('[role="treeitem"]').first().focus();
-      await tree.evaluate((element) => {
-        const events = [];
-        window.__frontendAuditNavigationEvents = events;
-        for (const eventName of ["keydown", "focusin", "scroll"]) {
-          element.addEventListener(eventName, (event) => {
-            events.push({ type: event.type, key: event.key, target: event.target?.getAttribute?.("data-node-id"), focused: document.activeElement?.getAttribute("data-node-id"), scrollTop: element.scrollTop, scrollHeight: element.scrollHeight });
-            if (events.length > 200) events.shift();
-          });
-        }
-      });
+      await installExplorerNavigationProbe(tree);
       let farFocusId = await pressAndWaitForFocusChange("End");
       for (let step = 0; farFocusId !== farSelectedId && step < initial.totalRows; step += 1) {
         farFocusId = await pressAndWaitForFocusChange("ArrowUp");
@@ -445,6 +529,7 @@ export async function qualifyFrontendProductionBrowser({
         else document.documentElement.dataset.theme = value;
       }, initialTheme);
       await capture("virtualized-home-end-arrows", page.locator(".fm-explorer"));
+      await cleanupExplorerNavigationProbe();
       return {
         logicalRows: initial.totalRows,
         renderedRowsAtTop: initial.renderedIds.length,
@@ -483,16 +568,7 @@ export async function qualifyFrontendProductionBrowser({
         await openWorkspace("frontend-tree-filter-shrink-audit");
         await page.getByRole("button", { name: "Expand all explorer nodes" }).click();
         const tree = page.locator(".fm-explorer-tree");
-        await tree.evaluate((element) => {
-          const events = [];
-          window.__frontendAuditNavigationEvents = events;
-          for (const eventName of ["keydown", "focusin", "scroll"]) {
-            element.addEventListener(eventName, (event) => {
-              events.push({ type: event.type, key: event.key, target: event.target?.getAttribute?.("data-node-id"), focused: document.activeElement?.getAttribute("data-node-id"), scrollTop: element.scrollTop, scrollHeight: element.scrollHeight });
-              if (events.length > 200) events.shift();
-            });
-          }
-        });
+        await installExplorerNavigationProbe(tree);
         const measureTree = () => tree.evaluate((element) => {
           const rows = Array.from(element.querySelectorAll('[role="treeitem"]'));
           const firstRow = rows[0];
@@ -664,6 +740,7 @@ export async function qualifyFrontendProductionBrowser({
         }).catch(() => null);
         throw error;
       } finally {
+        await cleanupExplorerNavigationProbe().catch(() => {});
         fixture.scene = structuredClone(originalScene);
         await setRevision(originalRevision);
         fixture.manifest.source_scene_revision = originalManifestRevision;

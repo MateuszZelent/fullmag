@@ -7,6 +7,14 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
   const original = structuredClone({ scene: fixture.scene, revision: fixture.revision, manifest: fixture.manifest });
   const originalViewport = page.viewportSize();
   const evidence = { scope: "Production region Inspector with intercepted API; no backend or physics qualification", status: "running", mutations: [], scenarios: [], screenshots: [] };
+  const pageErrors = [];
+  const consoleErrors = [];
+  const onPageError = (error) => {
+    if (pageErrors.length < 20) pageErrors.push(String(error?.stack ?? error).slice(0, 2000));
+  };
+  const onConsole = (message) => {
+    if (message.type() === "error" && consoleErrors.length < 20) consoleErrors.push(message.text().slice(0, 2000));
+  };
   const regionId = "audit-core";
   const nodeId = `model:object:film:regions:${regionId}`;
   const shape = { kind: "csg", expression: { op: "difference", left: { kind: "sphere", radius: 12e-9 }, right: { kind: "sphere", radius: 4e-9 } } };
@@ -83,6 +91,8 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
     evidence.screenshots.push(file);
   }
   await page.route("**/v2/**", intercept);
+  page.on("pageerror", onPageError);
+  page.on("console", onConsole);
   try {
     if (originalViewport) await page.setViewportSize({ ...originalViewport, height: 720 });
     resetInspectorDocumentBudget(fixture.requestBudget, "frontend-region-lossless");
@@ -280,12 +290,20 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
       activeRows: Array.from(document.querySelectorAll('.fm-explorer-tree-row[data-active="true"]'), (row) => row.getAttribute("data-node-id")),
       inspectorTitle: document.querySelector(".fm-inspector__title")?.textContent,
       inspectorOwner: document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner"),
+      inspectorText: document.querySelector(".fm-inspector")?.innerText?.slice(0, 6000),
+      inspectorEmpty: document.querySelector(".fm-inspector__empty")?.textContent,
+      inspectorPanels: Array.from(document.querySelectorAll(".fm-inspector-panel"), (panel) => ({ owner: panel.getAttribute("data-inspector-owner"), text: panel.textContent?.slice(0, 2000) })),
       visibleInputs: Array.from(document.querySelectorAll(".fm-inspector input"), (input) => ({ label: input.getAttribute("aria-label"), type: input.type, visible: input.getClientRects().length > 0 })),
       dialogs: Array.from(document.querySelectorAll('[role="dialog"]'), (dialog) => dialog.textContent?.slice(0, 1200)),
     })).catch(() => null);
+    evidence.page_errors = pageErrors;
+    evidence.console_errors = consoleErrors;
+    await capture("failure").catch(() => null);
     console.error("Region audit failure state: " + JSON.stringify(evidence.failure_ui));
     throw error;
   } finally {
+    page.off("pageerror", onPageError);
+    page.off("console", onConsole);
     acknowledge?.();
     await page.unroute("**/v2/**", intercept);
     if (originalViewport) await page.setViewportSize(originalViewport);

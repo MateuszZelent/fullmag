@@ -318,6 +318,23 @@ async function verifyResponsiveAnalysisFixtures(page) {
       }
       return {
         ancestorRects,
+        horizontalFitsRoot: Boolean(root && root.scrollWidth <= root.clientWidth + 1),
+        rootScrollWidth: root?.scrollWidth,
+        rootClientWidth: root?.clientWidth,
+        overflowingDescendants: Array.from(root?.querySelectorAll("*") ?? [])
+          .filter((node) => node instanceof HTMLElement && node.getClientRects().length > 0)
+          .map((node) => ({
+            tag: node.tagName,
+            classes: node.className,
+            label: node.getAttribute("aria-label"),
+            rect: node.getBoundingClientRect().toJSON(),
+            clientWidth: node.clientWidth,
+            scrollWidth: node.scrollWidth,
+            minWidth: getComputedStyle(node).minWidth,
+            gridTemplateColumns: getComputedStyle(node).gridTemplateColumns,
+          }))
+          .filter((node) => rootRect && (node.rect.right > rootRect.right + 1 || node.scrollWidth > node.clientWidth + 1))
+          .slice(0, 24),
         axisDescription: chartOwner?.getAttribute("aria-label") ?? "",
         clipped: required.filter(([name, node]) => !fits([name, node])).map(([name, node]) => ({
           name,
@@ -333,7 +350,7 @@ async function verifyResponsiveAnalysisFixtures(page) {
         viewport: { height: window.innerHeight, width: window.innerWidth },
       };
     });
-    if (!fixture.visible || !fixture.rootFitsViewport || !fixture.documentFitsViewport) {
+    if (!fixture.visible || !fixture.horizontalFitsRoot || !fixture.rootFitsViewport || !fixture.documentFitsViewport) {
       throw new Error(
         `Analysis responsive fixture clips a required scientific control at ${width}px: ${JSON.stringify(fixture)}`,
       );
