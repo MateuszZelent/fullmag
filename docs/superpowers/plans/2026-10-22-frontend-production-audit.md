@@ -313,3 +313,60 @@ Ostrzeżenia dotyczą istniejących łańcuchów iteracji i eksportów helperów
 z plików TSX; nie są dowodem awarii poprawionego przepływu. Nie zmieniano
 niepowiązanych helperów ani konfiguracji diagnostyki dla poprawy punktacji.
 Cały job `rust-contracts` dla `0a31c30…` także zakończył się **PASS**.
+
+### Checkpoint po CI `4b9788128d0e91f7f40a337930685c3c7c050f6e`
+
+`control-room-contracts` i `inspector-actions-browser-smoke` przeszły.
+Python ujawnił brak czterech pól środowiska w mocku Compose maintenance.
+Commit `29e5a8da8e295bec056b7999ded235b20a54802d` uzupełnia wyłącznie fixture.
+Interpretowane testy w usłudze frontend grupy zadania: 35 testów, 2 pominięte,
+PASS; receipt `verification/host-ledger-fixture-5af0f373338c449a8641e07a1b2925d9.json`.
+Uruchomienie tego zestawu na Windows nie przeszło z powodu braku `os.geteuid`;
+dowód PASS pochodzi z Linux w kontenerze, bez zmiany rzeczywistego ledgera.
+
+Nowe rodziny browser ujawniły dwie potwierdzone pomyłki harnessu: selektor
+paneli docka wskazywał wewnętrzny element zamiast zewnętrznego `[data-panel]`,
+a fixture topologii nie przekazywał wymaganego manifestu. Obie poprawiono.
+Nawigacja dużego drzewa przeszła; scenariusz zmniejszenia drzewa i edycja
+regionu nadal wymagają diagnozy. Dodano stan błędu przed cleanup fixture,
+zdarzenia przewijania i stan wyboru Inspectora. Przyczyny tych dwóch awarii
+nie są jeszcze potwierdzone; nie wprowadzono spekulacyjnej zmiany routingu.
+
+Pomiar Analysis przy 360 px potwierdził implicit grid min-content:
+slot miał 112,64 px, a jego kolumna i root 310,55 px. Poprawka `slots.css`
+ustala `minmax(0, 1fr)` w obu gridach oraz `min-width: 0` roota.
+Potwierdzenie przeglądarkowe poprawki oczekuje na następne CI.
+
+Priority regionu, override'u i pola materiałowego oraz Order siatki używają
+wspólnego pola integer z trwałym surowym tekstem. Pusty tekst, znak i urwany
+wykładnik blokują Apply zamiast zamieniać się w zero. Priority dopuszcza zero
+i wartości ujemne; Order ma minimum 1. Klucze draftów są związane z regionem,
+uiKey override'u lub assignmentId pola; Remove i Revert czyszczą właściwy draft.
+Zapisano regresje parsera, DOM i browser; lokalnie nie kompilowano testów TS.
+Produkcyjne typy, architecture hygiene i lint zmienionych plików: PASS,
+stabilne źródła, receipt
+`verification/frontend-production-source-f8d2f0d868834f2fbf013a459ee33a56.json`.
+
+Review wykrył i poprawiono dwie usterki nowej integracji: jawne wyłączenie
+mesh policy usuwa tylko raw draft Order tego regionu, a testy DOM commitują
+przez bąbelkujący natywny `focusout`. Po poprawkach produkcyjne typy,
+architecture hygiene i lint ponownie PASS dla stabilnych źródeł:
+`verification/frontend-production-source-9d698d08816f4d14b1e3e9f421d9e33f.json`.
+Później usunięto jedynie redundantną asercję tekstu implementacji z testu;
+regresje parsera, DOM i browser pozostają. Zachowanie wyłączenia polityki
+w przeglądarce jest nadal NOT VERIFIED.
+
+Commity poprawek: `c7019363d4af54f79c561c86f31b6545b804a743`
+(grid Analysis i harness browser) oraz
+`2d5b5b59fbab0eed4bf714817e8db34d0c1632aa` (surowe drafty integerów regionu).
+Hook React Doctor zgłosił w harnessie sekwencyjne await i iteracje; scenariusze
+celowo wykonują zależne kroki użytkownika. Nie zmieniano konfiguracji reguł.
+Hook uruchomiony w root nie wykrywa frameworka, więc nie zastępuje pełnej
+diagnostyki React ani bramek runtime.
+
+Otwarte poza tym etapem: pola liczbowe Planar nadal wymagają pełnego kontraktu
+surowych draftów i przełączania kontekstu; Priority w tworzeniu nowego regionu
+nie jest objęte powyższą zmianą. Zrzut przy 640 px wskazuje też możliwe
+nakładanie etykiet zakładek Explorera przy wąskiej kolumnie. Nie są to
+zweryfikowane poprawki. Managed runtime pozostaje zablokowany przez zachowanego
+ownera poprzedniego buildu; nie wykonano resetu ani usuwania danych.
