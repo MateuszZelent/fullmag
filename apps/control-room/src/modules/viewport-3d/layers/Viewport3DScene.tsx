@@ -70,6 +70,7 @@ import type {
   Viewport3DBounds,
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
+  Viewport3DTopologyPartRenderModel,
 } from "../viewport3dRenderModel";
 import type { Viewport3DMeshSizeHighlightModel } from "../viewport3dMeshSizeHighlight";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
@@ -1160,6 +1161,37 @@ export function resolveViewport3DRealizedFdmObjectIds({
   return objectIds;
 }
 
+/** A manifest alone does not establish that replacement geometry can render. */
+export function resolveViewport3DRealizedTopologyObjectIds({
+  enabled,
+  committedParts,
+  primitiveModel,
+  topologyModel,
+  topologyFreshness,
+}: {
+  enabled: boolean;
+  committedParts: ReadonlySet<Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>>;
+  primitiveModel: Viewport3DPrimitiveRenderModel | null;
+  topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
+  topologyFreshness: Viewport3DTopologyFreshness;
+}): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (!enabled || topologyFreshness !== "current" || !topologyModel?.positions.length) return ids;
+  for (const object of primitiveModel?.objects ?? []) {
+    if (object.meshState !== "mesh-ready") continue;
+    const aliases = new Set([object.objectId, object.objectId.endsWith("_geom")
+      ? object.objectId.slice(0, -5) : object.objectId + "_geom"]);
+    const parts = topologyModel.magneticParts.filter(({ part }) =>
+      (part.object_id != null && aliases.has(part.object_id)) ||
+      (part.geometry_id != null && aliases.has(part.geometry_id)),
+    );
+    if (parts.length > 0 && parts.every((part) => committedParts.has(part) && (part.surfaceIndices?.length ?? 0) >= 3)) {
+      ids.add(object.objectId);
+    }
+  }
+  return ids;
+}
+
 function Viewport3DModelLayerStack({
   adoptionRegistry,
   sessionIdentity,
@@ -1313,14 +1345,38 @@ function Viewport3DModelLayerStack({
     ? realizedRegionOverlayModels.status
     : "disabled";
 
-  const realizedFdmObjectIds = useMemo(
-    () =>
-      resolveViewport3DRealizedFdmObjectIds({
-        fdmNativeLayerViews,
-        fdmTargetViews,
-      }),
-    [fdmNativeLayerViews, fdmTargetViews],
-  );
+  const [committedTopologyParts, setCommittedTopologyParts] = useState<
+    ReadonlySet<Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>>
+  >(() => new Set());
+  const onTopologyGeometryReady = useCallback((
+    part: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>, ready: boolean,
+  ) => {
+    setCommittedTopologyParts((previous) => {
+      if (previous.has(part) === ready) return previous;
+      const next = new Set(previous);
+      if (ready) next.add(part);
+      else next.delete(part);
+      return next;
+    });
+  }, []);
+  const topologyLayerEnabled = !savedViewportActive && !fdmLaneActive &&
+    viewport3DTopologyMeshLayerEnabledFromBrowserConfig();
+  const realizedObjectIds = useMemo(() => {
+    const ids = new Set(resolveViewport3DRealizedTopologyObjectIds({
+      enabled: topologyLayerEnabled && stageVisibility.baseGeometry,
+      committedParts: committedTopologyParts,
+      primitiveModel,
+      topologyModel,
+      topologyFreshness,
+    }));
+    if (fdmCuboidLayerEnabled && stageVisibility.baseGeometry) {
+      for (const id of resolveViewport3DRealizedFdmObjectIds({
+        fdmNativeLayerViews, fdmTargetViews,
+      })) ids.add(id);
+    }
+    return ids;
+  }, [committedTopologyParts, topologyLayerEnabled, stageVisibility.baseGeometry, primitiveModel, topologyModel,
+    topologyFreshness, fdmCuboidLayerEnabled, fdmNativeLayerViews, fdmTargetViews]);
 
   if (!sceneLayersEnabled) return null;
 
@@ -1508,7 +1564,7 @@ function Viewport3DModelLayerStack({
           materialProfile={materialProfile}
           onSelectObject={onSelectObject}
           primitiveModel={primitiveModel}
-          realizedObjectIds={realizedFdmObjectIds}
+          realizedObjectIds={realizedObjectIds}
           tracker={tracker}
         />
       ) : null}
@@ -1521,11 +1577,11 @@ function Viewport3DModelLayerStack({
         primitiveModel={primitiveModel}
         selectedObjectId={selectedObjectId}
       />
-      {!savedViewportActive &&
-      !fdmLaneActive &&
-      viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
+      {topologyLayerEnabled ? (
         <group visible={stageVisibility.baseGeometry}>
           <TopologyMeshLayer
+            onGeometryReady={onTopologyGeometryReady}
+            replacementObjectIds={realizedObjectIds}
             adoptionRegistry={adoptionRegistry}
             colors={colors}
             primitiveModel={primitiveModel}

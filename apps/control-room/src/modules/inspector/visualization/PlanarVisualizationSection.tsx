@@ -15,7 +15,8 @@ import {
 } from "@/kernel/resources/planarFieldResources";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
-import { useFieldCatalogResource } from "@/kernel/resources/studyRuntimeResources";
+import { isFlowMajorTensorDescriptor, tensorProjectionOptions, tensorProjectionOutputKind } from "@/kernel/api/tensorFieldProjection";
+import { useFieldCatalogResource, useQuantityCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
@@ -120,6 +121,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   const monitors = usePlanarMonitorsResource({ enabled: coverage.supported });
   const domain = useDomainMetaResource({ enabled: coverage.supported });
   const fieldCatalog = useFieldCatalogResource({ enabled: coverage.supported });
+  const quantityCatalog = useQuantityCatalogResource({ enabled: coverage.supported });
   const discretization = useSessionStatusSelector(
     (status) => resolveSessionDiscretization(status.data),
     { enabled: coverage.supported },
@@ -174,7 +176,10 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   );
   const patch = (next: PlanarPatch) => visualizationSync.queuePatch({ planar: next });
   const selectedDescriptor = fieldCatalog.data?.quantities.find((quantity) => quantity.quantity_id === quantityId);
-  const componentItems = (selectedDescriptor?.components ?? 3) > 1 ? PLANAR_COMPONENTS : ["magnitude"];
+  const tensor = quantityCatalog.data?.quantities.find((entry) => entry.id === quantityId)?.tensor;
+  const tensorOptions = tensorProjectionOptions(tensor);
+  const componentItems = tensorOptions.length > 0 ? tensorOptions
+    : ((selectedDescriptor?.components ?? 3) > 1 ? PLANAR_COMPONENTS : ["magnitude"]).map((value) => ({ value, label: value.replaceAll("_", " ") }));
   const canonicalUnit = meta.data?.canonical_unit ?? selectedDescriptor?.unit ?? "";
   const displayUnitItems = scalarColorbarDisplayUnitItems(canonicalUnit);
   const availableQuantities = (fieldCatalog.data?.quantities ?? []).filter(
@@ -236,7 +241,9 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     discretization,
     metaAvailable: meta.status === "ready" && meta.data !== null,
     occupancyAvailable: mask.status === "ready" && mask.data !== null,
-    quantity: selectedDescriptor,
+    quantity: selectedDescriptor && isFlowMajorTensorDescriptor(tensor)
+      ? { ...selectedDescriptor, components: tensorProjectionOutputKind(planar.component) === "vector" ? 3 : 1 }
+      : selectedDescriptor,
     scopeKind: planar.view_scope.kind,
   });
   const scalarReason = capabilityReason(capabilities.raster);
@@ -306,7 +313,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         clipping={<p className="m-0 text-fm-help leading-snug text-fm-muted">The active plane and slice position are controlled in Source &amp; Slice.</p>}
         context={sourceAndSlice}
         dataState={meta.status === "ready" ? "Live" : meta.status}
-        display={<><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} /><FormField label="Quantity" type="select" value={quantityId} onChange={(event) => patch({ component: "magnitude", quantity_id: event.currentTarget.value })}>{availableQuantities.map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField label="Component" type="select" value={planar.component} onChange={(event) => patch({ component: event.currentTarget.value as PlanarState["component"] })}>{componentItems.map((component) => <option key={component} value={component}>{component.replaceAll("_", " ")}</option>)}</FormField></>}
+        display={<><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} /><FormField label="Quantity" type="select" value={quantityId} onChange={(event) => { const next = event.currentTarget.value; const descriptor = quantityCatalog.data?.quantities.find((entry) => entry.id === next)?.tensor; patch({ component: isFlowMajorTensorDescriptor(descriptor) ? "frobenius" : "magnitude", quantity_id: next, ...(isFlowMajorTensorDescriptor(descriptor) ? { layers: { ...planar.layers, vectors: false } } : {}) }); }}>{availableQuantities.map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField label="Component" type="select" value={planar.component} onChange={(event) => { const component = event.currentTarget.value as PlanarState["component"]; patch({ component, ...(isFlowMajorTensorDescriptor(tensor) && tensorProjectionOutputKind(component) !== "vector" ? { layers: { ...planar.layers, vectors: false } } : {}) }); }}>{componentItems.map((component) => <option key={component.value} value={component.value}>{component.label}</option>)}</FormField></>}
         enabledPassCount={enabledPassCount}
         meshState={capabilities.mesh.enabled ? "Ready" : "Degraded"}
         quantitySource={quantityId || "Not available"}

@@ -768,8 +768,8 @@ function restoreCheckpointDisabledReason(context: CommandContext): string | null
 
   const checkpoint = resolveCheckpointForRestore(context);
   if (!checkpoint) return "No checkpoint is selected.";
-  if (checkpoint.resume_class === "config_only") {
-    return "Selected checkpoint does not contain magnetization state.";
+  if (checkpoint.resume_class !== "exact_resume") {
+    return `Selected checkpoint cannot be resumed exactly (${checkpoint.resume_class}).`;
   }
   return null;
 }

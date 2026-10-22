@@ -22,7 +22,9 @@ pub(crate) fn build_quantities(
         .and_then(|value| value.get("backend_plan"))
         .and_then(|value| value.get("kind"))
         .and_then(Value::as_str)
-        == Some("antenna_external_lead_inspection")
+        .is_some_and(|kind| matches!(
+            kind, "antenna_external_lead_inspection" | "antenna_field_only"
+        ))
     {
         // V/J/H belong to the owner-bound inspection publisher, not to the
         // magnetic quantity catalog or its interactive preview controls.

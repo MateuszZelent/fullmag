@@ -20,6 +20,7 @@ from verify_boris_nf_interface import (
 PINNED_COMMIT = "048503d2ca6475e91b073eb1762ecf9d3634c3e1"
 PINNED_FILES = {
     "Boris/Transport_Spin_Display.cpp": "fefbc95a5c8f0b95611302dd2a992b3aae8e903c10a9631b53b332b2c905d791",
+    "BorisLib/Funcs_Math.h": "9bdece3851ed09a91af11929a5decce22434f198ae3b1a55ff5439c7931c9310",
     "BorisLib/Funcs_Math_base.h": "54dac9acaaa68fac247f1f9a1142b17a4942054801b6e40a359fac309f6af96b",
     "BorisLib/Types_VAL.h": "1602c65945d070272f47b0aacfddb754523b12deb64bf6c71fb9097859cd5bfe",
 }

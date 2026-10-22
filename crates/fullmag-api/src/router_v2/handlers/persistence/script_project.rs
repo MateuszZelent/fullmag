@@ -350,6 +350,11 @@ fn build_project_from_script(
         ));
     }
 
+    // Return the canonical scene without a parallel browser ZIP parser.
+    let activation_scene = scene_value.as_object()
+        .ok_or_else(|| ApiError::internal("exported scene is not an object"))?
+        .iter().map(|(key, value)| (key.clone(), value.clone())).collect();
+
     // 3. Build the project: scene, embedded script, metadata, provenance.
     let sha256 = format!("{:x}", Sha256::digest(&script_bytes));
     let sha12 = &sha256[..12];
@@ -422,6 +427,7 @@ fn build_project_from_script(
     }
     let project = resource_from_application(&application, view, archive)?;
     Ok(ProjectFromScriptResource {
+        scene_document: Some(activation_scene),
         project,
         script_import: ProjectScriptImportResource {
             name: script_leaf.to_string(),

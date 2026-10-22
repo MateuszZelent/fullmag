@@ -1,3 +1,4 @@
+import { tensorProjectionOutputKind } from "@/kernel/api/tensorFieldProjection";
 import type {
   PlanarFieldProbeQuery,
   PlanarFieldQuery,
@@ -89,7 +90,7 @@ export function buildFieldMapDataPlan(
     requestMask: enabled,
     requestMesh: enabled && input.includeMesh,
     requestScalar: enabled,
-    requestVectors: enabled && input.showVectors,
+    requestVectors: enabled && tensorProjectionOutputKind(input.component) !== "scalar" && input.showVectors,
     unavailableReason,
   };
 }

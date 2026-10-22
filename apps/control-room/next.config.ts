@@ -329,7 +329,13 @@ function securityHeaders() {
   ];
 }
 
+// Bounded transport wait for the existing synchronous closed-loop Mesh command:
+// render 30s + source capture 90s + accepted frontier 1800s + one 250ms poll.
+// These are owner phase budgets, not a hard maximum for locks/CPU/filesystem work.
+export const CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS = (30 + 90 + 1800) * 1000 + 250;
+
 const nextConfig: NextConfig = {
+  experimental: { proxyTimeout: CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS },
   allowedDevOrigins,
   distDir,
   // R3F v9 force-loses WebGL during React development strict remounts.

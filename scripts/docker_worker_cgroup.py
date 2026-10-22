@@ -147,6 +147,8 @@ def ensure_delegation(control, operation, document, backend_id, image, selected)
             or helper.get("HostConfig", {}).get("CgroupnsMode") != "host"
             or helper.get("HostConfig", {}).get("PidMode") != "host"
             or helper.get("State", {}).get("ExitCode") != 0
+            or helper.get("HostConfig", {}).get("CgroupnsMode") != "host"
+            or helper.get("HostConfig", {}).get("PidMode") != "host"
             or helper.get("Config", {}).get("Labels", {}).get("com.docker.compose.project") != control.project
             or helper.get("Config", {}).get("Labels", {}).get("com.docker.compose.service") != "worker-cgroup-maintenance"):
         raise BuildControlError("Worker cgroup helper identity/outcome differs")

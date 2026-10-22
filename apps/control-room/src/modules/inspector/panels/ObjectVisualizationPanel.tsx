@@ -1,5 +1,5 @@
 "use client";
-import { isScalarSpatialQuantityId } from "@/kernel/api/quantityIds";
+import { isScalarSpatialQuantityId, resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 
 import { artifactFieldCatalogMatchesOwner, type ArtifactFieldSelection, artifactCarrierPresentationKey, artifactInspectionQuantity, artifactInspectorFieldBinding } from "@/kernel/visualization/artifactFieldSelection";
 import { useVisualizationFieldMeta } from "@/kernel/resources/useVisualizationFieldMeta";
@@ -33,6 +33,7 @@ import {
   mergeVisualizationStateTargetOverride,
   persistentVisualizationTargetPatch,
   resetAirboxVisualizationState,
+  resolveObjectVisualizationQuantityCatalog,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
   visualizationTargetCapabilities,
@@ -74,7 +75,9 @@ import {
   useFdmMultilayerLayerActiveMasksResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
+  canonicalVisualizationSceneObjectId,
   isVisualizationAirboxIdentity,
+  visualizationObjectIdForMeshPartLike,
   visualizationTargetIdForSceneObject,
 } from "@/kernel/selection/selectionTypes";
 import { visualizationSceneObjectIds } from "@/kernel/selection/visualizationTargetResolver";
@@ -316,7 +319,7 @@ function useObjectVisualizationPanelState(
   const [patchChildRegions, setPatchChildRegions] = useState(false);
   const [fieldCatalogRequestedTargetKey, setFieldCatalogRequestedTargetKey] =
     useState<string | null>(null);
-  const ownScene = useSceneResource({ enabled: femResourcesEnabled && !sceneOverride });
+  const ownScene = useSceneResource({ enabled: Boolean(target) && !sceneOverride });
   const scene = sceneOverride ?? ownScene;
   const fdmDomain = useDomainMetaResource({ enabled: fdmResourcesEnabled });
   const fdmMembership = useFdmRegionMembershipResource({
@@ -448,9 +451,44 @@ function useObjectVisualizationPanelState(
   const snapshot = useObjectVisualizationSelector(selectPanelSnapshot, {
     isEqual: objectVisualizationPanelSnapshotEquals,
   });
+  const contextObjectId = resolvedTarget?.kind === "object"
+    ? resolvedTarget.id.slice("object:".length)
+    : resolvedTarget?.kind === "region"
+      ? parseRegionVisualizationTargetId(resolvedTarget.id)?.objectId ?? null
+      : selection.ref?.type === "scene-object"
+        ? selection.ref.objectId
+        : selection.objectId ?? (selectedMeshPart ? visualizationObjectIdForMeshPartLike(selectedMeshPart) : null);
+  const contextObject = scene.data?.objects?.find((object) => contextObjectId != null &&
+    canonicalVisualizationSceneObjectId(object.id) === canonicalVisualizationSceneObjectId(contextObjectId)) ?? null;
+  const hasObjectContext = Boolean(resolvedTarget && (
+    resolvedTarget.kind === "object" || resolvedTarget.kind === "region" ||
+      resolvedTarget.kind === "part" && Boolean(contextObjectId)
+  ));
+  const rawQuantityCatalog = useQuantityCatalogResource({
+    stageId: artifactInspection ? artifactInspectionOwner?.runtimeStageId ?? "" : undefined,
+    runId: artifactInspectionOwner?.runId,
+    enabled: artifactInspection ? Boolean(artifactInspectionOwner) : Boolean(resolvedTarget),
+  });
+  const quantityCatalog = useMemo(() => {
+    const data = hasObjectContext
+      ? resolveObjectVisualizationQuantityCatalog(rawQuantityCatalog.data, contextObject)
+      : rawQuantityCatalog.data;
+    return {
+      ...rawQuantityCatalog,
+      data: artifactInspection && data
+        ? { ...data, quantities: data.quantities.filter((entry) => artifactInspectionQuantity(data, entry.id)) }
+        : data,
+    };
+  }, [artifactInspection, contextObject, hasObjectContext, rawQuantityCatalog]);
+  const objectContext = hasObjectContext ? {
+    object: contextObject,
+    // Resource keys already isolate session/run/stage; keep the last-good selection during refresh.
+    quantityCatalog: quantityCatalog.data,
+  } : undefined;
   const inheritedSettings =
     resolvedTarget?.kind === "region" && selection.objectId
       ? resolveTargetVisualization({
+          objectContext,
           snapshot,
           target: {
             id: visualizationTargetIdForSceneObject(selection.objectId),
@@ -463,6 +501,7 @@ function useObjectVisualizationPanelState(
   const targetVisualization = resolvedTarget
     ? resolveTargetVisualization({
         inheritedSettings,
+        objectContext,
         snapshot,
         target: resolvedTarget,
         visualizationState: displayVisualizationState,
@@ -486,6 +525,7 @@ function useObjectVisualizationPanelState(
     ),
     targets: appliedBaselineTargets.map((baselineTarget) => {
       const baselineSettings = resolveTargetVisualization({
+          objectContext,
           snapshot: canonicalPanelSnapshot,
           target: baselineTarget,
           visualizationState: baselineVisualizationState,
@@ -567,30 +607,23 @@ function useObjectVisualizationPanelState(
         vectorsVisible: Boolean(settings?.vectorsVisible),
       }),
   });
-  const rawQuantityCatalog = useQuantityCatalogResource({
-    stageId: artifactInspection ? artifactInspectionOwner?.runtimeStageId ?? "" : undefined,
-    runId: artifactInspectionOwner?.runId,
-    enabled: artifactInspection ? Boolean(artifactInspectionOwner) :
-      fdmTarget ||
-      target?.kind === "airbox" ||
-      shouldLoadObjectVisualizationFieldCatalog({
-        requested: fieldCatalogRequested,
-        surfaceColorSource: settings?.surfaceColorSource,
-        targetActive: Boolean(resolvedTarget),
-        vectorsVisible: Boolean(settings?.vectorsVisible),
-      }),
-  });
+
   const catalogOwnerReady = !artifactInspection || artifactFieldCatalogMatchesOwner(rawFieldCatalog.data, artifactInspectionOwner);
   const catalogOwnerError = artifactInspection && Boolean(artifactInspectionOwner) && rawFieldCatalog.status === "ready" && !catalogOwnerReady;
-  const quantityCatalog = useMemo(() => !artifactInspection || !rawQuantityCatalog.data ? rawQuantityCatalog : ({
-    ...rawQuantityCatalog, data: { ...rawQuantityCatalog.data, quantities: rawQuantityCatalog.data.quantities.filter(entry => artifactInspectionQuantity(rawQuantityCatalog.data, entry.id)) },
-  }), [artifactInspection, rawQuantityCatalog]);
-  const fieldCatalog = useMemo(() => !artifactInspection || !rawFieldCatalog.data ? rawFieldCatalog : ({
-    ...rawFieldCatalog, data: { ...rawFieldCatalog.data, quantities: rawFieldCatalog.data.quantities.filter(entry => catalogOwnerReady && artifactInspectionQuantity(rawQuantityCatalog.data, entry.quantity_id)) },
-  }), [artifactInspection, catalogOwnerReady, rawFieldCatalog, rawQuantityCatalog.data]);
+  const fieldCatalog = useMemo(() => !rawFieldCatalog.data ? rawFieldCatalog : ({
+    ...rawFieldCatalog,
+    data: {
+      ...rawFieldCatalog.data,
+      quantities: rawFieldCatalog.data.quantities.filter((entry) =>
+        (!hasObjectContext || Boolean(quantityCatalog.data?.quantities.some((quantity) =>
+          resolveCanonicalQuantityId(quantity.id) === resolveCanonicalQuantityId(entry.quantity_id),
+        ))) && (!artifactInspection || catalogOwnerReady && artifactInspectionQuantity(quantityCatalog.data, entry.quantity_id)),
+      ),
+    },
+  }), [artifactInspection, catalogOwnerReady, hasObjectContext, quantityCatalog.data, rawFieldCatalog]);
   const requiresFieldData = Boolean(
     resolvedTarget &&
-      settings &&
+      settings?.activeQuantityId &&
       visualizationTargetCapabilities(resolvedTarget).supportsFieldData &&
       (settings.vectorsVisible ||
         (settings.shaderVisible && settings.surfaceColorSource !== "solid")),
@@ -1170,6 +1203,7 @@ function useObjectVisualizationPanelState(
     carrierIdentity: vectorCapacity?.carrierId ?? targetFieldCarrier?.carrierId ?? null,
     setPatchChildRegions,
     primitiveDisplayToggleVisible,
+    presentationRole: scene.data?.objects?.find((object) => object.id === selection.objectId)?.role,
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorCapacity,
@@ -1532,6 +1566,7 @@ function ObjectVisualizationPanelView({
               settings={settings}
               target={target}
               primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
+              presentationRole={panel.presentationRole}
                 />
                 <VisualizationRenderModeSection
               displaySettings={displaySettings}
@@ -1572,7 +1607,7 @@ function ObjectVisualizationPanelView({
                 ? "Not available"
                 : analysisFieldShown && shownAnalysisField
                   ? `Mode · ${shownAnalysisField.label}`
-                  : settings.activeQuantityId || "H_eff"
+                  : settings.activeQuantityId || "No quantity selected"
             }
             surfaceColoring={!capabilities.supportsFieldData || target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target) ? null : (
               <VisualizationSurfaceColoringSection

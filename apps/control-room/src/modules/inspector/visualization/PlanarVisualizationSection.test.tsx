@@ -166,6 +166,11 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
 }));
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
+  useQuantityCatalogResource: () => ({
+    data: { schema_version: "1.0", quantities: [] },
+    error: null,
+    status: "ready",
+  }),
   useFieldCatalogResource: () => ({
     data: {
       quantities: [

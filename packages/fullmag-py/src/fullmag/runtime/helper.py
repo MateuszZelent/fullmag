@@ -262,6 +262,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Execution-only: realize canonical geometry and antenna lead inputs without running a solver. Default export stays geometry-light.",
     )
 
+    export_scene_config.add_argument(
+        "--accepted-preparation-json",
+        help=argparse.SUPPRESS,
+    )
+
     read_state = subparsers.add_parser(
         "read-magnetization-state",
         help="Load a magnetization state file and print canonical JSON values.",
@@ -306,6 +311,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         emit_progress("Lowering SceneDocument through the canonical Python DSL")
         scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
         if args.command == "export-scene-config":
+            accepted_preparation = None
+            if args.accepted_preparation_json:
+                with Path(args.accepted_preparation_json).open("rb") as handoff:
+                    payload = handoff.read(8 * 1024 * 1024 + 1)
+                if len(payload) > 8 * 1024 * 1024:
+                    raise ValueError("bound preparation handoff exceeds 8 MiB")
+                accepted_preparation = json.loads(payload)
             execution_config = scene_document_to_execution_config(
                 scene_document,
                 requested_backend=args.backend,
@@ -314,6 +326,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 requested_mode=args.mode,
                 source_root=args.asset_root,
                 materialize_geometry_assets=args.materialize_geometry_assets,
+                _accepted_preparation=accepted_preparation,
             )
             _write_json(execution_config)
             emit_progress("SceneDocument execution config export completed")

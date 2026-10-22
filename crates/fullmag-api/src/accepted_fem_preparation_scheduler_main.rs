@@ -328,8 +328,17 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         // `active` continue draining even after an offer is withdrawn.
         // Serialize membership and lease adoption with pool/lease publication.
         // Supervisors start in separate threads; never wait for them here.
-        let recovery_transaction = retry_store_writer_busy(|| store.write_transaction())
-            .context("preparation scheduler: acquire recovery transaction")?;
+        let Some(recovery_transaction) = classify_recovery_transaction(
+            retry_store_writer_busy(|| store.write_transaction()),
+        )? else {
+            // The recovery fence was not acquired: do not observe/adopt leases
+            // or publish readiness. Retain owned supervisors for the next reap.
+            if shutdown_requested.load(Ordering::Acquire) && active.is_empty() {
+                break;
+            }
+            std::thread::sleep(args.idle_poll_interval);
+            continue;
+        };
         let current_pool =
             retry_store_writer_busy(|| store.read_preparation_resource_pool(&args.pool_id))?;
         if let Some(pool) = &current_pool {
@@ -879,6 +888,22 @@ fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Resul
     fullmag_runtime_control::retry_store_writer_busy(&mut operation)
 }
 
+/// Classify only the final result of acquiring the recovery fence. The
+/// transaction body has not run, so deferral cannot replay a durable effect.
+fn classify_recovery_transaction<T>(result: Result<T>) -> Result<Option<T>> {
+    match result.context("preparation scheduler: acquire recovery transaction") {
+        Ok(transaction) => Ok(Some(transaction)),
+        Err(error) if is_store_writer_busy(&error) => {
+            tracing::warn!(
+                error = ?error,
+                "preparation scheduler deferred recovery while the session store writer is busy"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn retry_host_admission_writer_busy<T>(
     operation: impl FnMut() -> Result<T>,
     context: impl FnOnce() -> String,
@@ -1101,10 +1126,117 @@ fn parse_usize(flag: &str, value: std::ffi::OsString) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        preparation_admission_snapshot_ready, retry_host_admission_writer_busy,
-        HostAdmissionOperation,
+        classify_recovery_transaction, preparation_admission_snapshot_ready,
+        retry_host_admission_writer_busy, retry_store_writer_busy,
+        ActivePreparation, ActivePreparations, CompletedPreparation, HostAdmissionOperation,
     };
     use anyhow::Context;
+
+    #[test]
+    fn recovery_fence_defers_exhausted_typed_busy_and_preserves_real_errors() {
+        let mut acquisitions = 0;
+        let deferred = classify_recovery_transaction::<u8>({
+            acquisitions += 1;
+            Err(anyhow::Error::new(fullmag_session::StoreWriterBusy).context("exhausted retry"))
+        }).unwrap();
+        assert!(deferred.is_none());
+        assert_eq!(acquisitions, 1, "classification must not replay the recovery pass");
+        assert_eq!(classify_recovery_transaction(Ok(7_u8)).unwrap(), Some(7));
+        for message in ["recovery identity mismatch", "session store writer is busy"] {
+            let error = classify_recovery_transaction::<u8>(
+                Err(anyhow::anyhow!(message.to_owned())),
+            ).unwrap_err();
+            assert_eq!(error.to_string(), "preparation scheduler: acquire recovery transaction");
+            assert!(format!("{error:#}").contains(message));
+        }
+    }
+
+    #[test]
+    fn real_recovery_writer_retry_can_exhaust_then_acquire_after_release() {
+        use fullmag_session::SessionStore;
+        use std::sync::{mpsc, Arc};
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::open(directory.path().join("store")).unwrap());
+        let holder_store = Arc::clone(&store);
+        let (held, observed_held) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let transaction = holder_store.write_transaction().unwrap();
+            held.send(()).unwrap();
+            released.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+            drop(transaction);
+        });
+        observed_held.recv().unwrap();
+        let mut attempts = 0;
+        let exhausted = retry_store_writer_busy(|| {
+            attempts += 1;
+            store.write_transaction()
+        });
+        let deferred = classify_recovery_transaction(exhausted).unwrap();
+        assert!(deferred.is_none());
+        assert!(attempts > 1, "exercise the existing bounded retry, not a fabricated string");
+        // A refused fence has not adopted a lease, published a pool or admitted work.
+        assert!(store.read_preparation_resource_pool("pool-busy").unwrap().is_none());
+        assert!(store.list_active_preparation_resource_leases().unwrap().is_empty());
+        assert!(store.list_run_intents().unwrap().is_empty());
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        let acquired = classify_recovery_transaction(
+            retry_store_writer_busy(|| store.write_transaction()),
+        ).unwrap();
+        assert!(acquired.is_some());
+        drop(acquired);
+    }
+
+    #[test]
+    fn deferred_recovery_retains_and_joins_an_owned_supervisor() {
+        use fullmag_session::{
+            FmsPreparationResourceLease, FmsResourceBudget, FmsResourceLeaseState,
+            FMS_PREPARATION_RESOURCE_LEASE_SCHEMA,
+        };
+        use std::sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc};
+        let now = chrono::Utc::now();
+        let lease = FmsPreparationResourceLease {
+            schema_version: FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "owned-resource".into(),
+            budget: FmsResourceBudget {
+                cpu_millis: 1_000, memory_bytes: 1, gpu_memory_bytes: 0, storage_bytes: 1,
+            },
+            run_id: "owned-run".into(), task_id: "owned-task".into(),
+            preparation_attempt_id: "owned-attempt".into(), lease_token: "owned-token".into(),
+            state: FmsResourceLeaseState::Active, acquired_at: now, heartbeat_at: now,
+            heartbeat_sequence: 0, released_at: None, host_launch_binding: None,
+        };
+        let expected_lease = lease.clone();
+        let (release, released) = mpsc::channel();
+        let joined = Arc::new(AtomicBool::new(false));
+        let finished = Arc::clone(&joined);
+        let handle = std::thread::spawn(move || {
+            released.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+            finished.store(true, Ordering::Release);
+            Err::<CompletedPreparation, _>(anyhow::anyhow!("test supervisor terminal"))
+        });
+        let thread_id = handle.thread().id();
+        let mut active = ActivePreparations::default();
+        let checkpoint_run_ids = Some(vec![lease.run_id.clone()]);
+        let next_run_id = Some("next-run".to_owned());
+        active.insert(lease.resource_id.clone(), ActivePreparation {
+            lease, handle, checkpoint_run_ids: checkpoint_run_ids.clone(),
+            next_run_id: next_run_id.clone(),
+        });
+        assert!(classify_recovery_transaction::<u8>(
+            Err(anyhow::Error::new(fullmag_session::StoreWriterBusy)),
+        ).unwrap().is_none());
+        let retained = active.get("owned-resource").unwrap();
+        assert_eq!(retained.lease, expected_lease);
+        assert_eq!(retained.handle.thread().id(), thread_id);
+        assert_eq!(retained.checkpoint_run_ids, checkpoint_run_ids);
+        assert_eq!(retained.next_run_id, next_run_id);
+        assert!(!joined.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        drop(active);
+        assert!(joined.load(Ordering::Acquire), "owned supervisor must be joined on drain/drop");
+    }
 
     #[test]
     fn pre_admission_snapshot_deferral_classifies_only_typed_busy() {

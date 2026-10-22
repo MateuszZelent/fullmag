@@ -73,6 +73,10 @@ SCRIPT_REJECTION_CODES = frozenset({
     "accepted_execution_stage_missing", "accepted_gpu_scope_unsupported",
     "accepted_execution_plan_invalid", "accepted_backend_unsupported",
     "accepted_study_step_unsupported", "accepted_study_step_ambiguous",
+    "accepted_script_capture_invalid", "accepted_script_capture_required",
+    "accepted_script_compilation_failed",
+    # Output mapping validation is pure and precedes durable run admission.
+    "docker_startup_output_mapping_required", "docker_startup_output_mapping_invalid",
 })
 
 

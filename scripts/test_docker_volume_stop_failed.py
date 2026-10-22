@@ -383,5 +383,173 @@ class NativeFailedStopTests(unittest.TestCase):
             self._extract_native_processes_live(os_mock)()
 
 
+
+class RuntimeSupervisionProbeTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile, types, os, json, copy, hashlib
+        from unittest.mock import patch
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.state=self.root/'state';self.store=self.state/'runs/docker-all/session-store'
+        self.native=self.root/'runtime-services';self.ledger=self.root/'ledger';self.receipt=self.root/'process-tree.json'
+        for p in (self.native,self.ledger,self.store/'runs',self.store/'temp',self.store/'recovery'):p.mkdir(parents=True,exist_ok=True)
+        for p in (self.native/'OWNER.lock',self.ledger/'WRITER.lock',self.store/'WRITER.lock'):p.touch()
+        self.pin=owner();self.pin.update(state='ready',owner_token='11111111-1111-4111-8111-111111111111',process_start_token='22222222-2222-4222-8222-222222222222')
+        for row in self.pin['children']:row['status']='running'
+        self.failed=copy.deepcopy(self.pin);self.failed.update(state='failed',heartbeat_at='2026-10-19T10:00:02Z')
+        for row in self.failed['children']:row['status']='exited_failure' if row['role']=='preparation' else 'exited_success'
+        self.process={'schema':'fullmag.docker-process-tree.v1','state':'failed_outcome_retained','error':stop.SUPERVISION_FAILURE_ERROR,'api_pid':3227,'api_exit_code':-15,'accepted_store':str(self.store),'service_owner':self.pin}
+        self.host={'schema':'fullmag.windows-folder-host.v1','storage_profile':'windows-folder-v1','restart_verified':True,'owner_token':'33333333-3333-4333-8333-333333333333','host_volume_serial':42,'host_root':r'D:\git\storage\runtime','engine_id':'fixture-engine'}
+        self.cert=self.root/'certificate.json';self.config=self.root/'config.json';self.write(self.cert,self.host);self.write(self.config,{'fixture':True})
+        self.write(self.state/'.fullmag-windows-folder-owner.json',self.host)
+        self.write(self.state/'.fullmag-windows-folder-grant.json',{'schema':'fullmag.windows-folder-session.v1','state':'operational','container_root':'/state','host_attestation_sha256':hashlib.sha256(self.cert.read_bytes()).hexdigest(),'owner_token':self.host['owner_token']})
+        self.rows=[];self.live=set()
+        runtime_path=Path(__file__).resolve().parents[1]/'docker/all-in-one/runtime_service.py'
+        spec=importlib.util.spec_from_file_location('runtime_service',runtime_path);runtime=importlib.util.module_from_spec(spec);sys.modules['runtime_service']=runtime;spec.loader.exec_module(runtime)
+        paths=types.SimpleNamespace(state=self.state,store=self.store,host_certificate=self.cert,config=self.config)
+        for name,value in [('canonical_paths',lambda:paths),('process_receipt_path',lambda p:self.receipt),('runtime_services_root',lambda p:self.native)]:
+            p=patch.object(runtime,name,value);p.start();self.addCleanup(p.stop)
+        self.environment={'FULLMAG_RUNS_ROOT':str(self.store.parent),'FULLMAG_STARTUP_ENABLED':'0'}
+    def write(self,path,value):
+        import json
+        path.write_text(json.dumps(value,sort_keys=True))
+    def execute(self):
+        import json, os, contextlib, io
+        from unittest.mock import patch
+        self.write(self.receipt,self.process);self.write(self.native/'OWNER.json',self.failed);self.write(self.ledger/'HOST_RESOURCE_LEDGER.json',{'reservations':self.rows})
+        script=stop._runtime_supervision_probe_script().replace(stop.CANONICAL_PROCESS_RECEIPT,str(self.receipt)).replace(stop.CANONICAL_HOST_LEDGER_ROOT,str(self.ledger))
+        original=os.path.exists
+        def exists(path):return int(str(path)[6:]) in self.live if str(path).startswith('/proc/') else original(path)
+        output=io.StringIO()
+        with patch.dict(os.environ,self.environment,clear=True),patch.object(os.path,'exists',side_effect=exists),contextlib.redirect_stdout(output):exec(compile(script,'<supervision-probe>','exec'),{})
+        result=json.loads(output.getvalue());self.assertNotIn(self.host['owner_token'],output.getvalue());self.assertNotIn(self.pin['owner_token'],output.getvalue())
+        return result
+    def test_exact_failed_owner_and_empty_store_produce_only_redacted_proof(self):
+        import hashlib
+        result=self.execute();stop._validate_supervision_probe(result,hashlib.sha256(self.receipt.read_bytes()).hexdigest())
+        self.assertTrue(result['processes_absent']);self.assertEqual(result['terminal_children'][1]['status'],'exited_failure')
+    def test_foreign_reservation_is_preserved_and_allowed(self):
+        self.rows=[{'identity':{'store_id':'sha256:'+'f'*64},'state':'active'}];before=list(self.rows);self.execute();self.assertEqual(self.rows,before)
+    def test_own_windows_store_reservation_refuses(self):
+        # Derive the independent Rust v2 normalization, including single backslashes.
+        import hashlib,json
+        identity={'schema':'fullmag.docker-admitted-store-identity.v2','host_root':self.host['host_root'].replace(chr(92),'/').lower(),'host_volume_serial':42,'engine_id':'fixture-engine','owner_token':self.host['owner_token'],'relative_state_path':'runs/docker-all/session-store'}
+        self.rows=[{'identity':{'store_id':'sha256:'+hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()},'state':'active'}]
+        with self.assertRaisesRegex(RuntimeError,'host reservation'):self.execute()
+    def test_unknown_reservation_owner_refuses(self):
+        self.rows=[{'state':'active'}]
+        with self.assertRaisesRegex(RuntimeError,'ownership is unknown'):self.execute()
+    def test_live_pid_refuses(self):
+        for pid in (3227,3241,3250,3251):
+            with self.subTest(pid=pid):
+                self.live={pid}
+                with self.assertRaisesRegex(RuntimeError,'live or ambiguous'):self.execute()
+    def test_identity_change_refuses(self):
+        self.failed['process_start_token']='44444444-4444-4444-8444-444444444444'
+        with self.assertRaisesRegex(RuntimeError,'identity differs'):self.execute()
+    def test_child_pid_change_refuses(self):
+        self.failed['children'][0]['pid']=9999
+        with self.assertRaisesRegex(RuntimeError,'children differ'):self.execute()
+    def test_nonterminal_child_refuses(self):
+        self.failed['children'][0]['status']='running'
+        with self.assertRaisesRegex(RuntimeError,'failed-child'):self.execute()
+    def test_all_success_is_not_the_supported_failure(self):
+        self.failed['children'][1]['status']='exited_success'
+        with self.assertRaisesRegex(RuntimeError,'failed-child'):self.execute()
+    def test_accepted_or_pending_store_entries_refuse(self):
+        for name in ('runs','temp','recovery'):
+            p=self.store/name/'unexpected';p.touch()
+            with self.subTest(name=name),self.assertRaisesRegex(RuntimeError,'pending transactions'):self.execute()
+            p.unlink()
+    def test_store_symlink_refuses(self):
+        path=self.store/'runs';path.rmdir();path.symlink_to(self.root,target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError,'unsafe accepted'):self.execute()
+    def test_wrong_error_or_unbound_pin_refuses(self):
+        self.process['error']='some other failure'
+        with self.assertRaisesRegex(RuntimeError,'supported retained'):self.execute()
+    def test_bad_windows_grant_refuses(self):
+        self.write(self.state/'.fullmag-windows-folder-grant.json',{'state':'operational'})
+        with self.assertRaisesRegex(RuntimeError,'Windows owner'):self.execute()
+    def test_probe_flags_and_pid_types_fail_closed(self):
+        result=self.execute()
+        for key,value in [('processes_absent',False),('runs_empty',1),('runtime_pid',True),('failed_owner_sha256','z'*64)]:
+            with self.subTest(key=key),self.assertRaises(stop.BuildControlError):stop._validate_supervision_probe(dict(result,**{key:value}),result['process_receipt_sha256'])
+
+
+
+    def test_unknown_child_or_proof_fields_refuse_without_logging(self):
+        self.failed['children'][0]['secret_extension']='fixture-secret'
+        with self.assertRaisesRegex(RuntimeError,'failed-child'):self.execute()
+        self.failed['children'][0].pop('secret_extension');result=self.execute()
+        with self.assertRaisesRegex(stop.BuildControlError,'unexpected fields'):stop._validate_supervision_probe(dict(result,secret_extension='fixture-secret'),result['process_receipt_sha256'])
+        result['terminal_children'][0]['secret_extension']='fixture-secret'
+        with self.assertRaises(stop.BuildControlError):stop._validate_supervision_probe(result,result['process_receipt_sha256'])
+
+
+    def test_actual_native_nanosecond_heartbeat_values(self):
+        self.pin['heartbeat_at']='2026-10-20T04:44:35.242816163Z';self.failed['heartbeat_at']='2026-10-20T04:44:35.835081284Z';self.execute()
+    def test_submicrosecond_order_and_exact_ties(self):
+        for ready,failed in [('2026-10-20T04:44:35.835081283Z','2026-10-20T04:44:35.835081284Z'),('2026-10-20T04:44:35.835081284Z','2026-10-20T04:44:35.835081284Z'),('2026-10-20T04:44:35.1Z','2026-10-20T04:44:35.100000000Z'),('2026-10-20T04:44:35Z','2026-10-20T04:44:35.000000000Z'),('2026-10-20T04:44:35.999999999Z','2026-10-20T04:44:36Z')]:
+            with self.subTest(ready=ready,failed=failed):self.pin['heartbeat_at']=ready;self.failed['heartbeat_at']=failed;self.execute()
+    def test_nanosecond_reverse_order_refuses(self):
+        self.pin['heartbeat_at']='2026-10-20T04:44:35.835081284Z';self.failed['heartbeat_at']='2026-10-20T04:44:35.835081283Z'
+        with self.assertRaisesRegex(RuntimeError,'predates ready pin'):self.execute()
+    def test_malformed_non_utc_and_overprecision_heartbeat_refuse(self):
+        for value in ('2026-10-20T04:44:35.1234567890Z','2026-10-20T04:44:35.Z','2026-10-20T04:44:35+00:00','2026-10-20T04:44:35.1+01:00','2026-10-20 04:44:35Z','2026-02-30T04:44:35Z','2026-10-20T24:44:35Z','2026-10-20T04:44:35Zjunk',None):
+            with self.subTest(value=value):
+                self.failed['heartbeat_at']=value
+                with self.assertRaises((RuntimeError,ValueError)):self.execute()
+
+
+class SupervisionStopOperationTests(unittest.TestCase):
+    def run_stop(self,fault=None):
+        import docker_build_control as build, docker_volume_dev as dev, docker_volume_reconcile as reconcile
+        import types,io,json,copy,hashlib,contextlib
+        from unittest.mock import Mock,patch
+        ids={'backend':'b'*64,'frontend':'f'*64};image='sha256:'+'a'*64;source=Path('D:/fixture');document={'fixture':'compose'}
+        config=hashlib.sha256(build.canonical(document)).hexdigest()
+        previous={'state':'succeeded','attempt':'1'*32,'compose_project':'fixture','config_sha256':config,'inputs':{'source_root':str(source)},'backend_container':ids['backend'],'frontend_container':ids['frontend']}
+        proof={'schema':stop.SUPERVISION_FAILURE_SCHEMA,'process_receipt_sha256':'d'*64,'ready_pin_sha256':'e'*64,'failed_owner_sha256':'f'*64,'config_sha256':'c'*64,'windows_certificate_sha256':'a'*64,'accepted_store_id':'sha256:'+'2'*64,'api_pid':3227,'runtime_pid':3241,'terminal_children':[{'role':'compute','pid':3250,'status':'exited_success'},{'role':'preparation','pid':3251,'status':'exited_failure'}],'processes_absent':True,'runs_empty':True,'transients_empty':True,'affected_reservations_empty':True}
+        services={name:{'Id':identifier,'Image':image,'State':{'StartedAt':'fixed-'+name,'Running':True,'Pid':100,'ExitCode':0}} for name,identifier in ids.items()}
+        writes=[];stops=[];logger=Mock();logger.stdin=io.BytesIO();logger.wait.return_value=0
+        control=types.SimpleNamespace(project='fixture',volume='fixture-control',namespace=None)
+        control.path=lambda x:'/control/'+x;control.helper_args=lambda *a,**kw:['mock-helper'];control.space=lambda:{'available_bytes':100*1024**3};control._line=Mock(side_effect=['READY','LOGGED'])
+        def read(path,optional=False):
+            if path=='development/current.json' or path.endswith('/terminal.json'):return previous
+            if path.endswith('/compose.json'):return document
+            if optional:return None
+            raise AssertionError(path)
+        def write(path,value):
+            if fault=='journal-write' and path.startswith('verification/') and value.get('state')=='stopped-confirmed':raise OSError('injected final journal write')
+            writes.append((path,copy.deepcopy(value)))
+        control.read=read;control.write=write;control.operation=types.MethodType(build.BuildControl.operation,control);control.operation_script=types.MethodType(build.BuildControl.operation_script,control)
+        def docker(*args,**kwargs):
+            if args[:2]==('image','inspect'):return types.SimpleNamespace(stdout=b'[{"Config":{}}]')
+            if args[0]=='inspect':return types.SimpleNamespace(stdout=json.dumps([services[next(name for name,value in ids.items() if value==args[1])]]).encode())
+            if args[0]=='exec':return types.SimpleNamespace(stdout=json.dumps(proof).encode())
+            if args[0]=='stop':
+                stops.append(args)
+                if fault=='stop-unknown':raise build.ControlOutcomeUnknown('injected daemon transport unknown')
+                services['backend']['State'].update(Running=False,Pid=0)
+                if fault=='post-stop-live':services['backend']['State']['Pid']=7
+                return types.SimpleNamespace(stdout=b'')
+            raise AssertionError(args)
+        terminal=Mock(return_value='7'*64)
+        if fault=='terminal-unknown':terminal.side_effect=build.BuildControlError('injected terminal refusal')
+        args=types.SimpleNamespace(container_id=ids['backend'],image_id=image,process_receipt_sha256='d'*64)
+        error=None
+        with patch.object(stop,'BuildControl',return_value=control),patch.object(build,'toolchain_configuration',return_value={'services':{'fem-gpu-toolchain':{'build':{'args':{'FULLMAG_CUDA_BASE_IMAGE':'fixture-image'}}}}}),patch.object(stop,'docker_capture',side_effect=docker),patch.object(reconcile,'fingerprint',side_effect=lambda v:v['Id']),patch.object(dev,'_validate_retained_service'),patch.object(dev,'_assert_private_restart_network'),patch.object(dev,'_read_runtime_config_digest',return_value='c'*64),patch.object(stop,'_supervision_terminal_proof',terminal),patch.object(build.subprocess,'Popen',return_value=logger),contextlib.redirect_stdout(io.StringIO()):
+            try:stop._stop_runtime_supervision_failure(args,source,{},copy.deepcopy(services['backend']))
+            except Exception as caught:error=caught
+        return writes,stops,logger,error
+    def test_success_publishes_only_after_stopped_and_terminal_proof(self):
+        writes,stops,logger,error=self.run_stop();self.assertIsNone(error);self.assertEqual(stops,[('stop','--time','60','b'*64)])
+        journal=next(value for path,value in reversed(writes) if path.startswith('verification/'));self.assertEqual(journal['state'],'stopped-confirmed');self.assertNotIn('owner_token',str(journal));self.assertNotIn('service_owner',str(journal));self.assertTrue(any(path.endswith('/terminal.json') and value['state']=='succeeded' for path,value in writes));logger.wait.assert_called_once()
+    def test_unknown_or_post_stop_failure_retains_real_control_lease(self):
+        for fault in ('stop-unknown','post-stop-live','terminal-unknown','journal-write'):
+            with self.subTest(fault=fault):
+                writes,stops,logger,error=self.run_stop(fault);self.assertIsNotNone(error);self.assertEqual(len(stops),1)
+                receipts=[v for p,v in writes if p.endswith('/receipt.json')];self.assertEqual(receipts[-1]['state'],'outcome-unknown-resources-retained');self.assertFalse(any(p.endswith('/terminal.json') for p,v in writes));logger.wait.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

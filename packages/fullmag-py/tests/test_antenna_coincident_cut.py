@@ -98,6 +98,23 @@ class CoincidentCutTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             fm.StructuredCurrentClosure("two",value.source_cuts*2,schema_version="structured_current_closure.v2")
 
+    def test_exported_geometry_and_transport_execute_to_same_canonical_intent(self):
+        from fullmag.runtime.script_builder import _render_antenna_layout_expr, _render_current_transport_payload
+        from fullmag.runtime.scene_document import _decode_current_transport
+        geometry=loop_geometry()
+        expression=_render_antenna_layout_expr("microstrip",geometry.to_ir(),name="loop")
+        restored=eval(expression,{"fm":fm})
+        self.assertEqual(restored.to_ir(),geometry.to_ir())
+        transport=fm.CurrentTransport(name="current",model="ohmic_poisson",domain=[fm.RegionRef("object")],
+            materials=[fm.ChargeTransportMaterialAssignment(fm.RegionRef("object"),fm.ChargeTransportMaterial(5.8e7))],
+            gauge=fm.ChargePotentialGauge("zero_mean"), solver=fm.ChargeSolverPolicy(
+                operator_version="fem_charge_conforming_h1_p1.transparent.v1"), structured_current_closure=closure())
+        self.assertEqual(_decode_current_transport(transport.to_ir()).to_ir(),transport.to_ir())
+        expression=_render_current_transport_payload(transport.to_ir(),surface="study")
+        class Surface:
+            def current_transport(self,**kwargs):return fm.CurrentTransport(**kwargs)
+        restored=eval(expression,{"fm":fm,"study":Surface()})
+        self.assertEqual(restored.to_ir(),transport.to_ir())
 
     def test_unknown_plane_frame_and_loop_enable_type_rejected(self):
         with self.assertRaises(ValueError):fm.StructuredCutPlane("z",0,coordinate_frame="local_guess")

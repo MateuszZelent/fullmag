@@ -46,6 +46,15 @@ class FakeDocker:
                 "FULLMAG_HOST_LEDGER_RUNTIME_GID", "FULLMAG_HOST_LEDGER_LOCK_WAIT_SECONDS",
             )
             maintenance_environment = {name: environment[name] for name in expected_names}
+            maintenance_environment.update({
+                "FULLMAG_DOCKER_HOST_ID": environment["FULLMAG_DOCKER_HOST_ID"],
+                "FULLMAG_HOST_LEDGER_PUBLISH_CAPACITY": environment.get(
+                    "FULLMAG_HOST_LEDGER_PUBLISH_CAPACITY", "0"),
+                "FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT": environment.get(
+                    "FULLMAG_HOST_LEDGER_DOCKER_CPU_COUNT", ""),
+                "FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES": environment.get(
+                    "FULLMAG_HOST_LEDGER_DOCKER_MEMORY_TOTAL_BYTES", ""),
+            })
             maintenance = {
                 "image": IMAGE,
                 "profiles": ["host-ledger-maintenance"],

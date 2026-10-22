@@ -175,7 +175,7 @@ def inspect_owned(cid, token):
     return observed
 
 
-def attest(observed, image, command, mounts):
+def attest(observed, image, command, mounts, *, memory_bytes=4 << 30):
     host, config = observed["HostConfig"], observed["Config"]
     if loader_environment(config) != dict.fromkeys(LOADER_ENV, ""):
         raise ValueError("Created container loader environment is not uniquely empty")
@@ -190,7 +190,7 @@ def attest(observed, image, command, mounts):
             not host["ReadonlyRootfs"] or host.get("Privileged") or
             host.get("CapAdd") or host.get("CapDrop") != ["ALL"] or
             host["PidsLimit"] != 256 or host["NanoCpus"] != 2000000000 or
-            host["Memory"] != 4 << 30 or host["MemorySwap"] != 4 << 30 or
+            host["Memory"] != memory_bytes or host["MemorySwap"] != memory_bytes or
             host.get("PortBindings") or host.get("Devices") or host.get("DeviceRequests") or
             host.get("RestartPolicy", {}).get("Name") != "no" or
             "no-new-privileges:true" not in (host.get("SecurityOpt") or []) or
@@ -210,8 +210,14 @@ def launch(request_path, request_sha):
     allowed = {"schema", "repo_root", "source_capsule", "managed_build_run_root", "output_root",
                "image", "commit", "snapshot", "source_digest", "solve_timeout_seconds",
                "driver", "project", "execution_profile", "resources"}
-    if not isinstance(request, dict) or set(request) != allowed or request.get("schema") != SCHEMA:
+    if not isinstance(request, dict) or set(request) not in (allowed, allowed | {"fixture"}) or request.get("schema") != SCHEMA:
         raise ValueError("Unsupported launch request")
+    fixture = request.get("fixture", "closed-loop")
+    if fixture not in ("closed-loop", "frozen-overlap-m3"):
+        raise ValueError("Unsupported fixed fixture")
+    frozen = fixture == "frozen-overlap-m3"
+    if frozen and request.get("solve_timeout_seconds") != 300:
+        raise ValueError("Frozen fixture requires the preregistered 300 second worker timeout")
     for key, pattern in (("image", "sha256:[a-f0-9]{64}"), ("commit", "[a-f0-9]{40}"),
                          ("snapshot", "[a-f0-9]{64}"), ("source_digest", "[a-f0-9]{64}")):
         if not re.fullmatch(pattern, str(request.get(key, ""))):
@@ -310,10 +316,13 @@ def launch(request_path, request_sha):
                    "--resources-sha256", request["resources"]["sha256"],
                    "--output-root", PROOF + "/run", "--python", "/usr/bin/python3",
                    "--solve-timeout-seconds", str(request["solve_timeout_seconds"])]
+        if frozen:
+            command += ["--fixture", fixture]
+        memory = "2g" if frozen else "4g"
         args = ["create", "--pull=never", "--name", "fullmag-b02-" + token, "--cidfile", str(output / "cid"),
                 "--label", OWNER + "=" + token, "--network=none", "--read-only", "--user=65532:65532",
                 "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--pids-limit=256",
-                "--cpus=2", "--memory=4g", "--memory-swap=4g", "--restart=no", "--log-driver=none",
+                "--cpus=2", "--memory=" + memory, "--memory-swap=" + memory, "--restart=no", "--log-driver=none",
                 "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777", "--workdir", PROJECT,
                 "--entrypoint", "/usr/bin/env"]
         # Docker must clear loader variables before the dynamic loader starts /usr/bin/env.
@@ -325,7 +334,7 @@ def launch(request_path, request_sha):
         docker(*args, request["image"], *command)
         cid = (output / "cid").read_text(encoding="ascii").strip()
         observed = inspect_owned(cid, token)
-        attest(observed, request["image"], command, mounts)
+        attest(observed, request["image"], command, mounts, memory_bytes=(2 if frozen else 4) << 30)
         save(output / "container-created-attestation.json", observed)
         receipt.update(state="created", container_id=cid)
         verifier.verify_source(capsule, request["source_digest"])
@@ -335,7 +344,7 @@ def launch(request_path, request_sha):
             windows_loop_storage.verify(windows_storage, token, request["image"], docker)
         storage_can_cleanup = False
         docker("start", cid)
-        code = int(docker("wait", cid, timeout=4 * request["solve_timeout_seconds"] + 180))
+        code = int(docker("wait", cid, timeout=(6 if frozen else 4) * request["solve_timeout_seconds"] + 180))
         observed = inspect_owned(cid, token)
         save(output / "container-terminal-inspect.json", observed)
         if observed["State"]["Running"] or observed["State"].get("OOMKilled") or code != 0:

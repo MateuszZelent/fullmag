@@ -24,7 +24,8 @@ use fullmag_session::materialized_dataset::{
 };
 use fullmag_session::solution_field_geometry::{
     read_pinned_solution_field_geometry, read_solution_field_geometry_manifest,
-    SavedFemP1FieldGeometry, SolutionFieldGeometryManifest, SOLUTION_FIELD_GEOMETRY_SCHEMA,
+    SavedFemP1FieldGeometry, SavedOwnedSampleFieldGeometry, read_pinned_solution_owned_sample_geometry,
+    SolutionFieldGeometryManifest, SOLUTION_FIELD_GEOMETRY_SCHEMA,
 };
 use fullmag_session::solution_tensor_source::{
     resolve_solution_tensor, PinnedSolutionTensorSource,
@@ -39,11 +40,45 @@ const FMSP_FLAGS: u16 = 0;
 const FMMT_V2_HEADER_LEN: usize = 64;
 const MAX_BINARY_RESPONSE_BYTES: usize = MAX_SAVED_FIELD_GEOMETRY_DECODE_BYTES as usize;
 
+// A transport view of either immutable magnetic support or owned nonmagnetic samples.
+// This adapter does not grant magnetic semantics to inspection carriers.
+#[derive(Debug, Clone)]
+struct SavedFieldGeometry {
+    schema_version: String,
+    coordinate_unit: String,
+    mesh: fullmag_ir::MeshIR,
+    support: SavedFieldSupport,
+}
+#[derive(Debug, Clone)]
+struct SavedFieldSupport {
+    producer_id: String,
+    producer_version: String,
+    active_node_mask: Vec<bool>,
+}
+impl From<SavedFemP1FieldGeometry> for SavedFieldGeometry {
+    fn from(value: SavedFemP1FieldGeometry) -> Self {
+        Self {schema_version:value.schema_version, coordinate_unit:value.coordinate_unit,
+            mesh:value.mesh, support:SavedFieldSupport {producer_id:value.field_semantics.producer_id,
+                producer_version:value.field_semantics.producer_version,
+                active_node_mask:value.field_semantics.active_node_mask}}
+    }
+}
+impl From<SavedOwnedSampleFieldGeometry> for SavedFieldGeometry {
+    fn from(value: SavedOwnedSampleFieldGeometry) -> Self {
+        // Every published owned sample has a value. This is quantitative sample
+        // coverage, not a magnetic material mask or extrapolation outside the carrier.
+        let active_node_mask = vec![true; value.mesh.nodes.len()];
+        Self {schema_version:value.schema_version, coordinate_unit:value.coordinate_unit,
+            mesh:value.mesh, support:SavedFieldSupport {producer_id:value.producer_id,
+                producer_version:value.producer_version, active_node_mask}}
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedSavedGeometry {
     geometry_artifact: SolutionArtifactRef,
     geometry_manifest: SolutionFieldGeometryManifest,
-    geometry: SavedFemP1FieldGeometry,
+    geometry: SavedFieldGeometry,
     tensor_artifact: SolutionArtifactRef,
     tensor: TensorDescriptor,
     dataset_artifact: SolutionArtifactRef,
@@ -203,7 +238,7 @@ pub async fn get_saved_field_geometry_support(
             let resolved = resolve_saved_geometry(store, &solution, &member_id, &artifact_id)?;
             verify_expected_identity(&resolved, &query)?;
             let etag_scope = saved_geometry_binary_etag_scope(&resolved);
-            let mask_body = encode_saved_support(&resolved.geometry.field_semantics.active_node_mask)?;
+            let mask_body = encode_saved_support(&resolved.geometry.support.active_node_mask)?;
             let max_response_bytes = parse_response_budget(&query.max_response_bytes)?;
             if mask_body.len() > max_response_bytes {
                 return Err(ApiError::unprocessable(format!(
@@ -256,10 +291,24 @@ fn resolve_saved_geometry(
         ));
     }
     let source = dataset.manifest.field.source.clone();
-    let resolved = read_pinned_solution_field_geometry(store, &source)
-        .map_err(|error| ApiError::internal(error.to_string()))?
-        .ok_or_else(|| ApiError::not_found("saved field geometry binding is missing"))?;
-    let (geometry_manifest, geometry) = resolved;
+    let quantity = dataset.manifest.dataset.samples.first()
+        .and_then(|sample| sample.items.first()).and_then(|item| item.fields.first())
+        .map(|field| field.descriptor.quantity_id)
+        .ok_or_else(|| ApiError::conflict("saved geometry dataset field descriptor is missing"))?;
+    let (geometry_manifest, geometry) = if quantity == fullmag_quantities::QuantityId::M {
+        let (manifest, geometry) = read_pinned_solution_field_geometry(store, &source)
+            .map_err(|error| ApiError::internal(error.to_string()))?
+            .ok_or_else(|| ApiError::not_found("saved field geometry binding is missing"))?;
+        (manifest, SavedFieldGeometry::from(geometry))
+    } else if matches!(quantity, fullmag_quantities::QuantityId::VElectric
+        | fullmag_quantities::QuantityId::JCharge | fullmag_quantities::QuantityId::HAnt) {
+        let (manifest, geometry) = read_pinned_solution_owned_sample_geometry(store, &source)
+            .map_err(|error| ApiError::internal(error.to_string()))?
+            .ok_or_else(|| ApiError::not_found("saved owned sample geometry binding is missing"))?;
+        (manifest, SavedFieldGeometry::from(geometry))
+    } else {
+        return Err(ApiError::unprocessable("saved field geometry has no supported carrier for this quantity"));
+    };
 
     let owner_member = dataset
         .owner
@@ -343,10 +392,10 @@ fn saved_geometry_resource(
     let topology_fingerprint = resolved.geometry.mesh.topology_fingerprint_v6();
     let topology_binary = topology_binary_identity(&resolved.geometry)?;
     let support_binary_byte_length =
-        support_body_len(resolved.geometry.field_semantics.active_node_mask.len())?;
+        support_body_len(resolved.geometry.support.active_node_mask.len())?;
     let support_binary_hash =
         if support_binary_byte_length <= MAX_SAVED_FIELD_SUPPORT_BINARY_BYTES as usize {
-            Some(support_binary_identity(&resolved.geometry.field_semantics.active_node_mask)?.1)
+            Some(support_binary_identity(&resolved.geometry.support.active_node_mask)?.1)
         } else {
             None
         };
@@ -390,14 +439,14 @@ fn saved_geometry_resource(
             .support_fingerprint
             .clone(),
         layout_digest: binding.descriptor.layout_digest.clone(),
-        producer_id: resolved.geometry.field_semantics.producer_id.clone(),
-        producer_version: resolved.geometry.field_semantics.producer_version.clone(),
+        producer_id: resolved.geometry.support.producer_id.clone(),
+        producer_version: resolved.geometry.support.producer_version.clone(),
         node_count: resolved.geometry.mesh.nodes.len().to_string(),
         cell_count: resolved.geometry.mesh.cells.len().to_string(),
         facet_count: resolved.geometry.mesh.facets.len().to_string(),
         active_node_count: resolved
             .geometry
-            .field_semantics
+            .support
             .active_node_mask
             .iter()
             .filter(|active| **active)
@@ -547,7 +596,7 @@ fn parse_response_budget(value: &str) -> Result<usize, ApiError> {
 }
 
 fn fem_mesh_payload(
-    geometry: SavedFemP1FieldGeometry,
+    geometry: SavedFieldGeometry,
     topology_fingerprint: String,
 ) -> Result<fullmag_runner::FemMeshPayload, ApiError> {
     let mesh = geometry.mesh;
@@ -572,7 +621,7 @@ fn fem_mesh_payload(
 }
 
 fn fem_mesh_payload_borrowed(
-    geometry: &SavedFemP1FieldGeometry,
+    geometry: &SavedFieldGeometry,
     topology_fingerprint: String,
 ) -> fullmag_runner::FemMeshPayload {
     let mesh = &geometry.mesh;
@@ -597,7 +646,7 @@ fn fem_mesh_payload_borrowed(
 }
 
 fn topology_binary_identity(
-    geometry: &SavedFemP1FieldGeometry,
+    geometry: &SavedFieldGeometry,
 ) -> Result<Option<(usize, String)>, ApiError> {
     let topology_fingerprint = geometry.mesh.topology_fingerprint_v6();
     let estimated = estimated_fmmt_v2_len_for_geometry(geometry)?;
@@ -636,7 +685,7 @@ fn estimated_fmmt_v2_len(mesh: &fullmag_runner::FemMeshPayload) -> Result<usize,
 }
 
 fn estimated_fmmt_v2_len_for_geometry(
-    geometry: &SavedFemP1FieldGeometry,
+    geometry: &SavedFieldGeometry,
 ) -> Result<usize, ApiError> {
     let mesh = &geometry.mesh;
     let sections = [

@@ -1,3 +1,4 @@
+import { normalizeTensorProjection, tensorProjectionOutputKind, type TensorProjectionToken } from "@/kernel/api/tensorFieldProjection";
 import type {
   FieldCatalogResource,
   FieldVectorQuery,
@@ -25,6 +26,7 @@ export type Viewport3DFieldPayloadCompleteness =
   | "sampled-ok";
 
 export type Viewport3DFieldComponentDemand =
+  | TensorProjectionToken
   | "none"
   | "x"
   | "y"
@@ -77,6 +79,7 @@ export interface Viewport3DScalarRangePolicy {
 }
 
 export interface Viewport3DTargetRenderPlan {
+  tensorProjection: TensorProjectionToken | null;
   colorbar: {
     inspectorVisible: boolean;
     scalarColorMode: string | null;
@@ -155,6 +158,7 @@ export interface Viewport3DPrimaryFieldDemandPlan {
 }
 
 export interface Viewport3DScopedPartFieldSettingsForPlanning {
+  tensorProjection?: string | null;
   activeQuantityId: string;
   shaderVisible: boolean;
   surfaceColorSource: SurfaceColorSource;
@@ -198,7 +202,7 @@ export interface Viewport3DFdmNativeLayerFieldRequestInput {
   layerId: string;
   settings: Pick<
     VisualizationTargetSettings,
-    "activeQuantityId" | "shaderVisible" | "vectorsVisible" | "visible"
+    "activeQuantityId" | "shaderVisible" | "vectorsVisible" | "visible" | "tensorProjection"
   > | null;
 }
 
@@ -230,12 +234,12 @@ export function resolveViewport3DFdmNativeLayerFieldRequests({
       consumers: [`viewport-3d:fdm-native-layer:${layerId}`],
       quantityId,
       query: {
-        component: "full",
+        component: normalizeTensorProjection(settings.tensorProjection) ?? "full",
         max_samples: maxSamples,
         scope_id: layerId,
         scope_kind: "layer",
       },
-      requestId: `fdm-native-layer:${layerId}:${quantityId}`,
+      requestId: `fdm-native-layer:${layerId}:${quantityId}:${normalizeTensorProjection(settings.tensorProjection) ?? "full"}`,
     });
   }
   return requests;
@@ -291,6 +295,7 @@ export function buildViewport3DTargetRenderPlan({
   label?: string | null;
   quantityId?: string | null;
   settings: {
+    tensorProjection?: string | null;
     geometryScope: VisualizationGeometryScope;
     scalarColorPalette: string;
     shaderMonoColor: string;
@@ -310,10 +315,12 @@ export function buildViewport3DTargetRenderPlan({
   targetId: string;
   targetKind: Viewport3DTargetRenderPlan["targetKind"];
 }): Viewport3DTargetRenderPlan {
+  const tensorProjection = normalizeTensorProjection(settings.tensorProjection);
   const visible = settings.visible;
+  const tensorScalar = tensorProjectionOutputKind(tensorProjection) === "scalar";
   const scalarColorMode =
     visible && settings.shaderVisible
-      ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
+      ? tensorScalar ? "magnitude" : surfaceColorSourceToColorMode(settings.surfaceColorSource)
       : null;
   const vectorScalarColorMode =
     visible && settings.vectorsVisible
@@ -327,6 +334,7 @@ export function buildViewport3DTargetRenderPlan({
         : null;
   const colorbarAvailable = colorbarScalarColorMode !== null;
   return {
+    tensorProjection,
     colorbar: {
       inspectorVisible: colorbarAvailable,
       scalarColorMode: colorbarScalarColorMode,
@@ -357,6 +365,7 @@ export function buildViewport3DTargetRenderPlan({
       visible:
         visible &&
         settings.vectorsVisible &&
+        !tensorScalar &&
         Math.max(0, Math.floor(settings.vectorBudget)) > 0,
     },
     visible,
@@ -389,9 +398,9 @@ export function buildViewport3DPassDemands(
     });
     if (query) {
       demands.push({
-        component: query.component === "full"
+        component: plan.tensorProjection === "frobenius" && plan.targetKind !== "fdm-domain" ? "full" : plan.tensorProjection ?? (query.component === "full"
           ? "full"
-          : componentDemandFromQuery(query.component),
+          : componentDemandFromQuery(query.component)),
         completeness: "complete",
         maxSamples: null,
         passId: `${plan.targetId}:surface`,
@@ -408,7 +417,7 @@ export function buildViewport3DPassDemands(
   if (plan.vectors.visible) {
     const forceComplete = options.forceComplete === true;
     demands.push({
-      component: "full",
+      component: plan.tensorProjection ?? "full",
       completeness: forceComplete || (plan.shader.visible && plan.shader.scalarColorMode)
         ? "complete"
         : "sampled-ok",
@@ -428,7 +437,7 @@ export function buildViewport3DPassDemands(
 
   if (plan.colorbar.viewportVisible && plan.colorbar.scalarColorMode) {
     demands.push({
-      component: componentDemandForColorMode(plan.colorbar.scalarColorMode),
+      component: plan.tensorProjection === "frobenius" && plan.targetKind !== "fdm-domain" ? "full" : plan.tensorProjection ?? componentDemandForColorMode(plan.colorbar.scalarColorMode),
       completeness: "complete",
       maxSamples: null,
       passId: `${plan.targetId}:colorbar`,
@@ -863,7 +872,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
     const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
     if (
       !isViewport3DQuantityAvailable(quantityId, availableQuantityIds) ||
-      sameViewport3DQuantityIdForPlanning(quantityId, primaryFieldQuantityId) ||
+      (sameViewport3DQuantityIdForPlanning(quantityId, primaryFieldQuantityId) && !settings.tensorProjection) ||
       !settings.visible ||
       (!settings.shaderVisible && !settings.vectorsVisible)
     ) {
@@ -893,7 +902,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
 
   for (const target of fdmTargetSettings) {
     if (
-      (target.targetId !== "airbox" &&
+      (target.targetId !== "airbox" && !target.settings.tensorProjection &&
         sameViewport3DQuantityIdForPlanning(
           target.settings.activeQuantityId,
           primaryFieldQuantityId,
@@ -961,7 +970,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
   ]) {
     if (
       !target ||
-      (target.targetId !== "airbox" &&
+      (target.targetId !== "airbox" && !target.settings.tensorProjection &&
         sameViewport3DQuantityIdForPlanning(
           target.settings.activeQuantityId,
           primaryFieldQuantityId,
@@ -1439,6 +1448,7 @@ function resolveViewport3DScopedPartFieldRequest({
       scalarColorPalette: "viridis",
       shaderMonoColor: DEFAULT_VIEWPORT3D_SHADER_MONO_COLOR,
       shaderVisible: settings.shaderVisible,
+      tensorProjection: settings.tensorProjection,
       surfaceColorSource: settings.surfaceColorSource,
       surfaceProjectionMode: settings.surfaceProjectionMode,
       vectorBudget: settings.vectorBudget,
@@ -1620,6 +1630,8 @@ function componentDemandForColorMode(
 function componentDemandFromQuery(
   component: FieldVectorQuery["component"],
 ): Viewport3DFieldComponentDemand {
+  const tensorProjection = normalizeTensorProjection(component);
+  if (tensorProjection) return tensorProjection;
   return component === "x" ||
       component === "y" ||
       component === "z" ||

@@ -118,6 +118,7 @@ jobs:
           cargo test -p fullmag-runtime-control --lib accepted_start
           cargo test -p fullmag-runtime-control --lib accepted_recovery_requires_release
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker restored_manual_worker_requires_exact_compute_release
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::closed_loop_run_parameter_tests::
 
       - name: Run Docker accepted workspace startup and projection contracts
         env:
@@ -142,6 +143,9 @@ jobs:
 
       - name: Run runtime service sampler and control contracts
         run: cargo test -p fullmag-api --bin fullmag-runtime-service --no-fail-fast
+
+      - name: Run explicit reaped-worker failure recovery contracts
+        run: cargo test -p fullmag-api --bin fullmag-runtime-service failed_worker_recovery::tests --no-fail-fast
 
       - name: Run disconnected mixed-P1 v2 API summary contracts
         run: cargo test -p fullmag-api --bin fullmag-api mixed_v2_summary_tests --no-fail-fast
@@ -340,6 +344,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler typed_writer_busy_retry_preserves_preparation_launch_identity
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler pre_admission_snapshot_deferral_classifies_only_typed_busy
+          cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler deferred_recovery_retains_and_joins_an_owned_supervisor
           cargo test -p fullmag-api --bin fullmag-api common_host_launch_gate_
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker common_host_launch_gate_
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_worker_claim_retry_tests::

@@ -681,8 +681,9 @@ function fieldSolutionRuntimeRows(
 ): DetailRow[] {
   const data = result.data;
   const rows: DetailRow[] = [{ label: "Runtime result", value: verifiedStatus }];
-  if (result.error) {
-    rows.push({ label: "Runtime error", value: result.error.message });
+  const error = result.error ?? result.refreshError;
+  if (error) {
+    rows.push({ label: "Runtime error", value: error.message });
   }
   if (!data || verifiedStatus !== "ready") return rows;
   rows.push(

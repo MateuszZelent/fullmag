@@ -164,6 +164,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
             allocated_region_ids: Vec::new(),
             material_parameter_fields: Vec::new(),
             absorbing_boundary: None,
+            visualization_hint: Default::default(),
         }],
         mesh_interfaces: Vec::new(),
         field_drives: Vec::new(),
@@ -30043,7 +30044,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     assert_eq!(json["checkpoint"]["source"], "manual_test");
     assert_eq!(json["checkpoint"]["vector_count"], 2);
     assert_eq!(json["checkpoint"]["coordinate_frame"], "solver_domain");
-    assert_eq!(json["checkpoint"]["resume_class"], "exact_resume");
+    assert_eq!(json["checkpoint"]["resume_class"], "unsupported");
     assert_eq!(json["checkpoint"]["stage_id"], "stage-001");
     assert_eq!(json["checkpoint"]["command_id"], "cmd-stage-1");
     let checkpoint_artifact_ref = json["checkpoint"]["artifact_ref"]
@@ -30114,6 +30115,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let detail = body_json(detail_response).await;
     assert_eq!(detail["checkpoint_id"], checkpoint_id.as_str());
     assert_eq!(detail["vector_count"], 2);
+    assert_eq!(detail["resume_class"], "unsupported");
     let mut active_after_capture = coupled_checkpoint.clone();
     active_after_capture["magnetization"][0] = serde_json::json!([0.0, 0.0, 1.0]);
     refresh_coupled_m3_checkpoint_digest(&mut active_after_capture);
@@ -30125,6 +30127,15 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .unwrap()
         .coupled_checkpoint = Some(active_after_capture);
 
+    let before_restore = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .clone();
+    let field_revision_before_restore =
+        crate::router_v2::handlers::sessions::status::field_revision(&before_restore);
     let restore_response = app
         .clone()
         .oneshot(
@@ -30145,35 +30156,25 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .await
         .unwrap();
 
-    if restore_response.status() != StatusCode::OK {
-        let status = restore_response.status();
-        let body = body_bytes(restore_response).await;
-        panic!(
-            "checkpoint restore returned {status}: {}",
-            String::from_utf8_lossy(&body)
+    assert_eq!(restore_response.status(), StatusCode::CONFLICT);
+    let refused = body_json(restore_response).await;
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("transport ExactResume is temporarily unsupported"));
+    {
+        let guard = state.current_live_state.read().await;
+        let after_restore = guard.as_ref().unwrap();
+        assert_eq!(
+            serde_json::to_value(after_restore).unwrap(),
+            serde_json::to_value(&before_restore).unwrap(),
+            "refused transport restore must not mutate the session snapshot"
+        );
+        assert_eq!(
+            after_restore.coupled_checkpoint,
+            before_restore.coupled_checkpoint
         );
     }
-    let restored = body_json(restore_response).await;
-    assert_eq!(
-        restored["checkpoint"]["checkpoint_id"],
-        checkpoint_id.as_str()
-    );
-    assert_eq!(restored["restore_class"], "exact_resume");
-    assert_eq!(restored["restored_vector_count"], 2);
-    assert_eq!(restored["field_revision"], 2);
-    assert_eq!(restored["checkpoint"]["stage_id"], "stage-001");
-    assert_eq!(restored["checkpoint"]["command_id"], "cmd-stage-1");
-    assert_eq!(
-        state
-            .current_live_state
-            .read()
-            .await
-            .as_ref()
-            .unwrap()
-            .coupled_checkpoint
-            .as_ref(),
-        Some(&coupled_checkpoint)
-    );
 
     let stage_after_restore_response = app
         .clone()
@@ -30188,18 +30189,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
 
     assert_eq!(stage_after_restore_response.status(), StatusCode::OK);
     let stage_after_restore = body_json(stage_after_restore_response).await;
-    assert_eq!(
-        stage_after_restore["stages"][1]["resume_from_checkpoint_ref"],
-        checkpoint_id.as_str()
-    );
-    assert_eq!(
-        stage_after_restore["stages"][1]["loaded_state_ref"],
-        checkpoint_artifact_ref
-    );
-    assert_eq!(
-        stage_after_restore["stages"][1]["state_transition"],
-        "restored"
-    );
+    assert_eq!(stage_after_restore, stage_after_create);
 
     let status_response = app
         .clone()
@@ -30214,7 +30204,10 @@ async fn session_checkpoint_create_captures_live_magnetization() {
 
     assert_eq!(status_response.status(), StatusCode::OK);
     let status = body_json(status_response).await;
-    assert_eq!(status["resources"]["field_revision"], 2);
+    assert_eq!(
+        status["resources"]["field_revision"],
+        field_revision_before_restore
+    );
 
     let list_response = app
         .oneshot(
@@ -30228,6 +30221,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
 
     assert_eq!(list_response.status(), StatusCode::OK);
     let listed = body_json(list_response).await;
+    assert_eq!(listed["checkpoints"][0]["resume_class"], "unsupported");
     assert_eq!(
         listed["checkpoints"][0]["checkpoint_id"],
         checkpoint_id.as_str()
@@ -30522,11 +30516,11 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
         )
         .await
         .unwrap();
-    assert_eq!(restore.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(restore.status(), StatusCode::CONFLICT);
     let body = body_json(restore).await;
     assert!(body
         .to_string()
-        .contains("legacy magnetization-only checkpoint"));
+        .contains("transport ExactResume is temporarily unsupported"));
     let _ = fs::remove_dir_all(&repo_root);
 }
 
@@ -30902,7 +30896,18 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             .await
             .unwrap();
         let create_status = create.status();
-        if create_status == StatusCode::BAD_REQUEST {
+        if create_status == StatusCode::BAD_REQUEST || label == "common-state magnetization" {
+            if label == "common-state magnetization" {
+                // Split primary frames are rejected by storage capture before
+                // any checkpoint exists; do not bypass that coherence gate.
+                assert_eq!(create_status, StatusCode::INTERNAL_SERVER_ERROR);
+                let response_body = body_json(create).await;
+                assert_eq!(response_body["code"], "internal_error");
+                assert_eq!(
+                    response_body["message"],
+                    "capturing checkpoint: capture backend and common primary frame differ"
+                );
+            }
             let mut guard = state.current_live_state.write().await;
             let snapshot = guard.as_mut().unwrap();
             assert_eq!(
@@ -30952,11 +30957,13 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             .expect("bounded restore error response");
         assert_eq!(
             restore_status,
-            StatusCode::BAD_REQUEST,
+            StatusCode::CONFLICT,
             "restore {label}; fixture_root={}; response_body={}",
             repo_root.display(),
             String::from_utf8_lossy(&restore_body),
         );
+        assert!(String::from_utf8_lossy(&restore_body)
+            .contains("transport ExactResume is temporarily unsupported"));
         let guard = state.current_live_state.read().await;
         let snapshot = guard.as_ref().unwrap();
         let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
@@ -50673,6 +50680,144 @@ async fn frequency_domain_response_field_meta_uses_v2_linked_payload_path() {
         payload["resource_key"],
         "/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector?view=abs&phase_rad=1.25"
     );
+}
+
+#[tokio::test]
+async fn frequency_response_binary_cache_tracks_content_and_representation() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    {
+        let mut current = state.current_live_state.write().await;
+        current.as_mut().unwrap().fem_mesh = Some(sample_fem_mesh_payload());
+    }
+    let point_dir = artifact_dir.join("response/frequency_points");
+    let payload_dir = artifact_dir.join("response/field_payloads/frequency_0001");
+    fs::create_dir_all(&point_dir).unwrap();
+    fs::create_dir_all(&payload_dir).unwrap();
+    let payload_path = payload_dir.join("vector_xyz.bin");
+    let mut bytes = Vec::new();
+    for value in 1..=12 {
+        bytes.extend_from_slice(&(value as f64).to_le_bytes());
+        bytes.extend_from_slice(&0.5f64.to_le_bytes());
+    }
+    fs::write(&payload_path, &bytes).unwrap();
+    fs::write(
+        point_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 12,
+            "payload_value_count": 24,
+            "available_views": ["complex", "real", "imag", "abs", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        })).unwrap(),
+    ).unwrap();
+
+    let path = "/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector";
+    let request = |query: &str, etag: Option<&str>| {
+        let mut builder = Request::builder().method("GET").uri(format!("{path}{query}"));
+        if let Some(etag) = etag {
+            builder = builder.header(header::IF_NONE_MATCH, etag);
+        }
+        builder.body(Body::empty()).unwrap()
+    };
+    let meta_request = || Request::builder().method("GET")
+        .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+        .body(Body::empty()).unwrap();
+    let meta_response = app.clone().oneshot(meta_request()).await.unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let first_meta = body_json(meta_response).await;
+    let first_digest = first_meta["content_digest"].as_str().unwrap();
+    let query = "?view=phase_rotated_real&phase_rad=0";
+    let first = app.clone().oneshot(request(query, None)).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_etag = first.headers()[header::ETAG].to_str().unwrap().to_owned();
+    let first_revision = first.headers()["x-fullmag-field-revision"].to_str().unwrap().to_owned();
+    assert!(first_etag.contains(first_digest));
+    let expected_revision = u64::from_str_radix(first_digest.strip_prefix("sha256:").unwrap()
+        .get(..16).unwrap(), 16).unwrap().max(1).to_string();
+    assert_eq!(first_revision, expected_revision);
+    let first_body = body_bytes(first).await;
+    let unchanged = app.clone().oneshot(request(query, Some(&first_etag))).await.unwrap();
+    assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(unchanged).await.is_empty());
+
+    let original_length = bytes.len();
+    bytes[..8].copy_from_slice(&20.0f64.to_le_bytes());
+    assert_eq!(original_length, bytes.len());
+    fs::write(&payload_path, &bytes).unwrap();
+    let changed = app.clone().oneshot(request(query, Some(&first_etag))).await.unwrap();
+    assert_eq!(changed.status(), StatusCode::OK);
+    let changed_etag = changed.headers()[header::ETAG].to_str().unwrap().to_owned();
+    let changed_revision = changed.headers()["x-fullmag-field-revision"].to_str().unwrap().to_owned();
+    assert_ne!(first_etag, changed_etag);
+    assert_ne!(first_revision, changed_revision);
+    let changed_body = body_bytes(changed).await;
+    assert_eq!(first_body.len(), changed_body.len());
+    assert_ne!(first_body, changed_body);
+    let meta_response = app.clone().oneshot(meta_request()).await.unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let changed_meta = body_json(meta_response).await;
+    let changed_digest = changed_meta["content_digest"].as_str().unwrap();
+    assert_ne!(first_digest, changed_digest);
+    assert!(changed_etag.contains(changed_digest));
+
+    for variant in [
+        "?view=imag&phase_rad=0",
+        "?view=phase_rotated_real&phase_rad=0&component=x",
+        "?view=phase_rotated_real&phase_rad=0.5",
+    ] {
+        let response = app.clone().oneshot(request(variant, Some(&changed_etag))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{variant}");
+        assert_ne!(response.headers()[header::ETAG].to_str().unwrap(), changed_etag);
+        assert_eq!(response.headers()["x-fullmag-field-revision"].to_str().unwrap(), changed_revision);
+    }
+
+    let baseline_mesh_revision = state.current_live_state.read().await
+        .as_ref().unwrap().mesh_revision;
+    for mutation in ["generation", "revision", "geometry"] {
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+            snapshot.mesh_revision = baseline_mesh_revision;
+        }
+        let baseline = app.clone().oneshot(request(query, None)).await.unwrap();
+        assert_eq!(baseline.status(), StatusCode::OK);
+        assert_eq!(baseline.headers()[header::ETAG].to_str().unwrap(), changed_etag);
+        assert_eq!(body_bytes(baseline).await, changed_body);
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            match mutation {
+                "generation" => snapshot.fem_mesh.as_mut().unwrap()
+                    .generation_id = Some("43".to_owned()),
+                "revision" => snapshot.mesh_revision += 1,
+                "geometry" => snapshot.fem_mesh.as_mut().unwrap().nodes[1][0] = 2.0,
+                _ => unreachable!(),
+            }
+        }
+        let remeshed = app.clone().oneshot(request(query, Some(&changed_etag))).await.unwrap();
+        assert_eq!(remeshed.status(), StatusCode::OK, "{mutation}");
+        let remeshed_etag = remeshed.headers()[header::ETAG].to_str().unwrap().to_owned();
+        assert_ne!(remeshed_etag, changed_etag, "{mutation}");
+        assert_eq!(remeshed.headers()["x-fullmag-field-revision"].to_str().unwrap(), changed_revision);
+        assert_ne!(body_bytes(remeshed).await, changed_body, "{mutation}");
+        let meta_response = app.clone().oneshot(meta_request()).await.unwrap();
+        assert_eq!(meta_response.status(), StatusCode::OK);
+        assert_eq!(body_json(meta_response).await["content_digest"], changed_meta["content_digest"]);
+        let unchanged = app.clone().oneshot(request(query, Some(&remeshed_etag))).await.unwrap();
+        assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED, "{mutation}");
+        assert!(body_bytes(unchanged).await.is_empty());
+    }
 }
 
 #[tokio::test]

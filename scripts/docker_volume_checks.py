@@ -136,13 +136,198 @@ print(json.dumps({'exit_code':result.returncode if before==after else 2,'source_
     return receipt['exit_code']
 
 
+FRONTEND_APP = '/state/development/workspace/apps/control-room'
+IMPORT_FILES = (
+    'src/kernel/persistence/ScriptProjectActivation.ts',
+    'src/kernel/persistence/ScriptProjectActivation.test.ts',
+    'src/kernel/persistence/ProjectDocumentController.ts',
+    'src/kernel/persistence/ProjectDocumentController.test.ts',
+    'src/modules/start/StartScreen.tsx',
+    'src/modules/start/model/scriptProject.ts',
+    'src/modules/start/model/pythonImport.ts',
+    'src/modules/start/model/pythonImport.test.ts',
+    'src/modules/start/model/importFormats.ts',
+    'src/modules/start/model/importFormats.test.ts',
+    'src/modules/start/sections/ImportSection.tsx',
+    'src/modules/start/sections/ImportSection.test.tsx',
+    'src/modules/start/ui/CreateProjectAction.tsx',
+    'src/modules/start/ui/CreateProjectAction.test.tsx',
+    'src/kernel/layout/shellCommands.ts',
+    'src/kernel/layout/shellCommands.test.ts',
+    'next.config.ts',
+    'next.config.test.ts',
+)
+IMPORT_TESTS = (
+    'src/kernel/persistence/ScriptProjectActivation.test.ts',
+    'src/kernel/persistence/ProjectDocumentController.test.ts',
+    'src/modules/start/model/pythonImport.test.ts',
+    'src/modules/start/model/importFormats.test.ts',
+    'src/modules/start/sections/ImportSection.test.tsx',
+    'src/modules/start/ui/CreateProjectAction.test.tsx',
+    'src/kernel/layout/shellCommands.test.ts',
+    'next.config.test.ts',
+)
+FRONTEND_COMMANDS = (
+    ('prepare', ('/bin/mkdir', '-p', '/state/development/cache/tsbuildinfo', '/state/development/tmp')),
+    ('typecheck', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'typecheck')),
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *IMPORT_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint', *IMPORT_FILES, '--max-warnings=0')),
+)
+
+ANTENNA_FILES = (
+    'src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.ts',
+    'src/modules/inspector/panels/antenna/MicrostripGeometryEditor.tsx',
+    'src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.test.ts',
+    'src/kernel/authoring/geometryLifecycleCommandContributions.test.ts',
+)
+ANTENNA_TESTS = (ANTENNA_FILES[2], ANTENNA_FILES[3])
+ANTENNA_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *ANTENNA_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint', *ANTENNA_FILES, '--max-warnings=0')),
+)
+
+
+VISUALIZATION_FILES = (
+    'src/kernel/visualization/ObjectVisualizationController.ts',
+    'src/kernel/visualization/ObjectVisualizationController.test.ts',
+    'src/shared/domain/physics/objectMagneticModel.ts',
+    'src/kernel/visualization/primitiveSurfaceColor.ts',
+    'src/modules/field-map/FieldMapModule.tsx',
+    'src/modules/inspector/panels/ObjectGeneralPanel.tsx',
+    'src/modules/inspector/panels/region/ObjectRegionMagneticParametersPanel.tsx',
+    'src/modules/viewport-3d/Viewport3DModule.tsx',
+    'src/modules/viewport-3d/viewport3dPrimitiveModel.ts',
+    'src/modules/viewport-3d/layers/PrimitiveObjectLayerModel.ts',
+    'src/modules/inspector/panels/ObjectVisualizationPanel.tsx',
+    'src/modules/inspector/panels/ObjectVisualizationPanelModel.ts',
+    'src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx',
+    'src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts',
+    'src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts',
+)
+# Type checking and source gates do not compile or execute native unit tests.
+VISUALIZATION_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    *((f'eslint-{index:02}', ('/usr/bin/env', 'NODE_OPTIONS=--max-old-space-size=4096',
+                '/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                source, '--max-warnings=0')) for index, source in enumerate(VISUALIZATION_FILES, 1)),
+    ('architecture', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:architecture-hygiene')),
+    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
+)
+
+
+def frontend_import_checks(control, selected, identity, *, scope='frontend-import'):
+    import hashlib
+    import time
+    import docker_dev_codegen as codegen
+    if scope not in ('frontend-import', 'frontend-antenna', 'frontend-visualization'):
+        raise BuildControlError('Unknown frontend verification scope')
+    source_files, commands = {
+        'frontend-import': (IMPORT_FILES, FRONTEND_COMMANDS),
+        'frontend-antenna': (ANTENNA_FILES, ANTENNA_COMMANDS),
+        'frontend-visualization': (VISUALIZATION_FILES, VISUALIZATION_COMMANDS),
+    }[scope]
+    receipt = {'schema': f'fullmag.volume-dev-{scope}-checks.v1', 'scope': scope,
+               'compose_project': control.project, 'state': 'running', 'commands': [],
+               'source_head': storage.git(selected, 'rev-parse', 'HEAD'),
+               'driver_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    root = f'verification/{scope}-checks'
+    def services():
+        result = {}
+        for name in ('backend', 'frontend'):
+            _identifier, document = codegen._running_service(control.project, name, identity, selected)
+            if document.get('State', {}).get('Health', {}).get('Status') != 'healthy':
+                raise codegen.CodegenError('Frontend checks require healthy existing services')
+            result[name] = (document['Id'], document)
+        return result
+    def service_pins(values):
+        return {name: {**codegen._service_identity(identifier, document),
+                       'started_at': document['State']['StartedAt']} for name, (identifier, document) in values.items()}
+    def input_hashes():
+        files = (*source_files, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
+                 'tsconfig.json', 'next.config.ts', 'next.config.test.ts', 'vitest.config.ts', 'eslint.config.mjs', 'package.json',
+                 'src/kernel/api/generated/openapi-v2.json', 'src/kernel/api/generated/openapi-v2-types.ts',
+                 'src/kernel/api/generated/openapi-v2-client.ts', 'src/kernel/api/generated/openapi-v2-paths.ts')
+        return {name: hashlib.sha256((selected / 'apps/control-room' / name).read_bytes()).hexdigest() for name in files}
+    try:
+        before = services()
+        pins = receipt['services_before'] = service_pins(before)
+        volumes = codegen._inspect_technical_volumes(control.project, before['backend'][1], before['frontend'][1])
+        receipt['technical_volumes'] = volumes
+        inputs = receipt['selected_frontend_input_hashes'] = input_hashes()
+        import docker_development_inputs as frontend_inputs
+        port = int(codegen._environment(before['frontend'][1])['FULLMAG_FRONTEND_HOST_PORT'])
+        metadata = frontend_inputs.describe(selected, port)
+        receipt['frontend_source_view_before'] = frontend_inputs.frontend_view(
+            before['frontend'][0], selected, port, inputs=metadata)
+        for name, arguments in commands:
+            item = {'name': name, 'arguments': list(arguments), 'state': 'running'}
+            receipt['commands'].append(item)
+            started = time.monotonic()
+            # Reuse codegen's existing fixed frontend executor. All mutable paths stay in its named volume.
+            command = ('/usr/bin/flock', '-n', '/state/development/cache/.fullmag-frontend-import-checks.lock',
+                '/usr/bin/env', 'FULLMAG_FRONTEND_ROOT=/state/development/cache', 'FULLMAG_NEXT_DIST_DIR=.next',
+                'TMPDIR=/state/development/tmp', 'TMP=/state/development/tmp', 'TEMP=/state/development/tmp',
+                'CI=1', *arguments)
+            try:
+                stdout, stderr = codegen._run_frontend(before['frontend'][0], command, timeout=600,
+                                                       stdout_limit=1024 * 1024)
+                for stream, raw in (('stdout', stdout), ('stderr', stderr)):
+                    relative = root + '/' + name + '.' + stream + '.log'
+                    control.write_bytes(relative, raw)
+                    item[stream] = {'path': relative, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+                item.update(state='succeeded', exit_code=0)
+            except codegen.CodegenError as error:
+                # A timed-out Docker exec may still own the per-command flock; never continue or retry it.
+                unknown = bool(error.reconciliation_required)
+                raw = str(error).encode('utf-8')
+                control.write_bytes(root + '/' + name + '.error.log', raw[:65536])
+                for stream, output in (('stdout', error.stdout), ('stderr', error.stderr)):
+                    relative = root + '/' + name + '.' + stream + '.log'
+                    control.write_bytes(relative, output)
+                    item[stream] = {'path': relative, 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
+                item.update(state='outcome-unknown' if unknown else 'failed', exit_code=error.exit_code,
+                            error=str(error)[:4096], error_log_truncated=len(raw)>65536,
+                            reconciliation_required=unknown)
+                if unknown or name == 'prepare':
+                    break
+            finally:
+                item['duration_ms'] = round((time.monotonic()-started)*1000)
+        after = services()
+        if service_pins(after) != pins or codegen._inspect_technical_volumes(
+                control.project, after['backend'][1], after['frontend'][1]) != volumes or input_hashes() != inputs:
+            raise codegen.CodegenError('Services, technical volumes or selected frontend inputs changed during checks')
+        if frontend_inputs.describe(selected, port)['files'] != metadata['files']:
+            raise codegen.CodegenError('Selected frontend metadata changed during checks')
+        receipt['frontend_source_view_after'] = frontend_inputs.frontend_view(
+            after['frontend'][0], selected, port, inputs=metadata)
+        receipt['services_after'] = service_pins(after)
+        unknown = any(item.get('reconciliation_required') for item in receipt['commands'])
+        receipt.update(state='outcome-unknown' if unknown else 'succeeded' if all(
+            item['state']=='succeeded' for item in receipt['commands']) and len(receipt['commands'])==len(commands)
+            else 'failed', exit_code=2 if unknown else 0 if all(item['state']=='succeeded' for item in receipt['commands']) else 1)
+    except Exception as error:
+        unknown = bool(getattr(error, 'reconciliation_required', False)) or any(
+            item.get('reconciliation_required') for item in receipt['commands'])
+        receipt.update(state='outcome-unknown' if unknown else 'failed', exit_code=2 if unknown else 1,
+                       error=str(error)[:4096], reconciliation_required=unknown)
+    control.write(root + '/receipt.json', receipt)
+    print(json.dumps(receipt, indent=2))
+    return receipt['exit_code']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-root', type=Path, required=True)
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
+    parser.add_argument('--scope', choices=('all', 'source-capture', 'frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-tools', 'field-only'), default='all')
     args = parser.parse_args()
     if args.offline:
+        if args.scope != 'all':
+            raise BuildControlError('Offline module checks cannot combine with a service-specific scope')
         if sys.platform != 'win32':
             raise BuildControlError('Offline Docker checks require native Windows Python')
         if not args.modules or len(args.modules) > 32 or any(re.fullmatch(r'test_[A-Za-z0-9_]+', module) is None for module in args.modules):
@@ -156,6 +341,8 @@ def main():
     helper = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     control = BuildControl(identity, helper)
     control.prepare()
+    if args.scope in ('frontend-import', 'frontend-antenna', 'frontend-visualization'):
+        return frontend_import_checks(control, selected, identity, scope=args.scope)
     ids = docker_capture('ps', *(['--all'] if args.offline else []), '--quiet', '--no-trunc', '--filter', 'label=com.docker.compose.project='+control.project,
                          '--filter', 'label=com.docker.compose.service=backend').stdout.decode().split()
     if len(ids) != 1:
@@ -174,16 +361,32 @@ pathlib.Path('/build/verification-tmp').mkdir(exist_ok=True)
 environment = {key:value for key,value in os.environ.items() if not key.startswith('FULLMAG_')}
 environment.update(TMPDIR='/build/verification-tmp', PYTHONDONTWRITEBYTECODE='1', HOME='/build/verification-tmp/home', USER='fullmag-checks', LOGNAME='fullmag-checks')
 pathlib.Path(environment['HOME']).mkdir(exist_ok=True)
-command=[sys.executable,'-B','-m','unittest','test_docker_dev_defaults','test_docker_dev_owned_control','test_docker_dev_codegen','test_docker_volume_activate','test_docker_volume_container_recovery','test_docker_volume_stop_unadmitted','test_docker_volume_dev_runtime_state','test_docker_runtime_control_volume','test_docker_container_runtime_recovery','test_runtime_service_recovery_busy_retry','test_docker_backend_volume_cache','test_bootstrap_docker_toolchain','test_docker_compose_identity','test_docker_host_ledger','test_docker_group_ledger','test_docker_volume_receipts','test_docker_dev_host','test_docker_volume_wsl','test_docker_wsl_bind','test_linux_native_host','test_linux_native_probe','test_docker_python_no_test_build','test_mfem_cuda_fast_compile','test_docker_frontend_dev','test_docker_dev_browser_qa','test_docker_development_inputs_linux','test_docker_backend_dev','test_docker_dev_fast_loop','test_docker_backend_live_source','test_docker_candidate_retirement','test_docker_startup_script','test_backend_volume_cache_maintenance','test_docker_cpu_access','test_docker_dev_storage','test_docker_dev_image_context','test_docker_dev_recreate','test_docker_volume_pre_admission_recreate','test_docker_volume_pre_admission_selector','test_docker_volume_pre_admission_integration','test_docker_volume_post_build_generation','test_docker_volume_post_build_integration','test_docker_volume_pending_continuation','test_docker_volume_pending_resume','test_docker_prestart_resume','test_docker_frontend_cache','test_docker_frontend_cache_named_volume','test_fullmag_docker_runtime','test_docker_orphan_recovery','test_recover_docker_orphan','test_just_orphan_recovery_shell']
-sys.exit(subprocess.call(command,cwd='/opt/fullmag/source/scripts',env=environment))
+command=[sys.executable,'-B','-m','unittest','test_docker_dev_defaults','test_docker_dev_up','test_docker_dev_owned_control','test_docker_dev_codegen','test_docker_volume_activate','test_docker_volume_reconcile','test_docker_activation_preflight','test_antenna_rt0_surface_oracle','test_docker_volume_container_recovery','test_docker_volume_stop_unadmitted','test_docker_volume_dev_runtime_state','test_docker_runtime_control_volume','test_docker_container_runtime_recovery','test_runtime_service_recovery_busy_retry','test_docker_backend_volume_cache','test_bootstrap_docker_toolchain','test_docker_toolchain_host_inputs','test_docker_compose_identity','test_docker_host_ledger','test_docker_group_ledger','test_docker_volume_receipts','test_docker_dev_host','test_docker_volume_wsl','test_docker_wsl_bind','test_linux_native_host','test_linux_native_probe','test_docker_python_no_test_build','test_mfem_cuda_fast_compile','test_docker_frontend_dev','test_docker_dev_browser_qa','test_docker_development_inputs_linux','test_docker_backend_dev','test_docker_dev_fast_loop','test_docker_backend_live_source','test_docker_candidate_retirement','test_docker_startup_script','test_backend_volume_cache_maintenance','test_docker_cpu_access','test_docker_dev_storage','test_docker_dev_image_context','test_docker_dev_recreate','test_docker_volume_pre_admission_recreate','test_docker_volume_pre_admission_selector','test_docker_volume_pre_admission_integration','test_docker_volume_post_build_generation','test_docker_volume_post_build_integration','test_docker_volume_pending_continuation','test_docker_volume_pending_resume','test_docker_prestart_resume','test_docker_frontend_cache','test_docker_frontend_cache_named_volume','test_fullmag_docker_runtime','test_docker_orphan_recovery','test_recover_docker_orphan','test_just_orphan_recovery_shell','test_docker_volume_checks']
+if sys.argv[1] == 'frontend-tools':
+    command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_dev_codegen', 'test_docker_volume_checks', 'test_docker_volume_frontend_recovery', 'test_docker_volume_dev_runtime_state', 'test_docker_volume_receipts', 'test_docker_dev_browser_qa']
+if sys.argv[1] == 'field-only':
+    environment.update(PYTHONPATH='/opt/fullmag/source/packages/fullmag-py/src', FULLMAG_TEST_TEMP_ROOT='/build/verification-tmp')
+    result = subprocess.call([sys.executable, '-B', '-m', 'unittest', 'discover',
+        '-s', '/opt/fullmag/source/packages/fullmag-py/tests', '-p', 'test_antenna_field_only_nonmagnetic.py', '-v'],
+        cwd='/opt/fullmag/source', env=environment)
+else:
+    result = subprocess.call(command,cwd='/opt/fullmag/source/scripts',env=environment) if sys.argv[1] in ('all', 'frontend-tools') else 0
+if result == 0 and sys.argv[1] not in ('field-only', 'frontend-tools'):
+    result = subprocess.call([sys.executable, '-B', '/opt/fullmag/source/scripts/verify_accepted_source_scene_capture.py',
+                              '--fullmag-root', '/opt/fullmag/source/packages/fullmag-py/src/fullmag',
+                              '--output-dir', '/build/verification-tmp'], env=environment)
+sys.exit(result)
 '''
     result = docker_capture('exec', '--workdir', '/opt/fullmag/source/scripts', ids[0],
-                           '/usr/local/bin/python3', '-B', '-c', script, allow_failure=True, timeout=180)
+                           '/usr/local/bin/python3', '-B', '-c', script, args.scope, allow_failure=True, timeout=900)
     receipt={'schema':'fullmag.volume-dev-interpreted-checks.v1','exit_code':result.returncode,
-             'container_id':ids[0], 'image_id':observed['Image'], 'compose_project':control.project,
+             'scope':args.scope, 'container_id':ids[0], 'image_id':observed['Image'], 'compose_project':control.project,
              'stdout':result.stdout.decode('utf-8','replace'), 'stderr':result.stderr.decode('utf-8','replace')}
-    control.write('verification/interpreted-checks.json',receipt)
-    print(receipt['stdout']+receipt['stderr'])
+    control.write('verification/interpreted-frontend-tools-checks.json' if args.scope == 'frontend-tools' else
+                  'verification/interpreted-checks.json' if args.scope == 'all' else
+                  'verification/interpreted-field-only-checks.json' if args.scope == 'field-only' else
+                  'verification/interpreted-source-capture-checks.json',receipt)
+    print(receipt['stderr'] if args.scope == 'frontend-tools' else receipt['stdout']+receipt['stderr'])
     return result.returncode
 
 

@@ -2426,11 +2426,13 @@ describe("ObjectVisualizationPanelModel", () => {
       quantitySourcePatch(
         {
           ...DEFAULT_OBJECT_VISUALIZATION,
+          tensorProjection: "spin_flow_z",
           surfaceColorSource: "orientation",
         },
         "material_ms",
       ),
     ).toEqual({
+      tensorProjection: null,
       activeQuantityId: "mat_ms",
       surfaceColorSource: "colormap",
     });
@@ -2945,12 +2947,14 @@ describe("ObjectVisualizationPanelModel", () => {
       quantitySourcePatch(
         {
           ...DEFAULT_OBJECT_VISUALIZATION,
+          tensorProjection: "spin_flow_z",
           surfaceColorSource: "colormap",
           vectorColorMode: "orientation",
         },
         "H_eff",
       ),
     ).toEqual({
+      tensorProjection: null,
       activeQuantityId: "H_eff",
       surfaceColorSource: "orientation",
     });
@@ -2961,12 +2965,14 @@ describe("ObjectVisualizationPanelModel", () => {
       quantitySourcePatch(
         {
           ...DEFAULT_OBJECT_VISUALIZATION,
+          tensorProjection: "spin_flow_z",
           surfaceColorSource: "component_z",
           vectorColorMode: "orientation",
         },
         "H_demag",
       ),
     ).toEqual({
+      tensorProjection: null,
       activeQuantityId: "H_demag",
     });
   });

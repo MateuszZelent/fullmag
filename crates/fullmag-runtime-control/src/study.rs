@@ -883,6 +883,14 @@ pub fn load_accepted_worker_step(
     )
     .context("durable worker Prepare checkpoint is inconsistent")?;
 
+    if let Some(binding) = &resolved_input.frozen_stage_context {
+        let fullmag_ir::BackendPlanIR::Fdm(plan) = &execution_plan.backend_plan else {
+            bail!("frozen history cannot dispatch through another backend");
+        };
+        crate::frozen_stage_lifecycle::load_execution_context(store,
+            &accepted.run.specification.run_id, step_id, plan, &current_claim, binding)?;
+    }
+
     Ok(AcceptedWorkerStep {
         claim: current_claim,
         step_id: step_id.to_owned(),
@@ -892,6 +900,132 @@ pub fn load_accepted_worker_step(
         until_seconds: execution_step.until_seconds,
         resolved_input: resolved_input.clone(),
     })
+}
+
+/// Shared physical input owner for execution and bounded historical validation.
+/// Preserve the exact existing state transfer; no V1 hash or normalization change.
+pub fn materialize_accepted_worker_execution_plan(
+    store: &SessionStore,
+    accepted_step: &AcceptedWorkerStep,
+) -> Result<ExecutionPlanIR> {
+    let resolved_input = &accepted_step.resolved_input;
+    resolved_input
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    if resolved_input.run_id != accepted_step.claim.run_id
+        || resolved_input.task_id != accepted_step.claim.task_id
+        || resolved_input.attempt_id != accepted_step.claim.attempt_id
+        || resolved_input.ownership_epoch != accepted_step.claim.ownership_epoch
+    {
+        bail!("accepted worker inputs differ from the current task claim");
+    }
+    let plan_fingerprint = fullmag_session::canonical_json_sha256(
+        &serde_json::to_value(&accepted_step.execution_plan)
+            .context("serialize accepted worker execution plan")?,
+    );
+    if resolved_input.plan_fingerprint != plan_fingerprint {
+        bail!("accepted worker inputs differ from the pinned execution plan");
+    }
+
+    let mut declared = std::collections::BTreeMap::<&str, &StudyInputPort>::new();
+    for port in &accepted_step.study_inputs {
+        fullmag_session::repository_path::validate_store_id(&port.port_id)
+            .with_context(|| format!("accepted study input port `{}` is invalid", port.port_id))?;
+        if declared.insert(port.port_id.as_str(), port).is_some() {
+            bail!("accepted study input port `{}` is duplicated", port.port_id);
+        }
+    }
+    for port in &accepted_step.study_inputs {
+        // Authored initial conditions are already part of the immutable
+        // ProblemIR and canonical plan reconstructed by the accepted loader.
+        if port.required
+            && !resolved_input.inputs.contains_key(&port.port_id)
+            && !matches!(&port.source, StudyInputSource::AuthoredInitialState { .. })
+        {
+            bail!(
+                "required accepted study input `{}` has no resolved artifact",
+                port.port_id
+            );
+        }
+    }
+
+    let mut execution_plan = accepted_step.execution_plan.clone();
+    let mut materialized_state = false;
+    for (port_id, input) in &resolved_input.inputs {
+        let port = declared.get(port_id.as_str()).with_context(|| {
+            format!("resolved input `{port_id}` is not declared by the accepted study")
+        })?;
+        input
+            .validate()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let artifact = input.study_artifact.as_ref().with_context(|| {
+            format!("resolved study input `{port_id}` has no typed CAS artifact binding")
+        })?;
+        let expected_data_kind = match port.data_kind {
+            StudyPortDataKind::InitialState => "initial_state",
+            StudyPortDataKind::State => "state",
+            unsupported => bail!(
+                "accepted worker has no solver input binding for `{unsupported:?}` port `{port_id}`"
+            ),
+        };
+        if artifact.data_kind != expected_data_kind {
+            bail!(
+                "accepted study input `{port_id}` expects `{expected_data_kind}` but its artifact is `{}`",
+                artifact.data_kind
+            );
+        }
+        if let StudyInputSource::PinnedArtifact {
+            artifact_id,
+            content_sha256,
+        } = &port.source
+        {
+            if artifact.artifact_id != *artifact_id || artifact.object_ref != *content_sha256 {
+                bail!("pinned artifact input `{port_id}` differs from its accepted identity");
+            }
+        }
+        if materialized_state {
+            bail!("accepted worker cannot bind multiple magnetization inputs to one initial state");
+        }
+        let bytes = if resolved_input.frozen_stage_context.is_some() {
+            store.cas().get_bounded(
+                &artifact.object_ref,
+                crate::frozen_stage_lifecycle::MAX_CONTEXT_BYTES
+                    .min(accepted_step.claim.lease.budget.storage_bytes),
+            )?
+        } else {
+            store.cas().get(&artifact.object_ref)?
+        }
+        .with_context(|| format!("accepted input `{port_id}` CAS object is missing"))?;
+        let decoded = fullmag_application::decode_study_artifact(artifact, &bytes)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .with_context(|| format!("decode accepted study input `{port_id}`"))?;
+        let state = match decoded {
+            fullmag_application::DecodedStudyArtifact::MagnetizationState(state) => state,
+            fullmag_application::DecodedStudyArtifact::FrozenMagnetizationState(state) => {
+                let binding = resolved_input.frozen_stage_context.as_ref()
+                    .context("full-history state input has no admitted lifecycle binding")?;
+                let fullmag_ir::BackendPlanIR::Fdm(plan) = &accepted_step.execution_plan.backend_plan else {
+                    bail!("full-history state input is not admitted for this backend");
+                };
+                crate::frozen_stage_lifecycle::load_execution_context(store,
+                    &accepted_step.claim.run_id, &accepted_step.step_id, plan,
+                    &accepted_step.claim, binding)?;
+                state.state
+            }
+            _ => bail!("accepted state input `{port_id}` decoded to a non-state artifact"),
+        };
+        execution_plan = fullmag_runner::materialize_study_magnetization_input(
+            &execution_plan,
+            &state.layout,
+            &state.values,
+        )
+        .with_context(|| {
+            format!("materialize accepted state input `{port_id}` into runner plan")
+        })?;
+        materialized_state = true;
+    }
+
+    Ok(execution_plan)
 }
 
 /// Rehydrate the accepted step when a worker receives its durable Start command.
@@ -1279,6 +1413,26 @@ pub fn publish_study_outputs(
     accepted_state_ref: Option<&fullmag_quantities::AcceptedStateRef>,
     observation_source: Option<&ObservationSourcePayload>,
 ) -> Result<fullmag_session::FmsArtifactCatalog> {
+    publish_study_outputs_internal(store,accepted,claim,step_id,outputs,accepted_state_ref,observation_source,None)
+}
+
+pub fn publish_terminal_study_outputs(
+    store: &SessionStore, accepted: &AcceptedStudySnapshot, claim: &TaskClaim, step_id: &str,
+    outputs: &[StudyOutputPayload], prepared: &crate::PreparedTerminalPublicationV4,
+) -> Result<fullmag_session::FmsArtifactCatalog> {
+    publish_study_outputs_internal(store,accepted,claim,step_id,outputs,Some(&prepared.manifest.accepted_state_ref),None,Some(prepared))
+}
+
+fn publish_study_outputs_internal(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    claim: &TaskClaim,
+    step_id: &str,
+    outputs: &[StudyOutputPayload],
+    accepted_state_ref: Option<&fullmag_quantities::AcceptedStateRef>,
+    observation_source: Option<&ObservationSourcePayload>,
+    terminal: Option<&crate::PreparedTerminalPublicationV4>,
+) -> Result<fullmag_session::FmsArtifactCatalog> {
     let run_id = accepted.run.specification.run_id.as_str();
     let expected_task_id = fullmag_session::task_id_for_study_step(run_id, step_id)?;
     if claim.run_id.as_str() != run_id || claim.task_id.as_str() != expected_task_id {
@@ -1387,7 +1541,7 @@ pub fn publish_study_outputs(
             let problem=accepted.catalog.entries().iter().find(|entry|entry.step_id()==step_id).context("inspection publication ProblemIR missing")?.problem();
             crate::study_inspection::validate_accepted_inspection_bytes(problem,step,&output.bytes,crate::study_inspection::inspection_bundle_budget(claim)?)?;
         } else if matches!(step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) { bail!("inspection output requires its single registered bundle codec"); }
-        fullmag_application::decode_study_artifact_bytes(
+        let decoded = fullmag_application::decode_study_artifact_bytes(
             data_kind,
             &output.codec_id,
             &output.codec_version,
@@ -1399,6 +1553,9 @@ pub fn publish_study_outputs(
                 output.port_id, output.case_id
             )
         })?;
+        if let fullmag_application::DecodedStudyArtifact::FrozenMagnetizationState(artifact) = decoded {
+            crate::frozen_stage_lifecycle::validate_terminal_output(store, accepted, claim, step_id, artifact)?;
+        }
         fullmag_session::repository_path::validate_store_id(&output.case_id)?;
         fullmag_session::repository_path::validate_store_id(&output.codec_id)?;
         fullmag_session::repository_path::validate_store_id(&output.codec_version)?;
@@ -1411,6 +1568,21 @@ pub fn publish_study_outputs(
                 declared.port_id
             );
         }
+    }
+
+    if let Some(prepared) = terminal {
+        let historical = cold_accepted_worker_step(store,accepted,step_id,&expected_task_id,
+            claim.attempt_id.as_str(),claim.ownership_epoch.value())?;
+        crate::validate_prepared_terminal_publication(store,&historical,prepared)?;
+        let manifest = &prepared.manifest;
+        if manifest.outputs.len() != outputs.len() || outputs.iter().any(|output| !manifest.outputs.iter().any(|entry|
+            entry.port_id == output.port_id && entry.case_id == output.case_id && entry.codec_id == output.codec_id
+            && entry.codec_version == output.codec_version && entry.object_ref == fullmag_session::hex_sha256(&output.bytes))) {
+            bail!("prepared terminal output bindings differ from the immutable completed receipt");
+        }
+        let catalog = store.append_artifact_catalog_entries_for_lease(&durable_lease,&prepared.entries)?;
+        crate::solution_set::publish_open_study_solution(store,accepted,claim,step_id,&catalog)?;
+        return Ok(catalog);
     }
 
     // Validate the complete declared output set before pinning any CAS object.
@@ -1602,7 +1774,7 @@ pub fn publish_study_outputs(
     Ok(catalog)
 }
 
-fn study_port_data_kind_label(kind: &StudyPortDataKind) -> &'static str {
+pub(crate) fn study_port_data_kind_label(kind: &StudyPortDataKind) -> &'static str {
     match kind {
         StudyPortDataKind::InitialState => "initial_state",
         StudyPortDataKind::State => "state",
@@ -1722,11 +1894,12 @@ pub(crate) fn validate_study_task_completion_for_snapshot(
     }
     let manifest_bytes = store
         .cas()
-        .get(manifest_ref)?
+        .get_bounded(manifest_ref, fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)?
         .with_context(|| format!("study completion manifest `{manifest_ref}` is missing"))?;
-    let manifest: fullmag_session::FmsStudyOutputManifest = serde_json::from_slice(&manifest_bytes)
+    crate::study_output_history::open_published_terminal_manifest(store,&accepted,claim,&source_step.step_id,
+        &manifest_bytes,manifest_artifact,&artifact_catalog)?;
+    let manifest = crate::study_output_history::read_manifest_projection(&manifest_bytes)
         .context("study completion manifest is not a typed document")?;
-    manifest.validate()?;
     if manifest.run_id != run_id
         || manifest.task_id != task_id
         || manifest.step_id != source_step.step_id
@@ -2060,12 +2233,15 @@ fn bind_step_output_manifests(
         }
         let manifest_bytes = store
             .cas()
-            .get(manifest_ref)?
+            .get_bounded(manifest_ref,fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)?
             .with_context(|| format!("study output manifest `{manifest_ref}` is missing"))?;
-        let manifest: fullmag_session::FmsStudyOutputManifest =
-            serde_json::from_slice(&manifest_bytes)
-                .context("study output manifest is not a supported typed document")?;
-        manifest.validate()?;
+        let manifest = crate::study_output_history::read_manifest_projection(&manifest_bytes)
+            .context("study output manifest is not a supported typed document")?;
+        if serde_json::from_slice::<serde_json::Value>(&manifest_bytes)?.get("schema_version").and_then(serde_json::Value::as_str)
+            == Some(fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V4) {
+            let reference = manifest.accepted_state_ref.as_ref().context("terminal dependency has no accepted source")?;
+            crate::load_study_observation_runtime_v2(store,reference)?;
+        }
         if manifest.run_id != run_id
             || manifest.task_id != dependency_task_id
             || manifest.step_id != *step_id
@@ -2761,6 +2937,66 @@ mod dependency_tests {
     }
 }
 
+fn apply_admitted_frozen_binding(resolved: &mut ResolvedTaskInput,
+    snapshot: &fullmag_session::FmsResolvedInputsSnapshot, stage: &str) -> Result<()> {
+    snapshot.validate()?;
+    if snapshot.inputs != serde_json::to_value(&resolved.inputs)? { bail!("physical input differs from its immutable admission"); }
+    if let Some(context) = &snapshot.frozen_stage_context {
+        let binding: fullmag_application::FrozenStageContextRefV1 = serde_json::from_value(context.clone())?;
+        binding.validate()?;
+        if binding.stage_id != stage || binding.run_id != resolved.run_id.as_str() {
+            bail!("admitted frozen binding belongs to another stage/run");
+        }
+        resolved.schema_version = fullmag_application::TERMINAL_RESOLVED_TASK_INPUT_SCHEMA.into();
+        resolved.frozen_stage_context = Some(binding);
+        resolved.validate()?;
+    }
+    Ok(())
+}
+
+/// Recover a read-only source from the original genesis/admission, including
+/// after success/lease release. This does not acquire a claim or dispatch work.
+pub(crate) fn cold_accepted_worker_step(store: &SessionStore,
+    accepted: &AcceptedStudySnapshot, stage: &str, task_id: &str, attempt: &str, epoch: u64)
+    -> Result<AcceptedWorkerStep> {
+    let run = accepted.run.specification.run_id.as_str();
+    if fullmag_session::task_id_for_study_step(run, stage)? != task_id { bail!("cold source task differs from its immutable stage"); }
+    let catalog = store.read_run_catalog(run)?.context("cold source run catalog is absent")?;
+    let task = catalog.tasks.iter().find(|task| task.task_id == task_id).context("cold source task is absent")?;
+    if task.attempt_id.as_deref() != Some(attempt) || task.ownership_epoch != Some(epoch) {
+        bail!("cold source no longer belongs to the published attempt");
+    }
+    let genesis = task.coordinator_genesis.as_ref().context("cold source has no historical coordinator genesis")?;
+    let checkpoint: fullmag_application::CoordinatorCheckpoint = serde_json::from_value(genesis.checkpoint.clone())?;
+    if genesis.run_id != run || genesis.task_id != task_id || genesis.attempt_id != attempt
+        || genesis.ownership_epoch != epoch || checkpoint.claim.run_id.as_str() != run
+        || checkpoint.claim.task_id.as_str() != task_id || checkpoint.claim.attempt_id.as_str() != attempt
+        || checkpoint.claim.ownership_epoch.value() != epoch || checkpoint.task.input_fingerprint != task.input_fingerprint
+        || checkpoint.command_sequence != 0 || checkpoint.event_sequence != 0
+        || fullmag_session::canonical_json_sha256(&genesis.checkpoint) != genesis.checkpoint_sha256
+    { bail!("cold source genesis differs from its immutable published identity"); }
+    fullmag_application::WorkerCoordinator::restore(checkpoint.clone(), &[], &[])?;
+    let admission = store.read_task_admission(run, task_id, attempt)?.context("cold source has no historical admission")?;
+    admission.validate()?;
+    let snapshot = admission.resolved_inputs_snapshot.context("cold source has no captured physical inputs/history")?;
+    snapshot.validate()?;
+    if snapshot.frozen_stage_context.is_none() { bail!("cold v2 source lacks the actual historical activation set"); }
+    let inputs: std::collections::BTreeMap<String, ResolvedInput> = serde_json::from_value(snapshot.inputs.clone())?;
+    let receipt = accepted.read_task_preparation(store, task_id)?;
+    let AcceptedPreparationReceipt::Solver(receipt) = receipt else { bail!("cold M3 source is not a solver stage"); };
+    let mut resolved = accepted.resolved_task_input_from_bound_receipt(&checkpoint.task,
+        &checkpoint.claim, stage, &receipt, inputs)?;
+    apply_admitted_frozen_binding(&mut resolved, &snapshot, stage)?;
+    let lowered = accepted.lowered.steps.iter().find(|step| step.step_id == stage).context("cold source has no accepted plan")?;
+    let authored = accepted.study.steps.iter().find(|step| step.step_id == stage).context("cold source has no accepted stage")?;
+    let problem = accepted.catalog.entries().iter().find(|entry| entry.step_id() == stage)
+        .context("cold source has no immutable ProblemIR")?.problem().clone();
+    let plan = lowered.execution_plan.clone().context("cold source has no resolved execution plan")?;
+    resolved.validate_execution_for_problem(&accepted.run.specification, &problem)?;
+    Ok(AcceptedWorkerStep { claim: checkpoint.claim, step_id: stage.into(), study_inputs: authored.inputs.clone(),
+        problem, execution_plan: plan, until_seconds: lowered.until_seconds, resolved_input: resolved })
+}
+
 /// Publish a worker Prepare command only after resolving its task input from
 /// the durable receipt and immutable accepted-study snapshot. The coordinator
 /// journal is the outbox boundary: this does not send a transport message,
@@ -2773,13 +3009,20 @@ pub fn publish_accepted_task_prepare(
     inputs: std::collections::BTreeMap<String, ResolvedInput>,
 ) -> Result<WorkerCommandEnvelope> {
     let checkpoint = coordinator.checkpoint();
-    let (receipt, resolved_input) = study.resolve_task_input_and_receipt_from_store(
+    let (receipt, mut resolved_input) = study.resolve_task_input_and_receipt_from_store(
         store,
         &checkpoint.task,
         &checkpoint.claim,
         step_id,
         inputs,
     )?;
+
+    if let Some(admission) = store.read_task_admission(checkpoint.claim.run_id.as_str(),
+        checkpoint.claim.task_id.as_str(), checkpoint.claim.attempt_id.as_str())? {
+        if let Some(snapshot) = admission.resolved_inputs_snapshot {
+            apply_admitted_frozen_binding(&mut resolved_input, &snapshot, step_id)?;
+        }
+    }
 
     retry_store_writer_busy(|| crate::commit_coordinator_genesis(store, &checkpoint))
         .context("publishing accepted task coordinator genesis")?;

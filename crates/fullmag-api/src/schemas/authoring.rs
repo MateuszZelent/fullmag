@@ -300,6 +300,10 @@ pub struct SceneObjectResource {
     pub locked: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Authored presentation metadata; it does not select physics modules.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(additional_properties)]
+    pub visualization_hint: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -322,6 +326,18 @@ pub struct AntennaPortBranchResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AntennaPortNormalizationResource {
+    SourceCutRt0 {source_cut_ref: String, orientation: AntennaSourceCutOrientationResource},
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AntennaSourceCutOrientationResource {
+    MinusOutward,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AntennaPortModeResource {
     pub schema_version: String,
@@ -329,6 +345,8 @@ pub struct AntennaPortModeResource {
     pub source_object_id: String,
     pub current_transport_id: String,
     pub branches: Vec<AntennaPortBranchResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalization: Option<AntennaPortNormalizationResource>,
     #[serde(default = "default_antenna_normalization_current_a")]
     pub normalization_current_a: f64,
 }
@@ -2031,6 +2049,29 @@ mod stage_autosave_tests {
             .validate()
             .unwrap_err()
             .contains("scalar tables only"));
+    }
+
+    #[test]
+    fn scene_resource_preserves_presentation_hints_without_magnetic_assignments() {
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version":"scene.v2", "objects":[{
+                "id":"conductor", "name":"Renamed source", "role":"antenna", "material_ref":"",
+                "geometry":{"geometry_kind":"Box","geometry_params":{"size":[1e-6,1e-6,1e-6]}},
+                "visualization_hint":{"display":"shaded_frame","role":"antenna"}
+            }]
+        })).unwrap();
+        let original = scene.objects[0].clone();
+        let resource = SceneResource::from_scene_document(scene).unwrap();
+        assert_eq!(resource.objects[0].visualization_hint, original.visualization_hint);
+        assert_eq!(resource.objects[0].role.as_deref(), Some("antenna"));
+        assert!(resource.objects[0].magnetization_ref.is_none());
+        assert!(resource.objects[0].physics_stack.is_empty());
+        assert!(resource.objects[0].region_overrides.is_empty());
+        let serialized = serde_json::to_value(resource).unwrap();
+        assert_eq!(serialized["objects"][0]["visualization_hint"],
+            serde_json::json!({"display":"shaded_frame","role":"antenna"}));
+        let without_hint: SceneObjectResource = serde_json::from_value(serde_json::json!({"id":"body"})).unwrap();
+        assert!(!serde_json::to_value(without_hint).unwrap().as_object().unwrap().contains_key("visualization_hint"));
     }
 
     #[test]

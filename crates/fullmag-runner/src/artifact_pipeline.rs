@@ -257,6 +257,7 @@ fn adaptive_attempt_reason_name(reason: AdaptiveAttemptReason) -> &'static str {
 }
 
 enum ArtifactJob {
+    TerminalHistory(serde_json::Value),
     ScalarRow(StepStats),
     FieldSnapshot {
         snapshot: FieldSnapshot,
@@ -292,6 +293,7 @@ enum ArtifactJob {
 impl ArtifactJob {
     fn estimated_bytes(&self) -> u64 {
         match self {
+            ArtifactJob::TerminalHistory(value) => value.to_string().len() as u64,
             ArtifactJob::ScalarRow(_) => std::mem::size_of::<StepStats>() as u64,
             ArtifactJob::FieldSnapshot { snapshot, .. } => snapshot
                 .values
@@ -1061,6 +1063,7 @@ pub(crate) struct ArtifactRecorder {
     /// which intentionally contains only requested output rows.
     solver_steps: Vec<StepStats>,
     cpu_adaptive_attempts: Vec<CpuAdaptiveAttemptBatch>,
+    terminal_history_enabled: bool,
     pipeline: Option<ArtifactPipelineSender>,
     provenance: ExecutionProvenance,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
@@ -1077,6 +1080,7 @@ impl ArtifactRecorder {
             field_snapshot_count: 0,
             solver_steps: Vec::new(),
             cpu_adaptive_attempts: Vec::new(),
+            terminal_history_enabled: false,
             pipeline: None,
             provenance,
             physics_execution_context: None,
@@ -1099,6 +1103,7 @@ impl ArtifactRecorder {
             field_snapshot_count: 0,
             solver_steps: Vec::new(),
             cpu_adaptive_attempts: Vec::new(),
+            terminal_history_enabled: false,
             pipeline: Some(pipeline),
             provenance,
             physics_execution_context,
@@ -1129,6 +1134,49 @@ impl ArtifactRecorder {
                 .insert(name.clone(), accepted_step);
         }
         due
+    }
+
+    pub(crate) fn begin_terminal_history(&mut self, outputs: &[fullmag_ir::OutputIR]) -> Result<(), RunError> {
+        let pipeline = self.pipeline.as_ref().ok_or_else(|| RunError {
+            message: "terminal history requires the existing streaming writer".into(),
+        })?;
+        if self.terminal_history_enabled { return Err(RunError { message: "terminal history already enabled".into() }); }
+        let header = serde_json::json!({"kind": "header", "schema_version": "fullmag.runner.output_inventory.v1", "outputs": outputs});
+        if header.to_string().len() > 128 * 1024 { return Err(RunError { message: "terminal output configuration exceeds metadata budget".into() }); }
+        pipeline.push(ArtifactJob::TerminalHistory(header))?;
+        self.terminal_history_enabled = true;
+        Ok(())
+    }
+
+    pub(crate) fn record_history_schedule_causes(&self, step: u64, time: f64,
+        collection: &str, schedules: &[crate::schedules::OutputSchedule]) -> Result<(), RunError> {
+        if !self.terminal_history_enabled { return Ok(()); }
+        let pipeline = self.pipeline.as_ref().expect("terminal history requires a writer");
+        for (index, schedule) in schedules.iter().enumerate()
+            .filter(|(_, schedule)| crate::schedules::is_due(time, schedule.next_time)) {
+            pipeline.push(ArtifactJob::TerminalHistory(serde_json::json!({
+                "kind": "cause", "step": step, "time_s": time, "collection": collection,
+                "schedule_index": index, "name": schedule.name, "cause": "scheduled",
+            })))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record_history_field_cause(&self, step: u64, time: f64, schedule_index: usize, name: &str)
+        -> Result<(), RunError> {
+        if !self.terminal_history_enabled { return Ok(()); }
+        self.pipeline.as_ref().expect("terminal history requires a writer").push(ArtifactJob::TerminalHistory(
+            serde_json::json!({"kind": "cause", "step": step, "time_s": time, "collection": "field",
+                "schedule_index": schedule_index, "name": name, "cause": "scheduled"})))?;
+        Ok(())
+    }
+
+    pub(crate) fn record_history_final_cause(&self, step: u64, time: f64) -> Result<(), RunError> {
+        if !self.terminal_history_enabled { return Ok(()); }
+        self.pipeline.as_ref().expect("terminal history requires a writer").push(
+            ArtifactJob::TerminalHistory(serde_json::json!({"kind": "cause", "step": step,
+                "time_s": time, "collection": "all", "schedule_index": null, "name": null, "cause": "final"})))?;
+        Ok(())
     }
 
     pub(crate) fn record_scalar(
@@ -1682,6 +1730,11 @@ fn zarr_dtype(scalar_type: NativeSnapshotScalarType) -> &'static str {
     }
 }
 
+fn write_terminal_history_line(writer: &mut BufWriter<File>, value: &serde_json::Value) -> Result<(), String> {
+    serde_json::to_writer(&mut *writer, value).map_err(|error| error.to_string())?;
+    writer.write_all(b"\n").map_err(|error| error.to_string())
+}
+
 fn writer_loop(
     output_dir: &Path,
     autosave_root: &Path,
@@ -1729,6 +1782,13 @@ fn writer_loop(
     #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     let mut zarr_writers: HashMap<String, ZarrFieldSeriesWriter> = HashMap::new();
 
+    let mut terminal_history: Option<BufWriter<File>> = None;
+    let mut history_ordinals = std::collections::BTreeMap::<String, u64>::new();
+    let mut scalar_byte_offset = {
+        let mut header = Vec::new();
+        write_scalars_csv_header(&mut header).map_err(|error| error.to_string())?;
+        header.len() as u64
+    };
     for job in rx {
         queue_depth
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
@@ -1740,6 +1800,26 @@ fn writer_loop(
             Ordering::Relaxed,
         );
         match job {
+            ArtifactJob::TerminalHistory(mut value) => {
+                if value.get("kind").and_then(serde_json::Value::as_str) == Some("cause") {
+                    let ordinal = match value.get("collection").and_then(serde_json::Value::as_str) {
+                        Some("scalar") => Some(history_ordinals.get("scalar-row").copied().unwrap_or(0)),
+                        Some("field") => value.get("name").and_then(serde_json::Value::as_str)
+                            .map(|name| history_ordinals.get(&format!("field:{name}")).copied().unwrap_or(0)),
+                        _ => None,
+                    };
+                    value["sample_ordinal"] = serde_json::json!(ordinal);
+                }
+                if value.get("kind").and_then(serde_json::Value::as_str) == Some("header") {
+                    if terminal_history.is_some() || summary.scalar_rows_written != 0 || summary.field_snapshots_written != 0 {
+                        return Err("terminal history must begin once before output samples".into());
+                    }
+                    terminal_history = Some(BufWriter::new(std::fs::OpenOptions::new().write(true).create_new(true)
+                        .open(output_dir.join("terminal-output-inventory.v1.jsonl")).map_err(|error| error.to_string())?));
+                }
+                let writer = terminal_history.as_mut().ok_or("terminal history event has no header")?;
+                write_terminal_history_line(writer, &value)?;
+            }
             ArtifactJob::ScalarRow(stats) => {
                 let job_start = std::time::Instant::now();
                 if scalar_writer.is_none() {
@@ -1760,12 +1840,14 @@ fn writer_loop(
                     })?;
                     scalar_writer = Some(writer);
                 }
-                write_scalar_row(
-                    scalar_writer
-                        .as_mut()
-                        .expect("scalar writer initialized before row write"),
-                    &stats,
-                )
+                let scalar_row = if terminal_history.is_some() {
+                    let mut row = Vec::with_capacity(512);
+                    write_scalar_row(&mut row, &stats).map_err(|error| error.to_string())?;
+                    row
+                } else { Vec::new() };
+                let writer = scalar_writer.as_mut().expect("scalar writer initialized before row write");
+                (if terminal_history.is_some() { writer.write_all(&scalar_row) }
+                    else { write_scalar_row(writer, &stats) })
                 .map_err(|error| {
                     format!(
                         "failed to append scalar trace row to '{}': {}",
@@ -1773,6 +1855,19 @@ fn writer_loop(
                         error
                     )
                 })?;
+                if let Some(writer) = terminal_history.as_mut() {
+                    let stream = "scalar-row".to_string();
+                    let ordinal = history_ordinals.entry(stream.clone()).or_default();
+                    write_terminal_history_line(writer, &serde_json::json!({
+                        "kind": "sample", "stream_id": stream, "ordinal": *ordinal,
+                        "collection": "scalar", "quantity_id": null,
+                        "step": stats.step, "time_s": stats.time, "solver_dt_s": stats.dt,
+                        "relative_path": "scalars.csv", "byte_offset": scalar_byte_offset,
+                        "writer_byte_count": scalar_row.len(), "payload_codec_id": "fullmag.runner.scalar_csv_row", "payload_codec_version": "v1",
+                    }))?;
+                    *ordinal = ordinal.checked_add(1).ok_or("terminal scalar ordinal overflow")?;
+                }
+                scalar_byte_offset = scalar_byte_offset.checked_add(scalar_row.len() as u64).ok_or("scalar byte offset overflow")?;
                 if let Some(runtime) = stage_autosave.as_mut() {
                     runtime.append_scalar(&stats)?;
                 }
@@ -1811,6 +1906,19 @@ fn writer_loop(
                         let bytes = fs::metadata(output_dir.join(&relative))
                             .ok()
                             .map(|meta| meta.len());
+                        if let Some(writer) = terminal_history.as_mut() {
+                            let stream = format!("field:{}", snapshot.name);
+                            let ordinal = history_ordinals.entry(stream.clone()).or_default();
+                            let count = fs::metadata(output_dir.join(&relative)).map_err(|error| error.to_string())?.len();
+                            write_terminal_history_line(writer, &serde_json::json!({
+                                "kind": "sample", "stream_id": stream, "ordinal": *ordinal,
+                                "collection": "field", "quantity_id": snapshot.name,
+                                "step": snapshot.step, "time_s": snapshot.time, "solver_dt_s": snapshot.solver_dt,
+                                "relative_path": relative, "byte_offset": 0, "writer_byte_count": count,
+                                "payload_codec_id": "fullmag.runner.field_snapshot_json", "payload_codec_version": "v1",
+                            }))?;
+                            *ordinal = ordinal.checked_add(1).ok_or("terminal field ordinal overflow")?;
+                        }
                         frames_index.record(
                             &snapshot.name,
                             snapshot.step,
@@ -2024,6 +2132,14 @@ fn writer_loop(
         }
     }
 
+    if let Some(mut writer) = terminal_history {
+        write_terminal_history_line(&mut writer, &serde_json::json!({
+            "kind": "seal", "schema_version": "fullmag.runner.output_inventory_seal.v1",
+            "streams": history_ordinals, "scalar_rows_written": summary.scalar_rows_written,
+            "field_snapshots_written": summary.field_snapshots_written,
+        }))?;
+        writer.flush().map_err(|error| format!("terminal history drain failed: {error}"))?;
+    }
     if let Some(mut writer) = scalar_writer {
         writer.flush().map_err(|error| {
             format!(

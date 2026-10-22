@@ -2838,6 +2838,18 @@ class BackendPackageTests(unittest.TestCase):
                             ).exists()
                         )
 
+    def test_recovery_archive_is_preserved_by_package_root_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "package"
+            control = backend._ensure_package_development_root(package)
+            archive = control / backend.PACKAGE_QUARANTINE_DIRNAME
+            archive.mkdir()
+            payload = archive / "preserved-evidence"
+            payload.write_bytes(b"retained publication")
+            self.assertEqual(backend._ensure_package_development_root(package), control)
+            self.assertEqual(payload.read_bytes(), b"retained publication")
+
+
     def test_successful_make_log_is_copied_then_external_log_is_retired(self):
         with tempfile.TemporaryDirectory() as directory:
             package, build_root, candidate, log_path = self._failed_make_fixture(

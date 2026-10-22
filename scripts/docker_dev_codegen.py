@@ -203,9 +203,13 @@ if root.exists():
 class CodegenError(RuntimeError):
     """The existing DEV services did not satisfy the codegen contract."""
 
-    def __init__(self, message: str, *, reconciliation_required: bool = False) -> None:
+    def __init__(self, message: str, *, reconciliation_required: bool = False,
+                 stdout: bytes = b"", stderr: bytes = b"", exit_code: int | None = None) -> None:
         super().__init__(message)
         self.reconciliation_required = reconciliation_required
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exit_code = exit_code
 
 
 def _sha256(data: bytes) -> str:
@@ -405,7 +409,8 @@ def _capture(arguments: Sequence[object], *, timeout: int = 120,
     stderr = bytes(output["stderr"])
     if process.returncode:
         message = stderr.decode("utf-8", "replace").strip() or stdout.decode("utf-8", "replace").strip()
-        raise CodegenError(message or f"Docker command failed ({process.returncode})")
+        raise CodegenError(message or f"Docker command failed ({process.returncode})",
+                           stdout=stdout, stderr=stderr, exit_code=process.returncode)
     return stdout, stderr
 
 
@@ -533,6 +538,96 @@ def _validate_mounts(
             raise CodegenError("frontend control namespace differs from the backend environment")
 
 
+def _validate_admitted_source_mount(
+    project: str, service: str, identity: Mapping[str, str], selected: Path,
+    document: Mapping[str, Any],
+) -> None:
+    """Authenticate daemon aliases against the exact succeeded DEV admission."""
+    from bootstrap_docker_toolchain import control_volume_name
+    from docker_build_control import BuildControlError, MAX_DOCUMENT_BYTES, canonical, control_read_script
+    from docker_volume_dev import _validate_retained_service
+
+    observed = {service: document}
+
+    def running(role: str) -> Mapping[str, Any]:
+        if role not in observed:
+            raw, _ = _capture((
+                "ps", "--quiet", "--filter", "status=running",
+                "--filter", f"label=com.docker.compose.project={project}",
+                "--filter", f"label=com.docker.compose.service={role}",
+            ), timeout=30, stdout_limit=64 * 1024)
+            ids = raw.decode().split()
+            if len(ids) != 1:
+                raise CodegenError(f"admission requires one current {role} service")
+            observed[role] = _inspect(ids[0])
+        return observed[role]
+
+    backend = running("backend")
+    control_mount = _mount_for(backend, "/opt/fullmag/control")
+    namespace = _backend_control_namespace(backend)
+    if (control_mount.get("Type") != "volume"
+            or control_mount.get("Name") != control_volume_name(project)
+            or _mount_subpath(backend, control_mount, "/opt/fullmag/control") != (namespace or None)):
+        raise CodegenError("admission control mount does not belong to this Compose group")
+    backend_id = backend.get("Id")
+    if not isinstance(backend_id, str) or SHA256_RE.fullmatch(backend_id) is None:
+        raise CodegenError("admission backend has no full container identity")
+
+    def read(relative: str) -> tuple[bytes, dict[str, Any]]:
+        script = control_read_script("/control/" + relative)
+        # The same control-volume root is mounted inside this fixed backend;
+        # reading it must not launch a helper or create a new operation.
+        script = script.replace("/control", "/opt/fullmag/control")
+        raw, _ = _exec(backend_id, ("/bin/bash", "-euo", "pipefail", "-c", script),
+                       timeout=90, stdout_limit=MAX_DOCUMENT_BYTES + 1)
+        return raw, _read_json_bytes(raw, "DEV admission " + relative, MAX_DOCUMENT_BYTES)
+
+    receipt_raw, receipt = read("development/verified.json")
+    attempt = receipt.get("attempt")
+    inputs = receipt.get("inputs")
+    if (receipt.get("schema") != "fullmag.docker-build-operation.v1"
+            or receipt.get("phase") != "development" or receipt.get("state") != "succeeded"
+            or receipt.get("compose_project") != project
+            or not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None
+            or not isinstance(inputs, Mapping)
+            or _path_identity(inputs.get("source_root")) != _path_identity(str(selected))
+            or any(inputs.get("source_" + key) != identity[key]
+                   for key in ("project_id", "worktree_id", "checkout_kind"))):
+        raise CodegenError("DEV admission does not authenticate the selected checkout")
+    root = "development/attempts/" + attempt
+    terminal_raw, _ = read(root + "/terminal.json")
+    _, compose = read(root + "/compose.json")
+    if (terminal_raw != receipt_raw or compose.get("name") != project
+            or _sha256(canonical(compose)) != receipt.get("config_sha256")):
+        raise CodegenError("DEV admission terminal or Compose digest differs")
+    try:
+        for role in ("backend", "frontend"):
+            actual = running(role)
+            expected = compose["services"][role]
+            actual_id = actual.get("Id")
+            if (not isinstance(actual_id, str) or SHA256_RE.fullmatch(actual_id) is None
+                    or actual_id != receipt.get(role + "_container")
+                    or actual.get("State", {}).get("Running") is not True
+                    or actual.get("Image") != expected["image"]):
+                raise CodegenError("DEV admission service incarnation or image differs: " + role)
+            source = next(mount for mount in expected["volumes"]
+                          if mount.get("target") == "/opt/fullmag/source")
+            pinned = expected.get("x-fullmag-daemon-binds", {}).get("/opt/fullmag/source")
+            if (source.get("type") != "bind" or source.get("read_only") is not True
+                    or _path_identity(source.get("source")) != _path_identity(str(selected))
+                    or not isinstance(pinned, str) or not pinned
+                    or _mount_for(actual, "/opt/fullmag/source").get("Source") != pinned):
+                raise CodegenError("DEV admission source declaration or daemon bind differs: " + role)
+            image = _inspect(actual["Image"])
+            if image.get("Id") != actual["Image"]:
+                raise CodegenError("DEV admission image inspection differs")
+            _validate_retained_service(compose, actual, role, image["Config"])
+    except (BuildControlError, KeyError, TypeError, StopIteration) as error:
+        raise CodegenError("DEV admission service validation failed: " + str(error)) from error
+    if read("development/verified.json")[0] != receipt_raw:
+        raise CodegenError("DEV admission changed during source mount validation")
+
+
 def _running_service(
     project: str,
     service: str,
@@ -579,7 +674,7 @@ def _running_service(
         raise CodegenError(f"{service} service environment is mounted from a different source checkout")
     source_mount = _mount_for(document, "/opt/fullmag/source")
     if _path_identity(source_mount.get("Source")) != _path_identity(str(selected)):
-        raise CodegenError(f"{service} inspected source mount differs from the selected checkout")
+        _validate_admitted_source_mount(project, service, identity, selected, document)
     return container, document
 
 
@@ -953,11 +1048,13 @@ def _publish_outputs(source: Path, outputs: Mapping[str, bytes], before: Mapping
         for name, data in outputs.items():
             destination = target_root / name
             handle, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=target_root)
+            temporary.append((Path(temporary_name), destination))
             with os.fdopen(handle, "wb", closefd=True) as stream:
                 stream.write(data)
                 stream.flush()
+                # Tracked public sources must also be readable by the frontend UID.
+                os.chmod(temporary_name, 0o644)
                 os.fsync(stream.fileno())
-            temporary.append((Path(temporary_name), destination))
         published: dict[str, str] = {}
         for temporary_name, destination in temporary:
             os.replace(temporary_name, destination)

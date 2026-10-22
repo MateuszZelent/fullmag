@@ -4094,6 +4094,19 @@ struct MeshBuildProvenance {
 }
 
 fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance {
+    // Field-only preparation owns a source mesh; independent sampling objects
+    // intentionally do not belong to that mesh. Invalid prepared ownership must
+    // not fall back to the all-visible-objects heuristic.
+    let field_only_publication = [snapshot.mesh_workspace.as_ref(), snapshot.metadata.as_ref()]
+        .into_iter().flatten().any(|document|
+            document.pointer("/execution_plan/backend_plan/kind").and_then(Value::as_str)
+                == Some("antenna_field_only"));
+    if field_only_publication {
+        return prepared_field_only_source_mesh(snapshot).map(|_| MeshBuildProvenance {
+            source_scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
+            geometry_realization_revision: None,
+        }).unwrap_or_default();
+    }
     let last_build = snapshot
         .mesh_workspace
         .as_ref()
@@ -4123,6 +4136,52 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
 
 pub(crate) fn mesh_source_scene_revision(snapshot: &SessionStateResponse) -> Option<u64> {
     mesh_build_provenance(snapshot).source_scene_revision
+}
+
+
+pub(crate) fn prepared_field_only_source_mesh(snapshot: &SessionStateResponse) -> Option<&Value> {
+    let scene = snapshot.scene_document.as_ref()?;
+    let workspace = snapshot.mesh_workspace.as_ref()?;
+    let preparation = snapshot.simulation_preparation.as_ref()?;
+    let mesh = snapshot.fem_mesh.as_ref()?;
+    let plan = workspace.pointer("/execution_plan/backend_plan")?;
+    let metadata_plan = snapshot.metadata.as_ref()?.pointer("/execution_plan/backend_plan")?;
+    if scene.study.requested_backend != "fem"
+        || workspace["schema_version"].as_str()
+            != Some(crate::live_scene_preparation::LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA)
+        || workspace["status"].as_str() != Some("completed")
+        || workspace["source_scene_revision"].as_u64() != Some(scene.revision)
+        || workspace["preparation_id"].as_str() != Some(preparation.preparation_id.as_str())
+        || preparation.preparation_id.is_empty()
+        || preparation.status != "ready"
+        || workspace.get("accepted_run_id")
+            .is_some_and(|run| run.as_str() != Some(snapshot.session.run_id.as_str()))
+        || plan["kind"].as_str() != Some("antenna_field_only")
+        || plan["schema_version"].as_str() != Some("antenna_field_only_plan.v1")
+        || mesh.nodes.is_empty() || mesh.cells.is_empty()
+        || plan.pointer("/source_mesh/mesh_name").and_then(Value::as_str) != Some(mesh.mesh_name.as_str())
+    {
+        return None;
+    }
+    // Both projections were published atomically by the canonical preparation owner.
+    // Compare only its small identity, never deserialize or clone the numerical plan.
+    for key in ["kind", "schema_version", "stage_id", "port_mode_id", "source_object_id"] {
+        let value = plan.get(key)?.as_str()?;
+        if value.is_empty() || metadata_plan.get(key)?.as_str()? != value { return None; }
+    }
+    let generation = mesh.generation_id.as_deref()?;
+    if generation.is_empty() || mesh.mesh_id != format!("{}:{generation}", mesh.mesh_name) {
+        return None;
+    }
+    let source_id = plan["source_object_id"].as_str()?;
+    let source = scene.objects.iter().find(|object| object.id == source_id)?;
+    if source.tags.iter().any(|tag| tag == "mesh:dirty")
+        || !(mesh.object_segments.iter().any(|segment| segment.object_id == source_id)
+            || mesh.mesh_parts.iter().any(|part| part.object_id.as_deref() == Some(source_id)))
+    {
+        return None;
+    }
+    Some(plan)
 }
 
 fn clean_scene_mesh_provenance(snapshot: &SessionStateResponse) -> Option<MeshBuildProvenance> {

@@ -502,6 +502,21 @@ pub(crate) fn request_cancelled_admission_stop(
     request_accepted_task_stop_inner(store, run_id, task_id, &intent.reason, false)
 }
 
+/// Request Stop after the runtime-service failed/no-spawn recovery checks.
+///
+/// The caller must hold the startup, launch and owner locks and authenticate the
+/// failed terminal owner, config, exact claim and lease, Pending/Closed launch
+/// gate, and absence of both Started events and worker exit receipts. This is
+/// only for that recovery path; ordinary Stop still requires a durable Start.
+pub fn request_failed_no_spawn_task_stop(
+    store: &SessionStore,
+    run_id: &fullmag_application::RunId,
+    task_id: &str,
+    reason: &str,
+) -> Result<AcceptedTaskStop> {
+    request_accepted_task_stop_inner(store, run_id, task_id, reason, false)
+}
+
 fn request_accepted_task_stop_inner(
     store: &SessionStore,
     run_id: &fullmag_application::RunId,
@@ -670,14 +685,21 @@ mod study_field_tensor;
 pub use study_field_tensor::{
     read_pinned_study_tensor_snapshot, verify_pinned_native_fem_snapshot,
 };
+mod study_inspection_tensor;
+mod study_inspection_sample_geometry;
 mod study_dataset;
 
+pub mod frozen_stage_lifecycle;
+mod study_output_history;
+pub use study_output_history::read_manifest_projection as read_study_output_manifest_projection;
+pub use study_output_history::{load_study_observation_runtime_v2, LoadedStudyObservationRuntimeV2, ObservationSourcePayloadV2, PreparedTerminalPublicationV4, prepare_terminal_study_publication, validate_prepared_terminal_publication};
 mod study;
 mod study_completion;
 pub use study::{
+    materialize_accepted_worker_execution_plan,
     load_accepted_study_snapshot, load_accepted_worker_step, load_accepted_worker_step_for_start,
     load_study_observation_runtime, publish_accepted_task_prepare, publish_accepted_task_start,
-    publish_study_outputs, queue_accepted_study_task, resolve_accepted_study_inputs,
+    publish_study_outputs, publish_terminal_study_outputs, queue_accepted_study_task, resolve_accepted_study_inputs,
     validate_requested_execution, validate_study_task_completion, AcceptedStudySnapshot,
     AcceptedWorkerStep, LoadedStudyObservationRuntime, ObservationSourcePayload,
     QueuedAcceptedStudyTask, StudyOutputPayload, ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION,
@@ -702,6 +724,15 @@ mod tests {
 
     #[test]
     fn accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event() {
+        assert_task_stop_recovery(false);
+    }
+
+    #[test]
+    fn failed_no_spawn_stop_without_start_preserves_public_stop_fence_and_replays() {
+        assert_task_stop_recovery(true);
+    }
+
+    fn assert_task_stop_recovery(no_spawn: bool) {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let mut task =
@@ -772,31 +803,90 @@ mod tests {
         let mut coordinator =
             DurableWorkerCoordinator::new(WorkerCoordinator::new(task, claim.clone()).unwrap());
         commit_coordinator_genesis(&store, &coordinator.checkpoint()).unwrap();
-        coordinator
-            .commit_command(WorkerCommand::Start, None, |transition| {
-                commit_transition(&store, transition)
-                    .map(|_| ())
-                    .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
-            })
-            .unwrap();
-        coordinator
-            .commit_event(
-                WorkerEventEnvelope {
-                    schema_version: WORKER_PROTOCOL_SCHEMA.into(),
-                    message_id: "event-started-operator-stop".into(),
-                    sequence: 1,
-                    claim: claim.identity(),
-                    event: WorkerEvent::Started,
-                },
-                |transition| {
+        if !no_spawn {
+            coordinator
+                .commit_command(WorkerCommand::Start, None, |transition| {
                     commit_transition(&store, transition)
                         .map(|_| ())
                         .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
-                },
+                })
+                .unwrap();
+            coordinator
+                .commit_event(
+                    WorkerEventEnvelope {
+                        schema_version: WORKER_PROTOCOL_SCHEMA.into(),
+                        message_id: "event-started-operator-stop".into(),
+                        sequence: 1,
+                        claim: claim.identity(),
+                        event: WorkerEvent::Started,
+                    },
+                    |transition| {
+                        commit_transition(&store, transition)
+                            .map(|_| ())
+                            .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
+                    },
+                )
+                .unwrap();
+        } else {
+            let receipt = fullmag_application::materialize_fdm_preparation_from_problem(
+                "prep-failed-no-spawn",
+                1,
+                &fullmag_ir::ProblemIR::bootstrap_example(),
+                &serde_json::json!({}),
             )
             .unwrap();
+            let binding = fullmag_application::PreparationBinding::from_receipt(&receipt).unwrap();
+            let resolved = fullmag_application::ResolvedTaskInput {
+                schema_version: fullmag_application::RESOLVED_TASK_INPUT_SCHEMA.into(),
+                run_id: claim.run_id.clone(),
+                task_id: claim.task_id.clone(),
+                attempt_id: claim.attempt_id.clone(),
+                ownership_epoch: claim.ownership_epoch,
+                specification_fingerprint: "a".repeat(64),
+                plan_fingerprint: binding.plan_fingerprint.trim_start_matches("sha256:").into(),
+                requested_execution: fullmag_application::RequestedExecution {
+                    backend: "fdm".into(),
+                    device: "cpu".into(),
+                    precision: "double".into(),
+                    mode: "strict".into(),
+                    minimum_resources: None,
+                },
+                preparation: binding,
+                inputs: Default::default(),
+                frozen_stage_context: None,
+            };
+            let prepare = coordinator
+                .commit_command(
+                    WorkerCommand::Prepare { resolved_input: resolved },
+                    Some(&receipt),
+                    |transition| {
+                        commit_transition(&store, transition)
+                            .map(|_| ())
+                            .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
+                    },
+                )
+                .unwrap();
+            assert_eq!(prepare.sequence, 1);
+            let error = request_accepted_task_stop(
+                &store,
+                &claim.run_id,
+                claim.task_id.as_str(),
+                "operator requested cancellation",
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("requires a durable Start"));
+            assert_eq!(
+                recover_coordinator(&store, &claim).unwrap().commands,
+                vec![prepare]
+            );
+        }
+        let request_stop = if no_spawn {
+            request_failed_no_spawn_task_stop
+        } else {
+            request_accepted_task_stop
+        };
 
-        let accepted = request_accepted_task_stop(
+        let accepted = request_stop(
             &store,
             &claim.run_id,
             claim.task_id.as_str(),
@@ -804,12 +894,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(accepted.disposition, AcceptedTaskStopDisposition::Accepted);
-        assert_eq!(accepted.catalog_revision, 5);
+        assert_eq!(accepted.catalog_revision, if no_spawn { 4 } else { 5 });
+        assert_eq!(accepted.command.sequence, 2);
         assert!(matches!(
             accepted.command.command,
             WorkerCommand::Stop { .. }
         ));
-        let replayed = request_accepted_task_stop(
+        let replayed = request_stop(
             &store,
             &claim.run_id,
             claim.task_id.as_str(),
@@ -819,7 +910,7 @@ mod tests {
         assert_eq!(replayed.disposition, AcceptedTaskStopDisposition::Replayed);
         assert_eq!(replayed.catalog_revision, accepted.catalog_revision);
         assert_eq!(replayed.command, accepted.command);
-        assert!(request_accepted_task_stop(
+        assert!(request_stop(
             &store,
             &claim.run_id,
             claim.task_id.as_str(),
@@ -837,7 +928,7 @@ mod tests {
                 WorkerEventEnvelope {
                     schema_version: WORKER_PROTOCOL_SCHEMA.into(),
                     message_id: "event-stopped-operator-stop".into(),
-                    sequence: 2,
+                    sequence: if no_spawn { 1 } else { 2 },
                     claim: claim.identity(),
                     event: WorkerEvent::Stopped,
                 },

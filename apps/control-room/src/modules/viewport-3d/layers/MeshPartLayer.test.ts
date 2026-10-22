@@ -6,11 +6,13 @@ import { BackSide, DoubleSide, FrontSide } from "three";
 
 import {
   DEFAULT_OBJECT_VISUALIZATION,
+  ObjectVisualizationController,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
   createMeshPartSurfaceGeometry,
+  hasMeshPartRenderableLayer,
   resolveMeshPartSurfacePickIdentity,
   resolveMeshPartBoundaryFaceIndexForPick,
   resolveMeshPartVisibleScalarColorState,
@@ -37,8 +39,71 @@ import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping
 import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
 import { updateScalarSurfaceShaderMaterial } from "../viewport3dScalarSurfaceShader";
+import {
+  resolveViewport3DPartVisualizationSettings,
+  resolveViewport3DPrimitiveVisualizationSettings,
+} from "../hooks/useViewport3DSceneModel";
+import { resolveViewport3DRealizedTopologyObjectIds } from "./Viewport3DScene";
+import { shouldRenderPrimitiveObject } from "./PrimitiveObjectLayerModel";
+import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
 
 describe("MeshPartLayer", () => {
+  it("keeps a nonmagnetic antenna preview after mesh upload until a visible replacement pass exists", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { kind: "object" as const, id: "object:antenna" };
+    const object = { id: "antenna", role: "antenna", physics_stack: [], magnetization_ref: null };
+    const primitive = { objectId: "antenna", meshState: "mesh-ready" } as never;
+    const surface = {
+      part: { id: "signal", object_id: "antenna_geom" },
+      surfaceIndices: new Uint32Array([0, 1, 2]),
+    };
+    const profile = { featureEdges: { opacity: 1 }, glyphs: { opacityScale: 1 } };
+    const resolve = () => {
+      const snapshot = controller.getSnapshot();
+      const settings = resolveViewport3DPartVisualizationSettings({
+        objectVisualizationSnapshot: snapshot, part: surface.part as never,
+        sceneObjectIds: new Set([object.id]), sceneObjectsById: new Map([[object.id, object]]),
+        quantityCatalog: null,
+      });
+      const ready = hasMeshPartRenderableLayer({
+        renderPlan: resolveViewport3DTargetRenderPlan(settings, profile),
+        surfaceReady: true, wireframeReady: true, pointsReady: true, vectorsReady: false,
+      });
+      const realized = resolveViewport3DRealizedTopologyObjectIds({
+        enabled: true, committedParts: new Set(ready ? [surface] : []) as never,
+        primitiveModel: { objects: [primitive] } as never,
+        topologyModel: { positions: new Float32Array(9), magneticParts: [surface] } as never,
+        topologyFreshness: "current",
+      });
+      const primitiveSettings = resolveViewport3DPrimitiveVisualizationSettings({
+        snapshot, target, objectContext: { object, quantityCatalog: null },
+      });
+      return { settings, ready, primitiveVisible: shouldRenderPrimitiveObject(primitive,
+        primitiveSettings, realized.has(object.id)) };
+    };
+    expect(resolve()).toMatchObject({
+      settings: { activeQuantityId: "", shaderVisible: false },
+      ready: false, primitiveVisible: true,
+    });
+    controller.patchTarget(target, { surfaceColorSource: "solid" });
+    expect(resolve()).toMatchObject({ ready: true, primitiveVisible: false });
+    controller.patchTarget(target, { visible: false });
+    expect(resolve()).toMatchObject({ ready: false, primitiveVisible: false });
+  });
+
+  it("does not replace geometry with an unuploaded or explicitly disabled pass", () => {
+    const profile = { featureEdges: { opacity: 1 }, glyphs: { opacityScale: 1 } };
+    const plan = resolveViewport3DTargetRenderPlan({ ...DEFAULT_OBJECT_VISUALIZATION,
+      shaderVisible: false, wireframeVisible: true }, profile);
+    const input = { renderPlan: plan, surfaceReady: true,
+      wireframeReady: false, pointsReady: false, vectorsReady: false };
+    expect(hasMeshPartRenderableLayer(input)).toBe(false);
+    expect(hasMeshPartRenderableLayer({ ...input, wireframeReady: true })).toBe(true);
+    expect(hasMeshPartRenderableLayer({ ...input, wireframeReady: true,
+      renderPlan: resolveViewport3DTargetRenderPlan({ ...DEFAULT_OBJECT_VISUALIZATION,
+        shaderVisible: false }, profile) })).toBe(false);
+  });
+
   it("maps both render triangles of a quad back to the same global facet", () => {
     const part = {
       boundary_face_count: 2,

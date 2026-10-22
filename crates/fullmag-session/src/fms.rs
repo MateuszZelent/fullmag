@@ -2859,6 +2859,141 @@ fn u64_le(bytes: &[u8], offset: usize) -> Result<u64> {
     Ok(u64::from_le_bytes(slice.try_into().unwrap()))
 }
 
+// Read-only restoration is independent from a magnetic checkpoint. Check the
+// static carrier and the archived manifest/payload identities, without decoding
+// the native numerical bundle here; its existing reader remains authoritative.
+fn field_only_saved_fields_available(
+    documents: &ArchiveDocuments<'_>, run: &FmsRunManifest,
+) -> Result<bool> {
+    if run.study_kind != "field_only" || run.status != RunStatus::Completed { return Ok(false); }
+    let Some(raw) = documents.read("project/current_live_snapshot.json")? else { return Ok(false); };
+    let snapshot: serde_json::Value = serde_json::from_slice(&raw)?;
+    if snapshot.pointer("/session/run_id").and_then(serde_json::Value::as_str) != Some(run.run_id.as_str())
+        || snapshot.pointer("/metadata/magnetic_state_present").and_then(serde_json::Value::as_bool) != Some(false)
+        || snapshot.pointer("/live_state/latest_step/magnetization").is_some_and(|m| !m.is_null())
+        || snapshot.pointer("/latest_fields/m").is_some()
+    { return Ok(false); }
+    let Some(plan) = snapshot.pointer("/metadata/execution_plan") else { return Ok(false); };
+    let plan: fullmag_ir::ExecutionPlanIR = serde_json::from_value(plan.clone())?;
+    let fullmag_ir::BackendPlanIR::AntennaFieldOnly(carrier) = plan.backend_plan else { return Ok(false); };
+    if carrier.source_mesh.cell_count() == 0 || carrier.field_sampling.positions_xyz_m.is_empty() { return Ok(false); }
+    let closed_prefix = format!("runs/{}/artifacts/antenna/closed_loop_stage_outputs/", run.run_id);
+    for name in documents.keys().filter(|name| name.starts_with(&closed_prefix)
+        && name.ends_with("/antenna_closed_loop_stage_output.v2.json")) {
+        let Some(raw) = documents.read(name)? else { continue; };
+        if raw.len() > 1 << 20 { continue; }
+        let record: serde_json::Value = serde_json::from_slice(&raw)?;
+        if record["schema_version"] != "antenna_closed_loop_stage_output.v2"
+            || record["stage_kind"] != "antenna_field_solve" || record["resolved_action"] != "closed_loop_inspection"
+            || record["status"] != "inspection_only" || record["qualification"] != "NOT VERIFIED"
+            || record["field_scope"] != "full_closed_loop.inspection_only.v2" { continue; }
+        let Some(outputs) = record["outputs"].as_array().filter(|a| a.len() == 1) else { continue; };
+        let output = &outputs[0];
+        let Some(output_id) = record["output_id"].as_str().filter(|id| !id.is_empty() && id.len() <= 255
+            && !id.contains("..") && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b))) else { continue; };
+        let Some(stage_id) = record["stage_id"].as_str().filter(|id| !id.is_empty()) else { continue; };
+        // Runtime stage namespace is distinct from the authored stage label.
+        let Some(runtime_stage_id) = name.strip_prefix(&closed_prefix).and_then(|s| s.strip_suffix("/antenna_closed_loop_stage_output.v2.json"))
+            .filter(|id| !id.is_empty() && !id.contains('/')) else { continue; };
+        let suffix = format!("antenna/closed_loop_stage_outputs/{runtime_stage_id}/antenna_closed_loop_stage_output.v2.json");
+        let registered = snapshot.pointer("/stage_execution/stages").and_then(serde_json::Value::as_array)
+            .is_some_and(|stages| stages.iter().filter(|stage| stage["stage_id"].as_str() == Some(runtime_stage_id)).count() == 1
+                && stages.iter().any(|stage| stage["stage_id"].as_str() == Some(runtime_stage_id)
+                    && stage["artifact_refs"].as_array().is_some_and(|refs| refs.iter().any(|r|
+                        r.as_str().is_some_and(|r| { let r = r.replace('\\', "/"); r == suffix || r.ends_with(&format!("/{suffix}")) })))));
+        if !registered || output["payload_units"] != serde_json::json!({"V_electric":"V", "J_charge":"A/m^2", "H_ant":"A/m", "H_ant_per_a":"1/m", "positions":"m"}) { continue; }
+        let manifest_ref = format!("antenna/field_solutions/{output_id}/manifest.v2.json");
+        if output["kind"] != "antenna_closed_loop_inspection" || output["manifest_ref"] != manifest_ref
+            || record["source_object_id"].as_str() != Some(carrier.source_object_id.as_str()) { continue; }
+        let manifest_path = format!("runs/{}/artifacts/{manifest_ref}", run.run_id);
+        crate::repository_path::validate_relative_path(&manifest_path)?;
+        let Some(raw) = documents.read(&manifest_path)? else { continue; };
+        if raw.len() > 16 * 1024 * 1024 { continue; }
+        let mut manifest: serde_json::Value = serde_json::from_slice(&raw)?;
+        if manifest["schema_version"] != "antenna_field_solution.v2" || manifest["status"] != "inspection_only"
+            || manifest["stage_id"] != stage_id || manifest["solution_id"] != output_id
+            || manifest["port_mode_id"] != record["port_mode_id"]
+            || manifest["source_object_id"].as_str() != Some(carrier.source_object_id.as_str())
+            || manifest["target_count"].as_u64() != Some(carrier.field_sampling.positions_xyz_m.len() as u64)
+            || manifest["sample_cell_count"].as_u64() != Some(carrier.field_sampling.cells.len() as u64)
+            || manifest["sample_carrier"]["topology_digest"].as_str() != Some(carrier.field_sampling.topology_digest.as_str())
+            || manifest["sample_carrier"]["domain"] != serde_json::to_value(&carrier.field_sampling.domain)?
+            || manifest["sample_carrier"]["location"].as_str() != Some(carrier.field_sampling.location.as_str())
+            || manifest["sample_carrier"]["carrier_kind"].as_str() != Some(carrier.field_sampling.carrier_kind.as_str())
+            || manifest["content_digest"] != output["content_digest"] || manifest["source"] != output["source"] { continue; }
+        let Some(digest) = manifest.as_object_mut().and_then(|m| m.remove("content_digest")) else { continue; };
+        if digest != format!("sha256:{}", crate::cas::hex_sha256(&serde_json::to_vec(&manifest)?)) { continue; }
+        let Some(payloads) = manifest["payloads"].as_object() else { continue; };
+        let expected = ["stable_vertex_ids", "vertex_xyz", "sample_xyz", "conductivity", "v_raw", "v_per_a",
+            "j_center_raw", "j_center_per_a", "j_local_raw", "j_local_per_a", "h_raw", "h_per_a", "cells",
+            "faces", "weak", "prepared_preimage", "charge_preimage", "source_preimage", "certificate",
+            "authoring_receipt", "direct_evidence", "sample_cells"];
+        let mut total = 0u64;
+        let complete = payloads.len() == expected.len() && expected.iter().all(|key| {
+            let Some(payload) = payloads.get(*key) else { return false; };
+            let path = format!("antenna/field_solutions/{output_id}/{key}.bin");
+            if payload["path"] != path { return false; }
+            let Some(identity) = documents.identity(&format!("runs/{}/artifacts/{path}", run.run_id)) else { return false; };
+            let Some(sum) = total.checked_add(identity.byte_count) else { return false; };
+            total = sum;
+            identity.byte_count > 0 && identity.byte_count <= 512 * 1024 * 1024
+                && payload["byte_length"].as_u64() == Some(identity.byte_count)
+                && payload["sha256"].as_str() == Some(identity.content_sha256.as_str())
+        });
+        // This flag permits saved-field reads only; the runner cold verifier remains
+        // authoritative for native identity, numerical binding and all display reads.
+        if complete && total <= 512 * 1024 * 1024 { return Ok(true); }
+    }
+    let prefix = format!("runs/{}/artifacts/antenna/external_lead_stage_outputs/", run.run_id);
+    for name in documents.keys().filter(|name| name.starts_with(&prefix)
+        && name.ends_with("/antenna_external_lead_stage_output.v1.json"))
+    {
+        let Some(raw) = documents.read(name)? else { continue; };
+        let record: serde_json::Value = serde_json::from_slice(&raw)?;
+        if record.get("status").and_then(serde_json::Value::as_str) != Some("inspection_only")
+            || record.get("resolved_action").and_then(serde_json::Value::as_str) != Some("external_lead_inspection")
+            || !matches!(record.get("schema_version").and_then(serde_json::Value::as_str),
+                Some("antenna_external_lead_stage_output.v1" | "antenna_external_lead_stage_output.v2"))
+        { continue; }
+        let Some(outputs) = record.get("outputs").and_then(serde_json::Value::as_array).filter(|outputs| outputs.len() == 1) else { continue; };
+        let Some(reference) = outputs[0].get("manifest_ref").and_then(serde_json::Value::as_str) else { continue; };
+        let manifest_path = format!("runs/{}/artifacts/{reference}", run.run_id);
+        crate::repository_path::validate_relative_path(&manifest_path)?;
+        let Some(raw) = documents.read(&manifest_path)? else { continue; };
+        let manifest: serde_json::Value = serde_json::from_slice(&raw)?;
+        if !matches!(manifest.get("schema_version").and_then(serde_json::Value::as_str),
+                Some("antenna_external_lead_solution.v1" | "antenna_external_lead_solution.v2"))
+            || manifest.get("status").and_then(serde_json::Value::as_str) != Some("inspection_only")
+            || manifest.get("qualification").and_then(serde_json::Value::as_str) != Some("NOT VERIFIED")
+            || manifest.get("field_scope").and_then(serde_json::Value::as_str) != Some("external_electrode_truncation")
+            || manifest.get("content_digest").and_then(serde_json::Value::as_str)
+                .and_then(|digest| digest.strip_prefix("sha256:"))
+                .is_none_or(|digest| digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+            || manifest.pointer("/sampling_carrier/sample_count").and_then(serde_json::Value::as_u64) != Some(carrier.field_sampling.positions_xyz_m.len() as u64)
+            || manifest.get("source_object_id").and_then(serde_json::Value::as_str) != Some(carrier.source_object_id.as_str())
+            || manifest.pointer("/sampling_carrier/topology_digest").and_then(serde_json::Value::as_str) != Some(carrier.field_sampling.topology_digest.as_str())
+            || manifest.get("content_digest") != outputs[0].pointer("/inspection_ref/content_digest")
+        { continue; }
+        let parent = manifest_path.rsplit_once('/').context("inspection manifest has no parent")?.0;
+        let payload_keys = ["bundle", "sample_positions", "magnetic_field", "device_vertex_ids", "device_potential"];
+        let payload_matches = |payload: &serde_json::Value| -> bool {
+            let Some(path) = payload.get("path").and_then(serde_json::Value::as_str) else { return false; };
+            if path.is_empty() || path.contains('/') || path.contains('\\') || path == "." || path == ".." { return false; }
+            let Some(identity) = documents.identity(&format!("{parent}/{path}")) else { return false; };
+            identity.byte_count > 0
+                && payload.get("byte_count").and_then(serde_json::Value::as_u64) == Some(identity.byte_count)
+                && payload.get("sha256").and_then(serde_json::Value::as_str) == Some(identity.content_sha256.as_str())
+        };
+        if manifest.get("schema_version").and_then(serde_json::Value::as_str) == Some("antenna_external_lead_solution.v2")
+            && manifest.get("current_display").is_none_or(|value| value.is_null()) { continue; }
+        if payload_keys.iter().all(|key| manifest.get(key).is_some_and(payload_matches))
+            && manifest.get("current_display").filter(|value| !value.is_null())
+                .is_none_or(|display| display.get("payload").is_some_and(payload_matches))
+        { return Ok(true); }
+    }
+    Ok(false)
+}
+
 fn build_inspection(
     session: &FmsSessionManifest,
     documents: &ArchiveDocuments<'_>,
@@ -2873,6 +3008,12 @@ fn build_inspection(
     let mut latest_cp: Option<CheckpointSummary> = None;
     let mut latest_checkpoint_ref: Option<String> = None;
     let mut latest_checkpoint_order: Option<(u64, chrono::DateTime<chrono::Utc>, String)> = None;
+    let active_run_id = documents.read("project/current_live_snapshot.json").ok().flatten()
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        .and_then(|snapshot| snapshot.pointer("/session/run_id")
+            .and_then(serde_json::Value::as_str).map(str::to_owned));
+    let mut saved_fields_read_only = false;
+    let mut field_only_run = false;
     for run_ref in &session.run_refs {
         let parts: Vec<&str> = run_ref.split('/').collect();
         if parts.len() < 2 || parts[0] != "runs" || parts[1].is_empty() {
@@ -2885,6 +3026,21 @@ fn build_inspection(
                 "run manifest '{run_ref}' is missing from the archive"
             ));
         }
+        let run: Option<FmsRunManifest> = documents.read(run_ref).ok().flatten()
+            .and_then(|raw| serde_json::from_slice(&raw).ok());
+        field_only_run |= active_run_id.as_deref() == Some(run_id)
+            && run.as_ref().is_some_and(|run| run.run_id == run_id && run.study_kind == "field_only");
+        let static_fields = match run.as_ref().filter(|run| run.run_id == run_id) {
+            Some(run) => match field_only_saved_fields_available(documents, run) {
+                Ok(available) => available,
+                Err(error) => {
+                    warnings.push(format!("field-only archived field inspection failed: {error}"));
+                    false
+                }
+            },
+            None => false,
+        };
+        saved_fields_read_only |= static_fields;
         let checkpoint_prefix = format!("runs/{run_id}/checkpoints/");
         let checkpoint_names = entry_names
             .iter()
@@ -2895,6 +3051,7 @@ fn build_inspection(
             .collect::<Vec<_>>();
         if matches!(session.profile, SaveProfile::Resume | SaveProfile::Archive)
             && checkpoint_names.is_empty()
+            && !static_fields
         {
             warnings.push(format!(
                 "{} session run '{run_id}' has no packaged checkpoint",
@@ -2948,7 +3105,11 @@ fn build_inspection(
         .and_then(|reference| reachability.checkpoint_status.get(reference));
     let has_primary_payload = latest_status.is_some_and(|status| status.primary);
     let has_restart_payload = latest_status.is_some_and(|status| status.restart);
-    let restore_class = if latest_cp.is_some()
+    let restore_class = if field_only_run {
+        if saved_fields_read_only && reachability.complete
+            && matches!(session.profile, SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive)
+        { RestoreClass::SavedFieldsReadOnly } else { RestoreClass::ConfigOnly }
+    } else if latest_cp.is_some()
         && matches!(session.profile, SaveProfile::Resume | SaveProfile::Archive)
         && reachability.complete
         && has_primary_payload
@@ -5458,3 +5619,114 @@ mod tests {
 #[cfg(test)]
 #[path = "fms_owner_closure_tests.rs"]
 mod owner_closure_tests;
+
+#[cfg(test)]
+mod field_only_archive_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn fixture() -> (FmsRunManifest, HashMap<String, Vec<u8>>) {
+        let run = FmsRunManifest { run_id:"field-only".into(), status:RunStatus::Completed,
+            study_kind:"field_only".into(), backend:"fem".into(), precision:"double".into(),
+            started_at:chrono::Utc::now(), finished_at:None, total_steps:0, total_time_s:0.0,
+            plan_ref:None, live_state_ref:None, latest_checkpoint_ref:None, artifact_index_ref:None };
+        let mesh = fullmag_ir::MeshIR { mesh_name:"source".into(),
+            nodes:vec![[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
+            cells:fullmag_ir::FemConnectivityIR { types:vec![fullmag_ir::FemCellTypeIR::Tet4], offsets:vec![0,4], nodes:vec![0,1,2,3], global_ordinals:vec![], mesh_parts:vec![] },
+            element_markers:vec![1], ..Default::default() };
+        let plan = fullmag_ir::ExecutionPlanIR {
+            common:fullmag_ir::CommonPlanMeta { ir_version:fullmag_ir::IR_VERSION.into(),
+                requested_backend:fullmag_ir::BackendTarget::Fem, resolved_backend:fullmag_ir::BackendTarget::Fem,
+                execution_mode:fullmag_ir::ExecutionMode::Strict, material_field_plans:vec![] },
+            backend_plan:fullmag_ir::BackendPlanIR::AntennaFieldOnly(fullmag_ir::AntennaFieldOnlyPlanIR {
+                schema_version:"antenna_field_only_plan.v1".into(), stage_id:"inspect".into(), port_mode_id:"port".into(),
+                source_object_id:"antenna".into(), source_mesh:mesh, source_object_segments:vec![], source_mesh_parts:vec![],
+                field_sampling:fullmag_ir::AntennaFieldSamplingPlanIR { domain:fullmag_ir::FieldTargetIR::Object { object_id:"sampling".into() },
+                    carrier_kind:"fem".into(), location:"nodes".into(), topology_digest:"sampling-digest".into(),
+                    positions_xyz_m:vec![[2.0,0.0,0.0]], cells:fullmag_ir::FemConnectivityIR::empty() } }),
+            output_plan:fullmag_ir::OutputPlanIR { outputs:vec![] }, provenance:Default::default() };
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let relative = "antenna/external_lead_solutions/inspection/manifest.v1.json";
+        let parent = format!("runs/field-only/artifacts/antenna/external_lead_solutions/inspection");
+        let mut documents = HashMap::new();
+        // The classifier checks packaging identities, not native scientific decoding.
+        let bytes = vec![0u8;8];
+        let payload = json!({"path":"payload.bin", "byte_count":8, "sha256":crate::cas::hex_sha256(&bytes)});
+        documents.insert(format!("{parent}/payload.bin"), bytes);
+        documents.insert("project/current_live_snapshot.json".into(), serde_json::to_vec(&json!({
+            "session":{"run_id":"field-only"}, "metadata":{"magnetic_state_present":false,"execution_plan":plan},
+            "live_state":{"latest_step":{"magnetization":null}},"latest_fields":{}
+        })).unwrap());
+        documents.insert("runs/field-only/artifacts/antenna/external_lead_stage_outputs/stage-000/antenna_external_lead_stage_output.v1.json".into(),
+            serde_json::to_vec(&json!({"schema_version":"antenna_external_lead_stage_output.v1","status":"inspection_only",
+                "resolved_action":"external_lead_inspection","outputs":[{"manifest_ref":relative,"inspection_ref":{"content_digest":digest}}]})).unwrap());
+        documents.insert(format!("runs/field-only/artifacts/{relative}"), serde_json::to_vec(&json!({
+            "schema_version":"antenna_external_lead_solution.v1", "status":"inspection_only", "qualification":"NOT VERIFIED",
+            "field_scope":"external_electrode_truncation", "source_object_id":"antenna", "content_digest":digest,
+            "sampling_carrier":{"topology_digest":"sampling-digest","sample_count":1},
+            "bundle":payload,"sample_positions":payload,"magnetic_field":payload,"device_vertex_ids":payload,"device_potential":payload
+        })).unwrap());
+        (run,documents)
+    }
+
+    #[test]
+    fn static_archive_needs_real_packaged_payloads_and_never_promotes_to_resume() {
+        let (run, mut documents) = fixture();
+        assert!(field_only_saved_fields_available(&ArchiveDocuments::Memory(&documents), &run).unwrap());
+        let mut session = FmsSessionManifest::new("static", "Static", SaveProfile::Archive);
+        session.run_refs.push("runs/field-only/run_manifest.json".into());
+        documents.insert(session.run_refs[0].clone(), serde_json::to_vec(&run).unwrap());
+        let mut reachability = ReachabilityReport::default();
+        reachability.complete = true;
+        let inspection = build_inspection(&session, &ArchiveDocuments::Memory(&documents), 0, &reachability);
+        assert_eq!(inspection.restore_class, RestoreClass::SavedFieldsReadOnly);
+        assert!(!inspection.warnings.iter().any(|warning| warning.contains("no packaged checkpoint")));
+        documents.remove("runs/field-only/artifacts/antenna/external_lead_solutions/inspection/payload.bin");
+        assert!(!field_only_saved_fields_available(&ArchiveDocuments::Memory(&documents), &run).unwrap());
+    }
+
+    #[test]
+    fn mixed_history_classifies_field_only_only_when_it_is_the_active_run() {
+        let (run, mut documents) = fixture();
+        let mut session = FmsSessionManifest::new("mixed", "Mixed", SaveProfile::Archive);
+        session.run_refs = vec!["runs/field-only/run_manifest.json".into(),
+            "runs/magnetic/run_manifest.json".into()];
+        documents.insert(session.run_refs[0].clone(), serde_json::to_vec(&run).unwrap());
+        let mut magnetic_run = run.clone();
+        magnetic_run.run_id = "magnetic".into();
+        magnetic_run.study_kind = "time_evolution".into();
+        documents.insert(session.run_refs[1].clone(), serde_json::to_vec(&magnetic_run).unwrap());
+        let checkpoint = FmsCheckpoint::new("magnetic", 8, 1e-12, 1e-13);
+        let checkpoint_ref = format!("runs/magnetic/checkpoints/{}/checkpoint.json", checkpoint.checkpoint_id);
+        documents.insert(checkpoint_ref.clone(), serde_json::to_vec(&checkpoint).unwrap());
+        let mut reachability = ReachabilityReport::default();
+        reachability.complete = true;
+        reachability.checkpoint_status.insert(checkpoint_ref, reachability::CheckpointPayloadStatus {
+            primary: true, restart: true,
+        });
+        let inspect = |documents: &HashMap<String, Vec<u8>>| {
+            build_inspection(&session, &ArchiveDocuments::Memory(documents), 0, &reachability).restore_class
+        };
+        assert_eq!(inspect(&documents), RestoreClass::SavedFieldsReadOnly);
+        let mut snapshot: serde_json::Value = serde_json::from_slice(
+            &documents["project/current_live_snapshot.json"]).unwrap();
+        snapshot["session"]["run_id"] = json!("magnetic");
+        snapshot["metadata"]["magnetic_state_present"] = json!(true);
+        documents.insert("project/current_live_snapshot.json".into(), serde_json::to_vec(&snapshot).unwrap());
+        assert_eq!(inspect(&documents), RestoreClass::LogicalResume);
+        documents.remove("project/current_live_snapshot.json");
+        assert_ne!(inspect(&documents), RestoreClass::SavedFieldsReadOnly);
+    }
+
+    #[test]
+    fn magnetic_state_or_corrupt_payload_cannot_claim_static_saved_fields() {
+        let (run, mut documents) = fixture();
+        documents.insert("runs/field-only/artifacts/antenna/external_lead_solutions/inspection/payload.bin".into(), vec![1u8;8]);
+        assert!(!field_only_saved_fields_available(&ArchiveDocuments::Memory(&documents), &run).unwrap());
+        let (run, mut documents) = fixture();
+        let mut snapshot:serde_json::Value = serde_json::from_slice(&documents["project/current_live_snapshot.json"]).unwrap();
+        snapshot["live_state"]["latest_step"]["magnetization"] = json!([1.0,0.0,0.0]);
+        documents.insert("project/current_live_snapshot.json".into(),serde_json::to_vec(&snapshot).unwrap());
+        assert!(!field_only_saved_fields_available(&ArchiveDocuments::Memory(&documents), &run).unwrap());
+    }
+}

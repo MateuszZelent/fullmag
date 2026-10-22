@@ -78,6 +78,127 @@
       "sources": [
         "jacobian-sampling"
       ]
+    },
+    {
+      "id": "eq-fem-recursive-seed-scales",
+      "symbols": [
+        "seed_h",
+        "seed_delta",
+        "seed_separation",
+        "seed_cover_radius"
+      ],
+      "sources": [
+        "seed-curve-contract"
+      ]
+    },
+    {
+      "id": "eq-fem-recursive-curve-map",
+      "symbols": [
+        "seed_point",
+        "seed_origin",
+        "seed_rank",
+        "seed_basis",
+        "seed_step",
+        "seed_margin",
+        "seed_period",
+        "seed_delta"
+      ],
+      "sources": [
+        "seed-curve-contract"
+      ]
+    },
+    {
+      "id": "eq-fem-recursive-child-spacing",
+      "symbols": [
+        "seed_child_length",
+        "seed_parent_length",
+        "seed_margin",
+        "seed_delta",
+        "seed_endpoints"
+      ],
+      "sources": [
+        "seed-curve-contract"
+      ]
+    },
+    {
+      "id": "eq-fem-recursive-seed-precount",
+      "symbols": [
+        "seed_curve_count",
+        "seed_face_count",
+        "seed_parent_length",
+        "seed_delta",
+        "seed_margin",
+        "seed_chart_lengths",
+        "seed_chart_steps",
+        "seed_chart_lower",
+        "seed_period"
+      ],
+      "sources": [
+        "seed-curve-contract"
+      ]
+    },
+    {
+      "id": "eq-fem-recursive-interior-separation",
+      "symbols": [
+        "seed_interior",
+        "seed_boundary",
+        "seed_separation",
+        "seed_witness",
+        "seed_accepted"
+      ],
+      "sources": [
+        "seed-coverage-contract"
+      ]
+    },
+    {
+      "id": "eq-fem-recursive-continuous-coverage",
+      "symbols": [
+        "seed_patch",
+        "seed_patch_vertex",
+        "seed_witness",
+        "seed_cover_radius",
+        "seed_weights",
+        "seed_vertex_index"
+      ],
+      "sources": [
+        "seed-coverage-contract"
+      ]
+    },
+    {
+      "id": "eq-fem-residue-validation-property",
+      "symbols": [
+        "seed_period",
+        "residue_value",
+        "residue_count",
+        "residue_predicate",
+        "residue_index"
+      ],
+      "sources": [
+        "residue-validation-once-contract"
+      ]
+    },
+    {
+      "id": "eq-fem-binary-residue-identity",
+      "symbols": [
+        "binary_encoding",
+        "binary_decoder",
+        "residue_value",
+        "residue_index"
+      ],
+      "sources": [
+        "binary-residue-v2-representation"
+      ]
+    },
+    {
+      "id": "eq-fem-binary-residue-resource-bounds",
+      "symbols": [
+        "producer_bytes",
+        "reader_bytes",
+        "retained_cap"
+      ],
+      "sources": [
+        "binary-residue-v2-resources"
+      ]
     }
   ],
   "symbols": [
@@ -248,6 +369,234 @@
       "latex": "h_K^\\mathrm{strict}",
       "meaning": "strict-validation characteristic scale: maximum pairwise vertex distance",
       "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_h",
+      "latex": "h_\\mathrm{seed}",
+      "meaning": "zadany rozmiar jednego poziomu geometry-only eksperymentu",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_delta",
+      "latex": "\\delta",
+      "meaning": "nieprzekraczalny maksymalny odstęp shared curve i chart axis",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_separation",
+      "latex": "\\varepsilon_s",
+      "meaning": "minimalna separacja generated points od granicy i innych points na tym face",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_cover_radius",
+      "latex": "\\rho_s",
+      "meaning": "promień kompletnego ciągłego pokrycia face przez retained nodes",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_scale",
+      "latex": "S",
+      "meaning": "skala zapisu współrzędnych względem SI",
+      "si_unit": "1"
+    },
+    {
+      "id": "seed_period",
+      "latex": "P",
+      "meaning": "okres maski admissible integer ranks",
+      "si_unit": "1"
+    },
+    {
+      "id": "seed_origin",
+      "latex": "\\mathbf o",
+      "meaning": "początek affine lattice line w świecie fizycznym",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_basis",
+      "latex": "\\mathbf b",
+      "meaning": "przesunięcie fizyczne odpowiadające jednemu integer rank",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_rank",
+      "latex": "r",
+      "meaning": "bezwymiarowy parametr rank, rational dla authored endpoint i integer dla generated point",
+      "si_unit": "1"
+    },
+    {
+      "id": "seed_point",
+      "latex": "\\mathbf y(r)",
+      "meaning": "dokładny punkt fizyczny affine lattice",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_step",
+      "latex": "d",
+      "meaning": "długość jednego primitive step w normie L1",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_margin",
+      "latex": "G",
+      "meaning": "największy dopuszczalny błąd wyszukiwania względem midpoint celu",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_parent_length",
+      "latex": "L",
+      "meaning": "długość parent segment w normie L1",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_child_length",
+      "latex": "L_c",
+      "meaning": "długość child segment w normie L1",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_target_rank",
+      "latex": "r_m",
+      "meaning": "rational midpoint parametru parent segment, wyłącznie cel wyszukiwania",
+      "si_unit": "1"
+    },
+    {
+      "id": "seed_endpoints",
+      "latex": "\\mathbf U,\\mathbf V",
+      "meaning": "dokładne fizyczne końce parent segment",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_boundary",
+      "latex": "\\mathcal B",
+      "meaning": "pełna authored granica jednego face",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_accepted",
+      "latex": "\\mathcal A",
+      "meaning": "zbiór już przyjętych interior nodes tego face",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_interior",
+      "latex": "\\mathbf p",
+      "meaning": "kandydat interior point",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_witness",
+      "latex": "\\mathbf Z",
+      "meaning": "retained node będący świadkiem pokrycia patch",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_patch_vertex",
+      "latex": "\\mathbf V_j",
+      "meaning": "exact rational vertex diagnostycznego convex patch",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_weights",
+      "latex": "\\lambda_j",
+      "meaning": "nieujemny współczynnik kombinacji wypukłej vertices patch",
+      "si_unit": "1"
+    },
+    {
+      "id": "seed_vertex_index",
+      "latex": "j",
+      "meaning": "indeks vertex diagnostycznego patch",
+      "si_unit": "1"
+    },
+    {
+      "id": "seed_patch",
+      "latex": "\\mathcal C",
+      "meaning": "clipped convex patch, bez dodawania mesh nodes",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_curve_count",
+      "latex": "N_\\mathrm{curve}",
+      "meaning": "upper bound liczby nodes jednej shared curve",
+      "si_unit": "1"
+    },
+    {
+      "id": "seed_face_count",
+      "latex": "N_\\mathrm{face}",
+      "meaning": "upper bound liczby interior candidates jednego face",
+      "si_unit": "1"
+    },
+    {
+      "id": "seed_chart_lengths",
+      "latex": "\\ell_u,\\ell_v",
+      "meaning": "physical L1 rozpiętości dwóch niezależnych chart axes",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_chart_steps",
+      "latex": "d_u,d_v",
+      "meaning": "primitive L1 step odpowiedniej chart axis",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "seed_chart_lower",
+      "latex": "\\sigma_u,\\sigma_v",
+      "meaning": "dodatnie dolne ograniczenie odstępu greedy chart ranks",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "residue_value",
+      "latex": "r_i",
+      "meaning": "reszta całkowitego rangu; `bool`, podklasy `int` i liczby zmiennoprzecinkowe są odrzucane",
+      "si_unit": "1"
+    },
+    {
+      "id": "residue_count",
+      "latex": "n",
+      "meaning": "liczba zachowanych reszt",
+      "si_unit": "1"
+    },
+    {
+      "id": "residue_predicate",
+      "latex": "V",
+      "meaning": "predykat poprawności zawartości",
+      "si_unit": "1"
+    },
+    {
+      "id": "residue_index",
+      "latex": "i",
+      "meaning": "indeks całkowity od $0$ do $n-1$",
+      "si_unit": "1"
+    },
+    {
+      "id": "binary_encoding",
+      "latex": "E(r)",
+      "meaning": "dokładny u16LE encoding skończonej sekwencji",
+      "si_unit": "\\mathrm{byte}"
+    },
+    {
+      "id": "binary_decoder",
+      "latex": "D",
+      "meaning": "dokładny decoder wartości całkowitych",
+      "si_unit": "1"
+    },
+    {
+      "id": "producer_bytes",
+      "latex": "B_p",
+      "meaning": "rzeczywisty zatrzymany graf producenta",
+      "si_unit": "\\mathrm{byte}"
+    },
+    {
+      "id": "reader_bytes",
+      "latex": "B_r",
+      "meaning": "niezależny rzeczywisty zatrzymany graf czytnika",
+      "si_unit": "\\mathrm{byte}"
+    },
+    {
+      "id": "retained_cap",
+      "latex": "C",
+      "meaning": "wspólny limit retained pamięci dla każdego ownera",
+      "si_unit": "\\mathrm{byte}"
     }
   ],
   "sources": [
@@ -320,6 +669,118 @@
       "symbol": "per_element_quality_metric_from_fmmq",
       "responsibility": "Reads active FMMQ v1 per-element arrays.",
       "evidence_status": "implemented"
+    },
+    {
+      "id": "object-mesh-id-api",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyObjectsMeshHandle",
+      "responsibility": "Immutable-ID lookup istniejącego GeometryMeshHandle, bez aktywacji fizyki.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "object-mesh-recipe-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_study_geometry_mesh_configs",
+      "responsibility": "Canonical per-object recipe export, including auxiliary geometry.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "object-mesh-id-contract",
+      "path": "docs/specs/mesh-roundtrip-semantics-v1.md",
+      "symbol": "DOC-ANCHOR:mesh-object-id-recipe",
+      "responsibility": "Kontrakt immutable-ID mesh recipe i unchanged raw geometry returns.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "auxiliary-mesh-owner",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class _AuxiliaryMeshOwner",
+      "responsibility": "Auxiliary mesh state without material or magnetic physics.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "auxiliary-independent-gmsh-proof",
+      "path": "packages/fullmag-py/tests/test_auxiliary_geometry_mesh.py",
+      "symbol": "test_independent_auxiliary_gmsh_mesh_across_source_levels",
+      "responsibility": "Executed exact sampling XYZ/Tet4 identity across three source hlevels with one Gmsh thread.",
+      "evidence_status": "executed"
+    },
+    {
+      "id": "auxiliary-context-proof",
+      "path": "packages/fullmag-py/tests/test_auxiliary_geometry_mesh.py",
+      "symbol": "test_mesh_context_lifetime_and_ambiguous_identity",
+      "responsibility": "Context lifetime and ambiguous-ID fail-closed regression.",
+      "evidence_status": "executed"
+    },
+    {
+      "id": "seed-qualification-contract",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-recursive-boundary-qualification",
+      "responsibility": "Complete planned geometry-only scope, constants and backend/API nonactivation.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "seed-curve-contract",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-recursive-boundary-curve-proof",
+      "responsibility": "Planned exact bracketing, spacing proof, nesting curves and independent precount.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "seed-coverage-contract",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-recursive-boundary-coverage-proof",
+      "responsibility": "Planned complete finite clipping/tree/continuous-distance coverage certificate.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "seed-artifact-contract",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-recursive-boundary-artifacts",
+      "responsibility": "Planned immutable owner/payload/resource evidence, not an existing producer.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "residue-validation-once-contract",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-residue-validation-once-contract",
+      "responsibility": "Planned storage-only full-content validation, exact retained accounting and independent-reader gates; no runtime or speedup claim.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "residue-validation-once-proof",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-residue-validation-once-proof",
+      "responsibility": "Planned storage-only full-content validation, exact retained accounting and independent-reader gates; no runtime or speedup claim.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "residue-validation-once-validation",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-residue-validation-once-validation",
+      "responsibility": "Planned storage-only full-content validation, exact retained accounting and independent-reader gates; no runtime or speedup claim.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "binary-residue-v2-representation",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-binary-residue-validation-v2",
+      "responsibility": "Planned storage-only binary representation, strict versioned resource authority and nonactivation controls.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "binary-residue-v2-resources",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-binary-residue-resources-v2",
+      "responsibility": "Planned storage-only binary representation, strict versioned resource authority and nonactivation controls.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "binary-residue-v2-gates",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-binary-residue-validation-gates-v2",
+      "responsibility": "Planned storage-only binary representation, strict versioned resource authority and nonactivation controls.",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {
@@ -343,6 +804,16 @@
         "meaning": "żąda per-element arrays; samo ustawienie nie dowodzi FMMQ v2",
         "backend_support": "FEM CPU/GPU; FDM N/A",
         "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].per_element_quality"
+      },
+      {
+        "python": "StudyObjectsMeshHandle.by_id.object_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "exact nonempty registered immutable ID; rejects wrong type, blank, unknown or ambiguous identity",
+        "meaning": "wybór istniejącej recipe magnetycznego lub pomocniczego obiektu bez aktywacji fizyki",
+        "backend_support": "shared authoring FEM/FDM CPU/GPU; existing mesh gates remain",
+        "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[] keyed by actual geometry name"
       }
     ]
   }

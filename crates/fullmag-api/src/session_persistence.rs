@@ -2674,10 +2674,14 @@ pub(crate) async fn export_session_with_context(
     } else {
         let run_ref = format!("runs/{}/run_manifest.json", snapshot.session.run_id);
         session_manifest.run_refs.push(run_ref);
+        let is_field_only = snapshot.metadata.as_ref()
+            .and_then(|metadata| metadata.get("execution_plan"))
+            .and_then(|plan| serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(plan.clone()).ok())
+            .is_some_and(|plan| matches!(plan.backend_plan, fullmag_ir::BackendPlanIR::AntennaFieldOnly(_)));
         let run_manifest = FmsRunManifest {
             run_id: snapshot.session.run_id.clone(),
             status: fullmag_session::RunStatus::Completed, // simplified
-            study_kind: "unknown".into(),
+            study_kind: if is_field_only { "field_only".into() } else { "unknown".into() },
             backend: snapshot.session.requested_backend.clone(),
             precision: snapshot.session.precision.clone(),
             started_at: chrono::Utc::now(),
@@ -3737,6 +3741,13 @@ pub(crate) async fn restore_checkpoint_with_context(
     }
     let run_id = snapshot.session.run_id.clone();
     let checkpoint = read_checkpoint_for_run(&store, &run_id, &checkpoint_id)?;
+    let resume_unsupported_reason = checkpoint_resume_unsupported_reason(snapshot);
+    if let Some(reason) = resume_unsupported_reason
+        .as_deref()
+        .or_else(|| checkpoint_schema_resume_unsupported_reason(&checkpoint))
+    {
+        return Err(ApiError::conflict(reason));
+    }
     let common_state = read_checkpoint_common_state(&store, &checkpoint)?;
     let magnetization = read_checkpoint_magnetization(&store, &common_state)?;
     let coupled_checkpoint = read_checkpoint_coupled_state(&store, &checkpoint)?;
@@ -3790,8 +3801,11 @@ pub(crate) async fn restore_checkpoint_with_context(
     }
     validate_checkpoint_restore_shape(snapshot, magnetization.len())?;
 
-    let restore_class =
-        supported_checkpoint_restore_class(&checkpoint, &checkpoint_compatibility(snapshot));
+    let restore_class = supported_checkpoint_restore_class(
+        &checkpoint,
+        &checkpoint_compatibility(snapshot),
+        resume_unsupported_reason.as_deref(),
+    );
     if restore_class != fullmag_session::RestoreClass::ExactResume {
         return Err(ApiError::conflict(format!(
             "checkpoint_restore_requires_exact_resume: checkpoint is classified as {restore_class:?}"
@@ -4742,6 +4756,7 @@ struct CheckpointEntryContext {
     mesh_revision: Option<u64>,
     scene_revision: Option<u64>,
     vector_count: u64,
+    resume_unsupported_reason: Option<String>,
 }
 
 fn checkpoint_context_from_snapshot(
@@ -4761,6 +4776,7 @@ fn checkpoint_context_from_snapshot(
         mesh_revision: Some(snapshot.mesh_revision),
         scene_revision: None,
         vector_count,
+        resume_unsupported_reason: checkpoint_resume_unsupported_reason(snapshot),
     }
 }
 
@@ -4807,7 +4823,7 @@ fn checkpoint_entry(
         field_revision: context.field_revision,
         scene_revision: context.scene_revision,
         backend_family: context.backend_family.clone(),
-        resume_class: checkpoint_resume_class(&checkpoint),
+        resume_class: checkpoint_resume_class(&checkpoint, context),
         artifact_ref: checkpoint.common_state_ref,
         checksum: context.checksum.clone(),
     }
@@ -5023,16 +5039,93 @@ fn now_unix_ms() -> u128 {
         .unwrap_or(0)
 }
 
+fn checkpoint_schema_resume_unsupported_reason(
+    checkpoint: &fullmag_session::FmsCheckpoint,
+) -> Option<&'static str> {
+    match checkpoint.compatibility.study_kind.as_deref() {
+        Some("fdm_coupled_m3") => Some(fullmag_runner::FDM_CPU_TRANSPORT_EXACT_RESUME_UNSUPPORTED),
+        Some(kind) if kind.starts_with("unsupported:") => {
+            Some("checkpoint ExactResume is unsupported for this checkpoint schema")
+        }
+        _ => None,
+    }
+}
+
+fn checkpoint_resume_unsupported_reason(snapshot: &SessionStateResponse) -> Option<String> {
+    let metadata = snapshot.metadata.as_ref();
+    let plan_value = metadata.and_then(|metadata| metadata.get("execution_plan"));
+    let resolved_transport = plan_value
+        .and_then(|value| value["backend_plan"].get("spin_transport_plans"))
+        .is_some_and(|plans| plans.as_array().is_none_or(|plans| !plans.is_empty()));
+    let authored_transport = metadata
+        .and_then(|metadata| {
+            metadata
+                .get("problem_ir")
+                .or_else(|| metadata.get("normalized_problem_ir"))
+        })
+        .and_then(|problem| problem.get("spin_transport_modules"))
+        .is_some_and(|modules| modules.as_array().is_none_or(|modules| !modules.is_empty()));
+    // Missing identity fails closed for transport without reparsing large pure
+    // magnetic/FEM plans or treating a charge-only current module as spin.
+    if resolved_transport || authored_transport {
+        match plan_value.and_then(|value| {
+            serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(value.clone()).ok()
+        }) {
+            Some(plan) => {
+                if let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan {
+                    if let Err(error) =
+                        fullmag_runner::validate_fdm_transport_checkpoint_resume_support(fdm)
+                    {
+                        return Some(error.message);
+                    }
+                }
+            }
+            None => {
+                return Some("transport checkpoint ExactResume requires valid resolved execution-plan identity".into());
+            }
+        }
+    }
+    match snapshot
+        .coupled_checkpoint
+        .as_ref()
+        .and_then(|value| value["schema"].as_str())
+    {
+        Some("fullmag.fdm.coupled_m3_checkpoint.v1") => {
+            Some(fullmag_runner::FDM_CPU_TRANSPORT_EXACT_RESUME_UNSUPPORTED.into())
+        }
+        Some(schema)
+            if schema != fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA
+                && schema != "fullmag.fdm.cpu.abm3-checkpoint.v1" =>
+        {
+            Some(format!(
+                "checkpoint ExactResume is unsupported for schema '{schema}'"
+            ))
+        }
+        _ => None,
+    }
+}
+
 fn checkpoint_resume_class(
     checkpoint: &fullmag_session::FmsCheckpoint,
+    context: &CheckpointEntryContext,
 ) -> fullmag_session::RestoreClass {
-    supported_checkpoint_restore_class(checkpoint, &checkpoint.compatibility)
+    supported_checkpoint_restore_class(
+        checkpoint,
+        &checkpoint.compatibility,
+        context.resume_unsupported_reason.as_deref(),
+    )
 }
 
 fn supported_checkpoint_restore_class(
     checkpoint: &fullmag_session::FmsCheckpoint,
     current: &CheckpointCompatibility,
+    resume_unsupported_reason: Option<&str>,
 ) -> fullmag_session::RestoreClass {
+    if resume_unsupported_reason.is_some()
+        || checkpoint_schema_resume_unsupported_reason(checkpoint).is_some()
+    {
+        return fullmag_session::RestoreClass::Unsupported;
+    }
     let class = determine_restore_class(&checkpoint.compatibility, current);
     if class == fullmag_session::RestoreClass::ExactResume && checkpoint.backend_state_ref.is_none()
     {
@@ -5060,7 +5153,8 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
         .coupled_checkpoint
         .as_ref()
         .and_then(|checkpoint| checkpoint["schema"].as_str());
-    let exact_resume_supported = checkpoint_schema == Some("fullmag.fdm.coupled_m3_checkpoint.v1");
+    let exact_resume_supported = checkpoint_schema == Some("fullmag.fdm.coupled_m3_checkpoint.v1")
+        && checkpoint_resume_unsupported_reason(snapshot).is_none();
     let restart_abi = exact_resume_supported.then(|| {
         format!(
             "{}:{}:{}",

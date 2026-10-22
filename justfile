@@ -49,8 +49,24 @@ docker-dev-stop-unadmitted attempt config_sha256 source_root backend_container_i
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" stop-unadmitted --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --backend-container-id {{quote(backend_container_id)}} --frontend-container-id {{quote(frontend_container_id)}} --image-id {{quote(image_id)}} --failure-marker-sha256 {{quote(failure_marker_sha256)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}} --source-sha256 {{quote(source_sha256)}} --request-id {{quote(request_id)}} --session-id {{quote(session_id)}}
 
 # Interpreted launcher/cache regressions run inside the selected fixed backend.
-docker-dev-control-checks source_root:
-    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_checks.py" --source-root {{quote(source_root)}}
+docker-dev-control-checks source_root scope="all":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_checks.py" --source-root {{quote(source_root)}} --scope {{quote(scope)}}
+
+# Build a repair candidate in the existing Failed backend; never restart or promote it.
+docker-dev-recovery-build source_root backend_container_id image_id process_receipt_sha256 owner_sha256 superseded_candidate_basename="" superseded_marker_sha256="" superseded_receipt_sha256="" superseded_make_attempt_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_recovery_build.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(backend_container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}} --owner-sha256 {{quote(owner_sha256)}}{{if (superseded_candidate_basename + superseded_marker_sha256 + superseded_receipt_sha256 + superseded_make_attempt_sha256) == "" { "" } else { " --superseded-candidate-basename " + quote(superseded_candidate_basename) + " --superseded-marker-sha256 " + quote(superseded_marker_sha256) + " --superseded-receipt-sha256 " + quote(superseded_receipt_sha256) + " --superseded-make-attempt-sha256 " + quote(superseded_make_attempt_sha256) }}}
+
+# Preview or explicitly finalize one retained own failed repair-build; no solver lease release.
+docker-dev-recover-failed-build source_root backend_container_id image_id attempt request="" request_sha256="" apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_failed_build_recovery.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(backend_container_id)}} --image-id {{quote(image_id)}} --attempt {{quote(attempt)}}{{if (request + request_sha256) == "" { "" } else { " --request " + quote(request) + " --request-sha256 " + quote(request_sha256) }}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") }}}
+
+# Promote one verified repair candidate without starting any runtime process.
+docker-dev-promote-recovery source_root backend_container_id image_id process_receipt_sha256 owner_sha256 candidate_basename candidate_receipt_sha256 current_receipt_sha256 provenance_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_recovery_build.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(backend_container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}} --owner-sha256 {{quote(owner_sha256)}} --promote --candidate-basename {{quote(candidate_basename)}} --candidate-receipt-sha256 {{quote(candidate_receipt_sha256)}} --current-receipt-sha256 {{quote(current_receipt_sha256)}} --provenance-sha256 {{quote(provenance_sha256)}}
+
+# Preserve one pinned unpublished package in its group's recovery archive.
+docker-dev-recover-package source_root backend_container_id image_id request request_sha256 apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_candidate_recovery.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(backend_container_id)}} --image-id {{quote(image_id)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") }}}
 
 # Probe the already-running volume DEV frontend with an image-owned browser.
 # Reuse the exact pinned image or acquire it through this Compose group's
@@ -63,6 +79,14 @@ docker-dev-browser-qa source_root="" port="" browser_image="" timeout="180" pull
 docker-dev-resume attempt config_sha256 source_root port="3197" restart_backend="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" resume-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} {{if restart_backend == "true" { "--restart-backend" } else if restart_backend == "false" { "" } else { error("restart_backend must be true or false") }}}
 
+# Reconcile only the existing unknown iteration; no backend/frontend lifecycle.
+docker-dev-reconcile-iteration request request_sha256 source_root port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_reconcile.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}
+
+# Validate or reconcile one exact completed output-preflight HTTP rejection; never retry Solve.
+docker-dev-reconcile-activation request request_sha256 source_root port="3197" preview="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_reconcile.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if preview == "true" { " --preview" } else if preview == "false" { "" } else { error("preview must be true or false") }}}
+
 # Activate one script in the exact currently running group. The control-volume
 # verified receipts supply attempt/configuration pins; ambiguity fails closed.
 docker-dev-script script source_root="" port="" request_id="":
@@ -74,12 +98,24 @@ docker-dev-script-pinned attempt config_sha256 source_root script request_id="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" activate-script --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --script {{quote(script)}} {{if request_id == "" { "" } else { "--request-id " + quote(request_id) }}}
 
 # Restart a pinned healthy backend only when its API confirms no active session.
+# Replace only the frontend generation; backend/source correspondence is required.
+docker-dev-refresh-frontend attempt config_sha256 source_root port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" refresh-frontend-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}
+
 docker-dev-restart-idle attempt config_sha256 source_root port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}
 
+# Restart only the explicitly saved, pinned, unadmitted authoring session.
+docker-dev-restart-saved-authoring attempt config_sha256 source_root checkpoint checkpoint_sha256 port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --saved-authoring-checkpoint {{quote(checkpoint)}} --saved-authoring-checkpoint-sha256 {{quote(checkpoint_sha256)}}
+
 # Replace exact retained volume DEV services, preserving caches and Windows state.
-docker-dev-recreate-volume attempt config_sha256 source_root port="3197" fresh_state="false" recovery_authorization="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if recovery_authorization == "" { "" } else { " --recovery-authorization " + quote(recovery_authorization) }}}{{if fresh_state == "true" { " --fresh-state" } else if fresh_state == "false" { "" } else { error("fresh_state must be true or false") }}}
+docker-dev-recreate-volume attempt config_sha256 source_root port="3197" fresh_state="false" recovery_authorization="" completed_recreation_attempt="" completed_recreation_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if recovery_authorization == "" { "" } else { " --recovery-authorization " + quote(recovery_authorization) }}}{{if fresh_state == "true" { " --fresh-state" } else if fresh_state == "false" { "" } else { error("fresh_state must be true or false") }}}{{if completed_recreation_attempt == "" { if completed_recreation_sha256 == "" { "" } else { error("completed recreation requires both attempt and SHA-256") } } else if completed_recreation_sha256 == "" { error("completed recreation requires both attempt and SHA-256") } else { " --completed-recreation-attempt " + quote(completed_recreation_attempt) + " --completed-recreation-sha256 " + quote(completed_recreation_sha256) }}}
+
+# Drain saved authoring before a managed configuration migration; preserve all data.
+docker-dev-stop-saved-authoring attempt config_sha256 source_root checkpoint checkpoint_sha256 port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --saved-authoring-checkpoint {{quote(checkpoint)}} --saved-authoring-checkpoint-sha256 {{quote(checkpoint_sha256)}} --stop-only
 
 # Explicit managed recovery of one stopped Docker namespace. The old attempt,
 # Compose config digest, source checkout, frontend port, and control-volume
@@ -159,8 +195,8 @@ observe-managed-antenna-ram run_root:
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_ram.py" --repo-root "{{repo_root}}" observe --run-root {{quote(run_root)}}
 
 # Real API publication/read-back: fixed CPU fixture, loopback-only RAM session.
-run-managed-antenna-http-ram job_id commit source_digest native_snapshot_sha256 fixture="magnetic":
-    @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_http_ram.py" --repo-root "{{repo_root}}" start --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --fixture {{quote(fixture)}}
+run-managed-antenna-http-ram job_id commit source_digest native_snapshot_sha256 fixture="magnetic" browser_port="":
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_http_ram.py" --repo-root "{{repo_root}}" start --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --fixture {{quote(fixture)}}{{if browser_port == "" { "" } else { " --browser-inspection-port " + quote(browser_port) }}}
 # Same pinned current input, but no magnetic probe physics or LLG scaffold.
 run-managed-antenna-standalone-ram job_id commit source_digest native_snapshot_sha256:
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_ram.py" --repo-root "{{repo_root}}" start --job-id {{quote(job_id)}} --commit {{quote(commit)}} --source-digest {{quote(source_digest)}} --native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --standalone
@@ -175,6 +211,10 @@ run-managed-antenna-standalone-cold-http-ram job_id commit source_digest native_
 
 observe-managed-antenna-http-ram run_root:
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_http_ram.py" --repo-root "{{repo_root}}" observe --run-root {{quote(run_root)}}
+
+# Complete only the retained browser proof for this owned cold RAM inspection.
+complete-managed-antenna-http-ram-browser run_root proof_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_antenna_http_ram.py" --repo-root "{{repo_root}}" complete-browser --run-root {{quote(run_root)}} --proof-sha256 {{quote(proof_sha256)}}
 
 # No-build public accepted full-3D inspection from a pinned managed capsule.
 verify-api-accepted-closed-loop-runtime request request_sha256:
@@ -299,6 +339,13 @@ run-managed-boris-nf-v2 job_id resolution:
 
 observe-managed-boris-nf-v2 runtime_id:
     @{{storage_python}} "{{repo_root}}/scripts/run_managed_boris_nf_v2.py" --repo-root {{quote(repo_root)}} observe --runtime-id {{quote(runtime_id)}}
+
+# New common-case inputs and runtime.v4; r1/r2 require the preceding capacity run.
+run-managed-boris-nf-common-v3 job_id case_key previous_runtime_id="":
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_boris_nf_v3.py" --repo-root {{quote(repo_root)}} run --job-id {{quote(job_id)}} --case {{quote(case_key)}} --previous-runtime-id {{quote(previous_runtime_id)}}
+
+observe-managed-boris-nf-common-v3 runtime_id:
+    @{{storage_python}} "{{repo_root}}/scripts/run_managed_boris_nf_v3.py" --repo-root {{quote(repo_root)}} observe --runtime-id {{quote(runtime_id)}}
 
 # Consume one completed managed CPU/SLEPc build; this recipe never builds an
 # image or native target and writes only a new run below canonical storage.
@@ -729,7 +776,7 @@ verify-preparation-workspace-browser:
 verify-antenna-source-spectrum-browser dependency_workspace="":
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3265 --scenario antenna-source-spectrum {{if dependency_workspace != "" { "--dependency-workspace \"" + dependency_workspace + "\"" } else { "" }}}
 
-# Immutable artifact carriers through production binary transport and WebGL.
+# Common immutable artifact carriers through production FMVP6/FMMT2 transport and WebGL.
 verify-artifact-field-overlay-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3276 --scenario artifact-field-overlay
 
@@ -7572,3 +7619,18 @@ verify-fdm-gpu-solved-current-racetrack-production:
         --execution-audit "$evidence_root/execution-audit.v1.json" || true; \
       python3 scripts/verify_fdm_gpu_racetrack_qualification.py --evidence-root "$evidence_root" --source-snapshot "$source_snapshot"; \
       echo "production-qualified racetrack manifest: $evidence_root/fdm_gpu_solved_current_racetrack_qualification_v1.json"'
+
+# Separate tools provenance; terminal native BC+M2 package, three common runtime-v4 references.
+[windows]
+verify-boris-fullmag-nf-common-managed-windows job_id commit source_digest native_snapshot_sha256 r0_runtime r1_runtime r2_runtime report_id:
+    @PYTHONPATH="{{repo_root}}/packages/fullmag-py/src" {{storage_python}} "{{repo_root}}/scripts/run_boris_fullmag_nf_common_matrix_v3.py" --repo-root {{quote(repo_root)}} --fullmag-managed-job-id {{quote(job_id)}} --fullmag-managed-commit {{quote(commit)}} --fullmag-managed-source-digest {{quote(source_digest)}} --fullmag-managed-native-snapshot-sha256 {{quote(native_snapshot_sha256)}} --boris-runtime-r0 {{quote(r0_runtime)}} --boris-runtime-r1 {{quote(r1_runtime)}} --boris-runtime-r2 {{quote(r2_runtime)}} --managed-report-id {{quote(report_id)}}
+
+# Optional external CPU reference: same admitted backend, task-private dependency prefix.
+# Does not run the common-case benchmark or change backend images.
+docker-dev-boris-reference attempt config_sha256 source_root reference_asset_image_id maximum_build_seconds:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_boris_volume.py" --repo-root "{{repo_root}}" --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --reference-asset-image-id {{quote(reference_asset_image_id)}} --maximum-build-seconds {{quote(maximum_build_seconds)}}
+
+# Scientific qualification only: current same-project package and terminal BORIS prefix.
+# No build service, old coordinator, backend restart, or physics qualification claim.
+docker-dev-nf-common-qualify attempt config_sha256 source_root producer_attempt producer_receipt_sha256 report_id profile="comparison":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_nf_common_volume.py" --repo-root "{{repo_root}}" --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --producer-attempt {{quote(producer_attempt)}} --producer-receipt-sha256 {{quote(producer_receipt_sha256)}} --report-id {{quote(report_id)}} --profile {{quote(profile)}}

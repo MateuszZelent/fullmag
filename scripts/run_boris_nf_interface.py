@@ -179,6 +179,9 @@ def capture_runtime_identity(
 
 def validate_runtime_identity(identity: Mapping[str, object], *, repo_root: Path | None = None,
                               artifact_root: Path | None = None) -> list[dict[str, object]]:
+    if identity.get("schema_version") == "fullmag.boris.runtime.v4":
+        from run_managed_boris_nf_v3 import verify_runtime_identity
+        return verify_runtime_identity(identity, repo_root, artifact_root)
     if identity.get("schema_version") == "fullmag.boris.runtime.v3":
         from run_managed_boris_nf_v2 import verify_runtime_identity
         return verify_runtime_identity(identity, repo_root, artifact_root)

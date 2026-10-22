@@ -6,6 +6,7 @@ import type { CommandContext, CommandContribution } from "../commands/commandTyp
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import { applyAuthoringHistoryWorkspaceTransition } from "../authoring/authoringHistoryWorkspaceRestore";
 import { pickProjectArchive } from "../persistence/ProjectDocumentController";
+import { openAndActivateAuthoringProject } from "../persistence/ScriptProjectActivation";
 
 function canonicalCopyFileName(scriptPath: string): string {
   const name = scriptPath.split(/[\\/]/).pop() || "fullmag-study.py";
@@ -264,8 +265,7 @@ export const SHELL_COMMANDS: CommandContribution[] = [
       if (!source) {
         return { message: "No project file selected.", status: "cancelled" };
       }
-      const resource = await context.projectDocument.open(source);
-      context.authoringHistory?.clear();
+      const resource = await openAndActivateAuthoringProject(context, source);
       return {
         message: `Opened project ${resource.name}.`,
         status: "completed",

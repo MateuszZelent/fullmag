@@ -66,6 +66,7 @@ struct DurableProjection {
     terminal_without_outputs: bool,
     status: &'static str,
     command_id: Option<String>,
+    preclaim_cancellations: Vec<(String, String)>,
     latest_state: Option<VerifiedOutput>,
     latest_total_energy: Option<fullmag_application::StudyScalarArtifact>,
     latest_output_identity: Option<String>,
@@ -360,6 +361,27 @@ fn load_durable_projection(
                 })
         })
         .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    if artifact_catalog.is_none() && preclaim_cancelled_without_artifacts(&store, &run_catalog)? {
+        let planned_count = accepted.lowered.steps.iter()
+            .filter(|step| matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned))
+            .count();
+        if run_catalog.tasks.len() != planned_count {
+            return Err(ApiError::conflict("cancelled run catalog does not cover every planned Study step"));
+        }
+        for task in &run_catalog.tasks {
+            let order = task_order.get(&task.task_id).ok_or_else(|| {
+                ApiError::conflict("cancelled task is not present in the canonical Study execution order")
+            })?;
+            let step = &accepted.lowered.steps[*order];
+            let fingerprint = fullmag_application::study_task_input_fingerprint(&specification, step)
+                .map_err(|error| ApiError::conflict(format!("cancelled Study input is invalid: {error}")))?;
+            if !matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned)
+                || task.input_fingerprint != fingerprint
+            {
+                return Err(ApiError::conflict("cancelled task input differs from its canonical Study step"));
+            }
+        }
+    }
     let active_task = run_catalog
         .tasks
         .iter()
@@ -446,7 +468,7 @@ fn load_durable_projection(
     } else {
         Vec::new()
     };
-    let stage_terminal_details = if durable_changed {
+    let stage_terminal_details = if durable_changed && artifact_catalog.is_some() {
         load_stage_terminal_details(&store, &context.run_id, &run_catalog.tasks)?
     } else {
         std::collections::BTreeMap::new()
@@ -512,12 +534,24 @@ fn load_durable_projection(
         .pointer("/parameters/live_workspace/command_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let mut preclaim_cancellations = Vec::new();
+    if status == "cancelled" && preclaim_cancelled_without_artifacts(&store, &run_catalog)? {
+        for task in &run_catalog.tasks {
+            let cancellation = store.read_task_cancellation_intent(&context.run_id, &task.task_id)
+                .map_err(|error| ApiError::conflict(format!("read command cancellation proof: {error}")))?
+                .ok_or_else(|| ApiError::conflict("command cancellation proof disappeared"))?;
+            cancellation.validate_task_scope(&store, task, run_catalog.revision)
+                .map_err(|error| ApiError::conflict(format!("invalid command cancellation proof: {error}")))?;
+            preclaim_cancellations.push((task.task_id.clone(), cancellation.cancellation_id));
+        }
+    }
     Ok(Some(DurableProjection {
         run_catalog_revision: run_catalog.revision,
         artifact_catalog_revision,
         terminal_without_outputs,
         status,
         command_id,
+        preclaim_cancellations,
         latest_state,
         latest_total_energy,
         latest_output_identity,
@@ -527,6 +561,36 @@ fn load_durable_projection(
         live_magnetization_sequence,
         stage_execution,
     }))
+}
+
+fn preclaim_cancelled_without_artifacts(
+    store: &fullmag_session::SessionStore,
+    catalog: &fullmag_session::FmsRunCatalog,
+) -> Result<bool, ApiError> {
+    if catalog.tasks.is_empty() || catalog.tasks.iter().any(|task| {
+        task.lifecycle != fullmag_session::FmsTaskLifecycle::Cancelled
+            || task.attempt_id.is_some()
+            || task.ownership_epoch.is_some()
+            || task.resource_id.is_some()
+            || task.resolved_input_fingerprint.is_some()
+            || task.observation.is_some()
+            || !task.artifact_ids.is_empty()
+            || task.coordinator_watermark.is_some()
+            || task.coordinator_genesis.is_some()
+    }) {
+        return Ok(false);
+    }
+    for task in &catalog.tasks {
+        let Some(intent) = store.read_task_cancellation_intent(&catalog.run_id, &task.task_id)
+            .map_err(|error| ApiError::conflict(format!("read pre-claim cancellation intent: {error}")))?
+        else {
+            return Ok(false);
+        };
+        intent.validate_task_scope(store, task, catalog.revision).map_err(|error| {
+            ApiError::conflict(format!("pre-claim cancellation scope is invalid: {error}"))
+        })?;
+    }
+    Ok(true)
 }
 
 fn build_stage_execution(
@@ -1852,20 +1916,22 @@ async fn apply_projection(
             }
         }
     }
-    if !changed && previous_status == projection.status {
-        return Ok(());
-    }
-    next.state_version = next.state_version.saturating_add(1);
-
-    if terminal && !projection.terminal_without_outputs {
+    // Reconcile a proof-bound cancellation even when the terminal session
+    // snapshot was already projected before a timed-out Mesh request recovered.
+    if terminal && (!projection.terminal_without_outputs || !projection.preclaim_cancellations.is_empty()) {
         complete_bound_command(
             state,
             &next,
             projection.command_id.as_deref(),
+            &projection.preclaim_cancellations,
             projection.status,
         )
         .await?;
     }
+    if !changed && previous_status == projection.status {
+        return Ok(());
+    }
+    next.state_version = next.state_version.saturating_add(1);
     {
         let mut current = state.current_live_state.write().await;
         *current = Some(next.clone());
@@ -1909,6 +1975,7 @@ async fn complete_bound_command(
     state: &AppState,
     snapshot: &SessionStateResponse,
     command_id: Option<&str>,
+    preclaim_cancellations: &[(String, String)],
     status: &str,
 ) -> Result<(), ApiError> {
     let Some(command_id) = command_id else {
@@ -1924,7 +1991,17 @@ async fn complete_bound_command(
     crate::live_command_journal::mutate(state, snapshot, |records| {
         let mut changed = false;
         for record in records.iter_mut() {
-            if record.command.command_id != command_id
+            let bound_execution = record.command.command_id == command_id
+                || (record.command.kind == "mesh_build"
+                    && command_id == format!("live-preparation-{}", record.command.command_id));
+            let bound_stop = status == "cancelled" && record.command.kind == "stop"
+                && !preclaim_cancellations.is_empty()
+                && preclaim_cancellations.iter().all(|(task_id, cancellation_id)| {
+                    *cancellation_id == format!("cancel-live-{}", fullmag_session::hex_sha256(
+                        format!("{}\0{}\0{}", record.command.command_id, snapshot.session.run_id, task_id).as_bytes(),
+                    ))
+                });
+            if !(bound_execution || bound_stop)
                 || matches!(
                     record.status,
                     crate::types::CommandLifecycleState::Completed
@@ -1997,6 +2074,281 @@ mod tests {
             catalog_status(&[task(fullmag_session::FmsTaskLifecycle::Succeeded)]),
             "completed"
         );
+    }
+
+    fn preclaim_cancelled_fixture() -> (
+        tempfile::TempDir,
+        fullmag_session::SessionStore,
+        ProjectionContext,
+        fullmag_session::FmsRunCatalog,
+    ) {
+        use fullmag_application::{ProjectEnvelope, ProjectId, ProjectSnapshot, RequestedExecution,
+            RequestedResourceBudget, RunId, RunIntent, RunSpecification, StudyId, StudyReference};
+        use fullmag_authoring::{PrimitiveStageNode, StudyDiscretizationReference,
+            StudyExecutionProfileReference, StudyModelReference, StudyPipelineDocument,
+            StudyPipelineNode, StudyPipelineNodeSource, StudyPlan, StudyPlanMigrationDefaults,
+            StudyPrimitiveStageKind, StudySolverConfigReference};
+        use fullmag_plan::{StudyProblemCatalog, StudyProblemCatalogEntry};
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path().join("store")).unwrap();
+        let definition = ProjectEnvelope::blank(ProjectId::parse("project-cancel").unwrap(), "Cancel").unwrap();
+        let study = StudyPlan::from_pipeline("study-cancel", 1, &StudyPipelineDocument {
+            version: "study_pipeline.v2".into(),
+            nodes: ["step:run", "step:run-2"].into_iter().map(|id|
+                StudyPipelineNode::Primitive(PrimitiveStageNode {
+                    id: id.into(), label: "Run".into(), enabled: true, notes: None,
+                    source: Some(StudyPipelineNodeSource::UiAuthored),
+                    stage_kind: StudyPrimitiveStageKind::Run,
+                    payload: [("until_seconds".into(), json!("1e-9"))].into_iter().collect(),
+                })).collect(),
+        }, &StudyPlanMigrationDefaults {
+            model: StudyModelReference { model_id: "model:one".into(), version: "v1".into() },
+            solver_config: StudySolverConfigReference { preset_id: "solver:default".into(), version: "v1".into() },
+            discretization: StudyDiscretizationReference { recipe_id: "mesh:default".into(), version: "v1".into() },
+            execution_profile: StudyExecutionProfileReference { profile_id: "exec:auto".into(), version: "v1".into() },
+        }).unwrap();
+        let problem_catalog = StudyProblemCatalog::from_entries(&study, study.steps.iter().map(|step|
+            StudyProblemCatalogEntry::from_step(step, fullmag_ir::ProblemIR::bootstrap_example()),
+        ).collect()).unwrap();
+        let context = ProjectionContext {
+            session_id: "session-cancel".into(), run_id: "run-cancel".into(), session_epoch: 4,
+            scene_revision: 9, execution_input: None, api_instance_id: "api-cancel".into(),
+            allow_api_instance_rebind: false,
+        };
+        let mut specification = RunSpecification::new(
+            ProjectSnapshot::from_envelope(&definition).unwrap(),
+            StudyReference {
+                study_id: StudyId::parse("study-cancel").unwrap(), plan_version: study.schema_version.clone(),
+                plan_sha256: study.canonical_sha256().unwrap(),
+            }, fullmag_session::canonical_json_sha256(&serde_json::to_value(&problem_catalog).unwrap()),
+            json!({"live_workspace": {"api_instance_id": context.api_instance_id, "session_id": context.session_id,
+                "session_epoch": context.session_epoch, "scene_revision": context.scene_revision,
+                "command_id": "live-preparation-mesh-command"}}),
+            RequestedExecution { backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+                mode: "strict".into(), minimum_resources: Some(RequestedResourceBudget {
+                    cpu_millis: 100, memory_bytes: 1, gpu_memory_bytes: 0, storage_bytes: 1,
+                }) },
+        );
+        specification.run_id = RunId::parse(context.run_id.clone()).unwrap();
+        crate::run_intent_persistence::commit_validated_run_intent(&store,
+            &RunIntent::new("submit-cancel", specification), &definition, &study, &problem_catalog,
+            &std::collections::BTreeMap::new()).unwrap();
+        let catalog = crate::run_intent_persistence::materialize_accepted_run_catalog(
+            &store, &context.run_id, &ProjectId::parse("project-cancel").unwrap()).unwrap();
+        let application_root = directory.path().join("application-state");
+        std::fs::create_dir(&application_root).unwrap();
+        let ledger = fullmag_session::host_resource_ledger::HostResourceLedger::initialize_for_application(&application_root,
+            directory.path().join("host-ledger"), fullmag_session::host_resource_ledger::HostResourceLedgerPolicy {
+                schema_version: fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1.into(),
+                host_id: "host-cancel".into(), topology_sha256: "a".repeat(64), revision: 1, owner_epoch: 1,
+                total_budget: fullmag_session::FmsResourceBudget {
+                    cpu_millis: 1000, memory_bytes: 1024, gpu_memory_bytes: 0, storage_bytes: 1024,
+                }, gpu_vram_bytes_by_uuid: Default::default(), allowed_cpu_ids: Default::default(),
+            }).unwrap();
+        for task in &catalog.tasks {
+            let revision = store.read_run_catalog(&context.run_id).unwrap().unwrap().revision;
+            let cancellation_id = format!("cancel-live-{}", fullmag_session::hex_sha256(
+                format!("stop-command\0{}\0{}", context.run_id, task.task_id).as_bytes(),
+            ));
+            store.request_task_cancellation_intent(&context.run_id, &task.task_id,
+                &cancellation_id, revision, "operator cancelled before claim").unwrap();
+            assert!(ledger.project_unclaimed_task_cancellation(&store, &context.run_id, &task.task_id).unwrap());
+        }
+        let catalog = store.read_run_catalog(&context.run_id).unwrap().unwrap();
+        assert_eq!(catalog.revision, 5);
+        (directory, store, context, catalog)
+    }
+
+    #[test]
+    fn preclaim_cancellation_projects_terminal_metadata_without_creating_artifacts() {
+        let (_directory, store, context, catalog) = preclaim_cancelled_fixture();
+        assert!(preclaim_cancelled_without_artifacts(&store, &catalog).unwrap());
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+        let before = std::fs::read(store.root().join(format!("runs/{}/run_catalog.json", context.run_id))).unwrap();
+        let projection = load_durable_projection(store.root(), &context, None).unwrap().unwrap();
+        assert_eq!(projection.status, "cancelled");
+        assert_eq!(projection.command_id.as_deref(), Some("live-preparation-mesh-command"));
+        assert_eq!(projection.artifact_catalog_revision, None);
+        assert!(projection.latest_state.is_none());
+        assert!(projection.latest_total_energy.is_none());
+        assert!(projection.latest_output_identity.is_none());
+        assert!(projection.live_observation.is_none());
+        assert!(projection.stage_execution.stages.iter().all(|stage|
+            stage.status == crate::types::StageLifecycleState::Cancelled));
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+        assert_eq!(before, std::fs::read(store.root().join(format!("runs/{}/run_catalog.json", context.run_id))).unwrap());
+    }
+
+    #[tokio::test]
+    async fn preclaim_cancellation_completes_live_session_and_bound_mesh_command() {
+        let (directory, store, context, _catalog) = preclaim_cancelled_fixture();
+        let projection = load_durable_projection(store.root(), &context, None).unwrap().unwrap();
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let journal_root = directory.path().join("live-journal");
+        Arc::get_mut(&mut state).unwrap().current_command_journal_store_root = Some(journal_root.clone());
+        state.current_live_session_epoch.store(context.session_epoch, std::sync::atomic::Ordering::Release);
+        let mut scene = crate::router_v2::handlers::sessions::create::create_empty_scene_document(
+            &serde_json::from_value(json!({"name":"Cancel", "backend":"fdm", "device":"cpu", "precision":"double"})).unwrap(),
+        ).unwrap();
+        scene.revision = context.scene_revision;
+        scene.scene.id = context.session_id.clone();
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.session.session_id = context.session_id.clone();
+            snapshot.session.run_id = context.run_id.clone();
+            snapshot.session.status = "waiting_for_compute".into();
+            snapshot.scene_document = Some(scene);
+            snapshot.run = Some(serde_json::from_value(json!({
+                "run_id":context.run_id, "session_id":context.session_id, "status":"waiting_for_compute",
+                "total_steps":2, "artifact_dir":""
+            })).unwrap());
+        }
+        state.current_command_ledger.lock().await.push_back(serde_json::from_value(json!({
+            "command":{"seq":1,"command_id":"mesh-command","kind":"mesh_build","created_at_unix_ms":1},
+            "status":"accepted"
+        })).unwrap());
+        for (seq, id, kind) in [
+            (2, "stop-command", "stop"),
+            (3, "unrelated-mesh", "mesh_build"),
+            (4, "unrelated-stop", "stop"),
+            (5, "live-preparation-mesh-command-extra", "mesh_build"),
+        ] {
+            state.current_command_ledger.lock().await.push_back(serde_json::from_value(json!({
+                "command":{"seq":seq,"command_id":id,"kind":kind,"created_at_unix_ms":1},
+                "status":"accepted"
+            })).unwrap());
+        }
+        let _transition = state.current_live_session_transition.lock().await;
+        apply_projection(&state, &context, projection).await.unwrap();
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.session.status, "cancelled");
+        assert_eq!(snapshot.run.as_ref().unwrap().status, "cancelled");
+        assert!(snapshot.session.finished_at_unix_ms > 0);
+        let ledger = state.current_command_ledger.lock().await;
+        assert_eq!(ledger[0].status, crate::types::CommandLifecycleState::Completed);
+        assert_eq!(ledger[0].completion_status, Some(crate::types::CommandCompletionState::Cancelled));
+        assert_eq!(ledger[1].completion_status, Some(crate::types::CommandCompletionState::Cancelled));
+        assert!(ledger.iter().skip(2).all(|record|
+            record.status == crate::types::CommandLifecycleState::Accepted));
+        let journal = fullmag_session::SessionStore::open_existing(journal_root).unwrap()
+            .read_live_command_journal(&context.session_id).unwrap().unwrap();
+        let journal: Value = serde_json::from_slice(&journal).unwrap();
+        assert_eq!(journal["records"][0]["completion_status"], "cancelled");
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_completion_requires_every_task_proof_for_the_current_run() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let snapshot = state.current_live_state.read().await.as_ref().unwrap().clone();
+        state.current_command_ledger.lock().await.push_back(serde_json::from_value(json!({
+            "command":{"seq":1,"command_id":"stop-command","kind":"stop","created_at_unix_ms":1},
+            "status":"accepted"
+        })).unwrap());
+        let proof = |run_id: &str, task_id: &str| (task_id.to_owned(), format!("cancel-live-{}",
+            fullmag_session::hex_sha256(format!("stop-command\0{run_id}\0{task_id}").as_bytes())));
+        for proofs in [
+            Vec::new(),
+            vec![proof("other-run", "task-a")],
+            vec![proof(&snapshot.session.run_id, "task-a"), proof("other-run", "task-b")],
+        ] {
+            complete_bound_command(&state, &snapshot, Some("live-preparation-mesh-command"),
+                &proofs, "cancelled").await.unwrap();
+            assert_eq!(state.current_command_ledger.lock().await[0].status,
+                crate::types::CommandLifecycleState::Accepted);
+        }
+        complete_bound_command(&state, &snapshot, Some("live-preparation-mesh-command"),
+            &[proof(&snapshot.session.run_id, "task-a")], "cancelled").await.unwrap();
+        assert_eq!(state.current_command_ledger.lock().await[0].completion_status,
+            Some(crate::types::CommandCompletionState::Cancelled));
+    }
+
+    #[test]
+    fn preclaim_cancellation_rejects_an_incomplete_study_task_catalog() {
+        let (_directory, store, context, mut catalog) = preclaim_cancelled_fixture();
+        assert_eq!(catalog.tasks.len(), 2);
+        catalog.tasks.pop();
+        std::fs::write(store.root().join(format!("runs/{}/run_catalog.json", context.run_id)),
+            serde_json::to_vec(&catalog).unwrap()).unwrap();
+        assert!(load_durable_projection(store.root(), &context, None).is_err());
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn missing_artifacts_exception_refuses_every_non_cancelled_or_mixed_catalog() {
+        use fullmag_session::FmsTaskLifecycle::*;
+        let (_directory, store, _context, catalog) = preclaim_cancelled_fixture();
+        for lifecycle in [Accepted, Queued, Preparing, Running, Stopping, Succeeded, Failed, Interrupted] {
+            let mut changed = catalog.clone();
+            changed.tasks[0].lifecycle = lifecycle;
+            assert!(!preclaim_cancelled_without_artifacts(&store, &changed).unwrap());
+            changed.tasks.push(catalog.tasks[0].clone());
+            assert!(!preclaim_cancelled_without_artifacts(&store, &changed).unwrap());
+        }
+        let mut empty = catalog.clone();
+        empty.tasks.clear();
+        assert!(!preclaim_cancelled_without_artifacts(&store, &empty).unwrap());
+    }
+
+    #[test]
+    fn missing_artifacts_exception_refuses_claimed_state_and_unknown_cancellation_scope() {
+        let (_directory, store, context, catalog) = preclaim_cancelled_fixture();
+        let mut claimed = catalog.clone();
+        claimed.tasks[0].attempt_id = Some("attempt".into());
+        claimed.tasks[0].ownership_epoch = Some(1);
+        claimed.tasks[0].resource_id = Some("cpu".into());
+        assert!(!preclaim_cancelled_without_artifacts(&store, &claimed).unwrap());
+        for field in ["ownership_epoch", "resolved_input_fingerprint", "artifact_ids", "coordinator_watermark"] {
+            let mut changed = catalog.clone();
+            match field {
+                "ownership_epoch" => changed.tasks[0].ownership_epoch = Some(1),
+                "resolved_input_fingerprint" => changed.tasks[0].resolved_input_fingerprint = Some("b".repeat(64)),
+                "artifact_ids" => changed.tasks[0].artifact_ids.push("artifact".into()),
+                _ => changed.tasks[0].coordinator_watermark = Some(Default::default()),
+            }
+            assert!(!preclaim_cancelled_without_artifacts(&store, &changed).unwrap());
+        }
+        let mut replaced = catalog.clone();
+        replaced.tasks[0].input_fingerprint = "b".repeat(64);
+        assert!(preclaim_cancelled_without_artifacts(&store, &replaced).is_err());
+        std::fs::remove_file(store.root().join(format!("runs/{}/task_cancellation_intents/{}.json",
+            context.run_id, catalog.tasks[0].task_id))).unwrap();
+        let projection = load_durable_projection(store.root(), &context, None).unwrap().unwrap();
+        assert!(projection.terminal_without_outputs);
+        assert!(projection.preclaim_cancellations.is_empty());
+    }
+
+    #[test]
+    fn preclaim_cancellation_without_artifacts_keeps_live_binding_fences() {
+        let (_directory, store, context, _catalog) = preclaim_cancelled_fixture();
+        for field in ["api_instance_id", "session_id", "session_epoch", "scene_revision", "run_id"] {
+            let mut stale = context.clone();
+            match field {
+                "api_instance_id" => stale.api_instance_id = "other-api".into(),
+                "session_id" => stale.session_id = "other-session".into(),
+                "session_epoch" => stale.session_epoch += 1,
+                "scene_revision" => stale.scene_revision += 1,
+                _ => stale.run_id = "other-run".into(),
+            }
+            assert!(!matches!(load_durable_projection(store.root(), &stale, None), Ok(Some(_))));
+        }
+    }
+
+    #[test]
+    fn preclaim_exception_does_not_accept_an_invalid_existing_artifact_catalog() {
+        let (_directory, store, context, _catalog) = preclaim_cancelled_fixture();
+        let path = store.root().join(format!("runs/{}/artifact_catalog.json", context.run_id));
+        for (run_id, revision) in [(context.run_id.as_str(), 0), ("other-run", 1)] {
+            let catalog = fullmag_session::FmsArtifactCatalog {
+                schema_version: fullmag_session::FMS_ARTIFACT_CATALOG_SCHEMA.into(), run_id: run_id.into(),
+                revision, updated_at: chrono::Utc::now(), entries: Vec::new(),
+            };
+            std::fs::write(&path, serde_json::to_vec(&catalog).unwrap()).unwrap();
+            assert!(load_durable_projection(store.root(), &context, None).is_err());
+        }
     }
 
     #[test]

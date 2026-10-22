@@ -14,6 +14,13 @@ const NO_IMPORTER = "No importer for this format ships in this build yet.";
 
 export const IMPORT_FORMATS: readonly ImportFormat[] = [
   {
+    id: "python",
+    label: "Fullmag Python",
+    extensions: [".py"],
+    fidelity: "Original UTF-8 source, reviewed before consent. Self-contained scripts only; companion files are not included.",
+    unavailableReason: null,
+  },
+  {
     id: "fms",
     label: "Fullmag",
     extensions: [".fms"],

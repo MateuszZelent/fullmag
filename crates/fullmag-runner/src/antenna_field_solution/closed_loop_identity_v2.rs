@@ -2,6 +2,8 @@
 use super::closed_loop_v2::ClosedLoopAcceptedSourceInputV2;
 use crate::types::RunError;
 use fullmag_ir::ConservativeCurrentClosureIR;
+use num_bigint::BigInt;
+use num_rational::BigRational;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -144,6 +146,57 @@ fn provenance_number(value:&Value,name:&str,expected:f64)->Result<(),RunError> {
 fn provenance_integer(value:&Value,name:&str,expected:u64)->Result<(),RunError> {
     require(value.get(name).and_then(Value::as_u64)==Some(expected),"provenance integer binding")
 }
+// Split the existing 128-epsilon pair budget between the two samples.
+// Exact dyadic arithmetic prevents a large constant component from corrupting
+// a shared slope inferred from the difference of rounded samples.
+fn verify_rt0_sample_affinity(points: &[[f64; 3]; 4], currents: &[f64; 12]) -> Result<(), RunError> {
+    let zero = BigRational::from_integer(BigInt::from(0));
+    let budget = BigRational::new(BigInt::from(64), BigInt::from(1) << 52_usize);
+    let mut coordinates: [[BigRational; 3]; 4] =
+        std::array::from_fn(|_| std::array::from_fn(|_| zero.clone()));
+    let mut samples: [[BigRational; 3]; 4] =
+        std::array::from_fn(|_| std::array::from_fn(|_| zero.clone()));
+    let mut errors: [[BigRational; 3]; 4] =
+        std::array::from_fn(|_| std::array::from_fn(|_| zero.clone()));
+    for local in 0..4 {
+        for axis in 0..3 {
+            coordinates[local][axis] = BigRational::from_float(points[local][axis])
+                .ok_or_else(|| invalid("nonfinite RT0 sample coordinate"))?;
+            let sample = BigRational::from_float(currents[3 * local + axis])
+                .ok_or_else(|| invalid("nonfinite RT0 current sample"))?;
+            let magnitude = if sample < zero { -sample.clone() } else { sample.clone() };
+            errors[local][axis] = &budget * magnitude;
+            samples[local][axis] = sample;
+        }
+    }
+    let mut slope_interval: Option<(BigRational, BigRational)> = None;
+    for axis in 0..3 {
+        for first in 0..4 {
+            for second in 0..first {
+                let distance = &coordinates[first][axis] - &coordinates[second][axis];
+                let delta = &samples[first][axis] - &samples[second][axis];
+                let width = &errors[first][axis] + &errors[second][axis];
+                if distance == zero {
+                    require(delta >= -width.clone() && delta <= width,
+                        "J samples are not one affine RT0 field")?;
+                    continue;
+                }
+                let mut lower = (&delta - &width) / &distance;
+                let mut upper = (&delta + &width) / &distance;
+                if lower > upper { std::mem::swap(&mut lower, &mut upper); }
+                if let Some((minimum, maximum)) = slope_interval.as_mut() {
+                    if lower > *minimum { *minimum = lower; }
+                    if upper < *maximum { *maximum = upper; }
+                    require(*minimum <= *maximum, "J samples are not one affine RT0 field")?;
+                } else {
+                    slope_interval = Some((lower, upper));
+                }
+            }
+        }
+    }
+    require(slope_interval.is_some(), "RT0 interpolation pivot")
+}
+
 fn verify_owned_geometry(source: &ClosedLoopAcceptedSourceInputV2,
     by_id: &BTreeMap<u64,usize>, faces: &BTreeMap<[u64;3],f64>, owners: &BTreeMap<[u64;3],Vec<usize>>,
     cut_pairs: &[([u64;3],[u64;3])]) -> Result<(),RunError> {
@@ -167,20 +220,7 @@ fn verify_owned_geometry(source: &ClosedLoopAcceptedSourceInputV2,
             let j_scale=(0..4).fold(0.0_f64,|a,local|a.max(cell.vertex_current_xyz_apm2[3*local+axis].abs()));
             require(cell.center_current_xyz_apm2[axis].is_finite() && (mean-cell.center_current_xyz_apm2[axis]).abs()<=128.0*f64::EPSILON*j_scale,"cell-local J interpolation mismatch")?;
         }
-        let mut pivot=(1_usize,0_usize); let mut distance=0.0_f64;
-        for local in 1..4 { for axis in 0..3 {
-            let delta=(points[local][axis]-points[0][axis]).abs();
-            if delta>distance { distance=delta; pivot=(local,axis); }
-        }}
-        require(distance.is_finite() && distance>0.0,"RT0 interpolation pivot")?;
-        let slope=(cell.vertex_current_xyz_apm2[3*pivot.0+pivot.1]-cell.vertex_current_xyz_apm2[pivot.1])/(points[pivot.0][pivot.1]-points[0][pivot.1]);
-        require(slope.is_finite(),"RT0 affine slope")?;
-        for local in 1..4 { for axis in 0..3 {
-            let delta=cell.vertex_current_xyz_apm2[3*local+axis]-cell.vertex_current_xyz_apm2[axis];
-            let expected=slope*(points[local][axis]-points[0][axis]);
-            let scale=cell.vertex_current_xyz_apm2[3*local+axis].abs().max(cell.vertex_current_xyz_apm2[axis].abs()).max(expected.abs());
-            require(delta.is_finite() && expected.is_finite() && (delta-expected).abs()<=128.0*f64::EPSILON*scale,"J samples are not one affine RT0 field")?;
-        }}
+        verify_rt0_sample_affinity(&points, &cell.vertex_current_xyz_apm2)?;
         let mut outward_fluxes=Vec::new();
         for opposite in 0..4 {
             let mut ids=cell.vertex_ids.iter().enumerate().filter_map(|(i,id)|(i!=opposite).then_some(*id)).collect::<Vec<_>>(); ids.sort_unstable();
@@ -423,3 +463,7 @@ pub(crate) fn verify(source: &ClosedLoopAcceptedSourceInputV2, requested_intent:
     require(digest_bytes(&m.view_identity_digest)?==Sha256::digest(&view).as_slice(),"RT0 view identity mismatch")?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "closed_loop_identity_v2_affinity_tests.rs"]
+mod affinity_tests;

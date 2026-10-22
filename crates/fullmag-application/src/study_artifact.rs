@@ -25,9 +25,194 @@ pub const STUDY_ANTENNA_INSPECTION_CODEC_VERSION: &str = "v1";
 pub const STUDY_SCALAR_ARTIFACT_SCHEMA: &str = "study_scalar.v1";
 pub const MAGNETIZATION_STATE_IDENTITY_SCHEMA: &str = "magnetization_state.v1";
 
+
+pub const STUDY_FROZEN_STATE_CODEC_ID: &str = "fullmag.runner.frozen_state_json";
+pub const STUDY_FROZEN_STATE_CODEC_VERSION: &str = "v1";
+pub const STUDY_FROZEN_STATE_SCHEMA: &str = "fullmag.frozen_state_output.v1";
+
+/// The application decodes state bytes; the runner owns lifecycle/plan validation.
+/// Legacy state consumers reject this distinct variant until they supply that gate.
+#[derive(Clone, Debug)]
+pub struct FrozenMagnetizationStateArtifact {
+    pub state: MagnetizationStateArtifact,
+    pub frozen_spins: Option<Box<serde_json::value::RawValue>>,
+    pub frozen_activation_set: Box<serde_json::value::RawValue>,
+}
+
+impl PartialEq for FrozenMagnetizationStateArtifact {
+    fn eq(&self, other: &Self) -> bool {
+        self.state == other.state
+            && self.frozen_spins.as_deref().map(serde_json::value::RawValue::get)
+                == other.frozen_spins.as_deref().map(serde_json::value::RawValue::get)
+            && self.frozen_activation_set.get() == other.frozen_activation_set.get()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrozenStudyStateWire {
+    schema_version: String,
+    state: Box<serde_json::value::RawValue>,
+    #[serde(deserialize_with = "required_frozen_state_child")]
+    frozen_spins: Option<Box<serde_json::value::RawValue>>,
+    frozen_activation_set: Box<serde_json::value::RawValue>,
+}
+
+fn required_frozen_state_child<'de, D>(deserializer: D)
+    -> Result<Option<Box<serde_json::value::RawValue>>, D::Error>
+where D: serde::Deserializer<'de> { Option::deserialize(deserializer) }
+
+fn decode_frozen_magnetization_state(bytes: &[u8]) -> Result<FrozenMagnetizationStateArtifact, ExecutionError> {
+    let fullmag_antenna_artifacts::artifact_json::UnambiguousJson(_) = serde_json::from_slice(bytes)
+        .map_err(|error| invalid(format!("ambiguous frozen state output: {error}")))?;
+    let wire: FrozenStudyStateWire = serde_json::from_slice(bytes)
+        .map_err(|error| invalid(format!("invalid frozen state output: {error}")))?;
+    if wire.schema_version != STUDY_FROZEN_STATE_SCHEMA {
+        return Err(invalid("unsupported frozen state output version"));
+    }
+    let state = decode_magnetization_state(wire.state.get().as_bytes())?;
+    Ok(FrozenMagnetizationStateArtifact { state, frozen_spins: wire.frozen_spins,
+        frozen_activation_set: wire.frozen_activation_set })
+}
+
+
+/// Materialize only metadata from a verified live terminal clock. The caller
+/// must bind dense M to the actual primary package or frozen child and apply
+/// the existing sampling alias predicate before invoking this artifact adapter.
+pub fn materialize_study_state_at_terminal_clock(state_bytes:&[u8],clock:fullmag_quantities::ObservationClock)
+    -> Result<Vec<u8>,ExecutionError> {
+    let decoded=decode_magnetization_state(state_bytes)?;
+    clock.validate().map_err(|error|invalid(error.to_string()))?;
+    if decoded.step>clock.accepted_step {return Err(invalid("terminal artifact cannot move a future sampled step backwards"));}
+    let mut fields:std::collections::BTreeMap<String,Box<serde_json::value::RawValue>>=
+        serde_json::from_slice(state_bytes).map_err(|error|invalid(error.to_string()))?;
+    for (key,value) in [("step",serde_json::to_string(&clock.accepted_step)),
+        ("time",serde_json::to_string(&clock.time_seconds)),
+        ("solver_dt",serde_json::to_string(&clock.dt_seconds.unwrap_or(0.0)))] {
+        fields.insert(key.into(),serde_json::value::RawValue::from_string(value.map_err(|error|invalid(error.to_string()))?)
+            .map_err(|error|invalid(error.to_string()))?);
+    }
+    serde_json::to_vec(&fields).map_err(|error|invalid(error.to_string()))
+}
+
+/// Embed the existing state representation without rerendering dense values.
+/// A supplied clock is the validated live terminal child clock, never a new
+/// solver timestamp. The legacy final-state file remains untouched.
+pub fn encode_frozen_study_state(
+    state_bytes: &[u8],
+    frozen_child: Option<&serde_json::value::RawValue>,
+    activation_set: &serde_json::value::RawValue,
+    terminal_clock: Option<fullmag_quantities::ObservationClock>,
+) -> Result<Vec<u8>, ExecutionError> {
+    let state_json = if let Some(clock)=terminal_clock {
+        String::from_utf8(materialize_study_state_at_terminal_clock(state_bytes,clock)?)
+            .map_err(|error|invalid(error.to_string()))?
+    } else {
+        decode_magnetization_state(state_bytes)?;
+        std::str::from_utf8(state_bytes).map_err(|error|invalid(error.to_string()))?.to_owned()
+    };
+    let state = serde_json::value::RawValue::from_string(state_json).map_err(|error|invalid(error.to_string()))?;
+    #[derive(Serialize)]
+    struct Wire<'a> {
+        schema_version: &'static str,
+        state: &'a serde_json::value::RawValue,
+        frozen_spins: Option<&'a serde_json::value::RawValue>,
+        frozen_activation_set: &'a serde_json::value::RawValue,
+    }
+    serde_json::to_vec(&Wire { schema_version: STUDY_FROZEN_STATE_SCHEMA, state: &state,
+        frozen_spins: frozen_child, frozen_activation_set: activation_set })
+        .map_err(|error| invalid(error.to_string()))
+}
+
+/// Validate one real CPU history frame without collecting all historical M.
+/// This is separate from the final-state codec and requires no state_identity.
+pub fn validate_study_history_field(
+    bytes: &[u8], quantity: &str, unit: &str, step: u64, time_s: f64, dt_s: f64,
+    expected_layout: &Value, cell_count: usize, component_count: u8, max_bytes: u64,
+) -> Result<(), ExecutionError> {
+    if cell_count == 0 || bytes.len() as u64 > max_bytes {
+        return Err(invalid("history frame exceeds the checked sample budget"));
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Frame<'a> {
+        observable: String, unit: String, step: u64, time: f64, solver_dt: f64,
+        component_count: u8, component_order: String, location: String, scope: String,
+        revision: u64, layout: Value, provenance: Value,
+        #[serde(borrow)] values: &'a serde_json::value::RawValue,
+    }
+    let frame: Frame<'_> = serde_json::from_slice(bytes).map_err(|error| invalid(error.to_string()))?;
+    if frame.observable != quantity || frame.unit != unit || frame.step != step
+        || frame.time.to_bits() != time_s.to_bits() || frame.solver_dt.to_bits() != dt_s.to_bits()
+        || !time_s.is_finite() || !dt_s.is_finite() || dt_s < 0.0
+        || frame.revision == 0 || frame.location != "sample" || frame.scope != "full"
+        || frame.component_count != component_count || component_count == 0
+        || (component_count == 3 && frame.component_order != "xyz")
+        || &frame.layout != expected_layout || !frame.provenance.is_object()
+    { return Err(invalid("history field metadata differs from the admitted frame")); }
+    struct Values { rows: bool, expected: usize }
+    impl<'de> serde::de::Visitor<'de> for Values {
+        type Value = ();
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the exact admitted number of finite xyz rows")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+            let mut count = 0_usize;
+            if self.rows {
+                while let Some(row) = seq.next_element::<[f64; 3]>()? {
+                    count = count.checked_add(1).ok_or_else(|| serde::de::Error::custom("field count overflow"))?;
+                    if count > self.expected || row.iter().any(|value| !value.is_finite()) {
+                        return Err(serde::de::Error::custom("field shape or finite validation failed"));
+                    }
+                }
+            } else {
+                while let Some(value) = seq.next_element::<f64>()? {
+                    count = count.checked_add(1).ok_or_else(|| serde::de::Error::custom("field count overflow"))?;
+                    if count > self.expected || !value.is_finite() {
+                        return Err(serde::de::Error::custom("field shape or finite validation failed"));
+                    }
+                }
+            }
+            if count != self.expected { return Err(serde::de::Error::custom("field sample count differs")); }
+            Ok(())
+        }
+    }
+    let mut decoder = serde_json::Deserializer::from_str(frame.values.get());
+    let rows = component_count == 3;
+    let expected = if rows { cell_count } else { cell_count.checked_mul(usize::from(component_count))
+        .ok_or_else(|| invalid("field scalar count overflow"))? };
+    serde::Deserializer::deserialize_seq(&mut decoder, Values { rows, expected })
+        .map_err(|error| invalid(error.to_string()))?;
+    decoder.end().map_err(|error| invalid(error.to_string()))?;
+    Ok(())
+}
+
+pub const STUDY_HISTORY_SCALAR_COLUMNS: [&str; 19] = ["step", "time", "solver_dt", "mx", "my", "mz",
+    "E_ex", "E_demag", "E_ext", "E_drive", "E_ani", "E_rotated_dmi", "E_dmi", "E_total",
+    "max_dm_dt", "max_h_eff", "max_h_demag", "max_torque_Apm", "max_torque_T"];
+
+/// Compare the source-clock token using the actual writer format, not parsed
+/// CSV bit equality: {:.15e} intentionally does not preserve every f64 bit.
+pub fn validate_study_history_scalar_row(bytes: &[u8], step: u64, time_s: f64, dt_s: f64)
+    -> Result<(), ExecutionError>
+{
+    if bytes.is_empty() || bytes.len() > 4096 || !bytes.ends_with(b"\n")
+        || bytes[..bytes.len()-1].contains(&b'\n') || bytes.contains(&b'\r')
+        || !time_s.is_finite() || !dt_s.is_finite() || dt_s < 0.0
+    { return Err(invalid("invalid bounded history CSV row")); }
+    let row = std::str::from_utf8(&bytes[..bytes.len()-1]).map_err(|error| invalid(error.to_string()))?;
+    let values: Vec<&str> = row.split(',').collect();
+    if values.len() != STUDY_HISTORY_SCALAR_COLUMNS.len() || values[0] != step.to_string()
+        || values[1] != format!("{time_s:.15e}") || values[2] != format!("{dt_s:.15e}")
+        || values.iter().skip(1).any(|value| value.parse::<f64>().map_or(true, |number| !number.is_finite()))
+    { return Err(invalid("history CSV row differs from its exact source clock or scalar schema")); }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum DecodedStudyArtifact {
     MagnetizationState(MagnetizationStateArtifact),
+    FrozenMagnetizationState(FrozenMagnetizationStateArtifact),
     Scalar(StudyScalarArtifact),
     AntennaClosedLoopInspection(AntennaInspectionBundle),
     AntennaInspection(AntennaInspectionArtifact),
@@ -134,6 +319,8 @@ pub fn decode_study_artifact(
             STUDY_MAGNETIZATION_CODEC_ID,
             STUDY_MAGNETIZATION_CODEC_VERSION,
         ) => decode_magnetization_state(bytes).map(DecodedStudyArtifact::MagnetizationState),
+        ("state" | "initial_state", STUDY_FROZEN_STATE_CODEC_ID, STUDY_FROZEN_STATE_CODEC_VERSION) =>
+            decode_frozen_magnetization_state(bytes).map(DecodedStudyArtifact::FrozenMagnetizationState),
         ("scalar", STUDY_SCALAR_CODEC_ID, STUDY_SCALAR_CODEC_VERSION) => {
             decode_scalar(bytes).map(DecodedStudyArtifact::Scalar)
         }

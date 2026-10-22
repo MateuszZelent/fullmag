@@ -829,3 +829,69 @@ def attest_mounts(actual, inputs, inputs_path=None):
         if (len(mounts) != 1 or mounts[0]["Type"] != "bind" or mounts[0]["RW"]
                 or host_path(mounts[0]["Source"]) != Path(source).resolve()):
             raise ValueError(f"Live frontend readonly mount differs from its manifest: {target}")
+
+
+def metadata_cache_key(inputs, project):
+    """Every frozen seed byte participates, including root config and tests."""
+    from docker_build_control import canonical
+    return hashlib.sha256(canonical({'project': project,
+        'dependencies': inputs['dependency_seed_sha256'], 'tools': inputs['toolpins_sha256'],
+        'metadata': inputs['files']})).hexdigest()
+
+
+FRONTEND_VIEW_SCRIPT = r"""import hashlib,json,os,pathlib,stat,sys
+request=json.load(sys.stdin)
+workspace=pathlib.Path('/state/development/workspace')
+source=pathlib.Path('/opt/fullmag/source')
+def read(path, maximum=16*1024*1024):
+ if any(p.is_symlink() for p in (path,*path.parents)): raise RuntimeError('frontend metadata traverses a link')
+ fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+ try:
+  info=os.fstat(fd)
+  if not stat.S_ISREG(info.st_mode) or info.st_size>maximum: raise RuntimeError('frontend metadata is not a bounded regular file')
+  raw=os.read(fd,maximum+1)
+  if len(raw)>maximum or len(raw)!=info.st_size: raise RuntimeError('frontend metadata changed/exceeded bound')
+  return raw
+ finally: os.close(fd)
+freeze=json.loads(read(workspace.parent/'inputs-freeze.json',8*1024*1024))
+manifest=freeze.get('manifest')
+if (freeze.get('schema')!='fullmag.docker-development-inputs-freeze.v1' or not isinstance(manifest,dict)
+ or manifest.get('files')!=request['files'] or freeze.get('files')!=request['files']
+ or freeze.get('manifest_digest')!=hashlib.sha256((json.dumps(manifest,sort_keys=True,separators=(',',':'))+'\n').encode()).hexdigest()
+ or freeze.get('frozen_root')!=str(workspace.parent/'frozen-inputs')): raise RuntimeError('frontend frozen metadata is stale')
+rows=[]
+for item in request['files']:
+ relative=pathlib.PurePosixPath(item['relative'])
+ if relative.is_absolute() or '..' in relative.parts or str(relative)!=item['relative']: raise RuntimeError('unsafe frontend metadata path')
+ selected=hashlib.sha256(read(source.joinpath(*relative.parts))).hexdigest()
+ frozen=hashlib.sha256(read(workspace.parent.joinpath('frozen-inputs',*relative.parts))).hexdigest()
+ actual=hashlib.sha256(read(workspace.joinpath(*relative.parts))).hexdigest()
+ if selected!=item['sha256'] or frozen!=selected or actual not in request['allowed'][item['relative']]: raise RuntimeError('frontend source/workspace metadata differs: '+item['relative'])
+ rows.append({'relative':item['relative'],'selected_sha256':selected,'workspace_sha256':actual,
+              'generated_variant':actual!=selected})
+print(json.dumps({'schema':'fullmag.frontend-source-view.v1','files':rows},sort_keys=True))
+"""
+
+
+def frontend_view(frontend, selected, port, *, inputs=None):
+    """Attest actual frozen workspace bytes before qualifying a frontend check."""
+    import docker_dev_codegen as codegen
+    inputs = describe(selected, port) if inputs is None else inputs
+    allowed = {}
+    for item in inputs['files']:
+        relative = item['relative']
+        source = _describe_regular(Path(selected) / relative, maximum=16*1024*1024)
+        if hashlib.sha256(source).hexdigest() != item['sha256']:
+            raise ValueError('Frontend metadata changed before source-view verification: ' + relative)
+        allowed[relative] = sorted(hashlib.sha256(value).hexdigest()
+            for value in _next_generated_seed_variants(relative, source))
+    request = {'files': inputs['files'], 'allowed': allowed}
+    payload = json.dumps(request, sort_keys=True, separators=(',', ':')).encode()
+    if len(payload) > 1024*1024:
+        raise ValueError('Frontend source-view metadata exceeds its bound')
+    stdout, _ = codegen._exec(frontend, ('/usr/local/bin/python3', '-B', '-c', FRONTEND_VIEW_SCRIPT),
+        input_bytes=payload, timeout=120, stdout_limit=1024*1024, stderr_limit=65536)
+    view = json.loads(stdout)
+    if view.get('schema') != 'fullmag.frontend-source-view.v1' or len(view.get('files', [])) != len(inputs['files']):
+        raise ValueError('Frontend source-view proof is incomplete')
+    return view

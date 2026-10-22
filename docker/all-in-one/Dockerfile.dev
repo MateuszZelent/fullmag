@@ -10,6 +10,10 @@ ENV FULLMAG_TOOLCHAIN_IMAGE_ID=${FULLMAG_TOOLCHAIN_IMAGE_ID}
 
 USER root
 
+# The frontend API hygiene gate invokes ripgrep inside its own service.
+RUN apt-get update && apt-get install -y --no-install-recommends ripgrep && \
+    rm -rf /var/lib/apt/lists/*
+
 # Empty prefixes preserve the frozen release context; DEV reads an allowlisted checkout.
 ARG FULLMAG_DOCKER_HELPERS=""
 ARG FULLMAG_SCRIPT_HELPERS=""

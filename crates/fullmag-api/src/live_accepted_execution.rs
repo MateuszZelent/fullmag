@@ -82,6 +82,7 @@ pub(crate) struct PreparedLiveAcceptedStudy {
     intent: fullmag_application::RunIntent,
     pub(crate) step_ids: Vec<String>,
     migrated_profile_to_publish: Option<fullmag_ir::ExecutionProfileIR>,
+    asset_payloads: BTreeMap<String, Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +101,7 @@ enum LiveAcceptedSubmission {
         request_id: String,
         source_sha256: String,
         auto_run: bool,
+        source_path: Option<PathBuf>,
     },
 }
 
@@ -739,7 +741,7 @@ pub(crate) async fn submit_live_study_with_transition_with_asset_root(
         (!snapshot.session.script_path.is_empty())
             .then(|| PathBuf::from(snapshot.session.script_path.clone()))
     };
-    let prepared = prepare_live_study_with_asset_root(
+    let prepared = prepare_live_study_with_source_paths(
         state,
         context,
         scene,
@@ -748,6 +750,7 @@ pub(crate) async fn submit_live_study_with_transition_with_asset_root(
         auto_run,
         asset_root,
         source_script_path,
+        None,
     )
     .await?;
     // The existing command path already owns the transition fence. The
@@ -772,6 +775,23 @@ pub(crate) async fn prepare_live_study_with_asset_root(
     auto_run: bool,
     asset_root: Option<PathBuf>,
     source_script_path: Option<PathBuf>,
+) -> Result<PreparedLiveAcceptedStudy, ApiError> {
+    let source_path = source_script_path.clone();
+    prepare_live_study_with_source_paths(state, context, scene, request_id, source_sha256,
+        auto_run, asset_root, source_script_path, source_path).await
+}
+
+// Output-storage selection and immutable source capture have distinct owners.
+async fn prepare_live_study_with_source_paths(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    scene: fullmag_authoring::SceneDocument,
+    request_id: String,
+    source_sha256: String,
+    auto_run: bool,
+    asset_root: Option<PathBuf>,
+    source_script_path: Option<PathBuf>,
+    source_path: Option<PathBuf>,
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
     validate_live_scene_for_context(state, context, &scene).await?;
     let Some(store_root) = state.submit_store_root.clone() else {
@@ -801,6 +821,7 @@ pub(crate) async fn prepare_live_study_with_asset_root(
                 request_id,
                 source_sha256,
                 auto_run,
+                source_path,
             },
         )
     })
@@ -1452,6 +1473,7 @@ fn prepare_live_accepted(
                 request_id,
                 source_sha256,
                 auto_run: _,
+                source_path: _,
             } => (
                 request_id.clone(),
                 Some(request_id.clone()),
@@ -1541,14 +1563,83 @@ fn prepare_live_accepted(
         )
     })?;
 
-    let mut inputs = crate::script::scene_document_to_study_execution_inputs_with_asset_root(
+    let closed_loop = has_closed_loop_inspection_pipeline(scene);
+    // Keep this guard in the preparation scope until the final
+    // capture.verify_unchanged() and immutable source-asset copy below.
+    // The authored scene remains the original full-content transition fence.
+    let generated_scene_source = if closed_loop && !matches!(
+        &submission, LiveAcceptedSubmission::Startup { source_path: Some(_), .. }
+    ) {
+        Some(crate::script::render_accepted_scene_source_bounded(
+            repo_root, workspace_root, scene,
+        )?)
+    } else {
+        None
+    };
+    let mut closed_capture = if closed_loop {
+        let source_path = match (&submission, &generated_scene_source) {
+            (LiveAcceptedSubmission::Startup { source_path: Some(path), .. }, None) => path,
+            (_, Some(generated)) => &generated.path,
+            _ => return Err(ApiError::internal("closed-loop source preparation lost its owner")),
+        };
+        let capture = crate::script::capture_startup_script_scene(repo_root, workspace_root, source_path)?;
+        let entry = capture.manifest["entry_relative_path"].as_str().ok_or_else(|| ApiError::unprocessable("captured source entry missing"))?;
+        let source = capture.files.get(entry).ok_or_else(|| ApiError::unprocessable("captured source entry bytes missing"))?;
+        let captured_source_sha256 = fullmag_session::hex_sha256(source);
+        let mut captured_scene: fullmag_authoring::SceneDocument = serde_json::from_value(capture.scene.clone()
+            .ok_or_else(|| ApiError::unprocessable("captured source scene missing"))?)
+            .map_err(|error| ApiError::unprocessable(format!("captured scene invalid: {error}")))?;
+        fullmag_authoring::normalize_scene_document_magnetization_assets(&mut captured_scene);
+        if let Some(generated) = generated_scene_source.as_ref() {
+            if captured_source_sha256 != generated.source_sha256 || source.len() != generated.byte_count {
+                return Err(ApiError::conflict_with_code(
+                    "accepted_ui_source_changed", "generated Python source differs from its immutable capture",
+                ));
+            }
+            // The legacy live preparation wrapper passes a SceneDocument
+            // fingerprint here. It is not the SHA of generated Python bytes.
+            if let LiveAcceptedSubmission::Startup { source_path: None, source_sha256, .. } = &submission {
+                if source_sha256 != &generated.scene_sha256 {
+                    return Err(ApiError::conflict_with_code(
+                        "accepted_ui_scene_changed", "UI source fingerprint differs from the captured scene",
+                    ));
+                }
+            }
+            validate_generated_scene_round_trip(scene, &captured_scene)?;
+        } else {
+            let LiveAcceptedSubmission::Startup { source_path: Some(_), source_sha256, .. } = &submission else {
+                return Err(ApiError::internal("authored startup capture lost its source identity"));
+            };
+            if captured_source_sha256 != *source_sha256 {
+                return Err(ApiError::conflict_with_code("accepted_script_source_changed", "startup source differs from immutable capture"));
+            }
+            if &captured_scene != scene {
+                return Err(ApiError::conflict_with_code("accepted_script_scene_changed",
+                    "captured script does not reproduce the immutable startup scene"));
+            }
+        }
+        // Capture authoring without geometry; bind the profile before preparing a source.
+        let config = crate::script::scene_document_to_authored_script_config_with_asset_root(
+            repo_root, workspace_root, asset_root, &effective_scene, &requested_execution)?;
+        capture.verify_unchanged().map_err(|error| ApiError::conflict_with_code(
+            "accepted_script_source_changed", format!("source changed during scene preparation: {error:#}")))?;
+        Some((capture, config))
+    } else { None };
+    let mut inputs = if let Some((_, config)) = &closed_capture {
+        vec![fullmag_application::StudyStepExecutionInput {
+            step_id: study.steps.iter().find(|step| step.enabled).ok_or_else(|| ApiError::unprocessable("closed-loop study has no enabled step"))?.step_id.clone(),
+            problem: config.ir.clone(), layers: effective_scene.study.execution_layers.clone(),
+        }]
+    } else {
+        crate::script::scene_document_to_study_execution_inputs_with_asset_root(
         repo_root,
         workspace_root,
         asset_root,
         &effective_scene,
         &requested_execution,
         &study,
-    )?;
+        )?
+    };
     apply_docker_output_storage_binding(
         &mut inputs,
         &effective_scene,
@@ -1629,7 +1720,39 @@ fn prepare_live_accepted(
         }
     }
 
-    let catalog = fullmag_application::materialize_study_execution(
+    let mut script_assets = None;
+    let catalog = if let Some((capture, config)) = closed_capture.take() {
+        let layers = inputs.first().ok_or_else(|| ApiError::unprocessable("closed-loop migration input missing"))?.layers.clone();
+        let bound = fullmag_application::materialize_captured_study_input(
+            "script-base", config.ir, &defaults.execution_profile, layers.clone(),
+            |id, version| if id == published_profile.profile_id && version == published_profile.version {
+                Ok(published_profile.clone())
+            } else { Err("closed-loop execution profile differs from pinned live profile".into()) },
+        ).map_err(ApiError::unprocessable)?;
+        // Projection validates typed resource intent even before host admission.
+        let mut preparation_constraints = requested_execution.clone();
+        preparation_constraints.minimum_resources = Some(minimum_resource_budget(
+            &bound.problem, &requested_execution.device,
+            bound.execution.requested.device == fullmag_ir::ExecutionDevice::Gpu,
+        )?);
+        let prepared_request = preparation_constraints.for_problem(&bound.problem)
+            .map_err(|error| ApiError::unprocessable(error.to_string()))?;
+        let config = crate::script::scene_document_to_bound_prepared_script_config_with_asset_root(
+            repo_root, workspace_root, asset_root, &effective_scene, &prepared_request, &bound.problem)?;
+        let compiled = fullmag_application::compile_accepted_closed_loop_pipeline(
+            config, study.study_id.clone(), effective_scene.revision, defaults.execution_profile.clone(), layers,
+            capture.manifest.clone(),
+            |id, version| if id == published_profile.profile_id && version == published_profile.version {
+                Ok(published_profile.clone())
+            } else { Err("closed-loop execution profile differs from pinned live profile".into()) },
+            fullmag_ir::configure_project_autosave_policy,
+        ).map_err(|error| ApiError::unprocessable_with_code("accepted_script_compilation_failed",
+            format!("canonical closed-loop compilation failed: {error:#}")))?;
+        study = compiled.study;
+        script_assets = Some((capture, compiled.source_bytes, compiled.source_reference));
+        compiled.catalog
+    } else {
+        fullmag_application::materialize_study_execution(
         &study,
         inputs,
         |profile_id, version| {
@@ -1647,8 +1770,9 @@ fn prepare_live_accepted(
             "accepted_execution_materialization_failed",
             format!("StudyPlan execution materialization failed: {error}"),
         )
-    })?;
+        })?
 
+    };
     let entries = catalog.entries();
     let requested_gpu = requested_execution.device.eq_ignore_ascii_case("gpu");
     let mut run_budget = None;
@@ -1755,6 +1879,30 @@ fn prepare_live_accepted(
         .validate_for_save()
         .map_err(|error| ApiError::unprocessable_with_code("accepted_project_invalid", error.to_string()))?;
 
+    let mut asset_paths = BTreeMap::new();
+    if let Some((capture, source_bytes, source_reference)) = script_assets {
+        capture.verify_unchanged().map_err(|error| ApiError::conflict_with_code(
+            "accepted_script_source_changed", format!("source changed before accepted capture: {error:#}")))?;
+        for (relative, bytes) in capture.files {
+            let asset_id = format!("script-file-{}", fullmag_application::study_artifact_content_sha256(relative.as_bytes()));
+            let path = format!("project/assets/accepted-script/files/{relative}");
+            if definition.assets.iter().any(|asset| asset.path() == path) {
+                return Err(ApiError::conflict("captured script asset path collision"));
+            }
+            definition.assets.push(fullmag_application::OpaqueAsset::new(&path, bytes, None)
+                .map_err(|error| ApiError::unprocessable(error.to_string()))?);
+            asset_paths.insert(asset_id, path);
+        }
+        if fullmag_application::study_artifact_content_sha256(&source_bytes) != source_reference.content_sha256 {
+            return Err(ApiError::conflict("compiled script source reference differs from payload"));
+        }
+        let path = "project/assets/accepted-script/pipeline-source.json";
+        definition.assets.push(fullmag_application::OpaqueAsset::new(path, source_bytes, None)
+            .map_err(|error| ApiError::unprocessable(error.to_string()))?);
+        asset_paths.insert(source_reference.asset_id, path.to_owned());
+        definition.validate_for_save().map_err(|error| ApiError::unprocessable(error.to_string()))?;
+    }
+
     let execution_input = crate::live_execution_binding::input_identity(scene)?;
     let mut parameters = json!({
         "live_workspace": {
@@ -1801,7 +1949,7 @@ fn prepare_live_accepted(
         &study,
         &catalog,
         authored,
-        &BTreeMap::new(),
+        &asset_paths,
     )
     .map_err(|error| {
         ApiError::unprocessable_with_code(
@@ -1809,6 +1957,12 @@ fn prepare_live_accepted(
             format!("typed live RunIntent materialization failed: {error:#}"),
         )
     })?;
+    let mut asset_payloads = BTreeMap::new();
+    for (asset_id, path) in &asset_paths {
+        let asset = definition.assets.iter().find(|asset| asset.path() == path)
+            .ok_or_else(|| ApiError::internal(format!("prepared immutable asset `{asset_id}` is missing")))?;
+        asset_payloads.insert(asset_id.clone(), asset.bytes().to_vec());
+    }
     Ok(PreparedLiveAcceptedStudy {
         store_root: store_root.to_path_buf(),
         backlog_limit,
@@ -1821,6 +1975,7 @@ fn prepare_live_accepted(
         intent,
         step_ids,
         migrated_profile_to_publish,
+        asset_payloads,
     })
 }
 
@@ -1858,7 +2013,7 @@ pub(crate) fn commit_prepared_live_accepted(
         &prepared.definition,
         &prepared.study,
         &prepared.catalog,
-        &BTreeMap::new(),
+        &prepared.asset_payloads,
         prepared.backlog_limit,
     )
     .map_err(|error| {
@@ -2214,6 +2369,52 @@ mod tests {
         request_accepted_stop_for_catalog, validate_scene_revision_and_content,
         AcceptedLiveStudyExecution, AcceptedLiveStudyPreparationError, MAX_RECOVERY_ERROR_CHARS,
     };
+
+    fn ui_source_scene() -> fullmag_authoring::SceneDocument {
+        serde_json::from_value(serde_json::json!({
+            "version": "scene.v2", "revision": 23,
+            "scene": {"name": "generated_source_contract"},
+            "objects": [{
+                "id": "waveguide", "name": "waveguide", "role": "magnet",
+                "geometry": {"geometry_kind": "Box",
+                    "geometry_params": {"size": [100e-9, 40e-9, 10e-9]}},
+                "material_ref": "permalloy", "magnetization_ref": "uniform"
+            }],
+            "materials": [{"id": "permalloy", "name": "Permalloy",
+                "properties": {"Ms": 800e3, "Aex": 13e-12, "alpha": 0.02}}],
+            "magnetization_assets": [{"id": "uniform", "name": "Uniform",
+                "kind": "preset_texture", "preset_kind": "uniform",
+                "preset_params": {"direction": [1.0, 0.0, 0.0]}, "preset_version": 1}],
+            "study": {"backend": "fdm", "requested_backend": "fdm",
+                "requested_device": "cpu", "requested_precision": "double",
+                "fdm": {"default_cell": [10e-9, 10e-9, 10e-9]}}
+        })).unwrap()
+    }
+
+    #[test]
+    fn generated_source_projection_keeps_revision_out_of_physics_without_weakening_commit_fence() {
+        let authored = ui_source_scene();
+        let mut captured = authored.clone();
+        captured.revision = 1;
+        super::validate_generated_scene_round_trip(&authored, &captured).unwrap();
+        let error = validate_scene_revision_and_content(
+            authored.revision, captured.revision,
+            &serde_json::to_value(&authored).unwrap(), &serde_json::to_value(&captured).unwrap(),
+        ).unwrap_err();
+        assert_eq!(error.message, "startup_scene_revision_or_content_changed");
+    }
+
+    #[test]
+    fn generated_source_projection_rejects_changed_physics_and_immutable_object_identity() {
+        let authored = ui_source_scene();
+        let mut changed = serde_json::to_value(&authored).unwrap();
+        changed["materials"][0]["properties"]["Ms"] = serde_json::json!(700e3);
+        let changed = serde_json::from_value(changed).unwrap();
+        assert!(super::validate_generated_scene_round_trip(&authored, &changed).is_err());
+        let mut changed = authored.clone();
+        changed.objects[0].id = "foreign-object".into();
+        assert!(super::validate_generated_scene_round_trip(&authored, &changed).is_err());
+    }
 
     #[test]
     fn startup_commit_guard_rejects_changed_scene_revision() {
@@ -2656,4 +2857,139 @@ mod tests {
             3
         );
     }
+}
+
+/// Compare the existing canonical public export projection. Scene revision,
+/// editor state and Results authoring remain protected by the full scene fence;
+/// they are not regenerated physical script semantics.
+fn validate_generated_scene_round_trip(
+    authored: &fullmag_authoring::SceneDocument,
+    captured: &fullmag_authoring::SceneDocument,
+) -> Result<(), ApiError> {
+    let mut authored = authored.clone();
+    let mut captured = captured.clone();
+    fullmag_authoring::normalize_scene_document_magnetization_assets(&mut authored);
+    fullmag_authoring::normalize_scene_document_magnetization_assets(&mut captured);
+    let project = |scene: &fullmag_authoring::SceneDocument| {
+        fullmag_authoring::scene_document_to_script_builder_overrides(scene)
+            .map_err(|error| ApiError::unprocessable_with_code(
+                "accepted_ui_scene_projection_invalid", error.message,
+            ))
+    };
+    if !script_projection_values_equal(&project(&authored)?, &project(&captured)?) {
+        return Err(ApiError::conflict_with_code(
+            "accepted_ui_scene_round_trip_changed",
+            "canonical Python capture does not reproduce the UI scene export projection",
+        ));
+    }
+    Ok(())
+}
+
+
+/// Compare JSON script semantics without conflating a number's value with its
+/// integer/float spelling. Source and artifact byte hashes remain exact.
+fn script_projection_values_equal(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => {
+            if left == right {
+                return true;
+            }
+            let (integer, floating) = if left.is_f64() && !right.is_f64() {
+                (right, left)
+            } else if right.is_f64() && !left.is_f64() {
+                (left, right)
+            } else {
+                return false;
+            };
+            let integer = integer.as_i64().map(i128::from)
+                .or_else(|| integer.as_u64().map(i128::from));
+            let Some(integer) = integer else { return false; };
+            let Some(floating) = floating.as_f64() else { return false; };
+            // The exclusive upper bound is 2^64, not a saturating u64 cast.
+            // Compare the exact integer represented by the float; converting
+            // both operands to f64 would merge distinct integers above 2^53.
+            floating.fract() == 0.0
+                && (i64::MIN as f64..u64::MAX as f64).contains(&floating)
+                && floating as i128 == integer
+        }
+        (Value::Array(left), Value::Array(right)) => left.len() == right.len()
+            && left.iter().zip(right).all(|(left, right)| script_projection_values_equal(left, right)),
+        (Value::Object(left), Value::Object(right)) => left.len() == right.len()
+            && left.iter().all(|(key, value)| right.get(key)
+                .is_some_and(|other| script_projection_values_equal(value, other))),
+        _ => left == right,
+    }
+}
+
+#[cfg(test)]
+mod script_projection_comparison_tests {
+    use super::script_projection_values_equal;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn browser_integer_spelling_preserves_nested_python_geometry_values() {
+        let browser = json!({"geometry_params": {"conductivity_s_per_m": 58000000,
+            "stations": [{"s": 0}, {"s": 1}], "transform": [[1, 0], [0, 1]]}});
+        let python = json!({"geometry_params": {"conductivity_s_per_m": 58000000.0,
+            "stations": [{"s": 0.0}, {"s": 1.0}], "transform": [[1.0, 0.0], [0.0, 1.0]]}});
+        assert_ne!(browser, python);
+        assert!(script_projection_values_equal(&browser, &python));
+        assert!(script_projection_values_equal(&python, &browser));
+    }
+
+    #[test]
+    fn changed_values_types_structure_and_array_order_remain_rejected() {
+        for (left, right) in [
+            (json!(58000000), json!(58000001.0)),
+            (json!(0), json!(0.25)),
+            (json!(1), json!(true)),
+            (json!(1), json!("1")),
+            (json!({"a": null}), json!({})),
+            (json!([0, 1]), json!([1.0, 0.0])),
+            (json!([0]), json!([0.0, 0.0])),
+        ] {
+            assert!(!script_projection_values_equal(&left, &right));
+            assert!(!script_projection_values_equal(&right, &left));
+        }
+    }
+
+    #[test]
+    fn integer_float_comparison_is_lossless_at_f64_and_integer_boundaries() {
+        for (integer, floating, equal) in [
+            (json!(9007199254740992u64), json!(9007199254740992.0), true),
+            (json!(9007199254740993u64), json!(9007199254740992.0), false),
+            (json!(i64::MIN), json!(-9223372036854775808.0), true),
+            (json!(i64::MAX), json!(9223372036854775808.0), false),
+            (json!(u64::MAX), json!(18446744073709551616.0), false),
+            (json!(u64::MAX - 2047), json!(18446744073709549568.0), true),
+            (json!(0), json!(-0.0), true),
+        ] {
+            assert_eq!(script_projection_values_equal(&integer, &floating), equal);
+            assert_eq!(script_projection_values_equal(&floating, &integer), equal);
+        }
+        let small: Value = serde_json::from_str("1e-300").unwrap();
+        assert!(!script_projection_values_equal(&json!(0), &small));
+    }
+}
+
+fn has_closed_loop_inspection_pipeline(scene: &fullmag_authoring::SceneDocument) -> bool {
+    fn enabled_closed_antenna(scene: &fullmag_authoring::SceneDocument,
+        nodes: &[fullmag_authoring::StudyPipelineNode]) -> bool {
+        nodes.iter().any(|node| match node {
+            fullmag_authoring::StudyPipelineNode::Primitive(node) if node.enabled
+                && node.stage_kind == fullmag_authoring::StudyPrimitiveStageKind::AntennaFieldSolve => {
+                node.payload.get("stage_id").and_then(serde_json::Value::as_str).is_some_and(|id|
+                    scene.antenna_field_solve_stages.iter().find(|stage| stage.id == id).is_some_and(|stage|
+                        scene.current_transports.iter().any(|module| module.known().is_some_and(|module|
+                            module.name == stage.current_transport_id
+                                && matches!(&module.structured_current_closure,
+                                    Some(fullmag_authoring::SceneStructuredCurrentClosure::ClosedGeometry { schema_version, .. })
+                                        if schema_version == "structured_current_closure.v2")))))
+            }
+            fullmag_authoring::StudyPipelineNode::Group(node) => node.enabled && enabled_closed_antenna(scene, &node.children),
+            _ => false,
+        })
+    }
+    scene.study.study_pipeline.as_ref().is_some_and(|pipeline| enabled_closed_antenna(scene, &pipeline.nodes))
 }

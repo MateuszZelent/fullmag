@@ -6093,3 +6093,13 @@ mod tests {
         assert_eq!(provenance.recovered_field_energy_joules, None);
     }
 }
+
+/// Original output position and the existing scalar/field schedule position.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalOutputScheduleBinding {
+    pub output_index: u64,
+    pub schedule_index: u64,
+    pub name: String,
+    pub every_seconds: f64,
+}

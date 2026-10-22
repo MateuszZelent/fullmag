@@ -279,6 +279,41 @@ class DockerDevUpReconciliationTests(unittest.TestCase):
             with self.assertRaisesRegex(docker_dev_up.BuildInputDrift, "image-backend"):
                 self._build_input_match_impl(group)
 
+    def test_prepared_wrapper_images_keep_the_saved_running_image_authenticated(self):
+        from dataclasses import replace
+        group = _group()
+        old, toolchain, dev, new = ('sha256:' + c * 64 for c in '1234')
+        def receipt(phase, image, inputs):
+            return {'phase': phase, 'state': 'succeeded',
+                    'compose_project': group.identity['project_name'], 'image_id': image,
+                    'inputs': inputs, 'source_digest': hashlib.sha256(docker_dev_up.canonical(inputs)).hexdigest()}
+        records = {
+            'toolchain/verified.json': receipt('toolchain', toolchain, {'source_inputs': []}),
+            'image-dev/verified.json': receipt('image-dev', dev, {'parent_image_id': toolchain, 'files': []}),
+            'image-backend/verified.json': receipt('image-backend', new, {'parent_image_id': dev, 'files': []}),
+        }
+        environment = {'FULLMAG_TOOLCHAIN_IMAGE_ID': toolchain, 'FULLMAG_RUNTIME_IMAGE_ID': old}
+        service = {'image': old, 'environment': environment}
+        backend = {**group.backend, 'Image': old,
+                   'Config': {'Env': [key+'='+value for key, value in environment.items()]}}
+        group = replace(group, backend=backend, control=Mock(),
+                        document={**group.document, 'services': {'backend': service}},
+                        terminal={**group.terminal, 'inputs': {'image_id': old}})
+        group.control.read.side_effect = lambda name, optional=False: records.get(name)
+        with self.assertRaisesRegex(docker_dev_up.BuildInputDrift, 'image-backend'):
+            self._build_input_match_impl(group)
+        bad_groups = [
+            replace(group, terminal={**group.terminal, 'inputs': {'image_id': new}}),
+            replace(group, document={**group.document, 'services': {'backend': {**service, 'image': new}}}),
+            replace(group, backend={**backend, 'Config': {'Env': [
+                'FULLMAG_TOOLCHAIN_IMAGE_ID='+toolchain, 'FULLMAG_RUNTIME_IMAGE_ID='+new]}}),
+            replace(group, backend={**backend, 'Config': {'Env': [
+                'FULLMAG_TOOLCHAIN_IMAGE_ID='+new, 'FULLMAG_RUNTIME_IMAGE_ID='+old]}}),
+        ]
+        for bad in bad_groups:
+            with self.subTest(bad=bad), self.assertRaises(docker_dev_up.BuildInputUnknown):
+                self._build_input_match_impl(bad)
+
     def test_toolchain_receipt_updated_before_up_recreates_old_authenticated_chain(self):
         group = _group()
         old_toolchain_image = "sha256:" + "4" * 64

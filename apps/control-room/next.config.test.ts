@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
 import nextConfig, {
+  CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS,
   DOCKER_DEV_WATCH_POLLING_DEFAULT_MS,
   isDockerDevGeneratedWatchPath,
   resolveControlRoomDistDir,
@@ -20,6 +21,33 @@ import nextConfig, {
 } from "./next.config";
 
 describe("control-room Next dev proxy config", () => {
+  it("keeps proxy waiting compatible with the synchronous command phase owners", () => {
+    const script = readFileSync(new URL("../../crates/fullmag-api/src/script.rs", import.meta.url), "utf8");
+    const preparation = readFileSync(new URL("../../crates/fullmag-api/src/live_scene_preparation.rs", import.meta.url), "utf8");
+    const duration = (source: string, name: string, unit: string) => {
+      const match = new RegExp("const " + name + "[^;]*from_" + unit + "\\((\\d+)\\)").exec(source);
+      expect(match, name).not.toBeNull();
+      return Number(match![1]);
+    };
+    const phaseBudget =
+      (duration(script, "BOUNDED_PYTHON_HELPER_TIMEOUT", "secs") +
+       duration(script, "BOUNDED_SOURCE_CAPTURE_TIMEOUT", "secs") +
+       duration(preparation, "ACCEPTED_LIVE_PREPARATION_WAIT_TIMEOUT", "secs")) * 1000 +
+      duration(preparation, "ACCEPTED_LIVE_PREPARATION_POLL_INTERVAL", "millis");
+    expect(CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS).toBe(phaseBudget);
+    expect(nextConfig.experimental?.proxyTimeout).toBe(phaseBudget);
+    expect(Number.isFinite(phaseBudget)).toBe(true);
+    expect(phaseBudget).toBeGreaterThan(30_000);
+    expect(phaseBudget).toBeLessThan(2 ** 31 - 1);
+  });
+
+  it("keeps API commands on the existing same-origin rewrite", async () => {
+    expect(await nextConfig.rewrites?.()).toContainEqual({
+      source: "/v2/:path*",
+      destination: expect.stringMatching(/\/v2\/:path\*$/),
+    });
+  });
+
   it("redirects the bootstrap root before lazily compiling the workspace", async () => {
     await expect(nextConfig.redirects?.()).resolves.toContainEqual({
       source: "/",
@@ -267,10 +295,10 @@ describe("control-room Next dev proxy config", () => {
       "utf8",
     );
 
-    // Next writes dev/ for development and the default types/ for typegen.
-    // The wrappers preserve whichever canonical entry point was present.
+    // Next writes dev/ for development and types/ for typegen. Docker DEV
+    // uses the fixed managed distDir; audit wrappers preserve either entry.
     expect(nextEnvSource).toMatch(
-      /import ["']\.\/\.next\/(?:dev\/)?types\/routes\.d\.ts["'];/,
+      /import ["']\.\/(?:\.next\/(?:dev\/)?|\.next-control-room-8080\/dev\/)types\/routes\.d\.ts["'];/,
     );
     expect(packageSource).toContain(
       '"build:audit:webpack": "node scripts/build-audit-control-room.mjs"',

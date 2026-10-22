@@ -5806,10 +5806,17 @@ export interface components {
             branches: components["schemas"]["AntennaPortBranchResource"][];
             current_transport_id: string;
             id: string;
+            normalization?: null | components["schemas"]["AntennaPortNormalizationResource"];
             /** Format: double */
             normalization_current_a?: number;
             schema_version: string;
             source_object_id: string;
+        };
+        AntennaPortNormalizationResource: {
+            /** @enum {string} */
+            kind: "source_cut_rt0";
+            orientation: components["schemas"]["AntennaSourceCutOrientationResource"];
+            source_cut_ref: string;
         };
         AntennaQuadratureEvidenceRefResource: {
             byte_length: number;
@@ -5834,6 +5841,8 @@ export interface components {
             topology_digest: string;
         };
         AntennaSolutionRefResource: components["schemas"]["AntennaStageOutputRefResource"] | components["schemas"]["AntennaResolvedAssetRefResource"] | components["schemas"]["AntennaFieldSolutionRefResource"];
+        /** @enum {string} */
+        AntennaSourceCutOrientationResource: "minus_outward";
         AntennaSourceSpectrumResource: {
             amplitude_count: number;
             amplitude_unit: string;
@@ -12445,6 +12454,10 @@ export interface components {
         ProjectDocumentResource: {
             /** @description Canonical or source-preserving `.fms` bytes for the next host adapter. */
             archive_base64: string;
+            /** @description Validated runtime-free authoring scene, available only on eligible Open. */
+            authoring_scene_document?: {
+                [key: string]: unknown;
+            } | null;
             dirty: boolean;
             /** @description Bytes-only transport never claims filesystem or power-loss durability. */
             durability: components["schemas"]["ProjectArchiveDurability"];
@@ -12487,6 +12500,10 @@ export interface components {
         };
         /** @description The created project (same fields as create/open) plus what was imported. */
         ProjectFromScriptResource: components["schemas"]["ProjectDocumentResource"] & {
+            /** @description Exact authoring scene embedded in this archive; new imports always provide it. */
+            scene_document?: {
+                [key: string]: unknown;
+            } | null;
             script_import: components["schemas"]["ProjectScriptImportResource"];
         };
         ProjectFromScriptSource: {
@@ -13172,7 +13189,7 @@ export interface components {
          * @description What level of session restoration is possible.
          * @enum {string}
          */
-        RestoreClass: "exact_resume" | "logical_resume" | "initial_condition_import" | "config_only";
+        RestoreClass: "exact_resume" | "logical_resume" | "initial_condition_import" | "saved_fields_read_only" | "config_only" | "unsupported";
         /** @description Facts of a Fullmag results folder, read from metadata files only. */
         ResultDetail: {
             finished_at?: string | null;
@@ -13770,6 +13787,10 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             visible?: boolean | null;
+            /** @description Authored presentation metadata; it does not select physics modules. */
+            visualization_hint?: {
+                [key: string]: unknown;
+            };
         };
         SceneOerstedField: components["schemas"]["KnownSceneOerstedField"] | components["schemas"]["UnsupportedAuthoringRecord"];
         SceneOerstedTimeDependence: {
@@ -13947,6 +13968,11 @@ export interface components {
         SceneSpinBoundary: {
             id: string;
             /** @enum {string} */
+            kind: "homogeneous_spin_potential_gradient";
+            surfaces: components["schemas"]["SceneSurfaceRef"][];
+        } | {
+            id: string;
+            /** @enum {string} */
             kind: "spin_insulating";
             surfaces: components["schemas"]["SceneSurfaceRef"][];
         } | {
@@ -13984,6 +14010,7 @@ export interface components {
         } | {
             absorption: string;
             ferromagnet_side: components["schemas"]["SceneRegionRef"];
+            ferromagnet_surface?: null | components["schemas"]["SceneSurfaceRef"];
             formula_version: string;
             /** Format: double */
             g_down_Spm2: number;
@@ -13999,6 +14026,7 @@ export interface components {
             /** @enum {string} */
             kind: "mixing_conductance";
             normal_side: components["schemas"]["SceneRegionRef"];
+            normal_surface?: null | components["schemas"]["SceneSurfaceRef"];
             normal_to_ferromagnet: number[];
             spin_memory_loss?: null | components["schemas"]["SceneSpinMemoryLossReservoir"];
         };

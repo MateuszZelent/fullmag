@@ -159,6 +159,295 @@ impl SupervisorSlot {
     }
 }
 
+/// Exact immutable slot identity authenticated by the failed runtime owner.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReapedSupervisorSlotPin {
+    pub(crate) owner_sha256: String,
+    pub(crate) process_id: u32,
+    pub(crate) process_start_token: String,
+}
+
+/// Open the actual existing ancestor without following links. Missing archive
+/// directories inherit this mount; publication rechecks their opened parents.
+fn archive_existing_parent(path: &Path) -> Result<fs::File> {
+    let mut existing = path;
+    loop {
+        match fs::symlink_metadata(existing) {
+            Ok(metadata) => {
+                if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                    bail!("slot archive parent must be a real directory");
+                }
+                let mut options = OpenOptions::new();
+                options.read(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+                }
+                let file = options.open(existing)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    let opened = file.metadata()?;
+                    let current = fs::symlink_metadata(existing)?;
+                    if opened.dev() != current.dev() || opened.ino() != current.ino() {
+                        bail!("slot archive parent inode changed during preflight");
+                    }
+                }
+                return Ok(file);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                existing = existing.parent().context("slot archive existing ancestor missing")?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+fn require_same_archive_mount(source: &fs::File, destination: &fs::File) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::MetadataExt;
+        let mount_id = |file: &fs::File| -> Result<u64> {
+            let info = fs::read_to_string(format!("/proc/self/fdinfo/{}", file.as_raw_fd()))?;
+            let id = info.lines().find_map(|line| line.strip_prefix("mnt_id:"))
+                .context("slot archive mount id unavailable")?;
+            Ok(id.trim().parse()?)
+        };
+        if source.metadata()?.dev() != destination.metadata()?.dev()
+            || mount_id(source)? != mount_id(destination)?
+        {
+            bail!("slot archive must remain on the same mounted filesystem before recovery");
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (source, destination);
+        bail!("slot archive mount preflight currently requires Linux");
+    }
+}
+
+/// Read-only half of operator recovery. Uses the same owner codec, resource
+/// naming and process-start-token observer as ordinary stale-slot recovery.
+pub(crate) fn validate_reaped_supervisor_slot(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    request_id: &str,
+    pin: &ReapedSupervisorSlotPin,
+) -> Result<(PathBuf, PathBuf)> {
+    let id = uuid::Uuid::parse_str(request_id)?;
+    if id.is_nil() || id.to_string() != request_id {
+        bail!("invalid slot recovery request id");
+    }
+    let relative = format!(
+        "{SUPERVISOR_DIRECTORY}/resource-{}",
+        fullmag_session::hex_sha256(claim.lease.resource_id.as_bytes())
+    );
+    let active = fullmag_session::repository_path::checked_path(store.root(), &relative)?;
+    let canonical_archive = fullmag_session::repository_path::checked_path(
+        store.root(), &format!("reaped-worker-recovery/{request_id}/supervisor-slot"),
+    )?;
+    let legacy_archive = fullmag_session::repository_path::checked_path(
+        store.root(),
+        &format!("runtime-services/reaped-worker-recovery/{request_id}/supervisor-slot"),
+    )?;
+    let locations = [active.try_exists()?, canonical_archive.try_exists()?, legacy_archive.try_exists()?];
+    if locations.iter().filter(|exists| **exists).count() != 1 {
+        bail!("reaped supervisor slot must exist at exactly one pinned location");
+    }
+    let archived = if locations[2] { legacy_archive } else { canonical_archive };
+    let selected = if locations[0] { &active } else { &archived };
+    if locations[0] {
+        // A slot mounted separately from its parent cannot be renamed even if
+        // the source and destination parents share a filesystem.
+        require_same_archive_mount(
+            &archive_existing_parent(&active)?,
+            &archive_existing_parent(active.parent().context("slot source parent missing")?)?,
+        )?;
+        require_same_archive_mount(
+            &archive_existing_parent(active.parent().context("slot source parent missing")?)?,
+            &archive_existing_parent(archived.parent().context("slot archive parent missing")?)?,
+        )?;
+    }
+    let metadata = fs::symlink_metadata(selected)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("reaped supervisor slot must be a real directory");
+    }
+    let bytes = fullmag_session::repository_path::read_bounded_regular_file(
+        selected,
+        SLOT_OWNER_FILE,
+        16 * 1024,
+    )?;
+    let owner: SupervisorSlotOwner = serde_json::from_slice(&bytes)?;
+    if fullmag_session::hex_sha256(&bytes) != pin.owner_sha256
+        || owner.schema_version != "fullmag.accepted_worker_supervisor_slot.v3"
+        || owner.run_id != claim.run_id.as_str()
+        || owner.task_id != claim.task_id.as_str()
+        || owner.resource_id.as_deref() != Some(claim.lease.resource_id.as_str())
+        || owner.process_id != pin.process_id
+        || owner.process_start_token != pin.process_start_token
+        || owner.max_concurrency.is_none_or(|limit| limit == 0)
+        || pin.process_start_token.is_empty()
+        || process_start_token(owner.process_id)?.as_deref() == Some(&owner.process_start_token)
+    {
+        bail!("reaped supervisor slot differs from its failed-owner/start-token proof");
+    }
+    let entries = fs::read_dir(selected)?.collect::<std::io::Result<Vec<_>>>()?;
+    if entries.len() != 1 || entries[0].file_name() != SLOT_OWNER_FILE {
+        bail!("reaped supervisor slot contains unexpected evidence; archive refused");
+    }
+    Ok((active, archived))
+}
+
+fn sync_archive_ancestors(store: &SessionStore, archived: &Path) -> Result<()> {
+    let mut parent = archived.parent().context("slot archive parent missing")?;
+    if !parent.starts_with(store.root()) {
+        bail!("slot archive durability barrier escapes the exact store");
+    }
+    loop {
+        if !parent.try_exists()? {
+            bail!("slot archive durability ancestor is missing");
+        }
+        archive_existing_parent(parent)?.sync_all()?;
+        if parent == store.root() {
+            return Ok(());
+        }
+        parent = parent.parent().context("slot archive store ancestor missing")?;
+    }
+}
+
+/// Preserve the entire slot only after terminal failure and proof-backed host
+/// release. Does not remove owner evidence or any worker-attempt effect.
+pub(crate) fn archive_reaped_supervisor_slot(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    request_id: &str,
+    pin: &ReapedSupervisorSlotPin,
+    released: &fullmag_session::host_resource_ledger::HostResourceReservation,
+) -> Result<()> {
+    use fullmag_session::host_resource_ledger::{
+        HostReservationOwner, HostResourceReservationState,
+    };
+    if released.state != HostResourceReservationState::Released
+        || released.release_proof_sha256.is_none()
+        || released.identity.store_id
+            != fullmag_session::host_resource_ledger::HostResourceLedger::store_id(store.root())?
+        || released.identity.run_id != claim.run_id.as_str()
+        || released.identity.task_id != claim.task_id.as_str()
+        || released.identity.resource_id != claim.lease.resource_id
+        || released.identity.lease_token != claim.lease.lease_token.as_str()
+        || released.identity.owner
+            != (HostReservationOwner::Solver {
+                attempt_id: claim.attempt_id.as_str().into(),
+                ownership_epoch: claim.ownership_epoch.value(),
+            })
+    {
+        bail!("slot archive requires exact proof-backed host release");
+    }
+    let _writer = store.write_transaction()?;
+    let catalog = store
+        .read_run_catalog(claim.run_id.as_str())?
+        .context("slot archive catalog missing")?;
+    let task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == claim.task_id.as_str())
+        .context("slot archive task missing")?;
+    let lease = store
+        .read_resource_lease(
+            claim.run_id.as_str(),
+            &claim.lease.resource_id,
+            claim.lease.lease_token.as_str(),
+        )?
+        .context("slot archive lease missing")?;
+    if task.lifecycle != fullmag_session::FmsTaskLifecycle::Failed
+        || task.attempt_id.as_deref() != Some(claim.attempt_id.as_str())
+        || task.ownership_epoch != Some(claim.ownership_epoch.value())
+        || lease.state != fullmag_session::FmsResourceLeaseState::Released
+        || lease.attempt_id != claim.attempt_id.as_str()
+        || lease.ownership_epoch != claim.ownership_epoch.value()
+        || lease.heartbeat_sequence != claim.lease.heartbeat_sequence
+    {
+        bail!("slot archive requires exact terminal Failed and Released lease");
+    }
+    let decision_id = format!("reaped-worker-failure-{request_id}");
+    let decision = store.read_retry_decision(claim.run_id.as_str(), &decision_id)?
+        .context("slot archive requires its durable DoNotRetry decision")?;
+    decision.validate_for_task(task)?;
+    let recovered = fullmag_runtime_control::recover_coordinator(store, claim)?;
+    let exact_failure = recovered.events.last().is_some_and(|event|
+        event.message_id == decision_id && event.event == (WorkerEvent::Failed {
+            retryable: false, reason: decision.reason.clone(),
+        }));
+    let receipts = store.list_worker_process_exit_receipts(claim.run_id.as_str())?.into_iter()
+        .filter(|receipt| receipt.task_id == claim.task_id.as_str()).collect::<Vec<_>>();
+    if decision.action != FmsRetryAction::DoNotRetry
+        || decision.trigger != FmsRetryTrigger::ExplicitOperatorRequest || !exact_failure
+        || receipts.len() != 1 {
+        bail!("slot archive lacks its exact Failed/DoNotRetry/process-exit chain");
+    }
+    receipts[0].validate_for_task(task)?;
+    if receipts[0].lease_token != claim.lease.lease_token.as_str()
+        || receipts[0].resource_id != claim.lease.resource_id
+        || receipts[0].lease_heartbeat_sequence != lease.heartbeat_sequence
+        || receipts[0].status_success || receipts[0].timed_out || receipts[0].stop_requested {
+        bail!("slot archive process-exit proof differs from the released attempt");
+    }
+    let (active, archived) = validate_reaped_supervisor_slot(store, claim, request_id, pin)?;
+    if active.try_exists()? {
+        let parent_relative = format!("reaped-worker-recovery/{request_id}");
+        let parent =
+            fullmag_session::repository_path::checked_path(store.root(), &parent_relative)?;
+        if !parent.try_exists()? {
+            fullmag_session::repository_path::create_new_directory(store.root(), &parent_relative)?;
+        }
+        // Confirm every ancestor entry even after replay of an uncertain
+        // create_new_directory, before moving the immutable owner evidence.
+        sync_archive_ancestors(store, &archived)?;
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
+            let source_parent = archive_existing_parent(active.parent().context("slot source parent missing")?)?;
+            let target_parent = archive_existing_parent(&parent)?;
+            require_same_archive_mount(&source_parent, &target_parent)?;
+            require_same_archive_mount(&archive_existing_parent(&active)?, &source_parent)?;
+            let before = fs::symlink_metadata(&active)?;
+            let from = std::ffi::CString::new(active.file_name().context("slot source name missing")?.as_bytes())?;
+            let to = std::ffi::CString::new(archived.file_name().context("slot archive name missing")?.as_bytes())?;
+            if unsafe {
+                libc::renameat2(
+                    source_parent.as_raw_fd(), from.as_ptr(),
+                    target_parent.as_raw_fd(), to.as_ptr(), libc::RENAME_NOREPLACE,
+                )
+            } != 0 {
+                return Err(std::io::Error::last_os_error())
+                    .context("archive exact supervisor slot without overwrite");
+            }
+            let after = fs::symlink_metadata(&archived)?;
+            if before.dev() != after.dev() || before.ino() != after.ino() {
+                bail!("archived supervisor slot inode differs from its exact source");
+            }
+            source_parent.sync_all()?;
+            target_parent.sync_all()?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            bail!("reaped supervisor slot archival currently requires Linux no-replace rename");
+        }
+    }
+    // Reconfirm both directory barriers on replay after an uncertain rename.
+    for parent in [active.parent(), archived.parent()] {
+        std::fs::File::open(parent.context("slot archive parent missing")?)?.sync_all()?;
+    }
+    sync_archive_ancestors(store, &archived)?;
+    validate_reaped_supervisor_slot(store, claim, request_id, pin)?;
+    Ok(())
+}
+
 fn reclaim_stale_retry_slot(
     slot_path: &Path,
     run_id: &str,
@@ -2234,6 +2523,25 @@ fn is_coordinator_watermark_conflict(error: &anyhow::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reaped_slot_mount_preflight_refuses_cross_mount_and_final_symlink() {
+        let source = tempfile::tempdir().unwrap();
+        // Linux CI provides tmpfs /dev/shm separately from the checkout/tmp mount.
+        let target = tempfile::tempdir_in("/dev/shm").unwrap();
+        let from = super::archive_existing_parent(source.path()).unwrap();
+        let to = super::archive_existing_parent(target.path()).unwrap();
+        assert!(super::require_same_archive_mount(&from, &to).unwrap_err()
+            .to_string().contains("same mounted filesystem"));
+        let same = super::archive_existing_parent(&source.path().join("not-created/archive")).unwrap();
+        super::require_same_archive_mount(&from, &same).unwrap();
+        assert!(!source.path().join("not-created").exists());
+        let link = source.path().join("link");
+        std::os::unix::fs::symlink(target.path(), &link).unwrap();
+        assert!(super::archive_existing_parent(&link).is_err());
+    }
+
     use super::*;
     use std::process::Child;
     use std::time::{Duration, Instant};
@@ -2900,9 +3208,62 @@ mod tests {
     }
 
     #[test]
-    fn operator_stop_terminates_child_and_records_distinct_outcome() {
+    fn cooperative_stop_child_fixture() {
+        if std::env::var_os("FULLMAG_ACCEPTED_SUPERVISOR_STOP_CHILD").is_some() {
+            let mut release = [0_u8; 1];
+            std::io::stdin().read_exact(&mut release).unwrap();
+            assert_eq!(release, [1]);
+            println!("cooperative Stop acknowledged");
+        }
+    }
+
+    #[test]
+    fn operator_stop_waits_for_cooperative_exit_and_records_distinct_outcome() {
+        use std::io::Write;
         let current_test_process = std::env::current_exe().unwrap();
-        let child = Command::new(current_test_process)
+        let mut child = Command::new(current_test_process)
+            .arg("--exact")
+            .arg("accepted_study_supervisor::tests::cooperative_stop_child_fixture")
+            .arg("--nocapture")
+            .env("FULLMAG_ACCEPTED_SUPERVISOR_STOP_CHILD", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut release = child.stdin.take().unwrap();
+        let mut stop_sent = false;
+        let mut heartbeat_count = 0_u64;
+        let started = Instant::now();
+        let outcome = observe_child(
+            OwnedWorkerProcess::unowned_test_fixture(child),
+            Some(Duration::from_secs(5)),
+            Some(Duration::from_millis(20)),
+            || {
+                heartbeat_count += 1;
+                Ok(true)
+            },
+            || {
+                if !stop_sent {
+                    release.write_all(&[1])?;
+                    stop_sent = true;
+                }
+                Ok(true)
+            },
+        )
+        .unwrap();
+        assert!(outcome.stop_requested);
+        assert!(!outcome.timed_out);
+        assert!(outcome.output.status.success());
+        assert!(String::from_utf8_lossy(&outcome.output.stdout)
+            .contains("cooperative Stop acknowledged"));
+        assert_eq!(heartbeat_count, 0);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn operator_stop_without_cooperative_exit_retains_timeout_outcome() {
+        let child = Command::new(std::env::current_exe().unwrap())
             .arg("--exact")
             .arg("accepted_study_supervisor::tests::timeout_child_fixture")
             .arg("--nocapture")
@@ -2912,19 +3273,17 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let started = Instant::now();
         let outcome = observe_child(
             OwnedWorkerProcess::unowned_test_fixture(child),
-            Some(Duration::from_secs(5)),
-            Some(Duration::from_millis(20)),
+            Some(Duration::from_millis(100)),
+            None,
             || Ok(true),
             || Ok(true),
         )
         .unwrap();
         assert!(outcome.stop_requested);
-        assert!(!outcome.timed_out);
+        assert!(outcome.timed_out);
         assert!(!outcome.output.status.success());
-        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

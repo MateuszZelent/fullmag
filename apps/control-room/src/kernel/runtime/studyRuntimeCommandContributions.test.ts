@@ -2241,7 +2241,7 @@ describe("study runtime command contributions", () => {
         field_revision: 8,
         format: "fmstate",
         mesh_revision: 5,
-        resume_class: "logical_resume",
+        resume_class: "exact_resume",
         run_id: "run-1",
         scene_revision: 3,
         source: "user_requested",
@@ -2250,7 +2250,7 @@ describe("study runtime command contributions", () => {
         vector_count: 2,
       },
       field_revision: 8,
-      restore_class: "logical_resume",
+      restore_class: "exact_resume",
       restored_vector_count: 2,
       warnings: [],
     }));
@@ -2278,7 +2278,7 @@ describe("study runtime command contributions", () => {
           checkpoints: [
             {
               checkpoint_id: "cp-000042",
-              resume_class: "logical_resume",
+              resume_class: "exact_resume",
             },
           ],
         },
@@ -3854,7 +3854,7 @@ describe("study runtime command contributions", () => {
     ).toBe("No runtime magnetization state is available to checkpoint.");
   });
 
-  it("requires a restorable checkpoint before enabling checkpoint restore", () => {
+  it("requires a restorable checkpoint before enabling checkpoint restore", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const api = {} as never;
     const emptyContext = {
@@ -3892,7 +3892,27 @@ describe("study runtime command contributions", () => {
       registry
         .get("study.restore-checkpoint")
         ?.disabledReason?.(configOnlyContext),
-    ).toBe("Selected checkpoint does not contain magnetization state.");
+    ).toBe("Selected checkpoint cannot be resumed exactly (config_only).");
+
+    for (const resumeClass of ["logical_resume", "unsupported"]) {
+      const restore = vi.fn();
+      const context = {
+        api: { persistence: { checkpoints: { restore } } } as never,
+        resourceData: {
+          [PERSISTENCE_CHECKPOINTS_PATH]: {
+            checkpoints: [{ checkpoint_id: "cp-refused", resume_class: resumeClass }],
+          },
+        },
+        source: "test" as const,
+      };
+      expect(registry.isEnabled("study.restore-checkpoint", context)).toBe(false);
+      const result = await registry.execute("study.restore-checkpoint", context);
+      expect(result).toEqual({
+        status: "failed",
+        message: `Selected checkpoint cannot be resumed exactly (${resumeClass}).`,
+      });
+      expect(restore).not.toHaveBeenCalled();
+    }
   });
 
   it("prevents starting a study while a runtime command is active", () => {

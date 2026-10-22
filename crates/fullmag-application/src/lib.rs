@@ -25,6 +25,7 @@ mod run_intent_materialization;
 mod run_spec;
 mod script_antenna_inspection_planning;
 mod script_pipeline_compilation;
+pub mod script_source_capture;
 pub mod script_stage_contract;
 pub mod script_stage_materialization;
 mod study_artifact;
@@ -56,6 +57,8 @@ pub use coordinator::{
 };
 pub use declared_execution::bind_declared_execution;
 pub use execution::{
+    FrozenStageContextRefV1, FrozenStageSourceManifestRef,
+    TERMINAL_RESOLVED_TASK_INPUT_SCHEMA, TERMINAL_WORKER_PROTOCOL_SCHEMA,
     resolved_inputs_sha256, study_task_input_fingerprint, AttemptId, ClaimIdentity, ExecutionError,
     LeaseToken, ObservationState, OwnershipEpoch, ProtocolDisposition, ResolvedInput,
     ResolvedStudyArtifact, ResolvedTaskInput, ResourceBudget, ResourceKind, ResourceLease,
@@ -107,6 +110,9 @@ pub use script_pipeline_compilation::{
     ScriptPipelineCompilation, ScriptPipelineNodeBinding, ScriptPipelineNodeKind,
 };
 pub use study_artifact::{
+    validate_study_history_field, validate_study_history_scalar_row, STUDY_HISTORY_SCALAR_COLUMNS,
+    materialize_study_state_at_terminal_clock, encode_frozen_study_state, FrozenMagnetizationStateArtifact, STUDY_FROZEN_STATE_CODEC_ID,
+    STUDY_FROZEN_STATE_CODEC_VERSION, STUDY_FROZEN_STATE_SCHEMA,
     decode_magnetization_field_semantics, decode_study_artifact, decode_study_artifact_bytes,
     encode_study_scalar_artifact, study_artifact_content_sha256, study_state_layout_sha256,
     AntennaInspectionArtifact, DecodedStudyArtifact, MagnetizationStateArtifact,

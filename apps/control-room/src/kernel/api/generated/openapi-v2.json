@@ -3640,6 +3640,16 @@
           "id": {
             "type": "string"
           },
+          "normalization": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaPortNormalizationResource"
+              }
+            ]
+          },
           "normalization_current_a": {
             "format": "double",
             "type": "number"
@@ -3659,6 +3669,32 @@
           "branches"
         ],
         "type": "object"
+      },
+      "AntennaPortNormalizationResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "source_cut_rt0"
+                ],
+                "type": "string"
+              },
+              "orientation": {
+                "$ref": "#/components/schemas/AntennaSourceCutOrientationResource"
+              },
+              "source_cut_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_cut_ref",
+              "orientation",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "AntennaQuadratureEvidenceRefResource": {
         "additionalProperties": false,
@@ -3760,6 +3796,12 @@
             "$ref": "#/components/schemas/AntennaFieldSolutionRefResource"
           }
         ]
+      },
+      "AntennaSourceCutOrientationResource": {
+        "enum": [
+          "minus_outward"
+        ],
+        "type": "string"
       },
       "AntennaSourceSpectrumResource": {
         "properties": {
@@ -30187,6 +30229,17 @@
             "description": "Canonical or source-preserving `.fms` bytes for the next host adapter.",
             "type": "string"
           },
+          "authoring_scene_document": {
+            "additionalProperties": {},
+            "description": "Validated runtime-free authoring scene, available only on eligible Open.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "dirty": {
             "type": "boolean"
           },
@@ -30310,6 +30363,17 @@
           },
           {
             "properties": {
+              "scene_document": {
+                "additionalProperties": {},
+                "description": "Exact authoring scene embedded in this archive; new imports always provide it.",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "script_import": {
                 "$ref": "#/components/schemas/ProjectScriptImportResource"
               }
@@ -32846,7 +32910,9 @@
           "exact_resume",
           "logical_resume",
           "initial_condition_import",
-          "config_only"
+          "saved_fields_read_only",
+          "config_only",
+          "unsupported"
         ],
         "type": "string"
       },
@@ -35227,6 +35293,11 @@
               "boolean",
               "null"
             ]
+          },
+          "visualization_hint": {
+            "additionalProperties": true,
+            "description": "Authored presentation metadata; it does not select physics modules.",
+            "type": "object"
           }
         },
         "required": [
@@ -35955,6 +36026,31 @@
               },
               "kind": {
                 "enum": [
+                  "homogeneous_spin_potential_gradient"
+                ],
+                "type": "string"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
                   "spin_insulating"
                 ],
                 "type": "string"
@@ -36144,6 +36240,16 @@
               "ferromagnet_side": {
                 "$ref": "#/components/schemas/SceneRegionRef"
               },
+              "ferromagnet_surface": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneSurfaceRef"
+                  }
+                ]
+              },
               "formula_version": {
                 "type": "string"
               },
@@ -36178,6 +36284,16 @@
               },
               "normal_side": {
                 "$ref": "#/components/schemas/SceneRegionRef"
+              },
+              "normal_surface": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneSurfaceRef"
+                  }
+                ]
               },
               "normal_to_ferromagnet": {
                 "items": {

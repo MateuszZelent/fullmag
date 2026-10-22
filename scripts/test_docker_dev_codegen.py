@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,17 @@ import docker_dev_codegen as codegen  # noqa: E402
 
 
 class DockerDevCodegenTests(unittest.TestCase):
+    def test_failed_command_retains_both_streams_and_exit_code(self) -> None:
+        command = [sys.executable, '-B', '-c',
+                   'import sys; print("compiler diagnostic"); print("wrapper failure", file=sys.stderr); sys.exit(7)']
+        with mock.patch.object(codegen, '_docker_argv', return_value=command):
+            with self.assertRaises(codegen.CodegenError) as raised:
+                codegen._capture(('fixture',), timeout=5)
+        self.assertEqual(raised.exception.exit_code, 7)
+        self.assertEqual(raised.exception.stdout.strip(), b'compiler diagnostic')
+        self.assertEqual(raised.exception.stderr.strip(), b'wrapper failure')
+        self.assertFalse(raised.exception.reconciliation_required)
+
     @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires executable POSIX shell fixture")
     def test_just_wrapper_preserves_explicit_codegen_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -123,6 +135,143 @@ class DockerDevCodegenTests(unittest.TestCase):
                     codegen._running_service(
                         "project", "backend", identity, Path(r"C:\git\fullmag\fullmag")
                     )
+
+    def _admitted_wsl_services(self):
+        from bootstrap_docker_toolchain import control_volume_name
+        from docker_build_control import canonical
+        selected = Path("/home/kking/git/fullmag/worktrees/antenna")
+        alias = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/" + "5d" * 32
+        identity = {"project_id":"project-id", "worktree_id":"worktree-id", "checkout_kind":"worktree"}
+        image = "sha256:" + "a" * 64
+        ids = {"backend":"b" * 64, "frontend":"f" * 64}
+        control = control_volume_name("project")
+        owner = "/run/fullmag/frontend-owner"
+        owner_options = "rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
+        compose = {"name":"project", "services":{}, "volumes":{}}
+        actual = {}
+        for role in ids:
+            labels = {"com.docker.compose.project":"project", "com.docker.compose.service":role,
+                "org.fullmag.compose.project":"project", "org.fullmag.source.project-id":"project-id",
+                "org.fullmag.source.worktree-id":"worktree-id", "org.fullmag.source.checkout-kind":"worktree"}
+            environment = {"FULLMAG_SOURCE_HOST_ROOT" if role == "backend" else "FULLMAG_SOURCE_ROOT":str(selected)}
+            volumes = [{"target":"/opt/fullmag/source", "type":"bind", "read_only":True, "source":str(selected)}]
+            pins = {"/opt/fullmag/source":alias}
+            if role == "backend":
+                volumes.append({"target":"/opt/fullmag/source-git", "type":"bind", "read_only":True,
+                    "source":"/home/kking/git/fullmag/.git"})
+                pins["/opt/fullmag/source-git"] = "/home/kking/git/fullmag/.git"
+            for target, name, readonly in (("/build","build",False), ("/opt/fullmag/package","package",False),
+                    ("/opt/fullmag/control","control",role == "frontend")) if role == "backend" else (
+                    ("/state/development","state",False), ("/opt/fullmag/control","control",True)):
+                compose["volumes"][name] = {"name":control if name == "control" else "project-" + name}
+                volumes.append({"target":target,"type":"volume","source":name,"read_only":readonly})
+            expected = {"image":image, "environment":environment, "labels":labels,
+                "volumes":volumes,"x-fullmag-daemon-binds":pins}
+            if role == "frontend":
+                expected["tmpfs"] = [owner + ":" + owner_options]
+            compose["services"][role] = expected
+            mounts = [{"Destination":v["target"],"Type":v["type"],"RW":not v["read_only"],
+                **({"Source":pins[v["target"]]} if v["type"] == "bind" else
+                   {"Name":compose["volumes"][v["source"]]["name"]})} for v in volumes]
+            if role == "frontend":
+                mounts.append({"Destination":owner,"Type":"tmpfs","RW":True})
+            actual[role] = {"Id":ids[role],"Image":image,"State":{"Running":True},
+                "Config":{"Image":image,"Labels":labels,"Env":[k + "=" + v for k,v in environment.items()]},
+                "HostConfig":{"ReadonlyRootfs":True,"Privileged":False,
+                    "Tmpfs":{owner:owner_options} if role == "frontend" else {}},"Mounts":mounts}
+        receipt = {"schema":"fullmag.docker-build-operation.v1","phase":"development","state":"succeeded",
+            "attempt":"c" * 32,"compose_project":"project","backend_container":ids["backend"],
+            "frontend_container":ids["frontend"],"inputs":{"source_root":str(selected),
+                **{"source_" + k:v for k,v in identity.items()}},"config_sha256":codegen._sha256(canonical(compose))}
+        return selected, identity, compose, actual, receipt
+
+    def _select_admitted_wsl_service(self, role, fixture, *, terminal=None, changed_verified=None):
+        selected, identity, compose, actual, receipt = fixture
+        receipt_raw = codegen._canonical_json(receipt)
+        reads = []
+        def capture(arguments, **_kwargs):
+            target = next(a.rsplit("=",1)[1] for a in arguments if a.startswith("label=com.docker.compose.service="))
+            return actual[target]["Id"].encode() + b"\n", b""
+        def inspect(identifier):
+            if identifier.startswith("sha256:"):
+                return {"Id":identifier,"Config":{}}
+            return next(document for document in actual.values() if document["Id"] == identifier)
+        def execute(container, arguments, **_kwargs):
+            self.assertEqual(container, actual["backend"]["Id"])
+            self.assertEqual(arguments[:4], ("/bin/bash","-euo","pipefail","-c"))
+            script = arguments[4]
+            reads.append(script)
+            if "/development/verified.json" in script:
+                return (changed_verified if changed_verified is not None and len(reads) > 3 else receipt_raw), b""
+            self.assertIn("development/attempts/" + receipt["attempt"], script)
+            if "/terminal.json" in script:
+                return receipt_raw if terminal is None else terminal, b""
+            self.assertIn("/compose.json", script)
+            return codegen._canonical_json(compose), b""
+        with mock.patch.object(codegen,"_capture",side_effect=capture), mock.patch.object(
+                codegen,"_inspect",side_effect=inspect), mock.patch.object(codegen,"_exec",side_effect=execute):
+            result = codegen._running_service("project",role,identity,selected)
+        self.assertEqual(len(reads),4)
+        return result
+
+    def test_wsl_daemon_alias_requires_exact_succeeded_admission_for_both_services(self):
+        for role in ("backend","frontend"):
+            with self.subTest(role=role):
+                fixture = self._admitted_wsl_services()
+                container, document = self._select_admitted_wsl_service(role,fixture)
+                self.assertEqual(container, fixture[3][role]["Id"])
+                self.assertIs(document,fixture[3][role])
+                self.assertNotEqual(codegen._path_identity(document["Mounts"][0]["Source"]),
+                    codegen._path_identity(str(fixture[0])))
+
+    def test_admitted_wsl_alias_refuses_daemon_or_compose_drift(self):
+        from docker_build_control import canonical
+        for change in ("daemon", "daemon-case", "configured-source", "pin", "readonly", "control", "stopped", "image", "labels"):
+            with self.subTest(change=change):
+                fixture = self._admitted_wsl_services()
+                compose, actual = fixture[2:4]
+                if change == "daemon": actual["backend"]["Mounts"][0]["Source"] += "different"
+                elif change == "daemon-case": actual["backend"]["Mounts"][0]["Source"] = actual["backend"]["Mounts"][0]["Source"].upper()
+                elif change == "configured-source": compose["services"]["backend"]["volumes"][0]["source"] = "/foreign"
+                elif change == "pin": compose["services"]["backend"]["x-fullmag-daemon-binds"]["/opt/fullmag/source"] += "different"
+                elif change == "readonly": actual["frontend"]["Mounts"][0]["RW"] = True
+                elif change == "control": next(m for m in actual["backend"]["Mounts"] if m["Destination"] == "/opt/fullmag/control")["Name"] = "foreign-control"
+                elif change == "stopped": actual["frontend"]["State"]["Running"] = False
+                elif change == "image": actual["frontend"]["Image"] = "sha256:" + "d" * 64
+                else: actual["frontend"]["Config"]["Labels"] = {"com.docker.compose.project":"foreign"}
+                if change in ("configured-source", "pin"):
+                    fixture[4]["config_sha256"] = codegen._sha256(canonical(compose))
+                with self.assertRaises(codegen.CodegenError):
+                    self._select_admitted_wsl_service("backend",fixture)
+
+    def test_admitted_wsl_alias_refuses_foreign_source_or_wrong_receipt(self):
+        for key, value in (("schema","wrong"),("phase","image-dev"),("state","failed"),
+                ("attempt","../foreign"),("compose_project","foreign"),("config_sha256","d" * 64),
+                ("backend_container","e" * 64),("frontend_container","e" * 64)):
+            with self.subTest(key=key):
+                fixture = self._admitted_wsl_services()
+                fixture[4][key] = value
+                with self.assertRaises(codegen.CodegenError):
+                    self._select_admitted_wsl_service("frontend",fixture)
+        fixture = list(self._admitted_wsl_services())
+        fixture[0] = Path("/home/kking/git/foreign")
+        for role, name in (("backend","FULLMAG_SOURCE_HOST_ROOT"),("frontend","FULLMAG_SOURCE_ROOT")):
+            fixture[3][role]["Config"]["Env"] = [name + "=" + str(fixture[0])]
+        with self.assertRaises(codegen.CodegenError):
+            self._select_admitted_wsl_service("frontend",fixture)
+
+    def test_wsl_alias_refuses_metadata_without_pins_and_changed_admission(self):
+        fixture = self._admitted_wsl_services()
+        fixture[2]["services"]["backend"].pop("x-fullmag-daemon-binds")
+        from docker_build_control import canonical
+        fixture[4]["config_sha256"] = codegen._sha256(canonical(fixture[2]))
+        with self.assertRaisesRegex(codegen.CodegenError,"daemon bind"):
+            self._select_admitted_wsl_service("backend",fixture)
+        fixture = self._admitted_wsl_services()
+        with self.assertRaisesRegex(codegen.CodegenError,"terminal"):
+            self._select_admitted_wsl_service("backend",fixture,terminal=b"{}")
+        with self.assertRaisesRegex(codegen.CodegenError,"changed"):
+            self._select_admitted_wsl_service("backend",fixture,changed_verified=b"{}")
 
     def test_backend_provenance_requires_receipt_and_binary_binding(self) -> None:
         receipt_sha = "a" * 64
@@ -323,6 +472,54 @@ class DockerDevCodegenTests(unittest.TestCase):
             published = codegen._publish_outputs(source, outputs, before)
             self.assertEqual(set(published), set(names))
             self.assertEqual({name: (generated / name).read_bytes() for name in names}, outputs)
+
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX permission bits")
+    def test_published_sources_are_world_readable_before_atomic_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            generated = source / "apps/control-room/src/kernel/api/generated"
+            generated.mkdir(parents=True)
+            names = ("openapi-v2.json", "openapi-v2-types.ts", "openapi-v2-client.ts", "openapi-v2-paths.ts")
+            before = codegen._output_baseline(source, names)
+            replace = os.replace
+            observed = []
+            def publish(prepared, destination):
+                self.assertEqual(stat.S_IMODE(prepared.stat().st_mode), 0o644)
+                observed.append(destination.name)
+                replace(prepared, destination)
+            with mock.patch.object(codegen.os, "replace", side_effect=publish):
+                codegen._publish_outputs(source, {name:name.encode() for name in names}, before)
+            self.assertEqual(observed, list(names))
+            for name in names:
+                self.assertEqual(stat.S_IMODE((generated / name).stat().st_mode), 0o644)
+                self.assertEqual((generated / name).read_bytes(), name.encode())
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX permission bits")
+    def test_chmod_failure_and_source_collision_preserve_existing_outputs(self) -> None:
+        for failure in ("chmod", "collision"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary)
+                generated = source / "apps/control-room/src/kernel/api/generated"
+                generated.mkdir(parents=True)
+                names = ("openapi-v2.json", "openapi-v2-types.ts", "openapi-v2-client.ts", "openapi-v2-paths.ts")
+                for name in names:
+                    (generated / name).write_bytes(b"previous")
+                    (generated / name).chmod(0o640)
+                before = codegen._output_baseline(source, names)
+                if failure == "collision":
+                    (generated / names[0]).write_bytes(b"concurrent edit")
+                preserved = {name:((generated / name).read_bytes(), (generated / name).stat().st_mode) for name in names}
+                outputs = {name:name.encode() for name in names}
+                if failure == "chmod":
+                    with mock.patch.object(codegen.os, "chmod", side_effect=PermissionError("refused")):
+                        with self.assertRaises(PermissionError):
+                            codegen._publish_outputs(source, outputs, before)
+                else:
+                    with self.assertRaisesRegex(codegen.CodegenError, "changed while codegen"):
+                        codegen._publish_outputs(source, outputs, before)
+                self.assertEqual({name:((generated / name).read_bytes(), (generated / name).stat().st_mode) for name in names}, preserved)
+                self.assertEqual(sorted(path.name for path in generated.iterdir()), sorted(names))
 
 
 if __name__ == "__main__":

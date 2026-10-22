@@ -273,7 +273,14 @@ mod recovery_tests {
             started.elapsed() < std::time::Duration::from_secs(1),
             "permanent host policy error was retried for too long: {error:#}"
         );
-        assert!(format!("{error:#}").contains("marker differs"));
+        assert!(
+            format!("{error:#}")
+                .contains("stored host resource policy differs from explicit ledger configuration"),
+            "unexpected permanent host policy error: {error:#}"
+        );
+        assert!(!error
+            .chain()
+            .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()));
     }
 
     #[test]
@@ -374,6 +381,53 @@ mod recovery_tests {
                 }],
             })
             .unwrap();
+    }
+
+    #[test]
+    fn accepted_recovery_waits_for_initial_catalog_without_mutating_admission() {
+        let fixture = recovery_fixture();
+        let run_id = fullmag_application::RunId::parse(&fixture.request.identity.run_id).unwrap();
+        let intent = FmsRunIntent::new(
+            run_id.as_str(),
+            "recovery-before-catalog",
+            serde_json::json!({
+                "schema_version": "run_spec.v2",
+                "run_id": run_id.as_str(),
+                "snapshot": {
+                    "project_id": "project-before-catalog",
+                    "definition_revision": 1,
+                    "definition_sha256": "a".repeat(64)
+                },
+                "study": {
+                    "study_id": "study-before-catalog",
+                    "plan_version": "study_plan.v2",
+                    "plan_sha256": "b".repeat(64)
+                },
+                "study_catalog_sha256": "c".repeat(64),
+                "parameters": {}, "seeds": {}, "dependencies": [], "immutable_assets": [],
+                "requested_execution": {
+                    "backend": "fdm", "device": "cpu", "precision": "double", "mode": "strict"
+                }
+            }),
+        );
+        fixture.store.commit_run_intent(&intent).unwrap();
+        assert!(fixture.store.accepted_run_start_permitted(run_id.as_str()).unwrap());
+        let before = fixture.ledger.read().unwrap().reservations;
+        assert!(fixture.context.has_current_compute_snapshot().unwrap());
+        assert!(crate::scheduler::resume_next_admitted_accepted_task_with_host(
+            &fixture.store, &run_id, "compute.cpu", &fixture.context,
+        ).unwrap().is_none());
+        assert!(fixture.store.read_run_catalog(run_id.as_str()).unwrap().is_none());
+        assert_eq!(fixture.ledger.read().unwrap().reservations, before);
+
+        seed_ready_queued_catalog(&fixture, None);
+        let catalog = fixture.store.read_run_catalog(run_id.as_str()).unwrap();
+        assert!(fixture.context.has_current_compute_snapshot().unwrap());
+        assert!(crate::scheduler::resume_next_admitted_accepted_task_with_host(
+            &fixture.store, &run_id, "compute.cpu", &fixture.context,
+        ).unwrap().is_none());
+        assert_eq!(fixture.store.read_run_catalog(run_id.as_str()).unwrap(), catalog);
+        assert_eq!(fixture.ledger.read().unwrap().reservations, before);
     }
 
     #[test]

@@ -3035,6 +3035,7 @@ class Problem:
           study_pipeline: dict[str, object] | None = None,
           runtime_device_override: str | None = None,
           _copy_cached_geometry_assets: bool = True,
+          _accepted_preparation: dict[str, object] | None = None,
     ) -> dict[str, object]:
         runtime = self.runtime.resolved(
             backend=requested_backend,
@@ -3063,6 +3064,35 @@ class Problem:
         effective_asset_cache = asset_cache if asset_cache is not None else self.geometry_asset_cache
         runtime_metadata = dict(self.runtime_metadata)
         runtime_metadata["runtime_selection"] = runtime.to_runtime_metadata()
+        if _accepted_preparation is not None:
+            if not include_geometry_assets:
+                raise ValueError("accepted preparation requires geometry materialization")
+            if not isinstance(_accepted_preparation, dict):
+                raise ValueError("accepted preparation requires a bound ProblemIR")
+            problem_meta = _accepted_preparation.get("problem_meta")
+            metadata = problem_meta.get("runtime_metadata") if isinstance(problem_meta, dict) else None
+            if not isinstance(metadata, dict):
+                raise ValueError("accepted preparation requires bound runtime metadata")
+            selection = metadata.get("runtime_selection")
+            materialization = metadata.get("execution_materialization")
+            if not isinstance(selection, dict) or not isinstance(materialization, dict):
+                raise ValueError("accepted preparation requires the canonical bound execution handoff")
+            requested = materialization.get("requested")
+            if not isinstance(requested, dict) or materialization.get("schema_version") != "execution_request.v1":
+                raise ValueError("accepted preparation requires materialized execution_request.v1")
+            if (requested.get("backend") != runtime.backend_target.value
+                    or requested.get("precision") != runtime.execution_precision.value
+                    or requested.get("mode") != runtime.execution_mode.value
+                    or requested.get("device") != selection.get("device")
+                    or selection.get("backend") != requested.get("backend")
+                    or selection.get("execution_precision") != requested.get("precision")
+                    or selection.get("execution_mode") != requested.get("mode")
+                    or not isinstance(metadata.get("compute_resources"), dict)):
+                raise ValueError("accepted preparation execution differs from the bound request")
+            for key in ("runtime_selection", "compute_resources", "execution_materialization"):
+                runtime_metadata[key] = copy.deepcopy(metadata[key])
+            runtime_metadata.pop("execution_profile", None)
+            runtime_metadata.pop("execution_layers", None)
         if isinstance(self.study, Eigenmodes) and self.study.solver_policy is not None:
             runtime_metadata["modal_solver_policy"] = self.study.solver_policy.to_ir()
         effective_study_pipeline = _normalize_study_pipeline_value(study_pipeline)

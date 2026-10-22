@@ -385,5 +385,339 @@ class NativeFailedRecreateTests(unittest.TestCase):
                 )
 
 
+
+class SupervisionFailedRecreateTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile,copy
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.state=Path(self.temp.name)
+        for name in ('runs','temp','recovery'):(self.state/'runs/docker-all/session-store'/name).mkdir(parents=True,exist_ok=True)
+        self.pin=failed_owner();self.pin['state']='ready'
+        for child in self.pin['children']:child['status']='running'
+        self.owner=copy.deepcopy(self.pin);self.owner['state']='failed';self.owner['children'][1]['status']='exited_failure';self.owner['children'][0]['status']='exited_success'
+        self.owner_raw=json.dumps(self.owner,sort_keys=True).encode()
+        self.terminal={'schema':'fullmag.docker-process-tree.v1','state':'shutdown_unknown','error':stop_failed.SUPERVISION_FAILURE_ERROR,'shutdown_error':'runtime service owner is not ready','api_pid':3227,'api_exit_code':-15,'service_owner':self.pin}
+        self.terminal_raw=json.dumps(self.terminal,sort_keys=True).encode()
+        self.probe={'schema':stop_failed.SUPERVISION_FAILURE_SCHEMA,'process_receipt_sha256':'d'*64,'ready_pin_sha256':hashlib.sha256(json.dumps(self.pin,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest(),'failed_owner_sha256':hashlib.sha256(self.owner_raw).hexdigest(),'config_sha256':'c'*64,'windows_certificate_sha256':'e'*64,'accepted_store_id':'sha256:'+'f'*64,'api_pid':3227,'runtime_pid':3241,'terminal_children':self.owner['children'],'processes_absent':True,'runs_empty':True,'transients_empty':True,'affected_reservations_empty':True}
+        self.previous={'attempt':'1'*32,'config_sha256':'2'*64,'state_root':str(self.state),'inputs':{'image_id':IMAGE_ID,'source_root':'D:/fixture'}}
+        self.journal={'schema':'fullmag.stop-failed-admission.v1','state':'stopped-confirmed','failure_kind':stop_failed.SUPERVISION_FAILURE_KIND,'container_id':BACKEND_ID,'image_id':IMAGE_ID,'source_root':'D:/fixture','development_attempt':'1'*32,'compose_config_sha256':'2'*64,'namespace_processes_absent':True,'exit_code':1,'supervision_probe':self.probe,'previous_config_sha256':'c'*64,'terminal_process_receipt_sha256':hashlib.sha256(self.terminal_raw).hexdigest()}
+    def run_context(self,*,fresh=False):
+        def read(control,relative,*,optional=False):
+            if relative.endswith('process-tree.json'):return self.terminal_raw
+            if relative.endswith('OWNER.json'):return self.owner_raw
+            return json.dumps(self.journal,sort_keys=True).encode()
+        with patch.object(stop_unadmitted,'_control_bytes',side_effect=read),patch.object(dev,'_read_runtime_config_digest',return_value='c'*64):
+            return dev._native_failed_stop_recovery_context(Mock(),self.previous,backend_id=BACKEND_ID,fresh_state=fresh)
+    def test_dispatch_returns_existing_previous_config_contract_without_tokens(self):
+        context=self.run_context();self.assertEqual(context['previous_config_sha256'],'c'*64);self.assertFalse(context['native_restart_metadata']['claim_pending']);self.assertNotIn('owner-token',json.dumps(context));self.assertNotIn('recovery_environment',context)
+    def test_terminal_ready_pin_change_refuses(self):
+        self.terminal['service_owner']['pid']=9999;self.terminal_raw=json.dumps(self.terminal).encode()
+        with self.assertRaisesRegex(dev.BuildControlError,'pin/failed owner changed'):self.run_context()
+    def test_failed_owner_bytes_change_refuses(self):
+        self.owner_raw+=b' '
+        with self.assertRaisesRegex(dev.BuildControlError,'pin/failed owner changed'):self.run_context()
+    def test_terminal_receipt_bytes_change_refuses(self):
+        self.terminal_raw+=b' '
+        with self.assertRaisesRegex(dev.BuildControlError,'terminal receipt changed'):self.run_context()
+    def test_config_change_refuses(self):
+        self.journal['previous_config_sha256']='a'*64
+        with self.assertRaisesRegex(dev.BuildControlError,'configuration changed'):self.run_context()
+    def test_namespace_and_development_pins_refuse_drift(self):
+        for key,value in [('namespace_processes_absent',False),('container_id','a'*64),('image_id','sha256:'+'b'*64),('development_attempt','3'*32),('compose_config_sha256','4'*64),('source_root','D:/other')]:
+            original=self.journal[key];self.journal[key]=value
+            with self.subTest(key=key),self.assertRaises(dev.BuildControlError):self.run_context()
+            self.journal[key]=original
+    def test_new_accepted_or_pending_work_refuses_recreation(self):
+        for name in ('runs','temp','recovery'):
+            p=self.state/'runs/docker-all/session-store'/name/'new';p.touch()
+            with self.subTest(name=name),self.assertRaisesRegex(dev.BuildControlError,'accepted/pending'):self.run_context()
+            p.unlink()
+    def test_fresh_state_refuses(self):
+        with self.assertRaises(dev.BuildControlError):self.run_context(fresh=True)
+
+
+
+class CompletedRecreationContinuationTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile,types,copy
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
+        self.args=types.SimpleNamespace(port=3202,attempt='1'*32,config_sha256='',completed_recreation_attempt='2'*32,completed_recreation_sha256='',fresh_state=False,recovery_authorization=None)
+        self.selected=Path('D:/selected checkout');self.state=self.root/'state';self.state.mkdir()
+        self.document={'name':'fixture','services':{'backend':{'environment':{'FULLMAG_STARTUP_ENABLED':'0'}},'frontend':{'environment':{'FULLMAG_FRONTEND_HOST_PORT':'3202'}}}}
+        self.args.config_sha256=hashlib.sha256(dev.canonical(self.document)).hexdigest()
+        self.previous={'state':'succeeded','phase':'development','attempt':'1'*32,'compose_project':'fixture','config_sha256':self.args.config_sha256,'inputs':{'source_root':str(self.selected),'image_id':IMAGE_ID,'gpu_access_requested':'required'},'backend_container':BACKEND_ID,'frontend_container':'f'*64,'state_root':str(self.state),'backend_volumes':{'build':'build-volume','package':'package-volume','control':'control-volume'},'frontend_volume':'frontend-volume'}
+        self.completed={'schema':'fullmag.docker-build-operation.v1','phase':'recreate-services','state':'succeeded','attempt':'2'*32,'compose_project':'fixture','fresh_state':False,'inputs':{'attempt':'1'*32,'config_sha256':self.args.config_sha256},'removed_containers':[BACKEND_ID,'f'*64],'previous_state_root':str(self.state),'retained_volumes':self.previous['backend_volumes'],'retained_frontend_volume':'frontend-volume'}
+        self.cert={'image_id':IMAGE_ID,'restart_verified':True};self.recovery={'previous_config_sha256':'c'*64,'native_restart_metadata':{'schema':'fullmag.docker-runtime-supervision-restart.v1','claim_pending':False,'terminal_failed_owner_sha256':'e'*64}}
+        self.control=Mock();self.control.project='fixture';self.control.read.return_value=self.document;self.drift={};self.absence=types.SimpleNamespace(returncode=1,stdout=b'',stderr=b'Error: No such object: fixture')
+    def invoke(self, host=None):
+        import docker_volume_container_recovery as recovery,types
+        if host is None:
+            import windows_folder_host
+            host=types.SimpleNamespace(HOST_CERT_PATH=windows_folder_host.HOST_CERT_PATH,
+                OWNER_NAME=windows_folder_host.OWNER_NAME,
+                read_owned_regular=Mock(return_value=json.dumps(self.cert).encode()))
+        previous_raw=json.dumps(self.previous,sort_keys=True).encode();completed_raw=json.dumps(self.completed,sort_keys=True).encode()
+        if not self.args.completed_recreation_sha256:self.args.completed_recreation_sha256=hashlib.sha256(completed_raw).hexdigest()
+        def read(control,path,**kw):
+            if path in self.drift:return self.drift[path]
+            if path.endswith('/compose.json'):return dev.canonical(self.document)+b'\n'
+            if path.endswith('/retained-containers.json'):return b'{}\n'
+            return completed_raw if path.startswith('recreate-services/') else previous_raw
+        with patch.object(stop_unadmitted,'_control_bytes',side_effect=read),patch.object(recovery,'docker_capture',return_value=self.absence),patch.object(dev,'_validate_removed_recreation_proof',return_value=({}, {}, self.recovery)),patch.object(dev,'_operator_probe_record_from_retained',return_value={}),patch.object(dev,'_session_host',return_value=host):
+            return dev._completed_recreation_start_context(self.control,self.args,self.selected,{'runtime_root':self.root})
+    def test_completed_removal_restores_exact_state_and_existing_r5_context(self):
+        context=self.invoke();self.assertEqual(context['reuse_state']['state'],self.state);self.assertEqual(context['previous_config_sha256'],'c'*64);self.assertEqual(context['native_restart_metadata'],self.recovery['native_restart_metadata']);self.control.write.assert_not_called()
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires the real Linux no-follow reader")
+    def test_linux_completed_removal_uses_profile_paths_and_real_owned_reader(self):
+        import linux_native_host as host
+        for name in (Path(host.HOST_CERT_PATH).name,host.OWNER_NAME):
+            (self.state/name).write_text(json.dumps(self.cert))
+        # These old Windows files must not be consumed as a Linux certificate.
+        (self.state/"windows-folder-host.json").write_text("invalid Windows certificate")
+        (self.state/".fullmag-windows-folder-owner.json").write_text("invalid Windows owner")
+        with patch('windows_folder_host.read_owned_regular',side_effect=AssertionError("Windows reader used on Linux")):
+            context=self.invoke(host=host)
+        self.assertEqual(context['reuse_state']['host_certificate'],self.state/Path(host.HOST_CERT_PATH).name)
+        self.assertEqual(context['reuse_state']['owner_marker'],self.state/host.OWNER_NAME)
+        self.assertEqual(context['reuse_state']['receipt']['image_id'],IMAGE_ID)
+        self.assertEqual(context['native_restart_metadata'],self.recovery['native_restart_metadata'])
+        self.control.write.assert_not_called()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires the real Linux no-follow reader")
+    def test_linux_continuation_preserves_owner_image_restart_and_startup_guards(self):
+        import linux_native_host as host,copy
+        for change in ('owner','image','restart','startup'):
+            with self.subTest(change=change):
+                cert=copy.deepcopy(self.cert);owner=copy.deepcopy(self.cert)
+                if change=='owner':owner['image_id']='sha256:'+'d'*64
+                elif change=='image':cert['image_id']=owner['image_id']='sha256:'+'d'*64
+                elif change=='restart':cert['restart_verified']=owner['restart_verified']=False
+                else:self.document['services']['backend']['environment']['FULLMAG_STARTUP_ENABLED']='1'
+                (self.state/Path(host.HOST_CERT_PATH).name).write_text(json.dumps(cert))
+                (self.state/host.OWNER_NAME).write_text(json.dumps(owner))
+                self.args.config_sha256=hashlib.sha256(dev.canonical(self.document)).hexdigest()
+                self.previous['config_sha256']=self.args.config_sha256
+                self.completed['inputs']['config_sha256']=self.args.config_sha256
+                self.args.completed_recreation_sha256=''
+                with self.assertRaisesRegex(dev.BuildControlError,'session owner/admission/startup'):
+                    self.invoke(host=host)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires the real Linux no-follow reader")
+    def test_linux_continuation_does_not_follow_certificate_or_owner_symlinks(self):
+        import linux_native_host as host
+        for name in (Path(host.HOST_CERT_PATH).name,host.OWNER_NAME):
+            (self.state/name).write_text(json.dumps(self.cert))
+        for name in (Path(host.HOST_CERT_PATH).name,host.OWNER_NAME):
+            with self.subTest(name=name):
+                path=self.state/name;path.unlink();target=self.root/'external-evidence.json'
+                target.write_text(json.dumps(self.cert));path.symlink_to(target)
+                with self.assertRaisesRegex(dev.storage.StorageError,'symlink/junction'):self.invoke(host=host)
+                path.unlink();path.write_text(json.dumps(self.cert))
+
+    def test_missing_old_ids_are_expected_but_present_old_id_refuses(self):
+        self.invoke();self.absence.returncode=0
+        with self.assertRaises(Exception):self.invoke()
+    def test_absence_transport_unknown_is_not_proof(self):
+        self.absence.stderr=b'Docker daemon unavailable'
+        with self.assertRaises(Exception):self.invoke()
+    def test_completed_terminal_sha_is_mandatory(self):
+        self.args.completed_recreation_sha256='9'*64
+        with self.assertRaisesRegex(dev.BuildControlError,'terminal digest'):self.invoke()
+    def test_each_current_or_verified_raw_drift_refuses(self):
+        for path in ('recreate-services/current.json','recreate-services/verified.json','recreate-services/attempts/'+'2'*32+'/receipt.json'):
+            with self.subTest(path=path):
+                self.drift={path:b'{}'}
+                with self.assertRaisesRegex(dev.BuildControlError,'CAS differs'):self.invoke()
+    def test_new_development_attempt_or_partial_unknown_current_refuses_replay(self):
+        self.drift={'development/current.json':b'{"state":"outcome-unknown-resources-retained"}'}
+        with self.assertRaisesRegex(dev.BuildControlError,'superseded'):self.invoke()
+    def test_completed_outcome_unknown_or_failed_is_not_replayable(self):
+        for state in ('outcome-unknown-resources-retained','failed-confirmed'):
+            with self.subTest(state=state):
+                self.completed['state']=state;self.args.completed_recreation_sha256=''
+                with self.assertRaisesRegex(dev.BuildControlError,'removal/state/cache'):self.invoke()
+    def test_removal_state_and_cache_pins_are_exact(self):
+        import copy
+        for key,value in [('removed_containers',[BACKEND_ID]),('previous_state_root','D:/other'),('retained_volumes',{}),('retained_frontend_volume','other'),('fresh_state',True)]:
+            original=copy.deepcopy(self.completed[key]);self.completed[key]=value;self.args.completed_recreation_sha256=''
+            with self.subTest(key=key),self.assertRaisesRegex(dev.BuildControlError,'removal/state/cache'):self.invoke()
+            self.completed[key]=original
+    def test_unpaired_or_incompatible_request_refuses(self):
+        for key,value in [('completed_recreation_attempt','bad'),('completed_recreation_sha256','bad'),('fresh_state',True),('recovery_authorization','opaque-reference')]:
+            original=getattr(self.args,key);setattr(self.args,key,value)
+            with self.subTest(key=key),self.assertRaisesRegex(dev.BuildControlError,'paired exact pins'):self.invoke()
+            setattr(self.args,key,original)
+    def test_missing_failed_owner_context_refuses(self):
+        self.recovery={}
+        with self.assertRaisesRegex(dev.BuildControlError,'failed-owner restart proof'):self.invoke()
+    def test_source_or_old_config_drift_refuses(self):
+        self.previous['inputs']['source_root']='D:/another'
+        with self.assertRaisesRegex(dev.BuildControlError,'old development authority'):self.invoke()
+    def test_changed_frontend_port_refuses(self):
+        self.args.port=3203
+        with self.assertRaisesRegex(dev.BuildControlError,'frontend port differs'):self.invoke()
+    def test_old_development_verified_drift_refuses(self):
+        self.drift={'development/verified.json':b'{}'}
+        with self.assertRaisesRegex(dev.BuildControlError,'superseded'):self.invoke()
+    def test_new_start_is_not_a_repeated_deletion(self):
+        # Calling the real retained-operation branch must return through start
+        # before Compose ps/inspect tries to find the deliberately removed IDs.
+        import types,docker_dev as cli,docker_build_control as build
+        self.args.repo_root=self.root;self.args.source_root=self.selected;self.args.port=3202
+        self.control.read.side_effect=[self.previous,self.document]
+        with patch.object(cli,'_require_native_windows'),patch.object(cli,'_select_source',return_value=(self.selected,{'runtime_root':self.root})),patch.object(cli,'_compose_identity',return_value={}),patch.object(build,'toolchain_configuration',return_value={'services':{'fem-gpu-toolchain':{'build':{'args':{'FULLMAG_CUDA_BASE_IMAGE':'fixture'}}}}}),patch.object(dev,'BuildControl',return_value=self.control),patch.object(dev,'_operator_probe_record_from_retained',return_value={}),patch.object(dev,'_completed_recreation_start_context',return_value={'reuse_state':{'state':self.state},**self.recovery}),patch.object(dev,'start',return_value='continued') as start,patch.object(dev,'compose_capture') as compose:
+            result=dev._retained_operation(self.args,recreate_services=True)
+        self.assertEqual(result,'continued');start.assert_called_once();compose.assert_not_called();self.assertEqual(self.args.gpu_access,'required')
+    def test_fixed_shell_recipe_preserves_both_continuation_pins_with_spaces(self):
+        import subprocess
+        root=Path(__file__).resolve().parents[1];shell=(root/'scripts/just_storage_shell.sh').read_text()
+        assignment=next(line.strip() for line in shell.splitlines() if line.strip().startswith('docker_dev_volume_recreate_pattern='))
+        # just quote() always emits single quotes, even for alphanumeric pins.
+        recipe='python "D:/selected checkout/scripts/docker_dev.py" --repo-root "D:/selected checkout" recreate-volume --attempt '+"'"+'1'*32+"' --config-sha256 '"+'a'*64+"' --source-root 'D:/selected checkout' --port '3202' --completed-recreation-attempt '"+'2'*32+"' --completed-recreation-sha256 '"+'b'*64+"'"
+        code=assignment+'\nrecipe=$1\n[[ "$recipe" =~ $docker_dev_volume_recreate_pattern ]] || exit 9\nprintf "%s\\n%s\\n" "${BASH_REMATCH[9]}" "${BASH_REMATCH[10]}"'
+        result=subprocess.run(['/bin/bash','-c',code,'fixture',recipe],capture_output=True,text=True,check=True)
+        self.assertEqual(result.stdout.splitlines(),['2'*32,'b'*64])
+
+
+
+class CompletedRemovalNativeProofTests(unittest.TestCase):
+    """Real retained/native validators after authoritative Docker-ID deletion."""
+    def setUp(self):
+        import copy
+        CompletedRecreationContinuationTests.setUp(self)
+        self.selected=self.root/'selected';self.selected.mkdir()
+        self.control.volume='fixture-control';self.control.namespace=''
+        self.control.identity={'project_name':'fixture','project_id':'project','worktree_id':'worktree','checkout_kind':'worktree'}
+        self.control.path=dev.BuildControl.path
+        self.control.helper_args=lambda script:['fixture-helper',script]
+        self.document={'name':'fixture','services':{},'volumes':{}}
+        self.snapshot={}
+        for role,identifier in [('backend',BACKEND_ID),('frontend','f'*64)]:
+            labels={'com.docker.compose.project':'fixture','com.docker.compose.service':role,
+                'org.fullmag.source.worktree-id':'worktree'}
+            environment={'FULLMAG_STARTUP_ENABLED':'0'} if role=='backend' else {'FULLMAG_FRONTEND_HOST_PORT':'3202'}
+            volumes=[{'type':'bind','source':str(self.selected),'target':'/opt/fullmag/source','read_only':True}]
+            technical=[('/build','build'),('/opt/fullmag/package','package'),('/opt/fullmag/control','control')] if role=='backend' else [('/state/development','frontend'),('/opt/fullmag/control','control')]
+            for target,name in technical:
+                self.document['volumes'][name]={'name':'fixture-'+name}
+                volumes.append({'type':'volume','source':name,'target':target,'read_only':role=='frontend' and name=='control'})
+            self.document['services'][role]={'image':IMAGE_ID,'labels':labels,'environment':environment,'volumes':volumes,
+                'x-fullmag-daemon-binds':{'/opt/fullmag/source':str(self.selected)}}
+            self.snapshot[role]={'Id':identifier,'Image':IMAGE_ID,
+                'Config':{'Labels':copy.deepcopy(labels),'Env':[k+'='+v for k,v in environment.items()]},
+                'HostConfig':{'ReadonlyRootfs':True,'Privileged':False},
+                'Mounts':[{'Destination':m['target'],'Type':m['type'],'RW':not m['read_only'],
+                    **({'Source':m['source']} if m['type']=='bind' else {'Name':'fixture-'+m['source']})} for m in volumes],
+                'State':{'Running':False,'StartedAt':'2026-10-19T10:00:00.000000000Z',
+                    'FinishedAt':'2026-10-19T10:00:10.000000000Z','ExitCode':1 if role=='backend' else 0}}
+        self.control.read.return_value=self.document
+        self.document['services']['frontend']['ports']=[{'host_ip':'127.0.0.1','mode':'ingress','protocol':'tcp','target':8080,'published':'3202'}]
+        self.args.config_sha256=hashlib.sha256(dev.canonical(self.document)).hexdigest()
+        self.args.gpu_access='required';self.args.include_untracked=[]
+        self.previous['config_sha256']=self.args.config_sha256
+        self.previous['inputs'].update(source_root=str(self.selected),source_project_id='project',
+            source_worktree_id='worktree',source_checkout_kind='worktree',
+            native_failed_restart={'container_id':'a'*64})  # An older generation is never copied.
+        self.completed['inputs']['config_sha256']=self.args.config_sha256
+        self.completed['control_volume']=self.control.volume
+        probe=after_ready_native_probe();ready=probe['process_receipt']['service_owner'];owner=probe['failed_owner']
+        owner_raw=dev.canonical(owner)+b'\n';probe['failed_owner_sha256']=hashlib.sha256(owner_raw).hexdigest()
+        terminal={**terminal_receipt(),'service_owner':ready}
+        self.config_raw=b'{"schema_version":"runtime_service.v1"}\n'
+        self.journal={'schema':'fullmag.stop-failed-admission.v1','state':'stopped-confirmed',
+            'failure_kind':'native-after-ready-failure','container_id':BACKEND_ID,'image_id':IMAGE_ID,'exit_code':1,
+            'failure_receipt':{'sha256':'d'*64,'receipt':probe['process_receipt']},'native_failure_probe':probe,
+            'retained_ready_owner':ready,'terminal_process_receipt':terminal,'terminal_retained_ready_owner':ready,
+            'terminal_failed_owner':owner,'terminal_failed_owner_sha256':hashlib.sha256(owner_raw).hexdigest(),
+            'container_state':NativeFailedRecreateTests.container_state(),
+            'previous_config_sha256':hashlib.sha256(self.config_raw).hexdigest()}
+        base='recreate-services/attempts/'+self.args.completed_recreation_attempt
+        prior='development/attempts/'+self.args.attempt
+        completed_raw=dev.canonical(self.completed)+b'\n';prior_raw=dev.canonical(self.previous)+b'\n'
+        self.args.completed_recreation_sha256=hashlib.sha256(completed_raw).hexdigest()
+        self.records={base+'/'+name:completed_raw for name in ('terminal.json','receipt.json')}
+        self.records.update({name:completed_raw for name in ('recreate-services/current.json','recreate-services/verified.json')})
+        self.records.update({name:prior_raw for name in (prior+'/terminal.json','development/current.json','development/verified.json')})
+        self.records.update({prior+'/compose.json':dev.canonical(self.document)+b'\n',
+            base+'/retained-containers.json':dev.canonical(self.snapshot)+b'\n',
+            'verification/stop-failed-'+BACKEND_ID+'.json':dev.canonical(self.journal)+b'\n',
+            'runtime-control/runtime-service/process-tree.json':dev.canonical(terminal)+b'\n',
+            'runtime-control/runtime-services/OWNER.json':owner_raw})
+        self.calls=[]
+
+    def invoke(self, ordinary=False):
+        import types,docker_volume_container_recovery as recovery
+        def read(control,path,*,optional=False):
+            if path in self.records:return self.records[path]
+            if optional:return None
+            raise AssertionError('Unexpected proof read: '+path)
+        def docker(*args,**kwargs):
+            self.calls.append(args)
+            if args[0]=='inspect':return CompletedProcess(args,1,b'',('Error: No such object: '+args[1]).encode())
+            if args[0]=='ps':return CompletedProcess(args,0,b'',b'')
+            raise AssertionError('Unexpected Docker mutation: '+str(args))
+        host=types.SimpleNamespace(HOST_CERT_PATH='/run/fullmag/linux-native-host.json',
+            OWNER_NAME='.fullmag-linux-native-owner.json',read_owned_regular=lambda path:json.dumps(self.cert).encode())
+        with patch.object(stop_unadmitted,'_control_bytes',side_effect=read), \
+             patch.object(dev,'docker_capture',side_effect=docker), \
+             patch.object(recovery,'docker_capture',side_effect=docker), \
+             patch.object(reconcile,'docker_capture',side_effect=AssertionError('Removed backend must not be inspected as stopped')), \
+             patch.object(dev,'docker_text',return_value=json.dumps([{'Id':IMAGE_ID,'Config':{}}])), \
+             patch.object(dev,'bounded_capture',return_value=CompletedProcess([],0,self.config_raw,b'')), \
+             patch.object(dev,'_operator_probe_record_from_retained',return_value={}), \
+             patch.object(dev,'_session_host',return_value=host):
+            if ordinary:
+                self.args.resume_recreation=self.args.completed_recreation_attempt
+                return dev._validate_recreation_resume_records(self.args,self.control,self.selected,self.control.identity)
+            return dev._completed_recreation_start_context(self.control,self.args,self.selected,{'runtime_root':self.root})
+
+    def test_completed_removal_revalidates_real_native_proof_without_stopped_inspection(self):
+        context=self.invoke()
+        self.assertEqual(context['native_restart_metadata']['container_id'],BACKEND_ID)
+        self.assertEqual(context['native_restart_metadata']['failure_kind'],'native-after-ready-failure')
+        self.assertEqual(context['native_restart_metadata']['journal_sha256'],hashlib.sha256(self.records['verification/stop-failed-'+BACKEND_ID+'.json']).hexdigest())
+        self.assertEqual(context['previous_config_sha256'],hashlib.sha256(self.config_raw).hexdigest())
+        self.assertTrue(any(call[0]=='ps' for call in self.calls))
+        self.control.write.assert_not_called()
+
+    def test_snapshot_journal_owner_process_and_cas_tampering_are_refused(self):
+        import copy
+        base='recreate-services/attempts/'+self.args.completed_recreation_attempt
+        journal='verification/stop-failed-'+BACKEND_ID+'.json'
+        cases=[(base+'/retained-containers.json',lambda value:value['backend']['State'].update(FinishedAt='changed')),
+            (base+'/retained-containers.json',lambda value:value['frontend']['Config']['Labels'].update({'com.docker.compose.project':'foreign'})),
+            (journal,lambda value:value['container_state'].update(finished_at='changed')),
+            ('runtime-control/runtime-services/OWNER.json',lambda value:value.update(pid=9999)),
+            ('runtime-control/runtime-service/process-tree.json',lambda value:value.update(api_exit_code=9)),
+            ('recreate-services/verified.json',lambda value:value.update(state='failed'))]
+        original=copy.deepcopy(self.records)
+        for path,mutate in cases:
+            with self.subTest(path=path):
+                self.records=copy.deepcopy(original);value=json.loads(self.records[path]);mutate(value)
+                self.records[path]=dev.canonical(value)+b'\n'
+                with self.assertRaises(dev.BuildControlError):self.invoke()
+
+    def test_recheck_pins_even_nonsemantic_retained_snapshot_changes(self):
+        before=self.invoke()
+        path='recreate-services/attempts/'+self.args.completed_recreation_attempt+'/retained-containers.json'
+        snapshot=json.loads(self.records[path]);snapshot['frontend']['Name']='/retained-name-changed'
+        self.records[path]=dev.canonical(snapshot)+b'\n'
+        after=self.invoke()
+        self.assertEqual(before['native_restart_metadata'],after['native_restart_metadata'])
+        self.assertNotEqual(before['reuse_state'],after['reuse_state'])
+
+    def test_runtime_config_digest_drift_is_refused(self):
+        self.config_raw=b'{"changed":true}'
+        with self.assertRaisesRegex(dev.BuildControlError,'runtime configuration digest differs'):self.invoke()
+
+    def test_ordinary_resume_still_refuses_active_lease_before_removed_proof(self):
+        self.records['active']=b'3'*32+b'\n'
+        with self.assertRaisesRegex(dev.BuildControlError,'lease is still active'):self.invoke(ordinary=True)
+        # Immutable completed-start rechecking is safe under its already-owned
+        # start lease; it cannot create/release a lease or mutate the daemon.
+        context=self.invoke()
+        self.assertEqual(context['native_restart_metadata']['container_id'],BACKEND_ID)
+        self.control.write.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3128,3 +3128,95 @@ describe("ObjectVisualizationController", () => {
     });
   });
 });
+
+describe("authored object quantity context", () => {
+  type ContextObject = NonNullable<import("../api/apiTypes").SceneResource["objects"]>[number];
+  type Catalog = import("../api/apiTypes").QuantityCatalogResource;
+  const target = { kind: "object" as const, id: "object:source" };
+  const emptyObject: ContextObject = { id: "source", role: "antenna" };
+
+  function catalog(id = "m", domain = "magnetic_only"): Catalog {
+    return {
+      schema_version: "1.0",
+      quantities: [{
+        id, label: id, description: "", domain, shape: "vector_field", unit: "1",
+        n_comp: 3, location: "node", normalization_hint: "none",
+        interactive_preview: true, supports_preview_2d: true, supports_preview_3d: true,
+        supports_history: false, supports_export: true, capability_state: "supported",
+        solver_capability: "supported", requestable: true, renderable: true,
+        materializable: true, materialization_state: "complete", publication_state: "interactive",
+        resolved_capability: {
+          quantity_id: id, provider: "available", request: "field_vector",
+          materialization: "materialized", render: "renderable", publication: "interactive",
+          scope: "object", lane: "test", precision: "double", carriers: [],
+        },
+      }],
+    };
+  }
+
+  function resolve(object: ContextObject | null, quantities: Catalog | null, quantityId = "m") {
+    const controller = new ObjectVisualizationController();
+    controller.patchTarget(target, { activeQuantityId: quantityId, vectorsVisible: true });
+    return resolveTargetVisualization({
+      snapshot: controller.getSnapshot(), target,
+      objectContext: { object, quantityCatalog: quantities },
+    });
+  }
+
+  it("never substitutes a magnetic default for unknown objects or catalogs", () => {
+    expect(resolve(null, catalog()).settings.activeQuantityId).toBe("");
+    expect(resolve(emptyObject, null).settings.activeQuantityId).toBe("");
+  });
+
+  it("uses authored physics rather than the presentation role", () => {
+    expect(resolve(emptyObject, catalog()).settings.activeQuantityId).toBe("");
+    expect(resolve({ ...emptyObject, role: "magnet" }, catalog()).settings.activeQuantityId).toBe("");
+    expect(resolve({ ...emptyObject, magnetization_ref: "texture" }, catalog()).settings.activeQuantityId).toBe("m");
+  });
+
+  it("does not hide magnetic authoring supplied by regions or parameter assignments", () => {
+    const region: NonNullable<ContextObject["regions"]>[number] = {
+      region_id: "core", owner_object: "source", name: "core",
+      shape: { kind: "sphere", center: [0, 0, 0], radius: 1 },
+      material_overrides: [{
+        parameter: "ms",
+        value: { kind: "constant", value: 8e5 },
+      }],
+    };
+    expect(resolve({ ...emptyObject, regions: [region] }, catalog()).settings.activeQuantityId).toBe("m");
+    expect(resolve({
+      ...emptyObject,
+      material_parameter_fields: [{
+        assignment_id: "ms", owner_object: "source", parameter: "ms",
+        value: { kind: "constant", value: 8e5 },
+      }],
+    }, catalog()).settings.activeQuantityId).toBe("m");
+  });
+
+  it("requires canonical provider capability even with explicitly assigned magnetization", () => {
+    const unavailable = catalog();
+    unavailable.quantities[0].resolved_capability!.provider = "unavailable";
+    expect(resolve({ ...emptyObject, magnetization_ref: "texture" }, unavailable).settings.activeQuantityId).toBe("");
+  });
+
+  it("retains supported nonmagnetic fields without a role or field-ID allowlist", () => {
+    expect(resolve(emptyObject, catalog("test_source_field", "full_domain"), "test_source_field")
+      .settings.activeQuantityId).toBe("test_source_field");
+    const historical = catalog("H_ant", "full_domain");
+    historical.quantities[0].resolved_capability!.lane = "artifact_inspection_read_only";
+    historical.quantities[0].materializable = false;
+    expect(resolve(emptyObject, historical, "H_ant").settings.activeQuantityId).toBe("H_ant");
+  });
+
+  it("keeps geometry passes while refusing unselected field-dependent passes", () => {
+    const result = resolve(emptyObject, catalog());
+    expect(result.settings.vectorsVisible).toBe(true);
+    expect(result.effectiveSettings).toMatchObject({
+      activeQuantityId: "", shaderVisible: false, vectorsVisible: false,
+    });
+    expect(resolveEffectiveVisualizationSettings({
+      ...result.settings, surfaceColorSource: "solid", shaderVisible: true,
+      wireframeVisible: true, pointsVisible: true,
+    })).toMatchObject({ shaderVisible: true, wireframeVisible: true, pointsVisible: true, vectorsVisible: false });
+  });
+});

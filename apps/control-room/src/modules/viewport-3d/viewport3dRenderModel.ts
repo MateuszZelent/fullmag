@@ -2777,7 +2777,7 @@ function buildVectorLineSegmentsFromPositions(
 ): Float32Array | null {
   if (
     !fieldVector ||
-    fieldVector.nComp < 3 ||
+    fieldVector.nComp !== 3 ||
     fieldVector.pointCount === 0 ||
     topology.nodeCount === 0
   ) {
@@ -2923,7 +2923,7 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
 ): Float32Array | null {
   if (
     !fieldVector ||
-    fieldVector.nComp < 3 ||
+    fieldVector.nComp !== 3 ||
     fieldVector.pointCount === 0 ||
     topology.nodeCount === 0
   ) {

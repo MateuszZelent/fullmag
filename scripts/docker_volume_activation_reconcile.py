@@ -673,9 +673,10 @@ def _validate_activation_receipt(
     source_root: str,
     image_id: str,
     backend_id: str,
+    receipt_raw: bytes | None = None,
 ) -> tuple[dict[str, object], bytes, dict[str, object]]:
     root = "activation/attempts/" + activation_attempt
-    raw = _control_bytes(control, root + "/receipt.json")
+    raw = _control_bytes(control, root + "/receipt.json") if receipt_raw is None else receipt_raw
     if raw is None:
         raise _fail("Unknown activation has no durable receipt")
     receipt = _json(raw, "unknown activation receipt")

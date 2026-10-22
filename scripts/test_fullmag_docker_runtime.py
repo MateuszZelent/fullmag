@@ -3290,7 +3290,15 @@ class DockerRuntimeContract(unittest.TestCase):
         for scenario in ("no_authorization", "wrong_hash", "profile_change", "corrupt_backup"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory).resolve()
-                paths = replace(service.RuntimePaths(), config=root / "runtime.json")
+                paths = replace(
+                    service.RuntimePaths(),
+                    state=root,
+                    storage=root,
+                    runs=root / "runs" / service.WORKTREE_ID,
+                    store=root / "runs" / service.WORKTREE_ID / "session-store",
+                    state_root=root / ".fullmag",
+                    config=root / "runtime.json",
+                )
                 old = self.host_profile_fixture(service)["configuration"]
                 expected = copy.deepcopy(old)
                 expected["host_execution"]["runtime_generation_sha256"] = "b" * 64
@@ -3308,9 +3316,16 @@ class DockerRuntimeContract(unittest.TestCase):
                     (root / f"docker-all.previous-{old_sha}.json").write_bytes(b"different history")
                 with patch.dict(os.environ, environment, clear=True), patch.object(
                         service, "initialize_host_configuration", return_value=expected):
-                    with self.assertRaises(service.RuntimeServiceError):
-                        service.ensure_configuration(paths)
+                    if scenario in {"no_authorization", "wrong_hash"}:
+                        with self.assertRaisesRegex(
+                                service.RuntimeServiceError, "owner lock is missing"):
+                            service.ensure_configuration(paths)
+                    else:
+                        with self.assertRaises(service.RuntimeServiceError):
+                            service.ensure_configuration(paths)
                 self.assertEqual(paths.config.read_bytes(), original)
+                if scenario in {"no_authorization", "wrong_hash"}:
+                    self.assertFalse((root / f"docker-all.previous-{old_sha}.json").exists())
 
     @unittest.skipIf(os.name == "nt", "Guest publication fsync is qualified on Linux")
     def test_recreate_requires_existing_config_and_can_pin_legacy_generation(self):

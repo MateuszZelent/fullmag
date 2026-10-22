@@ -66,6 +66,30 @@ class DockerDevDefaultsTests(unittest.TestCase):
         fallback = self._defaults(self.main, environment={})
         self.assertEqual(fallback.source_root, self.main)
 
+    def test_worktree_toolchain_uses_main_dotenv_and_bounded_keys(self) -> None:
+        (self.main / ".env").write_text(
+            "FULLMAG_CUDA_ARCHITECTURES='86-real;86-virtual'\n"
+            "FULLMAG_MFEM_BUILD_JOBS=2\nUNRELATED_SECRET=private\n")
+        (self.worktree / ".env").write_text("FULLMAG_MFEM_BUILD_JOBS=99\n")
+        with patch.object(defaults, "_known_checkouts", return_value=self.known):
+            values = defaults.configured_toolchain_environment(self.worktree, {})
+        self.assertEqual(values, {"FULLMAG_CUDA_ARCHITECTURES": "86-real;86-virtual",
+                                  "FULLMAG_MFEM_BUILD_JOBS": "2"})
+
+    def test_toolchain_process_override_preserves_other_main_settings(self) -> None:
+        (self.main / ".env").write_text(
+            "FULLMAG_MFEM_BUILD_JOBS=2\nFULLMAG_HYPRE_GPU_ARCHITECTURES=86\n")
+        with patch.object(defaults, "_known_checkouts", return_value=self.known):
+            values = defaults.configured_toolchain_environment(
+                self.worktree, {"FULLMAG_MFEM_BUILD_JOBS": "4",
+                                "FULLMAG_HYPRE_GPU_ARCHITECTURES": ""})
+        self.assertEqual(values, {"FULLMAG_MFEM_BUILD_JOBS": "4",
+                                  "FULLMAG_HYPRE_GPU_ARCHITECTURES": "86"})
+
+    def test_absent_toolchain_settings_leave_compose_defaults(self) -> None:
+        with patch.object(defaults, "_known_checkouts", return_value=self.known):
+            self.assertEqual(defaults.configured_toolchain_environment(self.worktree, {}), {})
+
     def test_port_priority_and_conflicts_fail_closed(self) -> None:
         self.assertEqual(self._defaults(self.main, port=3210).port, 3210)
         self.assertEqual(

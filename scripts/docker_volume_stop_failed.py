@@ -607,6 +607,245 @@ def _native_failure_probe_cas(probe: Mapping[str, object]) -> tuple[object, ...]
     )
 
 
+SUPERVISION_FAILURE_SCHEMA = 'fullmag.docker-runtime-supervision-failure-stop-probe.v1'
+SUPERVISION_FAILURE_KIND = 'native-runtime-supervision-failure'
+SUPERVISION_FAILURE_ERROR = 'runtime service owner observation failed during supervision: runtime service owner is not ready'
+
+
+def _runtime_supervision_probe_script():
+    # Reuse the fixed no-follow readers/lock helpers, not the startup-only proof.
+    prelude, separator, _ = _native_failure_probe_script().partition("\nif os.environ.get('FULLMAG_RUNTIME_PROCESS_RECEIPT'")
+    if not separator:
+        raise BuildControlError('native failure probe prelude changed')
+    return prelude + r"""
+import sys, uuid, datetime, re
+sys.path.insert(0,'/opt/fullmag')
+import runtime_service
+
+def canon(value): return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
+def sha(raw): return hashlib.sha256(raw).hexdigest()
+def empty(root):
+ if not root.is_dir() or any(p.is_symlink() for p in (root,*root.parents)): raise RuntimeError('unsafe accepted inventory')
+ if any(root.iterdir()): raise RuntimeError('accepted runs or pending transactions exist')
+paths=runtime_service.canonical_paths()
+if (str(runtime_service.process_receipt_path(paths))!=CANONICAL_RECEIPT
+ or os.environ.get('FULLMAG_RUNTIME_PROCESS_RECEIPT',CANONICAL_RECEIPT)!=CANONICAL_RECEIPT
+ or os.environ.get('FULLMAG_HOST_LEDGER_ROOT',CANONICAL_LEDGER)!=CANONICAL_LEDGER
+ or os.environ.get('FULLMAG_ACCEPTED_STORE_SCOPE')
+ or paths.store!=pathlib.Path(os.environ['FULLMAG_RUNS_ROOT'])/'session-store'):
+ raise RuntimeError('runtime/store/ledger selection differs')
+if os.environ.get('FULLMAG_STARTUP_ENABLED','0')!='0' or os.path.lexists('/state/.fullmag/docker-startup/activation.json'):
+ raise RuntimeError('startup activation is outside supervision recovery')
+receipt_raw=read_regular(CANONICAL_RECEIPT,'process receipt'); receipt=json.loads(receipt_raw)
+if (receipt.get('schema')!='fullmag.docker-process-tree.v1' or receipt.get('state')!='failed_outcome_retained'
+ or receipt.get('error')!='runtime service owner observation failed during supervision: runtime service owner is not ready'
+ or type(receipt.get('api_exit_code')) is not int or 'terminal_service_owner' in receipt
+ or 'startup_activation' in receipt or receipt.get('runtime_pid') is not None
+ or receipt.get('accepted_store')!=str(paths.store)):
+ raise RuntimeError('not the supported retained supervision failure')
+pin=receipt.get('service_owner');runtime_service._validate_terminal_owner(pin,state='ready',name='supervision ready pin')
+owner_root=runtime_service.runtime_services_root(paths)
+owner_fd=lock_file(owner_root/'OWNER.lock','native owner lock')
+try:
+ owner_raw=read_regular(owner_root/'OWNER.json','failed owner');owner=json.loads(owner_raw)
+ children=owner.get('children')
+ if (owner.get('state')!='failed' or not isinstance(children,list) or len(children)!=2
+  or any(not isinstance(x,dict) or set(x)!={'role','pid','status'} for x in children)
+  or {x.get('role') for x in children}!={'compute','preparation'}
+  or any(x.get('status') not in {'exited_success','exited_failure'} for x in children)
+  or not any(x.get('status')=='exited_failure' for x in children)):
+  raise RuntimeError('failed owner lacks terminal failed-child evidence')
+ if runtime_service._owner_child_identity(owner)!=runtime_service._owner_child_identity(pin):
+  raise RuntimeError('terminal children differ from ready pin')
+ expected=dict(pin,state='failed',heartbeat_at=owner.get('heartbeat_at'),children=children)
+ if owner!=expected: raise RuntimeError('failed owner identity differs from ready pin')
+ def timestamp(value):
+  # Chrono DateTime<Utc> serializes UTC with Z and up to nine fraction digits.
+  match=re.fullmatch(r'([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.([0-9]{1,9}))?Z',value) if isinstance(value,str) else None
+  if match is None:raise RuntimeError('invalid native UTC heartbeat')
+  return (datetime.datetime.fromisoformat(match[1]),int((match[2] or '').ljust(9,'0')))
+ if timestamp(owner['heartbeat_at'])<timestamp(pin['heartbeat_at']): raise RuntimeError('failed heartbeat predates ready pin')
+ pids=[receipt.get('api_pid'),owner.get('pid'),*[x.get('pid') for x in children]]
+ if any(type(pid) is not int or pid<=0 for pid in pids) or len(set(pids))!=4 or any(os.path.exists('/proc/'+str(pid)) for pid in pids):
+  raise RuntimeError('API/native owner/child is live or ambiguous')
+ host_raw=read_regular(paths.host_certificate,'Windows certificate');host=json.loads(host_raw)
+ host_owner_raw=read_regular(paths.state/'.fullmag-windows-folder-owner.json','Windows owner');host_owner=json.loads(host_owner_raw)
+ grant_raw=read_regular(paths.state/'.fullmag-windows-folder-grant.json','Windows grant');grant=json.loads(grant_raw)
+ if (canon(host_owner)!=canon(host) or host.get('schema')!='fullmag.windows-folder-host.v1' or host.get('storage_profile')!='windows-folder-v1'
+  or host.get('restart_verified') is not True or grant.get('state')!='operational'
+  or grant.get('schema')!='fullmag.windows-folder-session.v1' or grant.get('container_root')!='/state'
+  or grant.get('host_attestation_sha256')!=sha(host_raw) or grant.get('owner_token')!=host.get('owner_token')):
+  raise RuntimeError('Windows owner/admission differs')
+ token=host['owner_token'];relative=paths.store.relative_to(paths.state).as_posix()
+ if str(uuid.UUID(token))!=token or uuid.UUID(token).int==0 or type(host.get('host_volume_serial')) is not int or host['host_volume_serial']<=0 or relative=='.':
+  raise RuntimeError('invalid admitted store identity')
+ identity={'schema':'fullmag.docker-admitted-store-identity.v2','host_root':host['host_root'].replace('\\','/').translate(str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')),
+  'host_volume_serial':host['host_volume_serial'],'engine_id':host['engine_id'],'owner_token':token,'relative_state_path':relative}
+ store_id='sha256:'+sha(canon(identity))
+ ledger=pathlib.Path(CANONICAL_LEDGER);ledger_fd=lock_file(ledger/'WRITER.lock','host ledger writer')
+ try:
+  store_fd=lock_file(paths.store/'WRITER.lock','accepted store writer')
+  try:
+   for name in ('runs','temp','recovery'):empty(paths.store/name)
+   reservations=read_json(ledger/'HOST_RESOURCE_LEDGER.json','host ledger').get('reservations')
+   if not isinstance(reservations,list):raise RuntimeError('ledger reservations missing')
+   for row in reservations:
+    item=row.get('identity') if isinstance(row,dict) else None;candidate=item.get('store_id') if isinstance(item,dict) else None
+    if not isinstance(candidate,str) or len(candidate)!=71 or not candidate.startswith('sha256:') or any(c not in '0123456789abcdef' for c in candidate[7:]):
+     raise RuntimeError('reservation ownership is unknown')
+    if candidate==store_id:raise RuntimeError('affected store has a host reservation')
+   config_raw=read_regular(paths.config,'runtime config')
+   if (read_regular(CANONICAL_RECEIPT,'process receipt')!=receipt_raw or read_regular(owner_root/'OWNER.json','failed owner')!=owner_raw
+    or read_regular(paths.host_certificate,'Windows certificate')!=host_raw
+    or read_regular(paths.state/'.fullmag-windows-folder-owner.json','Windows owner')!=host_owner_raw
+    or read_regular(paths.state/'.fullmag-windows-folder-grant.json','Windows grant')!=grant_raw
+    or any(os.path.exists('/proc/'+str(pid)) for pid in pids)):
+    raise RuntimeError('supervision evidence changed')
+   print(json.dumps({'schema':'fullmag.docker-runtime-supervision-failure-stop-probe.v1','process_receipt_sha256':sha(receipt_raw),
+    'ready_pin_sha256':sha(canon(pin)),'failed_owner_sha256':sha(owner_raw),'config_sha256':sha(config_raw),
+    'accepted_store_id':store_id,'windows_certificate_sha256':sha(host_raw),'api_pid':pids[0],'runtime_pid':pids[1],
+    'terminal_children':[{key:child[key] for key in ('role','pid','status')} for child in children],'processes_absent':True,'runs_empty':True,'transients_empty':True,'affected_reservations_empty':True},sort_keys=True))
+  finally:fcntl.flock(store_fd,fcntl.LOCK_UN);os.close(store_fd)
+ finally:fcntl.flock(ledger_fd,fcntl.LOCK_UN);os.close(ledger_fd)
+finally:fcntl.flock(owner_fd,fcntl.LOCK_UN);os.close(owner_fd)
+"""
+
+
+def _validate_supervision_probe(probe, expected_sha):
+    if not isinstance(probe, Mapping) or probe.get('schema') != SUPERVISION_FAILURE_SCHEMA or probe.get('process_receipt_sha256') != expected_sha:
+        raise BuildControlError('runtime supervision proof identity differs')
+    if set(probe)!={'schema','process_receipt_sha256','ready_pin_sha256','failed_owner_sha256','config_sha256','windows_certificate_sha256','accepted_store_id','api_pid','runtime_pid','terminal_children','processes_absent','runs_empty','transients_empty','affected_reservations_empty'}:
+        raise BuildControlError('runtime supervision proof has unexpected fields')
+    for key in ('process_receipt_sha256','ready_pin_sha256','failed_owner_sha256','config_sha256','windows_certificate_sha256'):
+        if not isinstance(probe.get(key),str) or re.fullmatch('[0-9a-f]{64}',probe[key]) is None:
+            raise BuildControlError('runtime supervision proof has invalid '+key)
+    if not isinstance(probe.get('accepted_store_id'),str) or re.fullmatch('sha256:[0-9a-f]{64}',probe['accepted_store_id']) is None:
+        raise BuildControlError('runtime supervision store identity differs')
+    if any(probe.get(key) is not True for key in ('processes_absent','runs_empty','transients_empty','affected_reservations_empty')):
+        raise BuildControlError('runtime supervision has live/accepted/ambiguous work')
+    children=probe.get('terminal_children')
+    if (not isinstance(children,list) or len(children)!=2 or any(not isinstance(row,dict) or set(row)!={'role','pid','status'} for row in children)
+            or {row.get('role') for row in children}!={'compute','preparation'}
+            or any(row.get('status') not in {'exited_success','exited_failure'} for row in children)
+            or not any(row.get('status')=='exited_failure' for row in children)):
+        raise BuildControlError('runtime supervision terminal child evidence differs')
+    pids=[probe.get('api_pid'),probe.get('runtime_pid'),*[row.get('pid') for row in children]]
+    if any(type(pid) is not int or pid<=0 for pid in pids) or len(set(pids))!=4:
+        raise BuildControlError('runtime supervision process identity is ambiguous')
+    return dict(probe)
+
+
+def _supervision_terminal_proof(control, probe):
+    from docker_volume_stop_unadmitted import _control_bytes
+    raw=_control_bytes(control,'runtime-control/runtime-service/process-tree.json')
+    owner_raw=_control_bytes(control,'runtime-control/runtime-services/OWNER.json')
+    terminal=json.loads(raw)
+    pin=terminal.get('service_owner')
+    if (terminal.get('schema')!='fullmag.docker-process-tree.v1' or terminal.get('state')!='shutdown_unknown'
+            or terminal.get('error')!=SUPERVISION_FAILURE_ERROR or terminal.get('shutdown_error')!='runtime service owner is not ready'
+            or terminal.get('api_pid')!=probe['api_pid'] or type(terminal.get('api_exit_code')) is not int
+            or terminal.get('runtime_pid') is not None or 'terminal_service_owner' in terminal or 'startup_activation' in terminal
+            or not isinstance(pin,dict) or hashlib.sha256(json.dumps(pin,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()!=probe['ready_pin_sha256']
+            or hashlib.sha256(owner_raw).hexdigest()!=probe['failed_owner_sha256']):
+        raise BuildControlError('stopped supervision receipt/pin/failed owner changed')
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _stop_runtime_supervision_failure(args, selected, identity, actual):
+    from docker_build_control import toolchain_configuration, canonical
+    from docker_volume_reconcile import fingerprint
+    from docker_volume_dev import _validate_retained_service, _assert_private_restart_network, _read_runtime_config_digest
+    configured=toolchain_configuration(selected,identity)
+    control=BuildControl(identity,configured['services']['fem-gpu-toolchain']['build']['args']['FULLMAG_CUDA_BASE_IMAGE'])
+    previous=control.read('development/current.json');attempt=previous.get('attempt')
+    if (previous.get('state')!='succeeded' or previous.get('compose_project')!=control.project
+            or not isinstance(attempt,str) or re.fullmatch('[0-9a-f]{32}',attempt) is None
+            or previous.get('inputs',{}).get('source_root')!=str(selected)
+            or previous.get('backend_container')!=args.container_id):
+        raise BuildControlError('supervision stop has no exact retained development authority')
+    base='development/attempts/'+attempt;document=control.read(base+'/compose.json')
+    config_sha=hashlib.sha256(canonical(document)).hexdigest()
+    if previous.get('config_sha256')!=config_sha or control.read(base+'/terminal.json')!=previous:
+        raise BuildControlError('retained development/config CAS differs')
+    ids={'backend':args.container_id,'frontend':previous.get('frontend_container')}
+    image_config=json.loads(docker_capture('image','inspect',args.image_id).stdout)[0]['Config']
+    initial={}
+    def services():
+        current={name:json.loads(docker_capture('inspect',identifier).stdout)[0] for name,identifier in ids.items()}
+        for name,value in current.items():
+            if value.get('Id')!=ids[name] or value.get('Image')!=args.image_id:
+                raise BuildControlError('supervision stop service identity differs')
+            _validate_retained_service(document,value,name,image_config)
+            if initial and (value['State']['StartedAt'],fingerprint(value))!=initial[name]:
+                raise BuildControlError('supervision stop service incarnation/config changed')
+        return current
+    current=services();_assert_private_restart_network(current,ids,control.project)
+    if current['backend']['State']['StartedAt']!=actual['State']['StartedAt'] or fingerprint(current['backend'])!=fingerprint(actual):
+        raise BuildControlError('backend changed since the pinned failed observation')
+    initial.update({name:(value['State']['StartedAt'],fingerprint(value)) for name,value in current.items()})
+    def probe():
+        value=json.loads(docker_capture('exec',args.container_id,'/usr/local/bin/python3','-B','-c',_runtime_supervision_probe_script(),timeout=90).stdout)
+        return _validate_supervision_probe(value,args.process_receipt_sha256)
+    journal_path='verification/stop-failed-'+args.container_id+'.json'
+    with control.operation('stop-failed-runtime',{'source_root':str(selected),'container_id':args.container_id,
+            'image_id':args.image_id,'process_receipt_sha256':args.process_receipt_sha256,'attempt':attempt,'config_sha256':config_sha}) as operation:
+        if (control.read('development/current.json')!=previous or control.read(base+'/terminal.json')!=previous
+                or control.read(base+'/compose.json')!=document):
+            raise BuildControlError('retained development authority changed before stop')
+        if control.read(journal_path,optional=True) is not None:
+            raise BuildControlError('supervision stop journal already exists')
+        before=probe();current=services();_assert_private_restart_network(current,ids,control.project)
+        if _read_runtime_config_digest(control)!=before['config_sha256']:
+            raise BuildControlError('runtime config changed before supervision stop')
+        journal={'schema':'fullmag.stop-failed-admission.v1','state':'stopping-confirmed-failed-supervisor',
+            'failure_kind':SUPERVISION_FAILURE_KIND,'container_id':args.container_id,'image_id':args.image_id,
+            'source_root':str(selected),'development_attempt':attempt,'compose_config_sha256':config_sha,
+            'supervision_probe':before,'previous_config_sha256':before['config_sha256'],'operation_attempt':operation['receipt']['attempt']}
+        control.write(journal_path,journal)
+        current=services();_assert_private_restart_network(current,ids,control.project)
+        if (probe()!=before or current['backend']['State'].get('Running') is not True
+                or control.read('development/current.json')!=previous):
+            raise BuildControlError('supervision stop proof changed before stop')
+        operation['daemon_pending']=True
+        docker_capture('stop','--time','60',args.container_id,timeout=90)
+        after=services()['backend']
+        if after['State'].get('Running') is not False or after['State'].get('Pid')!=0 or type(after['State'].get('ExitCode')) is not int:
+            raise BuildControlError('supervision namespace stop is unconfirmed')
+        terminal_sha=_supervision_terminal_proof(control,before)
+        if _read_runtime_config_digest(control)!=before['config_sha256']:
+            raise BuildControlError('runtime config changed after supervision stop')
+        journal.update(state='stopped-confirmed',exit_code=after['State']['ExitCode'],terminal_process_receipt_sha256=terminal_sha,
+                       stopped_started_at=after['State']['StartedAt'],namespace_processes_absent=True)
+        control.write(journal_path,journal)
+        operation['daemon_pending']=False;operation['receipt']['state']='succeeded'
+    print(json.dumps({'state':'stopped-confirmed','failure_kind':SUPERVISION_FAILURE_KIND,'container_id':args.container_id}))
+
+
+def _supervision_failed_restart_context(control, previous, journal, journal_raw, backend_id, fresh_state):
+    if (fresh_state or journal.get('schema')!='fullmag.stop-failed-admission.v1' or journal.get('state')!='stopped-confirmed'
+            or journal.get('container_id')!=backend_id or journal.get('image_id')!=previous.get('inputs',{}).get('image_id')
+            or journal.get('source_root')!=previous.get('inputs',{}).get('source_root')
+            or journal.get('development_attempt')!=previous.get('attempt')
+            or journal.get('compose_config_sha256')!=previous.get('config_sha256')
+            or journal.get('namespace_processes_absent') is not True or type(journal.get('exit_code')) is not int):
+        raise BuildControlError('runtime supervision stopped namespace proof differs')
+    probe=journal.get('supervision_probe');_validate_supervision_probe(probe,probe.get('process_receipt_sha256') if isinstance(probe,dict) else None)
+    if _supervision_terminal_proof(control,probe)!=journal.get('terminal_process_receipt_sha256'):
+        raise BuildControlError('runtime supervision terminal receipt changed')
+    from docker_volume_dev import _read_runtime_config_digest
+    if _read_runtime_config_digest(control)!=journal.get('previous_config_sha256') or journal['previous_config_sha256']!=probe['config_sha256']:
+        raise BuildControlError('runtime supervision configuration changed')
+    root=Path(previous['state_root'])/'runs/docker-all/session-store'
+    for name in ('runs','temp','recovery'):
+        path=root/name
+        if not path.is_dir() or any(storage.is_link(p) for p in (path,*path.parents)) or any(path.iterdir()):
+            raise BuildControlError('runtime supervision store acquired accepted/pending work')
+    return {'previous_config_sha256':probe['config_sha256'],'native_restart_metadata':{
+        'schema':'fullmag.docker-runtime-supervision-restart.v1','journal_sha256':hashlib.sha256(journal_raw).hexdigest(),
+        'container_id':backend_id,'image_id':journal['image_id'],'terminal_failed_owner_sha256':probe['failed_owner_sha256'],
+        'terminal_process_receipt_sha256':journal['terminal_process_receipt_sha256'],'claim_pending':False}}
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-root',type=Path,required=True)
@@ -645,6 +884,10 @@ print(json.dumps({'sha256':hashlib.sha256(raw).hexdigest(),'receipt':document,'a
 '''
     observed=json.loads(docker_capture('exec',args.container_id,'/usr/local/bin/python3','-B','-c',script).stdout)
     receipt=observed['receipt']
+    if (receipt.get('state') == 'failed_outcome_retained' and 'service_owner' in receipt
+            and receipt.get('error') == SUPERVISION_FAILURE_ERROR
+            and 'FULLMAG_SESSION_STORAGE_PROFILE=windows-folder-v1' in actual.get('Config', {}).get('Env', [])):
+        return _stop_runtime_supervision_failure(args,selected,identity,actual)
     native_failure = None
     native_failure_kind = None
     pre_marker_failure = (

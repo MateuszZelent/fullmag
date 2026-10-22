@@ -8,7 +8,8 @@
 
 use anyhow::Context;
 use fullmag_application::{
-    AcceptedRunPreparationSource, PreparationBinding, PreparationReceipt, RequestedExecution,
+    AcceptedPreparationReceipt, AcceptedRunPreparationSource, ClosedLoopPreparationReceipt,
+    PreparationBinding, PreparationReceipt, RequestedExecution,
 };
 use fullmag_authoring::SceneDocument;
 use fullmag_plan::PreparationPlanSource;
@@ -210,8 +211,10 @@ fn prepared_fem_mesh(
         fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan) => {
             Some(fullmag_runner::FemMeshPayload::from(plan))
         }
-        fullmag_ir::BackendPlanIR::AntennaFieldOnly(_)
-        | fullmag_ir::BackendPlanIR::Fdm(_)
+        fullmag_ir::BackendPlanIR::AntennaFieldOnly(plan) => Some(
+            fullmag_runner::StageFemMeshAsset::build_from_antenna_field_only_plan(plan).payload,
+        ),
+        fullmag_ir::BackendPlanIR::Fdm(_)
         | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
         | fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_) => None,
     }
@@ -243,6 +246,24 @@ fn prepared_domain_publication(
         // retaining that older layout would misroute native-layer offsets.
         metadata.insert("artifact_layout".into(), layout);
     }
+    if matches!(
+        &read_model.execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::AntennaFieldOnly(_)
+    ) {
+        metadata.remove("artifact_layout");
+        metadata.remove("live_preview");
+        metadata.insert("magnetic_state_present".into(), Value::Bool(false));
+        metadata.insert("capabilities".into(), Value::Null);
+    } else if matches!(
+        &read_model.execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::Fdm(_)
+            | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
+            | fullmag_ir::BackendPlanIR::Fem(_)
+            | fullmag_ir::BackendPlanIR::FemEigen(_)
+            | fullmag_ir::BackendPlanIR::FemFrequencyResponse(_)
+    ) {
+        metadata.remove("magnetic_state_present");
+    }
     let metadata = Value::Object(metadata);
     // Keep the typed pinned plan as the authority for the binary topology.
     // The metadata JSON is a transport projection and must not replace the
@@ -250,7 +271,8 @@ fn prepared_domain_publication(
     let fem_mesh = prepared_fem_mesh(&read_model.execution_plan);
     if matches!(
         &read_model.execution_plan.backend_plan,
-        fullmag_ir::BackendPlanIR::Fem(_)
+        fullmag_ir::BackendPlanIR::AntennaFieldOnly(_)
+            | fullmag_ir::BackendPlanIR::Fem(_)
             | fullmag_ir::BackendPlanIR::FemEigen(_)
             | fullmag_ir::BackendPlanIR::FemFrequencyResponse(_)
     ) && fem_mesh.as_ref().is_none_or(|mesh| mesh.cells.is_empty())
@@ -986,6 +1008,60 @@ pub(crate) fn ensure_preparation_run_is_active(snapshot: &SessionStateResponse) 
     Ok(())
 }
 
+// Normal pending polls avoid rebuilding the immutable Study. A failed exit
+// triggers the same task-level proof validation used by development restore.
+fn observe_accepted_preparation_failure(
+    store: &fullmag_session::SessionStore,
+    run_id: &fullmag_application::RunId,
+    step_id: &str,
+    task_id: &str,
+    specification: &fullmag_application::RunSpecification,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    if !store.list_preparation_process_exit_receipts(run_id.as_str())?.iter()
+        .any(|receipt| receipt.task_id == task_id && !receipt.status_success)
+    {
+        return Ok(None);
+    }
+    let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+        store, run_id, &specification.snapshot.project_id,
+    )?;
+    let step = accepted.lowered.steps.iter().find(|step| {
+        step.step_id == step_id && step.enabled
+            && matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned)
+    }).context("failed preparation task is not a planned accepted Study step")?;
+    let planned_inputs = std::collections::BTreeMap::from([(
+        task_id.to_owned(),
+        (step_id.to_owned(), fullmag_application::study_task_input_fingerprint(
+            &accepted.run.specification, step,
+        )?),
+    )]);
+    let _snapshot = store.write_transaction()?;
+    if store.read_run_intent(run_id.as_str())?.as_ref() != Some(&accepted.run.intent) {
+        anyhow::bail!("accepted run intent changed while reading preparation failure");
+    }
+    // The supervisor commits its exit before finalizing its lease. That brief
+    // interval is pending, not a corrupt proof and not a completed failure.
+    for receipt in store.list_preparation_process_exit_receipts(run_id.as_str())?
+        .iter().filter(|receipt| receipt.task_id == task_id && !receipt.status_success)
+    {
+        if let Some(lease) = store.read_preparation_resource_lease(
+            run_id.as_str(), &receipt.resource_id, &receipt.lease_token,
+        )? {
+            if lease.state == fullmag_session::FmsResourceLeaseState::Active {
+                receipt.validate_for_lease(&lease)?;
+                return Ok(None);
+            }
+        }
+    }
+    let catalog = store.read_run_catalog(run_id.as_str())?
+        .context("accepted preparation run catalog is missing")?;
+    let task = catalog.tasks.iter().find(|task| task.task_id == task_id)
+        .context("accepted preparation task is missing")?;
+    crate::development_accepted_restore::load_task_preparation_failure(
+        store, run_id.as_str(), task, &planned_inputs,
+    )
+}
+
 /// Publish preparation that was produced by the accepted task lane.
 ///
 /// The accepted FEM preparer is the only component allowed to create native
@@ -997,8 +1073,8 @@ pub(crate) fn ensure_preparation_run_is_active(snapshot: &SessionStateResponse) 
 /// accepted preparation receipt is already available, keeping the two lanes
 /// on one publication contract.
 /// Callers own the transition fence and validate the accepted snapshot before
-/// entering this bridge. An absent receipt returns pending before repeating
-/// that expensive validation; an existing receipt is always fully validated.
+/// entering this bridge. An absent receipt without a failed native exit stays
+/// pending without rebuilding the plan; existing evidence is fully validated.
 pub(crate) async fn publish_accepted_task_preparation_with_transition(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
@@ -1100,7 +1176,9 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
             &step_id_for_worker,
         )
         .map_err(|error| ApiError::bad_request(format!("accepted step id is invalid: {error}")))?;
-        // `None` is the only pending state. Once an envelope exists, every
+        // An absent success receipt may mean pending or a failed native
+        // process; validate durable failure evidence before waiting. Once an
+        // envelope exists, every
         // decode, CAS, plan, certificate, and accepted-run binding error is a
         // durable integrity failure and must surface immediately; mapping it
         // to pending would hide tampering or invalid native evidence behind a
@@ -1115,6 +1193,30 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
             })?
             .is_none()
         {
+            let failure = observe_accepted_preparation_failure(
+                &store, &typed_run_id, &step_id_for_worker, &task_id, &specification,
+            ).map_err(|error| {
+                if error.chain().any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()) {
+                    ApiError::with_status_and_code(
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        "accepted_preparation_pending",
+                        "accepted preparation evidence is being updated",
+                    )
+                } else {
+                    ApiError::conflict_with_code(
+                        "accepted_preparation_receipt_invalid",
+                        format!("accepted preparation failure evidence is invalid: {error:#}"),
+                    )
+                }
+            })?;
+            if let Some(failure) = failure {
+                return Err(ApiError::unprocessable_with_code(
+                    "accepted_preparation_process_failed",
+                    format!("{} (preparation exit receipt: {})",
+                        failure["error"].as_str().unwrap_or("preparation failed"),
+                        failure["exit_receipt_id"].as_str().unwrap_or_default()),
+                ));
+            }
             return Err(ApiError::with_status_and_code(
                 axum::http::StatusCode::SERVICE_UNAVAILABLE,
                 "accepted_preparation_pending",
@@ -1150,7 +1252,7 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
                 )
             })?;
         let receipt = accepted
-            .read_task_preparation_receipt(&store, &task_id)
+            .read_task_preparation(&store, &task_id)
             .map_err(|error| {
                 ApiError::conflict_with_code(
                     "accepted_preparation_receipt_invalid",
@@ -1165,15 +1267,15 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
     .map_err(|error| ApiError::internal(format!("accepted preparation task failed: {error}")))??;
 
     let (receipt, execution_plan, requested_execution) = materialized;
-    let preparation_id = receipt.preparation_id.clone();
+    let preparation_id = receipt.preparation_id().to_owned();
     let existing_preparation = existing_preparation
         .filter(|existing| existing.preparation_id == preparation_id);
     let preparation_started_at_unix_ms = existing_preparation
         .as_ref()
         .map(|existing| existing.started_at_unix_ms)
         .unwrap_or(observed_preparation_started_at_unix_ms);
-    let plan_fingerprint = receipt.plan_fingerprint.clone();
-    let binding = PreparationBinding::from_receipt(&receipt).map_err(|error| {
+    let plan_fingerprint = receipt.plan_fingerprint().to_owned();
+    let binding = receipt.binding().map_err(|error| {
         ApiError::conflict(format!("accepted preparation binding is invalid: {error}"))
     })?;
     let read_model = LiveScenePreparationReadModel {
@@ -1185,7 +1287,7 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
         execution_plan,
     };
 
-    let disposition = commit_live_preparation_receipt_for_context_under_transition(
+    let disposition = commit_live_preparation_for_context_under_transition(
         state,
         context,
         receipt,
@@ -1365,6 +1467,27 @@ pub(crate) async fn commit_live_preparation_receipt_for_context_under_transition
     expected_preparation_id: Option<&str>,
     expected_run_id: Option<&str>,
 ) -> Result<fullmag_session::PreparationReceiptCommitDisposition, ApiError> {
+    commit_live_preparation_for_context_under_transition(
+        state,
+        context,
+        AcceptedPreparationReceipt::Solver(receipt),
+        expected_scene_revision,
+        expected_preparation_id,
+        expected_run_id,
+    )
+    .await
+}
+
+/// Preserve the concrete receipt schema across the accepted-to-live boundary.
+/// The external live sync endpoint remains solver-only.
+async fn commit_live_preparation_for_context_under_transition(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    receipt: AcceptedPreparationReceipt,
+    expected_scene_revision: Option<u64>,
+    expected_preparation_id: Option<&str>,
+    expected_run_id: Option<&str>,
+) -> Result<fullmag_session::PreparationReceiptCommitDisposition, ApiError> {
     let session_epoch = state
         .current_live_session_epoch
         .load(std::sync::atomic::Ordering::Acquire);
@@ -1403,33 +1526,51 @@ pub(crate) async fn commit_live_preparation_receipt_for_context_under_transition
             "current_live_preparation_materialization_run_id_mismatch",
         ));
     }
-    receipt
-        .validate()
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    match &receipt {
+        AcceptedPreparationReceipt::Solver(receipt) => receipt.validate(),
+        AcceptedPreparationReceipt::ClosedLoop(receipt) => receipt.validate(),
+    }
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let preparation_id_differs = current_preparation_id
         .as_deref()
-        .is_some_and(|preparation_id| preparation_id != receipt.preparation_id.as_str());
+        .is_some_and(|preparation_id| preparation_id != receipt.preparation_id());
     drop(current);
 
-    if let Some(source) = receipt.accepted_run_source.as_ref() {
-        validate_live_accepted_run_source(state, &current_run_id, &receipt, source)?;
+    let accepted_source = live_preparation_accepted_source(&receipt);
+    if let Some(source) = accepted_source {
+        match &receipt {
+            AcceptedPreparationReceipt::Solver(receipt) => {
+                validate_live_accepted_run_source(state, &current_run_id, receipt, source)?;
+            }
+            AcceptedPreparationReceipt::ClosedLoop(receipt) => {
+                let store_root = state.submit_store_root.as_ref().ok_or_else(|| {
+                    ApiError::with_status_and_code(
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        "accepted_preparation_store_unavailable",
+                        "accepted inspection requires the configured durable run store",
+                    )
+                })?;
+                let store = fullmag_session::SessionStore::open_existing(store_root)
+                    .map_err(|error| ApiError::conflict(format!(
+                        "accepted inspection store could not be opened: {error}"
+                    )))?;
+                validate_closed_loop_against_accepted_store(&store, &current_run_id, receipt)?;
+            }
+        }
     } else if preparation_id_differs {
         return Err(ApiError::conflict(
             "current_live_preparation_receipt_id_mismatch",
         ));
     }
 
-    let accepted_source_step = receipt
-        .accepted_run_source
-        .as_ref()
-        .map(|source| source.step_id.clone());
-    let payload = serde_json::to_value(&receipt).map_err(|error| {
+    let accepted_source_step = accepted_source.map(|source| source.step_id.clone());
+    let payload = receipt.payload().map_err(|error| {
         ApiError::internal(format!("failed to encode preparation receipt: {error}"))
     })?;
     let durable_receipt = fullmag_session::FmsPreparationReceipt::new(
-        receipt.preparation_id.clone(),
+        receipt.preparation_id().to_owned(),
         current_run_id,
-        receipt.plan_fingerprint.clone(),
+        receipt.plan_fingerprint().to_owned(),
         payload,
     );
     // The live workspace anchor and accepted task/stage receipts have
@@ -1560,6 +1701,76 @@ pub(crate) async fn commit_live_preparation_receipt_for_context_under_transition
     };
     *state.current_live_preparation_receipt.write().await = Some(durable_receipt);
     Ok(disposition)
+}
+
+fn live_preparation_accepted_source(
+    receipt: &AcceptedPreparationReceipt,
+) -> Option<&AcceptedRunPreparationSource> {
+    match receipt {
+        AcceptedPreparationReceipt::Solver(receipt) => receipt.accepted_run_source.as_ref(),
+        AcceptedPreparationReceipt::ClosedLoop(receipt) => Some(&receipt.plan.source),
+    }
+}
+
+/// Decode only the declared schema. An operation receipt never becomes a
+/// solver receipt, and malformed historical state cannot authorize replacement.
+fn validated_live_preparation_payload(payload: &Value) -> Option<AcceptedPreparationReceipt> {
+    if payload.get("schema_version").and_then(Value::as_str)
+        == Some(fullmag_application::CLOSED_LOOP_PREPARATION_SCHEMA)
+    {
+        let receipt: ClosedLoopPreparationReceipt = serde_json::from_value(payload.clone()).ok()?;
+        receipt.validate().ok()?;
+        Some(AcceptedPreparationReceipt::ClosedLoop(receipt))
+    } else {
+        let receipt: PreparationReceipt = serde_json::from_value(payload.clone()).ok()?;
+        receipt.validate().ok()?;
+        Some(AcceptedPreparationReceipt::Solver(receipt))
+    }
+}
+
+/// Re-read readiness through the immutable accepted snapshot, including
+/// expected_plan and real native source-mesh evidence. Session envelopes alone
+/// are not application-level preparation proof.
+fn validate_closed_loop_against_accepted_store(
+    store: &fullmag_session::SessionStore,
+    current_run_id: &str,
+    receipt: &ClosedLoopPreparationReceipt,
+) -> Result<(), ApiError> {
+    let source = &receipt.plan.source;
+    if source.run_id.as_str() != current_run_id {
+        return Err(ApiError::conflict_with_code(
+            "live_preparation_accepted_source_run_mismatch",
+            "accepted inspection does not belong to the current live run",
+        ));
+    }
+    let intent = store.read_run_intent(current_run_id)
+        .map_err(|error| ApiError::conflict(format!("accepted RunIntent read failed: {error}")))?
+        .ok_or_else(|| ApiError::conflict_with_code(
+            "accepted_preparation_run_missing", "accepted inspection has no durable RunIntent",
+        ))?;
+    let specification: fullmag_application::RunSpecification =
+        serde_json::from_value(intent.specification)
+            .map_err(|error| ApiError::conflict(format!("accepted RunSpec is not typed: {error}")))?;
+    let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+        store, &source.run_id, &specification.snapshot.project_id,
+    ).map_err(|error| ApiError::conflict(format!(
+        "accepted inspection snapshot validation failed: {error:#}"
+    )))?;
+    let task_id = fullmag_session::task_id_for_study_step(current_run_id, &source.step_id)
+        .map_err(|error| ApiError::conflict(format!("accepted inspection task is invalid: {error}")))?;
+    let verified = accepted.read_task_preparation(store, &task_id)
+        .map_err(|error| ApiError::conflict_with_code(
+            "accepted_preparation_receipt_invalid",
+            format!("accepted inspection readiness validation failed: {error:#}"),
+        ))?;
+    if !matches!(&verified, AcceptedPreparationReceipt::ClosedLoop(_)) {
+        return Err(ApiError::conflict("accepted inspection selected a solver preparation"));
+    }
+    let expected_payload = serde_json::to_value(receipt)
+        .map_err(|error| ApiError::internal(format!("inspection receipt encoding failed: {error}")))?;
+    let verified_payload = verified.payload()
+        .map_err(|error| ApiError::internal(format!("inspection readiness encoding failed: {error}")))?;
+    validate_accepted_receipt_payload_identity(&expected_payload, &verified_payload)
 }
 
 /// Accepted-run provenance is allowed on the live sync boundary only when it
@@ -1741,15 +1952,14 @@ fn prove_stale_accepted_replacement(
         return Ok(false);
     }
 
-    let Ok(application) =
-        serde_json::from_value::<PreparationReceipt>(previous.payload.clone())
-    else {
+    let Some(application) = validated_live_preparation_payload(&previous.payload) else {
         return Ok(false);
     };
-    if application.validate().is_err() {
-        return Ok(false);
+    if let AcceptedPreparationReceipt::ClosedLoop(receipt) = &application {
+        validate_closed_loop_against_accepted_store(accepted_store, &previous.run_id, receipt)?;
     }
-    let anchor_store = if application.accepted_run_source.is_some() {
+    let source = live_preparation_accepted_source(&application);
+    let anchor_store = if source.is_some() {
         accepted_store
     } else {
         live_store
@@ -1758,7 +1968,7 @@ fn prove_stale_accepted_replacement(
     else {
         return Ok(false);
     };
-    let Some(source) = application.accepted_run_source.as_ref() else {
+    let Some(source) = source else {
         return Ok(stale_replacement_durable_evidence_matches(
             &previous.run_id,
             &anchor.run_id,
@@ -1868,10 +2078,9 @@ fn accepted_stage_step_for_run(
     if receipt.run_id != run_id {
         return None;
     }
-    let application: PreparationReceipt = serde_json::from_value(receipt.payload.clone()).ok()?;
-    application.validate().ok()?;
-    let source = application.accepted_run_source?;
-    (source.run_id.as_str() == run_id).then_some(source.step_id)
+    let application = validated_live_preparation_payload(&receipt.payload)?;
+    let source = live_preparation_accepted_source(&application)?;
+    (source.run_id.as_str() == run_id).then(|| source.step_id.clone())
 }
 
 fn validate_live_read_model_binding(
@@ -2895,6 +3104,75 @@ mod tests {
                 },
             },
         }
+    }
+
+    fn prepared_field_only_read_model() -> LiveScenePreparationReadModel {
+        let mut model = prepared_fem_read_model(true);
+        let fullmag_ir::BackendPlanIR::Fem(fem) = &model.execution_plan.backend_plan else {
+            unreachable!();
+        };
+        model.execution_plan.backend_plan = fullmag_ir::BackendPlanIR::AntennaFieldOnly(
+            fullmag_ir::AntennaFieldOnlyPlanIR {
+                schema_version: "antenna_field_only_plan.v1".into(),
+                stage_id: "inspect".into(),
+                port_mode_id: "port".into(),
+                source_object_id: "conductor".into(),
+                source_mesh: fem.mesh.clone(),
+                source_object_segments: Vec::new(),
+                source_mesh_parts: Vec::new(),
+                field_sampling: fullmag_ir::AntennaFieldSamplingPlanIR {
+                    domain: fullmag_ir::FieldTargetIR::Global {},
+                    carrier_kind: "points".into(),
+                    location: "node".into(),
+                    topology_digest: digest('b'),
+                    positions_xyz_m: vec![[2e-9, 0.0, 0.0]],
+                    cells: fullmag_ir::FemConnectivityIR::empty(),
+                },
+            },
+        );
+        model
+    }
+
+    #[test]
+    fn prepared_field_only_domain_publishes_canonical_source_topology_without_magnetic_fields() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "prepared-field-only-session",
+        })).unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        snapshot.metadata = Some(json!({"artifact_layout": {"backend": "fdm"}}));
+        snapshot.latest_fields = serde_json::from_value(json!({
+            "m": {"values": [[1.0, 0.0, 0.0]]},
+            "mat_ms": {"values": [800_000.0]},
+            "mat_aex": {"values": [1e-11]},
+        })).unwrap();
+        let model = prepared_field_only_read_model();
+        let expected = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
+            &model.execution_plan.backend_plan,
+        ).unwrap().payload;
+        let (metadata, mesh) = prepared_domain_publication(&snapshot, &model).unwrap();
+        assert!(metadata.get("artifact_layout").is_none());
+        assert_eq!(metadata["magnetic_state_present"], false);
+        assert!(metadata["capabilities"].is_null());
+        let mesh = mesh.expect("field-only source topology must be visible before Compute");
+        assert_eq!(mesh.generation_id, expected.generation_id);
+        assert_eq!(mesh.nodes, expected.nodes);
+        assert_eq!(mesh.cells, expected.cells);
+        let mut publication = request;
+        publication.metadata = Some(metadata);
+        publication.fem_mesh = Some(mesh);
+        crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
+        publish_prepared_initial_state(&mut snapshot, &model).unwrap();
+        assert!(snapshot.fem_mesh.is_some());
+        assert!(snapshot.latest_fields.get("m").is_none());
+        assert!(snapshot.latest_fields.get("mat_ms").is_none());
+        assert!(snapshot.latest_fields.get("mat_aex").is_none());
+        assert!(snapshot.live_state.is_none());
+        assert!(snapshot.quantities.is_empty());
+        assert!(snapshot.capabilities.is_none());
+        assert!(snapshot.scalar_rows.is_empty());
+        assert!(!crate::field_store::serialize_fem_mesh_topology_binary_v2(
+            snapshot.fem_mesh.as_ref().unwrap(),
+        ).unwrap().is_empty());
     }
 
     fn prepared_multilayer_read_model() -> LiveScenePreparationReadModel {

@@ -1645,6 +1645,8 @@ fn validate_scene_spin_interface(
             normal_to_ferromagnet,
             normal_side,
             ferromagnet_side,
+            normal_surface,
+            ferromagnet_surface,
             g_up_spm2,
             g_down_spm2,
             g_r_spm2,
@@ -1674,6 +1676,70 @@ fn validate_scene_spin_interface(
                 &format!("{path}.normal_to_ferromagnet"),
                 true,
             )?;
+            match (normal_surface, ferromagnet_surface) {
+                (Some(normal_surface), Some(ferromagnet_surface)) => {
+                    for (surface, side, sign, name) in [
+                        (normal_surface, normal_side, 1.0, "normal_surface"),
+                        (
+                            ferromagnet_surface,
+                            ferromagnet_side,
+                            -1.0,
+                            "ferromagnet_surface",
+                        ),
+                    ] {
+                        validate_scene_surface_ref(surface, object_ids, &format!("{path}.{name}"))?;
+                        if surface.object_id != side.object_id {
+                            return Err(SceneDocumentValidationError::new(format!(
+                                "{path}.{name}.object_id must match its interface side"
+                            )));
+                        }
+                        let tolerance = 1.0e-12;
+                        if surface
+                            .orientation
+                            .iter()
+                            .zip(normal_to_ferromagnet)
+                            .any(|(actual, expected)| (actual - sign * expected).abs() > tolerance)
+                        {
+                            return Err(SceneDocumentValidationError::new(format!(
+                                "{path}.{name}.orientation must match its oriented interface side"
+                            )));
+                        }
+                        let oriented_surface_id =
+                            surface
+                                .orientation
+                                .iter()
+                                .enumerate()
+                                .find_map(|(axis, component)| {
+                                    ((component.abs() - 1.0).abs() <= tolerance
+                                        && surface.orientation.iter().enumerate().all(
+                                            |(other, value)| {
+                                                other == axis || value.abs() <= tolerance
+                                            },
+                                        ))
+                                    .then(|| {
+                                        format!(
+                                            "{}{}",
+                                            ["x", "y", "z"][axis],
+                                            if *component > 0.0 { "+" } else { "-" }
+                                        )
+                                    })
+                                });
+                        if let Some(expected) = oriented_surface_id {
+                            if surface.surface_id != expected {
+                                return Err(SceneDocumentValidationError::new(format!(
+                                    "{path}.{name}.surface_id must be '{expected}' for its orientation"
+                                )));
+                            }
+                        }
+                    }
+                }
+                (None, None) => {}
+                _ => {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "{path} requires normal_surface and ferromagnet_surface together"
+                    )))
+                }
+            }
             for (name, value) in [
                 ("g_up_Spm2", *g_up_spm2),
                 ("g_down_Spm2", *g_down_spm2),
@@ -1724,6 +1790,7 @@ fn validate_scene_spin_boundary(
 ) -> Result<(), SceneDocumentValidationError> {
     let (id, surfaces): (&str, Vec<&SceneSurfaceRef>) = match boundary {
         SceneSpinBoundary::SpinInsulating { id, surfaces }
+        | SceneSpinBoundary::HomogeneousSpinPotentialGradient { id, surfaces }
         | SceneSpinBoundary::SpinSink { id, surfaces } => (id, surfaces.iter().collect()),
         SceneSpinBoundary::SpecifiedSpinPotential {
             id,

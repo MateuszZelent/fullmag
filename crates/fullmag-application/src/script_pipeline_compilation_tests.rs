@@ -342,3 +342,47 @@ fn compilation_rejects_ambiguous_explicit_and_pipeline_inputs() {
     .to_string()
     .contains("cannot mix explicit stages with study_pipeline"));
 }
+
+// These regressions use the actual explicit materializer; they do not replay snapshots from the final base.
+fn physical_snapshots() -> ScriptExecutionConfig {
+    let base=ProblemIR::bootstrap_example();
+    let mut first=crate::script_stage_materialization::materialize_pipeline_relax(&base,&std::collections::BTreeMap::from([
+        ("max_steps".into(),json!(4)),("fixed_timestep".into(),json!(1e-14))])).unwrap().ir;
+    first.current_density=Some([1.0,0.0,0.0]);first.problem_meta.runtime_metadata.insert("active_stage_id".into(),json!("relax"));
+    let mut second=base;second.current_density=Some([2.0,0.0,0.0]);second.problem_meta.runtime_metadata.insert("active_stage_id".into(),json!("run"));
+    ScriptExecutionConfig {ir:second.clone(),antenna_inventory:Default::default(),shared_geometry_assets:None,default_until_seconds:Some(1e-12),
+        study_pipeline:Some(serde_json::from_value(json!({"version":"study_pipeline.v1","nodes":[
+            {"node_kind":"primitive","id":"relax","label":"Relax","stage_kind":"relax","payload":{"max_steps":4}},
+            {"node_kind":"primitive","id":"run","label":"Run","stage_kind":"run","payload":{"until_seconds":1e-12}}
+        ]})).unwrap()),stages:vec![
+            crate::script_stage_contract::ScriptExecutionStage{ir:first,default_until_seconds:None,entrypoint_kind:"flat_relax".into(),action:None},
+            crate::script_stage_contract::ScriptExecutionStage{ir:second,default_until_seconds:Some(1e-12),entrypoint_kind:"flat_run".into(),action:None},
+        ]}
+}
+#[test]
+fn explicit_physical_snapshots_preserve_earlier_state_and_provenance() {
+    let compiled=materialize_script_pipeline_with_output_policy_bounded(physical_snapshots(),fullmag_ir::configure_project_autosave_policy,2).unwrap();
+    assert_eq!(compiled.executions.len(),2);
+    assert!(matches!(compiled.executions[0].stage.ir.study,fullmag_ir::StudyIR::Relaxation{..}));
+    assert_eq!(compiled.executions[0].stage.ir.current_density,Some([1.0,0.0,0.0]));
+    assert_eq!(compiled.executions[1].stage.ir.current_density,Some([2.0,0.0,0.0]));
+    assert_eq!(compiled.executions[0].stage.provenance.as_ref().unwrap().authored_step_id,"relax");
+    assert_eq!(compiled.executions[1].stage.provenance.as_ref().unwrap().authored_step_id,"run");
+}
+#[test]
+fn explicit_physical_snapshots_refuse_unknown_duplicate_disabled_and_kind_mismatch() {
+    let mut unknown=physical_snapshots();unknown.stages[0].ir.problem_meta.runtime_metadata.insert("active_stage_id".into(),json!("unknown"));
+    let mut duplicate=physical_snapshots();duplicate.stages[1].ir.problem_meta.runtime_metadata.insert("active_stage_id".into(),json!("relax"));
+    let mut disabled=physical_snapshots();if let StudyPipelineNode::Primitive{enabled,..}=&mut disabled.study_pipeline.as_mut().unwrap().nodes[0] {*enabled=false;}
+    let mut mismatch=physical_snapshots();mismatch.stages[0].ir.study=mismatch.stages[1].ir.study.clone();
+    let mut missing=physical_snapshots();missing.stages.remove(0);
+    for config in [unknown,duplicate,disabled,mismatch,missing] {
+        assert!(materialize_script_pipeline_with_output_policy_bounded(config,fullmag_ir::configure_project_autosave_policy,2).is_err());
+    }
+}
+#[test]
+fn explicit_physical_snapshots_refuse_unknown_version_and_authored_duplicate() {
+    let mut version=physical_snapshots();version.study_pipeline.as_mut().unwrap().version="future".into();
+    let mut duplicate=physical_snapshots();let pipeline=duplicate.study_pipeline.as_mut().unwrap();pipeline.nodes.push(pipeline.nodes[0].clone());
+    for config in [version,duplicate] {assert!(materialize_script_pipeline_with_output_policy_bounded(config,fullmag_ir::configure_project_autosave_policy,3).is_err());}
+}

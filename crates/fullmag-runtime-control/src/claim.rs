@@ -38,7 +38,7 @@ pub fn commit_claimed_task_admission_with_host(
     request: &fullmag_session::host_resource_ledger::HostReservationRequest,
     inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
 ) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
-    let inputs = capture_admission_inputs(inputs)?;
+    let inputs = capture_admission_inputs(inputs, None)?;
     commit_claimed_task_admission_with(store, task, claim, |lease, dependencies| {
         let lease = attach_host_launch_binding(ledger, lease)?;
         ledger
@@ -60,7 +60,7 @@ pub fn try_commit_claimed_task_admission_with_host(
     request: &fullmag_session::host_resource_ledger::HostReservationRequest,
     inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
 ) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
-    let inputs = capture_admission_inputs(inputs)?;
+    let inputs = capture_admission_inputs(inputs, None)?;
     commit_claimed_task_admission_with(store, task, claim, |lease, dependencies| {
         let lease = attach_host_launch_binding(ledger, lease)?;
         ledger.try_commit_task_admission_checked(request, store, &lease, &inputs, || {
@@ -80,13 +80,55 @@ fn attach_host_launch_binding(
     Ok(lease)
 }
 
+/// The same admission transaction owns physical inputs and prepared frozen history.
+pub(crate) fn commit_claimed_task_admission_with_frozen_context(
+    store: &SessionStore,
+    task: &TaskRecord,
+    claim: &TaskClaim,
+    inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+    frozen: Option<&fullmag_application::FrozenStageContextRefV1>,
+) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
+    let snapshot = capture_admission_inputs(inputs, frozen)?;
+    commit_claimed_task_admission_with(store, task, claim, |lease, dependencies| {
+        let _writer = store.write_transaction()?;
+        dependencies.require_locked(store)?;
+        store.commit_task_admission_with_inputs(lease, &Some(snapshot)).map(Some)
+    })
+}
+
+pub(crate) fn try_commit_claimed_task_admission_with_host_and_frozen_context(
+    store: &SessionStore,
+    task: &TaskRecord,
+    claim: &TaskClaim,
+    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    request: &fullmag_session::host_resource_ledger::HostReservationRequest,
+    inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+    frozen: Option<&fullmag_application::FrozenStageContextRefV1>,
+) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
+    let snapshot = capture_admission_inputs(inputs, frozen)?;
+    commit_claimed_task_admission_with(store, task, claim, |lease, dependencies| {
+        let lease = attach_host_launch_binding(ledger, lease)?;
+        ledger.try_commit_task_admission_checked(request, store, &lease, &snapshot, || {
+            dependencies.require_locked(store)
+        })
+    })
+}
+
 fn capture_admission_inputs(
     inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+    frozen: Option<&fullmag_application::FrozenStageContextRefV1>,
 ) -> Result<fullmag_session::FmsResolvedInputsSnapshot> {
     for input in inputs.values() {
         input.validate().map_err(|error| anyhow::anyhow!(error))?;
     }
-    fullmag_session::FmsResolvedInputsSnapshot::new(serde_json::to_value(inputs)?)
+    match frozen {
+        Some(binding) => {
+            binding.validate()?;
+            fullmag_session::FmsResolvedInputsSnapshot::new_with_frozen_stage_context(
+                serde_json::to_value(inputs)?, serde_json::to_value(binding)?)
+        }
+        None => fullmag_session::FmsResolvedInputsSnapshot::new(serde_json::to_value(inputs)?),
+    }
 }
 
 fn commit_claimed_task_admission_with(

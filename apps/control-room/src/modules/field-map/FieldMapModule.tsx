@@ -468,7 +468,6 @@ export default function FieldMapModule() {
     canonicalPlanar,
     canonicalSampleError,
     evidence,
-    evidenceStatus,
     mask,
     meshOverlay,
     meta,
@@ -609,10 +608,10 @@ export default function FieldMapModule() {
             range={renderModel.range}
             rangeState={
               renderModel.range
-                ? evidenceStatus === "ready"
+                ? evidence.status === "ready"
                   ? "current"
                   : "stale-compatible"
-                : evidenceStatus === "loading"
+                : evidence.status === "loading"
                   ? "pending"
                   : "unavailable"
             }

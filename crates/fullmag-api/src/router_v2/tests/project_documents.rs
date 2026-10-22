@@ -4932,6 +4932,66 @@ async fn from_script_embeds_script_provenance_and_survives_open_and_authoring() 
 }
 
 #[tokio::test]
+async fn canonical_nonmagnetic_antenna_script_archive_has_lossless_cold_open_projection() {
+    use base64::Engine as _;
+    use fullmag_application::{FileProjectRepository, RawJsonEnvelope};
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/fem_antenna_closed_loop_nonmagnetic.py"));
+    let (app, root) = from_script_test_app();
+    let (status, imported) = post_from_script(&app, serde_json::json!({
+        "source":{"name":"fem_antenna_closed_loop_nonmagnetic.py","text":source},
+        "consent":{"executed_by_user":true}
+    })).await;
+    assert_eq!(status, StatusCode::CREATED, "{imported:?}");
+    assert_eq!(imported["script_import"]["fidelity"]["round_trip"], "verified");
+    let (envelope, documents) = open_archive_documents(imported["archive_base64"].as_str().unwrap());
+    assert_eq!(documents["project/source/script.py"], source.as_bytes());
+    assert!(!documents.contains_key("project/scene_document.json"), "the core scene is never opaque");
+
+    // Exercise the real public Python producer and canonical archive encoder,
+    // not a hand-written minimal scene fixture or a running solver/session.
+    for mutation in 0..8 {
+        let mut draft = envelope.clone();
+        let mut raw = draft.definition.scene.value().clone();
+        match mutation {
+            0 => {}
+            1 => { raw["objects"][0]["future"] = serde_json::Value::Null; }
+            2 => { raw["objects"][0]["geometry"]["future"] = serde_json::json!({}); }
+            3 => { raw["objects"][0]["transform"]["future"] = serde_json::json!([]); }
+            4 => { raw["objects"][0]["future"] = serde_json::json!(""); }
+            5 => { raw["study"]["solver"]["max_relaxation_time_s"] = serde_json::json!("1e-9"); }
+            6 => { raw["study"]["mesh_defaults"]["boundary_layer_thickness"] = serde_json::json!("1e-9"); }
+            _ => { raw["objects"][0]["mesh_override"]["boundary_layer_count"] = serde_json::json!(2); }
+        }
+        draft.replace_scene(RawJsonEnvelope::from_value(raw.clone()).unwrap()).unwrap();
+        let archive = FileProjectRepository::new().encode_archive(&draft).unwrap();
+        let response = app.clone().oneshot(Request::builder().method("POST")
+            .uri("/v2/persistence/projects/open").header("content-type","application/json")
+            .body(Body::from(serde_json::json!({"display_name":"antenna.fms",
+                "archive_base64":base64::engine::general_purpose::STANDARD.encode(archive)}).to_string()))
+            .unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let opened = body_json(response).await;
+        if mutation == 0 {
+            assert_eq!(opened["authoring_scene_document"], raw);
+            let scene = &opened["authoring_scene_document"];
+            assert_eq!(scene["objects"][0]["role"], "antenna");
+            assert_eq!(scene["objects"][0]["visualization_hint"],
+                serde_json::json!({"display":"shaded_frame","role":"antenna"}));
+            assert!(scene["magnetization_assets"].as_array().unwrap().is_empty());
+            assert!(scene["objects"].as_array().unwrap().iter().all(|object|
+                object["magnetization_ref"].is_null() && object["physics_stack"].as_array().unwrap().is_empty()));
+        } else {
+            assert!(opened.get("authoring_scene_document").is_none(), "mutation {mutation}");
+        }
+        let (reopened, reopened_documents) = open_archive_documents(opened["archive_base64"].as_str().unwrap());
+        assert_eq!(reopened.definition.scene.value(), &raw, "raw scene survives mutation {mutation}");
+        assert_eq!(reopened_documents, documents, "opaque bytes survive mutation {mutation}");
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
 async fn from_script_reports_export_failure_as_422_and_keeps_nothing() {
     let (app, root) = from_script_test_app();
     let (status, json) = post_from_script(

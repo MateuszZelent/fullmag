@@ -16,7 +16,9 @@ import {
   type FieldMetaResource,
   type QuantityCatalogResource,
 } from "@/kernel/api/apiTypes";
+import { isFlowMajorTensorDescriptor, tensorProjectionOptions, normalizeTensorProjection } from "@/kernel/api/tensorFieldProjection";
 import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
+import { primitiveMonoColorForRole } from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
 import {
   SegmentedControl,
@@ -125,6 +127,7 @@ export function VisualizationDisplayPassesSection({
   settings,
   target,
   primitiveDisplayToggleVisible,
+  presentationRole,
 }: {
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
@@ -134,6 +137,7 @@ export function VisualizationDisplayPassesSection({
   settings: VisualizationTargetSettings;
   target: VisualizationTargetRef;
   primitiveDisplayToggleVisible: boolean;
+  presentationRole?: string | null;
 }) {
   const capabilities = visualizationTargetCapabilities(target);
   return (
@@ -207,7 +211,7 @@ export function VisualizationDisplayPassesSection({
           <ColorField
             disabled={isFieldPending("primitiveMonoColor")}
             label="Primitive color"
-            value={settings.primitiveMonoColor ?? settings.shaderMonoColor}
+            value={primitiveMonoColorForRole(presentationRole, settings.primitiveMonoColor ?? settings.shaderMonoColor)}
             onChange={(value) => void patch({ primitiveMonoColor: value })}
           />
           <NumberField
@@ -683,7 +687,10 @@ export function VisualizationQuantitySection({
   targetFieldAvailability?: ReadonlyMap<string, TargetFieldAvailability>;
   targetKind?: VisualizationTargetKind;
 }) {
+  const descriptor = quantityCatalog?.quantities.find((entry) => entry.id === settings.activeQuantityId)?.tensor;
+  const tensorOptions = tensorProjectionOptions(descriptor);
   return (
+    <>
     <FormField
       disabled={
         isFieldPending("activeQuantityId") ||
@@ -696,6 +703,12 @@ export function VisualizationQuantitySection({
       value={settings.activeQuantityId}
       onChange={(event) => {
         const patchValue = quantitySourcePatch(settings, event.target.value);
+        const nextTensor = quantityCatalog?.quantities.find((entry) => entry.id === event.target.value)?.tensor;
+        if (isFlowMajorTensorDescriptor(nextTensor)) {
+          patchValue.tensorProjection = "c0";
+          patchValue.surfaceColorSource = "colormap";
+          patchValue.vectorsVisible = false;
+        }
         const nextSurfaceColorSource =
           patchValue.surfaceColorSource ?? settings.surfaceColorSource;
         if (nextSurfaceColorSource !== "solid") {
@@ -704,6 +717,9 @@ export function VisualizationQuantitySection({
         void patch(patchValue);
       }}
     >
+      {!settings.activeQuantityId ? <option disabled value="">
+        {fieldCatalogLoading ? "Loading quantities…" : "Select an available quantity"}
+      </option> : null}
       {visualizationQuantityItems(
         settings.activeQuantityId,
         targetKind,
@@ -716,6 +732,27 @@ export function VisualizationQuantitySection({
         </option>
       ))}
     </FormField>
+    {isFlowMajorTensorDescriptor(descriptor) ? (
+      <>
+      <FormField
+        disabled={!settings.visible || isFieldPending("tensorProjection")}
+        inline
+        label="Tensor projection"
+        type="select"
+        value={settings.tensorProjection ?? ""}
+        onChange={(event) => {
+          const tensorProjection = normalizeTensorProjection(event.target.value);
+          if (tensorProjection) void patch({ tensorProjection, surfaceColorSource: "colormap" });
+        }}
+      >
+        <option disabled value="">Select tensor projection</option>
+        {tensorOptions.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </FormField>
+      </>
+    ) : null}
+    </>
   );
 }
 

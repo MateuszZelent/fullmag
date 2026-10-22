@@ -1,5 +1,6 @@
 #include "cpu/mfem/transport/conservative_constraint_rank.hpp"
 #include "cpu/mfem/transport/affine_trace_relations.hpp"
+#include "cpu/mfem/transport/affine_rt0_element.hpp"
 #include "cpu/mfem/transport/conservative_current_view.hpp"
 #include "cpu/mfem/transport/periodic_charge_potential.hpp"
 #include "cpu/mfem/transport/terminal_constrained_rt0_projection.hpp"
@@ -117,6 +118,113 @@ void require_rejected(Callable &&callable, const std::string &message)
         rejected = true;
     }
     require(rejected, message);
+}
+
+using Rt0Point = fullmag::fem::transport::AffineRt0Element::Point;
+
+std::array<Rt0Point, 5> retained_rt0_samples(const std::array<Rt0Point, 4> &vertices,
+    const std::array<double, 4> &signed_coefficients, bool mutate_sources = false)
+{
+    using fullmag::fem::transport::AffineRt0Element;
+    mfem::Mesh mesh(3, 4, 1, 0, 3);
+    const double unit_vertices[][3] = {{0., 0., 0.}, {1., 0., 0.},
+        {0., 1., 0.}, {0., 0., 1.}};
+    for (const auto &vertex : unit_vertices) mesh.AddVertex(vertex);
+    const int nodes[] = {0, 1, 2, 3};
+    mesh.AddTet(nodes, 1);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+    // Change only coordinates after topology finalization so the negative-
+    // determinant fixture cannot be silently reoriented by mesh finalization.
+    for (int local = 0; local < 4; ++local) {
+        for (int axis = 0; axis < 3; ++axis) mesh.GetVertex(local)[axis] = vertices[local][axis];
+    }
+    mfem::RT_FECollection collection(0, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::GridFunction field(&space);
+    mfem::Array<int> dofs;
+    space.GetElementDofs(0, dofs);
+    require(dofs.Size() == 4, "retained RT0 fixture lost its four signed coefficients");
+    for (int local = 0; local < 4; ++local) {
+        const int dof = dofs[local];
+        field[dof < 0 ? -1 - dof : dof] =
+            (dof < 0 ? -1.0 : 1.0) * signed_coefficients[local];
+    }
+    const AffineRt0Element evaluator(field, 0);
+    const AffineRt0Element basis_only(space, 0);
+    require_rejected([&] { (void)basis_only.retained_current_at(vertices[0]); },
+        "retained RT0 accepted an unfrozen coefficient set");
+    require_rejected([&] {
+        (void)evaluator.retained_current_at({std::numeric_limits<double>::infinity(), 0., 0.});
+    }, "retained RT0 accepted a nonfinite sampling point");
+    if (mutate_sources) {
+        field = 0.0;
+        for (int local = 0; local < 4; ++local) mesh.GetVertex(local)[0] += 16.0;
+    }
+    std::array<Rt0Point, 5> samples;
+    Rt0Point center{};
+    for (int axis = 0; axis < 3; ++axis) {
+        long double value = 0.0L;
+        for (int local = 0; local < 4; ++local) value += static_cast<long double>(vertices[local][axis]) / 4.0L;
+        center[axis] = static_cast<double>(value);
+    }
+    for (int local = 0; local < 4; ++local) samples[local] = evaluator.retained_current_at(vertices[local]);
+    samples[4] = evaluator.retained_current_at(center);
+    return samples;
+}
+
+void retained_rt0_sampling_is_exact_frozen_and_fail_closed()
+{
+    const std::array<Rt0Point, 4> unit{{{0., 0., 0.}, {1., 0., 0.},
+        {0., 1., 0.}, {0., 0., 1.}}};
+    const auto dyadic = retained_rt0_samples(unit, {1., 2., 4., 8.});
+    const std::array<Rt0Point, 5> dyadic_expected{{{-2., -4., -8.},
+        {13., -4., -8.}, {-2., 11., -8.}, {-2., -4., 7.}, {1.75, -.25, -4.25}}};
+    require(dyadic == dyadic_expected, "retained RT0 lost exact dyadic sample values");
+    auto translated = unit;
+    for (auto &point : translated) { point[0] += 8.; point[1] -= 4.; point[2] += 2.; }
+    require(retained_rt0_samples(translated, {1., 2., 4., 8.}) == dyadic,
+        "retained RT0 changed under an exactly representable translation");
+    auto reversed_geometry = unit;
+    for (auto &point : reversed_geometry) std::swap(point[0], point[1]);
+    auto swapped = dyadic;
+    for (auto &sample : swapped) std::swap(sample[0], sample[1]);
+    require(retained_rt0_samples(reversed_geometry, {1., 2., 4., 8.}) == swapped,
+        "retained RT0 lost the absolute-determinant sign contract");
+    const std::array<Rt0Point, 4> witness{{{0., 0., 0.}, {1.1e-6, 0., 0.},
+        {0., .7e-6, 0.}, {0., 0., .3e-6}}};
+    const std::array<double, 4> coefficients{{.21000000000044933, -.21, -3.3e-13, -9.625000000000001e-14}};
+    // Independently rounded Python Fraction(binary64) oracle, including center.
+    const std::array<Rt0Point, 5> expected{{
+        {0x1.d1a94a2000000p+39, 0x1.0000000000000p+0, 0x1.0000000000000p-3},
+        {0x1.d1a94a2000385p+39, 0x1.0000000000000p+0, 0x1.0000000000000p-3},
+        {0x1.d1a94a2000000p+39, 0x1.11e88b367a41fp+0, 0x1.0000000000000p-3},
+        {0x1.d1a94a2000000p+39, 0x1.0000000000000p+0, 0x1.3d666f9635745p-3},
+        {0x1.d1a94a20000e2p+39, 0x1.047a22cd9e908p+0, 0x1.0f599be58d5d2p-3}}};
+    const auto samples = retained_rt0_samples(witness, coefficients);
+    require(samples == expected, "retained RT0 cancellation witness differs from Fraction oracle");
+    require(retained_rt0_samples(witness, coefficients, true) == samples,
+        "retained RT0 aliased the mutable input coefficients or geometry");
+    auto negative = coefficients;
+    for (auto &coefficient : negative) coefficient = -coefficient;
+    auto reversed = samples;
+    for (auto &sample : reversed) for (auto &value : sample) value = -value;
+    require(retained_rt0_samples(witness, negative) == reversed,
+        "retained RT0 failed signed-current reversal");
+    const auto zero = retained_rt0_samples(unit, {0., -0., 0., -0.});
+    for (const auto &sample : zero) for (double value : sample) {
+        require(value == 0.0 && !std::signbit(value), "retained RT0 did not preserve canonical exact zero");
+    }
+    const auto constant = retained_rt0_samples(unit, {-1., 1., 0., 0.});
+    for (const auto &sample : constant) require(sample == Rt0Point{-1., 0., 0.},
+        "retained RT0 did not preserve a constant field");
+    require_rejected([&] {
+        const double maximum = std::numeric_limits<double>::max();
+        (void)retained_rt0_samples(unit, {maximum, maximum, 0., 0.});
+    }, "retained RT0 silently accepted overflow");
+    require_rejected([&] {
+        (void)retained_rt0_samples(unit, {std::numeric_limits<double>::denorm_min(), 0., 0., 0.});
+    }, "retained RT0 silently rounded a nonzero exact sample to zero");
 }
 
 void affine_trace_relations_preserve_independent_jumps_and_reject_cycles()
@@ -1900,6 +2008,50 @@ void layered_conductor_preserves_series_current()
         "layered RT0 current is not elementwise conservative");
     require(view->balance().electrode_balance_relative <= 1.0e-10,
         "layered periodic terminal currents do not balance");
+}
+
+void global_kkt_norm_does_not_certify_a_local_current_balance()
+{
+    using Exact = boost::multiprecision::cpp_rational;
+    using Integer = boost::multiprecision::cpp_int;
+    // M=I ohm, D=[1,-1], h=0 A. This is an exact KKT counterexample,
+    // independent of the production residual/refinement implementation.
+    const Exact q = Exact(1) / (Integer(1) << 17);
+    const Exact error = -Exact(1) / (Integer(1) << 48);
+    const Exact multiplier = Exact(1) / 4;
+    const std::array<std::array<Exact, 3>, 3> matrix{{
+        {1, 0, 1}, {0, 1, -1}, {1, -1, 0}}};
+    const std::array<Exact, 3> rhs{q + multiplier, q - multiplier, 0};
+    const std::array<Exact, 3> approximate{
+        q + error / 2, q - error / 2, multiplier - error / 2};
+    std::array<Exact, 3> residual{};
+    Exact rhs_squared = 0, residual_squared = 0;
+    for (int row = 0; row < 3; ++row) {
+        residual[row] = rhs[row];
+        for (int column = 0; column < 3; ++column) {
+            residual[row] -= matrix[row][column] * approximate[column];
+        }
+        rhs_squared += rhs[row] * rhs[row];
+        residual_squared += residual[row] * residual[row];
+    }
+    const Exact relative = Exact(1) / Integer(1'000'000'000'000LL);
+    const Exact local_gate = Exact(1) / Integer(1'000'000'000'000'000'000LL) +
+        Exact(1) / Integer(10'000'000'000LL) * (abs(approximate[0]) + abs(approximate[1]));
+    require(residual[0] == 0 && residual[1] == 0 &&
+            abs(residual[2]) > local_gate &&
+            residual_squared < relative * relative * rhs_squared &&
+            residual_squared < Exact(1) / (Integer(10'000'000'000LL) * Integer(10'000'000'000LL)),
+        "exact KKT witness did not pass global norms while failing local current admission");
+    const std::array<Exact, 3> correction{-error / 2, error / 2, error / 2};
+    for (int row = 0; row < 3; ++row) {
+        Exact action = 0, corrected = 0;
+        for (int column = 0; column < 3; ++column) {
+            action += matrix[row][column] * correction[column];
+            corrected += matrix[row][column] * (approximate[column] + correction[column]);
+        }
+        require(action == residual[row] && corrected == rhs[row],
+            "full KKT correction did not solve both blocks of the exact witness");
+    }
 }
 
 void large_tetrahedral_projection_uses_sparse_kkt_lane()
@@ -5028,6 +5180,91 @@ void accepted_external_lead_finalizer_preserves_owned_series_and_rejects_foreign
         "external finalizer lost its owner after original mesh and requests were destroyed");
 }
 
+void sparse_terminal_source_preserves_local_si_balances_and_h1_reactions()
+{
+    using fullmag::fem::antenna_field_solve::AcceptedTerminalChargeRequest;
+    using fullmag::fem::antenna_field_solve::solve_accepted_terminal_charge_source;
+    constexpr double length_m = 2.0e-6, width_m = 0.3e-6, height_m = 0.2e-6;
+    constexpr double conductivity_spm = 5.8e7, current_a = 1.0e-3;
+    auto mesh = mfem::Mesh::MakeCartesian3D(
+        7, 7, 7, mfem::Element::TETRAHEDRON, length_m, width_m, height_m);
+    const auto ids = stable_vertex_ids(mesh);
+    AcceptedTerminalChargeRequest request;
+    request.mesh = &mesh;
+    request.stable_vertex_identities = ids;
+    request.conductivity_spm_per_element.assign(mesh.GetNE(), conductivity_spm);
+    request.terminals = {fixture_terminal_on_x(mesh, ids, "left", 0.0, -current_a),
+        fixture_terminal_on_x(mesh, ids, "right", length_m, current_a)};
+    const auto source = solve_accepted_terminal_charge_source(request);
+    const auto &projection = source->rt0_projection();
+    const auto &field = projection.field();
+    const auto &h1 = *source->terminal_solution().accepted_solution;
+    const auto potential_before = h1.potential_vertex_values_v;
+    const auto reactions_before = h1.reaction_vertex_values_a;
+    const std::vector<double> field_before(field.GetData(), field.GetData() + field.Size());
+    const auto digest_before = source->content_digest();
+    std::size_t terminal_faces = 0;
+    for (const auto &terminal : request.terminals) terminal_faces += terminal.boundary_face_vertex_ids.size();
+    const std::size_t free_dofs = static_cast<std::size_t>(field.Size()) -
+        (static_cast<std::size_t>(mesh.GetNBE()) - terminal_faces);
+    require(field.Size() == mesh.GetNumFaces() && field.Size() == 4410 &&
+            field.Size() > 4096 && free_dofs == 4018,
+        "SI terminal regression did not use the real sparse RT0 path (4410 faces, 4018 free dofs)");
+    require(!projection.constraint_rank_certificate().omitted_rows.empty(),
+        "SI terminal regression did not retain any dependent physical row");
+    const auto measured = fullmag::fem::transport::measure_terminal_current_projection(projection);
+    require(measured.elements.size() == static_cast<std::size_t>(mesh.GetNE()),
+        "SI sparse projection omitted an element from its independent physical measurement");
+    for (const auto &element : measured.elements) {
+        require(std::abs(element.outward_flux_sum_a) <=
+                1.0e-18 + 1.0e-10 * element.absolute_flux_sum_a,
+            "SI sparse projection failed a local element current gate");
+    }
+    for (const auto &face : measured.faces) {
+        if (face.side_count == 2) {
+            require(std::abs(face.canonical_jump_a) <= 1.0e-18 + 1.0e-10 *
+                    (std::abs(face.first_outward_flux_a) + std::abs(face.second_outward_flux_a)),
+                "SI sparse projection failed an independently integrated shared-face gate");
+        }
+    }
+    std::map<std::uint64_t, std::size_t> vertex_by_id;
+    for (std::size_t vertex = 0; vertex < ids.local_to_stable.size(); ++vertex) {
+        vertex_by_id.emplace(ids.local_to_stable[vertex], vertex);
+    }
+    for (std::size_t terminal = 0; terminal < request.terminals.size(); ++terminal) {
+        std::set<std::uint64_t> vertices;
+        for (const auto &face : request.terminals[terminal].boundary_face_vertex_ids) {
+            vertices.insert(face.begin(), face.end());
+        }
+        long double outward_h1 = 0.0L;
+        for (const auto vertex : vertices) outward_h1 -= reactions_before.at(vertex_by_id.at(vertex));
+        const double expected = request.terminals[terminal].requested_outward_current_a;
+        const double tolerance = 1.0e-18 + 1.0e-8 * std::abs(expected);
+        require(std::abs(outward_h1 - expected) <= tolerance &&
+                std::abs(source->terminal_solution().measured_outward_currents_a[terminal] - expected) <= tolerance &&
+                std::abs(measured.terminal_outward_currents_a[terminal] - expected) <= tolerance,
+            "SI sparse projection lost requested, original-K H1 or independently measured RT0 current");
+    }
+    const auto average = volume_average(field);
+    const double expected_density = current_a / (width_m * height_m);
+    require(std::abs(average[0] - expected_density) <= 1.0e-8 * expected_density &&
+            std::abs(average[1]) <= 1.0e-8 * expected_density &&
+            std::abs(average[2]) <= 1.0e-8 * expected_density,
+        "SI sparse terminal projection differs from the analytic uniform-conductor current");
+    long double power = 0.0L;
+    for (std::size_t vertex = 0; vertex < potential_before.size(); ++vertex) {
+        power += static_cast<long double>(potential_before[vertex]) * reactions_before[vertex];
+    }
+    const double expected_power = current_a * current_a * length_m /
+        (conductivity_spm * width_m * height_m);
+    require(std::abs(power - expected_power) <= 1.0e-8 * expected_power,
+        "SI sparse source changed its analytic original-K Joule power");
+    require(h1.potential_vertex_values_v == potential_before &&
+            h1.reaction_vertex_values_a == reactions_before && source->content_digest() == digest_before &&
+            std::equal(field_before.begin(), field_before.end(), field.GetData()),
+        "SI sparse source getters changed H1 reactions, accepted RT0 coefficients or digest");
+}
+
 void accepted_terminal_charge_source_preserves_nanometre_scale_and_rejects_degeneracy()
 {
     using fullmag::fem::antenna_field_solve::AcceptedTerminalChargeRequest;
@@ -5530,12 +5767,14 @@ int main(int argc, char **argv)
             "usage: fem_conservative_current_view_contract");
 #endif
 
+        retained_rt0_sampling_is_exact_frozen_and_fail_closed();
         affine_trace_relations_preserve_independent_jumps_and_reject_cycles();
         deterministic_constraint_rank_oracle_is_exact();
         constraint_rank_row_semantics_are_explicit_and_validated();
         constraint_rank_resource_limits_are_bounded_without_large_fixtures();
         constraint_rank_handles_wide_exact_arithmetic_and_physical_rhs_gate();
         deterministic_constraint_rank_rejects_malformed_rows();
+        global_kkt_norm_does_not_certify_a_local_current_balance();
         orientation_conservation_and_source_cut_are_canonical();
         layered_conductor_preserves_series_current();
         if (std::getenv("FULLMAG_OET0_LARGE_MESH") != nullptr) {
@@ -5568,6 +5807,7 @@ int main(int argc, char **argv)
         accepted_terminal_charge_source_freezes_layered_material_and_one_mesh();
         accepted_terminal_charge_source_freezes_explicit_interface_series();
         accepted_terminal_content_digest_matches_independent_owned_codec();
+        sparse_terminal_source_preserves_local_si_balances_and_h1_reactions();
         accepted_terminal_charge_source_preserves_nanometre_scale_and_rejects_degeneracy();
         accepted_external_lead_finalizer_preserves_owned_series_and_rejects_foreign_descriptors();
         incomplete_external_lead_extension_fails_closed();

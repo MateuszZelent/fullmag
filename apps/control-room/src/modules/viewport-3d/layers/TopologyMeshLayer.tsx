@@ -21,6 +21,7 @@ import {
 import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
+  Viewport3DTopologyPartRenderModel,
 } from "../viewport3dRenderModel";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DColors } from "../viewport3dTypes";
@@ -48,6 +49,8 @@ export function TopologyMeshLayer({
   modeCompositionId,
   modeCompositionPhaseByLayerId,
   onSelectPart,
+  onGeometryReady,
+  replacementObjectIds,
   tracker,
   topologyModel,
   topologyFreshness,
@@ -69,6 +72,8 @@ export function TopologyMeshLayer({
   modeCompositionId?: string | null;
   modeCompositionPhaseByLayerId?: ReadonlyMap<string, number>;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
+  onGeometryReady?: (part: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>, ready: boolean) => void;
+  replacementObjectIds?: ReadonlySet<string>;
   tracker: Viewport3DResourceTracker;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   topologyFreshness: Viewport3DTopologyFreshness;
@@ -84,6 +89,13 @@ export function TopologyMeshLayer({
       <>
         {topologyModel.magneticParts.map((partModel) => {
           const settings = getPartSettings(partModel.part);
+          const previewObject = primitiveModel?.objects.find((object) =>
+            [object.objectId, object.objectId.endsWith("_geom")
+              ? object.objectId.slice(0, -5) : object.objectId + "_geom"]
+              .some((id) => id === partModel.part.object_id || id === partModel.part.geometry_id),
+          );
+          const replacementVisible = !topologyCurrent || !previewObject || !replacementObjectIds ||
+            replacementObjectIds.has(previewObject.objectId);
           const modeTargetId = modeCompositionTargetIdForMeshPart(partModel.part);
           const modeCompositionSnapshot = modeTargetId
             ? modeCompositionFieldLayers?.get(modeTargetId) ?? null
@@ -137,6 +149,8 @@ export function TopologyMeshLayer({
               modeCompositionSnapshot={modeCompositionSnapshot}
               onSelectPart={onSelectPart}
               partModel={partModel}
+              onGeometryReady={onGeometryReady}
+              renderVisible={replacementVisible}
               settings={
                 topologyCurrent
                   ? settings

@@ -476,6 +476,28 @@ porównania ProblemIR oryginału z ProblemIR sceny wyrenderowanej z powrotem do
 Pythona (geometria, materiały, komórka FDM, dynamika i etapy badania);
 `verified` nie oznacza, że scena jest skryptem. Aktualizacja authoring, open i
 save nie zmieniają osadzonego skryptu. Odpowiedź ma `memory_only` durability.
+Nowy producent zwraca również `scene_document`: dokładnie ten sam dokument
+`scene.v2`, który zapisał w archiwum. Pole jest opcjonalne na granicy transportu,
+ale aktywacja UI odmawia odpowiedzi bez niego. Import nie aktywuje sesji sam:
+UI wymaga pustego workspace, tworzy sesję z `replace_current: false`, potwierdza
+jej tożsamość i wykonuje istniejącą transakcję `replace_scene` z aktualnym
+`base_revision` i nagłówkiem `x-fullmag-session-scope`. Zachowuje jawnie wybrane
+`study.output_storage` przy pełnym zastąpieniu sceny oraz archive/fidelity importu.
+Pusta sesja jest wyłącznie bootstrapem authoring: istniejący `sessions.create`
+przyjmuje tylko FDM/FEM CPU double (FEM dla jawnego `fem`, FDM dla pozostałych).
+Nie jest to wybór wykonania ani fallback. Pełny `replace_scene` zachowuje authored
+backend (`auto|fdm|fem|hybrid`), device (`auto|cpu|gpu`) i precision (`single|double`);
+niepoprawne wartości są odrzucane przed create. Przygotowanie obliczeń odczytuje
+intencję z `scene.study` i podlega istniejącym bramkom możliwości, bez gwarancji
+wykonalności każdej kombinacji. Źródła: `crates/fullmag-api/src/router_v2/handlers/sessions/create.rs::validated_execution`
+oraz `crates/fullmag-application/src/run_spec.rs::RequestedExecution::validate`.
+Nie uruchamia Compute. Zapis projektu później korzysta z bindingu potwierdzonej
+sesji. Nieznany wynik create lub transakcji nie jest automatycznie ponawiany.
+Latch create jest związany z generacją operacji; potwierdzony ACK lub odmowa
+400/409 przed publikacją zamykają próbę, unknown jej nie resetuje. Jeden
+guard PendingFormRegistry obejmuje create, replace_scene i finalizację bindingu
+oraz historii. Nowy draft po create jest zachowany i blokuje dalszą aktywację.
+
 
 `POST /v2/persistence/projects/authoring` aktualizuje dostarczone archiwum
 przez ten sam use case dokumentu. Wymaga oczekiwanego ProjectId i rewizji oraz
@@ -544,6 +566,50 @@ FDM membership realization has an independent
 The event carries no descriptor or mask data. HTTP v2 remains authoritative,
 and the recommended fetch invalidates the descriptor and its revision-scoped
 binary membership consumers.
+
+(checkpoint-restore-admission)=
+### Checkpoint restore admission — źródłowa odmowa transportu A
+
+Status A: **`IMPLEMENTED_SOURCE_ONLY`, `NOT_COMPILED`, `NOT_EXECUTED`**.
+`crates/fullmag-session/src/types.rs::RestoreClass` zawiera jawne `Unsupported`
+(wire `unsupported`). To odmowa continuation, bez automatycznego przejścia do
+`InitialConditionImport`, `LogicalResume`, portable importu lub innego restore.
+
+Wspólny owner `crates/fullmag-runner/src/lib.rs::validate_fdm_transport_checkpoint_resume_support`
+odmawia dla rzeczywistego typed CPU M1/M2/M3 spin workflow, również z frozen.
+`Ok(())` oznacza tylko, że ten konkretny CPU guard nie dotyczy planu; dalsze
+schema/identity/backend gates nadal obowiązują. Brak wymaganej transportowej
+metadata/identity daje odmowę. Sam schema M3 v1/v2, study-kind string ani
+prywatny codec v2/original-stage helper B nie nadają ExactResume.
+
+`crates/fullmag-api/src/session_persistence.rs::checkpoint_resume_unsupported_reason`
+i `supported_checkpoint_restore_class` stosują tę odmowę w create/list/detail;
+`restore_checkpoint_with_context` odmawia 409 przed odczytem common state oraz
+mutacją snapshotu. Wpis `CheckpointEntry` nie ma nowego pola ze szczegółowym
+powodem; endpoint zachowuje powód w odpowiedzi błędu, UI pokazuje klasę.
+Dla pozostałych przypadków catalog nadal używa wcześniejszego
+self-compatibility; ta zmiana nie dowodzi zgodności katalogu z aktualną runtime
+identity ani pełnego pozytywnego admission innych checkpointów.
+
+`crates/fullmag-cli/src/main.rs::main` stosuje ten sam support preflight w ResumeJson
+przed odczytem payloadu/schema. `crates/fullmag-cli/src/orchestrator.rs::capture_pause_checkpoint`
+odmawia pause capture przed store; `run_script_mode` odmawia resume/frozen hot-apply przed `take()`,
+zachowując paused state po odmowie. UI
+`apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts::restoreCheckpointDisabledReason`
+dopuszcza restore wyłącznie dla `exact_resume`;
+`apps/control-room/src/modules/start/model/continueModel.ts::REASON_NOT_EXACT` opisuje `unsupported`
+bez własnego solverowego walidatora. Nie dodano globalnego guard dla pure
+magnetic/frozen/ABM3 bez spin workflow; GPU/FEM ownerzy pozostają odrębni.
+
+Full v2 common/primary carriers/generation, activation/spin history, immutable
+original context, committed output/CAS prefix i atomic restore pozostają OPEN;
+[§13 frozen spec](frozen-spins-v1.md#frozen-v2-composite-checkpoint) nie stanowi
+publicznego admission. Aktualny #80 nie zawiera A. Nowy wariant wire wymaga
+oficjalnej generacji OpenAPI oraz TS typów/klienta z udanego przyszłego managed
+pakietu zawierającego piny A, z jego source/snapshot receipt; plików generowanych
+nie aktualizowano ręcznie. HTTP/native/browser i pełne ExactResume są nadal
+NOT VERIFIED. Source freeze A:
+`77afed0bb488f115d3692e27044d5209daa876e33eceafbe34e78566c8267844`.
 
 ### Relaxation solver contract
 
@@ -1700,6 +1766,116 @@ nowy current step mógłby ponownie certyfikować stare dane. Stary m preview
 nie jest kopiowany przez zmianę domain/topology. Dowód bundle wymaga
 obowiązkowego nonnull carrier/frame/physical-row match w positive fixture;
 warunkowe sprawdzenie tylko gdy bundle istnieje jest niewystarczające.
+
+## Inspekcja artefaktów anteny: FMVP v6 z mapowaniem u64
+
+Status: producent, codec i dopuszczenie nośnika są zaimplementowane w źródłach.
+Build po integracji, wygenerowany kontrakt OpenAPI, rzeczywiste HTTP/cold-load
+oraz browser/WebGL pozostają **NOT VERIFIED**. Opis formatu nie kwalifikuje
+źródła do bazy per-A, FFT ani LLG.
+
+Ten wariant korzysta z istniejącego zasobu
+`/v2/sessions/current/data/fields/{quantity_id}/samples/vector` i jego
+wspólnego klienta. `FMVP v5` opisany w ADR0053 nadal obsługuje pełne quantity
+IDs. `FMVP v6` oznacza odrębny układ immutable artifact inspection, którego
+natywne identyfikatory próbek wymagają `u64`. O wyborze układu decyduje wyłącznie
+zewnętrzny bajt wersji FMVP. Samo `FMMI version=4` nie rozróżnia tych układów;
+decoder nie zgaduje schematu na podstawie długości lub zawartości.
+
+### Nagłówek i metadane v6
+
+Nagłówek ma 48 bajtów. Liczby wielobajtowe są little-endian. Magic to `FMVP`,
+wersja na offsecie4 wynosi6, kind na offsecie5 wynosi1 (`float64`), offset6
+zawiera liczbę komponentów, a offset7 jest zerem. Offset8 zawiera długość
+metadanych `u32`, offset12 liczbę skalarnych wartości `u32`, zaś offsety16/20/24
+grid `u32`: `[sample_count, 1, 1]`. Quantity ID zajmuje16 bajtów UTF-8 od
+offsetu28 i jest dopełniony zerami; zastrzeżone bajty44–47 są zerami.
+Obsługiwane tu kanoniczne `V_electric`, `J_charge` i `H_ant` mieszczą się
+w tym polu. V6 nie przejmuje rozszerzenia pełnego ID z v5.
+
+Metadane zaczynają się bezpośrednio po nagłówku. Ich część stała ma88 bajtów:
+
+| Offset względem FMMI | Typ | Znaczenie |
+|---:|---|---|
+| 0 | 4 bajty | Magic `FMMI` |
+| 4 | `u16` | Wersja metadanych4 |
+| 6 | `u16` | Flags, zero |
+| 8 / 10 / 12 / 14 | 4 × `u16` | Długości UTF-8: domain generation, source kind, source ID, field generation |
+| 16 | `u64` | Rewizja nośnika, niezerowa |
+| 24 | 32 bajty | SHA256 nośnika |
+| 56 | `u32` | Kod indeksowania |
+| 60 | `u32` | Liczba rekordów mapowania, równa sample_count |
+| 64 / 66 | 2 × `u16` | Długości UTF-8: scope kind i scope ID |
+| 68 | `u64` | Rewizja źródła |
+| 76 | `u32` | Rozmiar rekordu mapowania:8 lub24 bajty |
+| 80 | `u32` | Powtórzony kod indeksowania |
+| 84 | `u32` | Pole zastrzeżone, zero |
+
+Po części stałej występują kolejno napisy: scope kind, scope ID, domain
+generation, source kind, source ID, field generation. Następnie zapisane
+jest mapowanie próbek, zerowe dopełnienie do wielokrotności8 bajtów i wartości
+`float64`. Długość odpowiedzi musi być dokładnie
+`48 + metadata_length + 8 * value_count`; wszystkie długości i iloczyny
+podlegają kontroli zakresu. Klient odrzuca bufory przekraczające128 MiB,
+niepoprawne UTF-8/NUL, zastrzeżone pola, padding i wartości nieskończone lub NaN.
+API ma dodatkowe niezależne budżety materializacji i zatrzymanych nośników;
+limit frontendowy nie jest zgodą na większe payloady w pozostałych warstwach.
+
+### Tożsamość i reprezentacja próbek
+
+| Kod | Indeksowanie | Rekord |
+|---:|---|---|
+| 4 | `source_nodes` | Stabilny identyfikator wierzchołka `u64` |
+| 5 | `sample_nodes` | Numer porządkowy próbki `u64`, równy pozycji rekordu |
+| 6 | `point_samples` | Numer porządkowy próbki `u64`, równy pozycji rekordu |
+| 7 | `tet4_cell_local_nodes` | Element `u64`, lokalny wierzchołek `u8`, siedem zerowych bajtów, stabilny identyfikator wierzchołka `u64` |
+| 8 | `cell_centers` | Stabilny identyfikator elementu `u64` |
+
+Dla kodu7 cztery kolejne rekordy mają wspólny element, lokalne indeksy
+0,1,2,3 i cztery różne identyfikatory wierzchołków. Mapowanie nie może mieć
+duplikatów tożsamości próbki. Ten nośnik zachowuje lokalne ślady prądu;
+nie dopuszcza współdzielenia/średniowania geometrii między komórkami RT0.
+Identyfikatory i rewizje nie przechodzą przez JavaScript `Number`.
+
+`source_kind` wynosi `artifact_inspection`. `domain_generation_id` jest
+bare lowercase SHA256 nośnika i odpowiada32 bajtom jego digestu. Rewizja
+nośnika jest interpretacją pierwszych8 bajtów tego digestu jako little-endian
+`u64`; zgodność nadal wymaga całego digestu, nie tylko jego prefiksu.
+`source_id` zachowuje dokładne `owner.source_digest`, zaś
+`field_generation_id` dokładne `owner.content_digest` z prefiksem `sha256:`.
+Nie zastępuje się tych tożsamości bieżącym krokiem magnetyzacji ani licznikiem
+zasobu. V pozostaje na węzłach przewodnika, J na swoim nośniku lokalnym albo
+centrach, a H na rzeczywistym nośniku próbkowania. Ich jednostki pochodzą
+z kanonicznego katalogu quantities; inspekcja nie tworzy fikcyjnego m/Ms/Aex.
+
+### HTTP, dopuszczenie i odtworzenie
+
+Nagłówek `x-fullmag-encoding` ma postać `FMVP;version=6`, natomiast
+`resolved_capability.carriers[].payload_version` wynosi `FMVP.v6`.
+Nagłówki `x-fullmag-carrier-id`, `x-fullmag-carrier-revision` oraz
+`x-fullmag-carrier-digest` wskazują dokładny nośnik z JSON locatora.
+Rewizje są dziesiętnymi napisami bez utraty precyzji. Nagłówki źródła i field
+generation muszą zgadzać się z binarnym payloadem. Klient porównuje również
+locator, session/epoch, request scope, run/stage, źródło, quantity i własną
+geometrię FMMT.v2. Dla zaakceptowanych zadań zachowuje dodatkowo przypięte
+project/task/attempt/ownership epoch i CAS. Brak zgodnego nośnika daje odmowę,
+a nie fallback do bieżącej domeny magnetycznej.
+
+ETag reprezentacji v6 ma oddzielny prefiks `artifact-field-v6` i uwzględnia
+owner/content, nośnik, rewizję quantity, ID oraz projekcję komponentów.
+Walidacja właściciela i zawartości poprzedza warunkową odpowiedź304.
+Archiwum przechowuje dotychczasowe schematy CAS/tensorów/geometrii; FMVP jest
+transportową reprezentacją odczytu. Odtworzenie nie może przyjąć starego
+framingu artefaktowego v5 jako wariantu v5 z pełnym ID ani odgadywać jego
+wersji po rozmiarze. Rollout wymaga zgodnego nowego pakietu API i frontendu.
+
+Bramki odbioru obejmują rzeczywiste200/304/409, obce owner/session/carrier,
+zmianę bajtów o tej samej długości, zmianę generation w trakcie odczytu,
+uszkodzony payload, archive/cold-load i widoczny canvas bez utraty WebGL.
+Kontrole źródeł i syntetyczne bufory pozostają dowodami wyłącznie swojego
+zakresu. OpenAPI i generated transport/types należy odtworzyć z nowego
+produkcyjnego eksportera; nie edytuje się ich ręcznie.
+
 
 ### Dostępność energii obiektu
 

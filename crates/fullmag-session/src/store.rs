@@ -3539,6 +3539,10 @@ impl SessionStore {
                             | "accepted_quantity_bundle"
                             | FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE
                             | FMS_OBSERVATION_STATE_ARTIFACT_TYPE
+                            | "accepted_primary_carrier"
+                            | "output_history_index"
+                            | "output_history_page"
+                            | "output_history_sample"
                     );
                 let exact_existing_entry = existing
                     .entries

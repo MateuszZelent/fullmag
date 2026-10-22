@@ -255,7 +255,7 @@ pub fn schedule_next_ready_accepted_task(
         run_id,
         resource_offer,
         |_| Ok(true),
-        |task, claim, _| crate::commit_claimed_task_admission(store, task, claim).map(Some),
+        |task, claim, inputs, frozen| crate::claim::commit_claimed_task_admission_with_frozen_context(store, task, claim, inputs, frozen),
     )
 }
 
@@ -287,7 +287,7 @@ pub fn schedule_next_ready_accepted_task_with_host(
                 Ok(true)
             }
         },
-        |task, claim, inputs| {
+        |task, claim, inputs, frozen| {
             if !host.has_current_compute_snapshot()? {
                 return Ok(None);
             }
@@ -298,8 +298,8 @@ pub fn schedule_next_ready_accepted_task_with_host(
                 placement,
                 host.expected_runtime_generation_sha256(),
             )?;
-            crate::try_commit_claimed_task_admission_with_host(
-                store, task, claim, ledger, &request, inputs,
+            crate::claim::try_commit_claimed_task_admission_with_host_and_frozen_context(
+                store, task, claim, ledger, &request, inputs, frozen,
             )
         },
     )
@@ -333,9 +333,11 @@ pub fn resume_next_admitted_accepted_task_with_host(
     if !store.accepted_run_start_permitted(run_id.as_str())? {
         return Ok(None);
     }
-    let catalog = store
-        .read_run_catalog(run_id.as_str())?
-        .context("accepted scheduler recovery requires a durable run catalog")?;
+    // Discovery can observe RunIntent before its initial task catalog is
+    // published. No admitted claim can be resumed until that catalog exists.
+    let Some(catalog) = store.read_run_catalog(run_id.as_str())? else {
+        return Ok(None);
+    };
     if !catalog.tasks.iter().any(|task| {
         task.lifecycle == FmsTaskLifecycle::Preparing
             && task.readiness == FmsTaskReadiness::Ready
@@ -596,7 +598,9 @@ pub fn resume_next_admitted_accepted_task_with_host(
             .context("decoding immutable admitted task inputs")?;
         match &prepare.command {
             fullmag_application::WorkerCommand::Prepare { resolved_input }
-                if resolved_input.inputs == captured_inputs => {}
+                if resolved_input.inputs == captured_inputs
+                    && resolved_input.frozen_stage_context.as_ref().map(serde_json::to_value).transpose()?
+                        == snapshot.frozen_stage_context => {}
             _ => bail!("persisted Prepare differs from immutable admitted task inputs"),
         }
     }
@@ -691,7 +695,7 @@ pub fn resume_next_admitted_accepted_task_with_host(
             )
         );
         let event = WorkerEventEnvelope {
-            schema_version: WORKER_PROTOCOL_SCHEMA.into(),
+            schema_version: prepare.schema_version.clone(),
             message_id,
             sequence: event_sequence,
             claim: claim.identity(),
@@ -825,6 +829,7 @@ fn schedule_next_ready_accepted_task_with_admission(
         &fullmag_application::TaskRecord,
         &TaskClaim,
         &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+        Option<&fullmag_application::FrozenStageContextRefV1>,
     ) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>>,
 ) -> Result<Option<ScheduledAcceptedTask>> {
     let intent = store
@@ -920,8 +925,10 @@ fn schedule_next_ready_accepted_task_with_admission(
         {
             continue;
         }
+        let frozen = crate::frozen_stage_lifecycle::prepare_admission_binding(
+            store, &accepted, study_step, &queued.resolved_inputs)?;
         let Some(admission) =
-            retry_store_writer_busy(|| admit(&task, &claim, &queued.resolved_inputs))
+            retry_store_writer_busy(|| admit(&task, &claim, &queued.resolved_inputs, frozen.as_ref()))
                 .context("durably admitting accepted task claim")?
         else {
             continue;
@@ -1501,7 +1508,7 @@ mod accepted_start_tests {
         (study, catalog, lowered)
     }
 
-    fn fixture() -> Fixture {
+    fn fixture(prepared: bool) -> Fixture {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let run_id = RunId::parse("run-manual-scheduler").unwrap();
@@ -1589,7 +1596,12 @@ mod accepted_start_tests {
                     input_fingerprint: input_fingerprint.clone(),
                     lifecycle: FmsTaskLifecycle::Accepted,
                     readiness: FmsTaskReadiness::Blocked {
-                        reason: ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION.into(),
+                        reason: if prepared {
+                            ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION
+                        } else {
+                            fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON
+                        }
+                        .into(),
                     },
                     observation: None,
                     attempt_id: None,
@@ -1613,25 +1625,27 @@ mod accepted_start_tests {
             catalog,
             lowered,
         };
-        let preparation = accepted
-            .materialize_fdm_preparation_receipt(
-                format!("prep-{task_id}"),
-                &step_id,
-            )
-            .unwrap();
-        store
-            .commit_task_preparation_receipt(
-                &FmsTaskPreparationReceipt::new(
-                    run_id.as_str(),
+        if prepared {
+            let preparation = accepted
+                .materialize_fdm_preparation_receipt(
+                    format!("prep-{task_id}"),
                     &step_id,
-                    input_fingerprint,
-                    preparation.preparation_id.clone(),
-                    preparation.plan_fingerprint.clone(),
-                    serde_json::to_value(preparation).unwrap(),
                 )
-                .unwrap(),
-            )
-            .unwrap();
+                .unwrap();
+            store
+                .commit_task_preparation_receipt(
+                    &FmsTaskPreparationReceipt::new(
+                        run_id.as_str(),
+                        &step_id,
+                        input_fingerprint,
+                        preparation.preparation_id.clone(),
+                        preparation.plan_fingerprint.clone(),
+                        serde_json::to_value(preparation).unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
         Fixture {
             _directory: directory,
             store,
@@ -1656,8 +1670,68 @@ mod accepted_start_tests {
     }
 
     #[test]
+    fn preparation_frontier_does_not_require_a_receipt_or_release_compute() {
+        for prepared in [false, true] {
+            let fixture = fixture(prepared);
+            let before = fixture.store.read_run_catalog(fixture.run_id.as_str()).unwrap();
+            assert!(super::accepted_run_step_is_preparation_frontier(
+                &fixture.store, &fixture.run_id, "step:run",
+            ).unwrap());
+            assert_eq!(super::accepted_run_step_is_scheduler_ready(
+                &fixture.store, &fixture.run_id, "step:run",
+            ).unwrap(), prepared);
+            assert!(!fixture.store.accepted_run_start_permitted(fixture.run_id.as_str()).unwrap());
+            assert_eq!(before, fixture.store.read_run_catalog(fixture.run_id.as_str()).unwrap());
+        }
+    }
+
+    #[test]
+    fn unprepared_frontier_preserves_completion_dependencies() {
+        let fixture = fixture(false);
+        let mut accepted = crate::load_accepted_study_snapshot(
+            &fixture.store, &fixture.run_id, &fixture.project_id,
+        ).unwrap();
+        let mut producer = accepted.study.steps[0].clone();
+        producer.step_id = "producer".into();
+        let mut producer_lowered = accepted.lowered.steps[0].clone();
+        producer_lowered.step_id = producer.step_id.clone();
+        accepted.study.steps[0].completion_dependencies = vec![producer.step_id.clone()];
+        accepted.lowered.steps[0].completion_dependencies = vec![producer.step_id.clone()];
+        accepted.study.steps.push(producer);
+        accepted.lowered.steps.push(producer_lowered);
+        let mut catalog = fixture.store.read_run_catalog(fixture.run_id.as_str()).unwrap().unwrap();
+        let mut producer_task = catalog.tasks[0].clone();
+        producer_task.task_id = fullmag_session::task_id_for_study_step(
+            fixture.run_id.as_str(), "producer",
+        ).unwrap();
+        catalog.tasks.push(producer_task);
+        catalog.revision += 1;
+        fixture.store.commit_run_catalog(&catalog).unwrap();
+        assert!(!super::step_is_ready(
+            &fixture.store, &fixture.run_id, &accepted,
+            &accepted.study.steps[0], &accepted.lowered.steps[0], false,
+        ).unwrap(), "a producer without durable Completed must block the frontier");
+        accepted.study.steps[0].completion_dependencies.clear();
+        accepted.lowered.steps[0].completion_dependencies.clear();
+        accepted.study.steps[0].inputs.push(fullmag_authoring::StudyInputPort {
+            port_id: "source_state".into(),
+            data_kind: fullmag_authoring::StudyPortDataKind::State,
+            required: true,
+            source: fullmag_authoring::StudyInputSource::StepOutput {
+                step_id: "producer".into(),
+                port: "final_state".into(),
+                case_id: "default".into(),
+            },
+        });
+        assert!(!super::step_is_ready(
+            &fixture.store, &fixture.run_id, &accepted,
+            &accepted.study.steps[0], &accepted.lowered.steps[0], false,
+        ).unwrap(), "an unresolved required input must also block the frontier");
+    }
+
+    #[test]
     fn manual_start_holds_scheduler_readiness_and_admission_until_exact_release() {
-        let fixture = fixture();
+        let fixture = fixture(true);
         let before = fixture.store.read_run_catalog(fixture.run_id.as_str()).unwrap().unwrap();
         assert!(!fixture
             .store
@@ -1682,7 +1756,7 @@ mod accepted_start_tests {
             &fixture.run_id,
             offer(),
             |_| Ok(true),
-            |_task, _claim, _inputs| {
+            |_task, _claim, _inputs, _preparation| {
                 admission_calls.set(admission_calls.get() + 1);
                 Ok(None)
             },
@@ -1729,7 +1803,7 @@ mod accepted_start_tests {
             &fixture.run_id,
             offer(),
             |_| Ok(true),
-            |_task, _claim, _inputs| {
+            |_task, _claim, _inputs, _preparation| {
                 admission_calls.set(admission_calls.get() + 1);
                 Ok(None)
             },

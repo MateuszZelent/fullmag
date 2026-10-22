@@ -352,7 +352,7 @@ export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
   { value: "component_x", label: "Component X" },
   { value: "component_y", label: "Component Y" },
   { value: "component_z", label: "Component Z" },
-  { value: "magnitude", label: "Magnitude |m|" },
+  { value: "magnitude", label: "Magnitude" },
   { value: "colormap", label: "Colormap" },
 ];
 
@@ -2400,7 +2400,7 @@ export function quantitySourcePatch(
   quantityId: string,
 ): VisualizationTargetPatch {
   const activeQuantityId = resolveCanonicalQuantityId(quantityId);
-  const patch: VisualizationTargetPatch = { activeQuantityId };
+  const patch: VisualizationTargetPatch = { activeQuantityId, tensorProjection: null };
 
   if (isScalarSpatialQuantityId(activeQuantityId)) {
     if (settings.surfaceColorSource !== "colormap") {

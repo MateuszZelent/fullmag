@@ -872,6 +872,7 @@ use utoipa::OpenApi;
         fullmag_authoring::CurrentTransportModel,
         fullmag_authoring::SceneTransportCoupling,
         fullmag_authoring::SceneStructuredCutAxis,
+        fullmag_authoring::SceneStructuredCutCoordinateFrame,
         fullmag_authoring::SceneStructuredCutNormal,
         fullmag_authoring::SceneStructuredCutPlane,
         fullmag_authoring::SceneImpressedPotentialJump,

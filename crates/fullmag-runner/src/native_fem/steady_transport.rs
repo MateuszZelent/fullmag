@@ -2456,9 +2456,10 @@ mod tests {
     fn common_reciprocal_m2_fdm_plan(nz: usize) -> FdmPlanIR {
         let cells = nz;
         let descriptor = ResolvedFdmCoupledSpinTransportIR {
-            descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v1".into(),
+            descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v2".into(),
             time_envelope: None,
             active_cells: vec![true; cells],
+            magnetic_active_mask: vec![true; cells],
             reciprocal_materials: vec![
                 ResolvedReciprocalMaterialIR {
                     sigma_spm: 4.0,
@@ -2809,7 +2810,7 @@ mod tests {
     fn reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles() {
         if !crate::native_fem::is_cpu_available() {
             eprintln!(
-                "skipping reciprocal M2 FDM↔FEM common-limit test: native FEM CPU unavailable"
+                "skipping reciprocal M2 FDMâ†”FEM common-limit test: native FEM CPU unavailable"
             );
             return;
         }
@@ -2924,7 +2925,7 @@ mod tests {
         for pair in resolution_errors.windows(2) {
             assert!(
                 pair[1].1 < pair[0].1 && pair[1].2 < pair[0].2,
-                "reciprocal M2 FDM↔FEM profiles must converge under Nz refinement: coarse={:?}, fine={:?}",
+                "reciprocal M2 FDMâ†”FEM profiles must converge under Nz refinement: coarse={:?}, fine={:?}",
                 pair[0],
                 pair[1]
             );
@@ -2932,7 +2933,7 @@ mod tests {
         assert!(
             resolution_errors.last().unwrap().1 < 1.0e-2
                 && resolution_errors.last().unwrap().2 < 1.0e-2,
-            "reciprocal M2 FDM↔FEM common-limit envelope is too large at fine Nz: {:?}",
+            "reciprocal M2 FDMâ†”FEM common-limit envelope is too large at fine Nz: {:?}",
             resolution_errors.last().unwrap()
         );
     }
@@ -2941,7 +2942,7 @@ mod tests {
     fn reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles() {
         if !crate::native_fem::is_cpu_available() {
             eprintln!(
-                "skipping reciprocal M2 3-D SHE/iSHE FDM↔FEM test: native FEM CPU unavailable"
+                "skipping reciprocal M2 3-D SHE/iSHE FDMâ†”FEM test: native FEM CPU unavailable"
             );
             return;
         }
@@ -3097,7 +3098,7 @@ mod tests {
         for pair in cross_errors.windows(2) {
             assert!(
                 pair[1].2 < pair[0].2,
-                "3-D reciprocal M2 FDM↔FEM spin profiles must converge under h refinement: coarse={pair:?}"
+                "3-D reciprocal M2 FDMâ†”FEM spin profiles must converge under h refinement: coarse={pair:?}"
             );
         }
         let fine = cross_errors.last().expect("3-D cross-backend sweep result");
@@ -3107,7 +3108,7 @@ mod tests {
         );
         assert!(
             fine.1 < 1.0e-3 && fine.2 < 5.0e-2,
-            "3-D reciprocal M2 FDM↔FEM common-limit envelope is too large: {fine:?}"
+            "3-D reciprocal M2 FDMâ†”FEM common-limit envelope is too large: {fine:?}"
         );
     }
 
@@ -3115,7 +3116,7 @@ mod tests {
     fn direct_she_common_si_limit_matches_fdm_and_fem_reference_profiles() {
         if !crate::native_fem::is_cpu_available() {
             eprintln!(
-                "skipping M1 direct-SHE FDM↔FEM common-limit test: native FEM CPU unavailable"
+                "skipping M1 direct-SHE FDMâ†”FEM common-limit test: native FEM CPU unavailable"
             );
             return;
         }

@@ -42,6 +42,7 @@ import {
   shouldRenderPrimitiveTransformGizmo,
   trackPrimitiveObjectGeometry,
 } from "./PrimitiveObjectLayerModel";
+import { createAntennaPrimitiveTextures } from "./antennaPrimitiveTextures";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 
 export function PrimitiveObjectLayer({
@@ -178,6 +179,18 @@ function RenderablePrimitiveObject({
   settings: VisualizationTargetSettings;
   tracker: Viewport3DResourceTracker;
 }) {
+  const antennaTextures = useMemo(() => {
+    if (object.role !== "antenna") return null;
+    const textures = createAntennaPrimitiveTextures();
+    tracker.track("texture", textures.matcap);
+    tracker.track("texture", textures.brush);
+    return textures;
+  }, [object.role, tracker]);
+  useEffect(() => () => {
+    if (!antennaTextures) return;
+    tracker.release("texture", antennaTextures.matcap);
+    tracker.release("texture", antennaTextures.brush);
+  }, [antennaTextures, tracker]);
   const renderSettings = resolvePrimitiveObjectRenderSettings(object, settings);
   const geometry = useMemo(
     () => trackPrimitiveObjectGeometry(tracker, object),
@@ -251,7 +264,16 @@ function RenderablePrimitiveObject({
           }}
         >
           <primitive attach="geometry" object={geometry} />
-          {materialProfile.uniformGeometry.lit ? (
+          {antennaTextures ? (
+            <meshMatcapMaterial
+              color={shaderColor}
+              map={antennaTextures.brush}
+              matcap={antennaTextures.matcap}
+              opacity={opacity}
+              {...materialProfile.primitivePreview}
+              {...surfaceMaterialPolicyProps(opacity)}
+            />
+          ) : materialProfile.uniformGeometry.lit ? (
             <meshLambertMaterial
               color={shaderColor}
               opacity={opacity}

@@ -95,7 +95,9 @@ class VolumeWslTests(unittest.TestCase):
                 stack.enter_context(patch.object(dev, "docker_text", side_effect=
                     lambda *args, **kwargs: json.dumps(inspected) if args[0] == "inspect" else "maintenance logs"))
                 remove = stack.enter_context(patch.object(dev, "docker_capture"))
-                control = Mock(project="fullmag-master", volume="control")
+                control = Mock(project="fullmag-master", volume="control", namespace="")
+                control.read.return_value = None
+                control.subpath.return_value = ""
                 operation = {"root": "test", "receipt": {"attempt": "owned-attempt"}}
                 layout = {"storage_root": "/home/operator/storage", "project_id": "project"}
                 if changed:

@@ -190,6 +190,12 @@ def _container(profile, *, socket=False):
             "NetworkMode": "fullmag_default",
             "PidMode": "",
             "Binds": [],
+            "Mounts": [{
+                "Type": "volume",
+                "Source": profile["volume_names"][cache.CONTROL_VOLUME_ROLE],
+                "Target": cache.CONTROL_TARGET,
+                "VolumeOptions": {"Subpath": profile.get("control_namespace", "")},
+            }],
         },
         "Mounts": mounts,
     }

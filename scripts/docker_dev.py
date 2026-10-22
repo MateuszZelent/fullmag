@@ -2520,11 +2520,19 @@ def _parser() -> argparse.ArgumentParser:
         help="optional frontend port override; conflicting defaults fail closed",
     )
     script_parser.add_argument("--request-id", help="optional stable request fence")
+    frontend_refresh = subparsers.add_parser("refresh-frontend-volume", help="Replace only the pinned frontend metadata generation")
+    frontend_refresh.add_argument("--attempt", required=True)
+    frontend_refresh.add_argument("--config-sha256", required=True)
+    frontend_refresh.add_argument("--source-root", type=Path, required=True)
+    frontend_refresh.add_argument("--port", type=int, required=True)
     idle_restart = subparsers.add_parser("restart-idle-volume", help="Restart the pinned healthy backend only while no session is active")
     idle_restart.add_argument("--attempt", required=True)
     idle_restart.add_argument("--config-sha256", required=True)
     idle_restart.add_argument("--source-root", type=Path, required=True)
     idle_restart.add_argument("--port", type=int, required=True)
+    idle_restart.add_argument("--saved-authoring-checkpoint")
+    idle_restart.add_argument("--saved-authoring-checkpoint-sha256")
+    idle_restart.add_argument("--stop-only", action="store_true", help="Drain and stop the pinned backend without restarting it")
     resources = subparsers.add_parser(
         "increase-resources", help="increase a pinned pre-API backend's budget without restarting its build"
     )
@@ -2600,6 +2608,8 @@ def _parser() -> argparse.ArgumentParser:
             "and is never resolved as a host path"
         ),
     )
+    recreate_volume.add_argument("--completed-recreation-attempt", help="Continue this exact succeeded removal without repeating rm")
+    recreate_volume.add_argument("--completed-recreation-sha256", help="SHA-256 of the completed removal terminal receipt")
     recreate_volume.add_argument("--fresh-state", action="store_true", help="Preserve the old host storage root and create a fresh one")
     recreate_volume.set_defaults(profile="dev", image=None, toolchain_image=None, source_manifest=None,
                                  include_untracked=None, script=None)
@@ -2731,6 +2741,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.port = selected.port
         if args.action == "build":
             build(args)
+        elif args.action == "refresh-frontend-volume":
+            from docker_volume_dev import refresh_frontend
+            refresh_frontend(args)
         elif args.action == "restart-idle-volume":
             from docker_volume_dev import restart_idle
             restart_idle(args)
@@ -2747,6 +2760,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_stop_unadmitted import stop
             stop(args)
         elif args.action == "recreate-volume":
+            if bool(args.completed_recreation_attempt) != bool(args.completed_recreation_sha256):
+                raise _fail("completed recreation requires both attempt and terminal SHA-256")
+            if args.completed_recreation_attempt and (args.fresh_state or args.recovery_authorization or args.resume_recreation):
+                raise _fail("completed recreation cannot combine fresh state, recovery authorization, or resume recreation")
             if args.resume_recreation is not None:
                 from docker_volume_dev import resume_recreation
                 resume_recreation(args)

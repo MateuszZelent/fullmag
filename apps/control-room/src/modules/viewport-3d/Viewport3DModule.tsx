@@ -1559,13 +1559,16 @@ export default function Viewport3DModule({
       solverStatus.data?.run_id &&
       runtimeFrozenSpins?.mask_sha256 &&
       runtimeFrozenSpins.topology_fingerprint &&
-      runtimeFrozenSpins.frozen_site_count > 0,
+      runtimeFrozenSpins.frozen_site_count > 0 &&
+      sceneModel.publishedModelQuantityIds.has(runtimeFrozenSpinsFieldRequest.quantityId),
   );
   const runtimeFrozenSpinsFieldResource = useViewport3DFieldVectorRequest(
     runtimeFrozenSpinsFieldRequest,
     runtimeFrozenSpinsFieldEnabled,
   );
-  const runtimeFrozenSpinsFieldVector = runtimeFrozenSpinsFieldResource.data;
+  const runtimeFrozenSpinsFieldVector = runtimeFrozenSpinsFieldEnabled
+    ? runtimeFrozenSpinsFieldResource.data
+    : null;
   const objectEditSnapshot = useObjectEditSelector(kernel.objectEditSession);
   const primitiveModelWithPlacementDraft = useMemo(
     () => withObjectPlacementDraftPreview(

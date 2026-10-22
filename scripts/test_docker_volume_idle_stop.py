@@ -71,8 +71,8 @@ class IdleStopFixture:
         self.document = {
             "name": PROJECT,
             "services": {
-                "backend": {"environment": self.environment},
-                "frontend": {},
+                "backend": {"image": IMAGE, "environment": self.environment},
+                "frontend": {"image": IMAGE},
             },
         }
         self.previous = {
@@ -158,7 +158,7 @@ class IdleStopFixture:
 
     def text(self, *args, **kwargs):
         if args[:2] == ("image", "inspect"):
-            return json.dumps([{"Config": {}}])
+            return json.dumps([{"Id": IMAGE, "Config": {}}])
         if args[:1] == ("inspect",):
             identifier = args[1]
             if identifier == BACKEND_ID and self.backend_stopped:

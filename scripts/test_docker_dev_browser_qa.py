@@ -921,6 +921,68 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
         with self.assertRaises(qa.ControlOutcomeUnknown):
             qa._validate_browser_helper(writable_mount, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT)
 
+    def test_frontend_image_uses_exact_per_service_compose_pin(self):
+        qa = self.qa
+        backend_image = "sha256:" + "a" * 64
+        frontend_image = "sha256:" + "b" * 64
+        identity = {
+            "project_name": "fullmag-worktree-fixture", "project_id": "fullmag",
+            "worktree_id": "fixture", "checkout_kind": "worktree",
+            "source_root": str(ROOT), "network_name": "fullmag-worktree-fixture_fullmag",
+        }
+        compose = {"name": identity["project_name"], "services": {
+            "backend": {"image": backend_image}, "frontend": {"image": frontend_image},
+        }}
+        current = {"attempt": "c" * 32, "inputs": {"image_id": backend_image}}
+        document = {
+            "Image": frontend_image, "State": {"Running": True},
+            "Config": {"Labels": {
+                **qa.source_labels(identity),
+                "com.docker.compose.project": identity["project_name"],
+                "com.docker.compose.service": "frontend",
+            }},
+            "HostConfig": {"NetworkMode": identity["network_name"],
+                "PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3202"}]}},
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}},
+            "Mounts": [
+                {"Type": "volume", "Name": "frontend-fixture", "Destination": "/state/development", "RW": True},
+                {"Type": "volume", "Name": "control-fixture", "Destination": "/opt/fullmag/control", "RW": False},
+            ],
+        }
+        reads = []
+        class FakeControl:
+            project = identity["project_name"]
+            volume = "control-fixture"
+            def read(self, path):
+                reads.append(path)
+                return deepcopy(compose)
+        control = FakeControl()
+        def check(observed, receipt):
+            qa._validate_frontend(observed, control, identity, "frontend-fixture", receipt, 3202)
+        for image in (backend_image, frontend_image):
+            with self.subTest(valid_frontend_image=image):
+                compose["services"]["frontend"]["image"] = image
+                current["config_sha256"] = hashlib.sha256(qa.canonical(compose)).hexdigest()
+                document["Image"] = image
+                check(document, current)
+        self.assertEqual(reads, ["development/attempts/" + "c" * 32 + "/compose.json"] * 2)
+        base_compose = deepcopy(compose)
+        for case in ("digest", "attempt", "project", "backend-image", "mutable-image", "observed-image", "missing-service"):
+            with self.subTest(rejected=case):
+                compose = deepcopy(base_compose)
+                bad_current = deepcopy(current)
+                bad_document = deepcopy(document)
+                if case == "attempt": bad_current["attempt"] = "../other"
+                elif case == "project": compose["name"] = "fullmag-other"
+                elif case == "backend-image": compose["services"]["backend"]["image"] = frontend_image
+                elif case == "mutable-image": compose["services"]["frontend"]["image"] = "fullmag:latest"
+                elif case == "observed-image": bad_document["Image"] = backend_image
+                elif case == "missing-service": del compose["services"]["frontend"]
+                bad_current["config_sha256"] = hashlib.sha256(qa.canonical(compose)).hexdigest()
+                if case == "digest": bad_current["config_sha256"] = "d" * 64
+                with self.assertRaises(qa.BuildControlError):
+                    check(bad_document, bad_current)
+
     def test_control_volume_preflight_is_read_only_and_fail_closed_when_absent(self):
         qa = self.qa
 

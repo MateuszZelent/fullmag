@@ -18,6 +18,8 @@ vi.mock("../viewport3dBatchedInvalidate", () => ({
 }));
 
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
+import { createAntennaPrimitiveTextures } from "./antennaPrimitiveTextures";
+import { primitiveMonoColorForRole } from "@/kernel/visualization/primitiveSurfaceColor";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
 import {
@@ -120,13 +122,14 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     });
     expect(overlay!.meshState).toBe("primitive-only");
   });
-  it("uses unlit materials for primitive preview surfaces", () => {
+  it("keeps ordinary primitives unlit and gives antennas a light-independent metallic finish", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./PrimitiveObjectLayer.tsx", import.meta.url)),
       "utf8",
     );
     expect(source).toContain("<meshBasicMaterial");
     expect(source).not.toContain("<meshStandardMaterial");
+    expect(source).toContain("<meshMatcapMaterial");
   });
 
   it("keeps Primitive field-free and routes its presentation through the color resolver", () => {
@@ -148,6 +151,30 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     expect(primitiveSurfaceSource).not.toContain("fieldModel");
     expect(primitiveSurfaceSource).not.toContain("scalarColors");
     expect(primitiveSurfaceSource).not.toContain("magnetizationTexturePreview");
+  });
+
+  it("shows the antenna primitive preference without confusing a solid shader override", () => {
+    expect(primitiveMonoColorForRole("antenna", "var(--fm-surface-magnetic)"))
+      .toBe("var(--fm-surface-antenna)");
+    expect(primitiveMonoColorForRole("antenna", "#c8a050")).toBe("#c8a050");
+    expect(primitiveMonoColorForRole("magnetic", "var(--fm-surface-magnetic)"))
+      .toBe("var(--fm-surface-magnetic)");
+  });
+
+  it("keeps the repeatable brushed finish subtle and bounded", () => {
+    const first = createAntennaPrimitiveTextures();
+    const second = createAntennaPrimitiveTextures();
+    const pixels = first.brush.image.data as Uint8Array;
+    expect(pixels.byteLength + (first.matcap.image.data as Uint8Array).byteLength)
+      .toBeLessThanOrEqual(32 * 1024);
+    const tones = Array.from(pixels).filter((_, index) => index % 4 !== 3);
+    expect(Math.min(...tones)).toBeGreaterThanOrEqual(230);
+    expect(Math.max(...tones) - Math.min(...tones)).toBeGreaterThan(10);
+    expect(pixels).toEqual(second.brush.image.data);
+    first.matcap.dispose();
+    first.brush.dispose();
+    second.matcap.dispose();
+    second.brush.dispose();
   });
 
   it("uses the antenna theme by default while preserving literal color overrides", () => {
@@ -314,13 +341,13 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     ).toBe(false);
   });
 
-  it("renders pre-mesh channels only before mesh-ready state", () => {
+  it("keeps preview until replacement geometry exists even when the manifest is ready", () => {
     expect(
       shouldRenderPrimitiveObject(
         { ...primitiveObject("box"), meshState: "mesh-ready" },
         { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: true },
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldRenderPrimitiveObject(
         { ...primitiveObject("box"), meshState: "primitive-only" },
@@ -333,6 +360,17 @@ describe("PrimitiveObjectLayer geometry resources", () => {
         { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: true },
       ),
     ).toBe(true);
+  });
+
+  it("hands a ready object from primitive preview to realized geometry and back without changing settings", () => {
+    const object = { ...primitiveObject("box"), meshState: "mesh-ready" as const };
+    const settings = { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: false, shaderVisible: true };
+    expect(shouldRenderPrimitiveObject(object, settings, false)).toBe(true);
+    expect(resolvePrimitiveObjectRenderSettings(object, settings).primitiveVisible).toBe(true);
+    expect(shouldRenderPrimitiveObject(object, settings, true)).toBe(false);
+    expect(shouldRenderPrimitiveObject(object, settings, false)).toBe(true);
+    expect(settings.primitiveVisible).toBe(false);
+    expect(shouldRenderPrimitiveObject(object, { ...settings, visible: false }, false)).toBe(false);
   });
 
   it("does not render a primitive fallback when a realized FDM carrier owns the object", () => {
@@ -380,7 +418,7 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     expect(settings.shaderVisible).toBe(true);
   });
 
-  it("does not invent a primitive fill for wireframe-only or mesh-ready passes", () => {
+  it("keeps wireframe-only intent but provides shaded fallback while replacement geometry is absent", () => {
     expect(
       resolvePrimitiveObjectRenderSettings(
         primitiveObject("box"),
@@ -392,7 +430,7 @@ describe("PrimitiveObjectLayer geometry resources", () => {
         { ...primitiveObject("box"), meshState: "mesh-ready" },
         { ...DEFAULT_OBJECT_VISUALIZATION, primitiveVisible: false, shaderVisible: true },
       ).primitiveVisible,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("renders a primitive-only points pass without a field payload", () => {

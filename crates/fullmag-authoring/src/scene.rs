@@ -228,6 +228,9 @@ pub struct SceneObject {
     pub locked: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Authored presentation only; this map never selects or activates physics.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub visualization_hint: BTreeMap<String, Value>,
 }
 
 fn default_scene_object_role() -> String {

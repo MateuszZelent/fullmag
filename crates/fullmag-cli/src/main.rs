@@ -449,6 +449,8 @@ fn main() -> Result<()> {
             let BackendPlanIR::Fdm(fdm) = &execution_plan.backend_plan else {
                 bail!("FDM checkpoint resume requires a single-grid FDM plan");
             };
+            fullmag_runner::validate_fdm_transport_checkpoint_resume_support(fdm)
+                .map_err(|error| anyhow!(error.message))?;
             let raw = std::fs::read(&checkpoint)
                 .with_context(|| format!("reading checkpoint {}", checkpoint.display()))?;
             let checkpoint_value: Value = serde_json::from_slice(&raw)

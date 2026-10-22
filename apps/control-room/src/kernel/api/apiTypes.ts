@@ -992,11 +992,36 @@ export type StructuredCommandRequest =
   | FdmGridRefreshCommandRequest;
 export type UniversePatchRequest = components["schemas"]["UniversePatchRequest"];
 export type UniverseResource = components["schemas"]["UniverseResource"];
-export type VisualizationStatePatch =
-  components["schemas"]["VisualizationStatePatch"];
+/** Pending managed export: schemas/visualization_state.rs tensor and planar serde fields. */
+type VisualizationStyleOverride = components["schemas"]["VisualizationTargetStyleOverride"] & {
+  tensor_projection?: string | null;
+};
+type VisualizationOverride = Omit<components["schemas"]["VisualizationOverrideState"], "style"> & {
+  style?: VisualizationStyleOverride | null;
+};
+type VisualizationTargetEntry = Omit<components["schemas"]["VisualizationTargetRegistryEntry"], "settings" | "override"> & {
+  settings: components["schemas"]["VisualizationResolvedTargetSettings"] & { tensor_projection?: string | null };
+  override?: VisualizationOverride | null;
+};
+type VisualizationTargets = Omit<components["schemas"]["VisualizationTargetRegistryState"], "airbox" | "objects" | "parts"> & {
+  airbox: VisualizationTargetEntry;
+  objects: VisualizationTargetEntry[];
+  parts: VisualizationTargetEntry[];
+};
+type PlanarFieldComponent = components["schemas"]["PlanarFieldComponent"] | import("./tensorFieldProjection").TensorProjectionToken;
+type PlanarVisualizationPatch = Omit<components["schemas"]["PlanarVisualizationPatch"], "component"> & {
+  component?: PlanarFieldComponent | null;
+};
+export type VisualizationStatePatch = Omit<components["schemas"]["VisualizationStatePatch"], "overrides" | "planar"> & {
+  overrides?: VisualizationOverride[] | null;
+  planar?: PlanarVisualizationPatch | null;
+};
 export type DisplaySelection = components["schemas"]["DisplaySelection"];
-export type VisualizationStateResource =
-  components["schemas"]["VisualizationStateResource"];
+export type VisualizationStateResource = Omit<components["schemas"]["VisualizationStateResource"], "overrides" | "targets" | "planar"> & {
+  overrides: VisualizationOverride[];
+  targets?: VisualizationTargets;
+  planar?: Omit<components["schemas"]["PlanarVisualizationState"], "component"> & { component: PlanarFieldComponent };
+};
 export type ModeCompositionDatasetPatch =
   components["schemas"]["ModeCompositionDatasetPatch"];
 export type EigenModeResourceRef =

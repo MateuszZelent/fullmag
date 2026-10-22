@@ -16,6 +16,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const BOUNDED_PYTHON_HELPER_TIMEOUT: Duration = Duration::from_secs(30);
+// Source capture hashes the complete bounded runtime closure before and after
+// export and separately revalidates every file; it is not a single DSL render.
+const BOUNDED_SOURCE_CAPTURE_TIMEOUT: Duration = Duration::from_secs(90);
 const BOUNDED_PYTHON_HELPER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const BOUNDED_PYTHON_HELPER_LOG_LIMIT: u64 = 1024 * 1024;
 
@@ -497,6 +500,75 @@ pub(crate) fn render_scene_document_via_python_helper_bounded(
     )
 }
 
+/// A private canonical export retained until accepted preparation has copied
+/// and reverified the immutable shared source capture.
+pub(crate) struct GeneratedAcceptedSceneSource {
+    directory: PathBuf,
+    pub(crate) path: PathBuf,
+    pub(crate) scene_sha256: String,
+    pub(crate) source_sha256: String,
+    pub(crate) byte_count: usize,
+}
+
+impl Drop for GeneratedAcceptedSceneSource {
+    fn drop(&mut self) {
+        // Remove only our exact generated entry and empty private directory.
+        // Never recursively delete workspace/user assets.
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir(&self.directory);
+    }
+}
+
+/// Render the captured UI scene through the ordinary public Python exporter.
+/// This is geometry-light authoring, not preparation, profile binding or Submit.
+pub(crate) fn render_accepted_scene_source_bounded(
+    repo_root: &Path,
+    workspace_root: &Path,
+    scene_document: &SceneDocument,
+) -> Result<GeneratedAcceptedSceneSource, ApiError> {
+    fs::create_dir_all(workspace_root)
+        .map_err(|error| ApiError::internal(format!("prepare canonical source workspace: {error}")))?;
+    let workspace_root = fs::canonicalize(workspace_root)
+        .map_err(|error| ApiError::internal(format!("resolve canonical source workspace: {error}")))?;
+    let directory = workspace_root.join(format!("accepted-scene-source-{}", uuid_v4_hex()));
+    fs::create_dir(&directory)
+        .map_err(|error| ApiError::internal(format!("create private canonical source directory: {error}")))?;
+    let mut source = GeneratedAcceptedSceneSource {
+        path: directory.join("source.py"),
+        directory,
+        scene_sha256: String::new(),
+        source_sha256: String::new(),
+        byte_count: 0,
+    };
+    let response = render_scene_document_via_python_helper_bounded(
+        repo_root, &source.directory, &source.path, scene_document,
+    )?;
+    if !response.written || response.bytes_written == 0 {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_ui_source_missing", "canonical UI export did not produce executable source",
+        ));
+    }
+    // Use the shared bounded capture budget; a generated source is not an
+    // alternative route around the accepted-source transport limits.
+    let bytes = fullmag_session::repository_path::read_bounded_regular_file(
+        &source.directory, "source.py",
+        fullmag_application::script_source_capture::METADATA_LIMIT,
+    ).map_err(|error| ApiError::unprocessable_with_code(
+        "accepted_ui_source_invalid", format!("canonical UI source is not a bounded regular file: {error}"),
+    ))?;
+    if response.bytes_written != bytes.len() {
+        return Err(ApiError::conflict_with_code(
+            "accepted_ui_source_changed", "canonical UI export byte count changed before capture",
+        ));
+    }
+    let scene = serde_json::to_value(scene_document)
+        .map_err(|error| ApiError::internal(format!("encode captured UI scene: {error}")))?;
+    source.scene_sha256 = fullmag_session::canonical_json_sha256(&scene);
+    source.source_sha256 = fullmag_session::hex_sha256(&bytes);
+    source.byte_count = bytes.len();
+    Ok(source)
+}
+
 /// Persistence may keep an authoring-valid scene with no enabled physics.
 /// Such a document has no executable source yet; runtime synchronization stays strict.
 pub(crate) fn try_render_scene_document_for_persistence(
@@ -881,6 +953,35 @@ pub(crate) fn scene_document_to_prepared_script_config_with_asset_root(
         scene_document,
         requested_execution,
         SceneCaptureKind::PreparedExecutionConfig,
+        None,
+    )
+}
+
+/// Internal accepted-preparation handoff; the profile was bound by Rust before native geometry.
+pub(crate) fn scene_document_to_bound_prepared_script_config_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    bound_problem: &fullmag_ir::ProblemIR,
+) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
+    capture_authored_scene_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+        SceneCaptureKind::PreparedExecutionConfig, Some(bound_problem),
+    )
+}
+
+pub(crate) fn scene_document_to_authored_script_config_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
+    capture_authored_scene_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+        SceneCaptureKind::ExecutionConfig, None,
     )
 }
 
@@ -927,6 +1028,7 @@ fn capture_authored_scene<T: serde::de::DeserializeOwned>(
         scene_document,
         requested_execution,
         kind,
+        None,
     )
 }
 
@@ -937,6 +1039,7 @@ fn capture_authored_scene_with_asset_root<T: serde::de::DeserializeOwned>(
     scene_document: &SceneDocument,
     requested_execution: &fullmag_application::RequestedExecution,
     kind: SceneCaptureKind,
+    bound_problem: Option<&fullmag_ir::ProblemIR>,
 ) -> Result<T, ApiError> {
     requested_execution
         .validate()
@@ -947,6 +1050,7 @@ fn capture_authored_scene_with_asset_root<T: serde::de::DeserializeOwned>(
         .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {error}")))?;
 
     let scene_path = workspace_root.join(format!("preparation-scene-{}.json", uuid_v4_hex()));
+    let _scene_guard = TemporaryFileGuard(scene_path.clone());
     let scene_body = serde_json::to_vec(scene_document).map_err(|error| {
         ApiError::internal(format!(
             "failed to serialize preparation SceneDocument: {error}"
@@ -977,6 +1081,24 @@ fn capture_authored_scene_with_asset_root<T: serde::de::DeserializeOwned>(
         asset_root.unwrap_or(workspace_root).display().to_string(),
     ];
     kind.append_preparation_args(&mut helper_args);
+    let bound_guard = bound_problem.map(|problem| {
+        let snapshot: fullmag_ir::MaterializedExecutionRequestIR = serde_json::from_value(
+            problem.problem_meta.runtime_metadata.get("execution_materialization").cloned()
+                .ok_or_else(|| ApiError::unprocessable("accepted preparation requires bound execution"))?,
+        ).map_err(|error| ApiError::unprocessable(error.to_string()))?;
+        fullmag_application::validate_execution_materialization(&snapshot)
+            .map_err(ApiError::unprocessable)?;
+        let guard = TemporaryFileGuard(workspace_root.join(format!("bound-preparation-{}.json", uuid_v4_hex())));
+        let bytes = serde_json::to_vec(problem).map_err(|error| ApiError::internal(error.to_string()))?;
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(ApiError::unprocessable("bound preparation handoff exceeds 8 MiB"));
+        }
+        fs::write(&guard.0, bytes).map_err(|error| ApiError::internal(error.to_string()))?;
+        Ok::<_, ApiError>(guard)
+    }).transpose()?;
+    if let Some(guard) = &bound_guard {
+        helper_args.extend(["--accepted-preparation-json".into(), guard.0.display().to_string()]);
+    }
     let output = run_python_helper(repo_root, &helper_args);
     let _ = std::fs::remove_file(&scene_path);
     let output = output?;
@@ -1154,9 +1276,18 @@ impl Drop for BoundedHelperLogGuard {
     }
 }
 
-fn run_bounded_python_helper(
-    mut command: ProcessCommand,
-    workspace_root: &Path,
+fn run_bounded_python_helper(command: ProcessCommand, workspace_root: &Path) -> Result<Output, BoundedHelperError> {
+    run_bounded_python_helper_with_limit(command, workspace_root, BOUNDED_PYTHON_HELPER_LOG_LIMIT)
+}
+
+fn run_bounded_python_helper_with_limit(
+    command: ProcessCommand, workspace_root: &Path, maximum: u64,
+) -> Result<Output, BoundedHelperError> {
+    run_bounded_python_helper_with_budget(command, workspace_root, maximum, BOUNDED_PYTHON_HELPER_TIMEOUT)
+}
+
+fn run_bounded_python_helper_with_budget(
+    mut command: ProcessCommand, workspace_root: &Path, maximum: u64, budget: Duration,
 ) -> Result<Output, BoundedHelperError> {
     let (stdout, stderr, logs) = match create_bounded_helper_logs(workspace_root) {
         Ok(logs) => logs,
@@ -1172,9 +1303,9 @@ fn run_bounded_python_helper(
         Ok(child) => child,
         Err(error) => return Err(BoundedHelperError::Spawn(error)),
     };
-    let deadline = Instant::now() + BOUNDED_PYTHON_HELPER_TIMEOUT;
+    let deadline = Instant::now() + budget;
     let status = loop {
-        if let Err(error) = bounded_helper_log_size(&stdout_path, &stderr_path) {
+        if let Err(error) = bounded_helper_log_size_with_limit(&stdout_path, &stderr_path, maximum) {
             let cleanup = stop_bounded_helper(&mut child);
             return Err(BoundedHelperError::Started(combine_bounded_error(
                 "Python helper log inspection failed",
@@ -1190,7 +1321,7 @@ fn run_bounded_python_helper(
                     let cleanup = stop_bounded_helper(&mut child);
                     return Err(BoundedHelperError::Started(
                         bounded_helper_failure_with_cleanup(
-                            "Python helper exceeded the 30 second deadline",
+                            &format!("Python helper exceeded the {} second deadline", budget.as_secs()),
                             cleanup,
                         ),
                     ));
@@ -1211,16 +1342,16 @@ fn run_bounded_python_helper(
             }
         }
     };
-    if let Err(error) = bounded_helper_log_size(&stdout_path, &stderr_path) {
+    if let Err(error) = bounded_helper_log_size_with_limit(&stdout_path, &stderr_path, maximum) {
         return Err(BoundedHelperError::Started(ApiError::internal(format!(
             "Python helper log inspection failed after exit: {error}"
         ))));
     }
-    let stdout = match read_bounded_helper_log(&stdout_path) {
+    let stdout = match read_bounded_helper_log_with_limit(&stdout_path, maximum) {
         Ok(bytes) => bytes,
         Err(error) => return Err(BoundedHelperError::Started(error)),
     };
-    let stderr = match read_bounded_helper_log(&stderr_path) {
+    let stderr = match read_bounded_helper_log_with_limit(&stderr_path, maximum) {
         Ok(bytes) => bytes,
         Err(error) => return Err(BoundedHelperError::Started(error)),
     };
@@ -1269,16 +1400,16 @@ fn create_bounded_helper_logs(
     ))
 }
 
-fn bounded_helper_log_size(stdout_path: &Path, stderr_path: &Path) -> Result<u64, ApiError> {
+fn bounded_helper_log_size_with_limit(stdout_path: &Path, stderr_path: &Path, maximum: u64) -> Result<u64, ApiError> {
     let stdout_size = bounded_helper_log_metadata(stdout_path, "stdout")?;
     let stderr_size = bounded_helper_log_metadata(stderr_path, "stderr")?;
     let combined = stdout_size
         .checked_add(stderr_size)
         .ok_or_else(|| ApiError::internal("Python helper log size overflow"))?;
-    if combined > BOUNDED_PYTHON_HELPER_LOG_LIMIT {
+    if combined > maximum {
         return Err(ApiError::internal(format!(
             "Python helper output exceeded the {} byte combined log limit",
-            BOUNDED_PYTHON_HELPER_LOG_LIMIT
+            maximum
         )));
     }
     Ok(combined)
@@ -1298,18 +1429,18 @@ fn bounded_helper_log_metadata(path: &Path, stream: &str) -> Result<u64, ApiErro
     Ok(metadata.len())
 }
 
-fn read_bounded_helper_log(path: &Path) -> Result<Vec<u8>, ApiError> {
+fn read_bounded_helper_log_with_limit(path: &Path, maximum: u64) -> Result<Vec<u8>, ApiError> {
     bounded_helper_log_metadata(path, "captured")?;
     let mut file = File::open(path).map_err(|error| {
         ApiError::internal(format!("failed to read bounded Python helper log: {error}"))
     })?;
     let mut bytes = Vec::new();
-    file.take(BOUNDED_PYTHON_HELPER_LOG_LIMIT + 1)
+    file.take(maximum + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| {
             ApiError::internal(format!("failed to read Python helper log: {error}"))
         })?;
-    if bytes.len() as u64 > BOUNDED_PYTHON_HELPER_LOG_LIMIT {
+    if bytes.len() as u64 > maximum {
         return Err(ApiError::internal(
             "Python helper log exceeded the bounded read limit",
         ));
@@ -1362,6 +1493,26 @@ mod tests {
     use axum::http::StatusCode;
 
     #[test]
+    fn generated_accepted_source_guard_removes_only_its_private_entry() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().join("owned-source");
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("source.py");
+        fs::write(&path, b"import fullmag as fm\n").unwrap();
+        let neighbor = workspace.path().join("user.py");
+        fs::write(&neighbor, b"# user source\n").unwrap();
+        let guard = GeneratedAcceptedSceneSource {
+            directory: directory.clone(), path: path.clone(),
+            scene_sha256: "a".repeat(64), source_sha256: "b".repeat(64), byte_count: 21,
+        };
+        assert!(guard.path.is_file());
+        drop(guard);
+        assert!(!path.exists());
+        assert!(!directory.exists());
+        assert_eq!(fs::read(neighbor).unwrap(), b"# user source\n");
+    }
+
+    #[test]
     fn geometry_materialization_is_explicit_and_only_uses_execution_config_export() {
         for (kind, command, prepared) in [
             (SceneCaptureKind::ProblemIr, "export-scene-ir", false),
@@ -1377,6 +1528,198 @@ mod tests {
                 prepared,
             );
         }
+    }
+
+
+    #[test]
+    fn accepted_closed_loop_binds_profile_before_source_geometry_and_preserves_provenance() {
+        let root = repo_root();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut scene = load_scene_document_state(
+            &root, workspace.path(), &root.join("examples/fem_antenna_closed_loop_nonmagnetic.py"),
+        ).unwrap();
+        let Some(fullmag_authoring::StudyPipelineNode::Primitive(node)) =
+            scene.study.study_pipeline.as_mut().unwrap().nodes.first_mut() else {
+                panic!("closed-loop example must begin with its explicit solve");
+            };
+        node.id = "authored-inspection-alias".into();
+        let profile = fullmag_application::legacy_live_execution_profile();
+        scene.study.execution_profile = Some(profile.clone());
+        let request = fullmag_application::RequestedExecution {
+            backend: "fem".into(), device: "cpu".into(),
+            precision: "double".into(), mode: "strict".into(), minimum_resources: None,
+        };
+        let reference = fullmag_authoring::StudyExecutionProfileReference {
+            profile_id: profile.profile_id.clone(), version: profile.version.clone(),
+        };
+        // This is the actual UI renderer/bootstrap, not the original Python IR.
+        let light = scene_document_to_authored_script_config_with_asset_root(
+            &root, workspace.path(), None, &scene, &request,
+        ).unwrap();
+        let selection = &light.ir.problem_meta.runtime_metadata["runtime_selection"];
+        assert_eq!(selection["device"], "auto");
+        assert!(selection.as_object().unwrap().contains_key("cpu_threads"));
+        assert!(selection["cpu_threads"].is_null());
+        let migration = fullmag_application::migrate_legacy_live_execution(
+            &light.ir, &request, fullmag_ir::ExecutionOriginKindIR::Study,
+            "live.scene.study.legacy_execution.inspect_loop",
+        ).unwrap();
+        let layers = vec![migration.layer];
+        let bind = |problem| fullmag_application::materialize_captured_study_input(
+            "script-base", problem, &reference, layers.clone(),
+            |id, version| {
+                assert_eq!(id, profile.profile_id);
+                assert_eq!(version, profile.version);
+                Ok(profile.clone())
+            },
+        ).unwrap();
+        let bound = bind(light.ir);
+        let selection = &bound.problem.problem_meta.runtime_metadata["runtime_selection"];
+        assert_eq!(selection["device"], "cpu");
+        assert!(!selection.as_object().unwrap().contains_key("cpu_threads"));
+        let old = scene_document_to_prepared_script_config_with_asset_root(
+            &root, workspace.path(), None, &scene, &request,
+        ).unwrap();
+        let mut old = old;
+        old.ir = bind(old.ir).problem;
+        let rejected = fullmag_application::materialize_script_pipeline_with_output_policy_bounded(
+            old, fullmag_ir::configure_project_autosave_policy, 16,
+        ).err().expect("preparation before binding must reproduce the actual digest failure");
+        assert!(format!("{rejected:#}").contains("prepared source authored input digest"));
+
+        let missing_budget = request.for_problem(&bound.problem).unwrap_err();
+        assert!(missing_budget.to_string().contains(
+            "compute_resources requires requested_execution.minimum_resources (run_spec.v2)"));
+        let mut preparation_constraints = request.clone();
+        // The default bound resource request uses Auto threads and no reservations.
+        preparation_constraints.minimum_resources = Some(fullmag_application::RequestedResourceBudget {
+            cpu_millis: 1_000, memory_bytes: 1, gpu_memory_bytes: 0, storage_bytes: 1,
+        });
+        let prepared_request = preparation_constraints.for_problem(&bound.problem).unwrap();
+        assert!(request.minimum_resources.is_none());
+        assert_eq!(prepared_request.minimum_resources, preparation_constraints.minimum_resources);
+        let mut prepared = scene_document_to_bound_prepared_script_config_with_asset_root(
+            &root, workspace.path(), None, &scene, &prepared_request, &bound.problem,
+        ).unwrap();
+        assert_eq!(
+            prepared.ir.problem_meta.runtime_metadata["runtime_selection"],
+            bound.problem.problem_meta.runtime_metadata["runtime_selection"],
+        );
+        let rebound = bind(prepared.ir);
+        assert_eq!(rebound.execution, bound.execution);
+        assert_eq!(
+            rebound.problem.problem_meta.runtime_metadata["execution_materialization"],
+            serde_json::to_value(&bound.execution).unwrap(),
+        );
+        prepared.ir = rebound.problem;
+        let compiled = fullmag_application::materialize_script_pipeline_with_output_policy_bounded(
+            prepared.clone(), fullmag_ir::configure_project_autosave_policy, 16,
+        ).expect("unchanged canonical planner must accept the bound producer digest");
+        assert_eq!(compiled.executions.len(), 1);
+        let stage = &compiled.executions[0].stage;
+        assert!(stage.ir.magnets.is_empty());
+        assert!(matches!(stage.action,
+            Some(fullmag_application::script_stage_contract::ResolvedScriptStageAction::AntennaClosedLoopInspection { .. })));
+        assert_eq!(
+            stage.ir.problem_meta.runtime_metadata["execution_materialization"],
+            serde_json::to_value(&bound.execution).unwrap(),
+        );
+        assert!(!fs::read_dir(workspace.path()).unwrap().any(|entry|
+            entry.unwrap().file_name().to_string_lossy().starts_with("bound-preparation-")));
+
+        // Exercise the complete accepted compiler and catalog, not only stage expansion.
+        let generated = render_accepted_scene_source_bounded(&root, workspace.path(), &scene).unwrap();
+        let capture = capture_startup_script_scene(&root, workspace.path(), &generated.path).unwrap();
+        let accepted = fullmag_application::compile_accepted_closed_loop_pipeline(
+            prepared, "study:closed-loop-full-acceptance".into(), scene.revision,
+            reference.clone(), layers.clone(), capture.manifest.clone(),
+            |id, version| {
+                assert_eq!(id, profile.profile_id);
+                assert_eq!(version, profile.version);
+                Ok(profile.clone())
+            },
+            fullmag_ir::configure_project_autosave_policy,
+        ).expect("typed standalone closed-loop selection must reach accepted catalog");
+        let lowered = fullmag_plan::lower_study_plan_with_catalog(
+            &accepted.study, &accepted.catalog,
+        ).expect("accepted closed-loop catalog must replan without an LLG carrier");
+        assert_eq!(lowered.steps.len(), 1);
+        let entry = &accepted.catalog.entries()[0];
+        let selected = entry.problem();
+        assert_eq!(selected.problem_meta.runtime_metadata["active_stage_id"], "authored-inspection-alias");
+        let fullmag_ir::StudyIR::AntennaFieldSolve { selection: Some(selection), sampling } =
+            &selected.study else { panic!("accepted physical selection must remain typed"); };
+        assert_eq!(selection.stage_id, "inspect_loop");
+        let stage_id = selection.stage_id.clone();
+        let port_id = selection.port_mode_id.clone();
+        let output_id = "loop_inspection";
+        let closed_identity = |problem: &fullmag_ir::ProblemIR| {
+            match fullmag_plan::validate_closed_loop_operation(
+                problem, &stage_id, &port_id, output_id,
+            ).unwrap() {
+                fullmag_plan::AntennaFieldSolveExecutionPlan::ClosedLoopInspection {
+                    input, requested_execution, output_id,
+                } => (input, requested_execution, output_id),
+                _ => panic!("expected the exact closed-loop operation"),
+            }
+        };
+        let expected = closed_identity(selected);
+        let mut multiple = selected.clone();
+        let mut other_definition = multiple.antenna_field_solve_stages[0].clone();
+        other_definition.id = "other-physical-solve".into();
+        other_definition.outputs[0].id = "other-inspection-output".into();
+        multiple.antenna_field_solve_stages.push(other_definition);
+        assert_eq!(closed_identity(&multiple), expected);
+
+        let mut legacy = selected.clone();
+        legacy.study = fullmag_ir::StudyIR::FieldOnly { sampling: sampling.clone() };
+        legacy.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!(stage_id));
+        assert_eq!(closed_identity(&legacy), expected);
+        for (wrong_stage, wrong_port) in [
+            ("other-physical-solve", port_id.as_str()), (stage_id.as_str(), "wrong-port"),
+        ] {
+            let mut wrong = multiple.clone();
+            wrong.study = fullmag_ir::StudyIR::AntennaFieldSolve {
+                selection: Some(fullmag_ir::AntennaFieldSolveSelectionIR {
+                    stage_id: wrong_stage.into(), port_mode_id: wrong_port.into(),
+                }), sampling: sampling.clone(),
+            };
+            assert!(fullmag_plan::validate_closed_loop_operation(
+                &wrong, &stage_id, &port_id, output_id,
+            ).is_err());
+        }
+        let mut ambiguous = multiple.clone();
+        ambiguous.study = fullmag_ir::StudyIR::AntennaFieldSolve {
+            selection: None, sampling: sampling.clone(),
+        };
+        assert!(fullmag_plan::validate_closed_loop_operation(
+            &ambiguous, &stage_id, &port_id, output_id,
+        ).is_err());
+        let magnetic = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut llg = selected.clone();
+        llg.study = magnetic.study.clone();
+        assert!(fullmag_plan::validate_closed_loop_operation(
+            &llg, &stage_id, &port_id, output_id,
+        ).is_err());
+        let magnetic_value = serde_json::to_value(&magnetic).unwrap();
+        for field in ["magnets", "materials", "energy_terms"] {
+            let mut value = serde_json::to_value(selected).unwrap();
+            value[field] = magnetic_value[field].clone();
+            let wrong = serde_json::from_value(value).unwrap();
+            assert!(fullmag_plan::validate_closed_loop_operation(
+                &wrong, &stage_id, &port_id, output_id,
+            ).is_err());
+        }
+        let mut wrong_target = selected.clone();
+        wrong_target.antenna_field_solve_stages[0].field_sampling_domain =
+            fullmag_ir::FieldTargetIR::Object { object_id: "missing-sampling-target".into() };
+        assert!(fullmag_plan::validate_closed_loop_operation(
+            &wrong_target, &stage_id, &port_id, output_id,
+        ).is_err());
+        assert!(fullmag_plan::validate_closed_loop_operation(
+            selected, &stage_id, &port_id, "wrong-output",
+        ).is_err());
+        capture.verify_unchanged().unwrap();
     }
 
     #[test]
@@ -2037,4 +2380,32 @@ study.stages.add_eigenmodes(count=4)
             "study pipeline should deserialize change_device primitive stage"
         );
     }
+}
+
+/// Bounded, environment-isolated executor for the shared immutable capture producer.
+/// Capture has no geometry/cache environment; meshing remains a separate one-shot preparation.
+pub(crate) fn capture_startup_script_scene(
+    repo_root: &Path, workspace_root: &Path, script_path: &Path,
+) -> Result<fullmag_application::script_source_capture::CapturedScriptSource, ApiError> {
+    let real_root = python_workspace_root(repo_root);
+    let authored = real_root.join("packages/fullmag-py/src/fullmag");
+    let fullmag = if authored.is_dir() { authored } else { real_root.join("python/site-packages/fullmag") };
+    let fullmag = fs::canonicalize(fullmag).map_err(|error| ApiError::internal(format!("capture runtime root: {error}")))?;
+    fullmag_application::script_source_capture::capture_authored_script(script_path, &fullmag,
+        &fullmag_application::script_source_capture::CaptureOptions { scene_only: true, ..Default::default() },
+        |args, maximum| {
+            let interpreter = resolve_python(repo_root).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let mut command = interpreter.command(&real_root).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            command.env_clear();
+            if let Some(parent) = interpreter.path.parent() { command.env("PATH", parent); }
+            command.env("PYTHONHASHSEED", "0").env("PYTHONDONTWRITEBYTECODE", "1");
+            command.args(args);
+            run_bounded_python_helper_with_budget(
+                command, workspace_root, u64::try_from(maximum)?, BOUNDED_SOURCE_CAPTURE_TIMEOUT,
+            )
+                .map_err(|error| match error {
+                    BoundedHelperError::Spawn(error) => anyhow::anyhow!("source capture spawn: {error}"),
+                    BoundedHelperError::Started(error) => anyhow::anyhow!(error.to_string()),
+                })
+        }).map_err(|error| ApiError::unprocessable_with_code("accepted_script_capture_invalid", format!("immutable startup source capture failed: {error:#}")))
 }

@@ -1613,6 +1613,10 @@ async function installFdmFixtureApi(page, fixture, requests) {
       }
       return;
     }
+    if (path === "/v2/sessions/current/data/quantities") {
+      await fulfillJson(route, fdmQuantityCatalogFixture());
+      return;
+    }
     if (path === "/v2/sessions/current/data/fields") {
       await fulfillJson(route, fdmFieldCatalogFixture());
       return;
@@ -2166,6 +2170,7 @@ function fdmSceneFixture() {
       {
         geometry: { geometry_params: { size }, kind: "box" },
         id: FDM_MEMORY_OBJECT_ID,
+        magnetization_ref: "fixture-magnetization",
         regions: [
           {
             enabled: true,
@@ -2268,6 +2273,10 @@ function fdmMembershipFixture() {
 }
 
 function validateFdmMemoryFixture(fixture) {
+  const object = fixture.scene.objects.find((entry) => entry.id === FDM_MEMORY_OBJECT_ID);
+  if (!object?.magnetization_ref) {
+    throw new Error("FDM memory fixture requires authored magnetization for its magnetic field requests.");
+  }
   const descriptor = fixture.fdmMembership;
   const support = descriptor.magnetic_support;
   const expectedCellCount = FIELD_GRID.reduce(
@@ -2607,6 +2616,35 @@ function normalizeFixtureFingerprint(value) {
   return /^[0-9a-f]{64}$/i.test(normalized)
     ? normalized.toLowerCase()
     : null;
+}
+
+function fdmQuantityCatalogFixture() {
+  return {
+    schema_version: "1.0",
+    quantities: WARM_QUANTITIES.map((id) => ({
+      id,
+      label: id,
+      description: "FDM memory churn fixture field",
+      domain: id === "m" || id === "H_ex" ? "magnetic_only" : "full_domain",
+      shape: "vector_field",
+      unit: id === "m" ? "1" : "A/m",
+      n_comp: 3,
+      location: "cell",
+      normalization_hint: "none",
+      interactive_preview: true,
+      supports_preview_2d: true,
+      supports_preview_3d: true,
+      supports_history: false,
+      supports_export: true,
+      capability_state: "supported",
+      solver_capability: "supported",
+      requestable: true,
+      renderable: true,
+      materializable: true,
+      materialization_state: "complete",
+      publication_state: "interactive",
+    })),
+  };
 }
 
 function fdmFieldCatalogFixture() {

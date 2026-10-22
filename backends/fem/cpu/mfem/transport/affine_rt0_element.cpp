@@ -216,6 +216,29 @@ AffineRt0Element::Point AffineRt0Element::current_at(const Point &physical_point
     return result;
 }
 
+AffineRt0Element::Point AffineRt0Element::retained_current_at(const Point &physical_point) const
+{
+    require(coefficients_frozen_, "affine RT0 retained current requires frozen field coefficients");
+    const auto point = exact_point(physical_point);
+    std::array<ExactPoint, 4> vertices;
+    for (int local = 0; local < 4; ++local) vertices[local] = exact_point(vertices_[local]);
+    const Exact denominator = determinant(vertices);
+    Point result;
+    for (int component = 0; component < 3; ++component) {
+        Exact sum = 0;
+        for (int local = 0; local < 4; ++local) {
+            sum += Exact(signed_coefficients_[local]) *
+                (point[component] - vertices[local][component]);
+        }
+        const Exact value = sum / denominator;
+        result[component] = value.convert_to<double>();
+        require(std::isfinite(result[component]) && (value == 0 || result[component] != 0.0),
+            "affine RT0 retained current is not representable");
+        if (result[component] == 0.0) result[component] = 0.0;
+    }
+    return result;
+}
+
 double AffineRt0Element::face_moment(const Face &face_points) const
 {
     require(coefficients_frozen_, "affine RT0 moment requires frozen field coefficients");

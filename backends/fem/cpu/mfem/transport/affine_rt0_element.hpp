@@ -21,6 +21,8 @@ public:
     AffineRt0Element(const mfem::GridFunction &field, int element);
     Point basis_value_at(const Point &physical_point, int local) const;
     Point current_at(const Point &physical_point) const;
+    // Exact frozen-binary64 reconstruction for the five retained snapshot samples.
+    Point retained_current_at(const Point &physical_point) const;
     double face_moment(const Face &face_points) const;
     double signed_face_weight(const Face &face_points, int local) const;
 

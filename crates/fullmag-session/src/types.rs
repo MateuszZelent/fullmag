@@ -42,8 +42,12 @@ pub enum RestoreClass {
     LogicalResume,
     /// Saved primary fields used as initial condition for a new run.
     InitialConditionImport,
+    /// Archived static fields can be inspected without magnetic state or restart.
+    SavedFieldsReadOnly,
     /// Project / UI / script only; solver must re-run from scratch.
     ConfigOnly,
+    /// The current runtime explicitly refuses continuation from this checkpoint.
+    Unsupported,
 }
 
 // ── Session manifest ───────────────────────────────────────────────────
@@ -1570,7 +1574,14 @@ impl FmsPreparationReceipt {
             .ok_or_else(|| {
                 anyhow::anyhow!("preparation receipt payload must contain schema_version")
             })?;
-        if payload_schema != FMS_PREPARATION_RECEIPT_SCHEMA {
+        if payload_schema == "closed_loop_preparation_receipt.v1" {
+            let step_id = self.payload["plan"]["source"]["step_id"].as_str()
+                .context("inspection preparation accepted step is missing")?;
+            validate_closed_loop_preparation_payload_identity(
+                &self.payload, &self.run_id, step_id,
+                &self.preparation_id, &self.plan_fingerprint,
+            )?;
+        } else if payload_schema != FMS_PREPARATION_RECEIPT_SCHEMA {
             bail!("preparation receipt payload has unsupported schema `{payload_schema}`");
         }
         let payload_preparation_id = self
@@ -1786,28 +1797,10 @@ impl FmsTaskPreparationReceipt {
     }
 
     fn validate_closed_loop_payload_identity(&self) -> Result<()> {
-        let payload = self.payload.as_object().context("inspection preparation is not an object")?;
-        let keys: std::collections::BTreeSet<_> = payload.keys().map(String::as_str).collect();
-        if keys != ["schema_version", "preparation_id", "plan_fingerprint", "plan", "native"].into_iter().collect()
-            || payload["preparation_id"].as_str() != Some(self.preparation_id.as_str())
-            || payload["plan_fingerprint"].as_str() != Some(self.plan_fingerprint.as_str()) {
-            bail!("inspection preparation payload identity differs from envelope");
-        }
-        let plan = payload["plan"].as_object().context("inspection preparation plan is missing")?;
-        let source = plan.get("source").and_then(Value::as_object).context("inspection preparation accepted source is missing")?;
-        if plan.get("schema_version").and_then(Value::as_str) != Some("closed_loop_preparation_plan.v1")
-            || source.get("schema_version").and_then(Value::as_str) != Some("accepted_run_preparation_source.v1")
-            || source.get("run_id").and_then(Value::as_str) != Some(self.run_id.as_str())
-            || source.get("step_id").and_then(Value::as_str) != Some(self.step_id.as_str())
-            || source.get("problem_fingerprint") != plan.get("problem_fingerprint")
-            || format!("sha256:{}", canonical_json_sha256(&payload["plan"])) != self.plan_fingerprint {
-            bail!("inspection preparation source differs from its envelope");
-        }
-        for field in ["problem_fingerprint", "carrier_fingerprint", "operation_fingerprint", "source_mesh_fingerprint"] {
-            validate_prefixed_sha256(plan.get(field).and_then(Value::as_str).context("inspection preparation digest missing")?, "inspection preparation fingerprint")?;
-        }
-        validate_prefixed_sha256(source.get("specification_fingerprint").and_then(Value::as_str).context("inspection accepted RunSpec digest missing")?, "inspection RunSpec fingerprint")?;
-        Ok(())
+        validate_closed_loop_preparation_payload_identity(
+            &self.payload, &self.run_id, &self.step_id,
+            &self.preparation_id, &self.plan_fingerprint,
+        )
     }
 
     pub fn relative_path(&self) -> Result<String> {
@@ -1869,6 +1862,42 @@ impl FmsTaskPreparationReceipt {
             && self.payload_sha256 == other.payload_sha256
             && self.payload == other.payload
     }
+}
+
+fn validate_closed_loop_preparation_payload_identity(
+    payload: &Value,
+    run_id: &str,
+    step_id: &str,
+    preparation_id: &str,
+    plan_fingerprint: &str,
+) -> Result<()> {
+    validate_study_step_id(step_id)?;
+    let task_id = task_id_for_study_step(run_id, step_id)?;
+    if preparation_id != format!("prep-{task_id}") {
+        bail!("inspection preparation does not belong to the canonical accepted task");
+    }
+    let payload = payload.as_object().context("inspection preparation is not an object")?;
+    let keys: std::collections::BTreeSet<_> = payload.keys().map(String::as_str).collect();
+    if keys != ["schema_version", "preparation_id", "plan_fingerprint", "plan", "native"].into_iter().collect()
+        || payload["preparation_id"].as_str() != Some(preparation_id)
+        || payload["plan_fingerprint"].as_str() != Some(plan_fingerprint) {
+        bail!("inspection preparation payload identity differs from envelope");
+    }
+    let plan = payload["plan"].as_object().context("inspection preparation plan is missing")?;
+    let source = plan.get("source").and_then(Value::as_object).context("inspection preparation accepted source is missing")?;
+    if plan.get("schema_version").and_then(Value::as_str) != Some("closed_loop_preparation_plan.v1")
+        || source.get("schema_version").and_then(Value::as_str) != Some("accepted_run_preparation_source.v1")
+        || source.get("run_id").and_then(Value::as_str) != Some(run_id)
+        || source.get("step_id").and_then(Value::as_str) != Some(step_id)
+        || source.get("problem_fingerprint") != plan.get("problem_fingerprint")
+        || format!("sha256:{}", canonical_json_sha256(&payload["plan"])) != plan_fingerprint {
+        bail!("inspection preparation source differs from its envelope");
+    }
+    for field in ["problem_fingerprint", "carrier_fingerprint", "operation_fingerprint", "source_mesh_fingerprint"] {
+        validate_prefixed_sha256(plan.get(field).and_then(Value::as_str).context("inspection preparation digest missing")?, "inspection preparation fingerprint")?;
+    }
+    validate_prefixed_sha256(source.get("specification_fingerprint").and_then(Value::as_str).context("inspection accepted RunSpec digest missing")?, "inspection RunSpec fingerprint")?;
+    Ok(())
 }
 
 /// Immutable pointer proving that the live accepted projection selected one
@@ -1975,7 +2004,7 @@ impl FmsAcceptedStagePreparationReceipt {
     }
 }
 
-fn validate_study_step_id(value: &str) -> Result<()> {
+pub(crate) fn validate_study_step_id(value: &str) -> Result<()> {
     if value.trim().is_empty()
         || value.len() > 256
         || value
@@ -3612,6 +3641,7 @@ pub enum PreparationResourceLeaseCommitDisposition {
 pub const FMS_TASK_ADMISSION_SCHEMA: &str = "task_admission.v1";
 
 pub const FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA: &str = "resolved_inputs_snapshot.v1";
+pub const FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA_V2: &str = "resolved_inputs_snapshot.v2";
 const MAX_RESOLVED_INPUT_SNAPSHOT_ENTRIES: usize = 256;
 const MAX_RESOLVED_INPUT_SNAPSHOT_BYTES: usize = 128 * 1024;
 
@@ -3625,6 +3655,15 @@ pub struct FmsResolvedInputsSnapshot {
     pub schema_version: String,
     pub inputs: Value,
     pub content_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_snapshot_frozen_context")]
+    pub frozen_stage_context: Option<Value>,
+}
+
+fn deserialize_present_snapshot_frozen_context<'de,D:serde::Deserializer<'de>>(decoder:D)
+    -> std::result::Result<Option<Value>,D::Error> {
+    let value=Value::deserialize(decoder)?;
+    if value.is_null() {return Err(serde::de::Error::custom("present frozen stage context cannot be null"));}
+    Ok(Some(value))
 }
 
 impl FmsResolvedInputsSnapshot {
@@ -3633,13 +3672,24 @@ impl FmsResolvedInputsSnapshot {
             schema_version: FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA.into(),
             content_sha256: canonical_json_sha256(&inputs),
             inputs,
+            frozen_stage_context: None,
         };
         snapshot.validate()?;
         Ok(snapshot)
     }
 
+    pub fn new_with_frozen_stage_context(inputs: Value, context: Value) -> Result<Self> {
+        let content_sha256 = canonical_json_sha256(&serde_json::json!({
+            "inputs": &inputs, "frozen_stage_context": &context,
+        }));
+        let snapshot = Self { schema_version: FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA_V2.into(),
+            inputs, content_sha256, frozen_stage_context: Some(context) };
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA {
+        if !matches!(self.schema_version.as_str(), FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA | FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA_V2) {
             bail!(
                 "unsupported resolved-input snapshot schema `{}`",
                 self.schema_version
@@ -3656,7 +3706,17 @@ impl FmsResolvedInputsSnapshot {
                 MAX_RESOLVED_INPUT_SNAPSHOT_ENTRIES
             );
         }
-        let canonical_inputs = canonical_json_bytes(&self.inputs);
+        if (self.schema_version == FMS_RESOLVED_INPUTS_SNAPSHOT_SCHEMA_V2)
+            != self.frozen_stage_context.is_some()
+        {
+            bail!("resolved-input snapshot and lifecycle versions differ");
+        }
+        let canonical_inputs = if let Some(context) = &self.frozen_stage_context {
+            validate_frozen_stage_context_ref(context)?;
+            canonical_json_bytes(&serde_json::json!({
+                "inputs": &self.inputs, "frozen_stage_context": context,
+            }))
+        } else { canonical_json_bytes(&self.inputs) };
         if canonical_inputs.len() > MAX_RESOLVED_INPUT_SNAPSHOT_BYTES {
             bail!(
                 "resolved-input snapshot metadata exceeds the {}-byte limit",
@@ -3688,6 +3748,9 @@ impl FmsResolvedInputsSnapshot {
             .as_object()
             .context("resolved-input snapshot inputs must be a JSON object")?;
         let mut object_refs = BTreeSet::new();
+        if let Some(context) = &self.frozen_stage_context {
+            object_refs.extend(validate_frozen_stage_context_ref(context)?);
+        }
         for (port_id, descriptor) in inputs {
             let descriptor = descriptor.as_object().with_context(|| {
                 format!("resolved-input snapshot entry `{port_id}` must be an object")
@@ -3716,6 +3779,52 @@ impl FmsResolvedInputsSnapshot {
         }
         Ok(object_refs)
     }
+}
+
+
+/// Validate the storage-only lifecycle DTO without depending on application/runner.
+/// Only the context body and the explicit source manifest are declared CAS edges.
+pub(crate) fn validate_frozen_stage_context_ref(value: &Value) -> Result<BTreeSet<String>> {
+    let object = value.as_object().context("frozen stage context binding must be an object")?;
+    let keys = ["schema_version", "run_id", "stage_id", "case_id", "entry_kind",
+        "context_object_ref", "context_sha256", "context_byte_count", "source_manifest"];
+    if object.len() != keys.len() || keys.iter().any(|key| !object.contains_key(*key)) {
+        bail!("frozen stage context binding has missing or unknown fields");
+    }
+    let string = |key: &str| -> Result<&str> {
+        object.get(key).and_then(Value::as_str).with_context(|| format!("frozen context {key} must be text"))
+    };
+    if string("schema_version")? != "frozen_stage_context_ref.v1"
+        || object.get("context_byte_count").and_then(Value::as_u64).is_none_or(|count| count == 0)
+    { bail!("invalid frozen stage context schema or byte count"); }
+    crate::repository_path::validate_store_id(string("run_id")?)?;
+    crate::repository_path::validate_store_id(string("case_id")?)?;
+    validate_study_step_id(string("stage_id")?)?;
+    let context_ref = string("context_object_ref")?;
+    validate_sha256(context_ref, "frozen context object_ref")?;
+    if context_ref != string("context_sha256")? { bail!("frozen context raw digest differs"); }
+    let mut refs = BTreeSet::from([context_ref.to_owned()]);
+    let source = object.get("source_manifest").context("frozen lifecycle source key is missing")?;
+    match string("entry_kind")? {
+        "fresh_authored_root" if source.is_null() => {},
+        "continued_stage" if source.is_object() => {
+            let source = source.as_object().context("source manifest must be an object")?;
+            let keys = ["catalog_revision", "artifact_id", "object_ref", "content_sha256"];
+            if source.len() != keys.len() || keys.iter().any(|key| !source.contains_key(*key))
+                || source.get("catalog_revision").and_then(Value::as_u64).is_none_or(|revision| revision == 0)
+            { bail!("invalid frozen lifecycle source manifest shape"); }
+            let artifact_id = source.get("artifact_id").and_then(Value::as_str).context("missing source artifact id")?;
+            crate::repository_path::validate_store_id(artifact_id)?;
+            let object_ref = source.get("object_ref").and_then(Value::as_str).context("missing source object ref")?;
+            validate_sha256(object_ref, "frozen source manifest object_ref")?;
+            if source.get("content_sha256").and_then(Value::as_str) != Some(object_ref) {
+                bail!("frozen source manifest raw digest differs");
+            }
+            refs.insert(object_ref.to_owned());
+        }
+        _ => bail!("frozen lifecycle entry/source presence differs"),
+    }
+    Ok(refs)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4211,6 +4320,403 @@ pub struct SolverEnergies {
     pub total: f64,
 }
 
+
+pub const FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V4: &str = "study_output_manifest.v4";
+pub const FMS_OBSERVATION_SOURCE_SCHEMA_V2: &str = "observation_source.v2";
+pub const FMS_OUTPUT_HISTORY_INDEX_SCHEMA: &str = "study_output_history_index.v1";
+pub const FMS_OUTPUT_HISTORY_PAGE_SCHEMA: &str = "study_output_history_page.v1";
+pub const MAX_OUTPUT_HISTORY_METADATA_BYTES: u64 = 4 * 1024 * 1024;
+pub const MAX_OUTPUT_HISTORY_PAGE_SAMPLES: usize = 8192;
+pub const MAX_OUTPUT_HISTORY_PAGES: usize = 16384;
+pub const FMS_ACCEPTED_PRIMARY_ARTIFACT_TYPE: &str = "accepted_primary_carrier";
+pub const FMS_OUTPUT_HISTORY_INDEX_ARTIFACT_TYPE: &str = "output_history_index";
+pub const FMS_OUTPUT_HISTORY_PAGE_ARTIFACT_TYPE: &str = "output_history_page";
+pub const FMS_OUTPUT_HISTORY_SAMPLE_ARTIFACT_TYPE: &str = "output_history_sample";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsPublishedCarrierV2 {
+    pub carrier_id: String,
+    pub value_digest: String,
+    pub codec_id: String,
+    pub codec_version: String,
+    pub preimage_sha256: String,
+    pub byte_count: u64,
+    pub artifact_id: String,
+    pub object_ref: String,
+    pub content_sha256: String,
+}
+
+impl FmsPublishedCarrierV2 {
+    pub fn validate(&self) -> Result<()> {
+        crate::repository_path::validate_store_id(&self.artifact_id)?;
+        if !fullmag_quantities::is_canonical_sha256(&self.value_digest)
+            || self.byte_count == 0 || self.codec_version != "v1"
+        { bail!("invalid published primary carrier"); }
+        validate_sha256(&self.preimage_sha256, "primary preimage SHA")?;
+        if self.preimage_sha256 != self.object_ref || self.object_ref != self.content_sha256 {
+            bail!("primary carrier raw identity differs");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsObservationSourceDescriptorV2 {
+    pub schema_version: String,
+    pub adapter_id: String,
+    pub accepted_state_ref: fullmag_quantities::AcceptedStateRef,
+    pub snapshot_schema_version: String,
+    pub snapshot_artifact_id: String,
+    pub snapshot_object_ref: String,
+    pub state_codec_id: String,
+    pub state_codec_version: String,
+    pub state_artifact_id: String,
+    pub state_object_ref: String,
+    pub grid_cells: [u32; 3],
+    pub quantity_ids: Vec<String>,
+    pub primary_carriers: Vec<FmsPublishedCarrierV2>,
+}
+
+impl FmsObservationSourceDescriptorV2 {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_OBSERVATION_SOURCE_SCHEMA_V2
+            || self.adapter_id != "fdm_cpu_observation.v2"
+            || self.snapshot_schema_version != "fullmag.fdm.cpu.accepted-state-snapshot.v2"
+            || self.state_codec_id != FMS_OBSERVATION_STATE_CODEC_ID || self.state_codec_version != "v1"
+            || self.quantity_ids != ["m"] || self.primary_carriers.len() != 4
+        { bail!("invalid terminal observation descriptor v2"); }
+        self.accepted_state_ref.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let mut artifacts = BTreeSet::new();
+        for (id, reference) in [(&self.snapshot_artifact_id, &self.snapshot_object_ref),
+            (&self.state_artifact_id, &self.state_object_ref)] {
+            crate::repository_path::validate_store_id(id)?;
+            validate_sha256(reference, "observation v2 object_ref")?;
+            if !artifacts.insert(id) { bail!("duplicate terminal observation artifact id"); }
+        }
+        self.grid_cells.iter().try_fold(1_u64, |n, &width| {
+            if width == 0 { return None; } n.checked_mul(u64::from(width))
+        }).context("invalid terminal observation grid")?;
+        let expected = [
+            ("fdm.cpu.coupled-m3-checkpoint-digest.v1", "fullmag.fdm.coupled_checkpoint"),
+            ("fdm.cpu.frozen-activation-set-digest.v1", "fullmag.fdm.frozen_activation_set"),
+            ("fdm.cpu.frozen-constraint-state-digest.v1", "fullmag.fdm.frozen_primary_preimage"),
+            ("fdm.cpu.transactional-state-digest.v1", "fullmag.fdm.engine_accepted_preimage"),
+        ];
+        for (carrier, (id, codec)) in self.primary_carriers.iter().zip(expected) {
+            carrier.validate()?;
+            if carrier.carrier_id != id || carrier.codec_id != codec || !artifacts.insert(&carrier.artifact_id) {
+                bail!("terminal carrier roles or identities differ");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FmsHistoryCollection { Scalar, Field, DefaultScalar }
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FmsOutputSampleCause {
+    Initial,
+    Final,
+    DefaultScalar,
+    Scheduled { output_index: u64, schedule_index: u64 },
+}
+
+/// Shared claim-qualified identity used by the terminal publisher and cold readers.
+/// The role must contain no owner fields; raw CAS identity remains independent.
+#[doc(hidden)]
+pub fn terminal_publication_artifact_id(
+    run_id:&str, task_id:&str, attempt_id:&str, ownership_epoch:u64,
+    artifact_type:&str, role:&serde_json::Value, object_ref:&str,
+) -> Result<String> {
+    let mut identity=role.as_object().ok_or_else(||anyhow::anyhow!("terminal publication role must be an object"))?.clone();
+    for (key,value) in [("run_id",serde_json::json!(run_id)),("task_id",serde_json::json!(task_id)),
+        ("attempt_id",serde_json::json!(attempt_id)),("ownership_epoch",serde_json::json!(ownership_epoch)),
+        ("artifact_type",serde_json::json!(artifact_type)),("object_ref",serde_json::json!(object_ref))] {
+        if identity.insert(key.into(),value).is_some() {bail!("terminal publication role overrides its owner");}
+    }
+    Ok(format!("artifact-{}",crate::canonical_json_sha256(&serde_json::Value::Object(identity))))
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsOutputHistorySample {
+    pub ordinal: u64,
+    pub step: u64,
+    pub time_s: f64,
+    pub solver_dt_s: f64,
+    pub causes: Vec<FmsOutputSampleCause>,
+    pub payload_codec_id: String,
+    pub payload_codec_version: String,
+    pub artifact_id: String,
+    pub object_ref: String,
+    pub content_sha256: String,
+    pub byte_count: u64,
+}
+
+impl FmsOutputHistorySample {
+    pub fn validate(&self) -> Result<()> {
+        if !self.time_s.is_finite() || !self.solver_dt_s.is_finite() || self.solver_dt_s < 0.0
+            || self.byte_count == 0 || self.causes.is_empty()
+            || self.causes.iter().collect::<BTreeSet<_>>().len() != self.causes.len()
+            || self.payload_codec_version != "v1"
+            || !matches!(self.payload_codec_id.as_str(), "fullmag.runner.field_snapshot_json" | "fullmag.runner.scalar_csv_row")
+        { bail!("invalid output history sample metadata"); }
+        crate::repository_path::validate_store_id(&self.artifact_id)?;
+        validate_sha256(&self.object_ref, "history sample object_ref")?;
+        if self.object_ref != self.content_sha256 { bail!("history sample raw identity differs"); }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsOutputHistoryPage {
+    pub schema_version: String,
+    pub stream_id: String,
+    pub first_ordinal: u64,
+    pub samples: Vec<FmsOutputHistorySample>,
+}
+
+impl FmsOutputHistoryPage {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_OUTPUT_HISTORY_PAGE_SCHEMA
+            || self.stream_id.trim().is_empty() || self.samples.is_empty()
+            || self.samples.len() > MAX_OUTPUT_HISTORY_PAGE_SAMPLES
+        { bail!("invalid output history page"); }
+        for (index, sample) in self.samples.iter().enumerate() {
+            sample.validate()?;
+            if self.first_ordinal.checked_add(index as u64) != Some(sample.ordinal) {
+                bail!("output history page ordinal gap");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsOutputHistoryPageBinding {
+    pub first_ordinal: u64,
+    pub sample_count: u64,
+    pub artifact_id: String,
+    pub object_ref: String,
+    pub content_sha256: String,
+    pub byte_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsOutputHistoryIndex {
+    pub schema_version: String,
+    pub stream_id: String,
+    pub collection: FmsHistoryCollection,
+    pub quantity_id: String,
+    pub unit: String,
+    pub sample_count: u64,
+    pub pages: Vec<FmsOutputHistoryPageBinding>,
+}
+
+impl FmsOutputHistoryIndex {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_OUTPUT_HISTORY_INDEX_SCHEMA
+            || self.stream_id.trim().is_empty() || self.quantity_id.trim().is_empty()
+            || self.unit.trim().is_empty() || self.collection == FmsHistoryCollection::DefaultScalar
+            || self.pages.len() > MAX_OUTPUT_HISTORY_PAGES
+        { bail!("invalid output history index"); }
+        let mut ordinal = 0_u64;
+        let mut ids = BTreeSet::new();
+        for page in &self.pages {
+            crate::repository_path::validate_store_id(&page.artifact_id)?;
+            validate_sha256(&page.object_ref, "history page object_ref")?;
+            if page.first_ordinal != ordinal || page.sample_count == 0
+                || page.sample_count > MAX_OUTPUT_HISTORY_PAGE_SAMPLES as u64
+                || page.object_ref != page.content_sha256 || page.byte_count == 0
+                || page.byte_count > MAX_OUTPUT_HISTORY_METADATA_BYTES || !ids.insert(&page.artifact_id)
+            { bail!("invalid output history page binding"); }
+            ordinal = ordinal.checked_add(page.sample_count).context("history count overflow")?;
+        }
+        if ordinal != self.sample_count { bail!("output history count differs from pages"); }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsOutputHistoryIndexBinding {
+    pub stream_id: String,
+    pub artifact_id: String,
+    pub object_ref: String,
+    pub content_sha256: String,
+    pub byte_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FmsHistoryProjection {
+    Field,
+    ScalarColumn { column_index: u64, column_name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsHistoryCoverage {
+    pub collection: FmsHistoryCollection,
+    #[serde(deserialize_with = "required_history_option")]
+    pub output_index: Option<u64>,
+    #[serde(deserialize_with = "required_history_option")]
+    pub schedule_index: Option<u64>,
+    pub name: String,
+    pub history_stream_id: String,
+    pub projection: FmsHistoryProjection,
+    pub sample_count: u64,
+    #[serde(deserialize_with = "required_history_option")]
+    pub first_sample_time_s: Option<f64>,
+    #[serde(deserialize_with = "required_history_option")]
+    pub last_sample_time_s: Option<f64>,
+}
+
+fn required_history_option<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where D: serde::Deserializer<'de>, T: Deserialize<'de> { Option::deserialize(deserializer) }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsOutputHistoryCursor {
+    pub output_index: u64,
+    pub schedule_index: u64,
+    pub name: String,
+    pub every_seconds: f64,
+    pub next_time: f64,
+    #[serde(deserialize_with = "required_history_option")]
+    pub last_sampled_time: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsOutputCoverage {
+    pub schema_version: String,
+    pub origin_s: f64,
+    pub configuration_sha256: String,
+    pub scalar_schedules: Vec<FmsOutputHistoryCursor>,
+    pub field_schedules: Vec<FmsOutputHistoryCursor>,
+    #[serde(deserialize_with = "required_history_option")]
+    pub default_scalar_last_sampled_time_s: Option<f64>,
+    pub initial_sample_committed: bool,
+    pub final_sample_committed: bool,
+    pub streams: Vec<FmsHistoryCoverage>,
+}
+
+/// This first terminal-publication version deliberately accepts only null.
+/// A future prefix implementation must add its actual typed source binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct FmsRequiredNull;
+impl<'de> Deserialize<'de> for FmsRequiredNull {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        <()>::deserialize(deserializer)?;
+        Ok(Self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsStudyOutputManifestV4 {
+    pub schema_version: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub step_id: String,
+    pub attempt_id: String,
+    pub ownership_epoch: u64,
+    pub accepted_state_ref: fullmag_quantities::AcceptedStateRef,
+    pub observation_source: FmsObservationSourceDescriptorV2,
+    pub outputs: Vec<FmsStudyOutputManifestEntry>,
+    pub publication_kind: String,
+    pub historical_prefix: FmsRequiredNull,
+    pub coverage: FmsOutputCoverage,
+    pub histories: Vec<FmsOutputHistoryIndexBinding>,
+}
+
+impl FmsStudyOutputManifestV4 {
+    /// Legacy projection is for common output identities only, not observation admission.
+    pub fn output_projection(&self) -> FmsStudyOutputManifest {
+        FmsStudyOutputManifest {
+            schema_version: FMS_STUDY_OUTPUT_MANIFEST_SCHEMA.into(),
+            run_id: self.run_id.clone(), task_id: self.task_id.clone(), step_id: self.step_id.clone(),
+            attempt_id: self.attempt_id.clone(), ownership_epoch: self.ownership_epoch,
+            accepted_state_ref: Some(self.accepted_state_ref.clone()), observation_source: None,
+            outputs: self.outputs.clone(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        self.output_projection().validate()?;
+        self.observation_source.validate()?;
+        if self.schema_version != FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V4 || self.publication_kind != "completed"
+            || self.accepted_state_ref != self.observation_source.accepted_state_ref
+            || self.accepted_state_ref.generation.runtime_epoch != self.ownership_epoch
+            || self.coverage.schema_version != "study_output_coverage.v1"
+            || !self.coverage.origin_s.is_finite()
+        { bail!("invalid terminal manifest v4 identity or publication kind"); }
+        validate_sha256(&self.coverage.configuration_sha256, "output configuration hash")?;
+        let mut ids: BTreeSet<&str> = self.outputs.iter().map(|entry| entry.artifact_id.as_str()).collect();
+        for id in [&self.observation_source.snapshot_artifact_id, &self.observation_source.state_artifact_id] {
+            if !ids.insert(id.as_str()) { bail!("duplicate terminal manifest artifact id"); }
+        }
+        for carrier in &self.observation_source.primary_carriers {
+            if !ids.insert(carrier.artifact_id.as_str()) { bail!("duplicate terminal primary artifact id"); }
+        }
+        let mut streams = BTreeSet::new();
+        for index in &self.histories {
+            crate::repository_path::validate_store_id(&index.artifact_id)?;
+            validate_sha256(&index.object_ref, "history index object_ref")?;
+            if index.stream_id.trim().is_empty() || !streams.insert(index.stream_id.as_str())
+                || !ids.insert(index.artifact_id.as_str()) || index.object_ref != index.content_sha256
+                || index.byte_count == 0 || index.byte_count > MAX_OUTPUT_HISTORY_METADATA_BYTES
+            { bail!("invalid terminal history index binding"); }
+        }
+        let mut keys = BTreeSet::new();
+        for coverage in &self.coverage.streams {
+            if !streams.contains(coverage.history_stream_id.as_str())
+                || !keys.insert((coverage.collection, coverage.output_index, coverage.schedule_index, coverage.name.as_str()))
+                || match coverage.collection {
+                    FmsHistoryCollection::DefaultScalar => coverage.output_index.is_some() || coverage.schedule_index.is_some(),
+                    FmsHistoryCollection::Scalar | FmsHistoryCollection::Field => coverage.output_index.is_none() || coverage.schedule_index.is_none(),
+                }
+                || if coverage.sample_count == 0 {
+                    coverage.first_sample_time_s.is_some() || coverage.last_sample_time_s.is_some()
+                } else { coverage.first_sample_time_s.is_none() || coverage.last_sample_time_s.is_none() }
+                || coverage.first_sample_time_s.zip(coverage.last_sample_time_s).is_some_and(|(first, last)| first > last)
+                || coverage.first_sample_time_s.is_some_and(|time| !time.is_finite())
+                || coverage.last_sample_time_s.is_some_and(|time| !time.is_finite())
+            { bail!("invalid terminal stream coverage metadata"); }
+        }
+        if streams.iter().any(|stream| !self.coverage.streams.iter().any(|coverage| coverage.history_stream_id == *stream)) {
+            bail!("terminal history root is missing its coverage projection");
+        }
+        let has_samples = self.coverage.initial_sample_committed || self.coverage.final_sample_committed
+            || self.coverage.default_scalar_last_sampled_time_s.is_some()
+            || self.coverage.scalar_schedules.iter().chain(&self.coverage.field_schedules)
+                .any(|cursor| cursor.last_sampled_time.is_some());
+        if has_samples && !self.coverage.streams.iter().any(|coverage| coverage.sample_count > 0) {
+            bail!("terminal committed sample flags have empty coverage");
+        }
+        for cursor in self.coverage.scalar_schedules.iter().chain(&self.coverage.field_schedules) {
+            if !cursor.every_seconds.is_finite() || cursor.every_seconds <= 0.0
+                || !cursor.next_time.is_finite()
+                || cursor.last_sampled_time.is_some_and(|time| !time.is_finite())
+            { bail!("invalid terminal output cursor"); }
+        }
+        if self.coverage.default_scalar_last_sampled_time_s.is_some_and(|time| !time.is_finite()) {
+            bail!("invalid terminal default scalar clock");
+        }
+        Ok(())
+    }
+}
+
 // ── Tensor descriptor ──────────────────────────────────────────────────
 
 /// Describes a binary tensor stored in the CAS object store.
@@ -4467,6 +4973,40 @@ mod closed_loop_preparation_identity_tests {
         let expected_payload=payload(&expected);
         let receipt=FmsTaskPreparationReceipt::new(run_id,step_id,"a".repeat(64),expected.clone(),plan_fingerprint,expected_payload).unwrap();
         assert_eq!(receipt.task_id,task_id);assert_eq!(receipt.preparation_id,expected);receipt.validate().unwrap();
+        let anchor = FmsPreparationReceipt::new(
+            &receipt.preparation_id, &receipt.run_id,
+            &receipt.plan_fingerprint, receipt.payload.clone(),
+        );
+        anchor.validate().unwrap();
+        let cold: FmsPreparationReceipt = serde_json::from_slice(
+            &serde_json::to_vec(&anchor).unwrap(),
+        ).unwrap();
+        cold.validate().unwrap();
+        assert!(cold.same_immutable_payload(&anchor));
+        let mut wrong_preparation = anchor.payload.clone();
+        wrong_preparation["preparation_id"] = json!("prep-foreign");
+        assert!(FmsPreparationReceipt::new(
+            &anchor.preparation_id, &anchor.run_id, &anchor.plan_fingerprint, wrong_preparation,
+        ).validate().is_err());
+        let mut wrong_fingerprint = anchor.payload.clone();
+        wrong_fingerprint["plan_fingerprint"] = json!(format!("sha256:{}", "1".repeat(64)));
+        assert!(FmsPreparationReceipt::new(
+            &anchor.preparation_id, &anchor.run_id, &anchor.plan_fingerprint, wrong_fingerprint,
+        ).validate().is_err());
+        let foreign = FmsPreparationReceipt::new(
+            &anchor.preparation_id, "run-foreign", &anchor.plan_fingerprint, anchor.payload.clone(),
+        );
+        assert!(foreign.validate().is_err());
+        let mut forged = anchor.payload.clone();
+        forged["plan"]["carrier_fingerprint"] = json!(format!("sha256:{}", "0".repeat(64)));
+        assert!(FmsPreparationReceipt::new(
+            &anchor.preparation_id, &anchor.run_id, &anchor.plan_fingerprint, forged,
+        ).validate().is_err());
+        let mut unknown = anchor.payload.clone();
+        unknown["schema_version"] = json!("closed_loop_preparation_receipt.v99");
+        assert!(FmsPreparationReceipt::new(
+            &anchor.preparation_id, &anchor.run_id, &anchor.plan_fingerprint, unknown,
+        ).validate().is_err());
     }
 }
 
@@ -4780,4 +5320,27 @@ mod batch_output_storage_snapshot_tests {
         tampered["settings"]["cleanup"] = json!("always");
         assert!(validate_batch_output_storage_snapshot(&tampered).is_err());
     }
+}
+
+/// A terminal publication must remain readable by the existing control-document owner.
+pub const MAX_TERMINAL_CATALOG_METADATA_BYTES: u64 = crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES;
+
+/// The same typed storage gate is used by publication and both reachability walkers.
+/// This proves declared CAS closure, not numerical/ExactResume admission.
+pub fn validate_output_history_leaf_storage(codec: &str, bytes: &[u8], max_bytes: u64)
+    -> Result<(), String>
+{
+    crate::typed_documents::inspect_output_history_leaf(codec, bytes, max_bytes)
+}
+
+
+/// Validate the complete new terminal publication graph through the storage
+/// owner shared by live-store and archive reachability walkers.
+pub fn validate_terminal_publication_storage(
+    bytes: &[u8], owner: &FmsArtifactCatalogEntry, catalog: &FmsArtifactCatalog,
+    read: impl FnMut(&str,u64) -> Result<Vec<u8>>,
+) -> Result<BTreeSet<String>> {
+    let mut read = read;
+    crate::typed_documents::inspect_published_frozen_outputs(bytes,owner,catalog,|reference,budget|read(reference,budget))?;
+    crate::typed_documents::inspect_terminal_publication(bytes,owner,catalog,read)
 }

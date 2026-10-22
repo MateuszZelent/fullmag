@@ -298,9 +298,24 @@ def _validate_frontend(
     state = document.get("State")
     if not isinstance(state, Mapping) or state.get("Running") is not True:
         raise BuildControlError("Selected frontend is not running")
-    expected_image = (current.get("inputs") or {}).get("image_id")
-    if not isinstance(expected_image, str) or document.get("Image") != expected_image:
-        raise BuildControlError("Observed frontend image differs from the live development receipt")
+    attempt = current.get("attempt")
+    digest = current.get("config_sha256")
+    if (not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None
+            or not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None):
+        raise BuildControlError("Development receipt has no exact Compose attempt/configuration pin")
+    compose = control.read(f"development/attempts/{attempt}/compose.json")
+    if (not isinstance(compose, Mapping) or compose.get("name") != control.project
+            or hashlib.sha256(canonical(compose)).hexdigest() != digest):
+        raise BuildControlError("Pinned development Compose identity/configuration differs")
+    services = compose.get("services")
+    if (not isinstance(services, Mapping) or not isinstance(services.get("frontend"), Mapping)
+            or not isinstance(services.get("backend"), Mapping)
+            or services["backend"].get("image") != (current.get("inputs") or {}).get("image_id")):
+        raise BuildControlError("Pinned development service image declarations differ")
+    expected_image = services["frontend"].get("image")
+    if (not isinstance(expected_image, str) or IMAGE_ID_RE.fullmatch(expected_image) is None
+            or document.get("Image") != expected_image):
+        raise BuildControlError("Observed frontend image differs from its pinned Compose service")
     if host.get("NetworkMode") in {"host", "none"}:
         raise BuildControlError("Frontend uses a forbidden host/none network")
     networks = network_settings.get("Networks") or {}

@@ -109,6 +109,7 @@ WINDOWS_FOLDER_GATE_POLL_SECONDS = 0.25
 PACKAGE_DEVELOPMENT_SCHEMA = "fullmag.direct-compose.package-development.v1"
 PACKAGE_DEVELOPMENT_OWNER = "owner.json"
 PACKAGE_CANDIDATES_DIRNAME = "candidates"
+PACKAGE_QUARANTINE_DIRNAME = "quarantine"
 PACKAGE_BACKUPS_DIRNAME = "backups"
 PACKAGE_RETENTION_ARCHIVE_DIRNAME = "retired"
 PACKAGE_CANDIDATE_MARKER = ".candidate-owner.json"
@@ -536,6 +537,7 @@ def _ensure_package_development_root(output: Path) -> Path:
     allowed = {
         PACKAGE_DEVELOPMENT_OWNER,
         PACKAGE_CANDIDATES_DIRNAME,
+        PACKAGE_QUARANTINE_DIRNAME,
         PACKAGE_BACKUPS_DIRNAME,
         PACKAGE_RETENTION_ARCHIVE_DIRNAME,
         PACKAGE_CACHE_CONTROL_DIRNAME,
@@ -551,6 +553,10 @@ def _ensure_package_development_root(output: Path) -> Path:
         metadata = entry.lstat()
         if stat.S_ISLNK(metadata.st_mode):
             _fail(f"backend package development control contains a symlink: {entry.name}")
+    quarantine = control / PACKAGE_QUARANTINE_DIRNAME
+    if quarantine.exists():
+        # Explicit recovery owns this archive; ordinary start/retention never removes it.
+        _ensure_directory(quarantine, "backend package recovery archive")
     journal = control / PACKAGE_ROTATION_JOURNAL_NAME
     if journal.exists() or journal.is_symlink():
         metadata = journal.lstat()
