@@ -121,9 +121,22 @@ export async function qualifyFrontendResponsiveBrowser({
         element.dataset.responsiveRootMenu = "true";
       });
       let activeLabel = await focusedLabel();
+      const focusTrail = [activeLabel];
       for (let attempt = 0; attempt < MAIN_MENU_LABELS.length + 3 && activeLabel !== menuLabel; attempt += 1) {
         await page.keyboard.press("ArrowDown");
         activeLabel = await focusedLabel();
+        focusTrail.push(activeLabel);
+      }
+      if (activeLabel !== menuLabel) {
+        evidence.compact_menu_failure = {
+          width,
+          requested: menuLabel,
+          focusTrail,
+          menus: await page.evaluate(() => Array.from(document.querySelectorAll('[role="menu"]'))
+            .filter((menu) => menu.getClientRects().length > 0)
+            .map((menu) => ({ marker: menu.dataset.responsiveRootMenu, label: menu.getAttribute("aria-label"), text: menu.textContent?.slice(0, 2000) }))),
+        };
+        console.error("Compact menu keyboard failure: " + JSON.stringify(evidence.compact_menu_failure));
       }
       assert.equal(activeLabel, menuLabel, "Arrow navigation could not reach " + menuLabel + " at " + width + "px.");
 
@@ -363,6 +376,9 @@ export async function qualifyFrontendResponsiveBrowser({
             .filter((entry) => entry.visible && entry.label.toLowerCase().includes("section"));
           const aux = group?.querySelector('[data-slot-id="viewport-aux"]');
           const auxRect = aux?.getBoundingClientRect();
+          const explorerTabs = document.querySelector(".fm-explorer-tabs");
+          const mainPanel = document.getElementById("workspace-main");
+          const bottomPanel = document.getElementById("panel-bottom");
           return {
             viewportWidth: window.innerWidth,
             documentClientWidth: document.documentElement.clientWidth,
@@ -378,6 +394,22 @@ export async function qualifyFrontendResponsiveBrowser({
                 }
               : null,
             panels,
+            verticalDock: {
+              mainHeight: mainPanel?.getBoundingClientRect().height ?? 0,
+              bottomHeight: bottomPanel?.getBoundingClientRect().height ?? 0,
+            },
+            explorerTabs: explorerTabs
+              ? {
+                  clientWidth: explorerTabs.clientWidth,
+                  scrollWidth: explorerTabs.scrollWidth,
+                  overflowX: getComputedStyle(explorerTabs).overflowX,
+                  tabs: Array.from(explorerTabs.querySelectorAll('[role="tab"]'), (tab) => ({
+                    label: tab.textContent?.trim(),
+                    clientWidth: tab.clientWidth,
+                    scrollWidth: tab.scrollWidth,
+                  })),
+                }
+              : null,
             header: header
               ? {
                   clientWidth: header.clientWidth,
@@ -439,6 +471,24 @@ export async function qualifyFrontendResponsiveBrowser({
           "A primary dock panel is missing at " + width + "px: " + JSON.stringify(measurements.panels),
         );
         assert.ok(measurements.header, "Workspace header is missing at " + width + "px.");
+        const verticalPanelHeight = measurements.verticalDock.mainHeight + measurements.verticalDock.bottomHeight;
+        assert.ok(measurements.verticalDock.bottomHeight > 0, "Default footer panel is missing at " + width + "px.");
+        assert.ok(
+          measurements.verticalDock.bottomHeight >= verticalPanelHeight * 0.12 - 2 &&
+            measurements.verticalDock.mainHeight >= verticalPanelHeight * 0.42 - 2,
+          "Vertical dock percentage minima were treated as pixels at " + width + "px: " + JSON.stringify(measurements.verticalDock),
+        );
+        assert.ok(measurements.explorerTabs?.tabs.length > 0, "Explorer tabs are missing at " + width + "px.");
+        assert.ok(
+          measurements.explorerTabs.tabs.every((tab) => tab.scrollWidth <= tab.clientWidth + 1),
+          "Explorer tab text overflows its button at " + width + "px: " + JSON.stringify(measurements.explorerTabs),
+        );
+        if (measurements.explorerTabs.scrollWidth > measurements.explorerTabs.clientWidth + 1) {
+          assert.ok(
+            ["auto", "scroll"].includes(measurements.explorerTabs.overflowX),
+            "Overflowing Explorer tabs cannot be scrolled at " + width + "px.",
+          );
+        }
         assert.ok(measurements.header.overflow <= 1, "Workspace header clips horizontal content at " + width + "px.");
         assert.ok(
           measurements.header.right <= width + 1,

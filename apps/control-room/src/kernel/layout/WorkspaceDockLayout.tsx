@@ -313,9 +313,9 @@ export function WorkspaceDockLayout() {
         panelCount={mainPanelCount}
       >
         <ResizablePanel
-          defaultSize={78}
+          defaultSize="78%"
           id="workspace-main"
-          minSize={42}
+          minSize="42%"
         >
           <SortableList
             id="workspace-dock-columns"
@@ -388,10 +388,10 @@ export function WorkspaceDockLayout() {
           <>
             <ResizableHandle className="fm-resize-handle--horizontal" />
             <ResizablePanel
-              defaultSize={layout.bottomDockDefaultSize}
+              defaultSize={`${layout.bottomDockDefaultSize}%`}
               className="fm-workspace-bottom-panel"
               id="panel-bottom"
-              minSize={layout.bottomDockMinSize}
+              minSize={`${layout.bottomDockMinSize}%`}
             >
               <SlotHost slotId="panel-bottom" />
             </ResizablePanel>

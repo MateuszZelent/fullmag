@@ -34,12 +34,16 @@
 /* Override the shared fm-tabs-list inside explorer */
 .fm-explorer-tabs .fm-tabs-list {
   gap: 0;
+  width: max-content;
+  min-width: 100%;
   min-height: var(--fm-panel-header-height);
   border: 0;
   background: transparent;
 }
 
 .fm-explorer-tabs .fm-tabs-trigger {
+  flex-shrink: 0;
+  white-space: nowrap;
   height: var(--fm-panel-header-height);
   padding-inline: var(--fm-space-2);
   border: 0;
