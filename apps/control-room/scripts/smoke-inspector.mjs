@@ -4596,7 +4596,7 @@ async function installInspectorFixtureApi(page, fixture) {
           source_scene_revision: fixture.revision,
           status: "completed",
         },
-        mesh_pipeline_status: failedCandidate ? "failed" : "ready",
+        mesh_pipeline_status: [{ id: "meshing", label: "Meshing", status: failedCandidate ? "failed" : "ready" }],
         revision: 7,
       });
     }

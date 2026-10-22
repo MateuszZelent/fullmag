@@ -1,5 +1,4 @@
 import { act } from "react";
-import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
@@ -217,6 +216,7 @@ describe("RegionsListPanel priority draft", () => {
 
 async function mountPanel(objectId: string) {
   const dom = installSimulationPreparationTestDom();
+  const { createRoot } = await import("react-dom/client");
   const container = dom.document.createElement("div");
   const root = createRoot(container as unknown as Element);
   const editSessionStore = createInspectorEditSessionStore();
