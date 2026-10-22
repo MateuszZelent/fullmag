@@ -218,6 +218,51 @@ export async function qualifyFrontendProductionBrowser({
   }
 
   try {
+    await runScenario("planar-raw-inputs-survive-field-remount", async () => {
+      await page.goto(new URL("/dev/frontend-controls", workspaceUrl).href, { waitUntil: "domcontentloaded" });
+      const panel = page.getByTestId("planar-draft-fixture");
+      await panel.waitFor({ state: "visible" });
+      const opacity = panel.getByRole("textbox", { name: "Audit planar opacity", exact: true });
+      const count = async () => Number(await panel.getByTestId("planar-commit-count").textContent());
+      const guard = async () => JSON.parse(await panel.getByTestId("planar-guard").textContent());
+      await opacity.fill("");
+      await opacity.press("Tab");
+      assert.equal(await opacity.inputValue(), "");
+      assert.equal((await guard()).dirty, true);
+      assert.equal((await guard()).valid, false);
+      assert.equal(await count(), 0, "Clearing an input unexpectedly committed zero.");
+      await panel.getByRole("button", { name: "Show fixture 3D", exact: true }).click();
+      assert.equal(await opacity.count(), 0);
+      await panel.getByRole("button", { name: "Show fixture 2D", exact: true }).click();
+      assert.equal(await opacity.inputValue(), "", "A remount lost the raw draft.");
+      await opacity.fill("0");
+      await opacity.press("Enter");
+      assert.equal(await count(), 1);
+      assert.equal(await panel.getByTestId("planar-opacity").textContent(), "0");
+      const minimum = panel.getByRole("textbox", { name: "Range minimum", exact: true });
+      const maximum = panel.getByRole("textbox", { name: "Range maximum", exact: true });
+      await minimum.fill("5");
+      await minimum.press("Tab");
+      assert.equal(await minimum.inputValue(), "5");
+      assert.equal(await count(), 1, "An invalid partial range reached the commit callback.");
+      await maximum.fill("10");
+      await maximum.press("Enter");
+      assert.equal(await count(), 2);
+      const range = JSON.parse(await panel.getByTestId("planar-range").textContent());
+      assert.equal(range.min, 5);
+      assert.equal(range.max, 10);
+      await opacity.fill("-");
+      await opacity.press("Tab");
+      await panel.getByRole("button", { name: "Show fixture 3D", exact: true }).click();
+      await panel.getByRole("button", { name: "Discard 2D input", exact: true }).click();
+      await panel.getByRole("button", { name: "Show fixture 2D", exact: true }).click();
+      assert.equal(await opacity.inputValue(), "0");
+      assert.equal((await guard()).dirty, false);
+      assert.equal(await count(), 2);
+      await capture("planar-raw-inputs", panel);
+      return { scope: "Production input components and field remount; no viewport proof", emptyPreserved: true, explicitZero: true, rangePair: range, discardWhileHidden: true, commitCount: await count() };
+    });
+
     await runScenario("filter-collapse-clear-and-no-match", async () => {
       await openWorkspace("frontend-filter-audit");
       const filter = page.getByRole("searchbox", { name: "Filter explorer" });

@@ -4,10 +4,55 @@ import { useState } from "react";
 
 import { GeometryValidationSummary } from "@/modules/inspector/primitives/GeometryValidationSummary";
 import { Vector3Field } from "@/modules/inspector/primitives/Vector3Field";
+import { InspectorEditSessionProvider, useInspectorEditSession } from "@/modules/inspector/InspectorEditSession";
+import { PlanarNumberField } from "@/modules/inspector/visualization/PlanarNumberField";
+import { PlanarManualRangeFields } from "@/modules/inspector/visualization/PlanarManualRangeFields";
+import { PlanarPresentationDraftOwner, PlanarPresentationFieldContext } from "@/modules/inspector/visualization/PlanarPresentationDraftOwner";
 import { RibbonMenuRenderer } from "@/modules/ribbon/RibbonMenuRenderer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/shared/ui/DropdownMenu";
 
 type ValidationState = "ready-empty" | "loading" | "error" | "stale";
+
+function PlanarGuardSnapshot() {
+  const session = useInspectorEditSession();
+  return <output data-testid="planar-guard">{JSON.stringify({ dirty: session?.dirty ?? false, valid: session?.valid ?? true })}</output>;
+}
+
+function PlanarDraftFixture() {
+  const [visible, setVisible] = useState(true);
+  const [opacity, setOpacity] = useState(1);
+  const [range, setRange] = useState({ min: -1, max: 1 });
+  const [commitCount, setCommitCount] = useState(0);
+  return (
+    <section aria-label="Planar raw input fixture" data-testid="planar-draft-fixture">
+      <h2>Planar input drafts</h2>
+      <InspectorEditSessionProvider>
+        <button type="button" onClick={() => setVisible(false)}>Show fixture 3D</button>
+        <button type="button" onClick={() => setVisible(true)}>Show fixture 2D</button>
+        <PlanarPresentationDraftOwner identityKey="audit-session:planar-target">
+          <PlanarPresentationFieldContext contextKey="audit-source">
+            {visible ? (
+              <>
+                <PlanarNumberField label="Audit planar opacity" minimum={0} maximum={1} path="opacity" value={opacity} onCommit={(value) => {
+                  setOpacity(value);
+                  setCommitCount((count) => count + 1);
+                }} />
+                <PlanarManualRangeFields minimum={range.min} maximum={range.max} onCommit={(value) => {
+                  setRange(value);
+                  setCommitCount((count) => count + 1);
+                }} />
+              </>
+            ) : <p>Input fields are unmounted in the fixture 3D view.</p>}
+          </PlanarPresentationFieldContext>
+        </PlanarPresentationDraftOwner>
+        <PlanarGuardSnapshot />
+      </InspectorEditSessionProvider>
+      <output data-testid="planar-commit-count">{commitCount}</output>
+      <output data-testid="planar-opacity">{opacity}</output>
+      <output data-testid="planar-range">{JSON.stringify(range)}</output>
+    </section>
+  );
+}
 
 export default function FrontendControlsFixturePage() {
   const [vectorValues, setVectorValues] = useState<[string, string, string]>([
@@ -55,6 +100,8 @@ export default function FrontendControlsFixturePage() {
       style={{ display: "grid", gap: 16, margin: "0 auto", maxWidth: 920, padding: 24 }}
     >
       <h1>Frontend controls browser fixture</h1>
+
+      <PlanarDraftFixture />
 
       <section aria-labelledby="vector-audit-heading">
         <h2 id="vector-audit-heading">Vector field callback</h2>
