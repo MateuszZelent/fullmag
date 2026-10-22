@@ -220,6 +220,61 @@ const FDM_EFFECTIVE_FIELDS = EFFECTIVE_FIELDS.filter(([key]) =>
 const displayEffectiveValue = (value: unknown) =>
   Array.isArray(value) ? value.join(", ") : value == null ? "not published" : String(value);
 
+function effectiveConfigurationSource(
+  policy: ReturnType<typeof useUniverseMeshPolicyResource>,
+): string {
+  const hasEffectiveConfig = policy.data?.effective_config != null;
+  const hasRefreshFailure = Boolean(policy.error || policy.refreshError);
+
+  if (hasEffectiveConfig) {
+    if (policy.status === "ready" && !hasRefreshFailure) {
+      return "effective_config published by backend";
+    }
+    if (policy.status === "stale" || hasRefreshFailure) {
+      return "Previously published effective_config (stale)";
+    }
+    if (policy.status === "loading") {
+      return "Previously published effective_config (refreshing)";
+    }
+    return `Previously published effective_config (${policy.status})`;
+  }
+
+  if (policy.status === "ready") {
+    return policy.data
+      ? "No effective_config was published by backend"
+      : "Unavailable; policy response has no data";
+  }
+  if (policy.status === "loading") return "Unavailable while the policy resource loads";
+  if (policy.status === "stale") return "Unavailable; no previous effective_config is retained";
+  if (policy.status === "error") return "Unavailable; policy refresh failed";
+  return "Unavailable; policy resource has not loaded";
+}
+
+function effectiveConfigurationNotice(
+  policy: ReturnType<typeof useUniverseMeshPolicyResource>,
+): { kind: "error" | "warning"; message: string } | null {
+  const hasEffectiveConfig = policy.data?.effective_config != null;
+  const failure = policy.error ?? policy.refreshError;
+
+  if (failure) {
+    return {
+      kind: hasEffectiveConfig ? "warning" : "error",
+      message: `Backend effective configuration refresh failed: ${failure.message}.${
+        hasEffectiveConfig
+          ? " Showing the previously published effective configuration."
+          : " No effective configuration is available."
+      }`,
+    };
+  }
+  if (policy.status === "stale" && hasEffectiveConfig) {
+    return {
+      kind: "warning",
+      message: "Showing the previous effective configuration; it may not reflect the current policy.",
+    };
+  }
+  return null;
+}
+
 export type AirboxMeshParametersLane = "fem" | "fdm";
 
 export function AirboxMeshParametersPanel({
@@ -237,6 +292,7 @@ export function AirboxMeshParametersPanel({
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const policy = useUniverseMeshPolicyResource();
   const resource = policy.data ?? defaultUniverseMeshPolicyResource();
+  const effectiveConfigNotice = effectiveConfigurationNotice(policy);
   const baseDraft = useMemo(
     () => draftFromUniverseMeshPolicyResource(resource),
     [resource],
@@ -759,7 +815,17 @@ export function AirboxMeshParametersPanel({
         </InspectorGroup>
       </fieldset>
       <InspectorGroup title="Backend-effective Values" badge="read-only">
-        <FieldRow label="Source" value="effective_config published by backend" />
+        <FieldRow
+          label="Source"
+          value={effectiveConfigurationSource(policy)}
+          status={policy.status}
+        />
+        {effectiveConfigNotice ? (
+          <FeedbackBanner
+            kind={effectiveConfigNotice.kind}
+            message={effectiveConfigNotice.message}
+          />
+        ) : null}
         {(isFdm ? FDM_EFFECTIVE_FIELDS : EFFECTIVE_FIELDS).map(([key, label]) => (
           <FieldRow key={key} label={label} value={displayEffectiveValue(resource.effective_config?.[key])} />
         ))}

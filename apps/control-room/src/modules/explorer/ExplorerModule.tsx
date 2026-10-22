@@ -2,13 +2,13 @@
 
 import { useAnalysisResultDatasetCatalogResource } from "@/kernel/resources/analysisResultResources";
 import { usePostprocessingDefinitionsResource } from "@/kernel/resources/postprocessingDefinitionResources";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronsDownUp,
   ChevronsUpDown,
   RefreshCw,
   Search,
-  SlidersHorizontal,
+  X,
 } from "lucide-react";
 
 import type {
@@ -147,6 +147,7 @@ import {
   setExplorerActiveTab,
   setExplorerFilterText,
   setExplorerResultContextRunId,
+  toggleExplorerNode,
   shouldAutoRevealModelTab,
   useExplorerStoreSelector,
 } from "./explorerStore";
@@ -372,6 +373,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const expandedIds = useExplorerStoreSelector(
     (explorer) => explorer.expandedIds[activeTab],
   );
+  const [filterCollapse, setFilterCollapse] = useState({ key: "", ids: new Set<string>() });
   const textureLoadObjectIds = useExplorerStoreSelector(
     (explorer) => explorer.textureLoadObjectIds,
   );
@@ -899,6 +901,67 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     () => filterExplorerNodes(baseNodes, filterText, selectedNodeId),
     [baseNodes, filterText, selectedNodeId],
   );
+  const filtering = filterText.trim().length > 0;
+  const filterKey = JSON.stringify([modelResource.sessionScopeKey, activeTab, filterText.trim().toLowerCase()]);
+  const filteredExpandedIds = useMemo(() => {
+    if (!filtering) return expandedIds;
+    const ids = new Set(collectExplorerNodeIds(nodes));
+    if (filterCollapse.key === filterKey) {
+      for (const id of filterCollapse.ids) ids.delete(id);
+    }
+    return ids;
+  }, [expandedIds, filterCollapse, filterKey, filtering, nodes]);
+  const hasFilterMatches = useMemo(
+    () => !filtering || filterExplorerNodes(baseNodes, filterText).length > 0,
+    [baseNodes, filtering, filterText],
+  );
+  const sceneError = modelResource.refreshError ?? modelResource.error;
+  const sceneNotice = !modelTabActive ? null
+    : sceneError ? `Model could not be refreshed. ${modelResource.data ? "Showing the last available model. " : ""}${sceneError.message}`
+    : modelResource.status === "loading" ? "Loading model…"
+    : modelResource.status === "stale" ? "Refreshing model. Showing the last available model."
+    : !modelResource.data ? "Model is not available yet."
+    : null;
+
+  function updateFilterText(value: string): void {
+    setFilterCollapse({ key: "", ids: new Set() });
+    setExplorerFilterText(value);
+  }
+
+  function toggleVisibleNode(nodeId: string): void {
+    if (!filtering) {
+      toggleExplorerNode(activeTab, nodeId);
+      return;
+    }
+    setFilterCollapse((current) => {
+      const ids = new Set(current.key === filterKey ? current.ids : []);
+      if (ids.has(nodeId)) ids.delete(nodeId);
+      else ids.add(nodeId);
+      return { key: filterKey, ids };
+    });
+  }
+
+  function refreshExplorer(): void {
+    // Resource hooks own retries, session fences and request deduplication.
+    // Refresh never rewrites the user's filter, expansion or selection.
+    const resources = modelTabActive
+      ? [modelResource, domainMeta, fdmMultilayerLayout, universeMeshPolicy,
+          fdmRegionMembership, regionMemberships, modelRegions, modelMaterialFields, modelCouplings,
+          physicsGraph, currentTransports, meshSummary, activeBuild,
+          latestSuccessfulBuild, manifest, qualityGates, realizedSizeFields,
+          stageExecution, hysteresisExecutionTree, planarMonitors, frozenSpins,
+          frequencyDomainManifest, frequencyDomainSpectrum, frequencyDomainResponseSweep]
+      : activeTab === "results"
+        ? [resultsRun, artifacts, tableCatalog, observationFrames, analysisDefinitions,
+            analysisDatasetCatalog, frequencyDomainManifest, frequencyDomainSpectrum,
+            frequencyDomainBranches, frequencyDomainDispersion, frequencyDomainResponseSweep]
+        : [currentRun, artifacts, fieldCatalog, tableCatalog, commandQueue, commandDetails,
+            geometryValidation, platformCapabilities, platformHealth, solverProfile,
+            solverStatus, stageExecution, manifest, frequencyDomainManifest];
+    for (const resource of resources) {
+      if (resource.status !== "idle") resource.refetch();
+    }
+  }
 
   useEffect(() => {
     previousCurrentRunId.current = currentRunId;
@@ -918,11 +981,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   useEffect(() => {
     if (activeTab !== "model") return;
     ensureExplorerModelObjectDefaults(
-      nodes
+      baseNodes
         .filter((node) => node.kind === "object.root")
         .map((node) => node.id),
     );
-  }, [activeTab, nodes]);
+  }, [activeTab, baseNodes]);
 
   useEffect(() => {
     const previous = previousSelectedNodeId.current;
@@ -933,7 +996,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [activeTab, selectedNodeId]);
 
   useEffect(() => {
-    const path = selectedNodeId ? findExplorerNodePath(nodes, selectedNodeId) : null;
+    const path = selectedNodeId ? findExplorerNodePath(baseNodes, selectedNodeId) : null;
     if (!selectedNodeId || !path) {
       lastRevealedSelectionPath.current = null;
       return;
@@ -943,7 +1006,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     if (lastRevealedSelectionPath.current === revealKey) return;
     lastRevealedSelectionPath.current = revealKey;
     revealExplorerNode(activeTab, selectedNodeId, path.slice(0, -1));
-  }, [activeTab, modelResource.sessionScopeKey, nodes, selectedNodeId]);
+  }, [activeTab, modelResource.sessionScopeKey, baseNodes, selectedNodeId]);
 
   useEffect(() => {
     if (activeTab !== "results") return;
@@ -1035,24 +1098,55 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           }}
           rebindDisabledReason={rebindDisabledReason}
         />
-        <label className="fm-explorer-filter">
+        <div className="fm-explorer-filter">
           <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
           <input
             aria-label="Filter explorer"
             value={filterText}
-            onChange={(event) => setExplorerFilterText(event.target.value)}
+            onChange={(event) => updateFilterText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && filterText) {
+                event.preventDefault();
+                event.stopPropagation();
+                updateFilterText("");
+              }
+            }}
             placeholder="Filter nodes..."
             type="search"
           />
-          <SlidersHorizontal size={13} aria-hidden="true" className="fm-explorer-filter__options-icon" />
-        </label>
+          {filterText ? (
+            <button
+              aria-label="Clear explorer filter"
+              className="fm-explorer-filter__clear"
+              title="Clear filter (Escape)"
+              type="button"
+              onClick={(event) => {
+                event.currentTarget.parentElement?.querySelector("input")?.focus();
+                updateFilterText("");
+              }}
+            >
+              <X size={13} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        {sceneNotice ? (
+          <p className={`fm-explorer-notice${sceneError ? " fm-explorer-notice--error" : ""}`} role={sceneError ? "alert" : "status"}>
+            {sceneNotice}
+          </p>
+        ) : null}
+        {filtering && !hasFilterMatches && (!modelTabActive || modelResource.data) ? (
+          <p className="fm-explorer-notice" role="status">
+            No matching nodes.{nodes.length > 0 ? " The current selection is kept visible." : " Try another filter."}
+          </p>
+        ) : null}
         <ExplorerTreeView
           activeNodeId={selectedNodeId}
-          expandedIds={expandedIds}
+          expandedIds={filteredExpandedIds}
           keyboardRowId={keyboardRow}
           kernel={kernel}
           moduleId={moduleId}
-          nodes={nodes}
+          nodes={modelTabActive && !modelResource.data ? [] : nodes}
+          onToggleNode={toggleVisibleNode}
           sceneResourceData={
             modelResource.status === "ready" ? modelResource.data : null
           }
@@ -1065,7 +1159,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             title="Expand All"
             type="button"
             onClick={() => {
-              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+              if (filtering) setFilterCollapse({ key: filterKey, ids: new Set() });
+              else expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
             }}
           >
             <ChevronsUpDown size={13} aria-hidden="true" />
@@ -1077,7 +1172,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             title="Collapse All"
             type="button"
             onClick={() => {
-              collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+              if (filtering) setFilterCollapse({ key: filterKey, ids: new Set(collectExplorerNodeIds(nodes)) });
+              else collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
             }}
           >
             <ChevronsDownUp size={13} aria-hidden="true" />
@@ -1088,10 +1184,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             aria-label="Refresh explorer"
             title="Refresh"
             type="button"
-            onClick={() => {
-              setExplorerFilterText("");
-              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-            }}
+            onClick={refreshExplorer}
           >
             <RefreshCw size={13} aria-hidden="true" />
             <span>Refresh</span>

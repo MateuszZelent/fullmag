@@ -69,11 +69,21 @@ function selectedModule(
 
 export function PhysicsGraphModuleInspectorPanel({ selection }: InspectorPanelProps) {
   const resource = usePhysicsGraphResource({ enabled: true });
+  const resourceError = resource.error ?? resource.refreshError;
+  const current = resource.status === "ready" && resource.data != null && !resourceError;
   const selectedPhysicsModule = selectedModule(selection, resource.data?.modules ?? []);
   if (!selectedPhysicsModule) {
     return (
       <div className="fm-inspector-panel">
-        <FeedbackBanner kind="warning" message="The selected physics module is no longer present in the current graph revision." />
+        {resourceError ? (
+          <FeedbackBanner kind="error" message="The physics graph could not be loaded." detail={resourceError.message} />
+        ) : current ? (
+          <FeedbackBanner kind="warning" message="The selected physics module is no longer present in the current graph revision." />
+        ) : (
+          <p role="status">{resource.status === "loading" || resource.status === "stale"
+            ? "Loading the current physics graph…"
+            : "The physics graph is not available yet."}</p>
+        )}
       </div>
     );
   }
@@ -101,5 +111,18 @@ export function PhysicsGraphModuleInspectorPanel({ selection }: InspectorPanelPr
     statusReason: selectedPhysicsModule.activation === "active" ? null : `Activation: ${selectedPhysicsModule.activation}`,
   });
 
-  return <PhysicsInspectorOverview model={model} />;
+  return (
+    <div className="fm-inspector-panel">
+      {!current ? (
+        <FeedbackBanner
+          kind={resourceError ? "error" : "warning"}
+          message={resourceError
+            ? "The physics graph could not be refreshed. Showing the previous graph revision."
+            : "Showing the previous physics graph revision while the current graph loads."}
+          detail={resourceError?.message}
+        />
+      ) : null}
+      <PhysicsInspectorOverview model={model} />
+    </div>
+  );
 }

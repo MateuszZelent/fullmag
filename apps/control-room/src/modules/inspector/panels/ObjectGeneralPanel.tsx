@@ -56,6 +56,7 @@ import { ObjectExtensionsSection } from "../extensions/ObjectExtensionsSection";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
+import { GeometryValidationSummary } from "../primitives/GeometryValidationSummary";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   buildGeometryDraftPatch,
@@ -1052,16 +1053,13 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         collapsible
         defaultOpen={validationMessages.length > 0}
       >
-        <FieldRow label="Fetch state" value={validation.status} />
-        {validationMessages.length > 0 ? (
-          <ul className="fm-inspector-validation-list">
-            {validationMessages.map((message) => (
-              <li key={message}>{message}</li>
-            ))}
-          </ul>
-        ) : (
-          <FieldRow label="Backend validation" value="no object issues" />
-        )}
+        <GeometryValidationSummary
+          error={validation.error}
+          hasData={validation.data !== null}
+          messages={validationMessages}
+          refreshError={validation.refreshError}
+          status={validation.status}
+        />
       </InspectorGroup>
 
       <ObjectExtensionsSection

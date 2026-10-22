@@ -18,11 +18,17 @@
   border-bottom: 1px solid var(--fm-border-subtle);
   padding: 0 var(--fm-space-2);
   overflow-x: auto;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fm-border-default) transparent;
 }
 
 .fm-explorer-tabs::-webkit-scrollbar {
-  display: none;
+  height: 4px;
+}
+
+.fm-explorer-tabs::-webkit-scrollbar-thumb {
+  background: var(--fm-border-default);
+  border-radius: var(--fm-radius-sm);
 }
 
 /* Override the shared fm-tabs-list inside explorer */
@@ -163,15 +169,42 @@
   color: var(--fm-text-muted);
 }
 
-.fm-explorer-filter__options-icon {
-  flex-shrink: 0;
+.fm-explorer-filter__clear {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--fm-icon-sm);
+  height: var(--fm-icon-sm);
+  border: 0;
+  border-radius: var(--fm-radius-sm);
+  padding: 0;
+  background: transparent;
   color: var(--fm-text-muted);
   cursor: pointer;
   transition: color var(--fm-transition-fast);
 }
 
-.fm-explorer-filter__options-icon:hover {
+.fm-explorer-filter__clear:hover {
+  color: var(--fm-text-primary);
+}
+
+.fm-explorer-filter__clear:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+  color: var(--fm-text-primary);
+}
+
+.fm-explorer-notice {
+  min-width: 0;
+  padding: var(--fm-space-2);
   color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.fm-explorer-notice--error {
+  color: var(--fm-danger);
 }
 
 /* ── Tree container ── */
@@ -236,6 +269,20 @@
 .fm-explorer-tree-row[data-active="true"].fm-explorer-tree-row--active-analysis-field {
   border-color: color-mix(in srgb, var(--fm-accent) 58%, var(--fm-border-default));
   background: color-mix(in srgb, var(--fm-accent) 16%, var(--fm-bg-selected));
+}
+
+.fm-explorer-tree-row:focus-visible {
+  z-index: 1;
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-explorer-tree-row[data-active="true"]:focus-visible {
+  box-shadow: var(--fm-focus-ring), inset 2px 0 0 var(--fm-accent);
+}
+
+.fm-explorer-tree-row[data-active="true"].fm-explorer-tree-row--active-analysis-field:focus-visible {
+  box-shadow: var(--fm-focus-ring), inset 2px 0 0 var(--fm-accent);
 }
 
 /* ── Tree guide lines (vertical connectors) ── */

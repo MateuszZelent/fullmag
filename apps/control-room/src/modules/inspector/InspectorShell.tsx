@@ -12,8 +12,9 @@ import {
   PanelRightClose,
   Play,
 } from "lucide-react";
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
+import { copyTextToClipboard } from "@/shared/browser/copyTextToClipboard";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import {
@@ -72,14 +73,34 @@ export function InspectorShell({
 }: InspectorShellProps) {
   const activeTab = useInspectorActiveTab();
   const contentRef = useRef<HTMLDivElement>(null);
-  const nodeId = descriptor.metadata.find((item) => item.label === "Node")?.value;
+  const nodeId = descriptor.nodeId ?? descriptor.metadata.find((item) => item.label === "Node")?.value;
+  const [copyFeedback, setCopyFeedback] = useState<{ nodeId: string; error: boolean; message: string } | null>(null);
+  const copySequence = useRef(0);
+  const visibleCopyFeedback = copyFeedback?.nodeId === nodeId ? copyFeedback : null;
   const descriptorKey = `${nodeId ?? descriptor.title}:${descriptor.tabs.map((tab) => tab.id).join(",")}`;
   useLayoutEffect(() => {
     configureInspectorTabs(descriptorKey, descriptor.tabs.map((tab) => tab.id));
   }, [descriptor.tabs, descriptorKey]);
   useLayoutEffect(() => {
     resetInspectorScroll(contentRef.current);
+    copySequence.current += 1;
   }, [descriptorKey]);
+
+  async function copyNodeId(): Promise<void> {
+    if (!nodeId) return;
+    const sequence = ++copySequence.current;
+    setCopyFeedback(null);
+    try {
+      await copyTextToClipboard(nodeId);
+      if (sequence === copySequence.current) {
+        setCopyFeedback({ nodeId, error: false, message: "Node ID copied." });
+      }
+    } catch {
+      if (sequence === copySequence.current) {
+        setCopyFeedback({ nodeId, error: true, message: "Could not copy the node ID. Check clipboard permissions and try again." });
+      }
+    }
+  }
 
   return (
     <section
@@ -154,9 +175,7 @@ export function InspectorShell({
               <DropdownMenuContent align="end">
                 <DropdownMenuItem
                   disabled={!nodeId}
-                  onSelect={() => {
-                    if (nodeId) void navigator.clipboard?.writeText(nodeId);
-                  }}
+                  onSelect={() => void copyNodeId()}
                 >
                   Copy node ID
                 </DropdownMenuItem>
@@ -174,6 +193,11 @@ export function InspectorShell({
             ))}
           </dl>
         ) : null}
+        {visibleCopyFeedback ? (
+          <p className={visibleCopyFeedback.error ? "fm-inspector__action-error" : "fm-inspector__action-reason"} role={visibleCopyFeedback.error ? "alert" : "status"}>
+            {visibleCopyFeedback.message}
+          </p>
+        ) : null}
       </header>
 
       {descriptor.tabs.length > 0 ? (
@@ -182,7 +206,7 @@ export function InspectorShell({
           value={activeTab}
           onValueChange={setInspectorActiveTab}
         >
-          <TabsList className="fm-inspector__tab-list">
+          <TabsList aria-label="Inspector sections" className="fm-inspector__tab-list">
             {descriptor.tabs.map((tab) => (
               <TabsTrigger key={tab.id} value={tab.id}>{tab.label}</TabsTrigger>
             ))}

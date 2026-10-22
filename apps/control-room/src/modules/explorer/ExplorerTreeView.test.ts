@@ -108,6 +108,21 @@ describe("flattenVisibleExplorerRows", () => {
     });
   });
 
+  it("keeps a nonempty virtual window when filtering shrinks a scrolled tree", () => {
+    const rows = Array.from({ length: 300 }, (_, index) => ({
+      depth: 0,
+      expanded: false,
+      hasChildren: false,
+      node: { id: `node-${index}`, kind: "object.root" as const, label: `Node ${index}`, parentId: null },
+    }));
+    const window = sliceVisibleExplorerRows({
+      overscan: 8, rowHeight: 28, rows, scrollTop: 25_000, viewportHeight: 420,
+    });
+    expect(window.rows.at(-1)?.node.id).toBe("node-299");
+    expect(window.rows.length).toBeGreaterThan(0);
+    expect(window.topPadding + window.rows.length * 28 + window.bottomPadding).toBe(300 * 28);
+  });
+
   it("scrolls an offscreen active node into the visible tree window", () => {
     const rowIds = Array.from({ length: 100 }, (_, index) => `node-${index}`);
 

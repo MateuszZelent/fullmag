@@ -172,7 +172,69 @@ describe("fdmUniverseExtentModel", () => {
       explicitFdm: true,
       resource: { data: fdmDomain, error: null, status: "stale" },
     });
-    expect(model.status).toBe("stale");
+    expect(model).toMatchObject({
+      domainId: "domain:fdm",
+      generationId: "generation-7",
+      gridShape: [4, 3, 2],
+      status: "stale",
+    });
+    expect(model.notice).toContain("previously published");
+  });
+
+  it("retains the last published descriptor when a DomainMeta refresh fails", () => {
+    const model = resolveFdmUniverseExtentModel({
+      explicitFdm: true,
+      resource: {
+        data: fdmDomain,
+        error: new Error("offline"),
+        status: "error",
+      },
+    });
+
+    expect(model).toMatchObject({
+      domainId: "domain:fdm",
+      generationId: "generation-7",
+      gridShape: [4, 3, 2],
+      origin: [-2, -1, 0],
+      spacing: [1, 4 / 3, 0.25],
+      status: "error",
+    });
+    expect(model.notice).toContain("offline");
+    expect(model.notice).toContain("retained structured-grid descriptor");
+  });
+
+  it.each([
+    {
+      label: "loading with retained data",
+      resourceStatus: "loading" as const,
+      refreshError: undefined,
+      expectedNotice: "is loading",
+    },
+    {
+      label: "refreshError with retained data",
+      resourceStatus: "ready" as const,
+      refreshError: new Error("offline"),
+      expectedNotice: "offline",
+    },
+  ])("keeps $label out of ready state", ({ resourceStatus, refreshError, expectedNotice }) => {
+    const model = resolveFdmUniverseExtentModel({
+      explicitFdm: true,
+      resource: {
+        data: fdmDomain,
+        error: null,
+        refreshError,
+        status: resourceStatus,
+      },
+    });
+
+    expect(model).toMatchObject({
+      domainId: "domain:fdm",
+      generationId: "generation-7",
+      gridShape: [4, 3, 2],
+      status: "stale",
+    });
+    expect(model.status).not.toBe("ready");
+    expect(model.notice).toContain(expectedNotice);
   });
 
   it.each(["error", "stale"] as const)(
