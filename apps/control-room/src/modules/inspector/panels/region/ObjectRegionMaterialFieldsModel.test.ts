@@ -176,6 +176,94 @@ describe("ObjectRegionMaterialFieldsModel", () => {
     expect(materialFieldDraftFromAssignment(assignment)).toBeNull();
   });
 
+  it("retains vector constants and parameters outside the selector as read-only assignments", () => {
+    const vectorConstant = {
+      assignment_id: "field:vector-constant",
+      owner_object: "permalloy_box",
+      parameter: "ms",
+      region_id: "hole_shell",
+      value: { kind: "constant", unit: "A/m", value: [1, 2, 3] },
+    } as never as SceneMaterialParameterAssignment;
+    const unsupportedParameter = {
+      assignment_id: "field:kc1",
+      owner_object: "permalloy_box",
+      parameter: "kc1",
+      region_id: "hole_shell",
+      value: { kind: "constant", unit: "J/m^3", value: 4 },
+    } as never as SceneMaterialParameterAssignment;
+
+    expect(isEditableMaterialField(vectorConstant)).toBe(false);
+    expect(materialFieldDraftFromAssignment(vectorConstant)).toBeNull();
+    expect(isEditableMaterialField(unsupportedParameter)).toBe(false);
+    expect(materialFieldDraftFromAssignment(unsupportedParameter)).toBeNull();
+  });
+
+  it("preserves unchanged assignment metadata and only updates an edited field value", () => {
+    const assignment: SceneMaterialParameterAssignment = {
+      assignment_id: "field:legacy-linear",
+      owner_object: "permalloy_box",
+      parameter: "ms",
+      region_id: "hole_shell",
+      value: {
+        base: 810000,
+        gradient: [1, 2, 3],
+        kind: "linear",
+      },
+    };
+    const draft = materialFieldDraftFromAssignment(assignment);
+
+    expect(
+      materialFieldFromDraft(draft as MaterialFieldDraft, {
+        objectId: "permalloy_box",
+        regionId: "hole_shell",
+      }),
+    ).toEqual(assignment);
+    expect(
+      materialFieldFromDraft(
+        { ...(draft as MaterialFieldDraft), base: 820000 },
+        { objectId: "permalloy_box", regionId: "hole_shell" },
+      ),
+    ).toEqual({
+      assignment_id: "field:legacy-linear",
+      owner_object: "permalloy_box",
+      parameter: "ms",
+      region_id: "hole_shell",
+      value: {
+        base: 820000,
+        gradient: [1, 2, 3],
+        kind: "linear",
+      },
+    });
+  });
+
+  it("still strips the FEM-only conflict policy from retained fields on the FDM lane", () => {
+    const assignment: SceneMaterialParameterAssignment = {
+      assignment_id: "field:legacy-fem-policy",
+      conflict_policy: "min_mesh_size_wins",
+      owner_object: "permalloy_box",
+      parameter: "ms",
+      priority: 4,
+      region_id: "hole_shell",
+      value: { kind: "constant", unit: "A/m", value: 810000 },
+    };
+    const draft = materialFieldDraftFromAssignment(assignment);
+
+    expect(
+      materialFieldFromDraft(
+        draft as MaterialFieldDraft,
+        { objectId: "permalloy_box", regionId: "hole_shell" },
+        { meshPolicyLane: "fdm" },
+      ),
+    ).toEqual({
+      assignment_id: "field:legacy-fem-policy",
+      owner_object: "permalloy_box",
+      parameter: "ms",
+      priority: 4,
+      region_id: "hole_shell",
+      value: { kind: "constant", unit: "A/m", value: 810000 },
+    });
+  });
+
   it("extracts material fields for the selected object only", () => {
     const fields = sceneObjectMaterialFields(
       {

@@ -184,6 +184,7 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
   const baseDraft = useMemo(() => objectRegionDraftFromModel(model), [model]);
   const draftKey = `${sessionScopeKey ?? "no-session"}:${objectRegionDraftKey(model)}`;
   const draftIdentityKey = objectRegionDraftIdentityKey(model);
+  const nextMaterialOverrideUiKey = useRef(0);
   const fieldDrafts = useQuantityFieldDraftScope(
     `${sessionScopeKey ?? "no-session"}:${draftIdentityKey}`,
   );
@@ -403,7 +404,10 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     updateDraft({
       materialOverrides: [
         ...draft.materialOverrides,
-        defaultMaterialOverrideDraft(draft.priority),
+        defaultMaterialOverrideDraft(
+          draft.priority,
+          `new:${nextMaterialOverrideUiKey.current++}`,
+        ),
       ],
     });
   }
@@ -456,6 +460,13 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
       setFeedback({ kind: "error", message: "Select an authored object region." });
       return false;
     }
+    const rawFieldBlockReason = quantityFieldDraftBlockReason(
+      fieldDrafts.store.getSummary(),
+    );
+    if (rawFieldBlockReason) {
+      setFeedback({ kind: "error", message: rawFieldBlockReason });
+      return false;
+    }
     const validationErrors = validateObjectRegionDraft(draft, {
       meshPolicyLane: meshLane,
     });
@@ -487,7 +498,10 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
           return api.model.patchObjectRegionResource(
             model.objectId,
             model.regionId,
-            buildObjectRegionPatch(draft, { meshPolicyLane: meshLane }),
+            buildObjectRegionPatch(draft, {
+              baseDraft,
+              meshPolicyLane: meshLane,
+            }),
             options,
           );
         },
@@ -819,6 +833,9 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     updateMaterialOverride,
     addMaterialOverride,
     removeMaterialOverride,
+    removeQuantityFieldDraftKeys: (keys) => {
+      for (const key of keys) fieldDrafts.store.remove(key);
+    },
     applyRegion,
     duplicateRegion,
     deleteRegion,

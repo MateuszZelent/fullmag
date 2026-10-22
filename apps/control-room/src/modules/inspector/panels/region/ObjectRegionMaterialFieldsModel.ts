@@ -36,6 +36,7 @@ export interface MaterialFieldDraft {
   radius: number;
   scalar: number;
   unit: string;
+  originalAssignment?: SceneMaterialParameterAssignment;
 }
 
 export interface MaterialFieldDraftState {
@@ -106,11 +107,29 @@ export function defaultMaterialFieldDraft(model: {
 export function isEditableMaterialField(
   field: SceneMaterialParameterAssignment,
 ): boolean {
-  return (
-    field.value.kind === "constant" ||
-    field.value.kind === "linear" ||
-    field.value.kind === "radial"
-  );
+  if (!MATERIAL_FIELD_PARAMETERS.includes(field.parameter)) return false;
+  if (field.value.kind === "constant") {
+    return typeof field.value.value === "number";
+  }
+  if (field.value.kind === "linear") {
+    return (
+      field.value.gradient.length === 3 &&
+      field.value.gradient.every(Number.isFinite) &&
+      (field.value.frame === undefined ||
+        field.value.frame === "object" ||
+        field.value.frame === "world")
+    );
+  }
+  if (field.value.kind === "radial") {
+    return (
+      field.value.center.length === 3 &&
+      field.value.center.every(Number.isFinite) &&
+      (field.value.frame === undefined ||
+        field.value.frame === "object" ||
+        field.value.frame === "world")
+    );
+  }
+  return false;
 }
 
 export function materialFieldDraftFromAssignment(
@@ -136,6 +155,7 @@ export function materialFieldDraftFromAssignment(
       radius: 10e-9,
       scalar,
       unit,
+      originalAssignment: field,
     };
   }
   if (value.kind === "linear") {
@@ -154,6 +174,7 @@ export function materialFieldDraftFromAssignment(
       radius: 10e-9,
       scalar: value.base,
       unit,
+      originalAssignment: field,
     };
   }
   if (value.kind === "radial") {
@@ -172,6 +193,7 @@ export function materialFieldDraftFromAssignment(
       radius: value.radius,
       scalar: value.inside,
       unit,
+      originalAssignment: field,
     };
   }
   return null;
@@ -182,6 +204,26 @@ export function materialFieldFromDraft(
   model: { objectId: string; regionId: string },
   options: MaterialFieldSerializationOptions = {},
 ): SceneMaterialParameterAssignment {
+  const meshPolicyLane = options.meshPolicyLane ?? "fem";
+  const original = draft.originalAssignment;
+  const originalDraft = original ? materialFieldDraftFromAssignment(original) : null;
+  if (
+    original &&
+    originalDraft &&
+    sameMaterialFieldDraftProjection(draft, originalDraft)
+  ) {
+    return applyMaterialFieldLaneFence(original, meshPolicyLane);
+  }
+
+  if (
+    original &&
+    originalDraft &&
+    original.value.kind === draft.kind &&
+    isEditableMaterialField(original)
+  ) {
+    return updateOriginalMaterialField(original, originalDraft, draft, meshPolicyLane);
+  }
+
   let value: SceneMaterialParameterField;
   if (draft.kind === "constant") {
     value = {
@@ -209,7 +251,6 @@ export function materialFieldFromDraft(
     };
   }
 
-  const meshPolicyLane = options.meshPolicyLane ?? "fem";
   const conflictPolicy =
     meshPolicyLane !== "fem" && draft.conflictPolicy === "min_mesh_size_wins"
       ? undefined
@@ -224,6 +265,89 @@ export function materialFieldFromDraft(
     value,
     ...(conflictPolicy ? { conflict_policy: conflictPolicy } : {}),
   };
+}
+
+function sameMaterialFieldDraftProjection(
+  left: MaterialFieldDraft,
+  right: MaterialFieldDraft,
+): boolean {
+  const leftProjection = { ...left };
+  const rightProjection = { ...right };
+  delete leftProjection.originalAssignment;
+  delete rightProjection.originalAssignment;
+  return JSON.stringify(leftProjection) === JSON.stringify(rightProjection);
+}
+
+function applyMaterialFieldLaneFence(
+  assignment: SceneMaterialParameterAssignment,
+  meshPolicyLane: MaterialFieldSerializationLane,
+): SceneMaterialParameterAssignment {
+  if (
+    meshPolicyLane !== "fem" &&
+    assignment.conflict_policy === "min_mesh_size_wins"
+  ) {
+    const retained = { ...assignment };
+    delete retained.conflict_policy;
+    return retained;
+  }
+  return assignment;
+}
+
+function updateOriginalMaterialField(
+  original: SceneMaterialParameterAssignment,
+  baseline: MaterialFieldDraft,
+  draft: MaterialFieldDraft,
+  meshPolicyLane: MaterialFieldSerializationLane,
+): SceneMaterialParameterAssignment {
+  const result: SceneMaterialParameterAssignment = { ...original };
+  if (draft.parameter !== baseline.parameter) result.parameter = draft.parameter;
+  if (draft.priority !== baseline.priority) result.priority = Math.trunc(draft.priority);
+  if (draft.conflictPolicy !== baseline.conflictPolicy) {
+    if (
+      meshPolicyLane === "fem" ||
+      draft.conflictPolicy !== "min_mesh_size_wins"
+    ) {
+      result.conflict_policy = draft.conflictPolicy;
+    } else {
+      delete result.conflict_policy;
+    }
+  }
+
+  const originalValue = original.value;
+  if (originalValue.kind === "constant" && draft.kind === "constant") {
+    const value: Extract<SceneMaterialParameterField, { kind: "constant" }> = {
+      ...originalValue,
+    };
+    if (draft.scalar !== baseline.scalar) value.value = draft.scalar;
+    if (draft.unit !== baseline.unit) value.unit = draft.unit || null;
+    result.value = value;
+  } else if (originalValue.kind === "linear" && draft.kind === "linear") {
+    const value: Extract<SceneMaterialParameterField, { kind: "linear" }> = {
+      ...originalValue,
+    };
+    if (draft.base !== baseline.base) value.base = draft.base;
+    if (JSON.stringify(draft.gradient) !== JSON.stringify(baseline.gradient)) {
+      value.gradient = draft.gradient;
+    }
+    if (draft.frame !== baseline.frame) value.frame = draft.frame;
+    if (draft.unit !== baseline.unit) value.unit = draft.unit || null;
+    result.value = value;
+  } else if (originalValue.kind === "radial" && draft.kind === "radial") {
+    const value: Extract<SceneMaterialParameterField, { kind: "radial" }> = {
+      ...originalValue,
+    };
+    if (JSON.stringify(draft.center) !== JSON.stringify(baseline.center)) {
+      value.center = draft.center;
+    }
+    if (draft.inside !== baseline.inside) value.inside = draft.inside;
+    if (draft.outside !== baseline.outside) value.outside = draft.outside;
+    if (draft.radius !== baseline.radius) value.radius = draft.radius;
+    if (draft.frame !== baseline.frame) value.frame = draft.frame;
+    if (draft.unit !== baseline.unit) value.unit = draft.unit || null;
+    result.value = value;
+  }
+
+  return applyMaterialFieldLaneFence(result, meshPolicyLane);
 }
 
 export function materialFieldDraftKey(

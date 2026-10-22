@@ -2,7 +2,6 @@
 
 import type { ChangeEvent } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { MaterialParameterFieldListResource, SceneResource } from "@/kernel/api/apiTypes";
 import {
   authoringWriteOptions,
   runAuthoringMutationWithHistory,
@@ -16,6 +15,10 @@ import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { RegionMaterialParameter, RegionMaterialConflictPolicy } from "../ObjectRegionsPanelModel";
+import {
+  isEditableRegionMaterialOverride,
+  resolveParentMaterialParameterInfo,
+} from "../ObjectRegionsPanelModel";
 import { useQuantityFieldDraftKeys } from "../../primitives/QuantityField";
 import { PhysicalScalarField } from "../ObjectRegionsPanel";
 import { publishRegionAuthoringScene } from "../regionAuthoringInvalidation";
@@ -30,11 +33,6 @@ import {
   SCENE_RESOURCE_KEY,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import {
-  defaultMaterialOverrideUnit,
-  defaultMaterialOverrideValue,
-} from "../ObjectRegionsPanelModel";
-
 const REGION_MATERIAL_PARAMETERS: RegionMaterialParameter[] = [
   "ms",
   "aex",
@@ -80,62 +78,12 @@ const MATERIAL_FIELD_DRAFT_PARTS = [
   "Center Z",
 ] as const;
 
-function materialFieldTextDraftKey(index: number, part: string): string {
-  return `material-field:${index}:${part}`;
+function materialFieldTextDraftKey(assignmentId: string, part: string): string {
+  return `material-field:${assignmentId}:${part}`;
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function getParentParamInfo(
-  param: RegionMaterialParameter,
-  objectId: string,
-  materialRef: string,
-  materialFields: MaterialParameterFieldListResource | null,
-  sceneData: SceneResource | null | undefined,
-): { unit: string; value: number | string } {
-  if (materialFields?.fields) {
-    const field = materialFields.fields.find(
-      (f) =>
-        f.owner_object_id === objectId &&
-        !f.source_region_id &&
-        f.parameter.toLowerCase() === param.toLowerCase()
-    );
-    if (field) {
-      const unit = field.unit ?? defaultMaterialOverrideUnit(param);
-      if (
-        field.field?.kind === "constant" &&
-        typeof field.field.value === "number"
-      ) {
-        return { value: field.field.value, unit };
-      }
-      return { value: `${field.field?.kind ?? "authored"} field`, unit };
-    }
-  }
-  
-  if (sceneData?.materials) {
-    const material = sceneData.materials.find((m) => m.id === materialRef);
-    if (material?.properties) {
-      let matVal: unknown;
-      const paramLower = param.toLowerCase();
-      const props = material.properties as Record<string, unknown>;
-      if (paramLower === "ms") matVal = props.Ms;
-      else if (paramLower === "aex") matVal = props.Aex;
-      else if (paramLower === "dind") matVal = props.Dind;
-      else if (paramLower === "dbulk") matVal = props.Dbulk;
-      else matVal = props[param];
-
-      if (typeof matVal === "number") {
-        return { value: matVal, unit: defaultMaterialOverrideUnit(param) };
-      }
-    }
-  }
-
-  return {
-    value: defaultMaterialOverrideValue(param),
-    unit: defaultMaterialOverrideUnit(param),
-  };
 }
 
 export function ObjectRegionMagneticParametersPanel(props: RegionSubPanelProps) {
@@ -158,6 +106,7 @@ function useObjectRegionMagneticParametersPanelView({
   updateMaterialOverride,
   addMaterialOverride,
   removeMaterialOverride,
+  removeQuantityFieldDraftKeys,
   applyRegion,
   revert,
   duplicateRegion,
@@ -188,13 +137,14 @@ function useObjectRegionMagneticParametersPanelView({
       ),
     [model.regionId, objectMaterialFields],
   );
-  const unsupportedRegionFieldCount = useMemo(
+  const unsupportedRegionAssignments = useMemo(
     () =>
       objectMaterialFields.filter(
         (field) => field.region_id === model.regionId && !isEditableMaterialField(field),
-      ).length,
+      ),
     [model.regionId, objectMaterialFields],
   );
+  const unsupportedRegionFieldCount = unsupportedRegionAssignments.length;
   const fieldDraftKey = materialFieldDraftKey(editableRegionAssignments);
   const baseFieldDrafts = useMemo(
     () =>
@@ -230,8 +180,10 @@ function useObjectRegionMagneticParametersPanelView({
   // Uncommitted field text belongs to this section's draft: invalid text
   // blocks Apply, and Revert discards it together with the numeric draft.
   const materialFieldTextDrafts = useQuantityFieldDraftKeys(
-    fieldDrafts.flatMap((_, index) =>
-      MATERIAL_FIELD_DRAFT_PARTS.map((part) => materialFieldTextDraftKey(index, part)),
+    fieldDrafts.flatMap((field) =>
+      MATERIAL_FIELD_DRAFT_PARTS.map((part) =>
+        materialFieldTextDraftKey(field.assignmentId, part),
+      ),
     ),
   );
   const materialFieldTextBlockReason = materialFieldTextDrafts.invalidLabels.length > 0
@@ -285,6 +237,13 @@ function useObjectRegionMagneticParametersPanelView({
 
   function removeMaterialField(index: number): void {
     if (fieldMutationInFlight.current) return;
+    const removedField = fieldDraftRef.current[index];
+    if (!removedField) return;
+    removeQuantityFieldDraftKeys?.(
+      MATERIAL_FIELD_DRAFT_PARTS.map((part) =>
+        materialFieldTextDraftKey(removedField.assignmentId, part),
+      ),
+    );
     replaceFieldDrafts(
       fieldDraftRef.current.filter((_field, fieldIndex) => fieldIndex !== index),
     );
@@ -308,6 +267,24 @@ function useObjectRegionMagneticParametersPanelView({
       setFieldFeedback({
         kind: "error",
         message: "Material field priority and radial radius must be finite values.",
+      });
+      return false;
+    }
+
+    const retainedFields = objectMaterialFields.filter(
+      (field) =>
+        field.region_id !== model.regionId || !isEditableMaterialField(field),
+    );
+    const retainedLaneConflict =
+      meshLane !== "fem"
+        ? retainedFields.find(
+            (field) => field.conflict_policy === "min_mesh_size_wins",
+          )
+        : undefined;
+    if (retainedLaneConflict) {
+      setFieldFeedback({
+        kind: "error",
+        message: `Cannot apply fields while retaining ${retainedLaneConflict.parameter} with the FEM-only min_mesh_size_wins policy on the ${meshLane} lane.`,
       });
       return false;
     }
@@ -338,10 +315,6 @@ function useObjectRegionMagneticParametersPanelView({
       sessionScopeKey: operationSessionScopeKey,
     });
     try {
-      const retainedFields = objectMaterialFields.filter(
-        (field) =>
-          field.region_id !== model.regionId || !isEditableMaterialField(field),
-      );
       const fields = [
         ...retainedFields,
         ...submittedFieldDrafts.map((field) =>
@@ -452,7 +425,11 @@ function useObjectRegionMagneticParametersPanelView({
   ]);
 
   const overriddenParams = new Set(
-    draft.materialOverrides.map((override) => override.parameter),
+    draft.materialOverrides.map(
+      (override) => override.preservedOverride && !isEditableRegionMaterialOverride(override.preservedOverride)
+        ? override.preservedOverride.parameter
+        : override.parameter,
+    ),
   );
   const inheritedParams = REGION_MATERIAL_PARAMETERS.filter(
     (parameter) => !overriddenParams.has(parameter),
@@ -483,12 +460,22 @@ function useObjectRegionMagneticParametersPanelView({
         {inheritedParams.length > 0 && (
           <div className="fm-region-inherited-parameters fm-mt-2 fm-mb-2">
             {inheritedParams.map((param) => {
-              const info = getParentParamInfo(param, model.objectId, model.materialRef, materialFields, sceneData);
+              const info = resolveParentMaterialParameterInfo(
+                param,
+                model.objectId,
+                model.materialRef,
+                materialFields,
+                sceneData,
+              );
               return (
                 <FieldRow
                   key={`inherited:${param}`}
                   label={param}
-                  value={`${info.value} ${info.unit ? info.unit + " " : ""}(inherits parent)`}
+                  value={
+                    info.available
+                      ? `${info.value} ${info.unit ? info.unit + " " : ""}(inherits parent)`
+                      : "Unavailable — no parent value"
+                  }
                 />
               );
             })}
@@ -500,7 +487,35 @@ function useObjectRegionMagneticParametersPanelView({
         ) : null}
 
         {draft.materialOverrides.map((override, index) => {
-          const parentInfo = getParentParamInfo(
+          const preserved = override.preservedOverride;
+          if (preserved && !isEditableRegionMaterialOverride(preserved)) {
+            return (
+              <div
+                className="fm-region-override fm-section-separator"
+                key={`override:${override.uiKey}`}
+              >
+                <FieldRow
+                  label="Read-only override"
+                  value={`${preserved.parameter} · ${preserved.value.kind} field · preserved on Apply`}
+                />
+                <FieldRow
+                  label="Stored override payload"
+                  value={JSON.stringify(preserved)}
+                />
+                <div className="fm-inspector-toolbar fm-toolbar-top">
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                    onClick={() => removeMaterialOverride(index)}
+                  >
+                    Remove Override
+                  </Button>
+                </div>
+              </div>
+            );
+          }
+          const parentInfo = resolveParentMaterialParameterInfo(
             override.parameter,
             model.objectId,
             model.materialRef,
@@ -508,7 +523,10 @@ function useObjectRegionMagneticParametersPanelView({
             sceneData,
           );
           return (
-            <div className="fm-region-override fm-section-separator" key={`override:${index}`}>
+            <div
+              className="fm-region-override fm-section-separator"
+              key={`override:${override.uiKey}`}
+            >
               <FormField
                 label={`Override ${index + 1}`}
                 type="select"
@@ -526,7 +544,11 @@ function useObjectRegionMagneticParametersPanelView({
               </FormField>
               <FieldRow
                 label="Inherited parent"
-                value={`${parentInfo.value} ${parentInfo.unit}`.trim()}
+                value={
+                  parentInfo.available
+                    ? `${parentInfo.value} ${parentInfo.unit}`.trim()
+                    : "Unavailable — no parent value"
+                }
               />
               <PhysicalScalarField
                 label="Local override"
@@ -593,7 +615,14 @@ function useObjectRegionMagneticParametersPanelView({
       <InspectorGroup title="Material Fields">
         <FieldRow label="Editable fields" value={fieldDrafts.length} />
         <FieldRow label="Unsupported fields" value={unsupportedRegionFieldCount} />
-        {fieldDrafts.length === 0 ? (
+        {unsupportedRegionAssignments.map((assignment) => (
+          <FieldRow
+            key={`readonly-field:${assignment.assignment_id}`}
+            label={`Read-only ${assignment.parameter}`}
+            value={`${JSON.stringify(assignment.value)} · retained on Apply`}
+          />
+        ))}
+        {fieldDrafts.length === 0 && unsupportedRegionAssignments.length === 0 ? (
           <FieldRow label="Region fields" value="no local parameter fields" />
         ) : null}
         {fieldDrafts.map((field, index) => {
@@ -657,7 +686,7 @@ function useObjectRegionMagneticParametersPanelView({
             )}
             {field.kind === "constant" ? (
               <PhysicalScalarField
-                draftKey={materialFieldTextDraftKey(index, "Value")}
+                draftKey={materialFieldTextDraftKey(field.assignmentId, "Value")}
                 label="Value"
                 unit={field.unit}
                 value={field.scalar}
@@ -667,28 +696,28 @@ function useObjectRegionMagneticParametersPanelView({
             {field.kind === "linear" ? (
               <>
                 <PhysicalScalarField
-                  draftKey={materialFieldTextDraftKey(index, "Base")}
+                  draftKey={materialFieldTextDraftKey(field.assignmentId, "Base")}
                   label="Base"
                   unit={field.unit}
                   value={field.base}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { base: next })}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldTextDraftKey(index, "Gradient X")}
+                  draftKey={materialFieldTextDraftKey(field.assignmentId, "Gradient X")}
                   label="Gradient X"
                   unit={`${field.unit}/m`}
                   value={field.gradient[0]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "gradient", 0, next)}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldTextDraftKey(index, "Gradient Y")}
+                  draftKey={materialFieldTextDraftKey(field.assignmentId, "Gradient Y")}
                   label="Gradient Y"
                   unit={`${field.unit}/m`}
                   value={field.gradient[1]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "gradient", 1, next)}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldTextDraftKey(index, "Gradient Z")}
+                  draftKey={materialFieldTextDraftKey(field.assignmentId, "Gradient Z")}
                   label="Gradient Z"
                   unit={`${field.unit}/m`}
                   value={field.gradient[2]}
@@ -699,42 +728,42 @@ function useObjectRegionMagneticParametersPanelView({
             {field.kind === "radial" ? (
               <>
                 <PhysicalScalarField
-                  draftKey={materialFieldTextDraftKey(index, "Inside")}
+                  draftKey={materialFieldTextDraftKey(field.assignmentId, "Inside")}
                   label="Inside"
                   unit={field.unit}
                   value={field.inside}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { inside: next })}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldTextDraftKey(index, "Outside")}
+                  draftKey={materialFieldTextDraftKey(field.assignmentId, "Outside")}
                   label="Outside"
                   unit={field.unit}
                   value={field.outside}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { outside: next })}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldTextDraftKey(index, "Radius")}
+                  draftKey={materialFieldTextDraftKey(field.assignmentId, "Radius")}
                   label="Radius"
                   unit="m"
                   value={field.radius}
                   onValueChange={(next) => updateMaterialFieldDraft(index, { radius: next })}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldTextDraftKey(index, "Center X")}
+                  draftKey={materialFieldTextDraftKey(field.assignmentId, "Center X")}
                   label="Center X"
                   unit="m"
                   value={field.center[0]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "center", 0, next)}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldTextDraftKey(index, "Center Y")}
+                  draftKey={materialFieldTextDraftKey(field.assignmentId, "Center Y")}
                   label="Center Y"
                   unit="m"
                   value={field.center[1]}
                   onValueChange={(next) => updateMaterialFieldVector(index, "center", 1, next)}
                 />
                 <PhysicalScalarField
-                  draftKey={materialFieldTextDraftKey(index, "Center Z")}
+                  draftKey={materialFieldTextDraftKey(field.assignmentId, "Center Z")}
                   label="Center Z"
                   unit="m"
                   value={field.center[2]}
