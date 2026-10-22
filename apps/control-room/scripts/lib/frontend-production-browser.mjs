@@ -52,16 +52,19 @@ export async function qualifyFrontendProductionBrowser({
   }
 
   async function runScenario(name, action) {
+    console.log(`Frontend audit: ${name} started`);
     const result = { name, status: "passed" };
     try {
       result.details = await action();
     } catch (error) {
       result.status = "failed";
       result.error = error?.stack ?? String(error);
+      console.log(`Frontend audit: ${name} failed`);
       evidence.scenarios.push(result);
       throw error;
     }
     evidence.scenarios.push(result);
+    console.log(`Frontend audit: ${name} passed`);
     return result.details;
   }
 
@@ -82,6 +85,15 @@ export async function qualifyFrontendProductionBrowser({
 
   async function focusedNodeId() {
     return page.evaluate(() => document.activeElement?.getAttribute("data-node-id") ?? null);
+  }
+
+  async function waitForInspectorName(expectedName) {
+    const name = page.locator(".fm-inspector").getByRole("textbox", { name: "Name", exact: true });
+    await name.waitFor({ state: "visible" });
+    await page.waitForFunction((expected) =>
+      document.querySelector('.fm-inspector input[aria-label="Name"]')?.value === expected,
+    expectedName, { timeout: 10_000 });
+    assert.equal(await name.inputValue(), expectedName);
   }
 
   async function waitForFocusedNode(nodeId) {
@@ -127,14 +139,14 @@ export async function qualifyFrontendProductionBrowser({
       await filter.press("Escape");
       assert.equal(await filter.inputValue(), "", "Escape should clear the explorer filter.");
       assert.equal(await geometry.count(), 0, "Escape should restore the collapsed tree.");
-      assert.equal(await row("model:objects").getAttribute("aria-expanded"), "false");
+      assert.equal(await row("model:session").getAttribute("aria-expanded"), "false");
 
       await filter.fill("Geometry");
       await geometry.waitFor({ state: "visible" });
       await page.getByRole("button", { name: "Clear explorer filter" }).click();
       assert.equal(await filter.inputValue(), "", "Clear should reset the explorer filter.");
       assert.equal(await geometry.count(), 0, "Clear should restore the collapsed tree.");
-      assert.equal(await row("model:objects").getAttribute("aria-expanded"), "false");
+      assert.equal(await row("model:session").getAttribute("aria-expanded"), "false");
 
       await filter.fill("__frontend_audit_no_matching_node__");
       const noMatches = page.getByRole("status").filter({ hasText: "No matching nodes." });
@@ -254,9 +266,20 @@ export async function qualifyFrontendProductionBrowser({
       });
       assert.ok(initial.totalRows > 200, `Large-tree fixture only exposes ${initial.totalRows} logical rows.`);
       assert.ok(initial.renderedIds.length < initial.totalRows, "The large-tree case should use row virtualization.");
+      evidence.virtualization_probe = initial;
 
       const farSelectedId = "model:object:audit-copy-30";
       await tree.locator('[role="treeitem"]').first().focus();
+      await tree.evaluate((element) => {
+        const events = [];
+        window.__frontendAuditNavigationEvents = events;
+        for (const eventName of ["keydown", "focusin", "scroll"]) {
+          element.addEventListener(eventName, (event) => {
+            events.push({ type: event.type, key: event.key, target: event.target?.getAttribute?.("data-node-id"), focused: document.activeElement?.getAttribute("data-node-id"), scrollTop: element.scrollTop, scrollHeight: element.scrollHeight });
+            if (events.length > 200) events.shift();
+          });
+        }
+      });
       let farFocusId = await pressAndWaitForFocusChange("End");
       for (let step = 0; farFocusId !== farSelectedId && step < initial.totalRows; step += 1) {
         farFocusId = await pressAndWaitForFocusChange("ArrowUp");
@@ -269,8 +292,8 @@ export async function qualifyFrontendProductionBrowser({
       farSelectedId, { timeout: 5_000 });
       assert.equal(await row(farSelectedId).getAttribute("data-active"), "true", "Far fixture object was not selected.");
       const inspector = page.locator(".fm-inspector");
-      const selectedInspectorTitle = "Film audit copy 30";
-      await inspector.getByRole("heading", { name: selectedInspectorTitle, exact: true }).waitFor({ state: "visible" });
+      const selectedObjectName = "Film audit copy 30";
+      await waitForInspectorName(selectedObjectName);
       await page.keyboard.press("Home");
       await page.waitForFunction((farId) => {
         const activeNodeId = document.activeElement?.getAttribute("data-node-id");
@@ -295,6 +318,14 @@ export async function qualifyFrontendProductionBrowser({
       assert.equal(await row(firstChildId).getAttribute("aria-level"),
         String(Number(await parent.getAttribute("aria-level")) + 1),
       "ArrowRight did not focus the first child of an expanded parent.");
+      const firstChild = row(firstChildId);
+      if (await firstChild.getAttribute("aria-expanded") === "true") {
+        await page.keyboard.press("ArrowLeft");
+        await page.waitForFunction((nodeId) =>
+          document.querySelector(`[data-node-id="${nodeId}"]`)?.getAttribute("aria-expanded") === "false",
+        firstChildId, { timeout: 5_000 });
+        await waitForFocusedNode(firstChildId);
+      }
       await page.keyboard.press("ArrowLeft");
       await waitForFocusedNode(parentId);
 
@@ -314,8 +345,8 @@ export async function qualifyFrontendProductionBrowser({
       const expanded = await tree.evaluate((element) => ({ scrollTop: element.scrollTop, scrollHeight: element.scrollHeight }));
       assert.ok(expanded.scrollTop < initial.rowHeight * 12, "Expanding a focused parent revealed the distant selection and stole the viewport.");
       assert.equal(
-        (await inspector.locator(".fm-inspector__title").innerText()).trim(),
-        selectedInspectorTitle,
+        await inspector.getByRole("textbox", { name: "Name", exact: true }).inputValue(),
+        selectedObjectName,
         "Keyboard expansion changed the selected Inspector identity.",
       );
 
@@ -487,7 +518,7 @@ export async function qualifyFrontendProductionBrowser({
         assert.ok(before.renderedIds.length < before.logicalRows, "The shrink case should use row virtualization.");
 
         const farSelectedId = "model:object:audit-shrink-60";
-        const farSelectedTitle = "Keep audit 60";
+        const farSelectedName = "Keep audit 60";
         await tree.locator('[role="treeitem"]').first().focus();
         let focusedId = await pressAndWaitForFocusChange("End");
         for (let step = 0; focusedId !== farSelectedId && step < before.logicalRows; step += 1) {
@@ -500,7 +531,7 @@ export async function qualifyFrontendProductionBrowser({
           document.querySelector(`[data-node-id="${nodeId}"]`)?.getAttribute("data-active") === "true",
         farSelectedId, { timeout: 5_000 });
         const inspector = page.locator(".fm-inspector");
-        await inspector.getByRole("heading", { name: farSelectedTitle, exact: true }).waitFor({ state: "visible" });
+        await waitForInspectorName(farSelectedName);
 
         await page.keyboard.press("End");
         await page.waitForFunction(() => {
@@ -539,7 +570,7 @@ export async function qualifyFrontendProductionBrowser({
           "The filtered tree lost its virtual spacer height.");
         assert.ok(afterFilter.scrollTop <= afterFilter.maxScrollTop + afterFilter.rowHeight,
           `Filtered scroll position exceeds its new extent: ${JSON.stringify(afterFilter)}.`);
-        await inspector.getByRole("heading", { name: farSelectedTitle, exact: true }).waitFor({ state: "visible" });
+        await waitForInspectorName(farSelectedName);
         const selectedRowMountedAfterShrink = (await row(farSelectedId).count()) > 0;
         if (selectedRowMountedAfterShrink) {
           assert.equal(await row(farSelectedId).getAttribute("data-active"), "true",
@@ -585,11 +616,12 @@ export async function qualifyFrontendProductionBrowser({
         await page.waitForFunction((lastId) =>
           document.activeElement?.getAttribute("data-node-id") !== lastId,
         endId, { timeout: 5_000 });
-        await inspector.getByRole("heading", { name: farSelectedTitle, exact: true }).waitFor({ state: "visible" });
+        await waitForInspectorName(farSelectedName);
         await capture("virtualized-tree-shrink-nonempty-window", page.locator(".fm-explorer"));
         return {
           selectedNodeId: farSelectedId,
-          selectedInspectorTitle: farSelectedTitle,
+          selectedObjectName: farSelectedName,
+          inspectorTitle: await inspector.locator(".fm-inspector__title").innerText(),
           largeTree: { logicalRows: before.logicalRows, renderedRows: before.renderedIds.length },
           filteredTree: {
             logicalRows: afterFilter.logicalRows,
@@ -812,7 +844,7 @@ export async function qualifyFrontendProductionBrowser({
       }
 
       async function selectGeometryRow(nodeId) {
-        for (const parentId of ["model:objects", "model:object:film"]) {
+        for (const parentId of ["model:session", "model:objects", "model:object:film"]) {
           const parent = row(parentId);
           await parent.waitFor({ state: "visible" });
           if (await parent.getAttribute("aria-expanded") === "false") {
@@ -922,7 +954,7 @@ export async function qualifyFrontendProductionBrowser({
       await percentObject.waitFor({ state: "visible" });
       await percentObject.click();
       const inspector = page.locator(".fm-inspector");
-      await inspector.getByRole("heading", { name: "Film percent", exact: true }).waitFor({ state: "visible" });
+      await waitForInspectorName("Film percent");
       assert.equal(fixture.unknownGetPaths.length, 0, `Unexpected fixture GET paths: ${JSON.stringify(fixture.unknownGetPaths)}.`);
 
       async function copyNodeId() {
@@ -955,7 +987,8 @@ export async function qualifyFrontendProductionBrowser({
       return {
         selectedObjectId: "film%",
         explorerNodeId: objectRowId,
-        inspectorTitle: "Film percent",
+        selectedObjectName: "Film percent",
+        inspectorTitle: await inspector.locator(".fm-inspector__title").innerText(),
         clipboardRejectAnnounced: true,
         clipboardResolveAnnounced: true,
         copiedNodeId: copiedText,
@@ -1107,6 +1140,11 @@ export async function qualifyFrontendProductionBrowser({
   } catch (error) {
     evidence.status = "failed";
     evidence.error = error?.stack ?? String(error);
+    evidence.failure_tree_state = await page.evaluate(() => {
+      const tree = document.querySelector(".fm-explorer-tree");
+      const rows = Array.from(tree?.querySelectorAll('[role="treeitem"]') ?? [], (row) => ({ id: row.getAttribute("data-node-id"), tabIndex: row.tabIndex }));
+      return { focused: document.activeElement?.outerHTML?.slice(0, 1200), scrollTop: tree?.scrollTop, clientHeight: tree?.clientHeight, scrollHeight: tree?.scrollHeight, rows, navigationEvents: window.__frontendAuditNavigationEvents ?? [] };
+    }).catch(() => null);
     evidence.page_errors = consoleErrorEvents
       .filter((event) => event.source === "pageerror")
       .map((event) => event.text);

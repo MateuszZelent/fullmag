@@ -56,7 +56,7 @@ export function Vector3Field({
                   disabled={disabled}
                   type="text"
                   value={values[index] ?? ""}
-                  onChange={(event) => onChange(index as 0 | 1 | 2, event.target.value)}
+                  onInput={(event) => onChange(index as 0 | 1 | 2, event.currentTarget.value)}
                 />
                 {unitControls?.[index]}
                 {errors?.[index] ? (

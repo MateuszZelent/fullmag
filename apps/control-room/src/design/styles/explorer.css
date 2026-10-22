@@ -212,6 +212,8 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /* Virtual spacers own the offset; native anchoring can undo keyboard jumps. */
+  overflow-anchor: none;
   padding: var(--fm-space-1) var(--fm-space-1);
   scrollbar-width: thin;
   scrollbar-color: var(--fm-border-default) transparent;

@@ -111,7 +111,7 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(fieldsStart).toBeGreaterThan(overridesStart);
 
     const overrideRows = materialPanel.slice(overridesStart, fieldsStart);
-    expect(overrideRows).toContain("getParentParamInfo(");
+    expect(overrideRows).toContain("resolveParentMaterialParameterInfo(");
     expect(overrideRows).toContain('label="Inherited parent"');
     expect(overrideRows).toContain('label="Local override"');
   });

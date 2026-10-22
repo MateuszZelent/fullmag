@@ -442,26 +442,46 @@ if (process.env.CONTROL_ROOM_INSPECTOR_MESH_ONLY === "1") {
 }
 
 if (process.env.CONTROL_ROOM_FRONTEND_AUDIT === "1") {
+  const failures = [];
+  async function runAuditSuite(name, action) {
+    console.log(`Frontend suite: ${name} started`);
+    try {
+      await action();
+      console.log(`Frontend suite: ${name} passed`);
+    } catch (error) {
+      failures.push(error);
+      console.error(`Frontend suite: ${name} failed: ${error?.message ?? String(error)}`);
+    }
+  }
   try {
-    const { qualifyFrontendProductionBrowser } = await import("./lib/frontend-production-browser.mjs");
-    await qualifyFrontendProductionBrowser({
-      consoleErrorEvents,
-      fulfillJson,
-      fixture,
-      outputDir,
-      page,
-      workspaceUrl,
+    await runAuditSuite("explorer-and-controls", async () => {
+      const { qualifyFrontendProductionBrowser } = await import("./lib/frontend-production-browser.mjs");
+      await qualifyFrontendProductionBrowser({
+        consoleErrorEvents,
+        fulfillJson,
+        fixture,
+        outputDir,
+        page,
+        workspaceUrl,
+      });
     });
-    const { qualifyFrontendResponsiveBrowser } = await import("./lib/frontend-responsive-browser.mjs");
-    await qualifyFrontendResponsiveBrowser({ page, fixture, outputDir, workspaceUrl });
-    const { qualifyFrontendRegionBrowser } = await import("./lib/frontend-region-browser.mjs");
-    await qualifyFrontendRegionBrowser({ page, fixture, outputDir, workspaceUrl, fulfillJson });
-    resetInspectorDocumentBudget(fixture.requestBudget, "frontend-object-airbox-mutation-stability");
-    const { qualifyMeshPolicyEditing } = await import("./lib/mesh-policy-browser.mjs");
-    await qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology });
+    await runAuditSuite("responsive-workspace", async () => {
+      const { qualifyFrontendResponsiveBrowser } = await import("./lib/frontend-responsive-browser.mjs");
+      await qualifyFrontendResponsiveBrowser({ page, fixture, outputDir, workspaceUrl });
+    });
+    await runAuditSuite("region-editing", async () => {
+      const { qualifyFrontendRegionBrowser } = await import("./lib/frontend-region-browser.mjs");
+      await qualifyFrontendRegionBrowser({ page, fixture, outputDir, workspaceUrl, fulfillJson });
+    });
+    await runAuditSuite("object-airbox-mutation-stability", async () => {
+      resetInspectorDocumentBudget(fixture.requestBudget, "frontend-object-airbox-mutation-stability");
+      const { qualifyMeshPolicyEditing } = await import("./lib/mesh-policy-browser.mjs");
+      await qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology });
+    });
   } finally {
     await browser.close();
   }
+  if (failures.length) throw new AggregateError(failures, "Frontend browser audit failed.");
   process.exit(0);
 }
 

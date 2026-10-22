@@ -67,7 +67,7 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
     }
   }
   async function selectNode(id) {
-    for (const parent of ["model:objects", "model:object:film", "model:object:film:regions", ...(id === nodeId ? [] : [nodeId])]) {
+    for (const parent of ["model:session", "model:objects", "model:object:film", "model:object:film:regions", ...(id === nodeId ? [] : [nodeId])]) {
       const target = page.locator(`[data-node-id="${parent}"]`);
       await target.waitFor({ state: "visible" });
       if (await target.getAttribute("aria-expanded") === "false") await target.locator(".fm-explorer-tree-row__branch").click();

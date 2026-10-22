@@ -41,8 +41,8 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
     return route.fallback();
   });
   const targets = [
-    { name: "object", path: objectPath, node: "model:object:film:mesh", parents: ["model:objects", "model:object:film"], jsonLabel: "Policy JSON", jsonGroup: "Advanced JSON", configKey: "maximum_element_size", apply: "Apply Policy", success: "Policy saved. Current solver mesh is stale until a mesh build completes." },
-    { name: "airbox", path: airboxPath, node: "model:airbox:mesh:parameters", parents: ["model:universe", "model:airbox", "model:airbox:mesh"], jsonLabel: "Advanced universe policy JSON", jsonGroup: "Advanced Authored Policy JSON", configKey: "airbox_hmax", apply: "Apply Airbox Policy", success: "Canonical Airbox policy saved. The realized shared-domain mesh is stale until rebuilt." },
+    { name: "object", path: objectPath, node: "model:object:film:mesh", parents: ["model:session", "model:objects", "model:object:film"], jsonLabel: "Policy JSON", jsonGroup: "Advanced JSON", configKey: "maximum_element_size", apply: "Apply Policy", success: "Policy saved. Current solver mesh is stale until a mesh build completes." },
+    { name: "airbox", path: airboxPath, node: "model:airbox:mesh:parameters", parents: ["model:session", "model:universe", "model:airbox", "model:airbox:mesh"], jsonLabel: "Advanced universe policy JSON", jsonGroup: "Advanced Authored Policy JSON", configKey: "airbox_hmax", apply: "Apply Airbox Policy", success: "Canonical Airbox policy saved. The realized shared-domain mesh is stale until rebuilt." },
   ];
   try {
     if (auditViewport && (auditViewport.width !== originalViewport.width || auditViewport.height !== originalViewport.height)) {
