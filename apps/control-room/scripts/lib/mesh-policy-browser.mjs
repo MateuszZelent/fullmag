@@ -34,7 +34,7 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
       }
       return fulfillJson(route, policies.get(path));
     }
-    if (path === "/v2/sessions/current/meshing/meshes/objects/film/topology") return fulfillTopology(route, fixture.topology);
+    if (path === "/v2/sessions/current/meshing/meshes/objects/film/topology") return fulfillTopology(route, fixture.topology, fixture.manifest);
     if (path === "/v2/sessions/current/meshing/meshes/objects/film/report") return fulfillJson(route, { object_id: "film", report: null, revision: fixture.revision });
     if (path === "/v2/sessions/current/meshing/meshes/objects/film/quality") return fulfillJson(route, { object_id: "film", quality: null, revision: fixture.revision });
     if (path === "/v2/sessions/current/meshing/meshes/objects/film/size-field") return fulfillJson(route, { object_id: "film", size_field: null, revision: fixture.revision });

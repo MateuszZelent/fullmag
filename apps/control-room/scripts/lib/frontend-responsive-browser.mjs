@@ -221,7 +221,7 @@ export async function qualifyFrontendResponsiveBrowser({
       await page.locator(".fm-inspector").waitFor({ state: "visible", timeout: 60_000 });
 
       const activeRow = page.locator('.fm-explorer-tree-row[data-active="true"]').first();
-      originalSelectionId = await activeRow.getAttribute("data-node-id").catch(() => null);
+      originalSelectionId = await activeRow.count() ? await activeRow.getAttribute("data-node-id") : null;
       await page.locator('[data-node-id="' + FILM_NODE_ID + '"]').waitFor({ state: "visible" });
       await page.locator('[data-node-id="' + FILM_NODE_ID + '"]').click();
 
@@ -308,7 +308,7 @@ export async function qualifyFrontendResponsiveBrowser({
           const group = document.querySelector("[data-workspace-column-group]");
           const groupRect = group?.getBoundingClientRect();
           const panels = group
-            ? Array.from(group.querySelectorAll(".fm-resizable-panel"))
+            ? Array.from(group.querySelectorAll(":scope > [data-panel]"))
                 .map((panel) => {
                   const rect = panel.getBoundingClientRect();
                   return {
@@ -418,6 +418,7 @@ export async function qualifyFrontendResponsiveBrowser({
           };
         });
 
+        evidence.last_measurements = measurements;
         assert.ok(measurements.group, "Workspace dock group is missing at " + width + "px.");
         assert.ok(measurements.group.width > 0, "Workspace dock group has no width at " + width + "px.");
         assert.ok(measurements.group.overflow <= 1, "Workspace dock group overflows horizontally at " + width + "px.");
@@ -435,7 +436,7 @@ export async function qualifyFrontendResponsiveBrowser({
           ["panel-left", "viewport-main", "panel-right"].every((panelId) =>
             measurements.panels.some((panel) => panel.id === panelId),
           ),
-          "A primary dock panel is missing at " + width + "px.",
+          "A primary dock panel is missing at " + width + "px: " + JSON.stringify(measurements.panels),
         );
         assert.ok(measurements.header, "Workspace header is missing at " + width + "px.");
         assert.ok(measurements.header.overflow <= 1, "Workspace header clips horizontal content at " + width + "px.");
@@ -569,6 +570,7 @@ export async function qualifyFrontendResponsiveBrowser({
     failure = error;
     evidence.status = "failed";
     evidence.error = error?.stack ?? String(error);
+    console.error("Responsive audit failure measurements: " + JSON.stringify(evidence.last_measurements ?? null));
     try {
       const filename = "frontend-responsive-failure.png";
       await page.screenshot({ path: resolve(outputDir, filename), fullPage: true });

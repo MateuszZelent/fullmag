@@ -483,6 +483,16 @@ export async function qualifyFrontendProductionBrowser({
         await openWorkspace("frontend-tree-filter-shrink-audit");
         await page.getByRole("button", { name: "Expand all explorer nodes" }).click();
         const tree = page.locator(".fm-explorer-tree");
+        await tree.evaluate((element) => {
+          const events = [];
+          window.__frontendAuditNavigationEvents = events;
+          for (const eventName of ["keydown", "focusin", "scroll"]) {
+            element.addEventListener(eventName, (event) => {
+              events.push({ type: event.type, key: event.key, target: event.target?.getAttribute?.("data-node-id"), focused: document.activeElement?.getAttribute("data-node-id"), scrollTop: element.scrollTop, scrollHeight: element.scrollHeight });
+              if (events.length > 200) events.shift();
+            });
+          }
+        });
         const measureTree = () => tree.evaluate((element) => {
           const rows = Array.from(element.querySelectorAll('[role="treeitem"]'));
           const firstRow = rows[0];
@@ -640,6 +650,19 @@ export async function qualifyFrontendProductionBrowser({
           selectedRowMountedAfterShrink,
           selectionPreserved: true,
         };
+      } catch (error) {
+        evidence.shrink_failure_tree_state = await page.evaluate(() => {
+          const tree = document.querySelector(".fm-explorer-tree");
+          return {
+            focused: document.activeElement?.getAttribute("data-node-id") ?? document.activeElement?.tagName,
+            scrollTop: tree?.scrollTop,
+            clientHeight: tree?.clientHeight,
+            scrollHeight: tree?.scrollHeight,
+            rows: Array.from(tree?.querySelectorAll('[role="treeitem"]') ?? [], (row) => ({ id: row.getAttribute("data-node-id"), rect: row.getBoundingClientRect().toJSON(), tabIndex: row.tabIndex })),
+            navigationEvents: window.__frontendAuditNavigationEvents ?? [],
+          };
+        }).catch(() => null);
+        throw error;
       } finally {
         fixture.scene = structuredClone(originalScene);
         await setRevision(originalRevision);
