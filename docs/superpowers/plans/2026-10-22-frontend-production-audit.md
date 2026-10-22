@@ -303,3 +303,13 @@ pakiet z nieudanym admission oraz wolumen kontrolny z receiptami potrzebnymi
 do kwalifikacji recovery. Brak dowodu ich zbędności; ponowna ocena po
 rozwiązaniu recovery i integracji. Nie usunięto danych. Pomiar dysku C:
 81 962 516 480 B wolne (22.10, około 22:03 UTC).
+
+Podłączenie czterech rodzin audytu do obowiązkowego CI:
+`cba4d6ac22d4ea9658ee227acfb438dcf97bf49d`. Po tym commicie wykonano
+React Doctor dla czterech zmienionych plików produkcyjnych: wszystkie zostały
+przeanalizowane, bez pominiętych kontroli, 0 błędów i 6 ostrzeżeń.
+Receipt: `verification/frontend-production-source-e00c93da106447fbb7ecd11c8c7265c9.json`.
+Ostrzeżenia dotyczą istniejących łańcuchów iteracji i eksportów helperów
+z plików TSX; nie są dowodem awarii poprawionego przepływu. Nie zmieniano
+niepowiązanych helperów ani konfiguracji diagnostyki dla poprawy punktacji.
+Cały job `rust-contracts` dla `0a31c30…` także zakończył się **PASS**.
