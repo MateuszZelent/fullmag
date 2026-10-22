@@ -91,6 +91,9 @@ wykonania wszystkich scenariuszy runtime ani kwalifikacji produkcyjnej.
 | Kolor w menu | Zagnieżdżona kontrolka nie należała do nawigacji Radix | Jeden natywny input jako element menu; strzałki, disabled, focus-visible i Escape |
 | Listy materiałowe | Klucz indeksowy przenosił lub usuwał niepoprawny tekst po Remove wcześniejszego wpisu | Tożsamość draftu niezależna od pozycji; usuwanie tylko draftów usuniętego pola |
 | Apply Region | Lokalne Apply mogło wysłać starą wartość liczbową mimo widocznego niepoprawnego tekstu | Sprawdzenie aktualnego magazynu draftów przed rozpoczęciem mutacji |
+| Mode breadcrumbs | Dekodowanie surowego objectId z `%` powodowało URIError podczas renderu | Zachowanie surowego ID, regresje `%`, `%ZZ` i `%2F`; produkcyjne typy i CI |
+| Branch CSV | Odrzucony Promise schowka pozostawał bez obsługi; brak API rzucał wyjątek | Wspólny helper schowka, komunikat wyniku i fence tożsamości wyniku; regresje DOM i browser |
+| Region visualization IDs | Parser dekodował surowego ownera, a porównania dekodowały surowe ID manifestu | Rozdzielenie raw owner/manifest od kodowanego sufiksu regionu; zachowanie literalnego `%2F` i istniejącego `_geom` |
 
 Wycofane podejrzenie: brak stylowania `aria-invalid` w FormField. Bieżący CSS
 już je obsługuje; nie wprowadzamy pozornej poprawki.
@@ -224,3 +227,79 @@ ten fakt nie kwalifikuje resetu. `restart-idle` wymaga zdrowego API,
 `stop-failed` wymaga ownera `failed`, a zachowany owner ma `ready`.
 Recepta container recovery wymaga osobnych dowodów namespace, teardown i
 przypiętej autoryzacji. Nie wykonano jej ani kolejnego ślepego resume.
+
+### Kolejna bramka CI i dalszy audyt
+
+Nowy CI dla `0a31c30aa4eb3396007243312c7a950530a58b15` potwierdził
+`inspector-actions-browser-smoke` oraz bramki API i native C ABI. Python
+przeszedł dalej niż poprzednio i wykazał następny niekompletny mock:
+`test_docker_volume_pending_resume.py` używał kontrolera bez `read()`.
+W tym teście użyto istniejącego `_Control`, który modeluje brak opcjonalnych
+receiptów i odrzuca nieoczekiwany obowiązkowy odczyt. 10/10 interpretowanych
+testów tego pliku przeszło lokalnie, bez kompilacji.
+Commit fixture: `5e0dfafa8b26bc0a0ddd50e6623c364a8cbe31f2`.
+
+Przygotowane cztery rodziny audytu frontendowego zostają włączone do istniejącej
+bramki browser w `.github/workflows/bootstrap.yml`. Korzystają z tego samego
+przypiętego źródłowo audit buildu i jego serwera. Każdy błąd nadal kończy
+obowiązkowy job niepowodzeniem; niezależne rodziny zbierają raporty także po
+błędzie poprzedniej. Fixture kontrolek jest dostępny w development oraz przy
+istniejącym `NEXT_PUBLIC_AUDIT_BUILD=1`; zwykły build produkcyjny zwraca 404.
+Nie tworzy to dowodu działania rzeczywistego backendu ani symulacji.
+
+Zakres governance: nadal etap modules/parity, bez zmiany statusu legacy,
+domyślnego wdrożenia ani kryteriów cutover. Audit flag ma dotychczasowy zakres
+weryfikacji frontendowej; właścicielem nowej ścieżki fixture jest to zadanie.
+Fixture pozostaje tylko tak długo, jak jest używany przez regresje bramki.
+Istniejące kontrakty workflow: 15/15 PASS (`python -B -m unittest
+scripts.test_bootstrap_workflow_contract`).
+
+Job `control-room-contracts` dla `0a31c30…` zakończył się **PASS**: 843 pliki
+testowe i 8732 testy przeszły, 1 plik i 13 testów pominięto. Produkcyjne typy,
+lint, kontrole wydajności oraz build aplikacji także przeszły. Wynik ten nie
+obejmuje późniejszych lokalnych poprawek breadcrumbs/clipboard/ID i docka.
+
+Nowa diagnostyka Analysis wskazała inną przyczynę niż hipoteza stopki:
+`clipped=[]`, `visible=true`, `documentFitsViewport=true`, ale
+`rootFitsViewport=false`. Przy viewport 360 px root zaczyna się na
+`65.359375` px, ma `310.546875` px szerokości i kończy na `375.90625` px.
+Wszystkie badane kontrolki mieszczą się w root; poza okno wychodzi cały panel.
+Naprawa musi dotyczyć rzeczywistej geometrii dock/layout, nie ukrywania
+kontrolek ani osłabienia asercji.
+
+Granica pokrycia: dotychczasowy przegląd rodzin Inspector był ukierunkowany
+przez registry i descriptors, nie obejmował każdego panelu. Inwentaryzacja
+wykazała 113 plików paneli/inspektorów. Nie jest to 113 potwierdzonych błędów
+ani 113 wykonanych audytów. Wszystkie etapy odbioru na początku dokumentu
+pozostają otwarte, dopóki nie ma odpowiednich dowodów źródłowych i browser.
+
+Po poprawkach opaque ID, kopiowania CSV oraz włączeniu harnessu do audit buildu
+produkcyjne typy, architecture hygiene i lint zmienionych plików przeszły
+bez ostrzeżeń, dla stabilnych źródeł:
+`verification/frontend-production-source-f47fea2fc7184946a451e397909ea749.json`.
+Niezależny review tych zmian nie wykazał kolejnych P1/P2. Regresje TS zostały
+zapisane, ale nie były lokalnie kompilowane ani uruchamiane. Browser helper
+sprawdza teraz odrzucone kopiowanie branch CSV bez fałszywego sukcesu oraz
+udane ponowienie; etykieta `Copy branch CSV` odpowiada rzeczywistej operacji.
+
+CI dla `0a31c30…` potwierdziło też krok `Run Docker accepted FEM GPU and
+host admission contracts`, obejmujący poprawioną asercję polityki Rust.
+Nie jest to dowód wznowienia lokalnej grupy: jej stale-ready owner nadal
+pozostaje odrębną blokadą. Kolejny pomiar Analysis obejmuje prostokąty i style
+przodków rootu; nie wprowadzono spekulacyjnej poprawki CSS.
+
+Commity tego etapu:
+
+- `85fe0930af4341e27827f2e28491660d3933addd` — zachowanie opaque ID
+  w breadcrumbs i wizualizacji regionów; produkcyjne kontrole źródeł PASS,
+  niezależny review, regresje wykonania oczekują na CI.
+- `e1f5990a2a4ebb899b2b9577359166cfec1dc37f` — prawdziwy feedback kopiowania
+  branch CSV z fence tożsamości; produkcyjne kontrole źródeł PASS,
+  niezależny review, nowe regresje DOM/browser oczekują na CI.
+
+Retencja etapu: brak nowych ciężkich buildów lokalnych. Zachowano frontend
+state/cache używany przez działającą usługę, cache przyrostowy backendu,
+pakiet z nieudanym admission oraz wolumen kontrolny z receiptami potrzebnymi
+do kwalifikacji recovery. Brak dowodu ich zbędności; ponowna ocena po
+rozwiązaniu recovery i integracji. Nie usunięto danych. Pomiar dysku C:
+81 962 516 480 B wolne (22.10, około 22:03 UTC).

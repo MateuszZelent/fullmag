@@ -300,7 +300,24 @@ async function verifyResponsiveAnalysisFixtures(page) {
       const visible = required.every(fits);
       const controls = root?.querySelector(".fm-analysis-chart-export");
       const chartOwner = root?.querySelector('.fm-analysis-chart-surface[role="img"]');
+      const ancestorRects = [];
+      for (let node = root; node instanceof HTMLElement && ancestorRects.length < 14; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        ancestorRects.push({
+          tag: node.tagName,
+          classes: node.className,
+          rect: node.getBoundingClientRect().toJSON(),
+          clientWidth: node.clientWidth,
+          scrollWidth: node.scrollWidth,
+          style: Object.fromEntries([
+            "display", "position", "boxSizing", "width", "minWidth", "maxWidth",
+            "overflowX", "flexBasis", "flexGrow", "flexShrink", "gridTemplateColumns",
+            "paddingLeft", "paddingRight", "marginLeft", "marginRight", "transform",
+          ].map((property) => [property, style[property]])),
+        });
+      }
       return {
+        ancestorRects,
         axisDescription: chartOwner?.getAttribute("aria-label") ?? "",
         clipped: required.filter(([name, node]) => !fits([name, node])).map(([name, node]) => ({
           name,
