@@ -2168,10 +2168,10 @@ export function resolveRegionVisualizationCarrier({
   if (manifestRegions) {
     for (const region of manifestRegions) {
       const regionId = region.source_region_candidate_id;
-      if (!regionId || decodeSafe(regionId) !== regionTarget.regionId) continue;
+      if (!regionId || regionId !== regionTarget.regionId) continue;
       const objectMatch = (region.source_object_ids ?? []).some(
         (objectId) =>
-          canonicalVisualizationSceneObjectId(decodeSafe(objectId)) ===
+          canonicalVisualizationSceneObjectId(objectId) ===
           canonicalVisualizationSceneObjectId(regionTarget.objectId),
       );
       if (!objectMatch) continue;
@@ -2636,7 +2636,7 @@ export function parseRegionVisualizationTargetId(
   if (!match) return null;
   try {
     return {
-      objectId: decodeURIComponent(match[1]),
+      objectId: match[1],
       regionId: decodeURIComponent(match[2]),
     };
   } catch {
@@ -2706,7 +2706,7 @@ export function resolveObjectChildRegionVisualizationTargets({
   for (const region of manifestRegions ?? []) {
     const sourceObjectMatch = (region.source_object_ids ?? []).some(
       (sourceObjectId) =>
-        canonicalVisualizationSceneObjectId(decodeSafe(sourceObjectId)) ===
+        canonicalVisualizationSceneObjectId(sourceObjectId) ===
         canonicalVisualizationSceneObjectId(ownerId),
     );
     if (!sourceObjectMatch) continue;

@@ -26,7 +26,7 @@ interface ModeVisualizationBreadcrumb {
 const MODE_VISUALIZATION_NODE_MARKER = ":mode-visualization";
 
 function objectLabel(objectId: string): string {
-  return decodeURIComponent(objectId)
+  return objectId
     .replaceAll("_", " ")
     .replaceAll("-", " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
