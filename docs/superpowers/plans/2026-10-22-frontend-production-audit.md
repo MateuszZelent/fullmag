@@ -499,3 +499,70 @@ do recovery; brak dowodu zbędności. Nie usunięto danych. Dysk C: ma
 79 794 331 648 B wolnego miejsca przy checkpointcie. Dalszy krok to wykonanie
 nowego browser CI i poprawki na podstawie jego pomiarów; Planar nadal wymaga
 wdrożenia opisanego wyżej trwałego właściciela draftów. PR pozostaje draft.
+
+### Checkpoint 23.10 — Planar, dane fixture i wąski Analysis
+
+CI dla `465486a62f671abecc29bcd715cb6cbb69dc3117`, run `39869732753`,
+jest terminalny: Python, Rust, generated API, API hygiene i Inspector actions
+browser PASS. Control Room: 8751 testów PASS, jeden FAIL, 13 pominiętych.
+Jedyna awaria dotyczy nowego testu DOM Priority: React DOM był importowany
+przed instalacją testowego DOM i wybrał niewłaściwą ścieżkę input events.
+Import przesunięto po instalacji DOM. Nie uruchamiano lokalnie testów TS.
+
+Browser fixture FAIL. Ustalono przyczynę pustego Inspectora regionu:
+fixture zwracała `mesh_pipeline_status` jako string, podczas gdy kontrakt
+wymaga tablicy faz. Konsola potwierdzała `.some is not a function`.
+Poprawiono fixture, zachowując produkcyjny kontrakt. Obie korekty:
+`5194df8b229859141bbe0357d1b9e4ab0d93979f`; wykonanie regresji czeka na CI.
+Artefakt browser `12464969626`, SHA256
+`6786b60dcfa761358637590c74726d0f95b530db6cc70712e4ae3c617ff58230`,
+odczytano w pamięci, bez rozpakowania do hostowego storage.
+
+Nowe pomiary wykluczają poprzednią hipotezę starej wysokości Explorera:
+clientHeight wynosi 391 już przy End. Po focusin ostatni wiersz ma rect
+1011..1039, scrollTop 11069; kolejny scroll 10957 usuwa go z okna DOM.
+Dokładny writer drugiego przewinięcia nadal wymaga diagnozy. Compact menu
+pozostaje na Start mimo ArrowDown; nie zastąpiono regresji klikaniem.
+Kontrola Object wire string przeszła dalej; następna awaria dotyczy
+zachowania pozycji przewijania Airbox po ACK.
+
+Analysis: pomiary wykazały min-content szerokość wewnętrznego nagłówka
+138,7 px przy panelu 92,64 px oraz implicit grid column wykresu.
+Dodano `minmax(0,1fr)`, ograniczenia dzieci nagłówka oraz container query
+dla kontrolek, zależne od panelu zamiast szerokości całego okna.
+Commit `2c2c77faee009e32326c0a19ecd88f73d55ddef6`.
+Istniejące poziome asercje browser pozostają; efekt renderowania NOT VERIFIED.
+
+Planar: wdrożono właściciela raw draftów nad warunkowym drzewem 2D/3D.
+Tożsamość obejmuje sesję i target, kontekst pola obejmuje źródło i jednostki.
+Niekompletne pola blokują globalny i lokalny Apply monitora; można je jawnie
+odrzucić także po ukryciu pól. Delegacja do właściciela mutacji nie dubluje
+historii; ACK sprawdza tożsamość, wersję raw store i późniejsze edycje.
+Commit Planar: `687ee8c16efaf7d58d4165ff404f734351117da6`.
+Liczby zatwierdzane są po blur/Enter, z ograniczeniami kanonicznego API.
+Pusty tekst, znak i niedokończony wykładnik pozostają tekstem. Manual range
+zatwierdza wyłącznie poprawną parę min < max; późniejsza edycja drugiego
+limitu może dokończyć pierwszy. Parser wydzielono z komponentu dla HMR.
+
+Dodano regresje parsera, DOM właściciela i pary zakresu oraz pierwszy
+scenariusz browser w istniejącej fixture frontend-controls. Zakres browser:
+produkcyjne prymitywy, remount pól, zero, para zakresu i Discard ukrytego
+draftu. Nie dowodzi on rzeczywistego przełączania viewportu Object 2D/3D,
+lokalnych akcji monitora ani API. Testy jednostkowe lokalnie nie były
+kompilowane ani uruchamiane. Review zmian produkcji i nowych testów:
+bez otwartych P1/P2 po poprawce lokalnego Apply/Discard monitora.
+
+Typy produkcyjne, architecture hygiene i scoped ESLint (również nowe testy):
+PASS, stabilne źródła, receipt
+`verification/frontend-production-source-f72a049ca7f542e18829f5dff47999e4.json`.
+React Doctor: 9 plików przeanalizowanych, bez pominięć, 0 błędów;
+`verification/frontend-production-source-a69b8a9a950b482fa761ec92abc9cf68.json`.
+Cztery ostrzeżenia dotyczą istniejących iteracji i efektów Object/Monitor:
+retencja ostatniego dobrego zasobu i rebazowanie czystego draftu po nowej
+rewizji. Nie usuwano tych zabezpieczeń dla wyniku skanera; wymagają osobnego
+profilowania/review synchronizacji. Nowy parser nie ma ostrzeżenia HMR.
+
+Retencja: cache, control volume i pakiet pozostają potrzebne do bieżących
+kontroli oraz recovery starego ownera. Nie usunięto danych ani nie resetowano
+ownera. Główny checkout pozostaje nietknięty. PR #249 jest draftem;
+pełny audyt frontendowy, browser acceptance i integracja pozostają otwarte.
