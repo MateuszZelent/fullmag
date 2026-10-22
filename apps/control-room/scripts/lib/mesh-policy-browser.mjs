@@ -109,6 +109,8 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
         }
       }, marker);
       const baseline = await inspectPanel(panel);
+      const stability = { target: target.name, baseline, during: null, after: null };
+      evidence.activeStability = stability;
       assert.ok(baseline.scrollHeight > baseline.clientHeight, `${target.name}: inspector viewport has no natural overflow`);
       assert.ok(baseline.scrollTop > 0, `${target.name}: inspector viewport did not reach a nonzero scroll offset`);
       const requestStart = evidence.requests.length;
@@ -117,6 +119,7 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
       await waitUntil(() => pendingRequest === target.path, `${target.name}: PUT was not submitted`);
       await page.waitForTimeout(80);
       const during = await inspectPanel(panel);
+      stability.during = during;
       assertStable(target.name, during, baseline, marker);
       assert.equal(await maxSize.isDisabled(), false, `${target.name}: unrelated size control disabled during PUT`);
       const pendingFile = `${target.name}-mesh-pending.png`;
@@ -140,6 +143,7 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
         return Boolean(apply && !apply.disabled && panel.textContent?.includes(successText));
       }, { applyLabel: target.apply, successText: target.success }, { timeout: 15_000 });
       const after = await inspectPanel(panel);
+      stability.after = after;
       assertStable(target.name, after, baseline, marker);
       assert.equal(await maxSize.isDisabled(), false, `${target.name}: size control remained disabled after ACK`);
       assert.equal(Number(await maxSize.inputValue()), 4e-8, `${target.name}: ACK lost the applied value`);
@@ -272,7 +276,7 @@ function assertStable(target, snapshot, baseline, marker) {
   assert.equal(snapshot.opacity, baseline.opacity, `${target}: inspector opacity changed`);
   assert.equal(snapshot.opacityAnimations, 0, `${target}: active opacity animation`);
   assert.equal(snapshot.focusedLabel, "Maximum element size", `${target}: field focus was lost`);
-  assert.ok(Math.abs(snapshot.scrollTop - baseline.scrollTop) <= 1, `${target}: scroll position changed`);
+  assert.ok(Math.abs(snapshot.scrollTop - baseline.scrollTop) <= 1, `${target}: scroll position changed: ${baseline.scrollTop} -> ${snapshot.scrollTop}; viewport ${baseline.clientHeight} -> ${snapshot.clientHeight}; content ${baseline.scrollHeight} -> ${snapshot.scrollHeight}`);
   assert.deepEqual(snapshot.formControls, baseline.formControls, `${target}: form-control disabled state or ancestor opacity changed`);
 }
 

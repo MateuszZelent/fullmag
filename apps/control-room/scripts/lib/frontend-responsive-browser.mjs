@@ -122,16 +122,39 @@ export async function qualifyFrontendResponsiveBrowser({
       });
       let activeLabel = await focusedLabel();
       const focusTrail = [activeLabel];
+      let navigationTimeout = null;
       for (let attempt = 0; attempt < MAIN_MENU_LABELS.length + 3 && activeLabel !== menuLabel; attempt += 1) {
+        const expectedLabel = MAIN_MENU_LABELS[MAIN_MENU_LABELS.indexOf(activeLabel) + 1] ?? "Start";
         await page.keyboard.press("ArrowDown");
+        try {
+          await page.waitForFunction((label) => {
+            const active = document.activeElement;
+            return active?.closest('[role="menu"]')?.dataset.responsiveRootMenu === "true" &&
+              active.getAttribute("role") === "menuitem" &&
+              (active.textContent ?? "").replace(/\s+/g, " ").trim() === label;
+          }, expectedLabel, { timeout: 5_000 });
+        } catch (error) {
+          navigationTimeout = { expectedLabel, message: error.message };
+        }
         activeLabel = await focusedLabel();
         focusTrail.push(activeLabel);
+        if (navigationTimeout) break;
       }
       if (activeLabel !== menuLabel) {
         evidence.compact_menu_failure = {
           width,
           requested: menuLabel,
           focusTrail,
+          navigationTimeout,
+          items: await rootMenu.getByRole("menuitem").evaluateAll((items) => items.map((item) => ({
+            text: (item.textContent ?? "").replace(/\s+/g, " ").trim(),
+            role: item.getAttribute("role"),
+            disabled: item.hasAttribute("disabled"),
+            ariaDisabled: item.getAttribute("aria-disabled"),
+            tabIndex: item.tabIndex,
+            highlighted: item.hasAttribute("data-highlighted"),
+            collectionItem: item.hasAttribute("data-radix-collection-item"),
+          }))),
           menus: await page.evaluate(() => Array.from(document.querySelectorAll('[role="menu"]'))
             .filter((menu) => menu.getClientRects().length > 0)
             .map((menu) => ({ marker: menu.dataset.responsiveRootMenu, label: menu.getAttribute("aria-label"), text: menu.textContent?.slice(0, 2000) }))),

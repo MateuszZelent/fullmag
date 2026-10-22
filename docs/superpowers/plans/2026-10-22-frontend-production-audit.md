@@ -566,3 +566,25 @@ Retencja: cache, control volume i pakiet pozostają potrzebne do bieżących
 kontroli oraz recovery starego ownera. Nie usunięto danych ani nie resetowano
 ownera. Główny checkout pozostaje nietknięty. PR #249 jest draftem;
 pełny audyt frontendowy, browser acceptance i integracja pozostają otwarte.
+
+Po push `cf3da9d72cda6d0d8e37e21f8fac32fe99f0e99d` uruchomiono
+bootstrap `39872650494`. Równolegle przygotowano dalsze pomiary pozostałych
+awarii, bez zgadywanych poprawek produkcji:
+
+- Compact menu: po każdym ArrowDown test oczekuje na konkretną następną
+  pozycję menu. Przy timeoutcie zapisuje role, disabled, tabindex i rejestrację
+  elementów Radix. Nadal używa prawdziwej klawiatury. Natychmiastowy odczyt
+  po klawiszu nie rozstrzygał odroczonego fokusu biblioteki.
+- Explorer: probe deleguje scrollTop do natywnego accessora i zapisuje
+  requested/before/actual oraz stos. Rejestruje także scrollIntoView drzewa.
+  Cleanup przywraca deskryptory. Pomiary rozróżnią synchroniczne przycięcie
+  offsetu od późniejszej korekty DOM/przeglądarki; nie są zmianą wirtualizacji.
+- Airbox: raport zachowuje baseline/during/after także dla nieudanego celu,
+  a błąd podaje scrollTop, clientHeight i scrollHeight przed/po. Dotychczas
+  błędny cel nie trafiał do końcowej listy udanych scenariuszy.
+
+Składnia i lint helperów PASS, receipty stabilnych źródeł:
+`13f2eb1c384b4c34b3ee05123c9f835f` (mesh),
+`03bc6ee2c080400992d31642db3f779a` (responsive),
+`0fdbaa2e50734aae9de2581532a52d9b` (Explorer), pod
+`verification/frontend-production-source-<id>.json` w tym samym wolumenie.

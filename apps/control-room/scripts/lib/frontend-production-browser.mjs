@@ -143,6 +143,35 @@ export async function qualifyFrontendProductionBrowser({
         events.push({ ...snapshot(), ...details });
         if (events.length > maxEvents) events.shift();
       };
+      const ownScrollTop = Object.getOwnPropertyDescriptor(element, "scrollTop");
+      let scrollPrototype = Object.getPrototypeOf(element);
+      let nativeScrollTop;
+      while (scrollPrototype && !nativeScrollTop) {
+        nativeScrollTop = Object.getOwnPropertyDescriptor(scrollPrototype, "scrollTop");
+        scrollPrototype = Object.getPrototypeOf(scrollPrototype);
+      }
+      if (!nativeScrollTop?.get || !nativeScrollTop?.set) throw new Error("Native scrollTop accessor is unavailable.");
+      Object.defineProperty(element, "scrollTop", {
+        configurable: true,
+        get() { return nativeScrollTop.get.call(this); },
+        set(requested) {
+          const before = nativeScrollTop.get.call(this);
+          nativeScrollTop.set.call(this, requested);
+          record({ type: "scrollTop-write", requested, before, actual: nativeScrollTop.get.call(this), stack: new Error().stack?.slice(0, 1500) });
+        },
+      });
+      const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+      const nativeScrollIntoView = scrollIntoViewDescriptor?.value;
+      const wrappedScrollIntoView = function (...args) {
+        const result = nativeScrollIntoView.apply(this, args);
+        if (this === element || element.contains(this)) {
+          record({ type: "scrollIntoView-call", target: this.getAttribute("data-node-id"), options: args[0] ?? null, stack: new Error().stack?.slice(0, 1500) });
+        }
+        return result;
+      };
+      if (typeof nativeScrollIntoView === "function") {
+        Object.defineProperty(Element.prototype, "scrollIntoView", { ...scrollIntoViewDescriptor, value: wrappedScrollIntoView });
+      }
       const listeners = [];
       for (const eventName of ["keydown", "focusin", "scroll"]) {
         const listener = (event) => record({
@@ -170,6 +199,11 @@ export async function qualifyFrontendProductionBrowser({
           element.removeEventListener(eventName, listener);
         }
         resizeObserver.disconnect();
+        if (ownScrollTop) Object.defineProperty(element, "scrollTop", ownScrollTop);
+        else delete element.scrollTop;
+        if (Element.prototype.scrollIntoView === wrappedScrollIntoView) {
+          Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+        }
         delete window.__frontendAuditNavigationProbeCleanup;
       };
       record({ type: "probe-installed" });
