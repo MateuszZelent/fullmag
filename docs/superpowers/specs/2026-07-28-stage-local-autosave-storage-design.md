@@ -65,33 +65,53 @@ the runtime must not silently fork or overwrite the target.
 
 ### 4.1 Zarr
 
-The canonical Zarr layout is:
+**Current implementation at base `9902410b016dbe934669122ef00a7825bbd2d5b0`
+(source inspection, not runtime qualification):**
 
 ```text
+<target>.autosave.json
 <target>.zarr/
   .zgroup
   .zattrs
-  manifest/
   stages/
-    <stage-index>-<stage-id>/
-      metadata/
-      table/<quantity>/
-      fields/<quantity>/
-  continuous/
-    manifest/
-    table-index/
-    field-index/<quantity>/
+    stage_<index:04>_<stage-id>/
+      .zgroup
+      manifest.json
+      table/                 # one 2-D array, not a group of column arrays
+      fields/<quantity>/     # one 2-D array per requested field
+  continuous/                # continuous layout only
+    .zgroup
+    .zattrs
+    index.jsonl              # created when samples are appended
 ```
 
-The numerical arrays are stored exactly once under `stages/*`. The
-`continuous` hierarchy contains only bounded manifests and indexes describing
-the ordered logical concatenation. Readers expose it as a continuous table or
-field series without copying numerical payloads.
+`ZarrAutosaveWriter::begin_stage` creates the stage groups and `manifest.json`,
+and stores the table column order in `table/.zattrs.quantities`
+(`crates/fullmag-runner/src/autosave_zarr.rs:81-135`).
+`initialize_array` writes `[sample, width]`, `<f8`, Zarr v2 arrays with
+`compressor: null`; compression is **not** enabled by default
+(`crates/fullmag-runner/src/autosave_zarr.rs:222-240`).
+`update_artifact_manifest` writes the sibling `<target>.autosave.json`
+(`crates/fullmag-runner/src/autosave_storage.rs:39-79`).
+`append_continuous_index` appends payload references to
+`continuous/index.jsonl`, only for continuous layout
+(`crates/fullmag-runner/src/autosave_zarr.rs:319-337`). The prior `manifest/`,
+`metadata/`, `table-index/`, and `field-index/` groups were design intent,
+not this implemented layout. The index carries a `StageSampleCoordinate`
+(`PhysicalTime` or `AcceptedStep`); the flat arrays do not provide the full
+per-array units and spatial metadata proposed above
+(`crates/fullmag-runner/src/autosave_storage.rs:6-11,82-91`,
+`StageSampleCoordinate`, `ContinuousIndexEntry`;
+`crates/fullmag-runner/src/autosave_zarr.rs:102-184`,
+`ZarrAutosaveWriter::begin_stage`, `ZarrAutosaveWriter::append_field_sample`).
 
-Field arrays follow the aMuMax-oriented time-first organization, adapted to
-the backend domain adapter. Every field series records sample times or
-accepted-step coordinates, units, components, mesh identity, stage ownership,
-and chunking. Zarr compression is enabled by default.
+**Future v1 contract:** [Canonical Zarr output store](../../specs/output-store-zarr-v1.md)
+supersedes this Zarr layout for time-domain fields and tables after writer
+integration and reader migration. It specifies root quantity arrays, a
+per-column `table/` group, and no compression by default (accepted D2).
+The source layout above remains the base behavior, not a v1 implementation.
+D6–D9 remain recommendations, not accepted decisions. This scoped supersession
+does not replace the separate HDF5/TXT contracts or authorize code changes.
 
 ### 4.2 HDF5
 

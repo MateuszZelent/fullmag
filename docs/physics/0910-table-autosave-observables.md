@@ -242,24 +242,41 @@ TXT field autosave is invalid at every public boundary. The error must retain
 the user's field configuration for correction; UI authoring must not silently
 delete it.
 
-Zarr and HDF5 store numerical payloads once under explicit stage groups:
+**Current implementation at base `9902410b016dbe934669122ef00a7825bbd2d5b0`
+(source inspection, not runtime qualification):** Zarr uses one 2-D table
+array per stage, not one array per quantity:
 
 ```text
-stages/<stage-index>-<stage-id>/table/<quantity>
-stages/<stage-index>-<stage-id>/fields/<quantity>
+<target>.zarr/stages/stage_<index:04>_<stage-id>/table
+<target>.zarr/stages/stage_<index:04>_<stage-id>/fields/<quantity>
 ```
 
-For `layout="continuous"`, the same target also contains a `continuous`
-hierarchy with ordered indexes and manifests only. It does not duplicate table
-or field arrays. Readers reconstruct the logical sequence from stage-owned
-payloads. `layout="separate"` produces one target per stage using the same
-internal stage schema.
+`ZarrAutosaveWriter::begin_stage` writes the table column order to
+`table/.zattrs.quantities` (`crates/fullmag-runner/src/autosave_zarr.rs:81-135`).
+`initialize_array` writes `[sample, width]` arrays with `<f8` values and no
+compression (`crates/fullmag-runner/src/autosave_zarr.rs:222-240`). HDF5 also
+uses one `table` matrix per stage, with `table_quantities_json` for column
+order, and separate field matrices (`Hdf5AutosaveWriter::finish_stage`,
+`crates/fullmag-runner/src/autosave_hdf5.rs:89-131`).
 
-Every logical sample carries `sample_index`, `stage_index`, `stage_id`,
-`stage_kind`, `stage_sample_index`, and `stage_step`. It also carries exactly
-the applicable clock coordinate: physical `time_s` for Run or
-`accepted_step` for Relax. Relaxation pseudotime is never merged with physical
-Run time.
+For Zarr `layout="continuous"`, `append_continuous_index` appends references
+to stage-owned payloads in `continuous/index.jsonl`; it writes no index for
+`layout="separate"` (`crates/fullmag-runner/src/autosave_zarr.rs:319-337`).
+The current index fields are `target_sample_index`, `stage_id`, `stage_index`,
+`stage_sample_index`, `sample_kind`, `coordinate`, and `payload_ref`
+(`ContinuousIndexEntry`, `crates/fullmag-runner/src/autosave_storage.rs:82-91`).
+`StageSampleCoordinate` distinguishes `PhysicalTime { time_s }` from
+`AcceptedStep { accepted_step }`
+(`crates/fullmag-runner/src/autosave_storage.rs:6-11`). This index does not
+contain the previously proposed `stage_kind` or `stage_step` fields.
+Relaxation pseudotime must never be merged with physical Run time.
+
+**Future v1 contract:** [Canonical Zarr output store](../specs/output-store-zarr-v1.md)
+supersedes this Zarr storage layout for time-domain fields and tables after
+implementation and reader migration. It specifies one root field array per
+quantity and a `table/` group with one array per column. It is not implemented
+at the cited base. This supersession does not change the observable equations,
+SI units, accepted-state sampling semantics, or the separate HDF5 contract.
 
 ## 5. Runtime, OpenAPI, and UI Impact
 
