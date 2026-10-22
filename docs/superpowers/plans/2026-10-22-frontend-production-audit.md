@@ -370,3 +370,132 @@ nie jest objęte powyższą zmianą. Zrzut przy 640 px wskazuje też możliwe
 nakładanie etykiet zakładek Explorera przy wąskiej kolumnie. Nie są to
 zweryfikowane poprawki. Managed runtime pozostaje zablokowany przez zachowanego
 ownera poprzedniego buildu; nie wykonano resetu ani usuwania danych.
+
+### Następny etap: zakładki, podział pionowy i drafty Planar
+
+Stan wyjściowy `ef3e0d098651b2c584b568e29f5c0f4b9d56c23d`, czysty worktree.
+CI bootstrap `39866139318` jest aktywne; nie restartowano jobów.
+
+Źródła potwierdzają ściskanie etykiet Explorera: wspólne tab buttons mają
+`min-width: 0` i domyślny flex-shrink. Scroll wrapper nie chroni tekstu przed
+zwężeniem przycisków. Poprawka nadaje liście szerokość max-content i zabrania
+kurczenia przycisków. Browser gate mierzy overflow tekstu każdego przycisku
+oraz możliwość przewijania listy przy szerokościach 640/899/1024/1280 px.
+
+Odczyt faktycznie zainstalowanego `react-resizable-panels@4.7.6` potwierdził,
+że wartości liczbowe oznaczają piksele. Pionowy dock przekazywał defaults
+78/22 i minima 42/12 jako liczby, choć model opisuje podział procentowy.
+Poprawka konwertuje te cztery wejścia na jawne procenty na granicy biblioteki.
+Browser gate sprawdza minima 42% main i 12% footer względem sumy wysokości
+obu paneli. Nie zmienia to poprawnych poziomych ograniczeń już zapisanych
+z jednostkami ani świadomie pikselowego Inspectora.
+
+Planar — potwierdzone źródłowo, implementacja nadal otwarta:
+
+- `Number("")` zapisuje zero m.in. dla raster/vector/point opacity,
+  vector density i manual range. Część zer jest legalna dla API, ale nie
+  reprezentuje intencji wyczyszczenia tekstu.
+- Wszystkie te pola poza target wireframe należą do jednego planar state
+  sesji; source/quantity są kontekstem interpretacji, nie osobnym backendowym
+  magazynem. Target wireframe należy do dokładnej pary `(scope, scope_id)`.
+- Spójna poprawka użyje QuantityField i jednego trwałego raw store ponad
+  gałęzią 2D/3D. Wzorzec agregacji prywatnej child edit-session z istniejącego
+  AntennaFieldSolveAuthoring pozwala zachować jednego globalnego ownera,
+  także przy staged definicji monitora. Nie należy rejestrować konkurujących
+  ownerów ani duplikować historii.
+- Pending raw musi blokować zmianę Source/Quantity/Range mode lub zachowywać
+  odpowiednie preimage. Sam store z identity zawierającym source/quantity
+  gubi tekst przez automatyczne clear. `syncSharedQuiverIntent` przy powrocie
+  do 2D nie może nadpisać bazowej wartości pending vector draftu.
+- Manual range wymaga pary lokalnych limitów i wysyłki dopiero dla min < max;
+  granice parserów muszą odpowiadać API, w tym point size <= 64.
+
+Powyższe kontrole źródeł nie dowodzą jeszcze zachowania browser ani pełnego
+odbioru produkcyjnego. Pełny zakres celu audytu pozostaje otwarty.
+
+### Dowody i pozostałe awarie po wykonaniu CI `ef3e0d098…`
+
+`control-room-contracts`: PASS, 844 pliki testowe i 8747 testów przeszły,
+1 plik i 13 testów pominięto; dodatkowy zestaw 3 testów także PASS.
+Produkcja typów, lint i build w tym jobie przeszły. `rust-contracts` i
+`inspector-actions-browser-smoke`: PASS. `python-contracts` doszedł do końca
+testów i oblał dopiero `check_repo_consistency.py`: brak sześciu mirrorów
+skilli UI w `.github`. Uzupełniono je odnośnikami do kanonicznych instrukcji
+w `.agents`, z identycznymi metadanymi i sprawdzonymi ścieżkami. Interpretowana
+kontrola spójności repo: PASS. Commit
+`cdc871e0d613b1c7c37a1e3b3de5b97bca204087` nie zmienia zachowania skilli.
+
+Tworzenie regionu także zachowuje teraz raw Priority, blokuje Create oraz
+Inspector Apply przy pending/invalid tekście i chroni późniejszą edycję przed
+ACK. Zakres jest przypięty do sesji i obiektu. Cancel/retarget czyści właściwy
+draft. Nowe regresje DOM obejmują zero, ujemne liczby, niedokończony tekst,
+późny ACK i zmianę właściciela; oczekują na wykonanie w CI. Review wykrył
+brak `act` wokół zdarzeń testu — poprawiono przed commitem. Poprawiono też
+semantykę kart regionów: lista `ul/li` zawiera przyciski bez nadpisywania ich
+roli na `listitem`. Commit
+`3a59f58aa94d5f670f3e033c6e4fab68039b0a00`.
+
+Produkcyjne typy, architecture hygiene i lint, również nowego pliku regresji:
+PASS dla stabilnych źródeł, receipt
+`verification/frontend-production-source-6807d04c761d4e4881a954a6ecf1e145.json`.
+React Doctor obu zmienionych plików produkcyjnych: 0 błędów, 0 ostrzeżeń,
+bez pominiętych kontroli; receipt
+`verification/frontend-production-source-378430895c294e0e967283c363080d12.json`.
+Nie kompilowano lokalnie testów jednostkowych. Dock i zakładki:
+`068ade1c37a215fc11a36770cd3dc3dec1944ed3`, review źródeł bez P1/P2;
+nowe regresje geometrii oczekują na browser CI.
+
+Nadal czerwony `browser-fixture-smoke` ma już bardziej precyzyjne dowody:
+
+- Explorer: filtrowanie, Refresh oraz pierwszy scenariusz dużego drzewa PASS.
+  W scenariuszu shrink po drugim End ostatni debug row dostaje fokus przy
+  scrollTop 11069, następnie scroll przechodzi na 10957 i wiersz znika z DOM;
+  fokus trafia do body. Stan zapisano przed cleanup. W końcowym stanie
+  clientHeight=391, scrollHeight=11824, wiersze mają 28 px. Rozbieżność
+  wysokości viewportu/okna jest hipotezą, nie potwierdzoną przyczyną.
+- Responsive: właściwe panele są widoczne przy 640 px, ale nawigacja menu
+  nie dochodzi do View (fokus Start). Dopisano historię fokusu i otwarte menu;
+  nie zmieniono kodu produkcyjnego na podstawie zgadywanej przyczyny.
+- Region: aktywny wiersz audit-core jest poprawny, ale Inspector nie ma
+  żadnych inputów. Source review wyklucza tłumaczenie pustym modelem:
+  Overview zawsze renderuje formularz. Dodano tekst Inspectora, błędy strony
+  i konsoli oraz screenshot błędu; przyczyna montowania nadal niepotwierdzona.
+- Mesh: komunikat „stale size” porównywał string `"4e-8"` z liczbą `4e-8`.
+  Nie dowodzi to starej wartości liczbowej. Kontrakt serializacji wymaga
+  dalszego sprawdzenia przed zmianą produkcji lub asercji.
+- Analysis: grid fix potwierdzony pomiarem rootFitsViewport=true; root ma
+  110,64 px, lecz scrollWidth=160. Pozostał realny poziomy overflow wewnątrz
+  panelu. Dotychczasowe `fits` sprawdza tylko kierunek poziomy, więc pionowe
+  przewijanie nie wyjaśnia tej awarii. Dodano pomiary potomków oraz kontrolę
+  root.scrollWidth <= root.clientWidth, zachowując etykiety osi i jednostki.
+
+Artefakt browser `12464283719`, SHA256
+`d2e98a7330f933253942cfca46121108a33ee52dacea9c5eb7888132c1b15f9a`.
+Odczytany w pamięci, bez rozpakowania do hostowego storage. W tym etapie
+nie usuwano cache, runtime, wyników ani receiptów; nadal są używane przez
+sprawdzenia i potrzebne do diagnozy zachowanego ownera. Pełny managed runtime,
+odbiór browser oraz cały audyt produkcyjny pozostają NOT VERIFIED.
+
+Wyjaśniono typ wire polityki Object: `objectMeshPolicyWireRequest` w
+`ControlRoomApi` celowo zamienia maximum_element_size na string, zgodny
+z `ScriptBuilderPerGeometryMeshState.maximum_element_size: Option<String>`.
+Adapter i istniejący test ControlRoomApi potwierdzają ten kontrakt. Harness
+sprawdza teraz dokładnie string `"4e-8"` dla Object i liczbę `4e-8` dla Airbox,
+w obu miejscach (PUT i ACK). Nie zmieniano produkcyjnego serializera.
+Składnia oraz lint poprawki PASS, stabilne źródła:
+`verification/frontend-production-source-ddc173a22ee1467caeaf38555016513f.json`.
+
+Rozszerzono probe Explorera o clientHeight, okno zamontowanych wierszy,
+spacery i zdarzenia ResizeObserver; bufor 200 zdarzeń i cleanup. Pozwoli to
+sprawdzić wysokość w chwili End, której stary log nie zapisywał. Składnia
+i lint pozostałych nowych pomiarów browser PASS, stabilne źródła:
+`verification/frontend-production-source-95e962a262d847f2be165c3c0d8a3c77.json`.
+
+Commit pomiarów i asercji wire:
+`23dd27221bca64fbda79951929fd9e76a004cfb2`. Główne poprawki zachowania
+mają oddzielne commity od rozszerzeń harnessu. Retencja: frontend jest nadal
+używany przez source checks, pakiet backendu i control volume są potrzebne
+do recovery; brak dowodu zbędności. Nie usunięto danych. Dysk C: ma
+79 794 331 648 B wolnego miejsca przy checkpointcie. Dalszy krok to wykonanie
+nowego browser CI i poprawki na podstawie jego pomiarów; Planar nadal wymaga
+wdrożenia opisanego wyżej trwałego właściciela draftów. PR pozostaje draft.
