@@ -40,7 +40,8 @@ class RetainedRecoveryContextTests(unittest.TestCase):
             'stop_journal_sha256': self.auth['prior_stop_journal_sha256'],
             'removed_container_ids': [self.auth['backend_container_id'], self.auth['frontend_container_id']],
         }
-        self.previous = {'inputs': {'source_root': '/checkout'},
+        self.previous = {'attempt': 'a' * 32,
+                         'inputs': {'source_root': '/checkout'},
                          'container_recovery': self.metadata,
                          'container_recovery_environment': sorted(self.env)}
         self.document = {'services': {'backend': {'environment': self.env}}}
@@ -63,6 +64,7 @@ class RetainedRecoveryContextTests(unittest.TestCase):
     def test_ordinary_recreation_does_not_acquire_recovery(self):
         self.previous.pop('container_recovery')
         self.document['services']['backend']['environment'] = {}
+        self.control.read.return_value = None
         with patch('docker_volume_pre_ack_retry.storage.resolve_layout') as resolve:
             self.assertEqual(self.run_context(), {})
         resolve.assert_not_called()
