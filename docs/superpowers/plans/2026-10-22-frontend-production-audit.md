@@ -1451,3 +1451,75 @@ stałego opóźnienia; kontrole świeżych odpowiedzi, zaznaczenia i budżetu
 pozostają aktywne. MJS syntax i scoped lint PASS, stabilne źródła, receipt
 `verification/frontend-production-source-89d9c9ad196846688485633ac513cf37.json`.
 Ponowne wykonanie scenariusza wymaga CI nowego HEAD.
+
+### Potwierdzone CI paginacji i membership — be71f2596
+
+HEAD `be71f259609dec1c1a9c3f5aa6308a7c00e8cce0`: Control Room contracts
+job `120230641425` w run `39897269744` PASS: 8950 testów PASS / 13 skip,
+862 pliki PASS / 1 skip, compute performance plus 3 testy i produkcyjny build PASS.
+Browser fixture job `120230641444` PASS: 11 scenariuszy frontend-production,
+w tym paginacja 55 ramek, oraz 3 scenariusze responsive. Page errors puste.
+Paginacja: kursory `[null, audit-frame-050, null, audit-frame-050]`, selection
+zachowane podczas Load more i obu stron Refresh, ostatnia ramka wybieralna.
+About 320/640: geometry/state failures puste, request budget bez zmian.
+
+ZIP artefaktu `12477931353` odczytano w pamięci i zweryfikowano SHA256
+`d6f42ae50b4185cc4525ce5fe5d1fa72a6fce7e90da1f2ce3344bff0f44df587`.
+Obejrzano screenshot ostatniej ramki: Step 55 zaznaczony, licznik 55,
+czytelne drzewo i filtr. Nie jest to nowy dowód live API ani solvera.
+Workflow eigensolve `39897269743`, contract-guard `39897269770` i
+dispersion-artifact-consumers `39897269833` PASS; bootstrap w chwili odczytu
+pozostawał in_progress, więc nie deklaruje się całego runu jako PASS.
+
+### Frozen Spins: wspólne raw drafts, struktura selektora i konflikty
+
+Wszystkie numery selektora korzystają z QuantityField: commit na Enter/blur,
+Escape odrzuca tekst, Revert czyści wspólny rejestr i przywraca baseline.
+Wektor wymaga dokładnie 3 składników, quaternion 4. Puste, niekompletne,
+nieskończone i błędne składniki nie są zamieniane na zero ani pomijane;
+jawne zero pozostaje legalne. Obsługiwany jest zapis dziesiętny/naukowy,
+z zachowaniem dotychczasowych min/max pól.
+
+Raw draft, także poprawny przed commit, ustawia globalne dirty/invalid i
+blokuje lokalne/globalne Apply, Preview i Commit preview. Handlery ponownie
+odczytują store. Operator/kind scalar/kind geometry i Remove clause mają
+blokady także w handlerach, aby indeksy list nie przenosiły raw tekstu do
+innego dziecka. Add clause nie przesuwa istniejących pól. Zwijanie grup
+pozostawia dzieci zamontowane, więc raw tekst pozostaje w rejestrze.
+Delete wymaga czystego draftu; scope/history/mounted fences chronią jego
+ACK. Preview ma ten sam in-flight guard i scope/history fence co mutacje,
+snapshot selektora requestu, a nowszy raw draft nie uzbraja Commit preview.
+Komunikat nie deklaruje już widoczności w 3D na podstawie samego response.
+
+Review wykryło P2: raw draft + incoming name B pozostawiało canonical name A,
+które następny Apply mógł wysłać jako niezamierzone cofnięcie. Naprawiono przez
+trójstronne scalanie pól baseline/incoming/draft: niezależne pola serwera są
+adoptowane, lokalne pozostają, a konflikt tego samego pola lub zmiana selektora
+przy raw pending blokuje mutacje do Revert. Raw pola nie są odmontowywane.
+Starszy ACK nie cofa nowszej rewizji/baseline. Ponowne source review bez
+otwartych potwierdzonych P1/P2 w delta.
+
+Dodano 18 przypadków parsera, 5 modelu scalania oraz 15 DOM: raw blank/invalid
+i valid-pending, lokalne/globalne akcje, Enter/blur/Escape/Revert, legalne zero,
+ochrona struktury/usunięcia siblinga, raw wpis w locie Apply/Preview, zmiana
+sesji, niezależne incoming fields, konflikt selektora i starszy ACK. To nowe
+regresje do wykonania w CI; lokalnie nie kompilowano/uruchamiano testów TS/Rust.
+
+Końcowe produkcyjne typy, architecture hygiene i scoped lint 7 plików PASS,
+stabilne źródła:
+`verification/frontend-production-source-353d9aee9f8b4a0f9bb4964c14cc1f45.json`.
+API hygiene PASS:
+`verification/frontend-api-hygiene-8cc5e9d54d2e4f3eb34e0ca4375189f6.json`.
+React Doctor: 4 pliki produkcyjne, 0 errors/skips, 7 ostrzeżeń:
+1 related useState, 3 aktualizacje props w efekcie (w tym nowa blokada konfliktu),
+2 mixed exports, 1 istniejący index key. Ten ostatni ma teraz jawną ochronę
+zmian struktury przy raw pending i regresję; nie nazywa się go usuniętym.
+Receipt `verification/frontend-production-source-5b6d01f47fee47ccbb0bb25ecd701251.json`.
+Bez suppression reguł. Pierwszy source pass `8efbcaef4f4144e0a3d230dabdff052b`
+poprzedzał znalezienie P2 i nie jest dowodem końcowego scalania.
+
+Retencja: bez buildu, instalacji, restartu, resetu ownera i usuwania danych.
+Potrzebny cache/receipty zachowano. Wolne C: 36 254 400 512 B; różnicy nie
+przypisuje się temu etapowi. Otwarte: CI nowego HEAD, retained definition i
+solver refresh/errors, referencje selektora i semantyczna walidacja, pozostałe
+rodziny Inspectora oraz live kwalifikacja. Cały cel pozostaje aktywny.

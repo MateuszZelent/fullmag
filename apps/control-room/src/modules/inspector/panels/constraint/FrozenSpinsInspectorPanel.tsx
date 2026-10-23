@@ -34,7 +34,10 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { QuantityFieldDraftScope, useQuantityFieldDraftScope } from "../../primitives/QuantityField";
+import { quantityFieldDraftBlockReason } from "../../primitives/quantityFieldDraftStore";
 import { SelectionExpressionBuilder } from "../selection/SelectionExpressionBuilder";
+import { reconcileFrozenSpinsDraft } from "./frozenSpinsDraft";
 
 type PendingField = "activate" | "apply" | "delete" | "preview" | "quantity" | null;
 
@@ -119,7 +122,14 @@ export function FrozenSpinsEditor({
 }) {
   const kernel = useKernel();
   const [draft, setDraft] = useState(() => normalizeDefinition(initialDefinition));
+  const numericDrafts = useQuantityFieldDraftScope(
+    JSON.stringify([sessionScopeKey, "frozen-spins", initialDefinition.id, objectId, regionId]),
+  );
+  const numericDraftBlockReason = quantityFieldDraftBlockReason(numericDrafts.summary)
+    ?? (numericDrafts.summary.pendingCount > 0 ? "Commit or discard pending selector numeric edits." : undefined);
   const [baseline, setBaseline] = useState(() => normalizeDefinition(initialDefinition));
+  const [conflict, setConflict] = useState(false);
+  const conflictReason = conflict ? "The definition changed externally. Revert to its latest version before applying or previewing." : undefined;
   const baselineRef = useRef({
     definition: normalizeDefinition(initialDefinition),
     revision: initialRevision,
@@ -144,7 +154,7 @@ export function FrozenSpinsEditor({
     owner_object_id: objectId,
     quantityId: "m",
   });
-  useEffect(() => {
+  useLayoutEffect(() => {
     draftRef.current = draft;
   }, [draft]);
   useEffect(() => {
@@ -157,19 +167,19 @@ export function FrozenSpinsEditor({
     ) {
       return;
     }
-    const wasClean =
-      JSON.stringify(draftRef.current) === JSON.stringify(previousBaseline.definition);
+    const reconciled = reconcileFrozenSpinsDraft(previousBaseline.definition, incomingDefinition, draftRef.current, numericDrafts.store.getSummary().pendingCount > 0);
     baselineRef.current = { definition: incomingDefinition, revision: initialRevision };
     acknowledgedRevisionRef.current = initialRevision;
     setBaseline(incomingDefinition);
     setRevision(initialRevision);
-    if (wasClean) {
-      draftRef.current = incomingDefinition;
-      setDraft(incomingDefinition);
+    if (reconciled.conflict) setConflict(true);
+    if (reconciled.draft !== draftRef.current) {
+      draftRef.current = reconciled.draft;
+      setDraft(reconciled.draft);
       setPreview(null);
       setPreviewSelectorJson(null);
     }
-  }, [initialDefinition, initialRevision]);
+  }, [initialDefinition, initialRevision, numericDrafts.store]);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -177,8 +187,15 @@ export function FrozenSpinsEditor({
     };
   }, []);
 
+  function blockNumericDrafts(): boolean {
+    const summary = numericDrafts.store.getSummary();
+    if (summary.pendingCount === 0) return false;
+    setFeedback({ kind: "warning", message: quantityFieldDraftBlockReason(summary) ?? "Commit or discard pending selector numeric edits." });
+    return true;
+  }
+
   async function applyDraft(): Promise<boolean> {
-    if (applyInFlight.current || !dirty) return false;
+    if (applyInFlight.current || blockNumericDrafts() || conflict || !canonicalDirty) return false;
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
     const submittedDraft = draft;
     const operationSessionScopeKey = sessionScopeKey ?? null;
@@ -221,15 +238,23 @@ export function FrozenSpinsEditor({
       );
       if (!mountedRef.current) return false;
       if (!isCurrentSession()) return false;
+      if (response.revision < acknowledgedRevisionRef.current) {
+        setConflict(true);
+        return false;
+      }
       const acknowledged = normalizeDefinition(response.definition);
+      const reconciled = reconcileFrozenSpinsDraft(submittedDraft, acknowledged, draftRef.current, numericDrafts.store.getSummary().pendingCount > 0);
       baselineRef.current = { definition: acknowledged, revision: response.revision };
       acknowledgedRevisionRef.current = response.revision;
       setBaseline(acknowledged);
-      if (draftRef.current === submittedDraft) {
-        if (!acknowledgeDraft?.()) return false;
-        draftRef.current = acknowledged;
-        setDraft(acknowledged);
+      if (draftRef.current === submittedDraft && numericDrafts.store.getSummary().pendingCount === 0 && acknowledgeDraft?.()) {
+        draftRef.current = reconciled.draft;
+        setDraft(reconciled.draft);
+      } else if (reconciled.draft !== draftRef.current) {
+        draftRef.current = reconciled.draft;
+        setDraft(reconciled.draft);
       }
+      if (reconciled.conflict) setConflict(true);
       setRevision(response.revision);
       setPreview(null);
       setActivationReceipt(null);
@@ -255,7 +280,17 @@ export function FrozenSpinsEditor({
   }
 
   async function createPreview(): Promise<void> {
-    if (applyInFlight.current) return;
+    if (applyInFlight.current || blockNumericDrafts() || conflict) return;
+    const operationSessionScopeKey = sessionScopeKey ?? null;
+    if (!operationSessionScopeKey) {
+      setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
+      return;
+    }
+    const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+    const isCurrentSession = () =>
+      kernel.commands.getSessionScopeKey() === operationSessionScopeKey &&
+      (historyGeneration === undefined || kernel.authoringHistory?.getGeneration?.() === historyGeneration);
+    const submittedSelectorJson = JSON.stringify(draft.selector);
     if (!objectId) {
       setFeedback({
         kind: "warning",
@@ -272,6 +307,7 @@ export function FrozenSpinsEditor({
       });
       return;
     }
+    applyInFlight.current = true;
     setPendingField("preview");
     setFeedback(null);
     try {
@@ -290,8 +326,8 @@ export function FrozenSpinsEditor({
       const response = requestOptions
         ? await kernel.api.model.frozenSpins.createPreview(request, requestOptions)
         : await kernel.api.model.frozenSpins.createPreview(request);
-      if (!mountedRef.current) return;
-      setPreviewSelectorJson(JSON.stringify(draft.selector));
+      if (!mountedRef.current || !isCurrentSession()) return;
+      setPreviewSelectorJson(submittedSelectorJson);
       setPreview(response);
       setActivationReceipt(null);
       setRuntimeApplication(null);
@@ -302,14 +338,15 @@ export function FrozenSpinsEditor({
       setFeedback({
         kind: response.current ? "success" : "warning",
         message: response.current
-          ? "Speculative Frozen Spins preview is current and visible in the 3D viewport. Solver identity is not bound until runtime activation."
+          ? "Speculative Frozen Spins preview is available for 3D visualization. Solver identity is not bound until runtime activation."
           : "Preview was created but is stale against the current model state.",
       });
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || !isCurrentSession()) return;
       const message = errorMessage(error);
       if (message.includes("selection_stale_revision")) {
         await fieldMeta.refetch();
+        if (!mountedRef.current || !isCurrentSession()) return;
         setFeedback({
           kind: "warning",
           message: `${message} Current field identity was refreshed; retry Preview mask.`,
@@ -318,14 +355,15 @@ export function FrozenSpinsEditor({
         setFeedback({ kind: "error", message });
       }
     } finally {
+      applyInFlight.current = false;
       if (mountedRef.current) setPendingField(null);
     }
   }
 
   async function activatePreview(): Promise<void> {
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
-    if (applyInFlight.current) return;
-    if (!preview?.current) {
+    if (applyInFlight.current || blockNumericDrafts() || conflict) return;
+    if (!preview || !activationCandidateReady) {
       setFeedback({
         kind: "warning",
         message: "Create a current Frozen Spins preview before activation.",
@@ -378,15 +416,23 @@ export function FrozenSpinsEditor({
       );
       if (!mountedRef.current) return;
       if (!isCurrentSession()) return;
+      if (response.revision < acknowledgedRevisionRef.current) {
+        setConflict(true);
+        return;
+      }
       const acknowledged = normalizeDefinition(response.definition);
+      const reconciled = reconcileFrozenSpinsDraft(submittedDraft, acknowledged, draftRef.current, numericDrafts.store.getSummary().pendingCount > 0);
       baselineRef.current = { definition: acknowledged, revision: response.revision };
       acknowledgedRevisionRef.current = response.revision;
       setBaseline(acknowledged);
-      if (draftRef.current === submittedDraft) {
-        if (!acknowledgeDraft?.()) return;
-        draftRef.current = acknowledged;
-        setDraft(acknowledged);
+      if (draftRef.current === submittedDraft && numericDrafts.store.getSummary().pendingCount === 0 && acknowledgeDraft?.()) {
+        draftRef.current = reconciled.draft;
+        setDraft(reconciled.draft);
+      } else if (reconciled.draft !== draftRef.current) {
+        draftRef.current = reconciled.draft;
+        setDraft(reconciled.draft);
       }
+      if (reconciled.conflict) setConflict(true);
       setRevision(response.revision);
       setPreview(null);
       setActivationReceipt(response);
@@ -409,7 +455,20 @@ export function FrozenSpinsEditor({
   }
 
   async function deleteDefinition(): Promise<void> {
-    if (applyInFlight.current) return;
+    if (applyInFlight.current || blockNumericDrafts() || conflict) return;
+    if (canonicalDirty) {
+      setFeedback({ kind: "warning", message: "Apply or revert the definition edits before deleting the constraint." });
+      return;
+    }
+    const operationSessionScopeKey = sessionScopeKey ?? null;
+    if (!operationSessionScopeKey) {
+      setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
+      return;
+    }
+    const historyGeneration = kernel.authoringHistory?.getGeneration?.();
+    const isCurrentSession = () =>
+      kernel.commands.getSessionScopeKey() === operationSessionScopeKey &&
+      (historyGeneration === undefined || kernel.authoringHistory?.getGeneration?.() === historyGeneration);
     applyInFlight.current = true;
     const requestOptions = scopedFrozenSpinsRequestOptions(sessionScopeKey);
     setPendingField("delete");
@@ -420,6 +479,7 @@ export function FrozenSpinsEditor({
           api: kernel.api,
           authoringHistory: kernel.authoringHistory,
           sessionScopeKey,
+          isCurrentSessionScope: isCurrentSession,
         },
         "Delete Frozen Spins definition",
         async ({ baseRevision }) =>
@@ -433,7 +493,7 @@ export function FrozenSpinsEditor({
                 expected_revision: baseRevision ?? revision,
               }),
       );
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || !isCurrentSession()) return;
       kernel.resources.invalidate(
         frozenSpinsCollectionResourceKey(),
         response.revision,
@@ -445,11 +505,11 @@ export function FrozenSpinsEditor({
       kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
       kernel.selection.clear("inspector");
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || !isCurrentSession()) return;
       setFeedback({ kind: "error", message: errorMessage(error) });
-      setPendingField(null);
     } finally {
       applyInFlight.current = false;
+      if (mountedRef.current) setPendingField(null);
     }
   }
 
@@ -479,9 +539,12 @@ export function FrozenSpinsEditor({
     }
   }
 
-  const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
+  const canonicalDirty = JSON.stringify(draft) !== JSON.stringify(baseline);
+  const dirty = canonicalDirty || numericDrafts.summary.pendingCount > 0 || conflict;
   const resetDraft = () => {
     if (applyInFlight.current) return;
+    numericDrafts.store.clear();
+    setConflict(false);
     draftRef.current = baseline;
     setDraft(baseline);
     setPreview(null);
@@ -493,6 +556,8 @@ export function FrozenSpinsEditor({
   const membership = draft.membership?.kind ?? "automatic";
   const toolbarPending = pendingField !== null;
   const activationCandidateReady = Boolean(
+    !conflict &&
+    numericDrafts.summary.pendingCount === 0 &&
     preview?.current &&
     draft.enabled &&
     reference.kind === "capture_current_at_activation" &&
@@ -506,14 +571,14 @@ export function FrozenSpinsEditor({
   );
   const acknowledgeAppliedDraft = useRegisterInspectorEditSession(
     "staged",
-    pendingField === "apply" || pendingField === "activate",
+    pendingField !== null,
     dirty,
-    true,
+    numericDrafts.summary.pendingCount === 0 && !conflict,
     undefined,
     applyDraft,
     resetDraft,
     {
-      applyBlockReason: sessionScopeKey ? undefined : "Session identity is not ready.",
+      applyBlockReason: conflictReason ?? numericDraftBlockReason ?? (sessionScopeKey ? undefined : "Session identity is not ready."),
       historyMode: "mutation-owned",
     },
   );
@@ -522,11 +587,14 @@ export function FrozenSpinsEditor({
   }, [acknowledgeAppliedDraft]);
 
   return (
+    <QuantityFieldDraftScope store={numericDrafts.store}>
     <div
       className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
       data-frozen-spins-inspector-id={draft.id}
     >
       {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
+      {numericDraftBlockReason ? <FeedbackBanner kind="warning" message={numericDraftBlockReason} /> : null}
+      {conflictReason ? <FeedbackBanner kind="warning" message={conflictReason} /> : null}
       <InspectorGroup title="Frozen Spins" collapsible defaultOpen>
         <FieldRow label="Constraint ID" value={draft.id} />
         <FieldRow label="Schema" value={draft.schema_version} />
@@ -550,6 +618,7 @@ export function FrozenSpinsEditor({
       <InspectorGroup title="Selection" collapsible defaultOpen>
         {objectId ? (
           <SelectionExpressionBuilder
+            numericDraftStore={numericDrafts.store}
             expression={draft.selector}
             objectId={objectId}
             regionId={regionId}
@@ -678,7 +747,7 @@ export function FrozenSpinsEditor({
       <InspectorGroup title="Preview" collapsible defaultOpen>
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={toolbarPending}
+            disabled={toolbarPending || Boolean(numericDraftBlockReason) || conflict}
             size="sm"
             type="button"
             onClick={() => void createPreview()}
@@ -686,12 +755,15 @@ export function FrozenSpinsEditor({
             {pendingField === "preview" ? "Computing preview…" : "Preview mask"}
           </Button>
           <Button
-            disabled={toolbarPending || !dirty}
+            disabled={toolbarPending || !dirty || Boolean(numericDraftBlockReason) || conflict}
             size="sm"
             type="button"
             onClick={() => void applyDraft()}
           >
             {pendingField === "apply" ? "Applying…" : "Apply"}
+          </Button>
+          <Button disabled={toolbarPending || !dirty} size="sm" type="button" onClick={resetDraft}>
+            Revert
           </Button>
           {preview ? (
             <Button
@@ -710,7 +782,7 @@ export function FrozenSpinsEditor({
             </Button>
           ) : null}
           <Button
-            disabled={toolbarPending}
+            disabled={toolbarPending || dirty}
             size="sm"
             type="button"
             variant="danger"
@@ -750,6 +822,7 @@ export function FrozenSpinsEditor({
         ) : null}
       </InspectorGroup>
     </div>
+    </QuantityFieldDraftScope>
   );
 }
 

@@ -19,6 +19,7 @@ import {
   frozenSpinsPreviewTopologyFingerprint,
   resolveFrozenSpinsSolverBinding,
 } from "./FrozenSpinsInspectorPanel";
+import { createInspectorEditSessionStore, InspectorEditSessionProvider } from "../../InspectorEditSession";
 
 const preview = {
   activation_candidate_token: "fsact-candidate-1",
@@ -525,6 +526,211 @@ describe("FrozenSpinsInspectorPanel", () => {
       await act(async () => root.unmount());
       dom.restore();
     }
+  });
+
+  it.each(["1, ,3", "x,2,3", "1,2", "0, 0, 1"])("blocks numeric draft %j in both local and global actions, then reverts it", async (text) => {
+    const harness = await mountNumericEditor();
+    try {
+      await harness.edit("Axis", text);
+      expect(findByAttribute(harness.container, "aria-label", "Axis").value).toBe(text);
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      expect(findButton(harness.container, "Apply").disabled).toBe(true);
+      expect(findButton(harness.container, "Preview mask").disabled).toBe(true);
+      expect(findButton(harness.container, "Delete").disabled).toBe(true);
+      let applied: unknown;
+      await act(async () => { applied = await harness.store.getCurrentSession()!.apply(); });
+      expect(applied).toBe(false);
+      await act(async () => findButton(harness.container, "Preview mask").click());
+      expect(mocks.patch).not.toHaveBeenCalled();
+      expect(mocks.createPreview).not.toHaveBeenCalled();
+      await act(async () => harness.store.getCurrentSession()!.reset());
+      expect(findByAttribute(harness.container, "aria-label", "Axis").value).toBe("1, 0, 0");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: false, valid: true });
+    } finally { await harness.dispose(); }
+  });
+
+  it("commits a complete vector with explicit zero on Enter", async () => {
+    const harness = await mountNumericEditor();
+    try {
+      await harness.edit("Axis", "0, 0, 1");
+      await harness.key("Axis", "Enter");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: true });
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.selector.value.axis).toEqual([0, 0, 1]);
+    } finally { await harness.dispose(); }
+  });
+
+  it("keeps raw edits and global invalid state after an older Apply ACK", async () => {
+    let resolvePatch!: (value: unknown) => void;
+    mocks.patch.mockReturnValueOnce(new Promise((resolve) => { resolvePatch = resolve; }));
+    const harness = await mountNumericEditor();
+    try {
+      await editDefinitionName(harness.container);
+      await act(async () => findButton(harness.container, "Apply").click());
+      await harness.edit("Axis", "1, ,3");
+      await act(async () => resolvePatch({ definition: { ...numericDefinitionFixture(), name: "Edited pinned edge" }, revision: 8 }));
+      expect(findByAttribute(harness.container, "aria-label", "Axis").value).toBe("1, ,3");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      await act(async () => harness.store.getCurrentSession()!.reset());
+      expect(findByAttribute(harness.container, "aria-label", "Name").value).toBe("Edited pinned edge");
+      expect(findByAttribute(harness.container, "aria-label", "Axis").value).toBe("1, 0, 0");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: false, valid: true });
+    } finally { await harness.dispose(); }
+  });
+
+  it("does not arm a preview candidate while a newer raw edit is unresolved", async () => {
+    let resolvePreview!: (value: unknown) => void;
+    mocks.createPreview.mockReturnValueOnce(new Promise((resolve) => { resolvePreview = resolve; }));
+    const harness = await mountNumericEditor();
+    try {
+      await act(async () => findButton(harness.container, "Preview mask").click());
+      await harness.edit("Axis", "1, ,3");
+      await act(async () => resolvePreview(preview));
+      expect(findButton(harness.container, "Commit preview").disabled).toBe(true);
+      await act(async () => findButton(harness.container, "Commit preview").click());
+      expect(mocks.activatePreview).not.toHaveBeenCalled();
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+    } finally { await harness.dispose(); }
+  });
+
+  it("protects selector structure while numeric text is unresolved", async () => {
+    const harness = await mountNumericEditor();
+    try {
+      await harness.edit("Axis", "1, ,3");
+      const operator = findByAttribute(harness.container, "aria-label", "Operator");
+      const scalarKind = findByAttribute(harness.container, "aria-label", "Scalar kind");
+      expect(operator.disabled).toBe(true);
+      expect(scalarKind.disabled).toBe(true);
+      await act(async () => {
+        operator.value = "all_magnetic";
+        operator.dispatchEvent(new TestEvent("change", { bubbles: true }));
+      });
+      expect(findByAttribute(harness.container, "data-selection-expression-kind").getAttribute("data-selection-expression-kind")).toBe("approx");
+      expect(findByAttribute(harness.container, "aria-label", "Axis").value).toBe("1, ,3");
+      await harness.key("Axis", "Escape");
+      expect(operator.disabled).toBe(false);
+      expect(scalarKind.disabled).toBe(false);
+    } finally { await harness.dispose(); }
+  });
+
+  it("does not move a numeric draft to the next clause when removing a sibling", async () => {
+    const first = numericDefinitionFixture();
+    const harness = await mountNumericEditor({
+      ...first,
+      selector: {
+        kind: "and",
+        expressions: [first.selector, { ...first.selector, value: { kind: "magnetization_dot", axis: [0, 1, 0] } }],
+      },
+    });
+    try {
+      await harness.edit("Axis", "1, ,3");
+      const remove = findButton(harness.container, "Remove clause");
+      expect(remove.disabled).toBe(true);
+      await act(async () => remove.click());
+      expect(findElements(harness.container, (element) => element.getAttribute("aria-label") === "Axis")).toHaveLength(2);
+      await harness.key("Axis", "Escape");
+      await act(async () => remove.click());
+      expect(findElements(harness.container, (element) => element.getAttribute("aria-label") === "Axis")).toHaveLength(1);
+      expect(findByAttribute(harness.container, "aria-label", "Axis").value).toBe("0, 1, 0");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: true });
+    } finally { await harness.dispose(); }
+  });
+
+  it("commits zero tolerance without allowing blank scalar text to fall back", async () => {
+    const definition = numericDefinitionFixture();
+    const harness = await mountNumericEditor({ ...definition, selector: { ...definition.selector, atol: 1 } });
+    try {
+      await harness.edit("Absolute tolerance", "");
+      await harness.key("Absolute tolerance", "Enter");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      expect(findByAttribute(harness.container, "aria-label", "Absolute tolerance").value).toBe("");
+      await harness.edit("Absolute tolerance", "0");
+      await harness.key("Absolute tolerance", "Enter");
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.selector.atol).toBe(0);
+    } finally { await harness.dispose(); }
+  });
+
+  it("ignores a preview response after its session scope is replaced", async () => {
+    let resolvePreview!: (value: unknown) => void;
+    mocks.createPreview.mockReturnValueOnce(new Promise((resolve) => { resolvePreview = resolve; }));
+    const harness = await mountNumericEditor();
+    try {
+      await act(async () => findButton(harness.container, "Preview mask").click());
+      mocks.sessionId = "session-b";
+      await act(async () => resolvePreview(preview));
+      expect(findOptionalButton(harness.container, "Commit preview")).toBeNull();
+      expect(mocks.invalidate).not.toHaveBeenCalled();
+    } finally { await harness.dispose(); }
+  });
+
+  it("requires clean edits before Delete and ignores a delete ACK from a replaced session", async () => {
+    let resolveDelete!: (value: unknown) => void;
+    mocks.delete.mockReturnValueOnce(new Promise((resolve) => { resolveDelete = resolve; }));
+    const harness = await mountNumericEditor();
+    try {
+      await editDefinitionName(harness.container);
+      expect(findButton(harness.container, "Delete").disabled).toBe(true);
+      await act(async () => findButton(harness.container, "Revert").click());
+      await act(async () => findButton(harness.container, "Delete").click());
+      mocks.sessionId = "session-b";
+      await act(async () => resolveDelete({ revision: 8 }));
+      expect(mocks.clear).not.toHaveBeenCalled();
+      expect(mocks.invalidate).not.toHaveBeenCalled();
+    } finally { await harness.dispose(); }
+  });
+
+  it("keeps a raw numeric edit while adopting unrelated fields from a newer revision", async () => {
+    const harness = await mountNumericEditor();
+    try {
+      await harness.edit("Axis", "0, ,1");
+      await harness.renderDefinition({ ...numericDefinitionFixture(), name: "Server name" }, 8);
+      expect(findByAttribute(harness.container, "aria-label", "Name").value).toBe("Server name");
+      expect(findByAttribute(harness.container, "aria-label", "Axis").value).toBe("0, ,1");
+      await harness.edit("Axis", "0, 0, 1");
+      await harness.blur("Axis");
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1]).toMatchObject({
+        expected_revision: 8,
+        definition: { name: "Server name", selector: { value: { axis: [0, 0, 1] } } },
+      });
+    } finally { await harness.dispose(); }
+  });
+
+  it("retains raw fields and blocks a conflicting server selector until Revert", async () => {
+    const harness = await mountNumericEditor();
+    try {
+      await harness.edit("Axis", "0, ,1");
+      await harness.renderDefinition({ ...numericDefinitionFixture(), selector: { kind: "all_magnetic" } }, 8);
+      expect(findByAttribute(harness.container, "aria-label", "Axis").value).toBe("0, ,1");
+      await harness.edit("Axis", "0, 0, 1");
+      await harness.key("Axis", "Enter");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      expect(findButton(harness.container, "Preview mask").disabled).toBe(true);
+      await act(async () => { expect(await harness.store.getCurrentSession()!.apply()).toBe(false); });
+      expect(mocks.patch).not.toHaveBeenCalled();
+      await act(async () => findButton(harness.container, "Revert").click());
+      expect(findByAttribute(harness.container, "data-selection-expression-kind").getAttribute("data-selection-expression-kind")).toBe("all_magnetic");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: false, valid: true });
+    } finally { await harness.dispose(); }
+  });
+
+  it("does not roll the current baseline back to an older Apply ACK", async () => {
+    let resolvePatch!: (value: unknown) => void;
+    mocks.patch.mockReturnValueOnce(new Promise((resolve) => { resolvePatch = resolve; }));
+    const harness = await mountNumericEditor();
+    try {
+      await editDefinitionName(harness.container);
+      await act(async () => findButton(harness.container, "Apply").click());
+      await harness.renderDefinition({ ...numericDefinitionFixture(), name: "Newer server name" }, 9);
+      await act(async () => resolvePatch({ definition: { ...numericDefinitionFixture(), name: "Edited pinned edge" }, revision: 8 }));
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      await act(async () => findButton(harness.container, "Revert").click());
+      expect(findByAttribute(harness.container, "aria-label", "Name").value).toBe("Newer server name");
+      await editDefinitionName(harness.container);
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch.mock.calls[1]![1].expected_revision).toBe(9);
+    } finally { await harness.dispose(); }
   });
 
   it("keeps a clean Apply disabled without submitting a write", async () => {
@@ -1163,6 +1369,48 @@ function definitionFixture() {
     name: "Pinned edge",
     schema_version: "fullmag.frozen-spins.v1",
     selector: { kind: "in_object" as const, object_id: "film" },
+  };
+}
+
+function numericDefinitionFixture() {
+  return {
+    ...definitionFixture(),
+    selector: {
+      kind: "approx" as const, atol: 0, rtol: 0,
+      value: { kind: "magnetization_dot" as const, axis: [1, 0, 0] },
+      target: { kind: "constant" as const, value: 0 },
+    },
+  };
+}
+
+async function mountNumericEditor(definition: ComponentProps<typeof ScopedFrozenSpinsEditor>["definition"] = numericDefinitionFixture()) {
+  const dom = installSimulationPreparationTestDom();
+  const container = dom.document.createElement("div");
+  const store = createInspectorEditSessionStore();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container as unknown as Element);
+  const renderDefinition = (nextDefinition: ComponentProps<typeof ScopedFrozenSpinsEditor>["definition"], revision = 7) => act(async () => root.render(
+    <InspectorEditSessionProvider store={store}>
+      <FrozenSpinsEditor definition={nextDefinition} objectId="film" regionId={null} revision={revision} />
+    </InspectorEditSessionProvider>,
+  ));
+  await renderDefinition(definition);
+  return {
+    container, store, renderDefinition,
+    edit: (label: string, text: string) => act(async () => {
+      const input = findByAttribute(container, "aria-label", label);
+      const setter = Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set;
+      if (!setter) throw new Error("Missing native input setter");
+      setter.call(input, text);
+      input.dispatchEvent(new TestEvent("input", { bubbles: true }));
+    }),
+    key: (label: string, key: string) => act(async () => {
+      findByAttribute(container, "aria-label", label).dispatchEvent(new TestEvent("keydown", { bubbles: true, key }));
+    }),
+    blur: (label: string) => act(async () => {
+      findByAttribute(container, "aria-label", label).dispatchEvent(new TestEvent("focusout", { bubbles: true }));
+    }),
+    dispose: async () => { await act(async () => root.unmount()); dom.restore(); },
   };
 }
 

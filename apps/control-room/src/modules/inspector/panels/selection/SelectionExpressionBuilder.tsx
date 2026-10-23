@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { createContext, useContext, useSyncExternalStore } from "react";
 
 import type {
   FrozenSpinsSelectionExpression,
@@ -9,7 +9,12 @@ import type {
 } from "@/kernel/api/apiTypes";
 import { Button } from "@/shared/ui/Button";
 
+import { QuantityField, QuantityFieldDraftScope, useQuantityFieldDraftScope } from "../../primitives/QuantityField";
+import type { QuantityFieldDraftStore } from "../../primitives/quantityFieldDraftStore";
+import { parseSelectionNumber, parseSelectionVector } from "./selectionNumericInput";
+
 interface SelectionExpressionBuilderProps {
+  numericDraftStore?: QuantityFieldDraftStore;
   expression: FrozenSpinsSelectionExpression;
   objectId: string;
   regionId?: string | null;
@@ -45,12 +50,36 @@ const SIMPLE_KINDS: readonly SimpleSelectionKind[] = [
   "not",
 ];
 
-export function SelectionExpressionBuilder({
+const SelectionDraftContext = createContext<QuantityFieldDraftStore | null>(null);
+const noSubscription = () => () => {};
+const noPendingDrafts = () => false;
+
+function useSelectionStructureGuard() {
+  const store = useContext(SelectionDraftContext);
+  const blocked = useSyncExternalStore(store?.subscribe ?? noSubscription, () => Boolean(store?.getSummary().pendingCount), noPendingDrafts);
+  return { blocked, allow: () => !store?.getSummary().pendingCount };
+}
+
+/** One scope also protects recursive structure edits from unresolved numeric text. */
+export function SelectionExpressionBuilder(props: SelectionExpressionBuilderProps) {
+  const local = useQuantityFieldDraftScope(JSON.stringify([props.objectId, props.regionId]));
+  const store = props.numericDraftStore ?? local.store;
+  return (
+    <QuantityFieldDraftScope store={store}>
+      <SelectionDraftContext.Provider value={store}>
+        <SelectionExpressionEditor {...props} />
+      </SelectionDraftContext.Provider>
+    </QuantityFieldDraftScope>
+  );
+}
+
+function SelectionExpressionEditor({
   expression,
   objectId,
   regionId,
   onChange,
 }: SelectionExpressionBuilderProps) {
+  const structure = useSelectionStructureGuard();
   const editable = SIMPLE_KINDS.includes(expression.kind as SimpleSelectionKind);
   return (
     <fieldset className="fm-inspector-field" data-selection-expression-kind={expression.kind}>
@@ -59,9 +88,12 @@ export function SelectionExpressionBuilder({
         <span>Operator</span>
         <select
           className="fm-inspector-input"
+          aria-label="Operator"
+          disabled={structure.blocked}
+          title={structure.blocked ? "Commit or discard numeric edits before changing the selector structure." : undefined}
           value={editable ? expression.kind : "advanced"}
           onChange={(event) =>
-            onChange(defaultExpression(event.target.value, objectId, regionId))
+            structure.allow() && onChange(defaultExpression(event.target.value, objectId, regionId))
           }
         >
           <option value="all_magnetic">All magnetic DOFs</option>
@@ -119,7 +151,7 @@ export function SelectionExpressionBuilder({
           ) : null}
           {expression.expressions.map((child, index) => (
             <div className="fm-inspector-panel" key={index}>
-              <SelectionExpressionBuilder
+              <SelectionExpressionEditor
                 expression={child}
                 objectId={objectId}
                 regionId={regionId}
@@ -136,8 +168,9 @@ export function SelectionExpressionBuilder({
                 size="sm"
                 type="button"
                 variant="ghost"
+                disabled={structure.blocked}
                 onClick={() =>
-                  onChange({
+                  structure.allow() && onChange({
                     ...expression,
                     expressions: expression.expressions.filter(
                       (_, childIndex) => childIndex !== index,
@@ -168,7 +201,7 @@ export function SelectionExpressionBuilder({
         </div>
       ) : null}
       {expression.kind === "not" ? (
-        <SelectionExpressionBuilder
+        <SelectionExpressionEditor
           expression={expression.expression}
           objectId={objectId}
           regionId={regionId}
@@ -274,12 +307,7 @@ function TextField({
 }
 
 function NumberField({
-  error: externalError,
-  label,
-  max,
-  min,
-  onChange,
-  value,
+  error, label, max, min, onChange, value,
 }: {
   error?: string;
   label: string;
@@ -288,77 +316,20 @@ function NumberField({
   onChange: (value: number) => void;
   value: number;
 }) {
-  const [draft, setDraft] = useState(() => ({
-    internalError: null as string | null,
-    sourceValue: value,
-    text: String(value),
-  }));
-  if (draft.sourceValue !== value) {
-    setDraft({ internalError: null, sourceValue: value, text: String(value) });
-  }
-
-  function handleChange(raw: string) {
-    const trimmed = raw.trim();
-    if (trimmed === "") {
-      setDraft({
-        internalError: "Value cannot be empty.",
-        sourceValue: value,
-        text: raw,
-      });
-      return;
-    }
-    const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed)) {
-      setDraft({
-        internalError: "Must be a valid finite number.",
-        sourceValue: value,
-        text: raw,
-      });
-      return;
-    }
-    if (min !== undefined && parsed < min) {
-      setDraft({
-        internalError: `Must be at least ${min}.`,
-        sourceValue: value,
-        text: raw,
-      });
-      return;
-    }
-    if (max !== undefined && parsed > max) {
-      setDraft({
-        internalError: `Must be at most ${max}.`,
-        sourceValue: value,
-        text: raw,
-      });
-      return;
-    }
-    setDraft({ internalError: null, sourceValue: value, text: raw });
-    onChange(parsed);
-  }
-
-  const effectiveError = externalError ?? draft.internalError;
-
   return (
-    <div className="fm-inspector-field-wrapper">
-      <label className="fm-inspector-field">
-        <span>{label}</span>
-        <input
-          className={`fm-inspector-input ${effectiveError ? "fm-inspector-input--invalid" : ""}`}
-          type="number"
-          value={draft.text}
-          onChange={(event) => handleChange(event.target.value)}
-        />
-      </label>
-      {effectiveError ? (
-        <p className="fm-inspector-feedback" data-kind="error">
-          {effectiveError}
-        </p>
-      ) : null}
-    </div>
+    <QuantityField
+      error={error}
+      label={label}
+      value={value}
+      format={String}
+      parse={(text) => parseSelectionNumber(text, min, max)}
+      onCommit={onChange}
+    />
   );
 }
 
 function SelectField({
+  changesStructure = false,
   label,
   onChange,
   options,
@@ -368,11 +339,13 @@ function SelectField({
   onChange: (value: string) => void;
   options: readonly (readonly [string, string])[];
   value: string;
+  changesStructure?: boolean;
 }) {
+  const structure = useSelectionStructureGuard();
   return (
     <label className="fm-inspector-field">
       <span>{label}</span>
-      <select className="fm-inspector-input" value={value} onChange={(event) => onChange(event.target.value)}>
+      <select aria-label={label} className="fm-inspector-input" disabled={changesStructure && structure.blocked} value={value} onChange={(event) => { if (!changesStructure || structure.allow()) onChange(event.target.value); }}>
         {options.map(([option, title]) => <option key={option} value={option}>{title}</option>)}
       </select>
     </label>
@@ -380,24 +353,21 @@ function SelectField({
 }
 
 function VectorField({
-  label,
-  onChange,
-  value,
+  dimension = 3, label, onChange, value,
 }: {
+  dimension?: number;
   label: string;
   onChange: (value: number[]) => void;
   value: number[];
 }) {
   return (
-    <TextField
+    <QuantityField
       label={label}
-      value={value.join(", ")}
-      onChange={(raw) => {
-        const parsed = raw.split(",").map((entry) => Number(entry.trim())).filter(Number.isFinite);
-        if (parsed.length > 0) {
-          onChange(parsed);
-        }
-      }}
+      value={value}
+      format={(components) => components.join(", ")}
+      parse={(text) => parseSelectionVector(text, dimension)}
+      equals={(left, right) => left.length === right.length && left.every((entry, index) => Object.is(entry, right[index]))}
+      onCommit={onChange}
     />
   );
 }
@@ -432,6 +402,7 @@ function ScalarExpressionBuilder({
     <fieldset className="fm-inspector-field" data-selection-scalar-kind={expression.kind}>
       <legend>{label}</legend>
       <SelectField
+        changesStructure
         label="Scalar kind"
         value={expression.kind}
         options={[["constant", "Constant"], ["coordinate", "Coordinate"], ["magnetization_component", "Magnetization component"], ["magnetization_norm", "Magnetization norm"], ["magnetization_dot", "Magnetization dot axis"], ["abs", "Absolute value"]]}
@@ -464,6 +435,7 @@ function GeometryPredicateBuilder({
     <fieldset className="fm-inspector-field" data-selection-geometry-kind={geometry.kind}>
       <legend>Geometry predicate</legend>
       <SelectField
+        changesStructure
         label="Geometry kind"
         value={geometry.kind}
         options={[["box", "Box"], ["sphere", "Sphere"], ["cylinder", "Cylinder"], ["ellipsoid", "Ellipsoid"], ["imported_solid", "Imported solid"], ["union", "Union"], ["intersection", "Intersection"], ["difference", "Difference"], ["xor", "XOR"], ["complement", "Complement"], ["affine", "Affine transform"]]}
@@ -477,7 +449,7 @@ function GeometryPredicateBuilder({
       {binary ? <><GeometryPredicateBuilder geometry={geometry.a} onChange={(a) => onChange({ ...geometry, a })} /><GeometryPredicateBuilder geometry={geometry.b} onChange={(b) => onChange({ ...geometry, b })} /></> : null}
       {geometry.kind === "difference" ? <><GeometryPredicateBuilder geometry={geometry.base} onChange={(base) => onChange({ ...geometry, base })} /><GeometryPredicateBuilder geometry={geometry.tool} onChange={(tool) => onChange({ ...geometry, tool })} /></> : null}
       {geometry.kind === "complement" ? <><GeometryPredicateBuilder geometry={geometry.geometry} onChange={(next) => onChange({ ...geometry, geometry: next })} /><GeometryPredicateBuilder geometry={geometry.domain} onChange={(domain) => onChange({ ...geometry, domain })} /></> : null}
-      {geometry.kind === "affine" ? <><GeometryPredicateBuilder geometry={geometry.geometry} onChange={(next) => onChange({ ...geometry, geometry: next })} /><VectorField label="Translation (m)" value={geometry.translation_m} onChange={(translation_m) => onChange({ ...geometry, translation_m })} /><VectorField label="Rotation xyzw" value={geometry.rotation_xyzw} onChange={(rotation_xyzw) => onChange({ ...geometry, rotation_xyzw })} /><VectorField label="Scale" value={geometry.scale} onChange={(scale) => onChange({ ...geometry, scale })} /><VectorField label="Pivot (m)" value={geometry.pivot_m} onChange={(pivot_m) => onChange({ ...geometry, pivot_m })} /></> : null}
+      {geometry.kind === "affine" ? <><GeometryPredicateBuilder geometry={geometry.geometry} onChange={(next) => onChange({ ...geometry, geometry: next })} /><VectorField label="Translation (m)" value={geometry.translation_m} onChange={(translation_m) => onChange({ ...geometry, translation_m })} /><VectorField dimension={4} label="Rotation xyzw" value={geometry.rotation_xyzw} onChange={(rotation_xyzw) => onChange({ ...geometry, rotation_xyzw })} /><VectorField label="Scale" value={geometry.scale} onChange={(scale) => onChange({ ...geometry, scale })} /><VectorField label="Pivot (m)" value={geometry.pivot_m} onChange={(pivot_m) => onChange({ ...geometry, pivot_m })} /></> : null}
     </fieldset>
   );
 }
