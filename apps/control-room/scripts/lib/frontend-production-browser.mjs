@@ -1120,7 +1120,7 @@ export async function qualifyFrontendProductionBrowser({
         const errorResponse = await responseTask;
         assert.equal(errorResponse.status(), 503, "The workspace error case did not use the mocked validation error.");
         const objectError = await openValidationSummary();
-        await objectError.getByRole("alert").waitFor({ state: "visible" });
+        await objectError.getByRole("alert").filter({ hasText: /Geometry validation could not be loaded/ }).waitFor({ state: "visible" });
         const objectErrorText = await normalizedText(objectError);
         assert.match(objectErrorText, /Geometry validation could not be loaded/);
         assert.doesNotMatch(objectErrorText, /no object issues/);
@@ -1128,7 +1128,7 @@ export async function qualifyFrontendProductionBrowser({
 
         await selectGeometryRow("model:object:film:geometry");
         const geometryError = await openValidationSummary();
-        await geometryError.getByRole("alert").waitFor({ state: "visible" });
+        await geometryError.getByRole("alert").filter({ hasText: /Geometry validation could not be loaded/ }).waitFor({ state: "visible" });
         const geometryErrorText = await normalizedText(geometryError);
         assert.match(geometryErrorText, /Geometry validation could not be loaded/);
         assert.doesNotMatch(geometryErrorText, /no object issues/);

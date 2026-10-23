@@ -479,6 +479,7 @@ describe("PlanarVisualizationSection", () => {
     "preserves the $name Inspector root, focus, scroll, and unrelated controls through pending and ACK",
     async ({ selected, target, scopeId, color }) => {
       const dom = installSimulationPreparationTestDom();
+      Object.assign(dom.document.defaultView!, { getSelection: () => null });
       const container = dom.document.createElement("div");
       const root = createRoot(container as unknown as Element);
       try {
