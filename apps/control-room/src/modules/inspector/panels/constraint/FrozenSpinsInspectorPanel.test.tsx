@@ -99,7 +99,8 @@ const solverRuntime = {
 
 const mocks = vi.hoisted(() => ({
   activatePreview: vi.fn(),
-  authoringHistory: undefined as { record: ReturnType<typeof vi.fn> } | undefined,
+  authoringHistory: undefined as { record: ReturnType<typeof vi.fn>; getGeneration?: () => number } | undefined,
+  historyGeneration: 0,
   clear: vi.fn(),
   createPreview: vi.fn(),
   delete: vi.fn(),
@@ -117,6 +118,8 @@ const mocks = vi.hoisted(() => ({
   sessionEpoch: "epoch-a",
   sessionId: "session-a",
   scene: vi.fn(),
+  syncAuthoringScript: vi.fn(),
+  observeDefinitionOptions: vi.fn(),
   setActiveViewportMainModule: vi.fn(),
   setFocusedSlot: vi.fn(),
   solverStatusData: null as unknown,
@@ -147,6 +150,7 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => {
           patch: mocks.patch,
         },
         scene: mocks.scene,
+        syncAuthoringScript: mocks.syncAuthoringScript,
       },
     },
     authoringHistory: mocks.authoringHistory,
@@ -197,10 +201,13 @@ vi.mock("@/kernel/resources/frozenSpinsResources", () => ({
   FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY: "model:frozen-spins:active-preview",
   frozenSpinsCollectionResourceKey: () => "model:frozen-spins",
   frozenSpinsDefinitionResourceKey: (id: string) => `model:frozen-spins:${id}`,
-  useFrozenSpinsDefinitionResource: () => ({
-    ...mocks.definitionResource, status: mocks.definitionStatus,
-    refreshError: mocks.definitionRefreshError, refetch: mocks.refetchDefinition,
-  }),
+  useFrozenSpinsDefinitionResource: (id: string, options: unknown) => {
+    mocks.observeDefinitionOptions(id, options);
+    return {
+      ...mocks.definitionResource, status: mocks.definitionStatus,
+      refreshError: mocks.definitionRefreshError, refetch: mocks.refetchDefinition,
+    };
+  },
 }));
 
 vi.mock("@/kernel/resources/useSessionScopedResourceKey", () => ({
@@ -228,13 +235,16 @@ describe("FrozenSpinsInspectorPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.authoringHistory = undefined;
+    mocks.historyGeneration = 0;
     mocks.scene.mockReset();
+    mocks.syncAuthoringScript.mockReset().mockResolvedValue({});
     mocks.requestScopeEpoch = "request-a";
     mocks.sessionEpoch = "epoch-a";
     mocks.sessionId = "session-a";
     mocks.definitionStatus = "ready";
     mocks.definitionRefreshError = null;
-    mocks.activatePreview.mockResolvedValue(activationReceipt);
+    mocks.activatePreview.mockReset().mockResolvedValue(activationReceipt);
+    mocks.delete.mockReset().mockResolvedValue({ revision: 8 });
     mocks.flushVisualization.mockResolvedValue(undefined);
     mocks.solverStatusData = { frozen_spins: null };
     mocks.solverStatus = "ready";
@@ -246,8 +256,8 @@ describe("FrozenSpinsInspectorPanel", () => {
       objects: [{ id: "film", name: "Film", regions: [{ region_id: "edge", name: "Edge" }] }],
       selections: [{ id: "state-dependent-selection", name: "Named state selection" }],
     };
-    mocks.createPreview.mockResolvedValue(preview);
-    mocks.patch.mockResolvedValue({
+    mocks.createPreview.mockReset().mockResolvedValue(preview);
+    mocks.patch.mockReset().mockResolvedValue({
       definition: definitionFixture(),
       revision: 8,
       runtime_application: activationReceipt.runtime_application,
@@ -1030,6 +1040,135 @@ describe("FrozenSpinsInspectorPanel", () => {
     } finally { await harness.dispose(); }
   });
 
+  it.each(["apply", "activate", "delete"] as const)("synchronizes canonical Python only after the scoped %s ACK", async (action) => {
+    let acknowledge!: (value: unknown) => void;
+    const mutation = action === "apply" ? mocks.patch : action === "activate" ? mocks.activatePreview : mocks.delete;
+    mutation.mockReturnValueOnce(new Promise((resolve) => { acknowledge = resolve; }));
+    const harness = await mountNumericEditor(definitionFixture());
+    try {
+      if (action === "apply") await editDefinitionName(harness.container);
+      if (action === "activate") await act(async () => findButton(harness.container, "Preview mask").click());
+      await act(async () => findButton(harness.container, action === "apply" ? "Apply" : action === "activate" ? "Commit preview" : "Delete").click());
+      expect(mocks.syncAuthoringScript).not.toHaveBeenCalled();
+      await act(async () => acknowledge(action === "activate" ? activationReceipt : action === "delete" ? { revision: 8 } : { definition: { ...definitionFixture(), name: "Edited pinned edge" }, revision: 8 }));
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledExactlyOnceWith({}, { sessionScopeKey: "session=session-a&epoch=epoch-a&request_scope_epoch=request-a" });
+      expect(mutation).toHaveBeenCalledTimes(1);
+    } finally { await harness.dispose(); }
+  });
+
+  it.each(["apply", "activate"] as const)("keeps a successful %s committed when Python sync fails", async (action) => {
+    mocks.syncAuthoringScript.mockRejectedValueOnce(new Error("Canonical Python unavailable"));
+    const harness = await mountNumericEditor(definitionFixture());
+    try {
+      if (action === "apply") await editDefinitionName(harness.container);
+      else await act(async () => findButton(harness.container, "Preview mask").click());
+      await act(async () => findButton(harness.container, action === "apply" ? "Apply" : "Commit preview").click());
+      expect(harness.container.textContent).toContain("Authoring script sync skipped: Canonical Python unavailable");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: false });
+      expect(action === "apply" ? mocks.patch : mocks.activatePreview).toHaveBeenCalledTimes(1);
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledTimes(1);
+      expect(findButton(harness.container, "Apply").disabled).toBe(true);
+    } finally { await harness.dispose(); }
+  });
+
+  it("retries only Python sync after an acknowledged Delete and keeps its warning visible", async () => {
+    mocks.delete.mockResolvedValueOnce({ revision: 8 });
+    mocks.syncAuthoringScript.mockRejectedValueOnce(new Error("Canonical Python unavailable"));
+    const harness = await mountNumericEditor(definitionFixture());
+    try {
+      await act(async () => findButton(harness.container, "Delete").click());
+      expect(harness.container.textContent).toContain("deletion was acknowledged");
+      expect(harness.container.textContent).toContain("Canonical Python unavailable");
+      expect(harness.store.getCurrentSession()).toBeNull();
+      expect(findOptionalButton(harness.container, "Delete")).toBeNull();
+      expect(findOptionalButton(harness.container, "Apply")).toBeNull();
+      expect(mocks.clear).not.toHaveBeenCalled();
+      await act(async () => findButton(harness.container, "Retry script sync").click());
+      expect(mocks.delete).toHaveBeenCalledTimes(1);
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledTimes(2);
+      expect(mocks.clear).toHaveBeenCalledExactlyOnceWith("inspector");
+    } finally { await harness.dispose(); }
+  });
+
+  it("allows closing the acknowledged-delete warning without another mutation or sync", async () => {
+    mocks.delete.mockResolvedValueOnce({ revision: 8 });
+    mocks.syncAuthoringScript.mockRejectedValueOnce(new Error("Canonical Python unavailable"));
+    const harness = await mountNumericEditor(definitionFixture());
+    try {
+      await act(async () => findButton(harness.container, "Delete").click());
+      await act(async () => findButton(harness.container, "Close").click());
+      expect(mocks.clear).toHaveBeenCalledExactlyOnceWith("inspector");
+      expect(mocks.delete).toHaveBeenCalledTimes(1);
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledTimes(1);
+    } finally { await harness.dispose(); }
+  });
+
+  it.each(["apply", "activate", "delete"] as const)("does not sync a rejected %s mutation", async (action) => {
+    const mutation = action === "apply" ? mocks.patch : action === "activate" ? mocks.activatePreview : mocks.delete;
+    mutation.mockRejectedValueOnce(new Error("Mutation rejected"));
+    const harness = await mountNumericEditor(definitionFixture());
+    try {
+      if (action === "apply") await editDefinitionName(harness.container);
+      if (action === "activate") await act(async () => findButton(harness.container, "Preview mask").click());
+      await act(async () => findButton(harness.container, action === "apply" ? "Apply" : action === "activate" ? "Commit preview" : "Delete").click());
+      expect(harness.container.textContent).toContain("Mutation rejected");
+      expect(mocks.syncAuthoringScript).not.toHaveBeenCalled();
+      expect(mutation).toHaveBeenCalledTimes(1);
+    } finally { await harness.dispose(); }
+  });
+
+  it.each(["apply", "activate", "delete"] as const)("ignores late %s sync feedback after a session change", async (action) => {
+    let finishSync!: () => void;
+    mocks.syncAuthoringScript.mockReturnValueOnce(new Promise<void>((resolve) => { finishSync = resolve; }));
+    mocks.delete.mockResolvedValue({ revision: 8 });
+    const harness = await mountNumericEditor(definitionFixture());
+    try {
+      if (action === "apply") await editDefinitionName(harness.container);
+      if (action === "activate") await act(async () => findButton(harness.container, "Preview mask").click());
+      await act(async () => findButton(harness.container, action === "apply" ? "Apply" : action === "activate" ? "Commit preview" : "Delete").click());
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledTimes(1);
+      mocks.sessionId = "session-b";
+      await act(async () => finishSync());
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledExactlyOnceWith({}, { sessionScopeKey: "session=session-a&epoch=epoch-a&request_scope_epoch=request-a" });
+      expect(mocks.clear).not.toHaveBeenCalled();
+      expect(harness.container.textContent).not.toContain("Authoring script sync skipped");
+    } finally { await harness.dispose(); }
+  });
+
+  it("does not carry local deletion state through another target back to the restored constraint", async () => {
+    mocks.delete.mockResolvedValueOnce({ revision: 8 });
+    mocks.syncAuthoringScript.mockRejectedValueOnce(new Error("Canonical Python unavailable"));
+    const harness = await mountDefinitionPanel();
+    try {
+      await act(async () => findButton(harness.container, "Delete").click());
+      expect(mocks.observeDefinitionOptions).toHaveBeenLastCalledWith("pin-edge", { enabled: false });
+      const other = { ...harness.selection, nodeId: "other", ref: { ...harness.selection.ref, constraintId: "pin-other", nodeId: "other" } };
+      mocks.definitionResource = { data: { definition: { ...definitionFixture(), id: "pin-other" }, revision: 9 }, error: null };
+      await harness.render(other);
+      expect(mocks.observeDefinitionOptions).toHaveBeenLastCalledWith("pin-other", { enabled: true });
+      mocks.definitionResource = { data: { definition: definitionFixture(), revision: 10 }, error: null };
+      await harness.render(harness.selection);
+      expect(mocks.observeDefinitionOptions).toHaveBeenLastCalledWith("pin-edge", { enabled: true });
+      expect(findByAttribute(harness.container, "aria-label", "Name").value).toBe("Pinned edge");
+    } finally { await harness.dispose(); }
+  });
+
+  it("does not acknowledge a newer history generation after Python sync returns", async () => {
+    let finishSync!: () => void;
+    mocks.authoringHistory = { record: vi.fn(), getGeneration: () => mocks.historyGeneration };
+    mocks.syncAuthoringScript.mockReturnValueOnce(new Promise<void>((resolve) => { finishSync = resolve; }));
+    const harness = await mountNumericEditor(definitionFixture());
+    try {
+      await editDefinitionName(harness.container);
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledTimes(1);
+      mocks.historyGeneration++;
+      await act(async () => finishSync());
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true });
+      expect(harness.container.textContent).not.toContain("Frozen Spins definition updated");
+    } finally { await harness.dispose(); }
+  });
+
   it("keeps a clean Apply disabled without submitting a write", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -1049,7 +1188,7 @@ describe("FrozenSpinsInspectorPanel", () => {
     }
   });
 
-  it("ignores a late write ACK after the editor is unmounted", async () => {
+  it("synchronizes a committed write after unmount without changing selection", async () => {
     let resolvePatch!: (value: unknown) => void;
     mocks.patch.mockReturnValueOnce(new Promise((resolve) => { resolvePatch = resolve; }));
     const dom = installSimulationPreparationTestDom();
@@ -1078,7 +1217,8 @@ describe("FrozenSpinsInspectorPanel", () => {
         revision: 8,
       }));
 
-      expect(mocks.invalidate).not.toHaveBeenCalled();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledWith({}, { sessionScopeKey: "session=session-a&epoch=epoch-a&request_scope_epoch=request-a" });
+      expect(mocks.invalidate).toHaveBeenCalledWith("model:frozen-spins", 8);
       expect(mocks.clear).not.toHaveBeenCalled();
     } finally {
       dom.restore();
@@ -1730,13 +1870,13 @@ async function mountDefinitionPanel() {
       nodeId: "model:object:film:frozen-spins:pin-edge", objectId: "film", type: "frozen-spins",
     },
   } as const;
-  const render = () => act(async () => root.render(
+  const render = (nextSelection: ComponentProps<typeof FrozenSpinsInspectorPanel>["selection"] = selection) => act(async () => root.render(
     <InspectorEditSessionProvider store={store}>
-      <FrozenSpinsInspectorPanel selection={selection} />
+      <FrozenSpinsInspectorPanel selection={nextSelection} />
     </InspectorEditSessionProvider>,
   ));
   await render();
-  return { container, store, render, dispose: async () => { await act(async () => root.unmount()); dom.restore(); } };
+  return { container, store, render, selection, dispose: async () => { await act(async () => root.unmount()); dom.restore(); } };
 }
 
 async function editDefinitionName(container: TestNode): Promise<void> {

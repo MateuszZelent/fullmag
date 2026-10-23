@@ -39,6 +39,7 @@ import { QuantityFieldDraftScope, useQuantityFieldDraftScope } from "../../primi
 import { quantityFieldDraftBlockReason } from "../../primitives/quantityFieldDraftStore";
 import { SelectionExpressionBuilder } from "../selection/SelectionExpressionBuilder";
 import { selectionReferenceCatalog, selectionReferenceIssue } from "../selection/selectionReferenceCatalog";
+import { syncAuthoringScriptBestEffort } from "../ObjectMagneticTexturePanelViewModel";
 import { reconcileFrozenSpinsDraft } from "./frozenSpinsDraft";
 
 type PendingField = "activate" | "apply" | "delete" | "preview" | "quantity" | null;
@@ -55,8 +56,11 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
     frozenSpinsDefinitionResourceKey(constraintId),
   );
   const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
+  const [deletedOwner, setDeletedOwner] = useState<string | null>(null);
+  const locallyDeleted = deletedOwner === resourceKey;
+  if (deletedOwner !== null && deletedOwner !== resourceKey) setDeletedOwner(null);
   const resource = useFrozenSpinsDefinitionResource(constraintId, {
-    enabled: ref !== null,
+    enabled: ref !== null && !locallyDeleted,
   });
   const matchingData = resource.data?.definition.id === constraintId ? resource.data : null;
   const resourceError = resource.error ?? resource.refreshError
@@ -108,8 +112,8 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
   const objectId = ref.objectId ?? selection.objectId;
   return (
     <div className="grid min-w-0 gap-fm-inspector-group">
-    {resourceError ? <FeedbackBanner kind="error" message={errorMessage(resourceError)} /> : null}
-    {!definitionCurrent ? (
+    {resourceError && !locallyDeleted ? <FeedbackBanner kind="error" message={errorMessage(resourceError)} /> : null}
+    {!definitionCurrent && !locallyDeleted ? (
       <div>
         <p className="fm-help-text" role="status">Current definition is unconfirmed. Your edits are preserved.</p>
         <Button size="sm" type="button" onClick={resource.refetch}>Retry definition</Button>
@@ -123,6 +127,7 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
       revision={retainedResource.revision}
       sessionScopeKey={sessionScopeKey}
       definitionUnavailableReason={definitionCurrent ? undefined : "Confirm the current Frozen Spins definition before applying, previewing or deleting."}
+      onDeleteCommitted={() => setDeletedOwner(resourceKey)}
     />
     </div>
   );
@@ -135,6 +140,7 @@ export function FrozenSpinsEditor({
   revision: initialRevision,
   sessionScopeKey,
   definitionUnavailableReason,
+  onDeleteCommitted,
 }: {
   definition: FrozenSpinsDefinition;
   objectId: string | null;
@@ -142,9 +148,12 @@ export function FrozenSpinsEditor({
   revision: number;
   sessionScopeKey?: string | null;
   definitionUnavailableReason?: string;
+  onDeleteCommitted?: () => void;
 }) {
   const kernel = useKernel();
   const [draft, setDraft] = useState(() => normalizeDefinition(initialDefinition));
+  const [deleted, setDeleted] = useState(false);
+  const deletedRef = useRef(false);
   const scene = useSceneResource();
   const referenceCatalog = useMemo(() => selectionReferenceCatalog(scene.data,
     scene.status === "ready" && !scene.error && !scene.refreshError), [scene.data, scene.status, scene.error, scene.refreshError]);
@@ -222,7 +231,7 @@ export function FrozenSpinsEditor({
   }
 
   async function applyDraft(): Promise<boolean> {
-    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue || !canonicalDirty) return false;
+    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue || !canonicalDirty) return false;
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
     const submittedDraft = draft;
     const operationSessionScopeKey = sessionScopeKey ?? null;
@@ -263,10 +272,14 @@ export function FrozenSpinsEditor({
                 expected_revision: baseRevision ?? revision,
           }),
       );
-      if (!mountedRef.current) return false;
       if (!isCurrentSession()) return false;
+      invalidateDefinitionResources(kernel, draft.id, response.revision);
+      kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
+      const syncWarning = await syncAuthoringScriptBestEffort(kernel.api, operationSessionScopeKey);
+      if (!mountedRef.current || !isCurrentSession()) return false;
       if (response.revision < acknowledgedRevisionRef.current) {
         setConflict(true);
+        setFeedback({ kind: "warning", message: `The definition was committed, but a newer scene revision is already loaded.${syncWarning ? ` Authoring script sync skipped: ${syncWarning}` : ""}` });
         return false;
       }
       const acknowledged = normalizeDefinition(response.definition);
@@ -286,13 +299,11 @@ export function FrozenSpinsEditor({
       setPreview(null);
       setActivationReceipt(null);
       setRuntimeApplication(response.runtime_application ?? null);
-      invalidateDefinitionResources(kernel, draft.id, response.revision);
-      kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
       setFeedback({
-        kind: response.runtime_application ? "warning" : "success",
-        message: response.runtime_application
+        kind: syncWarning || response.runtime_application ? "warning" : "success",
+        message: (response.runtime_application
           ? frozenSpinsRuntimeApplicationMessage(response.runtime_application)
-          : "Frozen Spins definition updated.",
+          : "Frozen Spins definition updated.") + (syncWarning ? ` Authoring script sync skipped: ${syncWarning}` : ""),
       });
       return true;
     } catch (error) {
@@ -307,7 +318,7 @@ export function FrozenSpinsEditor({
   }
 
   async function createPreview(): Promise<void> {
-    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue) return;
+    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue) return;
     const operationSessionScopeKey = sessionScopeKey ?? null;
     if (!operationSessionScopeKey) {
       setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
@@ -389,7 +400,7 @@ export function FrozenSpinsEditor({
 
   async function activatePreview(): Promise<void> {
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
-    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue) return;
+    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue) return;
     if (!preview || !activationCandidateReady) {
       setFeedback({
         kind: "warning",
@@ -441,10 +452,14 @@ export function FrozenSpinsEditor({
                 },
               ),
       );
-      if (!mountedRef.current) return;
       if (!isCurrentSession()) return;
+      invalidateDefinitionResources(kernel, draft.id, response.revision);
+      kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
+      const syncWarning = await syncAuthoringScriptBestEffort(kernel.api, operationSessionScopeKey);
+      if (!mountedRef.current || !isCurrentSession()) return;
       if (response.revision < acknowledgedRevisionRef.current) {
         setConflict(true);
+        setFeedback({ kind: "warning", message: `The preview was committed, but a newer scene revision is already loaded.${syncWarning ? ` Authoring script sync skipped: ${syncWarning}` : ""}` });
         return;
       }
       const acknowledged = normalizeDefinition(response.definition);
@@ -464,12 +479,10 @@ export function FrozenSpinsEditor({
       setPreview(null);
       setActivationReceipt(response);
       setRuntimeApplication(response.runtime_application);
-      invalidateDefinitionResources(kernel, draft.id, response.revision);
-      kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
       solverStatus.refetch();
       setFeedback({
         kind: "warning",
-        message: `${frozenSpinsRuntimeApplicationMessage(response.runtime_application)} The preview candidate was consumed. Current runtime confirmation is shown below.`,
+        message: `${frozenSpinsRuntimeApplicationMessage(response.runtime_application)} The preview candidate was consumed. Current runtime confirmation is shown below.${syncWarning ? ` Authoring script sync skipped: ${syncWarning}` : ""}`,
       });
     } catch (error) {
       if (!mountedRef.current) return;
@@ -482,7 +495,7 @@ export function FrozenSpinsEditor({
   }
 
   async function deleteDefinition(): Promise<void> {
-    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason) return;
+    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason) return;
     if (canonicalDirty) {
       setFeedback({ kind: "warning", message: "Apply or revert the definition edits before deleting the constraint." });
       return;
@@ -520,7 +533,13 @@ export function FrozenSpinsEditor({
                 expected_revision: baseRevision ?? revision,
               }),
       );
-      if (!mountedRef.current || !isCurrentSession()) return;
+      if (!isCurrentSession()) return;
+      if (mountedRef.current) {
+        deletedRef.current = true;
+        setDeleted(true);
+        numericDrafts.store.clear();
+        onDeleteCommitted?.();
+      }
       kernel.resources.invalidate(
         frozenSpinsCollectionResourceKey(),
         response.revision,
@@ -530,6 +549,12 @@ export function FrozenSpinsEditor({
         response.revision,
       );
       kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
+      const syncWarning = await syncAuthoringScriptBestEffort(kernel.api, operationSessionScopeKey);
+      if (!mountedRef.current || !isCurrentSession()) return;
+      if (syncWarning) {
+        setFeedback({ kind: "warning", message: `Frozen Spins deletion was acknowledged. Authoring script sync skipped: ${syncWarning}` });
+        return;
+      }
       kernel.selection.clear("inspector");
     } catch (error) {
       if (!mountedRef.current || !isCurrentSession()) return;
@@ -540,8 +565,29 @@ export function FrozenSpinsEditor({
     }
   }
 
+  async function retryDeletedScriptSync(): Promise<void> {
+    if (!deletedRef.current || applyInFlight.current || !sessionScopeKey) return;
+    const operationSessionScopeKey = sessionScopeKey;
+    const generation = kernel.authoringHistory?.getGeneration?.();
+    const isCurrentSession = () => kernel.commands.getSessionScopeKey() === operationSessionScopeKey
+      && (generation === undefined || kernel.authoringHistory?.getGeneration?.() === generation);
+    if (!isCurrentSession()) return;
+    applyInFlight.current = true;
+    setPendingField("delete");
+    setFeedback(null);
+    try {
+      const warning = await syncAuthoringScriptBestEffort(kernel.api, operationSessionScopeKey);
+      if (!mountedRef.current || !isCurrentSession()) return;
+      if (warning) setFeedback({ kind: "warning", message: `Frozen Spins deletion was acknowledged. Authoring script sync skipped: ${warning}` });
+      else kernel.selection.clear("inspector");
+    } finally {
+      applyInFlight.current = false;
+      if (mountedRef.current) setPendingField(null);
+    }
+  }
+
   async function showSolverQuantity(): Promise<void> {
-    if (applyInFlight.current || !canShowSolverQuantity) return;
+    if (deletedRef.current || applyInFlight.current || !canShowSolverQuantity) return;
     const operationSessionScopeKey = sessionScopeKey ?? null;
     const isCurrentSession = () => Boolean(operationSessionScopeKey) && kernel.commands.getSessionScopeKey() === operationSessionScopeKey;
     if (!isCurrentSession()) return;
@@ -577,7 +623,7 @@ export function FrozenSpinsEditor({
   const canonicalDirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   const dirty = canonicalDirty || numericDrafts.summary.pendingCount > 0 || conflict;
   const resetDraft = () => {
-    if (applyInFlight.current) return;
+    if (deletedRef.current || applyInFlight.current) return;
     numericDrafts.store.clear();
     setConflict(false);
     draftRef.current = baseline;
@@ -615,7 +661,7 @@ export function FrozenSpinsEditor({
           : resolveFrozenSpinsSolverBinding(activationReceipt, solverRuntime, draft.id);
   const canShowSolverQuantity = solverStatusCurrent && (solverBinding.state === "confirmed" || solverBinding.state === "mismatch");
   const acknowledgeAppliedDraft = useRegisterInspectorEditSession(
-    "staged",
+    deleted ? null : "staged",
     pendingField !== null,
     dirty,
     numericDrafts.summary.pendingCount === 0 && !conflict && !definitionUnavailableReason && !referenceIssue,
@@ -630,6 +676,20 @@ export function FrozenSpinsEditor({
   useLayoutEffect(() => {
     acknowledgeAppliedDraftRef.current = acknowledgeAppliedDraft;
   }, [acknowledgeAppliedDraft]);
+
+  if (deleted) {
+    return (
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" data-frozen-spins-inspector-id={draft.id}>
+        <FeedbackBanner kind={feedback?.kind ?? "warning"} message={feedback?.message ?? "Deletion acknowledged. Synchronizing the canonical Python script…"} />
+        <div className="fm-inspector-toolbar">
+          <Button disabled={toolbarPending} size="sm" type="button" onClick={() => void retryDeletedScriptSync()}>Retry script sync</Button>
+          <Button disabled={toolbarPending} size="sm" type="button" onClick={() => {
+            if (kernel.commands.getSessionScopeKey() === sessionScopeKey) kernel.selection.clear("inspector");
+          }}>Close</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <QuantityFieldDraftScope store={numericDrafts.store}>
@@ -648,6 +708,7 @@ export function FrozenSpinsEditor({
           <Button size="sm" type="button" onClick={scene.refetch}>Refresh selector catalog</Button>
         </div>
       ) : null}
+      <fieldset className="m-0 grid min-w-0 gap-fm-inspector-group border-0 p-0" disabled={pendingField === "delete"}>
       <InspectorGroup title="Frozen Spins" collapsible defaultOpen>
         <FieldRow label="Constraint ID" value={draft.id} />
         <FieldRow label="Schema" value={draft.schema_version} />
@@ -878,6 +939,7 @@ export function FrozenSpinsEditor({
           </Button>
         ) : null}
       </InspectorGroup>
+      </fieldset>
     </div>
     </QuantityFieldDraftScope>
   );

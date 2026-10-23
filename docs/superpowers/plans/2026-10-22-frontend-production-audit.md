@@ -1654,3 +1654,45 @@ Potrzebny cache/receipty zachowano. Wolne C: 36 234 625 024 B; różnicy nie
 przypisuje się temu etapowi. Otwarte: CI nowych 21 przypadków, dalsza walidacja
 geometrii/axis/transform i pól aktywacji/referencji, pozostałe aktywne rodziny,
 browser oraz managed live qualification i integracja PR #249.
+
+### Checkpoint: synchronizacja kanonicznego Python po Frozen Spins
+
+Potwierdzono lukę: historia mutacji zapisuje scenę, ale Apply, Commit preview
+i Delete nie wywoływały osobnego model.syncAuthoringScript. Po ACK używają
+teraz istniejącego syncAuthoringScriptBestEffort z przypiętą sesją. Sync może
+dokończyć się po unmount w tej samej sesji; lokalny UI, selekcja i przyjęcie
+ACK są chronione przez mounted/session/history generation. Błąd sync nie
+cofa zatwierdzonej mutacji i nie powoduje jej ponowienia; pozostaje widoczny
+jako osobne ostrzeżenie. Edycje podczas oczekiwania zachowują dotychczasowe
+trójstronne uzgadnianie i ochronę raw drafts.
+
+Po zatwierdzonym Delete edytor przechodzi do nieedytowalnego potwierdzenia.
+Błąd synchronizacji pozostawia Retry script sync i Close; retry wywołuje
+wyłącznie sync, nigdy ponowne Delete. Globalny edit session zostaje odłączony.
+Panel wyłącza lookup usuniętej definicji; zmiana właściciela selekcji resetuje
+ten stan. Test sprawdza przekazaną flagę enabled, nie rzeczywisty brak żądań
+sieciowych. To ograniczenie dowodu pozostaje jawne.
+
+Dodano 15 przypadków DOM dotyczących kolejności ACK/sync, błędów, retry,
+scope/history fences i powrotu A→B→A. Uaktualniono przypadek unmount:
+zatwierdzona mutacja wymaga sync w nadal bieżącej sesji, bez zmian lokalnego
+UI. Lokalnie nie kompilowano ani nie uruchamiano TS/Rust unit tests.
+Review tej zmiany: brak potwierdzonych P1/P2.
+
+Production typecheck, architecture hygiene i scoped lint PASS, stabilne
+źródła: verification/frontend-production-source-91c5a8baa6d0481e9148c1261dcd73d2.json.
+Zatwierdzona bramka API hygiene PASS:
+verification/frontend-api-hygiene-d31736ab445546448a5f83d3684c7fce.json.
+React Doctor: 0 errors/skips, 6 ostrzeżeń (related state, prop adjustments,
+mixed exports), bez suppression; stabilny receipt
+verification/frontend-production-source-262f7752be4942d9aab38c7aff769092.json.
+
+CI poprzedniego HEAD 71bdf3d66272aa936ca753648ce2b4da88dc09ff:
+control-room-contracts PASS, 9021 testów PASS/13 skip oraz production build
+i compute performance PASS; inspector-actions-browser-smoke PASS w run
+39901391022. Cały run nadal czeka na rust-contracts. Wyniki te obejmują
+21 regresji katalogu referencji, nie nowe 15 przypadków synchronizacji.
+
+Retencja: bez builda, instalacji, restartu, resetu ownera i usuwania danych;
+cache i receipty pozostają potrzebne. Nowe CI, szerszy audyt frontendowy,
+browser formularza oraz managed live qualification pozostają otwarte.
