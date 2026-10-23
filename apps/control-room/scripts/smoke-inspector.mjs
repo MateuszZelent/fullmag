@@ -19,6 +19,13 @@ const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
 // Per-path request budget of one page lifecycle: counts restart at every
 // load so the budget detects request storms, not the number of loads in a run.
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
+// Only objects selected by the declared navigation/opaque-ID fixture scenarios.
+const INSPECTOR_OBJECT_METRICS_PATHS = new Map(
+  ["film", "audit-copy-30", "audit-shrink-60", "film%"].map((objectId) => [
+    `/v2/sessions/current/simulation/objects/${encodeURIComponent(objectId)}/metrics`,
+    objectId,
+  ]),
+);
 const INSPECTOR_SCENE_TRACE_LIMIT = 20;
 const INSPECTOR_MODAL_FIELD_ID = "analysis:eigen:sample-0001:mode-0002";
 const INSPECTOR_MODAL_FIELD_ARRAY_PATH =
@@ -4722,7 +4729,8 @@ async function installInspectorFixtureApi(page, fixture) {
       status: "completed",
       total_steps: 1,
     });
-    if (path === "/v2/sessions/current/simulation/objects/film/metrics") return fulfillJson(route, inspectorObjectMetrics());
+    const metricsObjectId = INSPECTOR_OBJECT_METRICS_PATHS.get(path);
+    if (metricsObjectId !== undefined) return fulfillJson(route, inspectorObjectMetrics(metricsObjectId));
     if (/^\/v2\/sessions\/current\/analysis\/results\/runs\/[^/]+\/datasets$/.test(path)) {
       return fulfillJson(route, {
         items: [],
@@ -5023,7 +5031,7 @@ function inspectorPreparationResource() {
   };
 }
 
-function inspectorObjectMetrics() {
+function inspectorObjectMetrics(objectId) {
   return {
     energies: {
       anisotropy: null,
@@ -5035,7 +5043,7 @@ function inspectorObjectMetrics() {
     },
     has_solver_sample: false,
     magnetization_average: { mx: 1, my: 0, mz: 0 },
-    object_id: "film",
+    object_id: objectId,
     revision: 1,
     source: "fixture",
     step: 0,

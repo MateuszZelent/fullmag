@@ -18,8 +18,8 @@ import {
 const mocks = vi.hoisted(() => ({
   components: 3,
   discretization: "fem",
-  metaCalls: 0,
-  maskCalls: 0,
+  metaRequests: [] as Parameters<typeof import("@/kernel/resources/planarFieldResources").usePlanarFieldMetaResource>[],
+  maskRequests: [] as Parameters<typeof import("@/kernel/resources/planarFieldResources").usePlanarMaskResource>[],
   optimisticPlanar: null as VisualizationStateResource["planar"] | null,
   queuePatch: vi.fn(),
   queuePlanarTargetOverride: vi.fn(),
@@ -112,8 +112,8 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
 
 vi.mock("@/kernel/resources/planarFieldResources", () => ({
   planarFieldQueryFromMeta: () => ({ ok: true, query: { sample_token: "planar-sample-v2:sample" } }),
-  usePlanarFieldMetaResource: () => {
-    mocks.metaCalls += 1;
+  usePlanarFieldMetaResource: (...args: Parameters<typeof import("@/kernel/resources/planarFieldResources").usePlanarFieldMetaResource>) => {
+    mocks.metaRequests.push(structuredClone(args));
     return {
       data: {
       canonical_unit: "A/m",
@@ -138,8 +138,8 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
       status: "ready",
     };
   },
-  usePlanarMaskResource: () => {
-    mocks.maskCalls += 1;
+  usePlanarMaskResource: (...args: Parameters<typeof import("@/kernel/resources/planarFieldResources").usePlanarMaskResource>) => {
+    mocks.maskRequests.push(structuredClone(args));
     return {
       data: mocks.maskStatus === "ready" ? new ArrayBuffer(1) : null,
       error: null,
@@ -279,8 +279,8 @@ describe("PlanarVisualizationSection", () => {
     mocks.planar.view_scope = { kind: "monitor_target" };
     mocks.queuePlanarTargetOverride.mockClear();
     mocks.optimisticPlanar = null;
-    mocks.metaCalls = 0;
-    mocks.maskCalls = 0;
+    mocks.metaRequests = [];
+    mocks.maskRequests = [];
     mocks.targets.airbox = { scope: "airbox", scope_id: "airbox" };
     mocks.targets.objects = [
       { scope: "object", scope_id: "free-layer" },
@@ -514,11 +514,37 @@ describe("PlanarVisualizationSection", () => {
           className: rasterOpacity.getAttribute("class"),
           disabled: rasterOpacity.disabled,
         };
-        const initialMetaCalls = mocks.metaCalls;
-        const initialMaskCalls = mocks.maskCalls;
+        const expectedMetaRequest = [
+          "h_eff",
+          { kind: "monitor", monitorId: "plane-1" },
+          {
+            component: "magnitude",
+            resolution_x: 512,
+            resolution_y: 256,
+            scope_id: undefined,
+            scope_kind: "monitor_target",
+          },
+          { enabled: true },
+        ];
+        const expectedMaskRequest = [
+          "h_eff",
+          { kind: "monitor", monitorId: "plane-1" },
+          { sample_token: "planar-sample-v2:sample" },
+          { enabled: true },
+        ];
+        // These mocks record hook inputs, not HTTP requests. Presentation-only
+        // renders must preserve both the metadata query and canonical mask query.
+        const expectUnchangedResourceQueries = () => {
+          expect(mocks.metaRequests.length).toBeGreaterThan(0);
+          expect(mocks.maskRequests.length).toBeGreaterThan(0);
+          for (const request of mocks.metaRequests) expect(request).toEqual(expectedMetaRequest);
+          for (const request of mocks.maskRequests) expect(request).toEqual(expectedMaskRequest);
+        };
+        expectUnchangedResourceQueries();
 
         await act(async () => change(wireframeOpacity, "0.2"));
         expect(mocks.queuePlanarTargetOverride).not.toHaveBeenCalled();
+        expectUnchangedResourceQueries();
         await act(async () => wireframeOpacity.dispatchEvent(new TestEvent("keydown", { bubbles: true, key: "Enter" })));
         expect(mocks.queuePlanarTargetOverride).toHaveBeenCalledTimes(1);
         expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
@@ -526,6 +552,7 @@ describe("PlanarVisualizationSection", () => {
           target,
           wireframeStyle: { color, opacity: 0.2 },
         });
+        expectUnchangedResourceQueries();
 
         const acknowledgedOverrides = mocks.planar.target_overrides.map(
           (entry) =>
@@ -562,6 +589,7 @@ describe("PlanarVisualizationSection", () => {
         expect(
           findControl(container, "Raster opacity").getAttribute("class"),
         ).toBe(unrelatedState.className);
+        expectUnchangedResourceQueries();
 
         mocks.planar.target_overrides = acknowledgedOverrides;
         mocks.optimisticPlanar = null;
@@ -579,8 +607,7 @@ describe("PlanarVisualizationSection", () => {
         expect(panel.scrollTop).toBe(127);
         expect(mocks.queuePlanarTargetOverride).toHaveBeenCalledTimes(1);
         expect(mocks.queuePatch).not.toHaveBeenCalled();
-        expect(mocks.metaCalls).toBe(initialMetaCalls + 2);
-        expect(mocks.maskCalls).toBe(initialMaskCalls + 2);
+        expectUnchangedResourceQueries();
       } finally {
         const focusedControl = dom.document.activeElement;
         if (focusedControl) {
