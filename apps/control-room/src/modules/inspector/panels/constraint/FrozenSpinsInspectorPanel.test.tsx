@@ -1277,6 +1277,56 @@ describe("FrozenSpinsInspectorPanel", () => {
     }
   });
 
+  it("keeps a nonunit axis visible after Enter and blocks all authoring until it is corrected", async () => {
+    const h = await mountNumericEditor();
+    try {
+      await h.edit("Axis", "0, 0, 2"); await h.key("Axis", "Enter");
+      expect(findByAttribute(h.container, "aria-label", "Axis").value).toBe("0, 0, 2");
+      expect(h.container.textContent).toContain("must be normalized");
+      expect(h.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      await act(async () => { await h.store.getCurrentSession()?.apply(); });
+      await act(async () => findButton(h.container, "Preview mask").click());
+      expect(mocks.patch).not.toHaveBeenCalled(); expect(mocks.createPreview).not.toHaveBeenCalled();
+      await h.edit("Axis", "0, 0, 1"); await h.key("Axis", "Enter");
+      expect(h.store.getCurrentSession()).toMatchObject({ valid: true });
+      await act(async () => findButton(h.container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.selector.value.axis).toEqual([0, 0, 1]);
+    } finally { await h.dispose(); }
+  });
+
+  it("preserves a zero geometry radius until explicitly repaired instead of submitting it", async () => {
+    const definition = { ...definitionFixture(), selector: { kind: "inside_geometry" as const, frame: { kind: "world" as const }, sampling: { kind: "dof_point" as const },
+      boundary: { kind: "inclusive" as const, absolute_tolerance_m: 0, relative_tolerance: 0 },
+      geometry: { kind: "sphere" as const, center_m: [0, 0, 0], radius_m: 1 } } };
+    const h = await mountNumericEditor(definition);
+    try {
+      await h.edit("Radius (m)", "0"); await h.key("Radius (m)", "Enter");
+      expect(findByAttribute(h.container, "aria-label", "Radius (m)").value).toBe("0");
+      expect(h.container.textContent).toContain("radius_m must be finite and positive");
+      expect(h.store.getCurrentSession()?.valid).toBe(false);
+      await act(async () => { await h.store.getCurrentSession()?.apply(); });
+      expect(mocks.patch).not.toHaveBeenCalled();
+      await h.edit("Radius (m)", "1e-9"); await h.key("Radius (m)", "Enter");
+      await act(async () => findButton(h.container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.selector.geometry.radius_m).toBe(1e-9);
+    } finally { await h.dispose(); }
+  });
+
+  it("requires an explicit positive approximate tolerance and recovers without changing zero-valued operands", async () => {
+    const definition = numericDefinitionFixture();
+    const h = await mountNumericEditor({ ...definition, selector: { ...definition.selector, atol: 0, rtol: 0 } });
+    try {
+      await h.edit("Name", "Edited pinned edge");
+      expect(h.container.textContent).toContain("at least one positive tolerance");
+      expect(h.store.getCurrentSession()?.valid).toBe(false);
+      await act(async () => { await h.store.getCurrentSession()?.apply(); });
+      expect(mocks.patch).not.toHaveBeenCalled();
+      await h.edit("Relative tolerance", "1e-12"); await h.key("Relative tolerance", "Enter");
+      await act(async () => findButton(h.container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.selector).toMatchObject({ atol: 0, rtol: 1e-12, target: { kind: "constant", value: 0 } });
+    } finally { await h.dispose(); }
+  });
+
   it("does not offer or accept creating unsupported explicit field-asset references", async () => {
     const h = await mountNumericEditor(definitionFixture());
     try {
@@ -1984,7 +2034,7 @@ function numericDefinitionFixture() {
   return {
     ...definitionFixture(),
     selector: {
-      kind: "approx" as const, atol: 0, rtol: 0,
+      kind: "approx" as const, atol: 0, rtol: 1e-12,
       value: { kind: "magnetization_dot" as const, axis: [1, 0, 0] },
       target: { kind: "constant" as const, value: 0 },
     },

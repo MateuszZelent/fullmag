@@ -127,7 +127,7 @@ function SelectionExpressionEditor({
           <option value="ref">Named selection</option>
           <option value="and">All expressions (AND)</option>
           <option value="or">Any expression (OR)</option>
-          <option value="xor">Exactly one expression (XOR)</option>
+          <option value="xor">Odd number of expressions (XOR)</option>
           <option value="not">Negation (NOT)</option>
           <option value="inside_geometry">Inside geometry</option>
           <option value="compare">Scalar comparison</option>
@@ -245,6 +245,7 @@ function SelectionExpressionEditor({
             tolerance={expression.tolerance ?? { atol: 0, rtol: 0 }}
             onChange={(tolerance) => onChange({ ...expression, tolerance })}
           />
+          <p className="fm-help-text">Strict comparisons require zero tolerances. Use Approximate scalar equality for a tolerance.</p>
         </div>
       ) : null}
       {expression.kind === "approx" ? (

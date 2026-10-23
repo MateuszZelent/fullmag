@@ -39,6 +39,7 @@ import { QuantityFieldDraftScope, useQuantityFieldDraftScope } from "../../primi
 import { quantityFieldDraftBlockReason } from "../../primitives/quantityFieldDraftStore";
 import { SelectionExpressionBuilder } from "../selection/SelectionExpressionBuilder";
 import { selectionReferenceCatalog, selectionReferenceIssue } from "../selection/selectionReferenceCatalog";
+import { selectionValueIssue } from "../selection/selectionValueIssue";
 import { syncAuthoringScriptBestEffort } from "../ObjectMagneticTexturePanelViewModel";
 import { reconcileFrozenSpinsDraft } from "./frozenSpinsDraft";
 import { frozenSpinsStageCatalog, frozenSpinsStageIssue } from "./frozenSpinsStageCatalog";
@@ -159,6 +160,7 @@ export function FrozenSpinsEditor({
   const referenceCatalog = useMemo(() => selectionReferenceCatalog(scene.data,
     scene.status === "ready" && !scene.error && !scene.refreshError), [scene.data, scene.status, scene.error, scene.refreshError]);
   const referenceIssue = selectionReferenceIssue(draft.selector, referenceCatalog);
+  const selectorValueIssue = selectionValueIssue(draft.selector);
   const stageCatalog = useMemo(() => frozenSpinsStageCatalog(scene.data?.study,
     scene.status === "ready" && !scene.error && !scene.refreshError && scene.data !== null),
   [scene.data, scene.status, scene.error, scene.refreshError]);
@@ -169,7 +171,7 @@ export function FrozenSpinsEditor({
   const referencePolicyIssue = draft.reference?.kind === "explicit_field_asset"
     ? "Field-asset reference resolution is unavailable. The stored ID is preserved. Choose a supported reference policy before applying or previewing."
     : undefined;
-  const authoringIssue = referenceIssue ?? stageIssue ?? referencePolicyIssue;
+  const authoringIssue = referenceIssue ?? selectorValueIssue ?? stageIssue ?? referencePolicyIssue;
   const numericDrafts = useQuantityFieldDraftScope(
     JSON.stringify([sessionScopeKey, "frozen-spins", initialDefinition.id, objectId, regionId]),
   );
@@ -719,6 +721,7 @@ export function FrozenSpinsEditor({
       {conflictReason ? <FeedbackBanner kind="warning" message={conflictReason} /> : null}
       {definitionUnavailableReason ? <FeedbackBanner kind="warning" message={definitionUnavailableReason} /> : null}
       {referenceIssue ? <FeedbackBanner kind="warning" message={referenceIssue} /> : null}
+      {selectorValueIssue ? <FeedbackBanner kind="warning" message={selectorValueIssue} /> : null}
       {referenceIssue && !referenceCatalog.ready ? (
         <div>
           {scene.error || scene.refreshError ? <FeedbackBanner kind="error" message={errorMessage(scene.error ?? scene.refreshError)} /> : null}

@@ -1927,3 +1927,60 @@ Retencja: bez builda, instalacji, restartu i usuwania danych; zachowano potrzebn
 cache i receipty. Nadal otwarte reguły geometrii/axis/transform i tolerancji
 selektora, kolejne aktywne rodziny, browser nowych formularzy, managed live
 qualification, wymagane kontrole/review oraz integracja PR #249.
+
+### Checkpoint: lokalna walidacja wartości selektora i poprawny opis XOR
+
+Nowy selectionValueIssue sprawdza wartości edytowanego kanonicznego AST przed
+Apply/Preview/Commit: skończone składowe, dodatnie rozmiary box/sphere/cylinder/
+ellipsoid, unit axes i quaternion (tolerancja norm² 1e-12 zgodna z IR), niezerową
+signed scale, tolerancje boundary i approx, bounds oraz arność XOR. Ujemna
+odwracalna skala, zerowe współrzędne/stałe i dodatnie małe rozmiary pozostają
+legalne. Nie ma clampowania, normalizacji ani zmiany wartości użytkownika.
+Imported/future kinds nadal obsługuje osobny unsupported guard. To lokalne
+sprawdzenie wartości, nie kwalifikacja pełnego grafu, lane, runtime ani fizyki.
+
+Źródła reguł: crates/fullmag-ir/src/validation.rs validate_selection_scalar,
+validate_selection_geometry, validate_tolerances oraz XOR minimum dwóch
+wyrażeń. docs/specs/selection-expr-v1.md odróżnia authored lowering i canonical
+IR. Edytor operuje na tym drugim; wymaganie unit norm odpowiada bezpośredniej
+walidacji API. Nie dodano domyślnego fizycznego progu approx: przy atol=rtol=0
+użytkownik musi jawnie podać dodatnią tolerancję. Test fixture zmieniono z
+niedozwolonej pary 0/0 na atol=0, rtol=1e-12, zachowując regresję legalnego zera.
+
+Compare.tolerance w V1 musi być dokładnie 0/0 (certificate.rs kod
+selection_compare_tolerance_unsupported); UI ujawnia tę regułę i wskazuje
+Approximate scalar equality. Dotychczasowy opis XOR „Exactly one” był
+niezgodny z evaluate_expression w certificate.rs: parity ^= wynik każdej
+klauzuli, więc trzy prawdziwe klauzule również dają true. Poprawiono etykietę
+na „Odd number of expressions (XOR)” bez zmiany evaluatora.
+
+Wspólny authoring guard obejmuje lokalne/globalne/imperatywne Apply i Preview
+oraz Commit; banner wskazuje wadliwe pole/nested path. Enter zachowuje błędną
+wartość w edytowalnym drafcie, zamiast wysyłać ją lub automatycznie naprawiać.
+Poprawienie wartości odblokowuje działania. Dotychczasowa ochrona raw text,
+struktury, sesji i ACK pozostaje.
+
+Dodano 15 przypadków modelowych i 3 DOM: błędne/prawidłowe geometrie, nested
+predykaty, unit norm granice i overflow, legalne signed scales/zero/tiny size,
+approx/compare/boundary/XOR oraz guard i odzyskanie po poprawie osi, radius
+i tolerancji. Review źródłowe bez potwierdzonych P1/P2. Lokalnie bez kompilacji
+i wykonania TS/Rust unit tests; nowe 18 przypadków oczekuje na CI.
+
+Production typecheck, architecture hygiene i lint 5 plików PASS:
+verification/frontend-production-source-efa8cf02296149ff97c6a3a8afa55c4f.json.
+API hygiene PASS: verification/frontend-api-hygiene-1d9c61577ed24d02b3607da209975434.json.
+React Doctor 3 pliki produkcyjne, 0 errors/skips, 7 istniejących ostrzeżeń
+(related state, prop adjustment, mixed exports i chroniony raw guardem index
+key klauzul), bez suppression:
+verification/frontend-production-source-571ce8eef2cb4d689fbd280310fb77f5.json.
+Końcowe źródła stabilne. Brak nowego browser/runtime/science proof.
+
+CI wcześniejszego 4df67c308ae1c33d16346cf8a38cf16a16d9b064 przy odczycie:
+browser fixture 120257567201 PASS, Control Room 120257567293 nadal wykonywał
+testy w bootstrap 39905782031. Dalsza kwalifikacja nie jest zastąpiona tym
+przeglądem. Osobno trwa read-only diagnoza bezpiecznego managed recovery
+wyłącznie własnej grupy zadania; nie wykonano restartu ani owner resetu.
+
+Retencja: bez builda, instalacji, restartu i usuwania danych; cache/receipty
+zachowane. Pozostałe rodziny i funkcjonalno-wizualny odbiór przeglądarkowy,
+managed live qualification oraz pełna integracja PR #249 nadal otwarte.
