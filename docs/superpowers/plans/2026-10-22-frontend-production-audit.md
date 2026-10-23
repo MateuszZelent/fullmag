@@ -1984,3 +1984,31 @@ wyłącznie własnej grupy zadania; nie wykonano restartu ani owner resetu.
 Retencja: bez builda, instalacji, restartu i usuwania danych; cache/receipty
 zachowane. Pozostałe rodziny i funkcjonalno-wizualny odbiór przeglądarkowy,
 managed live qualification oraz pełna integracja PR #249 nadal otwarte.
+
+### Checkpoint: jawna mapa pokrycia wszystkich zarejestrowanych tras Inspectora
+
+Dodano [osobną mapę tras i odbioru](2026-10-23-frontend-inspector-coverage.md):
+246 contributions, 247 unikalnych selection kinds i 48 plików wejściowych,
+z kompletną listą route/kind/component/source. Analiza AST TypeScript w już
+działającym frontendzie własnej grupy rozwinęła także dynamiczne frequency
+domain contributions i named panels; nie wykonywała modułu aplikacji ani
+kompilacji testów. SHA256 katalogu:
+af48c36662d04c4e5a8faa85e80ebca95a698f88964c7f5dd7dbed20f9632aac.
+
+Mapa obejmuje rejestrację, a nie potwierdzenie osiągalności każdego route
+z bieżącego Explorera. Wrappery wymagają kontroli właściwych konsumentów,
+zasobów i mutacji. Częściowe dowody są oddzielone od pełnego odbioru; brak
+osobnego wpisu odbioru nie neguje wcześniejszego szerokiego przeglądu źródeł.
+Nie zamyka się celu liczbą tras ani liczbą zielonych testów.
+
+Kontrola Markdown/linków i zgodności źródła PASS: 246 unikalnych route IDs,
+247 unikalnych kinds, 48 grup źródłowych sumujących się do 246, 295 istniejących
+lokalnych linków oraz zgodny SHA katalogu. Bez nowych testów powtarzających
+dokument i bez ponawiania niezmienionych zielonych bramek aplikacji.
+
+Następne źródła według ryzyka: SpinAuthoringInspector (Spin Torque i Oersted),
+RuntimeExplorerInspectorPanels oraz postprocessing definitions/exports.
+To priorytety dalszego przeglądu, nie domniemane błędy bez odczytu. Równolegle
+trwa ograniczona diagnoza własnego managed recovery; runtime nie został
+zrestartowany, owner nie został zresetowany. Retencja bez zmian, cache i
+receipty zachowane; pełny cel, live/browser i integracja pozostają otwarte.
