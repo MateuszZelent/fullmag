@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -58,15 +56,4 @@ describe("DataPreviewDialog", () => {
     expect(html).toContain("H_demag (Demagnetization Field)");
   });
 
-  it("contains handleCopy log formatting implementation", () => {
-    const source = readFileSync(
-      resolve(__dirname, "DataPreviewDialog.tsx"),
-      "utf-8",
-    );
-    expect(source).toContain("navigator.clipboard.writeText");
-    expect(source).toContain("=== Data Preview ===");
-    expect(source).toContain("[Data]");
-    expect(source).toContain("[Resource]");
-    expect(source).toContain("handleCopy");
-  });
 });

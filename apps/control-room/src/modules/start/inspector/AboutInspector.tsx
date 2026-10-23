@@ -10,9 +10,10 @@ import {
   Globe,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
+import { useClipboardCopy } from "@/shared/browser/useClipboardCopy";
 import { Button } from "@/shared/ui/Button";
 
 import {
@@ -34,10 +35,16 @@ export interface AboutInspectorProps {
   readonly index?: RecentIndexState;
 }
 
+const subscribeNever = () => () => undefined;
+const serverInvoke = () => null;
+
 export function AboutInspector({ compute, index }: AboutInspectorProps) {
+  const invoke = useSyncExternalStore(subscribeNever, tauriInvoke, serverInvoke);
   const [build, setBuild] = useState<BuildInfo | null>(null);
-  const [copiedBibtex, setCopiedBibtex] = useState(false);
-  const [copiedDiag, setCopiedDiag] = useState(false);
+  const bibtexCopy = useClipboardCopy(FULLMAG_BIBTEX);
+  const diagnosticsCopy = useClipboardCopy(
+    JSON.stringify([build, index ?? { kind: "unavailable" }, compute]),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -50,10 +57,7 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
   }, []);
 
   const handleCopyBibtex = () => {
-    void navigator.clipboard?.writeText(FULLMAG_BIBTEX).then(() => {
-      setCopiedBibtex(true);
-      setTimeout(() => setCopiedBibtex(false), 1800);
-    });
+    void bibtexCopy.copy(FULLMAG_BIBTEX);
   };
 
   const handleCopyDiagnostics = () => {
@@ -66,10 +70,7 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
       index: index ?? { kind: "unavailable" },
       compute,
     });
-    void navigator.clipboard?.writeText(text).then(() => {
-      setCopiedDiag(true);
-      setTimeout(() => setCopiedDiag(false), 1800);
-    });
+    void diagnosticsCopy.copy(text);
   };
 
   const gpu = compute?.gpus?.[0];
@@ -87,7 +88,9 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
               FullMag
             </h2>
             <div className="fm-about-inspector__badges">
-              <span className="fm-start-badge">v0.1.0</span>
+              <span className="fm-start-badge">
+                {build ? `v${build.version}` : "Version unavailable"}
+              </span>
               <span className="fm-start-badge fm-start-badge--fem">Hybrid</span>
             </div>
           </div>
@@ -97,13 +100,33 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
         <div className="fm-about-inspector__card">
           <h3 className="fm-about-inspector__card-title">Quick Actions</h3>
           <div className="fm-about-inspector__btn-group">
-            <Button onClick={handleCopyBibtex} size="sm" type="button" variant="secondary">
-              {copiedBibtex ? <Check size={14} className="fm-about-icon--success" /> : <Copy size={14} />}
-              {copiedBibtex ? "BibTeX Copied!" : "Copy BibTeX"}
+            <Button
+              disabled={bibtexCopy.status === "pending"}
+              onClick={handleCopyBibtex}
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              {bibtexCopy.status === "success" ? <Check size={14} className="fm-about-icon--success" /> : <Copy size={14} />}
+              {bibtexCopy.status === "pending"
+                ? "Copying BibTeX…"
+                : bibtexCopy.status === "success"
+                  ? "BibTeX Copied!"
+                  : "Copy BibTeX"}
             </Button>
-            <Button onClick={handleCopyDiagnostics} size="sm" type="button" variant="secondary">
-              {copiedDiag ? <Check size={14} className="fm-about-icon--success" /> : <Cpu size={14} />}
-              {copiedDiag ? "Diagnostics Copied!" : "Copy Diagnostics"}
+            <Button
+              disabled={diagnosticsCopy.status === "pending"}
+              onClick={handleCopyDiagnostics}
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              {diagnosticsCopy.status === "success" ? <Check size={14} className="fm-about-icon--success" /> : <Cpu size={14} />}
+              {diagnosticsCopy.status === "pending"
+                ? "Copying Diagnostics…"
+                : diagnosticsCopy.status === "success"
+                  ? "Diagnostics Copied!"
+                  : "Copy Diagnostics"}
             </Button>
             <Button
               onClick={() => startScreenStore.setSection("docs")}
@@ -115,6 +138,16 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
               Open Bundled Docs
             </Button>
           </div>
+          {bibtexCopy.error ? (
+            <p className="fm-start-inspector__note" role="alert">
+              {bibtexCopy.error}
+            </p>
+          ) : null}
+          {diagnosticsCopy.error ? (
+            <p className="fm-start-inspector__note" role="alert">
+              {diagnosticsCopy.error}
+            </p>
+          ) : null}
         </div>
 
         {/* Compute & Runtime Probe */}
@@ -122,7 +155,7 @@ export function AboutInspector({ compute, index }: AboutInspectorProps) {
           <h3 className="fm-about-inspector__card-title">Runtime Environment</h3>
           <dl className="fm-about-spec-row fm-about-flush">
             <dt>Platform Host</dt>
-            <dd>{tauriInvoke() ? "Desktop (Tauri)" : "Web Browser"}</dd>
+            <dd>{invoke ? "Desktop (Tauri)" : "Web Browser"}</dd>
           </dl>
           <dl className="fm-about-spec-row fm-about-flush">
             <dt>CPU Threads</dt>

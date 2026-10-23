@@ -15,9 +15,10 @@ import {
   Network,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { tauriInvoke } from "@/kernel/persistence/ProjectDocumentController";
+import { useClipboardCopy } from "@/shared/browser/useClipboardCopy";
 import { Button } from "@/shared/ui/Button";
 
 import {
@@ -62,12 +63,16 @@ const TAB_ITEMS: readonly { readonly id: AboutTabId; readonly label: string }[] 
   { id: "toolchain", label: "Toolchain & System" },
 ];
 
+const subscribeNever = () => () => undefined;
+const serverInvoke = () => null;
+
 export function AboutSection({ compute, index }: AboutSectionProps) {
+  const invoke = useSyncExternalStore(subscribeNever, tauriInvoke, serverInvoke);
   const [build, setBuild] = useState<BuildInfo | null>(null);
   const [activeTab, setActiveTab] = useState<AboutTabId>("all");
-  const [copiedBibtex, setCopiedBibtex] = useState(false);
-  const [copiedCitation, setCopiedCitation] = useState(false);
-  const [copiedDiag, setCopiedDiag] = useState(false);
+  const bibtexCopy = useClipboardCopy(FULLMAG_BIBTEX);
+  const citationCopy = useClipboardCopy(FULLMAG_CITATION);
+  const diagnosticsCopy = useClipboardCopy(JSON.stringify([build, index, compute]));
 
   useEffect(() => {
     let cancelled = false;
@@ -80,17 +85,11 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
   }, []);
 
   const handleCopyBibtex = () => {
-    void navigator.clipboard?.writeText(FULLMAG_BIBTEX).then(() => {
-      setCopiedBibtex(true);
-      setTimeout(() => setCopiedBibtex(false), 1800);
-    });
+    void bibtexCopy.copy(FULLMAG_BIBTEX);
   };
 
   const handleCopyCitation = () => {
-    void navigator.clipboard?.writeText(FULLMAG_CITATION).then(() => {
-      setCopiedCitation(true);
-      setTimeout(() => setCopiedCitation(false), 1800);
-    });
+    void citationCopy.copy(FULLMAG_CITATION);
   };
 
   const handleCopyDiagnostics = () => {
@@ -103,10 +102,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
       index,
       compute,
     });
-    void navigator.clipboard?.writeText(text).then(() => {
-      setCopiedDiag(true);
-      setTimeout(() => setCopiedDiag(false), 1800);
-    });
+    void diagnosticsCopy.copy(text);
   };
 
   const showAll = activeTab === "all";
@@ -138,7 +134,9 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
           </div>
           <div className="fm-about-hero__header-text">
             <div className="fm-about-hero__badges">
-              <span className="fm-start-badge">FullMag v0.1.0</span>
+              <span className="fm-start-badge">
+                {build ? `FullMag v${build.version}` : "FullMag version unavailable"}
+              </span>
               <span className="fm-start-badge fm-start-badge--fem">Hybrid Solvers</span>
               <span className="fm-start-pill fm-start-pill--ready">
                 <span className="fm-start-pill__dot" />
@@ -181,11 +179,26 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
               Online Portal
             </a>
           </Button>
-          <Button onClick={handleCopyBibtex} size="sm" type="button" variant="secondary">
-            {copiedBibtex ? <Check size={14} className="fm-about-icon--success" /> : <Copy size={14} />}
-            {copiedBibtex ? "BibTeX Copied!" : "Copy BibTeX"}
+          <Button
+            disabled={bibtexCopy.status === "pending"}
+            onClick={handleCopyBibtex}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            {bibtexCopy.status === "success" ? <Check size={14} className="fm-about-icon--success" /> : <Copy size={14} />}
+            {bibtexCopy.status === "pending"
+              ? "Copying BibTeX…"
+              : bibtexCopy.status === "success"
+                ? "BibTeX Copied!"
+                : "Copy BibTeX"}
           </Button>
         </div>
+        {bibtexCopy.error ? (
+          <p className="fm-start-inspector__note" role="alert">
+            {bibtexCopy.error}
+          </p>
+        ) : null}
       </header>
 
       {/* ── Key Architectural Pillars ── */}
@@ -432,16 +445,41 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
                   software (fullmag_2026) · BibTeX
                 </span>
                 <div className="fm-about-row">
-                  <Button onClick={handleCopyCitation} size="sm" type="button" variant="ghost">
-                    {copiedCitation ? <Check size={12} className="fm-about-icon--success" /> : <Copy size={12} />}
-                    {copiedCitation ? "Copied" : "Copy Plain Text"}
+                  <Button
+                    disabled={citationCopy.status === "pending"}
+                    onClick={handleCopyCitation}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >
+                    {citationCopy.status === "success" ? <Check size={12} className="fm-about-icon--success" /> : <Copy size={12} />}
+                    {citationCopy.status === "pending"
+                      ? "Copying Plain Text…"
+                      : citationCopy.status === "success"
+                        ? "Copied"
+                        : "Copy Plain Text"}
                   </Button>
-                  <Button onClick={handleCopyBibtex} size="sm" type="button" variant="secondary">
-                    {copiedBibtex ? <Check size={12} className="fm-about-icon--success" /> : <Copy size={12} />}
-                    {copiedBibtex ? "Copied" : "Copy BibTeX"}
+                  <Button
+                    disabled={bibtexCopy.status === "pending"}
+                    onClick={handleCopyBibtex}
+                    size="sm"
+                    type="button"
+                    variant="secondary"
+                  >
+                    {bibtexCopy.status === "success" ? <Check size={12} className="fm-about-icon--success" /> : <Copy size={12} />}
+                    {bibtexCopy.status === "pending"
+                      ? "Copying BibTeX…"
+                      : bibtexCopy.status === "success"
+                        ? "Copied"
+                        : "Copy BibTeX"}
                   </Button>
                 </div>
               </div>
+              {citationCopy.error ? (
+                <p className="fm-start-inspector__note" role="alert">
+                  {citationCopy.error}
+                </p>
+              ) : null}
               <pre className="fm-about-bibtex-code">{FULLMAG_BIBTEX}</pre>
             </div>
           </div>
@@ -473,11 +511,26 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
                 <h3 className="fm-about-subheading">
                   Host System Diagnostics
                 </h3>
-                <Button onClick={handleCopyDiagnostics} size="sm" type="button" variant="secondary">
-                  {copiedDiag ? <Check size={14} className="fm-about-icon--success" /> : <Cpu size={14} />}
-                  {copiedDiag ? "Copied Diagnostics" : "Copy Diagnostics"}
+                <Button
+                  disabled={diagnosticsCopy.status === "pending"}
+                  onClick={handleCopyDiagnostics}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  {diagnosticsCopy.status === "success" ? <Check size={14} className="fm-about-icon--success" /> : <Cpu size={14} />}
+                  {diagnosticsCopy.status === "pending"
+                    ? "Copying Diagnostics…"
+                    : diagnosticsCopy.status === "success"
+                      ? "Copied Diagnostics"
+                      : "Copy Diagnostics"}
                 </Button>
               </div>
+              {diagnosticsCopy.error ? (
+                <p className="fm-start-inspector__note" role="alert">
+                  {diagnosticsCopy.error}
+                </p>
+              ) : null}
 
               {build ? (
                 <dl className="fm-start-kv__grid">
@@ -496,7 +549,7 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
                 </dl>
               ) : (
                 <p className="fm-start-inspector__note fm-about-flush">
-                  Host build details are reported by the desktop runtime. Running in {tauriInvoke() ? "desktop mode" : "browser environment"}.
+                  Host build details are reported by the desktop runtime. Running in {invoke ? "desktop mode" : "browser environment"}.
                 </p>
               )}
             </div>
