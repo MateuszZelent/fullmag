@@ -926,6 +926,20 @@ async function verifyLiveChartsInspector(page) {
       throw new Error(`Live Charts Inspector does not expose the ${SERIES_IDS[index]} visibility control.`);
     }
   });
+  for (const quantity of SERIES_IDS) {
+    const label = `Show ${quantity}`;
+    const signal = inspector.getByRole("checkbox", { name: label, exact: true });
+    const initial = await signal.isChecked();
+    await signal.focus();
+    for (const checked of [!initial, initial]) {
+      await page.keyboard.press("Space");
+      await page.waitForFunction(({ label, checked }) => Array.from(document.querySelectorAll('.fm-inspector input[type="checkbox"]'))
+        .some((input) => input.getAttribute("aria-label") === label && input.checked === checked), { label, checked }, { timeout: timeoutMs });
+      if (!await signal.evaluate((input) => input === document.activeElement)) {
+        throw new Error(`Live Charts Inspector lost keyboard focus after toggling ${quantity}.`);
+      }
+    }
+  }
 }
 
 async function verifyOneVisibleCanvas(page) {
