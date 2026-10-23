@@ -166,7 +166,10 @@ export function FrozenSpinsEditor({
   const selectedStageIds = useMemo(() => new Set(draft.activation?.kind === "stage_ids" ? draft.activation.stage_ids : []), [draft.activation]);
   const stageIssue = draft.activation?.kind === "stage_ids"
     ? frozenSpinsStageIssue(draft.activation.stage_ids, stageCatalog) : undefined;
-  const authoringIssue = referenceIssue ?? stageIssue;
+  const referencePolicyIssue = draft.reference?.kind === "explicit_field_asset"
+    ? "Field-asset reference resolution is unavailable. The stored ID is preserved. Choose a supported reference policy before applying or previewing."
+    : undefined;
+  const authoringIssue = referenceIssue ?? stageIssue ?? referencePolicyIssue;
   const numericDrafts = useQuantityFieldDraftScope(
     JSON.stringify([sessionScopeKey, "frozen-spins", initialDefinition.id, objectId, regionId]),
   );
@@ -866,29 +869,18 @@ export function FrozenSpinsEditor({
           options={[
             ["capture_current_at_activation", "Capture current at activation"],
             ["initial_state", "Initial state"],
-            ["explicit_field_asset", "Explicit field asset"],
+            ...(reference.kind === "explicit_field_asset" ? [["explicit_field_asset", "Explicit field asset (unsupported; preserved)"]] as const : []),
           ]}
-          onChange={(kind) =>
-            setDraft((current) => ({
-              ...current,
-              reference:
-                kind === "explicit_field_asset"
-                  ? { kind, asset_id: "" }
-                  : ({ kind } as FrozenSpinsReferencePolicy),
-            }))
-          }
+          onChange={(kind) => {
+            if (kind !== "capture_current_at_activation" && kind !== "initial_state") return;
+            setDraft((current) => ({ ...current, reference: { kind } as FrozenSpinsReferencePolicy }));
+          }}
         />
         {reference.kind === "explicit_field_asset" ? (
-          <TextInput
-            label="Field asset ID"
-            value={reference.asset_id}
-            onChange={(asset_id) =>
-              setDraft((current) => ({
-                ...current,
-                reference: { kind: "explicit_field_asset", asset_id },
-              }))
-            }
-          />
+          <div>
+            <FieldRow label="Field asset ID (preserved)" value={reference.asset_id || "Empty authored ID"} mono />
+            <FeedbackBanner kind="warning" message={referencePolicyIssue!} />
+          </div>
         ) : null}
       </InspectorGroup>
 

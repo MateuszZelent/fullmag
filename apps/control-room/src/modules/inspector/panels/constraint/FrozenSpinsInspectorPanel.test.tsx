@@ -1277,6 +1277,52 @@ describe("FrozenSpinsInspectorPanel", () => {
     }
   });
 
+  it("does not offer or accept creating unsupported explicit field-asset references", async () => {
+    const h = await mountNumericEditor(definitionFixture());
+    try {
+      const select = findByAttribute(h.container, "aria-label", "Reference");
+      expect(findElements(select, (element) => element.getAttribute("value") === "explicit_field_asset")).toHaveLength(0);
+      await h.change("Reference", "explicit_field_asset");
+      expect(findByAttribute(h.container, "aria-label", "Reference").value).toBe("capture_current_at_activation");
+      expect(findElements(h.container, (element) => element.getAttribute("aria-label") === "Field asset ID")).toHaveLength(0);
+    } finally { await h.dispose(); }
+  });
+
+  it.each(["asset,opaque/%25", ""])("preserves unsupported authored field asset %j and guards Apply/Preview until an explicit supported choice", async (assetId) => {
+    const definition = { ...definitionFixture(), reference: { kind: "explicit_field_asset" as const, asset_id: assetId } };
+    const h = await mountNumericEditor(definition);
+    try {
+      expect(h.container.textContent).toContain("Field-asset reference resolution is unavailable");
+      if (assetId) expect(h.container.textContent).toContain(assetId);
+      await h.edit("Name", "Edited pinned edge");
+      expect(h.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      await act(async () => { await h.store.getCurrentSession()?.apply(); });
+      for (const action of ["Apply", "Preview mask"]) {
+        expect(findButton(h.container, action).disabled).toBe(true);
+        await act(async () => findButton(h.container, action).click());
+      }
+      expect(mocks.patch).not.toHaveBeenCalled(); expect(mocks.createPreview).not.toHaveBeenCalled();
+      await h.change("Reference", "initial_state");
+      expect(findButton(h.container, "Apply").disabled).toBe(false);
+      await act(async () => findButton(h.container, "Apply").click());
+      expect(mocks.patch).toHaveBeenCalledWith("pin-edge", expect.objectContaining({ definition: expect.objectContaining({
+        reference: { kind: "initial_state" },
+      }) }), expect.anything());
+    } finally { await h.dispose(); }
+  });
+
+  it("reverts an explicit policy change without rewriting its preserved field asset ID", async () => {
+    const definition = { ...definitionFixture(), reference: { kind: "explicit_field_asset" as const, asset_id: "asset,opaque/%25" } };
+    const h = await mountNumericEditor(definition);
+    try {
+      await h.change("Reference", "capture_current_at_activation");
+      await act(async () => findButton(h.container, "Revert").click());
+      expect(findByAttribute(h.container, "aria-label", "Reference").value).toBe("explicit_field_asset");
+      expect(h.container.textContent).toContain("asset,opaque/%25");
+      expect(mocks.patch).not.toHaveBeenCalled(); expect(mocks.createPreview).not.toHaveBeenCalled();
+    } finally { await h.dispose(); }
+  });
+
   it("selects exact canonical stage IDs including groups and previews the explicit first stage", async () => {
     mocks.sceneCatalog = { objects: [{ id: "film" }], study: { study_pipeline: { nodes: [{
       id: "group,alpha", label: "Shared label", node_kind: "group", children: [{

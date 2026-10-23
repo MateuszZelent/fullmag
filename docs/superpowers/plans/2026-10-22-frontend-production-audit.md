@@ -1844,3 +1844,57 @@ audytu: Topological Charge; bez wykonanego review nie przypisuje się jej błęd
 
 Retencja: brak builda, instalacji, restartu, resetu ownera i usuwania danych.
 Cache/receipty potrzebne i zachowane; szerszy cel, live i integracja otwarte.
+
+### Checkpoint: nieobsługiwana referencja Frozen Spins field asset
+
+Audyt źródeł wykazał, że obecne API zapisuje niepusty explicit_field_asset ID,
+ale nie rozwiązuje jego istnienia/typu. Planner FDM (fullmag-plan/src/fdm.rs:
+1256–1262,1464–1471) i FEM (fem.rs:583–590) przekazują initial_magnetization
+do referencji ograniczeń. Certificate compiler sprawdza otrzymane dane,
+nie wiąże ich z asset_id. Kontrakt frozen-spins-v1.md:163–168 wymaga m.in.
+domain/components/unit/norm/topology. Preview syntetyzuje capture-current,
+a activation odrzuca non-capture-current. To luka implementacyjna backendu,
+nie brak kosmetycznej listy w UI; frontend nie może jej kwalifikować.
+
+Magnetization assets to authored initial textures, FieldCatalog to metadane
+wielkości, a antenna solution to vector_basis H_ant_basis. Nie wykorzystano
+ich jako niezgodnego zastępstwa dla immutable Frozen field assets. Pełna
+obsługa wymaga kanonicznego typed catalog/resolvera i planner/runtime bridge;
+nie została zaimplementowana w tym zadaniu frontendowym i pozostaje otwarta.
+
+UI nie oferuje już tworzenia explicit_field_asset przez dowolny tekst.
+Handler dopuszcza jawny wybór capture-current albo initial-state. Istniejąca
+referencja jest widoczna jako unsupported/preserved, ID readonly i bez zmian;
+wspólny guard blokuje lokalne/globalne/imperatywne Apply/Preview/Commit, dopóki
+użytkownik nie wybierze obsługiwanej polityki. Revert przywraca oryginalną
+referencję. Usunięcie czystej definicji nadal jest możliwe. Nie zmieniono
+backendu ani fizyki i nie zadeklarowano obsługi assetów.
+
+Cztery regresje DOM: brak opcji i guard programmatic change, authored opaque
+oraz pusty ID, brak requestów przy unsupported, jawny wybór initial i exact
+payload, Revert. Review bez potwierdzonych P1/P2. Lokalnie bez kompilacji
+i uruchamiania TS/Rust unit tests; wykonanie nowych przypadków wymaga CI.
+
+Production typecheck/architecture/scoped lint PASS, stabilne źródła:
+verification/frontend-production-source-158040bf2f474050bb817451d170b4d4.json.
+API hygiene PASS: verification/frontend-api-hygiene-c1b921b37f3e4e5ebbc0da0d3c3a2835.json.
+React Doctor 0 errors/skips i 6 istniejących ostrzeżeń, bez suppression:
+verification/frontend-production-source-3eadabccb18141aea7e2d85252cfbc0a.json.
+
+CI 6172b4c18697d968d97efefacfc5b8d355d0db47: Control Room job 120252247798
+PASS (9055 testów/13 skip, build, compute performance i osobne 3 testy), browser
+job 120252247958 PASS. Potwierdza 13 przypadków stage catalog, nie nowy guard
+reference policy. Spin Interface e8f677b5c143215bfb2cb0b5f38276564a886402
+w run 39904946942 nadal wykonywał Control Room i browser przy odczycie.
+
+Retencja: bez builda, instalacji, restartu, resetu ownera i usuwania danych;
+cache/receipty zachowane. Dalsze reguły selektora, aktywne rodziny frontendowe,
+kwalifikacja browser/live i integracja pozostają otwarte.
+
+Pierwszy odczyt aktywnego TopologicalChargeExtensionPanel i jego modelu
+potwierdził pomijanie resource.error/refreshError: model otrzymuje tylko status
+i retained data; resolveBanner sprawdza wyłącznie payload warnings/status.
+Po nieudanym refresh mogą pozostać Q/trust/status=ready starego payloadu,
+z Fetch state jako jedyną informacją o błędzie i bez jego treści. To kolejny
+kandydat poprawki feedbacku i jawnej aktualności wyników, bez zmiany obliczeń.
+Nie wykonano jeszcze regresji ani browser proof tego zachowania.
