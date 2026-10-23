@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chartDisplayUnitOptions, resolveChartUnit } from "./chartUnits";
+import { chartDisplayUnitOptions, chartUnitsCompatible, resolveChartUnit } from "./chartUnits";
 
 describe("resolveChartUnit", () => {
   it("resolves canonical dimensionless units without an SI display prefix", () => {
@@ -30,6 +30,14 @@ describe("resolveChartUnit", () => {
       scaleToCanonical: 1,
       unit: "rad",
     });
+  });
+
+  it("keeps magnetic induction units compatible with each other and separate from field strength", () => {
+    expect(resolveChartUnit("T")).toMatchObject({ dimension: "magnetic_induction", scaleToCanonical: 1 });
+    expect(resolveChartUnit("mT")).toMatchObject({ canonicalUnit: "T", scaleToCanonical: 1e-3 });
+    expect(chartDisplayUnitOptions("T")).toEqual(expect.arrayContaining(["T", "mT"]));
+    expect(chartUnitsCompatible("T", "mT")).toBe(true);
+    expect(chartUnitsCompatible("T", "A/m")).toBe(false);
   });
 
   it("offers only compatible display units to chart controls", () => {

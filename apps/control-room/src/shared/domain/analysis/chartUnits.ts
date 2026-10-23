@@ -5,6 +5,7 @@ export type ChartDimension =
   | "energy_density"
   | "field"
   | "frequency"
+  | "magnetic_induction"
   | "phase"
   | "time"
   | "wavevector";
@@ -81,6 +82,8 @@ const UNIT_DEFINITIONS: Readonly<Record<string, Omit<ChartUnit, "unit">>> =
       scaleToCanonical: 1,
     },
     "mA/m": { canonicalUnit: "A/m", dimension: "field", scaleToCanonical: 1e-3 },
+    "T": { canonicalUnit: "T", dimension: "magnetic_induction", scaleToCanonical: 1 },
+    "mT": { canonicalUnit: "T", dimension: "magnetic_induction", scaleToCanonical: 1e-3 },
     "A/m": {
       canonicalUnit: "A/m",
       dimension: "field",
