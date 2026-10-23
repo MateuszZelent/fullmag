@@ -824,3 +824,148 @@ do usunięcia w tym etapie. Pomiar C: 63 842 295 808 B wolnego miejsca.
 Stale backend owner nie został zresetowany; managed runtime, właściwy
 Object 2D/3D/monitor, pełny browser odbiór i pozostały audyt nadal otwarte.
 PR #249 pozostaje draft; nie wykonano merge ani cleanupu worktree.
+
+### Jednostki wykresów i podsumowania Frequency Response / FFT
+
+Nierozpoznana jednostka w chartScalePolicy zachowuje teraz factor=1 i swój
+literalny tekst. Zarejestrowane jednostki nadal się skalują, w tym rad→mrad.
+Resolver jednostek wymaga własnego wpisu rejestru; `constructor`, `toString`,
+`hasOwnProperty` i `__proto__` nie są jednostkami przez dziedziczenie Object.
+Regresje formattera/rejestru i renderu AnalysisFrequencySurface wymagają
+niezmienionej amplitudy 0.06 z unit `not published` oraz fazy 300 mrad.
+Wspólni konsumenci: frequency/table surfaces, chartRenderer, PointsTableDialog,
+chartExport i live charts. Nie dopisano jednostek obserwabli do fixture.
+Commit `b821bbfde4e3ed62a52e8c28226b90b3d8436eab`.
+
+Kolejny przegląd znalazł Until przez Number także w FFT Response. Widok używa
+teraz kanonicznego parsera czasu, a regresja czterech rodzin sprawdza 2 ps,
+pusty tekst, zero i tekst niepoprawny. FrequencyResponse miał osobne parsery
+podsumowań: pusty lub końcowy token dawał 0 Hz, 5GHz znikało, średnik zmieniał
+liczbę punktów, pusta faza stawała się finite 0 deg. Udostępniono istniejące
+parsery draftNumber/positiveDraftNumberList z modelu authoringu bez zmiany
+gramatyki, DTO czy obliczeń. Formatter i sweep używają ich wspólnie. Lista
+z błędnym/niedodatnim tokenem nie udaje poprawnego podzbioru ani liczby
+artefaktów. Pusta faza jest niedostępna, niepuste legacy Number pozostaje.
+Regresje obejmują jednostki bez spacji, średniki, duplikaty równych wartości
+SI, trailing delimiter, błędne listy i częściowe fazy. `5 GHz` pozostaje
+niepoprawną listą według istniejącej gramatyki; `5GHz` jest legalne.
+Commit `4d9077b4b8ee44e33b5648739ce8a39d744f9e82`.
+
+### CI abcda66f — Explorer odebrany, dalsze przyczyny awarii
+
+Bootstrap `39878842186`, Control Room `120171027729`: FAIL, 8817 PASS,
+3 FAIL, 13 pominiętych. Nowe regresje shared clipboard, Data Preview,
+autosave oraz poprzednie Field Drive przeszły. Dwa Planar testy wymagały
+Selection API dla Enter po realistycznym focusin. Odczytano faktyczne
+constructSelectEvent React 19.2.4 z zależności własnego frontendu
+(`verification/frontend-production-source-8b394c99c0414b9ba44ab69d8df89de9.json`,
+wyłącznie odczyt, nie wykonanie testów). React bezpośrednio czyta cztery
+właściwości wyniku getSelection. Lokalny testowy adapter zwraca pusty obiekt
+Selection; null byłby błędem. Pozostają Enter i asercje root/focus/scroll/ACK.
+
+Trzeci test wykrył drugi wpis v0.1.0, tym razem w tabeli About. Tabela pokazuje
+build.version albo Version unavailable tak jak header. Test obejmuje build
+1.2.3. Tytuł Toolchain Declarations nie udaje kwalifikacji aktywnego runtime;
+pozostałe deklaracje zależności wymagają osobnego porównania z manifestami.
+Commit `ebc1f546daf666a9a8930651496b2d3a80768e13`.
+Harness walidacji/getSelection:
+`6ba6b806fa32d0deaa60cf0d6df3a5364f2af27e`, następnie dokładny kontrakt Selection
+`b85bd3a710b6075ee88007af9134952884572dd6`.
+
+Browser `120171028080`: FAIL; Inspector actions `120171027915`: PASS.
+Artefakt `12470241176`, SHA256
+`76172318380af0a0fad644eb1a9c9d94c51944fd3d0aad5e3dbf0442d800080e`,
+odczytany i zahashowany w pamięci, bez hostowego rozpakowywania.
+
+- Explorer navigation/hierarchy PASS: 461 wierszy logicznych, 30 montowanych,
+  45 kroków przez wirtualne okno, End/pełna widoczność przez cztery klatki,
+  Home, rodzic/dziecko oraz widoczny focus ring w obu motywach.
+- Shrink PASS: 881→422 wierszy, 14 widocznych po zmianie, offset 11433,
+  zachowany wybór audit-shrink-60 i fokus ostatniego logicznego wiersza.
+- Planar raw/remount, filtr, Refresh oraz memberships 503→200 PASS.
+- Real Object/Geometry validation zatrzymało się na loading warning. Test
+  czekał na dowolny alert, który jest legalny również podczas loading.
+  Teraz czeka na alert zawierający oczekiwaną treść błędu; nadal wymaga GET
+  503 i braku pozornego sukcesu. Syntax/lint helpera PASS:
+  `verification/frontend-production-source-506fa2f3e9574149a5fd645abc68e86a.json`.
+- Wszystkie dziewięć scenariuszy regionów PASS, również usuwanie wcześniejszego
+  wiersza bez utraty surowego draftu następcy. Końcowy exact-once check FAIL:
+  3 potwierdzone zapisy, 2 synci. To brak produkcyjny w Apply Fields, nie
+  błąd zliczania fixture. Dwa region PATCH robiły sync; material-fields
+  transaction publikowała ACK bez odświeżenia kanonicznego skryptu Python.
+
+Ścieżka Apply Fields→patchObjectMaterialFields→commitTransaction nie synchronizuje
+skryptu w API ani runAuthoringMutationWithHistory. Osobny model/syncs przepisuje
+kanoniczny Python, a exporter serializuje material_parameter_fields przez
+set_material_field. Przygotowano jeden scoped best-effort sync po ACK,
+z ostrzeżeniem przy awarii bez ponawiania transakcji. Review wykrył nowy P2:
+ten sam mounted panel może zmienić region w obrębie sesji podczas await sync;
+sam session fence nie chroni lokalnego feedbacku. Poprawka właściciela
+regionu i jej regresja są wymagane przed commitem tego fragmentu.
+Końcowa asercja jednego syncu na ACK pozostaje bez zmian.
+
+Weryfikacja zakończonych delt: produkcyjne typy/architecture/scoped lint PASS,
+`verification/frontend-production-source-25618ff90ce14d12b5cb79b7940bb93d.json`.
+Lista lint obejmuje także pliki już zacommitowane po bazowym pełnym lint,
+nie tylko zmienione wpisy baseline i pliki untracked. React Doctor sześciu
+plików bez pominięć, 0 błędów:
+`verification/frontend-production-source-431b5aff9a254a7db238c64392e81b76.json`.
+Ostrzeżenie o window w StudyStageAuthoringModel:212 to nazwa pola interfejsu
+`window: "hann"`, nie odczyt browser global; nie zmieniano kodu dla heurystyki.
+Żadnych lokalnych kompilacji ani uruchomień testów jednostkowych TS/Rust.
+
+### CrossSection — potwierdzona następna poprawka
+
+Readonly audyt CrossSectionSettingsEditor, FormField, crossSectionWorkspace,
+DraftEditor, InspectorPanel oraz ich testów potwierdził utratę surowych liczb.
+Position/Rotation konwertują każdy input przez Number: `12.` traci kropkę,
+`-` przechodzi w NaN i sanitizację do 0/-180, pusty tekst zatwierdza zero.
+Puste Edge width zapisuje 0 mimo minimum 0.5; sanitizeDraft nie ogranicza go.
+Shrink z pustego tekstu przechodzi po cichu na 0.5. Pola potrzebują raw draft,
+walidacji przed commit i guardów zapisu; suwaki range pozostają natychmiastowe.
+Position/Rotation trafiają do współrzędnej SI i ramki kanonicznego monitora.
+Brak aktywnego konsumenta useCrossSectionImageResource: widoczny efekt opcji
+Edge width/Shrink jest NOT VERIFIED. Nie potwierdzono błędu sesji/ACK:
+istniejący create jest scoped i testuje późny ACK po zmianie sesji.
+Ta implementacja pozostaje otwarta; nie wprowadzono lokalnego obejścia,
+które pozwalałoby Apply wysłać poprzednią liczbę przy błędnym raw tekście.
+
+### Region sync — zamknięcie P2 i końcowe sprawdzenia źródeł
+
+P2 właściciela zamknięte źródłowo. Memoizowany obiekt właściciela zawiera
+sesję, objectId i regionId; aktywny ref jest ustawiany/zwalniany w layout
+effect. Stan feedbacku porównuje obiekty właściciela, bez odczytu ref podczas
+renderu. Powrót A→B→A tworzy nowego właściciela i nie przyjmuje starego wyniku.
+Publish ACK oraz pojedynczy sync nie znikają przy zmianie widoku. Baseline,
+draft i feedback są ograniczone do bieżącego właściciela. Globalny lock
+mutacji pozostaje do końca sync, więc stary finally nie odblokuje innego
+równoległego zapisu. Zwrócenie true dla zaakceptowanego ACK starego właściciela
+nie czyści obecnego draftu: rodzic nie wykonuje globalnego reset/acknowledge,
+a guard ponownie sprawdza selection/dirty po Apply.
+
+Regresje obejmują jeden sync dopiero po ACK, przechwycony scope, brak sync po
+odrzuconej mutacji, warning po sync failure bez replay, późną starą sesję,
+retarget tego samego mounted panelu, późniejszy poprawny zapis B i A→B→A.
+Review końcowego kodu i tego kontraktu nie ma otwartych P1/P2.
+Commit `ad054d562e3215f5e0e25f1ef835ec452ba7edca`.
+
+Końcowe produkcyjne typy, architecture hygiene i scoped lint 78 plików PASS,
+ze stabilnymi źródłami:
+`verification/frontend-production-source-e938d34663674ff1958701bef4b68e8c.json`.
+Zatwierdzony interpretowany API hygiene PASS:
+`verification/frontend-api-hygiene-1f95834f395244f0bb08918922cdcb97.json`.
+React Doctor ostatniego pliku: bez pominięć, 0 błędów, jedno istniejące
+ostrzeżenie rejestracji edit-session u rodzica:
+`verification/frontend-production-source-d3ea0bd1259d44968e2cbb9258194cc5.json`.
+W trakcie zamykania P2 lint odrzucił odczyt generation ref w renderze oraz
+memo dependency wyprowadzone przez JSON.stringify; poprawiono model
+właściciela, bez wyłączania reguł i bez pomijania testów/bramek projektu.
+Nie kompilowano ani nie uruchamiano lokalnie testów jednostkowych TS/Rust.
+Nowe regresje i exact-once browser wymagają kolejnego CI.
+
+Retencja: cache/control/package pozostają potrzebne do kontroli i recovery.
+Nie wykonano ciężkiego buildu ani kasowania danych. Pomiar C: 54 469 525 504 B
+wolnego miejsca; nie przypisano zmian wolnego miejsca temu etapowi bez pomiaru
+jego własnych artefaktów. Główny checkout i pozostałe grupy pozostały bez zmian
+tej pracy. CrossSection, porównanie deklaracji About z manifestami, właściwy
+Object 2D/3D/monitor, managed runtime/API, dalszy audyt i integracja są otwarte.
