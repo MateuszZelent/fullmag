@@ -1789,3 +1789,58 @@ Retencja: bez builda, instalacji, restartu, owner resetu i usuwania danych;
 cache oraz receipty zachowano. Nadal otwarte: dalsza walidacja reference asset,
 geometry/axis/transform, pozostałe rodziny frontendowe, rzeczywisty browser
 formularzy, managed runtime/live qualification oraz integracja PR #249.
+
+### Checkpoint: Spin Interface — spójne źródła i ochrona właściciela draftu
+
+Szerszy audyt potwierdził produkcyjną trasę SpinInterfaceInspectorPanel
+(route catalog, Explorer oraz Edit/Create interface w Transport). Dwa P2:
+projekcja interfejsu rev17 mogła dostarczyć stare g_r do aktualnego ownera
+rev18, a lokalne selektory owner/interface omijały guard globalnej selekcji
+i porzucały dirty draft. Walidacja kandydata nie wykrywa utraty cudzej edycji,
+jeśli stare pola zostaną wysłane ze zgodnym nowszym base_revision.
+
+Authoring wymaga teraz potwierdzonych, zgodnych rewizji projekcji, ownera
+i geometrii: ready, bez error/refreshError, oraz co najmniej rewizji ostatniego
+ACK. Niepotwierdzone źródła nie uruchamiają debounce walidacji i blokują
+lokalne/globalne/imperatywne mutacje; błędy oraz powód są widoczne. Refresh
+ponawia wszystkie wymagane źródła i mesh evidence. Po wyrównaniu zasobów
+dotychczasowe scalanie przyjmuje niezależną zmianę serwera, zachowując draft.
+Backend validation i CAS pozostają autorytetem; nie zmieniono semantyki fizyki.
+
+Owner i Interface mają dirty/pending guard zarówno w disabled, jak i handlerze;
+komunikat wymaga Apply/Revert. Imperatywne Revert podczas zapisu jest blokowane.
+Stable interface ID ma pierwszeństwo przed legacy index, aby reorder listy
+nie zmieniał adresata selekcji. Dotychczasowe session/history/ACK fences
+pozostają. Nie dodano endpointów, zależności ani zastępczego transportu.
+
+Dodano 10 regresji DOM: dirty switch/reset, pending ACK i reset, rozbieżne
+rewizje i zachowanie nowego g_r przy edycji g_up, retained stale/error każdego
+źródła, rozbieżna geometria, odzyskanie przez Refresh oraz reorder ID/index.
+Review ujawniło brak geometry.refetch w recovery; poprawiono i zamknięto P2
+wraz z regresją. Końcowy review źródłowy bez otwartych P1/P2. Lokalnie bez
+kompilacji i uruchamiania TS/Rust unit tests; nowe przypadki oczekują na CI.
+
+Końcowy production typecheck, architecture hygiene i scoped lint PASS:
+verification/frontend-production-source-4022f8cc76084d0ba848e35c30c704e5.json.
+API hygiene PASS: verification/frontend-api-hygiene-58e89aef5f8a4cbf9917c576a3187e27.json.
+React Doctor 0 errors/skips, 5 ostrzeżeń (updater heuristic, dwa index keys,
+filter/map, JSON.parse), bez suppression:
+verification/frontend-production-source-81a4e1612bee41f79139b1e0eff80ac7.json.
+Wszystkie receipty stabilne. Przejściowy błąd hostowego pwsh.dll rozwiązano
+uruchomieniem dostępnego Windows PowerShell; bez zmian systemu lub runtime.
+
+CI poprzedniego 6172b4c18697d968d97efefacfc5b8d355d0db47 przy ostatnim
+odczycie: browser fixture job 120252247958 PASS, Control Room job 120252247798
+nadal in_progress w bootstrap 39904077117. Nie dowodzi to nowych przypadków.
+
+Następne potwierdzone kwestie: walidacja geometrii/axis/transform i co najmniej
+jednej dodatniej tolerancji approx zgodna z IR (bez auto-normalizacji); backend
+explicit_field_asset nie rozwiązuje ID i używa initial_magnetization, a Preview
+zawsze używa current m i activation odrzuca non-capture-current. Brak zgodnego
+typed field-asset catalog/resolvera; magnetization assets i FieldCatalog nie są
+zamiennikiem. Frontend wymaga jawnego zachowania unsupported/preserved zamiast
+oferowania nieprawdziwie działającej referencji. Kolejna aktywna rodzina do
+audytu: Topological Charge; bez wykonanego review nie przypisuje się jej błędu.
+
+Retencja: brak builda, instalacji, restartu, resetu ownera i usuwania danych.
+Cache/receipty potrzebne i zachowane; szerszy cel, live i integracja otwarte.
