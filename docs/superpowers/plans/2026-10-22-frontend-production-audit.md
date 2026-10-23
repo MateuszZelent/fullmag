@@ -1043,3 +1043,88 @@ resetowano ownera, nie uruchamiano ciężkiego buildu ani nie usuwano danych.
 Cache/control/package pozostają potrzebne do checks i recovery. C: wolne
 51 451 351 040 B, bez przypisania różnicy tej pracy. Pełny audyt frontendowy,
 live Object 2D/3D/monitor, managed runtime, finalne CI i integracja nadal otwarte.
+
+### CI 45b82c625 — kolejne potwierdzenia i granice osiągalności
+
+Run `39884401610`, HEAD `45b82c625af147fc389eb73aab1ddcd157662e41`:
+control-room-contracts zakończone FAIL, 8874 PASS / 3 FAIL / 13 skip (8890).
+Wcześniejsze awarie QuickChart T/mT i liczenia renderów Planar nie wróciły.
+Nowe trzy błędy były w regresjach: tooltip formatter zachowuje 103.17, a nie
+precyzję etykiety osi 103.2; brakowało helpera findElements; symulacja range
+ustawiała wartość przez tracker Reacta przed eventem, więc onChange jej nie
+wykrywał. Poprawiono wyłącznie setup/asercję właściwego formattera; wymaganie
+natychmiastowego slidera i zachowania innych raw pól pozostaje. Commit
+`e658d3e23ee5d7c7f8b33d8ac6ae6a3e4563056c`, scoped lint PASS, receipt
+`verification/frontend-production-source-cb07615d22f5426dbbf9c0572afc06a1.json`.
+Nie uruchamiano lokalnie tych testów TS.
+
+Inspector-actions-browser-smoke PASS. Browser-fixture-smoke FAIL już później:
+menu koloru zamykało się, ale natychmiastowa asercja zastała fokus na body.
+Artefakt `12471804035`, SHA256
+`74402425ebcb9c9cfb098ce0050585d8856ac582a3e5229c46adb9f3f5efa056`,
+potwierdza PASS pierwszych 9 scenariuszy frontend-production, w tym raw `%`
+i clipboard, rzeczywistych konsumentów walidacji oraz pełnej nawigacji drzewa.
+Region browser (9 scenariuszy) i dotychczasowy responsive browser PASS;
+page_errors w raporcie frontend-production są puste.
+
+Odczyt zainstalowanego w własnym kontenerze Radix FocusScope 1.3.1 potwierdza
+wywołanie unmount autofocus w setTimeout(0). Wrapper nie nadpisuje tej ścieżki,
+a fixture zachowuje trigger w tej samej gałęzi. Kontrola czeka teraz do 2 s
+na rzeczywisty focus konkretnego triggera, następnie nadal wykonuje ścisłą
+asercję; nie używa arbitralnego sleep ani nie wymusza focus ręcznie. Hipoteza
+wyścigu jest poparta źródłami, ale wynik po poprawce wymaga kolejnego CI.
+
+Commit `ccc022deaf03ec0500cc84590eb2e7ca186cb34e` dodaje też rzeczywisty
+Start → About → Toolchain przez klawiaturę, pomiary bounds/overflow i zrzuty
+obu szerokości 320/640 CSS px przed zbiorczym błędem. 640 jest odpowiednikiem
+układu 1280 przy 200%, nie pomiarem zmiany browser zoom. Kontrola zachowuje
+draft Name i document budget bez resetu. Stały rail 232 px daje źródłowe
+podejrzenie clipping przy 320, ale nie zmieniano CSS przed browser dowodem.
+Nowy scenariusz pozostaje NOT VERIFIED. Lokalny własny frontend volume nie
+ma zainstalowanego Chromium; nie instalowano zależności ani nie budowano
+zastępczej ścieżki browsera.
+
+Sprawdzenie rzeczywistych wejść UI zmienia kwalifikację dwóch obszarów:
+
+- View → Monitor wywołuje beginPlanarMonitorDraft, nie beginCrossSectionDraft.
+  CrossSection ma zarejestrowane trasy, lecz świeży workspace ma plots: [];
+  New Image wymaga istniejącego plotu, a beginCrossSectionDraft nie ma
+  produkcyjnego call site poza deklaracją. Nie wstrzyknięto testowego stanu
+  przez evaluate, by udawać odbiór czterech poprawionych pól. Browser/live
+  odbiór tego przepływu pozostaje otwarty.
+- ModeCompositionInspectorRouteAdapter i jego panele nie mają konsumenta
+  w aktualnym inspectorRouteCatalog. Commit
+  `24b29a911d9093c69778374d31f47c40238a40a4` poprawia wyłącznie opcjonalny
+  scaffold: pełną podmianę mode+field_id przy zachowaniu ustawień warstwy,
+  optimistic/ACK snapshot i merge bieżącego layera, raw rate finite >= 0,
+  owner scope bez resetu na revision oraz obsługę rejected Promise.
+  Nie aktywowano nowych tras i nie traktuje się tego jako naprawy działającego
+  routowanego UI. Review ujawnił P2 starszego reject nadpisującego nowszy
+  feedback; current-operation fence i regresje obu kolejności zamykają go
+  źródłowo. Nowe testy DOM nadal oczekują wykonania w CI.
+
+Końcowe produkcyjne typy, architecture hygiene i scoped lint 97 plików PASS
+przy stabilnych źródłach:
+`verification/frontend-production-source-4a5d5fa2bc8c4aaaa21852a32d01ed59.json`.
+Browser MJS syntax i wcześniejszy scoped lint PASS:
+`verification/frontend-production-source-3e946e3fae63414493c3823d9f456685.json`.
+Interpretowany API hygiene PASS:
+`verification/frontend-api-hygiene-e228335133d34e4e9cbce5c72b3247e8.json`.
+React Doctor czterech zmienionych plików produkcyjnych: 0 błędów, brak
+pominięć, 3 istniejące ostrzeżenia (dwa mixed exports dla HMR i filter/map
+na liście compatible objects), receipt
+`verification/frontend-production-source-79ac3cd1e262450aa93d89b1d4757095.json`.
+Hook commita wskazał też podobieństwo istniejących tabel i sekwencyjne await
+w scenariuszach browsera; nie wyłączano reguł ani nie równoleglono zależnych
+interakcji dla heurystyki. Pierwszy lint odrzucił mock switch bez role;
+naprawiono semantykę mocka, a końcowy lint jest zielony.
+
+Retencja: brak ciężkiego buildu, instalacji Chromium i usuwania danych.
+Kontrole oraz receipty pozostają we własnych wolumenach, potrzebnych do
+kontynuacji i recovery. C: wolne 45 672 603 648 B; różnicy nie przypisuje się
+temu etapowi bez pomiaru właścicieli innych zapisów. Receipt backendu nadal
+failed-confirmed. Cały cel jest aktywny: następne kroki to CI bieżących zmian,
+reflow About, audyt pozostałych zarejestrowanych tras (m.in. transport,
+observation frames i coupling), live odbiór Object/Airbox/2D/3D/monitor,
+a następnie integracja. Nie ma podstaw do oznaczenia całego frontendu jako
+gotowego produkcyjnie.
