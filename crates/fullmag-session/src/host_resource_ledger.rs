@@ -8342,8 +8342,11 @@ mod tests {
         gpu_request.expected_compute_node_owner_id = Some(owner.descriptor().host_owner_id.clone());
         gpu_request.expected_compute_node_owner_epoch = Some(owner.descriptor().host_owner_epoch);
         let error = ledger.reserve(&gpu_request).unwrap_err();
-        assert!(
-            error.to_string().contains("GPU host admission requires current GPU inventory"),
+        assert_eq!(
+            error
+                .downcast_ref::<TransientGpuInventoryUnavailable>()
+                .map(|error| error.reason),
+            Some(UnavailableReason::ProbeFailed),
             "GPU admission must remain closed on a warm-unavailable sample: {error:#}"
         );
     }
