@@ -2432,3 +2432,39 @@ Commit table actions:3e1de3fe952b3ff2f538a461c8c7ab66a40ddc5f;
 testowy typed GPU rejection:51a53d7e1367962717be24fcbb9ff331ba1d2159.
 Nowe source changes i testy po HEAD68479 oczekują na push/CI. Merge, lokalny
 fast-forward i cleanup nadal nie są wykonane; cel szerszego audytu pozostaje otwarty.
+
+
+### 2026-10-23 — zamknięcie źródłowe bramki health przed kolejnym CI
+
+Recepta health ma limit floor(elapsed/5000)+1 i osobne minimum odstępu4900ms.
+Dotyczy wyłącznie dokładnego GET skonfigurowanego URL; query, obcy origin,
+metoda i inny endpoint zachowują stare limity i unknown guards. Smoke zachowuje
+pierwotny same-origin fallback, a jawne env overrides są przekazane również do
+browser config. Nie zmienia produkcyjnego monitoringu ani pozostałych limitów.
+Pełna historia exact health polli zawiera dokument, timestamp, elapsed, cadence,
+limit i naruszenia, a reset dokumentu zachowuje cumulative counts i trace.
+
+Wykonana próba Node (bez ponawiania po niezmienionym helperze):
+node --test apps/control-room/scripts/inspector-request-budget.node-test.mjs apps/control-room/scripts/lib/viewport-idle-network.node-test.mjs
+Wynik: exit0;14/14 PASS,0 fail/skip,147.6068ms. Obejmuje długie legalne okno,
+4900ms loop przekraczający długookresowy limit, duplikaty, reset, błędne URL/
+metody/endpointy, konfigurację oraz zachowane mutation caps. Oba zestawy są teraz
+wpięte w browser-fixture-pre-proof, aby działały także w kolejnych CI.
+
+Review źródłowe znalazło pojedynczy raw reload po object move, który nie resetował
+budżetu nowego dokumentu; zamieniono go na reloadInspectorDocument. Dodano również
+inicjalizację zegara przed pierwszą nawigacją osobnego FDM build-grid fixture.
+Odczyt call sites potwierdził, że pozostałe aktywne nawigacje workspace mają reset przed
+page.goto/reload. W normalnym smoke pozostały wyłącznie dwa raw wywołania wewnątrz
+wrapperów. Trace zapisuje się do inspector-request-budget.json także po failure,
+a pięć izolowanych resonance leaf kontekstów ma osobne pliki o stałych ID.
+Node --check i git diff --check po tych poprawkach PASS; bash -n bramki CI PASS.
+Nie jest to wykonanie pełnego browser smoke; nowy CI pozostaje wymagany.
+
+Dodatkowa korekta insetu:5e9c1687b9e802b3a6b21457e1aa0f3719f63993;
+fokus Live Chart:87f772b347b2d8d3ab1558f930b82470e28e5e7a.
+Główny checkout ma HEAD87d2ee166d32dcd67618581dc5d87ca7957dce36 na master i
+zmodyfikowany submodule external_solvers/3. Ancestry87d2ee→ae8e570 PASS, więc
+nie stwierdzamy jego unikalnej niezintegrowanej pracy; nie zmieniono checkoutu
+ani submodułu. Finalny fast-forward/cleanup wymaga ponownego sprawdzenia stanu
+po merge. Rejestr i PR zostaną przypięte do końcowego wypchniętego HEAD.

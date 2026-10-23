@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { PerspectiveCamera, Vector3 } from "three";
 import { resolve } from "node:path";
+import { performance } from "node:perf_hooks";
+import { PerspectiveCamera, Vector3 } from "three";
 import { installInspectorCommitTrace } from "./lib/inspector-commit-trace.mjs";
 
 import {
@@ -10,14 +11,18 @@ import {
 } from "./lib/inspector-request-budget.mjs";
 
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
+const apiBase =
+  process.env.CONTROL_ROOM_API_BASE_URL ??
+  process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
+  new URL(workspaceUrl).origin;
 const outputDir = resolve(
   process.cwd(),
   process.env.CONTROL_ROOM_INSPECTOR_REPORT_DIR ?? ".fullmag/reports/inspector-2-browser",
 );
 const INSPECTOR_REQUEST_QUIET_MS = 500;
 const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
-// Per-path request budget of one page lifecycle: counts restart at every
-// load so the budget detects request storms, not the number of loads in a run.
+// Per-path GET limits restart at every load. The exact configured API health
+// URL uses a separate elapsed-window budget and cadence check.
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
 // Only objects selected by the declared navigation/opaque-ID fixture scenarios.
 const INSPECTOR_OBJECT_METRICS_PATHS = new Map(
@@ -367,7 +372,7 @@ await page.addInitScript((baseUrl) => {
       new URL(window.location.href).searchParams.get("inspectorRealtimeFixture") !== "1",
     enableDiagnosticRecorder: true,
   };
-}, new URL(workspaceUrl).origin);
+}, apiBase);
 await page.addInitScript(() => {
   const wavevectorUniforms = [];
   const uniformNames = new WeakMap();
@@ -422,6 +427,7 @@ await installInspectorFixtureApi(page, fixture);
 
 if (process.env.CONTROL_ROOM_INSPECTOR_FDM_BUILD_GRID === "1") {
   try {
+    resetInspectorDocumentBudget(fixture.requestBudget, "fdm-build-grid-workspace");
     const { qualifyFdmBuildGrid } = await import("./lib/fdm-build-grid-browser.mjs");
     await qualifyFdmBuildGrid({
       consoleErrors,
@@ -432,7 +438,7 @@ if (process.env.CONTROL_ROOM_INSPECTOR_FDM_BUILD_GRID === "1") {
       workspaceUrl,
     });
   } finally {
-    await browser.close();
+    await closeInspectorBrowser();
   }
   process.exit(0);
 }
@@ -443,7 +449,7 @@ if (process.env.CONTROL_ROOM_INSPECTOR_MESH_ONLY === "1") {
     const { qualifyMeshPolicyEditing } = await import("./lib/mesh-policy-browser.mjs");
     await qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology });
   } finally {
-    await browser.close();
+    await closeInspectorBrowser();
   }
   process.exit(0);
 }
@@ -486,7 +492,7 @@ if (process.env.CONTROL_ROOM_FRONTEND_AUDIT === "1") {
       await qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology });
     });
   } finally {
-    await browser.close();
+    await closeInspectorBrowser();
   }
   if (failures.length) throw new AggregateError(failures, "Frontend browser audit failed.");
   process.exit(0);
@@ -1178,7 +1184,15 @@ try {
     ),
   );
 } finally {
-  await browser.close();
+  await closeInspectorBrowser();
+}
+
+async function closeInspectorBrowser() {
+  try {
+    await browser.close();
+  } finally {
+    await writeInspectorRequestBudgetEvidence(fixture);
+  }
 }
 
 async function qualifyVisualizationMutationStability(page, inspector, fixture) {
@@ -1704,7 +1718,7 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
   fixture.geometryPatchDelayMs = 0;
   fixture.geometryMutationBodies.length = 0;
   fixture.requestCounts.clear();
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, { waitUntil: "domcontentloaded", timeout: 60_000 }, "object-move-recovery");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
   return proof;
 }
@@ -2438,7 +2452,7 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
         } catch {
           // Storage unavailable: the "before" assertion below reports it.
         }
-      }, new URL(workspaceUrl).origin);
+      }, apiBase);
       await installInspectorFixtureApi(page, fixture);
       await gotoInspectorDocument(
         page,
@@ -2650,7 +2664,11 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       }
       throw error;
     } finally {
-      await context.close();
+      try {
+        await context.close();
+      } finally {
+        await writeInspectorRequestBudgetEvidence(fixture, `inspector-request-budget-${resultCase.id}.json`);
+      }
     }
   }
 
@@ -3812,20 +3830,36 @@ function recordInspectorSceneResponse(
   }
 }
 
+async function writeInspectorRequestBudgetEvidence(fixture, filename = "inspector-request-budget.json") {
+  await writeFile(
+    resolve(outputDir, filename),
+    JSON.stringify(inspectorRequestBudgetDiagnostics(fixture), null, 2),
+  );
+}
+
 function inspectorRequestBudgetDiagnostics(fixture) {
   return {
     documentId: fixture.requestBudget.documentId,
     documentLabel: fixture.requestBudget.documentLabel,
     documentRequestCounts: Object.fromEntries(fixture.requestBudget.documentCounts),
+    healthPolling: {
+      apiBase: fixture.requestBudget.apiBase,
+      documentRequestCount: fixture.requestBudget.documentHealthCount,
+      documentStartedAtMs: fixture.requestBudget.documentStartedAtMs,
+      endpoint: fixture.requestBudget.expectedHealthUrl,
+      lastRequest: fixture.requestBudget.lastHealthRequest,
+      cumulativeRequestCount: fixture.requestBudget.cumulativeHealthCount,
+      requests: fixture.requestBudget.healthRequests,
+    },
     requestBudgetViolation: fixture.requestBudgetViolation,
     requestCounts: Object.fromEntries(fixture.requestCounts),
     sceneResponseTrace: fixture.sceneResponseTrace,
   };
 }
 
-// Only explicit page.goto/page.reload calls reset the document GET budget.
-// Same-document history/hash navigation cannot mask request growth. The
-// cumulative counters and mutation caps remain scenario-scoped.
+// Only explicit page.goto/page.reload calls reset document counts and health
+// cadence. Same-document navigation cannot mask growth; cumulative counts and
+// mutation caps remain scenario-scoped.
 async function gotoInspectorDocument(page, fixture, url, options, label) {
   resetInspectorDocumentBudget(fixture.requestBudget, label);
   return page.goto(url, options);
@@ -3938,7 +3972,7 @@ function createInspectorFixture() {
       size: [1e-6, 1e-6, 1e-6],
     },
   };
-  const requestBudget = createInspectorRequestBudgetState();
+  const requestBudget = createInspectorRequestBudgetState({ apiBase });
   const topology = inspectorTopologyBuffer();
   assertInspectorTopologyGeometry(
     topology,
@@ -4101,9 +4135,11 @@ async function installInspectorFixtureApi(page, fixture) {
       INSPECTOR_REQUEST_LIMITS.get(requestKey) ??
       INSPECTOR_MAX_REQUESTS_PER_PATH;
     const budget = recordInspectorRequestBudget(fixture.requestBudget, {
+      atMs: performance.now(),
       method: request.method(),
       requestKey,
       requestLimit,
+      requestUrl: request.url(),
     });
     if (budget.exceeded) {
       fixture.requestBudgetViolation ??= {
@@ -4112,9 +4148,10 @@ async function installInspectorFixtureApi(page, fixture) {
         documentId: budget.documentId,
         documentLabel: fixture.requestBudget.documentLabel,
         key: requestKey,
-        limit: requestLimit,
+        limit: budget.limit ?? requestLimit,
         recent: fixture.requests.slice(-20),
         scope: budget.scope,
+        ...(budget.health ? { health: budget.health } : {}),
       };
       if (path === "/v2/sessions/current/model/scene" && request.method() === "GET") {
         recordInspectorSceneResponse(fixture, {
@@ -4162,7 +4199,7 @@ async function installInspectorFixtureApi(page, fixture) {
         }],
       });
     }
-    if (path === "/v2/platform/health" && request.method() === "GET") {
+    if (budget.health) {
       return fulfillJson(route, {
         active_session: true,
         api_contract_version: "1.0.0",
