@@ -1337,7 +1337,109 @@ export async function qualifyFrontendProductionBrowser({
       return { focused, radixMenu: true, disabledSkipped: true, triggerFocusRestored: true, commandCount: 1, nativeDialog: "not exercised; native input/change events exercised" };
     });
 
+    await runScenario("observation-frame-pagination-retains-selection", async () => {
+      const previousFrames = fixture.observationFrames;
+      const framesPath = "/v2/sessions/current/data/observation-frames";
+      fixture.observationFrames = Array.from({ length: 55 }, (_, index) => {
+        const step = index + 1;
+        const frameId = `audit-frame-${String(step).padStart(3, "0")}`;
+        return {
+          schema_version: "observation_frame.v1", frame_id: frameId, status: "complete",
+          run_id: "inspector-run", stage_id: "audit-dynamics", task_id: "audit-task", attempt_id: "audit-attempt",
+          ownership_epoch: 1, adapter_id: "fdm-cpu", grid_cells: [2, 2, 1], quantity_ids: ["m"],
+          state_codec_id: "fullmag.fdm_cpu.observation_state", state_codec_version: "v1",
+          magnetization_href: `${framesPath}/${frameId}/magnetization`,
+          accepted_state_ref: {
+            generation: { accepted_revision: step, runtime_epoch: 1 },
+            id: { accepted_step: step, run_id: "inspector-run", stage_id: "audit-dynamics", state_digest: `audit-state-${step}`, clock_digest: "audit-clock", domain_digest: "audit-domain", plan_digest: "audit-plan" },
+          },
+        };
+      });
+      const requestStart = fixture.requests.length;
+      const listQueries = () => fixture.requests.slice(requestStart)
+        .filter((request) => request.startsWith(`GET ${framesPath}?`))
+        .map((request) => new URL(request.slice(4), "http://fixture").searchParams.get("cursor"));
+      try {
+        await openWorkspace("frontend-observation-pagination");
+        await page.locator(".fm-explorer").getByRole("tab", { name: "Results", exact: true }).click();
+        const loadMore = page.getByRole("button", { name: "Load more snapshots", exact: true });
+        await loadMore.waitFor({ state: "visible" });
+        assert.deepEqual(listQueries(), [null], "Another page was fetched without Load more.");
+        const snapshotsId = "results:run:inspector-run:dynamics:observation-frames";
+        for (const id of ["results:run:inspector-run", "results:run:inspector-run:dynamics", snapshotsId]) {
+          const parent = row(id);
+          await parent.waitFor({ state: "visible" });
+          if (await parent.getAttribute("aria-expanded") === "false") await parent.locator(".fm-explorer-tree-row__branch").click();
+        }
+        const selectedId = `${snapshotsId}:audit-frame-001`;
+        await row(selectedId).click();
+        await page.locator('[data-inspector-owner="observation-frame"]').waitFor({ state: "visible" });
+        await loadMore.click();
+        await page.waitForFunction((id) => document.querySelector(`[data-node-id="${id}"]`)?.textContent?.includes("55"), snapshotsId);
+        await loadMore.waitFor({ state: "hidden" });
+        assert.deepEqual(listQueries(), [null, "audit-frame-050"]);
+        assert.equal(await row(selectedId).getAttribute("data-active"), "true", "Loading more snapshots changed the selection.");
+        assert.match(await page.locator('[data-inspector-owner="observation-frame"]').innerText(), /audit-frame-001/);
+        assert.match(await row(snapshotsId).innerText(), /55/);
+
+        // Hold the second refresh response so the old rows can be inspected
+        // during a real pending request, then await both responses and idle UI.
+        let releaseRefresh;
+        const heldRefresh = new Promise((resolveRefresh) => { releaseRefresh = resolveRefresh; });
+        let markSecondRefreshIntercepted;
+        const secondRefreshIntercepted = new Promise((resolveIntercepted) => { markSecondRefreshIntercepted = resolveIntercepted; });
+        const pattern = `**${framesPath}**`;
+        const holdSecondRefresh = async (route) => {
+          const url = new URL(route.request().url());
+          if (route.request().method() === "GET" && url.pathname === framesPath && url.searchParams.get("cursor") === "audit-frame-050") {
+            markSecondRefreshIntercepted();
+            await heldRefresh;
+          }
+          return route.fallback();
+        };
+        await page.route(pattern, holdSecondRefresh);
+        try {
+          const pagination = page.getByRole("group", { name: "State snapshot pagination", exact: true });
+          const refreshedPage = (cursor) => page.waitForResponse((response) => {
+            const url = new URL(response.url());
+            return url.pathname === framesPath && url.searchParams.get("cursor") === cursor && response.status() === 200;
+          });
+          await Promise.all([
+            refreshedPage(null),
+            refreshedPage("audit-frame-050"),
+            (async () => {
+              await page.getByRole("button", { name: "Refresh explorer", exact: true }).click();
+              await pagination.waitFor({ state: "visible" });
+              let interceptTimer;
+              try {
+                await Promise.race([
+                  secondRefreshIntercepted,
+                  new Promise((_, reject) => { interceptTimer = setTimeout(() => reject(new Error("The second snapshot refresh page was not requested.")), 10_000); }),
+                ]);
+              } finally { clearTimeout(interceptTimer); }
+              assert.equal(await pagination.getAttribute("aria-busy"), "true");
+              assert.equal(await row(selectedId).getAttribute("data-active"), "true", "Pending Refresh lost the selected frame.");
+              releaseRefresh();
+              await pagination.waitFor({ state: "hidden" });
+            })(),
+          ]);
+        } finally { releaseRefresh(); await page.unroute(pattern, holdSecondRefresh); }
+        assert.equal(await row(selectedId).getAttribute("data-active"), "true", "Completed Refresh changed the selected frame.");
+        assert.match(await row(snapshotsId).innerText(), /55/);
+        assert.deepEqual(listQueries(), [null, "audit-frame-050", null, "audit-frame-050"]);
+        const filter = page.getByRole("searchbox", { name: "Filter explorer", exact: true });
+        await filter.fill("Step 55");
+        const lastId = `${snapshotsId}:audit-frame-055`;
+        await row(lastId).waitFor({ state: "visible" });
+        await row(lastId).click();
+        assert.match(await page.locator('[data-inspector-owner="observation-frame"]').innerText(), /audit-frame-055/);
+        await capture("observation-frame-last-page", page.locator(".fm-explorer"));
+        return { totalFrames: 55, pageSize: 50, listCursors: listQueries(), previousSelectionPreserved: true, lastFrameSelectable: true, noUnrequestedPage: true };
+      } finally { fixture.observationFrames = previousFrames; }
+    });
+
     const newRequests = fixture.requests.slice(initialRequestIndex);
+    assert.equal(fixture.requestBudgetViolation, null, "The frontend audit exceeded the fixture request budget.");
     const forbiddenWrites = newRequests.filter((request) => NO_BACKEND_WRITES.some((pattern) => pattern.test(request)));
     assert.deepEqual(forbiddenWrites, [], `Audit attempted a model edit or Solve command: ${JSON.stringify(forbiddenWrites)}.`);
     assert.equal(fixture.unknownMutationPaths.length, initialMutationCount,

@@ -20,6 +20,7 @@ import { useKernel } from "../KernelContext";
 
 import { useResource } from "./useResource";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
+import { validateObservationFramePage } from "./observationFramePagination";
 
 export interface ObservationFrameListResourceOptions {
   cursor?: string | null;
@@ -140,7 +141,8 @@ export function useObservationFrameListResource({
   );
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
-      api.data.observationFrames.list(query, { sessionScopeKey, signal }),
+      api.data.observationFrames.list(query, { sessionScopeKey, signal })
+        .then((data) => validateObservationFramePage(data, query)),
     [api, query],
   );
 

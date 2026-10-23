@@ -70,7 +70,7 @@ import {
 } from "@/kernel/resources/sessionDiscretization";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
-import { useObservationFrameListResource } from "@/kernel/resources/observationFrameResources";
+import { useObservationFrameListPages } from "@/kernel/resources/useObservationFrameListPages";
 import { useCurrentTransportsResource } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
@@ -547,7 +547,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const resolvedResultContextRunId = reconciledResultContextRunId;
   const resultContextIsCurrent = resolvedResultContextRunId === currentRunId;
-  const observationFrames = useObservationFrameListResource({
+  const observationFrames = useObservationFrameListPages({
     enabled: resultsResourceActive && resultContextIsCurrent,
     runId: resultContextIsCurrent ? resolvedResultContextRunId : null,
   });
@@ -1152,6 +1152,19 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           }
           tabId={activeTab}
         />
+        {activeTab === "results" && resultContextIsCurrent && (observationFrames.hasMore || observationFrames.refreshError || observationFrames.error || (observationFrames.loading && observationFrames.data)) ? (
+          <div className="fm-explorer-notice" role="group" aria-label="State snapshot pagination" aria-busy={observationFrames.loading}>
+            <p className="m-0" role={observationFrames.refreshError || observationFrames.error ? "alert" : "status"}>
+              {observationFrames.refreshError?.message ?? observationFrames.error?.message
+                ?? (observationFrames.loading ? "Loading state snapshots…" : `${observationFrames.data?.frames.length ?? 0} state snapshots loaded. More are available.`)}
+            </p>
+            <button className="fm-explorer-toolbar__action" type="button"
+              disabled={observationFrames.loading}
+              onClick={observationFrames.refreshError || observationFrames.error ? observationFrames.retry : observationFrames.loadMore}>
+              {observationFrames.loading ? "Loading snapshots…" : observationFrames.refreshError || observationFrames.error ? "Retry snapshots" : "Load more snapshots"}
+            </button>
+          </div>
+        ) : null}
         <footer className="fm-explorer-toolbar">
           <button
             className="fm-explorer-toolbar__action"

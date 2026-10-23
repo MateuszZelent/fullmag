@@ -3973,6 +3973,7 @@ function createInspectorFixture() {
       topology_fingerprint: INSPECTOR_MODAL_TOPOLOGY_HASH,
     },
     requests: [],
+    observationFrames: [],
     visualizationMutationBodies: [],
     requestBudget,
     requestCounts: requestBudget.cumulativeCounts,
@@ -4131,13 +4132,25 @@ async function installInspectorFixtureApi(page, fixture) {
       );
     }
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
-    // The fixture run has no durable observation frames.
     if (path === "/v2/sessions/current/data/observation-frames" && request.method() === "GET") {
+      const runId = url.searchParams.get("run_id") ?? "inspector-run";
+      if (runId !== "inspector-run") return fulfillJson(route, { error: { code: "observation_run_mismatch" } }, 409);
+      const limit = Number(url.searchParams.get("limit") ?? 50);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) return fulfillJson(route, { error: { code: "observation_page_limit" } }, 400);
+      const stageId = url.searchParams.get("stage_id");
+      const frames = fixture.observationFrames.filter((frame) => !stageId || frame.stage_id === stageId);
+      const cursor = url.searchParams.get("cursor");
+      const cursorIndex = cursor === null ? -1 : frames.findIndex((frame) => frame.frame_id === cursor);
+      if (cursor !== null && cursorIndex < 0) return fulfillJson(route, { error: { code: "observation_page_cursor" } }, 400);
+      const page = frames.slice(cursorIndex + 1, cursorIndex + 1 + limit);
       return fulfillJson(route, {
-        frames: [],
-        run_id: url.searchParams.get("run_id") ?? "inspector-run",
+        frames: page,
+        next_cursor: frames.length > cursorIndex + 1 + limit ? page.at(-1).frame_id : null,
+        run_id: runId,
       });
     }
+    const observationFrame = fixture.observationFrames.find((frame) => path === `/v2/sessions/current/data/observation-frames/${encodeURIComponent(frame.frame_id)}`);
+    if (observationFrame && request.method() === "GET") return fulfillJson(route, observationFrame);
     if (path === "/v2/sessions" && request.method() === "GET") {
       return fulfillJson(route, {
         schema_version: "2.0.0",
