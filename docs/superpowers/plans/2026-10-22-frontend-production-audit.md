@@ -2066,3 +2066,30 @@ bezpiecznie zbierać brakujące dowody i poprawiać źródła frontendu.
 Retencja: brak builda, instalacji i usuwania danych; potrzebny cache i receipty
 zachowano. Nadal otwarte pełne rodziny, browser/live qualification, draft P2
 Spin Torque/Oersted oraz integracja PR #249.
+
+### 2026-10-23 — stabilny draft Spin Torque/Oersted, odbiór źródłowy
+
+Zamknięto reset lokalnego draftu przy odświeżeniu payloadu: stabilna tożsamość,
+trójstronne uzgadnianie pól, przesuwana baseline, trwałe konflikty i Revert.
+ACK zachowuje późniejsze edycje, blokuje starszy cache oraz odpowiedzi po
+zmianie celu, w tym A→B→A. Selector celu, Save i Delete mają blokady dirty,
+pending, rewizji oraz aktualności zasobu. Poprawny nowy default pozwala Create;
+niezmieniony istniejący wpis nie wysyła Replace. Błędy refresh i utrata celu
+pozostają widoczne. Nie zmieniono kontraktów fizyki ani API.
+
+Review źródłowe: bez P1/P2. Dodano 26 DOM i 4 modelowe regresje (32 DOM łącznie).
+Nie uruchamiano ani nie kompilowano lokalnych testów jednostkowych.
+Production typecheck, architecture hygiene i lint czterech plików PASS:
+verification/frontend-production-source-5df21383962d4b44be7f2cb800f61328.json.
+Zatwierdzona interpretowana API hygiene PASS:
+verification/frontend-production-source-40ae2dcf7d8d4265afcd735407d327d4.json.
+React Doctor 0.9.12: 0 errors/skips, 4 warnings, bez suppression:
+verification/frontend-production-source-79917bb6eaaa42f1a3e23bdc0656dc32.json.
+Fingerprint źródeł stabilny. CI wcześniejszego cd675213582e73b1aedf3dc9bd8c77dceac67395
+PASS: 9101 testów/13 skip, production build, browser fixture oraz bramki
+kontraktów. Nie obejmuje nowych 30 przypadków. Live/API i browser dla obecnego
+draftu pozostają NOT VERIFIED. Puste liczby/wektory wymagają osobnej poprawki parsera.
+
+Decyzja użytkownika: przed aktualizacją PR #249 ujednolicić wszystkie Inspectory,
+czytelność pól i brakujące pickery koloru. Bieżący etap zapisujemy lokalnie;
+push nastąpi po realizacji i weryfikacji tego zakresu. Retencja bez usuwania.
