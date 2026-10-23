@@ -24,6 +24,7 @@ import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   ArtifactCarrierGeometryQuery,
   BinaryResourceResult,
+  CurrentRunResource,
   FieldCatalogResource,
   FieldVectorResponseMetadata,
   FieldVectorQuery,
@@ -51,6 +52,8 @@ import {
 } from "@/kernel/resources/ResourceRuntimeStore";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { useResource } from "@/kernel/resources/useResource";
+import { useCurrentRunResource } from "@/kernel/resources/studyRuntimeResources";
+import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import { sessionResourceIdentityKey, sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { observationFrameMagnetizationResourceKey } from "@/kernel/resources/observationFrameResources";
@@ -1676,12 +1679,35 @@ export function validateViewport3DObservationFrameMagnetization(
   }
 }
 
+export function resolveViewport3DObservationRunAvailability(
+  runId: string | null | undefined,
+  run: Pick<ResourceResult<CurrentRunResource | null>, "data" | "status" | "error" | "refreshError">,
+): { available: boolean; status: "ready" | "loading" | "error"; message: string | null } {
+  if (!runId) return { available: false, status: "error", message: "Pinned observation frame has no run identity. Unpin or select a frame from the active run." };
+  if (run.error || run.refreshError) return {
+    available: false, status: "error",
+    message: `Cannot confirm the active run for the pinned observation frame: ${(run.error ?? run.refreshError)!.message}`,
+  };
+  if (run.status !== "ready") return { available: false, status: "loading", message: "Waiting for the active run before displaying the pinned observation frame." };
+  if (run.data?.run_id !== runId) return {
+    available: false, status: "error",
+    message: `Pinned observation frame belongs to run ${runId}; active run is ${run.data?.run_id ?? "unavailable"}. Unpin or select a frame from the active run.`,
+  };
+  return { available: true, status: "ready", message: null };
+}
+
 export function useViewport3DObservationFrameMagnetization(
   frameId: string | null | undefined,
   enabled = true,
+  runId?: string | null,
 ) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
+  const currentRun = useCurrentRunResource({ enabled: enabled && Boolean(frameId) });
+  const runAvailability = resolveViewport3DObservationRunAvailability(runId, currentRun);
+  const runError = useMemo(() => runAvailability.status === "error"
+    ? new Error(runAvailability.message ?? "Pinned observation frame is unavailable.") : null,
+  [runAvailability.message, runAvailability.status]);
   const unscopedRequestKey = observationFrameMagnetizationResourceKey(frameId);
   const requestKey = sessionIdentity
     ? sessionScopedResourceKey(sessionIdentity, unscopedRequestKey)
@@ -1723,7 +1749,7 @@ export function useViewport3DObservationFrameMagnetization(
   );
   const resource = useResource({
     abortStaleInflight: true,
-    enabled: enabled && Boolean(frameId) && sessionIdentity !== null,
+    enabled: enabled && Boolean(frameId) && sessionIdentity !== null && runAvailability.available,
     load,
     pauseLoad: false,
     retryPolicy: FIELD_VECTOR_RETRY_POLICY,
@@ -1732,9 +1758,14 @@ export function useViewport3DObservationFrameMagnetization(
   });
   return {
     ...resource,
-    data: resource.data?.data ?? null,
-    payloadRevision: resource.data?.etag ?? resolveRevision(),
-    responseMetadata: resource.data?.responseMetadata ?? null,
+    availableForActiveRun: runAvailability.available,
+    runStatusMessage: runAvailability.message,
+    data: runAvailability.available ? resource.data?.data ?? null : null,
+    error: runAvailability.available ? resource.error : runError,
+    status: runAvailability.available ? resource.status : runAvailability.status,
+    refetch: runAvailability.available ? resource.refetch : currentRun.refetch,
+    payloadRevision: runAvailability.available ? resource.data?.etag ?? resolveRevision() : null,
+    responseMetadata: runAvailability.available ? resource.data?.responseMetadata ?? null : null,
   };
 }
 
