@@ -42,7 +42,7 @@ type JsonRecord = Record<string, unknown>;
  * historic `Number()` semantics; time and frequency fields additionally accept
  * an explicit unit suffix ("2 ps", "10GHz") and are converted to SI.
  */
-function draftNumber(value: string, dimension: QuantityDimension = "dimensionless"): number {
+export function draftNumber(value: string, dimension: QuantityDimension = "dimensionless"): number {
   const trimmed = value.trim();
   if (dimension === "dimensionless") return trimmed ? Number(trimmed) : Number.NaN;
   const parsed = parseQuantityInput(trimmed, dimension);
@@ -4113,7 +4113,7 @@ function strictFiniteNumberList(value: string): number[] | null {
  * reported instead of silently dropped. Tokens are separated by commas or
  * whitespace; a unit must be attached to its number ("10GHz").
  */
-function positiveDraftNumberList(
+export function positiveDraftNumberList(
   value: string,
   dimension: QuantityDimension,
 ): { invalid: string[]; nonPositive: string[]; values: number[] } {
