@@ -288,7 +288,7 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
         assert.equal(await apply.isDisabled(), true, "Invalid material field text must block Apply Fields.");
       } else {
         await apply.click();
-        await inspector.getByText(/Correct Local override before applying/).waitFor();
+        await inspector.locator(".fm-inspector-feedback__message").filter({ hasText: /^Correct Local override before applying\.$/ }).waitFor();
       }
       assert.equal(evidence.mutations.length, mutationCount, `${label}: invalid text was submitted as a previous numeric value.`);
       await capture(`${label === "Value" ? "field" : "override"}-retained-invalid-draft`);

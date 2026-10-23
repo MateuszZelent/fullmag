@@ -497,7 +497,16 @@ describe("PlanarVisualizationSection", () => {
         );
         const rasterOpacity = findControl(container, "Raster opacity");
         panel.scrollTop = 127;
-        wireframeOpacity.focus();
+        await act(async () => {
+          // The custom DOM does not emit focusin from focus(). React's legacy
+          // input-event polyfill needs that event before handling keydown.
+          Object.assign(wireframeOpacity, {
+            attachEvent: () => undefined,
+            detachEvent: () => undefined,
+          });
+          wireframeOpacity.focus();
+          wireframeOpacity.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+        });
         const unrelatedState = {
           className: rasterOpacity.getAttribute("class"),
           disabled: rasterOpacity.disabled,
@@ -570,6 +579,10 @@ describe("PlanarVisualizationSection", () => {
         expect(mocks.metaCalls).toBe(initialMetaCalls + 2);
         expect(mocks.maskCalls).toBe(initialMaskCalls + 2);
       } finally {
+        const focusedControl = dom.document.activeElement;
+        if (focusedControl) {
+          await act(async () => focusedControl.dispatchEvent(new TestEvent("focusout", { bubbles: true })));
+        }
         await act(async () => root.unmount());
         dom.restore();
       }

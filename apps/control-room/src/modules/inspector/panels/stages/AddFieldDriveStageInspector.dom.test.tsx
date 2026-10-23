@@ -583,7 +583,14 @@ function findTextarea(root: TestNode, label: string): TestElement {
 function findSelect(root: TestNode, label: string): TestElement {
   return findElement(
     root,
-    (element) => element.tagName === "SELECT" && element.getAttribute("aria-label") === label,
+    (element) => {
+      if (element.tagName !== "SELECT") return false;
+      if (element.getAttribute("aria-label") === label) return true;
+      const wrapper = element.parentNode;
+      return wrapper instanceof TestElement && wrapper.tagName === "LABEL" &&
+        wrapper.childNodes.some((child) => child instanceof TestElement &&
+          child.tagName === "SPAN" && child.textContent.trim() === label);
+    },
     "select " + label,
   );
 }
