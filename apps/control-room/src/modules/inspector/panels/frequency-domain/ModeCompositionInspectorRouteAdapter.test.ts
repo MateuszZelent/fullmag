@@ -13,6 +13,7 @@ import { modeCompositionInspectorDependenciesFromResources } from "./modeComposi
 
 const fixtures = vi.hoisted(() => ({
   composition: { source: "composition-resource" },
+  controllerState: { resource: { source: "optimistic-or-ack-resource" }, error: null, pending_target_ids: ["object:film"], status: "stale" },
   controller: { source: "kernel-controller" },
   scene: { source: "scene-resource" },
   spectrum: { source: "spectrum-v3-resource" },
@@ -33,7 +34,10 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   useSceneResource: () => ({ data: fixtures.scene }),
 }));
 vi.mock("@/kernel/resources/modeCompositionResources", () => ({
-  useModeCompositionControllerResource: () => ({ resource: { data: fixtures.composition } }),
+  useModeCompositionControllerResource: () => ({ resource: { data: fixtures.composition }, controller: fixtures.controllerState }),
+}));
+vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionResourceIdentity: () => ({ sessionId: "session-1", sessionEpoch: "1", requestScopeEpoch: "1" }),
 }));
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFrequencyDomainEigenSpectrumV3Resource: () => ({ data: fixtures.spectrum }),
@@ -68,8 +72,10 @@ describe("ModeCompositionInspectorRouteAdapter resource boundary", () => {
     renderToStaticMarkup(createElement(Route, props));
 
     expect(modeCompositionInspectorDependenciesFromResources).toHaveBeenCalledWith({
-      composition: fixtures.composition,
+      composition: fixtures.controllerState.resource,
       controller: fixtures.controller,
+      controllerState: fixtures.controllerState,
+      sessionScopeKey: "session=session-1&epoch=1&request_scope_epoch=1",
       scene: fixtures.scene,
       spectrumArtifact: fixtures.spectrum,
     });

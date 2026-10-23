@@ -61,6 +61,17 @@ const spectrumArtifact = {
 } as unknown as FrequencyDomainJsonArtifactResource;
 
 describe("modeCompositionInspectorDependenciesFromResources", () => {
+  it("carries the controller status and session owner alongside its projected resource", () => {
+    const controllerState = { resource: composition, error: null, pending_target_ids: ["object:film"], status: "stale" as const };
+    const dependencies = modeCompositionInspectorDependenciesFromResources({
+      composition, controller, controllerState, sessionScopeKey: "session=session-1&epoch=2",
+      scene, spectrumArtifact,
+    });
+    expect(dependencies.resource).toBe(controllerState.resource);
+    expect(dependencies.controllerState).toBe(controllerState);
+    expect(dependencies.sessionScopeKey).toBe("session=session-1&epoch=2");
+  });
+
   it("builds non-null registry dependencies from spectrum.v3 and canonical scene targets", () => {
     const dependencies = modeCompositionInspectorDependenciesFromResources({
       composition,
