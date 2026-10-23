@@ -41,6 +41,7 @@ import { SelectionExpressionBuilder } from "../selection/SelectionExpressionBuil
 import { selectionReferenceCatalog, selectionReferenceIssue } from "../selection/selectionReferenceCatalog";
 import { syncAuthoringScriptBestEffort } from "../ObjectMagneticTexturePanelViewModel";
 import { reconcileFrozenSpinsDraft } from "./frozenSpinsDraft";
+import { frozenSpinsStageCatalog, frozenSpinsStageIssue } from "./frozenSpinsStageCatalog";
 
 type PendingField = "activate" | "apply" | "delete" | "preview" | "quantity" | null;
 
@@ -158,6 +159,14 @@ export function FrozenSpinsEditor({
   const referenceCatalog = useMemo(() => selectionReferenceCatalog(scene.data,
     scene.status === "ready" && !scene.error && !scene.refreshError), [scene.data, scene.status, scene.error, scene.refreshError]);
   const referenceIssue = selectionReferenceIssue(draft.selector, referenceCatalog);
+  const stageCatalog = useMemo(() => frozenSpinsStageCatalog(scene.data?.study,
+    scene.status === "ready" && !scene.error && !scene.refreshError && scene.data !== null),
+  [scene.data, scene.status, scene.error, scene.refreshError]);
+  const stageOptionsById = useMemo(() => new Map(stageCatalog.options.map((option) => [option.id, option])), [stageCatalog]);
+  const selectedStageIds = useMemo(() => new Set(draft.activation?.kind === "stage_ids" ? draft.activation.stage_ids : []), [draft.activation]);
+  const stageIssue = draft.activation?.kind === "stage_ids"
+    ? frozenSpinsStageIssue(draft.activation.stage_ids, stageCatalog) : undefined;
+  const authoringIssue = referenceIssue ?? stageIssue;
   const numericDrafts = useQuantityFieldDraftScope(
     JSON.stringify([sessionScopeKey, "frozen-spins", initialDefinition.id, objectId, regionId]),
   );
@@ -236,7 +245,7 @@ export function FrozenSpinsEditor({
   }
 
   async function applyDraft(): Promise<boolean> {
-    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue || !canonicalDirty) return false;
+    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || authoringIssue || !canonicalDirty) return false;
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
     const submittedDraft = draft;
     const operationSessionScopeKey = sessionScopeKey ?? null;
@@ -323,7 +332,7 @@ export function FrozenSpinsEditor({
   }
 
   async function createPreview(): Promise<void> {
-    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue || !fieldIdentityCurrent) return;
+    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || authoringIssue || !fieldIdentityCurrent) return;
     const operationSessionScopeKey = sessionScopeKey ?? null;
     if (!operationSessionScopeKey) {
       setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
@@ -405,7 +414,7 @@ export function FrozenSpinsEditor({
 
   async function activatePreview(): Promise<void> {
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
-    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue) return;
+    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || authoringIssue) return;
     if (!preview || !activationCandidateReady) {
       setFeedback({
         kind: "warning",
@@ -642,7 +651,7 @@ export function FrozenSpinsEditor({
   const membership = draft.membership?.kind ?? "automatic";
   const toolbarPending = pendingField !== null;
   const activationCandidateReady = Boolean(
-    !referenceIssue &&
+    !authoringIssue &&
     !definitionUnavailableReason &&
     !conflict &&
     numericDrafts.summary.pendingCount === 0 &&
@@ -669,12 +678,12 @@ export function FrozenSpinsEditor({
     deleted ? null : "staged",
     pendingField !== null,
     dirty,
-    numericDrafts.summary.pendingCount === 0 && !conflict && !definitionUnavailableReason && !referenceIssue,
+    numericDrafts.summary.pendingCount === 0 && !conflict && !definitionUnavailableReason && !authoringIssue,
     undefined,
     applyDraft,
     resetDraft,
     {
-      applyBlockReason: definitionUnavailableReason ?? conflictReason ?? referenceIssue ?? numericDraftBlockReason ?? (sessionScopeKey ? undefined : "Session identity is not ready."),
+      applyBlockReason: definitionUnavailableReason ?? conflictReason ?? authoringIssue ?? numericDraftBlockReason ?? (sessionScopeKey ? undefined : "Session identity is not ready."),
       historyMode: "mutation-owned",
     },
   );
@@ -818,19 +827,38 @@ export function FrozenSpinsEditor({
           }
         />
         {activation.kind === "stage_ids" ? (
-          <TextInput
-            label="Stage IDs"
-            value={activation.stage_ids.join(", ")}
-            onChange={(value) =>
-              setDraft((current) => ({
-                ...current,
-                activation: {
-                  kind: "stage_ids",
-                  stage_ids: splitIds(value),
-                },
-              }))
-            }
-          />
+          <div className="grid min-w-0 gap-fm-inspector-group">
+            {stageIssue ? <FeedbackBanner kind="warning" message={stageIssue} /> : null}
+            {scene.error || scene.refreshError ? <FeedbackBanner kind="error" message={errorMessage(scene.error ?? scene.refreshError)} /> : null}
+            <Button disabled={scene.status === "loading"} size="sm" type="button" onClick={scene.refetch}>Refresh activation stages</Button>
+            <label className="fm-inspector-field">
+              <span>Add activation stage</span>
+              <select aria-label="Add activation stage" className="fm-inspector-input min-w-0" value="" disabled={!stageCatalog.ready}
+                onChange={(event) => {
+                  const id = event.target.value;
+                  if (!stageCatalog.ready || !stageCatalog.options.some((option) => option.id === id)) return;
+                  setDraft((current) => current.activation?.kind !== "stage_ids" || current.activation.stage_ids.includes(id) ? current : ({
+                    ...current, activation: { kind: "stage_ids", stage_ids: [...current.activation.stage_ids, id] },
+                  }));
+                }}>
+                <option value="" disabled>Select a study stage…</option>
+                {stageCatalog.options.map((option) => selectedStageIds.has(option.id) ? null : (
+                  <option key={option.id} value={option.id}>{option.groupIds.length ? `${option.groupIds.join(" / ")} / ` : ""}{option.label}</option>
+                ))}
+              </select>
+            </label>
+            {[...selectedStageIds].map((id) => {
+              const option = stageOptionsById.get(id);
+              return <div key={id} className="flex min-w-0 items-start gap-2">
+                <span className="min-w-0 flex-1 break-words">{option?.label ?? `${stageCatalog.ready ? "Unavailable" : "Unconfirmed"}: ${id}`}</span>
+                <Button aria-label={`Remove activation stage ${id}`} size="sm" type="button" onClick={() => setDraft((current) => current.activation?.kind === "stage_ids" ? ({
+                  ...current, activation: { kind: "stage_ids", stage_ids: current.activation.stage_ids.filter((entryId) => entryId !== id) },
+                }) : current)}>Remove</Button>
+              </div>;
+            })}
+            {activation.stage_ids.length ? <FieldRow label="Preview stage ID" value={activation.stage_ids[0]} /> : null}
+            <p className="fm-help-text">Preview uses the first selected stage. Remove and add a stage to change that order. Disabled study stages remain valid activation references.</p>
+          </div>
         ) : null}
         <SelectInput
           label="Reference"
@@ -874,7 +902,7 @@ export function FrozenSpinsEditor({
         ) : null}
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={toolbarPending || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason) || Boolean(referenceIssue) || !fieldIdentityCurrent}
+            disabled={toolbarPending || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason) || Boolean(authoringIssue) || !fieldIdentityCurrent}
             size="sm"
             type="button"
             onClick={() => void createPreview()}
@@ -882,7 +910,7 @@ export function FrozenSpinsEditor({
             {pendingField === "preview" ? "Computing preview…" : "Preview mask"}
           </Button>
           <Button
-            disabled={toolbarPending || !dirty || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason) || Boolean(referenceIssue)}
+            disabled={toolbarPending || !dirty || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason) || Boolean(authoringIssue)}
             size="sm"
             type="button"
             onClick={() => void applyDraft()}
@@ -1172,10 +1200,6 @@ function scopedFrozenSpinsRequestOptions(
   sessionScopeKey: string | null | undefined,
 ): { sessionScopeKey: string } | undefined {
   return sessionScopeKey ? { sessionScopeKey } : undefined;
-}
-
-function splitIds(value: string): string[] {
-  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
 
 function activationIncludesStage(

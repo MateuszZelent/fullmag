@@ -1277,6 +1277,86 @@ describe("FrozenSpinsInspectorPanel", () => {
     }
   });
 
+  it("selects exact canonical stage IDs including groups and previews the explicit first stage", async () => {
+    mocks.sceneCatalog = { objects: [{ id: "film" }], study: { study_pipeline: { nodes: [{
+      id: "group,alpha", label: "Shared label", node_kind: "group", children: [{
+        id: "leaf,alpha", label: "Shared label", node_kind: "primitive", stage_kind: "relax",
+      }],
+    }] } } };
+    const harness = await mountNumericEditor(definitionFixture());
+    try {
+      await harness.change("Activation", "stage_ids");
+      expect(findButton(harness.container, "Apply").disabled).toBe(true);
+      expect(harness.store.getCurrentSession()).toMatchObject({ valid: false });
+      await harness.change("Add activation stage", "group,alpha");
+      await harness.change("Add activation stage", "leaf,alpha");
+      // Repeated events cannot add duplicate IDs.
+      await harness.change("Add activation stage", "leaf,alpha");
+      expect(harness.container.textContent).toContain("Preview stage ID");
+      expect(harness.container.textContent).toContain("group,alpha");
+      await act(async () => findButton(harness.container, "Preview mask").click());
+      expect(mocks.createPreview).toHaveBeenCalledWith(expect.objectContaining({ stage_id: "group,alpha" }), expect.anything());
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch).toHaveBeenCalledWith("pin-edge", expect.objectContaining({ definition: expect.objectContaining({
+        activation: { kind: "stage_ids", stage_ids: ["group,alpha", "leaf,alpha"] },
+      }) }), expect.anything());
+    } finally { await harness.dispose(); }
+  });
+
+  it("preserves unavailable stage IDs until explicit removal and never substitutes an option", async () => {
+    const definition = { ...definitionFixture(), activation: { kind: "stage_ids" as const, stage_ids: ["missing,stage"] } };
+    mocks.sceneCatalog = { objects: [{ id: "film" }], study: { study_pipeline: { nodes: [{
+      id: "available", node_kind: "primitive", stage_kind: "relax",
+    }] } } };
+    const harness = await mountNumericEditor(definition);
+    try {
+      await harness.edit("Name", "Edited pinned edge");
+      expect(harness.container.textContent).toContain("Unavailable: missing,stage");
+      expect(findButton(harness.container, "Apply").disabled).toBe(true);
+      const session = harness.store.getCurrentSession();
+      expect(session).toMatchObject({ valid: false });
+      await act(async () => { await session?.apply(); });
+      expect(mocks.patch).not.toHaveBeenCalled();
+      await harness.change("Add activation stage", "available");
+      expect(findButton(harness.container, "Apply").disabled).toBe(true);
+      await act(async () => findByAttribute(harness.container, "aria-label", "Remove activation stage missing,stage").click());
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch).toHaveBeenCalledWith("pin-edge", expect.objectContaining({ definition: expect.objectContaining({
+        activation: { kind: "stage_ids", stage_ids: ["available"] },
+      }) }), expect.anything());
+    } finally { await harness.dispose(); }
+  });
+
+  it.each(["loading", "stale", "error", "malformed"] as const)("preserves selected stage IDs and guards mutations with %s study source", async (state) => {
+    const definition = { ...definitionFixture(), activation: { kind: "stage_ids" as const, stage_ids: ["stage,alpha"] } };
+    mocks.sceneCatalog = { objects: [{ id: "film" }], study: { study_pipeline: { version: state === "malformed" ? "future" : "study_pipeline.v1", nodes: [{
+      id: "stage,alpha", node_kind: "primitive", stage_kind: "relax",
+    }] } } };
+    mocks.sceneCatalogStatus = state === "malformed" ? "ready" : state;
+    if (state === "error") mocks.sceneCatalogError = new Error("Study refresh failed");
+    const harness = await mountNumericEditor(definition);
+    try {
+      await harness.edit("Name", "Edited pinned edge");
+      expect(findByAttribute(harness.container, "aria-label", "Add activation stage").disabled).toBe(true);
+      expect(harness.container.textContent).toContain("stage,alpha");
+      for (const action of ["Apply", "Preview mask"]) {
+        expect(findButton(harness.container, action).disabled).toBe(true);
+        await act(async () => findButton(harness.container, action).click());
+      }
+      expect(mocks.patch).not.toHaveBeenCalled();
+      expect(mocks.createPreview).not.toHaveBeenCalled();
+      mocks.sceneCatalogStatus = "ready";
+      mocks.sceneCatalogError = null;
+      mocks.sceneCatalog = { objects: [{ id: "film" }], study: { study_pipeline: { nodes: [{ id: "stage,alpha", node_kind: "primitive", stage_kind: "relax" }] } } };
+      await harness.renderDefinition(definition);
+      expect(findByAttribute(harness.container, "aria-label", "Name").value).toBe("Edited pinned edge");
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch).toHaveBeenCalledWith("pin-edge", expect.objectContaining({ definition: expect.objectContaining({
+        activation: { kind: "stage_ids", stage_ids: ["stage,alpha"] },
+      }) }), expect.anything());
+    } finally { await harness.dispose(); }
+  });
+
   it.each(["idle", "loading", "stale", "error", "ready-error", "ready-refresh-error"] as const)("blocks retained field identity in %s and recovers without losing edits", async (state) => {
     mocks.fieldMetaStatus = state.startsWith("ready-") ? "ready" : state as ResourceStatus;
     if (state === "error" || state === "ready-error") mocks.fieldMetaError = new Error("Field identity failed");

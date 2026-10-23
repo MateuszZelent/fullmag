@@ -1737,3 +1737,55 @@ dowodu nowym guardom.
 Retencja: brak builda, instalacji, restartu i usuwania danych; zachowano cache
 i receipty. Następne: katalog etapów zamiast CSV, dalsza semantyka formularzy,
 szerszy audyt frontendowy i kwalifikacja live; pełny cel nadal otwarty.
+
+### Checkpoint: katalog etapów aktywacji zamiast stratnego CSV
+
+Backend dopuszcza przecinek w opaque study pipeline ID oraz referencje do
+grup, primitive i macro, także disabled. Dawne join/split/trim nie potrafiło
+zachować stage,alpha. Zastąpiono CSV jawnym dodawaniem etapów ze sceny
+study.study_pipeline i usuwaniem wybranych ID. readStudyStageSource sprawdza
+kanoniczny dokument; osobna projekcja dodaje grupy, których wykonawcza lista
+entries celowo nie zawiera. Nie używa run execution IDs, indeksów, labels
+ani dormant flat stages jako tożsamości. Etykiety pokazują rodzaj, dokładny
+ID, kontekst grup i inherited disabled; disabled pozostaje legalną referencją.
+
+Brakujące ID pozostaje w draft i jest widoczne jako Unavailable/Unconfirmed.
+Nie ma auto-first, split ani trim. Loading/stale/error/malformed nie czyści
+wyboru; lokalne, globalne i imperatywne Apply/Preview/Commit wymagają obecnych,
+niepustych, unikalnych ID w potwierdzonym katalogu. Refresh korzysta z tego
+samego resource hooka sceny. Usuwanie jest jawne; przy powtórzonym authored ID
+usuwa wszystkie jego wystąpienia, bez cichej normalizacji pozostałych danych.
+Preview stage ID jest widoczny i odpowiada pierwszemu wybranemu ID; tekst
+wyjaśnia kolejność i zmianę przez remove/add. Zachowano dotychczasową semantykę
+backendu, bez nowych endpointów, zależności lub lokalnej instalacji.
+
+Dodano 7 regresji modelu i 6 DOM: grupy/zagnieżdżenia/macro/disabled, identyczne
+labels i comma ID, puste/duplicate/missing, brak fallbacku, retained/stale/error,
+malformed, globalny guard, jawne usuwanie i exact Preview/Apply payload.
+Review wykryło dwa P2 w fixture/helperze testów (brak film i założenie aktywnego
+Apply w stanie invalid); oba poprawiono i zamknięto źródłowo. Produkcyjny diff
+bez potwierdzonych P1/P2. Testy jednostkowe lokalnie nie były kompilowane ani
+uruchamiane; nowe 13 przypadków oczekuje na CI.
+
+Końcowe production typecheck, architecture hygiene i lint 4 plików PASS:
+verification/frontend-production-source-aee990977519446db66b5aa372904b6a.json.
+API hygiene PASS: verification/frontend-api-hygiene-0612d9e6698049a0880556b0b2d85ed5.json.
+React Doctor: 0 errors/skips, 6 istniejących ostrzeżeń, bez suppression:
+verification/frontend-production-source-adad9a9f8dec4dd8a68bedaf29674bba.json.
+Wcześniejsze uwagi filter/map, linear lookup i index key nowej listy usunięto
+przez Set/Map i klucz rzeczywistego ID. Wszystkie końcowe źródła stabilne.
+Końcowy review staged diff poprawił również parametryzację czterech
+array-valued cases Vitest: przekazuje obiekt z ids, zamiast rozpakowania
+tablicy jako argumentów testu. Końcowy lint tego test-only doprecyzowania PASS:
+verification/frontend-production-source-85a7a1cafd7549358d1c951852aa03c9.json.
+
+CI HEAD 215993dc3f554f41a298c07e4d8446c7a1015cfd: Control Room job
+120249617791 PASS (9042 testy/13 skip, production build, compute performance
+i dodatkowe 3 testy); browser fixture job 120249617922 PASS w run 39903281813.
+To obejmuje 15 przypadków Python sync i 6 field freshness, nie nowy katalog
+etapów. Cały bootstrap nadal wykonywał pozostałe bramki przy odczycie.
+
+Retencja: bez builda, instalacji, restartu, owner resetu i usuwania danych;
+cache oraz receipty zachowano. Nadal otwarte: dalsza walidacja reference asset,
+geometry/axis/transform, pozostałe rodziny frontendowe, rzeczywisty browser
+formularzy, managed runtime/live qualification oraz integracja PR #249.
