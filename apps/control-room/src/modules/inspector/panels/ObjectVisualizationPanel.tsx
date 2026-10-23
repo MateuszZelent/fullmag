@@ -4,6 +4,7 @@ import { isScalarSpatialQuantityId } from "@/kernel/api/quantityIds";
 import { artifactFieldCatalogMatchesOwner, type ArtifactFieldSelection, artifactCarrierPresentationKey, artifactInspectionQuantity, artifactInspectorFieldBinding } from "@/kernel/visualization/artifactFieldSelection";
 import { useVisualizationFieldMeta } from "@/kernel/resources/useVisualizationFieldMeta";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { Eye } from "lucide-react";
 import React, {
   useCallback,
@@ -141,6 +142,7 @@ import {
 } from "./ObjectVisualizationHelpers";
 import { ObjectVisualizationOverview } from "./ObjectVisualizationOverview";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
+import { PlanarPresentationDraftOwner, usePlanarPresentationDraftState } from "../visualization/PlanarPresentationDraftOwner";
 import {
   VisualizationContextSwitchControl,
   useVisualizationViewContext,
@@ -1214,21 +1216,33 @@ const OBJECT_VISUALIZATION_OWNER: VisualizationInspectorOwner = {
   title: "Object visualization",
 };
 
-export function VisualizationTargetInspectorPanel({
+type VisualizationTargetInspectorPanelProps = InspectorPanelProps & {
+  children?: React.ReactNode;
+  owner: VisualizationInspectorOwner;
+  sceneOverride?: ReturnType<typeof useSceneResource>;
+  artifactInspection?: boolean;
+  artifactInspectionOwner?: ArtifactFieldSelection | null;
+};
+
+export function VisualizationTargetInspectorPanel(props: VisualizationTargetInspectorPanelProps) {
+  const sessionScope = sessionRequestScopeKey(useSessionResourceIdentity());
+  const target = resolveVisualizationTargetFromSelection(props.selection);
+  const identityKey = JSON.stringify([sessionScope, target ? visualizationTargetKey(target) : props.selection.nodeId]);
+  return (
+    <PlanarPresentationDraftOwner identityKey={identityKey}>
+      <VisualizationTargetInspectorContent {...props} />
+    </PlanarPresentationDraftOwner>
+  );
+}
+
+function VisualizationTargetInspectorContent({
   children,
   owner,
   selection,
   sceneOverride,
   artifactInspection = false,
   artifactInspectionOwner = null,
-}: InspectorPanelProps & {
-  /** Owner-specific nav sections (e.g. complex representation and phase for a mode), shown after "View" in 3D. */
-  children?: React.ReactNode;
-  owner: VisualizationInspectorOwner;
-  sceneOverride?: ReturnType<typeof useSceneResource>;
-  artifactInspection?: boolean;
-  artifactInspectionOwner?: ArtifactFieldSelection | null;
-}) {
+}: VisualizationTargetInspectorPanelProps) {
   const panel = useObjectVisualizationPanelState(selection, sceneOverride, artifactInspection, artifactInspectionOwner);
   const {
     carrierIdentity,
@@ -1291,7 +1305,9 @@ export function VisualizationTargetInspectorPanel({
   const activeSettings = stablePanel?.settings ?? settings;
   const visualizationViewContext = useVisualizationViewContext();
   const { visualizationSync } = useKernel();
+  const planarDrafts = usePlanarPresentationDraftState();
   const syncSharedQuiverIntent = useCallback(() => {
+    if (planarDrafts.store?.getSummary().pendingCount) return;
     const planar = planarVisualizationState;
     if (!planar) return;
     const presentationPatch = planarPresentationPatchFromThreeDimensional({
@@ -1300,7 +1316,7 @@ export function VisualizationTargetInspectorPanel({
       vectorLengthScale: activeSettings?.vectorLengthScale ?? 1,
     }, planar.resolution, planar.vector_style);
     if (presentationPatch) visualizationSync.queuePatch({ planar: presentationPatch });
-  }, [activeSettings?.vectorBudget, activeSettings?.vectorColorMode, activeSettings?.vectorLengthScale, planarVisualizationState, visualizationSync]);
+  }, [activeSettings?.vectorBudget, activeSettings?.vectorColorMode, activeSettings?.vectorLengthScale, planarDrafts.store, planarVisualizationState, visualizationSync]);
   const scientificInspectorIdentity = (
     <ScientificInspectorIdentity
       methodLabel="Display controls"

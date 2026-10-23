@@ -27,6 +27,10 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
+  QuantityFieldDraftScope,
+  useQuantityFieldDraftScope,
+} from "../primitives/QuantityField";
+import {
   buildNewRegionPayload,
   defaultNewRegionDraft,
   findRegionIdByName,
@@ -41,6 +45,7 @@ import { resolveMeshInspectorLane } from "./fdmMeshInspectorModel";
 import { publishRegionAuthoringScene } from "./regionAuthoringInvalidation";
 import { syncAuthoringScriptBestEffort } from "./ObjectMagneticTexturePanelViewModel";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+import { RegionIntegerField } from "./region/RegionIntegerField";
 
 type Feedback =
   | {
@@ -82,6 +87,17 @@ function diagnosticSummary(item: RegionsListItem): string | null {
     .join(" · ");
 }
 
+function pendingPriorityDraftBlockReason(summary: {
+  pendingCount: number;
+  invalidLabels: readonly string[];
+}): string | undefined {
+  if (summary.pendingCount === 0) return undefined;
+  if (summary.invalidLabels.length === 0) {
+    return "Commit Priority before creating the region.";
+  }
+  return `Complete or correct ${summary.invalidLabels[0] ?? "Priority"} before creating the region.`;
+}
+
 export function RegionsListPanel({ selection }: InspectorPanelProps) {
   const {
     api,
@@ -109,6 +125,14 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
       ),
     [meshLane, regionDiagnostics.data, regions.data, scene.data, selection],
   );
+  const draftScopeIdentity = JSON.stringify([sessionScopeKey, model.objectId]);
+  const draftScopeIdentityRef = useRef(draftScopeIdentity);
+  const previousDraftScopeIdentityRef = useRef(draftScopeIdentity);
+  const fieldDrafts = useQuantityFieldDraftScope(draftScopeIdentity);
+  const priorityDraftKey = `new-region-priority:${draftScopeIdentity}`;
+  const priorityDraftBlockReason = pendingPriorityDraftBlockReason(
+    fieldDrafts.summary,
+  );
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<NewRegionDraft>(defaultNewRegionDraft);
   const draftRef = useRef(draft);
@@ -118,6 +142,16 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
   const createInFlight = useRef(false);
+  useLayoutEffect(() => {
+    draftScopeIdentityRef.current = draftScopeIdentity;
+    if (previousDraftScopeIdentityRef.current === draftScopeIdentity) return;
+    previousDraftScopeIdentityRef.current = draftScopeIdentity;
+    const reset = defaultNewRegionDraft();
+    draftRef.current = reset;
+    setDraft(reset);
+    setAdding(false);
+    setFeedback(null);
+  }, [draftScopeIdentity]);
 
   function updateDraft(patch: Partial<NewRegionDraft>): void {
     const next = { ...draftRef.current, ...patch };
@@ -127,6 +161,7 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
 
   function resetDraft(): void {
     if (createInFlight.current) return;
+    fieldDrafts.store.remove(priorityDraftKey);
     const reset = defaultNewRegionDraft();
     draftRef.current = reset;
     setDraft(reset);
@@ -162,13 +197,15 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
     adding ? "staged" : null,
     pending,
     adding,
-    model.mode === "committed" && validateNewRegionDraft(draft).length === 0,
+    model.mode === "committed" &&
+      validateNewRegionDraft(draft).length === 0 &&
+      priorityDraftBlockReason === undefined,
     undefined,
     createRegion,
     resetDraft,
     {
       applyBlockReason: sessionScopeKey
-        ? undefined
+        ? priorityDraftBlockReason
         : "Session identity is not ready.",
       historyMode: "mutation-owned",
     },
@@ -176,11 +213,21 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
 
   async function createRegion(): Promise<boolean> {
     if (createInFlight.current) return false;
+    const currentPriorityDraftBlockReason = pendingPriorityDraftBlockReason(
+      fieldDrafts.store.getSummary(),
+    );
+    if (currentPriorityDraftBlockReason) {
+      setFeedback({
+        kind: "error",
+        message: currentPriorityDraftBlockReason,
+      });
+      return false;
+    }
     if (model.mode !== "committed") {
       setFeedback({ kind: "error", message: "No committed scene object." });
       return false;
     }
-    const submittedDraft = draft;
+    const submittedDraft = draftRef.current;
     const validationErrors = validateNewRegionDraft(submittedDraft);
     if (validationErrors.length > 0) {
       setFeedback({ kind: "error", message: validationErrors[0] ?? "Invalid region draft." });
@@ -192,6 +239,12 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
       setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
       return false;
     }
+    const operationDraftScopeIdentity = draftScopeIdentity;
+    const submittedDraftStore = fieldDrafts.store;
+    const submittedDraftStoreVersion = submittedDraftStore.getVersion();
+    const submittedPriorityDraft = submittedDraftStore.get(priorityDraftKey);
+    const isCurrentDraftScope = () =>
+      draftScopeIdentityRef.current === operationDraftScopeIdentity;
     const historyGeneration = authoringHistory?.getGeneration?.();
     const historyContext = {
       api,
@@ -238,9 +291,16 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
         model.objectId,
         submittedDraft.name,
       );
-      const draftUnchanged = draftRef.current === submittedDraft;
+      const submittedDraftStoreUnchanged =
+        submittedDraftStore.getVersion() === submittedDraftStoreVersion &&
+        submittedDraftStore.get(priorityDraftKey) === submittedPriorityDraft;
+      const draftUnchanged =
+        isCurrentDraftScope() &&
+        submittedDraftStoreUnchanged &&
+        draftRef.current === submittedDraft;
       if (draftUnchanged) {
         if (!acknowledgeNewRegionDraft()) return false;
+        submittedDraftStore.remove(priorityDraftKey);
         const reset = defaultNewRegionDraft();
         draftRef.current = reset;
         setDraft(reset);
@@ -265,6 +325,7 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
       }
       const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
       if (historyContext.isCurrentSessionScope() === false) return false;
+      if (!isCurrentDraftScope()) return false;
       setFeedback({
         kind: "success",
         message: syncWarning
@@ -274,6 +335,7 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
       return true;
     } catch (error) {
       if (historyContext.isCurrentSessionScope() === false) return false;
+      if (draftScopeIdentityRef.current !== operationDraftScopeIdentity) return false;
       setFeedback({ kind: "error", message: errorMessage(error) });
       return false;
     } finally {
@@ -299,48 +361,48 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
             Add Region
           </Button>
         </div>
-        <div className="fm-region-list" role="list">
+        <ul className="fm-region-list m-0 list-none">
           {model.items.length === 0 ? (
-            <div className="fm-region-list__empty">No authored regions.</div>
+            <li className="fm-region-list__empty">No authored regions.</li>
           ) : (
             model.items.map((item) => {
               const diagnostics = diagnosticSummary(item);
               return (
-                <button
-                  key={item.regionId}
-                  className="fm-region-card"
-                  type="button"
-                  role="listitem"
-                  onClick={() => selectRegion(item)}
-                >
-                  <span
-                    className={`fm-region-card__dot fm-region-card__dot--${item.colorIndex}`}
-                    aria-hidden="true"
-                  />
-                  <span className="fm-region-card__body">
-                    <span className="fm-region-card__title-row">
-                      <span className="fm-region-card__title">{item.name}</span>
-                      <span className="fm-region-card__status">
-                        {item.enabled ? "enabled" : "disabled"}
+                <li key={item.regionId} className="min-w-0">
+                  <button
+                    className="fm-region-card"
+                    type="button"
+                    onClick={() => selectRegion(item)}
+                  >
+                    <span
+                      className={`fm-region-card__dot fm-region-card__dot--${item.colorIndex}`}
+                      aria-hidden="true"
+                    />
+                    <span className="fm-region-card__body">
+                      <span className="fm-region-card__title-row">
+                        <span className="fm-region-card__title">{item.name}</span>
+                        <span className="fm-region-card__status">
+                          {item.enabled ? "enabled" : "disabled"}
+                        </span>
                       </span>
-                    </span>
-                    <span className="fm-region-card__meta">
-                      {regionSummary(item)}
-                    </span>
-                    <span className="fm-region-card__meta">
-                      {item.realizationStatus}
-                    </span>
-                    {diagnostics ? (
                       <span className="fm-region-card__meta">
-                        {diagnostics}
+                        {regionSummary(item)}
                       </span>
-                    ) : null}
-                  </span>
-                </button>
+                      <span className="fm-region-card__meta">
+                        {item.realizationStatus}
+                      </span>
+                      {diagnostics ? (
+                        <span className="fm-region-card__meta">
+                          {diagnostics}
+                        </span>
+                      ) : null}
+                    </span>
+                  </button>
+                </li>
               );
             })
           )}
-        </div>
+        </ul>
       </InspectorGroup>
 
       {adding ? (
@@ -364,15 +426,14 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
             <option value="cylinder">Cylinder</option>
             <option value="sphere">Sphere</option>
           </FormField>
-          <FormField
-            label="Priority"
-            type="number"
-            step={1}
-            value={String(draft.priority)}
-            onChange={(event) =>
-              updateDraft({ priority: Number(event.target.value) })
-            }
-          />
+          <QuantityFieldDraftScope store={fieldDrafts.store}>
+            <RegionIntegerField
+              draftKey={priorityDraftKey}
+              label="Priority"
+              value={draft.priority}
+              onValueChange={(priority) => updateDraft({ priority })}
+            />
+          </QuantityFieldDraftScope>
           <div className="fm-inspector-toolbar">
             <Button
               disabled={pending}

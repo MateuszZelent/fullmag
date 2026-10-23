@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
 import type {
   CrossSectionQualityMetric,
@@ -11,6 +11,8 @@ import {
   useCrossSectionQualityResource,
   useCrossSectionResource,
 } from "@/kernel/resources/crossSectionResources";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import {
@@ -28,6 +30,15 @@ import {
 } from "@/shared/domain/mesh/crossSectionStatistics";
 import { Button } from "@/shared/ui/Button";
 
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+import {
+  QuantityFieldDraftScope,
+  useQuantityFieldDraftScope,
+} from "../primitives/QuantityField";
+import {
+  quantityFieldDraftBlockReason,
+  type QuantityFieldDraftStore,
+} from "../primitives/quantityFieldDraftStore";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -135,7 +146,8 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
     crossSection.data.parentElementIds,
     quality.data?.perElementQuality ?? null,
   );
-  const duplicateSelectedPlot = () => {
+  const duplicateSelectedPlot = (numericDraftStore: QuantityFieldDraftStore) => {
+    if (numericDraftStore.getSummary().pendingCount > 0) return;
     if (!selectedPlot) return;
     const draft = beginCrossSectionDraftFromPlot(selectedPlot.id);
     if (!draft) return;
@@ -162,19 +174,10 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
   return (
     <div className="fm-cross-section-inspector">
       {selectedPlot ? (
-        <CrossSectionSettingsEditor
-          value={settingsValueFromPlot(selectedPlot)}
+        <CrossSectionPlotSettingsEditor
+          plot={selectedPlot}
           onChange={(patch) => updateCrossSectionPlot(selectedPlot.id, patch)}
-          action={
-            <Button
-              size="sm"
-              type="button"
-              variant="secondary"
-              onClick={duplicateSelectedPlot}
-            >
-              New Image
-            </Button>
-          }
+          onDuplicate={duplicateSelectedPlot}
         />
       ) : (
         <InspectorGroup title="Cut Plane">
@@ -254,6 +257,62 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
         )}
       </InspectorGroup>
     </div>
+  );
+}
+
+function CrossSectionPlotSettingsEditor({
+  onChange,
+  onDuplicate,
+  plot,
+}: {
+  onChange: (patch: Partial<CrossSectionDraft>) => void;
+  onDuplicate: (store: QuantityFieldDraftStore) => void;
+  plot: CrossSectionPlot;
+}) {
+  const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
+  const numericDrafts = useQuantityFieldDraftScope(
+    JSON.stringify([sessionScopeKey, "cross-section-plot", plot.id]),
+  );
+  const pendingNumericDraft = numericDrafts.summary.pendingCount > 0;
+  const blockReason =
+    quantityFieldDraftBlockReason(numericDrafts.summary) ??
+    (pendingNumericDraft
+      ? "Commit or discard the pending cross-section numeric edits."
+      : sessionScopeKey
+        ? undefined
+        : "Session identity is not ready.");
+  const apply = useCallback(() => false, []);
+  const reset = useCallback(() => numericDrafts.store.clear(), [numericDrafts.store]);
+
+  useRegisterInspectorEditSession(
+    pendingNumericDraft ? "staged" : null,
+    false,
+    pendingNumericDraft,
+    !pendingNumericDraft && Boolean(sessionScopeKey),
+    undefined,
+    apply,
+    reset,
+    { applyBlockReason: blockReason },
+  );
+
+  return (
+    <QuantityFieldDraftScope store={numericDrafts.store}>
+      <CrossSectionSettingsEditor
+        value={settingsValueFromPlot(plot)}
+        onChange={onChange}
+        action={
+          <Button
+            disabled={pendingNumericDraft}
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={() => onDuplicate(numericDrafts.store)}
+          >
+            New Image
+          </Button>
+        }
+      />
+    </QuantityFieldDraftScope>
   );
 }
 

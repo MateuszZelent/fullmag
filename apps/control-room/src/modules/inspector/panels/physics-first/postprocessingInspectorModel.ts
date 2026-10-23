@@ -178,7 +178,9 @@ export function tableInspectorModel(
   }
   return {
     ...model,
-    actionLabel: "Open this published table in Analysis from the Explorer context menu.",
+    actionLabel: model.status.availability === "available"
+      ? "Open this published table in Analysis from the Explorer context menu."
+      : "Table actions are unavailable until the resource is confirmed.",
     properties: [
       { label: "Table ID", mono: true, value: display(ref?.ownerId) },
       { label: "Schema revision", mono: true, value: display(ref?.ownerSchemaRevision) },

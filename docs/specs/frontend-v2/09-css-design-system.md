@@ -65,6 +65,39 @@ The active theme is stored in user preferences (layout store). `prefers-color-sc
 
 These states must be visible without relying on color alone.
 
+### Shared Inspector template
+
+All Inspectors follow the existing Visualize property-grid language. The shared
+`InspectorGroup`, `InspectorPropertyRow`, `FormField`, `QuantityUnitSelect` and
+`ColorField` own presentation; individual panels own their scientific content,
+validation and mutation policy. A panel must not introduce its own field palette,
+font, border or focus recipe.
+
+`src/design/styles/inspector-theme.css` is the common Tailwind `@apply` field
+recipe. `tailwind-theme.css` exposes semantic `fm-inspector-*` utilities backed
+by application tokens; `theme.css` resolves surfaces through the active
+Catppuccin Mocha/Latte theme. Inspector geometry and typography come from
+`--fm-inspector-control-height`, `--fm-inspector-control-font-size` and
+`--fm-inspector-label-font-size` in `tokens.css`. Color and text-size utility
+names remain distinct to avoid Tailwind's `text-*` namespace ambiguity. Property
+rows share `--fm-inspector-row-columns` across editable/read-only fields and
+native wrappers, including the same inline inset (`px-fm-2`); the narrow
+container breakpoint stacks the same template.
+
+Use `fm-inspector-input`, `fm-inspector-select` and `fm-inspector-textarea` for
+native fields; selects must use the select recipe, including unit selectors.
+Shared Radix select triggers use the same Inspector theme. Layout utilities
+may change width or grouping without overriding field typography and states.
+Property rows stack at the Inspector's narrow container breakpoint. Scientific
+units and validation messages remain visible; mono is reserved for explicit
+identifiers/code. Color fields pair a picker with editable text; alpha and
+existing Apply semantics remain separate. Unknown/token/automatic values must
+survive rendering without an implicit color write.
+
+Verify dark/light, wide/narrow, keyboard focus, disabled and invalid states.
+The `frontend-controls` browser fixture provides a shared theme matrix;
+successful CSS compilation alone does not establish visual acceptance.
+
 ## 3. Token Families
 
 The color palette is **Catppuccin Mocha** (dark) and **Catppuccin Latte** (light), using the official Catppuccin palette as source of truth: <https://catppuccin.com/palette/>.

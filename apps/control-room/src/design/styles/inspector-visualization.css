@@ -46,60 +46,6 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-/* ── Frequency-domain visualization color compatibility ── */
-.fm-visualization-color-field__control {
-  display: grid;
-  grid-template-columns: var(--fm-space-8) minmax(0, 1fr);
-  align-items: center;
-  gap: var(--fm-space-2);
-}
-
-.fm-visualization-color-field__picker {
-  width: var(--fm-control-height-regular);
-  height: var(--fm-control-height-regular);
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-canvas);
-  cursor: pointer;
-  padding: 2px;
-}
-
-.fm-visualization-color-field__value {
-  min-width: 0;
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-canvas);
-  color: var(--fm-text-primary);
-  font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-xs);
-  padding: var(--fm-space-1) var(--fm-space-2);
-}
-
-/* ── Color swatch (native <input type="color">) polish ── */
-.fm-viz-color-swatch {
-  box-shadow: var(--fm-shadow-control);
-  transition:
-    box-shadow var(--fm-transition-fast),
-    transform var(--fm-duration-fast) ease;
-}
-
-.fm-viz-color-swatch:hover:not(:disabled) {
-  box-shadow: var(--fm-shadow-control-hover);
-  transform: translateY(-1px);
-}
-
-.fm-viz-color-swatch:active:not(:disabled) {
-  box-shadow: var(--fm-shadow-control-pressed);
-  transform: translateY(0);
-}
-
-.fm-viz-color-swatch:focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--fm-accent) 30%, transparent),
-    var(--fm-shadow-control);
-}
-
 /* ── Per-part vector toggles ── */
 .fm-visualization-part-toggles {
   display: grid;
@@ -775,7 +721,6 @@ button:hover > .fm-inspector-group-icon-box {
   .fm-viz-render-mode-tile,
   .fm-viz-render-mode-tile__icon,
   .fm-inspector-metric-card,
-  .fm-viz-color-swatch,
   .fm-visualization-toggle {
     transition: none !important;
     transform: none !important;

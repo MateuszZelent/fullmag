@@ -18,13 +18,13 @@ import { useVisualizationStateResource } from "@/kernel/visualization/useVisuali
 import { Button } from "@/shared/ui/Button";
 
 import {
-  colorPickerInputValue,
   normalizeScalarColorPalette,
   scalarColorPaletteGradientCss,
   SCALAR_COLOR_PALETTE_ITEMS,
   SURFACE_COLOR_SOURCE_ITEMS,
   surfaceSolidColorPatch,
 } from "./ObjectVisualizationPanelModel";
+import { ColorField } from "../primitives/ColorField";
 import { FieldRow } from "../primitives/FieldRow";
 import type { ModeFieldComponentOption } from "./frequency-domain/FrequencyDomainHelpers";
 
@@ -394,7 +394,6 @@ export function FrequencyDomainModeDisplayControls({
   viewRef,
   viewTitle,
 }: FrequencyDomainModeDisplayControlsProps) {
-  const pickerValue = colorPickerInputValue(settings.solidColor);
   const selectedView = viewOptions.includes(settings.view)
     ? settings.view
     : normalizeAnalysisFieldView(viewDefaultValue);
@@ -488,28 +487,13 @@ export function FrequencyDomainModeDisplayControls({
           </select>
         }
       />
-      <FieldRow
+      <ColorField
+        disabled={disabled}
         label="Mode solid color"
-        value={
-          <div className="fm-visualization-color-field__control">
-            <input
-              aria-label={`${labelPrefix} solid color picker`}
-              className="fm-visualization-color-field__picker"
-              disabled={disabled}
-              type="color"
-              value={pickerValue}
-              onChange={(event) => settings.setSolidColor(event.target.value)}
-            />
-            <input
-              aria-label={`${labelPrefix} solid color`}
-              className="fm-visualization-color-field__value"
-              disabled={disabled}
-              type="text"
-              value={settings.solidColor}
-              onChange={(event) => settings.setSolidColor(event.target.value)}
-            />
-          </div>
-        }
+        pickerAriaLabel={`${labelPrefix} solid color picker`}
+        value={settings.solidColor}
+        valueAriaLabel={`${labelPrefix} solid color`}
+        onChange={settings.setSolidColor}
       />
       <FieldRow
         label="Mode colormap"

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   chartAxisName,
   createChartDisplayTransform,
+  formatChartDisplayValue,
   resolveChartScalePolicy,
 } from "./chartScalePolicy";
 
@@ -23,6 +24,34 @@ describe("chart scale policy", () => {
 
     expect(transform.factor).not.toBe(1e-3);
     expect(chartAxisName("Magnetization M", transform)).toContain("A/m");
+  });
+
+  it.each(["not published", "unregistered-unit", "constructor", "toString"])(
+    "preserves unknown unit %s without applying a prefix or value scale",
+    (unit) => {
+      const transform = createChartDisplayTransform(unit, [1e-6, 1e-5]);
+
+      expect(transform.factor).toBe(1);
+      expect(transform.displayUnit).toBe(unit);
+      expect(chartAxisName("Response", transform)).toBe(`Response [${unit}]`);
+      expect(transform.formatValue(1e-6)).toContain(unit);
+    },
+  );
+
+  it("continues to SI-scale a known phase unit to milliradians", () => {
+    const transform = createChartDisplayTransform("rad", [0.1, 0.3]);
+
+    expect(transform.factor).toBe(1e-3);
+    expect(transform.displayUnit).toBe("mrad");
+    expect(chartAxisName("Phase", transform)).toBe("Phase [mrad]");
+  });
+
+  it("honors a millitesla preference without changing canonical chart values", () => {
+    const transform = createChartDisplayTransform("T", [0.1, 0.3], "mT");
+    expect(transform.factor).toBe(1e-3);
+    expect(transform.displayUnit).toBe("mT");
+    expect(formatChartDisplayValue(0.10317, transform)).toBe("103.17");
+    expect(createChartDisplayTransform("T", [0.1, 0.3], "A/m").displayUnit).not.toBe("A/m");
   });
 
   it("honors a compatible persisted display-unit preference", () => {

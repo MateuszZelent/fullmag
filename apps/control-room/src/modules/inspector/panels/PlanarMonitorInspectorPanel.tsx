@@ -33,6 +33,7 @@ import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { VisualizationContextSwitch } from "../visualization/VisualizationContextSwitch";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
+import { PlanarPresentationDraftOwner, usePlanarPresentationDraftState } from "../visualization/PlanarPresentationDraftOwner";
 import {
   PlanarMonitorDefinitionEditor,
   planarMonitorDefinitionAvailabilityErrors,
@@ -41,6 +42,7 @@ import { usePlanarMonitorDefinitionAvailability } from "./usePlanarMonitorDefini
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 
 export function PlanarMonitorInspectorPanel({ selection }: InspectorPanelProps) {
+  const sessionScope = sessionRequestScopeKey(useSessionResourceIdentity());
   const definitionAvailability = usePlanarMonitorDefinitionAvailability();
   const monitorId = selection.ref?.type === "planar-monitor" ? selection.ref.monitorId : "";
   const resource = usePlanarMonitorResource(monitorId, { enabled: monitorId.length > 0 });
@@ -58,14 +60,16 @@ export function PlanarMonitorInspectorPanel({ selection }: InspectorPanelProps) 
   }
 
   return (
-    <CommittedPlanarMonitorEditor
+    <PlanarPresentationDraftOwner identityKey={JSON.stringify([sessionScope, monitor.id])}>
+      <CommittedPlanarMonitorEditor
       key={monitor.id}
       monitor={monitor}
       sceneRevision={sceneRevision}
       selection={selection}
       refetch={resource.refetch}
       definitionAvailability={definitionAvailability}
-    />
+      />
+    </PlanarPresentationDraftOwner>
   );
 }
 
@@ -85,6 +89,7 @@ function CommittedPlanarMonitorEditor({
   const kernel = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const visualizationState = useVisualizationStateResource();
+  const planarDrafts = usePlanarPresentationDraftState();
   const [acknowledgedBaseline, setAcknowledgedBaseline] = useState<{
     monitor: PlanarMonitor;
     revision: number;
@@ -175,6 +180,8 @@ function CommittedPlanarMonitorEditor({
     );
 
   const resetDraft = () => {
+    if (applyInFlight.current) return;
+    planarDrafts.store?.clear();
     const reset = planarMonitorDraftFromMonitor(
       baseline.monitor,
       draft.ui.displayLengthUnit,
@@ -186,6 +193,10 @@ function CommittedPlanarMonitorEditor({
   };
 
   const apply = async (): Promise<boolean> => {
+    if (planarDrafts.store?.getSummary().pendingCount) {
+      setFeedback("Complete or discard the pending 2D inputs before applying changes.");
+      return false;
+    }
     if (applyInFlight.current || hasConflict || !dirty || errors.length > 0) return false;
     const acknowledgeDraft = acknowledgeCommittedDraftRef.current;
     const submittedDraft = draft;
@@ -330,7 +341,7 @@ function CommittedPlanarMonitorEditor({
       </InspectorGroup>
       <div className="fm-inspector-toolbar">
         <Button
-          disabled={pending || !dirty}
+          disabled={pending || (!dirty && !planarDrafts.pending)}
           size="sm"
           type="button"
           variant="ghost"
@@ -339,7 +350,7 @@ function CommittedPlanarMonitorEditor({
           Discard
         </Button>
         <Button
-          disabled={pending || hasConflict || !dirty || errors.length > 0}
+          disabled={pending || planarDrafts.pending || hasConflict || !dirty || errors.length > 0}
           size="sm"
           type="button"
           variant="primary"

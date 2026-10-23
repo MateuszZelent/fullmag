@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
   authoringWriteOptions,
+  captureAuthoringMutationFence,
   runAuthoringMutationWithHistory,
 } from "@/kernel/authoring/authoringHistoryMutation";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   MODEL_COUPLINGS_RESOURCE_KEY,
   MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY,
@@ -23,6 +25,10 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { resolveCouplingInspectorModel } from "./CouplingInspectorPanelModel";
+import { syncAuthoringScriptBestEffort } from "./ObjectMagneticTexturePanelViewModel";
+
+type CouplingOwner = { sessionScopeKey: string | null; couplingId: string | null };
+type CouplingFeedback = { kind: "error" | "success" | "warning"; message: string };
 
 function formatParameters(parameters: Record<string, unknown>): string {
   const entries = Object.entries(parameters);
@@ -42,29 +48,45 @@ function errorMessage(error: unknown): string {
 }
 
 export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
-  const { api, authoringHistory, resources } = useKernel();
+  const kernel = useKernel();
+  const { api, resources } = kernel;
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const couplings = useModelCouplingsResource();
   const [pending, setPending] = useState(false);
-  const [feedback, setFeedback] = useState<{
-    kind: "error" | "success";
-    message: string;
-  } | null>(null);
+  const inFlight = useRef(false);
   const model = useMemo(
     () => resolveCouplingInspectorModel(selection, couplings.data ?? null),
     [couplings.data, selection],
   );
-  const lockReason = model.mode === "found"
-    ? undefined
-    : model.mode === "missing"
+  const couplingId = model.couplingId;
+  const owner = useMemo<CouplingOwner>(() => ({ sessionScopeKey, couplingId }), [sessionScopeKey, couplingId]);
+  const activeOwner = useRef<CouplingOwner | null>(null);
+  useLayoutEffect(() => {
+    activeOwner.current = owner;
+    return () => { activeOwner.current = null; };
+  }, [owner]);
+  const [feedbackState, setFeedbackState] = useState<(CouplingFeedback & { owner: CouplingOwner }) | null>(null);
+  const feedback = feedbackState?.owner === owner ? feedbackState : null;
+  const setFeedback = (value: CouplingFeedback | null) => setFeedbackState(value ? { ...value, owner } : null);
+  const resourceCurrent = couplings.status === "ready" && !couplings.refreshError && Boolean(couplings.data);
+  const revision = couplings.data?.scene_revision;
+  const lockReason = !sessionScopeKey
+    ? "Session identity is not ready."
+    : !resourceCurrent
+      ? "Wait for the current coupling resource before changing it."
+      : !Number.isSafeInteger(revision) || (revision ?? -1) < 0
+        ? "The canonical scene revision is unavailable. Refresh before changing a coupling."
+        : model.mode === "missing"
       ? "The selected coupling is not present in the current model resource."
-      : "Select an authored coupling to use its immediate actions.";
+          : model.mode === "unselected"
+            ? "Select an authored coupling to use its immediate actions."
+            : undefined;
 
   useRegisterInspectorEditSession(
     "immediate",
     pending,
     false,
-    true,
+    !lockReason,
     lockReason,
     () => true,
     () => undefined,
@@ -74,44 +96,51 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
   async function commitCouplingAction(
     action: "delete" | "toggle-enabled",
   ): Promise<void> {
-    if (!model.couplingId || model.mode !== "found") {
-      setFeedback({ kind: "error", message: "Select an authored coupling." });
+    if (inFlight.current) return;
+    if (lockReason || !model.couplingId || !sessionScopeKey || revision === undefined) {
+      setFeedback({ kind: "error", message: lockReason ?? "Select an authored coupling." });
       return;
     }
 
     const operationSessionScopeKey = sessionScopeKey;
+    const mutationContext = captureAuthoringMutationFence(createCommandContext("inspector", kernel, {
+      sessionScopeKey: operationSessionScopeKey,
+      sourceDetail: "coupling-inspector",
+    }));
+    if (mutationContext.isCurrentSessionScope?.() !== true) return;
+    inFlight.current = true;
     setPending(true);
+    setFeedback(null);
     try {
       const response = await runAuthoringMutationWithHistory(
-        {
-          api,
-          authoringHistory,
-          sessionScopeKey: operationSessionScopeKey,
-        },
+        mutationContext,
         action === "delete"
           ? `Delete coupling ${model.couplingId}`
           : `Toggle coupling ${model.couplingId}`,
         async ({ baseRevision }) => {
+          if (baseRevision !== null && baseRevision !== revision) {
+            throw new Error("The scene changed before the coupling action. Refresh before trying again.");
+          }
           const options = authoringWriteOptions(
-            baseRevision ?? couplings.data?.scene_revision,
+            revision,
             operationSessionScopeKey,
           );
+          if (!options?.sessionScopeKey) throw new Error("Session identity is not ready.");
           if (action === "delete") {
-            return options
-              ? api.model.deleteCoupling(model.couplingId!, options)
-              : api.model.deleteCoupling(model.couplingId!);
+            return api.model.deleteCoupling(model.couplingId!, options);
           }
-          return options
-            ? api.model.patchCoupling(
-                model.couplingId!,
-                { enabled: !model.enabled },
-                options,
-              )
-            : api.model.patchCoupling(model.couplingId!, {
-                enabled: !model.enabled,
-              });
+          return api.model.patchCoupling(
+            model.couplingId!,
+            { enabled: !model.enabled },
+            options,
+          );
         },
       );
+      if (mutationContext.isCurrentSessionScope?.() !== true) return;
+      if (!Number.isSafeInteger(response.scene_revision) || response.scene_revision <= revision
+        || response.committed_scene?.revision !== response.scene_revision) {
+        throw new Error("The coupling ACK omitted a coherent committed scene. Refresh before trying again.");
+      }
       publishCommittedSceneResource(
         resources,
         response.committed_scene,
@@ -129,14 +158,16 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
         MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY,
         response.scene_revision,
       );
-      setFeedback({
-        kind: "success",
-        message:
-          action === "delete" ? "Coupling deleted." : "Coupling updated.",
-      });
+      const syncWarning = await syncAuthoringScriptBestEffort(api, operationSessionScopeKey);
+      if (mutationContext.isCurrentSessionScope?.() !== true || activeOwner.current !== owner) return;
+      const message = action === "delete" ? "Coupling deleted." : "Coupling updated.";
+      setFeedback({ kind: syncWarning ? "warning" : "success", message: syncWarning ? `${message} Authoring script sync skipped: ${syncWarning}` : message });
     } catch (error) {
-      setFeedback({ kind: "error", message: errorMessage(error) });
+      if (mutationContext.isCurrentSessionScope?.() === true && activeOwner.current === owner) {
+        setFeedback({ kind: "error", message: errorMessage(error) });
+      }
     } finally {
+      inFlight.current = false;
       setPending(false);
     }
   }
@@ -144,7 +175,12 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Coupling" collapsible defaultOpen>
-        {model.mode === "missing" ? (
+        {!resourceCurrent ? (
+          couplings.error || couplings.refreshError ? (
+            <FeedbackBanner kind="error" message={`Coupling resource unavailable: ${errorMessage(couplings.error ?? couplings.refreshError)}${couplings.data ? " Showing previous details." : ""}`} />
+          ) : <p className="fm-help-text" role="status">{couplings.data ? "Refreshing couplings. Showing previous details." : "Loading coupling details…"}</p>
+        ) : null}
+        {resourceCurrent && model.mode === "missing" ? (
           <FeedbackBanner
             kind="warning"
             message="Selected coupling is not present in the current model resource."
@@ -154,12 +190,13 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
           <FeedbackBanner kind="warning" message="No authored coupling selected." />
         ) : null}
         <FieldRow label="ID" value={model.couplingId ?? "none"} />
-        <FieldRow label="Kind" value={model.kind} />
-        <FieldRow label="Enabled" value={model.enabled ? "yes" : "no"} />
-        <FieldRow label="Status" value={model.realizationStatus} />
+        <FieldRow label="Kind" value={model.mode === "found" ? model.kind : "not available"} />
+        <FieldRow label="Enabled" value={model.mode === "found" ? model.enabled ? "yes" : "no" : "not available"} />
+        <FieldRow label="Status" value={resourceCurrent ? model.realizationStatus : "not current"} />
+        {lockReason && model.mode === "found" ? <p className="fm-help-text" role="status">{lockReason}</p> : null}
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={pending || model.mode !== "found"}
+            disabled={pending || Boolean(lockReason)}
             size="sm"
             type="button"
             variant="ghost"
@@ -168,7 +205,7 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
             {model.enabled ? "Disable Coupling" : "Enable Coupling"}
           </Button>
           <Button
-            disabled={pending || model.mode !== "found"}
+            disabled={pending || Boolean(lockReason)}
             size="sm"
             type="button"
             variant="ghost"

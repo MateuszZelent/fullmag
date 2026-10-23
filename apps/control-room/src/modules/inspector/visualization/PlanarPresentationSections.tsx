@@ -6,10 +6,12 @@ import type { FieldMapCapability, PlanarInspectorCapabilities } from "@/kernel/v
 import { Button } from "@/shared/ui/Button";
 import { ArrowRightLeft, Crosshair, Eye, ScanLine, SquareDashed } from "lucide-react";
 
+import { ColorField } from "../primitives/ColorField";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-import { ColorField } from "../panels/ObjectVisualizationTargetSection";
+import { usePlanarPresentationDraftState } from "./PlanarPresentationDraftOwner";
+import { PlanarNumberField } from "./PlanarNumberField";
 import { VisualizationDisplayPassesControl } from "./VisualizationInspectorControls";
 import {
   PLANAR_QUALITY_ITEMS,
@@ -145,10 +147,10 @@ export function PlanarVectorStyleSection({
     variant="nav"
   >
     <FormField disabled label="Glyph" type="select" value="quiver">{PLANAR_VECTOR_GLYPH_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
-    <FormField disabled={!capability.enabled} hint={hint} label="Vector density" max="10000" min="0" step="1" type="number" value={resolution.vector_budget} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value >= 0 && value <= 10000) patch(planarResolutionPatch(resolution, { vector_budget: value })); }} />
-    <FormField disabled={!capability.enabled} hint={hint} label="Vector scale" min="0" step="0.1" type="number" value={vectorStyle.scale} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value > 0) patch(planarVectorStylePatch(vectorStyle, { scale: value })); }} />
-    <FormField disabled={!capability.enabled} hint={hint} label="Vector opacity" max="1" min="0" step="0.05" type="number" value={vectorStyle.opacity} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value >= 0 && value <= 1) patch(planarVectorStylePatch(vectorStyle, { opacity: value })); }} />
-    <FormField disabled={!capability.enabled} hint={hint} label="Vector thickness" max="16" min="0.1" step="0.1" type="number" value={vectorStyle.thickness} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value > 0 && value <= 16) patch(planarVectorStylePatch(vectorStyle, { thickness: value })); }} />
+    <PlanarNumberField disabled={!capability.enabled} hint={hint} integer label="Vector density" maximum={10000} minimum={0} path="resolution.vector_budget" value={resolution.vector_budget} onCommit={(value) => patch(planarResolutionPatch(resolution, { vector_budget: value }))} />
+    <PlanarNumberField disabled={!capability.enabled} hint={hint} label="Vector scale" minimum={0} minimumExclusive path="vector_style.scale" value={vectorStyle.scale} onCommit={(value) => patch(planarVectorStylePatch(vectorStyle, { scale: value }))} />
+    <PlanarNumberField disabled={!capability.enabled} hint={hint} label="Vector opacity" maximum={1} minimum={0} path="vector_style.opacity" value={vectorStyle.opacity} onCommit={(value) => patch(planarVectorStylePatch(vectorStyle, { opacity: value }))} />
+    <PlanarNumberField disabled={!capability.enabled} hint={hint} label="Vector thickness" maximum={16} minimum={0} minimumExclusive path="vector_style.thickness" value={vectorStyle.thickness} onCommit={(value) => patch(planarVectorStylePatch(vectorStyle, { thickness: value }))} />
     <FormField disabled={!capability.enabled} hint={hint} label="Vector length mode" type="select" value={vectorStyle.length_mode} onChange={(event) => patch(planarVectorStylePatch(vectorStyle, { length_mode: event.currentTarget.value }))}>{PLANAR_VECTOR_LENGTH_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
     <FormField disabled={!capability.enabled} hint={hint} label="Vector color mode" type="select" value={vectorStyle.color_mode} onChange={(event) => patch(planarVectorStylePatch(vectorStyle, { color_mode: event.currentTarget.value }))}>{PLANAR_VECTOR_COLOR_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
     {vectorStyle.color_mode === "monochrome" ? <ColorField disabled={!capability.enabled} label="Vector color" value={vectorStyle.monochrome_color} onChange={(value) => patch(planarVectorStylePatch(vectorStyle, { monochrome_color: value }))} /> : null}
@@ -157,6 +159,7 @@ export function PlanarVectorStyleSection({
 
 export function PlanarWireframeSection({
   disabled = false,
+  draftPath = "wireframe.opacity",
   hasOverride,
   reason,
   style,
@@ -164,12 +167,14 @@ export function PlanarWireframeSection({
   onStyleChange,
 }: {
   disabled?: boolean;
+  draftPath?: string;
   hasOverride: boolean;
   reason?: string;
   style: Planar["wireframe_style"];
   onReset: () => void;
   onStyleChange: (style: Planar["wireframe_style"]) => void;
 }) {
+  const { pending } = usePlanarPresentationDraftState();
   return (
     <InspectorGroup title="Wireframe">
       <FieldRow
@@ -182,25 +187,19 @@ export function PlanarWireframeSection({
         value={style.color}
         onChange={(color) => onStyleChange({ ...style, color })}
       />
-      <FormField
+      <PlanarNumberField
         disabled={disabled}
         hint={reason}
         label="Wireframe opacity"
-        max="1"
-        min="0"
-        step="0.05"
-        type="number"
+        maximum={1}
+        minimum={0}
+        path={draftPath}
         value={style.opacity}
-        onChange={(event) => {
-          const opacity = Number(event.currentTarget.value);
-          if (Number.isFinite(opacity) && opacity >= 0 && opacity <= 1) {
-            onStyleChange({ ...style, opacity });
-          }
-        }}
+        onCommit={(opacity) => onStyleChange({ ...style, opacity })}
       />
       <div className="fm-inspector-toolbar">
         <Button
-          disabled={disabled || !hasOverride}
+          disabled={disabled || pending || !hasOverride}
           size="sm"
           type="button"
           variant="secondary"
@@ -223,8 +222,8 @@ export function PlanarPointsSection({
   return (
     <InspectorGroup title="Points">
       <ColorField label="Point color" value={style.color} onChange={(color) => patch({ point_style: { ...style, color } })} />
-      <FormField label="Point opacity" max="1" min="0" step="0.05" type="number" value={style.opacity} onChange={(event) => { const opacity = Number(event.currentTarget.value); if (Number.isFinite(opacity) && opacity >= 0 && opacity <= 1) patch({ point_style: { ...style, opacity } }); }} />
-      <FormField label="Point size" max="64" min="0.5" step="0.5" type="number" value={style.size} onChange={(event) => { const size = Number(event.currentTarget.value); if (Number.isFinite(size) && size > 0) patch({ point_style: { ...style, size } }); }} />
+      <PlanarNumberField label="Point opacity" maximum={1} minimum={0} path="point_style.opacity" value={style.opacity} onCommit={(opacity) => patch({ point_style: { ...style, opacity } })} />
+      <PlanarNumberField label="Point size" maximum={64} minimum={0} minimumExclusive path="point_style.size" value={style.size} onCommit={(size) => patch({ point_style: { ...style, size } })} />
     </InspectorGroup>
   );
 }
@@ -245,9 +244,9 @@ export function PlanarQualitySection({
   const hint = capability.enabled ? undefined : capability.reasonCode === "quantity_not_spatial" ? "The selected quantity is not spatially sampleable." : capability.reasonCode?.replaceAll("_", " ");
   return <InspectorGroup collapsible defaultOpen={false} title="Sampling & Resolution">
     <FormField disabled={!capability.enabled} hint={hint} label="Render quality" type="select" value={quality} onChange={(event) => patch({ quality: event.currentTarget.value as Planar["quality"] })}>{PLANAR_QUALITY_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
-    <FormField disabled={!capability.enabled} hint={hint} label="Resolution width" max="2048" min="16" step="1" type="number" value={resolution.width} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value >= 16 && value <= 2048) patch(planarResolutionPatch(resolution, { width: value })); }} />
-    <FormField disabled={!capability.enabled} hint={hint} label="Resolution height" max="2048" min="16" step="1" type="number" value={resolution.height} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value >= 16 && value <= 2048) patch(planarResolutionPatch(resolution, { height: value })); }} />
-    <FormField disabled={!capability.enabled} hint={hint} label="Interaction zoom" min="0.01" step="0.1" type="number" value={interaction.zoom} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value > 0) patch(planarInteractionPatch(interaction, { zoom: value })); }} />
+    <PlanarNumberField disabled={!capability.enabled} hint={hint} integer label="Resolution width" maximum={2048} minimum={16} path="resolution.width" value={resolution.width} onCommit={(value) => patch(planarResolutionPatch(resolution, { width: value }))} />
+    <PlanarNumberField disabled={!capability.enabled} hint={hint} integer label="Resolution height" maximum={2048} minimum={16} path="resolution.height" value={resolution.height} onCommit={(value) => patch(planarResolutionPatch(resolution, { height: value }))} />
+    <PlanarNumberField disabled={!capability.enabled} hint={hint} label="Interaction zoom" minimum={0} minimumExclusive path="interaction.zoom" value={interaction.zoom} onCommit={(value) => patch(planarInteractionPatch(interaction, { zoom: value }))} />
   </InspectorGroup>;
 }
 

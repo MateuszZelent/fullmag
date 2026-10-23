@@ -39,7 +39,7 @@ function ValuesPage({ dataset, pageSize, total }: {
         <p className="m-0 text-fm-xs text-fm-muted">{dataset.field.descriptor.quantity_id} · unit {dataset.field.descriptor.unit} · elements {offset.toString()}–{(offset + count - BigInt(1)).toString()} of {total.toString()}</p>
         <label className="flex items-center gap-2 text-fm-xs">
           Component index
-          <input aria-label="Saved field component index" className="min-w-0 border border-fm-border bg-fm-raised text-fm-primary" type="number" min={0} max={components - 1} value={component}
+          <input aria-label="Saved field component index" className="fm-inspector-input min-w-0 w-full" type="number" min={0} max={components - 1} value={component}
             onChange={(event) => {
               const value = event.currentTarget.valueAsNumber;
               if (Number.isFinite(value) && Number.isInteger(value) && value >= 0 && value < components) setComponent(value);

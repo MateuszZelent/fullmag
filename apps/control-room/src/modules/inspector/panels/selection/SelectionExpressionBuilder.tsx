@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { createContext, useContext, useId, useSyncExternalStore } from "react";
 
 import type {
   FrozenSpinsSelectionExpression,
@@ -9,7 +9,17 @@ import type {
 } from "@/kernel/api/apiTypes";
 import { Button } from "@/shared/ui/Button";
 
+import { QuantityField, QuantityFieldDraftScope, useQuantityFieldDraftScope } from "../../primitives/QuantityField";
+import type { QuantityFieldDraftStore } from "../../primitives/quantityFieldDraftStore";
+import { parseSelectionNumber, parseSelectionVector } from "./selectionNumericInput";
+
+import { selectionUnsupportedReason, type SelectionReferenceCatalog, type SelectionReferenceOption } from "./selectionReferenceCatalog";
+import { FeedbackBanner } from "../../primitives/FeedbackBanner";
+import { FieldRow } from "../../primitives/FieldRow";
+
 interface SelectionExpressionBuilderProps {
+  referenceCatalog?: SelectionReferenceCatalog;
+  numericDraftStore?: QuantityFieldDraftStore;
   expression: FrozenSpinsSelectionExpression;
   objectId: string;
   regionId?: string | null;
@@ -45,12 +55,55 @@ const SIMPLE_KINDS: readonly SimpleSelectionKind[] = [
   "not",
 ];
 
-export function SelectionExpressionBuilder({
+const EMPTY_REFERENCE_CATALOG: SelectionReferenceCatalog = { ready: false, objects: [], selections: [] };
+const SelectionReferenceContext = createContext(EMPTY_REFERENCE_CATALOG);
+const SelectionDraftContext = createContext<QuantityFieldDraftStore | null>(null);
+const noSubscription = () => () => {};
+const noPendingDrafts = () => false;
+
+function useSelectionStructureGuard() {
+  const store = useContext(SelectionDraftContext);
+  const blocked = useSyncExternalStore(store?.subscribe ?? noSubscription, () => Boolean(store?.getSummary().pendingCount), noPendingDrafts);
+  return { blocked, allow: () => !store?.getSummary().pendingCount };
+}
+
+/** One scope also protects recursive structure edits from unresolved numeric text. */
+export function SelectionExpressionBuilder(props: SelectionExpressionBuilderProps) {
+  const local = useQuantityFieldDraftScope(JSON.stringify([props.objectId, props.regionId]));
+  const store = props.numericDraftStore ?? local.store;
+  const unsupported = selectionUnsupportedReason(props.expression);
+  return (
+    <QuantityFieldDraftScope store={store}>
+      <SelectionDraftContext.Provider value={store}>
+        <SelectionReferenceContext.Provider value={props.referenceCatalog ?? EMPTY_REFERENCE_CATALOG}>
+          {unsupported ? <FeedbackBanner kind="warning" message={unsupported} /> : null}
+          <fieldset className="min-w-0 border-0 p-0 m-0" disabled={Boolean(unsupported)} aria-label={unsupported ? "Unsupported selector (preserved)" : "Selector editor"}>
+            {unsupported ? (
+              <>
+                <label className="fm-inspector-field">
+                  <span>Operator</span>
+                  <select aria-label="Operator" className="fm-inspector-select w-full min-w-0" value="advanced" disabled>
+                    <option value="advanced" disabled>Advanced/unsupported (preserved)</option>
+                  </select>
+                </label>
+                <pre className="fm-help-text whitespace-pre-wrap break-all">{JSON.stringify(props.expression, null, 2)}</pre>
+              </>
+            ) : <SelectionExpressionEditor {...props} />}
+          </fieldset>
+        </SelectionReferenceContext.Provider>
+      </SelectionDraftContext.Provider>
+    </QuantityFieldDraftScope>
+  );
+}
+
+function SelectionExpressionEditor({
   expression,
   objectId,
   regionId,
   onChange,
 }: SelectionExpressionBuilderProps) {
+  const structure = useSelectionStructureGuard();
+  const catalog = useContext(SelectionReferenceContext);
   const editable = SIMPLE_KINDS.includes(expression.kind as SimpleSelectionKind);
   return (
     <fieldset className="fm-inspector-field" data-selection-expression-kind={expression.kind}>
@@ -58,19 +111,23 @@ export function SelectionExpressionBuilder({
       <label className="fm-inspector-field">
         <span>Operator</span>
         <select
-          className="fm-inspector-input"
+          className="fm-inspector-select w-full min-w-0"
+          aria-label="Operator"
+          disabled={structure.blocked || !editable}
+          title={structure.blocked ? "Commit or discard numeric edits before changing the selector structure." : undefined}
           value={editable ? expression.kind : "advanced"}
           onChange={(event) =>
-            onChange(defaultExpression(event.target.value, objectId, regionId))
+            structure.allow() && SIMPLE_KINDS.includes(event.target.value as SimpleSelectionKind) && onChange(defaultExpression(event.target.value, objectId, regionId))
           }
         >
+          {!editable ? <option value="advanced" disabled>Advanced/unsupported (preserved)</option> : null}
           <option value="all_magnetic">All magnetic DOFs</option>
           <option value="in_object">In object</option>
           <option value="in_region">In region</option>
           <option value="ref">Named selection</option>
           <option value="and">All expressions (AND)</option>
           <option value="or">Any expression (OR)</option>
-          <option value="xor">Exactly one expression (XOR)</option>
+          <option value="xor">Odd number of expressions (XOR)</option>
           <option value="not">Negation (NOT)</option>
           <option value="inside_geometry">Inside geometry</option>
           <option value="compare">Scalar comparison</option>
@@ -79,36 +136,24 @@ export function SelectionExpressionBuilder({
         </select>
       </label>
       {expression.kind === "in_object" ? (
-        <TextField
-          label="Object ID"
-          value={expression.object_id}
-          onChange={(value) => onChange({ ...expression, object_id: value })}
-          error={expression.object_id.trim() === "" ? "Object ID cannot be empty." : undefined}
-        />
+        <ReferenceSelect label="Object ID" value={expression.object_id} options={catalog.objects}
+          onChange={(object_id) => onChange({ ...expression, object_id })} />
       ) : null}
       {expression.kind === "in_region" ? (
         <>
-          <TextField
-            label="Object ID"
-            value={expression.object_id}
-            onChange={(value) => onChange({ ...expression, object_id: value })}
-            error={expression.object_id.trim() === "" ? "Object ID cannot be empty." : undefined}
-          />
-          <TextField
-            label="Region ID"
-            value={expression.region_id}
-            onChange={(value) => onChange({ ...expression, region_id: value })}
-            error={expression.region_id.trim() === "" ? "Region ID cannot be empty." : undefined}
-          />
+          <ReferenceSelect label="Object ID" value={expression.object_id} options={catalog.objects}
+            onChange={(object_id) => onChange({ ...expression, object_id, region_id: object_id === expression.object_id ? expression.region_id : "" })} />
+          <ReferenceSelect label="Region ID" value={expression.region_id}
+            options={catalog.objects.find((object) => object.id === expression.object_id)?.regions ?? []}
+            onChange={(region_id) => onChange({ ...expression, region_id })} />
         </>
       ) : null}
       {expression.kind === "ref" ? (
-        <TextField
-          label="Selection ID"
-          value={expression.selection_id}
-          onChange={(value) => onChange({ ...expression, selection_id: value })}
-          error={expression.selection_id.trim() === "" ? "Selection ID cannot be empty." : undefined}
-        />
+        <>
+          <ReferenceSelect label="Selection ID" value={expression.selection_id} options={catalog.selections}
+            onChange={(selection_id) => onChange({ ...expression, selection_id })} />
+          <p className="fm-help-text">Preview validates the named selection graph and its compatibility with the target object.</p>
+        </>
       ) : null}
       {expression.kind === "and" || expression.kind === "or" || expression.kind === "xor" ? (
         <div className="fm-inspector-panel">
@@ -119,7 +164,7 @@ export function SelectionExpressionBuilder({
           ) : null}
           {expression.expressions.map((child, index) => (
             <div className="fm-inspector-panel" key={index}>
-              <SelectionExpressionBuilder
+              <SelectionExpressionEditor
                 expression={child}
                 objectId={objectId}
                 regionId={regionId}
@@ -136,8 +181,9 @@ export function SelectionExpressionBuilder({
                 size="sm"
                 type="button"
                 variant="ghost"
+                disabled={structure.blocked}
                 onClick={() =>
-                  onChange({
+                  structure.allow() && onChange({
                     ...expression,
                     expressions: expression.expressions.filter(
                       (_, childIndex) => childIndex !== index,
@@ -168,7 +214,7 @@ export function SelectionExpressionBuilder({
         </div>
       ) : null}
       {expression.kind === "not" ? (
-        <SelectionExpressionBuilder
+        <SelectionExpressionEditor
           expression={expression.expression}
           objectId={objectId}
           regionId={regionId}
@@ -199,6 +245,7 @@ export function SelectionExpressionBuilder({
             tolerance={expression.tolerance ?? { atol: 0, rtol: 0 }}
             onChange={(tolerance) => onChange({ ...expression, tolerance })}
           />
+          <p className="fm-help-text">Strict comparisons require zero tolerances. Use Approximate scalar equality for a tolerance.</p>
         </div>
       ) : null}
       {expression.kind === "approx" ? (
@@ -231,7 +278,7 @@ export function SelectionExpressionBuilder({
             onChange={(kind) => onChange({ ...expression, frame: kind === "object" ? { kind, object_id: objectId } : { kind: "world" } })}
           />
           {expression.frame.kind === "object" ? (
-            <TextField label="Frame object ID" value={expression.frame.object_id} onChange={(object_id) => onChange({ ...expression, frame: { kind: "object", object_id } })} error={expression.frame.object_id.trim() === "" ? "Frame object ID cannot be empty." : undefined} />
+            <ObjectReferenceField label="Frame object ID" value={expression.frame.object_id} onChange={(object_id) => onChange({ ...expression, frame: { kind: "object", object_id } })} />
           ) : null}
           <GeometryPredicateBuilder geometry={expression.geometry} onChange={(geometry) => onChange({ ...expression, geometry })} />
           <SelectField label="Boundary" value={expression.boundary.kind} options={[["inclusive", "Inclusive"], ["exclusive", "Exclusive"]]} onChange={(kind) => onChange({ ...expression, boundary: { ...expression.boundary, kind: kind as typeof expression.boundary.kind } })} />
@@ -243,43 +290,43 @@ export function SelectionExpressionBuilder({
   );
 }
 
-function TextField({
-  error,
-  label,
-  onChange,
-  value,
-}: {
-  error?: string;
-  label: string;
-  onChange: (value: string) => void;
-  value: string;
+function ObjectReferenceField(props: { label: string; value: string; onChange: (value: string) => void }) {
+  const catalog = useContext(SelectionReferenceContext);
+  return <ReferenceSelect {...props} options={catalog.objects} />;
+}
+
+function ReferenceSelect({ label, value, onChange, options }: {
+  label: string; value: string; onChange: (value: string) => void;
+  options: readonly SelectionReferenceOption[];
 }) {
+  const catalog = useContext(SelectionReferenceContext);
+  const errorId = useId();
+  const available = options.some((option) => option.id === value);
+  const error = !value.trim() ? `${label} cannot be empty.`
+    : !catalog.ready ? "Scene catalog is unconfirmed. Existing IDs are preserved."
+      : !available ? `${label} is unavailable: ${value}` : undefined;
   return (
     <div className="fm-inspector-field-wrapper">
       <label className="fm-inspector-field">
         <span>{label}</span>
-        <input
-          className={`fm-inspector-input ${error ? "fm-inspector-input--invalid" : ""}`}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        />
+        <select aria-label={label} aria-invalid={Boolean(error) || undefined} aria-describedby={error ? errorId : undefined}
+          className="fm-inspector-select w-full min-w-0" disabled={!catalog.ready} value={value}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (catalog.ready && (next === "" || options.some((option) => option.id === next))) onChange(next);
+          }}>
+          <option value="">Choose {label.toLowerCase()}…</option>
+          {value && !available ? <option value={value} disabled>Unavailable: {value}</option> : null}
+          {options.map((option) => <option key={option.id} value={option.id} title={option.id}>{option.label}</option>)}
+        </select>
       </label>
-      {error ? (
-        <p className="fm-inspector-feedback" data-kind="error">
-          {error}
-        </p>
-      ) : null}
+      {error ? <p id={errorId} className="fm-inspector-feedback" data-kind="error">{error}</p> : null}
     </div>
   );
 }
 
 function NumberField({
-  error: externalError,
-  label,
-  max,
-  min,
-  onChange,
-  value,
+  error, label, max, min, onChange, value,
 }: {
   error?: string;
   label: string;
@@ -288,77 +335,20 @@ function NumberField({
   onChange: (value: number) => void;
   value: number;
 }) {
-  const [draft, setDraft] = useState(() => ({
-    internalError: null as string | null,
-    sourceValue: value,
-    text: String(value),
-  }));
-  if (draft.sourceValue !== value) {
-    setDraft({ internalError: null, sourceValue: value, text: String(value) });
-  }
-
-  function handleChange(raw: string) {
-    const trimmed = raw.trim();
-    if (trimmed === "") {
-      setDraft({
-        internalError: "Value cannot be empty.",
-        sourceValue: value,
-        text: raw,
-      });
-      return;
-    }
-    const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed)) {
-      setDraft({
-        internalError: "Must be a valid finite number.",
-        sourceValue: value,
-        text: raw,
-      });
-      return;
-    }
-    if (min !== undefined && parsed < min) {
-      setDraft({
-        internalError: `Must be at least ${min}.`,
-        sourceValue: value,
-        text: raw,
-      });
-      return;
-    }
-    if (max !== undefined && parsed > max) {
-      setDraft({
-        internalError: `Must be at most ${max}.`,
-        sourceValue: value,
-        text: raw,
-      });
-      return;
-    }
-    setDraft({ internalError: null, sourceValue: value, text: raw });
-    onChange(parsed);
-  }
-
-  const effectiveError = externalError ?? draft.internalError;
-
   return (
-    <div className="fm-inspector-field-wrapper">
-      <label className="fm-inspector-field">
-        <span>{label}</span>
-        <input
-          className={`fm-inspector-input ${effectiveError ? "fm-inspector-input--invalid" : ""}`}
-          type="number"
-          value={draft.text}
-          onChange={(event) => handleChange(event.target.value)}
-        />
-      </label>
-      {effectiveError ? (
-        <p className="fm-inspector-feedback" data-kind="error">
-          {effectiveError}
-        </p>
-      ) : null}
-    </div>
+    <QuantityField
+      error={error}
+      label={label}
+      value={value}
+      format={String}
+      parse={(text) => parseSelectionNumber(text, min, max)}
+      onCommit={onChange}
+    />
   );
 }
 
 function SelectField({
+  changesStructure = false,
   label,
   onChange,
   options,
@@ -368,11 +358,13 @@ function SelectField({
   onChange: (value: string) => void;
   options: readonly (readonly [string, string])[];
   value: string;
+  changesStructure?: boolean;
 }) {
+  const structure = useSelectionStructureGuard();
   return (
     <label className="fm-inspector-field">
       <span>{label}</span>
-      <select className="fm-inspector-input" value={value} onChange={(event) => onChange(event.target.value)}>
+      <select aria-label={label} className="fm-inspector-select w-full min-w-0" disabled={changesStructure && structure.blocked} value={value} onChange={(event) => { if ((!changesStructure || structure.allow()) && options.some(([key]) => key === event.target.value)) onChange(event.target.value); }}>
         {options.map(([option, title]) => <option key={option} value={option}>{title}</option>)}
       </select>
     </label>
@@ -380,24 +372,21 @@ function SelectField({
 }
 
 function VectorField({
-  label,
-  onChange,
-  value,
+  dimension = 3, label, onChange, value,
 }: {
+  dimension?: number;
   label: string;
   onChange: (value: number[]) => void;
   value: number[];
 }) {
   return (
-    <TextField
+    <QuantityField
       label={label}
-      value={value.join(", ")}
-      onChange={(raw) => {
-        const parsed = raw.split(",").map((entry) => Number(entry.trim())).filter(Number.isFinite);
-        if (parsed.length > 0) {
-          onChange(parsed);
-        }
-      }}
+      value={value}
+      format={(components) => components.join(", ")}
+      parse={(text) => parseSelectionVector(text, dimension)}
+      equals={(left, right) => left.length === right.length && left.every((entry, index) => Object.is(entry, right[index]))}
+      onCommit={onChange}
     />
   );
 }
@@ -432,6 +421,7 @@ function ScalarExpressionBuilder({
     <fieldset className="fm-inspector-field" data-selection-scalar-kind={expression.kind}>
       <legend>{label}</legend>
       <SelectField
+        changesStructure
         label="Scalar kind"
         value={expression.kind}
         options={[["constant", "Constant"], ["coordinate", "Coordinate"], ["magnetization_component", "Magnetization component"], ["magnetization_norm", "Magnetization norm"], ["magnetization_dot", "Magnetization dot axis"], ["abs", "Absolute value"]]}
@@ -442,7 +432,7 @@ function ScalarExpressionBuilder({
         <>
           <SelectField label="Component" value={expression.component} options={[["x", "x"], ["y", "y"], ["z", "z"]]} onChange={(component) => onChange({ ...expression, component: component as typeof expression.component })} />
           <SelectField label="Frame" value={expression.frame.kind} options={[["world", "World"], ["object", "Object"]]} onChange={(kind) => onChange({ ...expression, frame: kind === "object" ? { kind, object_id: objectId } : { kind: "world" } })} />
-          {expression.frame.kind === "object" ? <TextField label="Frame object ID" value={expression.frame.object_id} onChange={(object_id) => onChange({ ...expression, frame: { kind: "object", object_id } })} /> : null}
+          {expression.frame.kind === "object" ? <ObjectReferenceField label="Frame object ID" value={expression.frame.object_id} onChange={(object_id) => onChange({ ...expression, frame: { kind: "object", object_id } })} /> : null}
         </>
       ) : null}
       {expression.kind === "magnetization_component" ? <SelectField label="Component" value={expression.component} options={[["x", "x"], ["y", "y"], ["z", "z"]]} onChange={(component) => onChange({ ...expression, component: component as typeof expression.component })} /> : null}
@@ -464,20 +454,21 @@ function GeometryPredicateBuilder({
     <fieldset className="fm-inspector-field" data-selection-geometry-kind={geometry.kind}>
       <legend>Geometry predicate</legend>
       <SelectField
+        changesStructure
         label="Geometry kind"
         value={geometry.kind}
-        options={[["box", "Box"], ["sphere", "Sphere"], ["cylinder", "Cylinder"], ["ellipsoid", "Ellipsoid"], ["imported_solid", "Imported solid"], ["union", "Union"], ["intersection", "Intersection"], ["difference", "Difference"], ["xor", "XOR"], ["complement", "Complement"], ["affine", "Affine transform"]]}
+        options={[["box", "Box"], ["sphere", "Sphere"], ["cylinder", "Cylinder"], ["ellipsoid", "Ellipsoid"], ...(geometry.kind === "imported_solid" ? [["imported_solid", "Imported solid (unsupported; preserved)"]] as const : []), ["union", "Union"], ["intersection", "Intersection"], ["difference", "Difference"], ["xor", "XOR"], ["complement", "Complement"], ["affine", "Affine transform"]]}
         onChange={(kind) => onChange(defaultGeometryPredicate(kind))}
       />
       {geometry.kind === "box" ? <><VectorField label="Center (m)" value={geometry.center_m} onChange={(center_m) => onChange({ ...geometry, center_m })} /><VectorField label="Size (m)" value={geometry.size_m} onChange={(size_m) => onChange({ ...geometry, size_m })} /></> : null}
       {geometry.kind === "sphere" ? <><VectorField label="Center (m)" value={geometry.center_m} onChange={(center_m) => onChange({ ...geometry, center_m })} /><NumberField label="Radius (m)" value={geometry.radius_m} onChange={(radius_m) => onChange({ ...geometry, radius_m })} /></> : null}
       {geometry.kind === "cylinder" ? <><VectorField label="Center (m)" value={geometry.center_m} onChange={(center_m) => onChange({ ...geometry, center_m })} /><VectorField label="Axis" value={geometry.axis} onChange={(axis) => onChange({ ...geometry, axis })} /><NumberField label="Radius (m)" value={geometry.radius_m} onChange={(radius_m) => onChange({ ...geometry, radius_m })} /><NumberField label="Height (m)" value={geometry.height_m} onChange={(height_m) => onChange({ ...geometry, height_m })} /></> : null}
       {geometry.kind === "ellipsoid" ? <><VectorField label="Center (m)" value={geometry.center_m} onChange={(center_m) => onChange({ ...geometry, center_m })} /><VectorField label="Radii (m)" value={geometry.radii_m} onChange={(radii_m) => onChange({ ...geometry, radii_m })} /></> : null}
-      {geometry.kind === "imported_solid" ? <TextField label="Asset ID" value={geometry.asset_id} onChange={(asset_id) => onChange({ ...geometry, asset_id })} /> : null}
+      {geometry.kind === "imported_solid" ? <FieldRow label="Asset ID" value={geometry.asset_id} mono /> : null}
       {binary ? <><GeometryPredicateBuilder geometry={geometry.a} onChange={(a) => onChange({ ...geometry, a })} /><GeometryPredicateBuilder geometry={geometry.b} onChange={(b) => onChange({ ...geometry, b })} /></> : null}
       {geometry.kind === "difference" ? <><GeometryPredicateBuilder geometry={geometry.base} onChange={(base) => onChange({ ...geometry, base })} /><GeometryPredicateBuilder geometry={geometry.tool} onChange={(tool) => onChange({ ...geometry, tool })} /></> : null}
       {geometry.kind === "complement" ? <><GeometryPredicateBuilder geometry={geometry.geometry} onChange={(next) => onChange({ ...geometry, geometry: next })} /><GeometryPredicateBuilder geometry={geometry.domain} onChange={(domain) => onChange({ ...geometry, domain })} /></> : null}
-      {geometry.kind === "affine" ? <><GeometryPredicateBuilder geometry={geometry.geometry} onChange={(next) => onChange({ ...geometry, geometry: next })} /><VectorField label="Translation (m)" value={geometry.translation_m} onChange={(translation_m) => onChange({ ...geometry, translation_m })} /><VectorField label="Rotation xyzw" value={geometry.rotation_xyzw} onChange={(rotation_xyzw) => onChange({ ...geometry, rotation_xyzw })} /><VectorField label="Scale" value={geometry.scale} onChange={(scale) => onChange({ ...geometry, scale })} /><VectorField label="Pivot (m)" value={geometry.pivot_m} onChange={(pivot_m) => onChange({ ...geometry, pivot_m })} /></> : null}
+      {geometry.kind === "affine" ? <><GeometryPredicateBuilder geometry={geometry.geometry} onChange={(next) => onChange({ ...geometry, geometry: next })} /><VectorField label="Translation (m)" value={geometry.translation_m} onChange={(translation_m) => onChange({ ...geometry, translation_m })} /><VectorField dimension={4} label="Rotation xyzw" value={geometry.rotation_xyzw} onChange={(rotation_xyzw) => onChange({ ...geometry, rotation_xyzw })} /><VectorField label="Scale" value={geometry.scale} onChange={(scale) => onChange({ ...geometry, scale })} /><VectorField label="Pivot (m)" value={geometry.pivot_m} onChange={(pivot_m) => onChange({ ...geometry, pivot_m })} /></> : null}
     </fieldset>
   );
 }
@@ -496,7 +487,6 @@ function defaultGeometryPredicate(kind: string): SelectionGeometryPredicate {
   if (kind === "sphere") return { kind, center_m: [0, 0, 0], radius_m: 1 };
   if (kind === "cylinder") return { kind, axis: [0, 0, 1], center_m: [0, 0, 0], height_m: 1, radius_m: 1 };
   if (kind === "ellipsoid") return { kind, center_m: [0, 0, 0], radii_m: [1, 1, 1] };
-  if (kind === "imported_solid") return { kind, asset_id: "asset" };
   if (kind === "union" || kind === "intersection" || kind === "xor") return { kind, a: box, b: box };
   if (kind === "difference") return { kind, base: box, tool: box };
   if (kind === "complement") return { kind, geometry: box, domain: box };
@@ -521,9 +511,9 @@ function defaultExpression(
   if (kind === "all_magnetic") return { kind };
   if (kind === "in_object") return { kind, object_id: objectId };
   if (kind === "in_region") {
-    return { kind, object_id: objectId, region_id: regionId ?? "region" };
+    return { kind, object_id: objectId, region_id: regionId ?? "" };
   }
-  if (kind === "ref") return { kind, selection_id: "selection" };
+  if (kind === "ref") return { kind, selection_id: "" };
   if (kind === "and" || kind === "or" || kind === "xor") {
     return { kind, expressions: [defaultTargetExpression(objectId, regionId)] };
   }

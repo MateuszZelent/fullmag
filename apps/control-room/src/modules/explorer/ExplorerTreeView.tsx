@@ -132,12 +132,14 @@ const EXPLORER_VIRTUALIZATION_THRESHOLD = 200;
 
 export function resolveExplorerRevealScrollTop({
   activeNodeId,
+  contentOffset = 0,
   rowHeight,
   rowIds,
   scrollTop,
   viewportHeight,
 }: {
   activeNodeId: string | null;
+  contentOffset?: number;
   rowHeight: number;
   rowIds: readonly string[];
   scrollTop: number;
@@ -146,13 +148,21 @@ export function resolveExplorerRevealScrollTop({
   if (!activeNodeId) return null;
   const index = rowIds.indexOf(activeNodeId);
   if (index < 0) return null;
-  const rowTop = index * rowHeight;
+  const rowTop = contentOffset + index * rowHeight;
   const rowBottom = rowTop + rowHeight;
   if (rowTop < scrollTop) return rowTop;
   if (rowBottom > scrollTop + viewportHeight) {
     return Math.max(rowBottom - viewportHeight, 0);
   }
   return null;
+}
+
+function explorerContentOffset(tree: HTMLDivElement): number {
+  const canvas = tree.querySelector<HTMLElement>(".fm-explorer-tree__canvas");
+  if (!canvas) return 0;
+  // Row coordinates start inside the scroll container's padding, not at its edge.
+  return Math.max(0, canvas.getBoundingClientRect().top - tree.getBoundingClientRect().top
+    - (tree.clientTop || 0) + tree.scrollTop);
 }
 
 function statusLabel(status: ExplorerNodeStatus | undefined): string {
@@ -290,7 +300,13 @@ export function sliceVisibleExplorerRows({
   scrollTop: number;
   viewportHeight: number;
 }): ExplorerVisibleRowSlice {
-  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  // Filtering or collapsing may shorten the tree before the browser emits a
+  // scroll event. Never let an obsolete offset create an oversized spacer.
+  const boundedScrollTop = Math.min(
+    Math.max(0, scrollTop),
+    Math.max(0, rows.length * rowHeight - viewportHeight),
+  );
+  const start = Math.max(0, Math.floor(boundedScrollTop / rowHeight) - overscan);
   const visibleCount = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
   const end = Math.min(rows.length, start + visibleCount);
 
@@ -332,6 +348,8 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   kernel,
   moduleId,
   node,
+  onKeyboardNavigation,
+  onToggleNode,
   resourceData,
   rowIds,
   tabId,
@@ -344,6 +362,8 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   kernel: KernelApi;
   moduleId: ModuleId;
   node: ExplorerNode;
+  onKeyboardNavigation: (nodeId: string) => void;
+  onToggleNode?: (nodeId: string) => void;
   resourceData: Readonly<Record<string, unknown>>;
   rowIds: readonly string[];
   tabId: ExplorerTabId;
@@ -369,7 +389,8 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
 
   function handleToggle(): void {
     if (hasChildren) {
-      toggleExplorerNode(tabId, node.id);
+      if (onToggleNode) onToggleNode(node.id);
+      else toggleExplorerNode(tabId, node.id);
     }
   }
 
@@ -382,12 +403,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
 
     if (navigationTarget) {
       event.preventDefault();
-      setExplorerKeyboardRow(navigationTarget);
-      const tree = event.currentTarget.closest('[role="tree"]');
-      const targetRow = Array.from(
-        tree?.querySelectorAll<HTMLElement>("[data-node-id]") ?? [],
-      ).find((row) => row.dataset.nodeId === navigationTarget);
-      targetRow?.focus();
+      onKeyboardNavigation(navigationTarget);
       return;
     }
 
@@ -396,14 +412,27 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       if (selectable) handleSelect();
       return;
     }
-    if (event.key === "ArrowRight" && hasChildren && !expanded) {
+    if (event.key === "ArrowRight" && hasChildren) {
       event.preventDefault();
-      toggleExplorerNode(tabId, node.id);
+      if (!expanded) {
+        handleToggle();
+      } else {
+        const currentIndex = rowIds.indexOf(node.id);
+        const firstChildId = rowIds[currentIndex + 1] ?? null;
+        if (firstChildId) onKeyboardNavigation(firstChildId);
+      }
       return;
     }
-    if (event.key === "ArrowLeft" && hasChildren && expanded) {
-      event.preventDefault();
-      toggleExplorerNode(tabId, node.id);
+    if (event.key === "ArrowLeft") {
+      if (hasChildren && expanded) {
+        event.preventDefault();
+        handleToggle();
+        return;
+      }
+      if (node.parentId && rowIds.includes(node.parentId)) {
+        event.preventDefault();
+        onKeyboardNavigation(node.parentId);
+      }
     }
   }
 
@@ -565,6 +594,7 @@ interface ExplorerTreeViewProps {
   kernel: KernelApi;
   moduleId: ModuleId;
   nodes: readonly ExplorerNode[];
+  onToggleNode?: (nodeId: string) => void;
   sceneResourceData: unknown;
   tabId: ExplorerTabId;
 }
@@ -576,11 +606,14 @@ export function ExplorerTreeView({
   kernel,
   moduleId,
   nodes,
+  onToggleNode,
   sceneResourceData,
   tabId,
 }: ExplorerTreeViewProps) {
   const treeRef = useRef<HTMLDivElement | null>(null);
+  const lastRevealedSelection = useRef<string | null>(null);
   const [viewport, setViewport] = useState({ height: 420, scrollTop: 0 });
+  const pendingKeyboardRow = useRef<string | null>(null);
   const runtimeResourceData = useRuntimeCommandControlResourceData({
     includeSharedDomainReadiness: false,
     includeStageExecution: false,
@@ -598,6 +631,7 @@ export function ExplorerTreeView({
     () => flattenVisibleExplorerRows(nodes, expandedIds),
     [expandedIds, nodes],
   );
+  const rowIds = useMemo(() => rows.map((row) => row.node.id), [rows]);
   const virtualized = rows.length > EXPLORER_VIRTUALIZATION_THRESHOLD;
   const visibleRows = useMemo(
     () =>
@@ -658,13 +692,70 @@ export function ExplorerTreeView({
     );
   }, []);
 
+  const requestKeyboardNavigation = useCallback((nodeId: string) => {
+    const tree = treeRef.current;
+    if (!tree || !rowIds.includes(nodeId)) return;
+    pendingKeyboardRow.current = nodeId;
+    setExplorerKeyboardRow(nodeId);
+    const nextScrollTop = resolveExplorerRevealScrollTop({
+      activeNodeId: nodeId,
+      contentOffset: explorerContentOffset(tree),
+      rowHeight: EXPLORER_ROW_HEIGHT,
+      rowIds,
+      scrollTop: tree.scrollTop,
+      viewportHeight: tree.clientHeight || viewport.height,
+    });
+    if (nextScrollTop !== null) {
+      tree.scrollTop = nextScrollTop;
+      setViewport((current) =>
+        current.scrollTop === tree.scrollTop
+          ? current
+          : { ...current, scrollTop: tree.scrollTop },
+      );
+    }
+    const targetRow = Array.from(
+      tree.querySelectorAll<HTMLElement>("[data-node-id]"),
+    ).find((row) => row.dataset.nodeId === nodeId);
+    if (targetRow) {
+      targetRow.focus({ preventScroll: true });
+      pendingKeyboardRow.current = null;
+    }
+  }, [rowIds, viewport.height]);
+
+  useEffect(() => {
+    const nodeId = pendingKeyboardRow.current;
+    const tree = treeRef.current;
+    if (!nodeId || !tree) return;
+    if (!rowIds.includes(nodeId)) {
+      pendingKeyboardRow.current = null;
+      return;
+    }
+    const targetRow = Array.from(
+      tree.querySelectorAll<HTMLElement>("[data-node-id]"),
+    ).find((row) => row.dataset.nodeId === nodeId);
+    if (targetRow) {
+      targetRow.focus({ preventScroll: true });
+      pendingKeyboardRow.current = null;
+    }
+  }, [keyboardRowId, rowIds, viewport.scrollTop]);
+
   useEffect(() => {
     const tree = treeRef.current;
-    if (!tree) return;
+    if (!activeNodeId) {
+      lastRevealedSelection.current = null;
+      return;
+    }
+    if (!tree || !rowIds.includes(activeNodeId)) return;
+    const selectionKey = JSON.stringify([tabId, activeNodeId]);
+    if (lastRevealedSelection.current === selectionKey) return;
+    lastRevealedSelection.current = selectionKey;
+    // Expanding a different branch must not pull keyboard focus or the user's
+    // scroll position back to an already revealed selection.
     const nextScrollTop = resolveExplorerRevealScrollTop({
       activeNodeId,
+      contentOffset: explorerContentOffset(tree),
       rowHeight: EXPLORER_ROW_HEIGHT,
-      rowIds: rows.map((row) => row.node.id),
+      rowIds,
       scrollTop: tree.scrollTop,
       viewportHeight: tree.clientHeight || viewport.height,
     });
@@ -675,7 +766,7 @@ export function ExplorerTreeView({
         ? current
         : { ...current, scrollTop: nextScrollTop },
     );
-  }, [activeNodeId, rows, viewport.height]);
+  }, [activeNodeId, rowIds, tabId, viewport.height]);
 
   return (
     <TooltipProvider delayDuration={350}>
@@ -686,34 +777,36 @@ export function ExplorerTreeView({
         aria-label="Explorer tree"
         onScroll={handleScroll}
       >
-        {visibleRows.topPadding > 0 ? (
+        <div
+          className="fm-explorer-tree__canvas"
+          role="presentation"
+          style={{ height: rows.length * EXPLORER_ROW_HEIGHT, position: "relative" }}
+        >
           <div
-            aria-hidden="true"
-            style={{ height: visibleRows.topPadding }}
-          />
-        ) : null}
-        {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
-          <ExplorerTreeRow
-            key={node.id}
-            active={activeNodeId === node.id}
-            depth={depth}
-            expanded={expanded}
-            focusable={focusableRowId === node.id}
-            hasChildren={hasChildren}
-            kernel={kernel}
-            moduleId={moduleId}
-            node={node}
-            resourceData={commandResourceData}
-            rowIds={visibleRowIds}
-            tabId={tabId}
-          />
-        ))}
-        {visibleRows.bottomPadding > 0 ? (
-          <div
-            aria-hidden="true"
-            style={{ height: visibleRows.bottomPadding }}
-          />
-        ) : null}
+            className="fm-explorer-tree__window"
+            role="presentation"
+            style={{ insetInline: 0, position: "absolute", top: visibleRows.topPadding }}
+          >
+            {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
+              <ExplorerTreeRow
+                key={node.id}
+                active={activeNodeId === node.id}
+                depth={depth}
+                expanded={expanded}
+                focusable={focusableRowId === node.id}
+                hasChildren={hasChildren}
+                kernel={kernel}
+                moduleId={moduleId}
+                node={node}
+                onKeyboardNavigation={requestKeyboardNavigation}
+                onToggleNode={onToggleNode}
+                resourceData={commandResourceData}
+                rowIds={rowIds}
+                tabId={tabId}
+              />
+            ))}
+          </div>
+        </div>
       </div>
     </TooltipProvider>
   );

@@ -1,8 +1,8 @@
 "use client";
 
-import { Activity, Copy, Download } from "lucide-react";
-import { useState } from "react";
+import { Activity, Check, Copy, Download } from "lucide-react";
 
+import { useClipboardCopy } from "@/shared/browser/useClipboardCopy";
 import { Button } from "@/shared/ui/Button";
 
 import {
@@ -42,7 +42,6 @@ function emptyNote(recorded: boolean, what: string): string {
 }
 
 export function AuthorsPanel({ entry, provenance }: { readonly entry: RecentEntry; readonly provenance: Provenance }) {
-  const [copied, setCopied] = useState(false);
   // The index carries the authors even before the archive is read.
   const authors = provenance.authors.length > 0 ? provenance.authors : (entry.authors ?? []);
   const year = new Date(entry.modifiedAt ?? entry.lastOpenedAt).getFullYear();
@@ -54,6 +53,9 @@ export function AuthorsPanel({ entry, provenance }: { readonly entry: RecentEntr
     citation: provenance.citation,
   });
   const { doi } = provenance.citation;
+  const bibtexCopy = useClipboardCopy(
+    JSON.stringify([entry.workspaceId ?? entry.projectId, entry.projectId, bibtex]),
+  );
 
   return (
     <>
@@ -88,18 +90,22 @@ export function AuthorsPanel({ entry, provenance }: { readonly entry: RecentEntr
         <pre className="fm-start-bibtex">{bibtex}</pre>
         <div className="fm-start-bibtex__actions">
           <Button
-            onClick={() => {
-              void navigator.clipboard?.writeText(bibtex).then(() => {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1600);
-              });
-            }}
+            disabled={bibtexCopy.status === "pending"}
+            onClick={() => void bibtexCopy.copy(bibtex)}
             size="sm"
             type="button"
             variant="secondary"
           >
-            <Copy aria-hidden="true" size={14} />
-            {copied ? "Copied" : "Copy BibTeX"}
+            {bibtexCopy.status === "success" ? (
+              <Check aria-hidden="true" className="fm-about-icon--success" size={14} />
+            ) : (
+              <Copy aria-hidden="true" size={14} />
+            )}
+            {bibtexCopy.status === "pending"
+              ? "Copying BibTeX…"
+              : bibtexCopy.status === "success"
+                ? "Copied"
+                : "Copy BibTeX"}
           </Button>
           {doi ? (
             <a className="fm-start-link" href={`https://doi.org/${doi}`} rel="noreferrer" target="_blank">
@@ -107,6 +113,11 @@ export function AuthorsPanel({ entry, provenance }: { readonly entry: RecentEntr
             </a>
           ) : null}
         </div>
+        {bibtexCopy.error ? (
+          <p className="fm-start-inspector__note" role="alert">
+            {bibtexCopy.error}
+          </p>
+        ) : null}
       </section>
     </>
   );

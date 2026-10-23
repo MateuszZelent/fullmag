@@ -470,7 +470,10 @@ export function TransportAuthoringInspector({
     <div className="fm-inspector-panel">
       <InspectorGroup title={family === "current_transport" ? "Charge transport" : "Spin transport"}>
         {resourceId === undefined || resourceId === null ? resourceIndex === undefined || resourceIndex === null ? (
-          <FormField label="Resource" type="select" value={localSelectionKey} onChange={(event) => setLocalSelectionKey(event.target.value)}>
+          <FormField label="Resource" type="select" value={localSelectionKey} disabled={dirty || pending} onChange={(event) => {
+            if (dirty || pending) return;
+            setLocalSelectionKey(event.target.value);
+          }}>
             <option value="">New resource</option>
             {selectedId && !selected ? <option value={`id:${selectedId}`}>{selectedId} · {targetUnavailable ? "missing" : "refreshing"}</option> : null}
             {items.map((item, index) => {
@@ -480,6 +483,9 @@ export function TransportAuthoringInspector({
             })}
           </FormField>
         ) : null : null}
+        {(resourceId === undefined || resourceId === null) && (resourceIndex === undefined || resourceIndex === null) && (dirty || pending) ? (
+          <p className="fm-help-text" role="status">Apply or Revert changes before switching resources.</p>
+        ) : null}
         {!known && selected ? (
           <>
             <FeedbackBanner kind="warning" message="Unknown transport variant is preserved losslessly and is read-only." />

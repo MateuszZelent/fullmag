@@ -34,6 +34,7 @@ import { FieldRow } from "../primitives/FieldRow";
 import { DraftQuantityUnitSelect, type DraftUnitUpdater } from "../primitives/DraftQuantityUnitSelect";
 import type { QuantityDraftField } from "@/kernel/authoring/object-edit/objectEditTypes";
 import { FormField } from "../primitives/FormField";
+import { GeometryValidationSummary } from "../primitives/GeometryValidationSummary";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { useInspectorActiveTab } from "../InspectorTabState";
 import { ObjectPlacementPanel } from "./ObjectPlacementPanel";
@@ -827,7 +828,10 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         revisionConflictPhase={revisionConflictPhase}
       />
       <ValidationSection
+        error={validation.error}
+        hasData={validation.data !== null}
         messages={validationMessages}
+        refreshError={validation.refreshError}
         status={validation.status}
       />
     </div>
@@ -1105,11 +1109,17 @@ function ActionsSection({
 }
 
 function ValidationSection({
+  error,
+  hasData,
   messages,
+  refreshError,
   status,
 }: {
-  messages: string[];
-  status: string;
+  error: Error | null;
+  hasData: boolean;
+  messages: readonly string[];
+  refreshError?: Error | null;
+  status: "idle" | "loading" | "ready" | "stale" | "error";
 }) {
   return (
     <InspectorGroup
@@ -1118,16 +1128,13 @@ function ValidationSection({
       collapsible
       defaultOpen={messages.length > 0}
     >
-      <FieldRow label="Fetch state" value={status} />
-      {messages.length > 0 ? (
-        <ul className="fm-inspector-validation-list">
-          {messages.map((message) => (
-            <li key={message}>{message}</li>
-          ))}
-        </ul>
-      ) : (
-        <FieldRow label="Backend validation" value="no object issues" />
-      )}
+      <GeometryValidationSummary
+        error={error}
+        hasData={hasData}
+        messages={messages}
+        refreshError={refreshError}
+        status={status}
+      />
     </InspectorGroup>
   );
 }

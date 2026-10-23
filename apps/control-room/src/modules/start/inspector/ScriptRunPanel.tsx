@@ -96,6 +96,7 @@ function ReadyView({ preflight, baseId, onRun, executionAvailability }: ReadyPro
         <label className="fm-start-run-field" htmlFor={`${baseId}-device`}>
           <span>Device</span>
           <select
+            className="fm-inspector-select w-full"
             id={`${baseId}-device`}
             onChange={(event) =>
               setOptions({ ...options, device: event.target.value as ScriptRunOptions["device"] })

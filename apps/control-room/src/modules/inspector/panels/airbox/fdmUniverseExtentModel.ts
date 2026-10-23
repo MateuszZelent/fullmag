@@ -32,7 +32,7 @@ export interface FdmUniverseExtentModel {
 
 export type FdmUniverseExtentResource = Pick<
   ResourceResult<DomainMetaResource | null>,
-  "data" | "error" | "status"
+  "data" | "error" | "refreshError" | "status"
 >;
 
 export type FdmUniverseRoleEvidence =
@@ -145,13 +145,14 @@ export function resolveFdmUniverseExtentModel({
     );
   }
 
-  if (resource.error || resource.status === "error") {
-    return withStatus(
-      "error",
-      resource.error?.message ?? "FDM DomainMeta could not be loaded.",
-    );
-  }
-  if (!resource.data) {
+  if (resource.data === null) {
+    const failure = resource.error ?? resource.refreshError;
+    if (failure || resource.status === "error") {
+      return withStatus(
+        "error",
+        failure?.message ?? "FDM DomainMeta could not be loaded.",
+      );
+    }
     return withStatus(
       resource.status === "loading" ? "loading" : "not-materialized",
       resource.status === "loading"
@@ -197,6 +198,22 @@ export function resolveFdmUniverseExtentModel({
     return withStatus(
       "error",
       "FDM DomainMeta does not contain a complete structured-grid descriptor; extent controls remain unavailable.",
+      fields,
+    );
+  }
+
+  if (resource.error || resource.status === "error") {
+    const failure = resource.error ?? resource.refreshError;
+    return withStatus(
+      "error",
+      `FDM DomainMeta refresh failed${failure ? `: ${failure.message}` : ""}. Showing the retained structured-grid descriptor; current publication is not confirmed.`,
+      fields,
+    );
+  }
+  if (resource.refreshError) {
+    return withStatus(
+      "stale",
+      `FDM DomainMeta refresh failed: ${resource.refreshError.message}. Showing the previous structured-grid descriptor; current publication is not confirmed.`,
       fields,
     );
   }
@@ -247,8 +264,22 @@ export function resolveFdmUniverseExtentModel({
     );
   }
 
+  if (resource.status === "stale") {
+    return withStatus(
+      "stale",
+      "FDM DomainMeta is stale; showing the previously published structured-grid descriptor without confirming the current publication.",
+      fields,
+    );
+  }
+  if (resource.status === "loading" || resource.status === "idle") {
+    return withStatus(
+      "stale",
+      `FDM DomainMeta is ${resource.status}; showing the retained structured-grid descriptor without confirming the current publication.`,
+      fields,
+    );
+  }
   return withStatus(
-    resource.status === "stale" ? "stale" : "ready",
+    "ready",
     "Structured FDM universe/grid extent is published; the magnetic-support / universe role is shown only with matching presentation or role evidence.",
     fields,
   );

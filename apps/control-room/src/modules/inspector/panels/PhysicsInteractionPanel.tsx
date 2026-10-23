@@ -314,9 +314,22 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     draft,
     interactionDiscretization,
   );
+  const authoringResource = isWritableObjectInteraction(interactionId, objectId)
+    ? objectInteraction
+    : scene;
+  const requiresAuthoringResource = isWritableObjectInteraction(interactionId, objectId) ||
+    isWritableStudyInteraction(interactionId);
+  const authoringResourceError = authoringResource.error ?? authoringResource.refreshError;
+  const authoringResourceIssue = !requiresAuthoringResource ? undefined
+    : authoringResourceError
+      ? `Interaction data could not be loaded: ${authoringResourceError.message}`
+      : authoringResource.status !== "ready" || !authoringResource.data
+        ? "Current interaction data is not available yet. Wait for it to load before applying changes."
+        : undefined;
   const canApply =
     Boolean(spec) &&
     activeLaneOperation.enabled &&
+    !authoringResourceIssue &&
     !laneIssue &&
     !isDeferredInteraction(interactionId) &&
     (isWritableStudyInteraction(interactionId) ||
@@ -342,6 +355,10 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   }
 
   const applyInteraction = useCallback(async (): Promise<boolean> => {
+    if (authoringResourceIssue) {
+      dispatch({ type: "setMutation", key: mutationKey, feedback: { kind: "error", message: authoringResourceIssue } });
+      return false;
+    }
     if (!activeLaneOperation.enabled) {
       dispatch({
         type: "setMutation",
@@ -483,6 +500,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     activeLaneOperation,
     api,
     authoringHistory,
+    authoringResourceIssue,
     dispatch,
     draft,
     interactionDiscretization,
@@ -533,11 +551,14 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
 
   const physicsStatus = !activeLaneOperation.enabled
     ? interactionAvailability.status === "unsupported" ? "unsupported" as const : "blocked" as const
-    : draft.enabled ? "active" as const : "inactive" as const;
+    : authoringResourceIssue ? "unresolved" as const
+      : !draft.present ? "absent" as const
+      : draft.enabled ? "active" as const : "inactive" as const;
   const draftDirty = physicsInteractionDraftDirty(draft, baseDraft);
   const editSessionValid = Boolean(
     spec &&
       activeLaneOperation.enabled &&
+      !authoringResourceIssue &&
       !laneIssue &&
       !isDeferredInteraction(interactionId) &&
       (isWritableStudyInteraction(interactionId) ||
@@ -545,7 +566,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   );
   const editSessionLockReason = !activeLaneOperation.enabled
     ? activeLaneOperation.reason
-    : laneIssue?.error;
+    : authoringResourceIssue ?? laneIssue?.error;
   const resetInteractionDraft = () => {
     setDraftState({ draft: baseDraft, key: draftKey });
     dispatch({ type: "setMutation", key: mutationKey, feedback: null });
@@ -564,7 +585,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       model={buildPhysicsInspectorOverviewModel({
         dependency: {
           requiredSourceIds: [],
-          reason: laneIssue?.error ?? activeLaneOperation.reason,
+          reason: authoringResourceIssue ?? laneIssue?.error ?? activeLaneOperation.reason,
           status: physicsStatus,
         },
         execution: { requestedLane: interactionDiscretization },
@@ -585,7 +606,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           status: physicsStatus,
         },
         status: physicsStatus,
-        statusReason: laneIssue?.error ?? activeLaneOperation.reason,
+        statusReason: authoringResourceIssue ?? laneIssue?.error ?? activeLaneOperation.reason,
       })}
       primary={<div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <PhysicsInteractionSelectionSection
@@ -620,6 +641,13 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       {laneIssue ? (
         <FeedbackBanner kind="error" message={laneIssue.error} />
       ) : null}
+      {authoringResourceIssue ? (
+        <FeedbackBanner
+          kind={authoringResourceError ? "error" : "warning"}
+          message={authoringResourceIssue}
+          detail={authoringResource.data ? "Previous values are retained until the current revision is available." : undefined}
+        />
+      ) : null}
       {!activeLaneOperation.enabled ? (
         <FeedbackBanner
           kind={
@@ -632,7 +660,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         />
       ) : null}
       {spec ? <PhysicsInteractionContractSection spec={spec} /> : null}
-      {isWritableObjectInteraction(interactionId, objectId) ? (
+      {isWritableObjectInteraction(interactionId, objectId) && objectInteraction.data ? (
         <PhysicsInteractionBackendSection
           enabled={resource.enabled}
           interactionKind={resource.interaction_kind}
@@ -640,19 +668,19 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           status={objectInteraction.status}
         />
       ) : null}
-      <PhysicsInteractionStateSection
+      {(!requiresAuthoringResource || authoringResource.data) ? <PhysicsInteractionStateSection
         disabled={!activeLaneOperation.enabled}
         draft={draft}
         interactionId={interactionId}
         onPatch={updateDraft}
-      />
-      <PhysicsInteractionParametersSection
+      /> : null}
+      {(!requiresAuthoringResource || authoringResource.data) ? <PhysicsInteractionParametersSection
         draft={draft}
         disabled={!activeLaneOperation.enabled}
         interactionId={interactionId}
         spec={spec}
         onValueChange={updateValue}
-      />
+      /> : null}
       <PhysicsInteractionActionsSection
         canApply={canApply}
         feedback={mutation.feedback}
@@ -910,7 +938,7 @@ function PhysicsInteractionStateSection({
         label="Enabled"
         type="checkbox"
         disabled={disabled || !draft.present}
-        checked={draft.enabled}
+        checked={draft.present && draft.enabled}
         onChange={(event) => onPatch({ enabled: event.target.checked })}
       />
     </InspectorGroup>

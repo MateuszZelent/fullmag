@@ -18,9 +18,15 @@ import {
   updateCrossSectionDraft,
   type CrossSectionDraft,
 } from "@/kernel/workspace/crossSectionWorkspace";
+import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import { Button } from "@/shared/ui/Button";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+import {
+  QuantityFieldDraftScope,
+  useQuantityFieldDraftScope,
+} from "../primitives/QuantityField";
+import { quantityFieldDraftBlockReason } from "../primitives/quantityFieldDraftStore";
 import { MeshResourceEmpty } from "./MeshResourceView";
 import { CrossSectionSettingsEditor } from "./CrossSectionSettingsEditor";
 
@@ -35,23 +41,41 @@ export function CrossSectionDraftEditor({
 }) {
   const kernel = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
+  const draftGeneration = useCrossSectionWorkspaceSelector(
+    (state) => state.draftGeneration,
+  );
+  const numericDrafts = useQuantityFieldDraftScope(
+    JSON.stringify([sessionScopeKey, "cross-section-draft", draftGeneration]),
+  );
   const monitors = usePlanarMonitorsResource();
   const visualizationState = useVisualizationStateResource();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const [pendingOperation, setPendingOperation] = useState<{
-    id: number;
-    sessionScopeKey: string;
-  } | null>(null);
+  const [pendingOperation, setPendingOperation] = useState<{ id: number } | null>(null);
   const nextPendingOperationId = useRef(0);
   const applyInFlight = useRef(false);
   const acknowledgeCommittedDraftRef = useRef<(() => boolean) | null>(null);
-  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey;
+  const pending = pendingOperation !== null;
+  const draftAvailable = draft !== null;
+  const numericDraftSummary = numericDrafts.summary;
+  const numericDraftBlockReason =
+    quantityFieldDraftBlockReason(numericDraftSummary) ??
+    (numericDraftSummary.pendingCount > 0
+      ? "Commit or discard the pending cross-section numeric edits."
+      : undefined);
 
   const commitDraft = async (): Promise<boolean> => {
     const acknowledgeDraft = acknowledgeCommittedDraftRef.current;
     if (applyInFlight.current) return false;
     if (!draft) return false;
+    const currentNumericDraftSummary = numericDrafts.store.getSummary();
+    if (currentNumericDraftSummary.pendingCount > 0) {
+      setFeedback(
+        quantityFieldDraftBlockReason(currentNumericDraftSummary) ??
+          "Commit or discard the pending cross-section numeric edits.",
+      );
+      return false;
+    }
     if (!visualizationState.data?.planar) {
       setFeedback("Planar visualization state is unavailable.");
       return false;
@@ -73,7 +97,7 @@ export function CrossSectionDraftEditor({
     const operationId = ++nextPendingOperationId.current;
     const submittedDraft = draft;
     applyInFlight.current = true;
-    setPendingOperation({ id: operationId, sessionScopeKey: operationSessionScopeKey });
+    setPendingOperation({ id: operationId });
     setFeedback(null);
     setConflict(false);
     try {
@@ -106,13 +130,16 @@ export function CrossSectionDraftEditor({
       );
       if (historyContext.isCurrentSessionScope?.() === false) return false;
       const currentDraft = crossSectionWorkspaceStore.getSnapshot().draft;
-      if (currentDraft !== null && currentDraft !== submittedDraft) {
+      if (
+        (currentDraft !== null && currentDraft !== submittedDraft) ||
+        numericDrafts.store.getSummary().pendingCount > 0
+      ) {
         kernel.resources.invalidate(
           MODEL_PLANAR_MONITORS_PATH,
           created.scene_revision,
         );
         setFeedback("The monitor was created; newer cross-section edits remain in the draft.");
-        return true;
+        return false;
       }
       if (!acknowledgeDraft?.()) return false;
       const monitor = created.monitor;
@@ -166,25 +193,32 @@ export function CrossSectionDraftEditor({
   };
 
   const resetDraft = () => {
+    if (applyInFlight.current) return;
+    numericDrafts.store.clear();
     discardCrossSectionDraft();
     setFeedback(null);
     setConflict(false);
   };
-  const draftAvailable = draft !== null;
+  const handleDraftChange = (patch: Partial<CrossSectionDraft>) => {
+    setFeedback(null);
+    updateDraft(patch);
+  };
   const resourcesReady = Boolean(monitors.data && visualizationState.data?.planar);
+  const draftDirty = draftAvailable || numericDraftSummary.pendingCount > 0;
   const acknowledgeCommittedDraft = useRegisterInspectorEditSession(
-    draftAvailable ? "staged" : null,
+    draftDirty ? "staged" : null,
     pending,
-    draftAvailable,
-    resourcesReady,
+    draftDirty,
+    resourcesReady && numericDraftSummary.pendingCount === 0,
     undefined,
     commitDraft,
     resetDraft,
     {
       applyBlockReason:
-        draftAvailable && !sessionScopeKey
+        numericDraftBlockReason ??
+        (draftAvailable && !sessionScopeKey
           ? "Session identity is not ready."
-          : undefined,
+          : undefined),
       historyMode: "mutation-owned",
     },
   );
@@ -197,44 +231,51 @@ export function CrossSectionDraftEditor({
   }
 
   return (
-    <div className="fm-cross-section-inspector">
-      <CrossSectionSettingsEditor
-        value={draft}
-        onChange={updateDraft}
-        action={
-          <div className="fm-inspector-toolbar">
-            <Button
-              disabled={pending}
-              size="sm"
-              type="button"
-              variant="ghost"
-              onClick={resetDraft}
-            >
-              Discard
-            </Button>
-            <Button
-              disabled={pending || !monitors.data || !visualizationState.data?.planar}
-              size="sm"
-              type="button"
-              variant="primary"
-              onClick={() => void commitDraft()}
-            >
-              Apply monitor
-            </Button>
-          </div>
-        }
-      />
-      {feedback ? <p role="alert">{feedback}</p> : null}
-      {conflict ? (
-        <Button
-          size="sm"
-          type="button"
-          variant="secondary"
-          onClick={monitors.refetch}
-        >
-          Reload current monitors
-        </Button>
-      ) : null}
-    </div>
+    <QuantityFieldDraftScope store={numericDrafts.store}>
+      <div className="fm-cross-section-inspector">
+        <CrossSectionSettingsEditor
+          value={draft}
+          onChange={handleDraftChange}
+          action={
+            <div className="fm-inspector-toolbar">
+              <Button
+                disabled={pending}
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={resetDraft}
+              >
+                Discard
+              </Button>
+              <Button
+                disabled={
+                  pending ||
+                  numericDraftSummary.pendingCount > 0 ||
+                  !monitors.data ||
+                  !visualizationState.data?.planar
+                }
+                size="sm"
+                type="button"
+                variant="primary"
+                onClick={() => void commitDraft()}
+              >
+                Apply monitor
+              </Button>
+            </div>
+          }
+        />
+        {feedback ? <p role="alert">{feedback}</p> : null}
+        {conflict ? (
+          <Button
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={monitors.refetch}
+          >
+            Reload current monitors
+          </Button>
+        ) : null}
+      </div>
+    </QuantityFieldDraftScope>
   );
 }

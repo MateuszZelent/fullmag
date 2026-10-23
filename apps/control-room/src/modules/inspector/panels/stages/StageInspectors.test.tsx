@@ -487,6 +487,73 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("100 fs");
   });
 
+  it("interprets following Run durations with canonical time units and leaves invalid values unavailable", () => {
+    const autosaveBase = createDefaultStudyStageDraft("autosave", 0);
+    const autosave = {
+      ...autosaveBase,
+      autosave: { ...autosaveBase.autosave, enabled: true },
+    };
+    const table = createDefaultStudyStageDraft("table_autosave", 1);
+    const fft = createDefaultStudyStageDraft("fft_response", 2);
+
+    for (const untilSeconds of ["2 ps", "", "0", "not a duration"] as const) {
+      const run = {
+        ...createDefaultStudyStageDraft("run", 3),
+        untilSeconds,
+      };
+      const pipeline = [autosave, table, fft, run];
+      const runHtml = render(
+        <RunStageInspector
+          {...props("run")}
+          draft={run}
+          draftIndex={3}
+          pipelineDrafts={pipeline}
+        />,
+      );
+      const autosaveHtml = render(
+        <AutosaveStageInspector
+          {...props("autosave")}
+          draft={autosave}
+          draftIndex={0}
+          pipelineDrafts={pipeline}
+        />,
+      );
+      const tableHtml = render(
+        <TableAutosaveStageInspector
+          {...props("table_autosave")}
+          draft={table}
+          draftIndex={1}
+          pipelineDrafts={pipeline}
+        />,
+      );
+
+      const fftHtml = render(
+        <FftResponseStageInspector
+          {...props("fft_response")}
+          draft={fft}
+          draftIndex={2}
+          pipelineDrafts={pipeline}
+        />,
+      );
+
+      if (untilSeconds === "2 ps") {
+        expect(runHtml).toContain(
+          '<span class="fm-inspector-field-row__label">Until</span><span class="fm-inspector-field-row__value">2 ps</span>',
+        );
+        expect(autosaveHtml).toContain("<small>Duration</small><strong>2 ps</strong>");
+        expect(tableHtml).toContain("<small>Duration</small><strong>2 ps</strong>");
+        expect(fftHtml).toContain("<small>Duration</small><strong>2 ps</strong>");
+      } else {
+        expect(runHtml).toContain(
+          '<span class="fm-inspector-field-row__label">Until</span><span class="fm-inspector-field-row__value">not declared</span>',
+        );
+        expect(autosaveHtml).toContain("<small>Duration</small><strong>not available</strong>");
+        expect(tableHtml).toContain("<small>Duration</small><strong>not available</strong>");
+        expect(fftHtml).toContain("<small>Duration</small><strong>not available</strong>");
+      }
+    }
+  });
+
   it("renders automatic sinc sampling controls and complete next-Run FFT diagnostics", () => {
     const antenna = createDefaultStudyStageDraft("add_field_drive", 0);
     const tableBase = createDefaultStudyStageDraft("table_autosave", 1);
@@ -922,6 +989,39 @@ describe("Study stage inspectors", () => {
     expect(resolveStudyStageInspectorKind("study.stage.hysteresis", null)).toBe(
       "hysteresis",
     );
+  });
+
+  it("does not invent a CPU request or runtime transfer when change-device data is unavailable", () => {
+    const html = render(<ChangeDeviceStageInspector {...props("change_device")} draft={null} stage={null} />);
+    expect(html).toContain("not authored");
+    expect(html).toContain("not available");
+    expect(html).not.toContain("change_device(&quot;cpu&quot;)");
+    expect(html).not.toContain("identity_copy");
+    expect(html).not.toContain("backend_transfer");
+    expect(html).not.toContain("device_change");
+  });
+
+  it.each(["gpu", "auto", "cuda:2"])("keeps requested %s separate from missing runtime transfer metadata", (deviceTarget) => {
+    const draft = { ...createDefaultStudyStageDraft("change_device", 0), deviceTarget };
+    const html = render(<ChangeDeviceStageInspector {...props("change_device")} draft={draft} />);
+    expect(html).toContain(`study.stages.change_device(&quot;${deviceTarget}&quot;)`);
+    expect(html).not.toContain("identity_copy");
+    expect(html).not.toContain("backend_transfer");
+  });
+
+  it("shows the transfer operator published by runtime without replacing it with a default", () => {
+    const runtimeStage = {
+      ...stage("change_device"),
+      transition: {
+        kind: "published-transfer-kind", label: "Published transition",
+        reason: "published-reason", transferOperator: "published-operator", uiPresentation: null,
+      },
+    };
+    const html = render(<ChangeDeviceStageInspector {...props("change_device")} stage={runtimeStage} />);
+    expect(html).toContain("published-operator");
+    expect(html).toContain("published-transfer-kind");
+    expect(html).toContain("published-reason");
+    expect(html).not.toContain("identity_copy");
   });
 
   it("routes change-device stage nodes to the change-device inspector", () => {
@@ -1418,6 +1518,64 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Phasor convention");
     expect(html).toContain("delta_h exp(i omega t + phase_rad)");
     expect(html).not.toContain("Modal Operator Contract");
+  });
+
+  it.each([
+    ["", "not set", "0 point(s)"],
+    ["   ", "not set", "0 point(s)"],
+    ["1e9,", "1 GHz", "1 point(s)"],
+    ["5GHz", "5 GHz", "1 point(s)"],
+    ["5GHz;6GHz", "5 GHz, 6 GHz", "2 point(s)"],
+    ["1e9,2GHz", "1 GHz, 2 GHz", "2 point(s)"],
+    ["1GHz;1000MHz", "1 GHz, 1 GHz", "2 point(s)"],
+  ])("summarizes authored frequency list %j using the canonical parser", (frequenciesHz, grid, count) => {
+    const draft = { ...createDefaultStudyStageDraft("frequency_response", 0), frequenciesHz };
+    const html = render(
+      <FrequencyResponseStageInspector {...props("frequency_response")} draft={draft} authoringView="sweep" />,
+      ["authoring", "frequency-response-sweep-detail"],
+    );
+    expect(html).toContain(grid);
+    expect(html).toContain(count);
+    expect(html).not.toContain(">0 Hz<");
+    if (frequenciesHz === "1GHz;1000MHz") expect(html).toContain("1 duplicate(s) require policy");
+  });
+
+  it.each(["1GHz;bad", "0", "-1", "5 GHz", "Infinity"])(
+    "does not present a valid subset or artifact count for invalid list %j",
+    (frequenciesHz) => {
+      const draft = { ...createDefaultStudyStageDraft("frequency_response", 0), frequenciesHz };
+      const html = render(
+        <FrequencyResponseStageInspector {...props("frequency_response")} draft={draft} authoringView="sweep" />,
+        ["authoring", "frequency-response-sweep-detail"],
+      );
+      expect(html).toContain("invalid frequency list");
+      expect(html).toContain("all frequencies must be finite and positive");
+      expect(html).not.toContain("frequency-point artifact(s)");
+    },
+  );
+
+  it.each(["", "   ", "1e-", "Infinity", "90deg"])(
+    "keeps incomplete or invalid phase %j unavailable",
+    (excitationPhaseRad) => {
+      const draft = { ...createDefaultStudyStageDraft("frequency_response", 0), excitationPhaseRad };
+      const html = render(
+        <FrequencyResponseStageInspector {...props("frequency_response")} draft={draft} authoringView="excitation" />,
+        ["authoring", "frequency-response-excitation-detail"],
+      );
+      expect(html).toContain("phase must be finite");
+      expect(html).toContain("not available");
+      expect(html).not.toContain("0 deg");
+    },
+  );
+
+  it.each(["0", "-0.5", "0x10"])("retains valid legacy phase %j", (excitationPhaseRad) => {
+    const draft = { ...createDefaultStudyStageDraft("frequency_response", 0), excitationPhaseRad };
+    const html = render(
+      <FrequencyResponseStageInspector {...props("frequency_response")} draft={draft} authoringView="excitation" />,
+      ["authoring", "frequency-response-excitation-detail"],
+    );
+    expect(html).toContain("finite phase");
+    expect(html).not.toContain("phase must be finite");
   });
 
   it("renders driven sweep semantics in the response sweep child view", () => {

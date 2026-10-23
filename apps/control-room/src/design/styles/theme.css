@@ -242,3 +242,9 @@
   border-left: 4px solid var(--fm-warning);
   background: color-mix(in srgb, var(--fm-warning) 10%, transparent);
 }
+
+/* Field surfaces follow the active Catppuccin theme without a second palette. */
+:root {
+  --fm-control-surface: color-mix(in srgb, var(--fm-bg-panel-raised) 68%, var(--fm-bg-panel));
+  --fm-control-surface-hover: color-mix(in srgb, var(--fm-bg-panel-raised) 86%, var(--fm-bg-hover));
+}

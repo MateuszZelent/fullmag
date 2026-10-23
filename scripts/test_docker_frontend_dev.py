@@ -235,6 +235,14 @@ class FrontendControlVolumeContractTests(TestCase):
 class FrontendReadonlySourceFixtureLinkTests(TestCase):
     def test_allowlisted_fixtures_are_exact_readonly_links_and_never_copied(self):
         module = load_module()
+        self.assertTrue(
+            {
+                (".node-version", "file"),
+                ("rust-toolchain.toml", "file"),
+                ("Cargo.toml", "file"),
+                ("compose.toolchain.yaml", "file"),
+            }.issubset(set(module.READONLY_SOURCE_FIXTURES))
+        )
         with tempfile.TemporaryDirectory(prefix="fullmag-frontend-fixtures-") as raw:
             root = Path(raw)
             source = root / "source"

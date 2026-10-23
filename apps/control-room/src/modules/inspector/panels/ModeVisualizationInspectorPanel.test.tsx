@@ -86,25 +86,25 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   }),
 }));
 
-function modeSelection() {
+function modeSelection(objectId = "film") {
+  const nodeId = `model:object:${objectId}:visualization:mode-visualization`;
   return {
     kind: "object.mode_visualization",
     label: "Eigenmode 5",
     moduleSource: "results",
-    nodeId: "model:object:film:visualization:mode-visualization",
-    objectId: "film",
+    nodeId,
+    objectId,
     ref: {
       fieldId: "field-eigen-456",
       kind: "object.mode_visualization" as const,
       modeIndex: 5,
-      nodeId: "model:object:film:visualization:mode-visualization",
-      objectId: "film",
+      nodeId,
+      objectId,
       sampleIndex: 2,
       source: "eigen-mode" as const,
       type: "mode-visualization" as const,
       view: "phase_rotated_real",
-      visualizationTargetId:
-        "mode:film:eigen-mode:field-eigen-456" as const,
+      visualizationTargetId: `mode:${objectId}:eigen-mode:field-eigen-456` as const,
     },
   };
 }
@@ -135,6 +135,7 @@ describe("ModeVisualizationInspectorPanel", () => {
     const selection = modeSelection();
     const [object, mode] = buildModeVisualizationBreadcrumbs(selection);
 
+    expect(object?.label).toBe("Film");
     expect(object?.selection).toMatchObject({
       kind: "object.root",
       objectId: "film",
@@ -144,6 +145,27 @@ describe("ModeVisualizationInspectorPanel", () => {
       current: true,
       selection: { kind: "object.mode_visualization", ref: selection.ref },
     });
+  });
+
+  it("keeps percent characters in raw object ids for breadcrumb labels and selections", () => {
+    for (const [objectId, label] of [
+      ["film%", "Film%"],
+      ["film%ZZ", "Film%ZZ"],
+      ["film%2Fcore", "Film%2Fcore"],
+    ]) {
+      const [object] = buildModeVisualizationBreadcrumbs(modeSelection(objectId));
+
+      expect(object?.label).toBe(label);
+      expect(object?.selection).toMatchObject({
+        objectId,
+        nodeId: `model:object:${objectId}`,
+        ref: {
+          objectId,
+          nodeId: `model:object:${objectId}`,
+          visualizationTargetId: `object:${objectId}`,
+        },
+      });
+    }
   });
 
   it("executes the canonical overlay command through the root view action", async () => {

@@ -244,6 +244,11 @@
   transition: border-color var(--fm-transition-fast), box-shadow var(--fm-transition-fast);
 }
 
+.fm-dropdown-color__swatch:has(.fm-dropdown-color__input:focus-visible) {
+  outline: 2px solid var(--fm-accent);
+  outline-offset: 2px;
+}
+
 .fm-dropdown-color__swatch:hover {
   border-color: var(--fm-accent);
   box-shadow:

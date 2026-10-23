@@ -20,13 +20,10 @@
   gap: 2px;
   overflow-x: auto;
   overflow-y: visible;
-  scrollbar-width: none;
+  scrollbar-color: var(--fm-border-default) transparent;
+  scrollbar-width: thin;
   border-bottom: 1px solid var(--fm-border-subtle);
   padding-inline: var(--fm-space-3);
-}
-
-.fm-ribbon__tabs::-webkit-scrollbar {
-  display: none;
 }
 
 .fm-ribbon__tab {
@@ -85,11 +82,8 @@
   overflow-x: auto;
   overflow-y: hidden;
   padding-inline: var(--fm-space-2);
-  scrollbar-width: none;
-}
-
-.fm-ribbon__groups::-webkit-scrollbar {
-  display: none;
+  scrollbar-color: var(--fm-border-default) transparent;
+  scrollbar-width: thin;
 }
 
 /* ── Single group ── */

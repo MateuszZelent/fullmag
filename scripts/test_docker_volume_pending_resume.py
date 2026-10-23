@@ -89,7 +89,7 @@ class RecreateResumeCallerGateTests(unittest.TestCase):
             )
 
     def test_missing_new_native_proof_returns_empty_context(self):
-        control = SimpleNamespace(project="fullmag", volume="build-control")
+        control = _Control()
         previous = {
             "attempt": "b" * 32,
             "inputs": {"source_root": "/src"},

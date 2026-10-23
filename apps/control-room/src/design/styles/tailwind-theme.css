@@ -41,6 +41,7 @@
   --spacing-fm-inspector-control: var(--fm-inspector-control-gap);
   --spacing-fm-inspector-row: var(--fm-inspector-row-gap);
   --spacing-fm-inspector-group: var(--fm-inspector-group-gap);
+  --spacing-fm-inspector-field: var(--fm-inspector-control-height);
   --spacing-fm-field-row: var(--fm-field-row-min-height);
   /* Radii */
   --radius-fm-control: var(--fm-radius-control);
@@ -76,6 +77,10 @@
   --text-fm-label: var(--fm-font-size-field-label);
   --text-fm-control: var(--fm-font-size-control);
   --text-fm-help: var(--fm-font-size-help);
+  --text-fm-inspector-field: var(--fm-inspector-control-font-size);
+  --text-fm-inspector-label: var(--fm-inspector-label-font-size);
+  --color-fm-inspector-input: var(--fm-control-surface);
+  --color-fm-inspector-input-hover: var(--fm-control-surface-hover);
   /* Named line heights — enables leading-fm-control, leading-fm-tight */
   --leading-fm-control: var(--fm-line-height-control);
   --leading-fm-tight: var(--fm-line-height-tight);

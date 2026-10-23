@@ -594,7 +594,12 @@ class StartupRejectionTests(unittest.TestCase):
                 return True
             event = mock.Mock()
             event.wait.side_effect = user_shutdown
-            with self.run_environment(), mock.patch.dict(sys.modules, {"runtime_service": service}), \
+            with self.run_environment(), mock.patch.dict(sys.modules, {
+                    "runtime_service": service,
+                    "runtime_service_unclaimed_cancellation": SimpleNamespace(
+                        run=lambda *_args: None
+                    ),
+                }), \
                     mock.patch.object(module.threading, "Event", return_value=event), \
                     mock.patch.object(module.signal, "signal"), \
                     mock.patch.object(module.subprocess, "Popen", return_value=api), \

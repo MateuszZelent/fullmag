@@ -5027,6 +5027,7 @@ export function useViewport3DSceneModel({
     liveViewportResourcesEnabled &&
       fieldVectorEnabled &&
       pinnedObservationActive,
+    pinnedObservationSource?.runId,
   );
   const fieldVector = pinnedObservationActive
     ? observationFieldVector
@@ -5069,7 +5070,7 @@ export function useViewport3DSceneModel({
     displayedRevision: fieldVectorDisplayedRevision,
     nextRetained: nextPrimaryFieldRetained,
   } = useMemo(() => {
-    if (!fieldVectorEnabled) {
+    if (!fieldVectorEnabled || (pinnedObservationActive && !observationFieldVector.availableForActiveRun)) {
       return {
         displayedEnvelope: null,
         displayedRevision: null,
@@ -5087,6 +5088,8 @@ export function useViewport3DSceneModel({
     });
   }, [
     fieldVector.status,
+    observationFieldVector.availableForActiveRun,
+    pinnedObservationActive,
     fieldVectorEnabled,
     fieldVectorPreparedRevision,
     incomingFieldVectorEnvelope,
@@ -6829,6 +6832,7 @@ export function useViewport3DSceneModel({
     (fdmLaneActive ? fdmBuildState?.error?.message : null) ??
     (renderingState?.clip?.enabled ? clipCrossSection.error?.message : null) ??
     (meshQualityOverlayVisible ? meshQualityData.error?.message : null) ??
+    (pinnedObservationActive && fieldVectorEnabled ? observationFieldVector.runStatusMessage : null) ??
     fieldVector.error?.message ??
     (fdmLaneActive && fdmFieldCompatibility?.status === "mismatch"
       ? `FDM field degraded: ${fdmFieldCompatibility.reason}`

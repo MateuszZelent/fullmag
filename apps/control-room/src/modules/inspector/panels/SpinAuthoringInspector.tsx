@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 
 import type {
   SceneCurrentTransport,
@@ -40,6 +40,7 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
 import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
 import type { PhysicsInteractionId } from "./PhysicsInteractionPanelModel";
+import { reconcileSpinAuthoringDraft } from "./spinAuthoringDraft";
 import {
   currentSourceOptions,
   isUnsupportedSpinAuthoringResource,
@@ -148,12 +149,15 @@ function vectorText(value: unknown): string {
 }
 
 function parseVector(value: string, label: string): number[] {
-  const parsed = value.split(/[\s,]+/).filter(Boolean).map(Number);
+  const commaParts = value.split(",");
+  if (commaParts.some((part) => !part.trim())) throw new Error(`${label} requires three finite components.`);
+  const parsed = commaParts.flatMap((part) => part.trim().split(/\s+/)).map(Number);
   if (parsed.length !== 3 || parsed.some((entry) => !Number.isFinite(entry))) throw new Error(`${label} requires three finite components.`);
   return parsed;
 }
 
 function finite(value: string, label: string): number {
+  if (!value.trim()) throw new Error(`${label} is required.`);
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`${label} must be finite.`);
   return parsed;
@@ -342,10 +346,12 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
   const active = family === "spin_torque" ? torques : oersted;
   const items = useMemo(() => (active.data?.items ?? []) as SpinResource[], [active.data]);
   const [localSelectedId, setLocalSelectedId] = useState("");
-  const selectedId = resourceId ?? localSelectedId;
-  const selected = (resourceIndex !== undefined && resourceIndex !== null ? items[resourceIndex] : items.find((item) => identity(item) === selectedId)) ?? null;
+  const requestedId = resourceId ?? localSelectedId;
+  const selected = (requestedId ? items.find((item) => identity(item) === requestedId)
+    : resourceIndex !== undefined && resourceIndex !== null ? items[resourceIndex] : null) ?? null;
+  const selectedId = requestedId || (selected ? identity(selected) : "");
   const readOnly = selected ? isUnsupportedSpinAuthoringResource(family, object(selected)) : false;
-  const baseDraft = family === "spin_torque"
+  const incomingDraft = family === "spin_torque"
     ? torqueDraft(selected as SceneSpinTorque | null, selected ? null : initialScope)
     : oerstedDraft(
         selected as SceneOerstedField | null,
@@ -353,24 +359,60 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
           ? null
           : resolveOerstedCurrentSource(currents.data?.items ?? [], initialScope ?? null),
       );
-  const draftKey = `${sessionScopeKey ?? "no-session"}:${family}:${resourceId ?? resourceIndex ?? localSelectedId}:${JSON.stringify(baseDraft)}`;
-  const [draftState, setDraftState] = useState<{ key: string; value: TorqueDraft | OerstedDraft }>({ key: draftKey, value: baseDraft });
-  const draft = draftState.key === draftKey ? draftState.value : baseDraft;
-  const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
+  const keyFor = (localId: string) => JSON.stringify([sessionScopeKey, family,
+    resourceId ?? (resourceIndex !== undefined && resourceIndex !== null ? `index:${resourceIndex}` : localId || "new"),
+    initialScope?.objectId ?? null, initialScope?.regionId ?? null]);
+  const draftKey = keyFor(localSelectedId);
+  const [draftState, setDraftState] = useState<{
+    key: string; value: TorqueDraft | OerstedDraft; baseline: TorqueDraft | OerstedDraft;
+    ackRevision: number | null; conflicts: string[];
+  }>({ key: draftKey, value: incomingDraft, baseline: incomingDraft, ackRevision: null, conflicts: [] });
+  const [unconfirmedAck, setUnconfirmedAck] = useState<{ key: string; minimumRevision: number } | null>(null);
+  const sourceRevision = active.data?.scene_revision;
+  const sameDraft = draftState.key === draftKey;
+  const olderThanAck = sameDraft && draftState.ackRevision !== null && (sourceRevision ?? -1) < draftState.ackRevision;
+  const legacyTargetChanged = sameDraft && !requestedId && resourceIndex !== undefined && resourceIndex !== null
+    && selected !== null && draftState.baseline.id !== incomingDraft.id;
+  const targetUnavailable = Boolean(legacyTargetChanged || (selectedId || resourceIndex !== undefined && resourceIndex !== null)
+    && !selected && active.status === "ready" && !olderThanAck);
+  const baseDraft = sameDraft && (olderThanAck || targetUnavailable) ? draftState.baseline : incomingDraft;
+  const reconciled = sameDraft ? reconcileSpinAuthoringDraft(baseDraft, draftState.value, draftState.baseline)
+    : { draft: baseDraft, conflicts: [] };
+  const draft = reconciled.draft;
+  const conflicts = [...new Set([...(sameDraft ? draftState.conflicts : []), ...reconciled.conflicts])];
+  const conflictReason = conflicts.length ? `Conflicting fields: ${conflicts.join(", ")}. Revert to the current server definition and review before applying.` : undefined;
+  const awaitingAckRefresh = unconfirmedAck?.key === draftKey && (sourceRevision ?? -1) < unconfirmedAck.minimumRevision;
+  const sourceCurrent = active.status === "ready" && !active.error && !active.refreshError && sourceRevision !== undefined && !olderThanAck && !awaitingAckRefresh;
+  const activeDraftKey = useRef(draftKey);
+  const targetGeneration = useRef(0);
+  const latestSource = useRef({ key: draftKey, revision: sourceRevision });
+  const mounted = useRef(true);
+  useLayoutEffect(() => {
+    if (activeDraftKey.current !== draftKey) targetGeneration.current++;
+    activeDraftKey.current = draftKey;
+    latestSource.current = { key: draftKey, revision: latestSource.current.key === draftKey
+      ? Math.max(latestSource.current.revision ?? -1, sourceRevision ?? -1) : sourceRevision };
+  }, [draftKey, sourceRevision]);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const [feedbackState, setFeedbackState] = useState<{ key: string; kind: "error" | "success" | "warning"; message: string } | null>(null);
+  const feedback = feedbackState?.key === draftKey ? feedbackState : null;
+  const setFeedback = (value: { kind: "error" | "success" | "warning"; message: string } | null) => setFeedbackState(value ? { ...value, key: draftKey } : null);
   const [pendingOperation, setPendingOperation] = useState<{
     id: number;
     sessionScopeKey: string;
+    draftKey: string;
+    action: "save" | "delete";
   } | null>(null);
   const nextPendingOperationId = useRef(0);
-  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey;
-  const validationKey = `${sessionScopeKey ?? "no-session"}:${draftKey}:${active.data?.scene_revision ?? "none"}`;
+  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey && pendingOperation.draftKey === draftKey;
+  const inFlightKey = useRef<string | null>(null);
+  const validationKey = `${draftKey}:${sourceRevision ?? "none"}:${JSON.stringify(draft)}`;
   const [validationState, setValidationState] = useState<{ key: string; response: TransportValidationResponse | null }>({ key: "", response: null });
   const validation = validationState.key === validationKey ? validationState.response : null;
   const capability = useSessionStatusSelector((status) => status.data?.capabilities.transport_authoring?.m1_one_way_steady ?? null);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft) || conflicts.length > 0;
   const valid = Boolean(
-    !readOnly &&
-      active.status === "ready" &&
+    !readOnly && !targetUnavailable && conflicts.length === 0 && sourceCurrent &&
       capability?.authoring_allowed &&
       validation?.semantic.valid === true &&
       validation?.execution.authoring_allowed === true,
@@ -379,9 +421,7 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
     ? "Unknown authoring records are read-only."
     : !sessionScopeKey
       ? "Session identity is not ready."
-    : active.status !== "ready"
-      ? "Authoring resources are not ready."
-      : !capability?.authoring_allowed
+    : !capability?.authoring_allowed
         ? capability?.reason ?? "Authoring capability is unavailable."
         : undefined;
 
@@ -406,7 +446,7 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
   );
 
   useEffect(() => {
-    if (!sessionScopeKey || readOnly || active.data?.scene_revision === undefined) return;
+    if (!sessionScopeKey || readOnly || targetUnavailable || conflicts.length || !sourceCurrent) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       try {
@@ -414,16 +454,16 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
           sessionScopeKey,
           signal: controller.signal,
         }).then((response) => {
-          if (!controller.signal.aborted && isCurrentSession()) {
+          if (!controller.signal.aborted && isCurrentSession() && activeDraftKey.current === draftKey && mounted.current) {
             setValidationState({ key: validationKey, response });
           }
         }).catch(() => {
-          if (!controller.signal.aborted && isCurrentSession()) {
+          if (!controller.signal.aborted && isCurrentSession() && activeDraftKey.current === draftKey && mounted.current) {
             setValidationState({ key: validationKey, response: null });
           }
         });
       } catch {
-        if (!controller.signal.aborted && isCurrentSession()) {
+        if (!controller.signal.aborted && isCurrentSession() && activeDraftKey.current === draftKey && mounted.current) {
           setValidationState({ key: validationKey, response: null });
         }
       }
@@ -431,20 +471,30 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
     return () => { window.clearTimeout(timer); controller.abort(); };
   // Serialized draft is the validation dependency by design.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active.data?.scene_revision, api, commands, draft, family, readOnly, selectedId, sessionScopeKey, validationKey]);
+  }, [api, commands, family, readOnly, selectedId, sessionScopeKey, sourceCurrent, targetUnavailable, conflictReason, validationKey]);
 
-  const patch = (value: Partial<TorqueDraft> | Partial<OerstedDraft>) => setDraftState({ key: draftKey, value: Object.assign({}, draft, value) as TorqueDraft | OerstedDraft });
+  const patch = (value: Partial<TorqueDraft> | Partial<OerstedDraft>) => {
+    if (readOnly || targetUnavailable || pending && pendingOperation?.action === "delete" || "id" in value && (pending || inFlightKey.current === draftKey)) return;
+    setDraftState({ key: draftKey, value: Object.assign({}, draft, value) as TorqueDraft | OerstedDraft,
+      baseline: baseDraft, ackRevision: sameDraft ? draftState.ackRevision : null, conflicts });
+  };
 
   async function save(): Promise<boolean> {
-    if (!sessionScopeKey) return false;
+    if (!sessionScopeKey || pending || inFlightKey.current === draftKey || !valid || Boolean(selectedId) && !dirty) return false;
+    const submittedDraft = draft;
     const mutationContext = captureMutationContext();
+    const generation = targetGeneration.current;
+    const isCurrentDraft = () => mounted.current && activeDraftKey.current === draftKey && targetGeneration.current === generation && mutationContext.isCurrentSessionScope?.() === true;
     const operationId = ++nextPendingOperationId.current;
-    setPendingOperation({ id: operationId, sessionScopeKey });
+    inFlightKey.current = draftKey;
+    setDraftState({ key: draftKey, value: submittedDraft, baseline: baseDraft,
+      ackRevision: sameDraft ? draftState.ackRevision : null, conflicts: [] });
+    setPendingOperation({ id: operationId, sessionScopeKey, draftKey, action: "save" });
     setFeedback(null);
     try {
       if (!capability?.authoring_allowed) throw new Error(capability?.reason ?? "Authoring capability is unavailable.");
       const checked = await api.model.validateTransport(validationRequest(), { sessionScopeKey });
-      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
+      if (!isCurrentDraft()) return false;
       setValidationState({ key: validationKey, response: checked });
       if (!checked.semantic.valid || !checked.execution.authoring_allowed) throw new Error(checked.semantic.issues[0]?.message ?? checked.execution.reason ?? "Candidate is not authoring-ready.");
       const resource = resourceFromDraft();
@@ -454,7 +504,9 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
         mutationContext,
         `${selectedId ? "Replace" : "Create"} ${family}${selectedId ? ` ${selectedId}` : ""}`,
         async ({ baseRevision }) => {
+          if (!isCurrentDraft()) throw new Error("Authoring target changed before commit.");
           const committedRevision = baseRevision ?? base_revision;
+          if (committedRevision !== base_revision) throw new Error("Scene revision changed before authoring commit. Refresh and reconcile the draft.");
           const requestOptions = authoringWriteOptions(null, mutationContext.sessionScopeKey);
           if (!requestOptions?.sessionScopeKey) throw new Error("Session identity is not ready.");
           if (family === "spin_torque") {
@@ -471,36 +523,66 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
       );
       if (mutationContext.isCurrentSessionScope?.() !== true) return false;
       invalidateSpinAuthoringResources(resources, commit, [family === "spin_torque" ? SPIN_TORQUES_RESOURCE_KEY : OERSTED_FIELDS_RESOURCE_KEY]);
-      setFeedback({ kind: "success", message: "Authoring resource committed." });
+      if (!isCurrentDraft()) return false;
+      if (!Number.isSafeInteger(commit.scene_revision) || commit.scene_revision <= (base_revision ?? -1)
+        || !commit.resource || identity(commit.resource) !== submittedDraft.id || isUnsupportedSpinAuthoringResource(family, object(commit.resource))) {
+        setUnconfirmedAck({ key: draftKey, minimumRevision: Number.isSafeInteger(commit.scene_revision) && commit.scene_revision > base_revision ? commit.scene_revision : base_revision + 1 });
+        active.refetch();
+        throw new Error("Commit acknowledged, but its returned authoring definition is unconfirmed. Refresh before retrying.");
+      }
+      if (latestSource.current.key === draftKey && (latestSource.current.revision ?? -1) > commit.scene_revision) {
+        setFeedback({ kind: "warning", message: "Commit acknowledged, but a newer server revision is already loaded. Your edits are preserved; review before applying again." });
+        return false;
+      }
+      const acknowledged = family === "spin_torque" ? torqueDraft(commit.resource as SceneSpinTorque, null)
+        : oerstedDraft(commit.resource as SceneOerstedField, null);
+      setUnconfirmedAck(null);
+      const acknowledgedKey = !selectedId ? keyFor(submittedDraft.id) : draftKey;
+      setDraftState((current) => {
+        if (current.key !== draftKey) return current;
+        const next = reconcileSpinAuthoringDraft(acknowledged, current.value, submittedDraft);
+        return { key: acknowledgedKey, value: next.draft, baseline: acknowledged, ackRevision: commit.scene_revision,
+          conflicts: [...new Set([...current.conflicts, ...next.conflicts])] };
+      });
+      if (!selectedId) setLocalSelectedId(submittedDraft.id);
+      setFeedbackState({ key: acknowledgedKey, kind: "success", message: "Authoring resource committed." });
       return true;
     } catch (error) {
-      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
+      if (!isCurrentDraft()) return false;
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
       return false;
     } finally {
-      setPendingOperation((current) => current?.id === operationId ? null : current);
+      if (inFlightKey.current === draftKey) inFlightKey.current = null;
+      if (mounted.current) setPendingOperation((current) => current?.id === operationId ? null : current);
     }
   }
 
   function resetDraft(): void {
-    setDraftState({ key: draftKey, value: baseDraft });
+    if (pending || inFlightKey.current === draftKey) return;
+    setDraftState({ key: draftKey, value: baseDraft, baseline: baseDraft,
+      ackRevision: olderThanAck ? draftState.ackRevision : null, conflicts: [] });
     setFeedback(null);
   }
 
   async function remove(): Promise<void> {
-    if (!selectedId || active.data?.scene_revision === undefined || readOnly || !sessionScopeKey) return;
+    if (!selectedId || active.data?.scene_revision === undefined || readOnly || !sessionScopeKey || pending || inFlightKey.current === draftKey || !valid || dirty) return;
+    const submittedRevision = active.data.scene_revision;
     const mutationContext = captureMutationContext();
+    const generation = targetGeneration.current;
+    const isCurrentDraft = () => mounted.current && activeDraftKey.current === draftKey && targetGeneration.current === generation && mutationContext.isCurrentSessionScope?.() === true;
     const operationId = ++nextPendingOperationId.current;
-    setPendingOperation({ id: operationId, sessionScopeKey });
+    inFlightKey.current = draftKey;
+    setPendingOperation({ id: operationId, sessionScopeKey, draftKey, action: "delete" });
     try {
       if (!capability?.authoring_allowed || validation?.execution.authoring_allowed !== true) throw new Error(capability?.reason ?? validation?.execution.reason ?? "Latest validation does not permit mutation.");
       const commit = await runAuthoringMutationWithHistory(
         mutationContext,
         `Delete ${family} ${selectedId}`,
         async ({ baseRevision }) => {
+          if (!isCurrentDraft()) throw new Error("Authoring target changed before delete.");
+          if ((baseRevision ?? submittedRevision) !== submittedRevision) throw new Error("Scene revision changed before authoring delete. Refresh and reconcile the draft.");
           const request = {
-            base_revision:
-              baseRevision ?? active.data!.scene_revision,
+            base_revision: submittedRevision,
           };
           const requestOptions = authoringWriteOptions(null, mutationContext.sessionScopeKey);
           if (!requestOptions?.sessionScopeKey) throw new Error("Session identity is not ready.");
@@ -511,13 +593,15 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
       );
       if (mutationContext.isCurrentSessionScope?.() !== true) return;
       invalidateSpinAuthoringResources(resources, commit, [family === "spin_torque" ? SPIN_TORQUES_RESOURCE_KEY : OERSTED_FIELDS_RESOURCE_KEY]);
+      if (!isCurrentDraft()) return;
       setLocalSelectedId("");
-      setFeedback({ kind: "success", message: "Authoring resource deleted." });
+      setFeedbackState({ key: resourceId === undefined && resourceIndex === undefined ? keyFor("") : draftKey, kind: "success", message: "Authoring resource deleted." });
     } catch (error) {
-      if (mutationContext.isCurrentSessionScope?.() !== true) return;
+      if (!isCurrentDraft()) return;
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
     } finally {
-      setPendingOperation((current) => current?.id === operationId ? null : current);
+      if (inFlightKey.current === draftKey) inFlightKey.current = null;
+      if (mounted.current) setPendingOperation((current) => current?.id === operationId ? null : current);
     }
   }
 
@@ -529,16 +613,33 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
     lockReason,
     save,
     resetDraft,
-    { historyMode: "mutation-owned" },
+    { historyMode: "mutation-owned", applyBlockReason: conflictReason ?? (targetUnavailable ? "Selected authoring target is unavailable." : !sourceCurrent ? "Confirm the current authoring source before applying." : undefined) },
   );
 
   return <div className="fm-inspector-panel"><InspectorGroup title={family === "spin_torque" ? "Transport torque" : "Oersted field"}>
-    {resourceId === undefined && resourceIndex === undefined ? <FormField label="Resource" type="select" value={localSelectedId} onChange={(event) => setLocalSelectedId(event.target.value)}><option value="">New resource</option>{items.map((item, index) => <option key={`${identity(item)}:${index}`} value={identity(item)}>{identity(item) || `Unknown ${index + 1}`}</option>)}</FormField> : null}
-    {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown authoring record is preserved losslessly and is read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected, null, 2)} /></> : family === "spin_torque" ? <TorqueFields currentTransports={currents.data?.items ?? []} draft={draft as TorqueDraft} identityReadOnly={Boolean(selected)} patch={patch} /> : <OerstedFields currentTransports={currents.data?.items ?? []} draft={draft as OerstedDraft} identityReadOnly={Boolean(selected)} patch={patch} />}
+    {resourceId === undefined && resourceIndex === undefined ? <>
+      <FormField label="Resource" type="select" value={localSelectedId} disabled={dirty || pending} onChange={(event) => {
+        const id = event.target.value;
+        if (!dirty && !pending && inFlightKey.current !== draftKey && (id === "" || items.some((item) => identity(item) === id))) setLocalSelectedId(id);
+      }}><option value="">New resource</option>
+        {localSelectedId && !items.some((item) => identity(item) === localSelectedId) ? <option value={localSelectedId} disabled>{localSelectedId} (unconfirmed; preserved)</option> : null}
+        {items.map((item, index) => <option key={`${identity(item)}:${index}`} value={identity(item)}>{identity(item) || `Unknown ${index + 1}`}</option>)}
+      </FormField>
+      {dirty || pending ? <p className="fm-help-text" role="status">Apply or Revert changes before switching resources.</p> : null}
+    </> : null}
+    <fieldset className="m-0 min-w-0 border-0 p-0" disabled={targetUnavailable || pending && pendingOperation?.action === "delete"}>
+    {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown authoring record is preserved losslessly and is read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected, null, 2)} /></> : family === "spin_torque" ? <TorqueFields currentTransports={currents.data?.items ?? []} draft={draft as TorqueDraft} identityReadOnly={Boolean(selectedId) || pending} patch={patch} /> : <OerstedFields currentTransports={currents.data?.items ?? []} draft={draft as OerstedDraft} identityReadOnly={Boolean(selectedId) || pending} patch={patch} />}
+    </fieldset>
     {!readOnly ? <div className="fm-help-text"><div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div><div>{validation?.execution.reason ?? capability?.reason ?? "Capability unavailable."}</div></div> : null}
     {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
-    {!readOnly ? <Button disabled={pending || !sessionScopeKey || active.status !== "ready" || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} onClick={() => void save()}>{pending ? "Committing…" : selected ? "Replace" : "Create"}</Button> : null}
-    {selected && !readOnly ? <Button disabled={pending || !sessionScopeKey || !capability?.authoring_allowed || validation?.execution.authoring_allowed !== true} variant="danger" onClick={() => void remove()}>Delete</Button> : null}
+    {conflictReason ? <FeedbackBanner kind="error" message={conflictReason} /> : null}
+    {targetUnavailable ? <FeedbackBanner kind="error" message="Selected authoring target is unavailable or its positional identity changed. Your draft is preserved; select the exact resource again." /> : null}
+    {!sourceCurrent ? <FeedbackBanner kind="warning" message="Current authoring source is unconfirmed. Your edits are preserved." /> : null}
+    {active.error || active.refreshError ? <FeedbackBanner kind="error" message={(active.error ?? active.refreshError)?.message ?? "Authoring source refresh failed."} /> : null}
+    <Button type="button" onClick={() => { active.refetch(); currents.refetch(); }}>Refresh authoring resources</Button>
+    {!readOnly ? <Button disabled={pending || Boolean(selectedId) && !dirty || !valid} onClick={() => void save()}>{pending ? "Committing…" : selectedId ? "Replace" : "Create"}</Button> : null}
+    <Button disabled={pending || !dirty} onClick={resetDraft}>Revert</Button>
+    {selected && !readOnly ? <Button disabled={pending || dirty || !valid} variant="danger" onClick={() => void remove()}>Delete</Button> : null}
   </InspectorGroup></div>;
 }
 

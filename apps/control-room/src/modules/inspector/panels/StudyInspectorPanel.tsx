@@ -3062,6 +3062,7 @@ export function ImportStateDialog({
               <label className="fm-study-select">
                 <span>Restore mode</span>
                 <select
+                  className="fm-inspector-select w-full min-w-0"
                   value={restoreMode}
                   onChange={(event) => onRestoreModeChange(event.target.value)}
                 >

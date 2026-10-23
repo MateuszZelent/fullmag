@@ -652,7 +652,7 @@ mod tests {
             .expect("prepared initial magnetization capability");
         assert_eq!(
             resolved.provider,
-            fullmag_runner::QuantityProviderCapability::Unavailable
+            crate::schemas::quantities::QuantityProviderCapability::Unavailable
         );
         assert_eq!(resolved.lane, "unresolved");
         assert_eq!(resolved.reason_code.as_deref(), Some("prepared_initial_state"));

@@ -88,7 +88,7 @@ describe("resolveInspectorDescriptor", () => {
 
     expect(descriptor.title).toBe("Film");
     expect(descriptor.breadcrumbs.map((item) => item.label)).toEqual([
-      "Film",
+      "film",
       "Material",
     ]);
     expect(descriptor.metadata.length).toBeLessThanOrEqual(4);
@@ -191,8 +191,16 @@ describe("resolveInspectorDescriptor", () => {
     );
 
     expect(descriptor.breadcrumbs[0]).toMatchObject({
-      label: "Film",
+      label: "film",
       selection: { kind: "object.root", nodeId: "model:object:film" },
+    });
+  });
+
+  it.each(["film%", "film%2Ftop", "MiXeD_object-ID"])("preserves the opaque object ID %s in parent navigation", (objectId) => {
+    const descriptor = resolveInspectorDescriptor({ ...selection("object.geometry", "Geometry"), objectId });
+    expect(descriptor.breadcrumbs[0]).toMatchObject({
+      label: objectId,
+      selection: { objectId, nodeId: `model:object:${objectId}` },
     });
   });
 

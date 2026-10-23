@@ -8,7 +8,7 @@ export function Textarea({
 }: ComponentPropsWithRef<"textarea">) {
   return (
     <textarea
-      className={cn("fm-inspector-input fm-textarea", className)}
+      className={cn("fm-inspector-textarea fm-textarea", className)}
       data-slot="textarea"
       {...props}
     />

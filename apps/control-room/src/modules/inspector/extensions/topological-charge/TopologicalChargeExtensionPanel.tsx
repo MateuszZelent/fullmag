@@ -77,7 +77,7 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
       profile_samples: support === "layer_profile" ? profileSamples : undefined,
     },
   });
-  const model = resolveTopologicalChargePanelModel(resource.status, resource.data);
+  const model = resolveTopologicalChargePanelModel(resource.status, resource.data, resource.error ?? resource.refreshError);
   const busy = resource.status === "loading";
 
   const handleModeChange = useCallback((nextMode: string) => {
@@ -116,7 +116,7 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
         {model.rows.map((row) => (
           <FieldRow key={row.label} label={row.label} value={row.value} />
         ))}
-        <TopologicalChargeProfileTable profile={resource.data?.profile ?? []} />
+        <TopologicalChargeProfileTable profile={resource.data?.profile ?? []} current={model.dataCurrent} />
       </InspectorGroup>
     </div>
   );
@@ -124,8 +124,10 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
 
 function TopologicalChargeProfileTable({
   profile,
+  current,
 }: {
   profile: NonNullable<ReturnType<typeof useObjectTopologicalChargeResource>["data"]>["profile"];
+  current: boolean;
 }) {
   if (!profile || profile.length === 0) return null;
 
@@ -133,6 +135,7 @@ function TopologicalChargeProfileTable({
     <div className="fm-topological-charge-profile" aria-label="Topological charge profile">
       <h4>Support profile</h4>
       <table>
+        {!current ? <caption>Cached profile — current source is unconfirmed.</caption> : null}
         <thead>
           <tr>
             <th scope="col">i</th>

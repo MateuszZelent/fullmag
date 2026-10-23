@@ -88,4 +88,34 @@ describe("topologicalChargeModel", () => {
     });
     expect(model.banner).toEqual({ kind: "warning", message: "Topological charge status: invalid magnetization." });
   });
+
+  it.each(["idle", "loading", "stale", "error"])("marks retained values and trust unconfirmed during %s", (status) => {
+    const model = resolveTopologicalChargePanelModel(status, readyResource);
+    expect(model.dataCurrent).toBe(false);
+    expect(model.banner).toMatchObject({ kind: "warning", message: expect.stringContaining("Cached topological charge results are unconfirmed") });
+    expect(model.rows).toContainEqual({ label: "Q", value: "-0.982341 (cached; unconfirmed)" });
+    expect(model.rows).toContainEqual({ label: "Status", value: "unconfirmed; cached status: ready" });
+    expect(model.rows).toContainEqual({ label: "Trust", value: "unconfirmed; cached trust: diagnostic_resolution" });
+  });
+
+  it.each(["ready", "error"])("reveals the actual refresh error with retained results at status %s", (status) => {
+    const model = resolveTopologicalChargePanelModel(status, readyResource, new Error("Analysis API unavailable"));
+    expect(model.banner).toEqual({ kind: "error", message: "Topological charge request failed: Analysis API unavailable. Cached results are unconfirmed." });
+    expect(model.dataCurrent).toBe(false);
+    expect(model.rows).toContainEqual({ label: "Q", value: "-0.982341 (cached; unconfirmed)" });
+  });
+
+  it("shows an initial request failure without inventing cached results", () => {
+    const model = resolveTopologicalChargePanelModel("error", null, new Error("Request rejected"));
+    expect(model.banner?.message).toBe("Topological charge request failed: Request rejected.");
+    expect(model.rows).toContainEqual({ label: "Q", value: "unavailable" });
+  });
+
+  it("restores current labels only after a confirmed response and retains scientific warnings", () => {
+    const model = resolveTopologicalChargePanelModel("ready", readyResource, null);
+    expect(model.dataCurrent).toBe(true);
+    expect(model.rows).toContainEqual({ label: "Q", value: "-0.982341" });
+    expect(model.rows).toContainEqual({ label: "Trust", value: "diagnostic_resolution" });
+    expect(model.banner?.message).toBe(readyResource.warnings?.[0]?.message);
+  });
 });

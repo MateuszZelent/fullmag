@@ -108,6 +108,21 @@ describe("flattenVisibleExplorerRows", () => {
     });
   });
 
+  it("keeps a nonempty virtual window when filtering shrinks a scrolled tree", () => {
+    const rows = Array.from({ length: 300 }, (_, index) => ({
+      depth: 0,
+      expanded: false,
+      hasChildren: false,
+      node: { id: `node-${index}`, kind: "object.root" as const, label: `Node ${index}`, parentId: null },
+    }));
+    const window = sliceVisibleExplorerRows({
+      overscan: 8, rowHeight: 28, rows, scrollTop: 25_000, viewportHeight: 420,
+    });
+    expect(window.rows.at(-1)?.node.id).toBe("node-299");
+    expect(window.rows.length).toBeGreaterThan(0);
+    expect(window.topPadding + window.rows.length * 28 + window.bottomPadding).toBe(300 * 28);
+  });
+
   it("scrolls an offscreen active node into the visible tree window", () => {
     const rowIds = Array.from({ length: 100 }, (_, index) => `node-${index}`);
 
@@ -129,6 +144,24 @@ describe("flattenVisibleExplorerRows", () => {
         viewportHeight: 280,
       }),
     ).toBeNull();
+  });
+
+  it("reveals the full last row inside a padded scroll viewport", () => {
+    const rowIds = Array.from({ length: 460 }, (_, index) => `node-${index}`);
+    const scrollTop = resolveExplorerRevealScrollTop({
+      activeNodeId: "node-459",
+      contentOffset: 4,
+      rowHeight: 28,
+      rowIds,
+      scrollTop: 0,
+      viewportHeight: 391,
+    });
+    expect(scrollTop).toBe(12493);
+    expect(4 + rowIds.length * 28 - scrollTop!).toBe(391);
+    expect(resolveExplorerRevealScrollTop({
+      activeNodeId: "node-459", contentOffset: 4, rowHeight: 28, rowIds,
+      scrollTop: scrollTop!, viewportHeight: 391,
+    })).toBeNull();
   });
 
   it("chooses a single focusable row for roving tree tabindex", () => {

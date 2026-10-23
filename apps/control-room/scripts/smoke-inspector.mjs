@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { PerspectiveCamera, Vector3 } from "three";
 import { resolve } from "node:path";
+import { performance } from "node:perf_hooks";
+import { PerspectiveCamera, Vector3 } from "three";
 import { installInspectorCommitTrace } from "./lib/inspector-commit-trace.mjs";
 
 import {
@@ -10,15 +11,26 @@ import {
 } from "./lib/inspector-request-budget.mjs";
 
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
+const apiBase =
+  process.env.CONTROL_ROOM_API_BASE_URL ??
+  process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
+  new URL(workspaceUrl).origin;
 const outputDir = resolve(
   process.cwd(),
   process.env.CONTROL_ROOM_INSPECTOR_REPORT_DIR ?? ".fullmag/reports/inspector-2-browser",
 );
 const INSPECTOR_REQUEST_QUIET_MS = 500;
 const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
-// Per-path request budget of one page lifecycle: counts restart at every
-// load so the budget detects request storms, not the number of loads in a run.
+// Per-path GET limits restart at every load. The exact configured API health
+// URL uses a separate elapsed-window budget and cadence check.
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
+// Only objects selected by the declared navigation/opaque-ID fixture scenarios.
+const INSPECTOR_OBJECT_METRICS_PATHS = new Map(
+  ["film", "audit-copy-30", "audit-shrink-60", "film%"].map((objectId) => [
+    `/v2/sessions/current/simulation/objects/${encodeURIComponent(objectId)}/metrics`,
+    objectId,
+  ]),
+);
 const INSPECTOR_SCENE_TRACE_LIMIT = 20;
 const INSPECTOR_MODAL_FIELD_ID = "analysis:eigen:sample-0001:mode-0002";
 const INSPECTOR_MODAL_FIELD_ARRAY_PATH =
@@ -360,7 +372,7 @@ await page.addInitScript((baseUrl) => {
       new URL(window.location.href).searchParams.get("inspectorRealtimeFixture") !== "1",
     enableDiagnosticRecorder: true,
   };
-}, new URL(workspaceUrl).origin);
+}, apiBase);
 await page.addInitScript(() => {
   const wavevectorUniforms = [];
   const uniformNames = new WeakMap();
@@ -415,6 +427,7 @@ await installInspectorFixtureApi(page, fixture);
 
 if (process.env.CONTROL_ROOM_INSPECTOR_FDM_BUILD_GRID === "1") {
   try {
+    resetInspectorDocumentBudget(fixture.requestBudget, "fdm-build-grid-workspace");
     const { qualifyFdmBuildGrid } = await import("./lib/fdm-build-grid-browser.mjs");
     await qualifyFdmBuildGrid({
       consoleErrors,
@@ -425,7 +438,7 @@ if (process.env.CONTROL_ROOM_INSPECTOR_FDM_BUILD_GRID === "1") {
       workspaceUrl,
     });
   } finally {
-    await browser.close();
+    await closeInspectorBrowser();
   }
   process.exit(0);
 }
@@ -436,8 +449,52 @@ if (process.env.CONTROL_ROOM_INSPECTOR_MESH_ONLY === "1") {
     const { qualifyMeshPolicyEditing } = await import("./lib/mesh-policy-browser.mjs");
     await qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology });
   } finally {
-    await browser.close();
+    await closeInspectorBrowser();
   }
+  process.exit(0);
+}
+
+if (process.env.CONTROL_ROOM_FRONTEND_AUDIT === "1") {
+  const failures = [];
+  async function runAuditSuite(name, action) {
+    console.log(`Frontend suite: ${name} started`);
+    try {
+      await action();
+      console.log(`Frontend suite: ${name} passed`);
+    } catch (error) {
+      failures.push(error);
+      console.error(`Frontend suite: ${name} failed: ${error?.message ?? String(error)}`);
+    }
+  }
+  try {
+    await runAuditSuite("explorer-and-controls", async () => {
+      const { qualifyFrontendProductionBrowser } = await import("./lib/frontend-production-browser.mjs");
+      await qualifyFrontendProductionBrowser({
+        consoleErrorEvents,
+        fulfillJson,
+        fixture,
+        outputDir,
+        page,
+        workspaceUrl,
+      });
+    });
+    await runAuditSuite("responsive-workspace", async () => {
+      const { qualifyFrontendResponsiveBrowser } = await import("./lib/frontend-responsive-browser.mjs");
+      await qualifyFrontendResponsiveBrowser({ page, fixture, outputDir, workspaceUrl });
+    });
+    await runAuditSuite("region-editing", async () => {
+      const { qualifyFrontendRegionBrowser } = await import("./lib/frontend-region-browser.mjs");
+      await qualifyFrontendRegionBrowser({ page, fixture, outputDir, workspaceUrl, fulfillJson });
+    });
+    await runAuditSuite("object-airbox-mutation-stability", async () => {
+      resetInspectorDocumentBudget(fixture.requestBudget, "frontend-object-airbox-mutation-stability");
+      const { qualifyMeshPolicyEditing } = await import("./lib/mesh-policy-browser.mjs");
+      await qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology });
+    });
+  } finally {
+    await closeInspectorBrowser();
+  }
+  if (failures.length) throw new AggregateError(failures, "Frontend browser audit failed.");
   process.exit(0);
 }
 
@@ -1127,7 +1184,15 @@ try {
     ),
   );
 } finally {
-  await browser.close();
+  await closeInspectorBrowser();
+}
+
+async function closeInspectorBrowser() {
+  try {
+    await browser.close();
+  } finally {
+    await writeInspectorRequestBudgetEvidence(fixture);
+  }
 }
 
 async function qualifyVisualizationMutationStability(page, inspector, fixture) {
@@ -1653,7 +1718,7 @@ async function qualifyObjectMoveGestureAndSharedApply(page, inspector, fixture, 
   fixture.geometryPatchDelayMs = 0;
   fixture.geometryMutationBodies.length = 0;
   fixture.requestCounts.clear();
-  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await reloadInspectorDocument(page, fixture, { waitUntil: "domcontentloaded", timeout: 60_000 }, "object-move-recovery");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
   return proof;
 }
@@ -2387,7 +2452,7 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
         } catch {
           // Storage unavailable: the "before" assertion below reports it.
         }
-      }, new URL(workspaceUrl).origin);
+      }, apiBase);
       await installInspectorFixtureApi(page, fixture);
       await gotoInspectorDocument(
         page,
@@ -2599,7 +2664,11 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       }
       throw error;
     } finally {
-      await context.close();
+      try {
+        await context.close();
+      } finally {
+        await writeInspectorRequestBudgetEvidence(fixture, `inspector-request-budget-${resultCase.id}.json`);
+      }
     }
   }
 
@@ -3304,7 +3373,30 @@ async function selectInspectorResultBranch(
 
 async function exportBranchSampleCsv(page, inspector, sampleIndex, rawModeIndex) {
   await page.evaluate(() => navigator.clipboard.writeText(""));
-  await inspector.getByRole("button", { name: "Export branch CSV" }).click();
+  const copyButton = inspector.getByRole("button", { name: "Copy branch CSV" });
+  await page.evaluate(() => {
+    window.__inspectorBranchClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async () => { throw new Error("fixture branch clipboard rejection"); } },
+    });
+  });
+  try {
+    await copyButton.click();
+    await inspector.getByRole("alert").filter({ hasText: "Could not copy branch CSV." }).waitFor({ state: "visible" });
+    assert(await inspector.getByRole("status").filter({ hasText: "Branch CSV copied." }).count() === 0,
+      "Rejected branch CSV copy announced success.");
+  } finally {
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: window.__inspectorBranchClipboard,
+      });
+      delete window.__inspectorBranchClipboard;
+    });
+  }
+  await copyButton.click();
+  await inspector.getByRole("status").filter({ hasText: "Branch CSV copied." }).waitFor({ state: "visible" });
   await page.waitForFunction(
     async ({ sampleIndex: expectedSampleIndex, rawModeIndex: expectedModeIndex }) =>
       (await navigator.clipboard.readText()).includes(
@@ -3738,20 +3830,36 @@ function recordInspectorSceneResponse(
   }
 }
 
+async function writeInspectorRequestBudgetEvidence(fixture, filename = "inspector-request-budget.json") {
+  await writeFile(
+    resolve(outputDir, filename),
+    JSON.stringify(inspectorRequestBudgetDiagnostics(fixture), null, 2),
+  );
+}
+
 function inspectorRequestBudgetDiagnostics(fixture) {
   return {
     documentId: fixture.requestBudget.documentId,
     documentLabel: fixture.requestBudget.documentLabel,
     documentRequestCounts: Object.fromEntries(fixture.requestBudget.documentCounts),
+    healthPolling: {
+      apiBase: fixture.requestBudget.apiBase,
+      documentRequestCount: fixture.requestBudget.documentHealthCount,
+      documentStartedAtMs: fixture.requestBudget.documentStartedAtMs,
+      endpoint: fixture.requestBudget.expectedHealthUrl,
+      lastRequest: fixture.requestBudget.lastHealthRequest,
+      cumulativeRequestCount: fixture.requestBudget.cumulativeHealthCount,
+      requests: fixture.requestBudget.healthRequests,
+    },
     requestBudgetViolation: fixture.requestBudgetViolation,
     requestCounts: Object.fromEntries(fixture.requestCounts),
     sceneResponseTrace: fixture.sceneResponseTrace,
   };
 }
 
-// Only explicit page.goto/page.reload calls reset the document GET budget.
-// Same-document history/hash navigation cannot mask request growth. The
-// cumulative counters and mutation caps remain scenario-scoped.
+// Only explicit page.goto/page.reload calls reset document counts and health
+// cadence. Same-document navigation cannot mask growth; cumulative counts and
+// mutation caps remain scenario-scoped.
 async function gotoInspectorDocument(page, fixture, url, options, label) {
   resetInspectorDocumentBudget(fixture.requestBudget, label);
   return page.goto(url, options);
@@ -3864,7 +3972,7 @@ function createInspectorFixture() {
       size: [1e-6, 1e-6, 1e-6],
     },
   };
-  const requestBudget = createInspectorRequestBudgetState();
+  const requestBudget = createInspectorRequestBudgetState({ apiBase });
   const topology = inspectorTopologyBuffer();
   assertInspectorTopologyGeometry(
     topology,
@@ -3899,6 +4007,7 @@ function createInspectorFixture() {
       topology_fingerprint: INSPECTOR_MODAL_TOPOLOGY_HASH,
     },
     requests: [],
+    observationFrames: [],
     visualizationMutationBodies: [],
     requestBudget,
     requestCounts: requestBudget.cumulativeCounts,
@@ -4026,9 +4135,11 @@ async function installInspectorFixtureApi(page, fixture) {
       INSPECTOR_REQUEST_LIMITS.get(requestKey) ??
       INSPECTOR_MAX_REQUESTS_PER_PATH;
     const budget = recordInspectorRequestBudget(fixture.requestBudget, {
+      atMs: performance.now(),
       method: request.method(),
       requestKey,
       requestLimit,
+      requestUrl: request.url(),
     });
     if (budget.exceeded) {
       fixture.requestBudgetViolation ??= {
@@ -4037,9 +4148,10 @@ async function installInspectorFixtureApi(page, fixture) {
         documentId: budget.documentId,
         documentLabel: fixture.requestBudget.documentLabel,
         key: requestKey,
-        limit: requestLimit,
+        limit: budget.limit ?? requestLimit,
         recent: fixture.requests.slice(-20),
         scope: budget.scope,
+        ...(budget.health ? { health: budget.health } : {}),
       };
       if (path === "/v2/sessions/current/model/scene" && request.method() === "GET") {
         recordInspectorSceneResponse(fixture, {
@@ -4057,13 +4169,25 @@ async function installInspectorFixtureApi(page, fixture) {
       );
     }
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
-    // The fixture run has no durable observation frames.
     if (path === "/v2/sessions/current/data/observation-frames" && request.method() === "GET") {
+      const runId = url.searchParams.get("run_id") ?? "inspector-run";
+      if (runId !== "inspector-run") return fulfillJson(route, { error: { code: "observation_run_mismatch" } }, 409);
+      const limit = Number(url.searchParams.get("limit") ?? 50);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) return fulfillJson(route, { error: { code: "observation_page_limit" } }, 400);
+      const stageId = url.searchParams.get("stage_id");
+      const frames = fixture.observationFrames.filter((frame) => !stageId || frame.stage_id === stageId);
+      const cursor = url.searchParams.get("cursor");
+      const cursorIndex = cursor === null ? -1 : frames.findIndex((frame) => frame.frame_id === cursor);
+      if (cursor !== null && cursorIndex < 0) return fulfillJson(route, { error: { code: "observation_page_cursor" } }, 400);
+      const page = frames.slice(cursorIndex + 1, cursorIndex + 1 + limit);
       return fulfillJson(route, {
-        frames: [],
-        run_id: url.searchParams.get("run_id") ?? "inspector-run",
+        frames: page,
+        next_cursor: frames.length > cursorIndex + 1 + limit ? page.at(-1).frame_id : null,
+        run_id: runId,
       });
     }
+    const observationFrame = fixture.observationFrames.find((frame) => path === `/v2/sessions/current/data/observation-frames/${encodeURIComponent(frame.frame_id)}`);
+    if (observationFrame && request.method() === "GET") return fulfillJson(route, observationFrame);
     if (path === "/v2/sessions" && request.method() === "GET") {
       return fulfillJson(route, {
         schema_version: "2.0.0",
@@ -4073,6 +4197,14 @@ async function installInspectorFixtureApi(page, fixture) {
           session_id: "inspector-routing-smoke",
           status: "active",
         }],
+      });
+    }
+    if (budget.health) {
+      return fulfillJson(route, {
+        active_session: true,
+        api_contract_version: "1.0.0",
+        status: "ok",
+        uptime_seconds: 12,
       });
     }
     // Home stays mounted while session bootstrap is loading. These are
@@ -4529,7 +4661,7 @@ async function installInspectorFixtureApi(page, fixture) {
           source_scene_revision: fixture.revision,
           status: "completed",
         },
-        mesh_pipeline_status: failedCandidate ? "failed" : "ready",
+        mesh_pipeline_status: [{ id: "meshing", label: "Meshing", status: failedCandidate ? "failed" : "ready" }],
         revision: 7,
       });
     }
@@ -4655,7 +4787,8 @@ async function installInspectorFixtureApi(page, fixture) {
       status: "completed",
       total_steps: 1,
     });
-    if (path === "/v2/sessions/current/simulation/objects/film/metrics") return fulfillJson(route, inspectorObjectMetrics());
+    const metricsObjectId = INSPECTOR_OBJECT_METRICS_PATHS.get(path);
+    if (metricsObjectId !== undefined) return fulfillJson(route, inspectorObjectMetrics(metricsObjectId));
     if (/^\/v2\/sessions\/current\/analysis\/results\/runs\/[^/]+\/datasets$/.test(path)) {
       return fulfillJson(route, {
         items: [],
@@ -4956,7 +5089,7 @@ function inspectorPreparationResource() {
   };
 }
 
-function inspectorObjectMetrics() {
+function inspectorObjectMetrics(objectId) {
   return {
     energies: {
       anisotropy: null,
@@ -4968,7 +5101,7 @@ function inspectorObjectMetrics() {
     },
     has_solver_sample: false,
     magnetization_average: { mx: 1, my: 0, mz: 0 },
-    object_id: "film",
+    object_id: objectId,
     revision: 1,
     source: "fixture",
     step: 0,

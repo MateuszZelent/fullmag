@@ -415,6 +415,7 @@ export function spinTransportDraft(
 }
 
 function finite(value: string, label: string): number {
+  if (!value.trim()) throw new Error(`${label} must be finite.`);
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`${label} must be finite.`);
   return parsed;

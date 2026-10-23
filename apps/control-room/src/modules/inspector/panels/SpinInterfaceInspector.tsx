@@ -56,13 +56,13 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   const ownerId = interfaceRef?.spinInterfaceOwnerId ?? localOwnerId;
   const selected = useMemo(() => {
     const items = projected.data?.items ?? [];
-    if (ref?.spinInterfaceIndex !== undefined) return items[ref.spinInterfaceIndex] ?? null;
     if (ref?.spinInterfaceId) {
       return items.find((item) =>
         item.interface_id === ref.spinInterfaceId &&
         (!ref.spinInterfaceOwnerId || item.owner_spin_transport_id === ref.spinInterfaceOwnerId)
       ) ?? null;
     }
+    if (ref?.spinInterfaceIndex !== undefined) return items[ref.spinInterfaceIndex] ?? null;
     return items.find((item) => item.owner_spin_transport_id === ownerId && item.interface_id === localInterfaceId) ?? null;
   }, [
     localInterfaceId,
@@ -114,10 +114,17 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   const owner = (transports.data?.items ?? []).find((item) => record(item)?.id === ownerId) ?? null;
   const capability = getTransportAuthoringCapability("spin_transport", owner, geometry.data, capabilities);
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const sourceRevision = transports.data?.scene_revision;
+  const sourcesCurrent = projected.status === "ready" && !projected.error && !projected.refreshError
+    && transports.status === "ready" && !transports.error && !transports.refreshError
+    && geometry.status === "ready" && !geometry.error && !geometry.refreshError
+    && sourceRevision !== undefined && projected.data?.scene_revision === sourceRevision
+    && geometry.data?.revision === sourceRevision
+    && (draftState.key !== draftKey || draftState.ackRevision === null || sourceRevision >= draftState.ackRevision);
   const valid = Boolean(
     !readOnly && !targetUnavailable && resolved.conflicts.length === 0 &&
       ownerId &&
-      transports.status === "ready" &&
+      sourcesCurrent &&
       capability?.authoring_allowed &&
       validation?.semantic.valid === true &&
       validation?.execution.authoring_allowed === true,
@@ -128,8 +135,8 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
       ? "Session identity is not ready."
     : !ownerId
       ? "Select the owning spin transport before applying."
-      : transports.status !== "ready"
-        ? "Spin transport resources are not ready."
+      : !sourcesCurrent
+        ? "Confirm matching current interface, spin transport and geometry revisions before applying."
         : !capability?.authoring_allowed
           ? capability?.reason ?? "Authoring capability is unavailable."
           : undefined;
@@ -151,7 +158,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   );
 
   useEffect(() => {
-    if (!sessionScopeKey || readOnly || targetUnavailable || !ownerId || transports.data?.scene_revision === undefined) return;
+    if (!sessionScopeKey || readOnly || targetUnavailable || !ownerId || !sourcesCurrent) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       try {
@@ -176,7 +183,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     return () => { window.clearTimeout(timer); controller.abort(); };
   // Serialized draft is the validation dependency by design.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, commands, ownerId, readOnly, selected?.interface_id, sessionScopeKey, targetUnavailable, transports.data?.scene_revision, validationKey]);
+  }, [api, commands, ownerId, readOnly, selected?.interface_id, sessionScopeKey, sourcesCurrent, targetUnavailable, transports.data?.scene_revision, validationKey]);
 
   function ownerWith(nextInterface: unknown | null): SceneSpinTransport {
     const owner = (transports.data?.items ?? []).find((item) => record(item)?.id === ownerId);
@@ -292,6 +299,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
   }
 
   function resetDraft(): void {
+    if (pending) return;
     setDraftState({ key: draftKey, value: baseDraft, baseline: baseDraft, ackRevision: null });
     setFeedback(null);
   }
@@ -331,13 +339,25 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     status: readOnly ? "unsupported" : "active",
   });
   return <PhysicsInspectorOverview model={overviewModel} primary={<div className="fm-inspector-panel"><InspectorGroup title="HM/FM interface">
-    {!ref ? <><FormField label="Owning spin transport" type="select" value={ownerId} onChange={(event) => { setLocalOwnerId(event.target.value); setLocalInterfaceId(""); }}><option value="">Select owner</option>{(transports.data?.items ?? []).map((item, index) => { const id = record(item)?.id; return typeof id === "string" ? <option key={`${id}:${index}`} value={id}>{id}</option> : null; })}</FormField><FormField label="Interface" type="select" value={localInterfaceId} onChange={(event) => setLocalInterfaceId(event.target.value)}><option value="">New interface</option>{(projected.data?.items ?? []).filter((item) => item.owner_spin_transport_id === ownerId).map((item, index) => <option key={`${item.interface_id}:${index}`} value={item.interface_id ?? ""}>{item.interface_id ?? `Unknown ${index + 1}`}</option>)}</FormField></> : null}
+    {!ref ? <>
+      <FormField label="Owning spin transport" type="select" value={ownerId} disabled={dirty || pending} onChange={(event) => {
+        if (dirty || pending) return;
+        setLocalOwnerId(event.target.value); setLocalInterfaceId("");
+      }}><option value="">Select owner</option>{(transports.data?.items ?? []).map((item, index) => { const id = record(item)?.id; return typeof id === "string" ? <option key={`${id}:${index}`} value={id}>{id}</option> : null; })}</FormField>
+      <FormField label="Interface" type="select" value={localInterfaceId} disabled={dirty || pending} onChange={(event) => {
+        if (dirty || pending) return;
+        setLocalInterfaceId(event.target.value);
+      }}><option value="">New interface</option>{(projected.data?.items ?? []).filter((item) => item.owner_spin_transport_id === ownerId).map((item, index) => <option key={`${item.interface_id}:${index}`} value={item.interface_id ?? ""}>{item.interface_id ?? `Unknown ${index + 1}`}</option>)}</FormField>
+      {dirty || pending ? <p className="fm-help-text" role="status">Apply or Revert changes before switching interfaces or owners.</p> : null}
+    </> : null}
     {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown interface payload is preserved losslessly and read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected.interface, null, 2)} /></> : <InterfaceFields scene={geometry.data} identityReadOnly={Boolean(addressedId) || pending} draft={draft} patch={patch} />}
     {!readOnly ? <div className="fm-help-text"><div>Owner: {ownerId || "not selected"}</div><div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div><div>{validation?.execution.reason ?? capability?.reason ?? "Capability unavailable."}</div></div> : null}
     {targetUnavailable ? <FeedbackBanner kind="error" message="Selected interface no longer exists. Its last draft is retained; refresh or select a different interface." /> : null}
+    {!sourcesCurrent ? <FeedbackBanner kind="warning" message={lockReason ?? "Confirm matching current interface, spin transport and geometry revisions before applying."} /> : null}
+    {projected.error || projected.refreshError || transports.error || transports.refreshError || geometry.error || geometry.refreshError ? <FeedbackBanner kind="error" message={(projected.error ?? projected.refreshError ?? transports.error ?? transports.refreshError ?? geometry.error ?? geometry.refreshError)?.message ?? "Interface resource refresh failed."} /> : null}
     {resolved.conflicts.length ? <FeedbackBanner kind="error" message={`Conflicting fields: ${resolved.conflicts.join(", ")}. Refresh and review before rebase.`} /> : null}
     <FeedbackBanner kind={meshMessage.startsWith("Mesh verified:") ? "success" : "warning"} message={meshMessage} />
-    <Button type="button" onClick={() => { projected.refetch(); transports.refetch(); meshEvidence.refetch(); }}>Refresh interface and mesh evidence</Button>
+    <Button type="button" onClick={() => { projected.refetch(); transports.refetch(); geometry.refetch(); meshEvidence.refetch(); }}>Refresh interface and mesh evidence</Button>
     {resolved.conflicts.length ? <Button type="button" disabled={pending} onClick={() => setDraftState({ key: draftKey, value: draft, baseline: baseDraft, ackRevision: null })}>Rebase interface draft explicitly</Button> : null}
     {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
     {!readOnly ? <Button disabled={pending || !valid} onClick={() => void run("save")}>{pending ? "Committing…" : selected ? "Replace" : "Create"}</Button> : null}

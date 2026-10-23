@@ -155,6 +155,24 @@ describe("physics-first frequency result inspectors", () => {
     });
   });
 
+  it.each([null, false, "", "   ", [], {}, Number.NaN, Number.POSITIVE_INFINITY])(
+    "does not present absent or invalid response residual %j as zero",
+    (value) => {
+      expect(buildFrequencyResponsePointResidualSummary({ residual_norm: value }, {
+        residualNorm: 5e-5,
+      }).reported).toBe(5e-5);
+      expect(buildFrequencyResponsePointResidualSummary({ residual_norm: value }, {
+        residualNorm: null,
+      }).reported).toBeNull();
+    },
+  );
+
+  it.each([0, "0", "5e-5"])("retains published numeric response residual %j", (value) => {
+    expect(buildFrequencyResponsePointResidualSummary({ residual_norm: value }, {
+      residualNorm: 9e-5,
+    }).reported).toBe(Number(value));
+  });
+
   it("counts each point once for valid typed L2 or legacy residual evidence", () => {
     expect(countResidualEvidencePoints([
       {

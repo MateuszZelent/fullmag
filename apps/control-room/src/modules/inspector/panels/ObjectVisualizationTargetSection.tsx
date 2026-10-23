@@ -23,8 +23,6 @@ import {
 } from "@/shared/ui/SegmentedControl";
 import { Slider } from "@/shared/ui/Slider";
 import { Switch } from "@/shared/ui/Switch";
-import { controlVariants } from "@/shared/ui/controlVariants";
-import { cn } from "@/shared/utils/className";
 import {
   type VisualizationGeometryScope,
   type SurfaceColorSource,
@@ -76,7 +74,6 @@ import {
   type RegionVisualizationCarrier,
   visualizationQuantityItems,
   type ScalarColorbarDisplayUnit,
-  colorPickerInputValue,
 } from "./ObjectVisualizationPanelModel";
 import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccountingRows";
 import { SHARED_VECTOR_COLOR_MODE_ITEMS } from "../visualization/presentationSemantics";
@@ -90,10 +87,13 @@ import {
 } from "../visualization/VisualizationInspectorControls";
 import { surfaceFieldStatus } from "./ObjectVisualizationHelpers";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
+import { ColorField } from "../primitives/ColorField";
 import { FormField } from "../primitives/FormField";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
+
+export { ColorField };
 
 const GEOMETRY_SCOPES = [
   { label: "Surface", value: "surface" },
@@ -1188,49 +1188,6 @@ export function VisualizationOverridesSection({
       {feedback && <FeedbackBanner kind="error" message={feedback} />}
       {mutationError ? <FeedbackBanner kind="error" message={mutationError} /> : null}
     </InspectorGroup>
-  );
-}
-
-export function ColorField({
-  disabled,
-  label,
-  value,
-  onChange,
-}: {
-  disabled?: boolean;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const inputId = useId();
-  return (
-    <InspectorPropertyRow label={label}>
-      <div
-        className="flex min-w-0 w-full items-center justify-end gap-2"
-        data-slot="visualization-color-control"
-      >
-        <input
-          aria-label={`${label} picker`}
-          className="fm-viz-color-swatch h-fm-control-sm w-fm-control-sm shrink-0 cursor-pointer rounded-fm-control border border-fm-subtle bg-fm-canvas p-1 disabled:cursor-not-allowed disabled:border-fm-disabled-border disabled:bg-fm-disabled disabled:opacity-100"
-          disabled={disabled}
-          id={inputId}
-          type="color"
-          value={colorPickerInputValue(value)}
-          onChange={(event) => onChange(event.currentTarget.value)}
-        />
-        <input
-          aria-label={`${label} value`}
-          className={cn(
-            "min-w-0 flex-1 font-fm-mono",
-            controlVariants({ density: "compact" }),
-          )}
-          disabled={disabled}
-          type="text"
-          value={value}
-          onChange={(event) => onChange(event.currentTarget.value)}
-        />
-      </div>
-    </InspectorPropertyRow>
   );
 }
 

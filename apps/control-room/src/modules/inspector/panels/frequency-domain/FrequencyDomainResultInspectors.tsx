@@ -70,6 +70,7 @@ import {
   formatFrequencyHz,
   formatFrequencyRangeHz,
 } from "@/shared/domain/analysis/frequencyUnits";
+import { finiteModalScalar } from "@/shared/domain/analysis/modalDampingObservables";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import {
@@ -5839,8 +5840,7 @@ export function isDrivenExcitationMissing(manifestPayload: unknown): boolean {
 }
 
 function finiteNumber(value: unknown): number | null {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return finiteModalScalar(value);
 }
 
 function nonnegativeFiniteNumber(value: unknown): number | null {

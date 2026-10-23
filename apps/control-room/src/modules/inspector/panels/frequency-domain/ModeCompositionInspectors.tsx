@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type {
   ModeCompositionLayer,
@@ -23,6 +23,8 @@ import { Switch } from "@/shared/ui/Switch";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { QuantityField, QuantityFieldDraftScope, useQuantityFieldDraftScope, type QuantityFieldParseResult } from "../../primitives/QuantityField";
+import { useRegisterInspectorEditSession } from "../../InspectorEditSession";
 import type {
   ModeCompositionCompatibleObject,
   ModeCompositionInspectorDependencies,
@@ -49,6 +51,82 @@ const SIGNED_REPRESENTATIONS = new Set<ModeFieldRepresentation>([
   "real",
   "imag",
 ]);
+
+function compositionOwnerKey(dependencies: ModeCompositionInspectorDependencies | undefined, targetId: string | null = null): string {
+  const resource = dependencies?.resource;
+  return JSON.stringify([
+    dependencies?.sessionScopeKey ?? resource?.lifecycle.session_id,
+    resource?.lifecycle,
+    resource?.composition_id,
+    resource?.run_id,
+    resource?.stage_id,
+    resource?.artifact_revision,
+    targetId,
+  ]);
+}
+
+/** Read the controller's current optimistic layer when several controls fire
+ * before React publishes the next render. Never merge into an old dataset. */
+function currentComposition(dependencies: ModeCompositionInspectorDependencies): ModeCompositionResource {
+  const controller = dependencies.controller;
+  const resource = controller?.getSnapshot ? controller.getSnapshot().resource : dependencies.resource;
+  if (!resource || compositionOwnerKey({ ...dependencies, resource }) !== compositionOwnerKey(dependencies)) {
+    throw new Error("The mode composition source changed. Review the current source before trying again.");
+  }
+  return resource;
+}
+
+function useCompositionMutation(ownerKey: string) {
+  const owner = useMemo(() => ({ key: ownerKey }), [ownerKey]);
+  const activeOwner = useRef<typeof owner | null>(null);
+  const sequence = useRef(0);
+  const [feedback, setFeedback] = useState<{ owner: typeof owner; status: "pending" | "success" | "error"; message: string } | null>(null);
+  useLayoutEffect(() => {
+    activeOwner.current = owner;
+    return () => { activeOwner.current = null; };
+  }, [owner]);
+  const run = useCallback(async (mutation: () => Promise<ModeCompositionResource>): Promise<boolean> => {
+    if (activeOwner.current !== owner) return false;
+    const operation = ++sequence.current;
+    const current = () => activeOwner.current === owner && sequence.current === operation;
+    setFeedback({ owner, status: "pending", message: "Updating mode composition…" });
+    try {
+      await mutation();
+      if (!current()) return false;
+      setFeedback({ owner, status: "success", message: "Mode composition updated." });
+      return true;
+    } catch (error) {
+      if (current()) setFeedback({ owner, status: "error", message: error instanceof Error ? error.message : String(error) });
+      return false;
+    }
+  }, [owner]);
+  return { run, feedback: feedback?.owner === owner ? feedback : null };
+}
+
+function MutationFeedback({ mutation, pending, error }: {
+  mutation: ReturnType<typeof useCompositionMutation>;
+  pending: boolean;
+  error?: string | null;
+}) {
+  const feedback = mutation.feedback;
+  const message = feedback?.status === "error" ? feedback.message : error;
+  if (message) return <p className="fm-help-text" role="alert">{message}</p>;
+  if (pending || feedback?.status === "pending") return <p className="fm-help-text" role="status">Updating mode composition…</p>;
+  return feedback?.status === "success" ? <p className="fm-help-text" role="status">{feedback.message}</p> : null;
+}
+
+function parseAnimationRate(text: string): QuantityFieldParseResult<number> {
+  if (/^[+-]?$|^[+-]?\.$|^[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?$/.test(text)) {
+    return { ok: false, status: "incomplete", message: "Complete the animation rate." };
+  }
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text)) {
+    return { ok: false, status: "invalid", message: "Enter a finite non-negative animation rate." };
+  }
+  const value = Number(text);
+  return Number.isFinite(value) && value >= 0
+    ? { ok: true, value }
+    : { ok: false, status: "invalid", message: "Enter a finite non-negative animation rate." };
+}
 
 export function legalModeLayerComponents(
   representation: ModeFieldRepresentation,
@@ -100,6 +178,13 @@ export function eigenModeLayerAppearanceDefaults(
 }
 
 export function EigenSpectrumCompositionInspectorPanel({
+  dependencies,
+  selection,
+}: InspectorDependenciesProps) {
+  return <EigenSpectrumCompositionEditor key={compositionOwnerKey(dependencies)} dependencies={dependencies} selection={selection} />;
+}
+
+function EigenSpectrumCompositionEditor({
   dependencies,
   selection,
 }: InspectorDependenciesProps) {
@@ -191,6 +276,7 @@ export function ModeCompositionActiveInspectorPanel({
   dependencies,
   selection,
 }: InspectorDependenciesProps) {
+  const mutation = useCompositionMutation(compositionOwnerKey(dependencies));
   const resource = dependencies?.resource;
   if (!dependencies || !resource) {
     return <ModeCompositionUnavailable selection={selection} surface="mode-composition-active" />;
@@ -199,7 +285,13 @@ export function ModeCompositionActiveInspectorPanel({
   const controller = dependencies.controller;
   const setAllEnabled = (enabled: boolean) => {
     if (!controller) return;
-    void Promise.all(resource.layers.map((layer) => controller.updateLayer({ ...layer, enabled })));
+    void mutation.run(() => {
+      const current = currentComposition(dependencies);
+      return controller.mutate({
+        operations: current.layers.map((layer) => ({ op: "upsert_layer" as const, layer: { ...layer, enabled } })),
+        target_ids: current.layers.map((layer) => layer.target_id),
+      });
+    });
   };
 
   return (
@@ -213,15 +305,16 @@ export function ModeCompositionActiveInspectorPanel({
             aria-label="Synchronize mode composition phase clock"
             checked={resource.phase_clock.synchronized}
             disabled={!controller}
-            onCheckedChange={(synchronized) => controller && void controller.setPhaseClock({ ...resource.phase_clock, synchronized })}
+            onCheckedChange={(synchronized) => controller && void mutation.run(() => controller.setPhaseClock({ ...currentComposition(dependencies).phase_clock, synchronized }))}
           />
           <span>Synchronize phase clock ({resource.phase_clock.master_rate_hz} Hz)</span>
         </div>
         <div className="fm-mode-composition-inspector__actions">
           <Button disabled={!controller || activeLayers.length === 0} size="sm" type="button" variant="secondary" onClick={() => setAllEnabled(false)}>Hide all modal layers</Button>
           <Button disabled={!controller || resource.layers.length === 0} size="sm" type="button" variant="secondary" onClick={() => setAllEnabled(false)}>Restore base visualization</Button>
-          <Button disabled={!controller || resource.layers.length === 0} size="sm" type="button" variant="danger" onClick={() => void controller?.mutate({ operations: [{ op: "clear_layers" }], target_ids: resource.layers.map((layer) => layer.target_id) })}>Clear composition</Button>
+          <Button disabled={!controller || resource.layers.length === 0} size="sm" type="button" variant="danger" onClick={() => controller && void mutation.run(() => controller.mutate({ operations: [{ op: "clear_layers" }], target_ids: currentComposition(dependencies).layers.map((layer) => layer.target_id) }))}>Clear composition</Button>
         </div>
+        <MutationFeedback mutation={mutation} pending={dependencies.controllerState?.status === "stale"} error={dependencies.controllerState?.error ? `Mode composition update failed: ${dependencies.controllerState.error.message}` : null} />
       </InspectorGroup>
       <InspectorGroup title="Objects" badge={`${activeLayers.length} active`}>
         <div className="fm-mode-composition-inspector__table-wrap">
@@ -276,6 +369,7 @@ export function ModeCompositionObjectInspectorPanel({
 
   return (
     <ModeCompositionObjectLayerEditor
+      key={compositionOwnerKey(dependencies, objectRef.targetId)}
       dependencies={dependencies}
       objectRef={objectRef}
     />
@@ -304,27 +398,52 @@ function ModeCompositionObjectLayerEditor({
   const [modeId, setModeId] = useState(layer?.mode.mode_id ?? sample?.modes[0]?.modeId ?? "");
   const selectedMode = sample?.modes.find((mode) => mode.modeId === modeId) ?? sample?.modes[0] ?? null;
   const controller = dependencies.controller;
+  const ownerKey = compositionOwnerKey(dependencies, object.targetId);
+  const mutation = useCompositionMutation(ownerKey);
+  const numericDrafts = useQuantityFieldDraftScope(ownerKey);
+  const pendingNumericDraft = numericDrafts.summary.pendingCount > 0;
+  const resetNumericDrafts = useCallback(() => numericDrafts.store.clear(), [numericDrafts.store]);
+  useRegisterInspectorEditSession(
+    pendingNumericDraft ? "staged" : null,
+    false,
+    pendingNumericDraft,
+    !pendingNumericDraft,
+    undefined,
+    () => false,
+    resetNumericDrafts,
+    { applyBlockReason: pendingNumericDraft ? "Commit or discard the pending animation rate." : undefined, historyMode: "mutation-owned" },
+  );
   const componentOptions = legalModeLayerComponents(layer?.representation ?? "phase_rotated_real");
   const canEnable = Boolean(controller && dependencies.resource && selectedMode?.fieldId);
 
   const enableLayer = () => {
     if (!controller || !dependencies.resource || !selectedMode?.fieldId || !sample) return;
-    const nextLayer = layer ?? defaultLayer({ object, resource: dependencies.resource, sample, selectedMode });
-    void controller.assign({ ...nextLayer, enabled: true });
+    void mutation.run(() => {
+      const resource = currentComposition(dependencies);
+      const nextLayer = resource.layers.find((candidate) => candidate.target_id === object.targetId) ?? defaultLayer({ object, resource, sample, selectedMode });
+      const selected = defaultLayer({ object, resource, sample, selectedMode });
+      return controller.assign({ ...nextLayer, enabled: true, field_id: selected.field_id, mode: selected.mode });
+    });
   };
-  const updateLayer = (patch: Partial<ModeCompositionLayer>) => {
+  const updateLayer = (patch: Partial<ModeCompositionLayer> | ((current: ModeCompositionLayer) => Partial<ModeCompositionLayer>)) => {
     if (!controller || !layer) return;
-    void controller.updateLayer({ ...layer, ...patch });
+    void mutation.run(() => {
+      const current = currentComposition(dependencies).layers.find((candidate) => candidate.target_id === object.targetId);
+      if (!current) throw new Error("The mode layer is no longer available. Choose its current source before editing.");
+      return controller.updateLayer({ ...current, ...(typeof patch === "function" ? patch(current) : patch) });
+    });
   };
   const updateRepresentation = (representation: ModeFieldRepresentation) => {
     if (!layer) return;
-    const component = legalModeLayerComponents(representation).includes(layer.component)
-      ? layer.component
-      : "x";
-    updateLayer({ appearance: { ...layer.appearance, ...eigenModeLayerAppearanceDefaults(representation) }, component, representation });
+    updateLayer((current) => ({
+      appearance: { ...current.appearance, ...eigenModeLayerAppearanceDefaults(representation) },
+      component: legalModeLayerComponents(representation).includes(current.component) ? current.component : "x",
+      representation,
+    }));
   };
 
   return (
+    <QuantityFieldDraftScope store={numericDrafts.store}>
     <div className="fm-mode-composition-inspector" data-inspector-surface="mode-composition-object">
       <InspectorGroup title="Object mode layer" badge={layer?.enabled ? "Active" : "Base"}>
         <FieldRow label="Object" value={object.label} />
@@ -334,6 +453,7 @@ function ModeCompositionObjectLayerEditor({
         <FieldRow label="Effective surface" value={effectiveSurfaceLabel(layer)} />
         <FieldRow label="Field lifecycle" value={layer?.enabled ? "Preparing/ready state is owned by the render plan." : "idle"} />
         <Button disabled={!canEnable} size="sm" type="button" variant="primary" onClick={enableLayer}>Enable mode layer</Button>
+        <MutationFeedback mutation={mutation} pending={dependencies.controllerState?.pending_target_ids.includes(object.targetId) ?? false} error={dependencies.controllerState?.error ? `Mode composition update failed: ${dependencies.controllerState.error.message}` : null} />
       </InspectorGroup>
       <InspectorGroup title="Mode source" badge={selectedMode?.modeId ?? "Unavailable"}>
         <div className="fm-mode-composition-inspector__controls">
@@ -345,27 +465,28 @@ function ModeCompositionObjectLayerEditor({
       </InspectorGroup>
       <InspectorGroup title="Component and representation">
         <div className="fm-mode-composition-inspector__controls">
-          <label className="fm-mode-composition-inspector__control"><span>Mode component</span><Select disabled={!layer} value={layer?.component ?? "x"} onValueChange={(value) => updateLayer({ component: value as ModeFieldComponent, appearance: { ...layer!.appearance, vectors_visible: value === "vector" ? true : layer!.appearance.vectors_visible } })}><SelectTrigger aria-label="Mode component"><SelectValue /></SelectTrigger><SelectContent>{componentOptions.map((component) => <SelectItem key={component} value={component}>{componentLabel(component)}</SelectItem>)}</SelectContent></Select></label>
+          <label className="fm-mode-composition-inspector__control"><span>Mode component</span><Select disabled={!layer} value={layer?.component ?? "x"} onValueChange={(value) => updateLayer((current) => ({ component: value as ModeFieldComponent, appearance: { ...current.appearance, vectors_visible: value === "vector" ? true : current.appearance.vectors_visible } }))}><SelectTrigger aria-label="Mode component"><SelectValue /></SelectTrigger><SelectContent>{componentOptions.map((component) => <SelectItem key={component} value={component}>{componentLabel(component)}</SelectItem>)}</SelectContent></Select></label>
           <label className="fm-mode-composition-inspector__control"><span>Mode representation</span><Select disabled={!layer} value={layer?.representation ?? "phase_rotated_real"} onValueChange={(value) => updateRepresentation(value as ModeFieldRepresentation)}><SelectTrigger aria-label="Mode representation"><SelectValue /></SelectTrigger><SelectContent>{representationOptions().map((representation) => <SelectItem key={representation} value={representation}>{representationLabel(representation)}</SelectItem>)}</SelectContent></Select></label>
-          <label className="fm-mode-composition-inspector__control"><span>Mode palette</span><Select disabled={!layer} value={layer?.appearance.colormap ?? "coolwarm"} onValueChange={(colormap) => layer && updateLayer({ appearance: { ...layer.appearance, colormap } })}><SelectTrigger aria-label="Mode palette"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="coolwarm">Coolwarm</SelectItem><SelectItem value="viridis">Viridis</SelectItem><SelectItem value="twilight">Twilight</SelectItem></SelectContent></Select></label>
+          <label className="fm-mode-composition-inspector__control"><span>Mode palette</span><Select disabled={!layer} value={layer?.appearance.colormap ?? "coolwarm"} onValueChange={(colormap) => updateLayer((current) => ({ appearance: { ...current.appearance, colormap } }))}><SelectTrigger aria-label="Mode palette"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="coolwarm">Coolwarm</SelectItem><SelectItem value="viridis">Viridis</SelectItem><SelectItem value="twilight">Twilight</SelectItem></SelectContent></Select></label>
         </div>
         <FieldRow label="Projection legality" value={layer?.component === "vector" ? "Vector is glyph-only and never becomes a scalar surface." : "Component is a scalar modal surface."} />
       </InspectorGroup>
       <InspectorGroup title="Phase and animation">
         <div className="fm-mode-composition-inspector__controls">
           <label className="fm-mode-composition-inspector__control"><span>Phase (rad)</span><Slider aria-label="Phase (rad)" disabled={!layer} max={Math.PI} min={-Math.PI} step={0.01} value={[layer?.phase_rad ?? 0]} onValueChange={([phase_rad]) => updateLayer({ phase_rad })} /></label>
-          <label className="fm-mode-composition-inspector__control"><span>Animation rate (Hz)</span><input aria-label="Animation rate (Hz)" className="fm-mode-composition-inspector__number" disabled={!layer} min="0" step="0.1" type="number" value={layer?.animation.rate_hz ?? 0} onChange={(event) => { const value = event.currentTarget.value; if (value === "" || !layer) return; const rate_hz = Number(value); if (Number.isFinite(rate_hz) && rate_hz >= 0) updateLayer({ animation: { ...layer.animation, rate_hz } }); }} /></label>
-          <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Animate mode layer" checked={layer?.animation.enabled ?? false} disabled={!layer} onCheckedChange={(enabled) => layer && updateLayer({ animation: { ...layer.animation, enabled } })} /><span>Animate mode layer</span></div>
+          <QuantityField<number> draftKey="mode-layer.animation.rate_hz" disabled={!layer} format={String} label="Animation rate (Hz)" parse={parseAnimationRate} value={layer?.animation.rate_hz ?? 0} onCommit={(rate_hz) => updateLayer((current) => ({ animation: { ...current.animation, rate_hz } }))} />
+          <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Animate mode layer" checked={layer?.animation.enabled ?? false} disabled={!layer} onCheckedChange={(enabled) => updateLayer((current) => ({ animation: { ...current.animation, enabled } }))} /><span>Animate mode layer</span></div>
         </div>
       </InspectorGroup>
       <InspectorGroup title="Appearance">
         <div className="fm-mode-composition-inspector__controls">
-          <label className="fm-mode-composition-inspector__control"><span>Opacity</span><Slider aria-label="Mode opacity" disabled={!layer} max={1} min={0} step={0.01} value={[layer?.appearance.opacity ?? 1]} onValueChange={([opacity]) => layer && updateLayer({ appearance: { ...layer.appearance, opacity } })} /></label>
-          <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Show mode colorbar" checked={layer?.appearance.colorbar_visible ?? false} disabled={!layer} onCheckedChange={(colorbar_visible) => layer && updateLayer({ appearance: { ...layer.appearance, colorbar_visible } })} /><span>Show colorbar</span></div>
-          <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Show modal vectors" checked={layer?.appearance.vectors_visible ?? false} disabled={!layer || !SIGNED_REPRESENTATIONS.has(layer.representation)} onCheckedChange={(vectors_visible) => layer && updateLayer({ appearance: { ...layer.appearance, vectors_visible } })} /><span>Show modal vectors</span></div>
+          <label className="fm-mode-composition-inspector__control"><span>Opacity</span><Slider aria-label="Mode opacity" disabled={!layer} max={1} min={0} step={0.01} value={[layer?.appearance.opacity ?? 1]} onValueChange={([opacity]) => updateLayer((current) => ({ appearance: { ...current.appearance, opacity } }))} /></label>
+          <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Show mode colorbar" checked={layer?.appearance.colorbar_visible ?? false} disabled={!layer} onCheckedChange={(colorbar_visible) => updateLayer((current) => ({ appearance: { ...current.appearance, colorbar_visible } }))} /><span>Show colorbar</span></div>
+          <div className="fm-mode-composition-inspector__inline-control"><Switch aria-label="Show modal vectors" checked={layer?.appearance.vectors_visible ?? false} disabled={!layer || !SIGNED_REPRESENTATIONS.has(layer.representation)} onCheckedChange={(vectors_visible) => updateLayer((current) => ({ appearance: { ...current.appearance, vectors_visible } }))} /><span>Show modal vectors</span></div>
         </div>
       </InspectorGroup>
     </div>
+    </QuantityFieldDraftScope>
   );
 }
 

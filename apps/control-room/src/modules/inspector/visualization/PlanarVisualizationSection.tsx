@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Palette, ScanLine } from "lucide-react";
 
 import type {
@@ -18,7 +18,7 @@ import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResou
 import { useFieldCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
-import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
+import { resolveVisualizationTargetFromSelection, visualizationStateScopeIdForTarget } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   findPlanarTargetWireframeOverride,
   planarTargetPresentationReason,
@@ -48,6 +48,9 @@ import {
   resolvePlanarDisplayMode,
 } from "./presentationSemantics";
 import { DefaultPlanarSourceSection } from "./DefaultPlanarSourceSection";
+import { PlanarNumberField } from "./PlanarNumberField";
+import { PlanarManualRangeFields } from "./PlanarManualRangeFields";
+import { PlanarPresentationFieldContext, usePlanarPresentationDraftState } from "./PlanarPresentationDraftOwner";
 import {
   PlanarDisplayPassesSection,
   PlanarPointsSection,
@@ -70,11 +73,6 @@ type PlanarPatch = NonNullable<Parameters<ReturnType<typeof useKernel>["visualiz
 const PLANAR_COMPONENTS = [
   "x", "y", "z", "u", "v", "normal", "magnitude", "in_plane_magnitude", "orientation",
 ] as const;
-
-function finiteNumber(value: string): number | null {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
 
 function capabilityReason(capability: FieldMapCapability): string | undefined {
   if (capability.enabled) return undefined;
@@ -116,7 +114,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   );
   const coverage = planarVisualizationCoverage(selection);
   const viewScope = planarViewScopeForSelection(selection);
-  const [validationError, setValidationError] = useState<string | null>(null);
+  const rawDrafts = usePlanarPresentationDraftState();
   const monitors = usePlanarMonitorsResource({ enabled: coverage.supported });
   const domain = useDomainMetaResource({ enabled: coverage.supported });
   const fieldCatalog = useFieldCatalogResource({ enabled: coverage.supported });
@@ -173,6 +171,10 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     },
   );
   const patch = (next: PlanarPatch) => visualizationSync.queuePatch({ planar: next });
+  const patchContext = (next: PlanarPatch) => {
+    if (rawDrafts.store?.getSummary().pendingCount) return;
+    patch(next);
+  };
   const selectedDescriptor = fieldCatalog.data?.quantities.find((quantity) => quantity.quantity_id === quantityId);
   const componentItems = (selectedDescriptor?.components ?? 3) > 1 ? PLANAR_COMPONENTS : ["magnitude"];
   const canonicalUnit = meta.data?.canonical_unit ?? selectedDescriptor?.unit ?? "";
@@ -215,6 +217,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     });
   };
   const resetPlanarWireframeStyle = () => {
+    if (rawDrafts.store?.getSummary().pendingCount) return;
     if (!planarTarget || planarTargetReason !== undefined) return;
     visualizationSync.queuePlanarTargetOverride({
       kind: "remove",
@@ -240,14 +243,17 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     scopeKind: planar.view_scope.kind,
   });
   const scalarReason = capabilityReason(capabilities.raster);
-  const updateManualRange = (field: "min" | "max", raw: string) => {
-    const value = finiteNumber(raw);
-    if (value === null) { setValidationError("Range limits must be finite SI values."); return; }
-    const next = { mode: "manual" as const, min: range.mode === "manual" ? range.min : -1, max: range.mode === "manual" ? range.max : 1, [field]: value };
-    if (typeof next.min !== "number" || typeof next.max !== "number" || next.min >= next.max) { setValidationError("Manual range requires minimum < maximum."); return; }
-    setValidationError(null);
-    patch({ range: next });
-  };
+  const fieldContextKey = JSON.stringify([
+    source.kind,
+    source.kind === "monitor" ? source.monitorId : null,
+    quantityId,
+    planar.component,
+    canonicalUnit,
+    planar.view_scope.kind,
+    "scope_id" in planar.view_scope ? planar.view_scope.scope_id : null,
+    source.kind === "default" ? planar.default_slice.plane : null,
+    source.kind === "default" ? planar.default_slice.operator.kind : null,
+  ]);
 
   const renderModeOptions = capabilities.mesh.enabled
     ? (["surface", "surface+edges", "wireframe", ...(capabilities.points.enabled ? ["points" as const] : []), "off"] as const)
@@ -272,7 +278,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     >
       <FieldRow label="Target" value={coverage.targetKind} />
       <div aria-label="Planar field selection controls" className="grid min-w-0 gap-fm-inspector-control" role="group">
-        <FormField label="Source" type="select" value={sourceValue} onChange={(event) => { const value = event.currentTarget.value; patch({ source: value === "default" ? { kind: "default" } : { kind: "monitor", monitor_id: value } }); }}>
+        <FormField disabled={rawDrafts.pending} label="Source" type="select" value={sourceValue} onChange={(event) => { const value = event.currentTarget.value; patchContext({ source: value === "default" ? { kind: "default" } : { kind: "monitor", monitor_id: value } }); }}>
           <option value="default">Default</option>
           <optgroup label="Monitors">{(monitors.data?.monitors ?? []).map((monitor) => <option key={monitor.id} value={monitor.id}>{monitor.name}</option>)}</optgroup>
         </FormField>
@@ -290,15 +296,16 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
       variant="nav"
     >
       <FormField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Color map" type="select" value={planar.colormap} onChange={(event) => patch({ colormap: event.currentTarget.value })}>{SCALAR_COLOR_PALETTE_ITEMS.map((palette) => <option key={palette.value} value={palette.value}>{palette.label}</option>)}</FormField>
-      {displayUnitItems.length > 1 ? <FormField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Display unit" type="select" value={planar.display_unit ?? displayUnitItems[0]?.value ?? ""} onChange={(event) => patch({ display_unit: event.currentTarget.value || null })}>{displayUnitItems.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}</FormField> : <FieldRow label="Unit" value={canonicalUnit || "dimensionless"} />}
-      <FormField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Range mode" type="select" value={range.mode} onChange={(event) => patch({ range: planarRangeForMode(event.currentTarget.value as PlanarRange["mode"], range) })}>{PLANAR_RANGE_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
-      {range.mode === "manual" ? <><FormField disabled={!capabilities.raster.enabled} error={validationError ?? undefined} hint={scalarReason} label="Range minimum" type="number" value={range.min ?? ""} onChange={(event) => updateManualRange("min", event.currentTarget.value)} /><FormField disabled={!capabilities.raster.enabled} error={validationError ?? undefined} hint={scalarReason} label="Range maximum" type="number" value={range.max ?? ""} onChange={(event) => updateManualRange("max", event.currentTarget.value)} /></> : null}
-      <FormField disabled={!capabilities.raster.enabled} error={validationError ?? undefined} hint={scalarReason} label="Raster opacity" max="1" min="0" step="0.05" type="number" value={planar.raster_opacity ?? 1} onChange={(event) => { const value = finiteNumber(event.currentTarget.value); if (value === null || value < 0 || value > 1) { setValidationError("Raster opacity must be between 0 and 1."); return; } setValidationError(null); patch({ raster_opacity: value }); }} />
+      {displayUnitItems.length > 1 ? <FormField disabled={!capabilities.raster.enabled || rawDrafts.pending} hint={scalarReason} label="Display unit" type="select" value={planar.display_unit ?? displayUnitItems[0]?.value ?? ""} onChange={(event) => patchContext({ display_unit: event.currentTarget.value || null })}>{displayUnitItems.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}</FormField> : <FieldRow label="Unit" value={canonicalUnit || "dimensionless"} />}
+      <FormField disabled={!capabilities.raster.enabled || rawDrafts.pending} hint={scalarReason} label="Range mode" type="select" value={range.mode} onChange={(event) => patchContext({ range: planarRangeForMode(event.currentTarget.value as PlanarRange["mode"], range) })}>{PLANAR_RANGE_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
+      {range.mode === "manual" ? <PlanarManualRangeFields disabled={!capabilities.raster.enabled} hint={scalarReason} minimum={range.min ?? null} maximum={range.max ?? null} onCommit={(next) => patch({ range: next })} /> : null}
+      <PlanarNumberField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Raster opacity" minimum={0} maximum={1} path="raster_opacity" value={planar.raster_opacity ?? 1} onCommit={(value) => patch({ raster_opacity: value })} />
       <FormField label="Viewport colorbar" type="checkbox" checked={planar.viewport_colorbar_visible} onChange={() => patch({ viewport_colorbar_visible: !planar.viewport_colorbar_visible })} />
     </InspectorGroup>
   );
 
   return (
+    <PlanarPresentationFieldContext contextKey={fieldContextKey}>
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <VisualizationInspectorOverview
         advanced={<PlanarQualitySection capability={capabilities.raster} interaction={interaction} patch={patch} quality={quality} resolution={planar.resolution} />}
@@ -306,7 +313,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         clipping={<p className="m-0 text-fm-help leading-snug text-fm-muted">The active plane and slice position are controlled in Source &amp; Slice.</p>}
         context={sourceAndSlice}
         dataState={meta.status === "ready" ? "Live" : meta.status}
-        display={<><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} /><FormField label="Quantity" type="select" value={quantityId} onChange={(event) => patch({ component: "magnitude", quantity_id: event.currentTarget.value })}>{availableQuantities.map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField label="Component" type="select" value={planar.component} onChange={(event) => patch({ component: event.currentTarget.value as PlanarState["component"] })}>{componentItems.map((component) => <option key={component} value={component}>{component.replaceAll("_", " ")}</option>)}</FormField></>}
+        display={<fieldset aria-label="Planar display context" className="m-0 min-w-0 border-0 p-0" disabled={rawDrafts.pending}><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patchContext} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible || rawDrafts.pending} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patchContext(planarDisplayModePatch(mode, planar.layers))} /><FormField disabled={rawDrafts.pending} label="Quantity" type="select" value={quantityId} onChange={(event) => patchContext({ component: "magnitude", quantity_id: event.currentTarget.value })}>{availableQuantities.map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField disabled={rawDrafts.pending} label="Component" type="select" value={planar.component} onChange={(event) => patchContext({ component: event.currentTarget.value as PlanarState["component"] })}>{componentItems.map((component) => <option key={component} value={component}>{component.replaceAll("_", " ")}</option>)}</FormField></fieldset>}
         enabledPassCount={enabledPassCount}
         meshState={capabilities.mesh.enabled ? "Ready" : "Degraded"}
         quantitySource={quantityId || "Not available"}
@@ -316,6 +323,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
       {planar.layers.points ? <PlanarPointsSection patch={patch} style={planar.point_style} /> : null}
       {planar.layers.mesh || planar.layers.boundaries ? (
         <PlanarWireframeSection
+          draftPath={JSON.stringify(["target", planarTarget?.kind, planarTarget ? visualizationStateScopeIdForTarget(planarTarget) : null, "wireframe.opacity"])}
           disabled={planarTargetReason !== undefined}
           hasOverride={planarTargetOverride !== undefined}
           onReset={resetPlanarWireframeStyle}
@@ -325,7 +333,8 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         />
       ) : null}
       <PlanarProvenanceSection meta={meta} source={source} />
-      <div className="fm-inspector-toolbar"><Button size="sm" type="button" variant="secondary" onClick={() => patch({ view_scope: viewScope })}>Use target scope</Button></div>
+      <div className="fm-inspector-toolbar"><Button disabled={rawDrafts.pending} size="sm" type="button" variant="secondary" onClick={() => patchContext({ view_scope: viewScope })}>Use target scope</Button></div>
     </div>
+    </PlanarPresentationFieldContext>
   );
 }

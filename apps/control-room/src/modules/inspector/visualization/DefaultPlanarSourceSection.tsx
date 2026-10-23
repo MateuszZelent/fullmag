@@ -12,6 +12,8 @@ import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { usePlanarPresentationDraftState } from "./PlanarPresentationDraftOwner";
+import { PlanarNumberField } from "./PlanarNumberField";
 import {
   normalAxisForPlane,
   positionFractionFromCoordinate,
@@ -51,10 +53,20 @@ export function DefaultPlanarSourceSection({
   patch: (next: PlanarPatch) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const { pending } = usePlanarPresentationDraftState();
   const bounds = useMemo(() => asBounds(domain), [domain]);
   const plane = defaultSlice.plane as DefaultPlanarPlane;
   const positionFraction = defaultSlice.position_fraction;
   const axis = normalAxisForPlane(plane);
+  const axisIndex = axis === "x" ? 0 : axis === "y" ? 1 : 2;
+  const minimumCoordinate = bounds?.min[axisIndex];
+  const maximumCoordinate = bounds?.max[axisIndex];
+  const hasCoordinateBounds =
+    minimumCoordinate !== undefined &&
+    maximumCoordinate !== undefined &&
+    Number.isFinite(minimumCoordinate) &&
+    Number.isFinite(maximumCoordinate) &&
+    minimumCoordinate <= maximumCoordinate;
   const coordinate = bounds
     ? resolvedAxisCoordinate(bounds, plane, positionFraction)
     : null;
@@ -72,28 +84,6 @@ export function DefaultPlanarSourceSection({
     patchSlice({ position_fraction: value });
   };
 
-  const updateCoordinate = (raw: string) => {
-    const value = Number(raw);
-    if (!bounds || !Number.isFinite(value)) {
-      setError("Coordinate must be a finite SI value.");
-      return;
-    }
-    setError(null);
-    patchSlice({
-      position_fraction: positionFractionFromCoordinate(bounds, plane, value),
-    });
-  };
-
-  const updateThickness = (raw: string) => {
-    const value = Number(raw);
-    if (!Number.isFinite(value) || value <= 0) {
-      setError("Slab thickness must be finite and positive.");
-      return;
-    }
-    setError(null);
-    patchSlice({ operator: { kind: "slab_average", thickness_m: value } });
-  };
-
   return (
     <InspectorGroup title="Default slice">
       <FieldRow label="Normal axis" value={axis.toUpperCase()} />
@@ -102,6 +92,7 @@ export function DefaultPlanarSourceSection({
         <SegmentedControl
           aria-label="Plane"
           columns={3}
+          disabled={pending}
           options={PLANES}
           value={plane}
           onValueChange={(value) =>
@@ -113,6 +104,7 @@ export function DefaultPlanarSourceSection({
         aria-valuetext={`${Math.round(positionFraction * 100)}% along ${axis}`}
         error={error ?? undefined}
         label="Position"
+        disabled={pending}
         max="1"
         min="0"
         step="0.01"
@@ -120,16 +112,24 @@ export function DefaultPlanarSourceSection({
         value={positionFraction}
         onChange={(event) => updateFraction(event.currentTarget.value)}
       />
-      <FormField
-        disabled={bounds === null}
-        error={error ?? undefined}
+      <PlanarNumberField
+        disabled={!hasCoordinateBounds}
         label={`Coordinate (${axis})`}
+        maximum={maximumCoordinate}
+        minimum={minimumCoordinate}
+        path="default_slice.coordinate"
         unit="m"
-        type="number"
-        value={coordinate ?? ""}
-        onChange={(event) => updateCoordinate(event.currentTarget.value)}
+        value={coordinate}
+        onCommit={(value) => {
+          if (!bounds) return;
+          setError(null);
+          patchSlice({
+            position_fraction: positionFractionFromCoordinate(bounds, plane, value),
+          });
+        }}
       />
       <FormField
+        disabled={pending}
         label="Sampling"
         type="select"
         value={defaultSlice.operator.kind}
@@ -148,15 +148,17 @@ export function DefaultPlanarSourceSection({
         <option value="slab_average">Slab average</option>
       </FormField>
       {defaultSlice.operator.kind === "slab_average" ? (
-        <FormField
-          error={error ?? undefined}
+        <PlanarNumberField
           label="Thickness"
-          min="0"
-          step="any"
-          type="number"
+          minimum={0}
+          minimumExclusive
+          path="default_slice.thickness"
           unit="m"
           value={defaultSlice.operator.thickness_m}
-          onChange={(event) => updateThickness(event.currentTarget.value)}
+          onCommit={(value) => {
+            setError(null);
+            patchSlice({ operator: { kind: "slab_average", thickness_m: value } });
+          }}
         />
       ) : null}
     </InspectorGroup>

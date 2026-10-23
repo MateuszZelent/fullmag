@@ -1,4 +1,6 @@
 .fm-analysis-plots {
+  container-name: analysis-panel;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--fm-space-3);
@@ -40,6 +42,7 @@
 
 .fm-analysis-plots__panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto auto minmax(280px, 1fr) auto;
   min-width: 0;
   min-height: 0;
@@ -64,6 +67,12 @@
 .fm-analysis-plots__header {
   border-bottom: 1px solid var(--fm-border-subtle);
   flex-wrap: wrap;
+}
+
+.fm-analysis-plots__header > div {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .fm-analysis-plots__header h3,
@@ -431,6 +440,7 @@
 
 .fm-chart-section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   /* Self-contained tall block — outer .fm-analysis-plots scrolls */
   min-height: calc(var(--fm-chart-height-analysis, 360px) + 80px);
@@ -524,6 +534,11 @@
   align-items: center;
   gap: var(--fm-space-1);
   flex-shrink: 0;
+}
+
+.fm-chart-display-units {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .fm-chart-section__legend {
@@ -843,6 +858,60 @@
     overflow: visible;
     overflow-wrap: anywhere;
     text-overflow: clip;
+    white-space: normal;
+  }
+
+  .fm-analysis-chart-export > * {
+    justify-content: center;
+    width: 100%;
+  }
+}
+
+@container analysis-panel (max-width: 380px) {
+  .fm-chart-section__header,
+  .fm-chart-section__status-group,
+  .fm-chart-section__toolbar,
+  .fm-analysis-chart-export {
+    align-items: stretch;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .fm-chart-section__title-group,
+  .fm-chart-section__toolbar {
+    flex: 0 1 auto;
+  }
+
+  .fm-chart-legend {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: var(--fm-space-2);
+  }
+
+  .fm-chart-legend__latest {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .fm-chart-control-bar {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .fm-chart-control-bar__range-select,
+  .fm-chart-control-bar__points-select {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .fm-chart-section__title,
+  .fm-chart-section__subtitle,
+  .fm-chart-section__point-count,
+  .fm-chart-section__revision {
+    overflow-wrap: anywhere;
     white-space: normal;
   }
 

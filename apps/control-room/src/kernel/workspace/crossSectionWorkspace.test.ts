@@ -14,6 +14,7 @@ import {
   commitCrossSectionDraft,
   crossSectionFramePreviewToClip,
   crossSectionWorkspaceStore,
+  discardCrossSectionDraft,
   discardPlanarMonitorDraft,
   isPlanarMonitorRevisionConflict,
   planarMonitorCreateRequestFromDraft,
@@ -189,6 +190,35 @@ describe("crossSectionWorkspace", () => {
       positionPercent: 62.5,
     });
     expect(crossSectionWorkspaceStore.getSnapshot().draft).toEqual(draft);
+  });
+
+  it("keeps edge width finite and within the Inspector range at the workspace boundary", () => {
+    resetCrossSectionWorkspaceForTests();
+    beginCrossSectionDraft(visualizationState);
+
+    expect(updateCrossSectionDraft({ edgeWidth: Number.NaN })?.edgeWidth).toBe(0.5);
+    expect(updateCrossSectionDraft({ edgeWidth: 4.5 })?.edgeWidth).toBe(4);
+    expect(updateCrossSectionDraft({ edgeWidth: 0.25 })?.edgeWidth).toBe(0.5);
+  });
+
+  it("advances a monotonic UI generation for fresh drafts but preserves it for edits", () => {
+    resetCrossSectionWorkspaceForTests();
+    beginCrossSectionDraft(visualizationState);
+    const firstGeneration = crossSectionWorkspaceStore.getSnapshot().draftGeneration;
+
+    updateCrossSectionDraft({ positionPercent: 25 });
+    expect(crossSectionWorkspaceStore.getSnapshot().draftGeneration).toBe(firstGeneration);
+
+    resetCrossSectionWorkspaceForTests();
+    beginCrossSectionDraft(visualizationState);
+    const afterResetAndBegin = crossSectionWorkspaceStore.getSnapshot().draftGeneration;
+    expect(afterResetAndBegin).toBeGreaterThan(firstGeneration);
+
+    discardCrossSectionDraft();
+    beginCrossSectionDraft(visualizationState);
+    expect(crossSectionWorkspaceStore.getSnapshot().draftGeneration).toBeGreaterThan(
+      afterResetAndBegin,
+    );
   });
 
   it("commits the draft into a saved plot with stable saved parameters", () => {

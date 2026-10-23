@@ -5,6 +5,9 @@ import { resolve } from "node:path";
 // Uses the production UI and the inspector smoke's typed resource fixture.
 // PUT responses remain pending until the test explicitly acknowledges them.
 export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, workspaceUrl, fulfillJson, fulfillTopology }) {
+  const originalViewport = page.viewportSize();
+  const auditViewport = originalViewport ? { ...originalViewport, height: Math.min(originalViewport.height, 620) } : null;
+  let viewportChanged = false;
   const objectPath = "/v2/sessions/current/meshing/policies/objects/film";
   const airboxPath = "/v2/sessions/current/meshing/policies/universe";
   const policies = new Map([
@@ -31,17 +34,21 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
       }
       return fulfillJson(route, policies.get(path));
     }
-    if (path === "/v2/sessions/current/meshing/meshes/objects/film/topology") return fulfillTopology(route, fixture.topology);
+    if (path === "/v2/sessions/current/meshing/meshes/objects/film/topology") return fulfillTopology(route, fixture.topology, fixture.manifest);
     if (path === "/v2/sessions/current/meshing/meshes/objects/film/report") return fulfillJson(route, { object_id: "film", report: null, revision: fixture.revision });
     if (path === "/v2/sessions/current/meshing/meshes/objects/film/quality") return fulfillJson(route, { object_id: "film", quality: null, revision: fixture.revision });
     if (path === "/v2/sessions/current/meshing/meshes/objects/film/size-field") return fulfillJson(route, { object_id: "film", size_field: null, revision: fixture.revision });
     return route.fallback();
   });
   const targets = [
-    { name: "object", path: objectPath, node: "model:object:film:mesh", parents: ["model:objects", "model:object:film"], jsonLabel: "Policy JSON", jsonGroup: "Advanced JSON", configKey: "maximum_element_size", apply: "Apply Policy" },
-    { name: "airbox", path: airboxPath, node: "model:airbox:mesh:parameters", parents: ["model:universe", "model:airbox", "model:airbox:mesh"], jsonLabel: "Advanced universe policy JSON", jsonGroup: "Advanced Authored Policy JSON", configKey: "airbox_hmax", apply: "Apply Airbox Policy" },
+    { name: "object", path: objectPath, node: "model:object:film:mesh", parents: ["model:session", "model:objects", "model:object:film"], jsonLabel: "Policy JSON", jsonGroup: "Advanced JSON", configKey: "maximum_element_size", expectedWireValue: "4e-8", apply: "Apply Policy", success: "Policy saved. Current solver mesh is stale until a mesh build completes." },
+    { name: "airbox", path: airboxPath, node: "model:airbox:mesh:parameters", parents: ["model:session", "model:universe", "model:airbox", "model:airbox:mesh"], jsonLabel: "Advanced universe policy JSON", jsonGroup: "Advanced Authored Policy JSON", configKey: "airbox_hmax", expectedWireValue: 4e-8, apply: "Apply Airbox Policy", success: "Canonical Airbox policy saved. The realized shared-domain mesh is stale until rebuilt." },
   ];
   try {
+    if (auditViewport && (auditViewport.width !== originalViewport.width || auditViewport.height !== originalViewport.height)) {
+      await page.setViewportSize(auditViewport);
+      viewportChanged = true;
+    }
     await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: 180_000 });
     const inspector = page.locator(".fm-inspector");
     await inspector.waitFor({ state: "visible", timeout: 60_000 });
@@ -51,7 +58,9 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
       if (await properties.count()) await properties.click();
       const panel = inspector.locator(".fm-inspector-panel").first();
       const maxSize = panel.locator('[aria-label="Maximum element size"]');
+      const scrollViewport = inspector.locator(".fm-inspector__content .fm-scroll-area__viewport").first();
       await maxSize.waitFor({ state: "visible" });
+      await scrollViewport.waitFor({ state: "visible" });
       const baselineFile = `${target.name}-mesh-before.png`;
       await maxSize.scrollIntoViewIfNeeded();
       await inspector.screenshot({ path: resolve(outputDir, baselineFile) });
@@ -86,38 +95,60 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
       assert.equal(Number(await maxSize.inputValue()), 4e-8, `${target.name}: cancel selection lost the draft`);
 
       await maxSize.scrollIntoViewIfNeeded();
-      await maxSize.focus();
+      await scrollViewport.evaluate((element) => {
+        if (element.scrollHeight > element.clientHeight && element.scrollTop <= 0) element.scrollTop = 1;
+      });
+      await maxSize.evaluate((element) => element.focus({ preventScroll: true }));
       // Exclude settled selection/form rendering from the mutation budget.
       await page.waitForTimeout(1_100);
       const marker = `${target.name}-mesh-stability`;
-      const baseline = await panel.evaluate((element, identity) => {
+      await panel.evaluate((element, identity) => {
         element.dataset.meshStabilityMarker = identity;
-        const scroller = element.closest(".fm-inspector");
         for (const entry of performance.getEntriesByType("measure")) {
           if (entry.name.startsWith("fullmag.react.render.InspectorModule.")) performance.clearMeasures(entry.name);
         }
-        return { opacity: getComputedStyle(element).opacity, scrollTop: scroller?.scrollTop ?? 0 };
       }, marker);
+      const baseline = await inspectPanel(panel);
+      const stability = { target: target.name, baseline, during: null, after: null };
+      evidence.activeStability = stability;
+      assert.ok(baseline.scrollHeight > baseline.clientHeight, `${target.name}: inspector viewport has no natural overflow`);
+      assert.ok(baseline.scrollTop > 0, `${target.name}: inspector viewport did not reach a nonzero scroll offset`);
       const requestStart = evidence.requests.length;
       const mutationStart = evidence.mutations.length;
       await apply.evaluate((button) => button.click());
       await waitUntil(() => pendingRequest === target.path, `${target.name}: PUT was not submitted`);
       await page.waitForTimeout(80);
       const during = await inspectPanel(panel);
+      stability.during = during;
       assertStable(target.name, during, baseline, marker);
       assert.equal(await maxSize.isDisabled(), false, `${target.name}: unrelated size control disabled during PUT`);
       const pendingFile = `${target.name}-mesh-pending.png`;
       await inspector.screenshot({ path: resolve(outputDir, pendingFile) });
       evidence.screenshots.push(pendingFile);
+      const ackResponsePromise = page.waitForResponse((response) => {
+        const request = response.request();
+        return request.method() === "PUT" && new URL(response.url()).pathname === target.path;
+      }, { timeout: 15_000 });
       acknowledge();
+      const ackResponse = await ackResponsePromise;
+      assert.equal(ackResponse.status(), 200, `${target.name}: PUT did not return success`);
+      assert.equal(await ackResponse.finished(), null, `${target.name}: PUT response did not finish cleanly`);
+      const ackBody = await ackResponse.json();
+      assert.equal(ackBody.config?.[target.configKey], target.expectedWireValue, `${target.name}: acknowledged response violates the authored wire value`);
       await waitUntil(() => pendingRequest === null, `${target.name}: PUT did not acknowledge`);
-      await page.waitForTimeout(500);
+      await page.waitForFunction(({ applyLabel, successText }) => {
+        const panel = document.querySelector(".fm-inspector-panel");
+        if (!panel) return false;
+        const apply = Array.from(panel.querySelectorAll("button")).find((button) => button.textContent?.trim() === applyLabel);
+        return Boolean(apply && !apply.disabled && panel.textContent?.includes(successText));
+      }, { applyLabel: target.apply, successText: target.success }, { timeout: 15_000 });
       const after = await inspectPanel(panel);
+      stability.after = after;
       assertStable(target.name, after, baseline, marker);
       assert.equal(await maxSize.isDisabled(), false, `${target.name}: size control remained disabled after ACK`);
       assert.equal(Number(await maxSize.inputValue()), 4e-8, `${target.name}: ACK lost the applied value`);
       assert.equal(evidence.mutations.length - mutationStart, 1, `${target.name}: apply issued duplicate PUTs`);
-      assert.equal(evidence.mutations.at(-1).body.config[target.configKey], 4e-8, `${target.name}: PUT contained a stale size value`);
+      assert.equal(evidence.mutations.at(-1).body.config[target.configKey], target.expectedWireValue, `${target.name}: PUT violates the authored wire value`);
       const mutationRequests = evidence.requests.slice(requestStart);
       assert.ok(mutationRequests.length <= 20, `${target.name}: request budget exceeded: ${JSON.stringify(mutationRequests)}`);
       assert.ok(after.renderCount <= 8, `${target.name}: render budget exceeded: ${after.renderCount}`);
@@ -144,7 +175,11 @@ export async function qualifyMeshPolicyEditing({ page, fixture, outputDir, works
     throw error;
   } finally {
     acknowledge?.();
-    await writeFile(resolve(outputDir, "mesh-policy-browser.json"), JSON.stringify(evidence, null, 2));
+    try {
+      if (viewportChanged && originalViewport) await page.setViewportSize(originalViewport);
+    } finally {
+      await writeFile(resolve(outputDir, "mesh-policy-browser.json"), JSON.stringify(evidence, null, 2));
+    }
   }
   console.log(JSON.stringify(evidence, null, 2));
 }
@@ -200,16 +235,40 @@ async function selectNode(page, nodeId, parents) {
 }
 
 async function inspectPanel(panel) {
-  return panel.evaluate((element) => ({
-    marker: element.dataset.meshStabilityMarker,
-    connected: element.isConnected,
-    opacity: getComputedStyle(element).opacity,
-    focusedLabel: document.activeElement?.getAttribute("aria-label"),
-    scrollTop: element.closest(".fm-inspector")?.scrollTop ?? 0,
-    opacityAnimations: element.getAnimations({ subtree: true }).filter((animation) =>
-      (animation.effect?.getKeyframes?.() ?? []).some((frame) => Object.hasOwn(frame, "opacity"))).length,
-    renderCount: performance.getEntriesByType("measure").filter((entry) => entry.name.startsWith("fullmag.react.render.InspectorModule")).length,
-  }));
+  return panel.evaluate((element) => {
+    const scrollViewport = element.closest(".fm-inspector")?.querySelector(".fm-inspector__content .fm-scroll-area__viewport");
+    const formControls = Array.from(element.querySelectorAll('input:not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]), select, textarea'))
+      .map((control, index) => {
+        const ancestors = [];
+        let current = control;
+        while (current) {
+          const classes = typeof current.className === "string" ? current.className.trim().split(/\s+/).filter(Boolean) : [];
+          ancestors.push({
+            selector: `${current.tagName.toLowerCase()}${classes.map((name) => `.${name}`).join("")}`,
+            opacity: getComputedStyle(current).opacity,
+          });
+          current = current.parentElement;
+        }
+        return {
+          key: control.getAttribute("aria-label") ?? control.getAttribute("name") ?? `${control.tagName.toLowerCase()}[${index}]`,
+          disabled: Boolean(control.disabled),
+          ancestors,
+        };
+      });
+    return {
+      marker: element.dataset.meshStabilityMarker,
+      connected: element.isConnected,
+      opacity: getComputedStyle(element).opacity,
+      focusedLabel: document.activeElement?.getAttribute("aria-label"),
+      scrollTop: scrollViewport?.scrollTop ?? 0,
+      scrollHeight: scrollViewport?.scrollHeight ?? 0,
+      clientHeight: scrollViewport?.clientHeight ?? 0,
+      formControls,
+      opacityAnimations: element.getAnimations({ subtree: true }).filter((animation) =>
+        (animation.effect?.getKeyframes?.() ?? []).some((frame) => Object.hasOwn(frame, "opacity"))).length,
+      renderCount: performance.getEntriesByType("measure").filter((entry) => entry.name.startsWith("fullmag.react.render.InspectorModule")).length,
+    };
+  });
 }
 
 function assertStable(target, snapshot, baseline, marker) {
@@ -217,7 +276,8 @@ function assertStable(target, snapshot, baseline, marker) {
   assert.equal(snapshot.opacity, baseline.opacity, `${target}: inspector opacity changed`);
   assert.equal(snapshot.opacityAnimations, 0, `${target}: active opacity animation`);
   assert.equal(snapshot.focusedLabel, "Maximum element size", `${target}: field focus was lost`);
-  assert.ok(Math.abs(snapshot.scrollTop - baseline.scrollTop) <= 1, `${target}: scroll position changed`);
+  assert.ok(Math.abs(snapshot.scrollTop - baseline.scrollTop) <= 1, `${target}: scroll position changed: ${baseline.scrollTop} -> ${snapshot.scrollTop}; viewport ${baseline.clientHeight} -> ${snapshot.clientHeight}; content ${baseline.scrollHeight} -> ${snapshot.scrollHeight}`);
+  assert.deepEqual(snapshot.formControls, baseline.formControls, `${target}: form-control disabled state or ancestor opacity changed`);
 }
 
 async function waitUntil(condition, message) {

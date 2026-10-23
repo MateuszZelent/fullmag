@@ -5,6 +5,7 @@ export type ChartDimension =
   | "energy_density"
   | "field"
   | "frequency"
+  | "magnetic_induction"
   | "phase"
   | "time"
   | "wavevector";
@@ -81,6 +82,8 @@ const UNIT_DEFINITIONS: Readonly<Record<string, Omit<ChartUnit, "unit">>> =
       scaleToCanonical: 1,
     },
     "mA/m": { canonicalUnit: "A/m", dimension: "field", scaleToCanonical: 1e-3 },
+    "T": { canonicalUnit: "T", dimension: "magnetic_induction", scaleToCanonical: 1 },
+    "mT": { canonicalUnit: "T", dimension: "magnetic_induction", scaleToCanonical: 1e-3 },
     "A/m": {
       canonicalUnit: "A/m",
       dimension: "field",
@@ -96,8 +99,10 @@ const UNIT_DEFINITIONS: Readonly<Record<string, Omit<ChartUnit, "unit">>> =
   });
 
 export function resolveChartUnit(unit: string): ChartUnit | null {
-  const definition = UNIT_DEFINITIONS[unit.trim()];
-  return definition ? { ...definition, unit: unit.trim() } : null;
+  const normalized = unit.trim();
+  if (!Object.prototype.hasOwnProperty.call(UNIT_DEFINITIONS, normalized)) return null;
+  const definition = UNIT_DEFINITIONS[normalized];
+  return definition ? { ...definition, unit: normalized } : null;
 }
 
 export function chartUnitsCompatible(left: string, right: string): boolean {

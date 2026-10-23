@@ -2,7 +2,7 @@
 
 import { isProjectWorkspaceCommand } from "../commands/projectWorkspaceCommandPolicy";
 
-import { ArrowLeft, House, Search } from "lucide-react";
+import { ArrowLeft, House, Menu as MenuIcon, Search } from "lucide-react";
 import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
@@ -218,6 +218,91 @@ function HeaderDropdown({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function CompactHeaderMenus({
+  commandDisabledReason,
+  isCommandActive,
+  isCommandDisabled,
+  onCommand,
+  onStartCommand,
+  startActive,
+  startReturnLabel,
+}: {
+  commandDisabledReason: CommandDisabledReasonResolver;
+  isCommandActive: (commandId: string) => boolean;
+  isCommandDisabled: (commandId: string) => boolean;
+  onCommand: (commandId: string, input?: unknown) => void;
+  onStartCommand: () => void;
+  startActive: boolean;
+  startReturnLabel?: string;
+}) {
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    clientHydratedSnapshot,
+    serverHydratedSnapshot,
+  );
+  const returning = startActive && Boolean(startReturnLabel);
+  const startLabel = returning ? startReturnLabel : "Start";
+
+  return (
+    <div className="fm-header__compact-nav">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            aria-label="Open main menu"
+            className="fm-header__compact-menu-trigger"
+            disabled={!hydrated}
+            size="sm"
+            title="Main menu"
+            type="button"
+            variant="ghost"
+          >
+            <MenuIcon aria-hidden="true" size={15} />
+            <span>Menu</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuLabel>Main menu</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            aria-current={startActive && !returning ? "page" : undefined}
+            disabled={!hydrated}
+            onSelect={onStartCommand}
+          >
+            {returning ? (
+              <ArrowLeft aria-hidden="true" size={14} />
+            ) : (
+              <House aria-hidden="true" size={14} />
+            )}
+            <span>{startLabel}</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {MAIN_MENUS.map((menu) => (
+            <DropdownMenuSub key={menu.id}>
+              <DropdownMenuSubTrigger disabled={!hydrated}>
+                {menu.label}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuLabel>{menu.label}</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {menu.children?.map((node) => (
+                  <MenuNode
+                    key={node.id}
+                    commandDisabledReason={commandDisabledReason}
+                    isCommandActive={isCommandActive}
+                    isCommandDisabled={isCommandDisabled}
+                    node={node}
+                    onCommand={onCommand}
+                  />
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 
@@ -529,6 +614,23 @@ function NoSessionAppMenuBar({
           />
         ))}
       </nav>
+      <CompactHeaderMenus
+        commandDisabledReason={commandDisabledReason}
+        isCommandActive={(commandId) => kernel.commands.isActive(commandId, commandContext)}
+        isCommandDisabled={isCommandDisabled}
+        onCommand={runCommand}
+        onStartCommand={() =>
+          runCommand(
+            project.state === "ready"
+              ? homeOpen
+                ? "workspace.return-to-workspace"
+                : "workspace.home"
+              : "start.section.home",
+          )
+        }
+        startActive={homeVisible}
+        startReturnLabel={project.state === "ready" ? "Back to project" : undefined}
+      />
       <button
         className="fm-header__search"
         disabled={isCommandDisabled("workspace.command-palette")}
@@ -706,6 +808,19 @@ function SessionAppMenuBar() {
           />
         ))}
       </nav>
+      <CompactHeaderMenus
+        commandDisabledReason={commandDisabledReason}
+        isCommandActive={isCommandActive}
+        isCommandDisabled={isCommandDisabled}
+        onCommand={runCommand}
+        onStartCommand={() =>
+          runCommand(
+            homeOpen ? "workspace.return-to-workspace" : "workspace.home",
+          )
+        }
+        startActive={homeOpen}
+        startReturnLabel="Back to simulation"
+      />
 
       <div className="fm-header__quick-actions">
         {QUICK_ACTIONS.map((action) => (

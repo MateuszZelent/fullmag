@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
-import { PlanarVisualizationSection } from "./PlanarVisualizationSection";
+import { PlanarPresentationDraftOwner } from "./PlanarPresentationDraftOwner";
+import { PlanarVisualizationSection as PlanarVisualizationSectionView } from "./PlanarVisualizationSection";
 import {
   installSimulationPreparationTestDom,
   TestElement,
@@ -17,8 +18,8 @@ import {
 const mocks = vi.hoisted(() => ({
   components: 3,
   discretization: "fem",
-  metaCalls: 0,
-  maskCalls: 0,
+  metaRequests: [] as Parameters<typeof import("@/kernel/resources/planarFieldResources").usePlanarFieldMetaResource>[],
+  maskRequests: [] as Parameters<typeof import("@/kernel/resources/planarFieldResources").usePlanarMaskResource>[],
   optimisticPlanar: null as VisualizationStateResource["planar"] | null,
   queuePatch: vi.fn(),
   queuePlanarTargetOverride: vi.fn(),
@@ -111,8 +112,8 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
 
 vi.mock("@/kernel/resources/planarFieldResources", () => ({
   planarFieldQueryFromMeta: () => ({ ok: true, query: { sample_token: "planar-sample-v2:sample" } }),
-  usePlanarFieldMetaResource: () => {
-    mocks.metaCalls += 1;
+  usePlanarFieldMetaResource: (...args: Parameters<typeof import("@/kernel/resources/planarFieldResources").usePlanarFieldMetaResource>) => {
+    mocks.metaRequests.push(structuredClone(args));
     return {
       data: {
       canonical_unit: "A/m",
@@ -137,8 +138,8 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
       status: "ready",
     };
   },
-  usePlanarMaskResource: () => {
-    mocks.maskCalls += 1;
+  usePlanarMaskResource: (...args: Parameters<typeof import("@/kernel/resources/planarFieldResources").usePlanarMaskResource>) => {
+    mocks.maskRequests.push(structuredClone(args));
     return {
       data: mocks.maskStatus === "ready" ? new ArrayBuffer(1) : null,
       error: null,
@@ -256,6 +257,15 @@ const regionSelection: Selection = {
     visualizationTargetId: "region:free-layer:r1",
   },
 };
+
+function PlanarVisualizationSection({ selection }: { selection: Selection }) {
+  return (
+    <PlanarPresentationDraftOwner identityKey={selection.nodeId}>
+      <PlanarVisualizationSectionView selection={selection} />
+    </PlanarPresentationDraftOwner>
+  );
+}
+
 describe("PlanarVisualizationSection", () => {
   beforeEach(() => {
     mocks.queuePatch.mockClear();
@@ -269,8 +279,8 @@ describe("PlanarVisualizationSection", () => {
     mocks.planar.view_scope = { kind: "monitor_target" };
     mocks.queuePlanarTargetOverride.mockClear();
     mocks.optimisticPlanar = null;
-    mocks.metaCalls = 0;
-    mocks.maskCalls = 0;
+    mocks.metaRequests = [];
+    mocks.maskRequests = [];
     mocks.targets.airbox = { scope: "airbox", scope_id: "airbox" };
     mocks.targets.objects = [
       { scope: "object", scope_id: "free-layer" },
@@ -306,7 +316,7 @@ describe("PlanarVisualizationSection", () => {
         root.render(<PlanarVisualizationSection selection={selection} />),
       );
       await act(async () =>
-        change(findControl(container, "Wireframe opacity"), "0.2"),
+        changeAndBlur(findControl(container, "Wireframe opacity"), "0.2"),
       );
 
       expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
@@ -336,7 +346,7 @@ describe("PlanarVisualizationSection", () => {
         ),
       );
       await act(async () =>
-        change(findControl(container, "Wireframe opacity"), "0.25"),
+        changeAndBlur(findControl(container, "Wireframe opacity"), "0.25"),
       );
 
       expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
@@ -395,7 +405,7 @@ describe("PlanarVisualizationSection", () => {
       );
       expect(findControl(container, "Wireframe opacity").disabled).toBe(true);
       await act(async () =>
-        change(findControl(container, "Wireframe opacity"), "0.1"),
+        changeAndBlur(findControl(container, "Wireframe opacity"), "0.1"),
       );
       expect(mocks.queuePatch).not.toHaveBeenCalled();
     } finally {
@@ -469,6 +479,9 @@ describe("PlanarVisualizationSection", () => {
     "preserves the $name Inspector root, focus, scroll, and unrelated controls through pending and ACK",
     async ({ selected, target, scopeId, color }) => {
       const dom = installSimulationPreparationTestDom();
+      Object.assign(dom.document.defaultView!, {
+        getSelection: () => ({ anchorNode: null, anchorOffset: 0, focusNode: null, focusOffset: 0 }),
+      });
       const container = dom.document.createElement("div");
       const root = createRoot(container as unknown as Element);
       try {
@@ -487,21 +500,59 @@ describe("PlanarVisualizationSection", () => {
         );
         const rasterOpacity = findControl(container, "Raster opacity");
         panel.scrollTop = 127;
-        wireframeOpacity.focus();
+        await act(async () => {
+          // The custom DOM does not emit focusin from focus(). React's legacy
+          // input-event polyfill needs that event before handling keydown.
+          Object.assign(wireframeOpacity, {
+            attachEvent: () => undefined,
+            detachEvent: () => undefined,
+          });
+          wireframeOpacity.focus();
+          wireframeOpacity.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+        });
         const unrelatedState = {
           className: rasterOpacity.getAttribute("class"),
           disabled: rasterOpacity.disabled,
         };
-        const initialMetaCalls = mocks.metaCalls;
-        const initialMaskCalls = mocks.maskCalls;
+        const expectedMetaRequest = [
+          "h_eff",
+          { kind: "monitor", monitorId: "plane-1" },
+          {
+            component: "magnitude",
+            resolution_x: 512,
+            resolution_y: 256,
+            scope_id: undefined,
+            scope_kind: "monitor_target",
+          },
+          { enabled: true },
+        ];
+        const expectedMaskRequest = [
+          "h_eff",
+          { kind: "monitor", monitorId: "plane-1" },
+          { sample_token: "planar-sample-v2:sample" },
+          { enabled: true },
+        ];
+        // These mocks record hook inputs, not HTTP requests. Presentation-only
+        // renders must preserve both the metadata query and canonical mask query.
+        const expectUnchangedResourceQueries = () => {
+          expect(mocks.metaRequests.length).toBeGreaterThan(0);
+          expect(mocks.maskRequests.length).toBeGreaterThan(0);
+          for (const request of mocks.metaRequests) expect(request).toEqual(expectedMetaRequest);
+          for (const request of mocks.maskRequests) expect(request).toEqual(expectedMaskRequest);
+        };
+        expectUnchangedResourceQueries();
 
         await act(async () => change(wireframeOpacity, "0.2"));
+        expect(mocks.queuePlanarTargetOverride).not.toHaveBeenCalled();
+        expectUnchangedResourceQueries();
+        await act(async () => wireframeOpacity.dispatchEvent(new TestEvent("keydown", { bubbles: true, key: "Enter" })));
         expect(mocks.queuePlanarTargetOverride).toHaveBeenCalledTimes(1);
         expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
           kind: "upsert",
           target,
           wireframeStyle: { color, opacity: 0.2 },
         });
+        expectUnchangedResourceQueries();
 
         const acknowledgedOverrides = mocks.planar.target_overrides.map(
           (entry) =>
@@ -538,6 +589,7 @@ describe("PlanarVisualizationSection", () => {
         expect(
           findControl(container, "Raster opacity").getAttribute("class"),
         ).toBe(unrelatedState.className);
+        expectUnchangedResourceQueries();
 
         mocks.planar.target_overrides = acknowledgedOverrides;
         mocks.optimisticPlanar = null;
@@ -555,9 +607,12 @@ describe("PlanarVisualizationSection", () => {
         expect(panel.scrollTop).toBe(127);
         expect(mocks.queuePlanarTargetOverride).toHaveBeenCalledTimes(1);
         expect(mocks.queuePatch).not.toHaveBeenCalled();
-        expect(mocks.metaCalls).toBe(initialMetaCalls + 2);
-        expect(mocks.maskCalls).toBe(initialMaskCalls + 2);
+        expectUnchangedResourceQueries();
       } finally {
+        const focusedControl = dom.document.activeElement;
+        if (focusedControl) {
+          await act(async () => focusedControl.dispatchEvent(new TestEvent("focusout", { bubbles: true })));
+        }
         await act(async () => root.unmount());
         dom.restore();
       }
@@ -726,22 +781,22 @@ describe("PlanarVisualizationSection", () => {
       await act(async () => change(findControl(container, "Color map"), "inferno"));
       await act(async () => change(findControl(container, "Display unit"), "kA/m"));
       await act(async () => change(findControl(container, "Range mode"), "symmetric"));
-      await act(async () => change(findControl(container, "Range minimum"), "-2"));
-      await act(async () => change(findControl(container, "Range maximum"), "4"));
-      await act(async () => change(findControl(container, "Raster opacity"), "0.5"));
+      await act(async () => changeAndBlur(findControl(container, "Range minimum"), "-2"));
+      await act(async () => changeAndBlur(findControl(container, "Range maximum"), "4"));
+      await act(async () => changeAndBlur(findControl(container, "Raster opacity"), "0.5"));
       await act(async () => clickControl(container, "Toggle Bounds"));
       await act(async () => clickControl(container, "Toggle Contours"));
       await act(async () => clickControl(container, "Toggle Points"));
       await act(async () => clickControl(container, "Toggle Vectors"));
       await act(async () => clickControl(container, "Toggle Probes"));
-      await act(async () => change(findControl(container, "Vector density"), "768"));
-      await act(async () => change(findControl(container, "Vector scale"), "1.5"));
-      await act(async () => change(findControl(container, "Vector opacity"), "0.5"));
-      await act(async () => change(findControl(container, "Vector thickness"), "2"));
+      await act(async () => changeAndBlur(findControl(container, "Vector density"), "768"));
+      await act(async () => changeAndBlur(findControl(container, "Vector scale"), "1.5"));
+      await act(async () => changeAndBlur(findControl(container, "Vector opacity"), "0.5"));
+      await act(async () => changeAndBlur(findControl(container, "Vector thickness"), "2"));
       await act(async () => change(findControl(container, "Render quality"), "export"));
-      await act(async () => change(findControl(container, "Resolution width"), "768"));
-      await act(async () => change(findControl(container, "Resolution height"), "384"));
-      await act(async () => change(findControl(container, "Interaction zoom"), "2"));
+      await act(async () => changeAndBlur(findControl(container, "Resolution width"), "768"));
+      await act(async () => changeAndBlur(findControl(container, "Resolution height"), "384"));
+      await act(async () => changeAndBlur(findControl(container, "Interaction zoom"), "2"));
       await act(async () => change(findControl(container, "Vector length mode"), "magnitude"));
       await act(async () => change(findControl(container, "Vector color mode"), "monochrome"));
       await act(async () => clickButton(container, "Use target scope"));
@@ -796,6 +851,81 @@ describe("PlanarVisualizationSection", () => {
       expect(recoverableErrors).toEqual([]);
     } finally {
       await act(async () => root!.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps incomplete numeric text and commits a valid value only on blur", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
+      const density = findControl(container, "Vector density");
+      await act(async () => change(density, "-"));
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+      await act(async () => blur(density));
+      expect(density.value).toBe("-");
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+
+      await act(async () => changeAndBlur(density, "0"));
+      expect(mocks.queuePatch).toHaveBeenCalledWith({
+        planar: { resolution: { height: 256, vector_budget: 0, width: 512 } },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("rejects coordinates outside the active axis bounds without clamping", async () => {
+    mocks.planar.source = { kind: "default" };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
+      const coordinate = findControl(container, "Coordinate (z)");
+      await act(async () => changeAndBlur(coordinate, "43"));
+      expect(coordinate.value).toBe("43");
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+
+      await act(async () => changeAndBlur(coordinate, "42"));
+      expect(mocks.queuePatch).toHaveBeenCalledWith({
+        planar: {
+          default_slice: {
+            operator: { kind: "plane_sample" },
+            plane: "xy",
+            position_fraction: 1,
+          },
+        },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("locks default-slice context controls while a coordinate draft is pending", async () => {
+    mocks.planar.source = { kind: "default" };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
+      await act(async () => change(findControl(container, "Coordinate (z)"), "-"));
+
+      expect(findControl(container, "Position").disabled).toBe(true);
+      expect(findControl(container, "Sampling").disabled).toBe(true);
+      expect(
+        findElements(container, (element) => element.getAttribute("role") === "radio")
+          .filter((element) => ["XY", "XZ", "YZ"].includes(element.textContent))
+          .every((element) => element.disabled),
+      ).toBe(true);
+      expect(findControl(container, "Coordinate (z)").disabled).toBe(false);
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
       dom.restore();
     }
   });
@@ -885,6 +1015,15 @@ function change(element: TestElement, value: string): void {
     element.tagName === "INPUT" ? "input" : "change",
     { bubbles: true },
   ));
+}
+
+function blur(element: TestElement): void {
+  element.dispatchEvent(new TestEvent("focusout", { bubbles: true }));
+}
+
+function changeAndBlur(element: TestElement, value: string): void {
+  change(element, value);
+  blur(element);
 }
 
 

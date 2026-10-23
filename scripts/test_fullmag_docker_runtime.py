@@ -2150,7 +2150,15 @@ class DockerRuntimeContract(unittest.TestCase):
             raise RuntimeError("startup activation failed")
 
         event = SimpleNamespace(wait=lambda _seconds: True)
-        with patch.dict(sys.modules, {"runtime_service": service}), \
+        with patch.dict(
+            sys.modules,
+            {
+                "runtime_service": service,
+                "runtime_service_unclaimed_cancellation": SimpleNamespace(
+                    run=lambda *_args: None
+                ),
+            },
+        ), \
                 patch.object(entrypoint.threading, "Event", return_value=event), \
                 patch.object(entrypoint.signal, "signal"), \
                 patch.object(entrypoint.subprocess, "Popen", return_value=api), \
@@ -2220,7 +2228,15 @@ class DockerRuntimeContract(unittest.TestCase):
         event.wait.side_effect = [False, True]
         unknown = entrypoint.StartupActivationOutcome(diagnostic)
         activation = mock.Mock(side_effect=unknown)
-        with patch.dict(sys.modules, {"runtime_service": service}), \
+        with patch.dict(
+            sys.modules,
+            {
+                "runtime_service": service,
+                "runtime_service_unclaimed_cancellation": SimpleNamespace(
+                    run=lambda *_args: None
+                ),
+            },
+        ), \
                 patch.object(entrypoint.threading, "Event", return_value=event), \
                 patch.object(entrypoint.signal, "signal"), \
                 patch.object(entrypoint.subprocess, "Popen", return_value=api), \

@@ -287,7 +287,7 @@ function RuntimeDegradedBanner() {
         <span>
           No computation will be rerun automatically. API diagnostics remain available;
           previously loaded results are retained. Inspect the runtime logs for the failed
-          stage and cause. A task's completion status is shown separately from API availability.
+          stage and cause. A task&apos;s completion status is shown separately from API availability.
         </span>
       </div>
     </div>

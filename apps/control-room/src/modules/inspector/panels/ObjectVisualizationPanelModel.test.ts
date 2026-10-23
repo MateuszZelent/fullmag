@@ -46,6 +46,7 @@ import {
   resolveChildRegionOverrideTargetIds,
   removeOwnerChildRegionVisualizationOverrides,
   resolveRegionVisualizationCarrier,
+  parseRegionVisualizationTargetId,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
   resolveVisualizationVectorSceneCap,
@@ -2155,6 +2156,51 @@ describe("ObjectVisualizationPanelModel", () => {
     ]);
   });
 
+  it("preserves raw object ids and decodes region target ids exactly once", () => {
+    expect(parseRegionVisualizationTargetId("region:film%:core%2Finner")).toEqual({
+      objectId: "film%",
+      regionId: "core/inner",
+    });
+    expect(
+      parseRegionVisualizationTargetId("region:film%2Fcore:core%252Finner"),
+    ).toEqual({
+      objectId: "film%2Fcore",
+      regionId: "core%2Finner",
+    });
+    expect(
+      parseRegionVisualizationTargetId("region:film%2Fcore:core%2Finner"),
+    ).toEqual({
+      objectId: "film%2Fcore",
+      regionId: "core/inner",
+    });
+  });
+
+  it("matches raw manifest ids for object child region targets", () => {
+    expect(
+      resolveObjectChildRegionVisualizationTargets({
+        manifestRegions: [
+          {
+            mesh_part_ids: ["part:literal-region"],
+            name: "Literal percent sequence",
+            source_object_ids: ["film%2Fcore_geom"],
+            source_region_candidate_id: "core%2Finner",
+          },
+          {
+            mesh_part_ids: ["part:slash-region"],
+            name: "Actual slash sequence",
+            source_object_ids: ["film%2Fcore_geom"],
+            source_region_candidate_id: "core/inner",
+          },
+        ] as never,
+        objectId: "film%2Fcore",
+        scene: { objects: [{ id: "film%2Fcore", regions: [] }] },
+      }).map((target) => [target.id, target.label]),
+    ).toEqual([
+      ["region:film%2Fcore:core%252Finner", "Literal percent sequence"],
+      ["region:film%2Fcore:core%2Finner", "Actual slash sequence"],
+    ]);
+  });
+
   it("does not expose duplicate orientation aliases as inspector option values", () => {
     const surfaceValues: string[] = SURFACE_COLOR_SOURCE_ITEMS.map(
       (item) => item.value,
@@ -3669,6 +3715,58 @@ describe("ObjectVisualizationPanelModel", () => {
       }),
     ).toMatchObject({
       kind: "unavailable",
+    });
+  });
+
+  it("matches raw manifest region ids without confusing literal percent sequences and slashes", () => {
+    const manifestRegions: NonNullable<
+      MeshSharedDomainManifestResource["regions"]
+    > = [
+      {
+        material_ref: "material:film",
+        mesh_part_ids: ["part:literal-region"],
+        name: "Literal percent sequence",
+        region_id: "manifest:literal-region",
+        source_object_ids: ["film%2Fcore_geom"],
+        source_region_candidate_id: "core%2Finner",
+      },
+      {
+        material_ref: "material:film",
+        mesh_part_ids: ["part:slash-region"],
+        name: "Actual slash sequence",
+        region_id: "manifest:slash-region",
+        source_object_ids: ["film%2Fcore_geom"],
+        source_region_candidate_id: "core/inner",
+      },
+    ];
+
+    expect(
+      resolveRegionVisualizationCarrier({
+        manifestRegions,
+        target: {
+          id: "region:film%2Fcore:core%252Finner",
+          kind: "region",
+        },
+      }),
+    ).toEqual({
+      kind: "mesh-parts",
+      objectId: "film%2Fcore",
+      partIds: ["part:literal-region"],
+      regionId: "core%2Finner",
+    });
+    expect(
+      resolveRegionVisualizationCarrier({
+        manifestRegions,
+        target: {
+          id: "region:film%2Fcore:core%2Finner",
+          kind: "region",
+        },
+      }),
+    ).toEqual({
+      kind: "mesh-parts",
+      objectId: "film%2Fcore",
+      partIds: ["part:slash-region"],
+      regionId: "core/inner",
     });
   });
 

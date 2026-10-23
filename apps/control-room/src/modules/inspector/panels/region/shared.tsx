@@ -39,6 +39,7 @@ export interface RegionSubPanelProps {
   ) => void;
   addMaterialOverride: () => void;
   removeMaterialOverride: (index: number) => void;
+  removeQuantityFieldDraftKeys?: (keys: readonly string[]) => void;
   materialFields: MaterialParameterFieldListResource | null;
   couplingDependencies: RegionCouplingDependency[];
   auxiliaryDraftOwnerKey?: string;

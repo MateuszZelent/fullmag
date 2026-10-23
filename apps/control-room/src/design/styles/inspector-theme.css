@@ -1,0 +1,74 @@
+/* One field recipe for every Inspector, following the Visualize property grid.
+   Tailwind aliases resolve through the application's Mocha/Latte semantic tokens. */
+.fm-inspector-input,
+.fm-inspector-select,
+.fm-inspector-textarea,
+:is(.fm-inspector, .fm-inspector-panel, [data-slot="inspector-property-control"]) .fm-select-trigger {
+  @apply min-w-0 rounded-fm-input border border-fm-subtle bg-fm-inspector-input px-fm-2 font-fm-ui text-fm-inspector-field text-fm-primary shadow-fm-sm outline-none;
+  font-weight: var(--fm-font-weight-normal);
+  font-variant-numeric: tabular-nums;
+  transition:
+    border-color var(--fm-transition-fast),
+    box-shadow var(--fm-transition-fast),
+    background-color var(--fm-transition-fast);
+}
+.fm-inspector-input,
+.fm-inspector-select,
+:is(.fm-inspector, .fm-inspector-panel, [data-slot="inspector-property-control"]) .fm-select-trigger {
+  @apply h-fm-inspector-field;
+}
+.fm-inspector-select { padding-inline-end: 26px; }
+.fm-inspector-textarea { @apply h-auto min-h-24 py-fm-2; }
+.fm-inspector-input--mono { @apply font-fm-mono; }
+/* FormField stacks its editor and feedback vertically. A width-filling flex
+   basis must not replace the editor's declared height in that column. */
+.fm-inspector-form-field__control > :is(.fm-inspector-input, .fm-inspector-select, .fm-inspector-textarea) {
+  @apply flex-none;
+}
+.fm-inspector-input:hover:not(:disabled),
+.fm-inspector-select:hover:not(:disabled),
+.fm-inspector-textarea:hover:not(:disabled),
+:is(.fm-inspector, .fm-inspector-panel, [data-slot="inspector-property-control"]) .fm-select-trigger:hover:not(:disabled) {
+  @apply border-fm-border bg-fm-inspector-input-hover;
+}
+.fm-inspector-input:focus-visible,
+.fm-inspector-select:focus-visible,
+.fm-inspector-textarea:focus-visible,
+:is(.fm-inspector, .fm-inspector-panel, [data-slot="inspector-property-control"]) .fm-select-trigger:focus-visible {
+  @apply border-fm-accent;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 18%, transparent);
+}
+.fm-inspector-input:disabled,
+.fm-inspector-select:disabled,
+.fm-inspector-textarea:disabled,
+:is(.fm-inspector, .fm-inspector-panel, [data-slot="inspector-property-control"]) .fm-select-trigger:disabled {
+  @apply cursor-not-allowed border-fm-disabled-border bg-fm-disabled text-fm-disabled-text opacity-100;
+}
+.fm-inspector-input[aria-invalid="true"],
+.fm-inspector-select[aria-invalid="true"],
+.fm-inspector-textarea[aria-invalid="true"],
+:is(.fm-inspector, .fm-inspector-panel, [data-slot="inspector-property-control"]) .fm-select-trigger[aria-invalid="true"] {
+  @apply border-fm-danger;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-danger) 18%, transparent);
+}
+/* Vector fields keep one border and one focus/error ring around the whole axis. */
+.fm-inspector-vector3-item .fm-inspector-input,
+.fm-inspector-vector3-item .fm-inspector-input:hover,
+.fm-inspector-vector3-item .fm-inspector-input:focus-visible {
+  height: 100%;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fm-inspector-input,
+  .fm-inspector-select,
+  .fm-inspector-textarea,
+  .fm-inspector-color-picker { transition: none; }
+}
+@media (forced-colors: active) {
+  .fm-inspector-color-picker:focus-within,
+  .fm-inspector-input:focus-visible,
+  .fm-inspector-select:focus-visible,
+  .fm-inspector-textarea:focus-visible { outline: 2px solid Highlight; }
+}

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { findAboutToolchainDeclarationDrift } from "./about-toolchain-declarations.mjs";
 
 const appRoot = process.cwd();
 const repoRoot = path.resolve(appRoot, "../..");
@@ -16,6 +17,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   checkRuntimeComputeAcceptanceInvalidations();
   checkLegacyWebPathGovernance();
   checkRawHexOutsideDesignTokens();
+  checkAboutToolchainDeclarations();
 
   if (failures.length > 0) {
     console.error(`Architecture hygiene check failed:\n${failures.join("\n")}`);
@@ -23,6 +25,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   }
 
   console.log("Architecture hygiene check passed.");
+}
+
+function checkAboutToolchainDeclarations() {
+  failures.push(...findAboutToolchainDeclarationDrift());
 }
 
 function checkBackupSuffixFiles() {
