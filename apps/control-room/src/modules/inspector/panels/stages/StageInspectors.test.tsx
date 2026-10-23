@@ -991,6 +991,39 @@ describe("Study stage inspectors", () => {
     );
   });
 
+  it("does not invent a CPU request or runtime transfer when change-device data is unavailable", () => {
+    const html = render(<ChangeDeviceStageInspector {...props("change_device")} draft={null} stage={null} />);
+    expect(html).toContain("not authored");
+    expect(html).toContain("not available");
+    expect(html).not.toContain("change_device(&quot;cpu&quot;)");
+    expect(html).not.toContain("identity_copy");
+    expect(html).not.toContain("backend_transfer");
+    expect(html).not.toContain("device_change");
+  });
+
+  it.each(["gpu", "auto", "cuda:2"])("keeps requested %s separate from missing runtime transfer metadata", (deviceTarget) => {
+    const draft = { ...createDefaultStudyStageDraft("change_device", 0), deviceTarget };
+    const html = render(<ChangeDeviceStageInspector {...props("change_device")} draft={draft} />);
+    expect(html).toContain(`study.stages.change_device(&quot;${deviceTarget}&quot;)`);
+    expect(html).not.toContain("identity_copy");
+    expect(html).not.toContain("backend_transfer");
+  });
+
+  it("shows the transfer operator published by runtime without replacing it with a default", () => {
+    const runtimeStage = {
+      ...stage("change_device"),
+      transition: {
+        kind: "published-transfer-kind", label: "Published transition",
+        reason: "published-reason", transferOperator: "published-operator", uiPresentation: null,
+      },
+    };
+    const html = render(<ChangeDeviceStageInspector {...props("change_device")} stage={runtimeStage} />);
+    expect(html).toContain("published-operator");
+    expect(html).toContain("published-transfer-kind");
+    expect(html).toContain("published-reason");
+    expect(html).not.toContain("identity_copy");
+  });
+
   it("routes change-device stage nodes to the change-device inspector", () => {
     expect(
       resolveStudyStageInspectorKind("study.stage.change_device", null),
