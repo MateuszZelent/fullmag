@@ -1287,3 +1287,104 @@ danych nie były wykonywane. Własne wolumeny pozostają potrzebne do sprawdzeń
 i recovery; backend receipt nadal failed-confirmed. C: wolne 40 580 079 616 B,
 bez przypisania różnicy temu etapowi. Pozostałe rodziny Inspectora, live
 Object/Airbox/2D/3D/monitor oraz integracja PR #249 nadal otwarte.
+
+### CI 56391cc61 — zielone bramki, jawna paginacja State snapshots
+
+HEAD `56391cc611a2ef8a00f3688d77f3473e7604e023`: bootstrap
+`39892754349` PASS; eigensolve-ui-method-contracts `39892754306`,
+contract-guard `39892754321` i dispersion-artifact-consumers `39892754316`
+również PASS. Control-room-contracts: 860 plików PASS / 1 skip, 8929 testów
+PASS / 13 skip (8942), dodatkowe 3 testy compute performance i build PASS.
+Nowe regresje aktualności observation descriptor oraz projekcji pin/run
+zostały więc wykonane w CI. Inspector-actions-browser-smoke i główny
+browser-fixture-smoke PASS. Nie oznacza to odbioru live backendu/WebGL.
+
+Artefakt `12475726735`, SHA256
+`21af6e07048f89a2e747f503136f3f8bdf9f60b9f8774268b0216403544eecd1`,
+zweryfikowano przy odczycie; obejrzano toolchain 320/640 po przewinięciu.
+Frontend-production: 10 scenariuszy PASS, page_errors: []. Responsive:
+3 scenariusze PASS. About geometryFailures i stateFailures puste. Ten sam
+root/input pozostaje connected z zachowanymi markerami i wartością Name
+podczas Startu, po reflow i po powrocie. Request budget zachowuje ten sam
+documentId i documentLabel. Wcześniejsza awaria hidden getByRole nie wróciła.
+
+Commit `ec96942bdb295f4fc29641f2b1601f4742fbc260` dodaje paginację:
+
+- `useObservationFrameListPages` składa wyłącznie zażądane strony istniejącego
+  hooka; „Load more snapshots” dopisuje następną stronę bez usuwania pierwszej
+  ani zmiany selection. 50/200 pochodzą z kontraktu API, nie z limitu UI.
+- Owner obejmuje klienta API, tożsamość sesji, run/stage i limit. Brak exact
+  runu nie uruchamia katalogu. Hook strony nadal posiada abortStaleInflight,
+  cache/dedup i kanoniczny session-scoped resource key.
+- Refresh od początku odwiedza tylko wcześniej zażądane okno stron, według
+  świeżych next_cursor. Stary zakres pozostaje widoczny do zakończenia.
+  Dotychczasowe immutable ramki wypchnięte poza częściowe okno przez nowy
+  etap są zachowane, deduplikowane po późniejszym Load more i czyszczone przy
+  końcu pełnego katalogu lub zmianie ownera. To zamyka P2 znalezione w review.
+- Walidacja odrzuca obcy run/stage, przekroczony rozmiar, powtórzone frame_id,
+  zły next_cursor i zerwany łańcuch. Błąd kolejnej strony nie usuwa wcześniejszych
+  danych; Retry ponawia ten sam kursor i blokuje powtórny klik tego samego błędu.
+- Grupa paginacji ma aria-busy oraz jawne loading/error/retry. Jej terminalny
+  stan można odróżnić od wyświetlania wcześniejszych danych podczas Refresh.
+
+Zapisano 12 przypadków modelu i 5 DOM hooka: append zachowujący descriptor,
+bounded Refresh i przesunięte granice stron, koniec katalogu, błędy envelope,
+duplikaty, retry i zmiana run/session. Hook DOM używa kontrolowanego zasobu;
+nie stanowi dowodu sieciowego anulowania starego requestu.
+
+Nowy browser scenariusz używa 55 cienkich descriptorów. Sprawdza brak drugiej
+strony bez kliknięcia, sekwencję cursor null → frame-050, zachowanie wybranej
+pierwszej ramki, Refresh dokładnie dwóch stron i wybór ostatniej ramki przez
+filtr. Przy Refresh wstrzymuje odpowiedź drugiej strony i czeka na potwierdzone
+przechwycenie; sprawdza busy i selection przed zwolnieniem, potem obie odpowiedzi
+oraz terminalny stan UI. Fixture wraca do wcześniejszego katalogu w finally.
+Limit GET pozostaje 8; dodano jawną asercję requestBudgetViolation === null.
+Nowe regresje i scenariusz browsera oczekują wykonania w CI; lokalnie testów
+TS/Rust nie kompilowano ani nie uruchamiano.
+
+Pierwszy lint odrzucił synchroniczny setState w efekcie konsumpcji strony.
+Zastąpiono go warunkowym dostosowaniem własnego akumulatora przy zmianie
+resource snapshot; efekt synchronizuje tylko zewnętrzny refetch. Nie wyłączano
+reguły. Końcowy produkcyjny typecheck, architecture hygiene i lint 115 plików
+PASS, stabilne źródła:
+`verification/frontend-production-source-8e85d9fa070c45c584c98ca116238994.json`.
+Po ostatnim doprecyzowaniu browsera syntax i scoped lint PASS:
+`verification/frontend-production-source-ffc46c807f354d5aa24eebc16999acfa.json`.
+API hygiene PASS:
+`verification/frontend-api-hygiene-adf1746618c1421cba22bab0e85a0552.json`.
+React Doctor: 5 plików (4 produkcyjne i wspólny fixture), 0 błędów/pominięć,
+3 istniejące ostrzeżenia Explorera: dwa mixed exports dla HMR i filter/map;
+receipt `verification/frontend-production-source-8118e9e3fbc349eb91d2b7e7ed6939e7.json`.
+Hook commita zgłosił też istniejące heurystyki pętli/URL w skryptach browsera;
+nowa pętla rozwija kolejne poziomy drzewa, więc wymaga sekwencji. Nie zmieniano
+reguł ani nie równoleglono zależnych interakcji.
+
+Retencja: brak ciężkiego buildu, instalacji, restartu, resetu ownera i usuwania
+danych. Receipty/cache we własnych wolumenach pozostają potrzebne do weryfikacji
+i recovery; backend control nadal failed-confirmed. C: wolne 37 106 233 344 B;
+różnicy nie przypisuje się temu etapowi. Następne kroki: CI paginacji, audyt
+FrozenSpins i pozostałych aktywnych rodzin, rzeczywiste request/cancellation
+oraz live Object/Airbox/2D/3D/monitor, a potem integracja PR #249.
+
+Następny read-only audyt potwierdził aktywną ścieżkę FrozenSpins:
+`objectExplorerNodes` → `explorerSelection` → route catalog →
+`panels/constraint/FrozenSpinsInspectorPanel.tsx`. Otwarte ustalenia źródłowe:
+
+- P2: `panels/selection/SelectionExpressionBuilder.tsx:396` używa Number(trim)
+  i filtruje finite: pusty składnik staje się zerem, a błędny znika. Przykłady
+  `1, , 3` → `[1,0,3]`, `x,2` → `[2]`. Lokalny błąd skalara nie wpływa też
+  na valid=true globalnej sesji Inspectora.
+- P2: retained definition ukrywa błąd odświeżenia (panel:83–100), a resource
+  status solvera jest pomijany przy etykiecie „Waiting” (panel:502–504).
+- Warunkowy P2: brak membership jest normalizowany do static (panel:949),
+  mimo że `docs/specs/frozen-spins-v1.md:104–108` uzależnia domyślną politykę
+  od AST i wymaga snapshot_at_activation dla selektora zależnego od stanu.
+- P2: builder:494–526 wstawia zastępcze asset/region/selection IDs zamiast
+  istniejących referencji; węzeł obiektu rzeczywiście nie ma regionId.
+- Niższy priorytet: Delete przy dirty draft uruchamia guard dopiero po ACK;
+  wybór Apply w tym momencie próbuje zmieniać już usuniętą definicję.
+
+Nie potwierdzono wycieku późnego ACK Apply/Activate ani zwykłej zmiany ownera.
+Ustalenia nie są wykonanymi regresjami. Poprawki wymagają zachowania surowych
+tekstów, blokady mutacji przy błędzie i zgodności z kontraktem selekcji;
+nie zostały jeszcze zaimplementowane. Cały cel pozostaje aktywny.
