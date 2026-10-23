@@ -87,6 +87,20 @@ export async function qualifyFrontendResponsiveBrowser({
     );
   }
 
+  async function waitForMenuFocus(rootMarker = null) {
+    await page.waitForFunction((excludedMarker) => {
+      const active = document.activeElement;
+      const menu = active?.closest('[role="menu"]');
+      if (!menu || (excludedMarker && menu.dataset.responsiveRootMenu === excludedMarker)) return false;
+      const selector = '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]';
+      const enabled = Array.from(menu.querySelectorAll(selector)).some((item) =>
+        item.closest('[role="menu"]') === menu && item.getAttribute("aria-disabled") !== "true");
+      return enabled
+        ? active.matches(selector) && active.getAttribute("aria-disabled") !== "true"
+        : active === menu;
+    }, rootMarker, { timeout: 5_000 });
+  }
+
   async function closeMenus() {
     for (let index = 0; index < 3; index += 1) {
       await page.keyboard.press("Escape");
@@ -164,35 +178,34 @@ export async function qualifyFrontendResponsiveBrowser({
       assert.equal(activeLabel, menuLabel, "Arrow navigation could not reach " + menuLabel + " at " + width + "px.");
 
       await page.keyboard.press("ArrowRight");
-      await page.waitForFunction(
-        (rootMarker) => {
-          const active = document.activeElement;
-          const menu = active?.closest('[role="menu"]');
-          return Boolean(
-            active?.getAttribute("role") === "menuitem" &&
-              menu &&
-              menu.dataset.responsiveRootMenu !== rootMarker,
-          );
-        },
-        "true",
-        { timeout: 5_000 },
-      );
+      await waitForMenuFocus("true");
       const focusedAction = await page.evaluate(() => {
         const active = document.activeElement;
+        const menu = active?.closest('[role="menu"]');
+        const items = menu ? Array.from(menu.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]')).filter((item) => item.closest('[role="menu"]') === menu) : [];
         return {
           label: (active?.textContent ?? "").replace(/\s+/g, " ").trim(),
           role: active?.getAttribute("role") ?? null,
           ariaDisabled: active?.getAttribute("aria-disabled") ?? null,
           tabIndex: active instanceof HTMLElement ? active.tabIndex : null,
+          itemCount: items.length,
+          enabledCount: items.filter((item) => item.getAttribute("aria-disabled") !== "true").length,
+          disabledReasons: items.filter((item) => item.getAttribute("aria-disabled") === "true").map((item) => item.querySelector(".fm-dropdown-reason")?.textContent?.trim() ?? ""),
           isInSubmenu: Boolean(
             active?.closest('[role="menu"]') &&
               active.closest('[role="menu"]')?.dataset.responsiveRootMenu !== "true",
           ),
         };
       });
-      assert.equal(focusedAction.role, "menuitem", "The " + menuLabel + " submenu did not focus an action.");
       assert.equal(focusedAction.isInSubmenu, true, "The " + menuLabel + " action was not reached by keyboard.");
-      assert.notEqual(focusedAction.ariaDisabled, "true", "The first keyboard action in " + menuLabel + " is disabled.");
+      if (focusedAction.enabledCount > 0) {
+        assert.ok(focusedAction.role?.startsWith("menuitem"), "The " + menuLabel + " submenu did not focus an available action.");
+        assert.notEqual(focusedAction.ariaDisabled, "true", "The first keyboard action in " + menuLabel + " is disabled.");
+      } else {
+        assert.equal(focusedAction.role, "menu", "A submenu with unavailable actions must retain its keyboard focus.");
+        assert.ok(focusedAction.itemCount > 0, "The " + menuLabel + " submenu is empty.");
+        assert.ok(focusedAction.disabledReasons.every(Boolean), "Unavailable actions in " + menuLabel + " do not explain their disabled state.");
+      }
       assert.ok(focusedAction.label, "The first keyboard action in " + menuLabel + " has no accessible text.");
       keyboardActions.push({ menu: menuLabel, firstAction: focusedAction });
       await closeMenus();
@@ -220,22 +233,30 @@ export async function qualifyFrontendResponsiveBrowser({
       discoveredLabels.push(menuLabel);
       await trigger.focus();
       await page.keyboard.press("Enter");
-      await page.waitForFunction(
-        () => document.activeElement?.getAttribute("role") === "menuitem",
-        null,
-        { timeout: 5_000 },
-      );
+      await waitForMenuFocus();
       await page.keyboard.press("ArrowDown");
+      await waitForMenuFocus();
       const activeAction = await page.evaluate(() => {
         const active = document.activeElement;
+        const menu = active?.closest('[role="menu"]');
+        const items = menu ? Array.from(menu.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]')).filter((item) => item.closest('[role="menu"]') === menu) : [];
         return {
           label: (active?.textContent ?? "").replace(/\s+/g, " ").trim(),
           role: active?.getAttribute("role") ?? null,
           ariaDisabled: active?.getAttribute("aria-disabled") ?? null,
+          itemCount: items.length,
+          enabledCount: items.filter((item) => item.getAttribute("aria-disabled") !== "true").length,
+          disabledReasons: items.filter((item) => item.getAttribute("aria-disabled") === "true").map((item) => item.querySelector(".fm-dropdown-reason")?.textContent?.trim() ?? ""),
         };
       });
-      assert.equal(activeAction.role, "menuitem", "Arrow navigation failed inside " + menuLabel + " at " + width + "px.");
-      assert.notEqual(activeAction.ariaDisabled, "true", "Keyboard focus landed on a disabled action in " + menuLabel + ".");
+      if (activeAction.enabledCount > 0) {
+        assert.ok(activeAction.role?.startsWith("menuitem"), "Arrow navigation failed inside " + menuLabel + " at " + width + "px.");
+        assert.notEqual(activeAction.ariaDisabled, "true", "Keyboard focus landed on a disabled action in " + menuLabel + ".");
+      } else {
+        assert.equal(activeAction.role, "menu", "A menu with unavailable actions must retain keyboard focus.");
+        assert.ok(activeAction.itemCount > 0, "The " + menuLabel + " menu is empty.");
+        assert.ok(activeAction.disabledReasons.every(Boolean), "Unavailable actions in " + menuLabel + " do not explain their disabled state.");
+      }
       assert.ok(activeAction.label, "Keyboard action in " + menuLabel + " has no accessible text.");
       keyboardActions.push({ menu: menuLabel, action: activeAction });
       await closeMenus();

@@ -6,7 +6,7 @@ import { resetInspectorDocumentBudget } from "./inspector-request-budget.mjs";
 export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, workspaceUrl, fulfillJson }) {
   const original = structuredClone({ scene: fixture.scene, revision: fixture.revision, manifest: fixture.manifest });
   const originalViewport = page.viewportSize();
-  const evidence = { scope: "Production region Inspector with intercepted API; no backend or physics qualification", status: "running", mutations: [], scenarios: [], screenshots: [] };
+  const evidence = { scope: "Production region Inspector with intercepted API; no backend or physics qualification", status: "running", mutations: [], syncs: [], scenarios: [], screenshots: [] };
   const pageErrors = [];
   const consoleErrors = [];
   const onPageError = (error) => {
@@ -33,6 +33,7 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
   object.material_parameter_fields = [readonlyField, editableField, secondEditableField];
   let acknowledge = null;
   let pending = false;
+  let acknowledgedWrites = 0;
   const regionPath = `/v2/sessions/current/model/objects/film/regions/${regionId}`;
   const requests = [];
   function advanceRevision() {
@@ -55,6 +56,7 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
       await new Promise((resolveAck) => { acknowledge = resolveAck; });
       Object.assign(object.regions[0], body.patch);
       advanceRevision();
+      acknowledgedWrites += 1;
       pending = false;
       return fulfillJson(route, fixture.scene);
     }
@@ -63,7 +65,23 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
       evidence.mutations.push({ path, body });
       object.material_parameter_fields = structuredClone(body.fields);
       advanceRevision();
+      acknowledgedWrites += 1;
       return fulfillJson(route, { committed_scene: fixture.scene, scene_revision: fixture.revision, revision: fixture.revision });
+    }
+    if (path === "/v2/sessions/current/model/syncs" && request.method() === "POST") {
+      evidence.syncs.push({ revision: fixture.revision, acknowledgedWrites });
+      if (evidence.syncs.length > acknowledgedWrites) {
+        return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "Duplicate authoring sync without an acknowledged region write." }) });
+      }
+      return fulfillJson(route, {
+        bytes_written: 0,
+        entrypoint_kind: "managed",
+        fidelity: "not_checked",
+        scene_revision: fixture.revision,
+        script_path: "fixture/canonical.py",
+        source_kind: "managed",
+        source_script_modified: false,
+      });
     }
     return route.fallback();
   };
@@ -282,6 +300,7 @@ export async function qualifyFrontendRegionBrowser({ page, fixture, outputDir, w
     }
     evidence.scenarios.push({ name: "override-removal-preserves-draft-identity", ...await verifyRemovalDraftIdentity({ label: "Local override", removeLabel: "Remove Override", revertLabel: "Revert", applyLabel: "Apply Region" }) });
     evidence.scenarios.push({ name: "field-removal-preserves-draft-identity", ...await verifyRemovalDraftIdentity({ label: "Value", removeLabel: "Remove Field", revertLabel: "Revert Fields", applyLabel: "Apply Fields" }) });
+    assert.equal(evidence.syncs.length, acknowledgedWrites, "Each acknowledged region write must issue exactly one authoring sync.");
     evidence.status = "passed";
   } catch (error) {
     evidence.status = "failed";
