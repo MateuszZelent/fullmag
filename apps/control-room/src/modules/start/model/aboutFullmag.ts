@@ -5,6 +5,8 @@
  * this file disagree, so the two cannot drift apart unnoticed.
  */
 
+import generatedToolchainDeclarations from "./toolchainDeclarations.generated.json";
+
 export const FULLMAG_TAGLINE =
   "FDM and FEM micromagnetics with Python, CPU/CUDA solvers, and an interactive Control Room";
 
@@ -314,27 +316,12 @@ export interface ToolchainBadge {
   readonly version: string;
   readonly category: "core" | "scientific" | "ui";
   readonly isAccent?: boolean;
+  readonly source?: string;
+  readonly basis?: string;
 }
 
-export const FULLMAG_TOOLCHAIN_BADGES: readonly ToolchainBadge[] = [
-  { name: "FullMag", version: "v0.1.0", category: "core", isAccent: true },
-  { name: "Python", version: ">=3.10", category: "core" },
-  { name: "Rust", version: "stable 2021", category: "core" },
-  { name: "Node.js", version: "24.18.0", category: "core" },
-  { name: "CUDA", version: "12.4.1", category: "scientific", isAccent: true },
-  { name: "MFEM", version: "4.9", category: "scientific" },
-  { name: "hypre", version: "3.1.0", category: "scientific" },
-  { name: "libCEED", version: "0.12.0", category: "scientific" },
-  { name: "Gmsh", version: ">=4.12", category: "scientific" },
-  { name: "NumPy", version: ">=1.24", category: "scientific" },
-  { name: "PyO3", version: "0.29", category: "scientific" },
-  { name: "Next.js", version: "16.2.11", category: "ui" },
-  { name: "React", version: "19.2.4", category: "ui" },
-  { name: "TypeScript", version: "5.8.3", category: "ui" },
-  { name: "Three.js", version: "^0.183.2", category: "ui" },
-  { name: "ECharts", version: "^6.1.0", category: "ui" },
-  { name: "Tauri", version: "2.11.1", category: "ui" },
-];
+export const FULLMAG_TOOLCHAIN_BADGES =
+  generatedToolchainDeclarations as readonly ToolchainBadge[];
 
 export const FULLMAG_KEY_PILLARS = [
   {

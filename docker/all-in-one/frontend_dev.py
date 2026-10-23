@@ -118,12 +118,12 @@ INSPECTOR_OUTPUT_RE = re.compile(
 )
 LIVE_DIRECTORY_NAMES = ("app", "src", "public", "scripts")
 LIVE_DIRECTORY_PATHS = tuple(f"apps/control-room/{name}" for name in LIVE_DIRECTORY_NAMES)
-# Vitest and the frontend smoke contracts execute from the writable workspace
-# but read a small, explicit set of repository fixtures outside the live
-# Control Room mount.  Keep these entries as symlinks into the readonly source
-# bind: copying them would duplicate source data in the named volume and would
-# make a stale fixture survive a checkout change.  The allowlist is deliberately
-# explicit; no operator-supplied source-relative path is accepted.
+# Vitest, frontend smoke contracts, and the source declaration gate execute
+# from the writable workspace but read a small, explicit set of repository
+# fixtures outside the live Control Room mount. Keep these entries as symlinks
+# into the readonly source bind: copying them would duplicate source data in the
+# named volume and make stale fixtures survive a checkout change. The allowlist
+# is deliberately explicit; no operator-supplied source-relative path is accepted.
 SOURCE_CONTAINER_ROOT = Path("/opt/fullmag/source")
 READONLY_SOURCE_FIXTURES = (
     (".github", "directory"),
@@ -134,8 +134,12 @@ READONLY_SOURCE_FIXTURES = (
     ("packages", "directory"),
     ("public_docs", "directory"),
     ("scripts", "directory"),
+    ("Cargo.toml", "file"),
+    (".node-version", "file"),
+    ("compose.toolchain.yaml", "file"),
     ("justfile", "file"),
     ("readme.md", "file"),
+    ("rust-toolchain.toml", "file"),
 )
 REQUIRED_MANIFEST_KEYS = frozenset(
     {

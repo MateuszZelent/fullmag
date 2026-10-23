@@ -1,0 +1,151 @@
+[
+  {
+    "name": "FullMag",
+    "version": "Build-reported",
+    "category": "core",
+    "isAccent": true,
+    "source": "apps/control-room/src/modules/start/model/buildInfo.ts",
+    "basis": "The About view substitutes the build-reported version; this is not a static package pin."
+  },
+  {
+    "name": "Python (package)",
+    "version": ">=3.10",
+    "category": "core",
+    "source": "packages/fullmag-py/pyproject.toml",
+    "basis": "Project requires-python compatibility range."
+  },
+  {
+    "name": "Python (GPU image)",
+    "version": "3.10.21",
+    "category": "core",
+    "source": "docker/fem-gpu/Dockerfile",
+    "basis": "Pinned Python source version declared for the GPU image build."
+  },
+  {
+    "name": "Rust (workspace)",
+    "version": "stable / edition 2021",
+    "category": "core",
+    "source": "rust-toolchain.toml; Cargo.toml",
+    "basis": "Workspace toolchain channel and Cargo edition declarations."
+  },
+  {
+    "name": "Rust (GPU image)",
+    "version": "nightly",
+    "category": "core",
+    "source": "docker/fem-gpu/Dockerfile",
+    "basis": "GPU image build toolchain declaration; not an observed runtime version."
+  },
+  {
+    "name": "Node.js",
+    "version": "24.18.0",
+    "category": "core",
+    "source": ".node-version; package.json",
+    "basis": "Repository pin constrained by engines.node >=24.18.0 <25."
+  },
+  {
+    "name": "CUDA (Compose default)",
+    "version": "12.6.3",
+    "category": "scientific",
+    "isAccent": true,
+    "source": "compose.toolchain.yaml",
+    "basis": "Default base image nvidia/cuda:12.6.3-devel-ubuntu22.04@sha256:d49bb8a4ff97fb5fe477947a3f02aa8c0a53eae77e11f00ec28618a0bcaa2ad1; host overrides are not read."
+  },
+  {
+    "name": "CUDA (Dockerfile fallback)",
+    "version": "12.4.1",
+    "category": "scientific",
+    "source": "docker/fem-gpu/Dockerfile",
+    "basis": "Fallback base image nvidia/cuda:12.4.1-devel-ubuntu20.04; Compose may override it."
+  },
+  {
+    "name": "MFEM",
+    "version": "v4.10",
+    "category": "scientific",
+    "source": "docker/fem-gpu/Dockerfile",
+    "basis": "GPU image source ref v4.10, pinned commit d964264cdb9a13e94a201b6c236c7721e0c8765f."
+  },
+  {
+    "name": "hypre",
+    "version": "v3.1.0",
+    "category": "scientific",
+    "source": "docker/fem-gpu/Dockerfile",
+    "basis": "GPU image source ref v3.1.0, pinned commit 9dc9e18aed6a945a95f966e57daacfb1c269f6ec."
+  },
+  {
+    "name": "libCEED",
+    "version": "v0.12.0",
+    "category": "scientific",
+    "source": "docker/fem-gpu/Dockerfile",
+    "basis": "GPU image source ref v0.12.0, pinned commit 4018a20a98d451fac24765d3ddb936861647ce8d."
+  },
+  {
+    "name": "Gmsh",
+    "version": ">=4.12,<5",
+    "category": "scientific",
+    "source": "packages/fullmag-py/pyproject.toml",
+    "basis": "Python meshing extra dependency requirement."
+  },
+  {
+    "name": "NumPy",
+    "version": ">=1.24,<3",
+    "category": "scientific",
+    "source": "packages/fullmag-py/pyproject.toml",
+    "basis": "Python project dependency requirement."
+  },
+  {
+    "name": "PyO3",
+    "version": "^0.29",
+    "category": "scientific",
+    "source": "Cargo.toml",
+    "basis": "Cargo workspace dependency requirement; not the Cargo.lock resolution."
+  },
+  {
+    "name": "Next.js",
+    "version": "16.3.8",
+    "category": "ui",
+    "source": "apps/control-room/package.json",
+    "basis": "Frontend package manifest dependency specifier."
+  },
+  {
+    "name": "React",
+    "version": "19.2.4",
+    "category": "ui",
+    "source": "apps/control-room/package.json",
+    "basis": "Frontend react and react-dom package manifest specifiers."
+  },
+  {
+    "name": "TypeScript",
+    "version": "6.0.2",
+    "category": "ui",
+    "source": "apps/control-room/package.json",
+    "basis": "Direct compiler npm alias to @typescript/typescript6."
+  },
+  {
+    "name": "TypeScript native",
+    "version": "7.0.2",
+    "category": "ui",
+    "source": "apps/control-room/package.json",
+    "basis": "Separate native TypeScript package alias."
+  },
+  {
+    "name": "Three.js",
+    "version": "^0.186.1",
+    "category": "ui",
+    "source": "apps/control-room/package.json",
+    "basis": "Frontend package manifest dependency specifier."
+  },
+  {
+    "name": "ECharts",
+    "version": "^6.1.0",
+    "category": "ui",
+    "source": "apps/control-room/package.json",
+    "basis": "Frontend package manifest dependency specifier."
+  },
+  {
+    "name": "Tauri",
+    "version": "^2.11.1",
+    "category": "ui",
+    "source": "Cargo.toml",
+    "basis": "Cargo workspace dependency requirement; not the Cargo.lock resolution."
+  }
+]
