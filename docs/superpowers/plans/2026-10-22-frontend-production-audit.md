@@ -1209,3 +1209,81 @@ resetu ownera i usuwania danych. Własne wolumeny nadal służą sprawdzeniom
 i recovery. Backend receipt pozostaje failed-confirmed; sam działający
 kontener nie jest dowodem API/runtime. C: wolne 45 514 788 864 B; brak
 podstaw do przypisania zmian miejsca temu etapowi. Cały cel nadal aktywny.
+
+### CI 2cf3b2da2 — bramka kontraktów zielona, aktualność observation source
+
+Run `39890660859`, HEAD `2cf3b2da2a99462b3806534bd1eca71a209892d2`:
+control-room-contracts PASS, 858 plików PASS / 1 skip; 8908 testów PASS /
+13 skip (8921). Obejmuje nowe regresje transport/Coupling, usunięcie
+osieroconego CSS oraz wcześniejsze CrossSection/ModeComposition. Dodatkowe
+3 testy compute performance i build aplikacji również PASS. To dowód CI,
+nie lokalnego uruchomienia testów ani akceptacji solvera/live viewportu.
+Inspector-actions-browser-smoke i pozostałe nieskipowane joby bootstrap PASS;
+wyjątkiem pozostaje browser-fixture-smoke.
+
+Artefakt browsera `12474786888`, SHA256
+`06b6ef85c13fe7eeb5d11b29774293875f1bdc23f788ec79bfe18f048f7bdcf8`,
+odczytano z kontrolą digestu. About ma geometryFailures: [], oba układy
+320/640 px obejrzano. Jedyna awaria to kontrola Name podczas otwartego Startu:
+beforeHome i afterReturn mają tę samą wartość draftu, whileHome było null.
+Kod wyjaśnia przyczynę: layout.css nadaje workspace visibility:hidden podczas
+HomeOverlay, a getByRole domyślnie pomija taki element. Ta asercja nie dowodziła
+utraty danych. Probe teraz sprawdza zapisane wcześniej DOM refs: isConnected,
+równość bieżącego root/input, oba markery i wartość podczas Startu, po reflow
+i po powrocie. Widoczny getByRole po powrocie nadal obowiązuje. Screenshot
+przewija też sam toolchain do widoku. Review nie znalazło osłabienia wymagania;
+wynik zmienionego probe wymaga kolejnego CI.
+Commit probe: `76f765979dfcac92a051a376be6685cacc3c0586`.
+
+Zamknięto źródłowo dwa następne problemy rzeczywistych observation routes:
+
+- Inspector używał retained descriptor do aktywowania Pin source mimo stale
+  lub refresh error. Pin wymaga teraz ready bez refresh error i zgodności
+  frame/run/stage/adapter/accepted step/revision/runtime epoch/state digest
+  z selection. Pokazuje błąd lub jawny stan wcześniejszych danych. Pasujący
+  istniejący pin zachowuje Unpin także po błędzie odświeżania. Overview mówi
+  Loaded frames i sygnalizuje next_cursor, zamiast sugerować kompletny count.
+  14 przypadków DOM zapisano; commit
+  `aa03f2e688c2286252fb8e79d3a811a0dd1552cc`.
+- Viewportowy hook przypiętej magnetyzacji potwierdza aktywny run istniejącym
+  resource hookiem. Przy innym/niepotwierdzonym runie wyłącza odczyt i projekcję
+  cached payloadu. SceneModel zeruje retained envelope tego źródła; primary
+  live fallback pozostaje wyłączony. Pin nie jest usuwany, powrót do jego runu
+  może ponownie udostępnić to samo źródło; overlay analizy zachowuje priorytet.
+  Status wyjaśnia brak zgodności runu, retry kieruje do current-run resource.
+  Commit `8cda33d0b97716c53eb5a61d3cb6ce10a20b9bc8`.
+  7 regresji hooka/helpera sprawdza projekcję przy celowo retained warm danych,
+  A→B→A oraz niepotwierdzone identity. Mock nie wykonuje loadera: nie jest to
+  dowód anulowania prawdziwego requestu, późnego network ACK ani WebGL.
+
+Typecheck produkcyjny, architecture hygiene i lint 108 plików PASS,
+źródła stabilne:
+`verification/frontend-production-source-adb34cde1cb8477582467830e54e3067.json`.
+Końcowy MJS syntax i lint probe/testów PASS:
+`verification/frontend-production-source-0aad2ce4c5024ac3be09457e99015d45.json`.
+API hygiene PASS:
+`verification/frontend-api-hygiene-78c5187a89ff455db1201963437a8c82.json`.
+React Doctor 3 zmienionych plików produkcyjnych: 0 błędów/pominięć, 1 istniejące
+ostrzeżenie filter/map w SceneModel, poza zmienionym fragmentem; receipt
+`verification/frontend-production-source-308f75da584a4e9195875fa47349c3d0.json`.
+Nowe regresje observation i browser/WebGL odbiór pozostają NOT VERIFIED.
+Testów TS/Rust lokalnie nie kompilowano ani nie uruchamiano.
+Hook commita probe zgłosił też 4 await-in-loop i lookup w istniejących pętlach
+scenariuszy browsera. Interakcje i resize wymagają kolejności; nie zrównoleglono
+ich ani nie wyłączano reguł dla heurystycznego wyniku.
+
+Następny konkretny etap: pager resource hooku dla Explorera, jawne Load more
+po 50 cienkich descriptorów i zachowanie wcześniej wybranej klatki. Istniejący
+hook jednej strony pozostaje właścicielem klucza sesja/run/stage/cursor/limit.
+Akumulator stron musi resetować scope, odrzucać późne wyniki, walidować run,
+unikalność frame_id i postęp next_cursor. Refresh odświeża tylko zażądane
+strony; retry ponawia dokładnie nieudaną stronę, bez automatycznego pobierania
+całego runu. Regresje muszą objąć append bez utraty selection, błąd/retry,
+bounded Refresh i zmianę sesji/runu podczas requestu; browser potwierdzi brak
+drugiego odczytu bez kliknięcia. Implementacja paginacji nadal otwarta.
+
+Retencja: brak ciężkiego buildu/instalacji/restartu, owner reset i usuwanie
+danych nie były wykonywane. Własne wolumeny pozostają potrzebne do sprawdzeń
+i recovery; backend receipt nadal failed-confirmed. C: wolne 40 580 079 616 B,
+bez przypisania różnicy temu etapowi. Pozostałe rodziny Inspectora, live
+Object/Airbox/2D/3D/monitor oraz integracja PR #249 nadal otwarte.
