@@ -487,6 +487,61 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("100 fs");
   });
 
+  it("interprets following Run durations with canonical time units and leaves invalid values unavailable", () => {
+    const autosaveBase = createDefaultStudyStageDraft("autosave", 0);
+    const autosave = {
+      ...autosaveBase,
+      autosave: { ...autosaveBase.autosave, enabled: true },
+    };
+    const table = createDefaultStudyStageDraft("table_autosave", 1);
+
+    for (const untilSeconds of ["2 ps", "", "0", "not a duration"] as const) {
+      const run = {
+        ...createDefaultStudyStageDraft("run", 2),
+        untilSeconds,
+      };
+      const pipeline = [autosave, table, run];
+      const runHtml = render(
+        <RunStageInspector
+          {...props("run")}
+          draft={run}
+          draftIndex={2}
+          pipelineDrafts={pipeline}
+        />,
+      );
+      const autosaveHtml = render(
+        <AutosaveStageInspector
+          {...props("autosave")}
+          draft={autosave}
+          draftIndex={0}
+          pipelineDrafts={pipeline}
+        />,
+      );
+      const tableHtml = render(
+        <TableAutosaveStageInspector
+          {...props("table_autosave")}
+          draft={table}
+          draftIndex={1}
+          pipelineDrafts={pipeline}
+        />,
+      );
+
+      if (untilSeconds === "2 ps") {
+        expect(runHtml).toContain(
+          '<span class="fm-inspector-field-row__label">Until</span><span class="fm-inspector-field-row__value">2 ps</span>',
+        );
+        expect(autosaveHtml).toContain("<small>Duration</small><strong>2 ps</strong>");
+        expect(tableHtml).toContain("<small>Duration</small><strong>2 ps</strong>");
+      } else {
+        expect(runHtml).toContain(
+          '<span class="fm-inspector-field-row__label">Until</span><span class="fm-inspector-field-row__value">not declared</span>',
+        );
+        expect(autosaveHtml).toContain("<small>Duration</small><strong>not available</strong>");
+        expect(tableHtml).toContain("<small>Duration</small><strong>not available</strong>");
+      }
+    }
+  });
+
   it("renders automatic sinc sampling controls and complete next-Run FFT diagnostics", () => {
     const antenna = createDefaultStudyStageDraft("add_field_drive", 0);
     const tableBase = createDefaultStudyStageDraft("table_autosave", 1);

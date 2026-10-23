@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/shared/ui/Button";
@@ -19,6 +20,23 @@ export function StageAutosaveSection({
   owner: StageAutosaveOwnerKind;
 }) {
   const cadenceUnit = owner === "relax" ? "accepted steps" : "s";
+  const nextAddedRowKey = useRef(0);
+
+  function addField() {
+    const existingRowKeys = new Set(draft.fields.map((field) => field.rowKey));
+    let rowKey: string;
+    do {
+      rowKey = `added-${nextAddedRowKey.current++}`;
+    } while (existingRowKeys.has(rowKey));
+    onChange({
+      ...draft,
+      fields: [
+        ...draft.fields,
+        { cadence: owner === "relax" ? "10" : "1e-12", quantity: "m", rowKey },
+      ],
+    });
+  }
+
   return (
     <section className="fm-stage-autosave" aria-label="Stage autosave">
       <div className="fm-stage-autosave__heading">
@@ -91,10 +109,7 @@ export function StageAutosaveSection({
                 size="sm"
                 type="button"
                 variant="secondary"
-                onClick={() => onChange({
-                  ...draft,
-                  fields: [...draft.fields, { cadence: owner === "relax" ? "10" : "1e-12", quantity: "m" }],
-                })}
+                onClick={addField}
               >
                 <Plus aria-hidden="true" size={14} />
                 Add field
@@ -103,14 +118,14 @@ export function StageAutosaveSection({
             {draft.format === "txt" ? (
               <p className="fm-stage-autosave__notice">TXT stores scalar tables only. Choose Zarr or HDF5 for fields.</p>
             ) : null}
-            {draft.fields.map((field, index) => (
-              <div className="fm-stage-autosave__field" key={`${index}:${field.quantity}`}>
+            {draft.fields.map((field) => (
+              <div className="fm-stage-autosave__field" key={field.rowKey}>
                 <FormField
                   label="Quantity"
                   value={field.quantity}
                   onChange={(event) => onChange({
                     ...draft,
-                    fields: draft.fields.map((item, itemIndex) => itemIndex === index ? { ...item, quantity: event.target.value } : item),
+                    fields: draft.fields.map((item) => item.rowKey === field.rowKey ? { ...item, quantity: event.target.value } : item),
                   })}
                 />
                 <FormField
@@ -119,15 +134,15 @@ export function StageAutosaveSection({
                   value={field.cadence}
                   onChange={(event) => onChange({
                     ...draft,
-                    fields: draft.fields.map((item, itemIndex) => itemIndex === index ? { ...item, cadence: event.target.value } : item),
+                    fields: draft.fields.map((item) => item.rowKey === field.rowKey ? { ...item, cadence: event.target.value } : item),
                   })}
                 />
                 <Button
-                  aria-label={`Remove field ${field.quantity || index + 1}`}
+                  aria-label={`Remove field ${field.quantity || draft.fields.indexOf(field) + 1}`}
                   size="icon"
                   type="button"
                   variant="ghost"
-                  onClick={() => onChange({ ...draft, fields: draft.fields.filter((_, itemIndex) => itemIndex !== index) })}
+                  onClick={() => onChange({ ...draft, fields: draft.fields.filter((item) => item.rowKey !== field.rowKey) })}
                 >
                   <Trash2 aria-hidden="true" size={14} />
                 </Button>
