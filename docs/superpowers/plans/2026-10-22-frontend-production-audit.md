@@ -969,3 +969,77 @@ wolnego miejsca; nie przypisano zmian wolnego miejsca temu etapowi bez pomiaru
 jego własnych artefaktów. Główny checkout i pozostałe grupy pozostały bez zmian
 tej pracy. CrossSection, porównanie deklaracji About z manifestami, właściwy
 Object 2D/3D/monitor, managed runtime/API, dalszy audyt i integracja są otwarte.
+
+### Kolejny etap — przekroje, deklaracje i poprawki po CI
+
+Stan CI dla `b18bcab742ad8fc9d9bc69e8be06f5fed06596b1`, run
+`39881518616`: control-room-contracts FAIL (8855 PASS, 3 FAIL, 13 skip).
+Jedna awaria dotyczy brakującej obsługi preferencji T→mT; dwie liczą wywołania
+mockowanego hooka zamiast rzeczywistych żądań. Browser-fixture-smoke FAIL
+ujawnił brak odpowiedzi metrics dla trzech obiektów świadomie wybieranych
+przez scenariusze Explorer/opaque ID. Inspector-actions-browser-smoke PASS.
+Artefakt browser `12470878438`, SHA256
+`22b5296853525e86a5244a9673b470c76956f5b38346fc7fe905b0841687ce53`:
+scenariusze rzeczywistych konsumentów walidacji PASS; region browser PASS
+(9 scenariuszy, 3 mutacje i dokładnie 3 odpowiadające sync po ACK), responsive
+i mesh-policy PASS. Wyniki te dotyczą fixture, nie kwalifikacji live backendu.
+
+Zapisane zmiany:
+
+- `c41bddfbd2effb7b0e61d214d4eac59ffd6cbb50`: T/mT mają wspólny wymiar
+  indukcji magnetycznej i poprawne skalowanie; pozostają oddzielone od A/m.
+- `fbb43aec142f390ae08669b5557c514c14651f60`: ChangeDevice nie fabrykuje
+  identity_copy, backend_transfer, device_change ani żądania CPU, gdy danych
+  brakuje. DSL zachowuje rzeczywisty requested intent.
+- `33ecdd1d6597405ea5f70bf4f86cd835c429b4e4`: fixture metrics jawnie obsługuje
+  film, audit-copy-30, audit-shrink-60 i film%, z encodeURIComponent oraz raw
+  object_id odpowiedzi. Strict unknown-path rejection i limit 8 GET na ścieżkę
+  pozostają. Test Planar sprawdza stabilne argumenty resource hooks zamiast
+  utożsamiać render z HTTP; nadal sprawdza focus, scroll i pojedynczy patch.
+- `30aac2a9bd26e174dca5e51e5e1183add9caf0ed`: cztery pola CrossSection
+  zachowują raw text i zatwierdzają skończoną liczbę w zakresie po Enter/blur.
+  Local/global Apply i New Image sprawdzają bieżący raw store. Slidery usuwają
+  raw tylko własnego pola. Monotoniczna draftGeneration odróżnia zastąpione
+  drafty, a sesja i plot ID ograniczają owner scope. Discard jest blokowany
+  podczas create. Późny ACK nie usuwa nowszych raw/numeric zmian. Store
+  ogranicza edgeWidth do 0.5–4. Regresje obejmują także replacement podczas ACK
+  oraz A→B→A; ich wykonanie pozostaje zadaniem CI.
+- `8a3379511a58f0113d4bc0cef93148a2d507046f`: About importuje deklaracje
+  wyprowadzone z manifestów przez deterministyczny generator. Architecture
+  hygiene wykrywa drift. Oddzielone są workspace/image Rust, deklarowane
+  wymagania pakietów, CUDA Compose default i Dockerfile fallback. Wersja
+  FullMag nadal pochodzi z buildInfo. Nie są to pomiary runtime hosta.
+
+Pierwszy architecture check wykrył brak `.node-version` w zarządzanym cieniu
+źródeł. Naprawiono istniejącą allowlistę readonly source fixtures o dokładne
+pliki `.node-version`, Cargo.toml, rust-toolchain.toml i compose.toolchain.yaml.
+Istniejący helper zweryfikował/utworzył wyłącznie te linki we własnym frontend
+volume, bez restartu, kopiowania źródeł i zmiany ownera. Dwa interpretowane
+testy dokładnych linków/przeciw obcym celom PASS. Receipt
+`verification/frontend-production-source-b71cf9f1637c482db18038452abeb332.json`
+ma wszystkie kroki PASS, ale cały stan failed z powodu równoległego dopisania
+regresji TS i zmiany fingerprintu; nie używa się go jako dowodu stabilnego
+całego etapu. Końcowy generator/architecture check wraz z hashami manifestów
+PASS przy stabilnych źródłach:
+`verification/frontend-production-source-1b1ebfd956874a3e9efb3e3247cb8ecb.json`.
+
+Końcowe produkcyjne typy, architecture hygiene i scoped ESLint 90 plików PASS:
+`verification/frontend-production-source-4b77af228e684e4b952ce0e9b56b745e.json`.
+React Doctor 7 zmienionych plików produkcyjnych: 0 błędów, 0 ostrzeżeń,
+bez pominięć, receipt
+`verification/frontend-production-source-11fde358d7db4aaea5a746c8ce1c9e7e.json`.
+Zatwierdzony interpretowany API hygiene PASS:
+`verification/frontend-api-hygiene-ed68a27bdbd34017a339fb34ea4e1514.json`.
+Hook commita wskazał istniejące heurystyki w skryptach smoke/architecture
+(parse, sekwencyjne await i array lookup), poza zmienioną logiką; nie wyłączano
+reguł ani nie przedstawiano ich jako regresji UI. Review źródeł nie wykazał
+otwartych P1/P2 w tym etapie. Lokalnie nie kompilowano ani nie uruchamiano
+testów TS/Rust. Browser akceptacja nowych pól przekroju i wykonanie nowych
+regresji pozostają NOT VERIFIED do czasu odpowiednich wyników CI/browsera.
+
+Grupa własnego checkoutu nadal ma działające kontenery, ale control receipt
+pozostaje failed-confirmed; sam running nie potwierdza gotowości API. Nie
+resetowano ownera, nie uruchamiano ciężkiego buildu ani nie usuwano danych.
+Cache/control/package pozostają potrzebne do checks i recovery. C: wolne
+51 451 351 040 B, bez przypisania różnicy tej pracy. Pełny audyt frontendowy,
+live Object 2D/3D/monitor, managed runtime, finalne CI i integracja nadal otwarte.
