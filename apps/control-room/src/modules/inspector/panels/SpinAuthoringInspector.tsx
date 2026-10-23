@@ -149,12 +149,15 @@ function vectorText(value: unknown): string {
 }
 
 function parseVector(value: string, label: string): number[] {
-  const parsed = value.split(/[\s,]+/).filter(Boolean).map(Number);
+  const commaParts = value.split(",");
+  if (commaParts.some((part) => !part.trim())) throw new Error(`${label} requires three finite components.`);
+  const parsed = commaParts.flatMap((part) => part.trim().split(/\s+/)).map(Number);
   if (parsed.length !== 3 || parsed.some((entry) => !Number.isFinite(entry))) throw new Error(`${label} requires three finite components.`);
   return parsed;
 }
 
 function finite(value: string, label: string): number {
+  if (!value.trim()) throw new Error(`${label} is required.`);
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`${label} must be finite.`);
   return parsed;

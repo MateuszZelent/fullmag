@@ -65,6 +65,42 @@ describe("Spin Torque and Oersted revision fences", () => {
       expect(h.container.textContent).toContain("Authoring resource committed");
     } finally { await h.dispose(); }
   });
+  it.each([
+    { family: "spin_torque", label: "Polarization degree", value: "" },
+    { family: "spin_torque", label: "Current density", value: "1,,2,3" },
+    { family: "oersted_field", label: "Current", value: " \t" },
+    { family: "oersted_field", label: "Center", value: "1,2,3," },
+  ] as const)("blocks invalid $family draft input before remote validation or mutation", async ({ family, label, value }) => {
+    const h = await mountSpin(family, 7);
+    try {
+      await h.edit(label, value);
+      await h.validate();
+      expect(h.validateTransport).not.toHaveBeenCalled();
+      expect(h.sessions.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      await act(async () => { expect(await h.sessions.getCurrentSession()?.apply()).toBe(false); });
+      expect(h.validateTransport).not.toHaveBeenCalled();
+      expect(h.replace).not.toHaveBeenCalled();
+      expect(h.create).not.toHaveBeenCalled();
+    } finally { await h.dispose(); }
+  });
+
+  it("accepts explicit zero and mixed comma and whitespace Oersted vector input", async () => {
+    const h = await mountSpin("oersted_field", 7);
+    try {
+      await h.edit("Current", "0");
+      await h.edit("Center", "+1e-9 , -2e-9\t0");
+      await h.validate();
+      expect(h.validateTransport).toHaveBeenCalledTimes(1);
+      expect(h.sessions.getCurrentSession()).toMatchObject({ dirty: true, valid: true });
+      await act(async () => { expect(await h.sessions.getCurrentSession()?.apply()).toBe(true); });
+      expect(h.replace).toHaveBeenCalledTimes(1);
+      expect(h.replace.mock.calls[0]?.[1]).toMatchObject({
+        base_revision: 7,
+        resource: { current: 0, center: [1e-9, -2e-9, 0] },
+      });
+    } finally { await h.dispose(); }
+  });
+
   it.each(["spin_torque", "oersted_field"] as const)("preserves later raw edits through the %s ACK and its resource refresh", async (family) => {
     const h = await mountSpin(family, 7, { deferred: true });
     const fields = fieldNames(family);

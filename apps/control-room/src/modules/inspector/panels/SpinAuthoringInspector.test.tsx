@@ -249,6 +249,27 @@ describe("dedicated torque and Oersted inspectors", () => {
     expect(slon).not.toHaveProperty("xi_fl");
   });
 
+  it("rejects blank required torque scalars and empty vector components while preserving numeric syntax", () => {
+    const draft: Parameters<typeof buildTorque>[0] = {
+      beta: "0.02", compatibilityOrigin: "", currentDensity: "", currentSource: "",
+      degree: "0", drive: "", epsilonPrime: "0", fixedLayerPosition: "",
+      formulaVersion: "zhang_li.fullmag.v1", freeLayerThickness: "", id: "numeric-draft",
+      kind: "zhang_li", landeG: " \t", lambdaAsymmetry: "1", operatorVersion: "",
+      rawSpinPolarization: "", realization: "", schemaVersion: "zhang_li_torque.v1",
+      spinPolarization: "", stackNormal: "", target: "", xiDl: "0", xiFl: "0",
+    };
+
+    expect(() => buildTorque({ ...draft, beta: " \t" })).toThrow("Beta is required.");
+    for (const vector of ["1,,2,3", ",1,2,3", "1,2,3,"]) {
+      expect(() => buildTorque({ ...draft, currentDensity: vector })).toThrow("Current density requires three finite components.");
+    }
+
+    const valid = buildTorque({ ...draft, beta: "-2.5e-2", currentDensity: "+1e2 , -2e0\t0" });
+    expect(valid).toMatchObject({ beta: -0.025, degree: 0, current_density: [100, -2, 0], lande_g: undefined });
+    expect(buildTorque({ ...draft, currentDensity: "+1e2\t-2e0\n0" })).toMatchObject({ current_density: [100, -2, 0] });
+    expect(buildTorque(draft)).toHaveProperty("current_density", undefined);
+  });
+
   it("builds the complete canonical Zhang-Li identity without dropping operator physics", () => {
     const torque = buildTorque({
       beta: "0.02", compatibilityOrigin: "", currentDensity: "1e11, 0, 0",
