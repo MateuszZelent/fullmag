@@ -622,3 +622,97 @@ Dwa istniejące ostrzeżenia: indeks jako ostatni składnik klucza stateless
 karty peak oraz statyczna tablica przycisków 3D tworzona przy renderze.
 Nie potwierdzono utraty draftu w karcie (brak edytowanych pól); poprawka
 parsera nie zmienia obu miejsc. Nie kompilowano lokalnie testów jednostkowych.
+
+### CI f2c9292 — potwierdzone zachowania i dalsze poprawki
+
+Bootstrap `39873154544`, browser job `120152476393`: FAIL, z nowymi pomiarami.
+Inspector actions PASS. Control Room nadal ma tylko te same dwa nieuzupełnione
+zatwierdzenia Enter; ich korekta jest w lokalnym commicie
+`86586e993427bf81da3c4e3bbeba4d34659a097d`, czeka na push/CI.
+Parser brakujących skalarów: commit
+`3f6c7ba038902e2f2a331e4fef03925f40341c5f`.
+Artefakt `12467572268`, SHA256
+`d5fe3a6afd5656b80c28bc0171dd658cced64aa983e7c7d52888e04489e224ba`;
+raporty i screenshot odczytane w pamięci, bez hostowych plików buildu.
+
+- Planar raw/remount fixture PASS: blank, jawne zero, para 5..10, Discard
+  ukrytego draftu, dokładnie dwa commity. Nadal bez dowodu właściwego viewportu
+  Object 2D/3D i API.
+- Explorer: filtr, Refresh i duże drzewo PASS. Przy shrink setter otrzymał
+  11425 i natychmiast zwrócił 11425, z viewportem 391 i max 11433. Dopiero po
+  renderze okna 400..422 browser zmienił offset na 11069, bez kolejnego zapisu
+  JS ani scrollIntoView. Następna korekta odmontowała fokusowany wiersz.
+  Zastąpiono osobne spacery stabilnym canvasem o wysokości pełnej listy oraz
+  absolutnie pozycjonowanym oknem wierszy. Browser wymaga teraz widocznego
+  fokusu przez cztery klatki po End. Źródłowy review kierunku bez P1/P2;
+  natywny mechanizm przejściowej korekty i efekt poprawki wymagają browsera.
+- Screenshot menu pokazuje otwarte Simulation z poprawnie wyłączonymi
+  akcjami i powodami. File/Edit/View zostały osiągnięte klawiaturą. Poprzedni
+  test wymagał menuitem także wtedy, gdy nie ma legalnej aktywnej komendy.
+  Teraz sprawdza fokus kontenera, niepustą listę i powody wyłączenia każdej
+  akcji; dla dostępnych komend nadal wymaga aktywnego menuitem.
+- Region: rename zachowujący CSG i stabilny Inspector PASS; Priority raw,
+  blokada zapisu, zero/ujemna liczba i Revert PASS. Kolejny zapis został
+  odrzucony przez globalny limit jednej synchronizacji skryptu w fixture.
+  Lokalny interceptor liczy teraz dokładnie jedną synchronizację na każdy
+  potwierdzony zapis regionu/pól; duplikat bez zapisu nadal jest błędem.
+  Nie podniesiono globalnych limitów i nie osłabiono kontroli payloadów.
+- Airbox: root, focus i kontrolki pozostały stabilne; po ACK wysokość treści
+  zmalała 1771→1741, scroll przeszedł 657→627 przy stałym viewport 136.
+  Zmieniony feedback usuwa wcześniejsze ostrzeżenie dirty. Wyłączono natywne
+  kotwiczenie viewportu Inspectora, aby zachowywać offset podczas feedbacku.
+  Zasadność efektu pozostaje do potwierdzenia tym samym browser checkiem.
+- Analysis: zewnętrzny root mieści się, lecz legendę wymuszało minmax 190px,
+  a kolumnowy header dziedziczył wrap i flex-basis 100% z viewport media rule.
+  Doprecyzowano regułę kontenera: nowrap, auto basis i jedna elastyczna kolumna
+  legendy. Dane, jednostki, etykiety i wymagane asercje nie zostały usunięte.
+
+Dalszy audyt Study potwierdził utratę późniejszych edycji profilu po ACK
+oraz zamianę pustych liczb Field Drive na zero. Wdrożenie i regresje są
+przygotowane do końcowych kontroli źródeł. Profil zapisuje wysłaną migawkę
+jako baseline, zachowuje późniejszy draft i zwraca Apply=false przy kolejnej
+niezapisanej zmianie. Review wykrył i doprowadził do poprawki zachowania
+warstw w sekwencji profil→Legacy→profil podczas zapisu. Field Drive używa
+raw scope i blokad lokalnego/globalnego Apply; review wykrył edytowalny
+Stage ID użyty jako tożsamość scope, co wymagało dodatkowej korekty.
+Nie kompilowano ani nie uruchamiano lokalnie testów jednostkowych.
+
+Końcowe poprawki Study są zapisane. Scope Field Drive korzysta z kanonicznej
+tożsamości etapu, nie edytowalnego Stage ID. Rename zachowuje raw; rzeczywisty
+retarget czyści właściwy scope. Lokalny Save jest wyłączony przy pending raw,
+a guard imperatywny nadal chroni oba kanały zapisu. Regresje obejmują także
+piecewise textarea (niekompletne wiersze nie są filtrowane do starego modelu),
+konwersję mT→T, jawne zero, optional width=null, ukryty draft waveform,
+Discard i blokadę resetu podczas zapisu. Review obu zgłoszonych P2 zamknięte
+na poziomie źródeł; nowe regresje nadal oczekują na wykonanie w CI.
+
+Końcowe typy produkcyjne, architecture hygiene i scoped ESLint bez ostrzeżeń:
+PASS, stabilne źródła,
+`verification/frontend-production-source-6570645a1603490c95d01844a8f846b7.json`.
+Zatwierdzony interpretowany API hygiene PASS:
+`verification/frontend-api-hygiene-1b6195b0340b49f99295370f500b44a9.json`.
+React Doctor: pięć plików produkcyjnych przeanalizowanych, brak pominięć,
+0 błędów, 3 ostrzeżenia w istniejących efektach reveal/synchronizacji
+edit-session z rodzicem. Zachowano te kontrakty zamiast usuwać je dla oceny;
+`verification/frontend-production-source-cdc0e1b07fdd43cd8864107f66de375c.json`.
+Początkowy lint wykazał dwie brakujące zależności stabilnego dispatch —
+poprawiono przed końcowym zielonym sprawdzeniem.
+
+Commity etapów:
+
+- Explorer i mocniejszy odbiór po End:
+  `56870f2b716939cc0885d8263790d8c5a461f646`.
+- Inspector scroll/Analysis narrow layout:
+  `d4f998659309cf87f5b8b6cb57aa5721b9b4443d`.
+- Dostępność niedostępnych komend i dokładny budżet synców fixture:
+  `55e6bba2b8d2bfc90ce9e08482b31008ea736a45`.
+- Zachowanie późniejszych edycji profilu po ACK:
+  `1d40badb54b8a9843bf7a3268fcce26a7b2f2f71`.
+- Raw Field Drive i guardy zapisu etapów:
+  `33f82b7bbffe6ebdac1d6f49cf724d4486ab2fef`.
+
+Retencja bez zmian: techniczne wolumeny i pakiet są potrzebne do kontroli
+oraz recovery ownera. Nie usuwano danych i nie dotykano głównego checkoutu.
+Pomiar C: w tym checkpointcie: 75 514 359 808 B wolnego miejsca.
+Nie wykonywano nowego ciężkiego buildu. Pełna kwalifikacja runtime i browser,
+pozostałe rodziny audytu oraz integracja nadal nie są ukończone.
