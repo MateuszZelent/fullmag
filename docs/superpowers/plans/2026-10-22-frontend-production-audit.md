@@ -1407,3 +1407,30 @@ stabilne źródła; receipt
 Lokalnie nie uruchamiano ani nie kompilowano testów TS/Rust.
 Nowa para wariantów wymaga potwierdzenia przez CI kolejnego HEAD.
 Bez builda, restartu i usuwania danych; potrzebny cache i receipty zachowano.
+
+### Frozen Spins: automatyczna polityka membership bez wymuszonego static
+
+Usunięto frontendowy fallback `membership → static`. Ominięte i null pole
+pozostają nieokreślone podczas edycji pozostałych pól. Select pokazuje wtedy
+`Automatic (from selector)`; powrót z jawnej polityki do Automatic zapisuje
+`null`, co dopuszcza wygenerowany `FrozenSpinsSchema`. Rozstrzygnięcie
+geometry_only/state_dependent, również przez named selection, pozostaje
+kanonicznej analizie opisanej w §7 `docs/specs/frozen-spins-v1.md`.
+UI nie próbuje zastępować jej analizą wyłącznie lokalnego AST.
+
+Dodano trzy regresje DOM: zachowanie undefined i null po edycji nazwy
+selektora ref oraz przejście snapshot_at_activation → Automatic. Weryfikują
+payload UI, nie wykonanie backendowej analizy named selection.
+Source review bez potwierdzonych P1/P2 w delta. Produkcyjny typecheck,
+architecture hygiene i scoped lint dwóch plików PASS, receipt
+`verification/frontend-production-source-c399f07ce0a74889bf36e4f0b39ccc59.json`.
+API hygiene PASS:
+`verification/frontend-api-hygiene-75524b1c9b99448288a03b0abd7c1df5.json`.
+React Doctor: 0 błędów i pominięć, 5 istniejących ostrzeżeń panelu:
+związane useState, 2 aktualizacje baseline w efekcie props oraz 2 eksporty
+helperów utrudniające Fast Refresh. Receipt
+`verification/frontend-production-source-0f02c8ffe43045278a83b089be7b7da2.json`.
+Te ostrzeżenia pozostają do oceny przy dalszym porządkowaniu panelu;
+nie wyłączano reguł. Lokalnie bez kompilacji/uruchamiania testów TS/Rust.
+Nowe regresje wymagają CI kolejnego HEAD. Cały audyt i live qualification
+pozostają otwarte; poprawka membership nie zamyka pozostałych ustaleń Frozen Spins.

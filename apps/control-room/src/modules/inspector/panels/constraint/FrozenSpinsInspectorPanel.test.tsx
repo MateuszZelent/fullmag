@@ -475,6 +475,58 @@ describe("FrozenSpinsInspectorPanel", () => {
     }
   });
 
+  it.each([undefined, null])("preserves automatic membership %s when applying an unrelated edit", async (membership) => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={{
+            ...definitionFixture(), membership,
+            selector: { kind: "ref", selection_id: "state-dependent-selection" },
+          }}
+          objectId="film" regionId={null} revision={7}
+        />,
+      ));
+      expect(findByAttribute(container, "aria-label", "Membership").value).toBe("automatic");
+      expect(findButton(container, "Apply").disabled).toBe(true);
+      await editDefinitionName(container);
+      await act(async () => findButton(container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.membership).toBe(membership);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("allows an explicit membership policy to return to canonical automatic resolution", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={{ ...definitionFixture(), membership: { kind: "snapshot_at_activation" } }}
+          objectId="film" regionId={null} revision={7}
+        />,
+      ));
+      const membership = findByAttribute(container, "aria-label", "Membership");
+      expect(membership.value).toBe("snapshot_at_activation");
+      await act(async () => {
+        membership.value = "automatic";
+        membership.dispatchEvent(new TestEvent("change", { bubbles: true }));
+      });
+      await act(async () => findButton(container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.membership).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("keeps a clean Apply disabled without submitting a write", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");

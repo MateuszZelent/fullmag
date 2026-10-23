@@ -490,7 +490,7 @@ export function FrozenSpinsEditor({
   };
   const activation = draft.activation ?? { kind: "all_stages" };
   const reference = draft.reference ?? { kind: "capture_current_at_activation" };
-  const membership = draft.membership ?? { kind: "static" };
+  const membership = draft.membership?.kind ?? "automatic";
   const toolbarPending = pendingField !== null;
   const activationCandidateReady = Boolean(
     preview?.current &&
@@ -562,18 +562,23 @@ export function FrozenSpinsEditor({
         )}
         <SelectInput
           label="Membership"
-          value={membership.kind}
+          value={membership}
           options={[
+            ["automatic", "Automatic (from selector)"],
             ["static", "Static"],
             ["snapshot_at_activation", "Snapshot at activation"],
           ]}
           onChange={(kind) =>
             setDraft((current) => ({
               ...current,
-              membership: { kind } as FrozenSpinsMembershipPolicy,
+              membership: kind === "automatic" ? null : { kind } as FrozenSpinsMembershipPolicy,
             }))
           }
         />
+        <p className="fm-help-text">
+          Automatic uses the canonical selector analysis, including named selection references:
+          static for geometry-only selections, snapshot at activation for state-dependent selections.
+        </p>
         <SelectInput
           label="Empty selection"
           value={draft.empty_selection ?? "error"}
@@ -946,7 +951,6 @@ function normalizeDefinition(definition: FrozenSpinsDefinition): FrozenSpinsDefi
     empty_selection: definition.empty_selection ?? "error",
     enabled: definition.enabled ?? true,
     inactive_selection: definition.inactive_selection ?? "warn_and_intersect",
-    membership: definition.membership ?? { kind: "static" },
     reference: definition.reference ?? { kind: "capture_current_at_activation" },
   };
 }
