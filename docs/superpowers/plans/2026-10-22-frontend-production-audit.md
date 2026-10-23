@@ -1696,3 +1696,44 @@ i compute performance PASS; inspector-actions-browser-smoke PASS w run
 Retencja: bez builda, instalacji, restartu, resetu ownera i usuwania danych;
 cache i receipty pozostają potrzebne. Nowe CI, szerszy audyt frontendowy,
 browser formularza oraz managed live qualification pozostają otwarte.
+
+### Checkpoint: aktualność źródła Preview Frozen Spins
+
+Audyt backendu potwierdził, że expected_source_state_revision musi używać
+FieldMeta.field_revision, a nie source_revision. Endpoint porównuje je
+z snapshot.field_quantity_revisions[m]; metadata rozwiązuje rewizję nośnika.
+Istniejący backendowy preview_carrier_uses_exact_quantity_revision_not_source_revision
+odróżnia ją od source_revision, field_samples_revision i preview config.
+publication_bundle.topology_hash pozostaje preferowanym atomowym fingerprintem.
+
+Potwierdzona luka UI: retained data przy loading/stale/error nadal pozwalało
+wysłać Preview. Backend sprawdza rewizję i topologię ponownie, więc nie jest
+to dowód akceptacji niewłaściwego źródła. UI wymaga teraz ready, braku error
+i refreshError oraz rewizji/fingerprintu: zarówno przycisk, jak i handler.
+Pokazuje powód blokady, błąd i Refresh field identity. Nie wymaga metadata
+state=complete: backend może rozwiązać bieżące live m niezależnie od statusu
+materializacji cache. Nie zmieniono publicznej semantyki fizyki ani transportu.
+
+Po selection_stale_revision komunikat mówi o żądaniu refresh, nie o jego
+potwierdzonym zakończeniu. Refetch zasobu nie stanowi dowodu świeżych danych.
+Sześć przypadków DOM obejmuje idle/loading/stale/error oraz ready z error
+lub refreshError, guard handlera, retry i zachowanie Name po odzyskaniu
+źródła. Fixture rozróżnia field_revision=42 od source_revision=41 i wymaga
+wysłania 42. Wykonanie nowych testów oczekuje na CI; lokalnie bez TS/Rust
+unit compilation/run. Review: brak potwierdzonych P1/P2. Brak osobnego
+przypadku testowego missing revision/topology pozostaje ograniczeniem.
+
+Production typecheck, architecture hygiene i scoped lint PASS:
+verification/frontend-production-source-a557b4cb2cd04ff8b7ad464927a20322.json.
+API hygiene PASS: verification/frontend-api-hygiene-af4c14ce06624357b35be45b87fdfa49.json.
+React Doctor PASS bez errors/skips:
+verification/frontend-production-source-b024ba300fe04b7bad6ae52eea3c7701.json.
+Wszystkie receipty mają stabilne źródła w wolumenie grupy zadania.
+Browser fixture dla poprzedniego 7b4d4aa3d40d60d5507b506d1cc2fe2f74647cd7
+PASS (job 120248138050, run 39902866035); Control Room nadal wykonywał
+Typecheck, lint and test przy ostatnim odczycie. Nie przypisuje się tego
+dowodu nowym guardom.
+
+Retencja: brak builda, instalacji, restartu i usuwania danych; zachowano cache
+i receipty. Następne: katalog etapów zamiast CSV, dalsza semantyka formularzy,
+szerszy audyt frontendowy i kwalifikacja live; pełny cel nadal otwarty.

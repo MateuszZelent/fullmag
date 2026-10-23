@@ -110,6 +110,9 @@ const mocks = vi.hoisted(() => ({
   flushVisualization: vi.fn(),
   queueVisualizationPatch: vi.fn(),
   refetchFieldMeta: vi.fn(),
+  fieldMetaStatus: "ready" as ResourceStatus,
+  fieldMetaError: null as Error | null,
+  fieldMetaRefreshError: null as Error | null,
   refetchSolverStatus: vi.fn(),
   refetchDefinition: vi.fn(),
   definitionStatus: "ready" as ResourceStatus,
@@ -174,6 +177,9 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => {
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFieldMetaResource: () => ({
+    status: mocks.fieldMetaStatus,
+    error: mocks.fieldMetaError,
+    refreshError: mocks.fieldMetaRefreshError,
     data: {
       field_revision: 42,
       publication_bundle: { topology_hash: "sha256:topology" },
@@ -236,6 +242,9 @@ describe("FrozenSpinsInspectorPanel", () => {
     vi.clearAllMocks();
     mocks.authoringHistory = undefined;
     mocks.historyGeneration = 0;
+    mocks.fieldMetaStatus = "ready";
+    mocks.fieldMetaError = null;
+    mocks.fieldMetaRefreshError = null;
     mocks.scene.mockReset();
     mocks.syncAuthoringScript.mockReset().mockResolvedValue({});
     mocks.requestScopeEpoch = "request-a";
@@ -1268,6 +1277,42 @@ describe("FrozenSpinsInspectorPanel", () => {
     }
   });
 
+  it.each(["idle", "loading", "stale", "error", "ready-error", "ready-refresh-error"] as const)("blocks retained field identity in %s and recovers without losing edits", async (state) => {
+    mocks.fieldMetaStatus = state.startsWith("ready-") ? "ready" : state as ResourceStatus;
+    if (state === "error" || state === "ready-error") mocks.fieldMetaError = new Error("Field identity failed");
+    if (state === "ready-refresh-error") mocks.fieldMetaRefreshError = new Error("Field identity refresh failed");
+    const definition = definitionFixture();
+    const harness = await mountNumericEditor(definition);
+    try {
+      await editDefinitionName(harness.container);
+      expect(findButton(harness.container, "Preview mask").disabled).toBe(true);
+      expect(harness.container.textContent).toContain("Current magnetization and topology identity are unconfirmed");
+      if (mocks.fieldMetaError || mocks.fieldMetaRefreshError) expect(harness.container.textContent).toContain("Field identity");
+      // The test DOM permits click dispatch on disabled controls: the handler must also fail closed.
+      await act(async () => findButton(harness.container, "Preview mask").click());
+      expect(mocks.createPreview).not.toHaveBeenCalled();
+      if (state === "loading") {
+        expect(findButton(harness.container, "Refresh field identity").disabled).toBe(true);
+        mocks.fieldMetaStatus = "stale";
+        await harness.renderDefinition(definition);
+      }
+      await act(async () => findButton(harness.container, "Refresh field identity").click());
+      expect(mocks.refetchFieldMeta).toHaveBeenCalledTimes(1);
+      expect(mocks.createPreview).not.toHaveBeenCalled();
+      mocks.fieldMetaStatus = "ready";
+      mocks.fieldMetaError = null;
+      mocks.fieldMetaRefreshError = null;
+      await harness.renderDefinition(definition);
+      expect(findByAttribute(harness.container, "aria-label", "Name").value).toBe("Edited pinned edge");
+      expect(findButton(harness.container, "Preview mask").disabled).toBe(false);
+      await act(async () => findButton(harness.container, "Preview mask").click());
+      expect(mocks.createPreview).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        expected_source_state_revision: 42,
+        expected_topology_fingerprint: "sha256:topology",
+      }), expect.anything());
+    } finally { await harness.dispose(); }
+  });
+
   it("refreshes field identity after a stale preview revision so the user can retry", async () => {
     mocks.createPreview.mockRejectedValueOnce(
       new Error("selection_stale_revision: expected source-state revision 4, current 5"),
@@ -1288,7 +1333,7 @@ describe("FrozenSpinsInspectorPanel", () => {
       await act(async () => findButton(container, "Preview mask").click());
 
       expect(mocks.refetchFieldMeta).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain("Current field identity was refreshed");
+      expect(container.textContent).toContain("Field identity refresh requested");
       expect(container.textContent).toContain("retry Preview mask");
     } finally {
       await act(async () => root.unmount());

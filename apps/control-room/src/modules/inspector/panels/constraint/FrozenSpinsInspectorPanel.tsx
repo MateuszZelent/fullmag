@@ -190,6 +190,11 @@ export function FrozenSpinsEditor({
     owner_object_id: objectId,
     quantityId: "m",
   });
+  const fieldIdentityError = fieldMeta.error ?? fieldMeta.refreshError;
+  const fieldIdentityCurrent = fieldMeta.status === "ready" && !fieldIdentityError
+    && fieldMeta.data?.field_revision !== undefined
+    && fieldMeta.data?.field_revision !== null
+    && Boolean(frozenSpinsPreviewTopologyFingerprint(fieldMeta.data));
   useLayoutEffect(() => {
     draftRef.current = draft;
   }, [draft]);
@@ -318,7 +323,7 @@ export function FrozenSpinsEditor({
   }
 
   async function createPreview(): Promise<void> {
-    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue) return;
+    if (deletedRef.current || applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue || !fieldIdentityCurrent) return;
     const operationSessionScopeKey = sessionScopeKey ?? null;
     if (!operationSessionScopeKey) {
       setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
@@ -387,7 +392,7 @@ export function FrozenSpinsEditor({
         if (!mountedRef.current || !isCurrentSession()) return;
         setFeedback({
           kind: "warning",
-          message: `${message} Current field identity was refreshed; retry Preview mask.`,
+          message: `${message} Field identity refresh requested; retry Preview mask after current identity is confirmed.`,
         });
       } else {
         setFeedback({ kind: "error", message });
@@ -860,9 +865,16 @@ export function FrozenSpinsEditor({
       </InspectorGroup>
 
       <InspectorGroup title="Preview" collapsible defaultOpen>
+        {!fieldIdentityCurrent ? (
+          <div>
+            <p className="fm-help-text" role="status">Current magnetization and topology identity are unconfirmed. Refresh field identity before previewing.</p>
+            {fieldIdentityError ? <FeedbackBanner kind="error" message={errorMessage(fieldIdentityError)} /> : null}
+            <Button disabled={toolbarPending || fieldMeta.status === "loading"} size="sm" type="button" onClick={fieldMeta.refetch}>Refresh field identity</Button>
+          </div>
+        ) : null}
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={toolbarPending || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason) || Boolean(referenceIssue)}
+            disabled={toolbarPending || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason) || Boolean(referenceIssue) || !fieldIdentityCurrent}
             size="sm"
             type="button"
             onClick={() => void createPreview()}
