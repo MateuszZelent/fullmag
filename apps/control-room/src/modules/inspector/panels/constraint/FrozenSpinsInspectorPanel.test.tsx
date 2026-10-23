@@ -123,6 +123,10 @@ const mocks = vi.hoisted(() => ({
   solverStatus: "ready" as ResourceStatus,
   solverError: null as Error | null,
   solverRefreshError: null as Error | null,
+  sceneCatalog: null as unknown,
+  sceneCatalogStatus: "ready" as ResourceStatus,
+  sceneCatalogError: null as Error | null,
+  refetchSceneCatalog: vi.fn(),
   definitionResource: {
     data: null as unknown,
     error: null as unknown,
@@ -182,6 +186,13 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   }),
 }));
 
+vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
+  useSceneResource: () => ({
+    data: mocks.sceneCatalog, status: mocks.sceneCatalogStatus,
+    error: null, refreshError: mocks.sceneCatalogError, refetch: mocks.refetchSceneCatalog,
+  }),
+}));
+
 vi.mock("@/kernel/resources/frozenSpinsResources", () => ({
   FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY: "model:frozen-spins:active-preview",
   frozenSpinsCollectionResourceKey: () => "model:frozen-spins",
@@ -229,6 +240,12 @@ describe("FrozenSpinsInspectorPanel", () => {
     mocks.solverStatus = "ready";
     mocks.solverError = null;
     mocks.solverRefreshError = null;
+    mocks.sceneCatalogStatus = "ready";
+    mocks.sceneCatalogError = null;
+    mocks.sceneCatalog = {
+      objects: [{ id: "film", name: "Film", regions: [{ region_id: "edge", name: "Edge" }] }],
+      selections: [{ id: "state-dependent-selection", name: "Named state selection" }],
+    };
     mocks.createPreview.mockResolvedValue(preview);
     mocks.patch.mockResolvedValue({
       definition: definitionFixture(),
@@ -885,6 +902,131 @@ describe("FrozenSpinsInspectorPanel", () => {
       await act(async () => finishFlush());
       expect(mocks.setFocusedSlot).not.toHaveBeenCalled();
       expect(mocks.setActiveViewportMainModule).not.toHaveBeenCalled();
+    } finally { await harness.dispose(); }
+  });
+
+  it("blocks Apply until a new region or named reference is explicitly chosen", async () => {
+    const harness = await mountNumericEditor(definitionFixture());
+    try {
+      await harness.change("Operator", "in_region");
+      expect(findByAttribute(harness.container, "aria-label", "Region ID").value).toBe("");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      await act(async () => { expect(await harness.store.getCurrentSession()!.apply()).toBe(false); });
+      expect(mocks.patch).not.toHaveBeenCalled();
+      await harness.change("Region ID", "edge");
+      expect(harness.store.getCurrentSession()).toMatchObject({ valid: true });
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.selector).toEqual({ kind: "in_region", object_id: "film", region_id: "edge" });
+      await harness.change("Operator", "ref");
+      expect(findByAttribute(harness.container, "aria-label", "Selection ID").value).toBe("");
+      expect(harness.store.getCurrentSession()).toMatchObject({ valid: false });
+      await harness.change("Selection ID", "state-dependent-selection");
+      expect(harness.store.getCurrentSession()).toMatchObject({ valid: true });
+    } finally { await harness.dispose(); }
+  });
+
+  it("preserves a missing opaque reference until its current catalog entry returns", async () => {
+    const definition = { ...definitionFixture(), selector: { kind: "ref" as const, selection_id: "missing/%25" } };
+    const harness = await mountNumericEditor(definition);
+    try {
+      await harness.edit("Name", "Edited");
+      const select = findByAttribute(harness.container, "aria-label", "Selection ID");
+      expect(select.value).toBe("missing/%25");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      await act(async () => { expect(await harness.store.getCurrentSession()!.apply()).toBe(false); });
+      expect(mocks.patch).not.toHaveBeenCalled();
+      mocks.sceneCatalog = { objects: [{ id: "film" }], selections: [{ id: "missing/%25", name: "Restored name" }] };
+      await harness.renderDefinition(definition);
+      expect(findByAttribute(harness.container, "aria-label", "Selection ID")).toBe(select);
+      expect(select.value).toBe("missing/%25");
+      expect(harness.store.getCurrentSession()).toMatchObject({ valid: true });
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.selector.selection_id).toBe("missing/%25");
+    } finally { await harness.dispose(); }
+  });
+
+  it("blocks retained references while the scene catalog refresh fails and preserves edits on recovery", async () => {
+    const harness = await mountNumericEditor(definitionFixture());
+    try {
+      await editDefinitionName(harness.container);
+      mocks.sceneCatalogStatus = "stale";
+      mocks.sceneCatalogError = new Error("Scene catalog refresh failed");
+      await harness.renderDefinition(definitionFixture());
+      expect(findByAttribute(harness.container, "aria-label", "Object ID").value).toBe("film");
+      expect(findByAttribute(harness.container, "aria-label", "Object ID").disabled).toBe(true);
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      expect(findButton(harness.container, "Preview mask").disabled).toBe(true);
+      expect(harness.container.textContent).toContain("Scene catalog refresh failed");
+      await act(async () => findButton(harness.container, "Refresh selector catalog").click());
+      expect(mocks.refetchSceneCatalog).toHaveBeenCalledTimes(1);
+      mocks.sceneCatalogStatus = "ready";
+      mocks.sceneCatalogError = null;
+      await harness.renderDefinition(definitionFixture());
+      expect(findByAttribute(harness.container, "aria-label", "Name").value).toBe("Edited pinned edge");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: true });
+    } finally { await harness.dispose(); }
+  });
+
+  it("keeps unqualified imported selectors read-only without publishing them", async () => {
+    const definition = {
+      ...definitionFixture(), selector: {
+        kind: "inside_geometry" as const, frame: { kind: "world" as const }, sampling: { kind: "dof_point" as const },
+        boundary: { kind: "inclusive" as const, absolute_tolerance_m: 0, relative_tolerance: 0 },
+        geometry: { kind: "imported_solid" as const, asset_id: "authored/%25" },
+      },
+    };
+    const harness = await mountNumericEditor(definition);
+    try {
+      expect(harness.container.textContent).toContain("authored/%25");
+      expect(findByAttribute(harness.container, "aria-label", "Operator").disabled).toBe(true);
+      await harness.edit("Name", "Edited");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      await act(async () => { expect(await harness.store.getCurrentSession()!.apply()).toBe(false); });
+      expect(findButton(harness.container, "Preview mask").disabled).toBe(true);
+      expect(mocks.patch).not.toHaveBeenCalled();
+      expect(mocks.createPreview).not.toHaveBeenCalled();
+      expect(definition.selector.geometry.asset_id).toBe("authored/%25");
+    } finally { await harness.dispose(); }
+  });
+
+  it("surfaces canonical graph rejection even when the named ID is present in the catalog", async () => {
+    mocks.createPreview.mockRejectedValueOnce(new Error("frozen_selection_target_mismatch"));
+    const harness = await mountNumericEditor({ ...definitionFixture(), selector: { kind: "ref", selection_id: "state-dependent-selection" } });
+    try {
+      await act(async () => findButton(harness.container, "Preview mask").click());
+      expect(mocks.createPreview).toHaveBeenCalledTimes(1);
+      expect(harness.container.textContent).toContain("frozen_selection_target_mismatch");
+      expect(findByAttribute(harness.container, "aria-label", "Selection ID").value).toBe("state-dependent-selection");
+      expect(mocks.patch).not.toHaveBeenCalled();
+    } finally { await harness.dispose(); }
+  });
+
+  it("keeps numeric raw text across catalog refresh and commits only after both recover", async () => {
+    const definition = {
+      ...definitionFixture(), selector: {
+        kind: "compare" as const, op: "ge" as const,
+        lhs: { kind: "coordinate" as const, component: "x" as const, frame: { kind: "object" as const, object_id: "film" } },
+        rhs: { kind: "constant" as const, value: 1 }, tolerance: { atol: 0, rtol: 0 },
+      },
+    };
+    const harness = await mountNumericEditor(definition);
+    try {
+      await harness.edit("Value", "1e-");
+      const input = findByAttribute(harness.container, "aria-label", "Value");
+      mocks.sceneCatalogStatus = "stale";
+      await harness.renderDefinition(definition);
+      expect(findByAttribute(harness.container, "aria-label", "Value")).toBe(input);
+      expect(input.value).toBe("1e-");
+      mocks.sceneCatalogStatus = "ready";
+      await harness.renderDefinition(definition);
+      expect(findByAttribute(harness.container, "aria-label", "Value")).toBe(input);
+      expect(input.value).toBe("1e-");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      await harness.edit("Value", "2e-3");
+      await harness.key("Value", "Enter");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: true });
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.selector.rhs.value).toBe(0.002);
     } finally { await harness.dispose(); }
   });
 
@@ -1561,6 +1703,11 @@ async function mountNumericEditor(definition: ComponentProps<typeof ScopedFrozen
     }),
     key: (label: string, key: string) => act(async () => {
       findByAttribute(container, "aria-label", label).dispatchEvent(new TestEvent("keydown", { bubbles: true, key }));
+    }),
+    change: (label: string, value: string) => act(async () => {
+      const select = findByAttribute(container, "aria-label", label);
+      select.value = value;
+      select.dispatchEvent(new TestEvent("change", { bubbles: true }));
     }),
     blur: (label: string) => act(async () => {
       findByAttribute(container, "aria-label", label).dispatchEvent(new TestEvent("focusout", { bubbles: true }));

@@ -1584,3 +1584,73 @@ Cache i receipty są potrzebne do dalszej weryfikacji/recovery i pozostają.
 Wolne C: 36 252 450 816 B; różnicy nie przypisuje się temu etapowi.
 Otwarte: CI tego etapu, referencje/semantyczna walidacja selektora,
 pozostałe aktywne rodziny i pełna live kwalifikacja. Cel pozostaje aktywny.
+
+### CI retained resources — 04f695a72
+
+HEAD `04f695a7222666d0830b0e7e703bacdf4861ec10`, run `39899835802`:
+Control Room job `120238705550` PASS — 9000 testów PASS / 13 skip,
+864 pliki PASS / 1 skip, compute performance + osobne 3 testy i build PASS.
+Nowe 12 przypadków definition/solver freshness przeszło. Browser fixture
+job `120238705999` PASS: explorer-and-controls (w tym paginacja), responsive,
+region editing i Object/Airbox mutation stability; page_errors puste.
+Cały bootstrap był nadal in_progress przy odczycie, więc nie deklaruje się
+wszystkich bramek jako ukończonych. Dowód fixture nie zastępuje live runtime.
+
+### Frozen Spins: katalogi referencji i nieobsługiwane selektory
+
+Usunięto placeholdery `region`, `selection` i `asset`. Nowa referencja wymaga
+jawnego wyboru; nie jest wybierany pierwszy wpis. Istniejący useSceneResource
+jest wspólnym, typowanym źródłem obiektów, ich regionów i named selections.
+Nazwy służą etykietom; wartości i klucze zachowują dokładne opaque IDs.
+Region bez jawnego region_id nie staje się kandydatem na podstawie nazwy.
+Lista regionów jest ograniczona do wybranego obiektu; zmiana obiektu czyści
+poprzedni region, nawet gdy inny właściciel ma podobną nazwę/ID regionu.
+
+Brakujący bieżący ID jest widoczny jako Unavailable i pozostaje w AST.
+Loading/stale/error katalogu nie zmienia wartości ani nie wybiera zamiennika;
+blokuje edycję referencji i zależne Apply/Preview/Commit, także globalne oraz
+imperatywne. Refresh selector catalog ujawnia błąd i ponawia istniejący zasób.
+Odzyskanie katalogu zachowuje Name i numeric raw drafts. Bezpośrednie
+nieistniejące referencje, puste klauzule i odwrócone bounds mają blokadę
+authoringu. Sprawdzenie obecności named ID **nie dowodzi** poprawności grafu,
+braku cykli, zagnieżdżonych referencji ani zgodności z target object;
+kanoniczny Preview/commit pozostaje walidatorem i pokazuje jego błąd.
+
+Audyt źródeł potwierdził, że katalog magnetization assets nie jest katalogiem
+selection occupancy. Nie dodano takiego adaptera ani nowego endpointu.
+IR `crates/fullmag-ir/src/validation.rs` odrzuca imported_solid przez
+`selection_imported_solid_unqualified`; evaluator w
+`crates/fullmag-plan/src/selection/geometry.rs` nie ma kwalifikowanego occupancy,
+zgodnie z walidacją publicznego Python DSL. Tworzenie tego wariantu usunięto
+z listy. Istniejący authored selector, także zagnieżdżony, oraz nieznane kinds
+mają jawny Advanced/unsupported (preserved), readonly i oryginalny JSON.
+Nie są przepisywane na box ani inny domyślny AST. Ten UI guard nie zmienia
+semantyki backendu ani nie jest dowodem kwalifikacji fizyki.
+
+Dodano 21 regresji: 10 modelu katalogu/opaque IDs/ownerów/unsupported/depth,
+5 DOM buildera (jawny wybór, missing/stale/recovery, brak imported creation,
+readonly imported/future) i 6 DOM edytora (global guards, ponowienie katalogu,
+missing opaque ID, canonical graph rejection i raw numeric podczas refresh).
+Review bez potwierdzonych P1/P2; wskazany brak bezpośredniej regresji raw
+podczas refresh uzupełniono. Lokalnie bez kompilacji i uruchamiania TS/Rust
+unit tests; wykonanie nowych przypadków wymaga CI następnego HEAD.
+
+Produkcjny typecheck, architecture hygiene i lint 6 plików PASS, stabilne
+źródła, receipt
+`verification/frontend-production-source-5e0059f4d2fd4939abb1fb1dec9c2d81.json`.
+Później dodano wyłącznie 3 przypadki testowe; ich końcowy scoped lint PASS:
+`verification/frontend-production-source-c87ed00f26a446b1b7521417bcabbdab.json`.
+API hygiene PASS:
+`verification/frontend-api-hygiene-58a54851fe24403d818ca277d1594e4a.json`.
+React Doctor: 3 pliki produkcyjne, 0 errors/skips, 7 istniejących ostrzeżeń
+(related useState, 3 prop adjustments, 2 mixed exports, index key chroniony
+blokadą struktury przy raw pending), receipt
+`verification/frontend-production-source-9916b9282b7a451c981c962a225b9c47.json`.
+Bez suppression, nowych zależności i endpointów. Nie wykonywano nowego
+browser/live proof dla formularza referencji; pozostaje do kwalifikacji.
+
+Retencja: brak builda, instalacji, restartu, owner resetu i usuwania danych.
+Potrzebny cache/receipty zachowano. Wolne C: 36 234 625 024 B; różnicy nie
+przypisuje się temu etapowi. Otwarte: CI nowych 21 przypadków, dalsza walidacja
+geometrii/axis/transform i pól aktywacji/referencji, pozostałe aktywne rodziny,
+browser oraz managed live qualification i integracja PR #249.

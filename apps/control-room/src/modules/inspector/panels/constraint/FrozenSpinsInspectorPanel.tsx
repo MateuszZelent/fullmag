@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type {
   FieldMetaResource,
@@ -15,6 +15,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
+import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
   FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY,
   frozenSpinsCollectionResourceKey,
@@ -37,6 +38,7 @@ import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { QuantityFieldDraftScope, useQuantityFieldDraftScope } from "../../primitives/QuantityField";
 import { quantityFieldDraftBlockReason } from "../../primitives/quantityFieldDraftStore";
 import { SelectionExpressionBuilder } from "../selection/SelectionExpressionBuilder";
+import { selectionReferenceCatalog, selectionReferenceIssue } from "../selection/selectionReferenceCatalog";
 import { reconcileFrozenSpinsDraft } from "./frozenSpinsDraft";
 
 type PendingField = "activate" | "apply" | "delete" | "preview" | "quantity" | null;
@@ -143,6 +145,10 @@ export function FrozenSpinsEditor({
 }) {
   const kernel = useKernel();
   const [draft, setDraft] = useState(() => normalizeDefinition(initialDefinition));
+  const scene = useSceneResource();
+  const referenceCatalog = useMemo(() => selectionReferenceCatalog(scene.data,
+    scene.status === "ready" && !scene.error && !scene.refreshError), [scene.data, scene.status, scene.error, scene.refreshError]);
+  const referenceIssue = selectionReferenceIssue(draft.selector, referenceCatalog);
   const numericDrafts = useQuantityFieldDraftScope(
     JSON.stringify([sessionScopeKey, "frozen-spins", initialDefinition.id, objectId, regionId]),
   );
@@ -216,7 +222,7 @@ export function FrozenSpinsEditor({
   }
 
   async function applyDraft(): Promise<boolean> {
-    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || !canonicalDirty) return false;
+    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue || !canonicalDirty) return false;
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
     const submittedDraft = draft;
     const operationSessionScopeKey = sessionScopeKey ?? null;
@@ -301,7 +307,7 @@ export function FrozenSpinsEditor({
   }
 
   async function createPreview(): Promise<void> {
-    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason) return;
+    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue) return;
     const operationSessionScopeKey = sessionScopeKey ?? null;
     if (!operationSessionScopeKey) {
       setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
@@ -383,7 +389,7 @@ export function FrozenSpinsEditor({
 
   async function activatePreview(): Promise<void> {
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
-    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason) return;
+    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || referenceIssue) return;
     if (!preview || !activationCandidateReady) {
       setFeedback({
         kind: "warning",
@@ -585,6 +591,7 @@ export function FrozenSpinsEditor({
   const membership = draft.membership?.kind ?? "automatic";
   const toolbarPending = pendingField !== null;
   const activationCandidateReady = Boolean(
+    !referenceIssue &&
     !definitionUnavailableReason &&
     !conflict &&
     numericDrafts.summary.pendingCount === 0 &&
@@ -611,12 +618,12 @@ export function FrozenSpinsEditor({
     "staged",
     pendingField !== null,
     dirty,
-    numericDrafts.summary.pendingCount === 0 && !conflict && !definitionUnavailableReason,
+    numericDrafts.summary.pendingCount === 0 && !conflict && !definitionUnavailableReason && !referenceIssue,
     undefined,
     applyDraft,
     resetDraft,
     {
-      applyBlockReason: definitionUnavailableReason ?? conflictReason ?? numericDraftBlockReason ?? (sessionScopeKey ? undefined : "Session identity is not ready."),
+      applyBlockReason: definitionUnavailableReason ?? conflictReason ?? referenceIssue ?? numericDraftBlockReason ?? (sessionScopeKey ? undefined : "Session identity is not ready."),
       historyMode: "mutation-owned",
     },
   );
@@ -634,6 +641,13 @@ export function FrozenSpinsEditor({
       {numericDraftBlockReason ? <FeedbackBanner kind="warning" message={numericDraftBlockReason} /> : null}
       {conflictReason ? <FeedbackBanner kind="warning" message={conflictReason} /> : null}
       {definitionUnavailableReason ? <FeedbackBanner kind="warning" message={definitionUnavailableReason} /> : null}
+      {referenceIssue ? <FeedbackBanner kind="warning" message={referenceIssue} /> : null}
+      {referenceIssue && !referenceCatalog.ready ? (
+        <div>
+          {scene.error || scene.refreshError ? <FeedbackBanner kind="error" message={errorMessage(scene.error ?? scene.refreshError)} /> : null}
+          <Button size="sm" type="button" onClick={scene.refetch}>Refresh selector catalog</Button>
+        </div>
+      ) : null}
       <InspectorGroup title="Frozen Spins" collapsible defaultOpen>
         <FieldRow label="Constraint ID" value={draft.id} />
         <FieldRow label="Schema" value={draft.schema_version} />
@@ -657,6 +671,7 @@ export function FrozenSpinsEditor({
       <InspectorGroup title="Selection" collapsible defaultOpen>
         {objectId ? (
           <SelectionExpressionBuilder
+            referenceCatalog={referenceCatalog}
             numericDraftStore={numericDrafts.store}
             expression={draft.selector}
             objectId={objectId}
@@ -786,7 +801,7 @@ export function FrozenSpinsEditor({
       <InspectorGroup title="Preview" collapsible defaultOpen>
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={toolbarPending || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason)}
+            disabled={toolbarPending || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason) || Boolean(referenceIssue)}
             size="sm"
             type="button"
             onClick={() => void createPreview()}
@@ -794,7 +809,7 @@ export function FrozenSpinsEditor({
             {pendingField === "preview" ? "Computing preview…" : "Preview mask"}
           </Button>
           <Button
-            disabled={toolbarPending || !dirty || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason)}
+            disabled={toolbarPending || !dirty || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason) || Boolean(referenceIssue)}
             size="sm"
             type="button"
             onClick={() => void applyDraft()}
