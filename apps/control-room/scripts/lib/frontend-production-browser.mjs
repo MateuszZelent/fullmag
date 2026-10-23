@@ -121,6 +121,11 @@ export async function qualifyFrontendProductionBrowser({
         const leadingSpacer = element.firstElementChild?.getAttribute("aria-hidden") === "true"
           ? element.firstElementChild
           : null;
+        const virtualWindow = element.querySelector(".fm-explorer-tree__window");
+        const virtualCanvas = element.querySelector(".fm-explorer-tree__canvas");
+        const virtualStart = rowHeight > 0
+          ? Math.round((virtualWindow ? Number.parseFloat(virtualWindow.style.top) : leadingSpacer?.getBoundingClientRect().height ?? 0) / rowHeight)
+          : 0;
         return {
           clientHeight: element.clientHeight,
           scrollHeight: element.scrollHeight,
@@ -128,12 +133,9 @@ export async function qualifyFrontendProductionBrowser({
           maxScrollTop: Math.max(0, element.scrollHeight - element.clientHeight),
           mountedRowCount: rows.length,
           rowHeight,
-          virtualStart: rowHeight > 0 && leadingSpacer
-            ? Math.round(leadingSpacer.getBoundingClientRect().height / rowHeight)
-            : 0,
-          virtualEnd: rowHeight > 0 && leadingSpacer
-            ? Math.round(leadingSpacer.getBoundingClientRect().height / rowHeight) + rows.length
-            : rows.length,
+          virtualStart,
+          virtualEnd: virtualStart + rows.length,
+          virtualExtent: virtualCanvas ? { height: virtualCanvas.getBoundingClientRect().height, windowTop: virtualWindow?.style.top } : null,
           firstMountedRow: describeRow(rows[0]),
           lastMountedRow: describeRow(rows.at(-1)),
           virtualSpacers: spacers,
@@ -229,6 +231,26 @@ export async function qualifyFrontendProductionBrowser({
       nodeId,
       { timeout: 5_000 },
     );
+  }
+
+  async function assertFocusedRowSettles(tree, expectedId) {
+    const frames = await tree.evaluate(async (element) => {
+      const samples = [];
+      for (let frame = 0; frame < 4; frame += 1) {
+        await new Promise((resolveFrame) => requestAnimationFrame(resolveFrame));
+        const focused = document.activeElement;
+        const rect = focused?.getBoundingClientRect();
+        const viewport = element.getBoundingClientRect();
+        samples.push({
+          focusedId: focused?.getAttribute("data-node-id"),
+          visible: Boolean(focused && element.contains(focused) && rect && rect.top >= viewport.top - 1 && rect.bottom <= viewport.top + element.clientHeight + 1),
+          scrollTop: element.scrollTop,
+        });
+      }
+      return samples;
+    });
+    assert.ok(frames.every((frame) => frame.focusedId === expectedId && frame.visible),
+      "The focused row did not remain visible after layout settled: " + JSON.stringify(frames));
   }
 
   async function pressAndWaitForFocusChange(key) {
@@ -553,6 +575,7 @@ export async function qualifyFrontendProductionBrowser({
       const endId = await focusedNodeId();
       assert.equal(endState.focusedId, endState.lastRenderedId,
         `End scrolled to the end without focusing the last logical row: ${JSON.stringify(endState)}.`);
+      await assertFocusedRowSettles(tree, endState.lastRenderedId);
       await page.keyboard.press("Home");
       await page.waitForFunction(() => {
         const element = document.querySelector(".fm-explorer-tree");
@@ -775,6 +798,7 @@ export async function qualifyFrontendProductionBrowser({
         assert.ok(atEnd.visibleRowCount > 0 && endId,
           `End reached a blank window in the filtered tree: ${JSON.stringify(atEnd)}.`);
         assert.equal(endId, atEnd.renderedIds.at(-1), "End did not focus the final filtered logical row.");
+        await assertFocusedRowSettles(tree, endId);
         assert.ok(atEnd.maxScrollTop - atEnd.scrollTop <= atEnd.rowHeight * 2,
           "End did not reach the bottom after the tree shrank.");
         await page.keyboard.press("ArrowUp");

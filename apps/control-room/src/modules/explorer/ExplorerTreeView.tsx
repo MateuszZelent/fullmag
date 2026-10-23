@@ -765,36 +765,36 @@ export function ExplorerTreeView({
         aria-label="Explorer tree"
         onScroll={handleScroll}
       >
-        {visibleRows.topPadding > 0 ? (
+        <div
+          className="fm-explorer-tree__canvas"
+          role="presentation"
+          style={{ height: rows.length * EXPLORER_ROW_HEIGHT, position: "relative" }}
+        >
           <div
-            aria-hidden="true"
-            style={{ height: visibleRows.topPadding }}
-          />
-        ) : null}
-        {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
-          <ExplorerTreeRow
-            key={node.id}
-            active={activeNodeId === node.id}
-            depth={depth}
-            expanded={expanded}
-            focusable={focusableRowId === node.id}
-            hasChildren={hasChildren}
-            kernel={kernel}
-            moduleId={moduleId}
-            node={node}
-            onKeyboardNavigation={requestKeyboardNavigation}
-            onToggleNode={onToggleNode}
-            resourceData={commandResourceData}
-            rowIds={rowIds}
-            tabId={tabId}
-          />
-        ))}
-        {visibleRows.bottomPadding > 0 ? (
-          <div
-            aria-hidden="true"
-            style={{ height: visibleRows.bottomPadding }}
-          />
-        ) : null}
+            className="fm-explorer-tree__window"
+            role="presentation"
+            style={{ insetInline: 0, position: "absolute", top: visibleRows.topPadding }}
+          >
+            {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
+              <ExplorerTreeRow
+                key={node.id}
+                active={activeNodeId === node.id}
+                depth={depth}
+                expanded={expanded}
+                focusable={focusableRowId === node.id}
+                hasChildren={hasChildren}
+                kernel={kernel}
+                moduleId={moduleId}
+                node={node}
+                onKeyboardNavigation={requestKeyboardNavigation}
+                onToggleNode={onToggleNode}
+                resourceData={commandResourceData}
+                rowIds={rowIds}
+                tabId={tabId}
+              />
+            ))}
+          </div>
+        </div>
       </div>
     </TooltipProvider>
   );
