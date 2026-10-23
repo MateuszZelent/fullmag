@@ -225,23 +225,6 @@
   margin-top: var(--fm-space-2);
 }
 
-.fm-mode-composition-inspector__number {
-  width: 100%;
-  min-width: 0;
-  min-height: var(--fm-control-height-regular);
-  padding: 0 var(--fm-space-2);
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-surface);
-  color: var(--fm-text-primary);
-  font: inherit;
-}
-
-.fm-mode-composition-inspector__number:focus-visible {
-  outline: none;
-  box-shadow: var(--fm-focus-ring);
-}
-
 .fm-mode-composition-inspector__table-wrap {
   overflow: auto;
   max-height: var(--fm-inspector-freq-domain-max-height);
