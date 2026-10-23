@@ -78,6 +78,7 @@ from ._gmsh_infra import (
     _GmshProgressLogger,
 )
 from ._gmsh_extraction import (
+    _compact_uncertified_volume_nodes,
     _extract_mesh_data,
     _extract_quality_metrics,
     certify_extracted_periodic_mesh,
@@ -4596,7 +4597,12 @@ def attach_disconnected_mixed_p1_certificate_v2(
         raise ValueError("mixed v2 certificate requires a positive body gap")
     if set(body_material_fields) != set(body_object_ids):
         raise ValueError("mixed v2 certificate material field coverage is incomplete")
-    topology_fingerprint = mesh.topology_fingerprint_v3()
+    with indeterminate_progress_phase(
+        phase="postprocessing",
+        progress_label="fingerprinting mixed-domain topology",
+        message=f"Fingerprinting mixed-domain topology ({mesh.n_elements} cells)",
+    ):
+        topology_fingerprint = mesh.topology_fingerprint_v3()
     resolved_direction = "xyz"[requested_axis]
     requested_direction = requested_direction if requested_direction in {"auto", "x", "y", "z"} else resolved_direction
 
@@ -4620,11 +4626,19 @@ def attach_disconnected_mixed_p1_certificate_v2(
     cell_volumes = np.zeros(mesh.n_elements, dtype=np.float64)
     jacobians: dict[str, list[float]] = {}
     scaled: dict[str, list[float]] = {}
-    for ordinal, family in enumerate(mesh.cell_types.tolist()):
-        coordinates = mesh.nodes[mesh.cell_node_ids(ordinal)]
-        cell_volumes[ordinal] = _mixed_v2_cell_volume(str(family), coordinates)
-        jacobians.setdefault(str(family), []).extend(_cell_jacobian_determinants(str(family), coordinates).tolist())
-        scaled.setdefault(str(family), []).extend(_mixed_cell_scaled_jacobians(str(family), coordinates).tolist())
+    with indeterminate_progress_phase(
+        phase="postprocessing",
+        progress_label="checking mixed-domain element quality",
+        message=f"Checking cell volumes and Jacobians ({mesh.n_elements} cells)",
+    ):
+        progress_stride = max(1, (mesh.n_elements + 19) // 20)
+        for ordinal, family in enumerate(mesh.cell_types.tolist()):
+            coordinates = mesh.nodes[mesh.cell_node_ids(ordinal)]
+            cell_volumes[ordinal] = _mixed_v2_cell_volume(str(family), coordinates)
+            jacobians.setdefault(str(family), []).extend(_cell_jacobian_determinants(str(family), coordinates).tolist())
+            scaled.setdefault(str(family), []).extend(_mixed_cell_scaled_jacobians(str(family), coordinates).tolist())
+            if (ordinal + 1) % progress_stride == 0 or ordinal + 1 == mesh.n_elements:
+                emit_progress(f"Cell volume and Jacobian checks: {ordinal + 1}/{mesh.n_elements}")
     if not np.all(np.isfinite(cell_volumes)) or np.any(cell_volumes <= 0.0):
         raise RuntimeError("mixed v2 mesh contains nonpositive cell volume")
     jacobian_minima = {family: float(np.min(values)) for family, values in sorted(jacobians.items())}
@@ -4733,7 +4747,12 @@ def attach_disconnected_mixed_p1_certificate_v2(
         if len(owners) == 2 and {str(mesh.cell_mesh_parts[index]) for index in owners} == {"transition_air", "far_air"} and len(key) == 3:
             transition_faces += 1
     del transition_face_keys
-    conformity = _mixed_v2_conformity_counts(mesh)
+    with indeterminate_progress_phase(
+        phase="postprocessing",
+        progress_label="checking mixed-domain conformity",
+        message="Checking mixed-domain interfaces and face conformity",
+    ):
+        conformity = _mixed_v2_conformity_counts(mesh)
     if any(conformity.values()):
         raise RuntimeError(f"mixed v2 conformity proof failed: {conformity}")
 
@@ -5054,11 +5073,22 @@ def generate_disconnected_mixed_p1_mesh(
         with indeterminate_progress_phase(phase="meshing", progress_label="optimizing mixed-pyramid apices", message="Optimizing mixed-pyramid apices"):
             _optimize_mixed_pyramid_apices(gmsh, initial_tet_report=mixed_tet_report)
         raw = _extract_mesh_data(gmsh, has_physical_groups=True, boundary_role_markers=(MIXED_INTERFACE_MARKER, int(airbox.boundary_marker)))
-        mesh = MeshData(nodes=np.asarray(raw.nodes, dtype=np.float64) / scale, cell_types=raw.cell_types, cell_offsets=raw.cell_offsets, cell_nodes=raw.cell_nodes, element_markers=raw.element_markers, facet_types=raw.facet_types, facet_roles=raw.facet_roles, facet_offsets=raw.facet_offsets, facet_nodes=raw.facet_nodes, boundary_markers=raw.boundary_markers, cell_global_ordinals=raw.cell_global_ordinals, facet_global_ordinals=raw.facet_global_ordinals, cell_mesh_parts=_gmsh_cell_parts_in_extraction_order(gmsh, {"magnetic": [box_volume, ring_volume], "transition_air": [int(tag) for tag in transition_volumes], "far_air": [far_air_volume]}))
+        raw = _compact_uncertified_volume_nodes(raw)
+        mesh = MeshData(nodes=np.asarray(raw.nodes, dtype=np.float64) / scale, vertex_identity=raw.vertex_identity, cell_types=raw.cell_types, cell_offsets=raw.cell_offsets, cell_nodes=raw.cell_nodes, element_markers=raw.element_markers, facet_types=raw.facet_types, facet_roles=raw.facet_roles, facet_offsets=raw.facet_offsets, facet_nodes=raw.facet_nodes, boundary_markers=raw.boundary_markers, cell_global_ordinals=raw.cell_global_ordinals, facet_global_ordinals=raw.facet_global_ordinals, cell_mesh_parts=_gmsh_cell_parts_in_extraction_order(gmsh, {"magnetic": [box_volume, ring_volume], "transition_air": [int(tag) for tag in transition_volumes], "far_air": [far_air_volume]}))
         if mesh.cell_mesh_parts.shape != (mesh.n_elements,):
             raise RuntimeError("mixed v2 cell mesh-part identity is incomplete")
-        mesh = mesh.oriented_copy()
-        mesh.validate_strict(require_positive_orientation=True)
+        with indeterminate_progress_phase(
+            phase="postprocessing",
+            progress_label="orienting mixed-domain cells",
+            message=f"Orienting mixed-domain cells ({mesh.n_elements} cells)",
+        ):
+            mesh = mesh.oriented_copy()
+        with indeterminate_progress_phase(
+            phase="postprocessing",
+            progress_label="validating mixed-domain topology",
+            message="Validating mixed-domain topology and positive cell orientation",
+        ):
+            mesh.validate_strict(require_positive_orientation=True)
         return mesh
     finally:
         gmsh.finalize()

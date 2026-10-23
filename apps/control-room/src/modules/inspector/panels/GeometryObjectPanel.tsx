@@ -149,6 +149,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   const draft = sessionMatchesTarget
     ? editSnapshot.draft ?? baseDraft
     : baseDraft;
+  const sourceNotice = geometrySourceNotice(draft.mode, object.mode, scene);
   const [feedbackState, setFeedbackState] = useState<FeedbackState>({
     feedback: null,
     key: draftKey,
@@ -767,7 +768,8 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <InspectorGroup title="Geometry Object" collapsible defaultOpen>
+      <InspectorGroup title="Geometry summary" collapsible defaultOpen>
+        {sourceNotice ? <FieldRow label="Source" value={sourceNotice} /> : null}
         {draft.mode === "committed" && (
           <FieldRow label="Object ID" value={object.objectId} />
         )}
@@ -834,6 +836,25 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
       />
     </div>
   );
+}
+
+function geometrySourceNotice(
+  draftMode: GeometryObjectDraft["mode"],
+  objectMode: ReturnType<typeof resolveGeometryObjectPanelModel>["mode"],
+  scene: Pick<ReturnType<typeof useSceneResource>, "data" | "status">,
+): string | null {
+  if (draftMode === "draft-new") return "Unsaved draft";
+  if (scene.status === "error") {
+    return scene.data ? "Scene refresh failed" : "Scene unavailable";
+  }
+  if (scene.status === "loading") {
+    return scene.data ? "Refreshing scene" : "Loading scene";
+  }
+  if (scene.status === "stale") return "Scene data is stale";
+  if (scene.status === "ready" && objectMode === "missing") {
+    return "Object not found in scene";
+  }
+  return null;
 }
 
 function PrimitiveGeometrySection({

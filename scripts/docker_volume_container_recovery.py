@@ -43,7 +43,9 @@ OPERATOR_AUTHORIZATION_SCHEMA = (
 )
 AUTHORIZATION_SCHEMA = "fullmag.docker-container-recovery-authorization.v1"
 REQUEST_SCHEMA = "runtime_service_container_recovery_request.v1"
+RETAINED_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v2"
 ATTESTATION_SCHEMA = "docker_namespace_teardown_attestation.v1"
+ABSENCE_ATTESTATION_SCHEMA = "docker_namespace_absence_attestation.v1"
 AUTHORIZATION_ENV = "FULLMAG_CONTAINER_RECOVERY_AUTHORIZATION"
 AUTHORIZATION_SHA_ENV = "FULLMAG_CONTAINER_RECOVERY_AUTHORIZATION_SHA256"
 CONTROL_ROOT = "/opt/fullmag/control"
@@ -328,12 +330,39 @@ def _validate_container_pins(pins: Sequence[object]) -> list[dict[str, object]]:
     return result
 
 
+def expected_recovery_outcome(request: Mapping[str, object]) -> str:
+    """Bind receipt semantics to the explicit request version, never its outcome alone."""
+    if request.get("schema_version") == REQUEST_SCHEMA:
+        if request.get("retained_cancelled_runs") is not None:
+            _fail("v1 recovery cannot retain cancelled runs")
+        return "empty_namespace_recovered"
+    if request.get("schema_version") != RETAINED_REQUEST_SCHEMA:
+        _fail("unsupported runtime service container recovery request schema")
+    pins = request.get("retained_cancelled_runs")
+    if not isinstance(pins, list) or not 1 <= len(pins) <= 128:
+        _fail("v2 recovery requires 1..128 retained cancelled run pins")
+    seen = set()
+    for pin in pins:
+        if not isinstance(pin, Mapping) or set(pin) != {
+            "run_id", "run_intent_sha256", "run_catalog_sha256"
+        }:
+            _fail("invalid retained cancelled run pin")
+        run_id = _require_text(pin.get("run_id"), "retained run id", 128)
+        if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", run_id) or run_id.endswith("."):
+            _fail("unsafe retained run id")
+        if run_id in seen:
+            _fail("duplicate retained cancelled run pin")
+        seen.add(run_id)
+        _require_sha(pin.get("run_intent_sha256"), "retained run intent digest")
+        _require_sha(pin.get("run_catalog_sha256"), "retained run catalog digest")
+    return "retained_cancelled_runs_recovered"
+
+
 def validate_request(value: Mapping[str, object]) -> dict[str, object]:
     """Validate the JSON shape accepted by native ``service-recover-container``."""
 
     request = _require_mapping(value, "runtime service container recovery request")
-    if request.get("schema_version") != REQUEST_SCHEMA:
-        _fail("unsupported runtime service container recovery request schema")
+    expected_recovery_outcome(request)
     request_id = request.get("request_id")
     if not isinstance(request_id, str) or REQUEST_ID_RE.fullmatch(request_id) is None:
         _fail("runtime recovery request_id is not a canonical UUID")
@@ -359,11 +388,78 @@ def validate_request(value: Mapping[str, object]) -> dict[str, object]:
 def validate_attestation(
     value: Mapping[str, object], request: Mapping[str, object], request_sha256: str
 ) -> dict[str, object]:
-    """Validate the teardown proof before it is written to the control volume."""
+    """Validate an exited proof or recovery-only exact-ID absence proof."""
 
     request = validate_request(request)
     _require_sha(request_sha256, "request file SHA-256")
     attestation = _require_mapping(value, "Docker namespace teardown attestation")
+    if attestation.get("schema_version") == ABSENCE_ATTESTATION_SCHEMA:
+        if (
+            request.get("schema_version") != RETAINED_REQUEST_SCHEMA
+            or not isinstance(request.get("retained_cancelled_runs"), list)
+        ):
+            _fail("Docker namespace absence proof requires a retained-run v2 request")
+        if set(attestation) != {
+            "schema_version", "request_sha256", "docker_engine_id_sha256",
+            "containers", "device_release", "manifest_sha256", "result",
+        }:
+            _fail("Docker namespace absence attestation has unexpected fields")
+        if attestation.get("request_sha256") != request_sha256:
+            _fail("namespace absence attestation request digest differs from raw request bytes")
+        for key in ("docker_engine_id_sha256", "manifest_sha256"):
+            _require_sha(attestation.get(key), f"namespace absence {key}")
+        if attestation["docker_engine_id_sha256"] != request["docker_engine_id_sha256"]:
+            _fail("namespace absence attestation engine differs from request")
+        if attestation["manifest_sha256"] != request["docker_manifest_sha256"]:
+            _fail("namespace absence attestation manifest differs from request")
+        if attestation.get("result") != "authoritative_namespace_absence":
+            _fail("namespace absence result is not authoritative")
+        pins = {item["container_id"]: item for item in request["containers"]}
+        observations = attestation.get("containers")
+        if not isinstance(observations, list) or len(observations) != len(pins):
+            _fail("namespace absence observation count differs from request")
+        observed_ids = set()
+        for raw in observations:
+            item = _require_mapping(raw, "namespace absence container observation")
+            if set(item) != {"container_id", "image_id", "config_sha256", "service", "absence"}:
+                _fail("namespace absence container observation has unexpected fields")
+            identifier = _require_container(item.get("container_id"), "absence container_id")
+            if identifier in observed_ids or identifier not in pins:
+                _fail("namespace absence repeats or introduces a container ID")
+            observed_ids.add(identifier)
+            pin = pins[identifier]
+            if any(item.get(field) != pin.get(field) for field in ("image_id", "config_sha256", "service")):
+                _fail("namespace absence container identity differs from request")
+            absence = _require_mapping(item.get("absence"), "namespace absence evidence")
+            if set(absence) != {"inspect", "ps_all"}:
+                _fail("namespace absence evidence has unexpected fields")
+            inspect = _require_mapping(absence.get("inspect"), "namespace inspect absence")
+            if set(inspect) != {"outcome", "matched_container_id", "output_sha256"}:
+                _fail("namespace inspect absence has unexpected fields")
+            if inspect.get("outcome") != "no_such_object" or inspect.get("matched_container_id") != identifier:
+                _fail("namespace inspect absence does not target the exact pinned ID")
+            _require_sha(inspect.get("output_sha256"), "namespace inspect output SHA-256")
+            ps_all = _require_mapping(absence.get("ps_all"), "namespace docker ps -a absence")
+            if set(ps_all) != {"outcome", "output_sha256"} or ps_all.get("outcome") != "empty":
+                _fail("namespace docker ps -a is not an empty listing")
+            _require_sha(ps_all.get("output_sha256"), "namespace docker ps -a output SHA-256")
+        if observed_ids != set(pins):
+            _fail("namespace absence does not cover every pinned container")
+        device = _require_mapping(attestation.get("device_release"), "absence device release")
+        expected_device_fields = {"resource_id", "mapping_sha256", "mapping_detached"}
+        if request.get("device_release_gpu_uuid") is not None:
+            expected_device_fields.add("gpu_uuid")
+        if set(device) != expected_device_fields:
+            _fail("namespace absence device release has unexpected fields")
+        if (
+            device.get("resource_id") != request["device_release_resource_id"]
+            or device.get("gpu_uuid") != request.get("device_release_gpu_uuid")
+            or device.get("mapping_sha256") != request["device_release_mapping_sha256"]
+            or device.get("mapping_detached") is not True
+        ):
+            _fail("namespace absence device release differs from request")
+        return {**attestation, "containers": list(observations), "device_release": device}
+
     if attestation.get("schema_version") != ATTESTATION_SCHEMA:
         _fail("unsupported Docker namespace teardown attestation schema")
     if attestation.get("request_sha256") != request_sha256:
@@ -637,6 +733,7 @@ def _build_request(
     docker_engine_id_sha256: str,
     manifest_sha256: str,
     containers: Sequence[Mapping[str, object]],
+    retained_cancelled_runs: Sequence[Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     device = _require_mapping(device_release, "device release")
     _require_text(device.get("resource_id"), "device release resource_id", 255)
@@ -644,7 +741,7 @@ def _build_request(
     if device.get("mapping_detached") is not True:
         _fail("device release mapping is not detached")
     request = {
-        "schema_version": REQUEST_SCHEMA,
+        "schema_version": RETAINED_REQUEST_SCHEMA if retained_cancelled_runs is not None else REQUEST_SCHEMA,
         "request_id": authorization["request_id"],
         "config_sha256": config_sha256,
         "owner_sha256": owner_sha256,
@@ -661,6 +758,11 @@ def _build_request(
         "device_release_mapping_sha256": device["mapping_sha256"],
         **({"device_release_gpu_uuid": device["gpu_uuid"]} if "gpu_uuid" in device else {}),
         "containers": [dict(item) for item in containers],
+        **(
+            {"retained_cancelled_runs": [dict(item) for item in retained_cancelled_runs]}
+            if retained_cancelled_runs is not None
+            else {}
+        ),
     }
     return validate_request(request)
 
@@ -773,10 +875,21 @@ def _ledger_snapshot_mount(control, backend, compose):
 
 
 def _ledger_and_store_snapshot(
-    control: BuildControl, backend: Mapping[str, object], *, compose=None
-) -> dict[str, str]:
+    control: BuildControl,
+    backend: Mapping[str, object],
+    *,
+    compose=None,
+    retained_cancelled_runs: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object]:
     """Read the exact accepted store and shared ledger through an isolated helper."""
 
+    retained_pins = None
+    if retained_cancelled_runs is not None:
+        retained_pins = [dict(pin) for pin in retained_cancelled_runs]
+        expected_recovery_outcome({
+            "schema_version": RETAINED_REQUEST_SCHEMA,
+            "retained_cancelled_runs": retained_pins,
+        })
     state_source = _bind_source(backend, "/state")
     ledger_mount, ledger_descriptor = _ledger_snapshot_mount(control, backend, compose)
     script = r'''import fcntl, hashlib, json, os, pathlib, time
@@ -818,7 +931,7 @@ for entry in os.scandir(runs):
     if entry.is_symlink() or not entry.is_dir(follow_symlinks=False): raise RuntimeError('accepted store runs has an invalid entry')
     run_dirs.append(entry.name)
     if len(run_dirs)>MAX_ENTRIES: raise RuntimeError('accepted store inventory is unbounded')
-records=[]; count=0
+records={}; count=0
 for current, directories, files in os.walk(store, topdown=True, followlinks=False):
     current_path=pathlib.Path(current)
     if any((current_path/name).is_symlink() for name in directories): raise RuntimeError('accepted store contains a symlink')
@@ -827,18 +940,48 @@ for current, directories, files in os.walk(store, topdown=True, followlinks=Fals
         if count>MAX_ENTRIES: raise RuntimeError('accepted store inventory is unbounded')
         path=current_path/name
         if path.is_symlink() or not path.is_file(): raise RuntimeError('accepted store contains an invalid file')
-        if name in {'run_intent.json','run_catalog.json'}: records.append(str(path.relative_to(store)))
-if records: raise RuntimeError('accepted store contains admitted run records')
-print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_root_sha256':hashlib.sha256(b'/state/runs/docker-all/session-store').hexdigest(),'ledger_root_sha256':hashlib.sha256(b'/host-ledger/ledger').hexdigest(),'ledger_snapshot_sha256':ledger_digest,'store_file_count':count,'run_directories':sorted(run_dirs),'run_records':records,**({'host_ledger_volume_probe':volume_proof} if volume_proof is not None else {})},sort_keys=True))
+        if name in {'run_intent.json','run_catalog.json'}:
+            relative=path.relative_to(store).as_posix()
+            records[relative]=hashlib.sha256(regular(path,'retained run record')).hexdigest()
+pins=observation.get('retained_cancelled_runs')
+if pins is None:
+    if records: raise RuntimeError('accepted store contains admitted run records')
+    run_records=[]
+else:
+    if not isinstance(pins,list) or not 1<=len(pins)<=128: raise RuntimeError('retained run pins are invalid or unbounded')
+    expected={}
+    for pin in pins:
+        if not isinstance(pin,dict) or set(pin)!={'run_id','run_intent_sha256','run_catalog_sha256'}: raise RuntimeError('retained run pin has an invalid shape')
+        run_id=pin.get('run_id')
+        if not isinstance(run_id,str) or not run_id or '/' in run_id or '..' in run_id: raise RuntimeError('retained run id is invalid')
+        for key in ('run_intent_sha256','run_catalog_sha256'):
+            value=pin.get(key)
+            if not isinstance(value,str) or len(value)!=64 or any(c not in '0123456789abcdef' for c in value): raise RuntimeError('retained run digest is invalid')
+        if run_id in expected: raise RuntimeError('retained run id is repeated')
+        expected[run_id]=pin
+    if set(run_dirs)!=set(expected): raise RuntimeError('retained run pins do not exactly match run directories')
+    expected_records={}
+    for run_id,pin in expected.items():
+        expected_records['runs/'+run_id+'/run_intent.json']=pin['run_intent_sha256']
+        expected_records['runs/'+run_id+'/run_catalog.json']=pin['run_catalog_sha256']
+    if set(records)!=set(expected_records): raise RuntimeError('accepted store run-record inventory differs from retained pins')
+    if records!=expected_records: raise RuntimeError('accepted store run-record bytes differ from retained pins')
+    run_records=[{'run_id':run_id,'run_intent_sha256':pin['run_intent_sha256'],'run_catalog_sha256':pin['run_catalog_sha256']} for run_id,pin in sorted(expected.items())]
+print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_root_sha256':hashlib.sha256(b'/state/runs/docker-all/session-store').hexdigest(),'ledger_root_sha256':hashlib.sha256(b'/host-ledger/ledger').hexdigest(),'ledger_snapshot_sha256':ledger_digest,'store_file_count':count,'run_directories':sorted(run_dirs),'run_records':run_records,**({'host_ledger_volume_probe':volume_proof} if volume_proof is not None else {})},sort_keys=True))
 '''
     if ledger_descriptor is not None:
         import docker_host_ledger as ledger
         # Reuse the bounded unprivileged mount/marker proof in this same helper.
         # Descriptor data travels as argv, never as executable Python source.
-        script = (ledger.HOST_VOLUME_PROBE_FUNCTIONS + "\nimport json,signal,sys\nsignal.alarm(45)\n"
-                  + "volume_proof=probe(json.loads(sys.argv[1]))\n" + script)
+        script = (
+            ledger.HOST_VOLUME_PROBE_FUNCTIONS
+            + "\nimport json,signal,sys\nsignal.alarm(45)\n"
+            + "observation=json.loads(sys.argv[1])\n"
+            + "volume_proof=probe(observation['ledger_descriptor'])\n"
+            + script
+        )
     else:
-        script = "volume_proof=None\n" + script
+        script = "import json,sys\nobservation=json.loads(sys.argv[1])\nvolume_proof=None\n" + script
     image = backend.get("Image")
     if not isinstance(image, str) or IMAGE_RE.fullmatch(image) is None:
         _fail("stopped backend image is unavailable for accepted-store proof")
@@ -861,8 +1004,10 @@ print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_
         "--user", "65532:65532", "--entrypoint", "/usr/local/bin/python3",
         image, "-B", "-c", script,
     ]
-    if ledger_descriptor is not None:
-        args.append(canonical(ledger_descriptor).decode("utf-8"))
+    args.append(canonical({
+        "ledger_descriptor": ledger_descriptor,
+        "retained_cancelled_runs": retained_pins,
+    }).decode("utf-8"))
     result = bounded_capture(args, data=b"", timeout=90)
     if result.returncode:
         _fail("accepted store/ledger proof failed: " + result.stderr.decode("utf-8", "replace")[-4096:])
@@ -874,8 +1019,18 @@ print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_
         _fail("accepted store/ledger proof is not an object")
     for key in ("store_root_sha256", "ledger_root_sha256", "ledger_snapshot_sha256"):
         _require_sha(value.get(key), f"storage proof {key}")
-    if value.get("run_records") != []:
-        _fail("accepted store/ledger proof contains run records")
+    expected_records = []
+    if retained_pins is not None:
+        expected_records = [
+            {
+                "run_id": pin["run_id"],
+                "run_intent_sha256": pin["run_intent_sha256"],
+                "run_catalog_sha256": pin["run_catalog_sha256"],
+            }
+            for pin in sorted(retained_pins, key=lambda item: item["run_id"])
+        ]
+    if value.get("run_records") != expected_records:
+        _fail("accepted store/ledger proof run records differ from retained pins")
     return dict(value)
 
 

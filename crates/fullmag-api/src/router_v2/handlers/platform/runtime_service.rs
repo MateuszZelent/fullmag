@@ -43,13 +43,22 @@ pub async fn get_runtime_service(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    let body = observe_runtime_service(&state).await?;
+    let etag = status_etag(&body)?;
+    Ok(conditional_json_response(&headers, &etag, &body))
+}
+
+/// Shared, read-only native liveness authority for status and command admission.
+pub(crate) async fn observe_runtime_service(
+    state: &AppState,
+) -> Result<RuntimeServiceStatusResource, ApiError> {
     // Resolve environment and accepted-store identity before moving the
     // observation onto the blocking pool.  No status read is allowed to create
     // a SessionStore or initialize APPLICATION.json.
     let explicit_config_path =
         std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG").map(PathBuf::from);
     let store_root = state.submit_store_root.clone();
-    let body = tokio::task::spawn_blocking(move || {
+    let mut body = tokio::task::spawn_blocking(move || {
         let config_path = resolve_config_path(store_root.as_deref(), explicit_config_path);
         let observation_root = store_root.unwrap_or_default();
         let observed = fullmag_runtime_control::application_service_status::observe(
@@ -63,8 +72,22 @@ pub async fn get_runtime_service(
         ApiError::internal(format!("runtime service observer task failed: {error}"))
     })?;
 
-    let etag = status_etag(&body)?;
-    Ok(conditional_json_response(&headers, &etag, &body))
+    // An old service descriptor can still say Ready after this API failed
+    // initialization. Expose the execution block that actually governs this
+    // instance. Preserve native failure/drain/unknown states and their reason
+    // codes; the API fence must not erase the underlying diagnostic evidence.
+    if let Some(reason) = state.development_admission.runtime_failure_reason() {
+        if body.state == crate::schemas::runtime_service::RuntimeServiceStatusState::Ready {
+            body.state = crate::schemas::runtime_service::RuntimeServiceStatusState::NotReady;
+            body.reason.code = "runtime_unavailable".to_owned();
+            body.reason.message = reason.to_owned();
+        } else {
+            body.reason.message.push(' ');
+            body.reason.message.push_str(reason);
+        }
+    }
+
+    Ok(body)
 }
 
 /// Select the only configuration path that the read-only observer may inspect.

@@ -1758,21 +1758,46 @@ pub async fn get_domain_topology(
     }
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
-            let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
-            let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
-            let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "domain-topology:{generation_id}:{topology_hash}:{}",
-                snapshot.mesh_revision,
-            ));
-            let mut response =
-                crate::router_v2::handlers::shared::conditional_fem_topology_response(
-                    &state, &headers, &etag, mesh,
-                )
-                .map_err(ApiError::conflict)?;
-            crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
-                &mut response,
-                &topology_hash,
-            );
+            let mesh = mesh.clone();
+            let mesh_revision = snapshot.mesh_revision;
+            let generation_id = mesh.generation_id.clone();
+            drop(guard);
+            let response_state = Arc::clone(&state);
+            // Hashing and encoding a large FEM domain must not occupy an
+            // async executor thread or keep the live-state read lock held.
+            let response = tokio::task::spawn_blocking(move || {
+                let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
+                let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+                    "domain-topology:{}:{topology_hash}:{mesh_revision}",
+                    mesh.generation_id.as_deref().unwrap_or("no-generation"),
+                ));
+                let mut response =
+                    crate::router_v2::handlers::shared::conditional_fem_topology_response(
+                        &response_state, &headers, &etag, &mesh,
+                    )
+                    .map_err(ApiError::conflict)?;
+                crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
+                    &mut response,
+                    &topology_hash,
+                );
+                Ok::<_, ApiError>(response)
+            })
+            .await
+            .map_err(|error| ApiError::internal(format!("domain topology serialization failed: {error}")))??;
+            let current = state.current_live_state.read().await;
+            let snapshot = current.as_ref()
+                .ok_or_else(|| ApiError::conflict("domain disappeared during topology serialization"))?;
+            crate::ensure_current_live_request_context(
+                snapshot,
+                &request_context,
+                state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+            )?;
+            if snapshot.mesh_revision != mesh_revision
+                || snapshot.fem_mesh.as_ref().map(|mesh| &mesh.generation_id)
+                    != Some(&generation_id)
+            {
+                return Err(ApiError::conflict("domain changed during topology serialization"));
+            }
             Ok(response)
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),

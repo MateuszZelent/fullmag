@@ -11,13 +11,50 @@ export function quantityCatalogEntrySupportsSpatialVisualization(
 ): boolean {
   const resolved = quantity.resolved_capability;
   if (resolved) {
-    return (
+    const providerBackedRead =
       resolved.provider === "available" &&
       resolved.request === "field_vector" &&
       resolved.render === "renderable" &&
       resolved.publication === "interactive" &&
-      resolved.materialization !== "legacy_unverified"
-    );
+      resolved.materialization !== "legacy_unverified";
+    const preparedInitialMagnetizationRead =
+      quantity.id === "m" &&
+      quantity.domain === "magnetic_only" &&
+      quantity.shape === "vector_field" &&
+      quantity.location === "node" &&
+      quantity.n_comp === 3 &&
+      quantity.capability_state === "unsupported" &&
+      quantity.solver_capability === "unsupported" &&
+      quantity.requestable &&
+      !quantity.materializable &&
+      quantity.renderable &&
+      quantity.interactive_preview &&
+      quantity.supports_preview_3d &&
+      quantity.publication_state === "interactive" &&
+      resolved.quantity_id === "m" &&
+      resolved.provider === "unavailable" &&
+      resolved.reason_code === "prepared_initial_state" &&
+      resolved.lane === "unresolved" &&
+      resolved.scope === "magnetic_only" &&
+      resolved.request === "field_vector" &&
+      resolved.materialization === "materialized" &&
+      resolved.render === "renderable" &&
+      resolved.publication === "interactive" &&
+      resolved.carriers.some(
+        (carrier) =>
+          carrier.carrier_id.length > 0 &&
+          carrier.carrier_fingerprint.length > 0 &&
+          carrier.components === 3 &&
+          carrier.indexing === "node" &&
+          carrier.scope === "full" &&
+          carrier.scope_kind === "full" &&
+          carrier.view === "3D" &&
+          carrier.payload_state === "current",
+      );
+
+    // The prepared initial m publication is readable from its current carrier
+    // even while solver/provider capability remains unavailable.
+    return providerBackedRead || preparedInitialMagnetizationRead;
   }
   return (
     quantity.solver_capability === "supported" &&

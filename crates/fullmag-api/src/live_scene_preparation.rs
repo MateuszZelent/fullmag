@@ -49,6 +49,179 @@ pub(crate) struct LiveScenePreparationReadModel {
     pub execution_plan: fullmag_ir::ExecutionPlanIR,
 }
 
+/// State identity used to keep accepted preparation work off the session
+/// transition lock.  The revisions cover the resources that preparation reads
+/// or replaces; session/run status and the accepted workspace binding cover
+/// lifecycle changes that must invalidate a prepared candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AcceptedPreparationPublicationFence {
+    session_id: String,
+    run_id: String,
+    session_epoch: u64,
+    request_scope_epoch: String,
+    session_status: String,
+    run_status: String,
+    scene_revision: u64,
+    state_version: u64,
+    scalar_revision: u64,
+    mesh_revision: u64,
+    mesh_build_revision: u64,
+    field_catalog_revision: u64,
+    field_samples_revision: u64,
+    field_quantity_revisions: std::collections::BTreeMap<String, u64>,
+    stage_execution_revision: u64,
+    simulation_preparation_revision: u64,
+    preparation_id: Option<String>,
+    preparation_snapshot: Option<SimulationPreparationSnapshot>,
+    accepted_run_id: Option<String>,
+    accepted_step_id: Option<String>,
+    display_projection: Value,
+}
+
+impl AcceptedPreparationPublicationFence {
+    fn capture(
+        snapshot: &SessionStateResponse,
+        context: &CurrentLiveRequestContext,
+        session_epoch: u64,
+    ) -> Result<Self, ApiError> {
+        crate::ensure_current_live_request_context(snapshot, context, session_epoch)?;
+        ensure_preparation_run_is_active(snapshot)?;
+        let run_id = snapshot
+            .run
+            .as_ref()
+            .map(|run| run.run_id.clone())
+            .unwrap_or_else(|| snapshot.session.run_id.clone());
+        if run_id.trim().is_empty() {
+            return Err(ApiError::conflict_with_code(
+                "accepted_preparation_current_run_missing",
+                "accepted preparation requires the current durable live run",
+            ));
+        }
+        let scene_revision = snapshot
+            .scene_document
+            .as_ref()
+            .map(|scene| scene.revision)
+            .ok_or_else(|| ApiError::not_found("no scene document available for preparation"))?;
+        let display_projection = serde_json::to_value(&snapshot.display_selection).map_err(|error| {
+            ApiError::internal(format!("failed to encode display projection: {error}"))
+        })?;
+        Ok(Self {
+            session_id: snapshot.session.session_id.clone(),
+            run_id,
+            session_epoch,
+            request_scope_epoch: context.request_scope_epoch.clone(),
+            session_status: snapshot.session.status.clone(),
+            run_status: snapshot
+                .run
+                .as_ref()
+                .map(|run| run.status.clone())
+                .unwrap_or_else(|| snapshot.session.status.clone()),
+            scene_revision,
+            state_version: snapshot.state_version,
+            scalar_revision: snapshot.scalar_revision,
+            mesh_revision: snapshot.mesh_revision,
+            mesh_build_revision: snapshot.mesh_build_revision,
+            field_catalog_revision: snapshot.field_catalog_revision,
+            field_samples_revision: snapshot.field_samples_revision,
+            field_quantity_revisions: snapshot.field_quantity_revisions.clone(),
+            stage_execution_revision: snapshot.stage_execution_revision,
+            simulation_preparation_revision: snapshot.simulation_preparation_revision,
+            preparation_id: snapshot
+                .simulation_preparation
+                .as_ref()
+                .map(|preparation| preparation.preparation_id.clone()),
+            preparation_snapshot: snapshot.simulation_preparation.clone(),
+            accepted_run_id: snapshot
+                .mesh_workspace
+                .as_ref()
+                .and_then(|workspace| workspace.get("accepted_run_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            accepted_step_id: snapshot
+                .mesh_workspace
+                .as_ref()
+                .and_then(|workspace| workspace.get("accepted_step_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            display_projection,
+        })
+    }
+
+    fn validate(
+        &self,
+        snapshot: &SessionStateResponse,
+        context: &CurrentLiveRequestContext,
+        session_epoch: u64,
+    ) -> Result<(), ApiError> {
+        crate::ensure_current_live_request_context(snapshot, context, session_epoch)?;
+        ensure_preparation_run_is_active(snapshot)?;
+        let current = Self::capture(snapshot, context, session_epoch)?;
+        if &current != self {
+            return Err(ApiError::conflict_with_code(
+                "accepted_preparation_current_state_changed",
+                "current live session or preparation inputs changed during accepted preparation",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Capability proving that the accepted snapshot and immutable task receipt
+/// were validated before taking the current-session transition fence.
+#[derive(Debug, Clone)]
+struct ValidatedAcceptedPreparationSource {
+    run_id: String,
+    step_id: String,
+    specification_fingerprint: String,
+    receipt_payload: Value,
+}
+
+impl ValidatedAcceptedPreparationSource {
+    fn from_validated_receipt(
+        current_run_id: &str,
+        receipt: &PreparationReceipt,
+    ) -> Result<Self, ApiError> {
+        let source = receipt.accepted_run_source.as_ref().ok_or_else(|| {
+            ApiError::conflict("accepted preparation receipt has no accepted-run source")
+        })?;
+        validate_accepted_source_plan_identity(current_run_id, receipt.plan.source.as_ref(), source)?;
+        let receipt_payload = serde_json::to_value(receipt).map_err(|error| {
+            ApiError::internal(format!("accepted preparation receipt serialization failed: {error}"))
+        })?;
+        Ok(Self {
+            run_id: source.run_id.as_str().to_owned(),
+            step_id: source.step_id.clone(),
+            specification_fingerprint: source.specification_fingerprint.clone(),
+            receipt_payload,
+        })
+    }
+
+    fn validate_receipt(
+        &self,
+        current_run_id: &str,
+        receipt: &PreparationReceipt,
+    ) -> Result<(), ApiError> {
+        let source = receipt.accepted_run_source.as_ref().ok_or_else(|| {
+            ApiError::conflict("accepted preparation receipt has no accepted-run source")
+        })?;
+        validate_accepted_source_plan_identity(current_run_id, receipt.plan.source.as_ref(), source)?;
+        let payload = serde_json::to_value(receipt).map_err(|error| {
+            ApiError::internal(format!("accepted preparation receipt serialization failed: {error}"))
+        })?;
+        if source.run_id.as_str() != self.run_id
+            || source.step_id != self.step_id
+            || source.specification_fingerprint != self.specification_fingerprint
+            || payload != self.receipt_payload
+        {
+            return Err(ApiError::conflict_with_code(
+                "accepted_preparation_validation_pin_mismatch",
+                "accepted preparation receipt differs from its validated snapshot identity",
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub(crate) const LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA: &str =
     "fullmag.live_scene_preparation_read_model.v1";
 
@@ -339,6 +512,8 @@ const ACCEPTED_LIVE_PREPARATION_WAIT_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(1800);
 const ACCEPTED_LIVE_PREPARATION_POLL_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(250);
+const ACCEPTED_LIVE_RUNTIME_FAILURE_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(1);
 
 /// Receipt, execution binding and read model produced as one preparation
 /// transaction.  The model is intentionally separate from solver execution.
@@ -803,10 +978,11 @@ pub(crate) async fn publish_accepted_frontier_preparation(
                     "accepted preparation anchor references a non-planned study step",
                 ));
             }
-            let ready = fullmag_runtime_control::accepted_run_step_is_scheduler_ready(
+            let ready = fullmag_runtime_control::accepted_run_step_is_scheduler_ready_from_snapshot(
                 &store,
                 &typed_run_id,
                 &source.step_id,
+                &accepted,
             )
             .map_err(|error| {
                 ApiError::conflict(format!(
@@ -829,10 +1005,11 @@ pub(crate) async fn publish_accepted_frontier_preparation(
                     matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned)
                 })
             {
-                if fullmag_runtime_control::accepted_run_step_is_preparation_frontier(
+                if fullmag_runtime_control::accepted_run_step_is_preparation_frontier_from_snapshot(
                     &store,
                     &typed_run_id,
                     &step.step_id,
+                    &accepted,
                 )
                 .map_err(|error| {
                     ApiError::conflict(format!(
@@ -870,10 +1047,11 @@ pub(crate) async fn publish_accepted_frontier_preparation(
                         .map_err(|error| ApiError::conflict(error.to_string()))?
                         .is_some();
                     if (launched || prepared)
-                        && fullmag_runtime_control::accepted_run_step_is_preparation_frontier(
+                        && fullmag_runtime_control::accepted_run_step_is_preparation_frontier_from_snapshot(
                             &store,
                             &typed_run_id,
                             &step.step_id,
+                            &accepted,
                         )
                         .map_err(|error| {
                             ApiError::conflict(format!(
@@ -906,24 +1084,44 @@ pub(crate) async fn publish_accepted_frontier_preparation(
         .await?;
     }
     let deadline = std::time::Instant::now() + ACCEPTED_LIVE_PREPARATION_WAIT_TIMEOUT;
+    let mut next_runtime_failure_observation = std::time::Instant::now();
     loop {
-        // Only one bounded receipt read/publication owns the transition.
-        // Native preparation may take minutes; Stop and session replacement
-        // must remain available between attempts, fenced by the same context.
-        let publication = {
-            let _transition = state.current_live_session_transition.lock().await;
-            publish_accepted_task_preparation_with_transition(
-                state,
-                context,
-                &run_id,
-                &step_id,
-                command_kind,
-            )
-            .await
-        };
+        // The bridge holds the transition only for its initial identity
+        // capture and final CAS/commit. Native preparation may take minutes;
+        // Stop and session replacement remain available during store reads.
+        let publication = publish_accepted_task_preparation(
+            state,
+            context,
+            &run_id,
+            &step_id,
+            command_kind,
+        )
+        .await;
         match publication {
             Ok(published) => return Ok(published),
             Err(error) if error.code.as_deref() == Some("accepted_preparation_pending") => {
+                if let Some(reason) = state.development_admission.runtime_failure_reason() {
+                    return Err(accepted_preparation_runtime_failure(reason));
+                }
+                if std::time::Instant::now() >= next_runtime_failure_observation {
+                    // A confirmed native owner failure is terminal for this
+                    // preparation wait. Starting/unknown/failed observations
+                    // are deliberately not conflated: transient liveness or
+                    // writer contention keeps the existing pending behavior.
+                    let observed = crate::router_v2::handlers::platform::runtime_service::observe_runtime_service(state)
+                        .await;
+                    next_runtime_failure_observation = std::time::Instant::now()
+                        + ACCEPTED_LIVE_RUNTIME_FAILURE_POLL_INTERVAL;
+                    if let Ok(status) = observed {
+                        if status.state
+                            == crate::schemas::runtime_service::RuntimeServiceStatusState::Failed
+                        {
+                            return Err(accepted_preparation_runtime_failure(
+                                &status.reason.message,
+                            ));
+                        }
+                    }
+                }
                 if std::time::Instant::now() >= deadline {
                     return Err(ApiError::with_status_and_code(
                         axum::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -936,9 +1134,35 @@ pub(crate) async fn publish_accepted_frontier_preparation(
                 }
                 tokio::time::sleep(ACCEPTED_LIVE_PREPARATION_POLL_INTERVAL).await;
             }
+            Err(error)
+                if error.code.as_deref()
+                    == Some("accepted_preparation_current_state_changed") =>
+            {
+                if std::time::Instant::now() >= deadline {
+                    return Err(ApiError::with_status_and_code(
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        "accepted_preparation_timeout",
+                        format!(
+                            "current live preparation inputs did not stabilize within {} seconds",
+                            ACCEPTED_LIVE_PREPARATION_WAIT_TIMEOUT.as_secs()
+                        ),
+                    ));
+                }
+                tokio::time::sleep(ACCEPTED_LIVE_PREPARATION_POLL_INTERVAL).await;
+            }
             Err(error) => return Err(error),
         }
     }
+}
+
+fn accepted_preparation_runtime_failure(reason: &str) -> ApiError {
+    ApiError::with_status_and_code(
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "accepted_preparation_runtime_failed",
+        format!(
+            "native runtime failed before the accepted preparation receipt was published: {reason}"
+        ),
+    )
 }
 
 /// Session status published with a preparation receipt. Preparation of a new
@@ -996,34 +1220,26 @@ pub(crate) fn ensure_preparation_run_is_active(snapshot: &SessionStateResponse) 
 /// receipt to the current-live read model.  FDM uses the same path when its
 /// accepted preparation receipt is already available, keeping the two lanes
 /// on one publication contract.
-/// Callers own the transition fence and validate the accepted snapshot before
-/// entering this bridge. An absent receipt returns pending before repeating
-/// that expensive validation; an existing receipt is always fully validated.
-pub(crate) async fn publish_accepted_task_preparation_with_transition(
+/// The transition fence is held only while capturing the current publication
+/// identity and for the final CAS/commit. Durable snapshot, plan, and task
+/// receipt validation runs without the transition lock so large accepted
+/// catalogs cannot stall current-session resource reads.
+pub(crate) async fn publish_accepted_task_preparation(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
     run_id: &str,
     step_id: &str,
     command_kind: &str,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
-    let (
-        scene_revision,
-        display_projection,
-        preparation_revision,
-        existing_preparation,
-    ) = {
+    let (fence, scene_revision, display_projection, preparation_revision, existing_preparation) = {
+        let _transition = state.current_live_session_transition.lock().await;
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        crate::ensure_current_live_request_context(
-            snapshot,
-            context,
-            state
-                .current_live_session_epoch
-                .load(std::sync::atomic::Ordering::Acquire),
-        )?;
-        ensure_preparation_run_is_active(snapshot)?;
+        let session_epoch = state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire);
         let active_run_id = snapshot
             .run
             .as_ref()
@@ -1034,17 +1250,16 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
                 "accepted_preparation_current_run_mismatch",
             ));
         }
-        let scene_revision = snapshot
-            .scene_document
-            .as_ref()
-            .map(|scene| scene.revision)
-            .ok_or_else(|| ApiError::not_found("no scene document available for preparation"))?;
-        let display_projection =
-            serde_json::to_value(&snapshot.display_selection).map_err(|error| {
-                ApiError::internal(format!("failed to encode display projection: {error}"))
-            })?;
+        let fence = AcceptedPreparationPublicationFence::capture(
+            snapshot,
+            context,
+            session_epoch,
+        )?;
+        let scene_revision = fence.scene_revision;
+        let display_projection = fence.display_projection.clone();
         let existing_preparation = snapshot.simulation_preparation.clone();
         (
+            fence,
             scene_revision,
             display_projection,
             snapshot.simulation_preparation_revision.saturating_add(1),
@@ -1165,6 +1380,8 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
     .map_err(|error| ApiError::internal(format!("accepted preparation task failed: {error}")))??;
 
     let (receipt, execution_plan, requested_execution) = materialized;
+    let validated_source =
+        ValidatedAcceptedPreparationSource::from_validated_receipt(run_id, &receipt)?;
     let preparation_id = receipt.preparation_id.clone();
     let existing_preparation = existing_preparation
         .filter(|existing| existing.preparation_id == preparation_id);
@@ -1185,19 +1402,6 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
         execution_plan,
     };
 
-    let disposition = commit_live_preparation_receipt_for_context_under_transition(
-        state,
-        context,
-        receipt,
-        Some(scene_revision),
-        None,
-        Some(run_id),
-    )
-    .await?;
-    let disposition = match disposition {
-        fullmag_session::PreparationReceiptCommitDisposition::Accepted => "accepted",
-        fullmag_session::PreparationReceiptCommitDisposition::Replayed => "replayed",
-    };
     let now = u64::try_from(crate::session::unix_time_millis_now()).unwrap_or(u64::MAX);
     let execution_plan_value =
         serde_json::to_value(&read_model.execution_plan).map_err(|error| {
@@ -1262,31 +1466,25 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
         log_tail: preparation_log,
         failure: None,
     };
-    let mut current = state.current_live_state.write().await;
-    let snapshot = current
-        .as_mut()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    crate::ensure_current_live_request_context(
-        snapshot,
-        context,
-        state
-            .current_live_session_epoch
-            .load(std::sync::atomic::Ordering::Acquire),
-    )?;
-    let active_run_id = snapshot
-        .run
-        .as_ref()
-        .map(|run| run.run_id.as_str())
-        .unwrap_or(snapshot.session.run_id.as_str());
-    if active_run_id != run_id {
-        return Err(ApiError::conflict(
-            "accepted_preparation_current_run_changed",
-        ));
-    }
-    ensure_preparation_run_is_active(snapshot)?;
-    let (metadata, fem_mesh) = prepared_domain_publication(snapshot, &read_model)?;
-    let session_status = preparation_session_status(snapshot);
-    let mut prepared_snapshot = snapshot.clone();
+    // Clone and prepare the large mesh/read-model candidate without either
+    // the transition fence or a current-state write lock. If the live state
+    // moved while the receipt was being validated, the exact pin rejects it.
+    let mut prepared_snapshot = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        fence.validate(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        snapshot.clone()
+    };
+    let (metadata, fem_mesh) = prepared_domain_publication(&prepared_snapshot, &read_model)?;
+    let session_status = preparation_session_status(&prepared_snapshot);
     crate::session::apply_current_live_snapshot(
         &mut prepared_snapshot,
         CurrentLiveSnapshotRequest {
@@ -1313,17 +1511,53 @@ pub(crate) async fn publish_accepted_task_preparation_with_transition(
         },
     )?;
     publish_prepared_initial_state(&mut prepared_snapshot, &read_model)?;
-    *snapshot = prepared_snapshot;
-    drop(current);
-    crate::validate_current_live_request_context(state, context).await?;
-    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
-        let display_revision = state.current_display_selection.read().await.revision;
-        let realtime_state =
-            crate::current_live_realtime_state_from_snapshot(state, &snapshot, display_revision)
-                .await;
-        crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0)
-            .await?;
+    prepared_snapshot.state_version = prepared_snapshot.state_version.saturating_add(1);
+    let display_revision = state.current_display_selection.read().await.revision;
+    let realtime_state =
+        crate::current_live_realtime_state_from_snapshot(state, &prepared_snapshot, display_revision)
+            .await;
+
+    // Reacquire the transition only for the final compare, immutable receipt
+    // commit, and pointer swap. The commit remains serialized with Stop and
+    // session replacement; catalog/plan/receipt materialization above does
+    // not hold this fence.
+    let transition = state.current_live_session_transition.lock().await;
+    {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        fence.validate(
+            snapshot,
+            context,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
     }
+    let durable_disposition = commit_live_preparation_receipt_for_context_under_transition_with_source_pin(
+        state,
+        context,
+        receipt,
+        Some(scene_revision),
+        None,
+        Some(run_id),
+        Some(&validated_source),
+    )
+    .await?;
+    let disposition = match durable_disposition {
+        fullmag_session::PreparationReceiptCommitDisposition::Accepted => "accepted",
+        fullmag_session::PreparationReceiptCommitDisposition::Replayed => "replayed",
+    };
+    let previous = {
+        let mut current = state.current_live_state.write().await;
+        std::mem::replace(&mut *current, Some(prepared_snapshot))
+    };
+    drop(transition);
+    if let Some(previous) = previous {
+        let _ = tokio::task::spawn_blocking(move || drop(previous));
+    }
+    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
     Ok(PublishedLiveScenePreparation {
         disposition,
         preparation_id,
@@ -1364,6 +1598,27 @@ pub(crate) async fn commit_live_preparation_receipt_for_context_under_transition
     expected_scene_revision: Option<u64>,
     expected_preparation_id: Option<&str>,
     expected_run_id: Option<&str>,
+) -> Result<fullmag_session::PreparationReceiptCommitDisposition, ApiError> {
+    commit_live_preparation_receipt_for_context_under_transition_with_source_pin(
+        state,
+        context,
+        receipt,
+        expected_scene_revision,
+        expected_preparation_id,
+        expected_run_id,
+        None,
+    )
+    .await
+}
+
+async fn commit_live_preparation_receipt_for_context_under_transition_with_source_pin(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    receipt: PreparationReceipt,
+    expected_scene_revision: Option<u64>,
+    expected_preparation_id: Option<&str>,
+    expected_run_id: Option<&str>,
+    validated_source: Option<&ValidatedAcceptedPreparationSource>,
 ) -> Result<fullmag_session::PreparationReceiptCommitDisposition, ApiError> {
     let session_epoch = state
         .current_live_session_epoch
@@ -1412,7 +1667,11 @@ pub(crate) async fn commit_live_preparation_receipt_for_context_under_transition
     drop(current);
 
     if let Some(source) = receipt.accepted_run_source.as_ref() {
-        validate_live_accepted_run_source(state, &current_run_id, &receipt, source)?;
+        if let Some(validated_source) = validated_source {
+            validated_source.validate_receipt(&current_run_id, &receipt)?;
+        } else {
+            validate_live_accepted_run_source(state, &current_run_id, &receipt, source)?;
+        }
     } else if preparation_id_differs {
         return Err(ApiError::conflict(
             "current_live_preparation_receipt_id_mismatch",

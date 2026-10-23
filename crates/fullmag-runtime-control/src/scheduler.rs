@@ -14,7 +14,7 @@ use fullmag_application::{
 use fullmag_authoring::StudyInputSource;
 use fullmag_session::{FmsTaskLifecycle, FmsTaskReadiness, SessionStore};
 
-use crate::claim::{claimed_task_resource_compatibility, ClaimedTaskResourceCompatibility};
+use crate::claim::ClaimedTaskResourceCompatibility;
 use crate::worker_inbox::DurableWorkerInboxError;
 
 #[derive(Clone, Debug)]
@@ -54,8 +54,23 @@ pub fn accepted_run_has_scheduler_ready_task(store: &SessionStore, run_id: &RunI
     }) {
         return Ok(false);
     }
+    // A Preparing/Running task, or an accepted task held for a different
+    // reason, cannot be advanced by this scheduler pass. Keep the durable
+    // catalog as the cheap mutable prefilter so resident polling does not
+    // repeatedly reload and revalidate the immutable study/catalog CAS data.
+    if !catalog
+        .tasks
+        .iter()
+        .any(|task| task_has_scheduler_eligible_catalog_state(task, true))
+    {
+        return Ok(false);
+    }
     let accepted =
         crate::load_accepted_study_snapshot(store, run_id, &specification.snapshot.project_id)?;
+    if accepted.run.intent != intent {
+        bail!("accepted scheduler run intent changed while loading its study snapshot");
+    }
+    crate::study::require_current_accepted_study_intent(store, &accepted)?;
 
     for study_step in &accepted.study.steps {
         let execution_step = accepted
@@ -97,6 +112,18 @@ pub fn accepted_run_step_is_scheduler_ready(
     accepted_run_step_is_ready(store, run_id, step_id, true)
 }
 
+/// Report readiness for one exact durable preparation anchor using the
+/// accepted snapshot already validated by the caller. Mutable run, catalog,
+/// dependency, and receipt state is still read at this boundary.
+pub fn accepted_run_step_is_scheduler_ready_from_snapshot(
+    store: &SessionStore,
+    run_id: &RunId,
+    step_id: &str,
+    accepted: &crate::study::AcceptedStudySnapshot,
+) -> Result<bool> {
+    accepted_run_step_is_ready_from_snapshot(store, run_id, step_id, accepted, true)
+}
+
 /// Select a dependency-ready preparation frontier before its receipt exists.
 /// This observes the same unclaimed task and resolvable-input gates as the
 /// solver scheduler; it never queues, claims, or dispatches the task.
@@ -106,6 +133,17 @@ pub fn accepted_run_step_is_preparation_frontier(
     step_id: &str,
 ) -> Result<bool> {
     accepted_run_step_is_ready(store, run_id, step_id, false)
+}
+
+/// Select readiness for a preparation frontier from the caller's validated
+/// immutable snapshot without reopening its CAS-backed study and catalog.
+pub fn accepted_run_step_is_preparation_frontier_from_snapshot(
+    store: &SessionStore,
+    run_id: &RunId,
+    step_id: &str,
+    accepted: &crate::study::AcceptedStudySnapshot,
+) -> Result<bool> {
+    accepted_run_step_is_ready_from_snapshot(store, run_id, step_id, accepted, false)
 }
 
 fn accepted_run_step_is_ready(
@@ -142,6 +180,71 @@ fn accepted_run_step_is_ready(
         run_id,
         &specification.snapshot.project_id,
     )?;
+    if accepted.run.intent != intent {
+        bail!("accepted scheduler run intent changed while loading its study snapshot");
+    }
+    crate::study::require_current_accepted_study_intent(store, &accepted)?;
+    accepted_run_step_is_ready_from_validated_snapshot(
+        store,
+        run_id,
+        step_id,
+        &accepted,
+        require_preparation_receipt,
+    )
+}
+
+fn accepted_run_step_is_ready_from_snapshot(
+    store: &SessionStore,
+    run_id: &RunId,
+    step_id: &str,
+    accepted: &crate::study::AcceptedStudySnapshot,
+    require_preparation_receipt: bool,
+) -> Result<bool> {
+    if accepted.run.intent.run_id != run_id.as_str()
+        || accepted.run.specification.run_id != *run_id
+    {
+        bail!("accepted scheduler snapshot belongs to another run");
+    }
+    let intent = store
+        .read_run_intent(run_id.as_str())?
+        .context("accepted scheduler requires an immutable run intent")?;
+    let specification: fullmag_application::RunSpecification =
+        serde_json::from_value(intent.specification.clone())
+            .context("accepted scheduler run specification is not typed")?;
+    if specification.run_id != *run_id || intent != accepted.run.intent {
+        bail!("accepted scheduler snapshot differs from the current run intent");
+    }
+    let Some(catalog) = store.read_run_catalog(run_id.as_str())? else {
+        return Ok(false);
+    };
+    if catalog.tasks.iter().all(|task| {
+        matches!(
+            task.lifecycle,
+            FmsTaskLifecycle::Succeeded
+                | FmsTaskLifecycle::Failed
+                | FmsTaskLifecycle::Cancelled
+                | FmsTaskLifecycle::Interrupted
+        )
+    }) {
+        return Ok(false);
+    }
+    crate::study::require_current_accepted_study_intent(store, accepted)?;
+    accepted_run_step_is_ready_from_validated_snapshot(
+        store,
+        run_id,
+        step_id,
+        accepted,
+        require_preparation_receipt,
+    )
+}
+
+fn accepted_run_step_is_ready_from_validated_snapshot(
+    store: &SessionStore,
+    run_id: &RunId,
+    step_id: &str,
+    accepted: &crate::study::AcceptedStudySnapshot,
+    require_preparation_receipt: bool,
+) -> Result<bool> {
     let study_step = accepted
         .study
         .steps
@@ -155,7 +258,7 @@ fn accepted_run_step_is_ready(
         .find(|step| step.step_id == step_id)
         .with_context(|| format!("accepted scheduler lowered step `{step_id}` is missing"))?;
     step_is_ready(
-        store, run_id, &accepted, study_step, execution_step,
+        store, run_id, accepted, study_step, execution_step,
         require_preparation_receipt,
     )
 }
@@ -206,23 +309,10 @@ fn step_is_ready(
                     study_step.step_id
                 )
             })?;
-        let scheduler_owned_accepted = durable_task.lifecycle == FmsTaskLifecycle::Accepted
-            && matches!(
-                &durable_task.readiness,
-                FmsTaskReadiness::Blocked { reason }
-                    if reason == crate::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION
-                        || (!require_preparation_receipt
-                            && reason == fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON)
-            )
-            && durable_task.attempt_id.is_none()
-            && durable_task.resource_id.is_none();
-        let unclaimed_queue = durable_task.lifecycle == FmsTaskLifecycle::Queued
-            && durable_task.readiness == FmsTaskReadiness::Ready
-            && durable_task.attempt_id.is_none()
-            && durable_task.resource_id.is_none();
-        if !scheduler_owned_accepted && !unclaimed_queue {
+        if !task_has_scheduler_eligible_catalog_state(durable_task, require_preparation_receipt) {
             return Ok(false);
         }
+        let scheduler_owned_accepted = durable_task.lifecycle == FmsTaskLifecycle::Accepted;
         if require_preparation_receipt
             && scheduler_owned_accepted
             && store
@@ -236,6 +326,27 @@ fn step_is_ready(
         Ok(dependencies_ready
             && inputs_are_automatically_resolvable(run_id.as_str(), &study_step.inputs, &catalog)?)
     })
+}
+
+fn task_has_scheduler_eligible_catalog_state(
+    task: &fullmag_session::FmsTaskCatalogEntry,
+    require_preparation_receipt: bool,
+) -> bool {
+    let scheduler_owned_accepted = task.lifecycle == FmsTaskLifecycle::Accepted
+        && matches!(
+            &task.readiness,
+            FmsTaskReadiness::Blocked { reason }
+                if reason == crate::ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION
+                    || (!require_preparation_receipt
+                        && reason == fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON)
+        )
+        && task.attempt_id.is_none()
+        && task.resource_id.is_none();
+    let unclaimed_queue = task.lifecycle == FmsTaskLifecycle::Queued
+        && task.readiness == FmsTaskReadiness::Ready
+        && task.attempt_id.is_none()
+        && task.resource_id.is_none();
+    scheduler_owned_accepted || unclaimed_queue
 }
 
 /// Select and durably dispatch one accepted task for the supplied resource.
@@ -255,7 +366,12 @@ pub fn schedule_next_ready_accepted_task(
         run_id,
         resource_offer,
         |_| Ok(true),
-        |task, claim, _| crate::commit_claimed_task_admission(store, task, claim).map(Some),
+        |task, claim, _, accepted| {
+            crate::claim::commit_claimed_task_admission_from_snapshot(
+                store, task, claim, accepted,
+            )
+            .map(Some)
+        },
     )
 }
 
@@ -287,7 +403,7 @@ pub fn schedule_next_ready_accepted_task_with_host(
                 Ok(true)
             }
         },
-        |task, claim, inputs| {
+        |task, claim, inputs, accepted| {
             if !host.has_current_compute_snapshot()? {
                 return Ok(None);
             }
@@ -298,8 +414,8 @@ pub fn schedule_next_ready_accepted_task_with_host(
                 placement,
                 host.expected_runtime_generation_sha256(),
             )?;
-            crate::try_commit_claimed_task_admission_with_host(
-                store, task, claim, ledger, &request, inputs,
+            crate::claim::try_commit_claimed_task_admission_with_host_from_snapshot(
+                store, task, claim, ledger, &request, inputs, accepted,
             )
         },
     )
@@ -314,9 +430,6 @@ pub fn resume_next_admitted_accepted_task_with_host(
     resource_id: &str,
     host: &crate::host_runtime::HostRuntimeAdmission,
 ) -> Result<Option<ScheduledAcceptedTask>> {
-    if !host.has_current_compute_snapshot()? {
-        return Ok(None);
-    }
     let intent = store
         .read_run_intent(run_id.as_str())?
         .context("accepted scheduler recovery requires an immutable run intent")?;
@@ -345,8 +458,20 @@ pub fn resume_next_admitted_accepted_task_with_host(
     }) {
         return Ok(None);
     }
+    // Idle resources, held runs and terminal tasks cannot be resumed. Do not
+    // acquire the host inventory writer for each such run/resource pair: those
+    // durable reads can otherwise starve an already spawned worker's launch
+    // validation. Real recovery still requires a current sample before loading
+    // its immutable input or touching the exact pending launch permit.
+    if !host.has_current_compute_snapshot()? {
+        return Ok(None);
+    }
     let accepted =
         crate::load_accepted_study_snapshot(store, run_id, &specification.snapshot.project_id)?;
+    if accepted.run.intent != intent {
+        bail!("accepted scheduler recovery intent changed while loading its study snapshot");
+    }
+    crate::study::require_current_accepted_study_intent(store, &accepted)?;
 
     let mut candidate: Option<(
         &fullmag_authoring::StudyStep,
@@ -420,7 +545,7 @@ pub fn resume_next_admitted_accepted_task_with_host(
         return Ok(None);
     }
     if let ClaimedTaskResourceCompatibility::Incompatible(reason) =
-        claimed_task_resource_compatibility(store, &claim)?
+        crate::claim::claimed_task_resource_compatibility_from_snapshot(store, &claim, &accepted)?
     {
         bail!("admitted accepted-task resource is no longer compatible: {reason:?}");
     }
@@ -600,9 +725,12 @@ pub fn resume_next_admitted_accepted_task_with_host(
             _ => bail!("persisted Prepare differs from immutable admitted task inputs"),
         }
     }
-    let prepared_step =
-        crate::load_accepted_worker_step(store, &specification.snapshot.project_id, &prepare)
-            .context("validating the exact admitted task Prepare")?;
+    let prepared_step = crate::study::load_accepted_worker_step_from_snapshot(
+        store,
+        &accepted,
+        &prepare,
+    )
+    .context("validating the exact admitted task Prepare")?;
     if prepared_step.step_id != study_step.step_id {
         bail!("persisted Prepare belongs to a different accepted study step");
     }
@@ -638,7 +766,7 @@ pub fn resume_next_admitted_accepted_task_with_host(
     }
     match checkpoint.pending.as_ref() {
         Some(pending) if pending == &prepare => {
-            crate::load_accepted_worker_step(store, &specification.snapshot.project_id, pending)
+            crate::study::load_accepted_worker_step_from_snapshot(store, &accepted, pending)
                 .context("revalidating pending admitted task Prepare")?;
             worker_inbox
                 .confirm_applied_preserving_store_writer_busy(pending)
@@ -656,10 +784,8 @@ pub fn resume_next_admitted_accepted_task_with_host(
             worker_inbox
                 .receive_preserving_store_writer_busy(&prepare, |envelope| {
                     retry_store_writer_busy(|| {
-                        crate::load_accepted_worker_step(
-                            store,
-                            &specification.snapshot.project_id,
-                            envelope,
+                        crate::study::load_accepted_worker_step_from_snapshot(
+                            store, &accepted, envelope,
                         )
                     })
                     .map(|_| ())
@@ -702,7 +828,11 @@ pub fn resume_next_admitted_accepted_task_with_host(
 
     let start = match start {
         Some(start) => start,
-        None => crate::publish_accepted_task_start(store, &mut coordinator)?,
+        None => crate::study::publish_accepted_task_start_from_snapshot(
+            store,
+            &accepted,
+            &mut coordinator,
+        )?,
     };
     const EXTERNAL_START_HANDOFF: &str =
         "accepted scheduler staged Start for external supervisor execution";
@@ -825,6 +955,7 @@ fn schedule_next_ready_accepted_task_with_admission(
         &fullmag_application::TaskRecord,
         &TaskClaim,
         &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+        &crate::study::AcceptedStudySnapshot,
     ) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>>,
 ) -> Result<Option<ScheduledAcceptedTask>> {
     let intent = store
@@ -843,6 +974,10 @@ fn schedule_next_ready_accepted_task_with_admission(
     }
     let accepted =
         crate::load_accepted_study_snapshot(store, run_id, &specification.snapshot.project_id)?;
+    if accepted.run.intent != intent {
+        bail!("accepted scheduler run intent changed while loading its study snapshot");
+    }
+    crate::study::require_current_accepted_study_intent(store, &accepted)?;
 
     for study_step in &accepted.study.steps {
         let execution_step = accepted
@@ -904,9 +1039,9 @@ fn schedule_next_ready_accepted_task_with_admission(
         }
 
         let queued = retry_store_writer_busy(|| {
-            crate::queue_accepted_study_task(
+            crate::study::queue_accepted_study_task_from_snapshot(
                 store,
-                &specification.snapshot.project_id,
+                &accepted,
                 run_id,
                 &study_step.step_id,
                 Default::default(),
@@ -916,12 +1051,14 @@ fn schedule_next_ready_accepted_task_with_admission(
         let mut task = queued.task;
         let claim = task.claim(resource_offer.clone())?;
         if let ClaimedTaskResourceCompatibility::Incompatible(_) =
-            claimed_task_resource_compatibility(store, &claim)?
+            crate::claim::claimed_task_resource_compatibility_from_snapshot(
+                store, &claim, &accepted,
+            )?
         {
             continue;
         }
         let Some(admission) =
-            retry_store_writer_busy(|| admit(&task, &claim, &queued.resolved_inputs))
+            retry_store_writer_busy(|| admit(&task, &claim, &queued.resolved_inputs, &accepted))
                 .context("durably admitting accepted task claim")?
         else {
             continue;
@@ -956,10 +1093,8 @@ fn schedule_next_ready_accepted_task_with_admission(
             worker_inbox
                 .receive_preserving_store_writer_busy(&prepare, |envelope| {
                     retry_store_writer_busy(|| {
-                        crate::load_accepted_worker_step(
-                            store,
-                            &specification.snapshot.project_id,
-                            envelope,
+                        crate::study::load_accepted_worker_step_from_snapshot(
+                            store, &accepted, envelope,
                         )
                     })
                     .map(|_| ())
@@ -969,10 +1104,8 @@ fn schedule_next_ready_accepted_task_with_admission(
             worker_inbox
                 .receive(&prepare, |envelope| {
                     retry_store_writer_busy(|| {
-                        crate::load_accepted_worker_step(
-                            store,
-                            &specification.snapshot.project_id,
-                            envelope,
+                        crate::study::load_accepted_worker_step_from_snapshot(
+                            store, &accepted, envelope,
                         )
                     })
                     .map(|_| ())
@@ -1004,7 +1137,11 @@ fn schedule_next_ready_accepted_task_with_admission(
                 event: WorkerEvent::Prepared,
             },
         )?;
-        let start = crate::publish_accepted_task_start(store, &mut coordinator)?;
+        let start = crate::study::publish_accepted_task_start_from_snapshot(
+            store,
+            &accepted,
+            &mut coordinator,
+        )?;
         const EXTERNAL_START_HANDOFF: &str =
             "accepted scheduler staged Start for external supervisor execution";
         if host_bound_admission {
@@ -1682,7 +1819,7 @@ mod accepted_start_tests {
             &fixture.run_id,
             offer(),
             |_| Ok(true),
-            |_task, _claim, _inputs| {
+            |_task, _claim, _inputs, _accepted| {
                 admission_calls.set(admission_calls.get() + 1);
                 Ok(None)
             },
@@ -1729,7 +1866,7 @@ mod accepted_start_tests {
             &fixture.run_id,
             offer(),
             |_| Ok(true),
-            |_task, _claim, _inputs| {
+            |_task, _claim, _inputs, _accepted| {
                 admission_calls.set(admission_calls.get() + 1);
                 Ok(None)
             },

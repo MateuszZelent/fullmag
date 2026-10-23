@@ -538,7 +538,10 @@ function resolveResourceRetryPolicy(
   if (policy === null) return undefined;
   return (
     policy ?? {
-      deadlineMs: 5_000,
+      // Large FEM resources can take longer than five seconds while native
+      // preparation shares the backend. Keep a bounded loading state instead
+      // of aborting a valid first response before the scene can be displayed.
+      deadlineMs: 30_000,
       maxAttempts: 3,
       retryAfterMs: errorRetryDelayMs(),
       retryableReasonCodes: DEFAULT_RESOURCE_RETRYABLE_REASON_CODES,

@@ -1,4 +1,5 @@
 //! File publication barriers. Power-loss qualification is platform-specific.
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -197,6 +198,29 @@ pub(crate) fn atomic_write_owner(dest: &Path, data: &[u8]) -> Result<()> {
         file.write_all(data)?;
         Ok(())
     })
+}
+
+/// Match only the unique sibling staging name created by `atomic_write_impl`
+/// (`.<hyphenated uuid v4>.part`). Other entries remain subject to each
+/// directory scanner's normal validation.
+pub(crate) fn is_atomic_write_staging_filename(filename: &OsStr) -> bool {
+    let Some(filename) = filename.to_str() else {
+        return false;
+    };
+    let Some(stem) = filename
+        .strip_prefix('.')
+        .and_then(|rest| rest.strip_suffix(".part"))
+    else {
+        return false;
+    };
+    stem.len() == 36
+        && uuid::Uuid::parse_str(stem)
+            .map(|uuid| {
+                uuid.get_version_num() == 4
+                    && uuid.get_variant() == uuid::Variant::RFC4122
+                    && uuid.hyphenated().to_string() == stem
+            })
+            .unwrap_or(false)
 }
 
 /// Publish a source file after verifying its complete content identity.

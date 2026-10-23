@@ -2148,3 +2148,44 @@ wyglądu, WebGL, API/native runtime ani pełnego pokrycia wszystkich tras.
 
 Retencja: cache przeglądarki i receipty we własnym named volume pozostawiono;
 bez usuwania zasobów i bez zmian obcych grup. Pełny audyt frontendu trwa.
+
+### 2026-10-23 — PR i integracja nowszego mastera
+
+Motyw zapisano i wypchnięto jako 5fd1f15d1510fffc71ff23fb494864a21d00a9c1;
+PR #249 do master zaktualizowany, nadal draft. CI bootstrap 39916129750
+używa synthetic merge 0a8ef6671a4f4f0196511c0a283e72f446451e0d z masterem
+ae8e570f2aa9655cb9fd8321c716b8d49a87e084. Znalezione blokery nie występują
+w poprzednim własnym HEAD: JSX apostrof w nowym RuntimeDegradedBanner;
+dwa testy serve() bez mocka nowego sibling cancellation helpera; audyt
+viewport idle traktujący obowiązkowy shell health polling 5 s jako ruch viewportu.
+Inspector actions browser job 120289999964 PASS. Nowa theme matrix pominięta
+przez wcześniejszy failing pre-proof; nie ma jeszcze jej render proof.
+
+Do czystego worktree włączono ten master bez konfliktów (merge oczekuje na
+weryfikację i commit). Zachowano jego zmiany, w tym kanonizację prezentacji µm
+w QuantityUnitSelect, przy utrzymaniu wspólnego select theme. Apostrof JSX
+poprawiony bez zmiany tekstu. Dwa testy startup activation mockują wyłącznie
+unclaimed cancellation jako no-op; prawdziwe helpery i pakowanie bez zmian.
+
+Audyt sieci nadal odrzuca wszystkie żądania viewport/data i pozostawia test
+zerowych settled R3F frames. Osobno kontroluje wyłącznie dokładny GET
+`<apiBase>/v2/platform/health`, bez query/obcego originu, z budżetem wynikającym
+z rzeczywistego czasu i odstępami minimum 4900 ms (5 s z tolerancją 100 ms).
+Pełny ślad idle zapisuje przed walidacją i jawnie nazywa tę granicę dowodu;
+nie deklaruje zerowej sieci całej strony. Brak ogólnego ignore lub wyłączania
+produkcyjnego monitoringu. Pięć interpretowanych regresji Node obejmuje legalny
+heartbeat, dłuższe okno, szybki loop, inne endpointy/metody/origin/query i timestampy.
+Jest wywoływane przez CI browser-fixture-pre-proof przed pomiarem.
+
+Dwa interpretowane testy Pythona i pięć Node oraz node --check audytu PASS:
+verification/frontend-production-source-286ed1ac6153449abdb034e5ba4ff422.json.
+Wykonano je w istniejącej grupie Compose, Python -B i temp w control volume;
+nie kompilowano ani nie uruchamiano TS/Rust unit tests. Komunikaty API/runtime
+w tych testach pochodzą z mocków, nie dowodzą uruchomionego API. Review helpera
+sieci bez P1/P2. Pełny typecheck/lint/architecture i kolejne CI pozostają bramką
+przed kwalifikacją zintegrowanego patcha. Runtime grupy bez restartu i resetu.
+
+Zintegrowane źródła: production typecheck, pełny ESLint całej aplikacji z
+max-warnings=0 oraz architecture hygiene PASS, stabilny fingerprint:
+verification/frontend-production-source-2ccbdd2414da4f97827ee817d2e805cb.json.
+To nie jest wynik wykonania TS unit tests ani browser matrix; te pozostają CI.

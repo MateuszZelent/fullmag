@@ -96,6 +96,7 @@ export interface Viewport3DDiagnosticsInput {
   surfaceColorStatus?: string | null;
   targetDiagnostics?: readonly Viewport3DTargetDiagnosticSummary[];
   topologyRevision: string | number | null;
+  topologyIndexStatus?: "idle" | "building" | "ready" | "error";
   tracker: Viewport3DResourceCounts;
   requestedRevision?: string | number | null;
   receivedRevision?: string | number | null;
@@ -487,6 +488,9 @@ export function buildViewport3DDiagnostics(
   return [
     `q:${input.quantityId}`,
     `top:${input.topologyRevision ?? "none"}`,
+    ...(input.topologyIndexStatus
+      ? [`topology-index:${input.topologyIndexStatus}`]
+      : []),
     `field:${input.fieldPayloadRevision ?? input.fieldRevision ?? "none"}`,
     ...formatFieldSyncDiagnostic(input),
     ...formatFieldRevisionSyncDiagnostic(input),

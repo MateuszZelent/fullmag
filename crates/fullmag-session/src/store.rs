@@ -26,7 +26,8 @@ use anyhow::{Context, Result};
 
 use crate::cas::CasStore;
 use crate::durability::{
-    atomic_write, atomic_write_verified_file, confirm_publication, sync_directory,
+    atomic_write, atomic_write_verified_file, confirm_publication,
+    is_atomic_write_staging_filename, sync_directory,
 };
 use crate::repository_path::{
     checked_path, create_parent, read_bounded_regular_file, reject_link, validate_store_id,
@@ -4146,6 +4147,9 @@ impl SessionStore {
             validate_store_id(&resource_id)?;
             for entry in fs::read_dir(resource_entry.path())? {
                 let entry = entry?;
+                if is_atomic_write_staging_filename(&entry.file_name()) {
+                    continue;
+                }
                 reject_link(&entry.path())?;
                 if !entry.file_type()?.is_file() {
                     anyhow::bail!("resource lease entry is not a regular file");
@@ -4200,6 +4204,9 @@ impl SessionStore {
             validate_store_id(&resource_id)?;
             for entry in fs::read_dir(resource_entry.path())? {
                 let entry = entry?;
+                if is_atomic_write_staging_filename(&entry.file_name()) {
+                    continue;
+                }
                 reject_link(&entry.path())?;
                 if !entry.file_type()?.is_file() {
                     anyhow::bail!("preparation resource lease is not a regular file");
@@ -5609,6 +5616,9 @@ impl SessionStore {
                 validate_store_id(&resource_id)?;
                 for lease_entry in fs::read_dir(resource_entry.path())? {
                     let lease_entry = lease_entry?;
+                    if is_atomic_write_staging_filename(&lease_entry.file_name()) {
+                        continue;
+                    }
                     reject_link(&lease_entry.path())?;
                     if !lease_entry.file_type()?.is_file() {
                         anyhow::bail!("preparation resource lease entry is not a file");
@@ -5773,6 +5783,9 @@ impl SessionStore {
             validate_store_id(&resource_id)?;
             for entry in fs::read_dir(resource.path())? {
                 let entry = entry?;
+                if is_atomic_write_staging_filename(&entry.file_name()) {
+                    continue;
+                }
                 reject_link(&entry.path())?;
                 if !entry.file_type()?.is_file() {
                     anyhow::bail!("solver lease entry is not a regular file");
@@ -6259,6 +6272,9 @@ impl SessionStore {
             }
             for lease_entry in fs::read_dir(&resource_dir)? {
                 let lease_entry = lease_entry?;
+                if is_atomic_write_staging_filename(&lease_entry.file_name()) {
+                    continue;
+                }
                 reject_link(&lease_entry.path())?;
                 if !lease_entry.file_type()?.is_file() {
                     anyhow::bail!("resource lease entry is not a file");
@@ -6316,6 +6332,9 @@ impl SessionStore {
             }
             for lease_entry in fs::read_dir(&resource_dir)? {
                 let lease_entry = lease_entry?;
+                if is_atomic_write_staging_filename(&lease_entry.file_name()) {
+                    continue;
+                }
                 reject_link(&lease_entry.path())?;
                 if !lease_entry.file_type()?.is_file() {
                     anyhow::bail!("preparation resource lease entry is not a file");

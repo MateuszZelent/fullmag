@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import path from "node:path";
+import { assertViewportIdleNetwork } from "./lib/viewport-idle-network.mjs";
 
 import {
   assertNoSettledR3FFrames,
@@ -207,7 +208,7 @@ page.on("response", (response) => {
 page.on("request", (request) => {
   if (!auditActive) return;
   const requestUrl = request.url();
-  auditedRequests.push(`${request.method()} ${requestUrl}`);
+  auditedRequests.push({ method: request.method(), url: requestUrl, atMs: performance.now() });
   if (requestUrl.includes("/v2/sessions/current/data/fields/")) {
     fieldRequests.push(`${request.method()} ${requestUrl}`);
   }
@@ -428,6 +429,7 @@ try {
   if (injectIdleLoop) {
     await injectViewportIdleLoop(page);
   }
+  const idleNetworkStart = performance.now();
   const idleRequestStart = auditedRequests.length;
   const idlePerformanceBefore = await captureViewportPerformanceSnapshot(page, "idle-before");
   const idle = await verifyViewportIdle(page, 5_000);
@@ -435,11 +437,13 @@ try {
   assertNoSettledR3FFrames(idlePerformanceBefore, idlePerformanceAfter, idle.observeMs);
   rawPerformanceTrace.push(idlePerformanceBefore, idlePerformanceAfter);
   const idleRequests = auditedRequests.slice(idleRequestStart);
-  if (idleRequests.length > 0) {
-    throw new Error(
-      `Viewport issued resource requests during the ${idle.observeMs}ms idle window:\n${idleRequests.join("\n")}`,
-    );
-  }
+  const idleNetworkEnd = performance.now();
+  await writeFile(path.join(auditArtifactsDirectory, "idle-network-requests.json"), JSON.stringify({
+    startMs: idleNetworkStart, endMs: idleNetworkEnd, requests: idleRequests,
+  }, null, 2));
+  idle.network = assertViewportIdleNetwork({
+    requests: idleRequests, apiBase, startMs: idleNetworkStart, endMs: idleNetworkEnd,
+  });
   auditActive = false;
   const fidelity = await assertCanvasHasFidelity(page);
   if (injectBlankScene) {

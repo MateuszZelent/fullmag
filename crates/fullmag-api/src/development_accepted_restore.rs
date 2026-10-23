@@ -331,10 +331,13 @@ pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
     }
     let snapshot =
         build_snapshot(&state.current_workspace_root, &loaded).map_err(|error| error.to_string())?;
-    *state.current_live_state.write().await = Some(snapshot);
-    state
-        .current_live_session_epoch
-        .store(loaded.session_epoch, Ordering::Release);
+    {
+        let mut current = state.current_live_state.write().await;
+        state
+            .current_live_session_epoch
+            .store(loaded.session_epoch, Ordering::Release);
+        *current = Some(snapshot);
+    }
     drop(_transition);
     checkpoint.complete();
 

@@ -24,6 +24,19 @@ const SUPERVISOR_DIRECTORY: &str = "supervisor-slots";
 const LEGACY_SINGLE_WORKER_SLOT: &str = "slot-0";
 const SLOT_OWNER_FILE: &str = "owner.v2.json";
 
+/// Only emitted before launch authorization and worker process creation.
+/// The durable claim and Start remain available to the admitted-task resume path.
+#[derive(Debug)]
+pub(crate) struct WorkerLaunchDeferred;
+
+impl std::fmt::Display for WorkerLaunchDeferred {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("worker launch deferred before authorization; no worker was spawned")
+    }
+}
+
+impl std::error::Error for WorkerLaunchDeferred {}
+
 #[derive(Debug)]
 pub(crate) struct SupervisedWorkerResult {
     pub(crate) recovered_terminal_completion: bool,
@@ -31,6 +44,12 @@ pub(crate) struct SupervisedWorkerResult {
     pub(crate) worker_cancelled: bool,
     pub(crate) retry_scheduled: bool,
     pub(crate) worker_summary: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FinalHeartbeatReconciliation {
+    Reconciled,
+    Unacknowledged { sequence: u64 },
 }
 
 struct ObservedWorkerProcess {
@@ -479,7 +498,22 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     }
     let _allocated_cpu_millis = lease.budget.cpu_millis;
     let (gpu_uuid, cpu_ids, _cpu_capacity_millis) = if let Some(host) = host {
-        verify_host_solver_claim_before_spawn(host, store, &claim)?;
+        if let Err(error) = verify_host_solver_claim_before_spawn(host, store, &claim) {
+            if error.chain().any(|cause| {
+                cause.is::<fullmag_session::StoreWriterBusy>()
+                    || cause.is::<
+                        fullmag_session::host_resource_ledger::TransientGpuInventoryUnavailable,
+                    >()
+            }) {
+                // No launch token has been issued and no child exists. Release
+                // only this supervision slot, retaining the exact lease/Start.
+                // The scheduler can resume admission after servicing drain and
+                // cancellation instead of treating contention as owner failure.
+                slot.release().context("release deferred worker supervision slot")?;
+                return Err(error.context(WorkerLaunchDeferred));
+            }
+            return Err(error);
+        }
         let placement = host.solver_placement(&lease.resource_id)?;
         let snapshot = host
             .current_compute_node_snapshot()?
@@ -682,17 +716,37 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
         }
     };
     accepted_supervisor_test_fail_after_process_exit_receipt()?;
-    if let Err(error) = final_heartbeat_result {
-        slot.retain_for_reconciliation();
-        return Err(error.context(format!(
-            "reconcile final worker-acknowledged resource heartbeat; {}",
-            worker_failure_reason(&outcome)
-        )));
+    match final_heartbeat_result {
+        Ok(FinalHeartbeatReconciliation::Reconciled) => {}
+        Ok(FinalHeartbeatReconciliation::Unacknowledged { sequence })
+            if !process_exit_receipt.status_success =>
+        {
+            tracing::warn!(
+                run_id = %process_exit_receipt.run_id,
+                task_id = %process_exit_receipt.task_id,
+                receipt_id = %process_exit_receipt.receipt_id,
+                heartbeat_sequence = sequence,
+                "reaped failed worker left one exact heartbeat unacknowledged; reconcile terminal outcome without inventing an acknowledgement"
+            );
+        }
+        Ok(FinalHeartbeatReconciliation::Unacknowledged { sequence }) => {
+            slot.retain_for_reconciliation();
+            return Err(anyhow::anyhow!(
+                "successful worker process exit left heartbeat sequence {sequence} unacknowledged; terminal completion remains unproven"
+            ));
+        }
+        Err(error) => {
+            slot.retain_for_reconciliation();
+            return Err(error.context(format!(
+                "reconcile final worker-acknowledged resource heartbeat; {}",
+                worker_failure_reason(&outcome)
+            )));
+        }
     }
     let reconciliation = reconcile_worker_exit(
         store,
         &claim,
-        &active_lease,
+        &receipt_lease,
         &process_exit_receipt,
         Some(&outcome.output),
         max_automatic_retries,
@@ -725,7 +779,7 @@ fn verify_host_solver_claim_before_spawn(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
 ) -> Result<()> {
-    retry_store_writer_busy(|| host.ensure_solver_claim_committed(store, claim))
+    retry_host_worker_launch(|| host.ensure_solver_claim_committed(store, claim), || {})
         .context("verify committed host solver claim before worker spawn")
 }
 
@@ -738,22 +792,47 @@ fn authorize_host_worker_launch(
         .context("authorize host worker launch")
 }
 
-fn retry_host_worker_launch(
-    mut operation: impl FnMut() -> Result<String>,
-    mut on_busy: impl FnMut(),
-) -> Result<String> {
-    fullmag_runtime_control::retry_store_writer_busy(|| match operation() {
-        Ok(token) => Ok(token),
-        Err(error)
-            if error
-                .chain()
-                .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()) =>
-        {
-            on_busy();
+fn retry_host_worker_launch<T>(
+    mut operation: impl FnMut() -> Result<T>,
+    mut on_retry: impl FnMut(),
+) -> Result<T> {
+    use std::hash::{Hash, Hasher};
+
+    // Both retryable errors precede one-shot permit consumption: writer
+    // contention prevents admission locks, and a transient GPU sample is
+    // returned by the read-only inventory validation.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut attempt = 0_u64;
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
             Err(error)
+                if error.chain().any(|cause| {
+                    cause.is::<fullmag_session::StoreWriterBusy>()
+                        || cause.is::<
+                            fullmag_session::host_resource_ledger::TransientGpuInventoryUnavailable,
+                        >()
+                }) && Instant::now() < deadline =>
+            {
+                on_retry();
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                std::process::id().hash(&mut hasher);
+                std::thread::current().id().hash(&mut hasher);
+                attempt.hash(&mut hasher);
+                let inventory_unavailable = error.chain().any(|cause| {
+                    cause.is::<fullmag_session::host_resource_ledger::TransientGpuInventoryUnavailable>()
+                });
+                let delay = if inventory_unavailable {
+                    Duration::from_secs(1)
+                } else {
+                    Duration::from_millis(5 + hasher.finish() % 36)
+                };
+                attempt = attempt.saturating_add(1);
+                std::thread::sleep(delay.min(deadline.saturating_duration_since(Instant::now())));
+            }
+            Err(error) => return Err(error),
         }
-        Err(error) => Err(error),
-    })
+    }
 }
 
 fn finish_host_worker_exit(
@@ -949,22 +1028,72 @@ fn reconcile_final_resource_heartbeat(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
     lease: &mut FmsResourceLease,
-) -> Result<()> {
+) -> Result<FinalHeartbeatReconciliation> {
     reconcile_acknowledged_resource_lease(store, claim, lease)?;
     let recovered =
         retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
             .context("recover final accepted-worker heartbeat state")?;
-    if recovered.commands.iter().any(|command| {
-        matches!(
-            &command.command,
-            WorkerCommand::Heartbeat {
-                lease_heartbeat_sequence
-            } if *lease_heartbeat_sequence > lease.heartbeat_sequence
-        )
+    classify_final_heartbeat_reconciliation(
+        &recovered.commands,
+        &recovered.events,
+        lease.heartbeat_sequence,
+    )
+}
+
+fn classify_final_heartbeat_reconciliation(
+    commands: &[fullmag_application::WorkerCommandEnvelope],
+    events: &[fullmag_application::WorkerEventEnvelope],
+    current_lease_sequence: u64,
+) -> Result<FinalHeartbeatReconciliation> {
+    for sequence in commands.iter().filter_map(|command| match &command.command {
+        WorkerCommand::Heartbeat {
+            lease_heartbeat_sequence,
+        } => Some(*lease_heartbeat_sequence),
+        _ => None,
     }) {
-        bail!("accepted worker exited with an unacknowledged heartbeat command");
+        let acknowledged = events.iter().any(|event| {
+            matches!(
+                &event.event,
+                WorkerEvent::HeartbeatAck {
+                    lease_heartbeat_sequence
+                } if *lease_heartbeat_sequence == sequence
+            )
+        });
+        if sequence <= current_lease_sequence && !acknowledged {
+            bail!("resource lease advanced beyond an unacknowledged worker heartbeat");
+        }
     }
-    Ok(())
+    let pending_heartbeats = commands
+        .iter()
+        .filter_map(|command| match &command.command {
+            WorkerCommand::Heartbeat {
+                lease_heartbeat_sequence,
+            } if *lease_heartbeat_sequence > current_lease_sequence => {
+                Some(*lease_heartbeat_sequence)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if pending_heartbeats.is_empty() {
+        return Ok(FinalHeartbeatReconciliation::Reconciled);
+    }
+    let expected = current_lease_sequence
+        .checked_add(1)
+        .context("accepted-worker resource lease heartbeat sequence exhausted")?;
+    if pending_heartbeats.len() != 1
+        || pending_heartbeats[0] != expected
+        || events.iter().any(|event| {
+            matches!(
+                &event.event,
+                WorkerEvent::HeartbeatAck {
+                    lease_heartbeat_sequence
+                } if *lease_heartbeat_sequence == expected
+            )
+        })
+    {
+        bail!("accepted worker exited with an ambiguous final heartbeat history");
+    }
+    Ok(FinalHeartbeatReconciliation::Unacknowledged { sequence: expected })
 }
 
 fn spawn_worker<H, C>(
@@ -1476,6 +1605,24 @@ fn reconcile_worker_exit(
     let recovered =
         retry_store_writer_busy(|| fullmag_runtime_control::recover_coordinator(store, claim))
             .context("recover coordinator after worker exit")?;
+    let final_heartbeat_reconciliation = classify_final_heartbeat_reconciliation(
+        &recovered.commands,
+        &recovered.events,
+        lease.heartbeat_sequence,
+    )?;
+    let failed_exit_with_unacknowledged_heartbeat = !process_exit.status_success
+        && matches!(
+            final_heartbeat_reconciliation,
+            FinalHeartbeatReconciliation::Unacknowledged { .. }
+        );
+    if process_exit.status_success
+        && matches!(
+            final_heartbeat_reconciliation,
+            FinalHeartbeatReconciliation::Unacknowledged { sequence: _ }
+        )
+    {
+        bail!("successful worker process exit left its final heartbeat unacknowledged");
+    }
     let phase = recovered.coordinator.phase();
     let checkpoint = recovered.coordinator.checkpoint();
     let starts = recovered
@@ -1620,30 +1767,43 @@ fn reconcile_worker_exit(
     }
 
     if let Some(reason) = retryable_failure_reason {
-        if let Some(decision) =
-            automatic_retry_decision(store, claim, lease, &reason, max_automatic_retries)?
-        {
-            retry_store_writer_busy(|| store.commit_retry_decision(&decision))
-                .context("persist automatic retry decision before releasing its lease")?;
-            accepted_supervisor_test_fail_after_retry_decision()?;
-            retry_store_writer_busy(|| store.release_resource_lease(lease))
-                .context("release failed worker resource lease after durable retry decision")?;
-            retry_store_writer_busy(|| store.apply_retry_decision(&decision))
-                .context("apply automatic retry decision after explicit lease release")?;
-            return Ok(SupervisedWorkerResult {
-                recovered_terminal_completion: false,
-                worker_timed_out: process_exit.timed_out,
-                worker_cancelled: false,
-                retry_scheduled: true,
-                worker_summary: serde_json::json!({
-                    "status": "retry_scheduled",
-                    "exit_code": process_exit.exit_code,
-                }),
-            });
+        if !failed_exit_with_unacknowledged_heartbeat {
+            if let Some(decision) =
+                automatic_retry_decision(store, claim, lease, &reason, max_automatic_retries)?
+            {
+                retry_store_writer_busy(|| store.commit_retry_decision(&decision))
+                    .context("persist automatic retry decision before releasing its lease")?;
+                accepted_supervisor_test_fail_after_retry_decision()?;
+                retry_store_writer_busy(|| store.release_resource_lease(lease))
+                    .context("release failed worker resource lease after durable retry decision")?;
+                retry_store_writer_busy(|| store.apply_retry_decision(&decision))
+                    .context("apply automatic retry decision after explicit lease release")?;
+                return Ok(SupervisedWorkerResult {
+                    recovered_terminal_completion: false,
+                    worker_timed_out: process_exit.timed_out,
+                    worker_cancelled: false,
+                    retry_scheduled: true,
+                    worker_summary: serde_json::json!({
+                        "status": "retry_scheduled",
+                        "exit_code": process_exit.exit_code,
+                    }),
+                });
+            }
         }
         retry_store_writer_busy(|| store.release_resource_lease(lease))
             .context("release failed worker resource lease after terminal process exit")?;
-        bail!("accepted worker failed before entering a durable side effect: {reason}");
+        return Ok(SupervisedWorkerResult {
+            recovered_terminal_completion: false,
+            worker_timed_out: process_exit.timed_out,
+            worker_cancelled: false,
+            retry_scheduled: false,
+            worker_summary: serde_json::json!({
+                "status": "failed",
+                "exit_code": process_exit.exit_code,
+                "failure_reason": reason,
+                "process_exit_receipt_id": process_exit.receipt_id,
+            }),
+        });
     }
 
     if phase == CoordinatorPhase::Terminal {
@@ -1750,19 +1910,43 @@ fn receipt_lease_after_final_heartbeat(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
     active_lease: &FmsResourceLease,
-    final_heartbeat_result: &Result<()>,
+    final_heartbeat_result: &Result<FinalHeartbeatReconciliation>,
 ) -> Result<FmsResourceLease> {
-    if final_heartbeat_result.is_ok() {
+    if matches!(
+        final_heartbeat_result,
+        Ok(FinalHeartbeatReconciliation::Reconciled)
+    ) {
         return Ok(active_lease.clone());
     }
-    retry_store_writer_busy(|| {
+    let lease = retry_store_writer_busy(|| {
         store.read_resource_lease(
             claim.run_id.as_str(),
             active_lease.resource_id.as_str(),
             active_lease.lease_token.as_str(),
         )
     })?
-    .context("active resource lease disappeared after final heartbeat failure")
+    .context("active resource lease disappeared after final heartbeat reconciliation")?;
+    if let Ok(FinalHeartbeatReconciliation::Unacknowledged { sequence }) =
+        final_heartbeat_result
+    {
+        let expected = lease
+            .heartbeat_sequence
+            .checked_add(1)
+            .context("accepted-worker resource lease heartbeat sequence exhausted")?;
+        if lease.state != fullmag_session::FmsResourceLeaseState::Active
+            || lease.run_id != claim.run_id.as_str()
+            || lease.task_id != claim.task_id.as_str()
+            || lease.attempt_id != claim.attempt_id.as_str()
+            || lease.ownership_epoch != claim.ownership_epoch.value()
+            || lease.resource_id != active_lease.resource_id
+            || lease.lease_token != active_lease.lease_token
+            || lease.heartbeat_sequence != active_lease.heartbeat_sequence
+            || *sequence != expected
+        {
+            bail!("unacknowledged worker heartbeat no longer matches the exact active lease");
+        }
+    }
+    Ok(lease)
 }
 
 fn persist_worker_process_exit_receipt(
@@ -1888,6 +2072,24 @@ fn reconcile_durable_worker_exit_before_spawn(
                     "receipt_id": receipt.receipt_id,
                 }),
             })),
+            fullmag_session::FmsTaskLifecycle::Failed if !receipt.status_success => {
+                let failure_reason = receipt
+                    .failure_reason
+                    .as_deref()
+                    .context("failed worker process exit receipt has no reason")?;
+                Ok(Some(SupervisedWorkerResult {
+                    recovered_terminal_completion: false,
+                    worker_timed_out: receipt.timed_out,
+                    worker_cancelled: false,
+                    retry_scheduled: false,
+                    worker_summary: serde_json::json!({
+                        "status": "failed",
+                        "exit_code": receipt.exit_code,
+                        "failure_reason": failure_reason,
+                        "process_exit_receipt_id": receipt.receipt_id,
+                    }),
+                }))
+            }
             _ => bail!(
                 "worker process exit receipt has no active lease and no reconciled terminal outcome"
             ),
@@ -2069,11 +2271,21 @@ fn worker_failure_reason(outcome: &ObservedWorkerProcess) -> String {
         return "accepted worker process exceeded its explicit timeout and was terminated".into();
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let normalized = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Startup and native solver diagnostics precede the actual failure. Keep
+    // the worker's explicit error chain (or the stderr tail), not just a
+    // successful initialization banner when the bounded receipt is written.
+    let failure = stderr
+        .rsplit_once("accepted worker failed:")
+        .map(|(_, failure)| failure)
+        .unwrap_or(stderr.as_ref());
+    let normalized = failure.split_whitespace().collect::<Vec<_>>().join(" ");
     let detail = if normalized.is_empty() {
         format!("exit code {:?}", output.status.code())
     } else {
-        normalized.chars().take(512).collect()
+        normalized
+            .chars()
+            .skip(normalized.chars().count().saturating_sub(512))
+            .collect()
     };
     format!("accepted worker process failed: {detail}")
 }
@@ -2653,7 +2865,7 @@ mod tests {
             .store
             .heartbeat_resource_lease(&durable_lease)
             .unwrap();
-        let final_heartbeat_result: Result<()> = Err(anyhow::anyhow!(
+        let final_heartbeat_result: Result<FinalHeartbeatReconciliation> = Err(anyhow::anyhow!(
             "accepted worker exited with an unacknowledged heartbeat command"
         ));
         let receipt_lease = receipt_lease_after_final_heartbeat(

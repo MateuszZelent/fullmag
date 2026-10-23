@@ -130,6 +130,29 @@ export interface Viewport3DTopologyRenderModel<
   positions: Float32Array;
 }
 
+export function buildViewport3DRenderableMeshPartKey(
+  partId: string,
+  topologyModel: Pick<
+    Viewport3DTopologyRenderModel,
+    "meshGenerationId" | "meshRevision" | "meshTopologyHash"
+  > | null,
+  sessionIdentity: {
+    sessionId: string;
+    sessionEpoch: string;
+    requestScopeEpoch: string;
+  } | null | undefined,
+): string {
+  return JSON.stringify([
+    sessionIdentity?.sessionId ?? null,
+    sessionIdentity?.sessionEpoch ?? null,
+    sessionIdentity?.requestScopeEpoch ?? null,
+    topologyModel?.meshGenerationId ?? null,
+    topologyModel?.meshRevision ?? null,
+    topologyModel?.meshTopologyHash ?? null,
+    partId,
+  ]);
+}
+
 export const EMPTY_VIEWPORT_3D_TOPOLOGY_INDICES = new Uint32Array();
 const EMPTY_VIEWPORT_3D_NODE_SELECTION: Viewport3DNodeSelection = {
   nodeIndices: [],

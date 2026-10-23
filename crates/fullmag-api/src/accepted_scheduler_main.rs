@@ -805,6 +805,23 @@ fn run_scheduler(
             .context("finished scheduler worker handle disappeared")?;
         let completed = match worker.handle.join() {
             Ok(Ok(completed)) => completed,
+            Ok(Err(error))
+                if error
+                    .downcast_ref::<accepted_study_supervisor::WorkerLaunchDeferred>()
+                    .is_some() =>
+            {
+                // This typed outcome is produced only before launch permission
+                // and spawn. Keep the admitted claim and its original Start;
+                // the next pass checks shutdown/cancellation and resumes it.
+                // Never classify arbitrary post-spawn errors as safe to retry.
+                tracing::warn!(
+                    resource_id = %resource_id,
+                    error = ?error,
+                    "compute scheduler deferred worker launch; runtime remains available"
+                );
+                std::thread::sleep(args.idle_poll_interval);
+                continue;
+            }
             Ok(Err(error)) => {
                 return Err(error).context("supervise scheduled accepted worker");
             }
@@ -829,10 +846,31 @@ fn run_scheduler(
                     .as_ref()
                     .map(|run_id| run_id.as_str().to_owned()),
             };
-            retry_store_writer_busy(|| {
-                store.commit_scheduler_pool_checkpoint(checkpoint_sequence, &checkpoint)
-            })
-            .context("commit scheduler pool checkpoint")?;
+            // The worker has already completed. Retain that outcome while a
+            // competing writer finishes; never replay admission or execution
+            // just because publishing this scheduler cursor was deferred.
+            let mut checkpoint_deferred = false;
+            loop {
+                match retry_store_writer_busy(|| {
+                    store.commit_scheduler_pool_checkpoint(checkpoint_sequence, &checkpoint)
+                }) {
+                    Ok(_) => break,
+                    Err(error) if is_store_writer_busy(&error) => {
+                        if !checkpoint_deferred {
+                            eprintln!("{}", serde_json::json!({
+                                "schema_version": "scheduler_checkpoint_deferred.v1",
+                                "component": "accepted_compute_scheduler",
+                                "run_id": completed.run_id.as_str(),
+                                "task_id": completed.scheduled.claim.task_id.as_str(),
+                                "detail": format!("{error:#}"),
+                            }));
+                            checkpoint_deferred = true;
+                        }
+                        std::thread::sleep(args.idle_poll_interval);
+                    }
+                    Err(error) => return Err(error).context("commit scheduler pool checkpoint"),
+                }
+            }
             checkpoint_sequence = checkpoint.sequence;
         }
         executed.push(serde_json::json!({
@@ -1031,6 +1069,23 @@ fn classify_scheduler_operation<T>(result: Result<T>) -> Result<SchedulerOperati
                 error = ?error,
                 "compute scheduler deferred an operation while the session store writer is busy"
             );
+            Ok(SchedulerOperation::Deferred)
+        }
+        Err(error)
+            if error.chain().any(|cause| {
+                cause.is::<fullmag_session::host_resource_ledger::TransientGpuInventoryUnavailable>()
+            }) =>
+        {
+            // A failed telemetry sample is not a failed scheduler. Admission
+            // has not proven a current GPU allocation; keep the accepted task
+            // pending and let the next pass reconcile durable state and read
+            // a fresh inventory. Never admit from last-known GPU telemetry.
+            eprintln!("{}", serde_json::json!({
+                "schema_version": "scheduler_admission_deferred.v1",
+                "component": "accepted_compute_scheduler",
+                "reason": "gpu_inventory_temporarily_unavailable",
+                "detail": format!("{error:#}"),
+            }));
             Ok(SchedulerOperation::Deferred)
         }
         Err(error) => Err(error),

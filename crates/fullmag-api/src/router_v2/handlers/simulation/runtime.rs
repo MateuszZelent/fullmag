@@ -81,7 +81,7 @@ pub struct HysteresisExecutionTreeQuery {
 pub async fn get_simulation_preparation(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SimulationPreparationResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()

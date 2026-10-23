@@ -35,6 +35,122 @@ pub(crate) struct TerminalPreparationFinalizationPending {
     source: anyhow::Error,
 }
 
+/// A store-writer conflict before the durable launch barrier. The scheduler
+/// may repeat the complete preflight with its retained lease; this type must
+/// never be used after `commit_preparation_process_launch` succeeds.
+pub(crate) struct PrelaunchPreparationPending {
+    run_id: String,
+    task_id: String,
+    resource_id: String,
+    preparation_attempt_id: String,
+    lease_token: String,
+    stage: &'static str,
+    source: anyhow::Error,
+}
+
+impl std::fmt::Debug for PrelaunchPreparationPending {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PrelaunchPreparationPending")
+            .field("run_id", &self.run_id)
+            .field("task_id", &self.task_id)
+            .field("resource_id", &self.resource_id)
+            .field("preparation_attempt_id", &self.preparation_attempt_id)
+            .field("stage", &self.stage)
+            .finish()
+    }
+}
+
+impl std::fmt::Display for PrelaunchPreparationPending {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "prelaunch preparation deferred at `{}` for run `{}`, task `{}`, resource `{}`, attempt `{}`",
+            self.stage,
+            self.run_id,
+            self.task_id,
+            self.resource_id,
+            self.preparation_attempt_id,
+        )
+    }
+}
+
+impl std::error::Error for PrelaunchPreparationPending {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+impl PrelaunchPreparationPending {
+    pub(crate) fn matches_lease(&self, lease: &FmsPreparationResourceLease) -> bool {
+        self.run_id == lease.run_id
+            && self.task_id == lease.task_id
+            && self.resource_id == lease.resource_id
+            && self.preparation_attempt_id == lease.preparation_attempt_id
+            && self.lease_token == lease.lease_token
+    }
+
+    pub(crate) fn stage(&self) -> &'static str {
+        self.stage
+    }
+}
+
+/// Preserve only typed writer contention. In particular, an already-observed
+/// process exit keeps its separate terminal-finalization retry contract.
+pub(crate) fn defer_prelaunch_writer_contention<T>(
+    run_id: &str,
+    task_id: &str,
+    resource_id: &str,
+    preparation_attempt_id: &str,
+    lease_token: &str,
+    stage: &'static str,
+    result: Result<T>,
+) -> Result<T> {
+    result.map_err(|error| {
+        if error
+            .chain()
+            .any(|cause| cause.is::<PrelaunchPreparationPending>())
+            || error
+                .chain()
+                .any(|cause| cause.is::<TerminalPreparationFinalizationPending>())
+        {
+            return error;
+        }
+        if error
+            .chain()
+            .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+        {
+            anyhow::Error::new(PrelaunchPreparationPending {
+                run_id: run_id.to_owned(),
+                task_id: task_id.to_owned(),
+                resource_id: resource_id.to_owned(),
+                preparation_attempt_id: preparation_attempt_id.to_owned(),
+                lease_token: lease_token.to_owned(),
+                stage,
+                source: error,
+            })
+        } else {
+            error
+        }
+    })
+}
+
+pub(crate) fn defer_prelaunch_writer_contention_for_lease<T>(
+    lease: &FmsPreparationResourceLease,
+    stage: &'static str,
+    result: Result<T>,
+) -> Result<T> {
+    defer_prelaunch_writer_contention(
+        &lease.run_id,
+        &lease.task_id,
+        &lease.resource_id,
+        &lease.preparation_attempt_id,
+        &lease.lease_token,
+        stage,
+        result,
+    )
+}
+
 impl std::fmt::Display for TerminalPreparationFinalizationPending {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("observed preparation exit awaits persistence or finalization")
@@ -82,6 +198,22 @@ pub(crate) struct SupervisedPreparationResult {
     pub(crate) finalization: PreparationProcessFinalizationDisposition,
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
+}
+
+struct PrelaunchReady {
+    active_lease: FmsPreparationResourceLease,
+    cpu_ids: BTreeSet<u32>,
+    thread_environment: Vec<(&'static str, Option<String>)>,
+    cpu_rate_limit: Option<u32>,
+    linux_cgroup: Option<owned_worker_process::LinuxWorkerCgroup>,
+    recovered_launch: bool,
+    launch: FmsPreparationProcessLaunch,
+    spawn_supervisor_start_token: Option<String>,
+}
+
+enum PrelaunchOutcome {
+    Ready(PrelaunchReady),
+    Finalized(SupervisedPreparationResult),
 }
 
 struct ObservedPreparationProcess {
@@ -137,135 +269,206 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
     if heartbeat_interval.is_zero() {
         bail!("preparation heartbeat interval must be greater than zero");
     }
-    let mut active_lease = retry_store_writer_busy(|| {
-        store.read_preparation_resource_lease(run_id, resource_id, lease_token)
-    })?
-    .context("preparation supervisor requires its durable resource lease")?;
-    if active_lease.task_id != task_id
-        || active_lease.preparation_attempt_id != preparation_attempt_id
-    {
-        bail!("preparation supervisor lease identity does not match its task attempt");
-    }
+    let (prelaunch_stage, preflight) = {
+        let mut stage = "read durable preparation resource lease";
+        let result = (|| -> Result<PrelaunchOutcome> {
+            let mut active_lease = retry_store_writer_busy(|| {
+                store.read_preparation_resource_lease(run_id, resource_id, lease_token)
+            })
+            .context("preflight: read durable preparation resource lease")?
+            .context("preparation supervisor requires its durable resource lease")?;
+            if active_lease.task_id != task_id
+                || active_lease.preparation_attempt_id != preparation_attempt_id
+            {
+                bail!("preparation supervisor lease identity does not match its task attempt");
+            }
 
-    if host.is_none() && active_lease.host_launch_binding.is_some() {
-        bail!("host-bound preparation lease requires its pinned host supervisor context");
-    }
-    let matching_exits =
-        retry_store_writer_busy(|| store.list_preparation_process_exit_receipts(run_id))?
+            if host.is_none() && active_lease.host_launch_binding.is_some() {
+                bail!("host-bound preparation lease requires its pinned host supervisor context");
+            }
+            stage = "read durable preparation process exit receipts";
+            let matching_exits = retry_store_writer_busy(|| {
+                store.list_preparation_process_exit_receipts(run_id)
+            })
+            .context("preflight: read durable preparation process exit receipts")?
             .into_iter()
             .filter(|receipt| receipt_matches_lease(receipt, &active_lease))
             .collect::<Vec<_>>();
-    if matching_exits.len() > 1 {
-        bail!("preparation attempt has multiple durable process exit receipts");
-    }
-    if let Some(receipt) = matching_exits.into_iter().next() {
-        let finalization = finalize_preparation_exit(store, &receipt, host)?;
-        return Ok(SupervisedPreparationResult {
-            recovered: true,
-            timed_out: receipt.timed_out,
-            status_success: receipt.status_success,
-            exit_code: receipt.exit_code,
-            finalization,
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-        });
-    }
-    if active_lease.state != FmsResourceLeaseState::Active {
-        bail!("preparation supervisor found a released lease without a durable process exit");
-    }
+            if matching_exits.len() > 1 {
+                bail!("preparation attempt has multiple durable process exit receipts");
+            }
+            if let Some(receipt) = matching_exits.into_iter().next() {
+                stage = "finalize previously observed preparation exit";
+                let finalization = finalize_preparation_exit(store, &receipt, host)?;
+                return Ok(PrelaunchOutcome::Finalized(SupervisedPreparationResult {
+                    recovered: true,
+                    timed_out: receipt.timed_out,
+                    status_success: receipt.status_success,
+                    exit_code: receipt.exit_code,
+                    finalization,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                }));
+            }
+            if active_lease.state != FmsResourceLeaseState::Active {
+                bail!("preparation supervisor found a released lease without a durable process exit");
+            }
 
-    let related_launches =
-        retry_store_writer_busy(|| store.list_preparation_process_launches(run_id))?
+            stage = "read durable preparation process launch intents";
+            let related_launches = retry_store_writer_busy(|| {
+                store.list_preparation_process_launches(run_id)
+            })
+            .context("preflight: read durable preparation process launch intents")?
             .into_iter()
             .filter(|launch| {
                 launch.task_id == task_id && launch.preparation_attempt_id == preparation_attempt_id
             })
             .collect::<Vec<_>>();
-    if related_launches.len() > 1
-        || related_launches
-            .first()
-            .is_some_and(|launch| !launch_matches_lease(launch, &active_lease))
-    {
-        bail!("preparation attempt has multiple or mismatched durable launch intents");
-    }
-    if host.is_none() && !related_launches.is_empty() {
-        bail!("legacy preparation launch has no process exit; spawn outcome is ambiguous and lease remains retained");
-    }
-    if let Some(host) = host {
-        retry_store_writer_busy(|| host.ensure_preparation_lease_committed(store, &active_lease))?;
-        if !retry_store_writer_busy(|| {
-            host.ledger()
-                .preparation_lease_has_pending_launch(store, &active_lease)
-        })? {
-            bail!("host preparation launch gate is not Pending; explicit migration or recovery is required before publishing a launch record");
-        }
-    }
-    let cpu_ids = host
-        .map(|host| host.preparation_cpu_ids(&active_lease.resource_id).cloned())
-        .transpose()?
-        .unwrap_or_default();
-    let thread_environment = preparation_thread_environment(&cpu_ids, host.is_some())?;
-    let _cpu_capacity_millis = if let Some(host) = host {
-        let snapshot = host
-            .current_compute_node_snapshot()?
-            .context("FEM preparation launch requires a current compute-node sample")?;
-        match snapshot.cpu.effective_capacity_millis {
-            fullmag_session::compute_node_snapshot::Observation::Available { value } => value,
-            _ => bail!("FEM preparation launch requires measured effective CPU capacity"),
-        }
-    } else {
-        0
-    };
-    let _allocated_cpu_millis = active_lease.budget.cpu_millis;
-    #[cfg(windows)]
-    let cpu_rate_limit = if host.is_some() {
-        Some(owned_worker_process::cpu_rate_limit(
-            _allocated_cpu_millis,
-            _cpu_capacity_millis,
-        )?)
-    } else {
-        None
-    };
-    #[cfg(not(windows))]
-    let cpu_rate_limit = None;
-    #[cfg(target_os = "linux")]
-    let linux_cgroup = if host.is_some() {
-        Some(owned_worker_process::LinuxWorkerCgroup::prepare(
-            _allocated_cpu_millis,
-        )?)
-    } else {
-        None
-    };
-    #[cfg(not(target_os = "linux"))]
-    let linux_cgroup = None;
-    validate_preparer_executable(preparer_executable)?;
+            if related_launches.len() > 1
+                || related_launches
+                    .first()
+                    .is_some_and(|launch| !launch_matches_lease(launch, &active_lease))
+            {
+                bail!("preparation attempt has multiple or mismatched durable launch intents");
+            }
+            if host.is_none() && !related_launches.is_empty() {
+                bail!("legacy preparation launch has no process exit; spawn outcome is ambiguous and lease remains retained");
+            }
+            if let Some(host) = host {
+                stage = "verify host preparation lease commitment";
+                retry_store_writer_busy(|| {
+                    host.ensure_preparation_lease_committed(store, &active_lease)
+                })
+                .context("preflight: verify host preparation lease commitment")?;
+                stage = "verify pending host preparation launch gate";
+                if !retry_store_writer_busy(|| {
+                    host.ledger()
+                        .preparation_lease_has_pending_launch(store, &active_lease)
+                })
+                .context("preflight: verify pending host preparation launch gate")?
+                {
+                    bail!("host preparation launch gate is not Pending; explicit migration or recovery is required before publishing a launch record");
+                }
+            }
+            stage = "resolve lease-bound CPU placement";
+            let cpu_ids = host
+                .map(|host| host.preparation_cpu_ids(&active_lease.resource_id).cloned())
+                .transpose()?
+                .unwrap_or_default();
+            stage = "prepare lease-bound thread environment";
+            let thread_environment = preparation_thread_environment(&cpu_ids, host.is_some())?;
+            stage = "read current compute-node CPU sample";
+            let _cpu_capacity_millis = if let Some(host) = host {
+                let snapshot = host
+                    .current_compute_node_snapshot()?
+                    .context("FEM preparation launch requires a current compute-node sample")?;
+                match snapshot.cpu.effective_capacity_millis {
+                    fullmag_session::compute_node_snapshot::Observation::Available { value } => {
+                        value
+                    }
+                    _ => bail!("FEM preparation launch requires measured effective CPU capacity"),
+                }
+            } else {
+                0
+            };
+            let _allocated_cpu_millis = active_lease.budget.cpu_millis;
+            #[cfg(windows)]
+            let cpu_rate_limit = if host.is_some() {
+                stage = "derive host-bound CPU rate limit";
+                Some(owned_worker_process::cpu_rate_limit(
+                    _allocated_cpu_millis,
+                    _cpu_capacity_millis,
+                )?)
+            } else {
+                None
+            };
+            #[cfg(not(windows))]
+            let cpu_rate_limit = None;
+            #[cfg(target_os = "linux")]
+            let linux_cgroup = if host.is_some() {
+                stage = "prepare lease-bound Linux worker cgroup";
+                Some(owned_worker_process::LinuxWorkerCgroup::prepare(
+                    _allocated_cpu_millis,
+                )?)
+            } else {
+                None
+            };
+            #[cfg(not(target_os = "linux"))]
+            let linux_cgroup = None;
+            stage = "validate preparation executable";
+            validate_preparer_executable(preparer_executable)?;
 
-    let supervisor_process_id = std::process::id();
-    let spawn_supervisor_start_token = process_start_token(supervisor_process_id)?;
-    let recovered_launch = !related_launches.is_empty();
-    let launch = if let Some(existing) = related_launches.into_iter().next() {
-        existing.validate_for_lease(&active_lease)?;
-        existing
-    } else {
-        FmsPreparationProcessLaunch {
-            schema_version: FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA.into(),
-            launch_id: format!("prep-launch-{}", uuid::Uuid::new_v4()),
-            run_id: run_id.into(),
-            task_id: task_id.into(),
-            preparation_attempt_id: preparation_attempt_id.into(),
-            resource_id: resource_id.into(),
-            lease_token: lease_token.into(),
-            lease_heartbeat_sequence: active_lease.heartbeat_sequence,
-            supervisor_process_id,
-            supervisor_start_token: spawn_supervisor_start_token.clone(),
-            created_at: chrono::Utc::now(),
-        }
+            stage = "capture supervisor process identity";
+            let supervisor_process_id = std::process::id();
+            let spawn_supervisor_start_token = process_start_token(supervisor_process_id)?;
+            let recovered_launch = !related_launches.is_empty();
+            stage = "validate or construct durable launch intent";
+            let launch = if let Some(existing) = related_launches.into_iter().next() {
+                existing.validate_for_lease(&active_lease)?;
+                existing
+            } else {
+                FmsPreparationProcessLaunch {
+                    schema_version: FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA.into(),
+                    launch_id: format!("prep-launch-{}", uuid::Uuid::new_v4()),
+                    run_id: run_id.into(),
+                    task_id: task_id.into(),
+                    preparation_attempt_id: preparation_attempt_id.into(),
+                    resource_id: resource_id.into(),
+                    lease_token: lease_token.into(),
+                    lease_heartbeat_sequence: active_lease.heartbeat_sequence,
+                    supervisor_process_id,
+                    supervisor_start_token: spawn_supervisor_start_token.clone(),
+                    created_at: chrono::Utc::now(),
+                }
+            };
+            Ok(PrelaunchOutcome::Ready(PrelaunchReady {
+                active_lease,
+                cpu_ids,
+                thread_environment,
+                cpu_rate_limit,
+                linux_cgroup,
+                recovered_launch,
+                launch,
+                spawn_supervisor_start_token,
+            }))
+        })();
+        (stage, result)
     };
-    let launch_disposition =
-        retry_store_writer_busy(|| store.commit_preparation_process_launch(&launch))?;
+    let preflight = defer_prelaunch_writer_contention(
+        run_id,
+        task_id,
+        resource_id,
+        preparation_attempt_id,
+        lease_token,
+        prelaunch_stage,
+        preflight,
+    )?;
+    let prelaunch = match preflight {
+        PrelaunchOutcome::Ready(prelaunch) => prelaunch,
+        PrelaunchOutcome::Finalized(result) => return Ok(result),
+    };
+    let launch_disposition = defer_prelaunch_writer_contention(
+        run_id,
+        task_id,
+        resource_id,
+        preparation_attempt_id,
+        lease_token,
+        "commit durable preparation process launch intent",
+        retry_store_writer_busy(|| store.commit_preparation_process_launch(&prelaunch.launch)),
+    )?;
     if host.is_none() && launch_disposition != PreparationProcessLaunchCommitDisposition::Accepted {
         bail!("replayed legacy preparation launch does not authorize another process spawn");
     }
+    let PrelaunchReady {
+        mut active_lease,
+        cpu_ids,
+        thread_environment,
+        cpu_rate_limit,
+        linux_cgroup,
+        recovered_launch,
+        launch,
+        spawn_supervisor_start_token,
+    } = prelaunch;
     if store
         .read_task_cancellation_intent(run_id, task_id)?
         .is_some()

@@ -407,15 +407,24 @@ pub(crate) fn finalize_native_fem_relaxation(
         Some(&gpu_rk_plan_info),
     );
     if engine == FemEngine::NativeGpu {
-        // The backend receipt describes the resolved RK execution plan. Direct
-        // minimizers publish their own policy and realization provenance.
         if let Some(receipt_request) = finalization.fem_gpu_receipt_request.as_deref() {
-            let receipt = backend
-                .gpu_execution_receipt()?
-                .into_provenance(receipt_request);
-            run_after_strict_receipt_gate(&receipt, receipt_request, || {
-                final_provenance.fem_gpu_execution_receipt = Some(receipt.clone())
-            })?;
+            let native_receipt = backend.gpu_execution_receipt()?;
+            if plan.relaxation.as_ref().is_some_and(|control| {
+                super::algorithm::is_direct_minimizer(control.algorithm)
+            }) {
+                let receipt = native_receipt.into_minimizer_provenance(receipt_request)?;
+                if receipt_request == "strict_device" {
+                    receipt.validate_strict_device().map_err(|error| RunError {
+                        message: format!("strict native FEM GPU minimizer receipt rejected: {error}"),
+                    })?;
+                }
+                final_provenance.fem_gpu_minimizer_execution_receipt = Some(receipt);
+            } else {
+                let receipt = native_receipt.into_provenance(receipt_request);
+                run_after_strict_receipt_gate(&receipt, receipt_request, || {
+                    final_provenance.fem_gpu_execution_receipt = Some(receipt.clone())
+                })?;
+            }
         }
     }
     artifacts.replace_provenance_synchronously(final_provenance)?;

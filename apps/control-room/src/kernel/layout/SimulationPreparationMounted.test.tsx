@@ -266,6 +266,7 @@ describe("mounted simulation preparation UI", () => {
       { ...resource(preparationFixture()), status: "stale" },
       { ...resource(statusFixture()), status: "stale" },
       20_000,
+      true,
     );
     const failedState = resolveSimulationPreparationViewModel(
       resource(failedPreparationFixture()),
@@ -845,10 +846,8 @@ describe("mounted simulation preparation UI", () => {
     });
     await settleLoads();
     expect(loadPreparation).toHaveBeenCalledTimes(2);
-    expect(container.textContent).toContain("Reconnecting…");
-    expect(container.textContent).toContain(
-      "Displayed progress may be out of date.",
-    );
+    expect(container.textContent).not.toContain("Reconnecting…");
+    expect(container.textContent).toContain("Optimizing element quality");
 
     await act(async () => root.unmount());
     dom.restore();

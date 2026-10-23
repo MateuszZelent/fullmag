@@ -36,6 +36,12 @@ docker-dev-images:
 docker-dev source_root="" port="" script="" gpu_access="auto":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) }}} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} {{if script == "" { "" } else { "--script " + quote(script) }}}
 
+# Ensure the persistent DEV services, then execute exactly one explicit script.
+# Noninteractive execution waits for its outcome; API/frontend and caches stay up.
+fullmag-dev-container script source_root="" port="" gpu_access="auto":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) }}} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}}
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" run-script --script {{quote(script)}} {{if port == "" { "" } else { "--port " + quote(port) }}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}}
+
 # Codegen through the already-running services; no Compose lifecycle operation.
 docker-dev-codegen source_root="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" codegen-openapi {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}}

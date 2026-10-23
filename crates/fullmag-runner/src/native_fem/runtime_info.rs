@@ -6,7 +6,10 @@ use crate::fem::execution_receipt::{
     FemGpuPerformanceSnapshotValidationError, FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
     FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE,
 };
-use crate::types::{FemBemDemagProvenance, FemGpuExecutionClass, FemGpuExecutionReceipt, RunError};
+use crate::types::{
+    FemBemDemagProvenance, FemGpuExecutionClass, FemGpuExecutionReceipt,
+    FemGpuMinimizerExecutionReceipt, RunError,
+};
 
 use std::ffi::CStr;
 
@@ -416,7 +419,9 @@ const FEM_GPU_KNOWN_OPERATOR_MASK: u64 = ffi::FULLMAG_FEM_GPU_OPERATOR_EXCHANGE
     | ffi::FULLMAG_FEM_GPU_OPERATOR_LLG_RHS
     | ffi::FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER
     | ffi::FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS
-    | ffi::FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER;
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NativeFemGpuExecutionReceipt {
@@ -441,6 +446,29 @@ pub(crate) struct NativeFemGpuExecutionReceipt {
 }
 
 impl NativeFemGpuExecutionReceipt {
+    /// The native minimizer bit is observed on a committed algorithm step.
+    /// Keep that workflow separate from the configured auxiliary RK tableau.
+    pub(crate) fn into_minimizer_provenance(
+        self,
+        requested: &str,
+    ) -> Result<FemGpuMinimizerExecutionReceipt, RunError> {
+        let mask = self.required_operator_mask
+            & (ffi::FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB
+                | ffi::FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG);
+        let algorithm = match mask {
+            ffi::FULLMAG_FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB => "projected_gradient_bb",
+            ffi::FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG => "nonlinear_cg",
+            _ => return Err(receipt_error("minimizer_algorithm_mismatch")),
+        };
+        let mut accounting = self.into_provenance(requested);
+        accounting.integrator = "not_used".into();
+        Ok(FemGpuMinimizerExecutionReceipt {
+            schema_version: "fullmag.fem.gpu.minimizer-execution-receipt.v1".into(),
+            algorithm: algorithm.into(),
+            accounting,
+        })
+    }
+
     pub(crate) fn from_ffi(
         receipt: ffi::fullmag_fem_gpu_execution_receipt_v1,
     ) -> Result<Self, RunError> {

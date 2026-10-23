@@ -1,4 +1,4 @@
-"""Fail before API startup when device access or durable state is unavailable."""
+"""Supervise runtime execution while retaining API diagnostics on startup failure."""
 import ctypes
 import hashlib
 import os
@@ -422,6 +422,48 @@ def _retain_liveness_observation(receipt, error):
         receipt["api_liveness"] = observation
 
 
+def _retain_diagnostic_api(service, handle, api, fence_path, error):
+    """Fence new operations before retaining the exact API for diagnostics.
+
+    The marker is private to this API incarnation and is never removed by
+    recovery of a transient observation. In-flight work is not replayed.
+    """
+    if api.poll() is not None:
+        return False
+    if handle is not None and handle.api_identity:
+        api_identity, api_port = handle.api_identity, handle.api_port
+        stage = "runtime_supervision"
+    elif isinstance(error, service.RuntimeServiceOwnerStartupFailure):
+        api_identity, api_port = error.api_identity, error.api_port
+        stage = "runtime_startup"
+    else:
+        return False
+    service._atomic_json(fence_path, {
+        "schema": "fullmag.api-runtime-failure-fence.v1",
+        "api_pid": api.pid,
+        "api_instance_id": api_identity["api_instance_id"],
+        "stage": stage,
+        "reason": str(error)[-4096:],
+        "next_action": "Inspect runtime diagnostics and repair before a managed restart; do not replay Compute.",
+    }, "runtime failure admission fence")
+    # A matching health response acknowledges that this binary has latched
+    # the fence. Older binaries cannot silently remain admission-open.
+    deadline = time.monotonic() + 15.0
+    while api.poll() is None and time.monotonic() < deadline:
+        try:
+            status, headers, body = service._http_json(
+                api_port, "/v2/platform/health", timeout=2.0
+            )
+            if (status == 200 and body.get("status") == "degraded"
+                    and service._single_header(headers, "x-fullmag-api-instance")
+                    == api_identity["api_instance_id"]):
+                return True
+        except (service.RuntimeServiceError, OSError):
+            pass
+        time.sleep(0.25)
+    return False
+
+
 def _supervise_once(service, handle, *, full_api_probe, now, degraded_since):
     """Run one check and bound only typed transient observation failures."""
 
@@ -455,30 +497,106 @@ def _supervise_once(service, handle, *, full_api_probe, now, degraded_since):
     return None
 
 
+def _serve_startup_diagnostics(service, paths, stopping, error):
+    """Keep the API observable without claiming or recovering runtime ownership."""
+    fence_path = service.process_receipt_path(paths).parent / (
+        "api-failure-" + uuid.uuid4().hex + ".json"
+    )
+    # Publish before spawn: the API must skip all execution/restore setup,
+    # not merely reject HTTP mutations after startup has already changed state.
+    service._atomic_json(fence_path, {
+        "schema": "fullmag.api-runtime-failure-fence.v1",
+        "stage": "runtime_startup",
+        "reason": str(error)[-4096:],
+        "next_action": "Inspect the startup error; execution is blocked. No task was replayed.",
+    }, "startup diagnostic fence")
+    environment = service.process_environment(paths)
+    environment["FULLMAG_API_RUNTIME_FAILURE_FENCE"] = str(fence_path)
+    api = subprocess.Popen(
+        ["/opt/fullmag/package/bin/fullmag-api"], env=environment,
+        stdin=subprocess.DEVNULL,
+    )
+    print(
+        "[fullmag-backend] Runtime startup failed; starting diagnostic API only: "
+        + str(error)[-4096:] + ". Diagnostic: " + str(fence_path),
+        file=sys.stderr, flush=True,
+    )
+    # Do not replace OWNER/process-tree evidence from the interrupted runtime.
+    # This child has no runtime owner, does not run recovery and is never retried.
+    try:
+        while not stopping.wait(1):
+            status = api.poll()
+            if status is not None:
+                print(f"[fullmag-backend] Diagnostic API exited ({status}); no automatic restart.",
+                      file=sys.stderr, flush=True)
+                return status if status != 0 else 1
+        return 0
+    finally:
+        if api.poll() is None:
+            api.terminate()
+        try:
+            api.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            print("[fullmag-backend] Diagnostic API shutdown is unconfirmed.",
+                  file=sys.stderr, flush=True)
+
+
 def serve():
     import runtime_service as service
+    import runtime_service_unclaimed_cancellation as unclaimed_cancellation
     stopping = threading.Event()
     for number in (signal.SIGTERM, signal.SIGINT):
         signal.signal(number, lambda *_: stopping.set())
     paths = service.prepare_storage()
-    bootstrap = service.initialize_accepted_store(paths)
-    accepted_preflight = service.accepted_reattach_preflight(paths)
-    container_recovery = service.recover_container_namespace(paths)
-    # An explicit host authorization is the only route that may transition a
-    # stale failed owner.  It must complete before configuration generation
-    # rotation; ordinary startup never invokes this path.
-    runtime_recovery = service.recover_idle_failure(paths)
-    with service.container_recovery_configuration_override(paths, container_recovery):
-        if (os.environ.get(service.POST_BUILD_START_ENV) is not None
-                or os.environ.get(service.POST_BUILD_START_SHA_ENV) is not None):
-            configuration = service.ensure_configuration(
-                paths, accepted_preflight=accepted_preflight
+    try:
+        bootstrap = service.initialize_accepted_store(paths)
+    except Exception as error:
+        return _serve_startup_diagnostics(service, paths, stopping, error)
+    cancellation = unclaimed_cancellation.run(paths, service, stopping)
+    if cancellation is not None:
+        print(
+            "[fullmag-backend] Unclaimed cancellation maintenance receipt: "
+            + cancellation["receipt_path"],
+            flush=True,
+        )
+        native_result = cancellation["native_result"]
+        if native_result["disposition"] != "cancelled":
+            raise RuntimeError(
+                "unclaimed cancellation projection is deferred; API startup and "
+                "configuration rotation remain stopped"
             )
-        else:
-            configuration = service.ensure_configuration(paths)
+        # This explicit one-shot operation is a maintenance stop. The host must
+        # inspect the immutable receipt, capture the post-cancel catalog pins,
+        # and issue a separate recovery/start operation.
+        print(
+            "[fullmag-backend] Maintenance completed successfully; stopping with exit code 0. "
+            "API was not started. Explicit recovery/start is required; no simulation was replayed.",
+            flush=True,
+        )
+        return 0
+    try:
+        accepted_preflight = service.accepted_reattach_preflight(paths)
+        container_recovery = service.recover_container_namespace(paths)
+        # These legacy paths still require explicit authorization. Ordinary
+        # startup never repairs an old owner or retries a previous script.
+        runtime_recovery = service.recover_idle_failure(paths)
+        with service.container_recovery_configuration_override(paths, container_recovery):
+            if (os.environ.get(service.POST_BUILD_START_ENV) is not None
+                    or os.environ.get(service.POST_BUILD_START_SHA_ENV) is not None):
+                configuration = service.ensure_configuration(
+                    paths, accepted_preflight=accepted_preflight
+                )
+            else:
+                configuration = service.ensure_configuration(paths)
+    except Exception as error:
+        return _serve_startup_diagnostics(service, paths, stopping, error)
     print("[fullmag-backend] Starting API and runtime service", flush=True)
+    failure_fence = service.process_receipt_path(paths).parent / (
+        "api-failure-" + uuid.uuid4().hex + ".json"
+    )
     with service.accepted_reattach_api_input(paths, preflight=accepted_preflight) as (api_environment, restore_input):
         api_environment = _api_environment_with_operator_capability(api_environment)
+        api_environment["FULLMAG_API_RUNTIME_FAILURE_FENCE"] = str(failure_fence)
         api = subprocess.Popen(["/opt/fullmag/package/bin/fullmag-api"],
                                env=api_environment, stdin=restore_input)
     handle = None
@@ -589,12 +707,24 @@ def serve():
         receipt.update(state="failed_outcome_retained", error=str(error))
         print(f"[fullmag-backend] Startup or runtime failed; admission closed: {str(error)[-4096:]}. "
               f"Process receipt: {receipt_path}", file=sys.stderr, flush=True)
-        if api.poll() is None:
-            api.terminate()
+        diagnostic_api = False
         try:
-            receipt["api_exit_code"] = api.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            receipt["api_shutdown"] = "unknown"
+            diagnostic_api = _retain_diagnostic_api(service, handle, api, failure_fence, error)
+        except Exception as fence_error:
+            receipt["api_fence_error"] = str(fence_error)[-2048:]
+        receipt["api_diagnostic_only"] = diagnostic_api
+        receipt["api_failure_fence"] = str(failure_fence)
+        if diagnostic_api:
+            print("[fullmag-backend] API retained for diagnostics; new operations are fenced. "
+                  "No simulation will be replayed automatically.", file=sys.stderr, flush=True)
+        else:
+            # An unconfirmed fence must never leave an admission-open API.
+            if api.poll() is None:
+                api.terminate()
+            try:
+                receipt["api_exit_code"] = api.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                receipt["api_shutdown"] = "unknown"
         service._atomic_json(receipt_path, receipt, "process tree receipt")
         # Failed observation must preserve a possibly live detached service.
         # Keep PID 1 alive with admission closed until an explicit stop.

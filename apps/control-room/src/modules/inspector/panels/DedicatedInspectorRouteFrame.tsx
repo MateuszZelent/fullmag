@@ -15,13 +15,26 @@ interface DedicatedInspectorRouteFrameProps extends InspectorPanelProps {
  * The wrapped panel remains the owner of its controls and resource lifecycle;
  * this frame owns only route identity, status, and the common scientific
  * chrome. This prevents a grouped route from looking like an anonymous copy
- * of its sibling while keeping the existing editor behavior intact.
+ * of its sibling while keeping the existing editor behavior intact. Geometry
+ * authoring keeps the shared Inspector header because it has no execution or
+ * availability facets for this result-oriented frame to report.
  */
 export function DedicatedInspectorRouteFrame({
   children,
   owner,
   selection,
 }: DedicatedInspectorRouteFrameProps) {
+  if (owner === "object.geometry" || owner === "builder.primitive") {
+    return (
+      <div
+        className="fm-inspector-route fm-inspector-route--dedicated"
+        data-inspector-route-owner={owner}
+      >
+        {children}
+      </div>
+    );
+  }
+
   const ref = selection.ref as Record<string, unknown> | null;
   const title = routeTitle(owner);
   const status = {

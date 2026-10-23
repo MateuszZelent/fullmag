@@ -513,6 +513,138 @@ int run_backend_relaxation_step(
         ctx.poisson_demag.step_solver_apply_wall_time_ns = 0;
         ctx.poisson_demag.step_recover_wall_time_ns = 0;
         ctx.poisson_demag.step_energy_wall_time_ns = 0;
+
+        std::string gpu_plan_reason;
+        const GpuRkPlan gpu_plan = gpu_rk_plan_device_resident(ctx, gpu_plan_reason);
+        if (!gpu_plan.enabled) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = "native FEM GPU direct minimizer requires a resolved device effective-field pipeline: " +
+                gpu_plan_reason;
+            return FULLMAG_FEM_ERR_UNAVAILABLE;
+        }
+        if (gpu_plan.execution_class == FemGpuExecutionClass::Unknown ||
+            gpu_plan.resolved_unknown_operator_mask != 0) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = "native FEM GPU direct minimizer requires every effective-field operator to be resolved";
+            return FULLMAG_FEM_ERR_UNAVAILABLE;
+        }
+        if ((gpu_plan.required_operator_mask & FEM_GPU_OPERATOR_DIRECT_TORQUES) != 0) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = "native FEM GPU direct minimizer does not support direct-torque operators";
+            return FULLMAG_FEM_ERR_UNAVAILABLE;
+        }
+        const bool strict_gpu_request =
+            ctx.gpu_state.execution_request ==
+            FULLMAG_FEM_GPU_EXECUTION_REQUEST_STRICT_DEVICE;
+        if (strict_gpu_request &&
+            !gpu_rk_plan_is_strict_device_resident(gpu_plan, gpu_plan_reason)) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = gpu_plan_reason;
+            return FULLMAG_FEM_ERR_UNAVAILABLE;
+        }
+
+        constexpr uint64_t rk_only_operator_mask =
+            FEM_GPU_OPERATOR_LLG_RHS | FEM_GPU_OPERATOR_RK_STEPPER;
+        const uint64_t algorithm_operator =
+            algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB
+            ? FEM_GPU_OPERATOR_PROJECTED_GRADIENT_BB
+            : FEM_GPU_OPERATOR_NONLINEAR_CG;
+        const uint64_t required_operator_mask =
+            (gpu_plan.required_operator_mask & ~rk_only_operator_mask) |
+            algorithm_operator;
+        const uint64_t resolved_device_operator_mask =
+            (gpu_plan.resolved_device_operator_mask & ~rk_only_operator_mask) |
+            algorithm_operator;
+        const uint64_t resolved_host_operator_mask =
+            gpu_plan.resolved_host_operator_mask & ~rk_only_operator_mask;
+        const uint64_t resolved_unknown_operator_mask =
+            gpu_plan.resolved_unknown_operator_mask & ~rk_only_operator_mask;
+        if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = "native FEM GPU direct minimizer found an unfinished execution-receipt attempt";
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        const auto current_receipt = gpu_execution_receipt_snapshot(
+            ctx.gpu_state.execution_receipt);
+        const bool same_receipt_plan = current_receipt.plan_resolved &&
+            current_receipt.execution_class == gpu_plan.execution_class &&
+            current_receipt.device_ordinal == ctx.mfem_context.selected_device_index &&
+            current_receipt.precision == static_cast<uint32_t>(ctx.base_plan.precision) &&
+            current_receipt.integrator == static_cast<uint32_t>(ctx.base_plan.integrator) &&
+            current_receipt.required_operator_mask == required_operator_mask &&
+            current_receipt.resolved_device_operator_mask == resolved_device_operator_mask &&
+            current_receipt.resolved_host_operator_mask == resolved_host_operator_mask &&
+            current_receipt.resolved_unknown_operator_mask == resolved_unknown_operator_mask;
+        if (!same_receipt_plan) {
+            gpu_execution_receipt_resolve_plan(
+                ctx.gpu_state.execution_receipt,
+                required_operator_mask,
+                resolved_device_operator_mask,
+                resolved_host_operator_mask,
+                resolved_unknown_operator_mask,
+                gpu_plan.execution_class,
+                ctx.mfem_context.selected_device_index,
+                static_cast<uint32_t>(ctx.base_plan.precision),
+                static_cast<uint32_t>(ctx.base_plan.integrator));
+        }
+        const auto resolved_receipt = gpu_execution_receipt_snapshot(
+            ctx.gpu_state.execution_receipt);
+        if (!resolved_receipt.accounting_valid || !resolved_receipt.plan_resolved ||
+            resolved_receipt.execution_class != gpu_plan.execution_class ||
+            resolved_receipt.required_operator_mask != required_operator_mask ||
+            resolved_receipt.resolved_device_operator_mask != resolved_device_operator_mask ||
+            resolved_receipt.resolved_host_operator_mask != resolved_host_operator_mask ||
+            resolved_receipt.resolved_unknown_operator_mask != resolved_unknown_operator_mask) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = "native FEM GPU direct minimizer rejected its resolved operator receipt plan";
+            return FULLMAG_FEM_ERR_UNAVAILABLE;
+        }
+        const uint64_t step_before = ctx.state.step_count;
+        const uint64_t accepted_steps_before = ctx.relaxation.accepted_steps;
+        gpu_execution_receipt_begin_attempt(
+            ctx.gpu_state.execution_receipt,
+            ctx.transfer_audit.audit.counters);
+        if (!gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = "native FEM GPU direct minimizer failed to begin receipt accounting";
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+
         int gpu_status = FULLMAG_FEM_OK;
         {
             TransferAuditScope hot_loop(
@@ -527,6 +659,7 @@ int run_backend_relaxation_step(
             }
         }
         if (ctx.transfer_audit.audit.hot_loop_violation) {
+            gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
             set_stage_completion(
                 ctx,
                 FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
@@ -537,6 +670,7 @@ int run_backend_relaxation_step(
             return FULLMAG_FEM_ERR_INTERNAL;
         }
         if (ctx.interrupt.step_interrupted) {
+            gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
             set_stage_completion(
                 ctx,
                 FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED,
@@ -547,14 +681,101 @@ int run_backend_relaxation_step(
             return FULLMAG_FEM_ERR_INTERRUPTED;
         }
         if (gpu_status != FULLMAG_FEM_OK) {
+            gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
             set_stage_completion(
                 ctx,
                 FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
                 nullptr,
                 0.0,
                 0.0);
+            return gpu_status;
         }
-        return gpu_status;
+        if (!gpu_execution_receipt_update_attempt_transfer(
+                ctx.gpu_state.execution_receipt,
+                ctx.transfer_audit.audit.counters)) {
+            gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = "native FEM GPU direct minimizer receipt rejected hot-loop compute transfer or synchronization";
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        const bool accepted_step =
+            ctx.state.step_count > step_before &&
+            ctx.state.step_count - step_before == 1 &&
+            ctx.relaxation.accepted_steps > accepted_steps_before &&
+            ctx.relaxation.accepted_steps - accepted_steps_before == 1;
+        const bool terminal_observation =
+            ctx.state.step_count == step_before &&
+            ctx.relaxation.accepted_steps == accepted_steps_before;
+        if (!accepted_step && terminal_observation) {
+            gpu_execution_receipt_reject_attempt(ctx.gpu_state.execution_receipt);
+            return FULLMAG_FEM_OK;
+        }
+        if (!accepted_step) {
+            gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = "native FEM GPU direct minimizer returned without one consistent accepted step";
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+
+        gpu_execution_receipt_note_device(
+            ctx.gpu_state.execution_receipt,
+            algorithm_operator);
+        uint64_t observed_device_operator_mask = 0;
+        uint64_t observed_host_operator_mask = 0;
+        uint64_t observed_unknown_operator_mask = 0;
+        {
+            std::lock_guard<std::mutex> lock(ctx.gpu_state.execution_receipt.mutex);
+            observed_device_operator_mask =
+                ctx.gpu_state.execution_receipt.attempt_device_operator_mask;
+            observed_host_operator_mask =
+                ctx.gpu_state.execution_receipt.attempt_host_operator_mask;
+            observed_unknown_operator_mask =
+                ctx.gpu_state.execution_receipt.attempt_unknown_operator_mask;
+        }
+        gpu_execution_receipt_commit_attempt(ctx.gpu_state.execution_receipt);
+        const auto execution_receipt = gpu_execution_receipt_snapshot(
+            ctx.gpu_state.execution_receipt);
+        if (!execution_receipt.accounting_valid ||
+            execution_receipt.executed_unknown_operator_mask != 0 ||
+            execution_receipt.executed_device_operator_mask !=
+                execution_receipt.resolved_device_operator_mask ||
+            execution_receipt.executed_host_operator_mask !=
+                execution_receipt.resolved_host_operator_mask ||
+            (strict_gpu_request &&
+             (execution_receipt.execution_class != FemGpuExecutionClass::DeviceResident ||
+              execution_receipt.executed_host_operator_mask != 0 ||
+              execution_receipt.fallback_count != 0 ||
+              execution_receipt.hot_loop_compute_h2d_bytes != 0 ||
+              execution_receipt.hot_loop_compute_d2h_bytes != 0 ||
+              execution_receipt.hot_loop_compute_host_sync_count != 0))) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = strict_gpu_request
+                ? "strict FEM GPU direct minimizer completed without a valid device-only execution receipt"
+                : "GPU direct minimizer completed without a valid executed-operator receipt";
+            error += "; required_mask=" + std::to_string(required_operator_mask) +
+                ", observed_device_mask=" + std::to_string(observed_device_operator_mask) +
+                ", observed_host_mask=" + std::to_string(observed_host_operator_mask) +
+                ", observed_unknown_mask=" + std::to_string(observed_unknown_operator_mask) +
+                ", accounting_valid=" + std::to_string(execution_receipt.accounting_valid) +
+                ", accepted_steps=" + std::to_string(execution_receipt.accepted_step_count);
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        return FULLMAG_FEM_OK;
     }
     const int status = run_native_relaxation_step(ctx, algorithm, out_stats, error);
     if (ctx.interrupt.step_interrupted) {

@@ -68,12 +68,17 @@ def host_id(daemon_id_sha256: str, compose_project: str) -> str:
     })).hexdigest()
 
 
-def volume_key(daemon_id_sha256: str, compose_project: str) -> str:
+def volume_key(daemon_id_sha256: str, compose_project: str, generation: str | None = None) -> str:
     """Return the owned-volume key; the volume is never shared between groups."""
-    return hashlib.sha256(_canonical({
+    identity = {
         "schema": "fullmag.docker-group-ledger-volume.v1",
         "host_id": host_id(daemon_id_sha256, compose_project),
-    })).hexdigest()
+    }
+    if generation is not None:
+        if not isinstance(generation, str) or re.fullmatch(r"[0-9a-f]{32}", generation) is None:
+            raise GroupLedgerError("Fresh group ledger requires an exact archive operation")
+        identity["fresh_runtime_generation"] = generation
+    return hashlib.sha256(_canonical(identity)).hexdigest()
 
 
 def profile(daemon_id_sha256: str, compose_project: str, volume_name: str,

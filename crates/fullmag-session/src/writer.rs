@@ -40,9 +40,18 @@ impl std::fmt::Display for WriterBusyConflict {
 }
 
 fn writer_busy_error(root: &Path, conflict: WriterBusyConflict) -> anyhow::Error {
+    // Advisory diagnostics only: native locking remains the authority. The
+    // record can lag an acquisition/release, so never use it to steal a lease.
+    let owner_observation = match read_owner_record(root) {
+        Ok(Some(owner)) => format!(
+            ", observed_owner_pid={}, observed_owner_acquired_at={}, observed_owner_released={}",
+            owner.pid, owner.acquired_at, owner.released,
+        ),
+        _ => String::new(),
+    };
     anyhow::Error::new(StoreWriterBusy).context(format!(
-        "session store writer is busy: root=`{}`, conflict={conflict}",
-        root.display()
+        "session store writer is busy: root=`{}`, conflict={conflict}{owner_observation}",
+        root.display(),
     ))
 }
 

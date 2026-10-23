@@ -45,12 +45,28 @@ describe("DedicatedInspectorRouteFrame", () => {
     expect(html).not.toContain('data-inspector-route-owner="object.magnetic-texture.asset"');
   });
 
+  it.each(["object.geometry", "builder.primitive"])(
+    "leaves %s identity to the shared Inspector header",
+    (owner) => {
+      const html = renderToStaticMarkup(
+        <DedicatedInspectorRouteFrame owner={owner} selection={{ ...selection, kind: owner }}>
+          <div>Geometry content</div>
+        </DedicatedInspectorRouteFrame>,
+      );
+
+      expect(html).toContain(`data-inspector-route-owner="${owner}"`);
+      expect(html).toContain("Geometry content");
+      expect(html).not.toContain("fm-scientific-inspector");
+      expect(html).not.toContain("Physical properties");
+      expect(html).not.toContain("Explorer node");
+    },
+  );
+
   it.each([
     ["mesh.quality", "Quality gates", "Mesh realization"],
     ["mesh.cross-section.plot", "Cross-section plot", "Derived visualization"],
     ["analysis.chart-point", "Data point inspection", "Published data"],
     ["study.stage.relax", "Relaxation stage", "Study pipeline"],
-    ["object.geometry", "Geometry authoring", "Model authoring"],
   ])("publishes a route-specific method and physical lane for %s", (owner, method, physicalLabel) => {
     const html = renderToStaticMarkup(
       <DedicatedInspectorRouteFrame owner={owner} selection={{ ...selection, kind: owner }}>

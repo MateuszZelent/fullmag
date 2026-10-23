@@ -28,6 +28,48 @@ The older public `/v1/live/current/...` tree has been removed. Only
 
 ## 2. Canonical route families
 
+### Dostępność API po błędzie wykonania (2026-10-22)
+
+Błąd zadania zachowuje terminalny wynik i diagnostykę zadania; nie oznacza
+zatrzymania API. Po zakończeniu pracy DEV pozostaje dostępny dla kolejnego
+skryptu. Zakończony model i wyniki mogą pozostać widoczne do następnej aktywacji.
+
+Gdy inicjalizacja lub nadzór wykonania zawiodą, `GET /v2/platform/health`
+zwraca `degraded`. Istniejący `GET /v2/platform/runtime-service` uwzględnia
+blokadę bieżącej instancji API: obserwowane `ready` zastępuje stanem
+`not_ready`, `reason.code=runtime_unavailable` oraz stałym komunikatem
+określającym etap, jeśli zawiódł wewnątrz API. Pozostałe stany i kody przyczyn
+natywnego runtime pozostają zachowane, a komunikat zawiera dodatkowo informację
+o blokadzie API. Starszy rekord właściciela `ready` nie może przesłonić tej blokady. Surowe błędy
+i ścieżki pozostają w logu backendu; zasób nie ujawnia prywatnych danych ownera.
+Zablokowane operacje otrzymują HTTP 503 z kodem `runtime_unavailable`.
+Nie jest to nakaz recovery, restartu ani ponowienia Solve. Recovery jest
+odłożone; niepewny worker nie zostaje oznaczony jako zakończony lub bezczynny.
+Kształt zasobu, typ `reason.code: string` i istniejące resource hooks pozostają
+bez zmian; zmiana nie wymaga regeneracji OpenAPI.
+
+W trybie Docker API-only gotowość połączenia sesji i dopuszczenie komend
+korzystają z tej samej obserwacji natywnego runtime co `runtime-service`:
+zgodna konfiguracja, właściciel i aktywna próba połączenia muszą potwierdzić
+`ready`. Oczekiwanie przygotowanego Study na Compute nie wymaga heartbeatów
+starego runnera. `unknown` pozostaje zdegradowane i nie dopuszcza obliczeń;
+błąd lub blokada runtime pozostają niedostępne. Pozostałe tryby zachowują
+dotychczasowy heartbeat publikacji runnera. Sam odczyt HTTP nie publikuje
+fałszywego heartbeat ani nie zwalnia Compute.
+
+Odczyty `status` i `simulation/preparation` korzystają z zatwierdzonego
+snapshotu bez oczekiwania na mutacyjny commit RunIntent/CAS. Tożsamość sesji,
+runu i epoka są sprawdzane względem odczytanego snapshotu; publikacja pary
+snapshot/epoka jest chroniona tym samym write guardem. Mutacje zachowują
+serializację przejść sesji.
+
+Na granicy accepted-live zwykłe włączone kroki Run/Relax bez jawnych portów
+otrzymują `final_state: State` i `total_energy: Scalar`. Porty trafiają do
+niezmiennego Study przed walidacją i materializacją, aby wspólni konsumenci
+FDM/FEM mogli opublikować stan końcowy oraz obserwacje. Jawne porty i inne
+rodzaje kroków zachowują zadany kształt; domyślna projekcja authoring nie
+otrzymuje dodatkowych portów.
+
 ### Pomocniczy inventory grafu fizyki
 
 `GET /v2/sessions/current/model/physics-graph` udostępnia opcjonalne
@@ -606,6 +648,17 @@ not own field payload freshness; `data/fields/*` does. Conversely,
 `data/fields/*` does not own camera or workspace-shell freshness.
 
 ### Field materialization freshness
+
+Odczyt już opublikowanego początkowego `m` jest niezależny od dostępności
+producenta obliczeniowego. Dla `prepared_initial_state` API wymaga zgodności
+preparation/plan, obserwacji, generacji domeny, rewizji topologii i layoutu.
+Może wtedy udostępnić `request=field_vector`, `materialization=materialized`
+i `render=renderable`, zachowując `provider=unavailable` i `lane=unresolved`.
+Nie uprawnia to do Compute, obliczania H ani wnioskowania o wykonaniu GPU.
+Brak lub niezgodność tych dowodów zachowuje odmowę; nie odtwarza się pola
+z samej deklaracji geometrii. To polityka odczytu danych, bez zmiany fizyki
+początkowego `m` opisanej w `docs/physics/0150-exchange-only-geometry-and-magnetization-bootstrap.md`.
+Weryfikacja runtime tej ścieżki jest zapisywana osobno od sukcesu buildu.
 
 Field catalog descriptors and `data/fields/{quantity_id}/meta` own the
 materialization state for each quantity. Both resources expose

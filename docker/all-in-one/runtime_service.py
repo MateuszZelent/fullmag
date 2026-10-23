@@ -136,6 +136,7 @@ CONTAINER_RECOVERY_AUTHORIZATION_SCHEMA = (
 CONTAINER_RECOVERY_AUTHORIZATION_SCHEMAS = frozenset({CONTAINER_RECOVERY_AUTHORIZATION_SCHEMA})
 CONTAINER_RECOVERY_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v1"
 CONTAINER_RECOVERY_ATTESTATION_SCHEMA = "docker_namespace_teardown_attestation.v1"
+CONTAINER_RECOVERY_ABSENCE_ATTESTATION_SCHEMA = "docker_namespace_absence_attestation.v1"
 CONTAINER_RECOVERY_RECEIPT_SCHEMA = "runtime_service_container_recovery.v1"
 CONTAINER_RECOVERY_ARCHIVE_SCHEMA = "runtime_service_container_recovery_archive.v1"
 CONTAINER_RECOVERY_RELATIVE = PurePosixPath("runtime-services/container-recovery")
@@ -188,6 +189,15 @@ class RuntimeServiceUnknown(RuntimeServiceError):
 
 class RuntimeServiceTransient(RuntimeServiceUnknown):
     """A bounded supervision observation could not prove liveness yet."""
+
+
+class RuntimeServiceOwnerStartupFailure(RuntimeServiceUnknown):
+    """The API was verified, but native service ownership was not confirmed."""
+
+    def __init__(self, detail: str, *, api_identity: Mapping[str, Any], api_port: int):
+        super().__init__(detail)
+        self.api_identity = dict(api_identity)
+        self.api_port = api_port
 
 
 class RuntimeServiceTransportError(RuntimeServiceError):
@@ -3773,14 +3783,38 @@ def _container_recovery_owner_digest(paths: RuntimePaths) -> tuple[dict[str, Any
     return owner, raw, _sha256_bytes(raw)
 
 
+def _container_recovery_expected_outcome(request: Mapping[str, Any]) -> str:
+    if request.get("schema_version") == CONTAINER_RECOVERY_REQUEST_SCHEMA:
+        if request.get("retained_cancelled_runs") is not None:
+            _fail("v1 container recovery cannot retain cancelled runs")
+        return "empty_namespace_recovered"
+    if request.get("schema_version") != "runtime_service_container_recovery_request.v2":
+        _fail("container recovery request schema is unsupported")
+    pins = request.get("retained_cancelled_runs")
+    if not isinstance(pins, list) or not 1 <= len(pins) <= 128:
+        _fail("v2 container recovery requires 1..128 retained run pins")
+    seen = set()
+    for pin in pins:
+        if not isinstance(pin, dict) or set(pin) != {
+            "run_id", "run_intent_sha256", "run_catalog_sha256"
+        }:
+            _fail("invalid retained cancelled run pin")
+        run_id = _recovery_store_id(pin.get("run_id"), "retained run id")
+        if run_id in seen:
+            _fail("duplicate retained cancelled run pin")
+        seen.add(run_id)
+        _container_recovery_hex(pin.get("run_intent_sha256"), "retained run intent digest")
+        _container_recovery_hex(pin.get("run_catalog_sha256"), "retained run catalog digest")
+    return "retained_cancelled_runs_recovered"
+
+
 def _container_recovery_request_sources(
     request: Mapping[str, Any], name: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     expected_owner = request.get("expected_owner")
     if not isinstance(expected_owner, dict):
         _fail(f"{name} has no typed expected owner")
-    if request.get("schema_version") != CONTAINER_RECOVERY_REQUEST_SCHEMA:
-        _fail(f"{name} schema is unsupported")
+    _container_recovery_expected_outcome(request)
     request_id = request.get("request_id")
     if not isinstance(request_id, str) or UUID_RE.fullmatch(request_id) is None:
         _fail(f"{name} has an invalid request id")
@@ -3845,6 +3879,102 @@ def _validate_container_recovery_attestation_document(
     attestation: Mapping[str, Any],
     attestation_sha256: str,
 ) -> None:
+    if attestation.get("schema_version") == CONTAINER_RECOVERY_ABSENCE_ATTESTATION_SCHEMA:
+        if (
+            request.get("schema_version") != "runtime_service_container_recovery_request.v2"
+            or not isinstance(request.get("retained_cancelled_runs"), list)
+        ):
+            _fail("container namespace absence proof requires a retained-run v2 request")
+        if set(attestation) != {
+            "schema_version",
+            "request_sha256",
+            "docker_engine_id_sha256",
+            "containers",
+            "device_release",
+            "manifest_sha256",
+            "result",
+        }:
+            _fail("container namespace absence attestation has unexpected fields")
+        if attestation.get("request_sha256") != request_sha256:
+            _fail("container namespace absence attestation targets another request")
+        if attestation.get("docker_engine_id_sha256") != request.get("docker_engine_id_sha256"):
+            _fail("container namespace absence attestation engine differs from request")
+        if attestation.get("manifest_sha256") != request.get("docker_manifest_sha256"):
+            _fail("container namespace absence manifest differs from request")
+        if attestation.get("result") != "authoritative_namespace_absence":
+            _fail("container namespace absence proof is not authoritative")
+        for field in ("request_sha256", "docker_engine_id_sha256", "manifest_sha256"):
+            _container_recovery_hex(attestation.get(field), f"container namespace absence {field}")
+        requested, _ = _container_recovery_request_sources(
+            request, "container recovery request"
+        )
+        observations = attestation.get("containers")
+        if not isinstance(observations, list) or len(observations) != len(requested):
+            _fail("container namespace absence observation count differs from request")
+        seen: set[str] = set()
+        for raw in observations:
+            observed = _require_mapping(raw, "container namespace absence observation")
+            if set(observed) != {
+                "container_id", "image_id", "config_sha256", "service", "absence"
+            }:
+                _fail("container namespace absence observation has unexpected fields")
+            container_id = _container_recovery_hex(
+                observed.get("container_id"), "absence container id"
+            )
+            if container_id in seen:
+                _fail("container namespace absence attestation repeats a container")
+            seen.add(container_id)
+            pin = next(
+                (item for item in requested.values() if item.get("container_id") == container_id),
+                None,
+            )
+            if pin is None or any(
+                observed.get(field) != pin.get(field)
+                for field in ("image_id", "config_sha256", "service")
+            ):
+                _fail("container namespace absence identity differs from request")
+            absence = _require_mapping(observed.get("absence"), "container absence evidence")
+            if set(absence) != {"inspect", "ps_all"}:
+                _fail("container namespace absence evidence has unexpected fields")
+            inspect = _require_mapping(absence.get("inspect"), "container inspect absence")
+            if set(inspect) != {"outcome", "matched_container_id", "output_sha256"}:
+                _fail("container inspect absence has unexpected fields")
+            if (
+                inspect.get("outcome") != "no_such_object"
+                or inspect.get("matched_container_id") != container_id
+            ):
+                _fail("container inspect absence does not target the exact pinned ID")
+            _container_recovery_hex(
+                inspect.get("output_sha256"), "container inspect absence output SHA-256"
+            )
+            ps_all = _require_mapping(absence.get("ps_all"), "container ps-all absence")
+            if set(ps_all) != {"outcome", "output_sha256"}:
+                _fail("container ps-all absence has unexpected fields")
+            if ps_all.get("outcome") != "empty":
+                _fail("Docker ps -a still lists a container in the namespace")
+            _container_recovery_hex(
+                ps_all.get("output_sha256"), "container ps-all output SHA-256"
+            )
+        if len(seen) != len(requested):
+            _fail("container namespace absence attestation omitted a pinned container")
+        release = _require_mapping(
+            attestation.get("device_release"), "container absence device release"
+        )
+        release_fields = {"resource_id", "mapping_sha256", "mapping_detached"}
+        if request.get("device_release_gpu_uuid") is not None:
+            release_fields.add("gpu_uuid")
+        if set(release) != release_fields:
+            _fail("container absence device release has unexpected fields")
+        if (
+            release.get("resource_id") != request.get("device_release_resource_id")
+            or release.get("gpu_uuid") != request.get("device_release_gpu_uuid")
+            or release.get("mapping_sha256") != request.get("device_release_mapping_sha256")
+            or release.get("mapping_detached") is not True
+        ):
+            _fail("container absence device release differs from request")
+        _container_recovery_hex(attestation_sha256, "container absence attestation SHA-256")
+        return
+
     if attestation.get("schema_version") != CONTAINER_RECOVERY_ATTESTATION_SCHEMA:
         _fail("container recovery teardown attestation schema is unsupported")
     if attestation.get("request_sha256") != request_sha256:
@@ -4481,7 +4611,8 @@ def _validate_container_recovery_receipt(
         _fail("native container recovery returned a non-object")
     if result.get("schema_version") != CONTAINER_RECOVERY_RECEIPT_SCHEMA:
         _fail("native container recovery receipt schema is unsupported")
-    if result.get("status") != "recovered" or result.get("outcome") != "empty_namespace_recovered":
+    if (result.get("status") != "recovered"
+            or result.get("outcome") != _container_recovery_expected_outcome(request)):
         _fail("native container recovery did not return a completed recovery")
     for field, expected in (
         ("request_id", request["request_id"]),
@@ -4889,6 +5020,24 @@ def _probe_api_identity(
         port, "/v2/platform/compute/profiles?limit=100", timeout=request_timeout()
     )
     if profile_status != 200:
+        health_status, health_headers, health = _http_json(
+            port, "/v2/platform/health", timeout=request_timeout()
+        )
+        if (health_status == 200 and health.get("status") == "degraded"
+                and _single_header(health_headers, "x-fullmag-api-instance") == instance
+                and _single_header(health_headers, "x-api-contract-version") == contract_version):
+            # The API has already fenced its failed startup. Keep its verified
+            # identity without requiring a compute route or starting an owner.
+            raise RuntimeServiceOwnerStartupFailure(
+                "API startup entered diagnostic-only mode; inspect API startup logs for the cause",
+                api_identity={
+                    "api_instance_id": instance,
+                    "api_contract_version": contract_version,
+                    "build_identity": build_identity,
+                    "runtime_store_binding": store_binding,
+                },
+                api_port=port,
+            )
         _fail("API compute profile route is unavailable")
     return (
         {
@@ -5040,6 +5189,10 @@ def wait_for_api(
                     "API identity validation exceeded startup deadline"
                 )
             return {**identity, "profiles": profile}
+        except RuntimeServiceOwnerStartupFailure:
+            # Diagnostic availability is a definitive startup outcome, not a
+            # transport retry and not evidence of a ready native service.
+            raise
         except (RuntimeServiceError, OSError) as error:
             last_error = error
             if api_process_poll is not None and api_process_poll() is not None:
@@ -5477,15 +5630,25 @@ def start(
             "runtime_store_binding",
         )
     }
-    ensured = _owner_from_cli(
-        _run_cli(
-            paths,
-            ("runtime", "service-ensure", "--config", str(paths.config)),
-            timeout=timeout,
-            cli=cli,
-        ),
-        "service-ensure",
-    )
+    try:
+        ensured = _owner_from_cli(
+            _run_cli(
+                paths,
+                ("runtime", "service-ensure", "--config", str(paths.config)),
+                timeout=timeout,
+                cli=cli,
+            ),
+            "service-ensure",
+        )
+    except Exception as error:
+        # API liveness and native ownership are different facts. Preserve the
+        # verified API identity for fenced diagnostics without inventing an
+        # owner handle or retrying an operation with an unknown outcome.
+        raise RuntimeServiceOwnerStartupFailure(
+            f"runtime service ownership was not confirmed: {error}",
+            api_identity=api_identity,
+            api_port=port,
+        ) from error
     pinned = RuntimeHandle(paths, configuration, ensured, port, api_identity)
     owner_pin_durable = False
     try:

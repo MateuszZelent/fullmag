@@ -912,6 +912,47 @@ def _meshio_typed_topology(
     )
 
 
+def _compact_uncertified_volume_nodes(mesh: MeshData) -> MeshData:
+    """Drop Gmsh construction points outside the extracted volume topology.
+
+    Run before certification. Keep surviving node order and owner IDs, and
+    remap volume and boundary connectivity together. Periodic mappings and
+    previously issued certificates require their own explicit rebinding.
+    """
+    used = np.zeros(mesh.n_nodes, dtype=np.bool_)
+    used[mesh.cell_nodes] = True
+    if np.all(used):
+        return mesh
+    if (
+        mesh.periodic_boundary_pairs
+        or mesh.periodic_node_pairs
+        or mesh.periodic_mesh_certificate is not None
+        or mesh.mixed_layer_topology_certificate is not None
+    ):
+        raise ValueError("volume node compaction must precede periodic mapping and certification")
+    if np.any(~used[mesh.facet_nodes]):
+        raise ValueError("boundary facet references a node outside the volume topology")
+    retained = np.flatnonzero(used)
+    remap = np.full(mesh.n_nodes, -1, dtype=np.int32)
+    remap[retained] = np.arange(retained.size, dtype=np.int32)
+    vertex_identity = None
+    if mesh.vertex_identity is not None:
+        vertex_identity = dict(mesh.vertex_identity)
+        vertex_ids = mesh.vertex_identity["vertex_ids"]
+        vertex_identity["vertex_ids"] = [vertex_ids[int(index)] for index in retained]
+    emit_progress(
+        f"Gmsh: discarded {mesh.n_nodes - retained.size} construction nodes "
+        "not referenced by volume cells"
+    )
+    return replace(
+        mesh,
+        nodes=mesh.nodes[retained],
+        cell_nodes=remap[mesh.cell_nodes],
+        facet_nodes=remap[mesh.facet_nodes],
+        vertex_identity=vertex_identity,
+    )
+
+
 def _extract_mesh_data(
     gmsh: Any,
     quality: MeshQualityReport | None = None,

@@ -62,6 +62,8 @@ class ScriptPins:
     config_sha256: str
     source_root: Path
     port: int
+    backend_container_id: str = ""
+    frontend_container_id: str = ""
 
 
 def _bounded_regular(path: Path, maximum: int, label: str) -> bytes | None:
@@ -496,9 +498,11 @@ def _discover_pins(
         if not candidates:
             raise DiscoveryError("no exactly validated running DEV group matches the selected source")
         raise DiscoveryError("multiple validated running DEV groups match the selected source")
-    (attempt, config_sha256, _backend_id, _frontend_id), actual_port = next(iter(candidates.items()))
+    (attempt, config_sha256, backend_id, frontend_id), actual_port = next(iter(candidates.items()))
     return ScriptPins(attempt=attempt, config_sha256=config_sha256,
-                      source_root=selected, port=actual_port)
+                      source_root=selected, port=actual_port,
+                      backend_container_id=backend_id,
+                      frontend_container_id=frontend_id)
 
 
 def activate_discovered(args) -> None:

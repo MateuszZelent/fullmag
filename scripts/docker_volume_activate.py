@@ -1645,7 +1645,7 @@ def _resume_retained_retirement(
     )
 
 
-def activate(args: argparse.Namespace) -> None:
+def activate(args: argparse.Namespace) -> dict[str, object]:
     from docker_dev import _compose_identity, _select_source
     from docker_dev_host import require_host
 
@@ -1859,6 +1859,7 @@ def activate(args: argparse.Namespace) -> None:
         # durable.  A committed API result with a failed receipt publication
         # must not look like a safe retry.
         _record_activation_result(operation, result)
+        return dict(result)
 
 
 def _parser() -> argparse.ArgumentParser:

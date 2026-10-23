@@ -369,6 +369,7 @@ export function resolveSimulationPreparationViewModel(
   preparation: ResourceResult<SimulationPreparationResource | null>,
   sessionStatus: ResourceResult<LiveStatusResource>,
   nowUnixMs: number | null,
+  connectionDisrupted = false,
 ): SimulationPreparationViewModel {
   const pendingActivation = resolvePendingActivationNotice(sessionStatus);
   const hasPublishedPreparation =
@@ -402,7 +403,12 @@ export function resolveSimulationPreparationViewModel(
     ? stages.find((stage) => stage.id === snapshot.failure?.stage_id) ?? null
     : null;
   const progress = resolveProgress(activeStage, snapshot);
-  const isStale = preparation.status === "stale";
+  // A retained snapshot is also stale while a newer revision is being fetched.
+  // Only a failed refresh or an actual transport disruption means reconnecting.
+  const isStale =
+    connectionDisrupted ||
+    preparation.error !== null ||
+    preparation.refreshError != null;
   const isFailed = snapshot.status === "failed";
   const isReady = snapshot.status === "ready";
   const failurePredicates = snapshot.failure

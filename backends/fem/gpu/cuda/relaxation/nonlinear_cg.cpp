@@ -1865,6 +1865,9 @@ int gpu_relax_nonlinear_cg_step(
         ctx, accepted_step, accepted_snapshot, accepted_refined);
     gpu.fields.accepted_observables_valid = true;
     gpu.fields.accepted_observables_step = ctx.state.step_count;
+    // Record the reductions actually evaluated by the accepted NCG path;
+    // the control-readback finalizer does not evaluate or record them again.
+    gpu_rk_note_completed_final_reductions(ctx);
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;

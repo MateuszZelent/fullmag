@@ -234,6 +234,24 @@ describe("resolveGeometryObjectPanelModel", () => {
     });
   });
 
+  it("keeps a nanometer-scale thickness visible in micron dimensions", () => {
+    const model = resolveGeometryObjectPanelModel(baseSelection, {
+      objects: [
+        {
+          geometry: {
+            geometry_kind: "Box",
+            geometry_params: { size: [2e-6, 6e-7, 1.6e-9] },
+          },
+          id: "box",
+          name: "Box",
+        },
+      ],
+      revision: 5,
+    });
+
+    expect(model.dimensions).toBe("2.0 x 0.6 x 0.0016 um");
+  });
+
   it("keeps primitive draft selections separate from committed scene objects", () => {
     const model = resolveGeometryObjectPanelModel(
       {

@@ -7,8 +7,9 @@ use fullmag_authoring::{
     ScriptBuilderState,
 };
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, Output, Stdio};
 use std::sync::Arc;
@@ -18,6 +19,14 @@ use std::time::{Duration, Instant};
 const BOUNDED_PYTHON_HELPER_TIMEOUT: Duration = Duration::from_secs(30);
 const BOUNDED_PYTHON_HELPER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const BOUNDED_PYTHON_HELPER_LOG_LIMIT: u64 = 1024 * 1024;
+const STREAMED_PYTHON_HELPER_LINE_LIMIT: usize = 16 * 1024;
+const STREAMED_PYTHON_HELPER_STDERR_LIMIT: usize = 128 * 1024;
+const STREAMED_PYTHON_HELPER_TRUNCATION_MARKER: &str = "[earlier helper stderr truncated]\n";
+const STREAMED_PYTHON_HELPER_STDERR_TAIL_LIMIT: usize =
+    STREAMED_PYTHON_HELPER_STDERR_LIMIT - STREAMED_PYTHON_HELPER_TRUNCATION_MARKER.len();
+const STREAMED_PYTHON_PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+const PYTHON_PROGRESS_LABEL_LIMIT: usize = 256;
+const PYTHON_PROGRESS_MESSAGE_LIMIT: usize = 1024;
 
 pub(crate) fn repo_root() -> PathBuf {
     if let Some(root) = std::env::current_exe().ok().and_then(|executable| {
@@ -719,6 +728,26 @@ pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root(
     requested_execution: &fullmag_application::RequestedExecution,
     study: &StudyPlan,
 ) -> Result<Vec<fullmag_application::StudyStepExecutionInput>, ApiError> {
+    scene_document_to_study_execution_inputs_with_asset_root_and_progress(
+        repo_root,
+        workspace_root,
+        asset_root,
+        scene_document,
+        requested_execution,
+        study,
+        None,
+    )
+}
+
+pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root_and_progress(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    study: &StudyPlan,
+    progress_sender: Option<&tokio::sync::mpsc::Sender<PythonHelperProgress>>,
+) -> Result<Vec<fullmag_application::StudyStepExecutionInput>, ApiError> {
     requested_execution
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
@@ -728,6 +757,7 @@ pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root(
         asset_root,
         scene_document,
         requested_execution,
+        progress_sender,
     )?;
     let enabled_steps = study.steps.iter().filter(|step| step.enabled);
     enabled_steps
@@ -821,13 +851,15 @@ fn scene_document_to_prepared_stages_with_asset_root(
     asset_root: Option<&Path>,
     scene_document: &SceneDocument,
     requested_execution: &fullmag_application::RequestedExecution,
+    progress_sender: Option<&tokio::sync::mpsc::Sender<PythonHelperProgress>>,
 ) -> Result<Vec<fullmag_application::script_stage_contract::ResolvedScriptStage>, ApiError> {
-    let config = scene_document_to_prepared_script_config_with_asset_root(
+    let config = scene_document_to_prepared_script_config_with_asset_root_and_progress(
         repo_root,
         workspace_root,
         asset_root,
         scene_document,
         requested_execution,
+        progress_sender,
     )?;
     materialize_scene_document_stages(config)
 }
@@ -874,13 +906,32 @@ pub(crate) fn scene_document_to_prepared_script_config_with_asset_root(
     scene_document: &SceneDocument,
     requested_execution: &fullmag_application::RequestedExecution,
 ) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
-    capture_authored_scene_with_asset_root(
+    scene_document_to_prepared_script_config_with_asset_root_and_progress(
+        repo_root,
+        workspace_root,
+        asset_root,
+        scene_document,
+        requested_execution,
+        None,
+    )
+}
+
+fn scene_document_to_prepared_script_config_with_asset_root_and_progress(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    progress_sender: Option<&tokio::sync::mpsc::Sender<PythonHelperProgress>>,
+) -> Result<fullmag_application::script_stage_contract::ScriptExecutionConfig, ApiError> {
+    capture_authored_scene_with_asset_root_and_progress(
         repo_root,
         workspace_root,
         asset_root,
         scene_document,
         requested_execution,
         SceneCaptureKind::PreparedExecutionConfig,
+        progress_sender,
     )
 }
 
@@ -938,6 +989,26 @@ fn capture_authored_scene_with_asset_root<T: serde::de::DeserializeOwned>(
     requested_execution: &fullmag_application::RequestedExecution,
     kind: SceneCaptureKind,
 ) -> Result<T, ApiError> {
+    capture_authored_scene_with_asset_root_and_progress(
+        repo_root,
+        workspace_root,
+        asset_root,
+        scene_document,
+        requested_execution,
+        kind,
+        None,
+    )
+}
+
+fn capture_authored_scene_with_asset_root_and_progress<T: serde::de::DeserializeOwned>(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    kind: SceneCaptureKind,
+    progress_sender: Option<&tokio::sync::mpsc::Sender<PythonHelperProgress>>,
+) -> Result<T, ApiError> {
     requested_execution
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
@@ -977,7 +1048,10 @@ fn capture_authored_scene_with_asset_root<T: serde::de::DeserializeOwned>(
         asset_root.unwrap_or(workspace_root).display().to_string(),
     ];
     kind.append_preparation_args(&mut helper_args);
-    let output = run_python_helper(repo_root, &helper_args);
+    let output = match progress_sender {
+        Some(sender) => run_python_helper_with_progress(repo_root, &helper_args, sender),
+        None => run_python_helper(repo_root, &helper_args),
+    };
     let _ = std::fs::remove_file(&scene_path);
     let output = output?;
     if !output.status.success() {
@@ -1052,6 +1126,15 @@ pub(crate) fn python_workspace_root(root: &Path) -> PathBuf {
 enum PythonHelperOutputPolicy<'a> {
     Capture,
     Bounded { workspace_root: &'a Path },
+    Progress {
+        sender: &'a tokio::sync::mpsc::Sender<PythonHelperProgress>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PythonHelperProgress {
+    pub label: String,
+    pub message: String,
 }
 
 pub(crate) fn run_python_helper(repo_root: &Path, args: &[String]) -> Result<Output, ApiError> {
@@ -1072,6 +1155,33 @@ pub(crate) fn run_python_helper_bounded(
     )
 }
 
+fn resolve_fem_mesh_cache_dir(
+    configured: Option<PathBuf>,
+    default: impl FnOnce() -> Result<PathBuf, ApiError>,
+) -> Result<PathBuf, ApiError> {
+    let Some(path) = configured else {
+        return default();
+    };
+    if path.as_os_str().is_empty() || !path.is_absolute() {
+        return Err(ApiError::internal(
+            "FULLMAG_FEM_MESH_CACHE_DIR must be a non-empty absolute path",
+        ));
+    }
+    Ok(path)
+}
+
+fn run_python_helper_with_progress(
+    repo_root: &Path,
+    args: &[String],
+    sender: &tokio::sync::mpsc::Sender<PythonHelperProgress>,
+) -> Result<Output, ApiError> {
+    run_python_helper_with_policy(
+        repo_root,
+        args,
+        PythonHelperOutputPolicy::Progress { sender },
+    )
+}
+
 fn run_python_helper_with_policy(
     repo_root: &Path,
     args: &[String],
@@ -1084,15 +1194,23 @@ fn run_python_helper_with_policy(
     let pythonpath = real_root.join("packages").join("fullmag-py").join("src");
     let packaged_site_packages = real_root.join("python").join("site-packages");
     let python_extension_root = real_root.join(".fullmag").join("local");
-    let fem_mesh_cache_dir = state_root(&real_root)?
-        .join("local")
-        .join("cache")
-        .join("fem_mesh_assets");
+    let fem_mesh_cache_dir = resolve_fem_mesh_cache_dir(
+        std::env::var_os("FULLMAG_FEM_MESH_CACHE_DIR").map(PathBuf::from),
+        || {
+            Ok(state_root(&real_root)?
+                .join("local")
+                .join("cache")
+                .join("fem_mesh_assets"))
+        },
+    )?;
     let inherited_pythonpath = std::env::var("PYTHONPATH").ok();
     {
         let mut command = python_command(repo_root)?;
         command.args(args);
         command.env("PYTHONUNBUFFERED", "1");
+        if matches!(policy, PythonHelperOutputPolicy::Progress { .. }) {
+            command.env("FULLMAG_PROGRESS", "1");
+        }
         command.env("FULLMAG_FEM_MESH_CACHE_DIR", &fem_mesh_cache_dir);
         let mut python_paths = Vec::new();
         if pythonpath.is_dir() {
@@ -1133,8 +1251,207 @@ fn run_python_helper_with_policy(
                     Err(BoundedHelperError::Started(error)) => Err(error),
                 }
             }
+            PythonHelperOutputPolicy::Progress { sender } => {
+                run_progress_python_helper(command, sender).map_err(|error| {
+                    ApiError::internal(format!("Python helper progress capture failed: {error}"))
+                })
+            }
         }
     }
+}
+
+fn run_progress_python_helper(
+    mut command: ProcessCommand,
+    sender: &tokio::sync::mpsc::Sender<PythonHelperProgress>,
+) -> io::Result<Output> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::other("Python helper stdout pipe was unavailable"));
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::other("Python helper stderr pipe was unavailable"));
+    };
+
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.read_to_end(&mut bytes);
+        (result, bytes)
+    });
+    let sender = sender.clone();
+    let stderr_reader = thread::spawn(move || read_progress_stderr(stderr, sender));
+
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(error);
+        }
+    };
+    let stdout_result = stdout_reader
+        .join()
+        .map_err(|_| io::Error::other("Python helper stdout reader panicked"));
+    let stderr_result = stderr_reader
+        .join()
+        .map_err(|_| io::Error::other("Python helper stderr reader panicked"));
+    let (stdout_read_result, stdout) = stdout_result?;
+    let stderr = stderr_result??;
+    stdout_read_result?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_progress_stderr(
+    stderr: impl Read,
+    sender: tokio::sync::mpsc::Sender<PythonHelperProgress>,
+) -> io::Result<Vec<u8>> {
+    let mut reader = BufReader::new(stderr);
+    let mut stderr_tail = VecDeque::with_capacity(STREAMED_PYTHON_HELPER_STDERR_TAIL_LIMIT);
+    let mut stderr_bytes = 0usize;
+    let mut stderr_truncated = false;
+    let mut last_sent = None;
+    let mut pending = None;
+    let mut receiver_closed = false;
+
+    while let Some((line, truncated)) = read_bounded_progress_line(&mut reader)? {
+        stderr_bytes = stderr_bytes.saturating_add(line.len());
+        stderr_truncated |= truncated || stderr_bytes > STREAMED_PYTHON_HELPER_STDERR_TAIL_LIMIT;
+        append_bounded_stderr_tail(
+            &mut stderr_tail,
+            &line,
+            STREAMED_PYTHON_HELPER_STDERR_TAIL_LIMIT,
+        );
+
+        if truncated || receiver_closed {
+            continue;
+        }
+        let Some(progress) = parse_python_progress_line(&line) else {
+            continue;
+        };
+        let ready_to_send = last_sent
+            .is_none_or(|last: Instant| last.elapsed() >= STREAMED_PYTHON_PROGRESS_INTERVAL);
+        if ready_to_send {
+            // The stderr reader must always drain the child pipe. If the
+            // bounded UI queue is full, keep only the newest event and retry
+            // on a later event or at EOF rather than blocking the helper.
+            match sender.try_send(progress) {
+                Ok(()) => {
+                    last_sent = Some(Instant::now());
+                    pending = None;
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(progress)) => {
+                    pending = Some(progress);
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    receiver_closed = true;
+                    pending = None;
+                }
+            }
+        } else {
+            pending = Some(progress);
+        }
+    }
+
+    if !receiver_closed {
+        if let Some(progress) = pending {
+            let _ = sender.try_send(progress);
+        }
+    }
+    let mut retained = Vec::with_capacity(STREAMED_PYTHON_HELPER_STDERR_LIMIT);
+    if stderr_truncated {
+        retained.extend_from_slice(STREAMED_PYTHON_HELPER_TRUNCATION_MARKER.as_bytes());
+    }
+    retained.extend(stderr_tail);
+    Ok(retained)
+}
+
+fn append_bounded_stderr_tail(tail: &mut VecDeque<u8>, bytes: &[u8], limit: usize) {
+    if bytes.len() >= limit {
+        tail.clear();
+        tail.extend(bytes[bytes.len() - limit..].iter().copied());
+        return;
+    }
+    let overflow = tail.len().saturating_add(bytes.len()).saturating_sub(limit);
+    for _ in 0..overflow {
+        tail.pop_front();
+    }
+    tail.extend(bytes.iter().copied());
+}
+
+fn read_bounded_progress_line(
+    reader: &mut impl BufRead,
+) -> io::Result<Option<(Vec<u8>, bool)>> {
+    let mut line = Vec::with_capacity(256);
+    let mut truncated = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok((!line.is_empty()).then_some((line, truncated)));
+        }
+        let count = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        let remaining = STREAMED_PYTHON_HELPER_LINE_LIMIT.saturating_sub(line.len());
+        let retained = count.min(remaining);
+        line.extend_from_slice(&available[..retained]);
+        truncated |= retained < count;
+        let line_complete = available.get(count.saturating_sub(1)) == Some(&b'\n');
+        reader.consume(count);
+        if line_complete {
+            return Ok(Some((line, truncated)));
+        }
+    }
+}
+
+fn parse_python_progress_line(line: &[u8]) -> Option<PythonHelperProgress> {
+    let line = String::from_utf8_lossy(line);
+    let payload = line
+        .trim_end_matches(['\r', '\n'])
+        .strip_prefix("[fullmag-progress] ")?;
+    let (label, message) = if let Some(json) = payload.strip_prefix("json:") {
+        let value: Value = serde_json::from_str(json).ok()?;
+        let message = value.get("message")?.as_str()?.trim().to_owned();
+        let label = value
+            .get("progress_label")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| message.clone());
+        (label, message)
+    } else {
+        let message = payload.trim().to_owned();
+        (message.clone(), message)
+    };
+    if message.is_empty() {
+        return None;
+    }
+    Some(PythonHelperProgress {
+        label: bounded_progress_text(&label, PYTHON_PROGRESS_LABEL_LIMIT),
+        message: bounded_progress_text(&message, PYTHON_PROGRESS_MESSAGE_LIMIT),
+    })
+}
+
+fn bounded_progress_text(value: &str, max_chars: usize) -> String {
+    let mut bounded = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        bounded.push_str("...");
+    }
+    bounded
 }
 
 enum BoundedHelperError {
@@ -1360,6 +1677,27 @@ mod tests {
     use super::*;
     use crate::artifacts::{parse_eigen_dispersion_csv, sanitize_artifact_relative_path};
     use axum::http::StatusCode;
+
+    #[test]
+    fn fem_mesh_cache_path_honors_only_nonempty_absolute_overrides() {
+        let workspace = tempfile::tempdir().expect("create cache-path test workspace");
+        let configured = workspace.path().join("build-cache");
+        let fallback = workspace.path().join("state-cache");
+
+        assert_eq!(
+            resolve_fem_mesh_cache_dir(Some(configured.clone()), || Ok(fallback.clone()))
+                .expect("absolute configured cache path is accepted"),
+            configured,
+        );
+        assert_eq!(
+            resolve_fem_mesh_cache_dir(None, || Ok(fallback.clone()))
+                .expect("absent override uses the state-root fallback"),
+            fallback,
+        );
+        assert!(resolve_fem_mesh_cache_dir(Some(PathBuf::new()), || Ok(PathBuf::new())).is_err());
+        assert!(resolve_fem_mesh_cache_dir(Some("relative-cache".into()), || Ok(PathBuf::new()))
+            .is_err());
+    }
 
     #[test]
     fn geometry_materialization_is_explicit_and_only_uses_execution_config_export() {

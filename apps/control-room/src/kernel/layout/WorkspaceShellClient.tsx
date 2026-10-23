@@ -8,6 +8,10 @@ import {
 } from "./SimulationStartupOverlay";
 import { useSessionCollection } from "../resources/useSessionCollection";
 import { useSessionBootstrapStatus } from "../resources/useSessionStatus";
+import {
+  usePlatformHealthResource,
+  usePlatformRuntimeServiceResource,
+} from "../resources/runtimeExplorerResources";
 import { Button } from "@/shared/ui/Button";
 import { CommandFeedbackPresenter } from "./CommandFeedbackPresenter";
 import { WorkspaceRenderProfiler } from "../performance/reactRenderProfiler";
@@ -49,22 +53,28 @@ export function WorkspaceShellClient() {
   const refetchSessions = sessions.resource.refetch;
   const refetchStatus = sessionStatus.refetch;
   const collectionStatus = sessions.resource.status;
-  // Realtime starts only after a session identity is confirmed. While the
-  // collection is empty, discover sessions activated by the local launcher.
+  // Realtime starts only after a session identity is confirmed. While no
+  // session is confirmed, discover launcher sessions and recover transient
+  // collection failures without relaxing the no-session creation guard.
   useEffect(() => {
     if (
-      sessions.state !== "no-session" ||
+      (sessions.state !== "no-session" && sessions.state !== "error") ||
       (collectionStatus !== "ready" && collectionStatus !== "error")
     ) {
       return;
     }
+    let refreshStarted = false;
+    let timer: number | null = null;
     const refreshVisibleCollection = () => {
-      if (document.visibilityState === "visible") refetchSessions();
+      if (refreshStarted || document.visibilityState !== "visible") return;
+      refreshStarted = true;
+      if (timer !== null) window.clearTimeout(timer);
+      refetchSessions();
     };
-    const timer = window.setTimeout(refreshVisibleCollection, 5_000);
+    timer = window.setTimeout(refreshVisibleCollection, 5_000);
     document.addEventListener("visibilitychange", refreshVisibleCollection);
     return () => {
-      window.clearTimeout(timer);
+      if (timer !== null) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", refreshVisibleCollection);
     };
   }, [collectionStatus, refetchSessions, sessions.state]);
@@ -129,6 +139,7 @@ function ProjectWorkspaceShell({
   return (
     <WorkspaceContentScopeProvider scope="project">
       <SlotHost slotId="app-menu" />
+      <RuntimeDegradedBanner />
       <section
         className="flex flex-wrap items-center justify-between gap-2 border-b border-fm-border bg-fm-surface px-4 py-2"
         data-project-workspace-session-state={sessionState}
@@ -185,6 +196,7 @@ function HomeShell({
           <Button size="sm" type="button" variant="ghost" onClick={onRetry}>Retry</Button>
         </div>
       ) : null}
+      <RuntimeDegradedBanner />
       <SlotHost loadingFallback={startScreenFallback} slotId="start-screen" />
       <div className="fm-workspace-overlay-host">
         <SlotHost slotId="overlay" />
@@ -224,6 +236,7 @@ function ActiveWorkspaceShell() {
     <>
       <SlotHost slotId="app-menu" />
       <SlotHost slotId="ribbon" />
+      <RuntimeDegradedBanner />
       <WorkspaceRenderProfiler id="WorkspaceDockLayout">
         <WorkspaceDockLayout />
       </WorkspaceRenderProfiler>
@@ -235,6 +248,49 @@ function ActiveWorkspaceShell() {
       </div>
       <CommandFeedbackPresenter />
     </>
+  );
+}
+
+function RuntimeDegradedBanner() {
+  const health = usePlatformHealthResource({ pollIntervalMs: 5_000 });
+  const degraded = health.data?.status === "degraded";
+  const runtimeService = usePlatformRuntimeServiceResource({
+    enabled: degraded,
+    pollIntervalMs: degraded ? 5_000 : 0,
+  });
+
+  if (!degraded) return null;
+
+  const service = runtimeService.data;
+  const reasonCode = service?.reason.code.trim();
+  const reasonMessage = service?.reason.message.trim();
+  return (
+    <div
+      aria-label="Native runtime degraded"
+      className="fm-runtime-degraded-banner"
+      data-runtime-state="degraded"
+      role="alert"
+    >
+      <div className="fm-runtime-degraded-banner__copy">
+        <strong>Native runtime is degraded. New computation requests are blocked.</strong>
+        <span>
+          {reasonMessage || (runtimeService.status === "error"
+            ? "Runtime diagnostics are temporarily unavailable."
+            : "Loading the runtime failure reason.")}
+        </span>
+        {service ? (
+          <span className="fm-runtime-degraded-banner__reason">
+            Runtime service: {service.state}
+            {reasonCode ? ` · Reason: ${reasonCode}` : ""}
+          </span>
+        ) : null}
+        <span>
+          No computation will be rerun automatically. API diagnostics remain available;
+          previously loaded results are retained. Inspect the runtime logs for the failed
+          stage and cause. A task&apos;s completion status is shown separately from API availability.
+        </span>
+      </div>
+    </div>
   );
 }
 

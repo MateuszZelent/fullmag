@@ -985,6 +985,10 @@ int gpu_relax_projected_gradient_bb_step(
     ctx.relaxation.accepted_energy_proof.delta_upper_j =
         accepted_energy_delta_upper_j;
     ctx.relaxation.accepted_energy_proof.armijo_rhs_j = armijo_increment_rhs_j;
+    // The direct minimizer already evaluated its device energy, gradient and
+    // field reductions. Its finalizer only reads those control scalars, unlike
+    // the RK finalizer that both evaluates and records the reductions.
+    gpu_rk_note_completed_final_reductions(ctx);
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;

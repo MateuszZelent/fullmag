@@ -61,6 +61,15 @@ resolved execution i rzeczywistego UUID.
 
 ### Accepted Workspace — obserwacje końcowe i carrier live (20.10.2026)
 
+Odczyt opublikowanego `prepared_initial_state` dla `m` ma osobny kontrakt
+w `resource-first-control-room-api-v2.md`: może być czytelny przed rozwiązaniem
+runtime lane, przy zgodnych preparation/plan/frame/domain/topology/layout.
+Nie promuje `provider`, legalności Compute, strict/extended, backendu,
+urządzenia ani precyzji. `auto` i requested intent pozostają zachowane.
+Dotyczy odczytu danych początkowych, nie nowego ewaluatora fizyki; semantyka
+`m` pozostaje w `../physics/0150-exchange-only-geometry-and-magnetization-bootstrap.md`.
+Implementacja i runtime tej poprawki wymagają odrębnych dowodów.
+
 Stan tej poprawki: `source_visible`, `validation_state=unvalidated`,
 `validated_workloads=[]`; kompilacja i runtime **NOT VERIFIED**. Nie promuje
 ona wykonania solvera, strategii demag ani kwalifikacji czterech lane.

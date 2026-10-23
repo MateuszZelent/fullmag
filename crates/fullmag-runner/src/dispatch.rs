@@ -3838,7 +3838,10 @@ fn execute_native_fem(
     let paused: bool;
     let preview_handoff: crate::fem::relax::preview::FemPreviewHandoff;
 
-    let requires_gpu_rk_execution_receipt = native_relaxation_step.is_none();
+    let requires_gpu_execution_receipt = native_relaxation_step.is_none()
+        || native_relaxation_step.is_some_and(|control| {
+            crate::fem::relax::algorithm::is_direct_minimizer(control.algorithm)
+        });
     if let Some(native_step_control) = native_relaxation_step {
         let outcome = crate::fem::relax::direct_minimizer::execute_direct_minimizer(
             &mut backend,
@@ -3912,7 +3915,7 @@ fn execute_native_fem(
             cancelled,
             paused,
             preview_handoff,
-            fem_gpu_receipt_request: requires_gpu_rk_execution_receipt.then(|| {
+            fem_gpu_receipt_request: requires_gpu_execution_receipt.then(|| {
                 if execution_mode == ExecutionMode::Strict {
                     "strict_device".to_string()
                 } else if native_execution_mode == "hybrid_legacy_sparse" {

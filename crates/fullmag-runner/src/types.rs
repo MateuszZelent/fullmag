@@ -4012,6 +4012,41 @@ impl FemGpuExecutionReceipt {
     }
 }
 
+/// Native direct-minimizer accounting, distinct from an RK time integrator.
+/// `accounting.integrator` is `not_used`: the algorithm is identified by a
+/// dedicated native operator bit committed with the accepted minimizer step.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FemGpuMinimizerExecutionReceipt {
+    pub schema_version: String,
+    pub algorithm: String,
+    pub accounting: FemGpuExecutionReceipt,
+}
+
+impl FemGpuMinimizerExecutionReceipt {
+    pub fn validate_strict_device(&self) -> Result<(), &'static str> {
+        let algorithm_bit = match self.algorithm.as_str() {
+            "projected_gradient_bb" => 1_u64 << 10,
+            "nonlinear_cg" => 1_u64 << 11,
+            _ => return Err("fem_gpu_minimizer_receipt_unknown_algorithm"),
+        };
+        let minimizer_bits = (1_u64 << 10) | (1_u64 << 11);
+        let time_evolution_bits = (1_u64 << 5) | (1_u64 << 6) | (1_u64 << 7);
+        let receipt = &self.accounting;
+        if self.schema_version != "fullmag.fem.gpu.minimizer-execution-receipt.v1"
+            || receipt.integrator != "not_used"
+            || receipt.required_operator_mask & minimizer_bits != algorithm_bit
+            || receipt.required_operator_mask & time_evolution_bits != 0
+            || receipt.requested != "strict_device"
+            || receipt.precision != "double"
+            || receipt.device_ordinal != 0
+        {
+            return Err("fem_gpu_minimizer_receipt_identity_mismatch");
+        }
+        receipt.validate_strict_device()
+    }
+}
+
 #[cfg(test)]
 mod fem_gpu_execution_receipt_contract_tests {
     use super::*;
@@ -4419,6 +4454,9 @@ pub struct ExecutionProvenance {
     /// GPU residency without inferring execution from the RK plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_gpu_execution_receipt: Option<FemGpuExecutionReceipt>,
+    /// Native accounting for accepted PG-BB/NCG steps, without RK operators.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_minimizer_execution_receipt: Option<FemGpuMinimizerExecutionReceipt>,
     /// Legacy compatibility observations retained for historical artifacts.
     /// Physics-graph realization must never infer an executed module from a
     /// kind-only observation.

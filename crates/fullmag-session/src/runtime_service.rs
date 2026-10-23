@@ -30,6 +30,9 @@ use crate::{
     FMS_SCHEDULER_RESOURCE_POOL_SCHEMA,
 };
 
+pub mod retained_cancelled_runs;
+pub mod container_recovery_proof;
+
 pub const RUNTIME_SERVICE_OWNER_SCHEMA: &str = "runtime_service_owner.v1";
 pub const RUNTIME_SERVICE_CONFIG_SCHEMA_V1: &str = "runtime_service_config.v1";
 pub const RUNTIME_SERVICE_CONFIG_SCHEMA_V2: &str = "runtime_service_config.v2";
@@ -43,6 +46,8 @@ pub const RUNTIME_SERVICE_RECOVERY_SCHEMA: &str = "runtime_service_recovery.v1";
 /// widened to accept a Ready owner or a Docker teardown attestation.
 pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA: &str =
     "runtime_service_container_recovery_request.v1";
+pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2: &str =
+    "runtime_service_container_recovery_request.v2";
 pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_SCHEMA: &str =
     "runtime_service_container_recovery.v1";
 
@@ -260,13 +265,30 @@ pub struct RuntimeServiceContainerRecoveryRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_release_gpu_uuid: Option<String>,
     pub containers: Vec<RuntimeServiceContainerPin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_cancelled_runs: Option<Vec<retained_cancelled_runs::RetainedCancelledRunPin>>,
 }
 
 impl RuntimeServiceContainerRecoveryRequest {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA {
-            bail!("unsupported runtime service container recovery request schema");
-        }
+        let retains_cancelled_runs = match self.schema_version.as_str() {
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA
+                if self.retained_cancelled_runs.is_none() =>
+            {
+                false
+            }
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA => {
+                bail!("v1 runtime service container recovery request cannot retain cancelled runs")
+            }
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2 => {
+                let pins = self.retained_cancelled_runs.as_deref().context(
+                    "v2 runtime service container recovery request requires retained cancelled-run pins",
+                )?;
+                validate_retained_cancelled_run_pins(pins)?;
+                true
+            }
+            _ => bail!("unsupported runtime service container recovery request schema"),
+        };
         validate_canonical_uuid(&self.request_id, "runtime service container recovery request id")?;
         for (digest, field) in [
             (&self.config_sha256, "runtime service container recovery config SHA-256"),
@@ -315,7 +337,11 @@ impl RuntimeServiceContainerRecoveryRequest {
                 "runtime service container recovery requires a Ready or Unknown expected owner"
             );
         }
-        require_recoverable_owner_identity(&self.expected_owner)?;
+        if retains_cancelled_runs {
+            require_recoverable_owner_identity_v2(&self.expected_owner)?;
+        } else {
+            require_recoverable_owner_identity(&self.expected_owner)?;
+        }
         validate_text(
             &self.device_release_resource_id,
             "runtime service container recovery device resource id",
@@ -369,6 +395,35 @@ impl RuntimeServiceContainerRecoveryRequest {
         self.validate()?;
         Ok(crate::canonical_json_sha256(&serde_json::to_value(self)?))
     }
+}
+
+fn validate_retained_cancelled_run_pins(
+    pins: &[retained_cancelled_runs::RetainedCancelledRunPin],
+) -> Result<()> {
+    if pins.is_empty() || pins.len() > retained_cancelled_runs::MAX_RETAINED_CANCELLED_RUN_PINS {
+        bail!(
+            "retained cancelled-run pin count must be between 1 and {}",
+            retained_cancelled_runs::MAX_RETAINED_CANCELLED_RUN_PINS
+        );
+    }
+    let mut run_ids = BTreeSet::new();
+    for pin in pins {
+        validate_store_id(&pin.run_id).context("retained cancelled-run pin id")?;
+        validate_lower_hex(
+            &pin.run_intent_sha256,
+            "retained cancelled-run intent SHA-256",
+            64,
+        )?;
+        validate_lower_hex(
+            &pin.run_catalog_sha256,
+            "retained cancelled-run catalog SHA-256",
+            64,
+        )?;
+        if !run_ids.insert(pin.run_id.as_str()) {
+            bail!("retained cancelled-run pins contain a duplicate run id");
+        }
+    }
+    Ok(())
 }
 
 /// Durable result of a Docker namespace recovery. `failed` is the resulting
@@ -447,7 +502,10 @@ impl RuntimeServiceContainerRecoveryReceipt {
         if self.owner_state_after != "failed" {
             bail!("runtime service container recovery owner state must be failed");
         }
-        if self.outcome != "empty_namespace_recovered" {
+        if !matches!(
+            self.outcome.as_str(),
+            "empty_namespace_recovered" | "retained_cancelled_runs_recovered"
+        ) {
             bail!("runtime service container recovery has an unsupported outcome");
         }
         if !matches!(self.status.as_str(), "prepared" | "recovered") {
@@ -1119,6 +1177,24 @@ fn require_recoverable_owner_identity(owner: &RuntimeServiceOwnerDescriptor) -> 
     {
         bail!("unknown runtime service owner has a terminal child status");
     }
+    if owner.build_commit.is_none()
+        || owner.build_snapshot.is_none()
+        || owner.compute_pool_generation.is_none()
+        || owner.preparation_pool_generation.is_none()
+        || owner.compute_pool_id.is_none()
+        || owner.preparation_pool_id.is_none()
+    {
+        bail!("runtime service container recovery requires complete owner identity");
+    }
+    Ok(())
+}
+
+fn require_recoverable_owner_identity_v2(owner: &RuntimeServiceOwnerDescriptor) -> Result<()> {
+    if owner.children.len() != 2 {
+        bail!("runtime service container recovery requires exactly two owner children");
+    }
+    expected_child_role(owner, RUNTIME_SERVICE_COMPUTE_ROLE)?;
+    expected_child_role(owner, RUNTIME_SERVICE_PREPARATION_ROLE)?;
     if owner.build_commit.is_none()
         || owner.build_snapshot.is_none()
         || owner.compute_pool_generation.is_none()
@@ -2023,9 +2099,38 @@ impl RuntimeServiceConfig {
         recovery_build_commit: &str,
         recovery_build_snapshot: &str,
     ) -> Result<RuntimeServiceContainerRecoveryReceipt> {
+        let proof = container_recovery_proof::RuntimeServiceContainerRecoveryProof::Exited(
+            attestation.clone(),
+        );
+        Self::recover_container_with_proof(
+            store,
+            candidate,
+            configuration_bytes,
+            request,
+            request_sha256,
+            &proof,
+            recovery_build_commit,
+            recovery_build_snapshot,
+        )
+    }
+
+    /// Recover a stopped Docker runtime namespace using either the existing
+    /// exited-container proof or the recovery-only exact-ID absence proof.
+    /// Absence is accepted only for v2 requests that retain explicitly pinned
+    /// cancelled runs; it never fabricates container exit or native drain.
+    pub fn recover_container_with_proof(
+        store: &SessionStore,
+        candidate: &Self,
+        configuration_bytes: &[u8],
+        request: &RuntimeServiceContainerRecoveryRequest,
+        request_sha256: &str,
+        proof: &container_recovery_proof::RuntimeServiceContainerRecoveryProof,
+        recovery_build_commit: &str,
+        recovery_build_snapshot: &str,
+    ) -> Result<RuntimeServiceContainerRecoveryReceipt> {
         candidate.validate()?;
         request.validate()?;
-        attestation.validate_without_request()?;
+        proof.validate_for_request(request, request_sha256)?;
         if configuration_bytes.len() > MAX_RECOVERY_REQUEST_BYTES {
             bail!("runtime service container recovery configuration exceeds its byte budget");
         }
@@ -2057,7 +2162,6 @@ impl RuntimeServiceConfig {
             bail!("runtime service container recovery target differs from application configuration");
         }
         candidate.require_application_binding(store, &request.expected_owner.target_id)?;
-        validate_container_recovery_attestation(request, request_sha256, attestation)?;
 
         let store_root_sha256 = absolute_path_sha256(store.root())?;
         if request.store_root_sha256 != store_root_sha256 {
@@ -2093,7 +2197,7 @@ impl RuntimeServiceConfig {
                 request_sha256,
                 &store_root_sha256,
                 &ledger_root_sha256,
-                &attestation.sha256()?,
+                &proof.sha256()?,
                 recovery_build_commit,
                 recovery_build_snapshot,
             )?;
@@ -2121,7 +2225,7 @@ impl RuntimeServiceConfig {
         )?;
         let result = ledger.with_container_runtime_recovery_quiescence(|ledger_snapshot| {
             let _store_writer = store.write_transaction()?;
-            recover_container_empty_locked(
+            recover_container_proof_locked(
                 store,
                 candidate,
                 configuration_bytes,
@@ -2129,7 +2233,7 @@ impl RuntimeServiceConfig {
                 request_sha256,
                 recovery_build_commit,
                 recovery_build_snapshot,
-                attestation,
+                proof,
                 ledger_snapshot,
                 &recovery_relative,
                 &owner_lock,
@@ -2417,6 +2521,35 @@ fn require_empty_runtime_store(store: &SessionStore, config: &RuntimeServiceConf
     }
     require_empty_batch_namespace(store)?;
 
+    require_runtime_recovery_scheduler_state(store, config, None)
+}
+
+fn require_retained_cancelled_runtime_store(
+    store: &SessionStore,
+    config: &RuntimeServiceConfig,
+    pins: &[retained_cancelled_runs::RetainedCancelledRunPin],
+) -> Result<()> {
+    for relative in [
+        "manifests",
+        "live_command_journals",
+        "recovery",
+        "temp",
+    ] {
+        require_empty_store_namespace(store, relative)?;
+    }
+    require_empty_batch_namespace(store)?;
+    let retained_run_ids = pins
+        .iter()
+        .map(|pin| pin.run_id.clone())
+        .collect::<BTreeSet<_>>();
+    require_runtime_recovery_scheduler_state(store, config, Some(&retained_run_ids))
+}
+
+fn require_runtime_recovery_scheduler_state(
+    store: &SessionStore,
+    config: &RuntimeServiceConfig,
+    retained_run_ids: Option<&BTreeSet<String>>,
+) -> Result<()> {
     let scheduler_root = checked_path(store.root(), "scheduler_pools")?;
     reject_link(&scheduler_root)?;
     let expected_names = [
@@ -2454,16 +2587,46 @@ fn require_empty_runtime_store(store: &SessionStore, config: &RuntimeServiceConf
         bail!("scheduler resource pools differ from the pinned application configuration");
     }
     if let Some(checkpoint) = store.read_scheduler_pool_checkpoint(&config.compute_pool_id)? {
-        if !checkpoint.run_ids.is_empty() || checkpoint.next_run_id.is_some() {
-            bail!("compute scheduler checkpoint still references work");
-        }
+        require_runtime_recovery_checkpoint_references(
+            &checkpoint.run_ids,
+            checkpoint.next_run_id.as_deref(),
+            retained_run_ids,
+            "compute",
+        )?;
     }
     if let Some(checkpoint) =
         store.read_preparation_scheduler_pool_checkpoint(&config.preparation_pool_id)?
     {
-        if !checkpoint.run_ids.is_empty() || checkpoint.next_run_id.is_some() {
-            bail!("preparation scheduler checkpoint still references work");
+        require_runtime_recovery_checkpoint_references(
+            &checkpoint.run_ids,
+            checkpoint.next_run_id.as_deref(),
+            retained_run_ids,
+            "preparation",
+        )?;
+    }
+    Ok(())
+}
+
+fn require_runtime_recovery_checkpoint_references(
+    run_ids: &[String],
+    next_run_id: Option<&str>,
+    retained_run_ids: Option<&BTreeSet<String>>,
+    role: &str,
+) -> Result<()> {
+    match retained_run_ids {
+        Some(allowed) => {
+            if run_ids.iter().any(|run_id| !allowed.contains(run_id))
+                || next_run_id.is_some_and(|run_id| !allowed.contains(run_id))
+            {
+                bail!(
+                    "{role} scheduler checkpoint references a run outside the pinned cancelled-run inventory"
+                );
+            }
         }
+        None if !run_ids.is_empty() || next_run_id.is_some() => {
+            bail!("{role} scheduler checkpoint still references work");
+        }
+        None => {}
     }
     Ok(())
 }
@@ -3506,8 +3669,14 @@ fn validate_container_receipt_for_request(
     recovery_build_commit: &str,
     recovery_build_snapshot: &str,
 ) -> Result<()> {
+    let expected_outcome = match request.schema_version.as_str() {
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA => "empty_namespace_recovered",
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2 => "retained_cancelled_runs_recovered",
+        _ => bail!("unsupported runtime service container recovery request schema"),
+    };
     if receipt.request_id != request.request_id
         || receipt.request_sha256 != request_sha256
+        || receipt.outcome != expected_outcome
         || receipt.config_sha256 != request.config_sha256
         || receipt.target_id != request.expected_owner.target_id
         || receipt.store_root_sha256 != store_root_sha256
@@ -3710,7 +3879,7 @@ fn canonical_container_recovery_failed_owner(
     Ok(descriptor)
 }
 
-fn recover_container_empty_locked(
+fn recover_container_proof_locked(
     store: &SessionStore,
     candidate: &RuntimeServiceConfig,
     configuration_bytes: &[u8],
@@ -3718,7 +3887,7 @@ fn recover_container_empty_locked(
     request_sha256: &str,
     recovery_build_commit: &str,
     recovery_build_snapshot: &str,
-    attestation: &DockerNamespaceTeardownAttestation,
+    proof: &container_recovery_proof::RuntimeServiceContainerRecoveryProof,
     ledger_snapshot: &HostResourceLedgerSnapshot,
     recovery_relative: &str,
     owner_lock: &File,
@@ -3726,12 +3895,18 @@ fn recover_container_empty_locked(
     owner_lock
         .metadata()
         .context("runtime service owner lock disappeared during container recovery")?;
-    require_empty_runtime_store(store, candidate)?;
+    match request.retained_cancelled_runs.as_deref() {
+        Some(pins) => {
+            retained_cancelled_runs::validate_retained_cancelled_runs(store, pins)?;
+            require_retained_cancelled_runtime_store(store, candidate, pins)?;
+        }
+        None => require_empty_runtime_store(store, candidate)?,
+    }
     if ledger_snapshot.stable_sha256()? != request.ledger_snapshot_sha256 {
         bail!("runtime service container recovery ledger snapshot changed");
     }
-    validate_container_recovery_attestation(request, request_sha256, attestation)?;
-    let attestation_sha256 = attestation.sha256()?;
+    proof.validate_for_request(request, request_sha256)?;
+    let attestation_sha256 = proof.sha256()?;
     let owner_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
     let owner_bytes = read_stable_regular_path(
         &owner_path,
@@ -3898,7 +4073,11 @@ fn recover_container_empty_locked(
         request_id: request.request_id.clone(),
         request_sha256: request_sha256.into(),
         status: "prepared".into(),
-        outcome: "empty_namespace_recovered".into(),
+        outcome: if request.retained_cancelled_runs.is_some() {
+            "retained_cancelled_runs_recovered".into()
+        } else {
+            "empty_namespace_recovered".into()
+        },
         target_id: request.expected_owner.target_id.clone(),
         config_sha256: request.config_sha256.clone(),
         owner_state_before: state_name(request.expected_owner.state).into(),
@@ -5434,6 +5613,7 @@ mod container_recovery_contract_tests {
                     device_requests_sha256: "8".repeat(64),
                 },
             ],
+            retained_cancelled_runs: None,
         }
     }
 
@@ -5673,6 +5853,7 @@ mod container_recovery_contract_tests {
                     device_requests_sha256: device_requests_sha256.clone(),
                 },
             ],
+            retained_cancelled_runs: None,
         };
         let request_sha256 = request.canonical_sha256().unwrap();
         let observed_containers = request

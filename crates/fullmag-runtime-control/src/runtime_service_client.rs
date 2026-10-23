@@ -4,9 +4,9 @@ use anyhow::{bail, Context, Result};
 use crate::process_environment::remove_local_compute_operator_token;
 use fullmag_session::{
     repository_path::checked_path,
-    host_resource_ledger::DockerNamespaceTeardownAttestation,
     runtime_service::{
         validate_descriptor, RuntimeServiceConfig, RuntimeServiceContainerRecoveryReceipt,
+        container_recovery_proof::RuntimeServiceContainerRecoveryProof,
         RuntimeServiceContainerRecoveryRequest, RuntimeServiceLaunchGuard,
         RuntimeServiceOwnerDescriptor, RuntimeServiceRecoveryReceipt,
         RuntimeServiceRecoveryRequest, RuntimeServiceState,
@@ -169,9 +169,9 @@ pub fn recover_container_empty(
     if request.config_sha256 != configuration_sha256 {
         bail!("container recovery configuration differs from the request pin");
     }
-    let attestation: DockerNamespaceTeardownAttestation =
+    let attestation: RuntimeServiceContainerRecoveryProof =
         serde_json::from_slice(&attestation_bytes).context("parse container recovery attestation")?;
-    attestation.validate_without_request()?;
+    attestation.validate_for_request(&request, &request_sha256)?;
     let attestation_sha256 = attestation.sha256()?;
     if attestation_sha256 != expected_attestation_sha256 {
         bail!("container recovery attestation differs from the operator SHA-256 pin");
@@ -204,7 +204,7 @@ pub fn recover_container_empty(
 
     let store = fullmag_session::SessionStore::open_existing(candidate.store_root.clone())?;
     let executor = fullmag_build_info::identity();
-    RuntimeServiceConfig::recover_container_empty(
+    RuntimeServiceConfig::recover_container_with_proof(
         &store,
         &candidate,
         &configuration_bytes,

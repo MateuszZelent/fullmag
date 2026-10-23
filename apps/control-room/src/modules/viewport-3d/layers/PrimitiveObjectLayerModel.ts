@@ -97,9 +97,10 @@ export function shouldRenderPrimitiveTransformGizmo(
 export function resolvePrimitiveObjectRenderSettings(
   object: Viewport3DPrimitiveObject,
   settings: VisualizationTargetSettings,
+  allowMeshReadyPreview = false,
 ): VisualizationTargetSettings {
   if (
-    object.meshState === "mesh-ready" ||
+    (object.meshState === "mesh-ready" && !allowMeshReadyPreview) ||
     settings.primitiveVisible ||
     !settings.shaderVisible
   ) {
@@ -285,11 +286,16 @@ export function shouldRenderPrimitiveObject(
   object: Viewport3DPrimitiveObject,
   settings: VisualizationTargetSettings,
   hasRealizedObjectGeometry = false,
+  allowMeshReadyPreview = false,
 ): boolean {
-  const renderSettings = resolvePrimitiveObjectRenderSettings(object, settings);
+  const renderSettings = resolvePrimitiveObjectRenderSettings(
+    object,
+    settings,
+    allowMeshReadyPreview,
+  );
   return (
     !hasRealizedObjectGeometry &&
-    object.meshState !== "mesh-ready" &&
+    (object.meshState !== "mesh-ready" || allowMeshReadyPreview) &&
     renderSettings.visible &&
     (renderSettings.primitiveVisible === true ||
       renderSettings.shaderVisible ||

@@ -1,6 +1,7 @@
 //! Native accepted-run service. UI is an attaching client, never its owner.
 #[path = "compute_operator_env.rs"]
 mod compute_operator_env;
+mod runtime_service_unclaimed_cancellation;
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     compute_node_snapshot::Reported,
@@ -2540,6 +2541,9 @@ fn run() -> Result<()> {
         Some(value) if value == OsString::from("--cancel-failed-no-spawn") => {
             cancel_failed_no_spawn(args)
         }
+        Some(value) if value == OsString::from("--cancel-unclaimed") => {
+            runtime_service_unclaimed_cancellation::cancel_unclaimed(args)
+        }
         Some(value) if value == OsString::from("--prepare-orphan-teardown") => {
             run_orphan_teardown(OrphanTeardownPhase::Prepare, args)
         }
@@ -2553,7 +2557,7 @@ fn run() -> Result<()> {
             }
             run_service(path)
         }
-        _ => bail!("usage: fullmag-runtime-service --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
+        _ => bail!("usage: fullmag-runtime-service --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --cancel-unclaimed --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
     }
 }
 

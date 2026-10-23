@@ -693,10 +693,22 @@ def _ensure_control_subnamespace(
                 entries = os.listdir(directory)
             except OSError as error:
                 raise MaintenanceError(f"cannot inspect {role} control namespace") from error
-            if entries:
+            expected_children = {child_name for child_name, _ in child_directories}
+            if entries and set(entries) != expected_children:
                 raise MaintenanceError(
                     f"{role} control namespace is nonempty without its owner marker"
                 )
+            # Fresh-session archival may pre-create the fixed mount subtree.
+            # Admit only these empty directories; never adopt old runtime data.
+            for child_name, child_label in child_directories if entries else ():
+                child = _open_child_directory(directory, child_name, uid, gid, child_label)
+                try:
+                    if os.listdir(child):
+                        raise MaintenanceError(
+                            f"{role} control namespace contains unowned runtime data"
+                        )
+                finally:
+                    os.close(child)
         marker = {
             "schema": CONTROL_NAMESPACE_SCHEMA,
             "state": "owned",

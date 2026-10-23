@@ -16,7 +16,7 @@ use fullmag_plan::{
     lower_study_plan_with_catalog, PreparationMaterialization, PreparationPlanSource,
     StudyExecutionPlan, StudyProblemCatalog, StudyStepLoweringStatus,
 };
-use fullmag_session::SessionStore;
+use fullmag_session::{FmsTaskPreparationReceipt, SessionStore};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -297,23 +297,71 @@ impl AcceptedStudySnapshot {
             .with_context(|| {
                 format!("accepted run `{run_id}` has no preparation receipt for task `{task_id}`")
             })?;
+        match self.validate_task_preparation_envelope(&durable, task_id)? {
+            AcceptedPreparationReceipt::Solver(receipt) => Ok(receipt),
+            AcceptedPreparationReceipt::ClosedLoop(_) => {
+                bail!("closed-loop inspection receipt is not a solver preparation receipt")
+            }
+        }
+    }
+
+    fn validate_task_preparation_envelope(
+        &self,
+        durable: &FmsTaskPreparationReceipt,
+        task_id: &str,
+    ) -> Result<AcceptedPreparationReceipt> {
+        let run_id = self.run.specification.run_id.as_str();
         if durable.run_id != run_id || durable.task_id != task_id {
             bail!("durable task preparation receipt identity differs from requested task");
         }
-
-        let receipt: PreparationReceipt = serde_json::from_value(durable.payload.clone())
-            .context("durable task preparation payload is not an application receipt")?;
-        receipt
-            .validate()
-            .context("durable task preparation application receipt is invalid")?;
-        if receipt.preparation_id != durable.preparation_id
-            || receipt.plan_fingerprint != durable.plan_fingerprint
-        {
-            bail!("application receipt identity differs from durable task envelope");
+        let step = self
+            .lowered
+            .steps
+            .iter()
+            .find(|step| step.step_id == durable.step_id)
+            .context("preparation has no accepted step")?;
+        let expected_task_id = fullmag_session::task_id_for_study_step(run_id, &step.step_id)?;
+        if task_id != expected_task_id || durable.task_id != expected_task_id {
+            bail!("preparation receipt has another canonical accepted task identity");
         }
 
-        self.bind_preparation_receipt(&durable.step_id, receipt)
-            .context("durable task preparation receipt does not match accepted study snapshot")
+        if !matches!(step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) {
+            let receipt: PreparationReceipt = serde_json::from_value(durable.payload.clone())
+                .context("durable task preparation payload is not an application receipt")?;
+            receipt
+                .validate()
+                .context("durable task preparation application receipt is invalid")?;
+            if receipt.preparation_id != durable.preparation_id
+                || receipt.plan_fingerprint != durable.plan_fingerprint
+            {
+                bail!("application receipt identity differs from durable task envelope");
+            }
+            return self
+                .bind_preparation_receipt(&durable.step_id, receipt)
+                .map(AcceptedPreparationReceipt::Solver)
+                .context("durable task preparation receipt does not match accepted study snapshot");
+        }
+
+        let receipt: ClosedLoopPreparationReceipt = serde_json::from_value(durable.payload.clone())
+            .context("inspection readiness is not a strict operation receipt")?;
+        let entry = self
+            .catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.step_id() == step.step_id)
+            .context("inspection readiness has no captured ProblemIR")?;
+        receipt.validate_for(
+            &self.run.specification,
+            &expected_task_id,
+            step,
+            entry.problem(),
+        )?;
+        if durable.preparation_id != receipt.preparation_id
+            || durable.plan_fingerprint != receipt.plan_fingerprint
+        {
+            bail!("inspection readiness differs from durable envelope");
+        }
+        Ok(AcceptedPreparationReceipt::ClosedLoop(receipt))
     }
 
     /// Read readiness using the immutable step kind, never by silently upgrading a legacy receipt.
@@ -322,25 +370,7 @@ impl AcceptedStudySnapshot {
     ) -> Result<AcceptedPreparationReceipt> {
         let durable = store.read_task_preparation_receipt(self.run.specification.run_id.as_str(), task_id)?
             .context("accepted task has no durable preparation")?;
-        let step = self.lowered.steps.iter().find(|step| step.step_id == durable.step_id)
-            .context("preparation has no accepted step")?;
-        if !matches!(step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) {
-            return self.read_task_preparation_receipt(store, task_id).map(AcceptedPreparationReceipt::Solver);
-        }
-        let receipt: ClosedLoopPreparationReceipt = serde_json::from_value(durable.payload.clone())
-            .context("inspection readiness is not a strict operation receipt")?;
-        let entry = self.catalog.entries().iter().find(|entry| entry.step_id() == step.step_id)
-            .context("inspection readiness has no captured ProblemIR")?;
-        let canonical_task_id = fullmag_session::task_id_for_study_step(self.run.specification.run_id.as_str(), &step.step_id)?;
-        if task_id != canonical_task_id || durable.task_id != canonical_task_id {
-            bail!("inspection readiness has another canonical accepted task identity");
-        }
-        receipt.validate_for(&self.run.specification, &canonical_task_id, step, entry.problem())?;
-        if durable.run_id != self.run.specification.run_id.as_str() || durable.task_id != task_id
-            || durable.preparation_id != receipt.preparation_id || durable.plan_fingerprint != receipt.plan_fingerprint {
-            bail!("inspection readiness differs from durable envelope");
-        }
-        Ok(AcceptedPreparationReceipt::ClosedLoop(receipt))
+        self.validate_task_preparation_envelope(&durable, task_id)
     }
 
     /// Resolve a claimed study task using only its durable preparation receipt
@@ -530,11 +560,43 @@ pub fn queue_accepted_study_task(
     step_id: &str,
     inputs: std::collections::BTreeMap<String, ResolvedInput>,
 ) -> Result<QueuedAcceptedStudyTask> {
+    let accepted = load_accepted_study_snapshot(store, run_id, project_id)?;
     let _writer = store.write_transaction()?;
     if !store.accepted_run_start_permitted(run_id.as_str())? {
         bail!("accepted run is waiting for explicit Compute release");
     }
-    let accepted = load_accepted_study_snapshot(store, run_id, project_id)?;
+    require_current_accepted_study_intent(store, &accepted)?;
+    queue_accepted_study_task_locked(store, &accepted, run_id, step_id, inputs)
+}
+
+/// Queue using the immutable snapshot already validated by one scheduler
+/// candidate pass. The writer still fences the exact RunIntent and every
+/// mutable queue prerequisite before publishing readiness.
+pub(crate) fn queue_accepted_study_task_from_snapshot(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    run_id: &RunId,
+    step_id: &str,
+    inputs: std::collections::BTreeMap<String, ResolvedInput>,
+) -> Result<QueuedAcceptedStudyTask> {
+    let _writer = store.write_transaction()?;
+    if !store.accepted_run_start_permitted(run_id.as_str())? {
+        bail!("accepted run is waiting for explicit Compute release");
+    }
+    require_current_accepted_study_intent(store, accepted)?;
+    queue_accepted_study_task_locked(store, accepted, run_id, step_id, inputs)
+}
+
+fn queue_accepted_study_task_locked(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    run_id: &RunId,
+    step_id: &str,
+    inputs: std::collections::BTreeMap<String, ResolvedInput>,
+) -> Result<QueuedAcceptedStudyTask> {
+    if accepted.run.specification.run_id != *run_id {
+        bail!("accepted task queue run differs from its immutable snapshot");
+    }
     let study_step = accepted
         .study
         .steps
@@ -682,6 +744,21 @@ pub fn queue_accepted_study_task(
     })
 }
 
+pub(crate) fn require_current_accepted_study_intent(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+) -> Result<()> {
+    let run_id = accepted.run.specification.run_id.as_str();
+    if accepted.run.intent.run_id != run_id {
+        bail!("accepted study snapshot intent belongs to another run");
+    }
+    let current_intent = store.read_run_intent(run_id)?;
+    if current_intent.as_ref() != Some(&accepted.run.intent) {
+        bail!("accepted run intent changed after its study snapshot was validated");
+    }
+    Ok(())
+}
+
 /// Immutable execution context reconstructed for a worker from the accepted
 /// study and a durable, claim-fenced Prepare command.
 #[derive(Clone, Debug, PartialEq)]
@@ -695,6 +772,17 @@ pub struct AcceptedWorkerStep {
     pub resolved_input: ResolvedTaskInput,
 }
 
+struct PrevalidatedAcceptedWorkerStep {
+    prepare: WorkerCommandEnvelope,
+    preparation_envelope: FmsTaskPreparationReceipt,
+    step_id: String,
+    study_inputs: Vec<StudyInputPort>,
+    problem: ProblemIR,
+    execution_plan: ExecutionPlanIR,
+    until_seconds: Option<f64>,
+    resolved_input: ResolvedTaskInput,
+}
+
 /// Rehydrate one accepted study step only from its exact persisted Prepare
 /// command. This verifies the current claim/lease, coordinator outbox,
 /// preparation receipt, dependency manifest, RunSpec, and canonical plan
@@ -704,7 +792,80 @@ pub fn load_accepted_worker_step(
     project_id: &ProjectId,
     envelope: &WorkerCommandEnvelope,
 ) -> Result<AcceptedWorkerStep> {
+    let accepted = load_accepted_study_snapshot(store, &envelope.claim.run_id, project_id)?;
+    load_accepted_worker_step_from_snapshot(store, &accepted, envelope)
+}
+
+/// Validate a scheduler-published Prepare against its already validated
+/// immutable study snapshot. Expensive plan/receipt validation and worker-step
+/// construction occur outside the writer; the mutable task and input bindings
+/// are rechecked before the prepared value is returned.
+pub(crate) fn load_accepted_worker_step_from_snapshot(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    envelope: &WorkerCommandEnvelope,
+) -> Result<AcceptedWorkerStep> {
+    let prepared = prevalidate_accepted_worker_step(store, accepted, envelope)?;
     let _writer = store.write_transaction()?;
+    require_current_accepted_study_intent(store, accepted)?;
+    let current_claim = crate::load_current_task_claim(
+        store,
+        &envelope.claim.run_id,
+        envelope.claim.task_id.as_str(),
+    )
+    .context("worker Prepare has no current durable task claim")?;
+    load_accepted_worker_step_locked(store, accepted, envelope, prepared, current_claim)
+}
+
+/// Rehydrate the accepted step when a worker receives its durable Start command.
+/// Recover the exact preceding Prepare under a short writer fence, validate its
+/// immutable execution inputs outside the fence, then refence the Start and
+/// mutable task bindings before exposing the step.
+pub fn load_accepted_worker_step_for_start_from_snapshot(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    start_envelope: &WorkerCommandEnvelope,
+) -> Result<AcceptedWorkerStep> {
+    validate_start_envelope(accepted, start_envelope)?;
+    let prepare = {
+        let _writer = store.write_transaction()?;
+        require_current_accepted_study_intent(store, accepted)?;
+        let current_claim = current_claim_for_start(store, start_envelope)?;
+        preceding_prepare_for_start_locked(store, &current_claim, start_envelope)?
+    };
+
+    let prepared = prevalidate_accepted_worker_step(store, accepted, &prepare)?;
+    let _writer = store.write_transaction()?;
+    require_current_accepted_study_intent(store, accepted)?;
+    let current_claim = current_claim_for_start(store, start_envelope)?;
+    let current_prepare = preceding_prepare_for_start_locked(store, &current_claim, start_envelope)?;
+    if current_prepare != prepare {
+        bail!("worker Start preceding Prepare changed during immutable validation");
+    }
+    load_accepted_worker_step_locked(store, accepted, &prepare, prepared, current_claim)
+}
+
+/// Compatibility facade for callers that do not already own a validated
+/// accepted snapshot. The snapshot is loaded once, then Start uses the same
+/// two short mutable fences as the snapshot-aware entry point.
+pub fn load_accepted_worker_step_for_start(
+    store: &SessionStore,
+    project_id: &ProjectId,
+    start_envelope: &WorkerCommandEnvelope,
+) -> Result<AcceptedWorkerStep> {
+    let accepted = load_accepted_study_snapshot(
+        store,
+        &start_envelope.claim.run_id,
+        project_id,
+    )?;
+    load_accepted_worker_step_for_start_from_snapshot(store, &accepted, start_envelope)
+}
+
+fn prevalidate_accepted_worker_step(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    envelope: &WorkerCommandEnvelope,
+) -> Result<PrevalidatedAcceptedWorkerStep> {
     let resolved_input = match &envelope.command {
         WorkerCommand::Prepare { resolved_input } => resolved_input,
         _ => bail!("accepted worker step requires a Prepare command"),
@@ -713,34 +874,11 @@ pub fn load_accepted_worker_step(
         .validate_for_claim(&envelope.claim)
         .context("worker Prepare command is invalid")?;
 
-    let accepted = load_accepted_study_snapshot(store, &envelope.claim.run_id, project_id)?;
     let run_id = accepted.run.specification.run_id.as_str();
+    if envelope.claim.run_id.as_str() != run_id {
+        bail!("worker Prepare claim differs from the accepted snapshot run");
+    }
     let task_id = envelope.claim.task_id.as_str();
-    let current_claim = crate::load_current_task_claim(store, &envelope.claim.run_id, task_id)
-        .context("worker Prepare has no current durable task claim")?;
-    if !envelope.claim.matches_claim(&current_claim) {
-        bail!("worker Prepare command belongs to a stale task claim");
-    }
-
-    let run_catalog = store
-        .read_run_catalog(run_id)?
-        .context("worker Prepare run catalog is missing")?;
-    let durable_task = run_catalog
-        .tasks
-        .iter()
-        .find(|task| task.task_id == task_id)
-        .context("worker Prepare task is missing from the run catalog")?;
-    if !matches!(
-        durable_task.lifecycle,
-        fullmag_session::FmsTaskLifecycle::Preparing
-            | fullmag_session::FmsTaskLifecycle::Running
-            | fullmag_session::FmsTaskLifecycle::Stopping
-    ) || !matches!(
-        durable_task.readiness,
-        fullmag_session::FmsTaskReadiness::Ready
-    ) {
-        bail!("worker Prepare requires a ready task under an active claim");
-    }
 
     let mut matching_steps = Vec::new();
     for step in &accepted.study.steps {
@@ -753,9 +891,6 @@ pub fn load_accepted_worker_step(
         bail!("worker task does not identify exactly one accepted study step");
     }
     let study_step = matching_steps[0];
-    if !crate::study_completion::dependencies_ready_locked(store, &accepted, study_step)? {
-        bail!("worker Prepare is blocked by completion dependencies");
-    }
     let step_id = study_step.step_id.as_str();
     let execution_step = accepted
         .lowered
@@ -782,11 +917,11 @@ pub fn load_accepted_worker_step(
         .context("accepted study step has no immutable ProblemIR")?
         .problem()
         .clone();
-    let replanned = fullmag_plan::plan(&problem)
-        .context("replan worker ProblemIR through the canonical planner")?;
-    if serde_json::to_value(&replanned)? != serde_json::to_value(execution_plan)? {
-        bail!("worker execution plan differs from the accepted canonical plan");
-    }
+    // `accepted` is the canonical snapshot produced by
+    // `load_accepted_study_snapshot`. Its preparation receipt is rebound to
+    // the ProblemIR below, outside the writer; a separate replan here would
+    // duplicate that full mesh validation. Keep using the matching plan from
+    // `accepted.lowered` and retain the other checks across the writer fence.
     let inspection = matches!(
         &execution_plan.backend_plan,
         fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_)
@@ -795,7 +930,7 @@ pub fn load_accepted_worker_step(
         bail!("accepted antenna inspection must not declare a magnetic horizon or inputs");
     }
     if !inspection
-        && matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. })
+        && matches!(&problem.study, fullmag_ir::StudyIR::TimeEvolution { .. })
         && execution_step.until_seconds.is_none()
     {
         bail!("accepted TimeEvolution worker step has no pinned until_seconds");
@@ -824,12 +959,98 @@ pub fn load_accepted_worker_step(
         bail!("worker Prepare input differs from the accepted execution plan digest");
     }
 
-    let receipt = accepted.read_task_preparation(store, task_id)?;
+    let preparation_envelope = store
+        .read_task_preparation_receipt(run_id, task_id)?
+        .context("accepted task has no durable preparation")?;
+    let receipt = accepted.validate_task_preparation_envelope(&preparation_envelope, task_id)?;
     let preparation = receipt.binding()?;
     if resolved_input.preparation != preparation {
         bail!("worker Prepare input differs from its accepted preparation receipt");
     }
 
+    Ok(PrevalidatedAcceptedWorkerStep {
+        prepare: envelope.clone(),
+        preparation_envelope,
+        step_id: step_id.to_owned(),
+        study_inputs: study_step.inputs.clone(),
+        problem,
+        execution_plan: execution_plan.clone(),
+        until_seconds: execution_step.until_seconds,
+        resolved_input: resolved_input.clone(),
+    })
+}
+
+fn load_accepted_worker_step_locked(
+    store: &SessionStore,
+    accepted: &AcceptedStudySnapshot,
+    envelope: &WorkerCommandEnvelope,
+    prepared: PrevalidatedAcceptedWorkerStep,
+    current_claim: TaskClaim,
+) -> Result<AcceptedWorkerStep> {
+    if prepared.prepare != *envelope {
+        bail!("prevalidated worker step belongs to a different Prepare envelope");
+    }
+    if !envelope.claim.matches_claim(&current_claim) {
+        bail!("worker Prepare command belongs to a stale task claim");
+    }
+    let run_id = accepted.run.specification.run_id.as_str();
+    let task_id = envelope.claim.task_id.as_str();
+    let run_catalog = store
+        .read_run_catalog(run_id)?
+        .context("worker Prepare run catalog is missing")?;
+    let durable_task = run_catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == task_id)
+        .context("worker Prepare task is missing from the run catalog")?;
+    if !matches!(
+        durable_task.lifecycle,
+        fullmag_session::FmsTaskLifecycle::Preparing
+            | fullmag_session::FmsTaskLifecycle::Running
+            | fullmag_session::FmsTaskLifecycle::Stopping
+    ) || !matches!(
+        durable_task.readiness,
+        fullmag_session::FmsTaskReadiness::Ready
+    ) {
+        bail!("worker Prepare requires a ready task under an active claim");
+    }
+    if !crate::study_completion::dependencies_ready_locked(
+        store,
+        accepted,
+        accepted
+            .study
+            .steps
+            .iter()
+            .find(|step| step.step_id == prepared.step_id)
+            .context("prevalidated worker step is missing from the accepted study")?,
+    )? {
+        bail!("worker Prepare is blocked by completion dependencies");
+    }
+
+    let resolved_input = match &envelope.command {
+        WorkerCommand::Prepare { resolved_input } => resolved_input,
+        _ => bail!("accepted worker step requires a Prepare command"),
+    };
+    if resolved_input.run_id != accepted.run.specification.run_id
+        || resolved_input.task_id.as_str() != task_id
+        || resolved_input.attempt_id.as_str() != current_claim.attempt_id.as_str()
+        || resolved_input.ownership_epoch != current_claim.ownership_epoch
+    {
+        bail!("worker Prepare input differs from the current accepted claim");
+    }
+    let current_preparation_envelope = store
+        .read_task_preparation_receipt(run_id, task_id)?
+        .context("accepted task has no durable preparation")?;
+    if current_preparation_envelope != prepared.preparation_envelope {
+        bail!("accepted task preparation envelope changed during worker-step validation");
+    }
+
+    let study_step = accepted
+        .study
+        .steps
+        .iter()
+        .find(|step| step.step_id == prepared.step_id)
+        .context("prevalidated worker step is missing from the accepted study")?;
     let resolved_inputs = resolve_accepted_study_inputs(
         store,
         run_id,
@@ -885,32 +1106,35 @@ pub fn load_accepted_worker_step(
 
     Ok(AcceptedWorkerStep {
         claim: current_claim,
-        step_id: step_id.to_owned(),
-        study_inputs: study_step.inputs.clone(),
-        problem,
-        execution_plan: execution_plan.clone(),
-        until_seconds: execution_step.until_seconds,
-        resolved_input: resolved_input.clone(),
+        step_id: prepared.step_id,
+        study_inputs: prepared.study_inputs,
+        problem: prepared.problem,
+        execution_plan: prepared.execution_plan,
+        until_seconds: prepared.until_seconds,
+        resolved_input: prepared.resolved_input,
     })
 }
 
-/// Rehydrate the accepted step when a worker receives its durable Start command.
-/// Start carries no input payload, so its exact preceding Prepare must be
-/// recovered from the same claim's coordinator journal before exposing solver
-/// inputs. This does not dispatch or replay either command.
-pub fn load_accepted_worker_step_for_start(
-    store: &SessionStore,
-    project_id: &ProjectId,
+fn validate_start_envelope(
+    accepted: &AcceptedStudySnapshot,
     start_envelope: &WorkerCommandEnvelope,
-) -> Result<AcceptedWorkerStep> {
-    let _writer = store.write_transaction()?;
+) -> Result<()> {
     if !matches!(&start_envelope.command, WorkerCommand::Start) {
         bail!("accepted worker start requires a Start command");
     }
     start_envelope
         .validate_for_claim(&start_envelope.claim)
         .context("worker Start command is invalid")?;
+    if start_envelope.claim.run_id != accepted.run.specification.run_id {
+        bail!("worker Start differs from the accepted snapshot run");
+    }
+    Ok(())
+}
 
+fn current_claim_for_start(
+    store: &SessionStore,
+    start_envelope: &WorkerCommandEnvelope,
+) -> Result<TaskClaim> {
     let current_claim = crate::load_current_task_claim(
         store,
         &start_envelope.claim.run_id,
@@ -921,22 +1145,40 @@ pub fn load_accepted_worker_step_for_start(
         bail!("worker Start command belongs to a stale task claim");
     }
 
-    let recovered = crate::recover_coordinator(store, &current_claim)
+    Ok(current_claim)
+}
+
+fn preceding_prepare_for_start_locked(
+    store: &SessionStore,
+    current_claim: &TaskClaim,
+    start_envelope: &WorkerCommandEnvelope,
+) -> Result<WorkerCommandEnvelope> {
+    let recovered = crate::recover_coordinator_locked(store, current_claim)
         .context("worker Start coordinator journal could not be recovered")?;
-    let start_index = recovered
+    let starts = recovered
         .commands
         .iter()
-        .position(|command| command == start_envelope)
-        .context("worker Start command is not present in the durable coordinator journal")?;
+        .enumerate()
+        .filter(|(_, command)| {
+            command.claim.matches_claim(current_claim)
+                && matches!(&command.command, WorkerCommand::Start)
+        })
+        .collect::<Vec<_>>();
+    if starts.len() != 1 || starts[0].1 != start_envelope {
+        bail!("worker Start is not the exact unique Start in the current coordinator journal");
+    }
+    let start_index = starts[0].0;
     let prepares = recovered.commands[..start_index]
         .iter()
-        .filter(|command| matches!(&command.command, WorkerCommand::Prepare { .. }))
+        .filter(|command| {
+            command.claim.matches_claim(current_claim)
+                && matches!(&command.command, WorkerCommand::Prepare { .. })
+        })
         .collect::<Vec<_>>();
     if prepares.len() != 1 {
         bail!("worker Start requires exactly one preceding durable Prepare command");
     }
-
-    load_accepted_worker_step(store, project_id, prepares[0])
+    Ok((*prepares[0]).clone())
 }
 
 /// Bytes emitted for one declared output port and study case.
@@ -2789,7 +3031,7 @@ pub fn publish_accepted_task_prepare(
         WorkerCommand::Prepare { resolved_input },
         Some(&receipt),
         |transition| {
-            crate::commit_transition(store, transition)
+            crate::commit_transition_with_accepted_snapshot(store, transition, study)
                 .map(|_| ())
                 .map_err(|error| {
                     publication_error = Some(error);
@@ -2802,6 +3044,7 @@ pub fn publish_accepted_task_prepare(
         (_, Some(error)) if is_store_writer_busy(&error) => retry_pending_command_publication(
             store,
             coordinator,
+            Some(study),
             "publishing accepted task Prepare command",
         ),
         (_, Some(error)) => Err(error).context("publishing accepted task Prepare command"),
@@ -2818,9 +3061,34 @@ pub fn publish_accepted_task_start(
     store: &SessionStore,
     coordinator: &mut DurableWorkerCoordinator,
 ) -> Result<WorkerCommandEnvelope> {
+    publish_accepted_task_start_inner(store, coordinator, None)
+}
+
+/// Publish Start using the accepted snapshot already validated by the
+/// scheduler operation. The transition writer still fences current intent,
+/// task identity, and dependency state before publication.
+pub(crate) fn publish_accepted_task_start_from_snapshot(
+    store: &SessionStore,
+    study: &AcceptedStudySnapshot,
+    coordinator: &mut DurableWorkerCoordinator,
+) -> Result<WorkerCommandEnvelope> {
+    publish_accepted_task_start_inner(store, coordinator, Some(study))
+}
+
+fn publish_accepted_task_start_inner(
+    store: &SessionStore,
+    coordinator: &mut DurableWorkerCoordinator,
+    study: Option<&AcceptedStudySnapshot>,
+) -> Result<WorkerCommandEnvelope> {
     let mut publication_error = None;
     let result = coordinator.commit_command(WorkerCommand::Start, None, |transition| {
-        crate::commit_transition(store, transition)
+        let commit = match study {
+            Some(study) => {
+                crate::commit_transition_with_accepted_snapshot(store, transition, study)
+            }
+            None => crate::commit_transition(store, transition),
+        };
+        commit
             .map(|_| ())
             .map_err(|error| {
                 publication_error = Some(error);
@@ -2832,6 +3100,7 @@ pub fn publish_accepted_task_start(
         (_, Some(error)) if is_store_writer_busy(&error) => retry_pending_command_publication(
             store,
             coordinator,
+            study,
             "publishing accepted task Start command",
         ),
         (_, Some(error)) => Err(error).context("publishing accepted task Start command"),
@@ -2844,6 +3113,7 @@ pub fn publish_accepted_task_start(
 fn retry_pending_command_publication(
     store: &SessionStore,
     coordinator: &mut DurableWorkerCoordinator,
+    study: Option<&AcceptedStudySnapshot>,
     context: &'static str,
 ) -> Result<WorkerCommandEnvelope> {
     let expected = match &coordinator
@@ -2858,7 +3128,13 @@ fn retry_pending_command_publication(
     loop {
         let mut publication_error = None;
         let result = coordinator.retry_publication(|transition| {
-            crate::commit_transition(store, transition)
+            let commit = match study {
+                Some(study) => {
+                    crate::commit_transition_with_accepted_snapshot(store, transition, study)
+                }
+                None => crate::commit_transition(store, transition),
+            };
+            commit
                 .map(|_| ())
                 .map_err(|error| {
                     publication_error = Some(error);

@@ -1,0 +1,31 @@
+{
+  "head": "e19ee0664173b5d0dafe281b402c0b088a11b3d5",
+  "branch": "master",
+  "sourceRoot": "/home/kkingstoun/git/fullmag/fullmag",
+  "files": {
+    "apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx": "90340f9c1d5c7095bd5dead9a6ab1c8e49daa5920e440460efa644376a793530",
+    "apps/control-room/src/modules/viewport-3d/layers/CameraControls.tsx": "a4776e2315ff3588206ee6bf700441e7636a322a863fb55b07e4d16f689ea313",
+    "apps/control-room/src/modules/viewport-3d/layers/viewport3DRenderPolicy.ts": "61a3df7687f3f9dffc415c1bde8f59e7f4ca13160183815edfa640424eb1f85b",
+    "apps/control-room/src/modules/viewport-3d/layers/viewport3DMaterialProfile.ts": "78243c027f25527012dca96bc13e8471f1f9c67bf6ac284c271cbaede0c57321",
+    "apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayer.tsx": "6c282fb7f578bed13e6724efb3fdf1e39ecdad07276b7c045c868cf98e7a3915",
+    "apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayerModel.ts": "f7f41ece39d5b6d10f6709762739911ef2c512b6ae71e45fb99ec9aa2bea3b48",
+    "apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts": "87a3bb5c64ce724ab2d8c3980a42fefd7eca3ee8c8f2123063e0397de395138b",
+    "apps/control-room/src/modules/viewport-3d/viewport3dRenderModel.ts": "bc190ebc1dc5ea427572c8c808fe9d8c984a8f30e13fccfc171997c42ab0247c",
+    "apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts": "cb1f5fec2bc40084e0fb24a4d9fed824dbdf97fbcf0f855687f065ba2c346838",
+    "apps/control-room/src/modules/viewport-3d/viewport3dVisualProfile.ts": "fc8c8ed837874bc55aa5ad86b45a697fb5a266950f978fbe2a6ba2e268c19537",
+    "apps/control-room/src/modules/viewport-3d/viewport3dAppearancePreferences.ts": "ba8b6422af0e4aea88a14acc58f975c726e7d2e1b06fd1bd94f3599a8999f2ef",
+    "apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.test.ts": "bd4f4f48553d1acc91617aa849f65c6a73e50a561189e65314949276fb5fb229",
+    "apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayer.test.tsx": "c36cba2d8755700e3dc747a7e72087826ced9c8c190fd8f7b6681a5cf99190fa",
+    "apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.test.ts": "a248f9ed62b4ef297d0faef8da4641bbd623fae894cb2dd1fbfaee88a5481242"
+  },
+  "dirtyViewportPaths": [
+    "apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts",
+    "apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer.tsx",
+    "apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayer.tsx",
+    "apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayerModel.ts",
+    "apps/control-room/src/modules/viewport-3d/layers/TopologyMeshLayer.tsx",
+    "apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx",
+    "apps/control-room/src/modules/viewport-3d/viewport3dDiagnostics.ts",
+    "apps/control-room/src/modules/viewport-3d/viewport3dRenderModel.ts"
+  ]
+}

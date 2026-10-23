@@ -52,10 +52,13 @@ pub async fn create(
     if replacing {
         reset_current_live_session_resources(&state).await;
     }
-    state
-        .current_live_session_epoch
-        .fetch_add(1, Ordering::Relaxed);
-    *state.current_live_state.write().await = Some(snapshot.clone());
+    {
+        let mut current = state.current_live_state.write().await;
+        state
+            .current_live_session_epoch
+            .fetch_add(1, Ordering::AcqRel);
+        *current = Some(snapshot.clone());
+    }
 
     let display_revision = state.current_display_selection.read().await.revision;
     let realtime_state =

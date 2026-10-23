@@ -27,6 +27,46 @@
   isolation: isolate;
 }
 
+.fm-workspace-shell:has(> .fm-runtime-degraded-banner) {
+  grid-template-rows:
+    var(--fm-menu-height)
+    minmax(var(--fm-ribbon-height), max-content)
+    auto
+    minmax(0, 1fr)
+    var(--fm-status-height);
+}
+
+.fm-runtime-degraded-banner {
+  position: relative;
+  z-index: var(--fm-z-panel);
+  display: flex;
+  grid-column: 1;
+  grid-row: 3;
+  min-width: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--fm-danger) 42%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-danger) 12%, var(--fm-bg-surface));
+  padding: var(--fm-space-2) var(--fm-space-3);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.45;
+}
+
+.fm-runtime-degraded-banner__copy {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-1);
+  color: var(--fm-text-secondary);
+}
+
+.fm-runtime-degraded-banner__copy strong {
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-semibold);
+}
+
+.fm-runtime-degraded-banner__reason {
+  color: var(--fm-start-meta);
+  font-family: var(--fm-font-mono);
+}
+
 .fm-workspace-overlay-host {
   position: absolute;
   inset: 0;
@@ -51,6 +91,19 @@
 
 .fm-start-host[data-state="home-session-reconnecting"] {
   grid-template-rows: auto minmax(0, 1fr);
+}
+
+.fm-start-host:has(> .fm-runtime-degraded-banner) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.fm-start-host[data-state="home-session-reconnecting"]:has(> .fm-runtime-degraded-banner) {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.fm-start-host > .fm-runtime-degraded-banner {
+  grid-column: 1;
+  grid-row: auto;
 }
 
 .fm-start-session-status {
@@ -112,8 +165,27 @@
   grid-row: 4;
 }
 
+.fm-workspace-shell:has(> .fm-home-overlay):has(> .fm-runtime-degraded-banner) {
+  grid-template-rows:
+    var(--fm-menu-height)
+    minmax(var(--fm-ribbon-height), max-content)
+    auto
+    minmax(0, 1fr)
+    var(--fm-status-height);
+}
+
+.fm-workspace-shell:has(> .fm-home-overlay):has(> .fm-runtime-degraded-banner)
+  > .fm-workspace-body {
+  grid-row: 4;
+}
+
+.fm-workspace-shell:has(> .fm-home-overlay):has(> .fm-runtime-degraded-banner)
+  > .fm-slot[data-slot-id="status-bar"] {
+  grid-row: 5;
+}
+
 .fm-workspace-shell:has(> .fm-home-overlay) >
-  :not(.fm-slot[data-slot-id="app-menu"]):not(.fm-home-overlay):not(.fm-workspace-overlay-host) {
+  :not(.fm-slot[data-slot-id="app-menu"]):not(.fm-home-overlay):not(.fm-workspace-overlay-host):not(.fm-runtime-degraded-banner) {
   visibility: hidden;
 }
 

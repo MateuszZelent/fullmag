@@ -53,6 +53,15 @@ pub(crate) fn reconcile_study_solution(
     claim: &TaskClaim,
     task: &fullmag_application::TaskRecord,
 ) -> Result<()> {
+    let Some((execution_status, assessment)) = terminal_solution_state(task)? else {
+        return Ok(());
+    };
+    let Some(artifact_catalog) = store.read_artifact_catalog(claim.run_id.as_str())? else {
+        return Ok(());
+    };
+    if !has_attempt_manifest(&artifact_catalog, claim) {
+        return Ok(());
+    }
     let Some(intent) = store.read_run_intent(claim.run_id.as_str())? else {
         return Ok(());
     };
@@ -81,17 +90,7 @@ pub(crate) fn reconcile_study_solution(
     }
     let step_id = accepted_step_id
         .context("accepted study solution task is not a step in the accepted plan")?;
-    let Some(artifact_catalog) = store.read_artifact_catalog(claim.run_id.as_str())? else {
-        return Ok(());
-    };
-    if !has_attempt_manifest(&artifact_catalog, claim) {
-        return Ok(());
-    }
     crate::study::validate_study_task_completion(store, claim)?;
-
-    let Some((execution_status, assessment)) = terminal_solution_state(task)? else {
-        return Ok(());
-    };
     let solution = build_solution(
         store,
         &accepted,

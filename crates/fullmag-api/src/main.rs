@@ -1,7 +1,7 @@
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::header::{CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Version};
 #[cfg(not(feature = "swagger-ui"))]
 use axum::response::Html;
 use axum::response::{IntoResponse, Response};
@@ -2675,23 +2675,111 @@ async fn main() {
         frozen_spins_previews: Arc::new(RwLock::new(Default::default())),
     });
 
+    // Observe the supervisor-owned fence before any startup path can restore or
+    // project accepted work. A present or unreadable fence selects a cold API
+    // that serves only process and runtime diagnostics.
+    let mut runtime_diagnostic_only = state.development_admission.observe_runtime_failure_fence();
+    let mut diagnostic_reason = runtime_diagnostic_only.then_some("runtime-failure-fence");
     eprintln!(
         "[fullmag-api] bootstrap phase=app_state state=complete elapsed_ms={}",
         bootstrap_started.elapsed().as_millis()
     );
-    development_accepted_restore::restore_before_listen(&state)
-        .await
-        .expect("private accepted-run reattach must succeed before API startup");
-
-    router_v2::handlers::platform::development_restore_input::restore_before_listen(state.as_ref())
-        .await
-        .expect("private development authoring restore must succeed before API startup");
-
-    live_accepted_projection::spawn(state.clone());
+    if !runtime_diagnostic_only {
+        if let Err(error) = development_accepted_restore::restore_before_listen(&state).await {
+            eprintln!("[fullmag-api] startup failure phase=accepted-run-restore error={error:#}");
+            state.development_admission.latch_runtime_failure(
+                "Accepted run initialization failed. API remains available; inspect the backend log for the cause. No task was replayed.",
+            );
+            runtime_diagnostic_only = true;
+            diagnostic_reason = Some("accepted-run-restore-failed");
+        }
+    }
+    if !runtime_diagnostic_only {
+        if let Err(error) =
+            router_v2::handlers::platform::development_restore_input::restore_before_listen(
+                state.as_ref(),
+            )
+            .await
+        {
+            eprintln!(
+                "[fullmag-api] startup failure phase=development-authoring-restore error={error:#}"
+            );
+            state.development_admission.latch_runtime_failure(
+                "Workspace initialization failed. API remains available; inspect the backend log for the cause. No task was replayed.",
+            );
+            runtime_diagnostic_only = true;
+            diagnostic_reason = Some("development-authoring-restore-failed");
+        }
+    }
 
     let (owner_shutdown_tx, owner_shutdown_rx) = tokio::sync::oneshot::channel();
-    let owner_control = development_owner_control::prepare(state.clone(), owner_shutdown_tx)
-        .expect("private development owner configuration must be valid before API startup");
+    let owner_control = if runtime_diagnostic_only {
+        drop(owner_shutdown_tx);
+        None
+    } else {
+        match development_owner_control::prepare(state.clone(), owner_shutdown_tx) {
+            Ok(control) => control,
+            Err(error) => {
+                eprintln!(
+                    "[fullmag-api] startup failure phase=development-owner-prepare error={error:#}"
+                );
+                state.development_admission.latch_runtime_failure(
+                    "Runtime control initialization failed. API remains available; inspect the backend log for the cause. No task was replayed.",
+                );
+                runtime_diagnostic_only = true;
+                diagnostic_reason = Some("development-owner-prepare-failed");
+                None
+            }
+        }
+    };
+
+    let port: u16 = std::env::var("FULLMAG_API_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8081);
+    let bind_ip = match std::env::var("FULLMAG_API_BIND_IP") {
+        Ok(value) => value
+            .parse::<IpAddr>()
+            .expect("FULLMAG_API_BIND_IP must be a valid IP address"),
+        Err(std::env::VarError::NotPresent) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        Err(error) => panic!("reading FULLMAG_API_BIND_IP failed: {error}"),
+    };
+    let addr = SocketAddr::new(bind_ip, port);
+    info!(%addr, "starting fullmag-api");
+
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("binding API listener should succeed");
+    let owner_control_task = if runtime_diagnostic_only {
+        None
+    } else if let Some(control) = owner_control {
+        match control.start(listener.local_addr().expect("API listener address").port()) {
+            Ok(task) => Some(task),
+            Err(error) => {
+                eprintln!(
+                    "[fullmag-api] startup failure phase=development-owner-publish error={error:#}"
+                );
+                state.development_admission.latch_runtime_failure(
+                    "Runtime control publication failed. API remains available; inspect the backend log for the cause. No task was replayed.",
+                );
+                runtime_diagnostic_only = true;
+                diagnostic_reason = Some("development-owner-publish-failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if runtime_diagnostic_only {
+        eprintln!(
+            "[fullmag-api] startup mode=runtime-diagnostic-only reason={}",
+            diagnostic_reason.unwrap_or("runtime-failure-fence")
+        );
+    } else {
+        // Start the background projector only after restores, owner
+        // preparation, and owner publication have succeeded.
+        live_accepted_projection::spawn(state.clone());
+    };
 
     let cors = router_v2::middleware::cors::cors_layer();
 
@@ -2757,44 +2845,27 @@ async fn main() {
         .merge(router_v2::build_v2_router());
 
     let app = merge_live_retirement_routes(maybe_merge_swagger_ui(app), state.clone())
-        .layer(DefaultBodyLimit::max(LOCAL_BRIDGE_BODY_LIMIT_BYTES))
+        .layer(DefaultBodyLimit::max(LOCAL_BRIDGE_BODY_LIMIT_BYTES));
+
+    let app = if runtime_diagnostic_only {
+        let app = attach_static_web_fallback(app.with_state(state.clone()), static_web_root.as_deref());
+        app.layer(axum::middleware::from_fn(
+            cold_runtime_diagnostic_only_middleware,
+        ))
+        // Keep the normal request/contract pin behavior for both allowed
+        // diagnostic responses and cold-mode rejections. These outer layers
+        // also cover /healthz and the fallback service.
+        .layer(axum::middleware::from_fn(
+            router_v2::middleware::version::contract_version_middleware,
+        ))
+        .layer(axum::middleware::from_fn(
+            router_v2::middleware::request_id::request_id_middleware,
+        ))
         .layer(cors)
-        .with_state(state);
-
-    let app = if let Some(static_root) = static_web_root {
-        info!(path = %static_root.display(), "serving built control room");
-        app.fallback_service(
-            ServeDir::new(&static_root)
-                .append_index_html_on_directories(true)
-                .fallback(ServeFile::new(static_root.join("index.html"))),
-        )
     } else {
-        app
+        let app = app.layer(cors).with_state(state);
+        attach_static_web_fallback(app, static_web_root.as_deref())
     };
-
-    let port: u16 = std::env::var("FULLMAG_API_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(8081);
-    let bind_ip = match std::env::var("FULLMAG_API_BIND_IP") {
-        Ok(value) => value
-            .parse::<IpAddr>()
-            .expect("FULLMAG_API_BIND_IP must be a valid IP address"),
-        Err(std::env::VarError::NotPresent) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        Err(error) => panic!("reading FULLMAG_API_BIND_IP failed: {error}"),
-    };
-    let addr = SocketAddr::new(bind_ip, port);
-    info!(%addr, "starting fullmag-api");
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("binding API listener should succeed");
-
-    let owner_control_task = owner_control.map(|control| {
-        control
-            .start(listener.local_addr().expect("API listener address").port())
-            .expect("publishing private development owner must succeed")
-    });
 
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
@@ -2836,6 +2907,57 @@ fn merge_live_retirement_routes(
         router_v2::middleware::development_admission::mutation_admission_middleware,
     ))
     .merge(retirement_routes)
+}
+
+fn attach_static_web_fallback(app: Router, static_root: Option<&Path>) -> Router {
+    let Some(static_root) = static_root else {
+        return app;
+    };
+    info!(path = %static_root.display(), "serving built control room");
+    app.fallback_service(
+        ServeDir::new(static_root)
+            .append_index_html_on_directories(true)
+            .fallback(ServeFile::new(static_root.join("index.html"))),
+    )
+}
+
+/// Restrict a cold API to the same health/runtime observations used by its
+/// supervisor. All other methods and paths are rejected before route handlers,
+/// including the private live-retirement routes merged outside admission.
+async fn cold_runtime_diagnostic_only_middleware(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let diagnostic_read = matches!(*request.method(), Method::GET | Method::HEAD)
+        && matches!(
+            request.uri().path(),
+            "/healthz"
+                | "/v2/platform/health"
+                | "/v2/platform/runtime-service"
+                | "/v2/platform/openapi.json"
+        );
+    if diagnostic_read {
+        return next.run(request).await;
+    }
+
+    let has_body = request
+        .headers()
+        .get(CONTENT_LENGTH)
+        .is_some_and(|value| value.as_bytes() != b"0")
+        || request.headers().contains_key(TRANSFER_ENCODING);
+    let http1 = matches!(request.version(), Version::HTTP_10 | Version::HTTP_11);
+    let mut response = ApiError::with_status_and_code(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "runtime_unavailable",
+        "Runtime startup failed; API diagnostics remain available and execution is disabled.",
+    )
+    .into_response();
+    if has_body && http1 {
+        response
+            .headers_mut()
+            .insert(CONNECTION, HeaderValue::from_static("close"));
+    }
+    response
 }
 
 #[cfg(feature = "swagger-ui")]
@@ -5249,9 +5371,19 @@ pub(crate) async fn capture_current_live_request_context(
     state: &Arc<AppState>,
 ) -> Result<CurrentLiveRequestContext, ApiError> {
     let _transition = state.current_live_session_transition.lock().await;
+    capture_current_live_read_context(state).await
+}
+
+/// Capture a committed snapshot identity for read-only resources without
+/// waiting behind long mutation commits. Consumers must validate this context
+/// against the snapshot they actually read; mutation callers retain the
+/// transition-fenced capture above.
+pub(crate) async fn capture_current_live_read_context(
+    state: &Arc<AppState>,
+) -> Result<CurrentLiveRequestContext, ApiError> {
+    let current = state.current_live_state.read().await;
     let session_epoch = state.current_live_session_epoch.load(Ordering::Acquire);
     let request_scope_epoch = format!("{}:{session_epoch}", state.request_scope_instance_id);
-    let current = state.current_live_state.read().await;
     let snapshot = current
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;

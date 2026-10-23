@@ -1,0 +1,35 @@
+{
+  "evidenceClass": "TRANSCRIPTION_OF_EARLIER_TOOL_RESPONSES",
+  "note": "Subset of actual HTTP responses observed earlier in this audit, before the session materialized its mesh and the camera changed. This is not a byte-for-byte saved response and does not identify the exact camera or UI settings in the user screenshots.",
+  "frontendConfirmedByUser": "http://localhost:3198",
+  "container": "fullmag-master-frontend-1",
+  "statusHttp": 200,
+  "sceneHttp": 200,
+  "visualizationHttp": 200,
+  "runtimeBundleVersion": "0.1.0-dev.20261022.ge19ee0664173.dirty.s132d2d16a80d+9791",
+  "sessionId": "docker-startup-99f850fa04cb97190df101486eddd764ff8be74f388be4056840032d05ac491d",
+  "sceneName": "permalloy_layer_cofeb_rings_relax_300nm",
+  "sceneRevision": 1,
+  "topologyRevision": 0,
+  "domain": { "generation_id": "fem:unmaterialized", "discretization": "fem", "cell_count": 0 },
+  "solverState": "waiting_for_compute",
+  "visualizationRevision": 11,
+  "camera": {
+    "projection": "perspective",
+    "position": [1.6710714031932422e-7, -6.101199092239823e-7, 2.0428454917790962e-7],
+    "target": [0, 0, 1.5500000000000002e-7],
+    "up": [0, 0, 1],
+    "fov_degrees": 45,
+    "orthographic_scale": null
+  },
+  "ring": {
+    "objectId": "cofeb_top_ring",
+    "geometryKind": "Difference",
+    "axis": [1, 0, 0],
+    "outerRadiusM": 1.5000000000000002e-7,
+    "innerRadiusM": 5.0000000000000004e-8,
+    "heightM": 5.0000000000000004e-8,
+    "translationM": [0, 0, 1.608e-7]
+  },
+  "visualizationNote": "The initial GET already reported ring surface_visible=false and wireframe_visible=true, unlike the supplied filled-surface screenshots. The user/session was active; settings are not assumed frozen."
+}

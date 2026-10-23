@@ -73,6 +73,8 @@ SCRIPT_REJECTION_CODES = frozenset({
     "accepted_execution_stage_missing", "accepted_gpu_scope_unsupported",
     "accepted_execution_plan_invalid", "accepted_backend_unsupported",
     "accepted_study_step_unsupported", "accepted_study_step_ambiguous",
+    # Output alias validation happens while loading the source, before RunIntent admission.
+    "docker_startup_output_mapping_required", "docker_startup_output_mapping_invalid",
 })
 
 

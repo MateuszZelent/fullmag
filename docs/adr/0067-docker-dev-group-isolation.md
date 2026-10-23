@@ -89,6 +89,28 @@ wirtualnej Docker oraz porty loopback frontendu.
    globalnego ledgera dotyczą wyłącznie jego konsumentów (kontenerów z
    mountem `/host-ledger`).
 
+### Jawne przeniesienie głównego checkoutu Windows do WSL
+
+Nazwa `fullmag-master` pozostaje nazwą głównej grupy na danym silniku Docker.
+Zmiana checkoutu nie uprawnia zwykłego `up` do przejęcia starej tożsamości.
+Zatwierdzona przez operatora operacja `scripts/docker_dev_source_transfer.py`
+obsługuje przejście ze zweryfikowanego, poddanego kwarantannie namespace
+Windows do świeżego namespace WSL. Wymaga zatrzymanych obu usług, braku
+aktywnej operacji i potwierdzonego zakończenia próby developmentu.
+
+Pod wspólną blokadą operacji archiwizuje konfiguracje, logi i obrazy warstw
+zapisu obu kontenerów w Dockerze, następnie usuwa wyłącznie te zatrzymane
+kontenery i pustą sieć grupy. Zachowuje wszystkie wolumeny, bind mounty danych,
+stare receipty i rejestr źródłowy. Nowy receipt wiąże obie tożsamości i hashe
+poprzedniego rejestru; jego publikacja atomowo wybiera nowy namespace.
+Stary klient zostaje odrzucony przez niezgodność tożsamości. Nie migrujemy
+sesji Windows do profilu Linux ani nie ponawiamy przyjętego wcześniej runu.
+
+Przerwanie transferu nie zezwala na automatyczny restart ani rollback:
+archiwum `source-transfer/<id>` i rejestr wymagają inspekcji. Przywrócenie
+starej grupy jest osobną operacją, po zatrzymaniu nowej. Implementacja tej
+ścieżki nie jest dowodem poprawności buildu, API, siatki ani WebGL.
+
 ## Konsekwencje
 
 - Trzy grupy mogą jednocześnie budować w swoich budżetach i mieć działające
@@ -156,3 +178,23 @@ orphan recovery); host Linux/WSL. Znane ograniczenie (fail-closed): dowody
 runów przyjętych pod ledgerem globalnym (`host_id` daemona) nie pasują do
 host ID grupy, więc capture-failure reconcile i pre-ack retry takich runów po
 przejściu grupy na własny ledger są odrzucane.
+
+
+### Jawny świeży start DEV po awarii (22.10.2026)
+
+`recreate-volume --fresh-state` archiwizuje runtime i wybiera nową generację
+wolumenu ledgera grupy. Stary ledger zachowuje bez zmian, razem z jego
+rezerwacjami; nie oznacza ich jako zwolnione ani nie odtwarza starego zadania.
+Warunkiem jest usunięcie dokładnie przypiętych kontenerów poprzedniej generacji
+oraz brak innych konsumentów jej ledgera. Budżet i tożsamość grupy pozostają te
+same. Inne grupy i globalny ledger pozostają poza zakresem.
+
+Wskaźnik `group-ledger-generation.json` w wolumenie kontrolnym wiąże nowy klucz
+wolumenu z zakończonym archiwum runtime. Zwykły start/restart zachowuje tę
+generację; tylko jawny świeży start ją zmienia. Poprzednie wolumeny i dane są
+zachowywane do osobnej decyzji retencji. Powrót do poprzedniej sesji nie jest
+automatycznym rollbackiem: wymaga jej własnej obsługi zachowanego stanu.
+
+Implementacja: `docker_volume_fresh_runtime.py`, `docker_volume_dev.py`,
+`docker_group_ledger.py`. Kontrola składni nie zastępuje dowodu stop→archiwum→
+nowy ledger→API; do czasu takiego uruchomienia ścieżka ma status NOT VERIFIED.

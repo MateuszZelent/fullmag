@@ -118,17 +118,46 @@ fn commit_transition_with_catalog_revision(
     store: &SessionStore,
     transition: &CoordinatorTransition,
 ) -> Result<(CoordinatorJournalCommitDisposition, u64)> {
+    commit_transition_with_catalog_revision_and_snapshot(store, transition, None)
+}
+
+/// Commit a Prepare/Start transition using the accepted snapshot already
+/// validated by its scheduler operation. Mutable run intent and dependency
+/// state remain fenced again under the session-store writer.
+pub(crate) fn commit_transition_with_accepted_snapshot(
+    store: &SessionStore,
+    transition: &CoordinatorTransition,
+    accepted: &study::AcceptedStudySnapshot,
+) -> Result<CoordinatorJournalCommitDisposition> {
+    commit_transition_with_catalog_revision_and_snapshot(store, transition, Some(accepted))
+        .map(|(disposition, _)| disposition)
+}
+
+fn commit_transition_with_catalog_revision_and_snapshot(
+    store: &SessionStore,
+    transition: &CoordinatorTransition,
+    accepted: Option<&study::AcceptedStudySnapshot>,
+) -> Result<(CoordinatorJournalCommitDisposition, u64)> {
     let dependencies = if let CoordinatorMessage::Command(envelope) = &transition.message {
         if matches!(
             &envelope.command,
             fullmag_application::WorkerCommand::Prepare { .. }
                 | fullmag_application::WorkerCommand::Start
         ) {
-            Some(study_completion::prepare_task_dependencies(
-                store,
-                &transition.checkpoint.claim.run_id,
-                transition.checkpoint.claim.task_id.as_str(),
-            )?)
+            let claim = &transition.checkpoint.claim;
+            Some(match accepted {
+                Some(accepted) => study_completion::prepare_task_dependencies_from_snapshot(
+                    store,
+                    &claim.run_id,
+                    claim.task_id.as_str(),
+                    accepted,
+                )?,
+                None => study_completion::prepare_task_dependencies(
+                    store,
+                    &claim.run_id,
+                    claim.task_id.as_str(),
+                )?,
+            })
         } else {
             None
         }
@@ -151,7 +180,10 @@ fn commit_transition_with_catalog_revision(
         entry.created_at = prior.created_at;
     }
     let disposition = store.commit_coordinator_journal_entry(&entry)?;
-    let catalog = reconcile_coordinator_catalog(store, &transition.checkpoint.claim)?;
+    let (catalog, projected_task) =
+        reconcile_coordinator_catalog_locked(store, &transition.checkpoint.claim)?;
+    drop(_writer);
+    solution_set::reconcile_study_solution(store, &transition.checkpoint.claim, &projected_task)?;
     Ok((disposition, catalog.revision))
 }
 
@@ -265,13 +297,27 @@ pub fn reconcile_coordinator_catalog(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
 ) -> Result<fullmag_session::FmsRunCatalog> {
+    let (catalog, projected_task) = {
+        let _transaction = store.write_transaction()?;
+        reconcile_coordinator_catalog_locked(store, claim)?
+    };
+    solution_set::reconcile_study_solution(store, claim, &projected_task)?;
+    Ok(catalog)
+}
+
+/// Project only the mutable coordinator/catalog state under the caller's
+/// writer. Portable result reconciliation must run after the outer writer
+/// has been released, including when this follows a journal publication.
+fn reconcile_coordinator_catalog_locked(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+) -> Result<(fullmag_session::FmsRunCatalog, fullmag_application::TaskRecord)> {
     use fullmag_application::{ObservationState as Observation, TaskLifecycle as Lifecycle};
     use fullmag_session::{
         FmsObservationState as StoredObservation, FmsTaskLifecycle as StoredLifecycle,
     };
-    let transaction = store.write_transaction()?;
     let recovered = recover_coordinator_locked(store, claim)?;
-    let recovered_task = recovered.coordinator.task();
+    let recovered_task = recovered.coordinator.task().clone();
     if recovered_task.lifecycle == fullmag_application::TaskLifecycle::Succeeded {
         study::validate_study_task_completion(store, claim)?;
     }
@@ -335,9 +381,7 @@ pub fn reconcile_coordinator_catalog(
         catalog.updated_at = chrono::Utc::now();
         store.commit_run_catalog(&catalog)?;
     }
-    drop(transaction);
-    solution_set::reconcile_study_solution(store, claim, recovered_task)?;
-    Ok(catalog)
+    Ok((catalog, recovered_task))
 }
 
 /// Recover one current claim from a complete causal chain of transition
@@ -659,7 +703,8 @@ pub use claim::{
 mod scheduler;
 pub use scheduler::{
     accepted_run_has_scheduler_ready_task, accepted_run_step_is_preparation_frontier,
-    accepted_run_step_is_scheduler_ready,
+    accepted_run_step_is_preparation_frontier_from_snapshot,
+    accepted_run_step_is_scheduler_ready, accepted_run_step_is_scheduler_ready_from_snapshot,
     resume_next_admitted_accepted_task_with_host,
     schedule_next_ready_accepted_task, schedule_next_ready_accepted_task_with_host,
     ScheduledAcceptedTask,
@@ -676,6 +721,7 @@ mod study;
 mod study_completion;
 pub use study::{
     load_accepted_study_snapshot, load_accepted_worker_step, load_accepted_worker_step_for_start,
+    load_accepted_worker_step_for_start_from_snapshot,
     load_study_observation_runtime, publish_accepted_task_prepare, publish_accepted_task_start,
     publish_study_outputs, queue_accepted_study_task, resolve_accepted_study_inputs,
     validate_requested_execution, validate_study_task_completion, AcceptedStudySnapshot,

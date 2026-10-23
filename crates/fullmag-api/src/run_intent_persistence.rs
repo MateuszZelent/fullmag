@@ -382,15 +382,96 @@ pub(crate) fn commit_validated_run_intent_with_backlog_limit(
     )
 }
 
-fn commit_validated_run_intent_with_optional_backlog_limit(
+/// Publish a RunIntent that was fully validated and canonicalized during the
+/// accepted-run preparation phase. The opaque payload binds the typed intent
+/// to the exact bytes that this transaction stores; mutable store admission,
+/// backlog, and idempotency checks remain inside the single writer lease.
+pub(crate) fn commit_prepared_run_intent_with_backlog_limit(
     store: &SessionStore,
+    prepared: &PreparedRunIntentCommit<'_>,
+    backlog_limit: NonZeroUsize,
+) -> Result<SubmitReceipt> {
+    commit_prepared_run_intent_with_optional_backlog_limit(
+        store,
+        prepared,
+        Some(backlog_limit),
+    )
+}
+
+enum CommitAssetPayloads<'a> {
+    Borrowed(&'a BTreeMap<String, Vec<u8>>),
+    Owned(BTreeMap<String, Vec<u8>>),
+}
+
+impl CommitAssetPayloads<'_> {
+    fn as_map(&self) -> &BTreeMap<String, Vec<u8>> {
+        match self {
+            Self::Borrowed(payloads) => payloads,
+            Self::Owned(payloads) => payloads,
+        }
+    }
+}
+
+/// A private, immutable handoff from accepted-run preparation to durable
+/// publication. Construction validates the typed intent and all planner
+/// inputs, then binds them to the exact canonical bytes that commit will store.
+/// Its fields stay private so callers cannot substitute an intent, catalog, or
+/// byte payload independently after validation.
+pub(crate) struct PreparedRunIntentCommit<'a> {
+    durable_intent: FmsRunIntent,
+    run_id: RunId,
+    payload_fingerprint: String,
+    definition_sha256: String,
+    study_sha256: String,
+    catalog_sha256: String,
+    definition_bytes: Vec<u8>,
+    study_bytes: Vec<u8>,
+    catalog_bytes: Vec<u8>,
+    asset_payloads: CommitAssetPayloads<'a>,
+}
+
+/// Prepare the expensive accepted RunIntent checks outside the live-session
+/// transition. The returned payload owns the canonical definition, study,
+/// catalog, and immutable asset bytes that the later commit publishes.
+pub(crate) fn prepare_owned_run_intent_commit(
+    intent: RunIntent,
+    definition: &ProjectEnvelope,
+    study: &StudyPlan,
+    catalog: &StudyProblemCatalog,
+    asset_payloads: BTreeMap<String, Vec<u8>>,
+) -> Result<PreparedRunIntentCommit<'static>> {
+    prepare_run_intent_commit(
+        intent,
+        definition,
+        study,
+        catalog,
+        CommitAssetPayloads::Owned(asset_payloads),
+    )
+}
+
+fn prepare_borrowed_run_intent_commit<'a>(
     intent: &RunIntent,
     definition: &ProjectEnvelope,
     study: &StudyPlan,
     catalog: &StudyProblemCatalog,
-    asset_payloads: &BTreeMap<String, Vec<u8>>,
-    backlog_limit: Option<NonZeroUsize>,
-) -> Result<SubmitReceipt> {
+    asset_payloads: &'a BTreeMap<String, Vec<u8>>,
+) -> Result<PreparedRunIntentCommit<'a>> {
+    prepare_run_intent_commit(
+        intent.clone(),
+        definition,
+        study,
+        catalog,
+        CommitAssetPayloads::Borrowed(asset_payloads),
+    )
+}
+
+fn prepare_run_intent_commit<'a>(
+    intent: RunIntent,
+    definition: &ProjectEnvelope,
+    study: &StudyPlan,
+    catalog: &StudyProblemCatalog,
+    asset_payloads: CommitAssetPayloads<'a>,
+) -> Result<PreparedRunIntentCommit<'a>> {
     intent.validate().context("validate typed run intent")?;
     intent.specification.snapshot.verify_envelope(definition)?;
     study
@@ -425,16 +506,30 @@ fn commit_validated_run_intent_with_optional_backlog_limit(
         &execution_plan,
     )
     .context("validate execution requests before publishing the run")?;
+
+    let definition_bytes = definition.raw_definition.raw_bytes().to_vec();
+    let definition_sha256 = fullmag_session::hex_sha256(&definition_bytes);
+    if definition_sha256 != intent.specification.snapshot.definition_sha256 {
+        bail!("stored definition object differs from run snapshot digest");
+    }
+    let study_bytes = study.canonical_json_bytes()?;
+    let study_sha256 = fullmag_session::hex_sha256(&study_bytes);
+    if study_sha256 != intent.specification.study.plan_sha256 {
+        bail!("stored study object differs from run plan digest");
+    }
     let catalog_value = serde_json::to_value(catalog)?;
-    let catalog_digest = fullmag_session::canonical_json_sha256(&catalog_value);
-    if intent.specification.study_catalog_sha256 != catalog_digest {
+    let catalog_bytes = fullmag_session::canonical_json_bytes(&catalog_value);
+    let catalog_sha256 = fullmag_session::hex_sha256(&catalog_bytes);
+    if intent.specification.study_catalog_sha256 != catalog_sha256 {
         bail!("run study catalog digest does not match immutable planner inputs");
     }
-    if asset_payloads.len() != intent.specification.immutable_assets.len() {
+
+    let asset_payload_map = asset_payloads.as_map();
+    if asset_payload_map.len() != intent.specification.immutable_assets.len() {
         bail!("run asset payload count does not match immutable asset references");
     }
     for asset in &intent.specification.immutable_assets {
-        let payload = asset_payloads
+        let payload = asset_payload_map
             .get(&asset.asset_id)
             .with_context(|| format!("missing immutable asset `{}`", asset.asset_id))?;
         if fullmag_session::hex_sha256(payload) != asset.content_sha256 {
@@ -444,16 +539,86 @@ fn commit_validated_run_intent_with_optional_backlog_limit(
             );
         }
     }
-    if study.schema_version==fullmag_authoring::STUDY_PLAN_SCHEMA_VERSION_V4 {
-        let bytes=asset_payloads.get(fullmag_application::SCRIPT_PIPELINE_SOURCE_ASSET_ID).context("v4 Submit requires captured compiler source")?;
-        let source=fullmag_application::validate_accepted_script_pipeline_source(study,catalog,bytes)?;
-        fullmag_application::validate_script_source_assets(&intent.specification,&source,|hash,maximum| {
-            let reference=intent.specification.immutable_assets.iter().find(|asset|asset.content_sha256==hash).context("captured source ref missing")?;
-            let bytes=asset_payloads.get(&reference.asset_id).context("captured source bytes missing")?;
-            if bytes.len() as u64>maximum { bail!("captured source byte bound differs from Submit bytes"); }
-            Ok(bytes.clone())
-        })?;
+    if study.schema_version == fullmag_authoring::STUDY_PLAN_SCHEMA_VERSION_V4 {
+        let bytes = asset_payload_map
+            .get(fullmag_application::SCRIPT_PIPELINE_SOURCE_ASSET_ID)
+            .context("v4 Submit requires captured compiler source")?;
+        let source = fullmag_application::validate_accepted_script_pipeline_source(
+            study, catalog, bytes,
+        )?;
+        fullmag_application::validate_script_source_assets(
+            &intent.specification,
+            &source,
+            |hash, maximum| {
+                let reference = intent
+                    .specification
+                    .immutable_assets
+                    .iter()
+                    .find(|asset| asset.content_sha256 == hash)
+                    .context("captured source ref missing")?;
+                let bytes = asset_payload_map
+                    .get(&reference.asset_id)
+                    .context("captured source bytes missing")?;
+                if bytes.len() as u64 > maximum {
+                    bail!("captured source byte bound differs from Submit bytes");
+                }
+                Ok(bytes.clone())
+            },
+        )?;
     }
+
+    let payload_fingerprint = intent.payload_fingerprint()?;
+    let specification = serde_json::to_value(&intent.specification)?;
+    let durable_intent = FmsRunIntent::new(
+        intent.specification.run_id.as_str(),
+        &intent.idempotency_key,
+        specification,
+    );
+    if durable_intent.payload_sha256 != payload_fingerprint {
+        bail!("application and durable run specification fingerprints differ");
+    }
+    durable_intent
+        .validate()
+        .context("validate durable run intent envelope")?;
+
+    Ok(PreparedRunIntentCommit {
+        durable_intent,
+        run_id: intent.specification.run_id,
+        payload_fingerprint,
+        definition_sha256,
+        study_sha256,
+        catalog_sha256,
+        definition_bytes,
+        study_bytes,
+        catalog_bytes,
+        asset_payloads,
+    })
+}
+
+fn commit_validated_run_intent_with_optional_backlog_limit(
+    store: &SessionStore,
+    intent: &RunIntent,
+    definition: &ProjectEnvelope,
+    study: &StudyPlan,
+    catalog: &StudyProblemCatalog,
+    asset_payloads: &BTreeMap<String, Vec<u8>>,
+    backlog_limit: Option<NonZeroUsize>,
+) -> Result<SubmitReceipt> {
+    let prepared = prepare_borrowed_run_intent_commit(
+        intent,
+        definition,
+        study,
+        catalog,
+        asset_payloads,
+    )?;
+    commit_prepared_run_intent_with_optional_backlog_limit(store, &prepared, backlog_limit)
+}
+
+fn commit_prepared_run_intent_with_optional_backlog_limit(
+    store: &SessionStore,
+    prepared: &PreparedRunIntentCommit<'_>,
+    backlog_limit: Option<NonZeroUsize>,
+) -> Result<SubmitReceipt> {
     // Every store mutation below (CAS blobs, intent publication, replay
     // verification) must belong to ONE writer lease.  The lease is re-entrant
     // on this thread, but separate short leases let two concurrent identical
@@ -467,30 +632,25 @@ fn commit_validated_run_intent_with_optional_backlog_limit(
     // retry can duplicate or reorder a partially committed submission.
     let _publication_lease =
         fullmag_runtime_control::retry_store_writer_busy(|| store.write_transaction())?;
-    let definition_object_ref = store.store_blob(definition.raw_definition.raw_bytes())?;
-    if definition_object_ref != intent.specification.snapshot.definition_sha256 {
+    let definition_object_ref = store.store_blob(&prepared.definition_bytes)?;
+    if definition_object_ref != prepared.definition_sha256 {
         bail!("stored definition object differs from run snapshot digest");
     }
-    let study_object_ref = store.store_blob(&study.canonical_json_bytes()?)?;
-    if study_object_ref != intent.specification.study.plan_sha256 {
+    let study_object_ref = store.store_blob(&prepared.study_bytes)?;
+    if study_object_ref != prepared.study_sha256 {
         bail!("stored study object differs from run plan digest");
     }
-    let study_catalog_object_ref =
-        store.store_blob(&fullmag_session::canonical_json_bytes(&catalog_value))?;
-    if study_catalog_object_ref != intent.specification.study_catalog_sha256 {
+    let study_catalog_object_ref = store.store_blob(&prepared.catalog_bytes)?;
+    if study_catalog_object_ref != prepared.catalog_sha256 {
         bail!("stored study catalog differs from run catalog digest");
     }
     let mut asset_object_refs = BTreeMap::new();
-    for (asset_id, payload) in asset_payloads {
+    for (asset_id, payload) in prepared.asset_payloads.as_map() {
         asset_object_refs.insert(asset_id.clone(), store.store_blob(payload)?);
     }
-    let payload_fingerprint = intent.payload_fingerprint()?;
-    let specification = serde_json::to_value(&intent.specification)?;
-    let mut durable = FmsRunIntent::new(
-        intent.specification.run_id.as_str(),
-        &intent.idempotency_key,
-        specification,
-    );
+    let payload_fingerprint = prepared.payload_fingerprint.as_str();
+    let mut durable = prepared.durable_intent.clone();
+    durable.accepted_at = Utc::now();
     durable.definition_object_ref = Some(definition_object_ref.clone());
     durable.study_object_ref = Some(study_object_ref.clone());
     durable.study_catalog_object_ref = Some(study_catalog_object_ref.clone());
@@ -505,7 +665,7 @@ fn commit_validated_run_intent_with_optional_backlog_limit(
     let (disposition, run_id) = match disposition {
         RunIntentCommitDisposition::Accepted => (
             SubmitDisposition::Accepted,
-            intent.specification.run_id.clone(),
+            prepared.run_id.clone(),
         ),
         RunIntentCommitDisposition::Replayed { run_id } => {
             let original = store
@@ -537,7 +697,7 @@ fn commit_validated_run_intent_with_optional_backlog_limit(
     Ok(SubmitReceipt {
         disposition,
         run_id,
-        payload_fingerprint,
+        payload_fingerprint: payload_fingerprint.to_owned(),
     })
 }
 

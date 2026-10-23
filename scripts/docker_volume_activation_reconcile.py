@@ -535,7 +535,7 @@ def _validate_helper(
     activation_attempt: str,
     *, phase: str = "activation",
 ) -> tuple[dict[str, object], str]:
-    if phase not in {"activation", "iteration", "browser-qa", "development"}:
+    if phase not in {"activation", "iteration", "browser-qa", "development", "stop-diagnostic"}:
         raise _fail("Unsupported retained helper phase")
     result = docker_capture("inspect", helper_name, timeout=90)
     try:
@@ -804,6 +804,12 @@ def assert_no_unresolved_activation(
     """Block every new activation while one prior activation is unknown."""
     from docker_control_namespace import assert_namespace_activation
     assert_namespace_activation(control, request_id)
+    aborted = _read_json(control, "preparation-abort/current.json", optional=True)
+    if aborted is not None:
+        from docker_volume_preparation_abort import has_fresh_archive
+        if ((request_id is not None and aborted.get("request_id") == request_id)
+            or not has_fresh_archive(control, aborted)):
+            raise _fail("An unreleased preparation was aborted; preserve it through recreate-volume --fresh-state before a new activation; old request replay is forbidden")
     record = _read_json(control, "activation/unresolved.json", optional=True)
     if record is None:
         return

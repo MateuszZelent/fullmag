@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::canonical_json_sha256;
-use crate::compute_node_snapshot::{ComputeNodeSnapshot, EnforcementStatus, GpuPartition, Reported};
+use crate::compute_node_snapshot::{
+    ComputeNodeSnapshot, EnforcementStatus, GpuPartition, Reported, UnavailableReason,
+};
 use crate::compute_node_policy::{NodePolicy, NodePolicyStatus};
 use crate::durability::{atomic_write, confirm_publication, sync_directory};
 use crate::repository_path::{checked_path, read_bounded_regular_file, reject_link, validate_store_id};
@@ -125,6 +127,27 @@ impl std::fmt::Display for HostResourceCapacityUnavailable {
 }
 
 impl std::error::Error for HostResourceCapacityUnavailable {}
+
+/// A transient GPU probe failure left the last validated inventory available
+/// for diagnostics, but it is not current and cannot authorize a reservation
+/// or worker launch. Callers may wait for a later successful sample and retry
+/// the complete validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransientGpuInventoryUnavailable {
+    pub reason: UnavailableReason,
+}
+
+impl std::fmt::Display for TransientGpuInventoryUnavailable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "GPU host admission requires a fresh inventory sample (probe reason: {:?})",
+            self.reason
+        )
+    }
+}
+
+impl std::error::Error for TransientGpuInventoryUnavailable {}
 
 /// Explicit operator configuration for one shared host ledger.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3117,6 +3140,17 @@ impl HostResourceLedger {
         if !request.exclusive_gpu_uuids.is_empty() {
             let devices = match &snapshot.gpus {
                 Reported::Available { value } => value,
+                Reported::Unavailable {
+                    reason,
+                    last_known: Some(devices),
+                } if !devices.is_empty()
+                    && matches!(
+                        reason,
+                        UnavailableReason::ProbeFailed | UnavailableReason::SourceUnavailable
+                    ) =>
+                {
+                    return Err(TransientGpuInventoryUnavailable { reason: *reason }.into());
+                }
                 Reported::Unavailable { .. } => {
                     bail!("GPU host admission requires current GPU inventory")
                 }

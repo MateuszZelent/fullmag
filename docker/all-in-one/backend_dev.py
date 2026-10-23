@@ -5622,7 +5622,10 @@ def _serve(extra: list[str]) -> int:
         }
     )
     command = [sys.executable, "/opt/fullmag/entrypoint.py", *extra]
-    _log_phase("api", "exec", mode="backend")
+    if environment.get("FULLMAG_RUNTIME_UNCLAIMED_CANCELLATION_REQUEST"):
+        _log_phase("maintenance", "exec", mode="unclaimed-cancellation")
+    else:
+        _log_phase("api", "exec", mode="backend")
     os.execvpe(sys.executable, command, environment)
     return 0
 

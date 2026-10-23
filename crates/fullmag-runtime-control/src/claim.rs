@@ -18,11 +18,31 @@ pub fn commit_claimed_task_admission(
     task: &TaskRecord,
     claim: &TaskClaim,
 ) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
-    commit_claimed_task_admission_with(store, task, claim, |lease, dependencies| {
+    commit_claimed_task_admission_with(store, task, claim, None, |lease, dependencies| {
         let _writer = store.write_transaction()?;
         dependencies.require_locked(store)?;
         store.commit_task_admission(lease).map(Some)
     })?
+    .context("local task admission unexpectedly returned no disposition")
+}
+
+pub(crate) fn commit_claimed_task_admission_from_snapshot(
+    store: &SessionStore,
+    task: &TaskRecord,
+    claim: &TaskClaim,
+    accepted: &crate::study::AcceptedStudySnapshot,
+) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
+    commit_claimed_task_admission_with(
+        store,
+        task,
+        claim,
+        Some(accepted),
+        |lease, dependencies| {
+            let _writer = store.write_transaction()?;
+            dependencies.require_locked(store)?;
+            store.commit_task_admission(lease).map(Some)
+        },
+    )?
     .context("local task admission unexpectedly returned no disposition")
 }
 
@@ -38,16 +58,44 @@ pub fn commit_claimed_task_admission_with_host(
     request: &fullmag_session::host_resource_ledger::HostReservationRequest,
     inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
 ) -> Result<fullmag_session::TaskAdmissionCommitDisposition> {
+    commit_claimed_task_admission_with_host_inner(
+        store, task, claim, ledger, request, inputs, None,
+    )?
+    .context("host task admission unexpectedly returned no disposition")
+}
+
+pub(crate) fn try_commit_claimed_task_admission_with_host_from_snapshot(
+    store: &SessionStore,
+    task: &TaskRecord,
+    claim: &TaskClaim,
+    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    request: &fullmag_session::host_resource_ledger::HostReservationRequest,
+    inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+    accepted: &crate::study::AcceptedStudySnapshot,
+) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
+    try_commit_claimed_task_admission_with_host_inner(
+        store, task, claim, ledger, request, inputs, Some(accepted),
+    )
+}
+
+fn commit_claimed_task_admission_with_host_inner(
+    store: &SessionStore,
+    task: &TaskRecord,
+    claim: &TaskClaim,
+    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    request: &fullmag_session::host_resource_ledger::HostReservationRequest,
+    inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+    accepted: Option<&crate::study::AcceptedStudySnapshot>,
+) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
     let inputs = capture_admission_inputs(inputs)?;
-    commit_claimed_task_admission_with(store, task, claim, |lease, dependencies| {
+    commit_claimed_task_admission_with(store, task, claim, accepted, |lease, dependencies| {
         let lease = attach_host_launch_binding(ledger, lease)?;
         ledger
             .commit_task_admission_checked(request, store, &lease, &inputs, || {
                 dependencies.require_locked(store)
             })
             .map(Some)
-    })?
-    .context("host task admission unexpectedly returned no disposition")
+    })
 }
 
 /// Capacity contention leaves the ready task queued without publishing a local
@@ -60,8 +108,22 @@ pub fn try_commit_claimed_task_admission_with_host(
     request: &fullmag_session::host_resource_ledger::HostReservationRequest,
     inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
 ) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
+    try_commit_claimed_task_admission_with_host_inner(
+        store, task, claim, ledger, request, inputs, None,
+    )
+}
+
+fn try_commit_claimed_task_admission_with_host_inner(
+    store: &SessionStore,
+    task: &TaskRecord,
+    claim: &TaskClaim,
+    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    request: &fullmag_session::host_resource_ledger::HostReservationRequest,
+    inputs: &std::collections::BTreeMap<String, fullmag_application::ResolvedInput>,
+    accepted: Option<&crate::study::AcceptedStudySnapshot>,
+) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
     let inputs = capture_admission_inputs(inputs)?;
-    commit_claimed_task_admission_with(store, task, claim, |lease, dependencies| {
+    commit_claimed_task_admission_with(store, task, claim, accepted, |lease, dependencies| {
         let lease = attach_host_launch_binding(ledger, lease)?;
         ledger.try_commit_task_admission_checked(request, store, &lease, &inputs, || {
             dependencies.require_locked(store)
@@ -89,13 +151,14 @@ fn capture_admission_inputs(
     fullmag_session::FmsResolvedInputsSnapshot::new(serde_json::to_value(inputs)?)
 }
 
-fn commit_claimed_task_admission_with(
+fn commit_claimed_task_admission_with<'a>(
     store: &SessionStore,
     task: &TaskRecord,
     claim: &TaskClaim,
+    accepted_snapshot: Option<&'a crate::study::AcceptedStudySnapshot>,
     admit: impl FnOnce(
         &FmsResourceLease,
-        &crate::study_completion::PreparedTaskDependencies,
+        &crate::study_completion::PreparedTaskDependencies<'a>,
     ) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>>,
 ) -> Result<Option<fullmag_session::TaskAdmissionCommitDisposition>> {
     task.fence(claim)
@@ -123,11 +186,19 @@ fn commit_claimed_task_admission_with(
     {
         bail!("application task differs from the durable ready task");
     }
-    let dependencies = crate::study_completion::prepare_task_dependencies(
-        store,
-        &claim.run_id,
-        claim.task_id.as_str(),
-    )?;
+    let dependencies = match accepted_snapshot {
+        Some(accepted) => crate::study_completion::prepare_task_dependencies_from_snapshot(
+            store,
+            &claim.run_id,
+            claim.task_id.as_str(),
+            accepted,
+        )?,
+        None => crate::study_completion::prepare_task_dependencies(
+            store,
+            &claim.run_id,
+            claim.task_id.as_str(),
+        )?,
+    };
     validate_claimed_task_resource(claim, &dependencies)?;
     let retry_queue_epoch = durable_task.ownership_epoch.is_some_and(|prior_epoch| {
         prior_epoch
@@ -230,7 +301,19 @@ pub(crate) fn claimed_task_resource_compatibility(
         &claim.run_id,
         &specification.snapshot.project_id,
     )?;
+    if accepted.run.intent != intent {
+        bail!("accepted task run intent changed while loading its study snapshot");
+    }
     claimed_task_resource_compatibility_for_snapshot(claim, &specification, &accepted)
+}
+
+pub(crate) fn claimed_task_resource_compatibility_from_snapshot(
+    store: &SessionStore,
+    claim: &TaskClaim,
+    accepted: &crate::study::AcceptedStudySnapshot,
+) -> Result<ClaimedTaskResourceCompatibility> {
+    crate::study::require_current_accepted_study_intent(store, accepted)?;
+    claimed_task_resource_compatibility_for_snapshot(claim, &accepted.run.specification, accepted)
 }
 
 fn claimed_task_resource_compatibility_for_snapshot(
@@ -325,7 +408,7 @@ fn resource_budget_meets_requested_minimum(
 
 fn validate_claimed_task_resource(
     claim: &TaskClaim,
-    dependencies: &crate::study_completion::PreparedTaskDependencies,
+    dependencies: &crate::study_completion::PreparedTaskDependencies<'_>,
 ) -> Result<()> {
     if !dependencies.has_run_intent() {
         bail!("accepted task admission requires its immutable run intent");

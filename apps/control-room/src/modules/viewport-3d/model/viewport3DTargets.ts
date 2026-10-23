@@ -319,12 +319,15 @@ export function resolveViewport3DSelectionBounds(
   fdmGrid: FdmSelectionGrid | null = null,
   fdmUniverseOverlay: FdmUniverseOutsideSupportOverlayModel | null = null,
   activeGenerationId?: string | null,
+  universeRootBounds: Viewport3DBounds | null = null,
 ): Viewport3DBounds | null {
   if (!selection.kind) return null;
 
   if (isFdmSelection(selection, fdmGrid)) {
     return resolveFdmSelectionBounds(selection, fdmGrid, fdmUniverseOverlay);
   }
+
+  if (selection.kind === "universe.root") return universeRootBounds;
 
   return (
     resolveMeshQualityElementBounds(selection, fallbackBounds, activeGenerationId) ??

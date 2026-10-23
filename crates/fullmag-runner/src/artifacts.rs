@@ -402,6 +402,40 @@ fn fem_relaxation_producer_provenance_artifact(
         }
         Ok(artifact.bytes.as_slice())
     };
+    const UNAVAILABLE_PATH: &str = "equilibrium/certification_unavailable.v1.json";
+    if let Err(unavailable) =
+        crate::fem::equilibrium_identity::validate_supported_relax_source(source_plan)
+    {
+        // Ordinary accepted-state publication has a wider physics scope than
+        // certified modal replay. Preserve that explicit distinction instead
+        // of requiring nonexistent modal certificates for a legal endpoint.
+        let marker: serde_json::Value = serde_json::from_slice(exact_bytes(
+            UNAVAILABLE_PATH, "certification availability",
+        )?)
+        .map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
+        let (step, time) = executed.result.steps.last()
+            .map_or((0, 0.0), |stats| (stats.step, stats.time));
+        let expected = serde_json::json!({
+            "schema_version": "fullmag.fem_equilibrium_certification_unavailable.v1",
+            "reason": unavailable.message,
+            "accepted_step": step,
+            "time_seconds": time,
+            "state_role": "time_domain_observation_only",
+        });
+        if marker != expected || executed.auxiliary_artifacts.iter().any(|artifact| {
+            [accepted_path, certified_path, recomputed_path,
+             crate::fem::eigen_equilibrium_contract::FEM_RELAXATION_PRODUCER_PROVENANCE_RELATIVE_PATH]
+                .contains(&artifact.relative_path.as_str())
+        }) {
+            return Err(Error::new(ErrorKind::InvalidData,
+                "FEM relaxation certification availability conflicts with its source scope or accepted endpoint"));
+        }
+        return Ok(None);
+    }
+    if executed.auxiliary_artifacts.iter().any(|artifact| artifact.relative_path == UNAVAILABLE_PATH) {
+        return Err(Error::new(ErrorKind::InvalidData,
+            "certifiable FEM relaxation unexpectedly declares certification unavailable"));
+    }
     let accepted_bytes = exact_bytes(accepted_path, "accepted fields")?;
     let certified_bytes = exact_bytes(certified_path, "certified fields")?;
     let recomputed_bytes = exact_bytes(recomputed_path, "recomputed certificate")?;
@@ -11151,6 +11185,7 @@ mod tests {
             fdm_cpu_evaluation_telemetry: None,
             fdm_fft_execution: None,
             fem_gpu_execution_receipt: None,
+            fem_gpu_minimizer_execution_receipt: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
@@ -12059,6 +12094,7 @@ mod tests {
             fdm_cpu_evaluation_telemetry: None,
             fdm_fft_execution: None,
             fem_gpu_execution_receipt: None,
+            fem_gpu_minimizer_execution_receipt: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),

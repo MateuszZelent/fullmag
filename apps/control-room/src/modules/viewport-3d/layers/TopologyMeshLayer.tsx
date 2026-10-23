@@ -48,6 +48,8 @@ export function TopologyMeshLayer({
   modeCompositionId,
   modeCompositionPhaseByLayerId,
   onSelectPart,
+  onRenderableGeometryChange,
+  renderableGeometryStageVisible = true,
   tracker,
   topologyModel,
   topologyFreshness,
@@ -69,6 +71,11 @@ export function TopologyMeshLayer({
   modeCompositionId?: string | null;
   modeCompositionPhaseByLayerId?: ReadonlyMap<string, number>;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
+  onRenderableGeometryChange?: (
+    renderableGeometryKey: string,
+    ready: boolean,
+  ) => void;
+  renderableGeometryStageVisible?: boolean;
   tracker: Viewport3DResourceTracker;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   topologyFreshness: Viewport3DTopologyFreshness;
@@ -136,6 +143,8 @@ export function TopologyMeshLayer({
               modeCompositionPhaseRad={modeCompositionPhaseRad}
               modeCompositionSnapshot={modeCompositionSnapshot}
               onSelectPart={onSelectPart}
+              onRenderableGeometryChange={onRenderableGeometryChange}
+              renderableGeometryStageVisible={renderableGeometryStageVisible}
               partModel={partModel}
               settings={
                 topologyCurrent

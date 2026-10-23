@@ -97,7 +97,9 @@ _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 # v8 invalidated v7 source-face corner targets. v9 invalidates meshes generated
 # with alias-shadowed per-geometry hmax policies; reusing them could retain a
 # neighboring geometry's size field after canonical owner binding changes.
-_FEM_MESH_CACHE_VERSION = "v10"
+# v11 excludes isolated Gmsh construction points from mixed-v2 P1 state nodes.
+# Retain old artifacts, but never reuse their unbound zero-support state DOFs.
+_FEM_MESH_CACHE_VERSION = "v11"
 _FEM_SHARED_DOMAIN_CACHE_SCHEMA = "fullmag.fem.shared-domain-cache.v1"
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

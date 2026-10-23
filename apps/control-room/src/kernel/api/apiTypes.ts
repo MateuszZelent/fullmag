@@ -252,6 +252,8 @@ export type GeometryRealizationResource =
 export type GeometryValidationResource =
   components["schemas"]["GeometryValidationResource"];
 export type HealthResource = components["schemas"]["HealthResponse"];
+export type RuntimeServiceStatusResource =
+  components["schemas"]["RuntimeServiceStatusResource"];
 export type ImportSessionAssetRequest =
   components["schemas"]["ImportSessionAssetRequest"];
 export type SessionAssetImportResponse =

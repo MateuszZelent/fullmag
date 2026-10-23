@@ -649,12 +649,10 @@ export function useSimulationStartupOverlayVisibility(): boolean {
   const realtimeConnection = useRealtimeConnection();
   const allowMissingSessionSmoke = useAllowMissingSessionSmoke();
   const state = resolveSimulationPreparationViewModel(
-    preparationDuringRealtimeDisruption(
-      preparation,
-      realtimeConnection.disrupted,
-    ),
+    preparation,
     startupResource.status,
     null,
+    realtimeConnection.disrupted,
   );
   return allowMissingSessionSmoke ? false : state.isVisible;
 }
@@ -672,12 +670,10 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
   const realtimeConnection = useRealtimeConnection();
   const allowMissingSessionSmoke = useAllowMissingSessionSmoke();
   const untimedState = resolveSimulationPreparationViewModel(
-    preparationDuringRealtimeDisruption(
-      preparation,
-      realtimeConnection.disrupted,
-    ),
+    preparation,
     startupResource.status,
     null,
+    realtimeConnection.disrupted,
   );
   const [displayNow, setDisplayNow] = useState<number | null>(null);
   const shouldTick = untimedState.isVisible && !untimedState.isTerminal;
@@ -690,12 +686,10 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
   }, [shouldTick]);
 
   const state = resolveSimulationPreparationViewModel(
-    preparationDuringRealtimeDisruption(
-      preparation,
-      realtimeConnection.disrupted,
-    ),
+    preparation,
     startupResource.status,
     displayNow,
+    realtimeConnection.disrupted,
   );
   const visibleState = allowMissingSessionSmoke ? hideStartupOverlay(state) : state;
   const startupRefetch = startupResource.refetch;
@@ -735,17 +729,6 @@ function scheduleRepeatingTimeout(
       globalThis.clearTimeout(timeoutId);
     }
   };
-}
-
-function preparationDuringRealtimeDisruption(
-  preparation: ReturnType<typeof useSimulationPreparation>,
-  disrupted: boolean,
-): ReturnType<typeof useSimulationPreparation> {
-  if (!disrupted || !preparation.data || preparation.status !== "ready") {
-    return preparation;
-  }
-
-  return { ...preparation, status: "stale" };
 }
 
 export function SimulationStartupOverlay() {

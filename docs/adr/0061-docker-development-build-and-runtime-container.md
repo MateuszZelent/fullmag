@@ -14,6 +14,46 @@ backendu, który buduje kod i następnie uruchamia aplikację.
 
 ## Decyzja
 
+### Aktualizacja 2026-10-22: podstawowy cykl skryptu
+
+Decyzja użytkownika: podstawą obsługi jest uruchomienie wskazanego skryptu,
+nie odtwarzanie poprzedniej sesji. Docelowe komendy to
+`fullmag-container skrypt.py` oraz `just fullmag-dev-container skrypt.py`.
+Stan implementacji tych komend i pełnego cyklu: **w przygotowaniu**.
+
+DEV po terminalnym zakończeniu lub błędzie zadania zachowuje API/frontend
+i cache, publikuje wynik/diagnostykę i wraca do bezczynności. Produkcja kończy
+kontenery po wykonaniu, chyba że skrypt żąda trybu interaktywnego. Wyniki
+i logi pozostają zapisane. Interaktywny workspace zachowuje wyniki do dalszej
+pracy. Kolejne uruchomienie nie wymaga przebudowy bez zmienionych źródeł.
+
+Recovery jest odłożone i nie jest etapem normalnego cyklu ani automatyczną
+reakcją na błąd zadania. Historyczne ścieżki poniżej zachowują swoje kontrakty,
+ale nie są rozszerzane w ramach tego etapu. Niepewne zakończenie workera
+pozostaje jawnym stanem niedostępnego wykonania przy dostępnym API; nie jest
+oznaczane jako bezczynność przez kasowanie ownera, lease lub wyników.
+
+Jawny `recreate-volume --fresh-state` izoluje także techniczny stan wykonania,
+nie tylko hostowy katalog `/state`. Po potwierdzeniu zatrzymania i usunięciu
+dokładnej pary usług, pod blokadą operacji grupy, zachowuje całe poprzednie
+`runtime-control` w `runtime-archives/<operation-id>` wolumenu kontrolnego.
+Mapowanie archiwum do starej sesji jest zapisane poza przenoszonym drzewem.
+Powstają puste `runtime-control` i `runtime-control/runtime-services`, wymagane
+przez mounty Compose. Nie zmienia to starego OWNER, katalogu runu, lease ani
+ledgera; niezakończone rezerwacje nie są uznawane za zwolnione. Cache pozostaje
+w tej samej parze wolumenów. Niepewna aktywacja lub obcy konsument blokuje
+operację. To jawny start nowej sesji, nie recovery starej ani automatyczna
+reakcja na błąd zadania. Niepewny wynik archiwizacji zatrzymuje procedurę
+z zachowaną blokadą; nie uruchamia automatycznego ponowienia. Stare ścieżki
+`runtime-control/...` odczytuje się historycznie przez zapisane mapowanie
+archiwum, nie jako dowód dotyczący nowej sesji.
+Stan tej poprawki: implementacja w toku; wykonanie **NOT VERIFIED**.
+
+Start diagnostyczny tego samego API pomija odtwarzanie accepted run,
+projekcję zapisującą stan oraz publikację właściciela wykonania. Bramka HTTP
+sama nie wystarcza: ograniczenie musi obejmować inicjalizację przed nasłuchem.
+Nie tworzymy osobnego serwera diagnostycznego ani alternatywnego solvera.
+
 W trybie dev dokładnie dwie stałe usługi aplikacji należą do projektu
 `fullmag-master` lub `fullmag-worktree-<worktree_id>`:
 
@@ -798,3 +838,166 @@ hosta nie może zmieniać storage policy; H1 nie mierzy fizycznej pojemności st
 Przy porównaniu konfiguracji tylko cpu_millis i memory_bytes są zmienne
 w budżetach ofert. storage_bytes, gpu_memory_bytes i nieznane dodatkowe pola
 pozostają dokładne; nie wynikają z pomiaru CPU/RAM deskryptora H1.
+
+
+## Awaria runtime z zachowaniem diagnostyki API (22.10.2026)
+
+Decyzja operatora: błąd zadania nie zamyka API, konflikt writer-lock odracza
+pracę schedulera, a utrata sprawnego runtime blokuje nowe operacje bez
+odcinania diagnostyki. Nie wolno automatycznie ponawiać Solve ani restartować
+symulacji. Implementacja i weryfikacja runtime tej zmiany: **w toku**.
+
+Nadzorca przekazuje każdej nowej instancji API prywatną, unikalną ścieżkę
+`FULLMAG_API_RUNTIME_FAILURE_FENCE` w wolumenie runtime-control. Po utracie
+nadzoru atomowo i trwale publikuje tam etap, przyczynę oraz zalecane działanie.
+Istnienie markera (również błędna zawartość lub błąd odczytu) zatrzaskuje
+blokadę nowych operacji w globalnej bramce API. Blokada nie znika po usunięciu
+pliku ani zakończeniu innej operacji handoff. Nie oznacza zakończenia już
+przyjętych zadań ani zwolnienia ich lease'ów.
+
+API pozostaje uruchomione dopiero po potwierdzeniu przez tę samą przypiętą
+instancję stanu health `degraded`. Brak potwierdzenia zachowuje zamknięcie
+admission przez zatrzymanie API; nie wolno zostawić starego binarium, które
+ignoruje fence. Jawnie bezpieczne odczyty diagnostyczne pozostają dostępne.
+Potwierdzenie tożsamości API nie wymaga potwierdzonego ownera schedulera.
+Jeśli API zostało zweryfikowane, a późniejsze `service-ensure` zawiedzie,
+nadzorca zachowuje tę tożsamość i może uzyskać ACK blokady od tego samego API.
+Nie tworzy w tym celu zastępczego ownera ani nie wykonuje drain bez ownera.
+Nie oznacza to jeszcze diagnostycznego startu po błędzie występującym przed
+spawnem API; wydzielenie tej ścieżki pozostaje wymagane.
+Odczyty ostatnich opublikowanych wyników należy dopuścić na podstawie ich
+kontraktu bez uruchamiania nowego compute/materializacji. Prywatne recovery i
+retirement nadal muszą respektować bramkę i własność runtime.
+
+Publiczny model JSON health nie zmienia kształtu. `status=degraded` oznacza
+żywe API z zablokowanymi operacjami. Istniejący zasób runtime-service zachowuje
+maszynowy kod i opis stanu właściciela. UI ma zachować workspace i pokazać
+problem oraz następne działanie, bez automatycznego restartu/replay.
+
+Rollback wymaga zarządzanego zatrzymania/odzyskania konkretnej grupy; markerów,
+receiptów ani danych runu nie usuwa się w celu obejścia blokady. Build nie jest
+dowodem poprawności tego scenariusza: potrzebne są obserwacje admission,
+dostępności diagnostyki, zachowania wyników i braku powtórzenia zadania.
+
+### Recovery z zachowaniem anulowanego runu — zakres w przygotowaniu
+
+Obserwacja z 22.10.2026 ujawniła stan, którego dotychczasowe recovery nie
+obsługuje: cały backend Docker jest zatrzymany, ale accepted store zawiera
+zadanie Queued po opublikowaniu start_release. Nie jest to pusty namespace
+ani run nadal oczekujący na zgodę Compute. Nie rozszerzamy znaczenia istniejącego
+`empty_namespace_recovered` i nie cofamy start_release.
+
+Przygotowywana odrębna ścieżka ma zachować run, siatkę i receipty. Przed zmianą
+ownera musi użyć standardowego trwałego intentu anulowania oraz projektora
+unclaimed/no-spawn. Samo żądanie anulowania nie wymaga dowodu teardownu:
+jest istniejącą operacją na zadaniu, blokuje nowe admission, a projektor
+odmawia terminalnej projekcji przy aktywnym lease lub pasującym admission.
+Nie zastępuje to osobnego dowodu teardownu wymaganego do zmiany ownera. Następnie wymaga jawnych digestów run_intent i run_catalog,
+pełnej zgodności listy zachowanych runów, stanu Cancelled dla wszystkich ich
+zadań, dopasowanego intentu anulowania i braku aktywnych lease oraz admission.
+Dowód zakończenia dokładnego namespace Docker pozostaje osobnym wymaganiem;
+metadane historycznego ownera nie są dowodem śmierci jego procesów.
+
+W źródłach dodano natywne `--cancel-unclaimed`: przypina konfigurację, ownera,
+katalog i dokładny snapshot zadania, publikuje standardowy intent anulowania
+i korzysta z projektora ledgera. Odroczona projekcja jest osobnym wynikiem;
+nie uprawnia do recovery ownera. Polecenie nie uruchamia solvera.
+
+Anulowanie nie jest admission wykonania: otwiera przypięty ledger aplikacji
+i polityki, ale nie wymaga zgodności historycznej generacji gotowości ze
+świeżo zbudowanym pakietem. Projektor nadal blokuje terminalne anulowanie
+przy aktywnym wykonaniu lub nierozstrzygniętej własności. Kontrola generacji
+pozostaje obowiązkowa przy uruchamianiu obliczeń.
+
+Natywny request recovery v2 przyjmuje `retained_cancelled_runs` i sprawdza je
+pod blokadą ledgera i store. Wynik nazywa się
+`retained_cancelled_runs_recovered`; request v1 nadal wymaga pustego store
+i zwraca `empty_namespace_recovered`. Digesty requestu i dowodu zakończenia
+namespace pozostają powiązane. Odczyt historycznego katalogu Queued nie spełnia
+tego kontraktu.
+
+Integracja hostowa musi przypiąć te dowody do autoryzacji i odpornego na
+przerwanie journalu. Konsumenci Python rozróżniają oba wyniki; samo przyjęcie
+schematu nie oznacza wykonanej migracji. Nie wolno podstawiać nowego requestu
+pod stary dowód pustego store. Stan implementacji i wykonania: **NOT VERIFIED**
+do zakończenia integracji, zarządzanego buildu i obserwacji runtime.
+
+Hostowa komenda `cancel-unclaimed-volume` wykonuje jawne maintenance w stałej
+usłudze backend wybranej grupy. Przed odtworzeniem usług zachowuje przypięte
+dowody starego namespace. Nowy backend kompiluje pakiet, przechodzi zwykłe
+bramki storage/cgroup/ledger i czeka na admission tej konkretnej próby. Dopiero
+wtedy wykonuje natywne anulowanie, zapisuje oddzielny receipt i kończy się bez
+uruchomienia API lub solvera. Odroczona albo nieznana projekcja nie jest sukcesem.
+Zakończenie tego maintenance nie dowodzi recovery ownera ani gotowości API.
+
+Wznowienie po przerwaniu hosta musi rozróżniać etap przed startem kontenera od
+nieznanego wyniku natywnej mutacji. W pierwszym przypadku dopuszczalne jest
+kontynuowanie tej samej przypiętej operacji po sprawdzeniu aktualnych dowodów;
+w drugim należy odczytać durable intent i wynik, bez ponownego Solve.
+
+### Recovery po usunięciu historycznego kontenera
+
+Dla zachowanych, anulowanych runów request v2 może użyć odrębnego dowodu
+`docker_namespace_absence_attestation.v1`. Historyczne piny obu usług są
+wiązane z oryginalną próbą i jej identyfikatorem silnika Docker. Host sprawdza
+nieobecność dokładnych pełnych ID przez `inspect` oraz `ps -a`, pod blokadą
+operacji tej grupy. Manifest zachowuje źródłowe dowody, aktualny wynik
+anulowania i digesty obu obserwacji. Brak kontenera nie jest przedstawiany jako
+nowy odczyt `exited`, czasu zakończenia ani liczby potomków.
+
+Ten wariant służy wyłącznie recovery ownera v2 z zachowanymi anulowanymi runami.
+Nie rozszerza kontraktu worker-orphan teardown ani requestu v1. Nadal wymaga
+zgodności konfiguracji, ownera, LAUNCH, ledgera, całego zbioru runów, lease'ów,
+admissions i CAS. Po autoryzowanym recovery można uruchomić API; historyczne
+anulowane zadanie nie jest ponawiane. Implementacja i runtime tego wariantu
+pozostają **NOT VERIFIED** do zakończenia buildu i obserwacji.
+
+
+### Normalny restart DEV po terminalnym zadaniu (22.10.2026)
+
+Załadowana sesja z zakończonym zadaniem nie oznacza aktywnego solvera.
+Zarządzany restart może dopuścić ją do zwykłego native drain, gdy prywatny
+frontend jest wyciszony, API i runtime są dostępne, bieżący run jest terminalny,
+kolejka obliczeń jest pusta, a tożsamość API/sesji/runu pozostaje zgodna w
+ponownym odczycie. Dopiero poprawny drain i istniejący terminalny receipt
+pozwalają ponownie uruchomić kontener. Ten preflight nie stanowi dowodu braku
+procesów i nie zastępuje drain. Nie resetuje ownera, lease ani stanu zadania,
+nie usuwa siatki/wyników i nie ponawia Solve. Nieznany stan oraz awaria samego
+runtime pozostają poza tą ścieżką. W obserwacji 22.10.2026 zwykły drain
+po failed task zakończył się poprawnie, zachowując run i siatkę. Po poprawie
+błędu kompilacji zarządzane resume `5246f32a6e554de5820d4c191ffa0629`
+uruchomiło API i runtime-service ready; starego Solve nie ponowiono.
+Dowód dotyczy tej próby grupy fullmag-master, nie kwalifikacji wszystkich
+ścieżek awarii. Szczegóły: `docs/reports/2026-10-22/runtime-recovery-simplification.md`.
+
+
+### Zamknięcie nieprzygotowanej aktywacji przed Start (23.10.2026)
+
+Potwierdzony Failed owner może pozostawić ręcznie wstrzymany RunIntent
+i zakończony jako Unknown klient aktywacji. Dla tego wąskiego przypadku
+`stop-diagnostic-volume --pending-activation <attempt>` dopuszcza techniczne
+zamknięcie oryginalnego helpera i późniejsze `recreate-volume --fresh-state`.
+Nie jest to recovery solvera ani anulowanie lub ponowienie Study.
+
+Warunki: oryginalny klient HTTP już zakończył się Unknown i potwierdził LOGGED;
+helper nadal posiada dokładny lease; API ma uwierzytelniony failure fence;
+owner i oba schedulery są zakończone, workerów brak; pasujący RunIntent ma
+manual start, katalog accepted/awaiting preparation i tylko intent/catalog
+w swoim katalogu. Wszystkie historyczne lease i rezerwacje są released.
+Ponowny odczyt przed stopem oraz pełne inventory i hashe po stopie muszą
+potwierdzić brak nowego Start, claim, lease, runu lub artefaktu.
+
+Osobny receipt `fullmag.docker-unreleased-preparation-abort.v1` zapisuje
+`accepted-preparation-failed`, `execution_state=not-started` i
+`restart_policy=fresh-state-only`. Oryginalny marker started i receipt Unknown,
+RunIntent, dane i cache pozostają zachowane. Oryginalny helper zwalnia własny
+marker dopiero po technicznym terminalu. Nie wolno na tej podstawie wznowić
+starej generacji ani powtórzyć requestu. Nowy request dopuszcza dopiero
+dowód archiwum runtime i terminal odtworzenia przypiętych usług.
+
+To przejściowa obsługa błędu launchera. Właściciel: Docker DEV launcher;
+warunek usunięcia: kanoniczny job aktywacji sam publikuje terminalną porażkę
+przygotowania bez pozostawienia Unknown helpera. Nie zmienia Python/IR,
+OpenAPI, wyboru FEM/FDM CPU/GPU ani fizyki. Rollback zachowuje stare archiwum
+i blokuje jego wykonanie. Source review i parser nie zastępują wykonania
+zarządzanej ścieżki; runtime pozostaje NOT VERIFIED do zapisania receiptu.

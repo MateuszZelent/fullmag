@@ -227,6 +227,7 @@ import {
   PLATFORM_COMPUTE_NODES_PATH,
   PLATFORM_COMPUTE_NODE_POLICY_PATH,
   PLATFORM_HEALTH_PATH,
+  PLATFORM_RUNTIME_SERVICE_PATH,
   WORKSPACE_ITEMS_PATH,
   WORKSPACE_ITEM_FORGET_PATH,
   WORKSPACE_ITEM_FRAMES_PATH,
@@ -372,6 +373,7 @@ import type {
   GeometryValidationResource,
   GpuTelemetryResource,
   HealthResource,
+  RuntimeServiceStatusResource,
   WorkspaceItemsQuery,
   WorkspaceRootWire,
   ImportSessionAssetRequest,
@@ -1238,6 +1240,8 @@ export class ControlRoomApi {
       ),
     health: (options?: RequestOptions) =>
       this.requestJson<HealthResource>(PLATFORM_HEALTH_PATH, options),
+    runtimeService: (options?: RequestOptions) =>
+      this.requestJson<RuntimeServiceStatusResource>(PLATFORM_RUNTIME_SERVICE_PATH, options),
   };
 
   readonly events = {

@@ -23,6 +23,7 @@ COPY ${FULLMAG_DOCKER_HELPERS}entrypoint.py /opt/fullmag/entrypoint.py
 COPY ${FULLMAG_DOCKER_HELPERS}windows_folder_probe.py /opt/fullmag/windows_folder_probe.py
 COPY ${FULLMAG_DOCKER_HELPERS}linux_native_probe.py /opt/fullmag/linux_native_probe.py
 COPY ${FULLMAG_DOCKER_HELPERS}runtime_service.py /opt/fullmag/runtime_service.py
+COPY ${FULLMAG_DOCKER_HELPERS}runtime_service_unclaimed_cancellation.py /opt/fullmag/runtime_service_unclaimed_cancellation.py
 COPY ${FULLMAG_DOCKER_HELPERS}frontend_dev.py /opt/fullmag/frontend_dev.py
 COPY ${FULLMAG_DOCKER_HELPERS}healthcheck.py /opt/fullmag/healthcheck.py
 COPY ${FULLMAG_SCRIPT_HELPERS}docker_startup_script.py /opt/fullmag/docker_startup_script.py

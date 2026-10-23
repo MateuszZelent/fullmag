@@ -280,11 +280,12 @@ describe("resolveSimulationPreparationViewModel", () => {
     });
   });
 
-  it("retains the last snapshot and marks stale transport as reconnecting", () => {
+  it("retains the last snapshot through an actual transport disruption", () => {
     const model = resolveSimulationPreparationViewModel(
       resource(preparationFixture(), "stale"),
       statusResource("stale"),
       19_700,
+      true,
     );
 
     expect(model).toMatchObject({
@@ -295,6 +296,37 @@ describe("resolveSimulationPreparationViewModel", () => {
     });
     expect(model.activeStage?.label).toBe("Meshing");
   });
+
+  it("keeps routine preparation refreshes quiet", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource(preparationFixture(), "stale"),
+      statusResource("stale"),
+      19_700,
+    );
+
+    expect(model.kind).toBe("running");
+    expect(model.reconnectingTitle).toBeNull();
+    expect(model.activeStage?.label).toBe("Meshing");
+  });
+
+  it.each(["error", "refreshError"] as const)(
+    "reports a failed %s while retaining preparation progress",
+    (errorChannel) => {
+      const preparation = {
+        ...resource(preparationFixture(), "stale"),
+        [errorChannel]: new Error("Preparation request failed"),
+      };
+      const model = resolveSimulationPreparationViewModel(
+        preparation,
+        statusResource(),
+        19_700,
+      );
+
+      expect(model.kind).toBe("stale");
+      expect(model.reconnectingTitle).toBe("Reconnecting…");
+      expect(model.activeStage?.label).toBe("Meshing");
+    },
+  );
 
   it("does not treat routine stale session-status polling as reconnecting", () => {
     const model = resolveSimulationPreparationViewModel(

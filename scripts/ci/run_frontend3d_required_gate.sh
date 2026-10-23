@@ -88,6 +88,7 @@ run_gate() {
       node apps/control-room/scripts/write-browser-fixture-proof-manifest.mjs
       ;;
     browser-fixture-pre-proof)
+      node --test apps/control-room/scripts/lib/viewport-idle-network.node-test.mjs
       run_gate browser-fixture-proof-identity
       run_gate browser-fixture-source-snapshot
       pnpm --dir apps/control-room run audit:viewport-3d-memory-churn

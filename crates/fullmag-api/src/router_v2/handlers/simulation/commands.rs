@@ -51,8 +51,17 @@ pub async fn submit_command(
     Json(req): Json<StructuredCommandRequest>,
 ) -> Result<Json<CommandResponse>, ApiError> {
     let context = crate::capture_current_live_request_context(&state).await?;
-    let response =
-        submit_structured_command_impl_with_context(state, &headers, req, Some(&context)).await?;
+    // A proxy timeout must not cancel publication after a durable Compute
+    // release. This task keeps the existing session fence and admission checks
+    // and finishes exactly this command even if its HTTP caller disconnects.
+    let response = tokio::spawn(async move {
+        submit_structured_command_impl_with_context(state, &headers, req, Some(&context)).await
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(error = %error, "command submission task failed");
+        ApiError::internal("command submission outcome is unknown; inspect runtime diagnostics")
+    })??;
     Ok(Json(response))
 }
 

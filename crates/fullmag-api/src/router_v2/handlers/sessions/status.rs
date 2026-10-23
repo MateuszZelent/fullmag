@@ -47,15 +47,19 @@ fn relaxation_algorithms_available() -> Vec<String> {
     tag = "sessions"
 )]
 pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveStatus>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
-    let _transition = state.current_live_session_transition.lock().await;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
+    // Native probing may wait on its bounded socket timeout. Do not hold the
+    // session transition while observing the separately owned service.
+    let connectivity = refresh_current_live_connectivity(&state).await;
+    // Read the last committed snapshot during long RunIntent commits too.
+    // Session identity is checked under the snapshot read lock and again
+    // before returning, without waiting behind the mutation transition.
     crate::validate_current_live_request_context(&state, &request_context).await?;
     let display_sel = state.current_display_selection.read().await.clone();
     let display_presentation = state.current_display_presentation.read().await.clone();
     let workspace_selection = state.current_workspace_selection.read().await.clone();
     let workspace_ribbon = state.current_workspace_ribbon.read().await.clone();
     let workspace_layout = state.current_workspace_layout.read().await.clone();
-    let connectivity = refresh_current_live_connectivity(&state).await;
     let (commands_revision, command_completion_revision) = {
         let ledger = state.current_command_ledger.lock().await;
         let revisions = command_ledger_revisions(
@@ -73,6 +77,11 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot,
+        &request_context,
+        state.current_live_session_epoch.load(Ordering::Acquire),
+    )?;
 
     let response = build_live_status(
         state.current_workspace_root.as_path(),
@@ -87,14 +96,30 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
         command_completion_revision,
         connectivity,
     );
+    drop(guard);
     crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(response))
 }
 
-/// Advances backend-owned connectivity from the real runner publication
-/// heartbeat. Only an accepted publication may restore `Connected`; this path
-/// can only preserve or worsen connectivity when the heartbeat becomes stale.
+/// Native accepted-run execution uses the verified service, including while
+/// idle before Compute. Legacy runners retain their publication heartbeat.
 pub(crate) async fn refresh_current_live_connectivity(state: &AppState) -> SessionConnectivity {
+    if crate::live_accepted_execution::docker_api_only_runtime() {
+        use crate::schemas::runtime_service::RuntimeServiceStatusState;
+        let observed =
+            crate::router_v2::handlers::platform::runtime_service::observe_runtime_service(state)
+                .await;
+        return match observed.map(|status| status.state) {
+            Ok(RuntimeServiceStatusState::Ready) => SessionConnectivity::Connected,
+            Ok(
+                RuntimeServiceStatusState::Starting
+                | RuntimeServiceStatusState::ObservationUnknown
+                | RuntimeServiceStatusState::Unknown,
+            )
+            | Err(_) => SessionConnectivity::Degraded,
+            Ok(_) => SessionConnectivity::Disconnected,
+        };
+    }
     refresh_current_live_connectivity_at(state, current_unix_ms()).await
 }
 

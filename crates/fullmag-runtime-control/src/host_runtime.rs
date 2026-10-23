@@ -7,11 +7,12 @@ use std::sync::{Arc, OnceLock};
 use anyhow::{bail, Context, Result};
 use fullmag_application::TaskClaim;
 use fullmag_session::compute_node_snapshot::{
-    ComputeNodeSnapshot, Reported, COMPUTE_NODE_SNAPSHOT_SCHEMA_V2,
+    ComputeNodeSnapshot, Reported, UnavailableReason, COMPUTE_NODE_SNAPSHOT_SCHEMA_V2,
 };
 use fullmag_session::host_resource_ledger::HostResourceLedger;
 use fullmag_session::host_resource_ledger::{
     HostReservationRequest, HostResourceLedgerSnapshot, HostResourceReservationState,
+    TransientGpuInventoryUnavailable,
 };
 use fullmag_session::runtime_service::RuntimeServiceConfig;
 use fullmag_session::{
@@ -1081,7 +1082,9 @@ impl HostRuntimeAdmission {
             HostReservationOwner, HostTaskAdmissionReconciliation, HostWorkerLaunchGate,
         };
         let store_id = HostResourceLedger::store_id(store.root())?;
-        let snapshot = self.ledger.read()?;
+        // Discovery does not authorize an admission. The exact reconciliation
+        // below reacquires host -> store guards and validates current state.
+        let snapshot = self.ledger.read_observation_snapshot()?;
         let mut committed = 0;
         for reservation in snapshot.reservations {
             if reservation.identity.store_id == store_id
@@ -1223,7 +1226,7 @@ impl HostRuntimeAdmission {
         store: &SessionStore,
     ) -> Result<usize> {
         let store_id = HostResourceLedger::store_id(store.root())?;
-        let snapshot = self.ledger.read()?;
+        let snapshot = self.ledger.read_observation_snapshot()?;
         self.reconcile_prestart_stopping_store_reservations_from_snapshot(
             store, &store_id, &snapshot,
         )
@@ -1670,9 +1673,22 @@ impl HostRuntimeAdmission {
         let current_snapshot = self
             .current_compute_node_snapshot()?
             .context("process spawn requires a current compute-node sample for this boot")?;
-        if !request.exclusive_gpu_uuids.is_empty() && !gpu_snapshot_is_available(&current_snapshot)
-        {
-            bail!("GPU process spawn requires a current GPU inventory");
+        if !request.exclusive_gpu_uuids.is_empty() {
+            match &current_snapshot.gpus {
+                Reported::Available { value } if !value.is_empty() => {}
+                Reported::Unavailable {
+                    reason,
+                    last_known: Some(devices),
+                } if !devices.is_empty()
+                    && matches!(
+                        reason,
+                        UnavailableReason::ProbeFailed | UnavailableReason::SourceUnavailable
+                    ) =>
+                {
+                    return Err(TransientGpuInventoryUnavailable { reason: *reason }.into());
+                }
+                _ => bail!("GPU process spawn requires a current GPU inventory"),
+            }
         }
         let snapshot = self.ledger.read()?;
         let reservation = snapshot

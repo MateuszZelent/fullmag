@@ -22,14 +22,25 @@ use crate::types::{AppState, CpuTelemetryResponse, GpuTelemetryResponse};
     tag = "platform"
 )]
 pub async fn get_health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let active = state.current_live_state.read().await.is_some();
+    let runtime_failure = state
+        .development_admission
+        .observe_runtime_failure_fence();
+    let active = if runtime_failure {
+        state
+            .current_live_state
+            .try_read()
+            .map(|current| current.is_some())
+            .unwrap_or(false)
+    } else {
+        state.current_live_state.read().await.is_some()
+    };
     let uptime = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
     Json(HealthResponse {
-        status: "ok".into(),
+        status: if runtime_failure { "degraded" } else { "ok" }.into(),
         uptime_seconds: uptime,
         api_contract_version: "1.0.0".into(),
         active_session: active,
