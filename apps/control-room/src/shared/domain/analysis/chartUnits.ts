@@ -96,8 +96,10 @@ const UNIT_DEFINITIONS: Readonly<Record<string, Omit<ChartUnit, "unit">>> =
   });
 
 export function resolveChartUnit(unit: string): ChartUnit | null {
-  const definition = UNIT_DEFINITIONS[unit.trim()];
-  return definition ? { ...definition, unit: unit.trim() } : null;
+  const normalized = unit.trim();
+  if (!Object.prototype.hasOwnProperty.call(UNIT_DEFINITIONS, normalized)) return null;
+  const definition = UNIT_DEFINITIONS[normalized];
+  return definition ? { ...definition, unit: normalized } : null;
 }
 
 export function chartUnitsCompatible(left: string, right: string): boolean {

@@ -78,6 +78,52 @@ describe("AnalysisFrequencySurface", () => {
     expect(html).toContain('data-analysis-inspector-route="chart"');
   });
 
+  it("keeps unpublished series units literal while scaling known phase units", () => {
+    const responseSeries: ChartSeries[] = [
+      {
+        ...series[0]!,
+        id: "amplitude",
+        label: "Amplitude",
+        points: [
+          { rowIndex: 0, x: 1, y: 0.02 },
+          { rowIndex: 1, x: 2, y: 0.06 },
+        ],
+        quantity: "amplitude",
+        unit: "not published",
+      },
+      {
+        ...series[0]!,
+        id: "phase",
+        label: "Phase",
+        points: [
+          { rowIndex: 0, x: 1, y: 0.1 },
+          { rowIndex: 1, x: 2, y: 0.3 },
+        ],
+        quantity: "phase",
+        unit: "rad",
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <AnalysisFrequencySurface
+        kernel={{} as KernelApi}
+        onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        selectedPoint={null}
+        selectedSeriesIds={["amplitude", "phase"]}
+        series={responseSeries}
+        status="ready"
+        title="Frequency response"
+        unavailableReason={null}
+      />,
+    );
+
+    expect(html).toContain(
+      'aria-label="Amplitude, unit not published, latest 0.06.',
+    );
+    expect(html).not.toContain("mnot published");
+    expect(html).toContain('aria-label="Phase, unit mrad, latest 300.');
+  });
+
   it("renders an explicit empty selection instead of restoring all frequency series", () => {
     const html = renderToStaticMarkup(
       <AnalysisFrequencySurface

@@ -16,6 +16,22 @@ describe("resolveChartUnit", () => {
     });
   });
 
+  it.each(["constructor", "toString", "hasOwnProperty", "__proto__"])(
+    "does not resolve inherited object property %s as a chart unit",
+    (unit) => {
+      expect(resolveChartUnit(unit)).toBeNull();
+    },
+  );
+
+  it("still resolves registered SI units after rejecting inherited keys", () => {
+    expect(resolveChartUnit("rad")).toMatchObject({
+      canonicalUnit: "rad",
+      dimension: "phase",
+      scaleToCanonical: 1,
+      unit: "rad",
+    });
+  });
+
   it("offers only compatible display units to chart controls", () => {
     expect(chartDisplayUnitOptions("s")).toEqual(expect.arrayContaining(["s", "ns"]));
     expect(chartDisplayUnitOptions("s")).not.toContain("J");
