@@ -490,8 +490,11 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
       {(showAll || activeTab === "toolchain") && (
         <section aria-labelledby="fm-about-toolchain-title" className="fm-start-section">
           <h2 className="fm-start-section__title" id="fm-about-toolchain-title">
-            Toolchain & Verified Ecosystem
+            Toolchain Declarations
           </h2>
+          <p className="fm-start-inspector__note">
+            Dependency declarations are shown below. Active host build details are reported separately.
+          </p>
 
           <div className="fm-about-stack">
             <div className="fm-about-toolchain">
@@ -501,7 +504,9 @@ export function AboutSection({ compute, index }: AboutSectionProps) {
                   key={badge.name}
                 >
                   <span>{badge.name}</span>
-                  <span className="fm-about-badge-chip__version">{badge.version}</span>
+                  <span className="fm-about-badge-chip__version">
+                    {badge.name === "FullMag" ? (build ? `v${build.version}` : "Version unavailable") : badge.version}
+                  </span>
                 </div>
               ))}
             </div>

@@ -14,7 +14,7 @@ import type { RecentEntry } from "../model/types";
 import { AboutInspector } from "./AboutInspector";
 import { AuthorsPanel } from "./ProvenancePanels";
 
-const host = vi.hoisted(() => ({ desktop: false, invoke: vi.fn(async () => null) }));
+const host = vi.hoisted(() => ({ desktop: false, invoke: vi.fn<() => Promise<unknown>>(async () => null) }));
 vi.mock("@/kernel/persistence/ProjectDocumentController", () => ({
   tauriInvoke: () => host.desktop ? host.invoke : null,
 }));
@@ -62,6 +62,7 @@ describe("About and provenance clipboard actions", () => {
 
   beforeEach(() => {
     host.desktop = false;
+    host.invoke.mockReset().mockResolvedValue(null);
     clipboard = { writeText: vi.fn(async (_value: string) => undefined) };
     dom = installSimulationPreparationTestDom({ clipboard });
     roots = [];
@@ -107,6 +108,15 @@ describe("About and provenance clipboard actions", () => {
     await act(async () => pending.resolve(undefined));
     expect(copyButton.textContent).toContain("BibTeX Copied!");
     expect(clipboard.writeText).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the published build version in both About version presentations", async () => {
+    host.desktop = true;
+    host.invoke.mockResolvedValue({ version: "1.2.3", profile: "debug", os: "test", arch: "test", project_schema: "test" });
+    const view = await mount(<AboutSection compute={null} index={{ kind: "loading" }} />);
+    expect(view.container.textContent).toContain("v1.2.3");
+    expect(view.container.textContent).not.toContain("v0.1.0");
+    expect(view.container.textContent).not.toContain("Version unavailable");
   });
 
   it("shows an accessible error when diagnostics copy is denied", async () => {
