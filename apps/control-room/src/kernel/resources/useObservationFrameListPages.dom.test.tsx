@@ -73,20 +73,24 @@ describe("useObservationFrameListPages", () => {
     } finally { await harness.dispose(); }
   });
 
-  it("refreshes only the loaded window and follows refreshed cursors", async () => {
+  it.each([false, true])("refreshes only the loaded window with a cached next cursor: %s", async (cached) => {
     const harness = await mountPages();
     try {
       await act(async () => harness.value().loadMore());
       respond("1", observationFramePage(["2"], "2")); await harness.render();
+      if (cached) respond("new", observationFramePage(["cached-old"], "cached-old"));
       await act(async () => harness.value().refetch());
       expect(harness.ids()).toEqual(["1", "2"]);
       respond(null, observationFramePage(["1", "new"], "new")); await harness.render();
       expect(harness.ids()).toEqual(["1", "2"]);
+      expect(harness.value().loading).toBe(true);
       respond("new", observationFramePage(["2"], "2")); await harness.render();
       expect(harness.ids()).toEqual(["1", "new", "2"]);
       expect(harness.value().loading).toBe(false);
       expect(mocks.queries.has("run-a:2")).toBe(false);
-      expect(mocks.refetch).toHaveBeenCalledTimes(2);
+      // A new resource key starts its own read; only a ready cached page needs
+      // an explicit refetch. Neither path may accept a cached stale snapshot.
+      expect(mocks.refetch).toHaveBeenCalledTimes(cached ? 2 : 1);
     } finally { await harness.dispose(); }
   });
 

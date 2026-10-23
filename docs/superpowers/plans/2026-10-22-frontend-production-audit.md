@@ -1388,3 +1388,22 @@ Nie potwierdzono wycieku późnego ACK Apply/Activate ani zwykłej zmiany ownera
 Ustalenia nie są wykonanymi regresjami. Poprawki wymagają zachowania surowych
 tekstów, blokady mutacji przy błędzie i zgodności z kontraktem selekcji;
 nie zostały jeszcze zaimplementowane. Cały cel pozostaje aktywny.
+
+### CI paginacji: rozdzielenie nowego i zapamiętanego kursora
+
+CI HEAD `45bd7ad9078bb07177f32887d7529eb425f2781f`, run
+`39895819935`, job `120225909793`: 8945 testów PASS, 13 skip,
+1 FAIL. Jedyną porażką była asercja liczby ręcznych refetch w regresji
+`refreshes only the loaded window and follows refreshed cursors`.
+Odczyt hooka wykazał, że dla nowego klucza zasobu stan loading rozpoczyna
+automatyczne pobranie; dodatkowy refetch jest potrzebny dla ready cache.
+Test obejmuje teraz osobno oba przypadki, wymaga pozostawienia starego
+okna podczas oczekiwania i nie dopuszcza wstawienia starego cache.
+Nie zmieniono produkcyjnego algorytmu ani nie usunięto kontroli świeżości.
+
+Produkcjny typecheck, architecture hygiene i lint 115 plików PASS,
+stabilne źródła; receipt
+`verification/frontend-production-source-650d5faaac074ca085c1c17f0a5e8a37.json`.
+Lokalnie nie uruchamiano ani nie kompilowano testów TS/Rust.
+Nowa para wariantów wymaga potwierdzenia przez CI kolejnego HEAD.
+Bez builda, restartu i usuwania danych; potrzebny cache i receipty zachowano.
