@@ -2012,3 +2012,57 @@ To priorytety dalszego przeglądu, nie domniemane błędy bez odczytu. Równoleg
 trwa ograniczona diagnoza własnego managed recovery; runtime nie został
 zrestartowany, owner nie został zresetowany. Retencja bez zmian, cache i
 receipty zachowane; pełny cel, live/browser i integracja pozostają otwarte.
+
+### Checkpoint: Spin Torque/Oersted — pin rewizji po odczycie historii
+
+Audyt aktywnego SpinAuthoringInspector potwierdził P2: kandydat zwalidowany
+przy rewizji R był następnie wysyłany z baseRevision R+1 odczytanym dla history,
+bez ponownego uzgodnienia jego pełnego payloadu. Backend CAS mógł zaakceptować
+taką operację i nadpisać równoległe zmiany. Save i Delete porównują teraz pin
+kandydata z rewizją historii i odrzucają rozbieżność z jawnym komunikatem
+Refresh/reconcile. Nie podnoszą rewizji starego payloadu. Guard imperatywnych
+wywołań uwzględnia pending i valid. Session/history fence pozostaje.
+
+Dodano sześć DOM regresji z rzeczywistą granicą authoring history: Save/Delete
+dla obu rodzin przy R+1 nie wysyła RPC i pokazuje konflikt; zgodne R pozwala
+na pojedynczy Save z oryginalną rewizją i przypiętą sesją. Review bez nowych
+P1/P2 i błędów setupu. Lokalnie bez kompilacji i wykonania TS/Rust unit tests.
+
+Osobny P2 pozostaje OPEN: draftKey zawiera JSON.stringify(baseDraft), więc
+refresh payloadu resetuje późniejsze lokalne edycje. Wymaga stabilnej identity,
+baseline/ACK i trójstronnego uzgadniania; nie nazywa się go zamkniętym tą
+poprawką pinu. Lokalny selector, spójność invalidacji i feedbacku również
+pozostają do pełnego odbioru obu rodzin.
+
+Production typecheck, architecture hygiene i lint dwóch plików miały exit 0
+w receipcie verification/frontend-production-source-26ca0db56551477495b785e971e269e3.json.
+Ten receipt ma całościowy stan failed: uruchomiona w kontenerze API hygiene
+nie mogła poprawnie wykonać rg. Nie jest przedstawiany jako passed. Zgodna,
+wcześniej zatwierdzona interpretowana bramka API uruchomiona na hoście PASS,
+bez kompilacji unit tests, z osobnym stabilnym receiptem:
+verification/frontend-production-source-8d1e833771d642718144798a68ddb134.json.
+React Doctor uruchomiony z istniejącego pnpm cache, wersja 0.9.12: 0 errors/
+skips, 4 ostrzeżenia (mixed exports i index key), bez suppression:
+verification/frontend-production-source-ff9054005d9f4a6a963e33b3b1a7a130.json.
+Pierwsza próba używała nieistniejącej lokalizacji pakietu i zakończyła się
+infrastrukturalnym błędem; niczego nie instalowano. Końcowe źródła stabilne.
+
+CI wcześniejszego 9ffd2b918993b66e20a86a653f4691d8268337ff: Control Room
+120259886991 PASS — 9095 testów/13 skip, build, compute performance i osobne
+3 testy; browser fixture 120259886979 PASS, bootstrap 39906533063 nadal
+wykonywał pozostałe bramki. Obejmuje 18 przypadków selector values, nie nowy
+pin Spin Torque/Oersted. Mapa tras uzupełniona o częściowy status tej rodziny.
+
+Ograniczona diagnoza własnej grupy DEV: backend unhealthy i frontend healthy;
+attempt a89495191d3d44fb95fff337871d4f03 failed-confirmed. Process tree:
+failed_outcome_retained, api_pid 3113, exit -15; OWNER/LAUNCH retained ready.
+Nie dowodzi to żywego API. Managed stop-failed wymaga pełnych pinów oraz
+native failure proof i braku PID; recovery wymaga stopped pair, journalu,
+reprobe i zgodnej operator authorization. Tych preconditions nie uznano za
+spełnione i nie fabrykowano kompletnego polecenia/autoryzacji. Nie wykonano
+stopu, resetu ownera, restartu, odtworzenia ani usuwania zasobów. Dalej można
+bezpiecznie zbierać brakujące dowody i poprawiać źródła frontendu.
+
+Retencja: brak builda, instalacji i usuwania danych; potrzebny cache i receipty
+zachowano. Nadal otwarte pełne rodziny, browser/live qualification, draft P2
+Spin Torque/Oersted oraz integracja PR #249.

@@ -436,7 +436,7 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
   const patch = (value: Partial<TorqueDraft> | Partial<OerstedDraft>) => setDraftState({ key: draftKey, value: Object.assign({}, draft, value) as TorqueDraft | OerstedDraft });
 
   async function save(): Promise<boolean> {
-    if (!sessionScopeKey) return false;
+    if (!sessionScopeKey || pending || !valid) return false;
     const mutationContext = captureMutationContext();
     const operationId = ++nextPendingOperationId.current;
     setPendingOperation({ id: operationId, sessionScopeKey });
@@ -455,6 +455,7 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
         `${selectedId ? "Replace" : "Create"} ${family}${selectedId ? ` ${selectedId}` : ""}`,
         async ({ baseRevision }) => {
           const committedRevision = baseRevision ?? base_revision;
+          if (committedRevision !== base_revision) throw new Error("Scene revision changed before authoring commit. Refresh and reconcile the draft.");
           const requestOptions = authoringWriteOptions(null, mutationContext.sessionScopeKey);
           if (!requestOptions?.sessionScopeKey) throw new Error("Session identity is not ready.");
           if (family === "spin_torque") {
@@ -488,7 +489,8 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
   }
 
   async function remove(): Promise<void> {
-    if (!selectedId || active.data?.scene_revision === undefined || readOnly || !sessionScopeKey) return;
+    if (!selectedId || active.data?.scene_revision === undefined || readOnly || !sessionScopeKey || pending || !valid) return;
+    const submittedRevision = active.data.scene_revision;
     const mutationContext = captureMutationContext();
     const operationId = ++nextPendingOperationId.current;
     setPendingOperation({ id: operationId, sessionScopeKey });
@@ -498,9 +500,9 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
         mutationContext,
         `Delete ${family} ${selectedId}`,
         async ({ baseRevision }) => {
+          if ((baseRevision ?? submittedRevision) !== submittedRevision) throw new Error("Scene revision changed before authoring delete. Refresh and reconcile the draft.");
           const request = {
-            base_revision:
-              baseRevision ?? active.data!.scene_revision,
+            base_revision: submittedRevision,
           };
           const requestOptions = authoringWriteOptions(null, mutationContext.sessionScopeKey);
           if (!requestOptions?.sessionScopeKey) throw new Error("Session identity is not ready.");
