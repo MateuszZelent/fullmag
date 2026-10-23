@@ -37,7 +37,7 @@ wymaga przypisania dowodów do tej rodziny przed deklaracją ukończenia.
 
 | Plik wejściowy | Trasy | Stan źródeł / następny krok |
 |---|---:|---|
-| [DedicatedExplorerInspectorPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/DedicatedExplorerInspectorPanels.tsx) | 61 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
+| [DedicatedExplorerInspectorPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/DedicatedExplorerInspectorPanels.tsx) | 61 | Częściowy: wspólny wrapper/source framing sprawdzony, LiveChart focus poprawiony; pozostali konsumenci wymagają osobnego odbioru. |
 | [FrequencyDomainResultInspectors.tsx](../../../apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx) | 30 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [PhysicsFirstResultInspectors.tsx](../../../apps/control-room/src/modules/inspector/panels/physics-first/PhysicsFirstResultInspectors.tsx) | 30 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [StudyStageInspectorRouter.tsx](../../../apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx) | 25 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |

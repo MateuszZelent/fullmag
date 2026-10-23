@@ -2384,3 +2384,51 @@ stale przy available-ready, stale owner, error mimo fresh oraz loading/unavailab
 Zachowują nazwę i diagnostykę zasobu. Nie dodano ani nie zmieniono mutacji/API.
 Interpretowana API hygiene i git diff --check PASS; nowe testy oraz odbiór
 browser/live tej rodziny nadal oczekują na CI/managed runtime.
+
+
+### 2026-10-23 — rzeczywisty render motywu i przegląd wspólnej ramy tras
+
+Bootstrap39936943095 / HEAD68479: Python contracts, Windows checkpoint,
+Control Room, Inspector actions i viewport pre-proof PASS. Nowa frontend suite
+przeszła również całą macierz Inspector theme: dark/light ×480/300 px, font12px
+normal400, input/native/Radix/unit select30px, textarea>=96px, wspólne powierzchnie,
+focus/error, disabled opacity1, wąski layout bez overflow oraz native picker/text
+z dokładnie dwiema świadomymi zmianami koloru. Błąd wysokości16px został
+potwierdzony jako usunięty w tym receipcie. Nie jest to live API/scientific proof.
+
+Artefakt viewport-3d-browser-audit:12494773385,
+SHA256 3506912ac0ed5c32d426799ffa8ca66d158c6172d76f5929ee59bdd2c606e739.
+Odczytano ZIP w pamięci przez gh API i zweryfikowano hash bez zapisu cache na
+hoście. Obejrzano wszystkie cztery inspector-theme PNG: miękkie powierzchnie,
+jednolita typografia, widoczny focus i error, zachowane token/automatic values,
+zmiana na układ pionowy w300px i brak uciętych kontrolek. Na zrzutach wykryto
+jeszcze różny inset etykiet FormField względem Color/Radix. Domyślne
+px-fm-2 przeniesiono do InspectorPropertyRow, aby każdy wspólny wiersz miał ten
+sam lewy odstęp (istniejący padding FormField nie sumuje się — to ten sam root).
+Macierz zapisuje i porównuje teraz położenie wszystkich etykiet. Ta dodatkowa
+korekta odstępów wymaga kolejnego renderu; wcześniejszy PASS jej nie obejmuje.
+
+Pełny starszy smoke-inspector w tym runie pozostał failed: na długim dokumencie
+texture-mutation-reset wykonał9 legalnych GET platform health przy stałym limicie8.
+Nowy health polling mastera działa co5s. Nie zwiększamy arbitralnie limitu ani
+nie ignorujemy ruchu. Naprawa testowej bramki ma mierzyć osobno dokładny GET
+skonfigurowanego apiBase bez query, z limitem wynikającym z czasu dokumentu i
+minimalną cadence4900ms. Pozostałe limity żądań/mutacji pozostają bez zmian.
+Odbiór tej naprawy i pełny bootstrap pozostają wymagane.
+
+DedicatedExplorerInspectorPanels zawiera61 prostych wrapperów; odczytano ich
+wspólną ramę, testy i konsumentów Chart/LiveChart. Rama nie przejmuje subskrypcji
+ani draftów dzieci; geometry routes pozostają bez result status facets, a Airbox
+ma pojedynczą własną ramę. Nie jest to odbiór wszystkich61 odmiennych paneli.
+
+W LiveChart potwierdzono P2 dostępności: każdy checkbox Signals wywoływał blur
+po zmianie, więc Space odbierało focus użytkownikowi klawiatury. Usunięto ręczny
+blur. Istniejący smoke-live-charts sprawdza teraz dla mx/my/mz przełączenie Space,
+stan checked, utrzymanie focus i przywrócenie pierwotnej wartości. Nie wykonano
+jeszcze tego browser smoke; nie jest dodany do obecnego bootstrapu. Node syntax,
+interpretowana API hygiene i git diff --check PASS; runtime pozostaje NOT VERIFIED.
+
+Commit table actions:3e1de3fe952b3ff2f538a461c8c7ab66a40ddc5f;
+testowy typed GPU rejection:51a53d7e1367962717be24fcbb9ff331ba1d2159.
+Nowe source changes i testy po HEAD68479 oczekują na push/CI. Merge, lokalny
+fast-forward i cleanup nadal nie są wykonane; cel szerszego audytu pozostaje otwarty.

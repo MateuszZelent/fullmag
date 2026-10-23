@@ -62,6 +62,8 @@ export async function qualifyInspectorTheme({ page, outputDir }) {
             radixHeight: element.querySelector('[data-slot="select-trigger"]').getBoundingClientRect().height,
             unitHeight: element.querySelector(".fm-inspector-quantity-unit").getBoundingClientRect().height,
             columns: getComputedStyle(row).gridTemplateColumns.split(" ").length,
+            labelStarts: Array.from(element.querySelectorAll('[data-slot="inspector-property-label"], .fm-inspector-form-field__label, .fm-inspector-field-row__label'), (label) =>
+              label.getBoundingClientRect().left - element.getBoundingClientRect().left),
             overflow: element.scrollWidth > element.clientWidth + 1,
           };
         });
@@ -82,6 +84,8 @@ export async function qualifyInspectorTheme({ page, outputDir }) {
         assert.equal(metrics.focusBorder, metrics.expectedFocus);
         assert.equal(metrics.fieldBackground, metrics.expectedBackground);
         assert.equal(metrics.columns, width === 300 ? 1 : 2);
+        assert.ok(metrics.labelStarts.length > 0 && metrics.labelStarts.every((left) => Math.abs(left - metrics.labelStarts[0]) < 0.5),
+          `${theme}/${width} property labels do not share the same inset`);
         assert.equal(metrics.overflow, false, `${theme}/${width} overflows`);
       }
     }
