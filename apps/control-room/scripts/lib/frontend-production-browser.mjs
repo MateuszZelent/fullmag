@@ -1320,6 +1320,19 @@ export async function qualifyFrontendProductionBrowser({
       assert.equal(await page.getByTestId("color-command-count").innerText(), "1");
       await page.keyboard.press("Escape");
       await page.getByRole("menu").waitFor({ state: "hidden" });
+      // Radix FocusScope dispatches unmount autofocus in a deferred task.
+      // Wait for that exact outcome instead of racing its cleanup after hide.
+      const triggerElement = await trigger.elementHandle();
+      assert.ok(triggerElement, "The color menu trigger was removed.");
+      try {
+        await page.waitForFunction(
+          (button) => button.isConnected && document.activeElement === button,
+          triggerElement,
+          { timeout: 2_000 },
+        );
+      } finally {
+        await triggerElement.dispose();
+      }
       assert.equal(await trigger.evaluate((button) => document.activeElement === button), true, "Closing the menu did not restore trigger focus.");
       return { focused, radixMenu: true, disabledSkipped: true, triggerFocusRestored: true, commandCount: 1, nativeDialog: "not exercised; native input/change events exercised" };
     });

@@ -30,11 +30,13 @@ export async function qualifyFrontendResponsiveBrowser({
     scope: "fixture-backed Control Room UI; viewport and keyboard checks only",
     workspace_url: workspaceUrl,
     requested_widths: VIEWPORT_WIDTHS,
+    about_toolchain_requested_widths: [320, 640],
     scenarios: [],
     screenshots: [],
     no_backend_edits_or_solve: null,
     fixture_requests: [],
     responsive_section: null,
+    about_toolchain_responsive: null,
     restoration: { status: "pending", errors: [] },
   };
 
@@ -46,6 +48,7 @@ export async function qualifyFrontendResponsiveBrowser({
   let responsiveDraft = null;
   let originalSelectionId = null;
   let originalRibbonTab = null;
+  let homeViewOpened = false;
   let failure = null;
 
   async function capture(width) {
@@ -598,6 +601,298 @@ export async function qualifyFrontendResponsiveBrowser({
       };
     });
 
+    await runScenario("about-toolchain-at-320-and-640-css-pixels", async () => {
+      await closeMenus();
+      await page.setViewportSize({ width: 1280, height: originalViewport.height });
+      await waitForLayout();
+
+      const mainMenu = page.getByRole("navigation", { name: "Main menu", exact: true });
+      const startButton = mainMenu.getByRole("button").first();
+      await startButton.waitFor({ state: "visible" });
+      assert.equal(normalizeLabel(await startButton.innerText()), "Start", "The workspace Start command is missing.");
+      const localNameDraftBeforeHome = await nameInput.inputValue();
+      assert.equal(localNameDraftBeforeHome, responsiveDraft, "The responsive Inspector draft changed before opening Start.");
+      const requestBudgetBeforeHome = {
+        documentId: fixture.requestBudget.documentId,
+        documentLabel: fixture.requestBudget.documentLabel,
+      };
+      const stateFailures = [];
+      await startButton.focus();
+      await page.keyboard.press("Enter");
+      homeViewOpened = true;
+
+      const startScreen = page.locator(".fm-start");
+      await startScreen.waitFor({ state: "visible" });
+      const nameDraftCountWhileHome = await nameInput.count();
+      const localNameDraftWhileHome = nameDraftCountWhileHome > 0
+        ? await nameInput.inputValue()
+        : null;
+      if (localNameDraftWhileHome !== responsiveDraft) {
+        stateFailures.push("The local Inspector Name draft changed or was unmounted while Start was open.");
+      }
+      const startRail = page.getByRole("navigation", { name: "Start screen sections", exact: true });
+      await startRail.waitFor({ state: "visible" });
+      const currentSection = startRail.locator('button[aria-current="page"]');
+      await currentSection.waitFor({ state: "visible" });
+      await currentSection.focus();
+
+      const railFocusTrail = [await focusedLabel()];
+      if (railFocusTrail[0] === "About") {
+        await page.keyboard.press("ArrowUp");
+        railFocusTrail.push(await focusedLabel());
+      }
+      for (let attempt = 0; attempt < 7 && railFocusTrail.at(-1) !== "About"; attempt += 1) {
+        await page.keyboard.press("ArrowDown");
+        railFocusTrail.push(await focusedLabel());
+      }
+      assert.equal(railFocusTrail.at(-1), "About", "Arrow keys could not reach the About section.");
+      const aboutSectionButton = startRail.getByRole("button", { name: "About", exact: true });
+      const aboutFocus = await aboutSectionButton.evaluate((button) => ({
+        active: document.activeElement === button,
+        current: button.getAttribute("aria-current"),
+        tabIndex: button.tabIndex,
+      }));
+      assert.equal(aboutFocus.active, true, "Arrow navigation did not focus the About button.");
+      assert.equal(
+        aboutFocus.tabIndex,
+        aboutFocus.current === "page" ? 0 : -1,
+        "The focused About button does not match the Start rail's roving tab semantics.",
+      );
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => document.querySelector(".fm-start")?.dataset.section === "about");
+      assert.equal(await aboutSectionButton.getAttribute("aria-current"), "page");
+      assert.deepEqual(
+        await aboutSectionButton.evaluate((button) => ({
+          active: document.activeElement === button,
+          tabIndex: button.tabIndex,
+        })),
+        { active: true, tabIndex: 0 },
+        "Enter did not select About while preserving keyboard focus and tab semantics.",
+      );
+
+      const aboutCategories = page.getByRole("navigation", { name: "About section categories", exact: true });
+      const toolchainCategory = aboutCategories.getByRole("button", { name: "Toolchain & System", exact: true });
+      await toolchainCategory.waitFor({ state: "visible" });
+      assert.ok(await toolchainCategory.evaluate((button) => button.tabIndex >= 0));
+      await toolchainCategory.focus();
+      assert.equal(await focusedLabel(), "Toolchain & System");
+      await page.keyboard.press("Enter");
+      const toolchainHeading = page.getByRole("heading", { name: "Toolchain Declarations", exact: true });
+      await toolchainHeading.waitFor({ state: "visible" });
+      assert.equal(
+        await toolchainCategory.evaluate((button) => button.classList.contains("fm-about-nav-tab--active")),
+        true,
+        "Enter did not open the Toolchain & System category.",
+      );
+
+      const widthResults = [];
+      const geometryFailures = [];
+      const keyboard = {
+        openedStartWithEnter: true,
+        aboutArrowFocusTrail: railFocusTrail,
+        activatedAboutWithEnter: true,
+        activatedToolchainWithEnter: true,
+        returnedToWorkspaceWithEnter: false,
+      };
+      evidence.about_toolchain_responsive = {
+        widths: widthResults,
+        keyboard,
+        geometryFailures,
+        noHorizontalClipping: null,
+      };
+      const requestedWidths = [
+        { width: 320, layoutEquivalent: "320 CSS px reflow viewport", zoomChanged: false },
+        {
+          width: 640,
+          layoutEquivalent: "1280 CSS px at 200% zoom equivalent; browser zoom unchanged",
+          zoomChanged: false,
+        },
+      ];
+
+      for (const target of requestedWidths) {
+        await page.setViewportSize({ width: target.width, height: originalViewport.height });
+        await waitForLayout();
+        const measurements = await page.evaluate(() => {
+          const metrics = (element) => {
+            if (!(element instanceof HTMLElement)) return null;
+            const rect = element.getBoundingClientRect();
+            return {
+              visible: element.getClientRects().length > 0,
+              left: Number(rect.left.toFixed(2)),
+              right: Number(rect.right.toFixed(2)),
+              width: Number(rect.width.toFixed(2)),
+              top: Number(rect.top.toFixed(2)),
+              bottom: Number(rect.bottom.toFixed(2)),
+              clientWidth: element.clientWidth,
+              scrollWidth: element.scrollWidth,
+              overflowX: getComputedStyle(element).overflowX,
+            };
+          };
+          const heading = document.getElementById("fm-about-toolchain-title");
+          const section = heading?.closest("section");
+          const chips = Array.from(document.querySelectorAll(".fm-about-toolchain .fm-about-badge-chip"));
+          return {
+            viewport: {
+              width: window.innerWidth,
+              documentClientWidth: document.documentElement.clientWidth,
+              documentScrollWidth: document.documentElement.scrollWidth,
+            },
+            start: metrics(document.querySelector(".fm-start")),
+            content: metrics(document.querySelector(".fm-start__content")),
+            contentInner: metrics(document.querySelector(".fm-start__content-inner")),
+            section: metrics(section),
+            toolchain: metrics(section?.querySelector(".fm-about-toolchain")),
+            chips: chips.map((chip) => {
+              const name = chip.querySelector(":scope > span:first-child");
+              const version = chip.querySelector(":scope > .fm-about-badge-chip__version");
+              return {
+                nameText: name?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+                versionText: version?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+                chip: metrics(chip),
+                name: metrics(name),
+                version: metrics(version),
+              };
+            }),
+          };
+        });
+
+        evidence.last_measurements = measurements;
+        const screenshot = "frontend-about-toolchain-" + target.width + ".png";
+        widthResults.push({
+          viewportWidthCssPx: target.width,
+          layoutEquivalent: target.layoutEquivalent,
+          browserZoomChanged: target.zoomChanged,
+          measurements,
+          screenshot,
+        });
+        evidence.about_toolchain_responsive.widths = widthResults;
+        await page.screenshot({ path: resolve(outputDir, screenshot), fullPage: true });
+        evidence.screenshots.push(screenshot);
+
+        const recordFailure = (condition, message) => {
+          if (!condition) geometryFailures.push(target.width + " CSS px: " + message);
+        };
+        const withinHorizontalBounds = (child, parent) => Boolean(
+          child && parent && child.left >= parent.left - 1 && child.right <= parent.right + 1,
+        );
+        const recordNoHorizontalOverflow = (element, label) => {
+          recordFailure(
+            Boolean(element) && element.scrollWidth <= element.clientWidth + 1,
+            label + " overflows horizontally: " + JSON.stringify(element),
+          );
+        };
+        recordFailure(
+          measurements.viewport.width === target.width,
+          "Browser viewport differs from the requested CSS width: " + JSON.stringify(measurements.viewport),
+        );
+        recordFailure(measurements.start?.visible && measurements.start.width > 0, "Start screen is missing.");
+        recordFailure(measurements.content?.visible && measurements.content.width > 0, "Start content is missing.");
+        recordFailure(measurements.contentInner?.visible, "Start content container is missing.");
+        recordFailure(measurements.section?.visible, "Toolchain section is missing.");
+        recordFailure(measurements.toolchain?.visible, "Toolchain chips are missing.");
+        recordFailure(measurements.chips.length > 0, "No toolchain declarations were rendered.");
+        recordFailure(
+          measurements.viewport.documentScrollWidth <= measurements.viewport.documentClientWidth + 1,
+          "Document has horizontal overflow: " + JSON.stringify(measurements.viewport),
+        );
+        recordFailure(
+          withinHorizontalBounds(measurements.start, { left: 0, right: target.width }),
+          "Start screen extends outside the viewport: " + JSON.stringify(measurements.start),
+        );
+        recordNoHorizontalOverflow(measurements.start, "Start screen");
+        recordFailure(
+          withinHorizontalBounds(measurements.content, measurements.start),
+          "Start content is clipped by the screen: " + JSON.stringify(measurements.content),
+        );
+        recordFailure(
+          withinHorizontalBounds(measurements.contentInner, measurements.content),
+          "Start content container is clipped: " + JSON.stringify(measurements.contentInner),
+        );
+        recordFailure(
+          withinHorizontalBounds(measurements.toolchain, measurements.contentInner),
+          "Toolchain declarations are clipped by the content container: " + JSON.stringify(measurements.toolchain),
+        );
+        recordNoHorizontalOverflow(measurements.content, "Start content");
+        recordNoHorizontalOverflow(measurements.contentInner, "Start content container");
+        recordNoHorizontalOverflow(measurements.toolchain, "Toolchain declarations");
+        for (const chip of measurements.chips) {
+          recordFailure(Boolean(chip.nameText), "Toolchain chip has no name.");
+          recordFailure(Boolean(chip.versionText), "Toolchain chip has no version: " + chip.nameText);
+          recordFailure(chip.chip?.visible && chip.chip.width > 0, "Toolchain chip is hidden: " + chip.nameText);
+          recordFailure(chip.name?.visible && chip.version?.visible, "Toolchain name or version is hidden: " + chip.nameText);
+          recordFailure(
+            withinHorizontalBounds(chip.chip, measurements.toolchain),
+            "Toolchain chip is clipped: " + JSON.stringify(chip),
+          );
+          recordFailure(
+            withinHorizontalBounds(chip.name, chip.chip) && withinHorizontalBounds(chip.version, chip.chip),
+            "Toolchain name or version is outside its chip: " + JSON.stringify(chip),
+          );
+          recordNoHorizontalOverflow(chip.chip, "Toolchain chip " + chip.nameText);
+          recordNoHorizontalOverflow(chip.name, "Toolchain name " + chip.nameText);
+          recordNoHorizontalOverflow(chip.version, "Toolchain version " + chip.nameText);
+        }
+        evidence.about_toolchain_responsive.geometryFailures = geometryFailures;
+      }
+
+      await page.setViewportSize({ width: 1280, height: originalViewport.height });
+      await waitForLayout();
+      const returnToWorkspace = mainMenu.getByRole("button").first();
+      await returnToWorkspace.waitFor({ state: "visible" });
+      const returnLabel = normalizeLabel(await returnToWorkspace.innerText());
+      assert.ok(
+        ["Back to simulation", "Back to project", "Start"].includes(returnLabel),
+        "The keyboard workspace return command is missing: " + returnLabel,
+      );
+      await returnToWorkspace.focus();
+      await page.keyboard.press("Enter");
+      await startScreen.waitFor({ state: "hidden" });
+      homeViewOpened = false;
+      keyboard.returnedToWorkspaceWithEnter = true;
+
+      const nameDraftCountAfterReturn = await nameInput.count();
+      const localNameDraftAfterReturn = nameDraftCountAfterReturn > 0
+        ? await nameInput.inputValue()
+        : null;
+      if (localNameDraftAfterReturn !== responsiveDraft) {
+        stateFailures.push("The local Inspector Name draft changed or was unmounted after returning from Start.");
+      }
+      const requestBudgetAfterHome = {
+        documentId: fixture.requestBudget.documentId,
+        documentLabel: fixture.requestBudget.documentLabel,
+      };
+      if (
+        requestBudgetAfterHome.documentId !== requestBudgetBeforeHome.documentId ||
+        requestBudgetAfterHome.documentLabel !== requestBudgetBeforeHome.documentLabel
+      ) {
+        stateFailures.push("The Start scenario reset the existing request budget document.");
+      }
+
+      const failures = [...geometryFailures, ...stateFailures];
+      const result = {
+        widths: widthResults,
+        keyboard,
+        localNameDraft: {
+          beforeHome: localNameDraftBeforeHome,
+          whileHome: localNameDraftWhileHome,
+          afterReturn: localNameDraftAfterReturn,
+          preserved: stateFailures.every((failure) => !failure.includes("Name draft")),
+        },
+        requestBudget: {
+          before: requestBudgetBeforeHome,
+          after: requestBudgetAfterHome,
+          unchanged: requestBudgetBeforeHome.documentId === requestBudgetAfterHome.documentId &&
+            requestBudgetBeforeHome.documentLabel === requestBudgetAfterHome.documentLabel,
+        },
+        geometryFailures,
+        stateFailures,
+        noHorizontalClipping: geometryFailures.length === 0,
+      };
+      evidence.about_toolchain_responsive = result;
+      assert.deepEqual(failures, [], "About Toolchain responsive checks failed: " + JSON.stringify(failures));
+      return result;
+    });
+
     await runScenario("ribbon-range-accessible-name", async () => {
       const tabList = page.locator('[role="tablist"][aria-label="Ribbon tabs"]');
       const viewTab = tabList.getByRole("tab", { name: "View", exact: true });
@@ -682,6 +977,23 @@ export async function qualifyFrontendResponsiveBrowser({
     }
 
     await restore("close menus", closeMenus);
+    if (homeViewOpened) {
+      await restore("return from Start screen", async () => {
+        await page.setViewportSize({ width: 1280, height: originalViewport.height });
+        const startScreen = page.locator(".fm-start");
+        if (!(await startScreen.isVisible())) {
+          homeViewOpened = false;
+          return;
+        }
+        const mainMenu = page.getByRole("navigation", { name: "Main menu", exact: true });
+        const returnToWorkspace = mainMenu.getByRole("button").first();
+        await returnToWorkspace.waitFor({ state: "visible" });
+        await returnToWorkspace.focus();
+        await page.keyboard.press("Enter");
+        await startScreen.waitFor({ state: "hidden" });
+        homeViewOpened = false;
+      });
+    }
     if (nameInput && originalName !== null) {
       await restore("Name draft", async () => {
         if (await nameInput.count()) await nameInput.fill(originalName);
