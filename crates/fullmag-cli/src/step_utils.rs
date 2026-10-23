@@ -4100,6 +4100,33 @@ mod tests {
     }
 
     #[test]
+    fn materialize_pipeline_llg_relax_applies_relax_alpha_to_this_stage_only() {
+        let base = sample_problem_ir();
+        let authored_damping = base.materials[0].damping;
+        let payload = serde_json::from_value(json!({
+            "relax_algorithm": "llg_overdamped",
+            "relax_alpha": "1"
+        }))
+        .expect("payload");
+
+        let stage = materialize_pipeline_relax(&base, &payload).expect("llg relax stage");
+        assert!(stage.ir.materials.iter().all(|material| material.damping == 1.0));
+        assert_eq!(base.materials[0].damping, authored_damping);
+
+        let unset = serde_json::from_value(json!({"relax_algorithm": "llg_overdamped"}))
+            .expect("payload");
+        let stage = materialize_pipeline_relax(&base, &unset).expect("llg relax stage");
+        assert_eq!(stage.ir.materials[0].damping, authored_damping);
+
+        let invalid = serde_json::from_value(json!({
+            "relax_algorithm": "llg_overdamped",
+            "relax_alpha": 0.0
+        }))
+        .expect("payload");
+        assert!(materialize_pipeline_relax(&base, &invalid).is_err());
+    }
+
+    #[test]
     fn session_command_direct_minimizer_rejects_llg_only_controls() {
         let base_problem = sample_problem_ir();
         let command = crate::types::SessionCommand {
