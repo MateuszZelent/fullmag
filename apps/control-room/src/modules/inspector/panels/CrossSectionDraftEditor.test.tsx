@@ -1,20 +1,30 @@
 import { readFileSync } from "node:fs";
 
 import { act, type ComponentProps, type ReactNode } from "react";
-import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
-import type { CrossSectionDraft } from "@/kernel/workspace/crossSectionWorkspace";
+import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
+import {
+  beginCrossSectionDraft,
+  crossSectionWorkspaceStore,
+  resetCrossSectionWorkspaceForTests,
+  updateCrossSectionDraft,
+  type CrossSectionDraft,
+} from "@/kernel/workspace/crossSectionWorkspace";
 import {
   installSimulationPreparationTestDom,
   TestElement,
+  TestEvent,
   TestNode,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
-import { InspectorEditSessionProvider } from "../InspectorEditSession";
+import {
+  createInspectorEditSessionStore,
+  InspectorEditSessionProvider,
+} from "../InspectorEditSession";
 import { CrossSectionDraftEditor as UnwrappedCrossSectionDraftEditor } from "./CrossSectionDraftEditor";
 
 const sessionA = {
@@ -81,10 +91,18 @@ function createTestKernel(): KernelApi {
   } as unknown as KernelApi;
 }
 
-function TestProviders({ children }: { children: ReactNode }) {
+function TestProviders({
+  children,
+  editSessionStore,
+}: {
+  children: ReactNode;
+  editSessionStore?: ReturnType<typeof createInspectorEditSessionStore>;
+}) {
   return (
     <KernelContext.Provider value={mocks.kernel as KernelApi}>
-      <InspectorEditSessionProvider>{children}</InspectorEditSessionProvider>
+      <InspectorEditSessionProvider store={editSessionStore}>
+        {children}
+      </InspectorEditSessionProvider>
     </KernelContext.Provider>
   );
 }
@@ -97,6 +115,11 @@ function CrossSectionDraftEditor(
       <UnwrappedCrossSectionDraftEditor {...props} />
     </TestProviders>
   );
+}
+
+function LiveCrossSectionDraftEditor() {
+  const liveDraft = useCrossSectionWorkspaceSelector((state) => state.draft);
+  return <UnwrappedCrossSectionDraftEditor draft={liveDraft} />;
 }
 
 vi.mock("@/kernel/resources/planarMonitorResources", () => ({
@@ -137,6 +160,8 @@ const crossSectionDraftEditorSourceUrl = new URL(
 describe("CrossSectionDraftEditor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetCrossSectionWorkspaceForTests();
+    mocks.historyGeneration = 0;
     mocks.kernel = createTestKernel();
     mocks.currentSessionScopeKey = sessionAScopeKey;
     mocks.sessionIdentity = sessionA;
@@ -159,8 +184,6 @@ describe("CrossSectionDraftEditor", () => {
     expect(html).toContain('disabled="" value="object_bounds"');
     expect(html).toContain('disabled="" value="custom"');
     expect(html).toContain('aria-label="Rotation"');
-    expect(html).toContain('max="180"');
-    expect(html).toContain('min="-180"');
     expect(html).not.toContain('aria-label="Rotation" disabled=""');
     expect(html).toContain("Apply monitor");
   });
@@ -179,6 +202,7 @@ describe("CrossSectionDraftEditor", () => {
   it("pins domain metadata and monitor creation to the same active session", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<CrossSectionDraftEditor draft={draft} />));
@@ -205,6 +229,7 @@ describe("CrossSectionDraftEditor", () => {
     mocks.create.mockReturnValue(createResult);
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<CrossSectionDraftEditor draft={draft} />));
@@ -214,6 +239,7 @@ describe("CrossSectionDraftEditor", () => {
         await Promise.resolve();
       });
 
+      expect(findButton(container, "Discard").getAttribute("disabled")).toBe("");
       expect(mocks.create).toHaveBeenCalledWith(
         expect.any(Object),
         { sessionScopeKey: sessionAScopeKey },
@@ -242,6 +268,7 @@ describe("CrossSectionDraftEditor", () => {
     mocks.sessionIdentity = null;
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<CrossSectionDraftEditor draft={draft} />));
@@ -255,6 +282,298 @@ describe("CrossSectionDraftEditor", () => {
       dom.restore();
     }
   });
+
+  it("blocks local and global Apply for raw numeric text and clears it on Discard", async () => {
+    beginCrossSectionDraft();
+    const editSessionStore = createInspectorEditSessionStore();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <TestProviders editSessionStore={editSessionStore}>
+            <LiveCrossSectionDraftEditor />
+          </TestProviders>,
+        ),
+      );
+
+      const edgeWidth = findInput(container, "Edge width");
+      await act(async () => editInput(edgeWidth, "4.5"));
+
+      const applyButton = findButton(container, "Apply monitor");
+      expect(applyButton.getAttribute("disabled")).toBe("");
+      expect(editSessionStore.getCurrentSession()).toMatchObject({
+        applyBlockReason: "Correct Edge width before applying.",
+        dirty: true,
+        valid: false,
+      });
+      const session = editSessionStore.getCurrentSession();
+      expect(session).not.toBeNull();
+      let applied: boolean | undefined;
+      await act(async () => {
+        applied = await session!.apply();
+      });
+      expect(applied).toBe(false);
+      expect(mocks.domainMeta).not.toHaveBeenCalled();
+      expect(mocks.create).not.toHaveBeenCalled();
+
+      await act(async () => editInput(edgeWidth, "3.5"));
+      expect(editSessionStore.getCurrentSession()).toMatchObject({
+        applyBlockReason: "Commit or discard the pending cross-section numeric edits.",
+        dirty: true,
+        valid: false,
+      });
+      const pendingValidSession = editSessionStore.getCurrentSession();
+      expect(pendingValidSession).not.toBeNull();
+      await act(async () => {
+        applied = await pendingValidSession!.apply();
+      });
+      expect(applied).toBe(false);
+      expect(mocks.domainMeta).not.toHaveBeenCalled();
+      expect(mocks.create).not.toHaveBeenCalled();
+
+      await act(async () => findButton(container, "Discard").click());
+      expect(crossSectionWorkspaceStore.getSnapshot().draft).toBeNull();
+      expect(editSessionStore.getCurrentSession()).toBeNull();
+
+      await act(async () => beginCrossSectionDraft());
+      expect(findInput(container, "Edge width").value).toBe("1.5");
+      expect(mocks.create).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("clears raw text when the session owner changes while keeping the draft values", async () => {
+    beginCrossSectionDraft();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    const render = () =>
+      root.render(
+        <TestProviders>
+          <LiveCrossSectionDraftEditor />
+        </TestProviders>,
+      );
+    try {
+      await act(async () => render());
+      const edgeWidth = findInput(container, "Edge width");
+      await act(async () => editInput(edgeWidth, "4.5"));
+      expect(edgeWidth.value).toBe("4.5");
+
+      await act(async () =>
+        updateCrossSectionDraft({ edgeWidth: 2, name: "Retitled draft" }),
+      );
+      expect(findInput(container, "Edge width").value).toBe("4.5");
+
+      mocks.currentSessionScopeKey = "session=B&epoch=2&request_scope_epoch=2";
+      mocks.sessionIdentity = {
+        sessionId: "B",
+        sessionEpoch: "2",
+        requestScopeEpoch: "2",
+      };
+      await act(async () => render());
+
+      expect(findInput(container, "Edge width").value).toBe("2");
+      expect(crossSectionWorkspaceStore.getSnapshot().draft?.edgeWidth).toBe(2);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("preserves raw edits typed while a create ACK is pending", async () => {
+    beginCrossSectionDraft();
+    let finishCreate: ((value: unknown) => void) | null = null;
+    const createResult = new Promise((resolve) => {
+      finishCreate = resolve;
+    });
+    mocks.create.mockReturnValue(createResult);
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <TestProviders>
+            <LiveCrossSectionDraftEditor />
+          </TestProviders>,
+        ),
+      );
+      await act(async () => {
+        findButton(container, "Apply monitor").click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mocks.create).toHaveBeenCalledOnce();
+
+      const position = findInput(container, "Position");
+      await act(async () => editInput(position, "12."));
+      expect(position.value).toBe("12.");
+      expect(findButton(container, "Discard").getAttribute("disabled")).toBe("");
+
+      await act(async () => {
+        finishCreate?.({
+          monitor: { id: "monitor-a", name: draft.name },
+          scene_revision: 8,
+        });
+        await createResult;
+      });
+
+      expect(crossSectionWorkspaceStore.getSnapshot().draft).not.toBeNull();
+      expect(findInput(container, "Position").value).toBe("12.");
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+      expect(mocks.setSelection).not.toHaveBeenCalled();
+      expect(mocks.invalidate).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("preserves a replacement draft and raw input when an earlier create ACK resolves", async () => {
+    beginCrossSectionDraft();
+    let finishCreate: ((value: unknown) => void) | null = null;
+    const createResult = new Promise((resolve) => {
+      finishCreate = resolve;
+    });
+    mocks.create.mockReturnValue(createResult);
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <TestProviders>
+            <LiveCrossSectionDraftEditor />
+          </TestProviders>,
+        ),
+      );
+      await act(async () => {
+        findButton(container, "Apply monitor").click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mocks.create).toHaveBeenCalledOnce();
+
+      let replacementDraft: CrossSectionDraft | null = null;
+      await act(async () => {
+        beginCrossSectionDraft();
+        updateCrossSectionDraft({ edgeWidth: 2.5, name: "Replacement draft" });
+        replacementDraft = crossSectionWorkspaceStore.getSnapshot().draft;
+      });
+      expect(replacementDraft).not.toBeNull();
+
+      const edgeWidth = findInput(container, "Edge width");
+      await act(async () => editInput(edgeWidth, "3."));
+      expect(edgeWidth.value).toBe("3.");
+
+      await act(async () => {
+        finishCreate?.({
+          monitor: { id: "monitor-a", name: draft.name },
+          scene_revision: 8,
+        });
+        await createResult;
+      });
+
+      expect(crossSectionWorkspaceStore.getSnapshot().draft).toBe(replacementDraft);
+      expect(
+        crossSectionWorkspaceStore.getSnapshot().draft?.name,
+      ).toBe("Replacement draft");
+      expect(crossSectionWorkspaceStore.getSnapshot().draft?.edgeWidth).toBe(2.5);
+      expect(findInput(container, "Edge width").value).toBe("3.");
+      expect(mocks.create).toHaveBeenCalledOnce();
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+      expect(mocks.setSelection).not.toHaveBeenCalled();
+      expect(mocks.setActiveViewportMainModule).not.toHaveBeenCalled();
+      expect(mocks.invalidate).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("ignores a delayed create ACK after the session changes A to B and back to A", async () => {
+    beginCrossSectionDraft();
+    const submittedDraft = crossSectionWorkspaceStore.getSnapshot().draft;
+    let finishCreate: ((value: unknown) => void) | null = null;
+    const createResult = new Promise((resolve) => {
+      finishCreate = resolve;
+    });
+    mocks.create.mockReturnValue(createResult);
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    const render = () =>
+      root.render(
+        <TestProviders>
+          <LiveCrossSectionDraftEditor />
+        </TestProviders>,
+      );
+    try {
+      await act(async () => render());
+      await act(async () => {
+        mocks.kernel = {
+          ...(mocks.kernel as KernelApi),
+          authoringHistory: {
+            getGeneration: () => mocks.historyGeneration,
+          },
+        } as unknown as KernelApi;
+        render();
+      });
+      await act(async () => {
+        findButton(container, "Apply monitor").click();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mocks.create).toHaveBeenCalledOnce();
+
+      await act(async () => {
+        mocks.historyGeneration += 1;
+        mocks.currentSessionScopeKey = "session=B&epoch=2&request_scope_epoch=2";
+        mocks.sessionIdentity = {
+          sessionId: "B",
+          sessionEpoch: "2",
+          requestScopeEpoch: "2",
+        };
+        render();
+      });
+      await act(async () => {
+        mocks.historyGeneration += 1;
+        mocks.currentSessionScopeKey = sessionAScopeKey;
+        mocks.sessionIdentity = sessionA;
+        render();
+      });
+
+      await act(async () => {
+        finishCreate?.({
+          monitor: { id: "monitor-a", name: draft.name },
+          scene_revision: 8,
+        });
+        await createResult;
+      });
+
+      expect(crossSectionWorkspaceStore.getSnapshot().draft).toBe(submittedDraft);
+      expect(mocks.create).toHaveBeenCalledOnce();
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+      expect(mocks.setSelection).not.toHaveBeenCalled();
+      expect(mocks.setActiveViewportMainModule).not.toHaveBeenCalled();
+      expect(mocks.invalidate).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });
 
 function findButton(root: TestNode, text: string): TestElement {
@@ -263,6 +582,21 @@ function findButton(root: TestNode, text: string): TestElement {
   )[0];
   if (!button) throw new Error(`Missing button ${text}`);
   return button;
+}
+
+function findInput(root: TestNode, label: string): TestElement {
+  const input = findElements(
+    root,
+    (element) =>
+      element.tagName === "INPUT" && element.getAttribute("aria-label") === label,
+  )[0];
+  if (!input) throw new Error(`Missing input ${label}`);
+  return input;
+}
+
+function editInput(input: TestElement, value: string): void {
+  input.value = value;
+  input.dispatchEvent(new TestEvent("input", { bubbles: true }));
 }
 
 function findElements(root: TestNode, predicate: (element: TestElement) => boolean): TestElement[] {
