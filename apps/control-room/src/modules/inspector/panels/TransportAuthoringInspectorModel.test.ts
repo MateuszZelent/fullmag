@@ -38,6 +38,39 @@ function parityManifest(): ParityManifest {
 }
 
 describe("transport authoring drafts", () => {
+  it.each(["", "   "])("rejects a blank absolute tolerance instead of serializing zero: %j", (text) => {
+    const current = currentTransportDraft();
+    Object.assign(current, currentTransportModelPatch(current, "ohmic_poisson"));
+    current.solverAbsoluteTolerance = text;
+    expect(() => buildCurrentTransport(current)).toThrow(/Absolute tolerance must be finite/);
+    const spin = spinTransportDraft();
+    spin.currentSourceId = "charge";
+    spin.solverAbsoluteTolerance = text;
+    expect(() => buildSpinTransport(spin)).toThrow(/Absolute tolerance must be finite/);
+  });
+
+  it.each(["", "   "])("rejects a blank source-cut offset while preserving explicit zero: %j", (text) => {
+    const draft = currentTransportDraft(null, { objectId: "ring" });
+    Object.assign(draft, currentTransportClosurePatch(draft, true));
+    draft.structuredCurrentClosure!.sourceCuts[0].offsetM = text;
+    expect(() => buildCurrentTransport(draft)).toThrow(/plane offset must be finite/);
+    draft.structuredCurrentClosure!.sourceCuts[0].offsetM = "0";
+    expect(buildCurrentTransport(draft)).toMatchObject({
+      structured_current_closure: { source_cuts: [{ plane: { offset_m: 0 } }] },
+    });
+  });
+
+  it("preserves explicitly authored zero absolute tolerances for both transport families", () => {
+    const current = currentTransportDraft();
+    Object.assign(current, currentTransportModelPatch(current, "ohmic_poisson"));
+    current.solverAbsoluteTolerance = "0";
+    expect(buildCurrentTransport(current)).toMatchObject({ solver: { linear: { absolute_tolerance: 0 } } });
+    const spin = spinTransportDraft();
+    spin.currentSourceId = "charge";
+    spin.solverAbsoluteTolerance = "0";
+    expect(buildSpinTransport(spin)).toMatchObject({ solver: { linear: { absolute_tolerance: 0 } } });
+  });
+
   it("retains only edited fields across server revisions and detects overlap", () => {
     for (const baseline of [currentTransportDraft(), spinTransportDraft()]) {
       const local = { ...baseline, solverRelativeTolerance: "2e-10" };
