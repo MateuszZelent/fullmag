@@ -1523,3 +1523,64 @@ Potrzebny cache/receipty zachowano. Wolne C: 36 254 400 512 B; różnicy nie
 przypisuje się temu etapowi. Otwarte: CI nowego HEAD, retained definition i
 solver refresh/errors, referencje selektora i semantyczna walidacja, pozostałe
 rodziny Inspectora oraz live kwalifikacja. Cały cel pozostaje aktywny.
+
+### CI raw drafts — 36d516474
+
+HEAD `36d516474f6e7c6912d3b3337c06a929951684bc`, run `39898810758`:
+Control Room job `120235365088` PASS — 8988 testów PASS / 13 skip,
+864 pliki PASS / 1 skip, compute performance i osobne 3 testy PASS,
+produkcyjny build PASS. Obejmuje 38 nowych przypadków numeric input,
+rekoncyliacji i DOM Frozen Spins. Browser fixture job `120235364688`
+pozostawał in_progress w ostatnim odczycie; nie rozszerza się sukcesu
+kontraktów na cały workflow ani live runtime.
+
+### Frozen Spins: retained definition i aktualność certyfikatu solvera
+
+Panel przyjmuje wyłącznie definicję zgodną z wybranym constraint ID. Last-good
+aktualizuje się z potwierdzonego ready bez error/refreshError. Przy retained
+data błędy odczytu pozostają widoczne, Retry definition ponawia zasób,
+a ten sam keyed editor i Name draft pozostają zamontowane. Loading/stale,
+brak aktualnych danych i niezgodny ID blokują Apply/Preview/Commit/Delete,
+również globalny i imperatywny Apply. Revert nadal pozwala odrzucić lokalne
+edycje. Początkowy błąd bez danych ma Retry bez montowania fałszywego edytora.
+
+Status solvera jest osobną bramką. Tylko ready, niepusty zasób bez error ani
+refreshError dostarcza bieżący certyfikat do porównania z activation receipt.
+Loading/stale/error/unavailable nie są już prezentowane jako oczekiwanie na
+aktywację ani potwierdzony/mismatch certyfikat z cache. Epoka i resolved-set
+revision są wtedy unconfirmed. Bieżący status bez frozen_spins nadal oznacza
+rzeczywiste pending; świeży niezgodny certyfikat pozostaje mismatch.
+Refresh solver status umożliwia jawne ponowienie. Akcja quantity znika przy
+nieaktualnym statusie i ma ten sam guard w handlerze, in-flight lock oraz
+scope/unmount fence przed przeniesieniem focusu po flush.
+
+Receipt opisuje teraz stan **przy commit**, a nie bieżący stan solvera:
+Application at commit, Solver at commit i wiadomość kierująca do aktualnego
+potwierdzenia poniżej. Komunikat uwzględnia oba warianty
+current_runtime_unchanged; nie utrzymuje „still pending” po świeżym potwierdzeniu.
+Nie zmieniono porównania tożsamości certyfikatów ani semantyki solvera.
+
+Dodano 12 regresji DOM: retained stale/error → retry → zachowany node/draft,
+pending bez błędu, initial failure, wrong ID; solver loading/stale/error/
+refreshError/missing → recovery, genuine pending i świeży mismatch, flush
+po zmianie sesji. Istniejące asercje receiptu doprecyzowano historycznie.
+Review źródłowe nie wykazało otwartych potwierdzonych P1/P2 w delta;
+wykonanie nowych przypadków należy do CI kolejnego HEAD.
+
+Końcowy produkcyjny typecheck, architecture hygiene i scoped lint PASS,
+stabilne źródła, receipt
+`verification/frontend-production-source-eac17836c8514d87b3f7dc51c2b0911f.json`.
+API hygiene PASS:
+`verification/frontend-api-hygiene-826e163e0d0742fba8e629f61f49cbb2.json`.
+React Doctor: 1 produkcyjny plik, 0 errors/skips, 6 istniejących ostrzeżeń
+(related useState, 3 prop adjustments, 2 mixed exports), receipt
+`verification/frontend-production-source-f6c6dc7b66684198a81610aca31eeba2.json`.
+API/Doctor wykonano przed końcową zmianą wyłącznie opisowych etykiet receiptu;
+końcowy typecheck/architecture/lint obejmuje też te etykiety. Bez suppression.
+Lokalnie nadal bez kompilacji/uruchamiania testów TS/Rust.
+
+Retencja: bez builda/instalacji/restartu/usuwania danych/resetu ownera.
+Cache i receipty są potrzebne do dalszej weryfikacji/recovery i pozostają.
+Wolne C: 36 252 450 816 B; różnicy nie przypisuje się temu etapowi.
+Otwarte: CI tego etapu, referencje/semantyczna walidacja selektora,
+pozostałe aktywne rodziny i pełna live kwalifikacja. Cel pozostaje aktywny.

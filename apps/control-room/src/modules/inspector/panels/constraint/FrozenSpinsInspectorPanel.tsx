@@ -56,21 +56,25 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
   const resource = useFrozenSpinsDefinitionResource(constraintId, {
     enabled: ref !== null,
   });
+  const matchingData = resource.data?.definition.id === constraintId ? resource.data : null;
+  const resourceError = resource.error ?? resource.refreshError
+    ?? (resource.data && !matchingData ? new Error("The loaded Frozen Spins definition does not match the selected constraint.") : null);
+  const definitionCurrent = resource.status === "ready" && matchingData !== null && !resourceError;
   const [lastGood, setLastGood] = useState<{
     constraintId: string;
     resourceKey: string;
     resource: NonNullable<typeof resource.data>;
   } | null>(null);
   if (
-    resource.data &&
+    definitionCurrent && matchingData &&
     (lastGood?.constraintId !== constraintId ||
       lastGood.resourceKey !== resourceKey ||
-      lastGood.resource !== resource.data)
+      lastGood.resource !== matchingData)
   ) {
-    setLastGood({ constraintId, resourceKey, resource: resource.data });
+    setLastGood({ constraintId, resourceKey, resource: matchingData });
   }
   const retainedResource =
-    resource.data ??
+    matchingData ??
     (lastGood?.constraintId === constraintId && lastGood.resourceKey === resourceKey
       ? lastGood.resource
       : null);
@@ -83,8 +87,13 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
       />
     );
   }
-  if (resource.error && !retainedResource) {
-    return <FeedbackBanner kind="error" message={errorMessage(resource.error)} />;
+  if (resourceError && !retainedResource) {
+    return (
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+        <FeedbackBanner kind="error" message={errorMessage(resourceError)} />
+        <Button size="sm" type="button" onClick={resource.refetch}>Retry definition</Button>
+      </div>
+    );
   }
   if (!retainedResource) {
     return (
@@ -96,6 +105,14 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
 
   const objectId = ref.objectId ?? selection.objectId;
   return (
+    <div className="grid min-w-0 gap-fm-inspector-group">
+    {resourceError ? <FeedbackBanner kind="error" message={errorMessage(resourceError)} /> : null}
+    {!definitionCurrent ? (
+      <div>
+        <p className="fm-help-text" role="status">Current definition is unconfirmed. Your edits are preserved.</p>
+        <Button size="sm" type="button" onClick={resource.refetch}>Retry definition</Button>
+      </div>
+    ) : null}
     <FrozenSpinsEditor
       key={resourceKey}
       definition={retainedResource.definition}
@@ -103,7 +120,9 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
       regionId={ref.regionId ?? null}
       revision={retainedResource.revision}
       sessionScopeKey={sessionScopeKey}
+      definitionUnavailableReason={definitionCurrent ? undefined : "Confirm the current Frozen Spins definition before applying, previewing or deleting."}
     />
+    </div>
   );
 }
 
@@ -113,12 +132,14 @@ export function FrozenSpinsEditor({
   regionId,
   revision: initialRevision,
   sessionScopeKey,
+  definitionUnavailableReason,
 }: {
   definition: FrozenSpinsDefinition;
   objectId: string | null;
   regionId: string | null;
   revision: number;
   sessionScopeKey?: string | null;
+  definitionUnavailableReason?: string;
 }) {
   const kernel = useKernel();
   const [draft, setDraft] = useState(() => normalizeDefinition(initialDefinition));
@@ -195,7 +216,7 @@ export function FrozenSpinsEditor({
   }
 
   async function applyDraft(): Promise<boolean> {
-    if (applyInFlight.current || blockNumericDrafts() || conflict || !canonicalDirty) return false;
+    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason || !canonicalDirty) return false;
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
     const submittedDraft = draft;
     const operationSessionScopeKey = sessionScopeKey ?? null;
@@ -280,7 +301,7 @@ export function FrozenSpinsEditor({
   }
 
   async function createPreview(): Promise<void> {
-    if (applyInFlight.current || blockNumericDrafts() || conflict) return;
+    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason) return;
     const operationSessionScopeKey = sessionScopeKey ?? null;
     if (!operationSessionScopeKey) {
       setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
@@ -362,7 +383,7 @@ export function FrozenSpinsEditor({
 
   async function activatePreview(): Promise<void> {
     const acknowledgeDraft = acknowledgeAppliedDraftRef.current;
-    if (applyInFlight.current || blockNumericDrafts() || conflict) return;
+    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason) return;
     if (!preview || !activationCandidateReady) {
       setFeedback({
         kind: "warning",
@@ -442,7 +463,7 @@ export function FrozenSpinsEditor({
       solverStatus.refetch();
       setFeedback({
         kind: "warning",
-        message: `${frozenSpinsRuntimeApplicationMessage(response.runtime_application)} The preview candidate was consumed; solver activation is still pending runtime confirmation and a matching solver-owned certificate.`,
+        message: `${frozenSpinsRuntimeApplicationMessage(response.runtime_application)} The preview candidate was consumed. Current runtime confirmation is shown below.`,
       });
     } catch (error) {
       if (!mountedRef.current) return;
@@ -455,7 +476,7 @@ export function FrozenSpinsEditor({
   }
 
   async function deleteDefinition(): Promise<void> {
-    if (applyInFlight.current || blockNumericDrafts() || conflict) return;
+    if (applyInFlight.current || blockNumericDrafts() || conflict || definitionUnavailableReason) return;
     if (canonicalDirty) {
       setFeedback({ kind: "warning", message: "Apply or revert the definition edits before deleting the constraint." });
       return;
@@ -514,6 +535,11 @@ export function FrozenSpinsEditor({
   }
 
   async function showSolverQuantity(): Promise<void> {
+    if (applyInFlight.current || !canShowSolverQuantity) return;
+    const operationSessionScopeKey = sessionScopeKey ?? null;
+    const isCurrentSession = () => Boolean(operationSessionScopeKey) && kernel.commands.getSessionScopeKey() === operationSessionScopeKey;
+    if (!isCurrentSession()) return;
+    applyInFlight.current = true;
     setPendingField("quantity");
     setFeedback(null);
     try {
@@ -526,6 +552,7 @@ export function FrozenSpinsEditor({
         },
       });
       await kernel.visualizationSync.flushNow();
+      if (!mountedRef.current || !isCurrentSession()) return;
       kernel.layout.setActiveViewportMainModule("viewport-3d");
       kernel.layout.setFocusedSlot("viewport-main");
       setFeedback({
@@ -533,9 +560,11 @@ export function FrozenSpinsEditor({
         message: "3D viewport now reads the solver-owned frozen_spins quantity.",
       });
     } catch (error) {
+      if (!mountedRef.current || !isCurrentSession()) return;
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
-      setPendingField(null);
+      applyInFlight.current = false;
+      if (mountedRef.current) setPendingField(null);
     }
   }
 
@@ -556,6 +585,7 @@ export function FrozenSpinsEditor({
   const membership = draft.membership?.kind ?? "automatic";
   const toolbarPending = pendingField !== null;
   const activationCandidateReady = Boolean(
+    !definitionUnavailableReason &&
     !conflict &&
     numericDrafts.summary.pendingCount === 0 &&
     preview?.current &&
@@ -564,21 +594,29 @@ export function FrozenSpinsEditor({
     previewSelectorJson === JSON.stringify(draft.selector) &&
     activationIncludesStage(activation, preview.requested.stage_id),
   );
-  const solverBinding = resolveFrozenSpinsSolverBinding(
-    activationReceipt,
-    solverStatus.data?.frozen_spins ?? null,
-    draft.id,
-  );
+  const solverReadError = solverStatus.error ?? solverStatus.refreshError;
+  const solverStatusCurrent = solverStatus.status === "ready" && !solverReadError && solverStatus.data !== null;
+  const solverRuntime = solverStatusCurrent ? solverStatus.data?.frozen_spins ?? null : null;
+  const solverBinding: FrozenSpinsSolverBindingModel = !activationReceipt
+    ? resolveFrozenSpinsSolverBinding(null, null, draft.id)
+    : solverReadError
+      ? { state: "error", message: `Cannot confirm solver binding: ${errorMessage(solverReadError)}` }
+      : solverStatus.status === "loading" || solverStatus.status === "stale"
+        ? { state: solverStatus.status, message: "Solver status is refreshing. Its previous certificate is unconfirmed." }
+        : !solverStatusCurrent
+          ? { state: "unavailable", message: "Solver status is unavailable. Runtime activation cannot be confirmed." }
+          : resolveFrozenSpinsSolverBinding(activationReceipt, solverRuntime, draft.id);
+  const canShowSolverQuantity = solverStatusCurrent && (solverBinding.state === "confirmed" || solverBinding.state === "mismatch");
   const acknowledgeAppliedDraft = useRegisterInspectorEditSession(
     "staged",
     pendingField !== null,
     dirty,
-    numericDrafts.summary.pendingCount === 0 && !conflict,
+    numericDrafts.summary.pendingCount === 0 && !conflict && !definitionUnavailableReason,
     undefined,
     applyDraft,
     resetDraft,
     {
-      applyBlockReason: conflictReason ?? numericDraftBlockReason ?? (sessionScopeKey ? undefined : "Session identity is not ready."),
+      applyBlockReason: definitionUnavailableReason ?? conflictReason ?? numericDraftBlockReason ?? (sessionScopeKey ? undefined : "Session identity is not ready."),
       historyMode: "mutation-owned",
     },
   );
@@ -595,6 +633,7 @@ export function FrozenSpinsEditor({
       {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
       {numericDraftBlockReason ? <FeedbackBanner kind="warning" message={numericDraftBlockReason} /> : null}
       {conflictReason ? <FeedbackBanner kind="warning" message={conflictReason} /> : null}
+      {definitionUnavailableReason ? <FeedbackBanner kind="warning" message={definitionUnavailableReason} /> : null}
       <InspectorGroup title="Frozen Spins" collapsible defaultOpen>
         <FieldRow label="Constraint ID" value={draft.id} />
         <FieldRow label="Schema" value={draft.schema_version} />
@@ -747,7 +786,7 @@ export function FrozenSpinsEditor({
       <InspectorGroup title="Preview" collapsible defaultOpen>
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={toolbarPending || Boolean(numericDraftBlockReason) || conflict}
+            disabled={toolbarPending || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason)}
             size="sm"
             type="button"
             onClick={() => void createPreview()}
@@ -755,7 +794,7 @@ export function FrozenSpinsEditor({
             {pendingField === "preview" ? "Computing preview…" : "Preview mask"}
           </Button>
           <Button
-            disabled={toolbarPending || !dirty || Boolean(numericDraftBlockReason) || conflict}
+            disabled={toolbarPending || !dirty || Boolean(numericDraftBlockReason) || conflict || Boolean(definitionUnavailableReason)}
             size="sm"
             type="button"
             onClick={() => void applyDraft()}
@@ -782,7 +821,7 @@ export function FrozenSpinsEditor({
             </Button>
           ) : null}
           <Button
-            disabled={toolbarPending || dirty}
+            disabled={toolbarPending || dirty || Boolean(definitionUnavailableReason)}
             size="sm"
             type="button"
             variant="danger"
@@ -801,13 +840,16 @@ export function FrozenSpinsEditor({
           <FrozenSpinsSolverBindingDetails
             binding={solverBinding}
             receipt={activationReceipt}
-            runtime={solverStatus.data?.frozen_spins ?? null}
+            runtime={solverRuntime}
           />
+        ) : null}
+        {activationReceipt && !solverStatusCurrent ? (
+          <Button disabled={toolbarPending} size="sm" type="button" onClick={solverStatus.refetch}>Refresh solver status</Button>
         ) : null}
         {runtimeApplication ? (
           <FrozenSpinsRuntimeApplicationDetails application={runtimeApplication} />
         ) : null}
-        {solverBinding.state === "confirmed" || solverBinding.state === "mismatch" ? (
+        {canShowSolverQuantity ? (
           <Button
             disabled={toolbarPending}
             size="sm"
@@ -888,7 +930,7 @@ export function FrozenSpinsPreviewDetails({
 }
 
 export interface FrozenSpinsSolverBindingModel {
-  state: "confirmed" | "mismatch" | "not_committed" | "pending";
+  state: "confirmed" | "mismatch" | "not_committed" | "pending" | "loading" | "stale" | "error" | "unavailable";
   message: string;
 }
 
@@ -957,15 +999,15 @@ function FrozenSpinsSolverBindingDetails({
         label="Activation epoch"
         value={
           runtime?.constraint_activation_epochs[receipt.definition.id]?.toString() ??
-          "pending"
+          (binding.state === "pending" ? "pending" : "unconfirmed")
         }
       />
       <FieldRow
         label="Resolved set revision"
-        value={runtime?.resolved_constraint_set_revision?.toString() ?? "pending"}
+        value={runtime?.resolved_constraint_set_revision?.toString() ?? (binding.state === "pending" ? "pending" : "unconfirmed")}
       />
       <FeedbackBanner
-        kind={binding.state === "confirmed" ? "success" : "warning"}
+        kind={binding.state === "confirmed" ? "success" : binding.state === "error" ? "error" : "warning"}
         message={binding.message}
       />
     </div>
@@ -982,9 +1024,9 @@ function FrozenSpinsRuntimeApplicationDetails({
       className="fm-inspector-panel"
       data-runtime-application={application.state}
     >
-      <FieldRow label="Runtime application" value={application.state} />
+      <FieldRow label="Application at commit" value={application.state} />
       <FieldRow
-        label="Pending scene revision"
+        label="Pending scene revision at commit"
         value={application.pending_revision.toString()}
       />
       <FieldRow label="Apply boundary" value={application.apply_boundary} />
@@ -995,7 +1037,7 @@ function FrozenSpinsRuntimeApplicationDetails({
         />
       ) : null}
       <FieldRow
-        label="Current solver"
+        label="Solver at commit"
         value={
           application.current_runtime_unchanged ? "unchanged" : "updated"
         }
@@ -1014,7 +1056,7 @@ function frozenSpinsRuntimeApplicationMessage(
   const command = application.application_command_id
     ? ` Application command: ${application.application_command_id}.`
     : "";
-  return `Frozen Spins definition committed as revision ${application.pending_revision}. The current solver is unchanged until ${boundary}.${command}`;
+  return `Frozen Spins definition committed as revision ${application.pending_revision}. The commit receipt schedules application at ${boundary}. Solver was ${application.current_runtime_unchanged ? "unchanged" : "updated"} at commit.${command}`;
 }
 
 function normalizeDefinition(definition: FrozenSpinsDefinition): FrozenSpinsDefinition {

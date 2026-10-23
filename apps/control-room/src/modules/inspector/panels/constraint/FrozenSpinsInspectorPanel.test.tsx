@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_FROZEN_SPINS_RESOLVED_MASK_PATH } from "@/kernel/api/apiPaths";
 import type { FieldMetaResource } from "@/kernel/api/apiTypes";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 
 import {
   installSimulationPreparationTestDom,
@@ -109,6 +110,9 @@ const mocks = vi.hoisted(() => ({
   queueVisualizationPatch: vi.fn(),
   refetchFieldMeta: vi.fn(),
   refetchSolverStatus: vi.fn(),
+  refetchDefinition: vi.fn(),
+  definitionStatus: "ready" as ResourceStatus,
+  definitionRefreshError: null as Error | null,
   requestScopeEpoch: "request-a",
   sessionEpoch: "epoch-a",
   sessionId: "session-a",
@@ -116,6 +120,9 @@ const mocks = vi.hoisted(() => ({
   setActiveViewportMainModule: vi.fn(),
   setFocusedSlot: vi.fn(),
   solverStatusData: null as unknown,
+  solverStatus: "ready" as ResourceStatus,
+  solverError: null as Error | null,
+  solverRefreshError: null as Error | null,
   definitionResource: {
     data: null as unknown,
     error: null as unknown,
@@ -168,6 +175,9 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   }),
   useSolverStatusResource: () => ({
     data: mocks.solverStatusData,
+    status: mocks.solverStatus,
+    error: mocks.solverError,
+    refreshError: mocks.solverRefreshError,
     refetch: mocks.refetchSolverStatus,
   }),
 }));
@@ -176,7 +186,10 @@ vi.mock("@/kernel/resources/frozenSpinsResources", () => ({
   FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY: "model:frozen-spins:active-preview",
   frozenSpinsCollectionResourceKey: () => "model:frozen-spins",
   frozenSpinsDefinitionResourceKey: (id: string) => `model:frozen-spins:${id}`,
-  useFrozenSpinsDefinitionResource: () => mocks.definitionResource,
+  useFrozenSpinsDefinitionResource: () => ({
+    ...mocks.definitionResource, status: mocks.definitionStatus,
+    refreshError: mocks.definitionRefreshError, refetch: mocks.refetchDefinition,
+  }),
 }));
 
 vi.mock("@/kernel/resources/useSessionScopedResourceKey", () => ({
@@ -208,9 +221,14 @@ describe("FrozenSpinsInspectorPanel", () => {
     mocks.requestScopeEpoch = "request-a";
     mocks.sessionEpoch = "epoch-a";
     mocks.sessionId = "session-a";
+    mocks.definitionStatus = "ready";
+    mocks.definitionRefreshError = null;
     mocks.activatePreview.mockResolvedValue(activationReceipt);
     mocks.flushVisualization.mockResolvedValue(undefined);
-    mocks.solverStatusData = null;
+    mocks.solverStatusData = { frozen_spins: null };
+    mocks.solverStatus = "ready";
+    mocks.solverError = null;
+    mocks.solverRefreshError = null;
     mocks.createPreview.mockResolvedValue(preview);
     mocks.patch.mockResolvedValue({
       definition: definitionFixture(),
@@ -733,6 +751,143 @@ describe("FrozenSpinsInspectorPanel", () => {
     } finally { await harness.dispose(); }
   });
 
+  it.each(["stale", "error"] as const)("preserves the draft and blocks writes while the definition is %s", async (status) => {
+    const harness = await mountDefinitionPanel();
+    try {
+      await editDefinitionName(harness.container);
+      const input = findByAttribute(harness.container, "aria-label", "Name");
+      const editor = findByAttribute(harness.container, "data-frozen-spins-inspector-id");
+      mocks.definitionStatus = status;
+      mocks.definitionRefreshError = new Error("Definition refresh failed");
+      await harness.render();
+      expect(findByAttribute(harness.container, "aria-label", "Name")).toBe(input);
+      expect(findByAttribute(harness.container, "data-frozen-spins-inspector-id")).toBe(editor);
+      expect(input.value).toBe("Edited pinned edge");
+      expect(harness.container.textContent).toContain("Definition refresh failed");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      for (const action of ["Apply", "Preview mask", "Delete"]) expect(findButton(harness.container, action).disabled).toBe(true);
+      await act(async () => { expect(await harness.store.getCurrentSession()!.apply()).toBe(false); });
+      expect(mocks.patch).not.toHaveBeenCalled();
+      await act(async () => findButton(harness.container, "Retry definition").click());
+      expect(mocks.refetchDefinition).toHaveBeenCalledTimes(1);
+      mocks.definitionStatus = "ready";
+      mocks.definitionRefreshError = null;
+      await harness.render();
+      expect(findByAttribute(harness.container, "aria-label", "Name")).toBe(input);
+      expect(input.value).toBe("Edited pinned edge");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: true });
+      await act(async () => findButton(harness.container, "Apply").click());
+      expect(mocks.patch.mock.calls[0]![1].definition.name).toBe("Edited pinned edge");
+    } finally { await harness.dispose(); }
+  });
+
+  it("keeps retained fields blocked while a definition refresh is pending without an error", async () => {
+    const harness = await mountDefinitionPanel();
+    try {
+      await editDefinitionName(harness.container);
+      mocks.definitionResource = { data: null, error: null };
+      mocks.definitionStatus = "loading";
+      await harness.render();
+      expect(findByAttribute(harness.container, "aria-label", "Name").value).toBe("Edited pinned edge");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+      expect(findButton(harness.container, "Apply").disabled).toBe(true);
+      expect(harness.container.textContent).toContain("Current definition is unconfirmed");
+    } finally { await harness.dispose(); }
+  });
+
+  it("offers Retry for an initial failure without mounting an editor", async () => {
+    mocks.definitionResource = { data: null, error: new Error("Definition unavailable") };
+    mocks.definitionStatus = "error";
+    const harness = await mountDefinitionPanel();
+    try {
+      expect(harness.container.textContent).toContain("Definition unavailable");
+      expect(findElements(harness.container, (element) => element.getAttribute("data-frozen-spins-inspector-id") !== null)).toHaveLength(0);
+      await act(async () => findButton(harness.container, "Retry definition").click());
+      expect(mocks.refetchDefinition).toHaveBeenCalledTimes(1);
+    } finally { await harness.dispose(); }
+  });
+
+  it("rejects a returned definition for another constraint without adopting it", async () => {
+    const harness = await mountDefinitionPanel();
+    try {
+      await editDefinitionName(harness.container);
+      mocks.definitionResource = { data: { definition: { ...definitionFixture(), id: "other", name: "Wrong constraint" }, revision: 8 }, error: null };
+      await harness.render();
+      expect(findByAttribute(harness.container, "data-frozen-spins-inspector-id").getAttribute("data-frozen-spins-inspector-id")).toBe("pin-edge");
+      expect(findByAttribute(harness.container, "aria-label", "Name").value).toBe("Edited pinned edge");
+      expect(harness.container.textContent).toContain("does not match the selected constraint");
+      expect(harness.store.getCurrentSession()).toMatchObject({ dirty: true, valid: false });
+    } finally { await harness.dispose(); }
+  });
+
+  it.each(["loading", "stale", "error", "refresh-error", "missing"] as const)("does not use a retained solver certificate when status is %s", async (state) => {
+    mocks.solverStatusData = { frozen_spins: solverRuntime };
+    const harness = await mountNumericEditor();
+    try {
+      await act(async () => findButton(harness.container, "Preview mask").click());
+      await act(async () => findButton(harness.container, "Commit preview").click());
+      expect(findByAttribute(harness.container, "data-solver-binding").getAttribute("data-solver-binding")).toBe("confirmed");
+      mocks.refetchSolverStatus.mockClear();
+      if (state === "refresh-error") {
+        mocks.solverStatus = "stale";
+        mocks.solverRefreshError = new Error("Solver refresh failed");
+      } else if (state === "missing") mocks.solverStatusData = null;
+      else {
+        mocks.solverStatus = state;
+        if (state === "error") mocks.solverError = new Error("Solver status failed");
+      }
+      await harness.renderDefinition(numericDefinitionFixture());
+      const binding = findByAttribute(harness.container, "data-solver-binding");
+      expect(binding.getAttribute("data-solver-binding")).toBe(state === "refresh-error" ? "error" : state === "missing" ? "unavailable" : state);
+      expect(binding.textContent).toContain("unconfirmed");
+      expect(binding.textContent).not.toContain("Waiting for a solver stage");
+      if (state === "refresh-error") expect(binding.textContent).toContain("Solver refresh failed");
+      if (state === "error") expect(binding.textContent).toContain("Solver status failed");
+      expect(findOptionalButton(harness.container, "Show solver frozen_spins in 3D")).toBeNull();
+      await act(async () => findButton(harness.container, "Refresh solver status").click());
+      expect(mocks.refetchSolverStatus).toHaveBeenCalledTimes(1);
+      mocks.solverStatus = "ready";
+      mocks.solverError = null;
+      mocks.solverRefreshError = null;
+      mocks.solverStatusData = { frozen_spins: solverRuntime };
+      await harness.renderDefinition(numericDefinitionFixture());
+      expect(findByAttribute(harness.container, "data-solver-binding").getAttribute("data-solver-binding")).toBe("confirmed");
+      expect(findOptionalButton(harness.container, "Show solver frozen_spins in 3D")).not.toBeNull();
+    } finally { await harness.dispose(); }
+  });
+
+  it("distinguishes current solver status without an activation from a current mismatch", async () => {
+    const harness = await mountNumericEditor();
+    try {
+      await act(async () => findButton(harness.container, "Preview mask").click());
+      await act(async () => findButton(harness.container, "Commit preview").click());
+      expect(findByAttribute(harness.container, "data-solver-binding").getAttribute("data-solver-binding")).toBe("pending");
+      expect(harness.container.textContent).toContain("Waiting for a solver stage");
+      mocks.solverStatusData = { frozen_spins: { ...solverRuntime, mask_sha256: "another-current-mask" } };
+      await harness.renderDefinition(numericDefinitionFixture());
+      expect(findByAttribute(harness.container, "data-solver-binding").getAttribute("data-solver-binding")).toBe("mismatch");
+      expect(findOptionalButton(harness.container, "Show solver frozen_spins in 3D")).not.toBeNull();
+      expect(harness.container.textContent).toContain("Solver at commit");
+      expect(harness.container.textContent).not.toContain("solver activation is still pending");
+    } finally { await harness.dispose(); }
+  });
+
+  it("does not move viewport focus after an old session's quantity flush completes", async () => {
+    let finishFlush!: () => void;
+    mocks.flushVisualization.mockReturnValueOnce(new Promise<void>((resolve) => { finishFlush = resolve; }));
+    mocks.solverStatusData = { frozen_spins: solverRuntime };
+    const harness = await mountNumericEditor();
+    try {
+      await act(async () => findButton(harness.container, "Preview mask").click());
+      await act(async () => findButton(harness.container, "Commit preview").click());
+      await act(async () => findButton(harness.container, "Show solver frozen_spins in 3D").click());
+      mocks.sessionId = "session-b";
+      await act(async () => finishFlush());
+      expect(mocks.setFocusedSlot).not.toHaveBeenCalled();
+      expect(mocks.setActiveViewportMainModule).not.toHaveBeenCalled();
+    } finally { await harness.dispose(); }
+  });
+
   it("keeps a clean Apply disabled without submitting a write", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -881,7 +1036,7 @@ describe("FrozenSpinsInspectorPanel", () => {
         { sessionScopeKey: "session=session-a&epoch=epoch-a&request_scope_epoch=request-a" },
       );
 
-      expect(container.textContent).toContain("current solver is unchanged");
+      expect(container.textContent).toContain("Solver was unchanged at commit");
       expect(container.textContent).toContain("pending_runtime_plan");
       expect(container.textContent).toContain("Pending scene revision");
       expect(container.textContent).toContain("next_runtime_plan");
@@ -966,7 +1121,7 @@ describe("FrozenSpinsInspectorPanel", () => {
         "model:frozen-spins:active-preview",
         "",
       );
-      expect(container.textContent).toContain("solver activation is still pending");
+      expect(container.textContent).toContain("Current runtime confirmation is shown below");
       expect(container.textContent).toContain("authoring_commit");
       expect(container.textContent).toContain("Waiting for a solver stage");
       expect(findOptionalButton(container, "Commit preview")).toBeNull();
@@ -1412,6 +1567,29 @@ async function mountNumericEditor(definition: ComponentProps<typeof ScopedFrozen
     }),
     dispose: async () => { await act(async () => root.unmount()); dom.restore(); },
   };
+}
+
+async function mountDefinitionPanel() {
+  const dom = installSimulationPreparationTestDom();
+  const container = dom.document.createElement("div");
+  const store = createInspectorEditSessionStore();
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container as unknown as Element);
+  const selection = {
+    kind: "object.frozen-spins", label: "Frozen Spins", moduleSource: "explorer",
+    nodeId: "model:object:film:frozen-spins:pin-edge", objectId: "film",
+    ref: {
+      constraintId: "pin-edge", kind: "object.frozen-spins",
+      nodeId: "model:object:film:frozen-spins:pin-edge", objectId: "film", type: "frozen-spins",
+    },
+  } as const;
+  const render = () => act(async () => root.render(
+    <InspectorEditSessionProvider store={store}>
+      <FrozenSpinsInspectorPanel selection={selection} />
+    </InspectorEditSessionProvider>,
+  ));
+  await render();
+  return { container, store, render, dispose: async () => { await act(async () => root.unmount()); dom.restore(); } };
 }
 
 async function editDefinitionName(container: TestNode): Promise<void> {
