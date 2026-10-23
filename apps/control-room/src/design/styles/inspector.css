@@ -811,6 +811,11 @@
   min-height: 0;
 }
 
+.fm-inspector__content > .fm-scroll-area__viewport {
+  /* Mutation feedback must not move the user's scroll position. */
+  overflow-anchor: none;
+}
+
 .fm-inspector__content > .fm-scroll-area__viewport > div {
   min-height: 100%;
 }

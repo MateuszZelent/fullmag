@@ -874,9 +874,25 @@
   .fm-analysis-chart-export {
     align-items: stretch;
     flex-direction: column;
+    flex-wrap: nowrap;
     width: 100%;
     min-width: 0;
     max-width: 100%;
+  }
+
+  .fm-chart-section__title-group,
+  .fm-chart-section__toolbar {
+    flex: 0 1 auto;
+  }
+
+  .fm-chart-legend {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: var(--fm-space-2);
+  }
+
+  .fm-chart-legend__latest {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .fm-chart-control-bar {
