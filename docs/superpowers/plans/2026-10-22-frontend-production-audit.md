@@ -716,3 +716,111 @@ oraz recovery ownera. Nie usuwano danych i nie dotykano głównego checkoutu.
 Pomiar C: w tym checkpointcie: 75 514 359 808 B wolnego miejsca.
 Nie wykonywano nowego ciężkiego buildu. Pełna kwalifikacja runtime i browser,
 pozostałe rodziny audytu oraz integracja nadal nie są ukończone.
+
+### CI b1ae97c4 — nowe dowody i zamknięte przyczyny źródłowe
+
+Bootstrap `39876664384`: Control Room job `120163803516` zakończony FAIL:
+8802 PASS, 4 FAIL, 13 pominiętych. Dwa testy Planar wywoływały Enter bez
+focusin potrzebnego polyfillowi React w uproszczonym DOM. Testy zachowują
+asercje Enter/focus/scroll/ACK i emitują brakujące zdarzenia. Dwa testy
+Field Drive szukały wyłącznie aria-label, choć select ma nazwę w natywnym
+label-wrapper. Helper rozpoznaje teraz oba poprawne źródła nazwy.
+Nie zmieniono kontraktu produkcyjnego dla dopasowania do testów.
+
+Browser job `120163803477` zakończony FAIL; Inspector actions browser job
+`120163803659` PASS. Odczytano logi i artefakt `12468258962`, SHA256
+`88914056e0bdf59d7a4888ecef8ff43e80dc0a7ecc2ec989fbaf81c130665d36`,
+bez rozpakowywania do hostowego storage. Raporty potwierdzają:
+
+- responsywny dock/header przy czterech szerokościach i nazwa range PASS;
+- mesh-policy browser PASS, w tym stabilność Inspectora;
+- Planar raw/remount, filtrowanie i Refresh nadal PASS;
+- regiony: siedem scenariuszy zakończonych przed błędem selektora, w tym
+  kolejne zapisy skalarów/pól i raw Priority. Test usuwania zatrzymał się,
+  ponieważ ten sam komunikat ma span feedbacku i opis footera. Selektor
+  wskazuje teraz dokładny komunikat feedbacku. Asercje braku mutacji,
+  zachowania node/raw i Revert pozostają;
+- Explorer: stały canvas zachował offset po wirtualizacji. Mocniejsza
+  asercja wykryła ucięcie ostatniego wiersza po pierwszym End: 460 wierszy,
+  wysokość 12880, viewport 391, scroll 12489, max 12497, ostatni rect
+  655..683 przy początku viewportu 288. Obliczenie pomijało 4 px paddingu
+  nad canvasem. Reveal klawiaturowy i selection mierzą teraz początek
+  canvasu względem scroll viewportu. Regresja liczbowa wymaga 12493,
+  a dotychczasowy browser nadal wymaga pełnej widoczności przez cztery klatki.
+  Korekta i późniejszy shrink wymagają nowego CI; nie są jeszcze odebrane.
+
+### Schowek, About i Study autosave
+
+Data Preview pokazywał sukces przed zakończeniem writeText i nie obsługiwał
+odrzucenia. About/Provenance również nie obsługiwały odrzuceń ani późnego ACK
+po zmianie źródła. Wspólny useClipboardCopy używa istniejącego adaptera
+Clipboard API/fallback, blokuje duplikaty, ma pending/success/error, cleanup
+timera i fencing tożsamości/operacji. Token chroni także A→B→A. Widoki
+pokazują dostępny błąd i umożliwiają retry. Data Preview wiąże stan z sesją,
+rewizją, ilością, komponentem, próbkami i kopiowanymi metadanymi.
+
+About pokazuje opublikowane build.version albo Version unavailable zamiast
+stałego v0.1.0. Stałe cytacji pozostają bez zmian. React Doctor wykrył
+istniejące renderowanie hosta zależne od browser globals; oba widoki używają
+teraz istniejącego wzorca useSyncExternalStore ze stałą migawką serwera.
+Test obejmuje markup SSR i mount desktopowy, nie pełną hydratację.
+Nowe regresje schowka obejmują rzeczywisty log, pending/ACK, odmowę, retry,
+duplikaty, retarget, A→B→A i unmount. Usunięto test tekstu implementacji.
+
+StageAutosaveSection używał `${index}:${quantity}` jako klucza React,
+odmontowując input podczas pisania. Wiersze mają lokalne, stabilne rowKey;
+usunięcie wcześniejszego wiersza zachowuje następcę. Serializer jawnie
+pomija klucz UI. Run/Autosave/Table Autosave używają kanonicznego parsera
+czasu dla Until; poprawne `2 ps` nie jest już wyświetlane jako brak danych.
+Niepoprawne/puste/niedodatnie wartości pozostają niedostępne. Testy obejmują
+focus/node identity oraz te podsumowania. Review usunął null z tabeli
+legalnego StudyStageDraft, którego Until jest wymaganym stringiem.
+
+Commity spójnych etapów:
+
+- harnessy Planar/Field Drive i selektor regionów:
+  `01964a2eec7f826bfb2a5adea731f46c449f15d5`;
+- pełny reveal wierszy Explorera:
+  `baf2033199f6eae54d6b87bb6da086405d7205ab`;
+- autosave identity i jednostki Until:
+  `9d9b6a1a35f1adcfb25070df9b68549b5773e13b`;
+- schowek i prawdziwe metadane About:
+  `ced313224bdd165739caa81093f2bc6c39143202`.
+
+Końcowe typy produkcyjne, architecture hygiene i scoped ESLint bez ostrzeżeń
+PASS, ze stabilnymi źródłami:
+`verification/frontend-production-source-36e7ae3806ae41a7984deffee98ba6e2.json`.
+React Doctor: 11 plików, brak pominięć, 0 błędów, jedno istniejące ostrzeżenie
+only-export-components w ProvenancePanels:
+`verification/frontend-production-source-b6c42cf50fe04cce9dc29a40c8a61bc7.json`.
+Pierwszy Doctor `616ff7ffcf4a4a52960de3133f73c8c4` wykazał dwa błędy host
+hydration; zielony receipt jest po poprawce. Review źródłowy nowych delt
+nie ma otwartych P1/P2. Hook commita zgłosił istniejące await w pętlach
+browser fixture: kroki są celowo sekwencyjne i sprawdzają zależne interakcje.
+Nie kompilowano ani nie uruchamiano lokalnych testów jednostkowych TS/Rust.
+Nowe regresje czekają na CI. Warstwy API/transport nie zostały zmienione.
+
+### Dalsze pokrycie i otwarte prace
+
+Readonly audyt Mode Composition objął inspectory/route adapter/controller,
+resources/resource model, API paths/types, realtime invalidation oraz schemat
+i handler backendu. Nie wykazano błędu zapisu lub złej tożsamości sesji.
+Rate publikuje poprawne prefiksy liczby natychmiast; pusty/sign nie stają się
+zerem. Bez ustalonego kontraktu deferred commit jest to kandydat UX,
+nie potwierdzony bug i nie został zmieniony.
+
+Nowy potwierdzony problem do następnego etapu: browser legendy response
+pokazały `Amplitude [mnot published]` i power density z tym samym prefiksem.
+Fixture nie publikuje observable units; frequencyDomainChartModels celowo
+zwraca `not published`. chartScalePolicy nadaje jednak prefiks SI także
+nierozpoznanemu tekstowi. Należy zachować factor=1 i literal dla nieznanej
+jednostki oraz sprawdzić regresję legendy; nie dopisywać jednostek z założeń.
+`Phase [mrad]` ma jawne rad i poprawne skalowanie. Odczytano formatter,
+frequency-domain models/testy, surface i fixture; poprawka jeszcze nie istnieje.
+
+Zachowano worktree i techniczne wolumeny: służą aktywnym kontrolom źródeł
+i recovery ownera. Brak nowego ciężkiego buildu i danych kwalifikujących się
+do usunięcia w tym etapie. Pomiar C: 63 842 295 808 B wolnego miejsca.
+Stale backend owner nie został zresetowany; managed runtime, właściwy
+Object 2D/3D/monitor, pełny browser odbiór i pozostały audyt nadal otwarte.
+PR #249 pozostaje draft; nie wykonano merge ani cleanupu worktree.
