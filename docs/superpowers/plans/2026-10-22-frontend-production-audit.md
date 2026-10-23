@@ -1128,3 +1128,84 @@ reflow About, audyt pozostałych zarejestrowanych tras (m.in. transport,
 observation frames i coupling), live odbiór Object/Airbox/2D/3D/monitor,
 a następnie integracja. Nie ma podstaw do oznaczenia całego frontendu jako
 gotowego produkcyjnie.
+
+### CI e4a6fff3e i aktywne trasy transport/Coupling
+
+Run `39887501130` dla `e4a6fff3e67e59cef3980f0ced05085f219fbbef`:
+control-room-contracts FAIL, 8886 PASS / 1 FAIL / 13 skip (8900).
+Wszystkie nowe regresje CrossSection, ModeComposition i poprawione wcześniejsze
+testy przeszły. Jedyny błąd to osierocona klasa CSS po zastąpieniu starego
+inputa ModeComposition przez QuantityField. Usunięto nieużywaną klasę i jej
+focus-visible w `3a1e975183af25198df62a72992b7dd501c7a094`; wynik ponownej
+bramki testowej pozostaje do potwierdzenia w CI.
+
+Inspector-actions-browser-smoke PASS. Browser-fixture-smoke FAIL wyłącznie
+w nowym reflow About. Artefakt `12473542983`, SHA256
+`c89d3fdfc732e01b000311af726739c43bbdfa2ec861314fb7a1dff4324a4fcb`,
+odczytano z weryfikacją digestu; obejrzano zrzuty 320 i 640 px. Audyt
+frontend-production ma 10/10 scenariuszy PASS i page_errors: []. Potwierdzono
+przywrócenie fokusu triggera menu koloru, bez ręcznego wymuszenia focus.
+Dotychczasowy responsive-dock-and-header-at-four-widths PASS. Nowy About
+przy 320 px potwierdza stały rail 232 px, kolumnę treści 88 px, a po gutterach
+tylko 40 px dla toolchain; tekst i chipy są obcięte. To dowód browser fixture,
+nie akceptacja live backendu ani solvera.
+
+Poprawka Startu przenosi rail nad treść do 640 px, ogranicza go do 35dvh
+z zachowaniem scrolla i wszystkich kontrolek Compute. Nawigacja zawija się,
+aria-keyshortcuts pozostaje; wizualne kbd nie zabierają miejsca. Status strip
+i etykiety chipów zawijają się, a minimum siatki engines nie przekracza
+szerokości rodzica. Układ desktopu pozostaje poza tym breakpointem. Tradeoff:
+przy 640 px jest mniej miejsca w pionie, ale pełna szerokość treści.
+Niezależny review źródeł bez uwag blokujących; ścisły browser probe pozostaje
+bez osłabienia i wymaga nowego CI.
+
+Potwierdzono wejścia z Explorer i inspectorRouteCatalog przed poprawkami:
+
+- Transport: wspólny parser `finite` przyjmował pusty tekst i whitespace jako
+  zero. Teraz odrzuca brak wartości, zachowując jawne zero. Regresje obejmują
+  absolute tolerance current/spin i offset source-cut. Lokalny Resource select
+  omijał ochronę globalnego wyboru i porzucał dirty draft; jest zablokowany
+  przy dirty/pending z jawną wskazówką Apply/Revert. Pozostałe pola nadal
+  pozostają edytowalne. Dwa testy DOM sprawdzają Revert oraz odłożony ACK
+  i próbę zmiany ownera także programatycznym eventem. Commit
+  `e958f78f9b256d3b3d6dca66378728a02983c776`.
+- Coupling: wcześniejsze akcje mogły użyć nieaktualnego zasobu lub kontekstu
+  bez scope, powielić klik przed rerender i pokazać feedback poprzedniego
+  ownera. Teraz wymagają ready zasobu bez refresh error, bezpiecznej rewizji
+  i scope; mają synchroniczny in-flight guard, session/history fence,
+  kontrolę zgodności rewizji przed zapisem i spójności ACK. Publikacja oraz
+  pojedynczy scoped Python sync następują po ACK. Zmiana celu w tej samej
+  sesji zachowuje publikację zaakceptowanej mutacji, lecz nie jej feedback
+  w nowym panelu; A→B→A nie omija fence. Błąd sync jest ostrzeżeniem o już
+  zapisanej zmianie, bez replay. 14 przypadków DOM obejmuje też stale/loading,
+  niezgodną rewizję, niespójny ACK i odrzuconą transakcję. Commit
+  `e744b7524e5f47b5509e53f727e95578e4e4569c`.
+
+Końcowy typecheck produkcyjny, architecture hygiene i lint 103 plików PASS,
+źródła stabilne, receipt
+`verification/frontend-production-source-a703e8ca613b4637809d179006e9a1e4.json`.
+API hygiene PASS:
+`verification/frontend-api-hygiene-403ed13010a24ca8b54543238f3c2fef.json`.
+React Doctor 3 plików produkcyjnych: 0 błędów, brak pominięć, 2 istniejące
+ostrzeżenia; receipt
+`verification/frontend-production-source-90992fa855ed4d68b8d4a3d6485203af.json`.
+Odczyt kodu nie potwierdza ich jako regresji: przyciski interfejsów mają
+klucz id+index bez lokalnego draftu, a densityOfStates przechodzi kontrolę
+typu i finite przed mnożeniem. Nie wyłączano reguł. Lokalnie nie kompilowano
+ani nie uruchamiano testów TS/Rust. Nowe regresje transport/Coupling oraz
+browser odbiór reflow pozostają NOT VERIFIED do kolejnego CI.
+
+ObservationFrame pozostaje otwartym obszarem: Explorer bierze domyślnie
+pierwsze 50 rekordów i nie konsumuje next_cursor. Pin ma scope sesji,
+natomiast endpoint szczegółów i magnetyzacji wybiera aktywny run; pin z innego
+run może więc przestać być dostępny po zmianie run/cache. ADR 0025 i P6
+nie ustanawiają jednoznacznej obietnicy cross-run pin. Nie rozszerzono API
+ani nie przedstawiono nieaktywnych danych jako odczytanych. Następne kroki:
+pagination i jawny kontrakt pin/run, pozostałe zarejestrowane Inspectory,
+live Object/Airbox/2D/3D/monitor oraz końcowe CI i integracja PR #249.
+
+Retencja: bez ciężkiego buildu, instalowania zależności, restartu grup,
+resetu ownera i usuwania danych. Własne wolumeny nadal służą sprawdzeniom
+i recovery. Backend receipt pozostaje failed-confirmed; sam działający
+kontener nie jest dowodem API/runtime. C: wolne 45 514 788 864 B; brak
+podstaw do przypisania zmian miejsca temu etapowi. Cały cel nadal aktywny.
