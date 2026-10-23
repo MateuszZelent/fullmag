@@ -294,6 +294,19 @@ function findButton(root: TestNode, text: string): TestElement {
   return button;
 }
 
+function findElements(
+  root: TestNode,
+  predicate: (element: TestElement) => boolean,
+): TestElement[] {
+  const found: TestElement[] = [];
+  const visit = (node: TestNode): void => {
+    if (node instanceof TestElement && predicate(node)) found.push(node);
+    node.childNodes.forEach(visit);
+  };
+  visit(root);
+  return found;
+}
+
 function editInput(input: TestElement, value: string): void {
   input.value = value;
   input.dispatchEvent(new TestEvent("input", { bubbles: true }));

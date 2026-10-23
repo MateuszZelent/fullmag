@@ -50,7 +50,7 @@ describe("chart scale policy", () => {
     const transform = createChartDisplayTransform("T", [0.1, 0.3], "mT");
     expect(transform.factor).toBe(1e-3);
     expect(transform.displayUnit).toBe("mT");
-    expect(formatChartDisplayValue(0.10317, transform)).toBe("103.2");
+    expect(formatChartDisplayValue(0.10317, transform)).toBe("103.17");
     expect(createChartDisplayTransform("T", [0.1, 0.3], "A/m").displayUnit).not.toBe("A/m");
   });
 

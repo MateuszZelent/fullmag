@@ -132,7 +132,11 @@ describe("CrossSectionSettingsEditor numeric drafts", () => {
 
       const positionSlider = findInput(mounted.container, "Position slider");
       await act(async () => {
-        positionSlider.value = "25";
+        // A browser changes the native value before dispatching input. Bypass
+        // React's instance setter so its change tracker observes that change.
+        const setNativeValue = Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set;
+        if (!setNativeValue) throw new Error("Missing native input value setter");
+        setNativeValue.call(positionSlider, "25");
         positionSlider.dispatchEvent(new TestEvent("input", { bubbles: true }));
       });
 
