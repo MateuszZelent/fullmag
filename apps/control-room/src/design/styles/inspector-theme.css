@@ -20,6 +20,11 @@
 .fm-inspector-select { padding-inline-end: 26px; }
 .fm-inspector-textarea { @apply h-auto min-h-24 py-fm-2; }
 .fm-inspector-input--mono { @apply font-fm-mono; }
+/* FormField stacks its editor and feedback vertically. A width-filling flex
+   basis must not replace the editor's declared height in that column. */
+.fm-inspector-form-field__control > :is(.fm-inspector-input, .fm-inspector-select, .fm-inspector-textarea) {
+  @apply flex-none;
+}
 .fm-inspector-input:hover:not(:disabled),
 .fm-inspector-select:hover:not(:disabled),
 .fm-inspector-textarea:hover:not(:disabled),

@@ -2268,3 +2268,47 @@ i owned-test-stop-e6215cd664974976be7512b7fd2a2b76.json w verification/.
 Procesy w stanie D i ich fake temp pozostawiono do zakończenia I/O; nie usuwano
 tych katalogów, kontenerów, cache ani danych innych grup. Zamknięcie tych
 procesów oraz finalne CI/render pozostają do potwierdzenia.
+
+
+### 2026-10-23 — CI po wspólnej strukturze Inspectorów i korekta wysokości
+
+HEAD 97488e75501438bd0837038305d485e85a22022f wypchnięty do PR #249.
+Bootstrap 39924911039: Control Room contracts/build PASS (9140 testów PASS,
+13 skip; osobne 3 testy performance PASS), Inspector actions browser PASS,
+generated API/API hygiene/native modal C ABI/FDM bounded qualification PASS.
+Contract guard, eigensolve UI methods i dispersion consumers również PASS.
+Są to dowody zakresów poszczególnych bramek; pełny bootstrap pozostaje failed.
+
+Browser fixture job 120318805035 przeszedł viewport pre-proof i doszedł do
+nowej macierzy theme. Rzeczywisty Sample name miał 16 px wysokości zamiast
+wymaganych 30 px; font 12 px/400 przeszedł. Przyczyną w źródłach jest legacy
+flex:1 na input w pionowym FormField. Recepta theme otrzymała flex-none dla
+bezpośrednich edytorów tego wrappera. Wymaganie 30 px pozostaje bez zmian.
+Helper zapisuje teraz metryki (w tym flex basis i kierunek rodzica) oraz zrzut
+przed asercją, aby ewentualny kolejny błąd miał widoczny artefakt. Odbiór
+renderu light/dark, 480/300 px nadal NOT VERIFIED dla tej korekty.
+
+Python contracts przeszedł wszystkie kroki testowe, a zatrzymał się na końcowym
+check_repo_consistency: brak 24 lustrzanych wpisów nowych skilli mastera w
+.github/skills. Dodano wyłącznie discovery pointers z identycznym canonical
+frontmatter i linkiem do .agents; instrukcji kanonicznych nie zmieniono.
+Sprawdzenie 24 metadanych/linków i pełny check_repo_consistency PASS na hoście.
+Nie jest to build aplikacji. Node --check helpera i git diff --check PASS.
+
+Rust contracts oraz Windows checkpoint zatrzymały się na E0308 w testowym
+quantities.rs:655: porównanie API schema enum z runner enum. Jedna linia testu
+korzysta teraz z właściwego schema enum, tak jak sąsiednie testy. Nie zmieniono
+logiki produkcyjnej. Weryfikacja kompilacji/wykonania Rust pozostaje w CI;
+nie kompilowano testów Rust ani TS lokalnie.
+
+Lokalny Docker Desktop zwraca HTTP 500 z dockerDesktopLinuxEngine przy odczycie
+obu własnych kontenerów; osobne docker version/inspect przekroczyły limit
+obserwacji. Nie zatrzymano ani nie zrestartowano grup, nie resetowano ownera.
+Ostatnia próba odczytu source receipt nie dała wyniku, więc nie przypisujemy
+nowej korekcie lokalnego lint/CSS compile PASS. CI jest następnym wykonawcą
+renderu i bramek. Nie odtworzono polecenia z utraconej obserwacji; procesów D
+oraz ich temp nie kwalifikowano do usunięcia przy niedostępnym silniku.
+
+PR nadal draft, merge i cleanup nie zostały wykonane. Szerszy audyt frontendowy
+pozostaje aktywny; parser pustych liczb/wektorów Spin oraz pełna kwalifikacja
+runtime i pokrycia Inspectorów pozostają otwarte.

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 /** Render proof for the shared Inspector recipe; uses no backend or solver. */
@@ -45,6 +46,9 @@ export async function qualifyInspectorTheme({ page, outputDir }) {
           return {
             fontSize: style.fontSize,
             fontWeight: style.fontWeight,
+            cssHeight: style.height,
+            flexBasis: style.flexBasis,
+            parentDirection: getComputedStyle(field.parentElement).flexDirection,
             height: field.getBoundingClientRect().height,
             selectHeight: select.getBoundingClientRect().height,
             textareaHeight: textarea.getBoundingClientRect().height,
@@ -61,6 +65,11 @@ export async function qualifyInspectorTheme({ page, outputDir }) {
             overflow: element.scrollWidth > element.clientWidth + 1,
           };
         });
+        await writeFile(resolve(outputDir, `inspector-theme-${theme}-${width}.json`), JSON.stringify(metrics, null, 2));
+        const filename = `inspector-theme-${theme}-${width}.png`;
+        await root.screenshot({ path: resolve(outputDir, filename) });
+        evidence.screenshots.push(filename);
+        evidence.themes.push({ theme, width, ...metrics });
         assert.equal(metrics.fontSize, "12px");
         assert.equal(metrics.fontWeight, "400");
         assert.equal(metrics.height, 30);
@@ -74,10 +83,6 @@ export async function qualifyInspectorTheme({ page, outputDir }) {
         assert.equal(metrics.fieldBackground, metrics.expectedBackground);
         assert.equal(metrics.columns, width === 300 ? 1 : 2);
         assert.equal(metrics.overflow, false, `${theme}/${width} overflows`);
-        const filename = `inspector-theme-${theme}-${width}.png`;
-        await root.screenshot({ path: resolve(outputDir, filename) });
-        evidence.screenshots.push(filename);
-        evidence.themes.push({ theme, width, ...metrics });
       }
     }
     assert.notEqual(evidence.themes[0].fieldBackground, evidence.themes[2].fieldBackground, "Light/dark field surfaces did not change");
