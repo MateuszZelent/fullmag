@@ -4,6 +4,10 @@ import { useCallback } from "react";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+import {
+  QuantityFieldDraftScope,
+  useQuantityFieldDraftScope,
+} from "../primitives/QuantityField";
 
 import { validateStudyStageDraft } from "./StudyStageAuthoringModel";
 import { useStudyInspectorPanelController } from "./StudyInspectorPanel";
@@ -37,11 +41,25 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     sceneHasPayload,
     sceneRevision,
     sceneStageCount,
+    sessionScopeKey,
     stageExecution,
     state,
   } = useStudyInspectorPanelController(selection);
   const selectedIndex = model.selectedStage?.index ?? state.selectedDraftIndex;
   const draft = state.stageDrafts[selectedIndex] ?? null;
+  const stageIdentity =
+    model.selectedStage?.pipelineNodeId ??
+    model.selectedStage?.stageId ??
+    draft?.pipelineNodeId ??
+    (selection.ref?.type === "study-stage" ? selection.ref.stageId : null) ??
+    JSON.stringify([selection.nodeId, selectedIndex]);
+  const numericDrafts = useQuantityFieldDraftScope(
+    JSON.stringify([sessionScopeKey ?? "no-session", stageIdentity]),
+  );
+  const hasPendingNumericDrafts = numericDrafts.summary.pendingCount > 0;
+  const pendingNumericApplyReason = hasPendingNumericDrafts
+    ? "Commit or discard pending numeric inputs before applying stage changes."
+    : undefined;
   const localValidation = draft
     ? validateStudyStageDraft(draft, {
         activeLane: runtimeStatus?.capabilities.active_lane ?? null,
@@ -77,19 +95,37 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     ),
   ]);
   const resetStageDrafts = useCallback(
-    () => dispatch({ type: "revertStageDrafts" }),
-    [dispatch],
+    () => {
+      if (state.authoringBusy) return;
+      numericDrafts.store.clear();
+      dispatch({ type: "revertStageDrafts" });
+    },
+    [dispatch, numericDrafts.store, state.authoringBusy],
   );
+  const commitStageDraftsWhenReady = useCallback(() => {
+    if (state.authoringBusy || numericDrafts.store.getSummary().pendingCount > 0) {
+      return false;
+    }
+    return commitStageDrafts();
+  }, [commitStageDrafts, numericDrafts.store, state.authoringBusy]);
+  const canonicalStageDraftsDirty =
+    JSON.stringify(state.stageDrafts) !==
+    JSON.stringify(state.baselineStageDrafts);
+  const stageDraftsValid =
+    !allStageValidation.some((issue) => issue.severity === "error") &&
+    !hasPendingNumericDrafts;
   useRegisterInspectorEditSession(
     "staged",
     state.authoringBusy,
-    JSON.stringify(state.stageDrafts) !==
-      JSON.stringify(state.baselineStageDrafts),
-    !allStageValidation.some((issue) => issue.severity === "error"),
+    canonicalStageDraftsDirty || hasPendingNumericDrafts,
+    stageDraftsValid,
     state.authoringBusy ? "Study stage changes are being saved." : undefined,
-    commitStageDrafts,
+    commitStageDraftsWhenReady,
     resetStageDrafts,
-    { historyMode: "mutation-owned" },
+    {
+      applyBlockReason: pendingNumericApplyReason,
+      historyMode: "mutation-owned",
+    },
   );
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
   const inspectorKind = draft?.pipelineNodeId && draft.kind === "unsupported"
@@ -108,7 +144,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     draft,
     draftIndex: selectedIndex,
     demagEnabled: state.globalDraft.demagEnabled,
-    onCommit: () => void commitStageDrafts(),
+    onCommit: () => void commitStageDraftsWhenReady(),
     onUpdateDraft: (patch: Partial<(typeof state.stageDrafts)[number]>) =>
       dispatch({ type: "updateStageDraft", index: selectedIndex, patch }),
     pipelineDrafts: state.stageDrafts,
@@ -124,6 +160,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   };
 
   return (
+    <QuantityFieldDraftScope store={numericDrafts.store}>
     <div
       className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
       data-scene-has-payload={sceneHasPayload}
@@ -149,6 +186,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
           {...commonProps}
           expectedKind="add_field_drive"
           kindLabel="Add Field Drive"
+          numericDraftStore={numericDrafts.store}
         />
       ) : inspectorKind === "table_autosave" ? (
         <TableAutosaveStageInspector
@@ -215,6 +253,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         />
       )}
     </div>
+    </QuantityFieldDraftScope>
   );
 }
 

@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 
 import type { RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
+import { Button } from "@/shared/ui/Button";
 import {
   milliTeslaToTesla,
   teslaToMilliTesla,
@@ -11,8 +12,13 @@ import { buildSincPulsePreview } from "@/shared/domain/physics/sincPulsePreview"
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
-import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { QuantityFieldDraftScope } from "../../primitives/QuantityField";
+import {
+  createQuantityFieldDraftStore,
+  EMPTY_QUANTITY_FIELD_DRAFT_SUMMARY,
+  type QuantityFieldDraftStore,
+} from "../../primitives/quantityFieldDraftStore";
 import {
   regionalFieldDriveSamplingContext,
   regionalFieldDriveSelectorOptions,
@@ -22,13 +28,42 @@ import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
 } from "./StageInspectorFrame";
+import {
+  StageNumberField,
+  StageNumberTextarea,
+  StageOptionalNumberField,
+} from "./StageNumericDraftFields";
 import { SamplingDiagnostics } from "./SamplingDiagnostics";
-import { formatEditableNumber } from "./samplingPresentation";
 import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
 const AXES = ["x", "y", "z"] as const;
 
-export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
+type AddFieldDriveStageInspectorProps = StageInspectorFrameProps & {
+  numericDraftStore?: QuantityFieldDraftStore;
+};
+
+export function AddFieldDriveStageInspector(
+  props: AddFieldDriveStageInspectorProps,
+) {
+  const [ownedNumericDraftStore] = useState(createQuantityFieldDraftStore);
+  const numericDraftStore = props.numericDraftStore ?? ownedNumericDraftStore;
+  const numericDraftSummary = useSyncExternalStore(
+    numericDraftStore.subscribe,
+    numericDraftStore.getSummary,
+    () => EMPTY_QUANTITY_FIELD_DRAFT_SUMMARY,
+  );
+  const validation =
+    numericDraftSummary.pendingCount === 0
+      ? props.validation
+      : [
+          ...props.validation,
+          {
+            message: numericDraftSummary.invalidLabels[0]
+              ? `Finish ${numericDraftSummary.invalidLabels[0]} before applying.`
+              : "Commit pending numeric inputs before applying.",
+            severity: "error" as const,
+          },
+        ];
   const draft = props.draft;
   const drive = draft?.kind === "add_field_drive" ? draft.fieldDrive : null;
   const selectorOptions = useMemo(
@@ -84,13 +119,41 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
     if (drive) setDrive(update(drive));
   }
 
-  return (
+  function commitStageIfReady(): void {
+    if (numericDraftStore.getSummary().pendingCount > 0) return;
+    props.onCommit();
+  }
+
+  const content = (
     <>
       <StageInspectorFrame
         {...props}
         expectedKind="add_field_drive"
         kindLabel="Add Field Drive"
+        onCommit={commitStageIfReady}
+        validation={validation}
       />
+      {numericDraftSummary.pendingCount > 0 ? (
+        <div className="fm-inspector-field-draft-notice" role="status">
+          <FeedbackBanner
+            kind="warning"
+            message={
+              numericDraftSummary.pendingCount +
+              " numeric input" +
+              (numericDraftSummary.pendingCount === 1 ? " is" : "s are") +
+              " still pending. Commit each value with Enter or blur, or discard the pending inputs before applying."
+            }
+          />
+          <Button
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={() => numericDraftStore.clear()}
+          >
+            Discard pending inputs
+          </Button>
+        </div>
+      ) : null}
       <InspectorGroup
         title="Regional Field Drive"
         badge="configuration instruction"
@@ -136,44 +199,40 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             }
           />
         </label>
-        <FormField
+        <StageNumberField
           disabled={!drive}
+          draftKey="fieldDrive.amplitude_B_T"
           label="Amplitude"
-          min="0"
-          step="0.001"
-          type="number"
           unit="mT"
-          value={drive ? teslaToMilliTesla(drive.amplitude_B_T) : ""}
-          onChange={(event) =>
+          value={drive ? teslaToMilliTesla(drive.amplitude_B_T) : 0}
+          onCommit={(value) =>
             updateDrive((current) => ({
               ...current,
-              amplitude_B_T: milliTeslaToTesla(Number(event.target.value)),
+              amplitude_B_T: milliTeslaToTesla(value),
             }))
           }
         />
-        <label className="fm-inspector-field">
-          <span>Direction (x, y, z)</span>
+        <fieldset className="fm-inspector-field">
+          <legend>Direction (x, y, z)</legend>
           <div className="fm-inspector-vector-row">
             {AXES.map((axis, index) => (
-              <input
-                aria-label={`Direction ${axis}`}
-                className="fm-inspector-input"
+              <StageNumberField
+                key={axis}
                 disabled={!drive}
-                key={index}
-                step="0.01"
-                type="number"
+                draftKey={"fieldDrive.direction." + axis}
+                label={"Direction " + axis}
                 value={drive?.direction[index] ?? 0}
-                onChange={(event) =>
+                onCommit={(value) =>
                   updateDrive((current) => {
                     const direction = [...current.direction];
-                    direction[index] = Number(event.target.value);
+                    direction[index] = value;
                     return { ...current, direction };
                   })
                 }
               />
             ))}
           </div>
-        </label>
+        </fieldset>
         <label className="fm-inspector-field">
           <span>Target</span>
           <select
@@ -281,6 +340,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         </label>
         {drive?.spatial_profile.kind === "sinc" ? (
           <SpatialSincFields
+            draftKeyPrefix="spatial_profile.sinc."
             profile={drive.spatial_profile}
             onChange={(profile) =>
               updateDrive((current) => ({ ...current, spatial_profile: profile }))
@@ -342,6 +402,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             </label>
             {drive.spatial_profile.envelope.kind === "sinc" ? (
               <SpatialSincFields
+                draftKeyPrefix="spatial_profile.geometry_mask.envelope.sinc."
                 profile={drive.spatial_profile.envelope}
                 onChange={(envelope) =>
                   updateDrive((current) =>
@@ -406,66 +467,62 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         {drive?.waveform.kind === "sinc_pulse" ? (
           <>
             <FieldRow label="Definition" value="a sinc(2 fc (t - t0))" />
-            <FormField
+            <StageNumberField
+              draftKey="waveform.sinc_pulse.cutoff_hz"
               label="Cutoff fc"
-              min="0"
-              type="number"
               unit="Hz"
-              value={formatEditableNumber(drive.waveform.cutoff_hz)}
-              onChange={(event) =>
+              value={drive.waveform.cutoff_hz}
+              onCommit={(value) =>
                 updateDrive((current) =>
                   current.waveform.kind === "sinc_pulse"
                     ? {
                         ...current,
                         waveform: {
                           ...current.waveform,
-                          cutoff_hz: Number(event.target.value),
+                          cutoff_hz: value,
                         },
                       }
                     : current,
                 )
               }
             />
-            <FormField
+            <StageNumberField
+              draftKey="waveform.sinc_pulse.t0"
               label="Center t0"
-              type="number"
               unit="s"
-              value={formatEditableNumber(drive.waveform.t0 ?? 0)}
-              onChange={(event) =>
+              value={drive.waveform.t0 ?? 0}
+              onCommit={(value) =>
                 updateDrive((current) =>
                   current.waveform.kind === "sinc_pulse"
                     ? {
                         ...current,
                         waveform: {
                           ...current.waveform,
-                          t0: Number(event.target.value),
+                          t0: value,
                         },
                       }
                     : current,
                 )
               }
             />
-            <label className="fm-inspector-field">
-              <span>Waveform amplitude a</span>
-              <input
-                className="fm-inspector-input"
-                type="number"
-                value={drive.waveform.amplitude ?? 1}
-                onChange={(event) =>
+            <StageNumberField
+              draftKey="waveform.sinc_pulse.amplitude"
+              label="Waveform amplitude a"
+              value={drive.waveform.amplitude ?? 1}
+              onCommit={(value) =>
                   updateDrive((current) =>
                     current.waveform.kind === "sinc_pulse"
                       ? {
                           ...current,
                           waveform: {
                             ...current.waveform,
-                            amplitude: Number(event.target.value),
+                          amplitude: value,
                           },
                         }
                       : current,
                   )
-                }
-              />
-            </label>
+              }
+            />
             {preview ? (
               <>
                 <FieldRow
@@ -486,10 +543,11 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         ) : null}
         {drive?.waveform.kind === "sinusoidal" ? (
           <>
-            <NumberField
+            <StageNumberField
+              draftKey="waveform.sinusoidal.frequency_hz"
               label="Frequency (Hz)"
               value={drive.waveform.frequency_hz}
-              onChange={(value) =>
+              onCommit={(value) =>
                 updateDrive((current) =>
                   current.waveform.kind === "sinusoidal"
                     ? {
@@ -500,10 +558,11 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
                 )
               }
             />
-            <NumberField
+            <StageNumberField
+              draftKey="waveform.sinusoidal.phase_rad"
               label="Phase (rad)"
               value={drive.waveform.phase_rad ?? 0}
-              onChange={(value) =>
+              onCommit={(value) =>
                 updateDrive((current) =>
                   current.waveform.kind === "sinusoidal"
                     ? {
@@ -514,10 +573,11 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
                 )
               }
             />
-            <NumberField
+            <StageNumberField
+              draftKey="waveform.sinusoidal.offset"
               label="Offset"
               value={drive.waveform.offset ?? 0}
-              onChange={(value) =>
+              onCommit={(value) =>
                 updateDrive((current) =>
                   current.waveform.kind === "sinusoidal"
                     ? {
@@ -532,10 +592,11 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         ) : null}
         {drive?.waveform.kind === "pulse" ? (
           <>
-            <NumberField
+            <StageNumberField
+              draftKey="waveform.pulse.t_on"
               label="On time (s)"
               value={drive.waveform.t_on}
-              onChange={(value) =>
+              onCommit={(value) =>
                 updateDrive((current) =>
                   current.waveform.kind === "pulse"
                     ? { ...current, waveform: { ...current.waveform, t_on: value } }
@@ -543,10 +604,11 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
                 )
               }
             />
-            <NumberField
+            <StageNumberField
+              draftKey="waveform.pulse.t_off"
               label="Off time (s)"
               value={drive.waveform.t_off}
-              onChange={(value) =>
+              onCommit={(value) =>
                 updateDrive((current) =>
                   current.waveform.kind === "pulse"
                     ? { ...current, waveform: { ...current.waveform, t_off: value } }
@@ -557,25 +619,19 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
           </>
         ) : null}
         {drive?.waveform.kind === "piecewise_linear" ? (
-          <label className="fm-inspector-field">
-            <span>Points (time, value; one pair per line)</span>
-            <textarea
-              className="fm-inspector-input"
-              rows={5}
-              value={drive.waveform.points.map((point) => point.join(", ")).join("\n")}
-              onChange={(event) => {
-                const points = event.target.value
-                  .split(/\n+/)
-                  .map((line) => line.split(/[ ,;]+/).filter(Boolean).map(Number))
-                  .filter((point) => point.length === 2);
-                updateDrive((current) =>
-                  current.waveform.kind === "piecewise_linear"
-                    ? { ...current, waveform: { ...current.waveform, points } }
-                    : current,
-                );
-              }}
+          <StageNumberTextarea
+            draftKey="waveform.piecewise_linear.points"
+            label="Points (time, value; one pair per line)"
+            points={drive.waveform.points}
+            store={numericDraftStore}
+            onCommit={(points) =>
+              updateDrive((current) =>
+                current.waveform.kind === "piecewise_linear"
+                  ? { ...current, waveform: { ...current.waveform, points } }
+                  : current,
+              )
+            }
             />
-          </label>
         ) : null}
       </InspectorGroup>
 
@@ -645,6 +701,13 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
       </InspectorGroup>
     </>
   );
+  return props.numericDraftStore ? (
+    content
+  ) : (
+    <QuantityFieldDraftScope store={numericDraftStore}>
+      {content}
+    </QuantityFieldDraftScope>
+  );
 }
 
 type SpatialSincProfile = Extract<
@@ -653,58 +716,52 @@ type SpatialSincProfile = Extract<
 >;
 
 function SpatialSincFields({
+  draftKeyPrefix,
   profile,
   onChange,
 }: {
+  draftKeyPrefix: string;
   profile: SpatialSincProfile;
   onChange: (profile: SpatialSincProfile) => void;
 }) {
   return (
     <>
-      <label className="fm-inspector-field">
-        <span>Spatial axis (x, y, z)</span>
+      <fieldset className="fm-inspector-field">
+        <legend>Spatial axis (x, y, z)</legend>
         <div className="fm-inspector-vector-row">
           {AXES.map((axisName, index) => (
-            <input
-              aria-label={`Spatial axis ${axisName}`}
-              className="fm-inspector-input"
-              key={index}
-              step="0.01"
-              type="number"
+            <StageNumberField
+              key={axisName}
+              draftKey={draftKeyPrefix + "axis." + axisName}
+              label={"Spatial axis " + axisName}
               value={profile.axis[index] ?? 0}
-              onChange={(event) => {
+              onCommit={(value) => {
                 const axis = [...profile.axis];
-                axis[index] = Number(event.target.value);
+                axis[index] = value;
                 onChange({ ...profile, axis });
               }}
             />
           ))}
         </div>
-      </label>
-      <NumberField
+      </fieldset>
+      <StageNumberField
+        draftKey={draftKeyPrefix + "period_m"}
         label="Spatial period (m)"
         value={profile.period_m}
-        onChange={(period_m) => onChange({ ...profile, period_m })}
+        onCommit={(period_m) => onChange({ ...profile, period_m })}
       />
-      <NumberField
+      <StageNumberField
+        draftKey={draftKeyPrefix + "center_m"}
         label="Spatial center (m)"
         value={profile.center_m ?? 0}
-        onChange={(center_m) => onChange({ ...profile, center_m })}
+        onCommit={(center_m) => onChange({ ...profile, center_m })}
       />
-      <label className="fm-inspector-field">
-        <span>Spatial width (m, optional)</span>
-        <input
-          className="fm-inspector-input"
-          type="number"
-          value={profile.width_m ?? ""}
-          onChange={(event) =>
-            onChange({
-              ...profile,
-              width_m: event.target.value ? Number(event.target.value) : null,
-            })
-          }
-        />
-      </label>
+      <StageOptionalNumberField
+        draftKey={draftKeyPrefix + "width_m"}
+        label="Spatial width (m, optional)"
+        value={profile.width_m ?? null}
+        onCommit={(width_m) => onChange({ ...profile, width_m })}
+      />
       <label className="fm-inspector-field">
         <span>Window</span>
         <select
@@ -717,28 +774,6 @@ function SpatialSincFields({
         </select>
       </label>
     </>
-  );
-}
-
-function NumberField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="fm-inspector-field">
-      <span>{label}</span>
-      <input
-        className="fm-inspector-input"
-        type="number"
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-    </label>
   );
 }
 
