@@ -50,11 +50,18 @@ def _helper_document(**changes: object) -> dict[str, object]:
             "NetworkMode": "none",
             "DeviceRequests": [],
             "ReadonlyRootfs": True,
+            "Mounts": [{
+                "Type": "volume",
+                "Source": VOLUME,
+                "Target": "/control",
+                "VolumeOptions": {"Subpath": ""},
+            }],
         },
         "Mounts": [{
             "Type": "volume",
             "Name": VOLUME,
             "Destination": "/control",
+            "RW": True,
         }],
     }
     for key, value in changes.items():
@@ -123,6 +130,15 @@ class DockerDevOwnedControlTests(unittest.TestCase):
                 "ReadonlyRootfs": False,
             }),
             ("Mounts", [{"Type": "volume", "Name": "foreign", "Destination": "/control"}]),
+            ("Mounts", [{"Type": "volume", "Name": VOLUME, "Destination": "/control", "RW": False}]),
+            ("HostConfig", {
+                "Runtime": "runc", "NetworkMode": "none", "DeviceRequests": [],
+                "ReadonlyRootfs": True,
+                "Mounts": [{
+                    "Type": "volume", "Source": "foreign", "Target": "/control",
+                    "VolumeOptions": {"Subpath": ""},
+                }],
+            }),
         )
         for key, value in cases:
             with self.subTest(key=key, value=value), patch.object(

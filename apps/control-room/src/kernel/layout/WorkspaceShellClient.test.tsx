@@ -724,6 +724,12 @@ function makeKernel(
         gpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },
       },
       platform: {
+        health: async () => ({
+          active_session: true,
+          api_contract_version: "1.0.0",
+          status: "ok",
+          uptime_seconds: 12,
+        }),
         capabilities: async () => { throw new Error("capabilities are not served in this test"); },
         computeNodes: async () => ({
           nodes: [],

@@ -79,7 +79,9 @@ by application tokens; `theme.css` resolves surfaces through the active
 Catppuccin Mocha/Latte theme. Inspector geometry and typography come from
 `--fm-inspector-control-height`, `--fm-inspector-control-font-size` and
 `--fm-inspector-label-font-size` in `tokens.css`. Color and text-size utility
-names remain distinct to avoid Tailwind's `text-*` namespace ambiguity.
+names remain distinct to avoid Tailwind's `text-*` namespace ambiguity. Property
+rows share `--fm-inspector-row-columns` across editable/read-only fields and
+native wrappers; the narrow container breakpoint stacks the same template.
 
 Use `fm-inspector-input`, `fm-inspector-select` and `fm-inspector-textarea` for
 native fields; selects must use the select recipe, including unit selectors.

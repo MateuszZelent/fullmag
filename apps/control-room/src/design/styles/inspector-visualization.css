@@ -721,7 +721,6 @@ button:hover > .fm-inspector-group-icon-box {
   .fm-viz-render-mode-tile,
   .fm-viz-render-mode-tile__icon,
   .fm-inspector-metric-card,
-  .fm-viz-color-swatch,
   .fm-visualization-toggle {
     transition: none !important;
     transform: none !important;

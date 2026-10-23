@@ -352,7 +352,7 @@ describe("resolveGeometryObjectPanelModel", () => {
     };
 
     expect(resolveGeometryObjectPanelModel(selection, scene)).toMatchObject({
-      dimensions: "2.5 x 1.0 x 0.1 um",
+      dimensions: "2.5 x 1.0 x 0.052 um",
       shape: "ArchWaveguide",
     });
 

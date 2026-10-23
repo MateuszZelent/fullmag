@@ -22,7 +22,7 @@
 /* ── Field rows (read-only) ── */
 .fm-inspector-field-row {
   display: grid;
-  grid-template-columns: minmax(104px, 0.8fr) minmax(0, 1fr);
+  grid-template-columns: var(--fm-inspector-row-columns);
   min-height: var(--fm-control-height-regular);
   align-items: center;
   gap: var(--fm-space-2);
@@ -106,8 +106,10 @@
 /* ── Form fields (editable) ── */
 .fm-inspector-field {
   display: grid;
+  grid-template-columns: var(--fm-inspector-row-columns);
+  align-items: center;
   min-width: 0;
-  gap: var(--fm-space-1);
+  gap: var(--fm-space-2);
   padding-block: var(--fm-space-1);
   color: var(--fm-text-secondary);
   font-family: var(--fm-font-ui);
@@ -124,7 +126,7 @@
 
 .fm-inspector-form-field--inline {
   display: grid;
-  grid-template-columns: minmax(104px, 0.8fr) minmax(0, 1fr);
+  grid-template-columns: var(--fm-inspector-row-columns);
   min-height: var(--fm-control-height-regular);
   align-items: center;
   gap: var(--fm-space-2);
@@ -780,6 +782,7 @@
 }
 @container (max-width: 390px) {
   [data-slot="inspector-property-row"][data-layout="inline"],
+  .fm-inspector-field,
   .fm-inspector-field-row,
   .fm-inspector-form-field--inline {
     grid-template-columns: minmax(0, 1fr);

@@ -38,6 +38,7 @@
   --fm-inspector-control-height: 30px;
   --fm-inspector-control-font-size: 12px;
   --fm-inspector-label-font-size: 12px;
+  --fm-inspector-row-columns: minmax(96px, 0.8fr) minmax(0, 1.2fr);
   --fm-inspector-tab-height: 44px;
   --fm-inspector-icon-size: 44px;
   --fm-inspector-nav-icon-size: 36px;

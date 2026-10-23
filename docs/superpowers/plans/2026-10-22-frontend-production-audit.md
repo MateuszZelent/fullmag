@@ -2189,3 +2189,82 @@ Zintegrowane źródła: production typecheck, pełny ESLint całej aplikacji z
 max-warnings=0 oraz architecture hygiene PASS, stabilny fingerprint:
 verification/frontend-production-source-2ccbdd2414da4f97827ee817d2e805cb.json.
 To nie jest wynik wykonania TS unit tests ani browser matrix; te pozostają CI.
+
+Integracja zapisana/wypchnięta jako ec3fd7dd626ef58747763e2cac98077542cce1bb.
+CI 39918441936: Inspector actions browser job 120297539702 PASS; artefakt
+12485552802, SHA256 2e1668d5dd1487dd2bea356013caeaf1c7217319ac4aeae27b295e18deb217f7.
+Receipt artefaktu: passed, synthetic HEAD fa6c90a28003897a447fb00f7cd7955a0cb18aab;
+workflow metadata przypina ec3fd7dd626ef58747763e2cac98077542cce1bb. ZIP zachowano
+w control volume pod verification/ci-artifacts/39918441936/inspector-actions.zip.
+Odczytano zrzut object-wide-invalid: jasny panel, stabilne pole i akcje; ten
+fixture nie obejmuje pełnej nowej macierzy theme i nie dowodzi live backendu.
+
+Control Room CI 120297539586: 9133 PASS, 3 FAIL, 13 skip oraz 22 unhandled errors
+brakującego mocka health w testach Workspace. Poprawiono te mocki, pozostały
+martwy selector fm-viz-color-swatch w reduced-motion CSS oraz test precyzji
+ArchWaveguide (52 nm = 0.052 um, bez zaokrąglenia do 0.1). Stary test overlay
+przypisywał każdemu stale gotowego zasobu przerwanie transportu. Zgodnie z nowym
+modelem mastera oczekuje teraz braku pollingu dla routine stale-ready; dodano
+osobne regresje connection/error/refreshError, running-stale i terminal failed.
+Review źródłowe bez P1/P2. Produkcyjnej logiki statusów nie zmieniono dla testu.
+
+Python CI 120297540149 przeszedł wcześniejsze poprawki, lecz zatrzymał się na
+starym oczekiwaniu argumentu helpera: descriptor-root zamiast nowego envelope
+ledger_descriptor/retained_cancelled_runs. Test porównuje teraz dokładną nową
+strukturę i nadal wymaga readonly mount, poprawnego descriptor device alias
+oraz braku host mountpoint w argv. Pełne 13 interpretowanych przypadków PASS:
+verification/frontend-production-source-27d74ea6d51f4f91a45e9e7c8dd05eba.json.
+Lint zmienionych TS testów (bez kompilacji/wykonania) i CSS compile PASS:
+verification/frontend-production-source-246890daed5646e396aa72e0e6e0fac3.json.
+
+Domknięto również wspólną strukturę wierszy: readonly, FormField, ColorField
+oraz dawne natywne wrappery korzystają z jednego tokenu kolumn, ze wspólnym
+przejściem do układu pionowego w wąskim Inspectorze. Nie są to osobne layouty
+poszczególnych paneli. Końcowe CI i render macierzy pozostają wymagane.
+
+Kolejny wynik tego samego runu: viewport browser pre-proof PASS po rozdzieleniu
+monitoringu shella. Dalsza macierz zatrzymała się przed gallery na brakującym
+GET platform health w fixture Inspector/Analysis (17 unknown GET w scenariuszu
+clipboard, error toast w modal field i analysis plots). Fixture’y obsługują teraz
+wyłącznie właściwą odpowiedź healthy; request logging/budgets i pozostałe unknown
+paths zachowane. Analysis odrzuca non-GET health HTTP 405. Nie wyłączono alertów.
+Lint i node --check obu skryptów PASS:
+verification/frontend-production-source-bb6863e2f18047628b02baf0d8f107ca.json.
+Końcowy token wspólnych kolumn, production typecheck, lint odpowiednich plików
+i skompilowany CSS PASS:
+verification/frontend-production-source-278abee1c92b4ea2b216aeca002070c4.json.
+
+Kontynuacja lekkiego pierwszego kroku Python CI objęła 41 plików, aby znaleźć
+pozostałe błędy po masterze w jednym przebiegu: siedem fixture’ów miało stary
+kontrakt (raport verification/docker-source-contracts-1fd8871f7c9a49a0b10d6ff5f2de1199.json;
+receipt verification/frontend-production-source-938f9d279bb74d6093f76b03512f1653.json failed).
+Uaktualniono wyłącznie testy: brak preparation-abort przed unresolved activation,
+zgodne deklarowane/obserwowane mounty helpera i nowe negatywne mount cases;
+kanoniczny request i hash, by wrong-outcome docierało do rzeczywistej kontroli
+request scope; jawna delegacja fresh archive po usunięciu kontenerów i przed
+zwolnieniem lease; odczyty retained według ścieżek i zachowanie GPU intent;
+poll/active operation mock loggera oraz cancellation no-op w osobnym startup teście.
+Review źródłowe siedmiu diffów: bez P1/P2, bez osłabienia kontroli produkcyjnych.
+
+Łącznie 98 przypadków w tych siedmiu plikach PASS. Agregat ze zweryfikowanymi
+hashami każdego testowego pliku:
+verification/frontend-fixture-summary-b2435d5e65134a80b4490f045eb3f78e.json.
+Nie jest to ponowny zielony przebieg wszystkich 41 plików ani dowód runtime.
+Pięć zakończonych modułów (49 przypadków) ma exit 0 w receipcie
+verification/frontend-production-source-472e7e2925fb469db3a483d8c41bca5c.json,
+który jako całość pozostaje failed, bo dalszy proces czekał na dyskowe I/O.
+Dwa zestawy (19 activation + 30 startup) wykonano jako source-only z mockowymi
+plikami na istniejącym /dev/shm tej samej usługi Compose; PASS:
+verification/frontend-production-source-694ba22431b0426d834f7182814ae9c0.json.
+Nie przypisujemy tmpfs dowodu trwałości fizycznego storage. Logi/receipty
+zachowano w control volume; kompilacji testów TS/Rust nadal nie wykonano.
+
+Wcześniejszy pełny lokalny zestaw trafił na niezmieniony Bash `sync` czekający
+na dyskowe I/O, a drugi na nieprzerywalne I/O procesu testowego. Nie nazwano
+tych prób zielonymi; receipt afc9e655509d41479346bfada2bc7e52 pozostaje failed.
+Po sprawdzeniu PID/start token/argv wysłano SIGTERM wyłącznie do własnych
+procesów mockowych: receipty owned-test-stop-decf98d6bbff41e1965fd217cbe43257.json
+i owned-test-stop-e6215cd664974976be7512b7fd2a2b76.json w verification/.
+Procesy w stanie D i ich fake temp pozostawiono do zakończenia I/O; nie usuwano
+tych katalogów, kontenerów, cache ani danych innych grup. Zamknięcie tych
+procesów oraz finalne CI/render pozostają do potwierdzenia.

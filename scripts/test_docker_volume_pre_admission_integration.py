@@ -484,15 +484,56 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(started.call_args.kwargs["reuse_state"])
 
     def test_fresh_state_remains_explicit_and_does_not_use_the_exception(self) -> None:
+        import docker_volume_fresh_runtime as fresh_runtime
         harness = _Harness()
         self.addCleanup(harness.close)
         harness.args.fresh_state = True
         harness.previous["post_build_generation"] = {"historical": "retained"}
         harness.previous["post_build_start"] = {"state": "pending"}
         helper = _helper_module(harness, reject=True)
-        _result, started = self._run(harness, helper=helper)
+        archive_record = {
+            "schema": "fullmag.docker-fresh-runtime-archive-terminal.v1",
+            "state": "succeeded",
+            "operation_attempt": "1" * 32,
+        }
+
+        def archive_runtime_control(control, operation, **kwargs):
+            self.assertIs(control, harness.control)
+            self.assertIs(operation, harness.control.operation_value.value)
+            self.assertTrue(operation["receipt"]["fresh_state"])
+            self.assertTrue(operation["daemon_pending"])
+            self.assertEqual(
+                kwargs,
+                {
+                    "previous_state_root": str(harness.state),
+                    "source_root": str(harness.source),
+                    "removed_containers": [BACKEND_ID, FRONTEND_ID],
+                },
+            )
+            harness.events.append("runtime-control-archive")
+            return archive_record
+
+        with mock.patch.object(
+            fresh_runtime,
+            "archive_runtime_control",
+            side_effect=archive_runtime_control,
+        ) as archive:
+            _result, started = self._run(harness, helper=helper)
         self.assertEqual(helper.calls["count"], 0)
         self.assertIsNone(started.call_args.kwargs["reuse_state"])
+        archive.assert_called_once()
+        self.assertEqual(
+            harness.control.operation_value.value["receipt"]["runtime_control_archive"],
+            archive_record,
+        )
+        self.assertLess(
+            harness.events.index("rm"),
+            harness.events.index("runtime-control-archive"),
+        )
+        self.assertLess(
+            harness.events.index("runtime-control-archive"),
+            harness.events.index("lease-exit"),
+        )
 
 if __name__ == "__main__":
     unittest.main()

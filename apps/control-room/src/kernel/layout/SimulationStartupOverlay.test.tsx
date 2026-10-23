@@ -345,7 +345,42 @@ describe("SimulationStartupOverlay", () => {
       { ...statusResource(), status: "stale" },
       20_000,
     );
-    expect(shouldRefreshSimulationStartupStatus(staleReady)).toBe(true);
+    expect(shouldRefreshSimulationStartupStatus(staleReady)).toBe(false);
+  });
+
+  it.each(["connection", "error", "refreshError"] as const)(
+    "keeps refreshing a retained ready snapshot after a real %s failure",
+    (failure) => {
+      const preparation = {
+        ...preparationResult(preparationResource({
+          active_stage_id: null,
+          completed_at_unix_ms: 20_000,
+          status: "ready",
+        }), "stale"),
+        error: failure === "error" ? new Error("Transport failed") : null,
+        refreshError: failure === "refreshError" ? new Error("Refresh failed") : null,
+      };
+      const model = resolveSimulationPreparationViewModel(
+        preparation, statusResource(), 20_000, failure === "connection",
+      );
+      expect(model.kind).toBe("stale");
+      expect(shouldRefreshSimulationStartupStatus(model)).toBe(true);
+    },
+  );
+
+  it("refreshes running preparation during a routine refresh and stops after terminal failure", () => {
+    const running = resolveSimulationPreparationViewModel(
+      preparationResult(preparationResource(), "stale"), statusResource(), 20_000,
+    );
+    expect(shouldRefreshSimulationStartupStatus(running)).toBe(true);
+    const failed = resolveSimulationPreparationViewModel(
+      preparationResult(preparationResource({
+        active_stage_id: null,
+        completed_at_unix_ms: 20_000,
+        status: "failed",
+      })), statusResource(), 20_000,
+    );
+    expect(shouldRefreshSimulationStartupStatus(failed)).toBe(false);
   });
 
   it("renders option A with determinate progress, ordered stages, and a visible log", () => {

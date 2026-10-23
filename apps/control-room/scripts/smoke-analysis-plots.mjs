@@ -2294,6 +2294,34 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
     table_id: datasetRef,
     total_rows: 256,
   };
+  await page.route("**/v2/platform/health", async (route) => {
+    const request = route.request();
+    const cors = {
+      "access-control-expose-headers": "x-api-contract-version",
+      "access-control-allow-origin": "*",
+      "x-api-contract-version": "1.0.0",
+    };
+    if (request.method() !== "GET") {
+      await route.fulfill({
+        body: JSON.stringify({ error: "Health fixture is read-only" }),
+        contentType: "application/json",
+        headers: cors,
+        status: 405,
+      });
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify({
+        active_session: true,
+        api_contract_version: "1.0.0",
+        status: "ok",
+        uptime_seconds: 12,
+      }),
+      contentType: "application/json",
+      headers: cors,
+      status: 200,
+    });
+  });
   await page.route(`**${SESSION_COLLECTION_PATH}`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());

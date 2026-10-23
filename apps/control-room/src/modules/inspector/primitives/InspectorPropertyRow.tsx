@@ -45,7 +45,7 @@ export function InspectorPropertyRow({
       className={cn(
         "grid min-h-fm-field-row min-w-0 gap-x-fm-inspector-control gap-y-1",
         layout === "inline"
-          ? "grid-cols-[minmax(96px,0.8fr)_minmax(0,1.2fr)] items-center"
+          ? "grid-cols-[var(--fm-inspector-row-columns)] items-center"
           : "grid-cols-1",
         className,
       )}

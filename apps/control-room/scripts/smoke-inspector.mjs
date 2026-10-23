@@ -4162,6 +4162,14 @@ async function installInspectorFixtureApi(page, fixture) {
         }],
       });
     }
+    if (path === "/v2/platform/health" && request.method() === "GET") {
+      return fulfillJson(route, {
+        active_session: true,
+        api_contract_version: "1.0.0",
+        status: "ok",
+        uptime_seconds: 12,
+      });
+    }
     // Home stays mounted while session bootstrap is loading. These are
     // read-only startup resources, so keep their fixture responses explicit;
     // the catch-all below must continue to reject route drift.

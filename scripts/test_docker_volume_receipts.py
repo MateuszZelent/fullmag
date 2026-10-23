@@ -48,7 +48,19 @@ class VolumeReceiptTests(unittest.TestCase):
                                 "inputs": {"source_root": str(source), "gpu_access_requested": policy,
                                            "image_id": "sha256:" + "b" * 64}}
                     control = mock.Mock(project=project_name)
-                    control.read.side_effect = [previous, document]
+                    previous_root = "development/attempts/" + args.attempt
+
+                    def read_control(relative, *, optional=False):
+                        if relative == previous_root + "/terminal.json":
+                            return previous
+                        if relative == previous_root + "/compose.json":
+                            return document
+                        if relative == "preparation-abort/current.json":
+                            self.assertTrue(optional)
+                            return None
+                        raise AssertionError("unexpected retained control read: " + relative)
+
+                    control.read.side_effect = read_control
                     configuration = {"services": {"fem-gpu-toolchain": {"build": {"args": {
                         "FULLMAG_CUDA_BASE_IMAGE": "unused"}}}}}
                     with mock.patch.object(docker_dev, "_select_source", return_value=(source, {})), \
@@ -65,6 +77,10 @@ class VolumeReceiptTests(unittest.TestCase):
                             with self.assertRaisesRegex(BuildControlError, "retained GPU access intent"):
                                 dev._retained_operation(args, recreate_services=True)
                             capture.assert_not_called()
+                        self.assertIn(
+                            mock.call("preparation-abort/current.json", optional=True),
+                            control.read.call_args_list,
+                        )
 
     def test_runtime_supervisor_accepts_only_fixed_provenance_locations(self):
         path = Path(__file__).resolve().parents[1] / 'docker/all-in-one/runtime_service.py'

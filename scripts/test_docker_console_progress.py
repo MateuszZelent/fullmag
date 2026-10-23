@@ -47,6 +47,9 @@ class _LoggerStdin:
 class _Logger:
     stdin = _LoggerStdin()
 
+    def poll(self):
+        return None
+
     def wait(self, timeout):
         self.wait_timeout = timeout
         return 0
@@ -149,9 +152,11 @@ assert docker_build_control.mirror_console(b"progress\\n") is False
         control.namespace = ""
         control.namespace_registry = None
         control.namespace_registry_sha256 = None
+        control._active_operation = None
         control.helper_args = lambda *args, **kwargs: ["fake-control-helper"]
         control.space = lambda: {"available_bytes": 64 * 1024**3}
         control._line = Mock(side_effect=("READY", "LOGGED"))
+        control._inspect_operation_helper = Mock(return_value="a" * 64)
         written = []
         control.write = lambda path, value: written.append((path, value))
         logger = _Logger()
@@ -163,6 +168,8 @@ assert docker_build_control.mirror_console(b"progress\\n") is False
             sink = build_control.sys.stdout
         sink.close()
 
+        control._inspect_operation_helper.assert_called_once_with(operation)
+        self.assertIsNone(control._active_operation)
         paths = [path for path, _value in written]
         self.assertTrue(any(path.endswith("/terminal.json") for path in paths))
         self.assertTrue(any(path == "development/current.json" for path in paths))

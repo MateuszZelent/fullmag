@@ -172,7 +172,13 @@ class ContainerRecoveryTests(unittest.TestCase):
         argv = helper.call_args.args[0]
         self.assertIn("type=volume,src=" + volume["Name"] + ",dst=/host-ledger,readonly,volume-nocopy", argv)
         self.assertFalse(any(volume["Mountpoint"] in argument for argument in argv))
-        self.assertEqual(json.loads(argv[-1]), compose["services"]["backend"]["x-fullmag-host-ledger-volume"])
+        self.assertEqual(
+            json.loads(argv[-1]),
+            {
+                "ledger_descriptor": compose["services"]["backend"]["x-fullmag-host-ledger-volume"],
+                "retained_cancelled_runs": None,
+            },
+        )
         self.assertEqual(volume["Options"]["device"],
                          compose["services"]["backend"]["x-fullmag-host-ledger-volume"]["device_alias"])
 
