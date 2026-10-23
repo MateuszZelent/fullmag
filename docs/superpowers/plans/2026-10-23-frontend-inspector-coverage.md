@@ -42,16 +42,16 @@ wymaga przypisania dowodów do tej rodziny przed deklaracją ukończenia.
 | [PhysicsFirstResultInspectors.tsx](../../../apps/control-room/src/modules/inspector/panels/physics-first/PhysicsFirstResultInspectors.tsx) | 30 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [StudyStageInspectorRouter.tsx](../../../apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx) | 25 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [ModelTreeOverviewInspectorPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/ModelTreeOverviewInspectorPanels.tsx) | 16 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
-| [RuntimeExplorerInspectorPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx) | 12 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
+| [RuntimeExplorerInspectorPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx) | 12 | Częściowy: typed selection/SSR/read-only theme sprawdzone; naprawa refreshError i message źródła z regresjami oczekuje na CI/browser. |
 | [PostprocessingResultInspectors.tsx](../../../apps/control-room/src/modules/inspector/panels/physics-first/PostprocessingResultInspectors.tsx) | 8 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [AirboxInspectorLanePanel.tsx](../../../apps/control-room/src/modules/inspector/panels/airbox/AirboxInspectorLanePanel.tsx) | 7 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [AntennaCompositionPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.tsx) | 6 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [ObjectRegionsPanel.tsx](../../../apps/control-room/src/modules/inspector/panels/ObjectRegionsPanel.tsx) | 5 | Częściowy: konkretne poprawki i regresje w raporcie; dopiąć browser/live. |
 | [TransportAuthoringInspector.tsx](../../../apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx) | 4 | Częściowy: konkretne poprawki i regresje w raporcie; dopiąć browser/live. |
-| [RuntimeExplorerOverviewInspectorPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/RuntimeExplorerOverviewInspectorPanels.tsx) | 3 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
+| [RuntimeExplorerOverviewInspectorPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/RuntimeExplorerOverviewInspectorPanels.tsx) | 3 | Częściowy: jawny context-only navigator, bez pozornej kwalifikacji zasobów; browser/live pozostaje OPEN. |
 | [inspectorRouteCatalog.tsx](../../../apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx) | 2 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [ObservationFrameInspectorPanel.tsx](../../../apps/control-room/src/modules/inspector/panels/ObservationFrameInspectorPanel.tsx) | 2 | Częściowy: konkretne poprawki i regresje w raporcie; dopiąć browser/live. |
-| [SpinAuthoringInspector.tsx](../../../apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx) | 2 | Źródłowo: pin rewizji, stabilny draft, merge refresh/ACK i fencing celu; browser/live pozostaje OPEN. |
+| [SpinAuthoringInspector.tsx](../../../apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx) | 2 | Źródłowo: pin rewizji, stabilny draft, merge refresh/ACK i fencing celu; odrzucanie pustych liczb/składników oczekuje na CI; browser/live pozostaje OPEN. |
 | [TopologicalChargeExtensionPanel.tsx](../../../apps/control-room/src/modules/inspector/extensions/topological-charge/TopologicalChargeExtensionPanel.tsx) | 1 | Częściowy: konkretne poprawki i regresje w raporcie; dopiąć browser/live. |
 | [AirboxVisualizationDebugInspectorPanel.tsx](../../../apps/control-room/src/modules/inspector/panels/airbox/AirboxVisualizationDebugInspectorPanel.tsx) | 1 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [FdmMultilayerAirboxTargetPanel.tsx](../../../apps/control-room/src/modules/inspector/panels/airbox/FdmMultilayerAirboxTargetPanel.tsx) | 1 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
@@ -87,9 +87,9 @@ wymaga przypisania dowodów do tej rodziny przed deklaracją ukończenia.
 | [SpinInterfaceInspector.tsx](../../../apps/control-room/src/modules/inspector/panels/SpinInterfaceInspector.tsx) | 1 | Częściowy: konkretne poprawki i regresje w raporcie; dopiąć browser/live. |
 
 Najpierw należy zamknąć źródło managed runtime i możliwość browser/live
-kwalifikacji. Następna wspólna rodzina do przeglądu: `SpinAuthoringInspector`
-(Spin Torque i Oersted), a następnie `RuntimeExplorerInspectorPanels` oraz
-postprocessing definitions/exports. Priorytet ten wynika z aktywnych mutacji
+kwalifikacji. SpinAuthoringInspector i RuntimeExplorerInspectorPanels mają teraz częściowy
+odbiór opisany powyżej. Następna rodzina do przeglądu: postprocessing
+definitions/exports; nowe regresje i pełny browser/live pozostają wymagane. Priorytet ten wynika z aktywnych mutacji
 lub prezentacji statusów; nie jest stwierdzeniem błędu przed odczytem źródeł.
 
 ## Pełna lista zarejestrowanych tras

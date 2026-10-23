@@ -2312,3 +2312,38 @@ oraz ich temp nie kwalifikowano do usunięcia przy niedostępnym silniku.
 PR nadal draft, merge i cleanup nie zostały wykonane. Szerszy audyt frontendowy
 pozostaje aktywny; parser pustych liczb/wektorów Spin oraz pełna kwalifikacja
 runtime i pokrycia Inspectorów pozostają otwarte.
+
+
+### 2026-10-23 — walidacja pustych wartości Spin i błąd odświeżenia runtime
+
+Korekta wysokości pola zapisana jako a0871f28386178ba8576053ad815a9b95043ef08;
+poprawki testowego enumu i discovery mirrors jako
+68479c5236876fae61b27ac4eba638e5c0c3a5ef. Oba commity wypchnięte do PR #249;
+bootstrap 39936943095 uruchomiony, wynik i nowy render nadal oczekiwane.
+
+Spin Torque/Oersted: finite() odrzuca pusty wymagany skalar zamiast zamieniać
+go przez Number na zero. parseVector() odrzuca puste segmenty przecinkowe
+(1,,2,3; ,1,2,3; 1,2,3,), zachowując trzy wartości rozdzielane przecinkami lub
+białymi znakami. Jawne zero, znaki, notacja naukowa i puste pola opcjonalne
+pozostają legalne. Dodano przypadki buildTorque i pięć DOM dla obu rodzin:
+niepoprawny draft nie może wywołać remote validation/create/replace, a poprawny
+Oersted zachowuje zero, center i base_revision. Nie zmieniono fizyki, jednostek,
+formuł, schematu ani kontraktu Apply. Wykonanie nowych regresji wymaga CI.
+
+Przegląd RuntimeExplorerInspectorPanels i Overview oraz ich producentów
+potwierdził osobne requested/resolved execution, typed selection sprawdzającą
+resourceKey, pusty SSR snapshot i readonly prymitywy wspólnego theme. Znalazł P2:
+canonical markResourceLoading po błędzie przy retained data przenosi przyczynę
+do refreshError; runtimeResourceSnapshot pomijał ten kanał. Ponadto run/stage
+nie miały domyślnego message z błędu źródła. Adapter bierze teraz error przed
+refreshError, zachowuje klasyfikację 404 i dane; detail używa źródłowej przyczyny,
+gdy brak własnego message. Trzy regresje obejmują 503/404 podczas retry,
+zmianę przyczyny mimo tych samych danych/rewizji, recovery i zwykłe stale bez
+awarii. Nie dodano endpointów, mutacji, pollingu ani drugiej subskrypcji zasobu.
+Review źródłowe wychwyciło niezgodny helper typu w nowych testach; poprawiono
+wejścia na canonical ResourceState, bez zmiany produkcyjnego kontraktu.
+
+Zatwierdzona interpretowana check-api-hygiene i git diff --check PASS dla nowych
+źródeł. Nie wykonano lokalnej kompilacji/uruchomienia testów TS/Rust. Nowe testy,
+production typecheck/lint i render dla końcowego commita pozostają wymagane w CI.
+Runtime family ma częściowy odbiór źródłowy, nie pełny browser/live acceptance.
