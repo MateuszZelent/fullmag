@@ -132,12 +132,14 @@ const EXPLORER_VIRTUALIZATION_THRESHOLD = 200;
 
 export function resolveExplorerRevealScrollTop({
   activeNodeId,
+  contentOffset = 0,
   rowHeight,
   rowIds,
   scrollTop,
   viewportHeight,
 }: {
   activeNodeId: string | null;
+  contentOffset?: number;
   rowHeight: number;
   rowIds: readonly string[];
   scrollTop: number;
@@ -146,13 +148,21 @@ export function resolveExplorerRevealScrollTop({
   if (!activeNodeId) return null;
   const index = rowIds.indexOf(activeNodeId);
   if (index < 0) return null;
-  const rowTop = index * rowHeight;
+  const rowTop = contentOffset + index * rowHeight;
   const rowBottom = rowTop + rowHeight;
   if (rowTop < scrollTop) return rowTop;
   if (rowBottom > scrollTop + viewportHeight) {
     return Math.max(rowBottom - viewportHeight, 0);
   }
   return null;
+}
+
+function explorerContentOffset(tree: HTMLDivElement): number {
+  const canvas = tree.querySelector<HTMLElement>(".fm-explorer-tree__canvas");
+  if (!canvas) return 0;
+  // Row coordinates start inside the scroll container's padding, not at its edge.
+  return Math.max(0, canvas.getBoundingClientRect().top - tree.getBoundingClientRect().top
+    - (tree.clientTop || 0) + tree.scrollTop);
 }
 
 function statusLabel(status: ExplorerNodeStatus | undefined): string {
@@ -689,6 +699,7 @@ export function ExplorerTreeView({
     setExplorerKeyboardRow(nodeId);
     const nextScrollTop = resolveExplorerRevealScrollTop({
       activeNodeId: nodeId,
+      contentOffset: explorerContentOffset(tree),
       rowHeight: EXPLORER_ROW_HEIGHT,
       rowIds,
       scrollTop: tree.scrollTop,
@@ -742,6 +753,7 @@ export function ExplorerTreeView({
     // scroll position back to an already revealed selection.
     const nextScrollTop = resolveExplorerRevealScrollTop({
       activeNodeId,
+      contentOffset: explorerContentOffset(tree),
       rowHeight: EXPLORER_ROW_HEIGHT,
       rowIds,
       scrollTop: tree.scrollTop,

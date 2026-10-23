@@ -146,6 +146,24 @@ describe("flattenVisibleExplorerRows", () => {
     ).toBeNull();
   });
 
+  it("reveals the full last row inside a padded scroll viewport", () => {
+    const rowIds = Array.from({ length: 460 }, (_, index) => `node-${index}`);
+    const scrollTop = resolveExplorerRevealScrollTop({
+      activeNodeId: "node-459",
+      contentOffset: 4,
+      rowHeight: 28,
+      rowIds,
+      scrollTop: 0,
+      viewportHeight: 391,
+    });
+    expect(scrollTop).toBe(12493);
+    expect(4 + rowIds.length * 28 - scrollTop!).toBe(391);
+    expect(resolveExplorerRevealScrollTop({
+      activeNodeId: "node-459", contentOffset: 4, rowHeight: 28, rowIds,
+      scrollTop: scrollTop!, viewportHeight: 391,
+    })).toBeNull();
+  });
+
   it("chooses a single focusable row for roving tree tabindex", () => {
     const rowIds = ["root", "geometry", "mesh"];
 
