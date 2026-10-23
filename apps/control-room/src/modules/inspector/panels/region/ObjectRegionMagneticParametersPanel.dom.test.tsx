@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   publishScene: vi.fn(),
   readScene: vi.fn(),
   recordHistory: vi.fn(),
+  syncAuthoringScript: vi.fn(),
   sessionIdentity: null as unknown,
   sceneData: { objects: [], materials: [] },
 }));
@@ -34,6 +35,7 @@ vi.mock("@/kernel/KernelContext", () => ({
       model: {
         patchObjectMaterialFields: mocks.patchMaterialFields,
         scene: mocks.readScene,
+        syncAuthoringScript: mocks.syncAuthoringScript,
       },
     },
     authoringHistory: {
@@ -92,6 +94,7 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
       committed_scene: { objects: [], revision: 11, scene_revision: 11 },
       scene_revision: 11,
     });
+    mocks.syncAuthoringScript.mockResolvedValue({});
   });
 
   it("keeps clean Apply Fields disabled without submitting a write", async () => {
@@ -305,7 +308,268 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
         sessionAScopeKey,
         undefined,
       );
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledWith(
+        {},
+        { sessionScopeKey: sessionAScopeKey },
+      );
       expect(container.textContent).toContain("Material fields updated.");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("waits for the material-field ACK before syncing the captured session", async () => {
+    let finishPatch: ((value: unknown) => void) | null = null;
+    const patchResult = new Promise((resolve) => {
+      finishPatch = resolve;
+    });
+    mocks.patchMaterialFields.mockReturnValue(patchResult);
+
+    let finishSync: ((value: unknown) => void) | null = null;
+    const syncResult = new Promise((resolve) => {
+      finishSync = resolve;
+    });
+    mocks.syncAuthoringScript.mockReturnValue(syncResult);
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...panelProps()} />));
+      await act(async () => findButton(container, "Add Field").click());
+      await act(async () => {
+        findButton(container, "Apply Fields").click();
+        await flushMicrotasks();
+      });
+
+      expect(mocks.patchMaterialFields).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).not.toHaveBeenCalled();
+      expect(mocks.publishScene).not.toHaveBeenCalled();
+
+      await act(async () => {
+        finishPatch?.({
+          committed_scene: { objects: [], revision: 11, scene_revision: 11 },
+          scene_revision: 11,
+        });
+        await flushMicrotasks();
+      });
+
+      expect(mocks.publishScene).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledWith(
+        {},
+        { sessionScopeKey: sessionAScopeKey },
+      );
+      expect(container.textContent).not.toContain("Material fields updated.");
+
+      await act(async () => {
+        finishSync?.({});
+        await flushMicrotasks();
+      });
+      expect(container.textContent).toContain("Material fields updated.");
+      expect(mocks.patchMaterialFields).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not sync when the material-field mutation is rejected", async () => {
+    mocks.patchMaterialFields.mockRejectedValueOnce(new Error("field mutation rejected"));
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...panelProps()} />));
+      await act(async () => findButton(container, "Add Field").click());
+      await act(async () => {
+        findButton(container, "Apply Fields").click();
+        await flushMicrotasks();
+      });
+
+      expect(mocks.patchMaterialFields).toHaveBeenCalledOnce();
+      expect(mocks.publishScene).not.toHaveBeenCalled();
+      expect(mocks.syncAuthoringScript).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("field mutation rejected");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps the field ACK successful when script sync fails without replaying the write", async () => {
+    mocks.syncAuthoringScript.mockRejectedValueOnce(new Error("script rewrite unavailable"));
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...panelProps()} />));
+      await act(async () => findButton(container, "Add Field").click());
+      await act(async () => {
+        findButton(container, "Apply Fields").click();
+        await flushMicrotasks();
+      });
+
+      expect(mocks.patchMaterialFields).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledWith(
+        {},
+        { sessionScopeKey: sessionAScopeKey },
+      );
+      expect(container.textContent).toContain(
+        "Material fields updated. Authoring script sync skipped: script rewrite unavailable",
+      );
+      expect(mocks.patchMaterialFields).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not publish sync feedback after the captured session changes", async () => {
+    let finishSync: ((value: unknown) => void) | null = null;
+    const syncResult = new Promise((resolve) => {
+      finishSync = resolve;
+    });
+    mocks.syncAuthoringScript.mockReturnValue(syncResult);
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...panelProps()} />));
+      await act(async () => findButton(container, "Add Field").click());
+      await act(async () => {
+        findButton(container, "Apply Fields").click();
+        await flushMicrotasks();
+      });
+
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledWith(
+        {},
+        { sessionScopeKey: sessionAScopeKey },
+      );
+      mocks.currentSessionScopeKey = "session=B&epoch=2&request_scope_epoch=2";
+      mocks.historyGeneration += 1;
+      await act(async () => {
+        finishSync?.({});
+        await flushMicrotasks();
+      });
+
+      expect(mocks.patchMaterialFields).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledOnce();
+      expect(container.textContent).not.toContain("Material fields updated.");
+      expect(container.textContent).not.toContain("Authoring script sync skipped:");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("scopes deferred sync feedback to the committed region owner", async () => {
+    let finishSync: ((value: unknown) => void) | null = null;
+    const syncResult = new Promise((resolve) => {
+      finishSync = resolve;
+    });
+    mocks.syncAuthoringScript.mockReturnValueOnce(syncResult);
+
+    const propsA = panelProps();
+    const propsB = {
+      ...propsA,
+      model: {
+        ...propsA.model,
+        objectId: "object-b",
+        regionId: "region-b",
+      },
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...propsA} />));
+      await act(async () => findButton(container, "Add Field").click());
+      await act(async () => {
+        findButton(container, "Apply Fields").click();
+        await flushMicrotasks();
+      });
+
+      expect(mocks.patchMaterialFields).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledWith(
+        {},
+        { sessionScopeKey: sessionAScopeKey },
+      );
+
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...propsB} />));
+      expect(container.textContent).not.toContain("Material fields updated.");
+
+      await act(async () => {
+        finishSync?.({});
+        await flushMicrotasks();
+      });
+      expect(container.textContent).not.toContain("Material fields updated.");
+
+      await act(async () => findButton(container, "Add Field").click());
+      await act(async () => findButton(container, "Apply Fields").click());
+
+      expect(mocks.patchMaterialFields).toHaveBeenCalledTimes(2);
+      expect(mocks.patchMaterialFields.mock.calls[1]?.[0]).toBe("object-b");
+      expect(mocks.patchMaterialFields.mock.calls[1]?.[1]).toEqual(
+        expect.arrayContaining([expect.objectContaining({ region_id: "region-b" })]),
+      );
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledTimes(2);
+      expect(container.textContent).toContain("Material fields updated.");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not accept a deferred sync result after the owner changes away and back", async () => {
+    let finishSync: ((value: unknown) => void) | null = null;
+    const syncResult = new Promise((resolve) => {
+      finishSync = resolve;
+    });
+    mocks.syncAuthoringScript.mockReturnValueOnce(syncResult);
+
+    const propsA = panelProps();
+    const propsB = {
+      ...propsA,
+      model: {
+        ...propsA.model,
+        objectId: "object-b",
+        regionId: "region-b",
+      },
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...propsA} />));
+      await act(async () => findButton(container, "Add Field").click());
+      await act(async () => {
+        findButton(container, "Apply Fields").click();
+        await flushMicrotasks();
+      });
+
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...propsB} />));
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...propsA} />));
+      await act(async () => {
+        finishSync?.({});
+        await flushMicrotasks();
+      });
+
+      expect(mocks.patchMaterialFields).toHaveBeenCalledOnce();
+      expect(mocks.syncAuthoringScript).toHaveBeenCalledOnce();
+      expect(container.textContent).not.toContain("Material fields updated.");
+      expect(container.textContent).not.toContain("Authoring script sync skipped:");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -434,6 +698,10 @@ function materialFieldAssignment(assignmentId: string, priority: number) {
 function editInput(input: TestElement, value: string): void {
   input.value = value;
   input.dispatchEvent(new TestEvent("input", { bubbles: true }));
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
 
 function findPriorityInputs(root: TestNode): TestElement[] {

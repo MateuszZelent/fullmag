@@ -22,6 +22,7 @@ import {
 import { useQuantityFieldDraftKeys } from "../../primitives/QuantityField";
 import { PhysicalScalarField } from "../ObjectRegionsPanel";
 import { publishRegionAuthoringScene } from "../regionAuthoringInvalidation";
+import { syncAuthoringScriptBestEffort } from "../ObjectMagneticTexturePanelViewModel";
 import {
   ObjectRegionMetadataSection,
   ObjectRegionActionsSection,
@@ -123,6 +124,15 @@ function useObjectRegionMagneticParametersPanelView({
 }: RegionSubPanelProps) {
   const { api, authoringHistory, commands, resources } = useKernel();
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
+  const fieldOwner = useMemo(
+    () => ({ sessionScopeKey, objectId: model.objectId, regionId: model.regionId }),
+    [sessionScopeKey, model.objectId, model.regionId],
+  );
+  const fieldOwnerRef = useRef<typeof fieldOwner | null>(null);
+  useLayoutEffect(() => {
+    fieldOwnerRef.current = fieldOwner;
+    return () => { fieldOwnerRef.current = null; };
+  }, [fieldOwner]);
   const { data: sceneData } = useSceneResource();
   const [pendingFieldOperation, setPendingFieldOperation] = useState<{
     id: number;
@@ -130,7 +140,24 @@ function useObjectRegionMagneticParametersPanelView({
   } | null>(null);
   const nextFieldOperationId = useRef(0);
   const fieldPending = pendingFieldOperation?.sessionScopeKey === sessionScopeKey;
-  const [fieldFeedback, setFieldFeedback] = useState<LocalFeedback>(null);
+  const [fieldFeedbackState, setFieldFeedbackState] = useState<{
+    owner: typeof fieldOwner;
+    value: Exclude<LocalFeedback, null>;
+  } | null>(null);
+  const fieldFeedback =
+    fieldFeedbackState?.owner === fieldOwner
+      ? fieldFeedbackState.value
+      : null;
+  function setFieldFeedback(value: LocalFeedback): void {
+    if (value === null) {
+      setFieldFeedbackState(null);
+      return;
+    }
+    setFieldFeedbackState({
+      owner: fieldOwner,
+      value,
+    });
+  }
   const objectMaterialFields = useMemo(
     () => sceneObjectMaterialFields(sceneData, model.objectId),
     [model.objectId, sceneData],
@@ -302,6 +329,8 @@ function useObjectRegionMagneticParametersPanelView({
       });
       return false;
     }
+    const operationOwner = fieldOwner;
+    const isCurrentFieldOwner = () => fieldOwnerRef.current === operationOwner;
     const historyGeneration = authoringHistory?.getGeneration?.();
     const historyContext = {
       api,
@@ -357,18 +386,37 @@ function useObjectRegionMagneticParametersPanelView({
         operationSessionScopeKey,
         api.resourceCacheScope,
       );
-      setAcknowledgedFieldBaseline({
-        fields: submittedFieldDrafts,
-        identityKey: `${model.objectId}:${model.regionId}`,
-        revision: response.scene_revision,
-      });
-      if (fieldDraftRef.current === submittedFieldDrafts) {
-        replaceFieldDrafts(submittedFieldDrafts);
+      if (isCurrentFieldOwner()) {
+        setAcknowledgedFieldBaseline({
+          fields: submittedFieldDrafts,
+          identityKey: `${model.objectId}:${model.regionId}`,
+          revision: response.scene_revision,
+        });
+        if (fieldDraftRef.current === submittedFieldDrafts) {
+          replaceFieldDrafts(submittedFieldDrafts);
+        }
       }
-      setFieldFeedback({ kind: "success", message: "Material fields updated." });
+      const syncWarning = await syncAuthoringScriptBestEffort(
+        api,
+        operationSessionScopeKey,
+      );
+      if (historyContext.isCurrentSessionScope() === false) return false;
+      if (isCurrentFieldOwner()) {
+        setFieldFeedback({
+          kind: "success",
+          message: syncWarning
+            ? `Material fields updated. Authoring script sync skipped: ${syncWarning}`
+            : "Material fields updated.",
+        });
+      }
       return true;
     } catch (error) {
-      if (historyContext.isCurrentSessionScope() === false) return false;
+      if (
+        historyContext.isCurrentSessionScope() === false ||
+        !isCurrentFieldOwner()
+      ) {
+        return false;
+      }
       setFieldFeedback({ kind: "error", message: errorMessage(error) });
       return false;
     } finally {
