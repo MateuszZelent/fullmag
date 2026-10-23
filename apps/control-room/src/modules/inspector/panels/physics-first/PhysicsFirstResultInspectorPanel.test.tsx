@@ -115,6 +115,36 @@ describe("routed postprocessing Inspectors", () => {
     expect(html).not.toContain("Dataset / resource");
   });
 
+  it.each([
+    { ownerReadiness: "available-ready", freshness: "stale" },
+    { ownerReadiness: "stale", freshness: "stale" },
+    { ownerReadiness: "error", freshness: "fresh" },
+    { ownerReadiness: "loading", freshness: "unknown" },
+    { ownerReadiness: "unavailable", freshness: "unknown" },
+  ] as const)("does not advertise opening an unconfirmed $ownerReadiness/$freshness table", ({ ownerReadiness, freshness }) => {
+    const html = renderRoute(
+      "results.tables.definition",
+      {
+        catalogRevision: 12,
+        contractGap: "Table catalog is unconfirmed.",
+        definitionKind: "table",
+        freshness,
+        ownerId: "energy",
+        ownerKind: "table",
+        ownerReadiness,
+        ownerResourceRevision: 8,
+        ownerSchemaRevision: 3,
+        resourceRef: "table:energy",
+      },
+      "energy",
+    );
+
+    expect(html).toContain("Table actions are unavailable until the resource is confirmed.");
+    expect(html).not.toContain("Open this published table in Analysis");
+    expect(html).toContain("Table catalog is unconfirmed.");
+    expect(html).toContain("energy");
+  });
+
   it("renders Export semantics from the actual route component", () => {
     const html = renderRoute(
       "results.exports.definition",

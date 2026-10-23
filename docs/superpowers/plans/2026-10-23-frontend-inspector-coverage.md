@@ -43,7 +43,7 @@ wymaga przypisania dowodów do tej rodziny przed deklaracją ukończenia.
 | [StudyStageInspectorRouter.tsx](../../../apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx) | 25 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [ModelTreeOverviewInspectorPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/ModelTreeOverviewInspectorPanels.tsx) | 16 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [RuntimeExplorerInspectorPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx) | 12 | Częściowy: typed selection/SSR/read-only theme sprawdzone; naprawa refreshError i message źródła z regresjami oczekuje na CI/browser. |
-| [PostprocessingResultInspectors.tsx](../../../apps/control-room/src/modules/inspector/panels/physics-first/PostprocessingResultInspectors.tsx) | 8 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
+| [PostprocessingResultInspectors.tsx](../../../apps/control-room/src/modules/inspector/panels/physics-first/PostprocessingResultInspectors.tsx) | 8 | Częściowy: readonly kontrakt, aktualizacja typed selection i wspólne prymitywy sprawdzone; poprawka akcji stale table z regresjami oczekuje na CI/browser. |
 | [AirboxInspectorLanePanel.tsx](../../../apps/control-room/src/modules/inspector/panels/airbox/AirboxInspectorLanePanel.tsx) | 7 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [AntennaCompositionPanels.tsx](../../../apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.tsx) | 6 | Brak osobnego wpisu odbioru; sprawdzić wrapper i odmienne źródła/mutacje. |
 | [ObjectRegionsPanel.tsx](../../../apps/control-room/src/modules/inspector/panels/ObjectRegionsPanel.tsx) | 5 | Częściowy: konkretne poprawki i regresje w raporcie; dopiąć browser/live. |
@@ -88,8 +88,9 @@ wymaga przypisania dowodów do tej rodziny przed deklaracją ukończenia.
 
 Najpierw należy zamknąć źródło managed runtime i możliwość browser/live
 kwalifikacji. SpinAuthoringInspector i RuntimeExplorerInspectorPanels mają teraz częściowy
-odbiór opisany powyżej. Następna rodzina do przeglądu: postprocessing
-definitions/exports; nowe regresje i pełny browser/live pozostają wymagane. Priorytet ten wynika z aktywnych mutacji
+odbiór opisany powyżej. Postprocessing definitions/exports również mają częściowy odbiór; nowe
+regresje i pełny browser/live pozostają wymagane. Kolejny zakres: wspólne
+DedicatedExplorerInspectorPanels i ich odmienne źródła danych. Priorytet ten wynika z aktywnych mutacji
 lub prezentacji statusów; nie jest stwierdzeniem błędu przed odczytem źródeł.
 
 ## Pełna lista zarejestrowanych tras

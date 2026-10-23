@@ -2347,3 +2347,40 @@ Zatwierdzona interpretowana check-api-hygiene i git diff --check PASS dla nowych
 źródeł. Nie wykonano lokalnej kompilacji/uruchomienia testów TS/Rust. Nowe testy,
 production typecheck/lint i render dla końcowego commita pozostają wymagane w CI.
 Runtime family ma częściowy odbiór źródłowy, nie pełny browser/live acceptance.
+
+
+### 2026-10-23 — dalszy odbiór postprocessing i nowa asercja CI
+
+Walidacja Spin zapisana jako b76219f311c8bfc8dc975575c1c45ec558179a84;
+przekazywanie błędów Runtime jako 401827c73de1c0f28039e3e8e379217db6862309.
+Nowe regresje tych commitów nie zostały jeszcze uruchomione. Hook React Doctor
+zgłosił istniejący wcześniej index w key opcji Resource (ten sam w HEAD68479);
+nie wprowadzono wyciszenia ani zmiany identyfikacji zasobów dla tego ostrzeżenia.
+
+CI68479 / bootstrap39936943095: Control Room i Windows checkpoint PASS;
+Python i oba browser jobs nadal aktywne podczas tego checkpointu. Rust po
+poprawce enumu wykonuje testy, lecz test warm GPU unavailable zatrzymał się
+na starym tekście błędu (411 PASS/1 FAIL w fullmag-session). Produkcyjna ścieżka
+prawidłowo zwróciła TransientGpuInventoryUnavailable{reason:ProbeFailed};
+legacy asercja wymagała innego komunikatu. Test sprawdza teraz downcast do
+konkretnego typu i dokładny reason, zamiast fragmentu komunikatu. Zachowuje
+unwrap_err i wszystkie wcześniejsze kontrole CPU/static identity/publication.
+Logika admission i runtime bez zmian. Ponowny wynik wymaga CI, bez lokalnej
+kompilacji lub wykonania Rust unit tests.
+
+Przegląd ośmiu PostprocessingResultInspectors i modelu potwierdził readonly
+Table/Artifact oraz jawne contract gaps dla obecnych analysis_view/derived_value
+fallbacków. Pinned mode visualizations/imported references mają oddzielną
+trasę i kontrakt; nie przypisujemy im braku persistence z fallbacków.
+Explorer aktualizuje typed postprocessing selection przy zmianie owner/freshness/
+revision i usuwa nieobecny owner, więc nie dodano drugiej subskrypcji w panelu.
+ScientificInspectorTemplate korzysta ze wspólnych FieldRow/InspectorGroup.
+
+Znaleziono P2 w komunikacie legal actions: również stale/error/loading tabela
+sugerowała otwarcie published resource, choć jej context action nie była dostępna.
+Tekst zależy teraz od potwierdzonej dostępności modelu; zachowuje poprzednią
+instrukcję dla fresh/available-ready. Pięć regresji routed Inspector obejmuje
+stale przy available-ready, stale owner, error mimo fresh oraz loading/unavailable.
+Zachowują nazwę i diagnostykę zasobu. Nie dodano ani nie zmieniono mutacji/API.
+Interpretowana API hygiene i git diff --check PASS; nowe testy oraz odbiór
+browser/live tej rodziny nadal oczekują na CI/managed runtime.
