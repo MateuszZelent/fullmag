@@ -1372,14 +1372,15 @@ export async function qualifyFrontendProductionBrowser({
           if (await parent.getAttribute("aria-expanded") === "false") await parent.locator(".fm-explorer-tree-row__branch").click();
         }
         const selectedId = `${snapshotsId}:audit-frame-001`;
+        const frameInspector = page.locator('section.fm-inspector[data-inspector-owner="observation-frame"]');
         await row(selectedId).click();
-        await page.locator('[data-inspector-owner="observation-frame"]').waitFor({ state: "visible" });
+        await frameInspector.getByText("audit-frame-001", { exact: true }).waitFor({ state: "visible" });
         await loadMore.click();
         await page.waitForFunction((id) => document.querySelector(`[data-node-id="${id}"]`)?.textContent?.includes("55"), snapshotsId);
         await loadMore.waitFor({ state: "hidden" });
         assert.deepEqual(listQueries(), [null, "audit-frame-050"]);
         assert.equal(await row(selectedId).getAttribute("data-active"), "true", "Loading more snapshots changed the selection.");
-        assert.match(await page.locator('[data-inspector-owner="observation-frame"]').innerText(), /audit-frame-001/);
+        assert.match(await frameInspector.innerText(), /audit-frame-001/);
         assert.match(await row(snapshotsId).innerText(), /55/);
 
         // Hold the second refresh response so the old rows can be inspected
@@ -1432,7 +1433,8 @@ export async function qualifyFrontendProductionBrowser({
         const lastId = `${snapshotsId}:audit-frame-055`;
         await row(lastId).waitFor({ state: "visible" });
         await row(lastId).click();
-        assert.match(await page.locator('[data-inspector-owner="observation-frame"]').innerText(), /audit-frame-055/);
+        await frameInspector.getByText("audit-frame-055", { exact: true }).waitFor({ state: "visible" });
+        assert.match(await frameInspector.innerText(), /audit-frame-055/);
         await capture("observation-frame-last-page", page.locator(".fm-explorer"));
         return { totalFrames: 55, pageSize: 50, listCursors: listQueries(), previousSelectionPreserved: true, lastFrameSelectable: true, noUnrequestedPage: true };
       } finally { fixture.observationFrames = previousFrames; }

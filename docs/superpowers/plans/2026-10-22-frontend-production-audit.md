@@ -1434,3 +1434,20 @@ Te ostrzeżenia pozostają do oceny przy dalszym porządkowaniu panelu;
 nie wyłączano reguł. Lokalnie bez kompilacji/uruchamiania testów TS/Rust.
 Nowe regresje wymagają CI kolejnego HEAD. Cały audyt i live qualification
 pozostają otwarte; poprawka membership nie zamyka pozostałych ustaleń Frozen Spins.
+
+### Browser paginacji: jednoznaczny właściciel Inspectora
+
+Zakończony job browser-fixture-smoke `120225909634` dla `45bd7ad90`
+potwierdził drugi błąd samej regresji: locator
+`[data-inspector-owner="observation-frame"]` dopasowuje zarówno sekcję
+Inspectora, jak i wewnętrzny panel. Playwright przerwał scenariusz strict
+mode violation przed Load more; nie jest to dowód ukończonej paginacji.
+Poprzednie scenariusze frontend-production przeszły, page_errors były puste.
+
+Locator ograniczono do `section.fm-inspector` z tym właścicielem. Scenariusz
+czeka też na dokładne ID wybranej ramki w tym Inspectorze przed asercją
+zachowania i po przejściu do ostatniej ramki. Nie dodano `.first()` ani
+stałego opóźnienia; kontrole świeżych odpowiedzi, zaznaczenia i budżetu
+pozostają aktywne. MJS syntax i scoped lint PASS, stabilne źródła, receipt
+`verification/frontend-production-source-89d9c9ad196846688485633ac513cf37.json`.
+Ponowne wykonanie scenariusza wymaga CI nowego HEAD.
