@@ -26,6 +26,7 @@ export interface TopologicalChargeMethodInfo {
 }
 
 export interface TopologicalChargePanelModel {
+  dataCurrent: boolean;
   banner: TopologicalChargePanelBanner | undefined;
   method: TopologicalChargeMethodInfo;
   rows: TopologicalChargePanelRow[];
@@ -179,21 +180,34 @@ function resolveBanner(
 export function resolveTopologicalChargePanelModel(
   fetchStatus: string,
   resource: TopologicalChargeResource | null | undefined,
+  fetchError?: Error | null,
 ): TopologicalChargePanelModel {
   const data = resource ?? null;
+  const dataCurrent = data !== null && fetchStatus === "ready" && !fetchError;
+  const cached = data !== null && !dataCurrent;
+  const resultNumber = (value: number | null | undefined, integer = false) => {
+    const formatted = integer ? formatMaybeInteger(value) : formatMaybeNumber(value);
+    return cached && formatted !== "unavailable" ? `${formatted} (cached; unconfirmed)` : formatted;
+  };
   return {
-    banner: resolveBanner(data),
+    dataCurrent,
+    banner: fetchError ? {
+      kind: "error",
+      message: `Topological charge request failed: ${fetchError.message}.${cached ? " Cached results are unconfirmed." : ""}`,
+    } : cached ? {
+      kind: "warning", message: `Cached topological charge results are unconfirmed (fetch state: ${fetchStatus}). Compute to confirm current data.`,
+    } : resolveBanner(data),
     method: resolveMethodInfo(data),
     rows: [
       { label: "Object", value: data?.object_id ?? "none" },
       { label: "Fetch state", value: fetchStatus },
-      { label: "Status", value: data?.status ?? fetchStatus },
+      { label: "Status", value: cached ? `unconfirmed; cached status: ${data.status}` : data?.status ?? fetchStatus },
       { label: "Schema", value: data?.schema_version ?? "unavailable" },
       { label: "Quantity", value: data?.method.quantity_id ?? "m" },
-      { label: "Q", value: formatMaybeNumber(data?.charge) },
-      { label: "Nearest integer", value: formatMaybeInteger(data?.nearest_integer) },
-      { label: "Integer error", value: formatMaybeNumber(data?.integer_error) },
-      { label: "Trust", value: formatMaybeText(data?.trust) },
+      { label: "Q", value: resultNumber(data?.charge) },
+      { label: "Nearest integer", value: resultNumber(data?.nearest_integer, true) },
+      { label: "Integer error", value: resultNumber(data?.integer_error) },
+      { label: "Trust", value: cached ? `unconfirmed; cached trust: ${formatMaybeText(data.trust)}` : formatMaybeText(data?.trust) },
       { label: "Plane", value: formatMaybeText(data?.resolved_support.plane) },
       { label: "Support", value: formatMaybeText(data?.resolved_support.support) },
       { label: "Sampling", value: formatSampling(data) },

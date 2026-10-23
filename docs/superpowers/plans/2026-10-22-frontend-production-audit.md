@@ -1898,3 +1898,32 @@ Po nieudanym refresh mogą pozostać Q/trust/status=ready starego payloadu,
 z Fetch state jako jedyną informacją o błędzie i bez jego treści. To kolejny
 kandydat poprawki feedbacku i jawnej aktualności wyników, bez zmiany obliczeń.
 Nie wykonano jeszcze regresji ani browser proof tego zachowania.
+
+### Checkpoint: Topological Charge — błąd żądania i aktualność wyników
+
+Zamknięto źródłowo opisany wyżej problem aktywnej trasy Topological Charge.
+Panel przekazuje error/refreshError do modelu. Status current wymaga retained
+data oraz ready bez błędu; stale/loading/idle/error nie potwierdza cache.
+Rzeczywisty błąd jest widoczny w bannerze. Q, nearest integer, integer error,
+payload status i trust są jawnie cached/unconfirmed; profil zachowuje próbki
+z caption informującym o niepotwierdzonym źródle. Provenance nie jest usuwane.
+Świeża odpowiedź przywraca zwykłe etykiety i ostrzeżenia naukowe payloadu.
+Nie zmieniono obliczeń, jednostek, samplingu, równań ani API.
+
+Dodano osiem regresji modelu: retained idle/loading/stale/error, rzeczywisty
+błąd przy ready/error, brak cache przy pierwszej awarii oraz odzyskanie ready
+i scientific warning. Review bez potwierdzonych P1/P2. Nie dodano osobnej
+regresji renderowania caption ani nie wykonano browser/live/science proof;
+to ograniczenie dowodu. Lokalnie bez kompilacji i wykonania TS/Rust unit tests.
+
+Production typecheck, architecture hygiene i lint 3 plików PASS:
+verification/frontend-production-source-48804a8e20bf4b7086daae673078650d.json.
+API hygiene PASS: verification/frontend-api-hygiene-0091c8197e974c17acb2f1a4676a0b34.json.
+React Doctor 2 pliki produkcyjne, 0 errors/warnings/skips:
+verification/frontend-production-source-9b9f4cafd02f47b094dedad64999dfcc.json.
+Receipty stabilne we własnym wolumenie grupy zadania. Nowe przypadki wymagają CI.
+
+Retencja: bez builda, instalacji, restartu i usuwania danych; zachowano potrzebny
+cache i receipty. Nadal otwarte reguły geometrii/axis/transform i tolerancji
+selektora, kolejne aktywne rodziny, browser nowych formularzy, managed live
+qualification, wymagane kontrole/review oraz integracja PR #249.
