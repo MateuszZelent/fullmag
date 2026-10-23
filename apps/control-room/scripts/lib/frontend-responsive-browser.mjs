@@ -84,6 +84,23 @@ export async function qualifyFrontendResponsiveBrowser({
     );
   }
 
+  async function readInspectorDraftIdentity() {
+    // Start hides the workspace from the accessibility tree while keeping its
+    // React tree mounted. Inspect the saved DOM nodes even while hidden.
+    return page.evaluate(() => {
+      const refs = window.__frontendResponsiveInspectorRefs;
+      return {
+        rootConnected: refs?.root?.isConnected === true,
+        inputConnected: refs?.input?.isConnected === true,
+        rootSame: refs?.root === document.querySelector(".fm-inspector"),
+        inputSame: refs?.input === refs?.root?.querySelector('input[aria-label="Name"]'),
+        rootMarker: refs?.root?.dataset.frontendResponsiveMarker ?? null,
+        inputMarker: refs?.input?.dataset.frontendResponsiveMarker ?? null,
+        value: refs?.input?.value ?? null,
+      };
+    });
+  }
+
   async function focusedLabel() {
     return page.evaluate(() =>
       (document.activeElement?.textContent ?? "").replace(/\s+/g, " ").trim(),
@@ -623,13 +640,18 @@ export async function qualifyFrontendResponsiveBrowser({
 
       const startScreen = page.locator(".fm-start");
       await startScreen.waitFor({ state: "visible" });
-      const nameDraftCountWhileHome = await nameInput.count();
-      const localNameDraftWhileHome = nameDraftCountWhileHome > 0
-        ? await nameInput.inputValue()
-        : null;
-      if (localNameDraftWhileHome !== responsiveDraft) {
-        stateFailures.push("The local Inspector Name draft changed or was unmounted while Start was open.");
-      }
+      const recordDraftIdentity = (state, context) => {
+        if (!state.rootConnected || !state.inputConnected || !state.rootSame || !state.inputSame
+          || state.rootMarker !== INSPECTOR_MARKER || state.inputMarker !== INSPECTOR_MARKER) {
+          stateFailures.push("The local Inspector Name draft DOM identity changed " + context + ".");
+        }
+        if (state.value !== responsiveDraft) {
+          stateFailures.push("The local Inspector Name draft value changed " + context + ".");
+        }
+      };
+      const draftIdentityWhileHome = await readInspectorDraftIdentity();
+      recordDraftIdentity(draftIdentityWhileHome, "while Start was open");
+      const localNameDraftWhileHome = draftIdentityWhileHome.value;
       const startRail = page.getByRole("navigation", { name: "Start screen sections", exact: true });
       await startRail.waitFor({ state: "visible" });
       const currentSection = startRail.locator('button[aria-current="page"]');
@@ -711,6 +733,7 @@ export async function qualifyFrontendResponsiveBrowser({
 
       for (const target of requestedWidths) {
         await page.setViewportSize({ width: target.width, height: originalViewport.height });
+        await page.locator(".fm-about-toolchain").scrollIntoViewIfNeeded();
         await waitForLayout();
         const measurements = await page.evaluate(() => {
           const metrics = (element) => {
@@ -837,6 +860,8 @@ export async function qualifyFrontendResponsiveBrowser({
 
       await page.setViewportSize({ width: 1280, height: originalViewport.height });
       await waitForLayout();
+      const draftIdentityAfterReflow = await readInspectorDraftIdentity();
+      recordDraftIdentity(draftIdentityAfterReflow, "after Start reflow");
       const returnToWorkspace = mainMenu.getByRole("button").first();
       await returnToWorkspace.waitFor({ state: "visible" });
       const returnLabel = normalizeLabel(await returnToWorkspace.innerText());
@@ -854,6 +879,8 @@ export async function qualifyFrontendResponsiveBrowser({
       const localNameDraftAfterReturn = nameDraftCountAfterReturn > 0
         ? await nameInput.inputValue()
         : null;
+      const draftIdentityAfterReturn = await readInspectorDraftIdentity();
+      recordDraftIdentity(draftIdentityAfterReturn, "after returning from Start");
       if (localNameDraftAfterReturn !== responsiveDraft) {
         stateFailures.push("The local Inspector Name draft changed or was unmounted after returning from Start.");
       }
@@ -877,6 +904,7 @@ export async function qualifyFrontendResponsiveBrowser({
           whileHome: localNameDraftWhileHome,
           afterReturn: localNameDraftAfterReturn,
           preserved: stateFailures.every((failure) => !failure.includes("Name draft")),
+          identity: { whileHome: draftIdentityWhileHome, afterReflow: draftIdentityAfterReflow, afterReturn: draftIdentityAfterReturn },
         },
         requestBudget: {
           before: requestBudgetBeforeHome,
