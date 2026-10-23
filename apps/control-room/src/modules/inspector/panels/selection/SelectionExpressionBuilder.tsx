@@ -82,7 +82,7 @@ export function SelectionExpressionBuilder(props: SelectionExpressionBuilderProp
               <>
                 <label className="fm-inspector-field">
                   <span>Operator</span>
-                  <select aria-label="Operator" className="fm-inspector-input" value="advanced" disabled>
+                  <select aria-label="Operator" className="fm-inspector-select w-full min-w-0" value="advanced" disabled>
                     <option value="advanced" disabled>Advanced/unsupported (preserved)</option>
                   </select>
                 </label>
@@ -111,7 +111,7 @@ function SelectionExpressionEditor({
       <label className="fm-inspector-field">
         <span>Operator</span>
         <select
-          className="fm-inspector-input"
+          className="fm-inspector-select w-full min-w-0"
           aria-label="Operator"
           disabled={structure.blocked || !editable}
           title={structure.blocked ? "Commit or discard numeric edits before changing the selector structure." : undefined}
@@ -310,7 +310,7 @@ function ReferenceSelect({ label, value, onChange, options }: {
       <label className="fm-inspector-field">
         <span>{label}</span>
         <select aria-label={label} aria-invalid={Boolean(error) || undefined} aria-describedby={error ? errorId : undefined}
-          className="fm-inspector-input" disabled={!catalog.ready} value={value}
+          className="fm-inspector-select w-full min-w-0" disabled={!catalog.ready} value={value}
           onChange={(event) => {
             const next = event.target.value;
             if (catalog.ready && (next === "" || options.some((option) => option.id === next))) onChange(next);
@@ -364,7 +364,7 @@ function SelectField({
   return (
     <label className="fm-inspector-field">
       <span>{label}</span>
-      <select aria-label={label} className="fm-inspector-input" disabled={changesStructure && structure.blocked} value={value} onChange={(event) => { if ((!changesStructure || structure.allow()) && options.some(([key]) => key === event.target.value)) onChange(event.target.value); }}>
+      <select aria-label={label} className="fm-inspector-select w-full min-w-0" disabled={changesStructure && structure.blocked} value={value} onChange={(event) => { if ((!changesStructure || structure.allow()) && options.some(([key]) => key === event.target.value)) onChange(event.target.value); }}>
         {options.map(([option, title]) => <option key={option} value={option}>{title}</option>)}
       </select>
     </label>

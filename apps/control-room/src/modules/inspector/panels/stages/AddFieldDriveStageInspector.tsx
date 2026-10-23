@@ -236,7 +236,7 @@ export function AddFieldDriveStageInspector(
         <label className="fm-inspector-field">
           <span>Target</span>
           <select
-            className="fm-inspector-input"
+            className="fm-inspector-select w-full min-w-0"
             disabled={!drive}
             value={drive?.target.kind ?? "global"}
             onChange={(event) =>
@@ -260,7 +260,7 @@ export function AddFieldDriveStageInspector(
           <label className="fm-inspector-field">
             <span>Object</span>
             <select
-              className="fm-inspector-input"
+              className="fm-inspector-select w-full min-w-0"
               value={drive.target.object_id}
               onChange={(event) =>
                 updateDrive((current) => {
@@ -289,7 +289,7 @@ export function AddFieldDriveStageInspector(
           <label className="fm-inspector-field">
             <span>Stable region</span>
             <select
-              className="fm-inspector-input"
+              className="fm-inspector-select w-full min-w-0"
               value={drive.target.region_id}
               onChange={(event) =>
                 updateDrive((current) =>
@@ -314,7 +314,7 @@ export function AddFieldDriveStageInspector(
         <label className="fm-inspector-field">
           <span>Spatial profile</span>
           <select
-            className="fm-inspector-input"
+            className="fm-inspector-select w-full min-w-0"
             disabled={!drive}
             value={drive?.spatial_profile.kind ?? "uniform"}
             onChange={(event) =>
@@ -352,7 +352,7 @@ export function AddFieldDriveStageInspector(
             <label className="fm-inspector-field">
               <span>Mask geometry</span>
               <select
-                className="fm-inspector-input"
+                className="fm-inspector-select w-full min-w-0"
                 value={drive.spatial_profile.object_id}
                 onChange={(event) =>
                   updateDrive((current) =>
@@ -377,7 +377,7 @@ export function AddFieldDriveStageInspector(
             <label className="fm-inspector-field">
               <span>Envelope</span>
               <select
-                className="fm-inspector-input"
+                className="fm-inspector-select w-full min-w-0"
                 value={drive.spatial_profile.envelope.kind}
                 onChange={(event) =>
                   updateDrive((current) =>
@@ -430,7 +430,7 @@ export function AddFieldDriveStageInspector(
         <label className="fm-inspector-field">
           <span>Function in time</span>
           <select
-            className="fm-inspector-input"
+            className="fm-inspector-select w-full min-w-0"
             disabled={!drive}
             value={drive?.waveform.kind ?? "constant"}
             onChange={(event) =>
@@ -450,7 +450,7 @@ export function AddFieldDriveStageInspector(
         <label className="fm-inspector-field">
           <span>Time origin</span>
           <select
-            className="fm-inspector-input"
+            className="fm-inspector-select w-full min-w-0"
             disabled={!drive}
             value={drive?.time_origin ?? "stage_local"}
             onChange={(event) =>
@@ -642,7 +642,7 @@ export function AddFieldDriveStageInspector(
         <label className="fm-inspector-field">
           <span>Activation</span>
           <select
-            className="fm-inspector-input"
+            className="fm-inspector-select w-full min-w-0"
             disabled={!drive}
             value={drive?.activation.kind ?? "all_time_evolution"}
             onChange={(event) =>
@@ -765,7 +765,7 @@ function SpatialSincFields({
       <label className="fm-inspector-field">
         <span>Window</span>
         <select
-          className="fm-inspector-input"
+          className="fm-inspector-select w-full min-w-0"
           value={profile.window ?? "none"}
           onChange={(event) => onChange({ ...profile, window: event.target.value })}
         >

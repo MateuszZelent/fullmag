@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { resetInspectorDocumentBudget } from "./inspector-request-budget.mjs";
+import { qualifyInspectorTheme } from "./inspector-theme-browser.mjs";
 
 const SCENE_PATH = "/v2/sessions/current/model/scene";
 const MODEL_REGIONS_PATH = "/v2/sessions/current/model/regions";
@@ -1204,6 +1205,8 @@ export async function qualifyFrontendProductionBrowser({
       await page.goto(controlsUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
       const fixtureRoot = page.getByTestId("frontend-controls-fixture");
       await fixtureRoot.waitFor({ state: "visible", timeout: 30_000 });
+      const inspectorTheme = await qualifyInspectorTheme({ page, outputDir });
+      evidence.inspector_theme = inspectorTheme;
       const callbackCount = page.getByTestId("vector-callback-count");
       const x = page.getByRole("textbox", { name: "Audit vector X", exact: true });
       await x.focus();

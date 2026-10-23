@@ -109,7 +109,7 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
             <label className="fm-inspector-field">
               <span>Output kind</span>
               <select
-                className="fm-inspector-input"
+                className="fm-inspector-select w-full min-w-0"
                 disabled={disabled}
                 value={draft.autosave.outputKind}
                 onChange={(event) =>

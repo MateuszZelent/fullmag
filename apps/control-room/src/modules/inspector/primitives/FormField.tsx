@@ -12,7 +12,6 @@ import {
   DialogTrigger,
 } from "@/shared/ui/Dialog";
 import { Button } from "@/shared/ui/Button";
-import { controlVariants } from "@/shared/ui/controlVariants";
 import { cn } from "@/shared/utils/className";
 
 import { InspectorPropertyRow } from "./InspectorPropertyRow";
@@ -250,10 +249,7 @@ export function FormField(props: FormFieldProps) {
             aria-describedby={feedbackId}
             aria-errormessage={error ? feedbackId : undefined}
             aria-invalid={invalidValue || undefined}
-            className={cn(
-              "fm-inspector-select w-full appearance-none",
-              controlVariants({ invalid: Boolean(invalid) }),
-            )}
+            className="fm-inspector-select w-full"
             disabled={disabled}
             value={value}
             onChange={onChange}
@@ -294,10 +290,7 @@ export function FormField(props: FormFieldProps) {
             aria-describedby={feedbackId}
             aria-errormessage={error ? feedbackId : undefined}
             aria-invalid={invalidValue || undefined}
-            className={cn(
-              "fm-inspector-textarea h-auto min-h-24 w-full resize-y py-2",
-              controlVariants({ invalid: Boolean(invalid) }),
-            )}
+            className="fm-inspector-textarea w-full"
             disabled={disabled}
             readOnly={readOnly}
             rows={rows ?? 5}
@@ -326,7 +319,6 @@ export function FormField(props: FormFieldProps) {
   const inputClass = cn(
     "fm-inspector-input w-full",
     mono === true ? "fm-inspector-input--mono font-fm-mono" : "font-fm-ui",
-    controlVariants({ invalid: Boolean(invalid) }),
   );
   const inputType = type === "number" && (unit || unitControl) ? "text" : type ?? "text";
   const resolvedInputMode =

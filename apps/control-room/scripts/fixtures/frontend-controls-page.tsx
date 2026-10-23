@@ -1,8 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import { parseQuantityInput } from "@/kernel/authoring/object-edit/quantityInput";
 
 import { GeometryValidationSummary } from "@/modules/inspector/primitives/GeometryValidationSummary";
+import { ColorField } from "@/modules/inspector/primitives/ColorField";
+import { FormField } from "@/modules/inspector/primitives/FormField";
+import { InspectorGroup } from "@/modules/inspector/primitives/InspectorGroup";
+import { InspectorPropertyRow } from "@/modules/inspector/primitives/InspectorPropertyRow";
+import { QuantityUnitSelect } from "@/modules/inspector/primitives/QuantityUnitSelect";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 import { Vector3Field } from "@/modules/inspector/primitives/Vector3Field";
 import { InspectorEditSessionProvider, useInspectorEditSession } from "@/modules/inspector/InspectorEditSession";
 import { PlanarNumberField } from "@/modules/inspector/visualization/PlanarNumberField";
@@ -12,6 +19,49 @@ import { RibbonMenuRenderer } from "@/modules/ribbon/RibbonMenuRenderer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/shared/ui/DropdownMenu";
 
 type ValidationState = "ready-empty" | "loading" | "error" | "stale";
+
+function InspectorThemeFixture() {
+  const [name, setName] = useState("Permalloy sample");
+  const [color, setColor] = useState("#89b4fa");
+  const [colorChanges, setColorChanges] = useState(0);
+  return (
+    <section
+      aria-label="Inspector theme fixture"
+      className="fm-inspector-panel rounded-fm-surface border border-fm-subtle bg-fm-panel p-fm-3"
+      data-testid="inspector-theme-fixture"
+      style={{ containerType: "inline-size", width: "100%", maxWidth: 480 }}
+    >
+      <InspectorGroup title="Properties" description="Shared Visualize-style Inspector controls">
+        <FormField label="Sample name" value={name} onChange={(event) => setName(event.currentTarget.value)} />
+        <FormField label="Execution profile" type="select" defaultValue="long">
+          <option value="long">Automatic — use the configured compute environment</option>
+          <option value="manual">Manual</option>
+        </FormField>
+        <FormField label="Field amplitude" value="1e-" unit="A/m" error="Complete the exponent before applying." onChange={() => {}} />
+        <FormField label="Unavailable value" value="Resource unavailable" disabled />
+        <InspectorPropertyRow label="Display mode">
+          <Select defaultValue="solid">
+            <SelectTrigger aria-label="Display mode"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="solid">Solid</SelectItem><SelectItem value="wireframe">Wireframe</SelectItem></SelectContent>
+          </Select>
+        </InspectorPropertyRow>
+        <Vector3Field label="Origin" values={["1", "2", "3"]} onChange={() => {}} unitControls={[
+          <QuantityUnitSelect key="x" label="Origin X" input={parseQuantityInput("1", "length", "nm")} onChange={() => {}} />,
+          <QuantityUnitSelect key="y" label="Origin Y" input={parseQuantityInput("2", "length", "nm")} onChange={() => {}} />,
+          <QuantityUnitSelect key="z" label="Origin Z" input={parseQuantityInput("3", "length", "nm")} onChange={() => {}} />,
+        ]} />
+        <FormField label="Notes" type="textarea" defaultValue="Retain local authoring values while resources refresh." />
+      </InspectorGroup>
+      <InspectorGroup title="Appearance">
+        <ColorField label="Sample color" hint="Viewport-local preference." value={color} onChange={(value) => { setColor(value); setColorChanges((count) => count + 1); }} />
+        <ColorField label="Theme color" value="var(--fm-accent)" onChange={() => {}} />
+        <ColorField label="Automatic color" value="" onChange={() => {}} />
+        <ColorField label="Disabled color" value="#a6e3a1" disabled onChange={() => {}} />
+      </InspectorGroup>
+      <output data-testid="inspector-theme-color-changes">{colorChanges}</output>
+    </section>
+  );
+}
 
 function PlanarGuardSnapshot() {
   const session = useInspectorEditSession();
@@ -100,6 +150,8 @@ export default function FrontendControlsFixturePage() {
       style={{ display: "grid", gap: 16, margin: "0 auto", maxWidth: 920, padding: 24 }}
     >
       <h1>Frontend controls browser fixture</h1>
+
+      <InspectorThemeFixture />
 
       <PlanarDraftFixture />
 

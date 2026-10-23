@@ -53,6 +53,7 @@ import { Button } from "@/shared/ui/Button";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { ObjectExtensionsSection } from "../extensions/ObjectExtensionsSection";
+import { ColorField } from "../primitives/ColorField";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
@@ -927,22 +928,20 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         )}
         {object.mode === "committed" && visualizationSettings ? (
           <>
-            <FormField
+            <ColorField
               label="Primitive color"
-              mono={false}
-              type="text"
               value={visualizationSettings.primitiveMonoColor ?? ""}
+              valueAriaLabel="Primitive color"
               hint="Viewport-local primitive preference; a solid shader override takes precedence."
-              onChange={(event) => patchObjectColor("primitiveColor", event.target.value)}
+              onChange={(value) => patchObjectColor("primitiveColor", value)}
             />
             <FieldRow label="Preview color" value={primitiveColor?.color ?? "unavailable"} />
             <FieldRow label="Preview color source" value={primitiveColor?.source ?? "unavailable"} />
-            <FormField
+            <ColorField
               label="Frame color"
-              mono={false}
-              type="text"
               value={visualizationSettings.wireframeColor}
-              onChange={(event) => patchObjectColor("frameColor", event.target.value)}
+              valueAriaLabel="Frame color"
+              onChange={(value) => patchObjectColor("frameColor", value)}
             />
           </>
         ) : null}

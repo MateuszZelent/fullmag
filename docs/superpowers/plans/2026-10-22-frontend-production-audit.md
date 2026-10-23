@@ -2093,3 +2093,58 @@ draftu pozostają NOT VERIFIED. Puste liczby/wektory wymagają osobnej poprawki 
 Decyzja użytkownika: przed aktualizacją PR #249 ujednolicić wszystkie Inspectory,
 czytelność pól i brakujące pickery koloru. Bieżący etap zapisujemy lokalnie;
 push nastąpi po realizacji i weryfikacji tego zakresu. Retencja bez usuwania.
+
+### 2026-10-23 — wspólny motyw Inspectorów na wzór Visualize
+
+Zapisano lokalny etap Spin draft jako 9315ae8cce0f02642bedb04fa09e517f0954a6b5.
+Użytkownik wskazał Visualize jako wzorzec i jeden centralny theme/Tailwind
+dla wszystkich Inspectorów, w jasnym i ciemnym szablonie. Wdrożono wspólną
+receptę `inspector-theme.css` z `@apply` i semantycznymi aliasami Tailwind.
+Geometria/fonty mają tokeny Inspectorów; powierzchnie wywodzą się z Mocha/Latte.
+Usunięto konkurencyjne recepty FormField i jednostek. Wspólne pola mają 30 px,
+wartości 12 px/400, etykiety i nagłówki 12 px, jawny focus/error/disabled.
+PropertyRow układa etykietę nad polem w wąskim kontenerze. Vector zachowuje
+wspólną ramkę osi i jednostki; shared Textarea nie dziedziczy wysokości inputu.
+
+Poprawiono 17 selectów z klasą input, 21 wrapperów bez CSS, Dataset Values,
+Study restore oraz Device w Start Inspector. Jeden ColorField obsługuje
+Object/Planar/Frequency Domain; Primitive i Frame w Object General dostały
+brakujące pickery. Zachowano callbacki, raw text/token/empty, nazwy dostępności,
+opacity osobno oraz dotychczasowe Apply/pending. Natywny fallback white jest
+wyłącznie początkowym stanem okna wyboru, opisanym dostępnościowo; nie wysyła
+sam mutacji. Kolory wyliczone pozostają readonly. Usunięto martwy CSS starych
+dwóch implementacji. Specyfikacja design-system opisuje wspólny template.
+
+Review źródłowe nie znalazło P1/P2 w implementacji. Poprawiono wskazaną
+niestabilność browser helpera: pointer poza gallery i oczekiwanie na ustalenie
+focus/background. Dodano macierz dark/light × 480/300 px, natywny/Radix select,
+vector/jednostki, invalid/disabled, token/auto color i dwie jawne zmiany koloru.
+Jest podłączona do istniejącego frontend-production browser fixture.
+
+Production typecheck, architecture hygiene, lint wszystkich Inspectorów oraz
+zmienionych Start/shared/fixture plików PASS:
+verification/frontend-production-source-99413e4923fb47b18f063d92098c5249.json.
+Końcowa korekta helpera: lint i node --check PASS:
+verification/frontend-production-source-d1c4221e659a44bc8dcf04808b570945.json.
+HTML fixture 200, skompilowany Tailwind z faktycznym font-size i zatwierdzona
+interpretowana API hygiene PASS:
+verification/frontend-production-source-0c8ac8a7d0d7482dbedd3f166b7cfdd1.json.
+Kontrola CSS wykryła i usunęła kolizję nazw color/text Tailwind; oddzielny alias
+koloru nie może przesłonić rozmiaru fontu. React Doctor 0.9.12: sześć wspólnych
+prymitywów 0 errors/warnings/skips; po zmianie ColorField ponownie 0/0/0:
+verification/frontend-production-source-32abf870cf204ae4b53e923303191b6e.json,
+verification/frontend-production-source-9dbda7c50ece45bf9c14f1580b280e71.json.
+Wcześniejsze failed receipty zachowano: raw hex poza tokenami, lint efektu
+setState/nieużywanych importów oraz fałszywa asercja dopasowująca background-color.
+Przyczyny poprawiono, bez suppression i bez lokalnego wykonania/kompilacji unit tests.
+
+Browser render obecnego motywu: NOT VERIFIED lokalnie. Chromium 1.62.1 pobrano
+wyłącznie do cache named volume własnej grupy, lecz start kończy się brakiem
+libnspr4.so (exit 127). Nie instalowano bibliotek na hoście ani nie zmieniano
+obrazu/kontenerów. Managed browser QA wymaga succeeded DEV receipt; obecny
+failed-confirmed backend nadal blokuje tę ścieżkę. Render CI i zrzuty pozostają
+do odbioru po aktualizacji draft PR #249. Źródła i CSS compile nie są dowodem
+wyglądu, WebGL, API/native runtime ani pełnego pokrycia wszystkich tras.
+
+Retencja: cache przeglądarki i receipty we własnym named volume pozostawiono;
+bez usuwania zasobów i bez zmian obcych grup. Pełny audyt frontendu trwa.

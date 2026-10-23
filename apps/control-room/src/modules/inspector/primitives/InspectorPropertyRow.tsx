@@ -54,7 +54,7 @@ export function InspectorPropertyRow({
     >
       <div className="min-w-0" data-slot="inspector-property-label">
         <div
-          className="text-fm-label font-medium leading-tight text-fm-secondary"
+          className="text-fm-inspector-label font-medium leading-fm-control text-fm-secondary"
           id={labelId}
         >
           {label}

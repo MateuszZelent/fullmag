@@ -6,10 +6,10 @@ import type { FieldMapCapability, PlanarInspectorCapabilities } from "@/kernel/v
 import { Button } from "@/shared/ui/Button";
 import { ArrowRightLeft, Crosshair, Eye, ScanLine, SquareDashed } from "lucide-react";
 
+import { ColorField } from "../primitives/ColorField";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-import { ColorField } from "../panels/ObjectVisualizationTargetSection";
 import { usePlanarPresentationDraftState } from "./PlanarPresentationDraftOwner";
 import { PlanarNumberField } from "./PlanarNumberField";
 import { VisualizationDisplayPassesControl } from "./VisualizationInspectorControls";

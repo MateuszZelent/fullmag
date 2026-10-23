@@ -839,7 +839,7 @@ export function FrozenSpinsEditor({
             <Button disabled={scene.status === "loading"} size="sm" type="button" onClick={scene.refetch}>Refresh activation stages</Button>
             <label className="fm-inspector-field">
               <span>Add activation stage</span>
-              <select aria-label="Add activation stage" className="fm-inspector-input min-w-0" value="" disabled={!stageCatalog.ready}
+              <select aria-label="Add activation stage" className="fm-inspector-select w-full min-w-0" value="" disabled={!stageCatalog.ready}
                 onChange={(event) => {
                   const id = event.target.value;
                   if (!stageCatalog.ready || !stageCatalog.options.some((option) => option.id === id)) return;
@@ -1253,7 +1253,7 @@ function SelectInput({
       <span>{label}</span>
       <select
         aria-label={label}
-        className="fm-inspector-input"
+        className="fm-inspector-select w-full min-w-0"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >

@@ -37,7 +37,7 @@ export function InspectorGroup({
 
   const heading = (
     <div className="min-w-0 flex-1" data-slot="inspector-group-heading">
-      <h3 className="m-0 text-fm-xs font-semibold leading-tight text-fm-primary">
+      <h3 className="m-0 text-fm-inspector-label font-semibold leading-tight text-fm-primary">
         {title}
       </h3>
       {description ? (
