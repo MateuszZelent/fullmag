@@ -3018,6 +3018,11 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             payload["table_autosave"] = stage.table_autosave.to_ir()
         if stage.autosave is not None:
             payload["autosave"] = stage.autosave.to_ir()
+        # relax(relax_alpha=...) is realized as this stage's material damping;
+        # export it so pipeline materialization applies it to this stage only.
+        relax_alphas = {float(magnet.material.alpha) for magnet in stage.problem.magnets}
+        if study.algorithm == "llg_overdamped" and len(relax_alphas) == 1:
+            payload["relax_alpha"] = _text_number(relax_alphas.pop())
         if study.dynamics is not None:
             payload.update(
                 {
