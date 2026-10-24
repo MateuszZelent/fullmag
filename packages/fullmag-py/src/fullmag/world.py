@@ -2681,6 +2681,8 @@ class CapturedStage:
     output_every_seconds: float | None = None
     table_autosave: TableAutosave | None = None
     autosave: StageAutosave | None = None
+    # mumax3 tablesave() after this stage; see fullmag.flat_field_sweep.
+    table_save: bool = False
 
 
 @dataclass
@@ -4026,7 +4028,9 @@ def set_script_capture_lightweight_assets(enabled: bool) -> None:
 
 def finish_script_capture() -> list[CapturedStage]:
     """Return captured flat-script execution data and clear capture mode."""
-    captured = list(_capture_binding.current().stages)
+    from fullmag.flat_field_sweep import coalesce_field_sweeps
+
+    captured = coalesce_field_sweeps(_capture_binding.current().stages)
     _capture_binding.replace(_CaptureState())
     reset()
     return captured
@@ -6899,6 +6903,9 @@ class StudyBuilder:
             field_refresh=field_refresh,
             stop=stop,
         )
+
+    def tablesave(self) -> None:
+        tablesave()
 
     def minimize(
         self,
@@ -10504,6 +10511,20 @@ def minimize(
         energy_tolerance=energy_tolerance,
         relax_alpha=None,
     )
+
+
+def tablesave() -> None:
+    """Save one table row of the state left by the preceding ``minimize()``.
+
+    mumax3 ``tablesave()``: in a loop over ``b_ext(...)`` and ``minimize()`` each call
+    adds one row ``t, mx, my, mz, B_ext`` to ``<script>.zarr/table``.
+    """
+    capture = _capture_binding.current()
+    if not capture.enabled:
+        raise RuntimeError("tablesave() is available in scripts run by fullmag")
+    if not capture.stages:
+        raise RuntimeError("tablesave() needs a preceding minimize()")
+    capture.stages[-1] = replace(capture.stages[-1], table_save=True)
 
 
 def Minimize(
