@@ -1502,10 +1502,10 @@ fn mesh_build_resource_signature(mesh_workspace: &Value) -> Value {
 }
 
 fn apply_mesh_workspace_update(current: &mut SessionStateResponse, mesh_workspace: Value) {
-    let previous_mesh_signature = current.mesh_workspace.as_ref().map(mesh_resource_signature);
+    let previous_mesh_signature = current.mesh_workspace.as_deref().map(mesh_resource_signature);
     let previous_build_signature = current
         .mesh_workspace
-        .as_ref()
+        .as_deref()
         .map(mesh_build_resource_signature);
     let next_mesh_signature = mesh_resource_signature(&mesh_workspace);
     let next_build_signature = mesh_build_resource_signature(&mesh_workspace);
@@ -1514,7 +1514,7 @@ fn apply_mesh_workspace_update(current: &mut SessionStateResponse, mesh_workspac
     {
         clear_mesh_dirty_tags_for_built_scene(current, source_scene_revision);
     }
-    current.mesh_workspace = Some(mesh_workspace);
+    current.mesh_workspace = Some(mesh_workspace.into());
     if previous_build_signature.as_ref() != Some(&next_build_signature) {
         bump_mesh_build_revision(current);
     }
@@ -1583,11 +1583,11 @@ fn apply_fem_mesh_update(
     }
 
     let changed =
-        current.fem_mesh.as_ref().map(fem_mesh_identity) != Some(fem_mesh_identity(&fem_mesh));
+        current.fem_mesh.as_deref().map(fem_mesh_identity) != Some(fem_mesh_identity(&fem_mesh));
     if changed {
         clear_mesh_dirty_tags_for_solver_mesh(current, &fem_mesh);
     }
-    current.fem_mesh = Some(fem_mesh);
+    current.fem_mesh = Some(fem_mesh.into());
     if changed {
         bump_mesh_revision(current);
         bump_mesh_build_revision(current);
@@ -1760,7 +1760,7 @@ struct CurrentLiveApplyFlags {
 }
 
 pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, metadata: Value) {
-    current.metadata = Some(metadata);
+    current.metadata = Some(metadata.into());
     if let Some(metadata) = current.metadata.as_ref() {
         // A session can be reused while switching execution lanes.  The FEM
         // mesh is solver-domain state, not scene authoring geometry; retain it
@@ -2006,7 +2006,7 @@ fn apply_frozen_spins_runtime_status(
 ) {
     let Some(metadata) = current
         .metadata
-        .get_or_insert_with(|| serde_json::json!({}))
+        .get_or_insert_with(|| serde_json::json!({}).into())
         .as_object_mut()
     else {
         return;
@@ -2146,7 +2146,8 @@ fn finalize_current_live_apply(
         current.fem_mesh = current
             .metadata
             .as_ref()
-            .and_then(extract_fem_mesh_from_metadata);
+            .and_then(extract_fem_mesh_from_metadata)
+            .map(Into::into);
     }
     if let Some(node_count) = current.fem_mesh.as_ref().map(|mesh| mesh.nodes.len()) {
         expand_uniform_material_latest_fields(&mut current.latest_fields, node_count);
@@ -4388,7 +4389,7 @@ mod tests {
     #[test]
     fn cached_physical_field_sources_survive_a_later_solver_progress_callback() {
         let mut current = test_current_snapshot();
-        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1"));
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1").into());
         add_physical_observation(&mut current, 4, Some(4.0e-12));
         let node_values = vec![[1.0, 0.0, 0.0]; 4];
         let mut latest_fields: LatestFields = serde_json::from_value(json!({
@@ -4839,7 +4840,7 @@ mod tests {
             fem_mesh: None,
         });
 
-        current.fem_mesh = Some(domain_fem_mesh("stale-fem-domain"));
+        current.fem_mesh = Some(domain_fem_mesh("stale-fem-domain").into());
         apply_current_live_metadata(
             &mut current,
             json!({
@@ -5469,7 +5470,7 @@ mod tests {
                 "backend": "fdm",
                 "grid_cells": [1, 1, 1]
             }
-        }));
+        }).into());
         current.latest_fields =
             serde_json::from_value(json!({"m": {"generation": 1}})).expect("valid fields fixture");
         add_physical_observation(&mut current, 1, None);
@@ -5610,7 +5611,7 @@ mod tests {
             let mut current = test_current_snapshot();
             current.metadata = Some(json!({
                 "artifact_layout": { "backend": "fdm", "grid_cells": [1, 1, 1] }
-            }));
+            }).into());
             if kind == "compute_fields" {
                 add_physical_observation(&mut current, 0, None);
             }
@@ -5788,7 +5789,7 @@ mod tests {
                 "backend": "fdm",
                 "grid_cells": [1, 1, 1]
             }
-        }));
+        }).into());
         add_physical_observation(&mut current, 1, Some(1.0e-12));
         let generation_id = domain_generation_id(&current);
         let mut command = session_command("cmd-fields", "compute_fields");
@@ -5854,7 +5855,7 @@ mod tests {
                 "backend": "fdm",
                 "grid_cells": [1, 1, 1]
             }
-        }));
+        }).into());
         current.accepted_terminal_field_generation =
             Some(crate::types::CurrentLiveFieldGeneration {
                 run_id: "run-1".to_string(),
@@ -5973,7 +5974,7 @@ mod tests {
                 "n_nodes": 16,
                 "n_elements": 8
             }
-        }));
+        }).into());
         current.engine_log = vec![
             engine_log(
                 1_700_000_000_600,
@@ -6044,7 +6045,7 @@ mod tests {
                 "error": "gmsh exited non-zero"
             }],
             "last_build_error": "gmsh exited non-zero"
-        }));
+        }).into());
         current.engine_log = vec![engine_log(
             1_700_000_000_700,
             "error",
@@ -6091,7 +6092,7 @@ mod tests {
                     "error": "FDM planner rejected the grid"
                 }
             ]
-        }));
+        }).into());
         let mut ledger = VecDeque::from([
             tracked_command("cmd-fdm-complete", "fdm_grid_refresh"),
             tracked_command("cmd-fdm-failed", "fdm_grid_refresh"),
@@ -6128,7 +6129,7 @@ mod tests {
                 "completed_at_unix_ms": 1_700_000_000_700u64,
                 "mesh_generation_id": "generation-a"
             }]
-        }));
+        }).into());
         current.engine_log = vec![engine_log(
             1_700_000_000_800,
             "error",
@@ -6598,7 +6599,7 @@ mod tests {
 
     fn current_with_accepted_fem_m_preview() -> (SessionStateResponse, LivePreviewField) {
         let mut current = test_current_snapshot();
-        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1"));
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1").into());
         let mut preview = preview_field("m");
         preview.source_step = 7;
         preview.source_time_seconds = Some(7.0e-12);
@@ -6651,7 +6652,7 @@ mod tests {
     #[test]
     fn new_mesh_frame_does_not_inherit_the_previous_fem_generation_hint() {
         let mut current = test_current_snapshot();
-        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1"));
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1").into());
         let mut previous_live_state =
             live_state_with_magnetization(7, vec![0.25; 12]);
         previous_live_state.latest_step.grid = [4, 1, 1];
@@ -6763,7 +6764,7 @@ mod tests {
     #[test]
     fn explicit_stale_fem_generation_does_not_qualify_live_m() {
         let mut current = test_current_snapshot();
-        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-current"));
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-current").into());
         let mut live_state = live_state_with_magnetization(
             8,
             vec![
@@ -6947,7 +6948,7 @@ mod tests {
     #[test]
     fn latest_m_writer_rejects_registered_replay_after_topology_change() {
         let mut current = test_current_snapshot();
-        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1"));
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1").into());
         let mut live_state = live_state_with_magnetization(7, vec![0.25; 12]);
         live_state.latest_step.grid = [4, 1, 1];
         live_state.latest_step.fem_mesh_generation_id =
@@ -6986,7 +6987,7 @@ mod tests {
             .as_object_mut()
             .expect("Latest m is an object")
             .remove("observation_frame");
-        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-2"));
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-2").into());
         let replay_fields = serde_json::from_value(json!({ "m": replay }))
             .expect("exact Latest m replay should deserialize");
 
@@ -7097,7 +7098,7 @@ mod tests {
         for change_generation_id in [false, true] {
             let mut current = test_current_snapshot();
             let original_mesh = domain_fem_mesh("mesh-generation-1");
-            current.fem_mesh = Some(original_mesh.clone());
+            current.fem_mesh = Some(original_mesh.clone().into());
             current.live_state = Some(live_state_with_magnetization(
                 7,
                 vec![
@@ -7158,7 +7159,7 @@ mod tests {
     #[test]
     fn standalone_snapshot_clears_magnetic_carriers_without_clearing_terminal_fence() {
         let mut current = test_current_snapshot();
-        current.fem_mesh = Some(domain_fem_mesh("old-magnetic-mesh"));
+        current.fem_mesh = Some(domain_fem_mesh("old-magnetic-mesh").into());
         current.latest_fields = serde_json::from_value(json!({
             "m": { "values": [[1.0, 0.0, 0.0]] },
             "mat_ms": { "values": [800_000.0] }
@@ -7238,7 +7239,7 @@ mod tests {
         let mut current = test_current_snapshot();
         current.metadata = Some(json!({
             "execution_plan": { "backend_plan": { "kind": "antenna_external_lead_inspection" } }
-        }));
+        }).into());
         let mut late = live_state_with_magnetization(5, vec![1.0, 0.0, 0.0]);
         late.latest_step.preview_field = Some(preview_field("H_eff"));
         apply_current_live_runtime_frame(
@@ -7934,7 +7935,7 @@ mod tests {
                 "backend": "fdm",
                 "grid_cells": [1, 1, 1]
             }
-        }));
+        }).into());
         add_physical_observation(&mut current, 52, None);
         current.latest_fields = serde_json::from_value(json!({
             "H_demag": {
@@ -8230,7 +8231,7 @@ mod tests {
                 "backend": "fdm",
                 "grid_cells": [2, 1, 1]
             }
-        }));
+        }).into());
         add_physical_observation(&mut current, 52, None);
         let field = |values: Vec<Vec<f64>>| -> LatestFields {
             serde_json::from_value(json!({
@@ -8289,7 +8290,7 @@ mod tests {
                 "backend": "fdm",
                 "grid_cells": [1, 1, 1]
             }
-        }));
+        }).into());
         add_physical_observation(&mut current, 10, None);
         add_physical_observation(&mut current, 11, None);
         current.latest_fields = serde_json::from_value(json!({

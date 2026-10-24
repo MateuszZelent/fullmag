@@ -1,14 +1,19 @@
 import type { DecodedTopology } from "@/kernel/api/codecs";
 
-type Viewport3DTopologyCells = Pick<
-  DecodedTopology,
-  | "cellNodes"
-  | "cellGlobalOrdinals"
-  | "cellOffsets"
-  | "cellTypes"
-  | "indices"
-  | "nodeCount"
->;
+import {
+  CELL_EDGES,
+  CELL_FACES,
+  cellEnd,
+  cellStart,
+  cellType,
+  countCellFaces,
+  forEachCellFace,
+  topologyCellCsr,
+  type TopologyCellCsr,
+  type Viewport3DTopologyCells,
+} from "./viewport3dTopologyCells";
+import { EdgeKeySet, FaceKeyTable, indexBound } from "./viewport3dTopologyKeys";
+
 
 type Viewport3DTopologyFacets = Pick<
   DecodedTopology,
@@ -20,26 +25,6 @@ type Viewport3DTopologyFacets = Pick<
 
 type Viewport3DTopologyInput = Viewport3DTopologyCells & Viewport3DTopologyFacets;
 
-const CELL_FACES: Readonly<Record<number, readonly (readonly number[])[]>> = {
-  1: [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]],
-  2: [[0, 1, 2], [3, 5, 4], [0, 3, 4, 1], [1, 4, 5, 2], [2, 5, 3, 0]],
-  3: [[0, 3, 2, 1], [0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]],
-  4: [
-    [0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4],
-    [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7],
-  ],
-};
-
-const CELL_EDGES: Readonly<Record<number, readonly (readonly [number, number])[]>> = {
-  1: [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
-  2: [[0, 1], [1, 2], [2, 0], [3, 4], [4, 5], [5, 3], [0, 3], [1, 4], [2, 5]],
-  3: [[0, 1], [1, 2], [2, 3], [3, 0], [0, 4], [1, 4], [2, 4], [3, 4]],
-  4: [
-    [0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6],
-    [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7],
-  ],
-};
-
 interface CanonicalFaceOwner {
   cellNodes: readonly number[];
   globalCellOrdinal: bigint | null;
@@ -47,10 +32,16 @@ interface CanonicalFaceOwner {
   type: number;
 }
 
-type CanonicalFaceIncidence = ReadonlyMap<
-  string,
-  readonly CanonicalFaceOwner[]
->;
+interface CanonicalFaceIncidence {
+  faces: FaceKeyTable;
+  /** First and last owner entry per face id (-1 when none). */
+  heads: Int32Array;
+  tails: Int32Array;
+  /** Owner entries: cell index and next entry of the same face. */
+  ownerCells: Int32Array;
+  ownerNext: Int32Array;
+  topology: Viewport3DTopologyCells;
+}
 
 export interface Viewport3DTopologySurfacePartInput {
   boundary_face_count: number;
@@ -105,8 +96,10 @@ export function buildViewport3DTopologyIndexBundle({
   >;
   topology: Viewport3DTopologyInput;
 }): Viewport3DTopologyIndexBundle {
-  const fallbackSurfaceIndices = buildTopologySurfaceIndices(topology);
-  const fallbackSurfaceEdgeIndices = buildTopologySurfaceEdgeIndices(topology);
+  // Boundary faces of the whole mesh feed both the surface and its edges.
+  const boundaryFaces = collectTopologyBoundaryFaces(topology, null);
+  const fallbackSurfaceIndices = triangulateFaces(boundaryFaces);
+  const fallbackSurfaceEdgeIndices = buildSemanticFaceEdgeIndices(boundaryFaces);
   const fallbackSurfaceNodeIndices = uniqueSortedIndices(fallbackSurfaceIndices);
   const fallbackVolumeEdgeIndices = buildTopologyVolumeEdgeIndices(topology);
   const canonicalFaceIncidence = buildCanonicalFaceIncidence(topology);
@@ -291,35 +284,50 @@ function buildPartSurfaceTrianglesWithSupplemental(
 function buildCanonicalFaceIncidence(
   topology: Viewport3DTopologyCells,
 ): CanonicalFaceIncidence {
-  const incidence = new Map<string, CanonicalFaceOwner[]>();
+  const cells = topologyCellCsr(topology);
+  const faceSlots = countCellFaces(cells);
+  const faces = new FaceKeyTable(faceSlots);
+  const heads = new Int32Array(faceSlots).fill(-1);
+  const tails = new Int32Array(faceSlots).fill(-1);
+  const ownerCells = new Int32Array(faceSlots);
+  const ownerNext = new Int32Array(faceSlots).fill(-1);
+  let owners = 0;
+  forEachCellFace(cells, topology.nodeCount, (cell, _localFace, n0, n1, n2, n3) => {
+    const id = faces.intern(n0, n1, n2, n3);
+    ownerCells[owners] = cell;
+    if ((tails[id] ?? -1) < 0) heads[id] = owners;
+    else ownerNext[tails[id] ?? 0] = owners;
+    tails[id] = owners;
+    owners += 1;
+  });
+  return { faces, heads, ownerCells, ownerNext, tails, topology };
+}
+
+function canonicalFaceOwners(
+  incidence: CanonicalFaceIncidence,
+  nodes: readonly number[],
+): CanonicalFaceOwner[] {
+  const id = incidence.faces.find(nodes);
+  if (id < 0) return [];
+  const { topology } = incidence;
   const globalOrdinals = topology.cellGlobalOrdinals;
   const hasGlobalOrdinals =
     globalOrdinals?.length === topologyCellCount(topology);
-  forEachTopologyCell(topology, (localCellIndex, type, cellNodes) => {
-    for (const localFace of CELL_FACES[type] ?? []) {
-      const nodes = localFace.map((corner) => cellNodes[corner]);
-      if (
-        nodes.some(
-          (node) => node === undefined || node >= topology.nodeCount,
-        )
-      ) {
-        continue;
-      }
-      const key = canonicalFaceKey(nodes as number[]);
-      const owners = incidence.get(key);
-      const owner = {
-        cellNodes,
-        globalCellOrdinal: hasGlobalOrdinals
-          ? globalOrdinals?.[localCellIndex] ?? null
-          : null,
-        localCellIndex,
-        type,
-      };
-      if (owners) owners.push(owner);
-      else incidence.set(key, [owner]);
-    }
-  });
-  return incidence;
+  const owners: CanonicalFaceOwner[] = [];
+  for (let entry = incidence.heads[id] ?? -1; entry >= 0; entry = incidence.ownerNext[entry] ?? -1) {
+    const localCellIndex = incidence.ownerCells[entry] ?? 0;
+    const cell = topologyCellAt(topology, localCellIndex);
+    if (!cell) continue;
+    owners.push({
+      cellNodes: cell.nodes,
+      globalCellOrdinal: hasGlobalOrdinals
+        ? globalOrdinals?.[localCellIndex] ?? null
+        : null,
+      localCellIndex,
+      type: cell.type,
+    });
+  }
+  return owners;
 }
 
 function resolveCanonicalFaceOwnerForPart(
@@ -327,7 +335,7 @@ function resolveCanonicalFaceOwnerForPart(
   incidence: CanonicalFaceIncidence,
   primaryClaim: PartElementClaim,
 ): CanonicalFaceOwner | null {
-  const owners = incidence.get(canonicalFaceKey(nodes)) ?? [];
+  const owners = canonicalFaceOwners(incidence, nodes);
   const primaryOwners = owners.filter((owner) =>
     isElementClaimed(
       owner.localCellIndex,
@@ -399,11 +407,17 @@ function derivedPartBoundaryFaces(
   if (!claim) return [];
 
   const selectedElements = new Set<number>();
-  forEachTopologyCell(topology, (element, _type, nodes) => {
-    if (isElementClaimed(element, nodes, [claim])) {
+  if (claim.type === "range") {
+    for (let element = claim.start; element < claim.end; element += 1) {
       selectedElements.add(element);
     }
-  });
+  } else {
+    forEachTopologyCell(topology, (element, _type, nodes) => {
+      if (isElementClaimed(element, nodes, [claim])) {
+        selectedElements.add(element);
+      }
+    });
+  }
   if (selectedElements.size === 0) return [];
 
   return collectTopologyBoundaryFaces(topology, selectedElements);
@@ -482,8 +496,12 @@ export function buildTopologySurfaceIndicesForElements(
   topology: Viewport3DTopologyCells,
   selectedElements: ReadonlySet<number> | null,
 ): Uint32Array {
+  return triangulateFaces(collectTopologyBoundaryFaces(topology, selectedElements));
+}
+
+function triangulateFaces(faces: readonly (readonly number[])[]): Uint32Array {
   const triangles: number[] = [];
-  for (const face of collectTopologyBoundaryFaces(topology, selectedElements)) {
+  for (const face of faces) {
     appendTriangulatedFace(triangles, face);
   }
   return Uint32Array.from(triangles);
@@ -493,25 +511,36 @@ function collectTopologyBoundaryFaces(
   topology: Viewport3DTopologyCells,
   selectedElements: ReadonlySet<number> | null,
 ): readonly (readonly number[])[] {
-  const faces = new Map<string, { count: number; nodes: number[] }>();
-  forEachTopologyCell(topology, (element, type, nodes) => {
-    if (selectedElements && !selectedElements.has(element)) return;
-    for (const localFace of CELL_FACES[type] ?? []) {
-      const face = localFace.map((corner) => nodes[corner]);
-      if (face.some((node) => node === undefined || node >= topology.nodeCount)) {
-        continue;
+  const cells = topologyCellCsr(topology);
+  const faceSlots = countCellFaces(cells);
+  const faces = new FaceKeyTable(faceSlots);
+  const counts = new Int32Array(faceSlots);
+  // The first occurrence keeps its own node order for triangulation.
+  const firstCells = new Int32Array(faceSlots);
+  const firstLocalFaces = new Uint8Array(faceSlots);
+  forEachCellFace(
+    cells,
+    topology.nodeCount,
+    (cell, localFace, n0, n1, n2, n3) => {
+      const id = faces.intern(n0, n1, n2, n3);
+      if (faces.created) {
+        firstCells[id] = cell;
+        firstLocalFaces[id] = localFace;
       }
-      const resolved = face as number[];
-      const key = `${resolved.length}:${[...resolved].sort((a, b) => a - b).join(":")}`;
-      const existing = faces.get(key);
-      if (existing) existing.count += 1;
-      else faces.set(key, { count: 1, nodes: resolved });
-    }
-  });
-
-  return Array.from(faces.values()).flatMap((face) =>
-    face.count === 1 ? [face.nodes] : [],
+      counts[id] = (counts[id] ?? 0) + 1;
+    },
+    selectedElements,
   );
+
+  const boundary: number[][] = [];
+  for (let id = 0; id < faces.size; id += 1) {
+    if (counts[id] !== 1) continue;
+    const cell = firstCells[id] ?? 0;
+    const start = cellStart(cells, cell);
+    const localFace = CELL_FACES[cellType(cells, cell)]?.[firstLocalFaces[id] ?? 0] ?? [];
+    boundary.push(localFace.map((corner) => cells.nodes[start + corner] ?? 0));
+  }
+  return boundary;
 }
 
 export function buildTopologySurfaceEdgeIndices(
@@ -535,13 +564,15 @@ function buildSemanticFaceEdgeIndices(
   faces: readonly (readonly number[])[],
 ): Uint32Array | null {
   const edges: number[] = [];
-  const seen = new Set<string>();
+  let bound = 0;
+  for (const face of faces) bound = Math.max(bound, indexBound(face));
+  const seen = new EdgeKeySet(bound);
   for (const face of faces) {
     for (let index = 0; index < face.length; index += 1) {
       const left = face[index];
       const right = face[(index + 1) % face.length];
       if (left === undefined || right === undefined) continue;
-      appendTetraEdgeByStringKey(edges, seen, left, right);
+      appendEdge(edges, seen, left, right);
     }
   }
   return edges.length ? Uint32Array.from(edges) : null;
@@ -550,7 +581,7 @@ function buildSemanticFaceEdgeIndices(
 export function buildTopologyVolumeEdgeIndices(
   topology: Viewport3DTopologyCells,
 ): Uint32Array {
-  return buildTopologyVolumeEdgeIndicesWhere(topology, () => true);
+  return buildTopologyVolumeEdgeIndicesWhere(topology, null);
 }
 
 export function buildTopologyVolumeEdgeIndicesForElements(
@@ -667,7 +698,7 @@ export function buildSurfaceEdgeIndices(
     return null;
   }
 
-  const seen = new Set<string>();
+  const seen = new EdgeKeySet(indexBound(surfaceIndices));
   const maxEdges = surfaceIndices.length;
   const edges = new Uint32Array(maxEdges * 2);
   let edgeCount = 0;
@@ -707,8 +738,9 @@ export function buildUnclaimedVolumeEdgeIndices(
   if (claims.length === 0) return null;
 
   let claimedElementCount = 0;
+  const rangeClaimsOnly = claims.every((claim) => claim.type === "range");
   const edges = buildTopologyVolumeEdgeIndicesWhere(topology, (element, nodes) => {
-    const claimed = isElementClaimed(element, nodes, claims);
+    const claimed = isElementClaimed(element, rangeClaimsOnly ? [] : nodes(), claims);
     if (claimed) claimedElementCount += 1;
     return !claimed;
   });
@@ -719,13 +751,16 @@ export function buildUnclaimedVolumeEdgeIndices(
 }
 
 export function uniqueSortedIndices(indices: Uint32Array): Uint32Array {
-  const unique = new Set<number>();
-  for (let index = 0; index < indices.length; index += 1) {
-    unique.add(indices[index] ?? 0);
+  const sorted = Uint32Array.from(indices).sort();
+  let unique = 0;
+  for (let index = 0; index < sorted.length; index += 1) {
+    const value = sorted[index] ?? 0;
+    if (unique === 0 || sorted[unique - 1] !== value) {
+      sorted[unique] = value;
+      unique += 1;
+    }
   }
-  return new Uint32Array(
-    Array.from(unique).toSorted((left, right) => left - right),
-  );
+  return sorted.slice(0, unique);
 }
 
 export function transferablesForTopologyIndexBundle(
@@ -819,7 +854,7 @@ function buildPartVolumeEdgeIndicesFromNodes(
 
   const edges = buildTopologyVolumeEdgeIndicesWhere(
     topology,
-    (_element, nodes) => nodes.every((node) => nodeSet.has(node)),
+    (_element, nodes) => nodes().every((node) => nodeSet.has(node)),
   );
   return edges.length ? edges : null;
 }
@@ -979,20 +1014,34 @@ function forEachTopologyCell(
 
 function buildTopologyVolumeEdgeIndicesWhere(
   topology: Viewport3DTopologyCells,
-  include: (element: number, nodes: readonly number[]) => boolean,
+  // Nodes are materialized only for predicates that read them.
+  include: ((element: number, nodes: () => readonly number[]) => boolean) | null,
 ): Uint32Array {
+  const cells = topologyCellCsr(topology);
   const edges: number[] = [];
-  const seen = new Set<string>();
-  forEachTopologyCell(topology, (element, type, nodes) => {
-    if (!include(element, nodes)) return;
-    for (const [leftCorner, rightCorner] of CELL_EDGES[type] ?? []) {
-      const left = nodes[leftCorner];
-      const right = nodes[rightCorner];
-      if (left === undefined || right === undefined) continue;
-      appendTetraEdgeByStringKey(edges, seen, left, right);
+  const seen = new EdgeKeySet(Math.max(topology.nodeCount, indexBound(cells.nodes)));
+  for (let element = 0; element < cells.count; element += 1) {
+    const start = cellStart(cells, element);
+    const end = cellEnd(cells, element);
+    if (include && !include(element, () => Array.from(cells.nodes.subarray(start, end)))) continue;
+    for (const [leftCorner, rightCorner] of CELL_EDGES[cellType(cells, element)] ?? []) {
+      if (start + leftCorner >= end || start + rightCorner >= end) continue;
+      appendEdge(edges, seen, cells.nodes[start + leftCorner] ?? 0, cells.nodes[start + rightCorner] ?? 0);
     }
-  });
+  }
   return Uint32Array.from(edges);
+}
+
+function appendEdge(
+  edges: number[],
+  seen: EdgeKeySet,
+  first: number,
+  second: number,
+): void {
+  if (first === second) return;
+  const low = Math.min(first, second);
+  const high = Math.max(first, second);
+  if (seen.add(low, high)) edges.push(low, high);
 }
 
 function topologyFacetNodes(
@@ -1062,7 +1111,7 @@ function appendTetraEdgeByStringKey(
 
 function appendSurfaceEdge(
   edges: Uint32Array,
-  seen: Set<string>,
+  seen: EdgeKeySet,
   edgeCount: number,
   first: number,
   second: number,
@@ -1070,9 +1119,7 @@ function appendSurfaceEdge(
   if (first === second) return edgeCount;
   const minVal = first < second ? first : second;
   const maxVal = first > second ? first : second;
-  const key = `${minVal}:${maxVal}`;
-  if (seen.has(key)) return edgeCount;
-  seen.add(key);
+  if (!seen.add(minVal, maxVal)) return edgeCount;
   edges[edgeCount] = minVal;
   edges[edgeCount + 1] = maxVal;
   return edgeCount + 2;

@@ -497,7 +497,7 @@ async fn current_live_waiting_for_compute_gate(
         let run_id = run.run_id.clone();
         let preparation_ready = accepted_frontier_preparation_is_ready(
             snapshot.simulation_preparation.as_ref(),
-            snapshot.mesh_workspace.as_ref(),
+            snapshot.mesh_workspace.as_deref(),
             &run_id,
         );
         (run_id, preparation_ready)
@@ -1072,7 +1072,11 @@ async fn publish_accepted_live_study_with_preparation_failure_under_transition(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    let mut metadata = snapshot.metadata.take().unwrap_or_else(|| json!({}));
+    let mut metadata = snapshot
+        .metadata
+        .take()
+        .map(crate::shared_json::SharedJson::into_value)
+        .unwrap_or_else(|| json!({}));
     if !metadata.is_object() {
         metadata = json!({"previous_metadata": metadata});
     }

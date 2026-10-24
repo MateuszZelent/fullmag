@@ -112,6 +112,7 @@ export function resolveObjectVisualizationDataState({
   backendAvailabilityStatus,
   carrier,
   fieldCatalog,
+  fieldCatalogRequested = true,
   fieldCatalogStatus,
   quantityId,
   requiresFieldData,
@@ -121,6 +122,8 @@ export function resolveObjectVisualizationDataState({
   backendAvailabilityStatus?: string;
   carrier?: TargetFieldCarrierDescriptor | null;
   fieldCatalog: FieldCatalogResource | null | undefined;
+  /** False while the catalog is demand-driven and nobody has asked for it. */
+  fieldCatalogRequested?: boolean;
   fieldCatalogStatus: string;
   quantityId: string;
   requiresFieldData: boolean;
@@ -152,6 +155,9 @@ export function resolveObjectVisualizationDataState({
       return "Supported";
     }
     if (backendState === "ready" && !fieldCatalog) {
+      // An unrequested catalog never arrives; the backend's ready state is
+      // then the only evidence, so do not show an endless "Loading".
+      if (!fieldCatalogRequested) return "Ready";
       // The backend reports the quantity, but its field payload has not
       // reached the inspector yet: that is loading, not ready data.
       return fieldCatalogStatus === "error" ? "Ready" : "Loading";

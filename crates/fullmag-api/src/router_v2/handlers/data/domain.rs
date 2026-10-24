@@ -170,7 +170,7 @@ pub(crate) fn domain_meta_for_snapshot(snapshot: &SessionStateResponse) -> Domai
         },
         grid,
         element_type: is_fem
-            .then(|| snapshot.fem_mesh.as_ref().and_then(fem_element_type))
+            .then(|| snapshot.fem_mesh.as_deref().and_then(fem_element_type))
             .flatten(),
     }
 }
@@ -1766,7 +1766,7 @@ pub async fn get_domain_topology(
             // Hashing and encoding a large FEM domain must not occupy an
             // async executor thread or keep the live-state read lock held.
             let response = tokio::task::spawn_blocking(move || {
-                let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
+                let topology_hash = mesh.topology_fingerprint().to_owned();
                 let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
                     "domain-topology:{}:{topology_hash}:{mesh_revision}",
                     mesh.generation_id.as_deref().unwrap_or("no-generation"),

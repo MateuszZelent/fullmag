@@ -746,21 +746,24 @@ fn admit_candidate(
             };
             lease.host_launch_binding = Some(binding);
             let cpu_ids = host.preparation_cpu_ids(&lease.resource_id)?;
-            let request = match retry_host_admission_writer_busy(
-                || {
-                    fullmag_runtime_control::host_allocation::host_request_for_preparation_lease(
-                        store,
-                        host.ledger(),
-                        &lease,
-                        cpu_ids,
-                    )
-                },
-                || {
-                    format!(
-                        "preparation admission: read host policy and compute-node owner for run {} task {} resource {}",
-                        candidate.run_id, candidate.task_id, offer.resource_id
-                    )
-                },
+            let request = match defer_if_compute_sample_expired(
+                host,
+                retry_host_admission_writer_busy(
+                    || {
+                        fullmag_runtime_control::host_allocation::host_request_for_preparation_lease(
+                            store,
+                            host.ledger(),
+                            &lease,
+                            cpu_ids,
+                        )
+                    },
+                    || {
+                        format!(
+                            "preparation admission: read host policy and compute-node owner for run {} task {} resource {}",
+                            candidate.run_id, candidate.task_id, offer.resource_id
+                        )
+                    },
+                ),
             )? {
                 HostAdmissionOperation::Completed(request) => request,
                 HostAdmissionOperation::Deferred => return Ok(CandidateAdmission::Deferred),
@@ -769,24 +772,27 @@ fn admit_candidate(
             // before it reads or publishes a tentative reservation. A typed
             // busy result therefore cannot represent a partial lease commit;
             // ordinary validation/publication errors remain fatal below.
-            match retry_host_admission_writer_busy(
-                || {
-                    host.ledger()
-                        .try_commit_preparation_resource_lease_from_pool(
-                            &request,
-                            store,
-                            pool_id,
-                            pool_generation,
-                            candidate.authorization_sequence,
-                            &lease,
+            match defer_if_compute_sample_expired(
+                host,
+                retry_host_admission_writer_busy(
+                    || {
+                        host.ledger()
+                            .try_commit_preparation_resource_lease_from_pool(
+                                &request,
+                                store,
+                                pool_id,
+                                pool_generation,
+                                candidate.authorization_sequence,
+                                &lease,
+                            )
+                    },
+                    || {
+                        format!(
+                            "preparation admission: commit host reservation and session lease for run `{}` task `{}` resource `{}`",
+                            candidate.run_id, candidate.task_id, offer.resource_id
                         )
-                },
-                || {
-                    format!(
-                        "preparation admission: commit host reservation and session lease for run `{}` task `{}` resource `{}`",
-                        candidate.run_id, candidate.task_id, offer.resource_id
-                    )
-                },
+                    },
+                ),
             )? {
                 HostAdmissionOperation::Completed(disposition) => disposition,
                 HostAdmissionOperation::Deferred => return Ok(CandidateAdmission::Deferred),
@@ -1073,6 +1079,33 @@ fn retry_host_admission_writer_busy<T>(
         }
         Err(error) => Err(error),
     }
+}
+
+/// The compute-node sample can expire between the pre-admission gate and the
+/// ledger's own freshness check. That refusal happens before the reservation
+/// is published, so the candidate is retried on the next poll instead of
+/// failing the resident scheduler (and with it the whole runtime service).
+/// Any failure while the sample is still current remains fatal.
+fn defer_if_compute_sample_expired<T>(
+    host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
+    result: Result<HostAdmissionOperation<T>>,
+) -> Result<HostAdmissionOperation<T>> {
+    let error = match result {
+        Ok(operation) => return Ok(operation),
+        Err(error) => error,
+    };
+    if preparation_admission_snapshot_ready(|| host.has_current_compute_snapshot())? {
+        return Err(error);
+    }
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "schema_version": "scheduler_admission_deferred.v1",
+            "component": "accepted_preparation_scheduler",
+            "detail": format!("compute-node sample expired during admission: {error:#}"),
+        })
+    );
+    Ok(HostAdmissionOperation::Deferred)
 }
 
 fn is_store_writer_busy(error: &anyhow::Error) -> bool {

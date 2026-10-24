@@ -56,14 +56,14 @@ struct PersistedCurrentLiveSnapshot {
     live_state: Option<crate::types::LiveState>,
     runtime_status: RuntimeStatusView,
     capabilities: Option<fullmag_runner::BackendCapabilities>,
-    metadata: Option<serde_json::Value>,
-    mesh_workspace: Option<serde_json::Value>,
+    metadata: Option<crate::shared_json::SharedJson>,
+    mesh_workspace: Option<crate::shared_json::SharedJson>,
     stage_execution: Option<crate::types::StageExecutionState>,
     scene_document: Option<fullmag_authoring::SceneDocument>,
     scalar_rows: Vec<crate::types::ScalarRow>,
     engine_log: Vec<crate::types::EngineLogEntry>,
     quantities: Vec<crate::types::QuantityDescriptor>,
-    fem_mesh: Option<fullmag_runner::FemMeshPayload>,
+    fem_mesh: Option<crate::shared_mesh::SharedFemMesh>,
     latest_fields: crate::types::LatestFields,
     #[serde(default)]
     field_publication_bundles: BTreeMap<String, crate::schemas::common::FieldPublicationBundle>,
@@ -1934,7 +1934,7 @@ mod accepted_fms_persistence_tests {
             snapshot.scene_document = Some(scene(17));
             snapshot.metadata = Some(serde_json::json!({
                 "docker_startup": {"run_id": run_id, "scene_revision": 17}
-            }));
+            }).into());
         }
 
         let exported = export_session_with_context(

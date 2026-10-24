@@ -1335,7 +1335,7 @@ fn build_startup_snapshot(
             "source_size_bytes": loaded.source.size_bytes,
             "scene_revision": loaded.scene.revision,
         }
-    }));
+    }).into());
     snapshot.runtime_status = build_runtime_status_view("activating");
     snapshot.simulation_preparation_revision = 1;
     snapshot.simulation_preparation = Some(build_startup_preparation_progress(&snapshot));
@@ -1590,7 +1590,7 @@ async fn publish_startup_result(
             "runtime_metadata": loaded.runtime,
             "output_storage_binding": loaded.output_storage_binding,
         }
-    }));
+    }).into());
     snapshot.state_version = snapshot.state_version.saturating_add(1);
     let response = DockerStartupResponse {
         schema: RESPONSE_SCHEMA,
@@ -2197,7 +2197,11 @@ fn apply_accepted_recovery_snapshot(
         return false;
     }
     apply_preparation_failure_snapshot(snapshot, error_code, error_message);
-    let mut metadata = snapshot.metadata.take().unwrap_or_else(|| json!({}));
+    let mut metadata = snapshot
+        .metadata
+        .take()
+        .map(crate::shared_json::SharedJson::into_value)
+        .unwrap_or_else(|| json!({}));
     if !metadata.is_object() {
         metadata = json!({"previous_metadata": metadata});
     }
@@ -2254,7 +2258,7 @@ fn apply_accepted_recovery_snapshot(
             .entry("run_id".to_string())
             .or_insert_with(|| json!(run.run_id.clone()));
     }
-    snapshot.metadata = Some(metadata);
+    snapshot.metadata = Some(metadata.into());
     snapshot.session.status = "waiting_for_compute".to_string();
     snapshot.runtime_status = build_runtime_status_view("waiting_for_compute");
     if let Some(run) = snapshot.run.as_mut() {
@@ -2315,7 +2319,11 @@ fn apply_startup_failure_snapshot(
 
     // A scene edit can retain the same session/run/epoch. Preserve the current
     // authoring metadata and record this stale attempt separately.
-    let mut metadata = snapshot.metadata.take().unwrap_or_else(|| json!({}));
+    let mut metadata = snapshot
+        .metadata
+        .take()
+        .map(crate::shared_json::SharedJson::into_value)
+        .unwrap_or_else(|| json!({}));
     if !metadata.is_object() {
         metadata = json!({"previous_metadata": metadata});
     }
@@ -2354,7 +2362,7 @@ fn apply_startup_failure_snapshot(
             startup_object.insert("run_id".to_string(), json!(run.run_id.clone()));
         }
     }
-    snapshot.metadata = Some(metadata);
+    snapshot.metadata = Some(metadata.into());
     if scene_matches {
         apply_preparation_failure_snapshot(
             snapshot,
@@ -2594,7 +2602,7 @@ mod tests {
         snapshot.metadata = Some(json!({
             "editor": {"draft": "keep"},
             STARTUP_METADATA_KEY: {"request": "current-placeholder"}
-        }));
+        }).into());
         let context = placeholder_context(&snapshot);
         let error = ApiError::conflict("startup_scene_revision_or_content_changed");
 
@@ -2659,7 +2667,7 @@ mod tests {
                 "run_id": "run-accepted-recovery",
                 "step_ids": ["step-recovery"]
             }
-        }));
+        }).into());
         let context = placeholder_context(&snapshot);
         let preparation_error =
             crate::live_accepted_execution::AcceptedLiveStudyPreparationError {
@@ -2870,7 +2878,7 @@ mod tests {
                 "scene_revision": scene.revision,
                 "runtime_metadata": {"interactive": true, "wait_for_solve": true},
             }
-        }));
+        }).into());
         let context = placeholder_context(&snapshot);
         let error = ApiError::conflict_with_code(
             "accepted_frontier_preparation_failed",
@@ -2979,7 +2987,7 @@ mod tests {
                 "preparation_error_code": "accepted_run_catalog_failed",
                 "preparation_error": "catalog materialization failed",
             }
-        }));
+        }).into());
 
         let error = replay_or_reject(&request, &source, &snapshot)
             .expect_err("a preparation failure must not replay as accepted");

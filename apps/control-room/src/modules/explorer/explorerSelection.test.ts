@@ -363,6 +363,39 @@ describe("selectExplorerNode", () => {
     );
   });
 
+  it("derives Airbox inspector state facets from the node mesh status", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:airbox",
+      kind: "airbox.root",
+      label: "Airbox",
+      parentId: "model:universe",
+      status: "mesh-ready",
+    }, "explorer");
+
+    expect(kernel.selection.get()?.ref).toMatchObject({
+      availability: "available",
+      executionState: "completed",
+      resourceState: "ready",
+      type: "airbox",
+    });
+
+    selectExplorerNode(kernel, {
+      availability: "partial",
+      id: "model:airbox:visualization",
+      kind: "airbox.visualization",
+      label: "Visualization",
+      parentId: "model:airbox",
+      status: "mesh-stale",
+    }, "explorer");
+
+    expect(kernel.selection.get()?.ref).toMatchObject({
+      availability: "partial",
+      resourceState: "stale",
+      type: "airbox",
+    });
+  });
+
   it("routes a multilayer Airbox visualization child to the canonical target", () => {
     const kernel = makeKernel();
     selectExplorerNode(kernel, {

@@ -2386,7 +2386,7 @@ fn resolve_spatial_field_metadata<'a>(
         let mesh = snapshot.fem_mesh.as_ref().ok_or_else(|| {
             ApiError::conflict(format!("field '{quantity_id}' has no FEM topology carrier"))
         })?;
-        let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+        let topology_fingerprint = mesh.topology_fingerprint().to_owned();
         match spec.location {
             QuantityLocation::Cell
                 if matches!(source_kind, SpatialFieldSourceKind::Materialized | SpatialFieldSourceKind::Preview)

@@ -613,6 +613,41 @@ export class ResourceRuntimeStore<TData = unknown> {
           return;
         }
         entry.deadlineTimer = null;
+        // A slow response is not a failed one: while attempts remain, abort
+        // this request and retry with a longer window instead of settling an
+        // error that the hook would never reload for this revision.
+        const nextAttempt = entry.retryAttempt + 1;
+        if (retryPolicy && nextAttempt < boundedPositiveNumber(retryPolicy.maxAttempts, 3)) {
+          const retryAfterMs = boundedPositiveNumber(retryPolicy.retryAfterMs, 250);
+          entry.retryAttempt = nextAttempt;
+          entry.retryDeadlineAtMs =
+            Date.now() +
+            retryAfterMs +
+            boundedPositiveNumber(retryPolicy.deadlineMs, 5_000) * (nextAttempt + 1);
+          controller.abort();
+          const retryRequest: ResourceRuntimeLoadRequest<TLoadData> = {
+            abortStaleInflight,
+            externalRevision,
+            force: true,
+            load,
+            minRefetchIntervalMs,
+            retryPolicy,
+            retrying: true,
+            resolveRevision,
+            resourceKey,
+          };
+          entry.retryExternalRevision = externalRevision;
+          entry.retryRequest = retryRequest;
+          const timer = setTimeout(() => {
+            if (entry.retryTimer !== timer) return;
+            entry.retryTimer = null;
+            entry.retryRequest = null;
+            if (!this.loadPaused(resourceKey)) void this.ensureLoad(retryRequest);
+          }, retryAfterMs);
+          entry.retryTimer = timer;
+          this.notify(entry);
+          return;
+        }
         const timeoutError = new Error("Resource load deadline exceeded");
         timeoutError.name = "TimeoutError";
         entry.snapshot = {

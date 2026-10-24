@@ -554,18 +554,19 @@ function useObjectVisualizationPanelState(
   );
   const fieldCatalogRequested =
     targetKey !== null && fieldCatalogRequestedTargetKey === targetKey;
+  const fieldCatalogEnabled = artifactInspection ? Boolean(artifactInspectionOwner) :
+    fdmTarget ||
+    target?.kind === "airbox" ||
+    shouldLoadObjectVisualizationFieldCatalog({
+      requested: fieldCatalogRequested,
+      surfaceColorSource: settings?.surfaceColorSource,
+      targetActive: Boolean(resolvedTarget),
+      vectorsVisible: Boolean(settings?.vectorsVisible),
+    });
   const rawFieldCatalog = useFieldCatalogResource({
     stageId: artifactInspection ? artifactInspectionOwner?.runtimeStageId ?? "" : undefined,
     runId: artifactInspectionOwner?.runId,
-    enabled: artifactInspection ? Boolean(artifactInspectionOwner) :
-      fdmTarget ||
-      target?.kind === "airbox" ||
-      shouldLoadObjectVisualizationFieldCatalog({
-        requested: fieldCatalogRequested,
-        surfaceColorSource: settings?.surfaceColorSource,
-        targetActive: Boolean(resolvedTarget),
-        vectorsVisible: Boolean(settings?.vectorsVisible),
-      }),
+    enabled: fieldCatalogEnabled,
   });
   const rawQuantityCatalog = useQuantityCatalogResource({
     stageId: artifactInspection ? artifactInspectionOwner?.runtimeStageId ?? "" : undefined,
@@ -655,6 +656,7 @@ function useObjectVisualizationPanelState(
       : undefined,
     carrier: targetFieldCarrier,
     fieldCatalog: fieldCatalog.data,
+    fieldCatalogRequested: Boolean(fieldCatalogEnabled),
     fieldCatalogStatus: fieldCatalog.status,
     quantityId: settings?.activeQuantityId ?? "",
     requiresFieldData,

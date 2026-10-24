@@ -354,6 +354,38 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toBe("Materializing");
   });
 
+  it("reports backend-ready data as ready while the catalog is not requested", () => {
+    const availability: FieldAvailabilityResource = {
+      carrier_id: "carrier:object",
+      generation: "generation-7",
+      materialized: true,
+      pending: false,
+      quantity_id: "m",
+      reason_code: null,
+      revision: 1,
+      scope_id: "body",
+      scope_kind: "object",
+      state: "ready",
+      supported: true,
+      target_id: "object:body",
+    };
+    const input = {
+      backendAvailability: availability,
+      backendAvailabilityStatus: "ready",
+      carrier: null,
+      fieldCatalog: null,
+      fieldCatalogStatus: "idle",
+      quantityId: "m",
+      requiresFieldData: true,
+      target: { id: "object:body", kind: "object" as const, objectId: "body" },
+    };
+
+    expect(
+      resolveObjectVisualizationDataState({ ...input, fieldCatalogRequested: false }),
+    ).toBe("Ready");
+    expect(resolveObjectVisualizationDataState(input)).toBe("Loading");
+  });
+
   it("keeps a target last-good payload stale while backend rematerializes", () => {
     const availability: FieldAvailabilityResource = {
       carrier_id: "carrier:airbox",

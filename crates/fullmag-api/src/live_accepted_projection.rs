@@ -1227,7 +1227,7 @@ fn load_verified_outputs(
 #[derive(Debug, Clone)]
 struct PreparedProjectionDomain {
     preparation_id: String,
-    execution_plan: fullmag_ir::ExecutionPlanIR,
+    execution_plan: Arc<fullmag_ir::ExecutionPlanIR>,
     plan_fingerprint: String,
 }
 
@@ -1295,11 +1295,7 @@ async fn ensure_stage_preparation_for_step(
             if !accepted_state_ref_matches_plan(accepted_state_ref, context.run_id.as_str(), step_id, plan_fingerprint) {
                 return None;
             }
-            let metadata = snapshot.metadata.as_ref()?;
-            let execution_plan = serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(
-                metadata.get("execution_plan")?.clone(),
-            )
-            .ok()?;
+            let execution_plan = snapshot.metadata.as_ref()?.execution_plan()?;
             Some(PreparedProjectionDomain {
                 preparation_id: preparation_id.to_owned(),
                 execution_plan,
@@ -1329,7 +1325,7 @@ async fn ensure_stage_preparation_for_step(
             .await?;
         PreparedProjectionDomain {
             preparation_id: published.read_model.preparation_id,
-            execution_plan: published.read_model.execution_plan,
+            execution_plan: Arc::new(published.read_model.execution_plan),
             plan_fingerprint: published.read_model.plan_fingerprint,
         }
     };

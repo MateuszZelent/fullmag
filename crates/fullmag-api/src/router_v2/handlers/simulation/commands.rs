@@ -3389,7 +3389,7 @@ mod tests {
         let run = snapshot.run.as_ref().expect("accepted run manifest");
         assert_eq!(run.run_id, "accepted-run");
         assert_eq!(run.total_steps, 2);
-        assert_eq!(snapshot.metadata.as_ref(), Some(&metadata));
+        assert_eq!(snapshot.metadata.as_deref(), Some(&metadata));
     }
 
     #[test]
@@ -3454,7 +3454,7 @@ mod tests {
         let mut snapshot = default_current_live_state(&request);
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": { "backend": "fdm_multilayer" }
-        }));
+        }).into());
 
         assert!(compute_fields_materialization_requirements(&snapshot).is_empty());
     }
@@ -3469,7 +3469,7 @@ mod tests {
         snapshot.capabilities = Some(compatibility_capability_fixture());
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": { "backend": "fdm_multilayer" }
-        }));
+        }).into());
 
         assert!(compute_fields_materialization_requirements(&snapshot).is_empty());
     }
@@ -3483,7 +3483,7 @@ mod tests {
         let mut snapshot = default_current_live_state(&request);
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": { "backend": "fdm_multilayer" }
-        }));
+        }).into());
 
         let mut compatibility = resolved_capability_fixture();
         compatibility

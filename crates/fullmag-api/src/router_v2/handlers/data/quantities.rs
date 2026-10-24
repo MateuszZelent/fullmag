@@ -525,13 +525,13 @@ mod tests {
                     "grid": { "cells": [1, 1, 1] }
                 }
             }
-        }));
+        }).into());
         snapshot.mesh_workspace = Some(serde_json::json!({
             "preparation_id": "prep-current",
             "plan_fingerprint": "plan-current",
             "source_scene_revision": 7,
             "status": "completed"
-        }));
+        }).into());
         let mut scene = fullmag_authoring::SceneDocument::default();
         scene.revision = 7;
         snapshot.scene_document = Some(scene);
@@ -729,7 +729,7 @@ mod tests {
         snapshot.capabilities = None;
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": { "backend_plan": { "kind": "antenna_external_lead_inspection" } }
-        }));
+        }).into());
         let mut response = QuantityCatalogResponse::build();
         annotate_runtime_quantity_state(&mut response, &snapshot);
 

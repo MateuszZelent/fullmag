@@ -3862,7 +3862,7 @@ fn resolve_field_scope(
             topology, mapping, ..
         }) => (*topology, Some(mapping)),
         _ => (
-            snapshot.fem_mesh.as_ref().ok_or_else(|| {
+            snapshot.fem_mesh.as_deref().ok_or_else(|| {
                 ApiError::bad_request(format!(
                     "field scope '{scope_kind}' requires FEM mesh topology"
                 ))
@@ -5235,7 +5235,7 @@ async fn get_field_vector_unfenced(
         snapshot
             .fem_mesh
             .as_ref()
-            .map(fullmag_runner::fem_mesh_topology_fingerprint)
+            .map(|mesh| mesh.topology_fingerprint().to_owned())
     };
     let topology_hash_bytes = topology_hash
         .as_deref()
@@ -5896,7 +5896,7 @@ fn serialize_analysis_field_vector_binary(
         (node_indices, FieldVectorIndexing::ExplicitNodeIndices)
     };
 
-    let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+    let topology_hash = mesh.topology_fingerprint().to_owned();
     let topology_hash_bytes = mesh_topology_hash_bytes(&topology_hash)?;
     let (scope_kind, scope_id) = match scope {
         Some(scope) => (scope.kind.as_str(), scope.id.as_deref().unwrap_or("")),
@@ -6397,7 +6397,7 @@ fn validate_eigen_mode_source_mesh_identity(
             relative_path, source.indexing
         )));
     }
-    let current_topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+    let current_topology_fingerprint = mesh.topology_fingerprint().to_owned();
     if source.topology_fingerprint.is_empty()
         || source.topology_fingerprint != current_topology_fingerprint
     {
@@ -9441,7 +9441,7 @@ mod tests {
                 "origin_m": [0.0, 0.0, 0.0],
                 "cell_size": [1.0, 1.0, 1.0]
             }
-        }));
+        }).into());
         snapshot
             .field_quantity_revisions
             .insert("H_demag".to_string(), 7);
@@ -9516,7 +9516,7 @@ mod tests {
                 "backend": "fdm",
                 "grid_cells": [1, 1, 1]
             }
-        }));
+        }).into());
         snapshot.live_state = Some(
             serde_json::from_value(serde_json::json!({
                 "status": "running",
@@ -9636,7 +9636,7 @@ mod tests {
                 "backend": "fdm_multilayer",
                 "grid_cells": [2, 1, 1]
             }
-        }));
+        }).into());
         add_physical_field_source(&mut snapshot, 2, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 1,
@@ -9717,7 +9717,7 @@ mod tests {
             generation_id: Some("mesh-generation-1".to_string()),
             per_domain_quality: std::collections::HashMap::new(),
             build_report: None,
-        });
+        }.into());
         snapshot.field_quantity_revisions.insert("m".to_string(), 9);
         add_physical_field_source(&mut snapshot, 2, None);
         snapshot.preview_cache.insert(LivePreviewField {
@@ -9781,7 +9781,7 @@ mod tests {
                 "backend": "fdm",
                 "grid_cells": [1, 1, 1]
             }
-        }));
+        }).into());
         snapshot.live_state = Some(
             serde_json::from_value(serde_json::json!({
                 "status": "running",
@@ -9894,7 +9894,7 @@ mod tests {
                 "origin_m": [0.0, 0.0, 0.0],
                 "cell_size": [1.0, 1.0, 1.0]
             }
-        }));
+        }).into());
         snapshot.field_samples_revision = 91;
         snapshot
             .field_quantity_revisions
@@ -10090,7 +10090,7 @@ mod tests {
         let mut snapshot = default_current_live_state(&request);
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": { "backend_plan": { "kind": "fdm" } }
-        }));
+        }).into());
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "source_step": 12,
@@ -10260,7 +10260,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "session_id": "scope-test" }))
                 .expect("minimal live snapshot request should deserialize");
         let mut snapshot = default_current_live_state(&request);
-        snapshot.fem_mesh = Some(mesh);
+        snapshot.fem_mesh = Some(mesh.into());
 
         let aggregate_scope = resolve_field_scope(
             &FieldVectorQuery {
@@ -10436,7 +10436,7 @@ mod tests {
         }))
         .expect("minimal live snapshot request should deserialize");
         let mut snapshot = default_current_live_state(&request);
-        snapshot.fem_mesh = Some(mesh);
+        snapshot.fem_mesh = Some(mesh.into());
 
         let scope = resolve_field_scope(
             &FieldVectorQuery {
@@ -10756,7 +10756,7 @@ mod tests {
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
             build_report: None,
-        });
+        }.into());
         let values = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
         let serialized = serialize_analysis_field_vector_binary(

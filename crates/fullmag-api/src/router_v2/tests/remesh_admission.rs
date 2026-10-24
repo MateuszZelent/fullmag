@@ -297,7 +297,7 @@ async fn remesh_active_record_survives_command_history_pruning() {
             snapshot.scene_document = Some(scene);
             snapshot.metadata = Some(serde_json::json!({
                 "execution_plan": { "backend_plan": { "kind": "fdm" } }
-            }));
+            }).into());
         }
         {
             let mut ledger = state.current_command_ledger.lock().await;

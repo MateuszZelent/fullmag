@@ -732,7 +732,7 @@ describe("ResourceRuntimeStore", () => {
         resourceKey: "data/fields/H_demag/active-deadline",
         retryPolicy: {
           deadlineMs: 20,
-          maxAttempts: 3,
+          maxAttempts: 1,
           retryableReasonCodes: ["field_pending"],
         },
       });
@@ -750,6 +750,55 @@ describe("ResourceRuntimeStore", () => {
       });
       expect(signals[0]?.aborted).toBe(true);
       expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a slow load with a longer window before settling a deadline error", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const signals: AbortSignal[] = [];
+      const second = deferred<string>();
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        if (signals.length === 2) return second.promise;
+        return new Promise<string>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("deadline", "AbortError")),
+            { once: true },
+          );
+        });
+      });
+
+      void store.ensureLoad({
+        externalRevision: null,
+        load,
+        resourceKey: "data/fields/H_eff/slow",
+        retryPolicy: {
+          deadlineMs: 20,
+          maxAttempts: 2,
+          retryAfterMs: 10,
+          retryableReasonCodes: [],
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(signals[0]?.aborted).toBe(true);
+      expect(store.getSnapshot("data/fields/H_eff/slow").status).toBe("loading");
+      await vi.advanceTimersByTimeAsync(10);
+      expect(load).toHaveBeenCalledTimes(2);
+      // The second attempt gets a doubled window and is not aborted at 20 ms.
+      await vi.advanceTimersByTimeAsync(25);
+      expect(signals[1]?.aborted).toBe(false);
+      second.resolve("field");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.getSnapshot("data/fields/H_eff/slow")).toMatchObject({
+        data: "field",
+        status: "ready",
+      });
     } finally {
       vi.useRealTimers();
     }

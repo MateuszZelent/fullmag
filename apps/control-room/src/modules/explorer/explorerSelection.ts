@@ -17,6 +17,7 @@ import { parsePinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
 import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import type { ExplorerNode } from "./explorerTypes";
+import { legacyStatusFacets } from "./builders/explorerNodeState";
 
 type StudyStageSelectionKind = Extract<
   SelectionRef,
@@ -283,12 +284,10 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     node.kind === "airbox.visualization.debug"
   ) {
     return {
-      ...(node.availability ? { availability: node.availability } : {}),
+      ...airboxStateFacets(node),
       ...(node.contractGap !== undefined ? { contractGap: node.contractGap } : {}),
-      ...(node.executionState ? { executionState: node.executionState } : {}),
       kind: node.kind,
       nodeId: node.id,
-      ...(node.resourceState ? { resourceState: node.resourceState } : {}),
       type: "airbox",
       visualizationTargetId: "airbox",
     };
@@ -522,6 +521,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "airbox.root" ||
       node.kind === "airbox.multilayer.target";
     return {
+      ...airboxStateFacets(node),
       kind: node.kind,
       nodeId: node.id,
       type: "airbox",
@@ -907,4 +907,18 @@ export function selectExplorerNode(
     },
     source,
   );
+}
+
+// Airbox nodes publish one mesh-derived status; the inspector reads the three
+// state facets, so derive them from that status unless the node states them.
+function airboxStateFacets(node: ExplorerNode) {
+  const derived = node.status ? legacyStatusFacets(node.status) : null;
+  const availability = node.availability ?? derived?.availability;
+  const executionState = node.executionState ?? derived?.executionState;
+  const resourceState = node.resourceState ?? derived?.resourceState;
+  return {
+    ...(availability ? { availability } : {}),
+    ...(executionState ? { executionState } : {}),
+    ...(resourceState ? { resourceState } : {}),
+  };
 }

@@ -1650,15 +1650,12 @@ pub async fn get_authoring_couplings(
         let execution_plan = snapshot
             .metadata
             .as_ref()
-            .and_then(|metadata| metadata.get("execution_plan"))
-            .and_then(|value| {
-                serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(value.clone()).ok()
-            });
+            .and_then(crate::shared_json::SharedJson::execution_plan);
         (execution_plan, snapshot.fem_mesh.clone())
     };
     Ok(Json(CouplingListResource {
         scene_revision: scene.revision,
-        couplings: authored_coupling_resources(&scene, execution_plan.as_ref(), fem_mesh.as_ref()),
+        couplings: authored_coupling_resources(&scene, execution_plan.as_deref(), fem_mesh.as_deref()),
     }))
 }
 

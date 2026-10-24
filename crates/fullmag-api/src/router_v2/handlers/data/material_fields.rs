@@ -47,7 +47,7 @@ pub async fn get_material_field_data_catalog(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active scene document"))?;
     let artifact_dir = current_artifact_dir(snapshot);
-    let assets = material_field_assets(snapshot.metadata.as_ref(), artifact_dir.as_deref());
+    let assets = material_field_assets(snapshot.metadata.as_deref(), artifact_dir.as_deref());
 
     Ok(Json(MaterialParameterFieldDataListResource {
         scene_revision: scene.revision,
@@ -89,7 +89,7 @@ pub async fn get_material_field_data(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active scene document"))?;
     let artifact_dir = current_artifact_dir(snapshot);
-    let assets = material_field_assets(snapshot.metadata.as_ref(), artifact_dir.as_deref());
+    let assets = material_field_assets(snapshot.metadata.as_deref(), artifact_dir.as_deref());
 
     let selected = scene.objects.iter().find_map(|object| {
         object

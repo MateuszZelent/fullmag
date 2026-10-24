@@ -25,10 +25,15 @@ import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 import { useRealtimeConnection } from "../realtime/useRealtimeConnection";
 import { SimulationPreparationFailureDialog } from "./SimulationPreparationFailureDialog";
 import type { ResourceResult } from "../resources/resourceTypes";
+import { usePlatformComputeNodesResource } from "../resources/runtimeExplorerResources";
 import { useSessionStatusSelector } from "../resources/useSessionStatus";
 import { useSimulationPreparation } from "../resources/useSimulationPreparation";
 import type { KernelApi } from "../types";
 import { SimulationPreparationLog } from "./SimulationPreparationLog";
+import {
+  preparationAdmissionBlocker,
+  preparationAwaitsAdmission,
+} from "./simulationPreparationAdmission";
 import {
   resolveSimulationPreparationViewModel,
   serializeSimulationPreparationDiagnostics,
@@ -36,7 +41,10 @@ import {
   type SimulationPreparationViewModel,
 } from "./simulationPreparationModel";
 
-export type SimulationStartupOverlayState = SimulationPreparationViewModel;
+export type SimulationStartupOverlayState = SimulationPreparationViewModel & {
+  /** Why a queued preparation cannot be admitted, when the host reports it. */
+  readonly admissionBlocker?: string | null;
+};
 
 interface SimulationStartupOverlayOptions {
   readonly allowMissingSessionSmoke?: boolean;
@@ -215,6 +223,11 @@ function SimulationPreparationWindow({ state }: { state: SimulationStartupOverla
                 {state.title}
               </h2>
               <p className="fm-simulation-startup__detail">{state.detail}</p>
+              {state.admissionBlocker ? (
+                <p className="fm-simulation-startup__blocker" role="alert">
+                  {state.admissionBlocker}
+                </p>
+              ) : null}
               {state.reconnectingTitle ? (
                 <span className="fm-simulation-startup__reconnecting-label">
                   {state.reconnectingTitle}
@@ -691,7 +704,16 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
     displayNow,
     realtimeConnection.disrupted,
   );
-  const visibleState = allowMissingSessionSmoke ? hideStartupOverlay(state) : state;
+  // Only a startup parked before native preparation needs the host sample.
+  const computeNodes = usePlatformComputeNodesResource({
+    enabled: preparationAwaitsAdmission(state),
+  });
+  const admissionBlocker = preparationAwaitsAdmission(state)
+    ? preparationAdmissionBlocker(computeNodes.data)
+    : null;
+  const visibleState = allowMissingSessionSmoke
+    ? hideStartupOverlay(state)
+    : { ...state, admissionBlocker };
   const startupRefetch = startupResource.refetch;
   const shouldRefresh = shouldRefreshSimulationStartupStatus(visibleState);
 

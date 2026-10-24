@@ -397,7 +397,7 @@ fn prepared_domain_publication(
     snapshot: &SessionStateResponse,
     read_model: &LiveScenePreparationReadModel,
 ) -> Result<(Value, Option<fullmag_runner::FemMeshPayload>), ApiError> {
-    let mut metadata = match snapshot.metadata.as_ref() {
+    let mut metadata = match snapshot.metadata.as_deref() {
         None => serde_json::Map::new(),
         Some(Value::Object(metadata)) => metadata.clone(),
         Some(_) => return Err(ApiError::conflict("live metadata must be an object")),
@@ -3255,7 +3255,7 @@ mod tests {
                 "stale_marker": "previous-run",
                 "layers": [{"layer_id": "layer:top", "value_offset": 999, "value_count": 999}]
             }
-        }));
+        }).into());
         let model = prepared_multilayer_read_model();
         let (metadata, mesh) = prepared_domain_publication(&snapshot, &model).unwrap();
         assert!(mesh.is_none());
@@ -3270,7 +3270,7 @@ mod tests {
             "session_id": "prepared-multilayer-session",
         }))
         .unwrap();
-        publication.metadata = Some(metadata);
+        publication.metadata = Some(metadata.into());
         crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
         publish_prepared_initial_state(&mut snapshot, &model).unwrap();
 
@@ -3301,7 +3301,7 @@ mod tests {
         }))
         .unwrap();
         let mut snapshot = crate::session::default_current_live_state(&request);
-        snapshot.metadata = request.metadata.clone();
+        snapshot.metadata = request.metadata.clone().map(Into::into);
         let model = prepared_fem_read_model(true);
         assert_eq!(
             match &model.execution_plan.backend_plan {
@@ -3321,7 +3321,7 @@ mod tests {
             "session_id": "prepared-domain-session",
         }))
         .unwrap();
-        publication.metadata = Some(metadata);
+        publication.metadata = Some(metadata.into());
         publication.fem_mesh = Some(mesh);
         crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
         publish_prepared_initial_state(&mut snapshot, &model).unwrap();
@@ -3403,7 +3403,7 @@ mod tests {
         })).unwrap();
         let mut snapshot = crate::session::default_current_live_state(&request);
         let (_, mesh) = prepared_domain_publication(&snapshot, &prepared_fem_read_model(true)).unwrap();
-        snapshot.fem_mesh = mesh;
+        snapshot.fem_mesh = mesh.map(Into::into);
         assert!(snapshot.fem_mesh.is_some());
         crate::session::apply_current_live_metadata(&mut snapshot, json!({
             "execution_plan": {"backend_plan": {"kind": "fdm_multilayer"}},

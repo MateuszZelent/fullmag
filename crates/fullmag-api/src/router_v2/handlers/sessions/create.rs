@@ -238,7 +238,7 @@ fn scratch_snapshot(
         "requested_execution": execution,
         "effective_execution": execution,
         "fallback": null,
-    }));
+    }).into());
     snapshot.scene_document = Some(scene_document);
     snapshot
 }

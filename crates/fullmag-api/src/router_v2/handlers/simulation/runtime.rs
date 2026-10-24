@@ -1494,7 +1494,7 @@ async fn attach_hysteresis_live_magnetization(
         .live_state
         .as_ref()
         .and_then(|live| {
-            average_hysteresis_live_magnetization(&live.latest_step, snapshot.fem_mesh.as_ref())
+            average_hysteresis_live_magnetization(&live.latest_step, snapshot.fem_mesh.as_deref())
         })
         .or_else(|| {
             snapshot
@@ -1758,7 +1758,7 @@ pub async fn get_solver_status(
             .find(|row| row.is_physical_observation()))
         .flatten();
     let runtime_status = build_runtime_status_view(&effective_runtime_status_code(snapshot));
-    let mut warnings = material_field_plan_warnings(snapshot.metadata.as_ref());
+    let mut warnings = material_field_plan_warnings(snapshot.metadata.as_deref());
     for warning in snapshot
         .engine_log
         .iter()
@@ -1799,23 +1799,23 @@ pub async fn get_solver_status(
             .as_ref()
             .and_then(|value| value.active_stage_kind.clone()),
         algorithm: metadata_string(
-            snapshot.metadata.as_ref(),
+            snapshot.metadata.as_deref(),
             &["execution_plan", "backend_plan", "kind"],
         ),
         relaxation_algorithm: metadata_string(
-            snapshot.metadata.as_ref(),
+            snapshot.metadata.as_deref(),
             &["relaxation_algorithm"],
         )
         .or_else(|| {
             metadata_string(
-                snapshot.metadata.as_ref(),
+                snapshot.metadata.as_deref(),
                 &["execution_plan", "backend_plan", "relax_algorithm"],
             )
         })
         .as_deref()
         .and_then(RelaxationAlgorithm::parse),
         integrator: metadata_string(
-            snapshot.metadata.as_ref(),
+            snapshot.metadata.as_deref(),
             &["execution_plan", "backend_plan", "integrator"],
         ),
         dt_seconds: latest.map(|value| value.dt),

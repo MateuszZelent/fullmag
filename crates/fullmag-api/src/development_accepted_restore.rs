@@ -385,7 +385,7 @@ pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
         .ok_or_else(|| "accepted-run reattach lost its live snapshot".to_string())?;
     let metadata = snapshot
         .metadata
-        .get_or_insert_with(|| json!({}))
+        .get_or_insert_with(|| json!({}).into())
         .as_object_mut()
         .ok_or_else(|| "accepted-run reattach metadata is not an object".to_string())?;
     metadata.insert(
@@ -3429,10 +3429,10 @@ fn build_snapshot(
     // preserve them before frontier projection, which revalidates the same
     // durable identity. No task, owner, lease, or Solve is created here.
     snapshot.run = request.run;
-    snapshot.metadata = request.metadata;
+    snapshot.metadata = request.metadata.map(Into::into);
     snapshot.scene_document = Some(loaded.scene.clone());
     if let Some(failure) = loaded.preparation_failure.as_ref() {
-        snapshot.metadata.as_mut()
+        snapshot.metadata.as_deref_mut()
             .and_then(Value::as_object_mut)
             .context("restored preparation failure metadata is not an object")?
             .insert("accepted_preparation".into(), failure.clone());

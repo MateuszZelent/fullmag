@@ -7145,7 +7145,7 @@ mod generation_snapshot_tests {
                 .expect("test live session should have a snapshot");
             snapshot.session.artifact_dir = artifact_root.display().to_string();
             snapshot.mesh_revision = 9;
-            snapshot.fem_mesh = Some(mesh);
+            snapshot.fem_mesh = Some(mesh.into());
         }
 
         let producer = Some(PublicationOwner {

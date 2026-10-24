@@ -256,6 +256,19 @@ fn parse_single_byte_range(raw: &str, len: usize) -> Option<(usize, usize)> {
     (start <= end).then_some((start, end))
 }
 
+/// Like [`conditional_json_response`], but builds the body only when the
+/// client's `If-None-Match` does not already match `etag`.
+pub(crate) fn conditional_json_response_with<T: Serialize>(
+    headers: &HeaderMap,
+    etag: &str,
+    build: impl FnOnce() -> T,
+) -> Response {
+    if if_none_match_matches(headers, etag) {
+        return conditional_json_response(headers, etag, &());
+    }
+    conditional_json_response(headers, etag, &build())
+}
+
 pub(crate) fn conditional_json_response<T: Serialize>(
     headers: &HeaderMap,
     etag: &str,

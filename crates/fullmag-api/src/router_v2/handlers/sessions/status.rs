@@ -294,7 +294,7 @@ pub(crate) fn build_live_status(
     let solver = SolverSummary {
         state: solver_lifecycle.clone(),
         algorithm: None,
-        relaxation_algorithm: relaxation_algorithm_from_metadata(snapshot.metadata.as_ref()),
+        relaxation_algorithm: relaxation_algorithm_from_metadata(snapshot.metadata.as_deref()),
         dt: latest.map(|s| s.dt),
         max_torque_t: max_torque_apm.and_then(torque_t_from_apm),
         max_torque_apm,

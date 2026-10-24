@@ -24,6 +24,12 @@ export interface VisualizationInspectorOverviewProps {
   vectors: ReactNode;
 }
 
+// "Supported" means the quantity can be produced for this target but no
+// solve has materialized it yet; say that instead of implying data exists.
+function dataStateLabel(dataState: string): string {
+  return dataState === "Supported" ? "Not computed yet" : dataState;
+}
+
 export function VisualizationInspectorOverview({
   advanced,
   camera,
@@ -64,7 +70,7 @@ export function VisualizationInspectorOverview({
           {
             label: "Data State",
             tone: dataState === "Live" ? "success" : "neutral",
-            value: dataState,
+            value: dataStateLabel(dataState),
           },
         ]}
         primary={display}

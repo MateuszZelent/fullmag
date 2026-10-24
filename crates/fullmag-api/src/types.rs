@@ -832,9 +832,9 @@ pub(crate) struct SessionStateResponse {
     pub runtime_status: RuntimeStatusView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<BackendCapabilities>,
-    pub metadata: Option<Value>,
+    pub metadata: Option<crate::shared_json::SharedJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mesh_workspace: Option<Value>,
+    pub mesh_workspace: Option<crate::shared_json::SharedJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<StageExecutionState>,
     #[serde(skip_serializing)]
@@ -845,7 +845,7 @@ pub(crate) struct SessionStateResponse {
     pub engine_log: Vec<EngineLogEntry>,
     pub solver_profile: SolverProfileResource,
     pub quantities: Vec<QuantityDescriptor>,
-    pub fem_mesh: Option<FemMeshPayload>,
+    pub fem_mesh: Option<crate::shared_mesh::SharedFemMesh>,
     pub latest_fields: LatestFields,
     /// Exact accepted-frame publication bindings. These are produced together
     /// with field/scalar acceptance and must never be reconstructed by a read handler.
@@ -1009,7 +1009,8 @@ pub(crate) struct QuantityDescriptor {
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[serde(transparent)]
 pub(crate) struct LatestFields(
-    BTreeMap<String, Value>,
+    // Node fields are large JSON arrays; snapshot clones share them.
+    BTreeMap<String, crate::shared_json::SharedJson>,
     #[serde(skip)]
     BTreeMap<String, Arc<crate::accepted_field_binary::AcceptedFieldReader>>,
 );
@@ -1030,7 +1031,7 @@ pub(crate) struct CachedPreviewFields {
 
 impl LatestFields {
     pub(crate) fn get(&self, quantity: &str) -> Option<&Value> {
-        self.0.get(quantity)
+        self.0.get(quantity).map(|value| &**value)
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -1039,7 +1040,7 @@ impl LatestFields {
 
     pub(crate) fn insert(&mut self, quantity: String, value: Value) {
         self.1.remove(&quantity);
-        self.0.insert(quantity, value);
+        self.0.insert(quantity, value.into());
     }
 
     pub(crate) fn remove(&mut self, quantity: &str) {
@@ -1048,11 +1049,11 @@ impl LatestFields {
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
-        self.0.iter()
+        self.0.iter().map(|(quantity, value)| (quantity, &**value))
     }
 
     pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = (&String, &mut Value)> {
-        self.0.iter_mut()
+        self.0.iter_mut().map(|(quantity, value)| (quantity, &mut **value))
     }
 
     pub(crate) fn binary_reader(
@@ -1060,7 +1061,7 @@ impl LatestFields {
         quantity: &str,
     ) -> Option<&Arc<crate::accepted_field_binary::AcceptedFieldReader>> {
         let reader = self.1.get(quantity)?;
-        let reference = crate::accepted_field_binary::binary_field_ref_from_metadata(self.0.get(quantity)?)?;
+        let reference = crate::accepted_field_binary::binary_field_ref_from_metadata(self.get(quantity)?)?;
         (reference == *reader.reference()).then_some(reader)
     }
 
@@ -1072,8 +1073,9 @@ impl LatestFields {
         let raw = self
             .0
             .get(&quantity)
-            .ok_or_else(|| crate::error::ApiError::conflict("binary field metadata is missing"))?;
-        let reference = crate::accepted_field_binary::binary_field_ref_from_metadata(raw)
+            .ok_or_else(|| crate::error::ApiError::conflict("binary field metadata is missing"))?
+            .clone();
+        let reference = crate::accepted_field_binary::binary_field_ref_from_metadata(&raw)
             .ok_or_else(|| crate::error::ApiError::conflict("binary field metadata is invalid"))?;
         if reference != *reader.reference() {
             return Err(crate::error::ApiError::conflict(
@@ -1089,7 +1091,8 @@ impl LatestFields {
     pub(crate) fn merge_from(&mut self, incoming: LatestFields) {
         let LatestFields(incoming_values, incoming_readers) = incoming;
         for (quantity, value) in incoming_values {
-            self.insert(quantity.clone(), value);
+            self.1.remove(&quantity);
+            self.0.insert(quantity.clone(), value);
             if let Some(reader) = incoming_readers.get(&quantity) {
                 let _ = self.attach_binary(quantity, Arc::clone(reader));
             }
@@ -2365,15 +2368,15 @@ mod tests {
             run: response.run.as_ref(),
             live_state: response.live_state.as_ref(),
             runtime_status: &response.runtime_status,
-            metadata: response.metadata.as_ref(),
-            mesh_workspace: response.mesh_workspace.as_ref(),
+            metadata: response.metadata.as_deref(),
+            mesh_workspace: response.mesh_workspace.as_deref(),
             stage_execution: response.stage_execution.as_ref(),
             scene_document: response.scene_document.as_ref(),
             scalar_rows: &response.scalar_rows,
             engine_log: &response.engine_log,
             solver_profile: &response.solver_profile,
             quantities: &response.quantities,
-            fem_mesh: response.fem_mesh.as_ref(),
+            fem_mesh: response.fem_mesh.as_deref(),
             latest_fields: &response.latest_fields,
             artifacts: &response.artifacts,
             display_selection: &response.display_selection,

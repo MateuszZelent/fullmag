@@ -160,7 +160,7 @@ async fn acquire_workspace_for_restart_inner(
         Some(snapshot) => {
             let kind = validate_runtime_status(snapshot)?;
             validate_preparation(snapshot)?;
-            validate_mesh_workspace(snapshot.mesh_workspace.as_ref())?;
+            validate_mesh_workspace(snapshot.mesh_workspace.as_deref())?;
             let scene_document = snapshot
                 .scene_document
                 .as_ref()
@@ -1211,7 +1211,7 @@ mod tests {
             .await
             .as_mut()
             .unwrap()
-            .mesh_workspace = Some(serde_json::json!({"active_build": {"status": "running"}}));
+            .mesh_workspace = Some(serde_json::json!({"active_build": {"status": "running"}}).into());
         assert!(acquire_workspace_for_restart(&state).await.is_err());
 
         let state = scratch_state().await;
@@ -1222,7 +1222,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .mesh_workspace = Some(
-            serde_json::json!({"mesh_pipeline_status": [{"id": "remesh", "status": "queued"}]}),
+            serde_json::json!({"mesh_pipeline_status": [{"id": "remesh", "status": "queued"}]}).into(),
         );
         assert!(acquire_workspace_for_restart(&state).await.is_err());
     }
