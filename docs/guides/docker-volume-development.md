@@ -100,6 +100,22 @@ w `build.cuda_architectures` receiptu. `backend_dev.py` rozumie też
 nie przekazuje jeszcze tej zmiennej do usługi, więc DEV zawsze używa `auto`.
 Pakiet DEV nie jest artefaktem przenośnym ani wydaniem.
 
+Obraz zależności DEV (MFEM, hypre/Umpire, PETSc) też jest budowany tylko dla
+GPU hosta. `toolchain_configuration` odczytuje `nvidia-smi --query-gpu=compute_cap`
+(na WSL także `/usr/lib/wsl/lib/nvidia-smi`) i ustawia
+`FULLMAG_CUDA_ARCHITECTURES=89-real`, `FULLMAG_HYPRE_GPU_ARCHITECTURES=89`
+oraz `FULLMAG_PETSC_CUDA_ARCHITECTURES=89`. Dla kilku GPU wybiera ich
+posortowaną sumę. Wynik jest częścią `inputs.build_args` receiptu toolchainu
+i tożsamości obrazu, więc zmiana GPU wymusza przebudowę zależności. Wyraźne
+wartości tych trzech zmiennych w środowisku procesu albo w `.env` wybranego
+checkoutu mają pierwszeństwo. `FULLMAG_DEV_CUDA_ARCHITECTURES=all` zachowuje
+przenośną macierz obrazu, a lista CMake (np. `89-real;90-virtual`) jest użyta
+wprost. Host bez sterownika NVIDIA zachowuje macierz obrazu. Gdy sterownik jest
+obecny, lecz nieczytelny po trzech próbach, build toolchainu i porównanie jego
+tożsamości w `docker-dev` kończą się błędem zamiast cicho zmienić tożsamość.
+Stop, recovery i odczyt obrazu helpera nadal działają. Recepty release i CI
+nie używają tej ścieżki i zachowują pełną macierz.
+
 Restart backendu po zmianie wyłącznie `docs/`, frontendu lub plików testowych
 wykorzystuje istniejący pakiet: cache-hit porównuje `runtime_source_digest`
 receiptu z plikami runtime świeżej migawki. Commit lub zmiana brancha nadal

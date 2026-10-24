@@ -241,9 +241,111 @@ def compose_capture(document, *args, timeout=90):
                           *args, data=canonical(document), timeout=timeout).stdout
 
 
-def toolchain_configuration(repo, identity):
+TOOLCHAIN_CUDA_ARCHITECTURE_ARGS = (
+    "FULLMAG_CUDA_ARCHITECTURES",
+    "FULLMAG_HYPRE_GPU_ARCHITECTURES",
+    "FULLMAG_PETSC_CUDA_ARCHITECTURES",
+)
+DEV_CUDA_ARCHITECTURES_ENV = "FULLMAG_DEV_CUDA_ARCHITECTURES"
+_CUDA_ARCHITECTURE_LIST_RE = re.compile(
+    r"[1-9][0-9]{1,2}(?:-real|-virtual)?(?:;[1-9][0-9]{1,2}(?:-real|-virtual)?)*")
+_COMPUTE_CAPABILITY_RE = re.compile(r"([1-9][0-9]?)\.([0-9])")
+_DOTENV_KEY_RE = re.compile(r"^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=", re.M)
+_WSL_NVIDIA_SMI = "/usr/lib/wsl/lib/nvidia-smi"
+_HOST_CUDA_CAPABILITIES = {}
+
+
+def _dotenv_keys(path):
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return set()
+    except (OSError, UnicodeDecodeError) as error:
+        raise BuildControlError(f"Cannot read Compose dotenv {path}: {error}") from error
+    return set(_DOTENV_KEY_RE.findall(text))
+
+
+def host_cuda_capabilities():
+    """Return sorted host GPU compute capabilities (e.g. [89]), or None without a driver.
+
+    The result is memoized per process: every toolchain identity check of one
+    launcher run must render the same build arguments.
+    """
+    if "error" in _HOST_CUDA_CAPABILITIES:
+        raise BuildControlError(_HOST_CUDA_CAPABILITIES["error"])
+    if "value" in _HOST_CUDA_CAPABILITIES:
+        return _HOST_CUDA_CAPABILITIES["value"]
+    executable = shutil.which("nvidia-smi") or (
+        _WSL_NVIDIA_SMI if os.path.isfile(_WSL_NVIDIA_SMI) else None)
+    if executable is None:
+        _HOST_CUDA_CAPABILITIES["value"] = None
+        return None
+    for _ in range(3):
+        try:
+            result = subprocess.run([executable, "--query-gpu=compute_cap", "--format=csv,noheader"],
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                    timeout=20, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        matches = [_COMPUTE_CAPABILITY_RE.fullmatch(line.strip())
+                   for line in result.stdout.splitlines() if line.strip()]
+        if result.returncode == 0 and matches and all(matches):
+            value = sorted({int(match[1]) * 10 + int(match[2]) for match in matches})
+            _HOST_CUDA_CAPABILITIES["value"] = value
+            return value
+    # A driver that is present but unreadable must not silently select the
+    # full matrix: that would change the toolchain identity between runs.
+    _HOST_CUDA_CAPABILITIES["error"] = (
+        "nvidia-smi did not report GPU compute capabilities; set "
+        f"{DEV_CUDA_ARCHITECTURES_ENV}=all (image matrix) or an explicit CMake list such as 89-real")
+    raise BuildControlError(_HOST_CUDA_CAPABILITIES["error"])
+
+
+def toolchain_cuda_environment(repo, environ=None):
+    """Select the dependency-image CUDA targets of a DEV toolchain build.
+
+    Explicit FULLMAG_*_ARCHITECTURES values (process environment or the
+    selected checkout's Compose .env) are kept verbatim. Otherwise
+    FULLMAG_DEV_CUDA_ARCHITECTURES decides: ``all`` keeps the image matrix,
+    a CMake list is used as given, and ``auto`` (default) targets the host
+    GPUs. A host without an NVIDIA driver keeps the image matrix.
+    """
+    environ = os.environ if environ is None else environ
+    if (any(environ.get(key) for key in TOOLCHAIN_CUDA_ARCHITECTURE_ARGS)
+            or _dotenv_keys(Path(repo) / ".env") & set(TOOLCHAIN_CUDA_ARCHITECTURE_ARGS)):
+        return {}
+    requested = environ.get(DEV_CUDA_ARCHITECTURES_ENV, "auto").strip() or "auto"
+    if requested == "all":
+        return {}
+    if requested == "auto":
+        capabilities = host_cuda_capabilities()
+        if capabilities is None:
+            return {}
+        cmake = ";".join(f"{value}-real" for value in capabilities)
+    elif _CUDA_ARCHITECTURE_LIST_RE.fullmatch(requested):
+        cmake = requested
+        capabilities = sorted({int(item.split("-")[0]) for item in requested.split(";")})
+    else:
+        raise BuildControlError(
+            f"{DEV_CUDA_ARCHITECTURES_ENV} must be auto, all, or a CMake list such as 89-real")
+    return {
+        "FULLMAG_CUDA_ARCHITECTURES": cmake,
+        "FULLMAG_HYPRE_GPU_ARCHITECTURES": " ".join(str(value) for value in capabilities),
+        "FULLMAG_PETSC_CUDA_ARCHITECTURES": ",".join(str(value) for value in capabilities),
+    }
+
+
+def toolchain_configuration(repo, identity, *, require_cuda_selection=False):
     from bootstrap_docker_toolchain import _compose_environment
-    environment = {**os.environ, **_compose_environment(repo, identity["project_name"])}
+    try:
+        cuda = toolchain_cuda_environment(repo)
+    except BuildControlError:
+        # Stop, recovery and helper-image lookups must not depend on a
+        # readable GPU driver; only build and identity callers require it.
+        if require_cuda_selection:
+            raise
+        cuda = {}
+    environment = {**os.environ, **cuda, **_compose_environment(repo, identity["project_name"])}
     return json.loads(docker_capture("compose", "--project-name", identity["project_name"],
         "--project-directory", str(repo), "-f", str(Path(repo)/"compose.toolchain.yaml"),
         "--profile", "toolchain", "config", "--format", "json", env=environment).stdout)
@@ -816,7 +918,7 @@ def build_volume_toolchain(repo):
     layout = storage.resolve_layout(repo, "docker-all-gpu")
     identity = compose_project_identity(layout)
     local_volume(repo)
-    configured = toolchain_configuration(repo, identity)
+    configured = toolchain_configuration(repo, identity, require_cuda_selection=True)
     service = configured["services"]["fem-gpu-toolchain"]
     build = service["build"]
     if (configured.get("name") != identity["project_name"]
@@ -828,6 +930,8 @@ def build_volume_toolchain(repo):
     helper = build["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", helper):
         raise BuildControlError("CUDA bootstrap image must be pinned by digest")
+    mirror_console("toolchain CUDA architectures: " + ", ".join(
+        f"{key}={build['args'].get(key, '')}" for key in TOOLCHAIN_CUDA_ARCHITECTURE_ARGS) + "\n")
     control = BuildControl(identity, helper)
     # The control helper itself is pulled only when it is absent. Do not call
     # prepare() first: its --pull never helper cannot run on a cold host.
