@@ -1156,8 +1156,10 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       .find((node) => node.kind === "results.dispersion.modal.mode_at_k");
     expect(mode).toMatchObject({ sampleIndex: 1, equilibriumId: eq1 });
 
+    // Identity syntax is opaque in this adapter; a missing sample identity
+    // must invalidate the collection rather than reuse the other sample.
     input.manifest.result_manifest.payload.sample_execution_provenance.samples[1]!
-      .validation.equilibrium_artifact_sha256 = "invalid";
+      .validation.equilibrium_artifact_sha256 = "";
     expect(physicsFirstResultsSnapshotFromResources(input).snapshot.entries).toEqual([]);
   });
 
