@@ -325,7 +325,7 @@ pub fn decode_modal_eigen_bundle(
 mod tests {
     use super::*;
     fn fixture() -> (Vec<u8>, BTreeMap<String, Vec<u8>>) {
-        let payloads = BTreeMap::from([
+        let payloads: BTreeMap<String, Vec<u8>> = BTreeMap::from([
             ("frequency_domain/manifest.v1.json".into(), br#"{"schema_version":"frequency_domain_manifest.v1","study_product":"modal_eigen","run_id":"run-exact","stage_id":"eigen"}"#.to_vec()),
             ("eigen/spectrum.v2.json".into(), br#"{"schema_version":"eigen_spectrum.v2","modes":[]}"#.to_vec()),
         ]);
