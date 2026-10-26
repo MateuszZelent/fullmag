@@ -65,7 +65,9 @@ describe("AppMenuBar", () => {
     expect(html).toContain('aria-current="page"');
     expect(html).not.toContain("fm-header__app-trigger");
     expect(html).toContain("Command search");
-    expect(html).toContain("Runtime controls");
+    // The no-session header sits over the start screen, which has no transport.
+    expect(html).not.toContain("Runtime controls");
+    expect(html).not.toContain("data-run-control");
     expect(html).toContain('aria-label="Color theme: System (currently dark)"');
 
     const themeSwitcherSource = readFileSync(themeSwitcherSourceUrl, "utf8");

@@ -132,10 +132,6 @@ assert.deepEqual(mutations, [], "Navigation never submits runtime mutations");
 for (const result of results) {
   assert.equal(result.theme, result.expectedTheme, "Theme matches preference");
   assert(result.headerScrollWidth <= result.headerWidth + 1, `Header overflows at ${result.width}px (${result.theme})`);
-  assert.equal(result.controls.length, 4);
-  for (const control of result.controls) {
-    assert.equal(control.id, `study.${control.role}`);
-    assert(control.width >= 24 && control.height >= 24, `Transport hit area ${control.id}`);
-  }
+  assert.equal(result.controls.length, 0, "The start screen shows no simulation transport");
 }
 console.log(JSON.stringify({ cases: results.length, errors: errors.length, mutations: mutations.length, output }));

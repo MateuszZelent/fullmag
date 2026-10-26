@@ -302,7 +302,8 @@
 
 .fm-header__project-status {
   display: inline-flex;
-  min-width: 0;
+  /* A floor keeps short states such as "No project" legible; long names ellipsize. */
+  min-width: min(10ch, 22vw);
   max-width: min(128px, 22vw);
   overflow: hidden;
   color: var(--fm-text-muted);
@@ -372,12 +373,16 @@
   }
 }
 
-/* Below this the search collapses to its icon; it stays reachable. */
-@media (width < 1180px) {
+/* Save/Apply/Undo/Redo duplicate the ribbon and shortcuts, so they yield
+   first while the full main menu is still shown. */
+@media (width < 1600px) {
   .fm-header__quick-actions {
     display: none;
   }
+}
 
+/* Below this the search collapses to its icon; it stays reachable. */
+@media (width < 1180px) {
   .fm-header__search {
     width: var(--fm-control-height-regular);
     justify-content: center;

@@ -603,12 +603,17 @@ function NoSessionAppMenuBar({
         <span className="fm-header__search-label">Command search</span>
         <kbd className="fm-header__kbd">Ctrl ⇧ P</kbd>
       </button>
-      <div className="fm-header__separator" />
-      <HeaderRunControls
-        commandDisabledReason={commandDisabledReason}
-        isCommandDisabled={isCommandDisabled}
-        onCommand={runCommand}
-      />
+      {/* The start screen offers no simulation transport. */}
+      {homeVisible ? null : (
+        <>
+          <div className="fm-header__separator" />
+          <HeaderRunControls
+            commandDisabledReason={commandDisabledReason}
+            isCommandDisabled={isCommandDisabled}
+            onCommand={runCommand}
+          />
+        </>
+      )}
       <div className="fm-header__actions">
         <ProjectDocumentStatus />
         <ThemeSwitcher theme={theme} onThemeChange={setTheme} />
@@ -751,17 +756,20 @@ function SessionAppMenuBar() {
         onCommand={runCommand}
       />
 
-      <div className="fm-header__quick-actions">
-        {QUICK_ACTIONS.map((action) => (
-          <QuickActionButton
-            key={action.id}
-            action={action}
-            disabled={isCommandDisabled(action.id)}
-            disabledReason={commandDisabledReason(action.id)}
-            onCommand={runCommand}
-          />
-        ))}
-      </div>
+      {/* Home shows neither document edits nor simulation transport. */}
+      {homeOpen ? null : (
+        <div className="fm-header__quick-actions">
+          {QUICK_ACTIONS.map((action) => (
+            <QuickActionButton
+              key={action.id}
+              action={action}
+              disabled={isCommandDisabled(action.id)}
+              disabledReason={commandDisabledReason(action.id)}
+              onCommand={runCommand}
+            />
+          ))}
+        </div>
+      )}
 
       <button
         className="fm-header__search"
@@ -842,13 +850,16 @@ function SessionAppMenuBar() {
         open={dialogState.communicationOpen}
       />
 
-      <div className="fm-header__separator" />
-
-      <HeaderRunControls
-        commandDisabledReason={commandDisabledReason}
-        isCommandDisabled={isCommandDisabled}
-        onCommand={runCommand}
-      />
+      {homeOpen ? null : (
+        <>
+          <div className="fm-header__separator" />
+          <HeaderRunControls
+            commandDisabledReason={commandDisabledReason}
+            isCommandDisabled={isCommandDisabled}
+            onCommand={runCommand}
+          />
+        </>
+      )}
 
       <div className="fm-header__separator" />
 
