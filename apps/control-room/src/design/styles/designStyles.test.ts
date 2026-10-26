@@ -104,6 +104,15 @@ describe("control-room design styles", () => {
     expect(themeCss).toContain("--fm-info: #04a5e5;");
   });
 
+  it("keeps raw palette values out of the start-screen token layer", () => {
+    const startTokens = readAppFile("src/design/styles/start-screen.tokens.css")
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+
+    // Colours resolve through theme.css; only comments may quote hex values.
+    expect(startTokens).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(startTokens).toContain("--fm-start-meta: var(--fm-text-tertiary);");
+  });
+
   it("keeps motion tokens concrete and action text theme-aware", () => {
     const tokensCss = readAppFile("src/design/styles/tokens.css");
     const themeCss = readAppFile("src/design/styles/theme.css");
