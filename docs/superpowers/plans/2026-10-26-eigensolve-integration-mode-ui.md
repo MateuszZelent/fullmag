@@ -176,12 +176,12 @@ Na remote `codex/eigensolve-integration-ui-20261026` wypchnięto: `6ba5c2321` (n
 
 | Krok | Aktualny stan | Pozostały odbiór |
 |---|---|---|
-| M1 | Kod wypchnięty; preflight pilota przeszedł do rezerwacji output storage | Rzeczywista relaksacja i dowód wybranego native lane |
-| M2 | Dispatch modalny skompilowany; runtime ujawnił brak przekazania certyfikatu Relax | Jawna zależność DAG, typed CAS handoff, ścisły replay i wykonanie eigensolve |
+| M1 | Rzeczywista natywna relaksacja CPU: completed/converged, exact producer owner | Odbiór wyjścia do eigensolve i spójnej projekcji UI |
+| M2 | DAG, typed CAS handoff, ścisły replay i dispatch skompilowane; CI PASS na 2f99894c54bc6745bc9353634dd06487a106cc51 | Runtime eigensolve po rozwiązaniu historycznego quarantined lease; NOT VERIFIED |
 | M3 | Codec/CAS/publikacja do UI skompilowane | Prawdziwy kompletny pakiet i odczyt API |
 | M4 | Walidacja zakończonego attemptu wdrożona | Dowód odtworzenia realnej publikacji bez solve |
-| M5 | Pilot ponowiony, nadal bez częstotliwości FEM | Usunąć blokadę storage/lifecycle; potem +10, -10 i signed sweep |
-| M6 | Harness przeglądarkowy przygotowany, jeszcze bez realnego moda | Pole, selekcja, składniki/faza/animacja, WebGL i wykres z rzeczywistych punktów |
+| M5 | Piloty ponowione; native Relax działa, brak nowej częstotliwości FEM. Signed15 zapisany na remote | Decyzja o izolowanym worktree albo właściwe uzgodnienie historycznej lease; potem +10, -10 i signed sweep |
+| M6 | Harness binarnego pola i decode-ready przygotowany, jeszcze bez realnego moda | Pole, selekcja, składniki/faza/animacja, WebGL i wykres z rzeczywistych punktów |
 
 ### Recovery i zarządzany build
 
@@ -219,7 +219,7 @@ Na remote `codex/eigensolve-integration-ui-20261026` wypchnięto: `6ba5c2321` (n
 3. Producer pakuje dokładny plan źródłowy, completion i m0 oraz oryginalne bytes accepted/certified fields, recomputed certificate i producer provenance. Używa ścisłego `from_completed_relax_verified_with_exact_artifacts_and_provenance`, nie samego `m_final` ani luźnego konstruktora.
 4. Publication/completion/recovery oraz consumer wiążą dane z exact run/task/attempt/epoch/preparation. Consumer przyjmuje tylko zadeklarowany StepOutput zakończonego Relax; żadnego latest, skanowania katalogu lub przemianowywania certyfikatu.
 5. Runner sprawdza istniejący certyfikat i target plan, wiąże dokładne m0 oraz przyjmuje handoff przez ścieżkę live-preview z zachowaniem obsługi przerwania i autosave. Zmiana `RelaxedInitialState -> Provided` należy do istniejącego natywnego kontraktu.
-6. Następnie wymagane są CI, nowy managed build, ponowienie pilota +10, kontrola artefaktów/moda w UI, -10 oraz signed sweep i wykres. Kod M2 przeszedł przegląd połączeń i kontrole składni; kompilacja/testy CI oraz runtime tego połączenia pozostają otwarte.
+6. Następnie wymagane są CI, nowy managed build, ponowienie pilota +10, kontrola artefaktów/moda w UI, -10 oraz signed sweep i wykres. Kod M2 przeszedł przegląd połączeń i kontrole składni; kompilacja i CI tego połączenia przeszły na 2f99894c54bc6745bc9353634dd06487a106cc51. Runtime eigensolve pozostaje NOT VERIFIED z powodu opisanej niżej blokady zasobów.
 
 Dodatkowa korekta wykryta podczas integracji: registry `ResolvedStudyArtifact` nie dopuszczał modal bundle mimo istniejącego dispatch decode. Dodano exact codec tuple i negatywną regresję wersji/kind; bez wildcard fallback.
 
@@ -235,3 +235,14 @@ Dodatkowa korekta wykryta podczas integracji: registry `ResolvedStudyArtifact` n
 - `crates/fullmag-runtime-control/src/study_equilibrium.rs::validate_handoff_publication` — niezależna walidacja przed publication i completion.
 
 Przegląd wykrył i poprawił preflight zewnętrznego KPath: używa istniejącego walidatora continuation na walidacyjnym klonie Provided, zachowując RelaxedInitialState w zwracanym planie. Native path nadal materializuje i waliduje każdy single-k punkt przed solve. Dodano regresje Path/Single, m0, mesh/material drift oraz zakazu reuse przy bias-field sweep.
+
+
+### Checkpoint po ponowieniach i odmowie recovery
+
+Pełny bootstrap źródeł `40352367030` zakończył się **success** dla `2f99894c54bc6745bc9353634dd06487a106cc51`; obejmuje nową regresję stabilności bajtów `ExecutionPlanIR`, źródłowe kontrakty Relax→Eigen, API i UI. Runner: 1817 passed, 0 failed, 1 ignored. Zarządzany build `a88722cf8121416b91c0666c119f68c2` PASS. To odrębne dowody od native eigensolve, który nie wystartował w ostatnim pilocie.
+
+Dokładne próby, tożsamości, historyczna aktywna lease w kwarantannie, odmowa `stop-diagnostic-volume` i konkretne warianty dalszego działania: [decyzja odzyskania runtime](2026-10-26-eigensolve-runtime-recovery-decision.md). Nie nadpisano kwarantanny, nie sfabrykowano release proof i nie powtórzono niejednoznacznej aktywacji.
+
+Harness UI wymaga pobrania binarnego pola zespolonego o dokładnej generacji oraz markeru gotowości po dekodowaniu; zdrowy canvas i metadata-only `3D field ready` nie są takim dowodem. Wykres odniesienia 101 punktów jest tylko analityczny. Nie ma nowych punktów FEM do dodania do wykresu.
+
+Harness zapisano w osobnym checkpointcie `6a913922ada2c5325acdbf430a16f9fc0fd026f7` po `node --check` i `--help`; czyta wyłącznie API, blokuje mutacje i wymaga dokładnej generacji binarnego pola oraz gotowości kontrolera. Nie ma jeszcze pozytywnego uruchomienia na rzeczywistym modzie.
