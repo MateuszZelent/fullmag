@@ -547,14 +547,22 @@ fn validate_native_fem_preflight(
         bail!("accepted FEM preflight requires a time-domain FEM plan");
     };
     if !fem_plan.mesh.periodic_node_pairs.is_empty() {
-        // The runner's FemStaticPbcLane is crate-private and its reference
-        // reduction is not an accepted native producer contract. Refuse every
-        // periodic lane here until the runner exports an immutable native-lane
-        // attestation; this keeps ReferenceReduction and hidden fallback out of
-        // the accepted attempt before any solver side effect.
-        bail!(
-            "accepted FEM preflight rejects static PBC without a native FemStaticPbcLane attestation; ReferenceReduction and fallback are forbidden"
-        );
+        let attestation = fullmag_runner::attest_accepted_fem_static_pbc(
+            execution_plan,
+            accepted_runtime.resolved_device.as_str(),
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .context("accepted FEM static PBC native attestation")?;
+        if attestation.mesh_topology_fingerprint != fem_plan.mesh.topology_fingerprint_v6() {
+            bail!(
+                "accepted FEM static PBC attestation mesh fingerprint differs from the exact execution plan"
+            );
+        }
+        if attestation.periodic_node_pair_count != fem_plan.mesh.periodic_node_pairs.len() {
+            bail!(
+                "accepted FEM static PBC attestation periodic node-pair count differs from the exact execution plan"
+            );
+        }
     }
     Ok(())
 }
@@ -722,8 +730,19 @@ mod source_contract_tests {
             .expect("source contracts follow the production execution adapter")
             .0;
         assert!(source.contains("AcceptedFemExecutionOutcome::Cancelled"));
-        assert!(source.contains("FemStaticPbcLane attestation"));
+        assert!(source.contains("attest_accepted_fem_static_pbc"));
         assert!(!source.contains("runner was cancelled before final-state publication"));
+    }
+
+    #[test]
+    fn static_pbc_preflight_consumes_runner_attestation_and_exact_mesh_identity() {
+        let source = include_str!("accepted_fem_study_worker.rs");
+        assert!(source.contains("attest_accepted_fem_static_pbc"));
+        assert!(source.contains("attestation.mesh_topology_fingerprint"));
+        assert!(source.contains("attestation.periodic_node_pair_count"));
+        assert!(!source.contains(
+            "accepted FEM preflight rejects static PBC without a native FemStaticPbcLane attestation"
+        ));
     }
 
     #[test]

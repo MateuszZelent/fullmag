@@ -2074,16 +2074,24 @@ fn frequency_publication_owner(
 fn validate_immutable_generation_references(
     member_bytes: &[(String, Vec<u8>)],
 ) -> std::io::Result<()> {
-    let member_paths = member_bytes
-        .iter()
-        .map(|(path, _)| path.as_str())
-        .collect::<BTreeSet<_>>();
-    let member_payload = |relative: &str| {
-        member_bytes
-            .iter()
-            .find(|(path, _)| path == relative)
-            .map(|(_, bytes)| bytes.as_slice())
-    };
+    validate_immutable_generation_reference_map(member_bytes.iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect())
+}
+
+/// The accepted transport and the original writer share one semantic closure
+/// check. Borrow payloads so validation never duplicates large mode fields.
+pub(crate) fn validate_modal_artifact_closure(
+    member_bytes: &BTreeMap<String, Vec<u8>>,
+) -> std::io::Result<()> {
+    validate_immutable_generation_reference_map(member_bytes.iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect())
+}
+
+fn validate_immutable_generation_reference_map(
+    member_bytes: BTreeMap<&str, &[u8]>,
+) -> std::io::Result<()> {
+    let member_paths = member_bytes.keys().copied().collect::<BTreeSet<_>>();
+    let member_payload = |relative: &str| member_bytes.get(relative).copied();
     let require_member = |relative: &str, context: &str| -> std::io::Result<()> {
         if relative.trim().is_empty() || !member_paths.contains(relative) {
             return Err(Error::new(

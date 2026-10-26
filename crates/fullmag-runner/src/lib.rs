@@ -194,6 +194,11 @@ mod time_events;
 mod timestep_qualification;
 mod types;
 
+pub use solvers::fem::pbc::{
+    attest_accepted_fem_static_pbc, AcceptedFemStaticPbcNativeAttestation,
+    AcceptedFemStaticPbcNativeLane, ACCEPTED_FEM_STATIC_PBC_NATIVE_ATTESTATION_SCHEMA,
+};
+
 use types::TimestepExecutionLane;
 
 // ── Shared runner defaults (FEM-040) ─────────────────────────────────────
@@ -11676,4 +11681,12 @@ mod tests {
             )
         );
     }
+}
+
+/// Validate immutable modal references with the same rules as the native writer.
+/// Byte membership and owner identity are validated by the generation capture.
+pub fn validate_modal_artifact_closure(
+    members: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> std::io::Result<()> {
+    artifacts::validate_modal_artifact_closure(members)
 }
