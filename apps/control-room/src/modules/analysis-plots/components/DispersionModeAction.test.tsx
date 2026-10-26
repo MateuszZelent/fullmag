@@ -134,11 +134,12 @@ describe("DispersionModeAction", () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
-    const selection = makeSelection(targetModeRef);
+    const previousRef = { ...targetModeRef, sampleIndex: 9 };
+    const selection = makeSelection(previousRef);
     const removeGuard = selection.addChangeGuard(() => false);
     const execute = vi.fn(async () => ({ status: "completed" as const }));
     const kernel = { commands: { execute }, selection } as unknown as KernelApi;
-    const onSelectPoint = vi.fn(() => selection.set({ ref: { ...targetModeRef, sampleIndex: 9 } }, "analysis-plots"));
+    const onSelectPoint = vi.fn(() => selection.set({ ref: targetModeRef }, "analysis-plots"));
 
     try {
       await act(async () => root.render(
@@ -155,7 +156,7 @@ describe("DispersionModeAction", () => {
         await Promise.resolve();
       });
 
-      expect(selection.get().ref).toEqual(targetModeRef);
+      expect(selection.get().ref).toEqual(previousRef);
       expect(execute).not.toHaveBeenCalled();
       expect(container.textContent).toContain("could not be bound to the current mode");
     } finally {
