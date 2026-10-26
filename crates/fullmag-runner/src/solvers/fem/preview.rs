@@ -2,6 +2,7 @@
 
 use fullmag_ir::FemPlanIR;
 
+use crate::dispatch::FemEngine;
 use crate::fem::pbc::fem_static_periodic_decision;
 use crate::fem_baseline;
 #[cfg(feature = "fem-gpu")]
@@ -9,7 +10,6 @@ use crate::native_fem::NativeFemBackend;
 use crate::quantities::active_fem_preview_quantities;
 #[cfg(feature = "fem-gpu")]
 use crate::quantities::normalized_quantity_name;
-use crate::solver_runtime::engine::FemEngine;
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
 
 pub(crate) fn snapshot_fem_preview(
