@@ -125,3 +125,38 @@ Poprawka materializatora zapisana jako `0b64bb67cc638a2da1a2a880b165ab8d3fdae0a3
 - Odczyt katalogu runu potwierdził dwa zadania (relax/eigenmodes), oba lifecycle `accepted`, readiness `blocked/accepted_task_awaiting_preparation`, bez artifact_ids; katalog ma tylko run_intent, run_catalog i preparation_resource_leases. Nie uruchomiono Solve, nie usunięto lease/ownerów ani archiwów.
 - **Blokada I4:** brak zweryfikowanej zarządzanej drogi odzyskania tego dwustopniowego przyjętego przygotowania. Następny krok to plan i regresje dla dokładnego wieloetapowego archive-only recovery, z ponowną kontrolą wszystkich tasków, rezerwacji, ownera i braku wykonania. Samo rozluźnienie `len(tasks)==1` jest niedopuszczalne. Dopiero później nowy build z diagnostyką i jawna nowa próba, bez automatycznego replay starego runu.
 - PR #262 pozostaje draft. Master, stare worktree i dane referencyjne pozostają zachowane. Wyszukiwanie archiwów zakończone; rzeczywiste pole i browser/WebGL nadal NOT VERIFIED.
+
+
+## Ponowienie rzeczywistych obliczeń — 26.10.2026, recovery i nowy blocker
+
+- Poprawka `6ba5c2321`: archive-only recovery sprawdza wszystkie nietknięte zadania i dopasowuje lease po task_id; 12 testów Python PASS, diff check PASS. Kontrolowane zatrzymanie starego nieuruchomionego runu zakończone `stopped-awaiting-fresh-archive`; stan i cache zachowane.
+- Managed fresh-state recreation zakończone sukcesem. Development attempt `fdba82b7de6f4c8881357bd7840bdb8d`, config `c387b9ab8e83047ee7e6a92bb79a6ab18ef975147d5d4ffa7dba235f07da9af0`. Backend snapshot `a8e7c51827c84ce24c586e75acd8e74222d6879796654834d3c28fde9059ce6f` na bazie `c2871b1385039821ea62d5ea0b12f9ac8a6e2c9d`; build 115194 ms, package/gates/API ready. UI http://127.0.0.1:3217.
+- Ponowiono `examples/fem_eigen_mode_ui_de_k10.py`, request `eigensolve-ui-de-k10-recovered-20261026`, activation `3e79d6b7e6344f54a262268813a9d49d`, run `run-live-7c501da955ebfad86f566b13adf4961e45bac0ef78296f736789c289e898c4bd`.
+- Native preparation etapu `relax` PASS (758 true DOF w dowodzie przestrzeni). Nie jest to wynik relaksacji ani częstotliwości. Przygotowanie `eigenmodes` zakończone błędem: `accepted FEM preparer requires a time-domain FEM or antenna inspection plan` (`accepted_fem_preparer.rs`, selekcja siatki). Brakuje obsługi planu częstotliwościowego w ścieżce accepted preparation; kontrakt jest analizowany przed poprawką.
+- API czekało na brakujący receipt mimo trwałego błędu preparera i zdrowego ownera. Osobna poprawka ma zgłaszać dokładny błąd, respektując autoryzowane retry, zamiast czekać do timeoutu.
+- Stop przez API zakończony i potwierdzony w journalu: `fm-34feb8cf-244c-420d-8c21-0defd3700db5`. Wcześniejsze writer-busy nie zapisały polecenia. Aktywacja zakończyła się HTTP409 `accepted_preparation_run_stopped`, zachowując lease/dane; nie wolno jej ślepo ponawiać.
+- Nowa częstotliwość, pole modu, wykres oraz kwalifikacja naukowa pozostają NOT VERIFIED. Następny krok: poprawić preparation i raportowanie błędu, zachować anulowaną próbę poprzez managed recovery, przebudować i ponowić pilot; dopiero po rzeczywistym wyniku signed sweep i wykresy.
+
+### Potwierdzone dalsze zależności wykonania (nie tylko preparation)
+
+1. `accepted_fem_study_worker.rs` wymaga planu time-domain oraz artefaktu `final_state`; nie posiada adaptera modalnego. `accepted_study_worker.rs::collect_runner_study_outputs` publikuje stan/energię, ale nie ma kontraktu pakietu widma i zespolonych modów. Przed realnym wynikiem UI trzeba wdrożyć dispatch modalny, typed output/recovery i publikację do właściwego run/stage/sample/equilibrium. Nie wolno przepuszczać eigen przez guard czasowego workera.
+2. Preflight czasowego workera odrzuca wszystkie static PBC bez publicznego native-lane attestation. Runner ma `FemStaticPbcLane::NativeDemagPoisson`, ale sama obecność kodu nie jest dowodem dopuszczenia accepted worker. Pilot DE potrzebuje tego również dla relaksacji.
+3. Istniejąca ścieżka `recover-cancelled-activation` obsługuje pojedynczy task po iteracji; obecny run ma dwa taski i bazowy development. Wymaga zachowującego pełne dowody rozszerzenia przed kolejnym restartem; żadnych fikcyjnych pinów iteracji ani kasowania stanu.
+4. CI `40306170593`: Rust i inspector-actions PASS; frontend 8866 testów PASS / 1 FAIL (fixture overlay bez modeIntent), browser fixture FAIL (brak k-resolved w inspector-run). To nie jest zielona bramka integracji. Fixture testu overlay jest uzupełniany, asercje zmiany właściciela pozostają wymagane.
+
+### Minimalna kolejność domknięcia accepted modal execution
+
+| Krok | Zakres | Odbiór |
+|---|---|---|
+| M1 | Native static-PBC attestation eksportowane przez runner; accepted relax dopuszcza tylko potwierdzone natywne lane, w tym demag Poisson | Ten sam przypięty plan, CPU/double, brak ReferenceReduction/fallback; negatywne testy lane niedozwolonych |
+| M2 | Oddzielny modal dispatch w accepted worker, istniejący runner `FemEigen`, wejściowa równowaga z dokładnego CAS/dependency | Brak kierowania eigen do time-domain adaptera; exact preparation, lease, mesh i input identity; brak ponownego solve po niejednoznacznym skutku |
+| M3 | Jawny kontrakt typed output dla widma, dyspersji i zespolonych pól oraz ich immutable publication | Run/stage/sample/mode/equilibrium/generation i hashe; brak udawanego final_state jako dowodu modu; limity rozmiaru i kompletne referencje |
+| M4 | Recovery modalnego zakończonego attemptu | Odtworzenie publikacji wyłącznie z istniejących zweryfikowanych wyników; bez powtórzenia native solvera |
+| M5 | Pilot DE +10, następnie -10 i signed sweep -25..25 rad/um | Wiersze częstotliwości, residuale, PBC, dynamiczny demag, źródła i równowaga; bez lustrzanego dopisywania numeryki |
+| M6 | Wykres i browser real-mode proof | Wykres z realnych artefaktów; kliknięcie sample/mode, real/imag/abs/phase i animacja; osobno WebGL i naukowa kwalifikacja |
+
+M1–M4 pozostają otwarte. Zmiany preparera i szybkiego błędu zamykają jedynie wcześniejsze blokady, nie te cztery kroki. Samo podniesienie tolerancji, wyłączenie demag lub obejście accepted-run nie jest rozwiązaniem.
+
+### Checkpoint źródeł po ponowieniu
+
+Na remote `codex/eigensolve-integration-ui-20261026` wypchnięto: `6ba5c2321` (nietknięte multi-task recovery, 12 Python PASS), `1a7f1eeca` (native preparation planów częstotliwościowych i regresje), `c0da4b0a6` (dokładny terminalny błąd preparera, retry pozostaje pending), `6c036512c` (kanoniczny modeIntent fixture UI). Nowe testy Rust/frontend wymagają nowego wyniku GitHub Actions; nie były lokalnie kompilowane. Runtime nadal używa snapshotu `a8e7c518...` i zachowanej zatrzymanej próby, więc nowe poprawki nie mają jeszcze dowodu wykonania.
