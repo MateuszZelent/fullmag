@@ -853,6 +853,45 @@ def _read_control_bytes(
     return bytes(result.stdout)
 
 
+def _validate_active_lease(
+    active_raw: bytes,
+    *,
+    expected_operation_id: str | None = None,
+    mismatch_message: str = "retained retirement active lease belongs to another operation",
+) -> str:
+    """Validate the control lease's exact ASCII token without normalizing bytes.
+
+    The build-control writer emits one trailing LF, while retained legacy
+    operations may contain the bare operation token.  Both forms are
+    authentic; every other byte layout is malformed and must not be accepted
+    by a recovery path.  Callers retain ``active_raw`` separately for CAS
+    hashing, so this parser never changes the bytes used by the finalizer's
+    ownership fence.
+    """
+
+    if not isinstance(active_raw, bytes):
+        raise BuildControlError("retained active operation identity is invalid")
+    if len(active_raw) == 33 and active_raw.endswith(b"\n"):
+        token_raw = active_raw[:-1]
+    elif len(active_raw) == 32:
+        token_raw = active_raw
+    else:
+        raise BuildControlError("retained active operation identity is invalid")
+    try:
+        operation_id = token_raw.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise BuildControlError("retained active operation identity is invalid") from error
+    if ATTEMPT_RE.fullmatch(operation_id) is None:
+        raise BuildControlError("retained active operation identity is invalid")
+    if expected_operation_id is not None:
+        if (not isinstance(expected_operation_id, str)
+                or ATTEMPT_RE.fullmatch(expected_operation_id) is None):
+            raise BuildControlError("retained active operation expectation is invalid")
+        if operation_id != expected_operation_id:
+            raise ControlOutcomeUnknown(mismatch_message)
+    return operation_id
+
+
 def _retirement_inputs_sha256(inputs: Mapping[str, object]) -> str:
     """Hash the exact immutable activation envelope bound into the image marker."""
 
@@ -1092,9 +1131,7 @@ def _retained_retirement_context(
     active_raw = _read_control_bytes(control, "active", optional=True, maximum=256)
     if active_raw is None:
         return None
-    operation_id = active_raw.decode("utf-8", "replace").strip()
-    if not ATTEMPT_RE.fullmatch(operation_id):
-        raise BuildControlError("retained active operation identity is invalid")
+    operation_id = _validate_active_lease(active_raw)
     receipt_relative = "activation/attempts/" + operation_id + "/receipt.json"
     receipt_raw = _read_control_bytes(control, receipt_relative)
     try:
@@ -1247,11 +1284,11 @@ def _retirement_cas_script(
             or any(len(payload) > RETIREMENT_CAS_PAYLOAD_BYTES
                    for payload in (receipt_raw, result_raw, terminal_raw, current_raw))):
         raise BuildControlError("retirement CAS expected records are incomplete")
-    expected_active_raw = operation_id.encode("ascii")
-    if active_raw != expected_active_raw:
-        raise ControlOutcomeUnknown(
-            "retained retirement active lease belongs to another operation"
-        )
+    _validate_active_lease(
+        active_raw,
+        expected_operation_id=operation_id,
+        mismatch_message="retained retirement active lease belongs to another operation",
+    )
     if (namespace_registry_sha256 is not None
             and (not isinstance(namespace_registry_sha256, str)
                  or SHA256_RE.fullmatch(namespace_registry_sha256) is None)):
@@ -1349,9 +1386,11 @@ def _wait_retirement_lease_release(
         remaining = _read_control_bytes(control, "active", optional=True, maximum=256)
         if remaining is None:
             return True
-        if (remaining != remaining.strip()
-                or remaining.decode("utf-8", "replace").strip() != operation_id):
-            raise ControlOutcomeUnknown("retained retirement control lease changed after finalization")
+        _validate_active_lease(
+            remaining,
+            expected_operation_id=operation_id,
+            mismatch_message="retained retirement control lease changed after finalization",
+        )
         time.sleep(0.1)
     return False
 
@@ -1392,10 +1431,11 @@ def _finalize_retained_retirement(
             ):
                 return
             raise ControlOutcomeUnknown("retained retirement active lease disappeared before records were complete")
-        if active_raw != operation_id.encode("ascii"):
-            raise ControlOutcomeUnknown(
-                "retained retirement active lease changed to another operation"
-            )
+        _validate_active_lease(
+            active_raw,
+            expected_operation_id=operation_id,
+            mismatch_message="retained retirement active lease changed to another operation",
+        )
         receipt_now = _read_control_bytes(control, root + "/receipt.json")
         if receipt_now != receipt_raw:
             raise ControlOutcomeUnknown("retained retirement receipt changed before logger-absence finalization")
@@ -1431,10 +1471,11 @@ def _finalize_retained_retirement(
         ):
             return
         raise ControlOutcomeUnknown("retained retirement active lease disappeared before retry records were complete")
-    if active_raw != operation_id.encode("ascii"):
-        raise ControlOutcomeUnknown(
-            "retained retirement active lease changed to another operation"
-        )
+    _validate_active_lease(
+        active_raw,
+        expected_operation_id=operation_id,
+        mismatch_message="retained retirement active lease changed to another operation",
+    )
     receipt_now = _read_control_bytes(control, root + "/receipt.json")
     if receipt_now != receipt_raw:
         raise ControlOutcomeUnknown("retained retirement receipt changed before retry finalization")
@@ -1535,9 +1576,11 @@ def _resume_retained_retirement(
             if retirement.get("state") != "rejected":
                 raise BuildControlError("retained retirement refusal evidence is not rejected") from error
             active_after = _read_control_bytes(control, "active", maximum=256)
-            if (active_after != active_after.strip()
-                    or active_after.decode("utf-8", "replace").strip() != operation_id):
-                raise ControlOutcomeUnknown("retained retirement control lease changed before refusal finalization")
+            _validate_active_lease(
+                active_after,
+                expected_operation_id=operation_id,
+                mismatch_message="retained retirement control lease changed before refusal finalization",
+            )
             receipt_after = _read_control_bytes(control, root + "/receipt.json")
             if receipt_after != receipt_raw:
                 raise ControlOutcomeUnknown("retained retirement receipt changed before refusal finalization")
@@ -1627,8 +1670,11 @@ def _resume_retained_retirement(
         "managed retirement replay API incarnation",
     )
     active_after = _read_control_bytes(control, "active", maximum=256)
-    if active_after != active_after.strip() or active_after.decode("utf-8", "replace").strip() != operation_id:
-        raise ControlOutcomeUnknown("retained retirement control lease changed before finalization")
+    _validate_active_lease(
+        active_after,
+        expected_operation_id=operation_id,
+        mismatch_message="retained retirement control lease changed before finalization",
+    )
     receipt_after = _read_control_bytes(control, root + "/receipt.json")
     if receipt_after != receipt_raw:
         raise ControlOutcomeUnknown("retained retirement receipt changed before finalization")

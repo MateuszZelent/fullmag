@@ -591,7 +591,8 @@ class RetirementFinalizeTests(unittest.TestCase):
         control = Mock(namespace="", namespace_registry_sha256=None)
         with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value=None), \
              patch.object(activate, "_ensure_control_record") as publish, \
-             patch.object(activate, "_wait_retirement_lease_release", return_value=True), \
+             patch.object(activate, "_read_control_bytes", side_effect=[self.operation.encode() + b"\n", None]), \
+             patch.object(activate.time, "sleep"), \
              patch.object(activate, "bounded_capture") as shell:
             self.finalize(control)
         self.assertEqual([call.args[1] for call in publish.call_args_list], [
@@ -617,6 +618,42 @@ class RetirementFinalizeTests(unittest.TestCase):
             with self.assertRaisesRegex(activate.ControlOutcomeUnknown, "receipt changed"):
                 self.finalize(control)
         shell.assert_not_called()
+
+    def test_active_lease_validator_accepts_legacy_and_writer_newline_forms(self):
+        self.assertEqual(
+            activate._validate_active_lease(self.operation.encode()),
+            self.operation,
+        )
+        self.assertEqual(
+            activate._validate_active_lease(self.operation.encode() + b"\n"),
+            self.operation,
+        )
+
+    def test_active_lease_validator_rejects_foreign_and_noncanonical_bytes(self):
+        for raw in (
+            self.operation.encode() + b"\r\n",
+            self.operation.encode() + b"\n\n",
+            self.operation.encode() + b"\t",
+            self.operation.encode() + b" ",
+        ):
+            with self.subTest(raw=raw):
+                with self.assertRaises(activate.BuildControlError):
+                    activate._validate_active_lease(raw)
+        with self.assertRaises(activate.ControlOutcomeUnknown):
+            activate._validate_active_lease(b"c" * 32, expected_operation_id=self.operation)
+
+    def test_wait_accepts_writer_newline_before_lease_disappears(self):
+        control = Mock()
+        with patch.object(
+            activate,
+            "_read_control_bytes",
+            side_effect=[self.operation.encode() + b"\n", None],
+        ), patch.object(activate.time, "sleep"):
+            self.assertTrue(
+                activate._wait_retirement_lease_release(
+                    control, operation_id=self.operation, timeout=1
+                )
+            )
 
 
 @unittest.skipUnless(fcntl is not None and all(shutil.which(tool) for tool in ("bash", "flock", "sync", "sha256sum")), "requires Linux shell CAS tools")
@@ -662,6 +699,36 @@ class RetirementCasTests(unittest.TestCase):
         replay = self.run_cas()
         self.assertEqual(replay.returncode, 0, replay.stderr)
         self.assertIn(b"ALREADY_FINALIZED\n", replay.stdout)
+
+    def test_publish_and_exact_replay_with_writer_newline(self):
+        self.payloads["active_raw"] = self.operation.encode() + b"\n"
+        (self.root / "active").write_bytes(self.payloads["active_raw"])
+        first = self.run_cas()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn(b"FINALIZED\n", first.stdout)
+        self.assert_complete()
+        replay = self.run_cas()
+        self.assertEqual(replay.returncode, 0, replay.stderr)
+        self.assertIn(b"ALREADY_FINALIZED\n", replay.stdout)
+
+    def test_cas_rejects_noncanonical_active_lease_bytes(self):
+        for raw in (
+            self.operation.encode() + b"\r\n",
+            self.operation.encode() + b"\n\n",
+            self.operation.encode() + b"\t",
+            self.operation.encode() + b" ",
+        ):
+            with self.subTest(raw=raw), self.assertRaises(activate.BuildControlError):
+                activate._retirement_cas_script(
+                    operation_id=self.operation,
+                    active_raw=raw,
+                    receipt_raw=self.payloads["receipt_raw"],
+                    result_raw=self.payloads["result_raw"],
+                    terminal_raw=self.payloads["terminal_raw"],
+                    current_raw=self.payloads["current_raw"],
+                )
+        self.assertTrue((self.root / "active").exists())
+        self.assertFalse((self.attempt / "terminal.json").exists())
 
     def test_namespaced_cas_requires_registry_lock_and_digest(self):
         with self.assertRaises(activate.BuildControlError):
