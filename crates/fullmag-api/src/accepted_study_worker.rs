@@ -2469,9 +2469,6 @@ fn execute_accepted_worker_start_with_snapshot(
         validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id)?;
         return execute_accepted_modal_worker_start(store, accepted, start, accepted_step, study_step, case_id, interrupt_requested);
     }
-    if study_step.outputs.iter().any(|port| port.data_kind == StudyPortDataKind::Artifact) {
-        bail!("legacy solver steps cannot publish an inspection artifact");
-    }
     // Validate the same bounded RunSpec metadata before backend dispatch;
     // FEM must not bypass the live-workspace/start-policy binding guard.
     validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id)?;
@@ -2487,6 +2484,11 @@ fn execute_accepted_worker_start_with_snapshot(
             case_id,
             interrupt_requested,
         );
+    }
+    // FEM owns its narrow typed equilibrium artifact contract above. The
+    // remaining legacy FDM adapter still rejects all Artifact outputs.
+    if study_step.outputs.iter().any(|port| port.data_kind == StudyPortDataKind::Artifact) {
+        bail!("legacy solver steps cannot publish an inspection artifact");
     }
     if request.backend != "fdm"
         || !matches!(request.device.as_str(), "cpu" | "gpu")

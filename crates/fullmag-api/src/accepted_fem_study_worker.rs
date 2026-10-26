@@ -671,7 +671,7 @@ pub(crate) fn validate_declared_outputs(outputs: &[StudyOutputPort]) -> Result<(
             StudyPortDataKind::Artifact
                 if output.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT => {}
             _ => bail!(
-                "accepted FEM CPU study output `{}` is outside final_state/total_energy contract",
+                "accepted FEM CPU study output `{}` is outside final_state/total_energy/equilibrium_handoff contract",
                 output.port_id
             ),
         }
@@ -706,6 +706,40 @@ mod source_contract_tests {
     use super::{accepted_gpu_relaxation_algorithm, validate_projected_gradient_bb_receipt};
     use fullmag_ir::RelaxationAlgorithmIR;
     use serde_json::json;
+
+    #[test]
+    fn accepted_fem_equilibrium_output_is_narrow_and_requires_final_state() {
+        use fullmag_authoring::{StudyOutputPort, StudyPortDataKind};
+        let state = StudyOutputPort {
+            port_id: "final_state".into(),
+            data_kind: StudyPortDataKind::State,
+        };
+        let handoff = StudyOutputPort {
+            port_id: fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT.into(),
+            data_kind: StudyPortDataKind::Artifact,
+        };
+        assert!(super::validate_declared_outputs(&[state.clone(), handoff.clone()]).is_ok());
+        assert!(super::validate_declared_outputs(&[handoff.clone()]).is_err());
+        assert!(
+            super::validate_declared_outputs(&[state.clone(), handoff.clone(), handoff]).is_err()
+        );
+        assert!(super::validate_declared_outputs(&[
+            state.clone(),
+            StudyOutputPort {
+                port_id: "inspection".into(),
+                data_kind: StudyPortDataKind::Artifact,
+            }
+        ])
+        .is_err());
+        assert!(super::validate_declared_outputs(&[
+            state,
+            StudyOutputPort {
+                port_id: fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT.into(),
+                data_kind: StudyPortDataKind::State,
+            }
+        ])
+        .is_err());
+    }
 
     #[test]
     fn accepted_relaxation_producer_binds_exact_owner_and_preserves_matching_metadata() {
