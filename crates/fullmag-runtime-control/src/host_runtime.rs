@@ -293,6 +293,14 @@ mod recovery_tests {
             fixture.context.compute_snapshot_admission_failure().unwrap(),
             Some("compute-node snapshot is missing".into())
         );
+        assert_eq!(
+            fixture
+                .context
+                .ensure_committed_request(&fixture.request)
+                .unwrap_err()
+                .to_string(),
+            "process spawn requires a current compute-node sample for this boot: compute-node snapshot is missing"
+        );
     }
 
     #[test]
@@ -306,6 +314,14 @@ mod recovery_tests {
         assert_eq!(
             fixture.context.compute_snapshot_admission_failure().unwrap(),
             Some("shared host inventory owner is not active".into())
+        );
+        assert_eq!(
+            fixture
+                .context
+                .ensure_committed_request(&fixture.request)
+                .unwrap_err()
+                .to_string(),
+            "process spawn requires a current compute-node sample for this boot: shared host inventory owner is not active"
         );
     }
 
@@ -326,6 +342,18 @@ mod recovery_tests {
 
         assert!(!fixture.context.has_current_compute_snapshot().unwrap());
         assert!(fixture.context.current_compute_node_snapshot().unwrap().is_none());
+        let current_boot_id =
+            crate::compute_node_probe::current_host_boot_id(chrono::Utc::now()).unwrap();
+        assert_eq!(
+            fixture
+                .context
+                .ensure_committed_request(&fixture.request)
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "process spawn requires a current compute-node sample for this boot: compute-node boot differs: sample=previous-host-boot, current={current_boot_id}"
+            )
+        );
     }
 
     #[test]
@@ -341,6 +369,7 @@ mod recovery_tests {
         snapshot.sample.collected_at =
             now.clone() - chrono::Duration::seconds(31);
         snapshot.sample.refresh_freshness_at(now);
+        let collected_at = snapshot.sample.collected_at.to_rfc3339();
         fixture
             .ledger
             .publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot)
@@ -356,6 +385,21 @@ mod recovery_tests {
         assert!(reason.contains("freshness is Stale"));
         assert!(reason.contains("collected_at="));
         assert!(reason.contains("observed_at="));
+        let error = fixture
+            .context
+            .ensure_committed_request(&fixture.request)
+            .unwrap_err()
+            .to_string();
+        let expected_prefix = format!(
+            "process spawn requires a current compute-node sample for this boot: compute-node sample freshness is Stale: collected_at={collected_at}, observed_at="
+        );
+        let observed_at = error
+            .strip_prefix(&expected_prefix)
+            .expect("spawn rejection must preserve the complete stale-sample reason");
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(observed_at).is_ok(),
+            "observed_at must remain a precise RFC 3339 timestamp"
+        );
     }
 
     fn seed_ready_queued_catalog(fixture: &RecoveryFixture, ownership_epoch: Option<u64>) {
@@ -1672,9 +1716,12 @@ impl HostRuntimeAdmission {
     }
 
     fn ensure_committed_request(&self, request: &HostReservationRequest) -> Result<()> {
-        let current_snapshot = self
-            .current_compute_node_snapshot()?
-            .context("process spawn requires a current compute-node sample for this boot")?;
+        let current_snapshot = match self.current_compute_snapshot_or_failure()? {
+            Ok(snapshot) => snapshot,
+            Err(reason) => bail!(
+                "process spawn requires a current compute-node sample for this boot: {reason}"
+            ),
+        };
         if !request.exclusive_gpu_uuids.is_empty() {
             match &current_snapshot.gpus {
                 Reported::Available { value } if !value.is_empty() => {}
