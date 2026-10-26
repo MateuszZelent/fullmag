@@ -17,6 +17,10 @@ Kolumny i dock są zwijane do zera przez `react-resizable-panels`; ich komponent
 
 Kontrakt centralny ADR 0016 otrzymuje jawny wyjątek dla istniejącego companion: host montuje aktywny moduł i najwyżej jeden jawnie wybrany, różny companion, każdy jeden raz. Pozostałe ciężkie moduły są odmontowane. Retencja bocznych paneli nie uprawnia do przechowywania niewybranych WebGL/ECharts powierzchni. Pozostaje co najwyżej jeden moduł 3D i jeden jego canvas. Żadna akcja ramy nie wysyła Stop ani Solve.
 
+### Uzupełnienie 26.10.2026 (poprawki odbioru PR #268)
+
+Centralny host (`viewport-main`) jest przypięty w docku: jego rama nie oferuje float, maximize ani hide, a zapisany wcześniej tryb floating/maximized jest ignorowany, bo odczepienie zostawiało pustą kolumnę w środku workspace. Menu ramy ma jedną akcję „Hide panel” (Minimize/Hide/Close wywoływały tę samą operację). Moduł może dołożyć własne pozycje do tego menu przez `PanelChrome menuItems` i ukrywać panel przez `hideWith`, zachowując retencję focusu i scrolla ramy; Inspector ma więc jeden wiersz chrome i jedno menu. Na wąskim ekranie szuflada Explorera otwiera się od lewej, Inspectora od prawej.
+
 ## Consequences
 
 Nie zmieniają się Python, ProblemIR, OpenAPI, generated types, resource hooks, command ID ani dane solvera. Wspólny workspace nie rozdziela FDM/FEM. Zachowanie formularzy jest ważniejsze od usunięcia wszystkich subskrypcji ukrytego Inspectora. Ciężkie wykresy docka nadal montowane są tylko dla aktywnej karty.
