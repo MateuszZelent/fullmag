@@ -1,7 +1,7 @@
 # Plan refaktoryzacji: uruchomienie eigensolve i trwały zapis danych
 
 Data: 26.10.2026. Audyt i plan zapisano przed wznowieniem celu. Obecny etap:
-**zadanie 4/8 — kontrolowany restart po potwierdzonym zwolnieniu historycznej rezerwacji**.
+**zadanie 6/8 — naprawa ponownej walidacji StepOutput przed startem Eigen; Relax i publikacja CAS zakończone**.
 
 Źródło stanu: [audyt wykonania](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.md)
 i [evidence JSON](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.evidence.json).
@@ -68,9 +68,9 @@ control/source/package zamiast nowego launchera lub drugiego systemu grantów.
 | 1/8 — audyt i zamrożenie | Zakończone dokumentacyjnie | Audyt, evidence, kopia WIP, ten plan |
 | 2/8 — spójny kontrakt i źródła | Zakończone: Rust CI i native preview PASS dla `ccc38b7c3` | Review kontraktu, kompletny zakres kodu, zielony odpowiedni build/CI |
 | 3/8 — zamknięcie zakończonego workera | Zakończone: local/host Released, normalny proof i zachowane dane | Exact local Released + host Released + normalny proof, dane bez zmian |
-| 4/8 — poprawny start runtime | Otwarte; przyczyna sample admission nieustalona | Ready owner i bieżący sample, działający scheduler bez kwarantanny |
-| 5/8 — zaakceptowany Relax | Historyczny native Relax jest; nowa publikacja otwarta | Certyfikat w CAS i zaakceptowane wyjście do Eigen w nowym runie |
-| 6/8 — rzeczywisty Eigen +10 | Brak wyniku nowego runu | Native frequency + residual + zespolony mod i terminalny sukces |
+| 4/8 — poprawny start runtime | Start runtime i bieżący sample potwierdzone; późniejsza awaria compute opisana w A12 | Ready owner i bieżący sample, działający scheduler bez kwarantanny |
+| 5/8 — zaakceptowany Relax | Nowy Relax Succeeded, handoff CAS i certyfikat matched; odbiór Eigen blokuje A12 | Certyfikat w CAS i zaakceptowane wyjście do Eigen w nowym runie |
+| 6/8 — rzeczywisty Eigen +10 | Zdiagnozowana odmowa przed startem workera; poprawka i regresja oczekują CI | Native frequency + residual + zespolony mod i terminalny sukces |
 | 7/8 — trwały zapis i UI | Kod istnieje, pozytywny odbiór otwarty | Readback po restarcie bez Solve oraz widoczny właściwy mod |
 | 8/8 — signed sweep i raport | Skrypt przygotowany, nowy sweep niewykonany | 15 rzeczywistych próbek, wykres/provenance i jawne ograniczenia |
 
@@ -265,8 +265,8 @@ host admission oraz wąski test kolejności, tylko jeśli diagnoza potwierdzi b�
 **Odbiór:**
 
 - [ ] Test brakującego/starego/obcego sample jest jednoznaczny i odrzucany, a prawidłowa sekwencja przechodzi.
-- [ ] Rzeczywisty runtime Ready, API commandable i aktualny sample właściwego owner/epoch; bez aktywnej historycznej blokady.
-- [ ] Tożsamość builda/runtime zapisana; nie wystartował niezamówiony lub powtórzony Solve.
+- [x] Rzeczywisty start runtime Ready i zgodny sample owner/epoch potwierdzone; API przyjęło aktywację. Późniejsza awaria compute nie unieważnia dowodu startu, ale blokuje obliczenia (A12).
+- [x] Tożsamość builda/runtime zapisana; nie wystartował niezamówiony lub powtórzony Solve.
 
 ## Zadanie 5/8: wykonać i opublikować accepted Relax
 
@@ -288,7 +288,7 @@ host admission oraz wąski test kolejności, tylko jeśli diagnoza potwierdzi b�
 **Odbiór:**
 
 - [ ] Nowy Relax ma prawdziwe completed/converged i diagnostyki wymaganej konfiguracji CPU/double.
-- [ ] Certyfikat w CAS i accepted output są spójne z exact planem/siatką/właścicielem.
+- [x] Certyfikat w CAS i accepted output są spójne z exact planem/siatką/właścicielem.
 - [ ] Eigen otrzymuje ten certyfikat; brak ponownej relaksacji i brak niejawnego fallbacku.
 
 **Checkpoint po 4–5:** raportować osobno native Relax i opublikowany handoff.
@@ -318,6 +318,43 @@ konkretny błąd i po aktualizacji wymaganej noty naukowej.
 - [ ] Natywny solver faktycznie uruchomiony; niepusta zaakceptowana częstotliwość dla dokładnego k, brak syntetycznej wartości.
 - [ ] Istnieją wymagane niezależne residuale oraz pełne zespolone pole/topologia i niezmienny certyfikat równowagi.
 - [ ] Modal output commitowany, task terminalny zgodnie z wynikiem i zasoby zwolnione normalnym protokołem.
+
+### Checkpoint startu i rzeczywistego Relax
+
+Źródła/runtime: `a5dda59c19334a5978a13dabffe1c4d8b9ecb92f`, snapshot
+`912c9ace1300929db4f198c4bbab7e7080e33a5e3f8325159e67e25516084a59`.
+Managed recreate `a25efbe5d55e4892a912df62c1154eaa` oraz development
+`12c0e5cf9063405b8d1b138b316eddd9` zakończone sukcesem. Compose config
+`4cc87b1108b2e98eb17e1ecd05e601fec7ea62f290faeecdc80c21e8e47c4833`.
+API health `ok`, runtime owner `Ready`, oba schedulery uruchomione;
+snapshot zasobów `current` z tym samym host owner i epoch=2.
+
+Jednorazowa aktywacja `c99e031df7e34fa39f40256791e6b291`, request
+`eigensolve-ui-de-k10-recovered-20261026-a5dda59c1933`, run
+`run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08`.
+Nowy native Relax: `completed`, 3 kroki, task `Succeeded`, 14 artefaktów.
+Handoff CAS ma 3154415 bajtów i rzeczywisty hash
+`b31f903a09fc5616eeea65c821253d2adb8cf6e982a2342ee79c3b61c421988f`.
+Certyfikat `RecomputedFemLinearizationCertificate.v1`: `matched`, 758 węzłów;
+różnica H_demag/H_eff `8.138520186984135e-24 A/m`, H_ex/H_ext zero.
+Siatka: 2530 komórek; CPU/double. Dowody zapisane w
+[evidence ponownej walidacji](../../audits/2026-10-26-eigensolve-relax-to-eigen-replay.evidence.json).
+
+### Korekta 6.1a — idempotentna walidacja typowanego StepOutput
+
+Eigen przygotowano i przydzielono, ale compute scheduler zakończył się na
+`equilibrium_handoff does not match its pinned artifact identity and digest`.
+Captured input i katalog mają identyczny artifact ID i SHA. Rozbieżnością
+jest wyłącznie `study_artifact=Some(...)` dodane podczas pierwszej walidacji
+wobec `None` w nowo odtworzonym wpisie katalogowym. Ponowne porównanie całej
+struktury odrzuca prawidłowe wejście przed Prepare/startem workera.
+
+Poprawka porównuje identity/digest, zachowuje dostarczony opis typu i ponownie
+porównuje go z niezależnie odczytanym manifestem. Dekodowanie CAS i wszystkie
+kontrole current attempt/epoch pozostają obowiązkowe. Regresja obejmuje
+resolve→bind→serde→resolve→bind, zmiany siedmiu pól oraz brak payload/manifest
+w CAS. Test włączono do GitHub Actions, bez lokalnej kompilacji. Runtime tej
+poprawki i końcowy Eigen pozostają **NOT VERIFIED**.
 
 ## Zadanie 7/8: trwale zapisać, odczytać i pokazać mod w UI
 
@@ -390,5 +427,7 @@ commita i dowodu odbioru. Nie commitować nieukończonych referencji do modułó
 Nie obiecywać, że „następny build na pewno uruchomi solve”. Jeśli etap blokuje
 nieznany kontrakt, raport wskazuje konkretną granicę i zatrzymuje prace zależne.
 
-Bieżący krok: **4.2–4.3**, managed diagnostic stop i odtworzenie runtime.
-Release potwierdzony; nowy Relax/Eigen, trwały odczyt i UI pozostają do wykonania.
+Bieżący krok: **6.1a**, review i GitHub CI ponownej walidacji StepOutput.
+Nie ponawiać aktywacji: istniejący run ma udany Relax i przydzielony Eigen bez
+uruchomionego workera. Najpierw sprawdzić zarządzaną ścieżkę wznowienia tego
+admission i zachować jego niezmienne wejścia; nie edytować lease ani receiptów.

@@ -186,3 +186,23 @@ Task pozostaje Failed, katalog zachował SHA-256
 i wszystkie 14 artifact IDs. `solver_replayed=false`,
 `artifacts_requalified=false`; oryginalny manifest zachował zgodność z receiptem.
 To dowód odzyskania zasobów, nie nowy wynik fizyczny.
+
+## A12 — P1: poprawne typowane wejście odrzucane przy ponownej walidacji
+
+Eigen przygotowano i przydzielono, ale compute scheduler zakończył się na
+`equilibrium_handoff does not match its pinned artifact identity and digest`.
+Captured input i katalog mają identyczny artifact ID i SHA. Rozbieżnością
+jest wyłącznie `study_artifact=Some(...)` dodane podczas pierwszej walidacji
+wobec `None` w nowo odtworzonym wpisie katalogowym. Ponowne porównanie całej
+struktury odrzuca prawidłowe wejście przed Prepare/startem workera.
+
+Poprawka porównuje identity/digest, zachowuje dostarczony opis typu i ponownie
+porównuje go z niezależnie odczytanym manifestem. Dekodowanie CAS i wszystkie
+kontrole current attempt/epoch pozostają obowiązkowe. Regresja obejmuje
+resolve→bind→serde→resolve→bind, zmiany siedmiu pól oraz brak payload/manifest
+w CAS. Test włączono do GitHub Actions, bez lokalnej kompilacji. Runtime tej
+poprawki i końcowy Eigen pozostają **NOT VERIFIED**.
+
+Dowód runtime: [captured input, katalog, certyfikat i log](2026-10-26-eigensolve-relax-to-eigen-replay.evidence.json).
+Nie zmieniano danych runu. Obecny runtime jest diagnostyczny po awarii compute;
+nie ma nowej częstotliwości ani pola modu.

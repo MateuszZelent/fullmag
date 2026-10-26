@@ -2497,6 +2497,16 @@ fn bind_step_output_manifests(
             codec_id: selected.codec_id.clone(),
             codec_version: selected.codec_version.clone(),
         };
+        if resolved
+            .study_artifact
+            .as_ref()
+            .is_some_and(|supplied| supplied != &study_artifact)
+        {
+            bail!(
+                "resolved StepOutput `{}` typed binding differs from its current manifest",
+                input.port_id
+            );
+        }
         let artifact_bytes = store
             .cas()
             .get(&study_artifact.object_ref)?
@@ -2615,18 +2625,23 @@ fn resolve_step_output_inputs(
                 port.port_id
             );
         }
-        let from_catalog = ResolvedInput {
+        let mut from_catalog = ResolvedInput {
             source: artifact.artifact_id.clone(),
             content_sha256: artifact.content_sha256.clone(),
             study_artifact: None,
         };
         if let Some(supplied) = supplied_inputs.get(&port.port_id) {
-            if supplied != &from_catalog {
+            if supplied.source != from_catalog.source
+                || supplied.content_sha256 != from_catalog.content_sha256
+            {
                 bail!(
                     "study input `{}` does not match its pinned artifact identity and digest",
                     port.port_id
                 );
             }
+            // Queueing already enriched this identity from the typed manifest.
+            // Preserve it for exact revalidation below during Prepare/recovery.
+            from_catalog.study_artifact = supplied.study_artifact.clone();
         }
         resolved.insert(port.port_id.clone(), from_catalog);
     }
@@ -3064,6 +3079,129 @@ mod dependency_tests {
             Some(&wrong_output),
         )
         .is_err());
+    }
+
+    #[test]
+    fn step_output_typed_binding_roundtrip_is_idempotent_and_rejects_drift() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let run_catalog = catalog(FmsTaskLifecycle::Succeeded);
+        let mut ports = ports();
+        ports[0].data_kind = StudyPortDataKind::Scalar;
+        let source: StudyStep = serde_json::from_value(serde_json::json!({
+            "step_id": "source-step", "label": "source",
+            "kind": {"kind": "primitive", "stage_kind": "run"},
+            "model": {"model_id": "m", "version": "v1"},
+            "solver_config": {"preset_id": "s", "version": "v1"},
+            "discretization": {"recipe_id": "d", "version": "v1"},
+            "execution_profile": {"profile_id": "e", "version": "v1"},
+            "acceptance": {"kind": "any"}, "acquisition": "exclusive",
+            "outputs": [{"port_id": "final_state", "data_kind": "scalar"}]
+        }))
+        .unwrap();
+        let steps = vec![source];
+        let bytes = fullmag_application::encode_study_scalar_artifact(
+            "E_total", "J", -1.25e-18, 3, 1.5e-14,
+        )
+        .unwrap();
+        let object_ref = store.cas().put(&bytes).unwrap();
+        let mut artifacts = artifact_catalog();
+        let entry = &mut artifacts.entries[1];
+        entry.artifact_type = "scalar".into();
+        entry.content_sha256 = object_ref.clone();
+        entry.object_ref = Some(object_ref.clone());
+        let manifest = fullmag_session::FmsStudyOutputManifest {
+            schema_version: fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA.into(),
+            run_id: run_catalog.run_id.clone(),
+            task_id: entry.task_id.clone(),
+            step_id: "source-step".into(),
+            attempt_id: entry.attempt_id.clone(),
+            ownership_epoch: entry.ownership_epoch,
+            accepted_state_ref: None,
+            observation_source: None,
+            outputs: vec![fullmag_session::FmsStudyOutputManifestEntry {
+                port_id: "final_state".into(),
+                case_id: "default".into(),
+                data_kind: "scalar".into(),
+                codec_id: fullmag_application::STUDY_SCALAR_CODEC_ID.into(),
+                codec_version: fullmag_application::STUDY_SCALAR_CODEC_VERSION.into(),
+                artifact_id: entry.artifact_id.clone(),
+                object_ref: object_ref.clone(),
+                content_sha256: object_ref.clone(),
+            }],
+        };
+        let manifest_ref = store
+            .cas()
+            .put(&serde_json::to_vec(&manifest).unwrap())
+            .unwrap();
+        let mut manifest_entry = entry.clone();
+        manifest_entry.artifact_id = "artifact-manifest".into();
+        manifest_entry.artifact_type = "study_output_manifest".into();
+        manifest_entry.logical_path = "outputs/current/manifest.json".into();
+        manifest_entry.object_ref = Some(manifest_ref.clone());
+        manifest_entry.content_sha256 = manifest_ref.clone();
+        manifest_entry.study_output = None;
+        artifacts.entries.push(manifest_entry);
+        let resolve = |supplied: &BTreeMap<String, ResolvedInput>| {
+            let mut resolved = resolve_step_output_inputs(
+                &run_catalog.run_id,
+                &ports,
+                supplied,
+                &run_catalog,
+                Some(&artifacts),
+            )?;
+            bind_step_output_manifests(
+                &store,
+                &run_catalog.run_id,
+                &steps,
+                &ports,
+                &mut resolved,
+                &run_catalog,
+                Some(&artifacts),
+            )?;
+            Ok::<_, anyhow::Error>(resolved)
+        };
+        let first = resolve(&BTreeMap::new()).unwrap();
+        assert!(first["initial_state"].study_artifact.is_some());
+        // Queue/admission captures the typed binding. Prepare and recovery
+        // deserialize it and must revalidate it without rejecting enrichment.
+        let captured = serde_json::from_slice(&serde_json::to_vec(&first).unwrap()).unwrap();
+        assert_eq!(resolve(&captured).unwrap(), first);
+        assert_eq!(resolve(&first).unwrap(), first);
+        for field in [
+            "source",
+            "content_sha256",
+            "artifact_id",
+            "object_ref",
+            "data_kind",
+            "codec_id",
+            "codec_version",
+        ] {
+            let mut forged = first.clone();
+            let input = forged.get_mut("initial_state").unwrap();
+            match field {
+                "source" => input.source = "foreign-artifact".into(),
+                "content_sha256" => input.content_sha256 = "f".repeat(64),
+                _ => {
+                    let artifact = input.study_artifact.as_mut().unwrap();
+                    match field {
+                        "artifact_id" => artifact.artifact_id = "foreign-artifact".into(),
+                        "object_ref" => artifact.object_ref = "f".repeat(64),
+                        "data_kind" => artifact.data_kind = "state".into(),
+                        "codec_id" => artifact.codec_id = "foreign.codec".into(),
+                        "codec_version" => artifact.codec_version = "v99".into(),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            assert!(resolve(&forged).is_err(), "accepted forged {field}");
+        }
+        let object_path = store.root().join("objects/sha256").join(&object_ref);
+        std::fs::remove_file(&object_path).unwrap();
+        assert!(resolve(&first).is_err(), "accepted missing payload");
+        store.cas().put(&bytes).unwrap();
+        std::fs::remove_file(store.root().join("objects/sha256").join(manifest_ref)).unwrap();
+        assert!(resolve(&first).is_err(), "accepted missing manifest");
     }
 
     #[test]
