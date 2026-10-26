@@ -87,11 +87,9 @@ export function buildEigenBranchResultManifestOwner(
 
   return {
     artifactSetId,
-    resultContext: frequencyDomainResultContextFromManifest({
-      ...payload,
-      // The owned resource envelope is authoritative over legacy payload placeholders.
-      run_id: runId,
-      stage_id: stageId,
+    resultContext: frequencyDomainResultContextFromManifest(payload, {
+      runId,
+      stageId,
     }),
     runId,
     sessionId,

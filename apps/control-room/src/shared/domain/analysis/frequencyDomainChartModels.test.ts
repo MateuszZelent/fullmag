@@ -1109,9 +1109,9 @@ describe("frequencyDomainChartModels", () => {
       branchId: null,
       frequencyHz: 1.2e9,
       itemId: "sample-0004-mode-0007",
-      modeFieldAvailable: false,
-      modeFieldId: null,
-      modeFieldResourceKey: null,
+      modeFieldAvailable: withField,
+      modeFieldId: withField ? "field-7" : null,
+      modeFieldResourceKey: withField ? fieldVectorResourceKey("field-7") : null,
       modeId: "sample-0004-mode-0007",
       pathS: 2.5e7,
       rawModeIndex: 7,
@@ -2126,6 +2126,8 @@ describe("frequencyDomainChartModels", () => {
       boundary_context: "floquet_periodic",
       equilibrium_artifact_sha256: "sha256:equilibrium-1",
       k_sampling: { kind: "single", vector_rad_per_m: [0, 0, 0] },
+      run_id: "current",
+      stage_id: "eigenmodes",
       study_product: "modal_eigen",
     }, {
       meshGenerationId: "mesh-generation-1",
@@ -2140,6 +2142,79 @@ describe("frequencyDomainChartModels", () => {
       stageId: "stage-1",
     });
     expect(context.classification?.kContext.kind).toBe("gamma");
+  });
+
+  it("rejects conflicting exact artifact and wrapper owners", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic",
+      equilibrium_identity: "equilibrium-1",
+      geometry_identity: "geometry-1",
+      k_sampling: { kind: "single", vector_rad_per_m: [0, 0, 0] },
+      mesh_identity: "mesh-1",
+      run_id: "payload-run",
+      stage_id: "payload-stage",
+      study_product: "modal_eigen",
+    }, {
+      runId: "wrapper-run",
+      stageId: "wrapper-stage",
+    });
+
+    expect(context.runId).toBeNull();
+    expect(context.stageId).toBeNull();
+    expect(context.evidence).toBeNull();
+    expect(context.classification).toBeNull();
+    expect(context.contractGaps).toEqual([
+      "run identity conflicts with artifact owner",
+      "stage identity conflicts with artifact owner",
+    ]);
+  });
+
+  it("checks an exact stage conflict even when the payload run id is the legacy alias", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic",
+      equilibrium_identity: "equilibrium-1",
+      geometry_identity: "geometry-1",
+      k_sampling: { kind: "single", vector_rad_per_m: [0, 0, 0] },
+      mesh_identity: "mesh-1",
+      run_id: "current",
+      stage_id: "payload-stage",
+      study_product: "modal_eigen",
+    }, {
+      runId: "wrapper-run",
+      stageId: "wrapper-stage",
+    });
+
+    expect(context.runId).toBe("wrapper-run");
+    expect(context.stageId).toBeNull();
+    expect(context.evidence).toBeNull();
+    expect(context.classification).toBeNull();
+    expect(context.contractGaps).toContain(
+      "stage identity conflicts with artifact owner",
+    );
+  });
+
+  it("treats eigenmodes as an exact stage id unless it is paired with run_id current", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic",
+      equilibrium_identity: "equilibrium-1",
+      geometry_identity: "geometry-1",
+      k_sampling: { kind: "single", vector_rad_per_m: [0, 0, 0] },
+      mesh_identity: "mesh-1",
+      run_id: "run-1",
+      stage_id: "eigenmodes",
+      study_product: "modal_eigen",
+    }, {
+      runId: "run-1",
+      stageId: "wrapper-stage",
+    });
+
+    expect(context.runId).toBe("run-1");
+    expect(context.stageId).toBeNull();
+    expect(context.evidence).toBeNull();
+    expect(context.classification).toBeNull();
+    expect(context.contractGaps).toContain(
+      "stage identity conflicts with artifact owner",
+    );
   });
 
   it("keeps a claimed response map unavailable without a typed map resource adapter", () => {

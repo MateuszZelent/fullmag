@@ -2220,7 +2220,7 @@ function makeDecimatedDispersionFixture() {
       sampleIndex: targetSampleIndex,
       seriesType: "line",
       sourceGapRow: 2 * gapAtRow,
-      tooltipTerms: ["path_s", "Branch tracked"],
+      tooltipTerms: ["k-path distance s", "Branch tracked"],
     },
     text: rows.join("\n"),
   };

@@ -170,8 +170,22 @@ export function frequencyDomainResultContextFromManifest(
   const manifest = record(manifestPayload);
   const requested = record(manifest?.requested_execution);
   const contractGaps: string[] = [];
-  const runId = stringValue(manifest?.run_id) ?? stringValue(owner.runId);
-  const stageId = stringValue(manifest?.stage_id) ?? stringValue(owner.stageId);
+  const manifestRunId = stringValue(manifest?.run_id);
+  const manifestStageId = stringValue(manifest?.stage_id);
+  const hasHistoricalOwnerPlaceholderPair =
+    manifestRunId === "current" && manifestStageId === "eigenmodes";
+  const runOwner = reconcileManifestOwner(
+    manifestRunId,
+    owner.runId,
+    "current",
+  );
+  const stageOwner = reconcileManifestOwner(
+    manifestStageId,
+    owner.stageId,
+    hasHistoricalOwnerPlaceholderPair ? "eigenmodes" : null,
+  );
+  const runId = runOwner.value;
+  const stageId = stageOwner.value;
   const equilibriumId = stringValue(
     manifest?.equilibrium_identity ?? manifest?.equilibrium_artifact_sha256,
   );
@@ -189,14 +203,30 @@ export function frequencyDomainResultContextFromManifest(
   const meshId = stringValue(manifest?.mesh_identity) ?? stringValue(owner.meshGenerationId);
   const observables = typedObservableEvidence(manifest?.observables);
   const kSampling = typedKSampling(manifest?.k_sampling ?? requested?.k_sampling);
-  if (!runId) contractGaps.push("run identity unavailable");
-  if (!stageId) contractGaps.push("stage identity unavailable");
+  if (runOwner.conflict) {
+    contractGaps.push("run identity conflicts with artifact owner");
+  } else if (!runId) {
+    contractGaps.push("run identity unavailable");
+  }
+  if (stageOwner.conflict) {
+    contractGaps.push("stage identity conflicts with artifact owner");
+  } else if (!stageId) {
+    contractGaps.push("stage identity unavailable");
+  }
   if (!equilibriumId) contractGaps.push("equilibrium identity unavailable");
   if (!studyProduct) contractGaps.push("study product unavailable");
   if (!boundaryContext) contractGaps.push("boundary context unavailable");
   if (!geometryId) contractGaps.push("geometry identity unavailable");
   if (!meshId) contractGaps.push("mesh identity unavailable");
-  if (!runId || !stageId || !equilibriumId || !studyProduct || !boundaryContext) {
+  if (
+    runOwner.conflict ||
+    stageOwner.conflict ||
+    !runId ||
+    !stageId ||
+    !equilibriumId ||
+    !studyProduct ||
+    !boundaryContext
+  ) {
     return {
       boundaryContext,
       classification: null,
@@ -259,6 +289,24 @@ export function frequencyDomainResultContextFromManifest(
       studyProduct,
     };
   }
+}
+
+/** Ignore only the exact historical payload aliases; conflicting exact IDs invalidate ownership. */
+function reconcileManifestOwner(
+  manifestValue: unknown,
+  wrapperValue: unknown,
+  historicalPayloadPlaceholder: string | null,
+): { conflict: boolean; value: string | null } {
+  const manifestId = stringValue(manifestValue);
+  const wrapperId = stringValue(wrapperValue);
+  const exactManifestId = historicalPayloadPlaceholder !== null &&
+    manifestId === historicalPayloadPlaceholder
+    ? null
+    : manifestId;
+  if (exactManifestId && wrapperId && exactManifestId !== wrapperId) {
+    return { conflict: true, value: null };
+  }
+  return { conflict: false, value: wrapperId ?? exactManifestId };
 }
 
 function typedDriveEvidence(value: unknown): FrequencyDomainResultEvidence["drive"] | null {

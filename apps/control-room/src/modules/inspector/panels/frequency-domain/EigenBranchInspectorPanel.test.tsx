@@ -107,6 +107,19 @@ const modalManifestOwner = buildEigenBranchResultManifestOwner(
   modalManifestResource(),
 );
 
+it("resolves legacy payload owner aliases from the API artifact envelope", () => {
+  expect(modalManifestOwner).toMatchObject({
+    resultContext: {
+      runId: "run-7",
+      stageId: "eigen-stage-7",
+      evidence: {
+        runId: "run-7",
+        stageId: "eigen-stage-7",
+      },
+    },
+  });
+});
+
 describe("EigenBranchInspectorPanel point model", () => {
   it("preserves branch, sample, mode and missing-field identity", () => {
     expect(buildEigenBranchPointViewModel("acoustic", point)).toEqual({

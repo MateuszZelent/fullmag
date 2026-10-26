@@ -977,9 +977,9 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       .not.toContain("Spectral Response Map · A(k,f)");
   });
 
-  it("adapts explicit manifest provenance without trusting the manifest run placeholder", () => {
+  it("resolves legacy manifest owner placeholders from the API artifact wrapper", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
-      currentRun: { revision: 17, run_id: "runtime-run-17" },
+      currentRun: { revision: 17, run_id: "artifact-run-17" },
       dispersion: {
         path_metadata: {
           sampling: {
@@ -1004,9 +1004,12 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
               k_sampling: "path",
             },
             revision: "eigen-r9",
-            stage_id: "eigen-stage",
+            run_id: "current",
+            stage_id: "eigenmodes",
             study_product: "modal_eigen",
           },
+          run_id: "artifact-run-17",
+          stage_id: "artifact-stage-17",
           status: "ready",
         },
       },
@@ -1015,18 +1018,46 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
 
     expect(adapted.contractGaps).toEqual([]);
     expect(adapted.snapshot).toMatchObject({
-      resultContextRunId: "runtime-run-17",
+      resultContextRunId: "artifact-run-17",
       entries: [
         {
           artifactRevision: "eigen-r9",
           equilibriumId: "eq-relax-r4",
           kSampling: { kind: "path", label: "Γ–X", sampleCount: 9 },
-          runId: "runtime-run-17",
-          stageId: "eigen-stage",
+          runId: "artifact-run-17",
+          stageId: "artifact-stage-17",
           studyProduct: "modal_eigen",
         },
       ],
     });
+  });
+
+  it("fails closed on an exact stage conflict even when the payload run id is a legacy alias", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 17, run_id: "artifact-run-17" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-relax-r4",
+            geometry_identity: "geometry-r4",
+            mesh_identity: "mesh-r4",
+            requested_execution: { boundary_context: "finite_open" },
+            run_id: "current",
+            stage_id: "payload-stage",
+            study_product: "modal_eigen",
+          },
+          run_id: "artifact-run-17",
+          stage_id: "wrapper-stage",
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.snapshot.entries).toEqual([]);
+    expect(adapted.contractGaps).toContain(
+      "stage identity conflicts with artifact owner",
+    );
   });
 
   it("preserves explicit result context gaps", () => {

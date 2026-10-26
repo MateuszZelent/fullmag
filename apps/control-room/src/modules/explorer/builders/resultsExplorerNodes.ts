@@ -110,7 +110,10 @@ interface ResultResourceLike {
 }
 
 interface ResultManifestLike extends ResultResourceLike {
+  mesh_generation_id?: string | null;
   payload?: unknown;
+  run_id?: string | null;
+  stage_id?: string | null;
 }
 
 export interface PhysicsFirstResultResourceInput {
@@ -472,7 +475,6 @@ export function physicsFirstResultsSnapshotFromResources(
   if (!runId || !payload) return { contractGaps, snapshot: emptySnapshot };
 
   const studyProduct = nonEmptyString(payload.study_product);
-  const stageId = nonEmptyString(payload.stage_id);
   const equilibriumId = nonEmptyString(payload.equilibrium_identity);
   const requested = record(payload.requested_execution);
   const boundaryContext = nonEmptyString(requested?.boundary_context);
@@ -483,7 +485,6 @@ export function physicsFirstResultsSnapshotFromResources(
     addContractGap("Frequency-domain artifact does not publish boundary_context");
   }
   if (
-    !stageId ||
     !equilibriumId ||
     (studyProduct !== "modal_eigen" && studyProduct !== "driven_response") ||
     (boundaryContext !== "finite_open" && boundaryContext !== "floquet_periodic")
@@ -504,11 +505,23 @@ export function physicsFirstResultsSnapshotFromResources(
   const frequencyContext = frequencyDomainResultContextFromManifest({
     ...payload,
     ...(kSampling ? { k_sampling: kSamplingForFrequencyContext(kSampling) } : {}),
-    run_id: runId,
+  }, {
+    meshGenerationId: nonEmptyString(resultManifest?.mesh_generation_id),
+    runId: nonEmptyString(resultManifest?.run_id) ?? runId,
+    stageId: nonEmptyString(resultManifest?.stage_id),
   });
   for (const gap of frequencyContext.contractGaps) {
     addContractGap(gap);
   }
+  const ownerRunId = frequencyContext.runId;
+  const ownerStageId = frequencyContext.stageId;
+  if (!ownerRunId || !ownerStageId) {
+    return {
+      contractGaps,
+      snapshot: { ...emptySnapshot, contractGaps: [...contractGaps] },
+    };
+  }
+  const stageId = ownerStageId;
   const artifactRevision =
     nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
   const products: PhysicsFirstResultProducts =
@@ -545,7 +558,7 @@ export function physicsFirstResultsSnapshotFromResources(
     observables: observablesFromPayload(payload.observables),
     ...(frequencyContext.normalization ? { normalization: frequencyContext.normalization } : {}),
     products,
-    runId,
+    runId: ownerRunId,
     stageId,
     stageLabel: nonEmptyString(payload.stage_label) ?? stageId,
     studyProduct,
