@@ -1210,6 +1210,157 @@ pub(crate) fn ensure_preparation_run_is_active(snapshot: &SessionStateResponse) 
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FinalizedAcceptedPreparationFailure {
+    preparation_attempt_id: String,
+    receipt_id: String,
+    reason: String,
+}
+
+/// Return the exact durable preparation failure that is still holding an
+/// accepted task, if any. A missing task receipt is not enough evidence by
+/// itself: an authorized retry may be waiting for the scheduler or may already
+/// own a new lease. The session store's authorization sequence is the retry
+/// fence; the exit, lease, and launch identities below prove that the failure
+/// was finalized rather than inferred from process logs or liveness.
+fn finalized_accepted_preparation_failure_for_task(
+    store: &fullmag_session::SessionStore,
+    run_id: &str,
+    task_id: &str,
+) -> anyhow::Result<Option<FinalizedAcceptedPreparationFailure>> {
+    // Keep the catalog, retry authorization, process exit, and lease reads on
+    // one native store snapshot. A retry decision or lease acquisition cannot
+    // interleave with these checks, so the result describes one coherent
+    // durable observation.
+    let _writer = match store.write_transaction() {
+        Ok(writer) => writer,
+        Err(error)
+            if error
+                .chain()
+                .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(catalog) = store.read_run_catalog(run_id)? else {
+        return Ok(None);
+    };
+    if catalog.run_id != run_id {
+        anyhow::bail!("preparation failure catalog belongs to another run");
+    }
+    let Some(task) = catalog.tasks.iter().find(|task| task.task_id == task_id) else {
+        return Ok(None);
+    };
+    if task.lifecycle != fullmag_session::FmsTaskLifecycle::Accepted
+        || !matches!(
+            &task.readiness,
+            fullmag_session::FmsTaskReadiness::Blocked { reason }
+                if reason == fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON
+        )
+        || task.attempt_id.is_some()
+        || task.ownership_epoch.is_some()
+        || task.resource_id.is_some()
+        || store
+            .read_task_preparation_receipt(run_id, task_id)?
+            .is_some()
+    {
+        return Ok(None);
+    }
+
+    // `Some(sequence)` means the initial attempt or a newer explicit retry is
+    // authorized. `None` is the durable held-failure state, unless an active
+    // lease makes the current attempt non-terminal (handled below).
+    if store
+        .preparation_attempt_authorization_sequence(run_id, task_id)?
+        .is_some()
+    {
+        return Ok(None);
+    }
+
+    let decisions = store.list_preparation_retry_decisions(run_id)?;
+    let failures = store
+        .list_preparation_process_exit_receipts(run_id)?
+        .into_iter()
+        .filter(|receipt| {
+            receipt.task_id == task_id
+                && !receipt.status_success
+                && !decisions.iter().any(|decision| {
+                    decision.task_id == task_id
+                        && decision.failed_preparation_attempt_id
+                            == receipt.preparation_attempt_id
+                })
+        })
+        .collect::<Vec<_>>();
+    if failures.is_empty() {
+        return Ok(None);
+    }
+    if failures.len() != 1 {
+        anyhow::bail!(
+            "accepted preparation failure requires one exact un-retried process exit, found {}",
+            failures.len()
+        );
+    }
+    let receipt = &failures[0];
+    receipt.validate()?;
+    if receipt.run_id != run_id || receipt.task_id != task_id {
+        anyhow::bail!("accepted preparation process exit identity differs from the requested task");
+    }
+    let lease = store
+        .read_preparation_resource_lease(run_id, &receipt.resource_id, &receipt.lease_token)?
+        .ok_or_else(|| anyhow::anyhow!("accepted preparation failure has no exact resource lease"))?;
+    lease.validate()?;
+    if lease.run_id != run_id
+        || lease.task_id != task_id
+        || lease.preparation_attempt_id != receipt.preparation_attempt_id
+        || lease.resource_id != receipt.resource_id
+        || lease.lease_token != receipt.lease_token
+        || lease.heartbeat_sequence != receipt.lease_heartbeat_sequence
+    {
+        anyhow::bail!("accepted preparation failure does not match its exact lease");
+    }
+    if lease.state != fullmag_session::FmsResourceLeaseState::Released {
+        // A durable exit can briefly precede finalization. It is not an
+        // authoritative terminal failure until its exact lease is released.
+        return Ok(None);
+    }
+
+    let launches = store
+        .list_preparation_process_launches(run_id)?
+        .into_iter()
+        .filter(|launch| {
+            launch.task_id == task_id
+                && launch.preparation_attempt_id == receipt.preparation_attempt_id
+        })
+        .collect::<Vec<_>>();
+    if launches.len() != 1 {
+        anyhow::bail!(
+            "accepted preparation failure requires exactly one matching durable launch"
+        );
+    }
+    let launch = &launches[0];
+    launch.validate()?;
+    if launch.run_id != run_id
+        || launch.task_id != task_id
+        || launch.resource_id != receipt.resource_id
+        || launch.lease_token != receipt.lease_token
+        || launch.lease_heartbeat_sequence > receipt.lease_heartbeat_sequence
+    {
+        anyhow::bail!("accepted preparation launch identity differs from its exit proof");
+    }
+
+    let reason = receipt
+        .failure_reason
+        .as_deref()
+        .unwrap_or("native preparation process failed")
+        .replace(&receipt.lease_token, "[redacted lease token]");
+    Ok(Some(FinalizedAcceptedPreparationFailure {
+        preparation_attempt_id: receipt.preparation_attempt_id.clone(),
+        receipt_id: receipt.receipt_id.clone(),
+        reason,
+    }))
+}
+
 /// Publish preparation that was produced by the accepted task lane.
 ///
 /// The accepted FEM preparer is the only component allowed to create native
@@ -1320,16 +1471,34 @@ pub(crate) async fn publish_accepted_task_preparation(
         // durable integrity failure and must surface immediately; mapping it
         // to pending would hide tampering or invalid native evidence behind a
         // thirty-minute wait while the manual Compute gate remains closed.
-        if store
+        let task_preparation_receipt = store
             .read_task_preparation_receipt(typed_run_id.as_str(), &task_id)
             .map_err(|error| {
                 ApiError::conflict_with_code(
                     "accepted_preparation_receipt_invalid",
                     format!("accepted task preparation receipt read failed: {error:#}"),
                 )
-            })?
-            .is_none()
-        {
+            })?;
+        if task_preparation_receipt.is_none() {
+            if let Some(failure) = finalized_accepted_preparation_failure_for_task(
+                &store,
+                typed_run_id.as_str(),
+                &task_id,
+            )
+            .map_err(|error| {
+                ApiError::conflict_with_code(
+                    "accepted_preparation_failure_status_invalid",
+                    format!("accepted preparation failure status is invalid: {error:#}"),
+                )
+            })? {
+                return Err(ApiError::unprocessable_with_code(
+                    "accepted_preparation_process_failed",
+                    format!(
+                        "accepted task preparation failed for `{step_id_for_worker}` (attempt `{}`; exit `{}`): {}",
+                        failure.preparation_attempt_id, failure.receipt_id, failure.reason
+                    ),
+                ));
+            }
             return Err(ApiError::with_status_and_code(
                 axum::http::StatusCode::SERVICE_UNAVAILABLE,
                 "accepted_preparation_pending",
@@ -3450,5 +3619,182 @@ mod tests {
                 .is_ok()
         );
         assert!(validate_requested_device_value("cpu", Some("gpu")).is_err());
+    }
+
+    fn finalized_preparation_failure_fixture() -> (
+        tempfile::TempDir,
+        fullmag_session::SessionStore,
+        String,
+        String,
+        fullmag_session::FmsPreparationProcessExitReceipt,
+    ) {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(temporary.path().join("store")).unwrap();
+        let run_id = "run-live-preparation-failure".to_owned();
+        let task_id = "task-live-preparation-failure".to_owned();
+        store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.clone(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: vec![fullmag_session::FmsTaskCatalogEntry {
+                    task_id: task_id.clone(),
+                    input_fingerprint: "a".repeat(64),
+                    lifecycle: fullmag_session::FmsTaskLifecycle::Accepted,
+                    readiness: fullmag_session::FmsTaskReadiness::Blocked {
+                        reason: fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON.into(),
+                    },
+                    observation: None,
+                    attempt_id: None,
+                    ownership_epoch: None,
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: None,
+                    coordinator_watermark: None,
+                    coordinator_genesis: None,
+                }],
+            })
+            .unwrap();
+        let now = chrono::Utc::now();
+        let lease = fullmag_session::FmsPreparationResourceLease {
+            schema_version: fullmag_session::FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "prep-resource-live-test".into(),
+            budget: fullmag_session::FmsResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1024,
+                gpu_memory_bytes: 0,
+                storage_bytes: 4096,
+            },
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            preparation_attempt_id: "prep-attempt-live-failure".into(),
+            lease_token: "prep-lease-live-failure".into(),
+            state: fullmag_session::FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 0,
+            released_at: None,
+            host_launch_binding: None,
+        };
+        assert_eq!(
+            store.commit_preparation_resource_lease(&lease).unwrap(),
+            fullmag_session::PreparationResourceLeaseCommitDisposition::Acquired
+        );
+        let launch = fullmag_session::FmsPreparationProcessLaunch {
+            schema_version: fullmag_session::FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA.into(),
+            launch_id: "prep-launch-live-failure".into(),
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            preparation_attempt_id: lease.preparation_attempt_id.clone(),
+            resource_id: lease.resource_id.clone(),
+            lease_token: lease.lease_token.clone(),
+            lease_heartbeat_sequence: lease.heartbeat_sequence,
+            supervisor_process_id: 41,
+            supervisor_start_token: Some("supervisor-live-failure".into()),
+            created_at: now,
+        };
+        store.commit_preparation_process_launch(&launch).unwrap();
+        let exit = fullmag_session::FmsPreparationProcessExitReceipt {
+            schema_version: fullmag_session::FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+            receipt_id: "prep-exit-live-failure".into(),
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            preparation_attempt_id: lease.preparation_attempt_id.clone(),
+            resource_id: lease.resource_id.clone(),
+            lease_token: lease.lease_token.clone(),
+            lease_heartbeat_sequence: lease.heartbeat_sequence,
+            process_id: 42,
+            process_start_token: Some("preparer-live-failure".into()),
+            status_success: false,
+            exit_code: Some(17),
+            timed_out: false,
+            failure_reason: Some("native preparation failed".into()),
+            observed_at: now,
+        };
+        store
+            .commit_preparation_process_exit_receipt(&exit)
+            .unwrap();
+        assert_eq!(
+            store.finalize_preparation_process_exit(&exit).unwrap(),
+            fullmag_session::PreparationProcessFinalizationDisposition::Failed
+        );
+        (temporary, store, run_id, task_id, exit)
+    }
+
+    #[test]
+    fn finalized_failed_preparation_is_not_reported_as_pending() {
+        let (_temporary, store, run_id, task_id, exit) = finalized_preparation_failure_fixture();
+
+        let failure = finalized_accepted_preparation_failure_for_task(&store, &run_id, &task_id)
+            .unwrap()
+            .expect("a finalized native preparation failure must be authoritative");
+        assert_eq!(failure.preparation_attempt_id, exit.preparation_attempt_id);
+        assert_eq!(failure.receipt_id, exit.receipt_id);
+        assert_eq!(failure.reason, "native preparation failed");
+    }
+
+    #[test]
+    fn authorized_preparation_retry_remains_pending_after_previous_failure() {
+        let (_temporary, store, run_id, task_id, exit) = finalized_preparation_failure_fixture();
+        let decision = fullmag_session::FmsPreparationRetryDecision {
+            schema_version: fullmag_session::FMS_PREPARATION_RETRY_DECISION_SCHEMA.into(),
+            decision_id: "prep-retry-live-failure".into(),
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            failed_preparation_attempt_id: exit.preparation_attempt_id,
+            retry_sequence: 1,
+            max_attempts: 2,
+            reason: "operator approved one retry".into(),
+            created_at: chrono::Utc::now(),
+        };
+        assert_eq!(
+            store.commit_preparation_retry_decision(&decision).unwrap(),
+            fullmag_session::PreparationRetryDecisionCommitDisposition::Accepted
+        );
+        assert_eq!(
+            store
+                .preparation_attempt_authorization_sequence(&run_id, &task_id)
+                .unwrap(),
+            Some(1)
+        );
+        assert!(
+            finalized_accepted_preparation_failure_for_task(&store, &run_id, &task_id)
+                .unwrap()
+                .is_none(),
+            "an authorized newer retry must keep the live wait pending"
+        );
+
+        let retry_now = chrono::Utc::now();
+        let retry_lease = fullmag_session::FmsPreparationResourceLease {
+            schema_version: fullmag_session::FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "prep-resource-live-test".into(),
+            budget: fullmag_session::FmsResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1024,
+                gpu_memory_bytes: 0,
+                storage_bytes: 4096,
+            },
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            preparation_attempt_id: "prep-attempt-live-retry".into(),
+            lease_token: "prep-lease-live-retry".into(),
+            state: fullmag_session::FmsResourceLeaseState::Active,
+            acquired_at: retry_now,
+            heartbeat_at: retry_now,
+            heartbeat_sequence: 0,
+            released_at: None,
+            host_launch_binding: None,
+        };
+        assert_eq!(
+            store.commit_preparation_resource_lease(&retry_lease).unwrap(),
+            fullmag_session::PreparationResourceLeaseCommitDisposition::Acquired
+        );
+        assert!(
+            finalized_accepted_preparation_failure_for_task(&store, &run_id, &task_id)
+                .unwrap()
+                .is_none(),
+            "an active authorized retry must keep the live wait pending"
+        );
     }
 }
