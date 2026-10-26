@@ -434,7 +434,7 @@ mod tests {
     }
 
     fn candidate(session_id: &str, run_id: &str, stage_id: &str) -> ModalPublicationCandidate {
-        let payloads = BTreeMap::from([
+        let payloads: BTreeMap<String, Vec<u8>> = BTreeMap::from([
             (
                 MODAL_METADATA_PATH.into(),
                 serde_json::to_vec(&serde_json::json!({

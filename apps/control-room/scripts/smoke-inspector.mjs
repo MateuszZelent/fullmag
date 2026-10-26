@@ -5151,11 +5151,18 @@ function inspectorFieldVector(path, fixture = {}) {
     quantityId === INSPECTOR_MODAL_FIELD_ID
   ) {
     const modeField = makeInspectorModalModeFieldVector(quantityId);
+    const artifactGenerationId = inspectorModeFieldArtifactGeneration(
+      fixture,
+      quantityId,
+    );
     return {
       buffer: modeField.buffer,
       headers: {
         "x-fullmag-component": "full",
         "x-fullmag-domain-generation-id": INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+        ...(artifactGenerationId
+          ? { "x-fullmag-artifact-generation-id": artifactGenerationId }
+          : {}),
         "x-fullmag-encoding": "FMVP;version=5",
         "x-fullmag-field-indexing": "full_domain",
         "x-fullmag-field-revision": modeField.fieldRevision,
@@ -5188,6 +5195,19 @@ function inspectorFieldVector(path, fixture = {}) {
     values[index + 2] = 0.1;
   }
   return { buffer, headers: {} };
+}
+
+function inspectorModeFieldArtifactGeneration(fixture, quantityId) {
+  const match = /^analysis:eigen:sample-(\d+):mode-(\d+)$/.exec(quantityId);
+  if (!match) return null;
+  const mode = inspectorFrequencyMode(
+    fixture,
+    Number(match[1]),
+    Number(match[2]),
+  );
+  return typeof mode.generation_id === "string" && mode.generation_id.trim().length > 0
+    ? mode.generation_id
+    : null;
 }
 
 function makeInspectorModalModeFieldVector(quantityId) {
@@ -5331,11 +5351,20 @@ async function assertInspectorModalModeFieldVectorResponse(response, fixture) {
   const headers = response.headers();
   const body = await response.body();
   const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const expectedArtifactGenerationId = inspectorModeFieldArtifactGeneration(
+    fixture,
+    INSPECTOR_MODAL_FIELD_ID,
+  );
+  assert(
+    expectedArtifactGenerationId !== null,
+    "Matched modal mode artifact has no owner-bound generation.",
+  );
   const expectedFieldRevision = inspectorAnalysisPayloadRevision(
     INSPECTOR_MODAL_FIELD_PAYLOAD_PATH,
     72 * Float64Array.BYTES_PER_ELEMENT,
   );
   const expectedHeaders = {
+    "x-fullmag-artifact-generation-id": expectedArtifactGenerationId,
     "x-fullmag-component": "full",
     "x-fullmag-domain-generation-id": INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
     "x-fullmag-encoding": "FMVP;version=5",

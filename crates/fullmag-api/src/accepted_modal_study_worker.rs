@@ -289,7 +289,7 @@ mod tests {
             digest, generation_id, GenerationBody, GenerationCommit, GenerationMember,
             PublicationOwner,
         };
-        let payloads = BTreeMap::from([
+        let payloads: BTreeMap<String, Vec<u8>> = BTreeMap::from([
             ("metadata.json".into(), br#"{"material_field_assets":[]}"#.to_vec()),
             ("frequency_domain/manifest.v1.json".into(), br#"{"schema_version":"frequency_domain_manifest.v1","study_product":"modal_eigen","run_id":"run-exact","stage_id":"eigen","artifacts":{"spectrum_v2_path":"eigen/spectrum.v2.json"}}"#.to_vec()),
             ("eigen/spectrum.v2.json".into(), br#"{"schema_version":"eigen_spectrum.v2","modes":[]}"#.to_vec()),

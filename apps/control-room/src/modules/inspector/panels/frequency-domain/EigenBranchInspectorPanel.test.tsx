@@ -88,6 +88,21 @@ function modalManifestResource(
           boundary_context: "floquet_periodic",
           k_sampling: { kind: "path", label: "Γ–X", sample_count: 2 },
         },
+        sample_execution_provenance: {
+          schema_version: "frequency_domain_sample_execution_provenance.v1",
+          status: "homogeneous",
+          sample_count: 2,
+          samples: [
+            {
+              sample_index: 0,
+              validation: { equilibrium_artifact_sha256: "equilibrium-7" },
+            },
+            {
+              sample_index: 1,
+              validation: { equilibrium_artifact_sha256: "equilibrium-7" },
+            },
+          ],
+        },
         run_id: "current",
         stage_id: "eigenmodes",
         study_product: "modal_eigen",
