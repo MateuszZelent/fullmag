@@ -12152,7 +12152,7 @@ fn reference_mode_publication_rejects_materialized_equilibrium_mismatch() {
     let error = execute_fem_eigen_inner(
         &plan, &[], false, false, None, 0, None, Some(&override_m0),
         Some(&handoff), None, None,
-    ).expect_err("the executor must reject inconsistent materialized m0 before mode publication");
+    ).err().expect("the executor must reject inconsistent materialized m0 before mode publication");
     assert!(error.message.contains("matching physical equilibrium vectors"),
         "unexpected guard error: {}", error.message);
 }

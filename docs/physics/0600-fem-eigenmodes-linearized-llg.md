@@ -408,8 +408,10 @@ równanie `eq-0710-phase`:
 | $\mathbf k$ | Zadany wektor falowy | $\mathrm{rad\,m^{-1}}$ |
 | $\Delta\mathbf r$ | Translacja od reprezentanta do węzła docelowego | $\mathrm m$ |
 
-Przed rozwinięciem runner sprawdza transport na zmaterializowanej równowadze,
-a nie wyłącznie na początkowym przybliżeniu. Czyste translacje wymagają
+Runner sprawdza zgodność równowagi przed utworzeniem stanu FEM oraz ponownie
+przed rozwinięciem na zmaterializowanej równowadze. Pierwsza kontrola jest
+konieczna, ponieważ konstruktor stanu nakłada statyczne więzy periodyczne
+i mógłby ukryć niespójność wejściowych wektorów. Czyste translacje wymagają
 zgodnych fizycznych wektorów równowagi. Full2x2 dopuszcza wspierane obroty
 lokalnej bazy; skalarna ścieżka nadal wymaga transportu tożsamościowego.
 Normowanie wektora zredukowanego pozostaje bez zmian. Natywny publisher
