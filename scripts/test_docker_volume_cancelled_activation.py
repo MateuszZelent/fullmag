@@ -10,12 +10,14 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import textwrap
 import unittest
 from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 module = importlib.import_module("docker_volume_cancelled_activation")
+docker_dev = importlib.import_module("docker_dev")
 from docker_build_control import ControlOutcomeUnknown, canonical
 from docker_volume_dev import _cancelled_activation_probe_script, _retained_startup_enabled
 
@@ -29,6 +31,7 @@ SOURCE_SHA = "f" * 64
 REQUEST = "fdm:cpu-docker-cancelled-activation"
 RUN_ID = "run-" + "1" * 40
 TASK_ID = "task-" + "2" * 40
+SUCCESS_TASK_ID = "task-" + "8" * 40
 CANCELLATION_ID = "cancel-" + "3" * 40
 BACKEND = "4" * 64
 FRONTEND = "5" * 64
@@ -79,13 +82,50 @@ def _ready_process() -> dict[str, object]:
 
 
 def _probe(**overrides: object) -> dict[str, object]:
-    exit_path = "preparation_process_exit_receipts/exit-1.json"
+    exit_path = "preparation_process_exit_receipts/prep-exit-launch-1.json"
     lease_path = "preparation_resource_leases/resource-1/lease-1.json"
     launch_path = "preparation_process_launches/launch-1.json"
-    task_path = "task_preparation_receipts/task-1.json"
+    task_path = "task_preparation_receipts/" + SUCCESS_TASK_ID + ".json"
+    stage_path = "accepted_stage_preparation_receipts/" + SUCCESS_TASK_ID + ".json"
+    success_exit_path = "preparation_process_exit_receipts/prep-exit-launch-2.json"
+    success_lease_path = "preparation_resource_leases/resource-2/lease-2.json"
+    success_launch_path = "preparation_process_launches/launch-2.json"
     hashes = {path: str(index) * 64 for index, path in enumerate(
-        (exit_path, launch_path, lease_path, task_path), start=1
+        (exit_path, launch_path, lease_path, task_path, stage_path,
+         success_exit_path, success_launch_path, success_lease_path), start=1
     )}
+    task_inventory = [
+        {"task_id": TASK_ID, "input_fingerprint": "a" * 64, "lifecycle": "cancelled",
+         "readiness": {"state": "blocked", "reason": "accepted_task_awaiting_preparation"}, "artifact_ids": []},
+        {"task_id": SUCCESS_TASK_ID, "input_fingerprint": "b" * 64, "lifecycle": "cancelled",
+         "readiness": {"state": "blocked", "reason": "awaiting dependency resolution"}, "artifact_ids": []},
+    ]
+    preparation_inventory = [
+        {
+            "task_id": TASK_ID, "outcome": "failed", "launch_id": "launch-1",
+            "preparation_attempt_id": "prep-attempt-1", "resource_id": "resource-1",
+            "lease_token": "lease-1", "launch_path": launch_path,
+            "launch_sha256": hashes[launch_path], "exit_path": exit_path,
+            "exit_sha256": hashes[exit_path], "lease_path": lease_path,
+            "lease_sha256": hashes[lease_path], "lease_heartbeat_sequence": 6,
+            "exit_code": 1, "timed_out": False, "lease_state": "released",
+            "released_at": "2026-10-25T10:03:00Z", "task_receipt_path": None,
+            "task_receipt_sha256": None, "stage_receipt_path": None,
+            "stage_receipt_sha256": None,
+        },
+        {
+            "task_id": SUCCESS_TASK_ID, "outcome": "succeeded", "launch_id": "launch-2",
+            "preparation_attempt_id": "prep-attempt-2", "resource_id": "resource-2",
+            "lease_token": "lease-2", "launch_path": success_launch_path,
+            "launch_sha256": hashes[success_launch_path], "exit_path": success_exit_path,
+            "exit_sha256": hashes[success_exit_path], "lease_path": success_lease_path,
+            "lease_sha256": hashes[success_lease_path], "lease_heartbeat_sequence": 7,
+            "exit_code": 0, "timed_out": False, "lease_state": "released",
+            "released_at": "2026-10-25T10:04:00Z", "task_receipt_path": task_path,
+            "task_receipt_sha256": hashes[task_path], "stage_receipt_path": stage_path,
+            "stage_receipt_sha256": hashes[stage_path],
+        },
+    ]
     probe: dict[str, object] = {
         "schema": "fullmag.docker-activation-cancel-probe.v1",
         "run_id": RUN_ID,
@@ -99,14 +139,15 @@ def _probe(**overrides: object) -> dict[str, object]:
         "cancellation_intent_sha256": "a" * 64,
         "activation_marker_sha256": "b" * 64,
         "matching_reservations": 0,
-        "task_count": 1,
+        "task_count": 2,
+        "task_inventory": task_inventory,
         "live_api_instance_id": "api-instance-1",
         "live_session_id": "session-1",
         "live_session_epoch": 2,
         "live_scene_revision": 5,
         "live_workspace_sha256": "c" * 64,
         "retained_current_run_sha256": "d" * 64,
-        "retained_current_run_task_count": 1,
+        "retained_current_run_task_count": 2,
         "compute_queue": {"items": []},
         "runtime_service": {"configured": True, "state": "ready"},
         "health": {"status": "ok", "active_session": True},
@@ -114,6 +155,7 @@ def _probe(**overrides: object) -> dict[str, object]:
             {"path": path, "sha256": hashes[path]}
             for path in sorted(hashes)
         ],
+        "preparation_inventory": preparation_inventory,
         "preparation_host_reservations": [],
         "failed_preparation": {
             "launch_id": "launch-1",
@@ -157,7 +199,7 @@ def _proof(control: FakeControl | None = None) -> dict[str, object]:
         "control": control,
         "config_sha256": CONFIG,
         "previous": {"attempt": DEV_ATTEMPT},
-        "pin": {"attempt": ITERATION_ATTEMPT},
+        "pin": {"attempt": ITERATION_ATTEMPT, "phase": "iteration"},
         "state_root": STATE_ROOT,
         "image_id": IMAGE,
         "backend": {"Id": BACKEND},
@@ -193,11 +235,14 @@ def _proof(control: FakeControl | None = None) -> dict[str, object]:
     }
 
 
-def _args(proof: dict[str, object], *, digest: str | None = None) -> argparse.Namespace:
+def _args(
+    proof: dict[str, object], *, digest: str | None = None, base_development: bool = False,
+) -> argparse.Namespace:
     plan = module._plan(proof)
     return argparse.Namespace(
         attempt=DEV_ATTEMPT,
-        iteration_attempt=ITERATION_ATTEMPT,
+        iteration_attempt=None if base_development else ITERATION_ATTEMPT,
+        base_development=base_development,
         activation_attempt=ATTEMPT,
         config_sha256=CONFIG,
         port=3198,
@@ -236,6 +281,40 @@ class CancelledActivationProofTests(unittest.TestCase):
             self.assertNotIn(forbidden, generated)
         ast.parse(module._scope_discovery_script())
 
+    def test_embedded_catalog_rejects_owner_state_and_unknown_task_fields(self) -> None:
+        generated = module._failed_preparation_probe_script()
+        start = generated.index('    tasks=catalog.get("tasks")')
+        end = generated.index('    if cancellation.get("schema_version")', start)
+        catalog_block = textwrap.dedent(generated[start:end])
+
+        class ProbeRejected(RuntimeError):
+            pass
+
+        def run(task: dict[str, object]) -> None:
+            def fail(message: str) -> None:
+                raise ProbeRejected(message)
+
+            namespace = {
+                "catalog": {"tasks": [task]},
+                "task_id": "task-catalog-test",
+                "is_sha": lambda value: isinstance(value, str) and len(value) == 64,
+                "fail": fail,
+            }
+            exec(catalog_block, namespace, namespace)
+
+        valid = {
+            "task_id": "task-catalog-test",
+            "input_fingerprint": "a" * 64,
+            "lifecycle": "cancelled",
+            "readiness": {"state": "blocked", "reason": "awaiting preparation"},
+            "artifact_ids": [],
+        }
+        run({**valid, "observation": None, "ownership_epoch": None})
+        with self.assertRaises(ProbeRejected):
+            run({**valid, "ownership_epoch": 7})
+        with self.assertRaises(ProbeRejected):
+            run({**valid, "future_task_field": None})
+
     def test_failed_exit_and_released_exact_lease_are_required(self) -> None:
         accepted = module._validate_failed_preparation_probe(
             _probe(), request_id=REQUEST, source_sha256=SOURCE_SHA,
@@ -256,6 +335,62 @@ class CancelledActivationProofTests(unittest.TestCase):
             {"retained_current_run_task_count": 0},
             {"compute_queue": {"items": [{"state": "queued"}]}},
         ):
+            with self.subTest(changes=changes):
+                with self.assertRaises(module.CancelledActivationRecoveryError):
+                    module._validate_failed_preparation_probe(
+                        _probe(**changes), request_id=REQUEST, source_sha256=SOURCE_SHA,
+                        expected_run_id=RUN_ID, expected_session_id="session-1",
+                    )
+
+    def test_multi_task_inventory_is_exact_and_fail_closed(self) -> None:
+        reordered = _probe()
+        reordered["task_inventory"] = list(reversed(reordered["task_inventory"]))
+        reordered["preparation_inventory"] = list(reversed(reordered["preparation_inventory"]))
+        accepted = module._validate_failed_preparation_probe(
+            reordered, request_id=REQUEST, source_sha256=SOURCE_SHA,
+            expected_run_id=RUN_ID, expected_session_id="session-1",
+        )
+        self.assertEqual(accepted["probe"]["task_count"], 2)
+        self.assertEqual(accepted["failed_preparation"]["launch_id"], "launch-1")
+        self.assertEqual(
+            {entry["task_id"] for entry in accepted["task_inventory"]},
+            {TASK_ID, SUCCESS_TASK_ID},
+        )
+        base = _probe()
+        variants = []
+        duplicate_tasks = list(base["task_inventory"])
+        duplicate_tasks[1] = {**duplicate_tasks[1], "task_id": TASK_ID}
+        variants.append({"task_inventory": duplicate_tasks})
+        variants.append({
+            "task_inventory": [
+                base["task_inventory"][0],
+                {**base["task_inventory"][1], "input_fingerprint": "not-a-sha"},
+            ],
+        })
+        variants.append({
+            "task_inventory": [
+                base["task_inventory"][0],
+                {**base["task_inventory"][1], "lifecycle": "succeeded"},
+            ],
+        })
+        variants.append({
+            "task_inventory": [
+                base["task_inventory"][0],
+                {**base["task_inventory"][1], "artifact_ids": ["artifact-output"]},
+            ],
+        })
+        orphan_lease = list(base["preparation_inventory"])
+        orphan_lease[0] = {**orphan_lease[0], "lease_path": "preparation_resource_leases/unknown/lease.json"}
+        variants.append({"preparation_inventory": orphan_lease})
+        duplicate_preparations = list(base["preparation_inventory"])
+        duplicate_preparations[1] = {
+            **duplicate_preparations[1], "task_id": TASK_ID,
+        }
+        variants.append({"preparation_inventory": duplicate_preparations})
+        unknown_evidence = list(base["preparation_evidence"])
+        unknown_evidence.append({"path": "preparation_process_launches/unknown.json", "sha256": "8" * 64})
+        variants.append({"preparation_evidence": unknown_evidence})
+        for changes in variants:
             with self.subTest(changes=changes):
                 with self.assertRaises(module.CancelledActivationRecoveryError):
                     module._validate_failed_preparation_probe(
@@ -304,6 +439,121 @@ class CancelledActivationProofTests(unittest.TestCase):
                     })
         with self.assertRaises(Exception):
             _retained_startup_enabled({"Config": {"Env": ["FULLMAG_STARTUP_ENABLED=invalid"]}})
+
+    def test_base_development_pin_has_no_fictional_iteration(self) -> None:
+        proof = dict(_proof(), pin={"attempt": DEV_ATTEMPT, "phase": "development"})
+        cancellation = module._validate_failed_preparation_probe(
+            _probe(), request_id=REQUEST, source_sha256=SOURCE_SHA,
+        )
+        proof["cancellation"] = cancellation
+        plan = module._plan(proof)
+        self.assertIsNone(plan["target"]["iteration_attempt"])
+        self.assertEqual(plan["target"]["continuation_phase"], "development")
+        self.assertEqual(plan["target"]["continuation_attempt"], DEV_ATTEMPT)
+        args = _args(proof, base_development=True)
+        journal = module._initial_journal(args, proof, plan, proof["control"])
+        with patch.object(module, "_read_pinned_original_records", return_value={
+            "receipt": proof["receipt"], "receipt_raw": proof["receipt_raw"],
+            "result_raw": proof["result_raw"], "activation_current_raw": proof["current_raw"],
+            "activation_terminal_raw": None,
+        }), patch.object(module, "_read_control_bytes", return_value=proof["active_raw"]):
+            resumed = module._proof_from_journal(
+                args, proof["selected"], proof["identity"], proof["control"], journal,
+            )
+        self.assertEqual(resumed["pin"], {"attempt": DEV_ATTEMPT, "phase": "development"})
+
+    def test_cancelled_activation_parser_requires_exactly_one_continuation_pin(self) -> None:
+        parser = docker_dev._parser()
+        common = [
+            "recover-cancelled-activation", "--attempt", DEV_ATTEMPT,
+            "--activation-attempt", ATTEMPT, "--config-sha256", CONFIG,
+            "--source-root", "/repo/worktree", "--port", "3198",
+        ]
+        parsed = parser.parse_args([*common, "--base-development"])
+        self.assertTrue(parsed.base_development)
+        self.assertIsNone(parsed.iteration_attempt)
+        parsed = parser.parse_args([*common, "--iteration-attempt", ITERATION_ATTEMPT])
+        self.assertFalse(parsed.base_development)
+        self.assertEqual(parsed.iteration_attempt, ITERATION_ATTEMPT)
+        with self.assertRaises(SystemExit):
+            parser.parse_args([*common])
+        with self.assertRaises(SystemExit):
+            parser.parse_args([
+                *common, "--base-development", "--iteration-attempt", ITERATION_ATTEMPT,
+            ])
+
+    def test_selected_context_accepts_base_or_iteration_without_swapping_the_guard(self) -> None:
+        configured = {
+            "services": {
+                "fem-gpu-toolchain": {
+                    "build": {"args": {"FULLMAG_CUDA_BASE_IMAGE": "image:pin"}},
+                },
+            },
+        }
+        for iteration_attempt, base_development in (
+            (None, True),
+            (ITERATION_ATTEMPT, False),
+        ):
+            with self.subTest(iteration_attempt=iteration_attempt), \
+                    patch.object(module, "_resolve_selected", return_value=(
+                        "/repo/worktree", None, {"project_name": "fullmag-worktree-test"}
+                    )), \
+                    patch.object(module, "toolchain_configuration", return_value=configured), \
+                    patch.object(module, "BuildControl", return_value=FakeControl()), \
+                    patch.object(module, "_validate_existing_control_volume"):
+                selected, _identity, _control = module._selected_context(argparse.Namespace(
+                    attempt=DEV_ATTEMPT,
+                    iteration_attempt=iteration_attempt,
+                    base_development=base_development,
+                    activation_attempt=ATTEMPT,
+                    config_sha256=CONFIG,
+                    port=3198,
+                    source_root="/repo/worktree",
+                ))
+                self.assertEqual(selected, "/repo/worktree")
+
+    def test_base_development_terminal_pin_rejects_iteration_impersonation(self) -> None:
+        previous = {
+            "schema": "fullmag.docker-build-operation.v1",
+            "phase": "development",
+            "state": "succeeded",
+            "attempt": DEV_ATTEMPT,
+            "compose_project": FakeControl.project,
+            "control_volume": FakeControl.volume,
+            "config_sha256": CONFIG,
+            "state_root": STATE_ROOT,
+            "inputs": {
+                "attempt": DEV_ATTEMPT,
+                "config_sha256": CONFIG,
+                "source_root": "/repo/worktree",
+                "image_id": IMAGE,
+            },
+            "backend_container": BACKEND,
+            "frontend_container": FRONTEND,
+            "backend_started_at": "2026-10-25T09:00:00.000000000Z",
+            "frontend_started_at": "2026-10-25T09:00:01.000000000Z",
+            "worker_cgroup": {
+                "schema": "fullmag.worker-cgroup-ready.v1",
+                "compose_project": FakeControl.project,
+                "container_id": BACKEND,
+                "image_id": IMAGE,
+                "state": "ready",
+                "root": "/opt/fullmag/worker-cgroup",
+            },
+        }
+        pin = module._validate_base_development_pin(
+            FakeControl(), previous, development_attempt=DEV_ATTEMPT,
+            config_sha256=CONFIG, source_root="/repo/worktree",
+        )
+        self.assertEqual(pin["phase"], "development")
+        self.assertEqual(pin["attempt"], DEV_ATTEMPT)
+        self.assertEqual(pin["backend_container"], BACKEND)
+        with self.assertRaises(module.CancelledActivationRecoveryError):
+            module._validate_base_development_pin(
+                FakeControl(), {**previous, "state": "iteration"},
+                development_attempt=DEV_ATTEMPT, config_sha256=CONFIG,
+                source_root="/repo/worktree",
+            )
 
     def test_drain_requires_same_backend_and_all_native_children_successfully_exit(self) -> None:
         proof = _proof()
@@ -401,6 +651,37 @@ class CancelledActivationProofTests(unittest.TestCase):
         self.assertEqual(resumed["frontend_container"], FRONTEND)
         self.assertEqual(resumed["backend_started_at"], proof["backend_started_at"])
         self.assertEqual(resumed["frontend_started_at"], proof["frontend_started_at"])
+
+        legacy_target = dict(plan["target"])
+        legacy_target.pop("continuation_phase")
+        legacy_target.pop("continuation_attempt")
+        legacy_plan = dict(plan, target=legacy_target)
+        legacy_plan_body = dict(legacy_plan)
+        legacy_plan_body.pop("plan_sha256")
+        legacy_plan["plan_sha256"] = module._sha256(canonical(legacy_plan_body))
+        legacy_journal = dict(journal, plan=legacy_plan)
+        with patch.object(module, "_read_pinned_original_records", return_value=original), \
+                patch.object(module, "_read_control_bytes", return_value=proof["active_raw"]):
+            legacy_resumed = module._proof_from_journal(
+                args, proof["selected"], proof["identity"], proof["control"], legacy_journal,
+            )
+        self.assertEqual(
+            legacy_resumed["pin"], {"attempt": ITERATION_ATTEMPT, "phase": "iteration"}
+        )
+
+        legacy_base_target = dict(legacy_target)
+        legacy_base_target.pop("iteration_attempt")
+        legacy_base_plan = dict(legacy_plan, target=legacy_base_target)
+        legacy_base_body = dict(legacy_base_plan)
+        legacy_base_body.pop("plan_sha256")
+        legacy_base_plan["plan_sha256"] = module._sha256(canonical(legacy_base_body))
+        with patch.object(module, "_read_pinned_original_records", return_value=original), \
+                patch.object(module, "_read_control_bytes", return_value=proof["active_raw"]), \
+                self.assertRaises(module.CancelledActivationRecoveryError):
+            module._proof_from_journal(
+                args, proof["selected"], proof["identity"], proof["control"],
+                dict(legacy_journal, plan=legacy_base_plan),
+            )
 
     def test_journal_plan_digest_is_mandatory(self) -> None:
         proof = _proof()

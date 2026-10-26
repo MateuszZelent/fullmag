@@ -2655,7 +2655,16 @@ def _parser() -> argparse.ArgumentParser:
         help="preview archival recovery of one cancelled preparation and its retained activation lease",
     )
     cancelled_activation.add_argument("--attempt", required=True)
-    cancelled_activation.add_argument("--iteration-attempt", required=True)
+    cancelled_continuation = cancelled_activation.add_mutually_exclusive_group(required=True)
+    cancelled_continuation.add_argument(
+        "--iteration-attempt",
+        help="exact successful retained idle-restart iteration",
+    )
+    cancelled_continuation.add_argument(
+        "--base-development",
+        action="store_true",
+        help="pin the exact retained successful development terminal without inventing an iteration",
+    )
     cancelled_activation.add_argument("--activation-attempt", required=True)
     cancelled_activation.add_argument("--config-sha256", required=True)
     cancelled_activation.add_argument("--source-root", type=Path, required=True)

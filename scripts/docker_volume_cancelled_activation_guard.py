@@ -31,6 +31,116 @@ def _object(raw, label):
     return value
 
 
+def _validate_inventory(record):
+    tasks = record.get("task_inventory")
+    preparations = record.get("preparation_inventory")
+    if tasks is None and preparations is None:
+        return
+    if not isinstance(tasks, list) or not tasks or len(tasks) > 4096:
+        raise BuildControlError("Cancelled activation task inventory is invalid")
+    task_ids = set()
+    for task in tasks:
+        if (not isinstance(task, dict)
+                or set(task) != {"task_id", "input_fingerprint", "lifecycle", "readiness", "artifact_ids"}
+                or not isinstance(task.get("task_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", task["task_id"])
+                or task["task_id"].endswith(".")
+                or task["task_id"] in task_ids
+                or not isinstance(task.get("input_fingerprint"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", task["input_fingerprint"])
+                or task.get("lifecycle") != "cancelled"
+                or not isinstance(task.get("readiness"), dict)
+                or set(task["readiness"]) != {"state", "reason"}
+                or task["readiness"].get("state") != "blocked"
+                or not isinstance(task["readiness"].get("reason"), str)
+                or not task["readiness"]["reason"]
+                or task.get("artifact_ids") != []):
+            raise BuildControlError("Cancelled activation task inventory contains execution/output state")
+        task_ids.add(task["task_id"])
+    if not isinstance(preparations, list) or len(preparations) != len(tasks):
+        raise BuildControlError("Cancelled activation preparation inventory is incomplete")
+    preparation_fields = {
+        "task_id", "outcome", "launch_id", "preparation_attempt_id", "resource_id", "lease_token",
+        "launch_path", "launch_sha256", "exit_path", "exit_sha256", "lease_path", "lease_sha256",
+        "lease_heartbeat_sequence", "exit_code", "timed_out", "lease_state", "released_at",
+        "task_receipt_path", "task_receipt_sha256", "stage_receipt_path", "stage_receipt_sha256",
+    }
+    preparation_ids = set()
+    failed = 0
+    succeeded = 0
+    for preparation in preparations:
+        if (not isinstance(preparation, dict)
+                or set(preparation) != preparation_fields
+                or preparation.get("task_id") not in task_ids):
+            raise BuildControlError("Cancelled activation preparation inventory task differs")
+        task_id = preparation["task_id"]
+        if (task_id in preparation_ids
+                or preparation.get("lease_state") != "released"
+                or not isinstance(preparation.get("released_at"), str)
+                or not preparation["released_at"]):
+            raise BuildControlError("Cancelled activation preparation inventory is not unique/released")
+        identifiers = ("launch_id", "preparation_attempt_id", "resource_id", "lease_token")
+        if any(
+            not isinstance(preparation.get(key), str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", preparation[key]) is None
+            or preparation[key].endswith(".")
+            for key in identifiers
+        ):
+            raise BuildControlError("Cancelled activation preparation identity is invalid")
+        launch_id = preparation["launch_id"]
+        resource_id = preparation["resource_id"]
+        lease_token = preparation["lease_token"]
+        expected_paths = {
+            "launch_path": f"preparation_process_launches/{launch_id}.json",
+            "exit_path": f"preparation_process_exit_receipts/prep-exit-{launch_id}.json",
+            "lease_path": f"preparation_resource_leases/{resource_id}/{lease_token}.json",
+        }
+        if any(preparation.get(key) != value for key, value in expected_paths.items()):
+            raise BuildControlError("Cancelled activation preparation path is not bound to its identity")
+        if preparation.get("task_receipt_path") not in {
+            None, f"task_preparation_receipts/{task_id}.json",
+        } or preparation.get("stage_receipt_path") not in {
+            None, f"accepted_stage_preparation_receipts/{task_id}.json",
+        }:
+            raise BuildControlError("Cancelled activation preparation receipt path is not task-bound")
+        for path_key, digest_key in (
+            ("launch_path", "launch_sha256"),
+            ("exit_path", "exit_sha256"),
+            ("lease_path", "lease_sha256"),
+            ("task_receipt_path", "task_receipt_sha256"),
+            ("stage_receipt_path", "stage_receipt_sha256"),
+        ):
+            path = preparation.get(path_key)
+            digest = preparation.get(digest_key)
+            if (path is None) != (digest is None):
+                raise BuildControlError("Cancelled activation preparation path/digest pair is incomplete")
+            if digest is not None and (
+                not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            ):
+                raise BuildControlError("Cancelled activation preparation digest is invalid")
+        if (type(preparation.get("lease_heartbeat_sequence")) is not int
+                or preparation["lease_heartbeat_sequence"] < 0
+                or type(preparation.get("exit_code")) is not int
+                or preparation["exit_code"] not in {0, 1}
+                or preparation.get("timed_out") is not False):
+            raise BuildControlError("Cancelled activation preparation terminal state is invalid")
+        if preparation.get("outcome") == "failed":
+            if (preparation["exit_code"] != 1
+                    or preparation.get("task_receipt_path") is not None
+                    or preparation.get("stage_receipt_path") is not None):
+                raise BuildControlError("Cancelled activation failed preparation contains output")
+            failed += 1
+        elif preparation.get("outcome") == "succeeded":
+            if preparation["exit_code"] != 0 or preparation.get("task_receipt_path") is None:
+                raise BuildControlError("Cancelled activation successful preparation is incomplete")
+            succeeded += 1
+        else:
+            raise BuildControlError("Cancelled activation preparation outcome is invalid")
+        preparation_ids.add(task_id)
+    if preparation_ids != task_ids or failed != 1 or succeeded != 1:
+        raise BuildControlError("Cancelled activation preparation inventory does not close the task set")
+
+
 def read_record(control):
     raw = _read_control_bytes(control, RECORD, optional=True)
     if raw is None:
@@ -43,6 +153,18 @@ def read_record(control):
             or record.get("restart_policy") != "fresh-state-only"
             or record.get("execution_state") != "not-started"):
         raise BuildControlError("Cancelled activation recovery record is invalid")
+    continuation_phase = record.get("continuation_phase")
+    continuation_attempt = record.get("continuation_attempt")
+    if continuation_phase is None:
+        continuation_phase = "iteration" if record.get("iteration_attempt") is not None else "development"
+        continuation_attempt = record.get("iteration_attempt", record.get("development_attempt"))
+    if (continuation_phase not in {"development", "iteration"}
+            or not isinstance(continuation_attempt, str)
+            or TOKEN.fullmatch(continuation_attempt) is None
+            or (continuation_phase == "development" and record.get("iteration_attempt") is not None)
+            or (continuation_phase == "iteration" and record.get("iteration_attempt") != continuation_attempt)):
+        raise BuildControlError("Cancelled activation continuation pin is invalid")
+    _validate_inventory(record)
     immutable = _read_control_bytes(
         control, f"verification/cancelled-activation-{activation}/terminal.json"
     )
