@@ -270,13 +270,13 @@ with at least 30 bins and never replace the underlying array.
 | `topology.exact_layers.v1` | wszystkie magnetic nodes, grupowanie współrzędnej normalnej przez $\tau_\mathrm{plane}$ | requested $=$ realized $=N_z$ i planes $=N_z+1$ | brak/wrong plane lub fallback fail | bounded mixed-P1 implemented, szersze scope unsupported |
 | `cell.strict_scale.max_pairwise_vertex_distance.v1` | każda finalna komórka; maksimum odległości po wszystkich parach jej wierzchołków | skończone $h_K^\mathrm{strict}>0$; bez agregacji lub subsamplingu | missing/non-finite/non-positive fail | implemented w `MeshData.validate_strict` |
 | `cell.det_jacobian.v1` | tet: jeden stały affine determinant; prism: 3 triangle points $\times\{\pm1/\sqrt3\}$; pyramid: $r,s\in\{\pm1/\sqrt3\}$ i $t=1/3\pm\sqrt{10}/15$; hex: $2^3$ Gauss points | wszystkie determinants $>\tau_J(h_K^\mathrm{strict})^3$; każdy negative fail niezależnie od progu | missing/non-finite/non-positive fail | topology-aware certificate path implemented |
-| `gmsh.min_sicn.v1` | wszystkie finalne element tags obsługiwane przez Gmsh, `minSICN` | p05 $\ge0.1$ i minimum $>0$ | inny producer/proxy nie spełnia gate | tetra reports implemented; mixed production evidence nie jest FMMQ v2 |
-| `gmsh.gamma.v1` | wszystkie finalne element tags, Gmsh `gamma` | minimum $\ge0.08$ | brak per-element array daje `not_qualified` | tetra reports implemented |
+| `gmsh.min_sicn.v1` | wszystkie finalne element tags obsługiwane przez Gmsh, `minSICN` | p05 $\ge0.1$ i minimum $>0$ | inny producer/proxy nie spełnia gate | per-family summaries obejmują obsługiwane rodziny; mixed production evidence nie jest FMMQ v2 |
+| `gmsh.gamma.v1` | wszystkie finalne element tags, Gmsh `gamma` | minimum $\ge0.08$ | brak per-element array daje `not_qualified` | per-family availability jawnie pomija pyramid5 i hex8; taki scope nie spełnia pełnego gate'u gamma |
 | `mixed_topology_scaled_jacobian.v1` | `tet4`: affine map; `prism6`/`pyramid5`: mapowany Jacobian w jawnych punktach kwadratury danej topologii | per-family p05 $\ge0.1$ i każde minimum $>0$; signed Jacobian pozostaje osobnym gate'em | nie jest SICN ani tetrahedralnym proxy; każda rodzina jest oceniana w swojej topologii | mixed certificate implemented |
 | `cell.volume.v1` | całkowanie mapy na wszystkich komórkach; SI $\mathrm{m^3}$ | $V_K>0$; względny CAD/shared-domain error $\le10^{-8}$ | non-finite/non-positive lub przekroczenie fail | tet + bounded mixed certificate implemented |
 | `cell.max_edge.v1` | $h_K^\mathrm{edge}$: maksimum wszystkich canonical edges komórki; agregacja po pełnym scope | object/interface p95 $\le1.25h_\mathrm{target}$ i max $\le1.50h_\mathrm{target}$ | pusty wymagany scope lub przekroczenie fail | kontrakt planowany; obecne tet-equivalent stats nie są tym gate'em |
 | `adjacent_size_growth.v1` | każda para komórek dzieląca pełną ścianę w tym samym resolved growth graph | $\rho_{KL}=\max(h_K^\mathrm{edge},h_L^\mathrm{edge})/\min(h_K^\mathrm{edge},h_L^\mathrm{edge})\le g(1+0.05)$ | cross-zone pary są oceniane tylko, gdy plan jawnie łączy ich growth graph; przekroczenie fail | planowany |
-| `airbox.regular_tet_equivalent_size.v1` | $h_K^\mathrm{air}=(6\sqrt2|V_K|)^{1/3}$ dla każdej finalnej air cell; bieżący diagnostic, bez mixed-topology claim | wszystkie wartości skończone i dodatnie; percentyle używają pełnego posortowanego binary64 scope | missing/non-finite/non-positive fail; nie spełnia strict-scale ani mixed gate | implemented dla bieżących tetra reports |
+| `airbox.regular_tet_equivalent_size.v1` | $h_K^\mathrm{air}=(6\sqrt2|V_K|)^{1/3}$ dla każdej finalnej air cell; bieżący diagnostic, bez mixed-topology claim | wszystkie wartości skończone i dodatnie; percentyle używają pełnego posortowanego binary64 scope | missing/non-finite/non-positive fail; nie spełnia strict-scale ani mixed gate | implemented dla tetra i mixed-family stat reports |
 | `airbox.distance_bands.v1` | centroidy air cells w pasmach $[0,0.1d]$, $(0.45d,0.55d]$, $(0.9d,d]$ osobno dla surface, edge, corner i każdej strony bbox | każde wymagane pasmo niepuste; p50/p95 size niemaleją z tolerancją $5\%$; far p95 w $[0.75h_\mathrm{air,max},1.25h_\mathrm{air,max}]$ | puste pasmo, odwrócony trend lub brak corner/side coverage fail | częściowe testy istnieją; pełny raport/gate planowany |
 | `evidence.identity.v1` | wszystkie element ordinals i payload sections | dokładna zgodność count, order, topology fingerprint, mesh revision i metric metadata | stale/duplicate/missing/tampered fail | JSON certificate częściowo; FMMQ v2 planowany |
 
@@ -284,6 +284,80 @@ Gmsh `Mesh.CharacteristicLengthMin` jest wyłącznie implementacyjną obwiednią
 Nie może zastąpić strefowego $\max\mathcal L$ ani przyciąć lokalnego upper
 target. `airbox.regular_tet_equivalent_size.v1` jest jawnie
 tetra-equivalent diagnostic, nie `cell.max_edge.v1` i nie mixed-topology gate.
+
+### 8.3 Mixed-mesh statistics and metric availability
+
+The bounded mesh-statistics report covers supported linear `tet4`, `prism6`,
+`pyramid5`, and `hex8` cells globally and by marker. Cell volume is reported in
+SI $\mathrm{m^3}$ using the canonical tetrahedral decomposition. For planar-faced
+linear cells this is the polyhedral volume; for warped quadrilateral faces it
+is the decomposition volume and is not claimed to be the exact isoparametric
+integral. Orientation and exact-zero degeneracy counts
+for non-tetrahedra use the topology-specific Jacobian samples from
+`cell.det_jacobian.v1`; these diagnostics are sampled and do not prove positive
+Jacobian everywhere. Edge-length summaries include each family's canonical
+edges, without face/body diagonals. Node counts are the unique nodes referenced
+by cells in the selected scope.
+
+`characteristic_size` remains the equivalent regular-tetrahedron diagnostic
+$h_\mathrm{eq}=(6\sqrt{2}|V_K|)^{1/3}$ for every family. The report labels this
+definition explicitly; it is not a mixed-cell edge measure or a substitute for
+`cell.max_edge.v1`.
+
+Each global or marker scope also publishes volume and canonical-edge-length
+histograms in SI units ($\mathrm{m^3}$ and $\mathrm m$). Their counts represent
+cells and per-cell canonical edges, respectively. Positive nonconstant ranges
+use up to 30 logarithmic bins; constant or numerically indistinguishable ranges
+collapse to one bin. The edge histogram uses a bounded second pass over the
+same chunked canonical-edge samples as the summary statistics.
+
+Per-family `minSICN` and `gamma` summaries retain Gmsh provenance. Gmsh defines
+SICN across supported 2D and 3D element families; its `gamma` metric is defined
+for simplices and prisms, but not pyramids or hexahedra. Those families therefore
+publish `gamma` as unavailable instead of inserting a numeric placeholder. A
+scope containing any unsupported family has no scope-wide `gamma` value, while
+its available per-family metrics remain visible. A topology-aware scaled
+Jacobian appears in a marker scope only when the certificate covers that
+marker and the family occurs exclusively there. The certificate's family
+minimum and p05 remain mesh-wide summaries when that family spans markers;
+marker counts alone do not partition those metrics. These descriptive
+summaries do not certify the FMMQ v2 production gates or change their sampling
+and acceptance rules.
+
+Starszy format `per_domain_quality` wymaga kompletnego pokrycia markerów i ich
+liczności. Jeżeli choć jeden marker nie ma pełnej obsługiwanej metryki gamma,
+publikacja pomija cały starszy format zamiast emitować niekompletny podzbiór.
+Nie usuwa to bogatych `mesh_statistics` ani dostępnych metryk per-family;
+nie wprowadza również sztucznych wartości gamma.
+
+W ścieżce accepted preparation bogaty raport jest przenoszony przez
+`domain_asset.build_report.mesh_statistics`, opcjonalne pole
+`FemSharedDomainBuildReportIR`, `FemPlanIR.mesh_build_report` oraz
+`FemMeshPayload.build_report`. Samo `mesh_statistics` na najwyższym poziomie
+JSON siatki nie stanowi tego kontraktu: starszy typowany `MeshIR` pomija
+nieznane pola. API odczytuje raport przypisany do bieżącej siatki przed
+starszymi diagnostykami workspace, a endpoint Airboxa wybiera wyłącznie
+scope markera 0. Brak nowego pola pozostaje zgodny ze starszymi artefaktami
+i uruchamia dotychczasowy fallback geometrii, bez tworzenia metryk Gmsh.
+
+Mapowanie fizycznych grup Gmsh na markery semantyczne musi być identyczne
+dla topologii i raportów jakości. W szczególności nazwy `air` i `airbox`
+oznaczają marker 0 niezależnie od surowego numeru grupy fizycznej. Surowe
+numery pozostają podstawą wykrywania nakładających się grup; normalizacja
+nie może ukrywać konfliktu przypisania elementu.
+
+The mixed-v2 Gmsh producer extracts these metrics when quality computation is
+requested and converts its scaled-coordinate volume channels back to SI before
+attaching them to `MeshData`. Marker reports are rekeyed only when the final
+classification is a one-to-one relabel of complete source-marker scopes. For a
+split or merge, aligned per-cell SICN and volume arrays are regrouped by the
+final marker when available; a metric without aligned samples remains
+unavailable for that scope. If `oriented_copy` changes cell connectivity, it
+drops the signed quality report and topology certificate so that stale
+orientation-dependent values cannot be published.
+
+The metric availability statements follow the [Gmsh reference manual's mesh
+quality section](https://gmsh.info/doc/texinfo/gmsh.html#Mesh-quality).
 
 (fem-meshing-acceptance-implementation-mapping)=
 ## 9. Implementation mapping
@@ -293,6 +367,28 @@ tetra-equivalent diagnostic, nie `cell.max_edge.v1` i nie mixed-topology gate.
 - `_build_field_stack` składa bieżący plan pól Gmsh; docelowo musi publikować
   dokładną algebrę i strefową eligibility.
 - `_extract_quality_metrics` pobiera bieżące Gmsh SICN/gamma/volume.
+- `generate_disconnected_mixed_p1_mesh` dołącza żądane przez `MeshOptions`
+  metryki Gmsh do mieszanej siatki i przelicza kanały objętości z Gmsh scale do
+  SI przed przekazaniem danych.
+- `MeshData.statistics_ir` i `_build_mesh_statistics_report` publikują
+  ograniczone statystyki globalne i markerowe dla obsługiwanych rodzin komórek;
+  `_mesh_cell_geometry` oraz `_mesh_edge_statistics` zachowują ich geometrię
+  i krawędzie właściwe danej topologii.
+- Dla starszych publikacji bez statystyk `mesh_scope_size_statistics` w API
+  używa `mesh_cell_geometry::cell_geometry` z tą samą dekompozycją i listami
+  rzeczywistych krawędzi. Publikuje tylko geometrię, nigdy zastępczy SICN,
+  Gamma ani certyfikat. Histogramy używają tolerancji względnej względem
+  wartości danych, także dla objętości rzędu $10^{-27}\,\mathrm{m}^3$.
+- `_quality_by_family_for_scope` odrzuca niezgodne liczności podsumowań rodziny
+  i używa ponownie tylko próbek jakości wyrównanych z bieżącą siatką;
+  `_certificate_scaled_jacobian_for_scope` pokazuje mesh-wide minimum i p05 w
+  markerze tylko wtedy, gdy cała rodzina występuje wyłącznie w tym markerze.
+- `_size_histogram_bins` ustala bins volume i characteristic size w zakresie
+  danych, a `_mesh_edge_histogram_bins` agreguje canonical-edge bins porcjami.
+- `_rekey_per_domain_quality_for_markers` zachowuje raporty tylko przy dokładnej
+  bijekcji markerów, `_quality_reports_for_final_mixed_markers` grupuje dostępne
+  tablice według finalnych markerów, a `MeshData.oriented_copy` unieważnia
+  raporty po zmianie orientacji connectivity.
 - `_cell_jacobian_determinants` implementuje jawne topology sampling points, a
   `_mixed_cell_scaled_jacobians` oblicza wersjonowany metric
   `mixed_topology_scaled_jacobian.v1` bez rozkładania prism/pyramid na
@@ -395,6 +491,7 @@ synthetic-only oracle albo niepowiązany fingerprint daje `not_qualified`.
 | Field stack | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | current deterministic size-field descriptors | FEM CPU/GPU | implemented, complete evidence pending |
 | Gmsh metrics | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | current SICN/gamma/volume extraction | FEM CPU/GPU | implemented for current report path |
 | Jacobian sampling | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `_cell_jacobian_determinants` | topology-aware determinant samples | FEM CPU/GPU | implemented certificate evidence |
+| Legacy marker quality serialization | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `_legacy_per_domain_quality_is_complete` | permits the gamma-bearing legacy map only for complete, count-aligned, gamma-eligible Gmsh marker reports | FEM CPU/GPU | implemented; mixed family metrics remain in `mesh_statistics` |
 | FMMQ v1 writer | `packages/fullmag-py/src/fullmag/meshing/remesh_cli.py` | `_write_quality_data_artifact_if_available` | writes active FMMQ v1 arrays without family/topology identity | FEM CPU/GPU transport | implemented v1; v2 planned |
 | FMMQ v1 TS reader | `apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts` | `decodeMeshQualityData` | decodes active v1 layout; format identity is insufficient for mixed qualification | unified Control Room | implemented v1; v2 planned |
 | FMMQ v1 Rust reader | `crates/fullmag-api/src/fem_cross_section.rs` | `per_element_quality_metric_from_fmmq` | reads active v1 per-element arrays | API | implemented v1; v2 planned |

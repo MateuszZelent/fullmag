@@ -76,7 +76,9 @@ from fullmag.model.geometry import Geometry
 from fullmag.meshing._gmsh_types import (
     FEM_TOPOLOGY_VOLUME_EPS,
     MixedPeriodicTopologyError,
+    _certificate_scaled_jacobian_for_scope,
     _infer_axis_aligned_periodic_pairs,
+    _mixed_cell_scaled_jacobians,
 )
 from fullmag.meshing._gmsh_infra import _GmshProgressLogger, _gmsh_heartbeat_interval
 from fullmag.meshing._gmsh_extraction import (
@@ -147,6 +149,7 @@ from fullmag.meshing._gmsh_extraction import (
     _align_quality_report_to_element_tags,
     certify_extracted_periodic_mesh,
     _extract_quality_metrics,
+    GmshQualityExtractionError,
     _read_mesh_file,
     UnsupportedGmshElementError,
     _meshio_cell_markers,
@@ -1317,6 +1320,235 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(quality.n_elements, 0)
         self.assertIsNone(per_domain)
 
+    def test_extract_quality_metrics_preserves_tet4_quality_channels(self) -> None:
+        channels = {
+            "minSICN": [0.2, 0.8],
+            "gamma": [0.3, 0.9],
+            "volume": [1.0, 2.0],
+        }
+
+        class _MeshApi:
+            @staticmethod
+            def getElements(dim: int) -> tuple[list[int], list[np.ndarray], list[np.ndarray]]:
+                assert dim == 3
+                return [4], [np.asarray([10, 20], dtype=np.int64)], [np.arange(8)]
+
+            @staticmethod
+            def getElementQualities(tags: list[int], metric: str) -> list[float]:
+                assert tags == [10, 20]
+                return channels[metric]
+
+        gmsh = SimpleNamespace(
+            model=SimpleNamespace(mesh=_MeshApi()),
+            option=SimpleNamespace(getNumber=lambda _name: 0.5),
+        )
+
+        quality, by_marker = _extract_quality_metrics(
+            gmsh,
+            MeshOptions(per_element_quality=True),
+            np.asarray([7, 7], dtype=np.int32),
+        )
+
+        self.assertEqual(quality.n_elements, 2)
+        self.assertEqual(quality.gamma_element_count, 2)
+        self.assertEqual(quality.element_sicn, [0.2, 0.8])
+        self.assertEqual(quality.element_gamma, [0.3, 0.9])
+        self.assertEqual(quality.element_volume, [1.0, 2.0])
+        self.assertAlmostEqual(quality.sicn_min, 0.2)
+        self.assertAlmostEqual(quality.gamma_min, 0.3)
+        self.assertAlmostEqual(quality.quality_by_family["tet4"]["sicn"]["mean"], 0.5)
+        self.assertIsNotNone(by_marker)
+        assert by_marker is not None
+        self.assertAlmostEqual(by_marker[7].gamma_min, 0.3)
+
+    def test_extract_quality_metrics_uses_canonical_air_marker(self) -> None:
+        element_blocks = {
+            101: (4, 10),  # magnetic ring tetrahedron
+            102: (4, 11),  # air tetrahedron
+            103: (6, 20),  # magnetic prism
+            104: (7, 30),  # air pyramid
+        }
+        group_entities = {1: [103], 2: [101], 3: [102, 104]}
+        group_names = {1: "magnetic_box", 2: "magnetic_ring", 3: "air"}
+        channel_values = {
+            "minSICN": {10: 0.7, 11: 0.8, 20: 0.9, 30: 0.2},
+            "gamma": {10: 0.4, 11: 0.6, 20: 0.5},
+            "volume": {10: 1.0, 11: 2.0, 20: 3.0, 30: 4.0},
+        }
+
+        class _MeshApi:
+            @staticmethod
+            def getElements(
+                dim: int,
+                entity: int | None = None,
+            ) -> tuple[list[int], list[np.ndarray], list[np.ndarray]]:
+                assert dim == 3
+                if entity is None:
+                    return (
+                        [4, 6, 7],
+                        [
+                            np.asarray([10, 11], dtype=np.int64),
+                            np.asarray([20], dtype=np.int64),
+                            np.asarray([30], dtype=np.int64),
+                        ],
+                        [np.zeros(8), np.zeros(6), np.zeros(5)],
+                    )
+                element_type, tag = element_blocks[entity]
+                return (
+                    [element_type],
+                    [np.asarray([tag], dtype=np.int64)],
+                    [np.zeros(4 if element_type == 4 else 6 if element_type == 6 else 5)],
+                )
+
+            @staticmethod
+            def getElementQualities(tags: list[int], metric: str) -> list[float]:
+                return [channel_values[metric][tag] for tag in tags]
+
+        class _Model:
+            mesh = _MeshApi()
+
+            @staticmethod
+            def getPhysicalGroups(dim: int) -> list[tuple[int, int]]:
+                assert dim == 3
+                return [(3, marker) for marker in (1, 2, 3)]
+
+            @staticmethod
+            def getPhysicalName(dim: int, marker: int) -> str:
+                assert dim == 3
+                return group_names[marker]
+
+            @staticmethod
+            def getEntitiesForPhysicalGroup(dim: int, marker: int) -> list[int]:
+                assert dim == 3
+                return group_entities[marker]
+
+        gmsh = SimpleNamespace(
+            model=_Model(),
+            option=SimpleNamespace(getNumber=lambda _name: 0.5),
+        )
+        quality, by_marker = _extract_quality_metrics(
+            gmsh,
+            MeshOptions(per_element_quality=True),
+        )
+
+        self.assertIsNotNone(by_marker)
+        assert by_marker is not None
+        self.assertEqual(set(by_marker), {0, 1, 2})
+        air_quality = by_marker[0]
+        self.assertEqual(air_quality.n_elements, 2)
+        self.assertAlmostEqual(air_quality.sicn_min, 0.2)
+        self.assertEqual(air_quality.gamma_element_count, 1)
+        self.assertEqual(
+            air_quality.quality_by_family["tet4"]["sicn"]["status"],
+            "available",
+        )
+        self.assertEqual(
+            air_quality.quality_by_family["tet4"]["gamma"]["status"],
+            "available",
+        )
+        self.assertEqual(
+            air_quality.quality_by_family["pyramid5"]["sicn"]["status"],
+            "available",
+        )
+        self.assertEqual(
+            air_quality.quality_by_family["pyramid5"]["gamma"]["status"],
+            "unavailable",
+        )
+
+        tet_coordinates = np.asarray(
+            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float64
+        )
+        prism_coordinates = np.asarray(
+            [
+                [0, 0, 0], [1, 0, 0], [0, 1, 0],
+                [0, 0, 1], [1, 0, 1], [0, 1, 1],
+            ],
+            dtype=np.float64,
+        ) + [6, 0, 0]
+        pyramid_coordinates = np.asarray(
+            [[7, -1, 0], [9, -1, 0], [9, 1, 0], [7, 1, 0], [8, 0, 1]],
+            dtype=np.float64,
+        )
+        nodes = np.concatenate(
+            [
+                tet_coordinates,
+                tet_coordinates + [3, 0, 0],
+                prism_coordinates,
+                pyramid_coordinates,
+            ]
+        )
+        mesh = MeshData(
+            nodes=nodes,
+            cell_types=np.asarray(["tet4", "tet4", "prism6", "pyramid5"]),
+            cell_offsets=np.asarray([0, 4, 8, 14, 19], dtype=np.int64),
+            cell_nodes=np.arange(19, dtype=np.int32),
+            element_markers=np.asarray([2, 0, 1, 0], dtype=np.int32),
+            facet_types=np.asarray([], dtype=np.str_),
+            facet_roles=np.asarray([], dtype=np.str_),
+            facet_offsets=np.asarray([0], dtype=np.int64),
+            facet_nodes=np.asarray([], dtype=np.int32),
+            boundary_markers=np.asarray([], dtype=np.int32),
+            cell_global_ordinals=np.arange(4, dtype=np.int64),
+            facet_global_ordinals=np.asarray([], dtype=np.int64),
+            quality=quality,
+            per_domain_quality=by_marker,
+        )
+        mesh_ir = mesh.to_ir("mixed")
+        self.assertNotIn("per_domain_quality", mesh_ir)
+        statistics = mesh_ir["mesh_statistics"]
+        air_scope = next(
+            scope for scope in statistics["scopes"] if scope["marker"] == 0
+        )
+        self.assertAlmostEqual(air_scope["sicn"]["min"], 0.2)
+        self.assertIsNone(air_scope["gamma"])
+        self.assertEqual(air_scope["quality_by_family"]["tet4"]["source"], "gmsh")
+        self.assertEqual(
+            air_scope["quality_by_family"]["pyramid5"]["sicn"]["status"],
+            "available",
+        )
+        self.assertEqual(
+            air_scope["quality_by_family"]["pyramid5"]["gamma"]["status"],
+            "unavailable",
+        )
+
+    def test_extract_quality_metrics_rejects_missing_and_nonfinite_channels(self) -> None:
+        def extract(responses: dict[str, list[float]]) -> None:
+            class _MeshApi:
+                @staticmethod
+                def getElements(dim: int) -> tuple[list[int], list[np.ndarray], list[np.ndarray]]:
+                    assert dim == 3
+                    return [4], [np.asarray([10, 20], dtype=np.int64)], [np.arange(8)]
+
+                @staticmethod
+                def getElementQualities(tags: list[int], metric: str) -> list[float]:
+                    assert tags == [10, 20]
+                    return responses[metric]
+
+            gmsh = SimpleNamespace(
+                model=SimpleNamespace(mesh=_MeshApi()),
+                option=SimpleNamespace(getNumber=lambda _name: 0.5),
+            )
+            _extract_quality_metrics(
+                gmsh,
+                MeshOptions(per_element_quality=False),
+                np.asarray([0, 1], dtype=np.int32),
+            )
+
+        valid_prefix = {"minSICN": [0.2, 0.8], "gamma": [0.3, 0.9]}
+        malformed = (
+            ({**valid_prefix, "minSICN": []}, "minSICN", 0, ()),
+            ({**valid_prefix, "minSICN": [0.2, float("nan")]}, "minSICN", 2, (1,)),
+            ({**valid_prefix, "gamma": []}, "gamma", 0, ()),
+            ({**valid_prefix, "volume": [1.0, float("inf")]}, "volume", 2, (1,)),
+        )
+        for responses, channel, actual_count, nonfinite_indices in malformed:
+            with self.subTest(channel=channel, responses=responses):
+                with self.assertRaises(GmshQualityExtractionError) as caught:
+                    extract(responses)
+                self.assertEqual(caught.exception.channel, channel)
+                self.assertEqual(caught.exception.actual_count, actual_count)
+                self.assertEqual(caught.exception.nonfinite_indices, nonfinite_indices)
+
     def test_meshdata_validate_strict_rejects_degenerate_tets(self) -> None:
         mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
@@ -1411,7 +1643,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertIs(cleaned, mesh)
 
-    def test_mixed_mesh_statistics_skip_full_ir_serialization(self) -> None:
+    def test_mixed_mesh_statistics_include_prism_geometry(self) -> None:
         mesh = MeshData(
             nodes=np.asarray(
                 [
@@ -1437,7 +1669,618 @@ class MeshScaffoldTests(unittest.TestCase):
             facet_global_ordinals=np.asarray([], dtype=np.int64),
         )
 
-        self.assertIsNone(mesh.statistics_ir("shared_domain"))
+        statistics = mesh.statistics_ir("shared_domain")
+        self.assertIsNotNone(statistics)
+        assert statistics is not None
+        self.assertEqual(statistics["global"]["element_count"], 1)
+        self.assertEqual(statistics["global"]["node_count"], 6)
+        self.assertAlmostEqual(statistics["global"]["volume"]["total"], 0.5)
+        self.assertAlmostEqual(statistics["global"]["edge_length"]["min"], 1.0)
+        self.assertAlmostEqual(
+            statistics["global"]["edge_length"]["max"], np.sqrt(2.0)
+        )
+        prism = statistics["global"]["quality_by_family"]["prism6"]
+        self.assertEqual(prism["cell_count"], 1)
+        self.assertEqual(prism["gamma"]["status"], "unavailable")
+        self.assertEqual(
+            prism["mixed_topology_scaled_jacobian"]["status"], "unavailable"
+        )
+
+    def _regular_mixed_quality_statistics_mesh(
+        self,
+        *,
+        invert_tet: bool = False,
+        flatten_pyramid: bool = False,
+        quality: MeshQualityReport | None = None,
+        per_domain_quality: dict[int, MeshQualityReport] | None = None,
+        families: tuple[str, ...] = ("tet4", "prism6", "pyramid5", "hex8"),
+        family_markers: dict[str, int] | None = None,
+    ) -> MeshData:
+        coordinates_by_family = {
+            "tet4": np.asarray(
+                [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                dtype=np.float64,
+            ),
+            "prism6": np.asarray(
+                [[4, 0, 0], [5, 0, 0], [4, 1, 0], [4, 0, 1], [5, 0, 1], [4, 1, 1]],
+                dtype=np.float64,
+            ),
+            "pyramid5": np.asarray(
+                [[7, -1, 0], [9, -1, 0], [9, 1, 0], [7, 1, 0], [8, 0, 1]],
+                dtype=np.float64,
+            ),
+            "hex8": np.asarray(
+                [
+                    [12, 0, 0], [13, 0, 0], [13, 1, 0], [12, 1, 0],
+                    [12, 0, 1], [13, 0, 1], [13, 1, 1], [12, 1, 1],
+                ],
+                dtype=np.float64,
+            ),
+        }
+        if flatten_pyramid:
+            coordinates_by_family["pyramid5"][-1, 2] = 0.0
+        local_facets = {
+            "tet4": ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)),
+            "prism6": (
+                (0, 1, 2), (3, 5, 4), (0, 3, 4, 1), (1, 4, 5, 2), (2, 5, 3, 0),
+            ),
+            "pyramid5": (
+                (0, 3, 2, 1), (0, 1, 4), (1, 2, 4), (2, 3, 4), (3, 0, 4),
+            ),
+            "hex8": (
+                (0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4),
+                (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7),
+            ),
+        }
+        cell_types: list[str] = []
+        cell_offsets = [0]
+        cell_nodes: list[int] = []
+        facet_types: list[str] = []
+        facet_roles: list[str] = []
+        facet_offsets = [0]
+        facet_nodes: list[int] = []
+        nodes: list[NDArray[np.float64]] = []
+        element_markers: list[int] = []
+        markers_by_family = family_markers or {
+            "tet4": 0,
+            "prism6": 1,
+            "pyramid5": 2,
+            "hex8": 3,
+        }
+        for family in families:
+            marker = markers_by_family[family]
+            coordinates = coordinates_by_family[family]
+            node_start = sum(block.shape[0] for block in nodes)
+            nodes.append(coordinates)
+            local_nodes = list(range(node_start, node_start + len(coordinates)))
+            if family == "tet4" and invert_tet:
+                local_nodes[1], local_nodes[2] = local_nodes[2], local_nodes[1]
+            cell_types.append(family)
+            cell_nodes.extend(local_nodes)
+            cell_offsets.append(len(cell_nodes))
+            element_markers.append(marker)
+            for face in local_facets[family]:
+                face_nodes = [local_nodes[index] for index in face]
+                facet_types.append("tri3" if len(face_nodes) == 3 else "quad4")
+                facet_roles.append("exterior")
+                facet_nodes.extend(face_nodes)
+                facet_offsets.append(len(facet_nodes))
+        return MeshData(
+            nodes=np.concatenate(nodes, axis=0),
+            cell_types=np.asarray(cell_types, dtype=np.str_),
+            cell_offsets=np.asarray(cell_offsets, dtype=np.int64),
+            cell_nodes=np.asarray(cell_nodes, dtype=np.int32),
+            element_markers=np.asarray(element_markers, dtype=np.int32),
+            facet_types=np.asarray(facet_types, dtype=np.str_),
+            facet_roles=np.asarray(facet_roles, dtype=np.str_),
+            facet_offsets=np.asarray(facet_offsets, dtype=np.int64),
+            facet_nodes=np.asarray(facet_nodes, dtype=np.int32),
+            boundary_markers=np.ones(len(facet_types), dtype=np.int32),
+            cell_global_ordinals=np.arange(len(cell_types), dtype=np.int64),
+            facet_global_ordinals=np.arange(len(facet_types), dtype=np.int64),
+            quality=quality,
+            per_domain_quality=per_domain_quality,
+        )
+
+    def test_mixed_mesh_statistics_cover_supported_families_and_marker_scopes(self) -> None:
+        mesh = self._regular_mixed_quality_statistics_mesh()
+
+        statistics = mesh.statistics_ir("mixed")
+
+        self.assertIsNotNone(statistics)
+        assert statistics is not None
+        global_scope = statistics["global"]
+        self.assertEqual(global_scope["element_count"], 4)
+        self.assertEqual(global_scope["node_count"], 23)
+        self.assertEqual(global_scope["boundary_face_count"], 20)
+        self.assertAlmostEqual(global_scope["volume"]["total"], 3.0)
+        self.assertEqual(
+            sum(bin_["count"] for bin_ in global_scope["volume"]["histogram"]),
+            global_scope["element_count"],
+        )
+        # Canonical cell edges exclude the unit hex's sqrt(3) body diagonal.
+        self.assertAlmostEqual(global_scope["edge_length"]["max"], 2.0)
+        self.assertEqual(
+            sum(bin_["count"] for bin_ in global_scope["edge_length"]["histogram"]),
+            35,
+        )
+        self.assertEqual(
+            set(global_scope["quality_by_family"]),
+            {"tet4", "prism6", "pyramid5", "hex8"},
+        )
+        for family in ("tet4", "prism6", "pyramid5", "hex8"):
+            row = global_scope["quality_by_family"][family]
+            self.assertEqual(row["sicn"]["status"], "unavailable")
+            self.assertEqual(row["gamma"]["status"], "unavailable")
+            self.assertEqual(
+                row["mixed_topology_scaled_jacobian"]["status"], "unavailable"
+            )
+
+        airbox = next(scope for scope in statistics["scopes"] if scope["marker"] == 0)
+        object_scope = next(scope for scope in statistics["scopes"] if scope["marker"] == 1)
+        other_scope = next(scope for scope in statistics["scopes"] if scope["marker"] == 2)
+        hex_scope = next(scope for scope in statistics["scopes"] if scope["marker"] == 3)
+        self.assertEqual(airbox["label"], "Airbox")
+        self.assertEqual(airbox["element_count"], 1)
+        self.assertEqual(airbox["node_count"], 4)
+        self.assertEqual(airbox["boundary_face_count"], 4)
+        self.assertAlmostEqual(airbox["volume"]["total"], 1.0 / 6.0)
+        self.assertEqual(set(airbox["quality_by_family"]), {"tet4"})
+        self.assertEqual(object_scope["element_count"], 1)
+        self.assertEqual(object_scope["node_count"], 6)
+        self.assertEqual(object_scope["boundary_face_count"], 5)
+        self.assertAlmostEqual(object_scope["volume"]["total"], 0.5)
+        self.assertAlmostEqual(object_scope["edge_length"]["max"], np.sqrt(2.0))
+        self.assertEqual(
+            sum(bin_["count"] for bin_ in object_scope["volume"]["histogram"]),
+            object_scope["element_count"],
+        )
+        self.assertEqual(
+            sum(bin_["count"] for bin_ in object_scope["edge_length"]["histogram"]),
+            9,
+        )
+        self.assertEqual(other_scope["element_count"], 1)
+        self.assertEqual(other_scope["node_count"], 5)
+        self.assertEqual(other_scope["boundary_face_count"], 5)
+        self.assertAlmostEqual(other_scope["volume"]["total"], 4.0 / 3.0)
+        self.assertEqual(set(other_scope["quality_by_family"]), {"pyramid5"})
+        self.assertEqual(hex_scope["element_count"], 1)
+        self.assertEqual(hex_scope["node_count"], 8)
+        self.assertEqual(hex_scope["boundary_face_count"], 6)
+        self.assertAlmostEqual(hex_scope["volume"]["total"], 1.0)
+        self.assertAlmostEqual(hex_scope["edge_length"]["max"], 1.0)
+        self.assertEqual(set(hex_scope["quality_by_family"]), {"hex8"})
+        self.assertEqual(
+            airbox["characteristic_size"]["definition"],
+            "volume_equivalent_regular_tetrahedron",
+        )
+
+    def test_legacy_per_domain_quality_is_all_or_nothing_for_mixed_markers(self) -> None:
+        def metric(value: float) -> dict[str, object]:
+            return {
+                "status": "available",
+                "source": "gmsh",
+                "min": value,
+                "p05": value,
+                "mean": value,
+                "max": value,
+            }
+
+        def report(
+            family: str,
+            value: float,
+            *,
+            gamma_element_count: int,
+            n_elements: int = 1,
+            quality_source: str = "gmsh",
+        ) -> MeshQualityReport:
+            gamma = (
+                metric(value)
+                if family in {"tet4", "prism6"}
+                else {"status": "unavailable", "reason": "Gmsh gamma is undefined."}
+            )
+            return MeshQualityReport(
+                n_elements=n_elements,
+                sicn_min=value,
+                sicn_max=value,
+                sicn_mean=value,
+                sicn_p5=value,
+                sicn_histogram=[0] * 20,
+                gamma_min=value,
+                gamma_mean=value,
+                gamma_histogram=[0] * 20,
+                volume_min=1.0 / 6.0,
+                volume_max=1.0 / 6.0,
+                volume_mean=1.0 / 6.0,
+                volume_std=0.0,
+                avg_quality=value,
+                quality_source=quality_source,
+                gamma_element_count=gamma_element_count,
+                quality_by_family={
+                    family: {
+                        "cell_count": n_elements,
+                        "source": "gmsh",
+                        "sicn": metric(value),
+                        "gamma": gamma,
+                    }
+                },
+            )
+
+        mixed_partial = self._regular_mixed_quality_statistics_mesh(
+            families=("pyramid5", "tet4"),
+            family_markers={"pyramid5": 0, "tet4": 1},
+            per_domain_quality={
+                0: report("pyramid5", 0.6, gamma_element_count=0),
+                1: report("tet4", 0.9, gamma_element_count=1),
+            },
+        )
+
+        partial_payload = mixed_partial.to_ir("mixed_partial_gamma")
+
+        self.assertNotIn("per_domain_quality", partial_payload)
+        partial_scopes = {
+            scope["marker"]: scope
+            for scope in partial_payload["mesh_statistics"]["scopes"]
+            if scope["marker"] is not None
+        }
+        pyramid_quality = partial_scopes[0]["quality_by_family"]["pyramid5"]
+        tet_quality = partial_scopes[1]["quality_by_family"]["tet4"]
+        self.assertEqual(pyramid_quality["sicn"]["status"], "available")
+        self.assertEqual(pyramid_quality["gamma"]["status"], "unavailable")
+        self.assertEqual(tet_quality["sicn"]["status"], "available")
+        self.assertEqual(tet_quality["gamma"]["status"], "available")
+
+        all_supported = self._regular_mixed_quality_statistics_mesh(
+            families=("prism6", "tet4"),
+            family_markers={"prism6": 0, "tet4": 1},
+            per_domain_quality={
+                0: report("prism6", 0.8, gamma_element_count=1),
+                1: report("tet4", 0.9, gamma_element_count=1),
+            },
+        )
+
+        supported_payload = all_supported.to_ir("all_supported_gamma")
+
+        self.assertEqual(
+            set(supported_payload["per_domain_quality"]),
+            {"0", "1"},
+        )
+
+        legacy_tet = self._regular_mixed_quality_statistics_mesh(
+            families=("tet4",),
+            family_markers={"tet4": 0},
+            per_domain_quality={
+                0: report("tet4", 0.9, gamma_element_count=None),
+            },
+        )
+        self.assertEqual(
+            set(legacy_tet.to_ir("legacy_tet")["per_domain_quality"]),
+            {"0"},
+        )
+
+        incomplete_reports = {
+            "missing_marker": {0: report("prism6", 0.8, gamma_element_count=1)},
+            "extra_marker": {
+                0: report("prism6", 0.8, gamma_element_count=1),
+                1: report("tet4", 0.9, gamma_element_count=1),
+                2: report("tet4", 0.9, gamma_element_count=1),
+            },
+            "partial_gamma": {
+                0: report("prism6", 0.8, gamma_element_count=0),
+                1: report("tet4", 0.9, gamma_element_count=1),
+            },
+            "non_gmsh_source": {
+                0: report(
+                    "prism6",
+                    0.8,
+                    gamma_element_count=1,
+                    quality_source="swept_topology_proxy",
+                ),
+                1: report("tet4", 0.9, gamma_element_count=1),
+            },
+            "misaligned_count": {
+                0: report("prism6", 0.8, gamma_element_count=1),
+                1: report("tet4", 0.9, gamma_element_count=2, n_elements=2),
+            },
+        }
+        for case, reports in incomplete_reports.items():
+            with self.subTest(case=case):
+                mesh = self._regular_mixed_quality_statistics_mesh(
+                    families=("prism6", "tet4"),
+                    family_markers={"prism6": 0, "tet4": 1},
+                    per_domain_quality=reports,
+                )
+                self.assertNotIn("per_domain_quality", mesh.to_ir(case))
+
+    def test_mixed_mesh_statistics_count_inverted_and_degenerate_cells(self) -> None:
+        mesh = self._regular_mixed_quality_statistics_mesh(
+            invert_tet=True,
+            flatten_pyramid=True,
+        )
+
+        statistics = mesh.statistics_ir("mixed")
+
+        self.assertIsNotNone(statistics)
+        assert statistics is not None
+        self.assertEqual(statistics["global"]["inverted_count"], 2)
+        self.assertEqual(statistics["global"]["degenerate_count"], 1)
+        self.assertAlmostEqual(statistics["global"]["volume"]["total"], 5.0 / 3.0)
+
+    def test_mesh_statistics_volume_histogram_preserves_tiny_si_values(self) -> None:
+        first_tet = np.asarray(
+            [[0, 0, 0], [1e-9, 0, 0], [0, 1e-9, 0], [0, 0, 1e-9]],
+            dtype=np.float64,
+        )
+        second_tet = np.asarray(
+            [[0, 0, 0], [2e-9, 0, 0], [0, 2e-9, 0], [0, 0, 2e-9]],
+            dtype=np.float64,
+        ) + np.asarray([5e-9, 0, 0], dtype=np.float64)
+        mesh = MeshData.from_legacy_tet4(
+            nodes=np.concatenate((first_tet, second_tet), axis=0),
+            elements=np.asarray([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=np.int32),
+            element_markers=np.asarray([0, 0], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.zeros((0,), dtype=np.int32),
+        )
+
+        statistics = mesh.statistics_ir("tiny_tet")
+
+        self.assertIsNotNone(statistics)
+        assert statistics is not None
+        global_scope = statistics["global"]
+        volume_bins = global_scope["volume"]["histogram"]
+        self.assertEqual(
+            sum(bin_["count"] for bin_ in volume_bins),
+            global_scope["element_count"],
+        )
+        self.assertEqual(sum(bin_["count"] > 0 for bin_ in volume_bins), 2)
+        self.assertGreater(global_scope["volume"]["min"], 0.0)
+        self.assertLess(global_scope["volume"]["max"], 1e-25)
+        self.assertEqual(
+            sum(bin_["count"] for bin_ in global_scope["edge_length"]["histogram"]),
+            12,
+        )
+
+    def test_mixed_certificate_quality_is_scope_count_aligned(self) -> None:
+        regular_tet = np.asarray(
+            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            dtype=np.float64,
+        )
+        skew_tet = np.asarray(
+            [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 0, 1]],
+            dtype=np.float64,
+        )
+        cell_quality = np.asarray(
+            [
+                _mixed_cell_scaled_jacobians("tet4", regular_tet)[0],
+                _mixed_cell_scaled_jacobians("tet4", skew_tet)[0],
+            ],
+            dtype=np.float64,
+        )
+        self.assertNotAlmostEqual(float(cell_quality[0]), float(cell_quality[1]))
+        certificate = SimpleNamespace(
+            quality_metric="mixed_topology_scaled_jacobian.v1",
+            scaled_jacobian_minima_by_family={"tet4": float(np.min(cell_quality))},
+            scaled_jacobian_p05_by_family={
+                "tet4": float(np.percentile(cell_quality, 5.0))
+            },
+            cell_family_counts_by_marker={
+                0: {"tet4": 1},
+                2: {"tet4": 1},
+            },
+            schema_version="mixed_topology_certificate.v2",
+            topology_fingerprint="sha256:abc",
+        )
+        mesh = SimpleNamespace(
+            mixed_layer_topology_certificate=certificate,
+            cell_types=np.asarray(["tet4", "tet4"], dtype=np.str_),
+            element_markers=np.asarray([0, 2], dtype=np.int32),
+        )
+
+        for marker in (0, 2):
+            family_quality = _certificate_scaled_jacobian_for_scope(
+                mesh, "tet4", marker
+            )
+            self.assertEqual(family_quality["status"], "unavailable")
+            self.assertNotIn("p05", family_quality)
+            self.assertIn("mesh-wide", family_quality["reason"])
+
+        mesh.element_markers[:] = 0
+        certificate.cell_family_counts_by_marker = {0: {"tet4": 2}}
+        family_quality = _certificate_scaled_jacobian_for_scope(mesh, "tet4", 0)
+        self.assertEqual(family_quality["status"], "available")
+        self.assertEqual(family_quality["certificate_fingerprint"], "sha256:abc")
+        self.assertAlmostEqual(
+            family_quality["p05"], float(np.percentile(cell_quality, 5.0))
+        )
+
+        certificate.cell_family_counts_by_marker[0]["tet4"] = 3
+        family_quality = _certificate_scaled_jacobian_for_scope(mesh, "tet4", 0)
+        self.assertEqual(family_quality["status"], "unavailable")
+
+    def test_mixed_family_quality_rejects_stale_preaggregated_counts(self) -> None:
+        def metric(value: float) -> dict[str, object]:
+            return {
+                "status": "available",
+                "source": "gmsh",
+                "min": value,
+                "p05": value,
+                "mean": value,
+                "max": value,
+            }
+
+        stale_family_summary = {
+            "cell_count": 2,
+            "source": "gmsh",
+            "sicn": metric(0.99),
+            "gamma": metric(0.99),
+        }
+
+        def report(n_elements: int) -> MeshQualityReport:
+            return MeshQualityReport(
+                n_elements=n_elements,
+                sicn_min=0.99,
+                sicn_max=0.99,
+                sicn_mean=0.99,
+                sicn_p5=0.99,
+                sicn_histogram=[0] * 20,
+                gamma_min=0.99,
+                gamma_mean=0.99,
+                gamma_histogram=[0] * 20,
+                volume_min=1.0 / 6.0,
+                volume_max=4.0 / 3.0,
+                volume_mean=0.75,
+                volume_std=0.0,
+                avg_quality=0.99,
+                gamma_element_count=n_elements,
+                quality_by_family={"prism6": stale_family_summary},
+            )
+
+        mesh = self._regular_mixed_quality_statistics_mesh(
+            quality=report(4),
+            per_domain_quality={1: report(1)},
+        )
+
+        statistics = mesh.statistics_ir("mixed")
+
+        self.assertIsNotNone(statistics)
+        assert statistics is not None
+        global_prism = statistics["global"]["quality_by_family"]["prism6"]
+        object_scope = next(scope for scope in statistics["scopes"] if scope["marker"] == 1)
+        scoped_prism = object_scope["quality_by_family"]["prism6"]
+        for row in (global_prism, scoped_prism):
+            self.assertEqual(row["cell_count"], 1)
+            for metric_name in ("sicn", "gamma"):
+                self.assertEqual(row[metric_name]["status"], "unavailable")
+                self.assertNotIn("min", row[metric_name])
+                self.assertIn("reports 2 cells", row[metric_name]["reason"])
+
+    def test_gmsh_mixed_family_quality_preserves_metric_availability_by_marker(self) -> None:
+        element_types = [4, 6, 7, 5]
+        element_tags = [
+            np.asarray([10], dtype=np.int64),
+            np.asarray([11, 12], dtype=np.int64),
+            np.asarray([13], dtype=np.int64),
+            np.asarray([14], dtype=np.int64),
+        ]
+        quality_values = {
+            "minSICN": {10: 0.9, 11: 0.8, 12: 0.6, 13: 0.7, 14: 0.5},
+            "gamma": {10: 0.9, 11: 0.7, 12: 0.5},
+            "volume": {10: 1.0 / 6.0, 11: 0.5, 12: 0.5, 13: 4.0 / 3.0, 14: 1.0},
+        }
+        quality_calls: list[tuple[tuple[int, ...], str]] = []
+
+        class _MeshApi:
+            @staticmethod
+            def getElements(dim: int) -> tuple[list[int], list[np.ndarray], list[np.ndarray]]:
+                assert dim == 3
+                return element_types, element_tags, [
+                    np.asarray([], dtype=np.int64)
+                ] * len(element_types)
+
+            @staticmethod
+            def getElementQualities(tags: list[int], metric: str) -> list[float]:
+                quality_calls.append((tuple(tags), metric))
+                return [quality_values[metric][int(tag)] for tag in tags]
+
+        gmsh = SimpleNamespace(
+            model=SimpleNamespace(mesh=_MeshApi()),
+            option=SimpleNamespace(getNumber=lambda name: 0.75 if name == "Mesh.AvgQuality" else 0.0),
+        )
+        markers = np.asarray([0, 0, 1, 0, 0], dtype=np.int32)
+
+        quality, by_marker = _extract_quality_metrics(
+            gmsh,
+            MeshOptions(per_element_quality=True),
+            markers,
+        )
+
+        self.assertEqual(quality.gamma_element_count, 3)
+        self.assertIsNone(quality.element_gamma)
+        self.assertEqual(quality.quality_by_family["hex8"]["sicn"]["status"], "available")
+        self.assertEqual(quality.quality_by_family["pyramid5"]["gamma"]["status"], "unavailable")
+        self.assertAlmostEqual(quality.quality_by_family["prism6"]["sicn"]["mean"], 0.7)
+        self.assertIn(((10, 11, 12, 13, 14), "minSICN"), quality_calls)
+        self.assertIn(((10, 11, 12), "gamma"), quality_calls)
+        self.assertNotIn(((10, 11, 12, 13, 14), "gamma"), quality_calls)
+        self.assertIsNotNone(by_marker)
+        assert by_marker is not None
+        self.assertAlmostEqual(
+            by_marker[0].quality_by_family["prism6"]["sicn"]["mean"], 0.8
+        )
+        self.assertAlmostEqual(
+            by_marker[1].quality_by_family["prism6"]["sicn"]["mean"], 0.6
+        )
+        self.assertEqual(by_marker[0].gamma_element_count, 2)
+        self.assertEqual(by_marker[0].quality_by_family["pyramid5"]["gamma"]["status"], "unavailable")
+
+    def test_mixed_quality_summaries_roundtrip_json_without_nonfinite_values(self) -> None:
+        def metric(value: float) -> dict[str, object]:
+            return {
+                "status": "available",
+                "source": "gmsh",
+                "min": value,
+                "p05": value,
+                "mean": value,
+                "max": value,
+                "threshold": 0.1,
+                "below_threshold_count": 0,
+                "below_threshold_fraction": 0.0,
+                "histogram": [],
+            }
+
+        quality_by_family = {
+            family: {
+                "cell_count": 1,
+                "source": "gmsh",
+                "sicn": metric(value),
+                "gamma": (
+                    metric(0.7)
+                    if family in {"tet4", "prism6"}
+                    else {"status": "unavailable", "reason": "Gmsh gamma is undefined."}
+                ),
+            }
+            for family, value in (
+                ("tet4", 0.9),
+                ("prism6", 0.8),
+                ("pyramid5", 0.7),
+                ("hex8", 0.6),
+            )
+        }
+        quality = MeshQualityReport(
+            n_elements=4,
+            sicn_min=0.6,
+            sicn_max=0.9,
+            sicn_mean=0.75,
+            sicn_p5=0.63,
+            sicn_histogram=[0] * 20,
+            gamma_min=0.7,
+            gamma_mean=0.7,
+            gamma_histogram=[0] * 20,
+            volume_min=1.0 / 6.0,
+            volume_max=4.0 / 3.0,
+            volume_mean=0.75,
+            volume_std=0.0,
+            avg_quality=0.75,
+            gamma_element_count=2,
+            quality_by_family=quality_by_family,
+        )
+        mesh = self._regular_mixed_quality_statistics_mesh(quality=quality)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "mixed.json"
+            mesh.save(path)
+            loaded = MeshData.load(path)
+
+        self.assertIsNotNone(loaded.quality)
+        assert loaded.quality is not None
+        self.assertEqual(loaded.quality.gamma_element_count, 2)
+        self.assertEqual(loaded.quality.quality_by_family, quality_by_family)
+        payload = loaded.to_ir("mixed")
+        family_stats = payload["mesh_statistics"]["global"]["quality_by_family"]
+        self.assertAlmostEqual(family_stats["tet4"]["sicn"]["p05"], 0.9)
+        self.assertEqual(family_stats["hex8"]["gamma"]["status"], "unavailable")
+        json.dumps(payload, allow_nan=False)
 
     def test_mixed_volume_size_options_disable_boundary_extension(self) -> None:
         from fullmag.meshing import _gmsh_swept
@@ -1635,6 +2478,23 @@ class MeshScaffoldTests(unittest.TestCase):
             mesh.validate_strict(eps_volume=FEM_TOPOLOGY_VOLUME_EPS)
 
     def test_meshdata_oriented_copy_flips_negative_tets(self) -> None:
+        quality = MeshQualityReport(
+            n_elements=1,
+            sicn_min=-0.5,
+            sicn_max=-0.5,
+            sicn_mean=-0.5,
+            sicn_p5=-0.5,
+            sicn_histogram=[0] * 20,
+            gamma_min=0.25,
+            gamma_mean=0.25,
+            gamma_histogram=[0] * 20,
+            volume_min=1.0 / 6.0,
+            volume_max=1.0 / 6.0,
+            volume_mean=1.0 / 6.0,
+            volume_std=0.0,
+            avg_quality=-0.5,
+            element_sicn=[-0.5],
+        )
         mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
@@ -1649,11 +2509,15 @@ class MeshScaffoldTests(unittest.TestCase):
             element_markers=np.asarray([1], dtype=np.int32),
             boundary_faces=np.zeros((0, 3), dtype=np.int32),
             boundary_markers=np.zeros((0,), dtype=np.int32),
+            quality=quality,
+            per_domain_quality={1: quality},
         )
 
         oriented = mesh.oriented_copy()
         oriented.validate_strict()
         self.assertEqual(oriented.elements.tolist(), [[0, 1, 3, 2]])
+        self.assertIsNone(oriented.quality)
+        self.assertIsNone(oriented.per_domain_quality)
 
     @staticmethod
     def _partition_tetra_counts(
@@ -2753,6 +3617,95 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(per_domain[0].n_elements, 1)
         self.assertEqual(per_domain[1].n_elements, 1)
 
+    def test_mixed_per_domain_quality_rekeys_only_bijective_marker_changes(self) -> None:
+        def report(sicn: float) -> MeshQualityReport:
+            return MeshQualityReport(
+                n_elements=1,
+                sicn_min=sicn,
+                sicn_max=sicn,
+                sicn_mean=sicn,
+                sicn_p5=sicn,
+                sicn_histogram=[0] * 20,
+                gamma_min=0.5,
+                gamma_mean=0.5,
+                gamma_histogram=[0] * 20,
+                volume_min=1.0,
+                volume_max=1.0,
+                volume_mean=1.0,
+                volume_std=0.0,
+                avg_quality=sicn,
+            )
+
+        first = report(0.2)
+        second = report(0.8)
+        reports = {10: first, 20: second}
+
+        rekeyed = mesh_asset_pipeline._rekey_per_domain_quality_for_markers(
+            np.asarray([10, 20], dtype=np.int32),
+            np.asarray([1, 2], dtype=np.int32),
+            reports,
+        )
+
+        self.assertIsNotNone(rekeyed)
+        assert rekeyed is not None
+        self.assertIs(rekeyed[1], first)
+        self.assertIs(rekeyed[2], second)
+        self.assertIsNone(
+            mesh_asset_pipeline._rekey_per_domain_quality_for_markers(
+                np.asarray([10, 20], dtype=np.int32),
+                np.asarray([1, 1], dtype=np.int32),
+                reports,
+            )
+        )
+        self.assertIsNone(
+            mesh_asset_pipeline._rekey_per_domain_quality_for_markers(
+                np.asarray([10, 10], dtype=np.int32),
+                np.asarray([1, 2], dtype=np.int32),
+                {10: report(0.2)},
+            )
+        )
+
+        mixed_quality = MeshQualityReport(
+            n_elements=4,
+            sicn_min=0.6,
+            sicn_max=0.9,
+            sicn_mean=0.75,
+            sicn_p5=0.63,
+            sicn_histogram=[0] * 20,
+            gamma_min=0.7,
+            gamma_mean=0.7,
+            gamma_histogram=[0] * 20,
+            volume_min=1.0 / 6.0,
+            volume_max=4.0 / 3.0,
+            volume_mean=0.75,
+            volume_std=0.0,
+            avg_quality=0.75,
+            element_sicn=[0.9, 0.8, 0.7, 0.6],
+            element_volume=[1.0 / 6.0, 0.5, 4.0 / 3.0, 1.0],
+            gamma_element_count=2,
+        )
+        mixed_mesh = self._regular_mixed_quality_statistics_mesh(
+            quality=mixed_quality,
+            per_domain_quality={
+                0: report(-0.1),
+                1: report(-0.2),
+                2: report(-0.3),
+                3: report(-0.4),
+            },
+        )
+        reaggregated = mesh_asset_pipeline._quality_reports_for_final_mixed_markers(
+            mixed_mesh,
+            np.asarray([1, 1, 2, 2], dtype=np.int32),
+        )
+        self.assertIsNotNone(reaggregated)
+        assert reaggregated is not None
+        self.assertEqual(reaggregated[1].n_elements, 2)
+        self.assertAlmostEqual(reaggregated[1].sicn_min, 0.8)
+        self.assertAlmostEqual(reaggregated[1].sicn_mean, 0.85)
+        self.assertEqual(
+            reaggregated[1].quality_by_family["prism6"]["gamma"]["status"],
+            "unavailable",
+        )
     def test_mesh_statistics_publish_metric_ranked_worst_elements(self) -> None:
         mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(

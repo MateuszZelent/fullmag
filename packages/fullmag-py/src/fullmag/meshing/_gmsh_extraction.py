@@ -11,6 +11,8 @@ from numpy.typing import NDArray
 from fullmag._progress import emit_progress
 
 from ._gmsh_types import (
+    GAMMA_MIN_QUALITY_THRESHOLD,
+    SICN_P05_QUALITY_THRESHOLD,
     SUPPORTED_BOUNDARY_ELEMENTS,
     SUPPORTED_VOLUME_ELEMENTS,
     MeshData,
@@ -1169,10 +1171,6 @@ def _extract_mesh_data(
         extracted_element_tags,
     )
     tet4_only = all(kind == "tet4" for kind in cell_types)
-    if not tet4_only:
-        # Gmsh's historical SICN/gamma report in this path is calibrated for
-        # tetrahedra. Do not relabel it as a mixed-family quality metric.
-        aligned_quality = None
     elements = cell_nodes_array.reshape((-1, 4)) if tet4_only else None
     aligned_per_domain_quality = (
         build_per_domain_quality_from_mesh_arrays(
@@ -1699,6 +1697,7 @@ def extract_per_domain_quality(
     sicn_values: NDArray[np.float64],
     gamma_values: NDArray[np.float64],
     volume_values: NDArray[np.float64],
+    element_families: NDArray[np.str_] | None = None,
 ) -> dict[int, MeshQualityReport]:
     """Compute quality metrics grouped per domain (element marker).
 
@@ -1711,16 +1710,33 @@ def extract_per_domain_quality(
     Returns:
         Mapping from marker integer to :class:`MeshQualityReport`.
     """
+    families = (
+        np.asarray(element_families, dtype=np.str_)
+        if element_families is not None
+        and len(element_families) == len(element_markers)
+        else None
+    )
     result: dict[int, MeshQualityReport] = {}
     for marker in np.unique(element_markers):
         mask = element_markers == marker
         s = sicn_values[mask]
-        g = gamma_values[mask]
+        raw_gamma = gamma_values[mask]
+        g = raw_gamma[np.isfinite(raw_gamma)]
         v = volume_values[mask]
         if s.size == 0:
             continue
         sicn_hist, _ = np.histogram(s, bins=20, range=(-1.0, 1.0))
         gamma_hist, _ = np.histogram(g, bins=20, range=(0.0, 1.0))
+        family_quality = None
+        if families is not None:
+            family_quality = {
+                str(family): _gmsh_quality_family_summary(
+                    str(family),
+                    sicn_values[mask & (families == family)],
+                    gamma_values[mask & (families == family)],
+                )
+                for family in sorted(str(value) for value in np.unique(families[mask]))
+            }
         result[int(marker)] = MeshQualityReport(
             n_elements=int(mask.sum()),
             sicn_min=float(np.min(s)),
@@ -1728,16 +1744,86 @@ def extract_per_domain_quality(
             sicn_mean=float(np.mean(s)),
             sicn_p5=float(np.percentile(s, 5)),
             sicn_histogram=sicn_hist.tolist(),
-            gamma_min=float(np.min(g)),
-            gamma_mean=float(np.mean(g)),
+            gamma_min=float(np.min(g)) if g.size else 0.0,
+            gamma_mean=float(np.mean(g)) if g.size else 0.0,
             gamma_histogram=gamma_hist.tolist(),
             volume_min=float(np.min(v)),
             volume_max=float(np.max(v)),
             volume_mean=float(np.mean(v)),
             volume_std=float(np.std(v)),
             avg_quality=float(np.mean(s)),
+            gamma_element_count=int(g.size),
+            quality_by_family=family_quality,
         )
     return result
+
+
+def _gmsh_metric_family_summary(
+    values: NDArray[np.float64],
+    *,
+    metric: str,
+) -> dict[str, object]:
+    if metric == "sicn":
+        lower, upper = -1.0, 1.0
+        threshold = SICN_P05_QUALITY_THRESHOLD
+        percentile = float(np.percentile(values, 5.0))
+    else:
+        lower, upper = 0.0, 1.0
+        threshold = GAMMA_MIN_QUALITY_THRESHOLD
+        percentile = float(np.percentile(values, 5.0))
+    histogram, _ = np.histogram(values, bins=20, range=(lower, upper))
+    below_threshold = int(np.count_nonzero(values < threshold))
+    width = (upper - lower) / 20.0
+    return {
+        "status": "available",
+        "source": "gmsh",
+        "min": float(np.min(values)),
+        "p05": percentile,
+        "mean": float(np.mean(values)),
+        "max": float(np.max(values)),
+        "threshold": threshold,
+        "below_threshold_count": below_threshold,
+        "below_threshold_fraction": below_threshold / float(values.size),
+        "histogram": [
+            {
+                "lo": lower + width * index,
+                "hi": lower + width * (index + 1),
+                "count": int(count),
+            }
+            for index, count in enumerate(histogram)
+        ],
+    }
+
+
+def _gmsh_quality_family_summary(
+    family: str,
+    sicn_values: NDArray[np.float64],
+    gamma_values: NDArray[np.float64],
+) -> dict[str, object]:
+    sicn = np.asarray(sicn_values, dtype=np.float64)
+    gamma = np.asarray(gamma_values, dtype=np.float64)
+    row: dict[str, object] = {
+        "cell_count": int(sicn.size),
+        "source": "gmsh",
+        "sicn": (
+            _gmsh_metric_family_summary(sicn, metric="sicn")
+            if sicn.size
+            else {"status": "unavailable", "reason": "No Gmsh SICN samples were returned."}
+        ),
+    }
+    if family in {"tet4", "prism6"}:
+        valid_gamma = gamma[np.isfinite(gamma)]
+        row["gamma"] = (
+            _gmsh_metric_family_summary(valid_gamma, metric="gamma")
+            if valid_gamma.size
+            else {"status": "unavailable", "reason": "No Gmsh gamma samples were returned."}
+        )
+    else:
+        row["gamma"] = {
+            "status": "unavailable",
+            "reason": f"Gmsh gamma is not defined for {family}.",
+        }
+    return row
 
 
 def _validated_gmsh_quality_channel(
@@ -1784,7 +1870,8 @@ def _extract_quality_metrics(
     # Collect all 3D element tags
     elem_types, elem_tags_blocks, _ = gmsh.model.mesh.getElements(dim=3)
     all_tags: list[int] = []
-    for block in elem_tags_blocks:
+    element_families: list[str] = []
+    for element_type, block in zip(elem_types, elem_tags_blocks, strict=True):
         tags = np.asarray(block).reshape(-1)
         try:
             all_tags.extend(int(tag) for tag in tags)
@@ -1795,6 +1882,8 @@ def _extract_quality_metrics(
                 actual_count=None,
                 reason=f"element tags are not integer-like: {exc}",
             ) from exc
+        family = SUPPORTED_VOLUME_ELEMENTS.get(int(element_type), ("unknown", 0))[0]
+        element_families.extend([family] * int(tags.size))
 
     if len(set(all_tags)) != len(all_tags):
         duplicate_tags = sorted(
@@ -1816,10 +1905,25 @@ def _extract_quality_metrics(
             gamma_histogram=[0] * 20,
             volume_min=0.0, volume_max=0.0, volume_mean=0.0, volume_std=0.0,
             avg_quality=0.0,
+            gamma_element_count=0,
+            quality_by_family={},
         ), None
 
     sicn = _validated_gmsh_quality_channel(gmsh, all_tags, "minSICN")
-    gamma = _validated_gmsh_quality_channel(gmsh, all_tags, "gamma")
+    family_values = np.asarray(element_families, dtype=np.str_)
+    gamma_defined = np.isin(family_values, ("tet4", "prism6"))
+    tags_by_index = np.asarray(all_tags, dtype=np.int64)
+    gamma = (
+        _validated_gmsh_quality_channel(
+            gmsh,
+            tags_by_index[gamma_defined].tolist(),
+            "gamma",
+        )
+        if np.any(gamma_defined)
+        else np.zeros(0, dtype=np.float64)
+    )
+    gamma_values = np.full(len(all_tags), np.nan, dtype=np.float64)
+    gamma_values[gamma_defined] = gamma
     vols = _validated_gmsh_quality_channel(gmsh, all_tags, "volume")
     try:
         avg_q = float(gmsh.option.getNumber("Mesh.AvgQuality"))
@@ -1845,6 +1949,14 @@ def _extract_quality_metrics(
 
     sicn_hist, _ = np.histogram(sicn, bins=20, range=(-1.0, 1.0))
     gamma_hist, _ = np.histogram(gamma, bins=20, range=(0.0, 1.0))
+    quality_by_family = {
+        str(family): _gmsh_quality_family_summary(
+            str(family),
+            sicn[family_values == family],
+            gamma_values[family_values == family],
+        )
+        for family in sorted(str(value) for value in np.unique(family_values))
+    }
 
     return MeshQualityReport(
         n_elements=len(all_tags),
@@ -1853,8 +1965,8 @@ def _extract_quality_metrics(
         sicn_mean=float(np.mean(sicn)),
         sicn_p5=float(np.percentile(sicn, 5)),
         sicn_histogram=sicn_hist.tolist(),
-        gamma_min=float(np.min(gamma)),
-        gamma_mean=float(np.mean(gamma)),
+        gamma_min=float(np.min(gamma)) if gamma.size else 0.0,
+        gamma_mean=float(np.mean(gamma)) if gamma.size else 0.0,
         gamma_histogram=gamma_hist.tolist(),
         volume_min=float(np.min(vols)),
         volume_max=float(np.max(vols)),
@@ -1862,15 +1974,22 @@ def _extract_quality_metrics(
         volume_std=float(np.std(vols)),
         avg_quality=float(avg_q),
         element_sicn=sicn.tolist() if opts.per_element_quality else None,
-        element_gamma=gamma.tolist() if opts.per_element_quality else None,
+        element_gamma=(
+            gamma_values.tolist()
+            if opts.per_element_quality and np.all(gamma_defined)
+            else None
+        ),
         element_volume=vols.tolist() if opts.per_element_quality else None,
         element_tags=[int(tag) for tag in all_tags],
+        gamma_element_count=int(gamma.size),
+        quality_by_family=quality_by_family,
     ), (
         extract_per_domain_quality(
             resolved_markers,
             sicn,
-            gamma,
+            gamma_values,
             vols,
+            family_values,
         )
         if resolved_markers is not None and len(resolved_markers) == len(all_tags)
         else None
@@ -1881,7 +2000,7 @@ def _extract_element_markers_for_tags(
     gmsh: Any,
     all_tags: list[int],
 ) -> NDArray[np.int32] | None:
-    """Return physical-group markers aligned to ``all_tags`` order."""
+    """Return canonical semantic markers aligned to ``all_tags`` order."""
     if not all_tags:
         return np.zeros(0, dtype=np.int32)
     if len(set(int(tag) for tag in all_tags)) != len(all_tags):
@@ -1903,7 +2022,12 @@ def _extract_element_markers_for_tags(
         return None
     requested_tags = {int(tag) for tag in all_tags}
     for _dim, phys_tag in physical_groups:
-        marker = int(phys_tag)
+        physical_marker = int(phys_tag)
+        try:
+            physical_name = gmsh.model.getPhysicalName(3, phys_tag)
+        except Exception:
+            physical_name = None
+        marker = _semantic_marker_from_name(physical_name, physical_marker)
         try:
             entities = gmsh.model.getEntitiesForPhysicalGroup(3, phys_tag)
         except Exception:
@@ -1916,7 +2040,10 @@ def _extract_element_markers_for_tags(
             for block in tag_blocks:
                 for tag in block:
                     element_tag = int(tag)
-                    marker_sources.setdefault(element_tag, set()).add(marker)
+                    # Preserve raw physical-group identities for overlap
+                    # detection even when multiple names normalize to the same
+                    # semantic marker (for example, ``air`` -> marker 0).
+                    marker_sources.setdefault(element_tag, set()).add(physical_marker)
                     previous = tag_to_marker.get(element_tag)
                     if previous is not None and previous != marker:
                         # Keep collecting so the error reports all conflicting

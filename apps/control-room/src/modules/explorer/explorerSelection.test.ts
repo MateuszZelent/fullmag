@@ -645,10 +645,14 @@ describe("selectExplorerNode", () => {
   it("selects Airbox mesh policy nodes as inspector-only airbox selections", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
+      availability: "partial",
       id: "model:airbox:mesh",
       kind: "airbox.mesh",
       label: "Airbox Mesh Policy",
       parentId: "model:universe",
+      executionState: "not_started",
+      resourceState: "loading",
+      statusReason: "Published mesh facts are loading.",
     };
 
     selectExplorerNode(kernel, node, "explorer");
@@ -661,6 +665,10 @@ describe("selectExplorerNode", () => {
       ref: {
         kind: "airbox.mesh",
         nodeId: "model:airbox:mesh",
+        availability: "partial",
+        contractGap: "Published mesh facts are loading.",
+        executionState: "not_started",
+        resourceState: "loading",
         type: "airbox",
         visualizationTargetId: "airbox",
       },

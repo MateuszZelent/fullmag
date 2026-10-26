@@ -5141,9 +5141,53 @@ def generate_disconnected_mixed_p1_mesh(
             mixed_tet_report = _repair_mixed_tetrahedra(gmsh)
         with indeterminate_progress_phase(phase="meshing", progress_label="optimizing mixed-pyramid apices", message="Optimizing mixed-pyramid apices"):
             _optimize_mixed_pyramid_apices(gmsh, initial_tet_report=mixed_tet_report)
-        raw = _extract_mesh_data(gmsh, has_physical_groups=True, boundary_role_markers=(MIXED_INTERFACE_MARKER, int(airbox.boundary_marker)))
+        quality, per_domain_quality = (
+            _extract_quality_metrics(gmsh, opts)
+            if opts.compute_quality
+            else (None, None)
+        )
+        quality = _quality_volumes_in_si(quality, scale)
+        if per_domain_quality is not None:
+            per_domain_quality = {
+                marker: _quality_volumes_in_si(report, scale)
+                for marker, report in per_domain_quality.items()
+            }
+        raw = _extract_mesh_data(
+            gmsh,
+            quality=quality,
+            has_physical_groups=True,
+            per_domain_quality=per_domain_quality,
+            boundary_role_markers=(
+                MIXED_INTERFACE_MARKER,
+                int(airbox.boundary_marker),
+            ),
+        )
         raw = _compact_uncertified_volume_nodes(raw)
-        mesh = MeshData(nodes=np.asarray(raw.nodes, dtype=np.float64) / scale, vertex_identity=raw.vertex_identity, cell_types=raw.cell_types, cell_offsets=raw.cell_offsets, cell_nodes=raw.cell_nodes, element_markers=raw.element_markers, facet_types=raw.facet_types, facet_roles=raw.facet_roles, facet_offsets=raw.facet_offsets, facet_nodes=raw.facet_nodes, boundary_markers=raw.boundary_markers, cell_global_ordinals=raw.cell_global_ordinals, facet_global_ordinals=raw.facet_global_ordinals, cell_mesh_parts=_gmsh_cell_parts_in_extraction_order(gmsh, {"magnetic": [box_volume, ring_volume], "transition_air": [int(tag) for tag in transition_volumes], "far_air": [far_air_volume]}))
+        mesh = MeshData(
+            nodes=np.asarray(raw.nodes, dtype=np.float64) / scale,
+            vertex_identity=raw.vertex_identity,
+            cell_types=raw.cell_types,
+            cell_offsets=raw.cell_offsets,
+            cell_nodes=raw.cell_nodes,
+            element_markers=raw.element_markers,
+            facet_types=raw.facet_types,
+            facet_roles=raw.facet_roles,
+            facet_offsets=raw.facet_offsets,
+            facet_nodes=raw.facet_nodes,
+            boundary_markers=raw.boundary_markers,
+            cell_global_ordinals=raw.cell_global_ordinals,
+            facet_global_ordinals=raw.facet_global_ordinals,
+            cell_mesh_parts=_gmsh_cell_parts_in_extraction_order(
+                gmsh,
+                {
+                    "magnetic": [box_volume, ring_volume],
+                    "transition_air": [int(tag) for tag in transition_volumes],
+                    "far_air": [far_air_volume],
+                },
+            ),
+            quality=raw.quality,
+            per_domain_quality=raw.per_domain_quality,
+        )
         if mesh.cell_mesh_parts.shape != (mesh.n_elements,):
             raise RuntimeError("mixed v2 cell mesh-part identity is incomplete")
         with indeterminate_progress_phase(

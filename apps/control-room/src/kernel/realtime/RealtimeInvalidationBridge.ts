@@ -43,6 +43,8 @@ import {
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_UNIVERSE_QUALITY_PATH,
+  MESHING_UNIVERSE_REPORT_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_MATERIAL_FIELDS_PATH,
   MODEL_MAGNETIZATION_ASSET_PATH,
@@ -942,6 +944,8 @@ export class RealtimeInvalidationBridge {
     );
     this.resources.invalidate(MESHING_SHARED_DOMAIN_QUALITY_PATH, revision);
     this.resources.invalidate(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH, revision);
+    this.resources.invalidate(MESHING_UNIVERSE_QUALITY_PATH, revision);
+    this.resources.invalidate(MESHING_UNIVERSE_REPORT_PATH, revision);
     this.resources.invalidate(
       MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
       revision,

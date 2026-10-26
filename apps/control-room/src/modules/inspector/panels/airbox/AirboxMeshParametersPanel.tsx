@@ -29,7 +29,11 @@ import {
 } from "../../InspectorEditSession";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
-import { AirboxFieldRow as FieldRow, boundedDisplayText } from "./airboxDisplay";
+import {
+  AirboxFieldRow as FieldRow,
+  airboxEffectiveLengthUnit,
+  boundedDisplayText,
+} from "./airboxDisplay";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { QuantityUnitSelect } from "../../primitives/QuantityUnitSelect";
@@ -761,7 +765,12 @@ export function AirboxMeshParametersPanel({
       <InspectorGroup title="Backend-effective Values" badge="read-only">
         <FieldRow label="Source" value="effective_config published by backend" />
         {(isFdm ? FDM_EFFECTIVE_FIELDS : EFFECTIVE_FIELDS).map(([key, label]) => (
-          <FieldRow key={key} label={label} value={displayEffectiveValue(resource.effective_config?.[key])} />
+          <FieldRow
+            key={key}
+            label={label}
+            value={displayEffectiveValue(resource.effective_config?.[key])}
+            unit={airboxEffectiveLengthUnit(key)}
+          />
         ))}
         <FieldRow
           label="Unknown effective keys"

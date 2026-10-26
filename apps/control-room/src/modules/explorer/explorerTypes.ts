@@ -686,6 +686,7 @@ export interface ModelTreeMeshSnapshot {
   meshName?: string | null;
   meshRevision?: number | string | null;
   objectSegmentCount?: number | null;
+  outerBoundaryEvidenceStatus?: "verified" | "loading" | "stale" | "error" | "unknown";
   outerBoundaryPartCount?: number | null;
   partCount?: number | null;
   qualityStatus?: string | null;

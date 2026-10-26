@@ -15331,6 +15331,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             mixed_layer_topology_certificate: None,
             mixed_layer_topology_certificate_v2: None,
             mixed_topology_provenance: None,
+            mesh_statistics: None,
         }),
     };
     assert!(asset.validate().is_ok());
@@ -16793,6 +16794,7 @@ fn valid_mixed_certificate_asset_for_version(
             mixed_layer_topology_certificate: Some(certificate),
             mixed_layer_topology_certificate_v2: None,
             mixed_topology_provenance: None,
+            mesh_statistics: None,
         }),
     }
 }
@@ -16851,6 +16853,7 @@ fn python_mixed_certificate_asset_for_layers(layer_count: u32) -> fullmag_ir::Fe
             mixed_layer_topology_certificate: Some(certificate),
             mixed_layer_topology_certificate_v2: None,
             mixed_topology_provenance: None,
+            mesh_statistics: None,
         }),
     }
 }

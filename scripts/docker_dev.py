@@ -2650,6 +2650,18 @@ def _parser() -> argparse.ArgumentParser:
     stop_held.add_argument("--apply", action="store_true")
     stop_held.add_argument("--allow-ui-reset", action="store_true")
     stop_held.add_argument("--expected-plan-sha256")
+    cancelled_activation = subparsers.add_parser(
+        "recover-cancelled-activation",
+        help="preview archival recovery of one cancelled preparation and its retained activation lease",
+    )
+    cancelled_activation.add_argument("--attempt", required=True)
+    cancelled_activation.add_argument("--iteration-attempt", required=True)
+    cancelled_activation.add_argument("--activation-attempt", required=True)
+    cancelled_activation.add_argument("--config-sha256", required=True)
+    cancelled_activation.add_argument("--source-root", type=Path, required=True)
+    cancelled_activation.add_argument("--port", type=int, required=True)
+    cancelled_activation.add_argument("--apply", action="store_true")
+    cancelled_activation.add_argument("--expected-plan-sha256")
     stop_bootstrap = subparsers.add_parser(
         "stop-bootstrap-volume",
         help="stop one pinned backend retaining only its exact pre-owner startup-fenced diagnostic API",
@@ -2924,6 +2936,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.allow_ui_reset or args.expected_plan_sha256 is not None:
                     raise _fail("Apply acknowledgement and plan digest require --apply")
                 result = plan(inspect_retirement(args))
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "recover-cancelled-activation":
+            from docker_volume_cancelled_activation import run as recover_cancelled_activation
+            result = recover_cancelled_activation(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-bootstrap-volume":
             from docker_volume_stop_bootstrap import stop_bootstrap

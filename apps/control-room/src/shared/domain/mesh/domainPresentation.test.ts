@@ -96,6 +96,22 @@ function topology(): DecodedTopology {
 }
 
 describe("domain presentation boundary", () => {
+  it.each([
+    ["different generation", { domain_generation_id: "generation-old" }],
+    ["noncurrent mesh revision", { mesh_revision: 0 }],
+  ] as const)("rejects FDM membership with %s identity", (_description, identity) => {
+    const presentation = buildDomainPresentation({
+      domainMeta: fdmMeta(),
+      fdmMembership: membership(identity),
+      fdmMembershipStatus: "ready",
+    });
+
+    expect(isFdmDomain(presentation)).toBe(true);
+    if (!isFdmDomain(presentation)) return;
+    expect(presentation.resourceStatus).toBe("incompatible");
+    expect(presentation.magneticSupport).toBeNull();
+  });
+
   it("keeps an empty automatic policy free of fabricated extents before runtime realization", () => {
     const presentation = buildUniverseDomainPolicyPresentation({
       policy: { config: null, revision: 0 },

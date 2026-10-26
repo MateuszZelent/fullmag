@@ -14,7 +14,9 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   useVisualizationStateResource: () => ({ data: null, status: "idle" }),
 }));
 vi.mock("./airboxInspectorRuntimeStatus", () => ({
+  matchesAirboxTopologyIdentity: () => false,
   resolveAirboxInspectorLane: () => "fem",
+  shouldLoadAirboxMeshManifest: () => true,
   useAirboxInspectorRuntimeStatus: () => ({
     authoring: { method: "fem", state: "known", reason: null },
     capabilities: { explicit_topology: false },

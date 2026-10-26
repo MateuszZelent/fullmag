@@ -97,8 +97,8 @@ Rozważone warianty:
    pozostaje `visible`, więc jej WebSocket, odpytywanie i viewport działają
    dalej. Sygnał widoczności przekazywany do ramki (`postMessage`) i
    wstrzymanie jej viewportu to otwarta praca.
-   Lista otwartych zakładek i aktywna zakładka są wygodą przeglądającego:
-   trzymane w `localStorage` originu strony, odczyt i zapis w `try/catch`,
+   Lista otwartych zakładek jest wygodą przeglądającego:
+   trzymana w `localStorage` originu strony, odczyt i zapis w `try/catch`,
    bez wpływu na poprawność przy braku magazynu. Zakładka instancji, której
    wykrywanie nie zwraca, pokazuje stan „niedostępna” i nie znika sama.
 
@@ -109,6 +109,34 @@ Rozważone warianty:
    ekranie (Home albo otwarta zakładka instancji). Bezczynny workspace bez
    zakładek instancji nie wysyła żadnych zapytań, zgodnie z kontraktem ciszy
    sieciowej audytów przeglądarkowych.
+
+7. **Adresy zakładek** (uzupełnienie 25.10.2026, decyzja użytkownika).
+   Zakładka na wierzchu jest odzwierciedlona w adresie strony, więc
+   przeładowanie, zakładka przeglądarki i Wstecz/Dalej prowadzą do tej
+   samej zakładki:
+   - `/home` — Home;
+   - `/session/<slug>` — sesja własnej instancji; slug to nazwa sesji
+     małymi literami, bez znaków diakrytycznych, z `-` między słowami;
+   - `/session/<slug>?port=<port>` — zakładka innej instancji z jej bieżącą
+     sesją; `/instance/<port>` — taka zakładka, gdy instancja nie ma sesji;
+   - `/` i `/workspace` są aliasami rozwiązywanymi do zakładki na wierzchu
+     (adres jest poprawiany przez `history.replaceState`).
+
+   Wszystkie adresy serwują tę samą stronę workspace (rewrite w
+   `next.config.ts`; w eksporcie statycznym serwer odpowiada stroną główną,
+   która też renderuje workspace). Przełączenie zakładki zapisuje adres
+   przez `history.pushState` i nigdy nie przeładowuje strony ani nie
+   odmontowuje workspace. Nowy wpis historii powstaje tylko przy zmianie
+   zakładki; zmiana nazwy sesji w tej samej zakładce, rozwiązanie aliasu
+   i zamknięcie zakładki na wierzchu tylko poprawiają adres. Adres
+   `/session/<slug>` bez portu wskazuje sesję własnej instancji, a gdy ta ma
+   inną nazwę — instancję z wykrywania, której bieżąca sesja ma ten slug;
+   gdy sesji nie ma nigdzie na tym komputerze, otwiera się Home. Tożsamością
+   zakładki innej instancji pozostaje port (decyzja 1); slug jest etykietą
+   i jest poprawiany na nazwę bieżącej sesji z wykrywania. Tytuł karty
+   przeglądarki pokazuje nazwę zakładki na wierzchu. Osadzona instancja
+   (ramka) nie zmienia adresu; jej ramka i „Open in window” nadal używają
+   `/workspace`, które rozumie też instancja sprzed tej zmiany.
 
 Odrzucony wariant 2 (wiele sesji w jednym API) wymaga zmiany decyzji D5
 z ADR 0068 („jedna sesja na grupę”) i przebudowy stanu API: około 25 pól

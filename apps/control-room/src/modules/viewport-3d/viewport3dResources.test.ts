@@ -2260,6 +2260,42 @@ describe("viewport3dResources", () => {
     ]);
   });
 
+  it("starts a fresh binary request instead of joining one whose consumers all aborted", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 32 });
+    const requestSignals: AbortSignal[] = [];
+    const request = vi.fn((_etag?: string | null, signal?: AbortSignal) => {
+      if (signal) requestSignals.push(signal);
+      if (requestSignals.length === 1) {
+        return new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => queueMicrotask(() => reject(new DOMException("aborted", "AbortError"))),
+            { once: true },
+          );
+        });
+      }
+      return Promise.resolve({
+        byteLength: 5,
+        data: "fresh",
+        etag: '"field-2"',
+        status: "ready" as const,
+      });
+    });
+    const staleController = new AbortController();
+    const stale = loadCachedBinaryResource(cache, "field:m", request, {
+      signal: staleController.signal,
+    });
+    staleController.abort();
+
+    const replacement = loadCachedBinaryResource(cache, "field:m", request);
+
+    await expect(stale).rejects.toHaveProperty("name", "AbortError");
+    await expect(replacement).resolves.toBe("fresh");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(requestSignals[0]?.aborted).toBe(true);
+    expect(requestSignals[1]?.aborted).toBe(false);
+  });
+
   it("retains oversized binary data as the current entry for future 304 reuse", async () => {
     const cache = new ResourceCache<string>({ maxBytes: 4 });
     const request = vi

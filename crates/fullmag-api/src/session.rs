@@ -3564,22 +3564,40 @@ fn registered_latest_field_replay_frame(
     if accepted != &stored_frame {
         return None;
     }
-    let mut stored_payload = stored.clone();
-    stored_payload.as_object_mut()?.remove("observation_frame");
-    let mut incoming_payload = incoming.clone();
-    if let Some(supplied) = incoming_payload
-        .as_object_mut()?
-        .remove("observation_frame")
-    {
+    let stored_payload = stored.as_object()?;
+    // Every read path qualifies the stored value itself; it trivially equals
+    // its own payload and frame, and comparing millions of values is wasted.
+    if std::ptr::eq(stored, incoming) {
+        return Some(accepted.clone());
+    }
+    let incoming_payload = incoming.as_object()?;
+    if let Some(supplied) = incoming_payload.get("observation_frame") {
         let supplied = serde_json::from_value::<
             crate::schemas::common::AcceptedObservationFrameRef,
-        >(supplied)
+        >(supplied.clone())
         .ok()?;
         if supplied != stored_frame {
             return None;
         }
     }
-    (stored_payload == incoming_payload).then(|| accepted.clone())
+    payloads_equal_except_observation_frame(stored_payload, incoming_payload)
+        .then(|| accepted.clone())
+}
+
+/// Compare two field payloads in place, ignoring their observation frames,
+/// without cloning their (possibly multi-million element) value arrays.
+fn payloads_equal_except_observation_frame(
+    left: &serde_json::Map<String, Value>,
+    right: &serde_json::Map<String, Value>,
+) -> bool {
+    let members = |payload: &serde_json::Map<String, Value>| {
+        payload.len() - usize::from(payload.contains_key("observation_frame"))
+    };
+    members(left) == members(right)
+        && left
+            .iter()
+            .filter(|(key, _)| key.as_str() != "observation_frame")
+            .all(|(key, value)| right.get(key) == Some(value))
 }
 
 pub(crate) fn preview_field_source_is_qualified(
@@ -8705,5 +8723,23 @@ mod tests {
             current.field_quantity_revisions.contains_key("H_eff"),
             "carried active preview field should publish a field revision"
         );
+    }
+
+    #[test]
+    fn replay_payload_comparison_ignores_only_the_observation_frame() {
+        let object = |value: Value| value.as_object().cloned().expect("object payload");
+        let stored = object(json!({
+            "values": [[1.0, 0.0, 0.0]], "source_step": 4, "observation_frame": {"source_step": 4}
+        }));
+        let unframed = object(json!({"values": [[1.0, 0.0, 0.0]], "source_step": 4}));
+        assert!(payloads_equal_except_observation_frame(&stored, &unframed));
+        assert!(payloads_equal_except_observation_frame(&unframed, &stored));
+        let other_values = object(json!({"values": [[0.0, 1.0, 0.0]], "source_step": 4}));
+        assert!(!payloads_equal_except_observation_frame(&stored, &other_values));
+        let extra_member = object(json!({
+            "values": [[1.0, 0.0, 0.0]], "source_step": 4, "source_time_seconds": 0.0
+        }));
+        assert!(!payloads_equal_except_observation_frame(&stored, &extra_member));
+        assert!(!payloads_equal_except_observation_frame(&extra_member, &stored));
     }
 }

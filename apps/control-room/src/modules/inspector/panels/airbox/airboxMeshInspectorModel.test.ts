@@ -11,6 +11,9 @@ import {
   buildAirboxMeshBuildModel,
   buildAirboxMeshInspectorModel,
   aggregateAirboxMeshParts,
+  airboxSizeDistributionPresentation,
+  currentAirboxQualityEvidence,
+  currentAirboxReportEvidence,
   findCanonicalAirboxPart,
   isDegradedBuildStatus,
 } from "./airboxMeshInspectorModel";
@@ -35,6 +38,130 @@ const part = (
 });
 
 describe("airboxMeshInspectorModel", () => {
+  it("labels equivalent tetrahedral size and SI length/volume units", () => {
+    expect(airboxSizeDistributionPresentation({
+      id: "tetra_size",
+      label: "Characteristic size",
+    })).toEqual({ label: "Equivalent tetrahedral size", unit: "m" });
+    expect(airboxSizeDistributionPresentation({
+      id: "edge_length",
+      label: "Edge length",
+    })).toEqual({ label: "Edge length", unit: "m" });
+    expect(airboxSizeDistributionPresentation({
+      id: "volume",
+      label: "Element volume",
+    })).toEqual({ label: "Element volume", unit: "m³" });
+  });
+
+  it.each(["idle", "loading", "stale", "error"] as const)(
+    "withholds retained quality data while its resource is %s",
+    (status) => {
+      const cached = {
+        quality: { airbox_quality_gates: { status: "pass" } },
+        revision: 12,
+      } as unknown as MeshUniverseQualityResource;
+      const evidence = currentAirboxQualityEvidence(
+        { data: cached, error: status === "error" ? new Error("offline") : null, refreshError: null, status },
+        true,
+        12,
+      );
+
+      expect(evidence).toBeNull();
+    },
+  );
+
+  it("requires ready quality evidence and a matching topology identity", () => {
+    const cached = {
+      quality: { airbox_quality_gates: { status: "pass" } },
+      revision: 12,
+    } as unknown as MeshUniverseQualityResource;
+
+    expect(currentAirboxQualityEvidence({
+      data: cached,
+      error: null,
+      refreshError: null,
+      status: "ready",
+    }, true, 12)).toBe(cached);
+    expect(currentAirboxQualityEvidence({
+      data: cached,
+      error: null,
+      refreshError: null,
+      status: "ready",
+    }, false, 12)).toBeNull();
+    expect(currentAirboxQualityEvidence({
+      data: cached,
+      error: null,
+      refreshError: new Error("refresh failed"),
+      status: "ready",
+    }, true, 12)).toBeNull();
+  });
+
+  it("withholds ready quality and report resources from the previous mesh revision", () => {
+    const quality = {
+      quality: { airbox_quality_gates: { status: "pass" } },
+      revision: 12,
+    } as unknown as MeshUniverseQualityResource;
+    const report = {
+      report: { shared_interface_node_count: 7, status: "complete" },
+      revision: 12,
+    } as unknown as MeshUniverseReportResource;
+
+    const qualityResource = {
+      data: quality,
+      error: null,
+      refreshError: null,
+      status: "ready" as const,
+    };
+    const reportResource = {
+      data: report,
+      error: null,
+      refreshError: null,
+      status: "ready" as const,
+    };
+
+    // The manifest and live status agree on mesh revision 13, but cached
+    // statistics and report still describe revision 12.
+    expect(currentAirboxQualityEvidence(qualityResource, true, 13)).toBeNull();
+    expect(currentAirboxReportEvidence(reportResource, true, 13)).toBeNull();
+    expect(currentAirboxQualityEvidence(qualityResource, true, 12)).toBe(quality);
+    expect(currentAirboxReportEvidence(reportResource, true, 12)).toBe(report);
+
+    const staleModel = buildAirboxMeshInspectorModel({
+      manifest: {
+        mesh_id: "mesh-13",
+        mesh_name: "Shared mesh",
+        mesh_parts: [part()],
+        revision: 13,
+        topology_fingerprint: "topology-13",
+      },
+      policy: { config: null, effective_config: null, revision: 13 },
+      quality: currentAirboxQualityEvidence(qualityResource, true, 13),
+      report: currentAirboxReportEvidence(reportResource, true, 13),
+      summary: null,
+    });
+    expect(staleModel.qualityGates.status).toBe("unknown");
+    expect(staleModel.topology.sharedInterfaceNodes.count).toBeNull();
+
+    const matchingReport = { ...report, revision: 13 };
+    const matchingModel = buildAirboxMeshInspectorModel({
+      manifest: {
+        mesh_id: "mesh-13",
+        mesh_name: "Shared mesh",
+        mesh_parts: [part()],
+        revision: 13,
+        topology_fingerprint: "topology-13",
+      },
+      policy: { config: null, effective_config: null, revision: 13 },
+      quality: null,
+      report: currentAirboxReportEvidence({
+        ...reportResource,
+        data: matchingReport,
+      }, true, 13),
+      summary: null,
+    });
+    expect(matchingModel.topology.sharedInterfaceNodes.count).toBe(7);
+  });
+
   it("unions the complete Airbox extent across every published carrier", () => {
     const first = part({
       bounds_max: [0, 1, 2],
@@ -91,6 +218,79 @@ describe("airboxMeshInspectorModel", () => {
     });
   });
 
+  it("keeps build history resource revision separate from successful artifact availability", () => {
+    const model = buildAirboxMeshBuildModel({
+      current: null,
+      currentSceneRevision: 10,
+      latest: ({
+        geometry_realization_revision: 8,
+        last_success: null,
+        revision: 17,
+        source_scene_revision: 9,
+      } as unknown) as Parameters<typeof buildAirboxMeshBuildModel>[0]["latest"],
+      report: null,
+    });
+
+    expect(model.latestSuccess).toMatchObject({
+      artifactPublished: false,
+      geometryRealizationRevision: null,
+      lastSuccess: null,
+      resourceRevision: 17,
+      sourceSceneRevision: null,
+    });
+  });
+
+  it("reads successful build revisions from its artifact instead of resource provenance", () => {
+    const model = buildAirboxMeshBuildModel({
+      current: null,
+      latest: ({
+        geometry_realization_revision: 81,
+        last_success: {
+          geometry_realization: {
+            realization_revision: 8,
+            source_scene_revision: 7,
+          },
+          realization_revision: 8,
+          source_scene_revision: 7,
+        },
+        revision: 17,
+        source_scene_revision: 71,
+      } as unknown) as Parameters<typeof buildAirboxMeshBuildModel>[0]["latest"],
+      report: null,
+    });
+
+    expect(model.latestSuccess).toMatchObject({
+      artifactPublished: true,
+      geometryRealizationRevision: 8,
+      resourceRevision: 17,
+      sourceSceneRevision: 7,
+    });
+  });
+
+  it("uses published report and last-build summary targets when current targets are absent", () => {
+    const fromSummary = buildAirboxMeshBuildModel({
+      current: ({
+        last_build_summary: {
+          effective_airbox_target: { maximum_element_size: 2e-8 },
+        },
+        revision: 4,
+      } as unknown) as Parameters<typeof buildAirboxMeshBuildModel>[0]["current"],
+      report: null,
+    });
+    const fromReport = buildAirboxMeshBuildModel({
+      current: null,
+      report: ({
+        report: {
+          effective_airbox_target: { maximum_element_size: 3e-8 },
+        },
+        revision: 5,
+      } as unknown) as MeshUniverseReportResource,
+    });
+
+    expect(fromSummary.effectiveAirboxTarget).toEqual({ maximum_element_size: 2e-8 });
+    expect(fromReport.effectiveAirboxTarget).toEqual({ maximum_element_size: 3e-8 });
+  });
+
   it("withholds a passing Airbox quality gate when the realized mesh predates the scene", () => {
     const model = buildAirboxMeshInspectorModel({
       currentSceneRevision: 11,
@@ -104,7 +304,14 @@ describe("airboxMeshInspectorModel", () => {
       },
       policy: { config: {}, effective_config: {}, revision: 12 },
       quality: ({
-        quality: { airbox_quality_gates: { status: "pass" } },
+        quality: {
+          airbox_quality_gates: {
+            marker: 0,
+            scope: "airbox",
+            source: "airbox_quality_gates.v1",
+            status: "pass",
+          },
+        },
         revision: 12,
       } as unknown) as MeshUniverseQualityResource,
       report: null,
@@ -112,7 +319,7 @@ describe("airboxMeshInspectorModel", () => {
     });
 
     expect(model.qualityGates).toMatchObject({
-      reason: "Airbox quality gates are stale for the current scene revision.",
+      reason: "Airbox quality gates are stale for the current source scene.",
       status: "unknown",
     });
   });
@@ -266,7 +473,12 @@ describe("airboxMeshInspectorModel", () => {
       } as unknown) as Parameters<typeof buildAirboxMeshBuildModel>[0]["current"],
       latest: ({
         geometry_realization_revision: 8,
-        last_success: { build_id: "build-9", artifact: "mesh-9" },
+        last_success: {
+          build_id: "build-9",
+          artifact: "mesh-9",
+          realization_revision: 3,
+          source_scene_revision: 2,
+        },
         revision: 9,
         source_scene_revision: 6,
       } as unknown) as Parameters<typeof buildAirboxMeshBuildModel>[0]["latest"],
@@ -315,10 +527,11 @@ describe("airboxMeshInspectorModel", () => {
       status: "degraded",
     });
     expect(model.latestSuccess).toMatchObject({
-      geometryRealizationRevision: 8,
+      artifactPublished: true,
+      geometryRealizationRevision: 3,
       lastSuccess: null,
-      revision: 9,
-      sourceSceneRevision: 6,
+      resourceRevision: 9,
+      sourceSceneRevision: 2,
     });
     expect(new TextEncoder().encode(model.rawDetails.serialized).byteLength).toBeLessThanOrEqual(4_096);
     expect(model.rawDetails.serialized).toContain("activeBuild");
@@ -447,7 +660,7 @@ describe("airboxMeshInspectorModel", () => {
     });
   });
 
-  it("reports missing and stale backend evidence without inventing Airbox quality", () => {
+  it("does not compare shared resource revisions with policy revisions for freshness", () => {
     const missing = buildAirboxMeshInspectorModel({
       manifest: null,
       policy: { config: null, effective_config: null, revision: 4 },
@@ -476,18 +689,123 @@ describe("airboxMeshInspectorModel", () => {
       summary: { revision: 4 },
     });
     expect(stale.lifecycle).toMatchObject({
-      reason: "Mesh evidence revision 4 is older than policy revision 6.",
-      status: "stale",
+      reason: "Source scene provenance is unavailable; mesh freshness cannot be verified.",
+      status: "missing",
     });
   });
 
-  it("keeps lifecycle stale when any published mesh evidence predates policy", () => {
+  it("keeps Airbox marker-zero mixed-family quality and individual gate checks scoped", () => {
     const model = buildAirboxMeshInspectorModel({
+      currentSceneRevision: 21,
+      manifest: {
+        mesh_id: "mesh-mixed-airbox",
+        mesh_name: "Shared mesh",
+        mesh_parts: [part()],
+        revision: 12,
+        source_scene_revision: 21,
+        topology_fingerprint: "topology-mixed-airbox",
+      },
+      policy: { config: {}, effective_config: {}, revision: 12 },
+      quality: ({
+        quality: {
+          airbox_quality_gates: {
+            checks: [
+              {
+                comparison: ">",
+                id: "sicn_min",
+                status: "pass",
+                threshold: 0,
+                unit: null,
+                value: 0.22,
+              },
+              {
+                comparison: ">=",
+                id: "gamma_min",
+                status: "unknown",
+                threshold: 0.08,
+                unit: null,
+                value: null,
+              },
+            ],
+            marker: 0,
+            reason: "Gamma is unavailable for one element family.",
+            scope: "airbox",
+            source: "airbox_quality_gates.v1",
+            status: "unknown",
+          },
+          global: {
+            label: "Airbox",
+            marker: 0,
+            quality_by_family: {
+              hex8: {
+                cell_count: 3,
+                gamma: {
+                  reason: "Gmsh does not define gamma for hex8.",
+                  status: "unavailable",
+                },
+                mixed_topology_scaled_jacobian: {
+                  certificate_fingerprint: "sha256:certificate-hex8",
+                  metric: "mixed_topology_scaled_jacobian.v1",
+                  min: 0.31,
+                  p05: 0.35,
+                  source: "mixed_layer_topology_certificate.v1",
+                },
+                sicn: {
+                  max: 0.91,
+                  mean: 0.62,
+                  min: 0.22,
+                  p05: 0.24,
+                  source: "gmsh",
+                  status: "available",
+                  threshold: 0.1,
+                },
+                source: "gmsh",
+              },
+            },
+          },
+        },
+        revision: 12,
+      } as unknown) as MeshUniverseQualityResource,
+      report: null,
+      summary: null,
+    });
+
+    expect(model.statistics.qualityScope).toEqual({ label: "Airbox", marker: 0 });
+    expect(model.statistics.qualityByFamily[0]).toMatchObject({
+      cellCount: 3,
+      family: "hex8",
+      gamma: {
+        reason: "Gmsh does not define gamma for hex8.",
+        status: "unavailable",
+      },
+      mixedTopologyScaledJacobian: {
+        certificateFingerprint: "sha256:certificate-hex8",
+        min: 0.31,
+        status: "available",
+      },
+      sicn: { min: 0.22, p05: 0.24, status: "available" },
+    });
+    expect(model.qualityGates).toMatchObject({
+      marker: 0,
+      scope: "airbox",
+      source: "airbox_quality_gates.v1",
+      status: "unknown",
+      checks: [
+        { id: "sicn_min", status: "pass", value: 0.22 },
+        { id: "gamma_min", status: "unknown", value: null },
+      ],
+    });
+  });
+
+  it("uses source scene provenance to mark published mesh evidence stale", () => {
+    const model = buildAirboxMeshInspectorModel({
+      currentSceneRevision: 7,
       manifest: {
         mesh_id: "mesh-4",
         mesh_name: "Shared mesh",
         mesh_parts: [part()],
         revision: 4,
+        source_scene_revision: 6,
         topology_fingerprint: "topology-4",
       },
       policy: { config: {}, effective_config: {}, revision: 6 },
@@ -497,7 +815,7 @@ describe("airboxMeshInspectorModel", () => {
     });
 
     expect(model.lifecycle.status).toBe("stale");
-    expect(model.lifecycle.reason).toContain("revision 4");
+    expect(model.lifecycle.reason).toContain("source scene revision 6");
   });
 
   it("prefers manifest role and canonical carrier over marker zero heuristics", () => {

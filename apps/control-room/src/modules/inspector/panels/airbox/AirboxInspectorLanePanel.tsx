@@ -18,6 +18,7 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import { Button } from "@/shared/ui/Button";
 import { AirboxInspectorIdentityFrame } from "./AirboxInspectorIdentityFrame";
 import {
+  hasPublishedFemTopologyInspectionLane,
   resolveAirboxInspectorAuthoringLane,
   resolveAirboxInspectorLane,
   useAirboxInspectorRuntimeStatus,
@@ -128,7 +129,12 @@ function AirboxInspectorLanePanel({
     );
   } else if (lane === "unresolved") {
     const authoredMethod = runtimeStatus?.authoring.method ?? null;
-    if (overviewFallback && authoredMethod === "fem") {
+    if (
+      authoredMethod === "fem" &&
+      hasPublishedFemTopologyInspectionLane(runtimeStatus)
+    ) {
+      content = <FemPanel selection={selection} />;
+    } else if (overviewFallback && authoredMethod === "fem") {
       content = <FemPanel selection={selection} />;
     } else if (overviewFallback && authoredMethod === "fdm") {
       content = <AirboxMeshParametersPanel lane="fdm" runtimeLane={null} selection={selection} />;
@@ -170,7 +176,16 @@ function AirboxInspectorLanePanel({
   }
 
   return (
-    <AirboxInspectorIdentityFrame lane={lane} selection={selection}>
+    <AirboxInspectorIdentityFrame
+      artifactLane={
+        !authoringPanel && hasPublishedFemTopologyInspectionLane(runtimeStatus)
+          ? "fem"
+          : null
+      }
+      lane={lane}
+      runtimeReason={runtimeStatus?.authoring.reason}
+      selection={selection}
+    >
       {content}
     </AirboxInspectorIdentityFrame>
   );

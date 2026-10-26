@@ -29,7 +29,7 @@ function fdmMeta(cells: number): DomainMetaResource {
     dimension: 3,
     discretization: "fdm",
     domain_id: "domain",
-    generation_id: "4",
+    generation_id: "generation-current",
     grid: {
       origin: [0, 0, 0],
       shape: [100, 100, 1],

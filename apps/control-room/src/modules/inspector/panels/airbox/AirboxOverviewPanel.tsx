@@ -7,7 +7,6 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
-import { shouldLoadRuntimeMeshManifest } from "@/kernel/resources/studyRuntimeResources";
 import { useKernel } from "@/kernel/KernelContext";
 import { Button } from "@/shared/ui/Button";
 import { buildUniverseDomainPolicyPresentation } from "@/shared/domain/mesh/domainPresentation";
@@ -17,7 +16,9 @@ import { AirboxFieldRow as FieldRow } from "./airboxDisplay";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { aggregateAirboxMeshParts, findCanonicalAirboxPart, findAirboxParts } from "./airboxMeshInspectorModel";
 import {
+  matchesAirboxTopologyIdentity,
   resolveAirboxInspectorLane,
+  shouldLoadAirboxMeshManifest,
   useAirboxInspectorRuntimeStatus,
 } from "./airboxInspectorRuntimeStatus";
 import { navigateToAirboxRoute } from "./airboxNavigation";
@@ -51,22 +52,26 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
   const runtimeResolved = runtimeLane === "fdm" || runtimeLane === "fem";
   const policy = useUniverseMeshPolicyResource();
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+    enabled: shouldLoadAirboxMeshManifest(true, runtimeStatus),
   });
   const build = useMeshBuildCurrent({ enabled: runtimeResolved });
   const scene = useSceneResource({ enabled: runtimeResolved });
   const visualization = useVisualizationStateResource();
-  const airboxParts = findAirboxParts(manifest.data?.mesh_parts);
+  const topologyMatches = matchesAirboxTopologyIdentity(runtimeStatus, manifest.data);
+  const currentManifest = topologyMatches ? manifest.data : null;
+  const airboxParts = findAirboxParts(currentManifest?.mesh_parts);
   const aggregate = aggregateAirboxMeshParts(airboxParts);
-  const carrier = findCanonicalAirboxPart(manifest.data?.mesh_parts);
+  const carrier = findCanonicalAirboxPart(currentManifest?.mesh_parts);
   const domainPolicy = buildUniverseDomainPolicyPresentation({
     build: build.data,
     buildStatus: build.status,
-    manifest: manifest.data,
+    manifest: currentManifest,
     manifestStatus: manifest.status,
     policy: policy.data,
     runtimeResolved,
-    sceneRevision: scene.data?.scene_revision ?? scene.data?.revision ?? null,
+    sceneRevision: scene.status === "ready" && !scene.error
+      ? scene.data?.scene_revision ?? scene.data?.revision ?? null
+      : null,
   });
   const modeValue = domainPolicy.authored.mode.value;
   const modeLabel = modeValue === "invalid"
@@ -116,7 +121,7 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Boundary faces (all carriers)" value={aggregate.boundaryFaceCount?.toLocaleString("en-US") ?? "not available"} />
         <FieldRow label="Node-count source" value={aggregate.nodeCountExact ? "deduplicated published carrier coverage" : "not fully published"} />
         <FieldRow label="Active quantity" value={visualization.data?.active_quantity_id ?? "not available"} />
-        <FieldRow label="Manifest state" value={manifest.status} />
+        <FieldRow label="Manifest state" value={manifest.status === "ready" && !topologyMatches ? "stale identity" : manifest.status} />
         <FieldRow label="Visualization state" value={visualization.status} />
         <FieldRow
           label="Visible override"

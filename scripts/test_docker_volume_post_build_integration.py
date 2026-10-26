@@ -252,6 +252,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
 
         import docker_dev
         import fullmag_docker_runtime as runtime
+        import docker_volume_cancelled_activation_guard as cancelled_guard
 
         with ExitStack() as stack:
             patches = [
@@ -259,6 +260,9 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
             ]
             import docker_volume_dev as dev
             patches.extend([
+                # These retained-start cases have no cancelled-activation
+                # recovery record; the optional control-volume read is absent.
+                mock.patch.object(cancelled_guard, "_read_control_bytes", return_value=None),
                 mock.patch.object(docker_dev, "_select_source", return_value=(source, {
                     "runtime_root": str(source), "storage_root": str(source),
                 })),

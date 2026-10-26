@@ -71,6 +71,8 @@ function expectPendingAcceptedRuntimeCommand(
   commandId: string,
 ): void {
   expect(result).toEqual({
+    clientIntentId: expect.stringMatching(/^study:[a-z_]+:\d+:/),
+    clientIntentKind: expect.any(String),
     commandId,
     message,
     observation: "waiting",

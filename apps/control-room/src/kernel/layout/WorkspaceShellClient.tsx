@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import {
   SimulationStartupOverlayView,
@@ -94,7 +94,13 @@ export function WorkspaceShellClient() {
 
   // The overlay is a visit, not a mode: starting or opening something, or the
   // workspace going away, ends it so it cannot reappear on top of the next one.
+  // A session confirmed while none was is not a visit ending: a /home address
+  // may have opened Home while the page's session was still loading.
+  const shownScopeKey = useRef<string | null>(null);
   useEffect(() => {
+    const previous = shownScopeKey.current;
+    shownScopeKey.current = sessionScopeKey;
+    if (previous === null && sessionScopeKey !== null) return;
     homeView.close();
   }, [sessionScopeKey, startOwnsPage]);
 
