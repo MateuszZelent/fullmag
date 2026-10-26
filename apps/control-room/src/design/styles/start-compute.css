@@ -273,11 +273,8 @@
   min-width: 0;
 }
 
-.fm-start-node-summary__head > div {
-  min-width: 0;
-}
-
 .fm-start-node-summary__head h3 {
+  min-width: 0;
   margin: 0;
   color: var(--fm-text-primary);
   font-size: var(--fm-font-size-xs);
@@ -285,11 +282,13 @@
   overflow-wrap: anywhere;
 }
 
-.fm-start-node-summary__head p {
-  margin: var(--fm-space-1) 0 0;
+/* Own full-width row: the status pill must not squeeze the host ID. */
+.fm-start-node-summary__host {
+  display: flex;
+  min-width: 0;
+  margin: 0;
   color: var(--fm-start-meta);
   font-size: var(--fm-font-size-2xs);
-  overflow-wrap: anywhere;
 }
 
 .fm-start-node-summary__metrics {

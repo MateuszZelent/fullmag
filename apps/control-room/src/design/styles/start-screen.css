@@ -306,6 +306,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--fm-space-1);
+  min-width: 0;
   max-width: 100%;
   vertical-align: middle;
 }
@@ -323,9 +324,9 @@
 
 .fm-start-copyable-id__action {
   flex: none;
+  width: var(--fm-control-height-compact);
   height: var(--fm-control-height-compact);
-  padding-inline: var(--fm-space-2);
-  white-space: nowrap;
+  min-width: var(--fm-control-height-compact);
 }
 
 /* ── Content column ───────────────────────────────────────────────────── */

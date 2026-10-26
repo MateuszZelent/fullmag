@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, RotateCcw } from "lucide-react";
 import { useState } from "react";
 
 import { copyTextToClipboard } from "@/shared/browser/copyTextToClipboard";
@@ -40,13 +40,12 @@ export function CopyableIdentifier({
         aria-label={status === "copied" ? `Copied full ${label}` : `Copy full ${label}`}
         className="fm-start-copyable-id__action"
         onClick={() => void copy()}
-        size="sm"
-        title={value}
+        size="icon"
+        title={status === "failed" ? `Could not copy ${label}; retry` : value}
         type="button"
         variant="ghost"
       >
-        {status === "copied" ? <Check aria-hidden="true" size={14} /> : <Copy aria-hidden="true" size={14} />}
-        {status === "copied" ? "Copied" : status === "failed" ? "Retry" : "Copy"}
+        {status === "copied" ? <Check aria-hidden="true" size={14} /> : status === "failed" ? <RotateCcw aria-hidden="true" size={14} /> : <Copy aria-hidden="true" size={14} />}
       </Button>
       <span aria-live="polite" className="fm-start-visually-hidden">
         {status === "copied" ? `${label} copied` : status === "failed" ? `Could not copy ${label}` : ""}
