@@ -562,7 +562,7 @@ describe("frequencyDomainChartModels", () => {
       "analysis.frequency-domain:eigen:dispersion:acoustic",
       "analysis.frequency-domain:eigen:dispersion:optical",
     ]);
-    expect(model.series[1]?.points).toEqual([
+    expect(model.series[1]?.points).toMatchObject([
       { rowIndex: 1, x: 3.14e7, y: 2.4 },
     ]);
   });
@@ -606,7 +606,7 @@ describe("frequencyDomainChartModels", () => {
         pathS: 78539816.33974482,
       }),
     );
-    expect(model.series[0]?.points).toEqual([
+    expect(model.series[0]?.points).toMatchObject([
       { rowIndex: 0, x: 78539816.33974482, y: 1.2 },
     ]);
   });
@@ -671,7 +671,7 @@ describe("frequencyDomainChartModels", () => {
       "analysis.frequency-domain:eigen:dispersion:acoustic",
       "analysis.frequency-domain:eigen:dispersion:acoustic:analytic",
     ]);
-    expect(model.series[1]?.points).toEqual([
+    expect(model.series[1]?.points).toMatchObject([
       { rowIndex: 0, x: 25000000, y: 1.4 },
     ]);
   });
@@ -688,7 +688,7 @@ describe("frequencyDomainChartModels", () => {
     );
 
     expect(model.points.map((point) => point.sampleLabel)).toEqual(["G", "X"]);
-    expect(model.series[0]?.points).toEqual([
+    expect(model.series[0]?.points).toMatchObject([
       { label: "G", rowIndex: 0, x: 0, y: 1.2 },
       { label: "X", rowIndex: 1, x: 78539816.33974482, y: 1.4 },
     ]);
@@ -961,7 +961,7 @@ describe("frequencyDomainChartModels", () => {
     expect(model.series.map((series) => series.label)).toEqual([
       "Branch acoustic",
     ]);
-    expect(model.series[0]?.points).toEqual([
+    expect(model.series[0]?.points).toMatchObject([
       { rowIndex: 0, x: 0, y: 1.2 },
       { rowIndex: 1, x: 3.14e7, y: 1.4 },
     ]);
@@ -1103,6 +1103,21 @@ describe("frequencyDomainChartModels", () => {
       equilibriumId: "equilibrium-current",
       representation: "complex-vector-xyz",
       kContextKind: "k_path",
+      wavevectorKf: [-2e7, 1e7, 0],
+    });
+    expect(model.series[0]?.points[0]).toMatchObject({
+      branchId: null,
+      frequencyHz: 1.2e9,
+      itemId: "sample-0004-mode-0007",
+      modeFieldAvailable: false,
+      modeFieldId: null,
+      modeFieldResourceKey: null,
+      modeId: "sample-0004-mode-0007",
+      pathS: 2.5e7,
+      rawModeIndex: 7,
+      rowIndex: 0,
+      sampleId: "k-path-sample-0004",
+      sampleIndex: 4,
       wavevectorKf: [-2e7, 1e7, 0],
     });
   });

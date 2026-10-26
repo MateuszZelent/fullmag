@@ -1,6 +1,7 @@
 import { finiteModalScalar } from "./modalDampingObservables";
 import { fieldVectorResourceKey as canonicalFieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
+import type { DispersionChartPointMetadata } from "./chartSeries";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -348,7 +349,7 @@ export function frequencyResponseSeriesUnit(
   return model.series.find((series) => series.quantity === quantity)?.unit ?? NOT_PUBLISHED_UNIT;
 }
 
-export interface FrequencyDomainChartPoint {
+export interface FrequencyDomainChartPoint extends DispersionChartPointMetadata {
   breakBefore?: boolean;
   label?: string | null;
   linewidthHz?: number | null;
@@ -358,6 +359,7 @@ export interface FrequencyDomainChartPoint {
 }
 
 export interface FrequencyDomainChartSeries {
+  hasCompleteWavevectorKf?: boolean;
   id: string;
   kind?: "line" | "scatter";
   label: string;
@@ -1117,6 +1119,8 @@ export function buildEigenDispersionChartModel(
     const dispersionSeriesKind: NonNullable<FrequencyDomainChartSeries["kind"]> =
       branchId === "raw" ? "scatter" : "line";
     const numericalSeries = {
+      hasCompleteWavevectorKf: branchPoints.length > 0 &&
+        branchPoints.every(({ point }) => point.wavevectorKf?.every(Number.isFinite) === true),
       id: `analysis.frequency-domain:eigen:dispersion:${branchId}`,
       kind: dispersionSeriesKind,
       label: branchLabel,
@@ -1128,6 +1132,7 @@ export function buildEigenDispersionChartModel(
             : {}),
           ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
           ...(point.linewidthHz != null ? { linewidthHz: point.linewidthHz } : {}),
+          ...dispersionChartPointMetadata(point),
           rowIndex,
           x: point.pathS,
           y: point.frequencyHz / frequencyScale.divisor,
@@ -1149,6 +1154,7 @@ export function buildEigenDispersionChartModel(
           ? { breakBefore: true }
           : {}),
         ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
+        ...dispersionChartPointMetadata(point),
         rowIndex,
         x: point.pathS,
         y: point.analyticFrequencyHz! / frequencyScale.divisor,
@@ -1158,6 +1164,8 @@ export function buildEigenDispersionChartModel(
     return [
       numericalSeries,
       {
+        hasCompleteWavevectorKf: analyticBranchPoints.length > 0 &&
+          analyticBranchPoints.every(({ point }) => point.wavevectorKf?.every(Number.isFinite) === true),
         id: `analysis.frequency-domain:eigen:dispersion:${branchId}:analytic`,
         kind: dispersionSeriesKind,
         label: `${branchLabel} analytic`,
@@ -1176,6 +1184,31 @@ export function buildEigenDispersionChartModel(
     droppedPointCount: parsed.droppedPointCount,
     points,
     series,
+  };
+}
+
+function dispersionChartPointMetadata(
+  point: EigenDispersionPoint,
+): DispersionChartPointMetadata {
+  return {
+    analyticFrequencyHz: point.analyticFrequencyHz,
+    branchId: point.branchId,
+    frequencyHz: point.frequencyHz,
+    itemId: point.modeId ?? null,
+    modeFieldAvailable: point.modeFieldAvailable,
+    modeFieldId: point.modeFieldId,
+    modeFieldResourceKey: point.modeFieldResourceKey,
+    modeId: point.modeId ?? null,
+    overlap: point.overlap,
+    pathS: point.pathS,
+    rawModeIndex: point.rawModeIndex,
+    relativeError: point.relativeError,
+    residualNorm: point.residualNorm,
+    sampleId: point.sampleId ?? null,
+    sampleIndex: point.sampleIndex,
+    sampleLabel: point.sampleLabel ?? null,
+    validationGeometry: point.validationGeometry,
+    wavevectorKf: point.wavevectorKf ?? null,
   };
 }
 

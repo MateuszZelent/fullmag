@@ -350,7 +350,7 @@ describe("frequencyDomainSeriesAdapter", () => {
         unit: "MHz",
       }),
     );
-    expect(model.series[0]?.points).toEqual([
+    expect(model.series[0]?.points).toMatchObject([
       { rowIndex: 0, x: 78539816.33974482, y: 250 },
     ]);
   });

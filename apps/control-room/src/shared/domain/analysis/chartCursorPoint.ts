@@ -1,4 +1,6 @@
-interface AnalysisChartPoint {
+import type { DispersionChartPointMetadata } from "./chartSeries";
+
+interface AnalysisChartPoint extends DispersionChartPointMetadata {
   label?: string | null;
   linewidthHz?: number | null;
   rowIndex: number;
