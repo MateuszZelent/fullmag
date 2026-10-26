@@ -329,6 +329,27 @@ tę kwarantannę: pozostaje zablokowana do wycofania grupy przez jej właścicie
 w cyklu sprzątania worktree (**NOT VERIFIED** jako trasa odzyskania). Nie usuwaj
 ręcznie `active`, markera ani lease.
 
+Przekroczenie 30-sekundowego limitu helpera Pythona podczas ładowania skryptu
+(proces helpera zabity i zebrany) API zwraca teraz również jako HTTP 422
+`validation_error`. Aktywację, która przed tą zmianą zapisała nieznany wynik z
+dokładnie tym HTTP 500 (`Python helper exceeded the 30 second deadline`),
+zwalnia trasa:
+
+```bash
+just docker-dev-release-unknown-activation "<checkout>" <activation-attempt>
+just docker-dev-recreate-volume <attempt> <config-sha256> "<checkout>" <port> true
+```
+
+Pierwsze polecenie wymaga zatrzymanego backendu (`Exited (0)`, bez OOM, ten sam
+kontener, który zapisał wynik, zatrzymany po jego zapisie), drzewa procesów
+`drained` z tego uruchomienia, pustego magazynu zaakceptowanych runów i
+działającego oryginalnego helpera lease. Zapisuje dowód
+`pre-mutation-release-proof.json` i terminal `failed-confirmed`
+(`activation_state: not-admitted`); marker aktywacji pozostaje `started`.
+Nie ponawia skryptu i nie zmienia danych sesji. Inny błąd, uruchomiony backend
+lub zaakceptowany run pozostawiają kwarantannę. Trasa na żywej grupie:
+**NOT VERIFIED**.
+
 Każde jawne wywołanie otrzymuje nowy domyślny `request_id` w postaci
 `docker-volume-<uuid>`, zapisany w receipcie przed wysłaniem żądania. Dzięki temu
 ten sam plik może posłużyć do kolejnej symulacji. Jawny `request_id` pozostaje

@@ -49,6 +49,11 @@ docker-dev-codegen source_root="":
 docker-dev-stop-failed source_root container_id image_id process_receipt_sha256:
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_stop_failed.py" --source-root {{quote(source_root)}} --container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}}
 
+# Release one unknown activation whose recorded HTTP 500 precedes any API mutation,
+# after the backend stopped gracefully with an empty accepted-run store. Never retries the script.
+docker-dev-release-unknown-activation source_root activation:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_release_unknown_activation.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --activation {{quote(activation)}}
+
 # Stop one rejected startup before any RunIntent or host reservation was admitted.
 # Every identity and proof is explicit; the helper never retries the script or clears state.
 docker-dev-stop-unadmitted attempt config_sha256 source_root backend_container_id frontend_container_id image_id failure_marker_sha256 process_receipt_sha256 source_sha256 request_id session_id:
