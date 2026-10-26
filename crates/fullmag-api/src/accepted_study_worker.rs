@@ -2203,7 +2203,10 @@ pub(crate) fn materialize_resolved_study_inputs(
         if port.data_kind == StudyPortDataKind::Artifact
             && port.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
         {
-            if !matches!(&execution_plan.backend_plan, BackendPlanIR::FemEigen(_))
+            if !matches!(
+                &execution_plan.backend_plan,
+                fullmag_ir::BackendPlanIR::FemEigen(_)
+            )
                 || artifact.data_kind != "artifact"
                 || artifact.codec_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
                 || artifact.codec_version != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION
