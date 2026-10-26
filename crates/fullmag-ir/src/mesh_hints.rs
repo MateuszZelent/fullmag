@@ -1738,7 +1738,11 @@ pub struct MeshIR {
     pub periodic_boundary_pairs: Vec<MeshPeriodicBoundaryPairIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub periodic_node_pairs: Vec<MeshPeriodicNodePairIR>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "crate::ordered_map::serialize"
+    )]
     pub per_domain_quality: HashMap<u32, MeshQualityIR>,
 }
 
@@ -5151,6 +5155,46 @@ mod mesh_validation_tests {
                 "JSON value execution plan must deserialize through the tagged backend plan",
             );
         assert_eq!(from_value, expected);
+    }
+
+    #[test]
+    fn execution_plan_metadata_bytes_survive_independent_map_reconstruction() {
+        let mut expected = execution_plan_with_domain_quality(false);
+        let crate::BackendPlanIR::Fem(fem) = &mut expected.backend_plan else {
+            unreachable!();
+        };
+        for marker in 2..16 {
+            fem.mesh
+                .per_domain_quality
+                .insert(marker, mesh_quality_fixture(marker + 1));
+        }
+        let targets = (0..16)
+            .rev()
+            .map(|i| {
+                (
+                    format!("object-{i:02}"),
+                    serde_json::json!({"marker": i, "maximum_element_size": 1e-8}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        fem.mesh_build_report = Some(
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "effective_per_object_targets": targets,
+            }))
+            .expect("multi-object report"),
+        );
+        let bytes = serde_json::to_vec(&expected).unwrap();
+        let encoded = std::str::from_utf8(&bytes).unwrap();
+        assert!(encoded.contains("\"per_domain_quality\":{\"0\":"));
+        assert!(encoded.contains("\"effective_per_object_targets\":{\"object-00\":"));
+        // Each deserialize constructs fresh randomly seeded HashMaps. Exact
+        // certificate preimages must retain the same bytes across processes.
+        for _ in 0..32 {
+            let decoded: crate::ExecutionPlanIR = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(decoded, expected);
+            assert_eq!(serde_json::to_vec(&decoded).unwrap(), bytes);
+        }
     }
 
     #[test]

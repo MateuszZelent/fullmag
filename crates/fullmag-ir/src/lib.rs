@@ -48,6 +48,7 @@ pub(crate) mod waveguide_mesh_bindings;
 pub(crate) mod waveguide_mesh_dirichlet;
 pub(crate) mod waveguide_mesh_world;
 pub(crate) mod waveguide_mesh_identity;
+mod ordered_map;
 mod floating_point_guard;
 mod validation;
 pub use antenna::*;

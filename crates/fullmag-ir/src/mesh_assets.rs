@@ -2207,7 +2207,11 @@ pub struct FemSharedDomainBuildReportIR {
         skip_serializing_if = "Option::is_none"
     )]
     pub effective_airbox_hmax: Option<f64>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "crate::ordered_map::serialize"
+    )]
     pub effective_per_object_targets: HashMap<String, FemPerObjectTargetIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_markers: Vec<FemDomainRegionMarkerIR>,
