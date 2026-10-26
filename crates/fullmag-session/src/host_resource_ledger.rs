@@ -34,6 +34,9 @@ use crate::types::{
 };
 use crate::writer::Writer;
 
+mod failed_worker_exit;
+pub use failed_worker_exit::FailedWorkerExitReconciliation;
+
 pub mod worker_orphan_teardown;
 pub use worker_orphan_teardown::*;
 
@@ -7614,6 +7617,7 @@ fn validate_worker_orphan_release_proof_identity(
 
 #[cfg(test)]
 mod tests {
+    include!("host_resource_ledger/failed_worker_exit_tests.rs");
     use super::*;
 
     const GPU_A: &str = "GPU-00000000-0000-4000-8000-000000000001";
