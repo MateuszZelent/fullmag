@@ -1,0 +1,148 @@
+# Audyt: od uruchomienia Fullmaga do solvera i trwałych wyników
+
+Data: 26.10.2026. Stan po poleceniu użytkownika: zatrzymać dalszą implementację,
+najpierw przygotować audyt i plan refaktoryzacji. Ten dokument jest bieżącą
+oceną blokad wykonania; wcześniejsze checkpointy zachowują znaczenie historyczne.
+
+## Werdykt
+
+**Obecny run nie uruchomił solvera. Najpilniejszy problem dotyczy cyklu życia
+runtime, rezerwacji i pochodzenia programu odzyskania, a nie wykazanej awarii
+samego operatora nonzero-k.** API pokazuje `waiting_for_compute`, 0 kroków,
+`disconnected`, `commandability=forbidden`.
+
+Zbudowanie pakietu i zielone testy źródłowe nie doprowadziły jeszcze do
+prawidłowo opublikowanego wyniku Eigen. Rozbudowa mechanizmów odzyskania przed
+sprawdzeniem całego kontraktu start→solve→save zwiększyła zakres i opóźniła
+pierwszy wynik. Należy teraz realizować ograniczone etapy z dowodami końcowymi.
+
+Plan wykonania: [8 zadań refaktoryzacji i odbioru](../superpowers/plans/2026-10-26-eigensolve-runtime-to-results-refactor.md).
+Źródła, fragmenty z liniami, hashe i piny prób: [evidence JSON](2026-10-26-eigensolve-runtime-to-results-audit.evidence.json).
+
+## Tożsamość i zamrożenie
+
+| Warstwa | Potwierdzony stan |
+|---|---|
+| Worktree | `/home/kkingstoun/git/fullmag/worktrees/eigensolve-integration-ui-20261026` |
+| Branch | `codex/eigensolve-integration-ui-20261026` |
+| Zapisany i wypchnięty HEAD | `a6dcd4db3c21c1ec458c09b83958df04bd7124e2` |
+| PR | [#262](https://github.com/MateuszZelent/fullmag/pull/262), draft; bez merge |
+| Działający runtime | commit `2f99894c54bc6745bc9353634dd06487a106cc51`, snapshot `dd4c5627c95ef8415256d3c1fdcaf81c706e3f83a9c7a924cf56b8a09070473f` |
+| Ostatni pakiet maintenance | HEAD `a6dcd4db3…`, snapshot `be753e4d9209e2ef476e27649db42aee2f5b069e9ccb2ac3403e1e82b2b69a29`; build sukces, native preview odmowa |
+| Lokalny WIP | 9 zmienionych plików; nieobjęte zielonym CI HEAD i niegotowe do buildu |
+| Nowe punkty częstotliwości / rzeczywisty mod obecnego runu | Brak / NOT VERIFIED |
+
+Przerwano implementację subagenta. Zachowano kopię 9 plików i binarny patch
+w `eigensolve-refactor-audit-freeze` pod katalogiem wizualizacji tego wątku;
+pełna ścieżka i hashe są w JSON. Niczego nie cofnięto, nie usunięto ani nie
+podmieniono w ledgerze. Nie rozpoczęto nowego builda lub Solve po zmianie zakresu.
+
+**Ważne:** WIP deklaruje `mod failed_worker_maintenance`, lecz pliku modułu ani
+jego `mod.rs` nie ma. To przerwana implementacja, nie gotowa poprawka. Nie wolno
+przedstawiać jej jako stanu zielonego brancha albo wdrażać z live checkoutu.
+
+## Co naprawdę wykonano
+
+1. Dodano accepted preparation i dispatch modalny, typowany Relax→Eigen handoff,
+   codec wyników i kontrolę właściciela. Ich obecność ma dowód źródłowy/CI,
+   nie nowy pozytywny dowód pełnego wykonania.
+2. Historyczna próba obecnej integracji rzeczywiście wykonała Relax: completed,
+   converged, 3 kroki. Publikacja została odrzucona przez niedeterministyczną
+   serializację planu; deterministyczny zapis map naprawiono w `2f99894c…`.
+3. W `6337f200…` naprawiono sprzężenie błędu publikacji z cleanup oraz wykrywanie
+   nadal aktywnego lease po terminalnym Failed. Poprawki nie działają w starym
+   uruchomionym runtime.
+4. W `7658c1d2…` dodano wąski protokół exact failed exit → normalny release proof.
+   W `a6dcd4db…` dodano zarządzany wrapper. CI HEAD przeszło bootstrap, kontrakty
+   eigensolve, UI i odbiorników dyspersji. To nie dotyczy późniejszego WIP.
+5. Rzeczywisty preview wrappera przeszedł. Pakiet maintenance zbudowano w tej
+   samej grupie i backendzie. Natywny preview odmówił na granicy storage/provenance;
+   `--apply` nie uruchomiono. Późniejszy odczyt potwierdził te same surowe hashe
+   katalogu, lease i exit receipt; 14 artefaktów zachowane, proof nadal nie istnieje.
+6. Harness UI istnieje i wymaga rzeczywistego zespolonego pola oraz WebGL.
+   Pozytywnego odbioru tego pola jeszcze nie przeprowadzono.
+
+Historyczne raporty starszych branchy obejmują wykonane punkty dyspersji.
+Nie zastępują wyniku dla aktualnego SHA/runtime. Przygotowana obecnie krzywa
+analityczna pozostaje REFERENCE ONLY, bez nowych punktów FEM tego runu.
+
+## Mapa ścieżki i miejsca przerwania
+
+`Python DSL → accepted RunIntent → preparation → Relax → certyfikat CAS →
+Eigen → modal generation/CAS → portable SolutionSet → API data plane → UI`.
+
+Obecny run zatrzymał się przed preparation/compute. Osobna historyczna próba
+zaszła do Relax i zachowanych artefaktów, lecz jej cleanup pozostawił Active
+lease + Quarantined host reservation. Z tego powodu normalny diagnostic stop
+odmawia. Nowy maintenance candidate nie jest równoważny aktywnemu runtime
+w delegacji storage, więc prawidłowo odmawia również normalne store identity.
+
+## Ustalenia według priorytetu
+
+| ID | Priorytet i charakter | Ustalenie / skutek | Dowód | Stan i dalsze działanie |
+|---|---|---|---|---|
+| A01 | P0, spójność źródeł | Niedokończony moduł maintenance jest zadeklarowany, ale nie istnieje. Bieżący WIP nie stanowi budowalnego punktu wyjścia. | E11, missing_module w JSON | Wstrzymane. Zadanie 2 ma wybrać i przywrócić spójny zakres, zachowując kopię WIP. |
+| A02 | P0, kontrakt wykonania | Nowy executable maintenance nie przechodzi delegacji storage starego canonical runtime. Build nie sprawdza tego kontraktu. | E05–E06; rzeczywista odmowa `compiled source commit differs from runtime provenance` | Potwierdzone. Potrzebny jawny, ograniczony kontrakt; bez spoofingu, env bypassu i podmiany provenance. |
+| A03 | P1, cleanup | Failed bez SolutionSet ponownie walidował nieudaną publikację, blokując drogę do release. Terminalny status bywał mylony z zamknięciem lease. | E01–E03; commit `6337f200…`; historyczny Active/Quarantined | Źródłowo naprawione i CI PASS; niewdrożone w aktualnym runtime. Zadanie 3 musi potwierdzić normalny proof. |
+| A04 | P1, start runtime | Admission odrzucił sample aktywnego compute-node ownera. Komunikat obejmuje kilka warunków i nie ustala, który zawiódł w chwili admission. | E09; stderr zachowanej próby | Objaw potwierdzony, przyczyna NOT VERIFIED. Nie wolno twierdzić, że na pewno chodzi tylko o wiek próbki. Zadanie 4. |
+| A05 | P1, dług architektoniczny | Wrapper ma 1661 linii, łączy odczyt kontekstu, build, source capture, walidację pakietu, wznowienie i embedded scripts. Silne mockowanie ukryło problemy ujawnione dopiero w realnym preview. | E12–E16; poprawki limitu control, aliasu WSL i short/full container ID | Refaktoryzacja wokół jednego modelu operacji, z reużyciem kanonicznych helperów. Nie dodawać kolejnego niezależnego launchera. |
+| A06 | P2, obserwowalność i replay | Część source/build działa przed blokiem utrwalania wyniku błędu. Błąd tej fazy może nie mieć kompletnego własnego terminal receipt. Natywny preview został konserwatywnie zapisany jako outcome-unknown. | E12, E15; prepare receipt w JSON | Potrzebny jawny state machine, faza błędu i rozróżnienie niewywołanej mutacji od nieznanego wyniku apply. Nie nadpisywać historycznego receiptu. |
+| A07 | P1, brak odbioru E2E | Certyfikat Relax→Eigen i modal bundle mają implementację, ale aktualny run nie przeszedł ścieżki do zaakceptowanego widma/pola. | E17–E20; stan runu | Luka weryfikacji, nie dowiedziony nowy błąd fizyczny. Zadania 5–6. |
+| A08 | P1, trwałość i UI | Nie wykazano odczytu zapisanych danych po restarcie ani rzeczywistego pola w UI dla tego runu. HTTP 200 i testy fixture nie dowodzą widocznego modu. | E18, E21; brak accepted frequency/mode | Zadanie 7: zapis, odczyt bez Solve i pozytywny browser proof. |
+| A09 | P2, integracja | Remote HEAD i lokalny WIP mają różny zakres. Zielone CI HEAD nie kwalifikuje WIP. Public documentation ma osobną porażkę CI. | Git status; CI w JSON | Nie scalać ani nie opisywać całego worktree jako zweryfikowanego. Oddzielić commit dokumentacji i późniejsze poprawki. |
+| A10 | P1, metodologia odbioru | Kilka lub 15 punktów i zgodna krzywa nie dowodzą kompletności okna, dowolnych materiałów/geometrii, GPU lub pełnej zbieżności. | Audyt worktrees/master; istniejące deklaracje selected_only i NOT VERIFIED | Utrzymywać wąski zakres. Zadanie 8 daje dowód sweepa, dalsze bramki naukowe pozostają jawne. |
+
+### Poprawione błędy, których nie należy naprawiać drugi raz
+
+- Deterministyczny zapis metadanych planu: `2f99894c…`.
+- Cleanup Failed/no SolutionSet i settled lookup po konkretnym exit receipt:
+  `6337f200…`.
+- Budżet odczytu control: limit pozostaje 8 MiB, nie 16 MiB. Poprawiono klienta.
+- Mount WSL: zaakceptowany tylko po dowodzie tożsamości inode, nie po podobnym prefiksie.
+- Container ID: porównywane pełne inspected Id, nie skrót z `docker ps`.
+- Candidate execution: inventory i rzeczywiste bajty oraz otwarty descriptor,
+  zamiast samego deklarowanego SHA w receipt.
+- Replay sukcesu: dokładny run/task/receipt/iteration, zamiast samego UUID.
+
+Ostatnie pięć pozycji jest zapisane w HEAD `a6dcd4db…`; dalsze rozszerzenie
+cross-build admission jest nieukończonym WIP. Usunięcie tych kontroli w celu
+szybszego uruchomienia nie jest naprawą.
+
+### Odrzucona hipoteza z review
+
+Nie potwierdzono, że `SessionStore::open_existing` sam wymaga compiled-runtime
+provenance i dlatego potrzebuje nowego konstruktora. Prześledzona ścieżka to
+`SessionStore::open_existing` → `CasStore::existing`: kontrola katalogów i CAS,
+bez tej weryfikacji (E07–E08). Błąd pochodzenia występuje w kontrakcie
+`HostResourceLedger::store_id` → `linux_native_store_identity` →
+`validate_development_runtime_identity` (E05–E06).
+
+Plan nie dodaje alternatywnego opener-a na podstawie niepotwierdzonego review.
+Kolejność guardów i brak mutacji przed admission nadal wymagają kontroli, ale
+są innym pytaniem niż przyczyna zaobserwowanego błędu.
+
+## Ocena dotychczasowego sposobu pracy
+
+- Rozwiązywano kolejne lokalne odmowy bez uprzedniego zamknięcia modelu całego
+  cyklu odzyskania. Cross-build storage admission należało sprawdzić przed
+  wielominutową kompilacją kandydata.
+- Dokumenty narastały jako checkpointy. Brakowało jednego bieżącego rejestru:
+  wymagany wynik → dokładny dowód → blokada → następny ograniczony krok.
+- Testy fixture i source gates nie wystarczały do oceny gotowości startu.
+  Potrzebne są scenariusze awarii całego protokołu i jeden rzeczywisty run.
+- Błędy operacyjne, naukowe i UI mieszały się w raportowaniu postępu.
+  Obecny blocker jest operacyjny; fizyka nie została ponownie zmierzona.
+
+## Granice audytu
+
+Audyt obejmuje lifecycle, provenance/storage, cleanup, typed handoff,
+publikację i odbiór danych/UI. Nie jest nowym pełnym review matematyki całego
+FEM ani certyfikacją CPU/GPU. Nie uruchamiano nowych obliczeń ani testów
+kompilowanych. Wykorzystano istniejące wyniki CI i lekkich testów.
+Parametry pilota w przykładzie są jawnymi danymi benchmarku, nie dowodem
+hardkodowania odpowiedzi w solverze. Nie obniżono tolerancji, nie wygenerowano
+fikcyjnej częstotliwości ani pola.
+
+Automatyczna kontrola uprawnień odrzuciła wcześniej dodatkowe rozszerzenie
+na skanowanie wszystkich lease'ów tasku. Nie wdrożono go. Plan pozostaje przy
+konkretnym autorytatywnym process-exit receipt i dokładnym fence zasobów.

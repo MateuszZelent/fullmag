@@ -1,0 +1,339 @@
+{
+  "schema": "fullmag.eigensolve-runtime-refactor-audit.v1",
+  "recorded_at_utc": "2026-10-26T20:05:06.826827+00:00",
+  "worktree": "/home/kkingstoun/git/fullmag/worktrees/eigensolve-integration-ui-20261026",
+  "branch": "codex/eigensolve-integration-ui-20261026",
+  "head": "a6dcd4db3c21c1ec458c09b83958df04bd7124e2",
+  "scope": "read-only code and existing runtime evidence; no new Solve or ledger mutation",
+  "frozen_wip_manifest": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/eigensolve-refactor-audit-freeze/manifest.json",
+  "frozen_wip": [
+    {
+      "path": "crates/fullmag-api/src/runtime_service_failed_worker_exit.rs",
+      "bytes": 12519,
+      "sha256": "661db94a2200aff807c7160ddbe850468fd1ff7444675ebcd87a83a12d10730e"
+    },
+    {
+      "path": "crates/fullmag-session/src/docker_desktop_storage.rs",
+      "bytes": 65025,
+      "sha256": "e6d8c812d6dbe1047513e4db0afa7300824e5ca285b50beb4c49fc075750d3a1"
+    },
+    {
+      "path": "crates/fullmag-session/src/host_resource_ledger.rs",
+      "bytes": 509797,
+      "sha256": "b317175c84fccda51d99615b7b8b15abcbb6c41c9b5d4715157e82355f6e0667"
+    },
+    {
+      "path": "crates/fullmag-session/src/host_resource_ledger/failed_worker_exit.rs",
+      "bytes": 9348,
+      "sha256": "32d74c0ae9d2cfa490fed7705e5618518c7c24624dc0678a194c04340b822654"
+    },
+    {
+      "path": "crates/fullmag-session/src/lib.rs",
+      "bytes": 3356,
+      "sha256": "a4db5970b3525c8eba32155d8e690ee899265e4e26ca9c05271d957eb39d1f46"
+    },
+    {
+      "path": "docs/guides/docker-volume-development.md",
+      "bytes": 39481,
+      "sha256": "3ce1e3b44969c7e29d3b1b342ac0e60262b27fc31e85b272b5d44784d812c47a"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-26-eigensolve-runtime-recovery-decision.md",
+      "bytes": 12542,
+      "sha256": "5b56763b8b0156b65add1fd29c8fad2e6c05ec5d85023524085afd1305ada6c0"
+    },
+    {
+      "path": "scripts/docker_volume_failed_worker_reconciliation.py",
+      "bytes": 72033,
+      "sha256": "da0ec5f1f22df52df51abc9f2d01d46b26d3c0a4901c15f6c387c1e2847b91f6"
+    },
+    {
+      "path": "scripts/test_docker_volume_failed_worker_reconciliation.py",
+      "bytes": 23086,
+      "sha256": "8c0cb6de2f8f2951bd5e6e37220a18e2c1c0b7675fae865fb9129cde7c7f8901"
+    }
+  ],
+  "status_before_document_creation": " M crates/fullmag-api/src/runtime_service_failed_worker_exit.rs\n M crates/fullmag-session/src/docker_desktop_storage.rs\n M crates/fullmag-session/src/host_resource_ledger.rs\n M crates/fullmag-session/src/host_resource_ledger/failed_worker_exit.rs\n M crates/fullmag-session/src/lib.rs\n M docs/guides/docker-volume-development.md\n M docs/superpowers/plans/2026-10-26-eigensolve-runtime-recovery-decision.md\n M scripts/docker_volume_failed_worker_reconciliation.py\n M scripts/test_docker_volume_failed_worker_reconciliation.py\n",
+  "source_evidence": [
+    {
+      "id": "E01",
+      "path": "crates/fullmag-runtime-control/src/solution_set.rs",
+      "line": 51,
+      "file_sha256": "c8ed730480011b1b5e97f9723b2882f1eb98dec1efc459f6a57a9d8adb6ffd30",
+      "excerpt_start_line": 49,
+      "excerpt_end_line": 57,
+      "excerpt": "/// This is called after releasing the run-catalog writer transaction, so a\n/// crash after journal/catalog publication is repaired by normal replay.\npub(crate) fn reconcile_study_solution(\n    store: &SessionStore,\n    claim: &TaskClaim,\n    task: &fullmag_application::TaskRecord,\n) -> Result<()> {\n    let Some((execution_status, assessment)) = terminal_solution_state(task)? else {\n        return Ok(());"
+    },
+    {
+      "id": "E02",
+      "path": "crates/fullmag-runtime-control/src/solution_set.rs",
+      "line": 99,
+      "file_sha256": "c8ed730480011b1b5e97f9723b2882f1eb98dec1efc459f6a57a9d8adb6ffd30",
+      "excerpt_start_line": 97,
+      "excerpt_end_line": 105,
+      "excerpt": "    // only close a portable solution that was actually published beforehand.\n    // Successful completion still requires the complete publication barrier.\n    if execution_status != SolutionExecutionStatus::Succeeded\n        && store\n            .solution_sets()\n            .read(&solution_set_id_for_claim(claim))?\n            .is_none()\n    {\n        return Ok(());"
+    },
+    {
+      "id": "E03",
+      "path": "crates/fullmag-api/src/accepted_scheduler_main.rs",
+      "line": 1155,
+      "file_sha256": "7df24bf12666b95b9f22774670c7a242318a34fd1647cab2c2ddd4f73d30e377",
+      "excerpt_start_line": 1153,
+      "excerpt_end_line": 1161,
+      "excerpt": "/// Whether a task reached a durable outcome and holds no resource lease: a\n/// terminal lifecycle, or queued again by a durable retry decision.\nfn task_outcome_settled(store: &SessionStore, run_id: &RunId, task_id: &str) -> Result<bool> {\n    let Some(catalog) = retry_store_writer_busy(|| store.read_run_catalog(run_id.as_str()))?\n    else {\n        return Ok(false);\n    };\n    let Some(task) = catalog.tasks.iter().find(|task| task.task_id == task_id) else {\n        return Ok(false);"
+    },
+    {
+      "id": "E04",
+      "path": "crates/fullmag-session/src/host_resource_ledger/failed_worker_exit.rs",
+      "line": 8,
+      "file_sha256": "32d74c0ae9d2cfa490fed7705e5618518c7c24624dc0678a194c04340b822654",
+      "excerpt_start_line": 6,
+      "excerpt_end_line": 14,
+      "excerpt": "#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]\n#[serde(deny_unknown_fields)]\npub struct FailedWorkerExitReconciliation {\n    pub expected_catalog_revision: u64,\n    pub expected_task: FmsTaskCatalogEntry,\n    pub expected_lease: FmsResourceLease,\n    pub expected_receipt: FmsWorkerProcessExitReceipt,\n    pub expected_reservation: HostResourceReservation,\n}"
+    },
+    {
+      "id": "E05",
+      "path": "crates/fullmag-session/src/host_resource_ledger.rs",
+      "line": 2837,
+      "file_sha256": "b317175c84fccda51d99615b7b8b15abcbb6c41c9b5d4715157e82355f6e0667",
+      "excerpt_start_line": 2835,
+      "excerpt_end_line": 2843,
+      "excerpt": "    /// Linux native Docker uses its separately validated engine/owner/relative\n    /// scope, with mount identity retained as current admission evidence.\n    pub fn store_id(store_root: &Path) -> Result<String> {\n        if !store_root.is_absolute() {\n            bail!(\"store root must be an explicit absolute path\");\n        }\n        if std::env::var(\"FULLMAG_SESSION_STORAGE_PROFILE\").ok().as_deref()\n            == Some(\"windows-folder-v1\")\n        {"
+    },
+    {
+      "id": "E06",
+      "path": "crates/fullmag-session/src/docker_desktop_storage.rs",
+      "line": 677,
+      "file_sha256": "e6d8c812d6dbe1047513e4db0afa7300824e5ca285b50beb4c49fc075750d3a1",
+      "excerpt_start_line": 675,
+      "excerpt_end_line": 683,
+      "excerpt": "    }\n    if required_json_string(&provenance, \"commit\", \"runtime provenance\")? != expected_commit {\n        bail!(\"compiled source commit differs from runtime provenance\");\n    }\n    if required_json_string(&provenance, \"package_root\", \"runtime provenance\")?\n        != DEVELOPMENT_PACKAGE_ROOT\n        || required_json_string(&provenance, \"backend_build_receipt\", \"runtime provenance\")?\n            != DEVELOPMENT_RECEIPT_PATH\n    {"
+    },
+    {
+      "id": "E07",
+      "path": "crates/fullmag-session/src/store.rs",
+      "line": 216,
+      "file_sha256": "a53bc6fd58f17d7f7a47a4422ebbcca996208f2af46b24029b92199b9f4f47f1",
+      "excerpt_start_line": 214,
+      "excerpt_end_line": 222,
+      "excerpt": "    /// Open without creating repository directories or files. Mutations still\n    /// require the same writer lease; useful for inspection and GC previews.\n    pub fn open_existing(root: impl Into<PathBuf>) -> Result<Self> {\n        let root = root.into();\n        reject_link(&root)?;\n        let root = fs::canonicalize(root)?;\n        let writer = Writer::new(root.clone());\n        let cas = CasStore::existing(checked_path(&root, \"objects\")?, writer.clone())?;\n        let solution_sets = SolutionSetCatalog::with_existing_writer(root.clone(), writer.clone());"
+    },
+    {
+      "id": "E08",
+      "path": "crates/fullmag-session/src/cas.rs",
+      "line": 58,
+      "file_sha256": "e8b04c5b8bc63cbdc3618a5f706192696c44a3d1c2b521c2fe00a7b8d27814e2",
+      "excerpt_start_line": 56,
+      "excerpt_end_line": 64,
+      "excerpt": "    }\n\n    pub(crate) fn existing(root: PathBuf, writer: Arc<Writer>) -> Result<Self> {\n        reject_link(&root)?;\n        if !checked_path(&root, \"sha256\")?.is_dir() {\n            anyhow::bail!(\"CAS is not initialized\");\n        }\n        Ok(Self { root, writer })\n    }"
+    },
+    {
+      "id": "E09",
+      "path": "crates/fullmag-session/src/host_resource_ledger.rs",
+      "line": 3084,
+      "file_sha256": "b317175c84fccda51d99615b7b8b15abcbb6c41c9b5d4715157e82355f6e0667",
+      "excerpt_start_line": 3082,
+      "excerpt_end_line": 3090,
+      "excerpt": "            || !snapshot.is_current_at(chrono::Utc::now())?\n        {\n            bail!(\"host admission requires a current sample for the active compute-node owner\");\n        }\n        Ok(())\n    }\n\n    /// Reconcile any pinned placement against current inventory facts. A\n    /// configured CPU mask or GPU UUID is not enough by itself: unavailable"
+    },
+    {
+      "id": "E10",
+      "path": "crates/fullmag-api/src/runtime_service_failed_worker_exit.rs",
+      "line": 131,
+      "file_sha256": "661db94a2200aff807c7160ddbe850468fd1ff7444675ebcd87a83a12d10730e",
+      "excerpt_start_line": 129,
+      "excerpt_end_line": 137,
+      "excerpt": "}\n\npub(super) fn reconcile(args: impl Iterator<Item = OsString>) -> Result<()> {\n    let (config_path, request_path, apply, candidate) = parse_args(args)?;\n    let request_raw = super::read_stable_absolute_operational_file(&request_path, MAX_BYTES)?;\n    let request: Request = serde_json::from_slice(&request_raw)?;\n    request.validate()?;\n    let config_raw = super::read_stable_absolute_operational_file(&config_path, 65536)?;\n    if fullmag_session::hex_sha256(&config_raw) != request.config_sha256 {"
+    },
+    {
+      "id": "E11",
+      "path": "crates/fullmag-session/src/docker_desktop_storage.rs",
+      "line": 26,
+      "file_sha256": "e6d8c812d6dbe1047513e4db0afa7300824e5ca285b50beb4c49fc075750d3a1",
+      "excerpt_start_line": 24,
+      "excerpt_end_line": 32,
+      "excerpt": "use uuid::Uuid;\n\nmod failed_worker_maintenance;\npub use failed_worker_maintenance::FailedWorkerMaintenanceStorageAdmission;\n\nconst HOST_ATTESTATION_PATH: &str = \"/run/fullmag/windows-folder-host.json\";\nconst CONTAINER_ROOT: &str = \"/state\";\nconst GRANT_NAME: &str = \".fullmag-windows-folder-grant.json\";\nconst DEVELOPMENT_PACKAGE_ROOT: &str = \"/opt/fullmag/package\";"
+    },
+    {
+      "id": "E12",
+      "path": "scripts/docker_volume_failed_worker_reconciliation.py",
+      "line": 1077,
+      "file_sha256": "da0ec5f1f22df52df51abc9f2d01d46b26d3c0a4901c15f6c387c1e2847b91f6",
+      "excerpt_start_line": 1075,
+      "excerpt_end_line": 1083,
+      "excerpt": "\n\ndef run(args: argparse.Namespace) -> dict[str, object]:\n    \"\"\"Preview, prepare, or apply one exact reconciliation under the parent lease.\"\"\"\n\n    _validate_args(args)\n    try:\n        context = _load_context(args)\n    except ReconciliationError:"
+    },
+    {
+      "id": "E13",
+      "path": "scripts/docker_volume_failed_worker_reconciliation.py",
+      "line": 1103,
+      "file_sha256": "da0ec5f1f22df52df51abc9f2d01d46b26d3c0a4901c15f6c387c1e2847b91f6",
+      "excerpt_start_line": 1101,
+      "excerpt_end_line": 1109,
+      "excerpt": "        control, operation_root, request_id\n    )\n    if existing is not None and existing.get(\"state\") == \"succeeded\":\n        if (\n            stored_request_raw is None\n            or existing.get(\"request_sha256\") != _sha256(stored_request_raw)\n            or existing.get(\"compose_project\") != control.project\n            or existing.get(\"control_volume\") != control.volume\n            or existing.get(\"development_attempt\") != args.attempt"
+    },
+    {
+      "id": "E14",
+      "path": "scripts/docker_volume_failed_worker_reconciliation.py",
+      "line": 1423,
+      "file_sha256": "da0ec5f1f22df52df51abc9f2d01d46b26d3c0a4901c15f6c387c1e2847b91f6",
+      "excerpt_start_line": 1421,
+      "excerpt_end_line": 1429,
+      "excerpt": "\n\nVALIDATE_AND_EXEC_CANDIDATE_SCRIPT = r'''\nimport hashlib\nimport os\nfrom pathlib import Path\nimport stat\nimport sys\n"
+    },
+    {
+      "id": "E15",
+      "path": "scripts/docker_volume_failed_worker_reconciliation.py",
+      "line": 1237,
+      "file_sha256": "da0ec5f1f22df52df51abc9f2d01d46b26d3c0a4901c15f6c387c1e2847b91f6",
+      "excerpt_start_line": 1235,
+      "excerpt_end_line": 1243,
+      "excerpt": "    native_stdout = b\"\"\n    native_stderr = b\"\"\n    native_started = False\n    try:\n        _recheck_context(args, context)\n        native_started = True\n        native_stdout, native_stderr = _invoke_native(\n            context[\"backend_id\"],\n            package,"
+    },
+    {
+      "id": "E16",
+      "path": "scripts/docker_dev_codegen.py",
+      "line": 536,
+      "file_sha256": "81ecfbb3c7324455e69623da1122f9e4b0b700361a939d917fcd624587fb4575",
+      "excerpt_start_line": 534,
+      "excerpt_end_line": 542,
+      "excerpt": "\n\ndef _running_service(\n    project: str,\n    service: str,\n    identity: Mapping[str, str],\n    selected: Path,\n    control_namespace: str | None = None,\n) -> tuple[str, dict[str, Any]]:"
+    },
+    {
+      "id": "E17",
+      "path": "crates/fullmag-api/src/accepted_modal_study_worker.rs",
+      "line": 32,
+      "file_sha256": "961a5a562114bd205fe119ef4af4a66896ba2544b1b9a50008a155b41db1f726",
+      "excerpt_start_line": 30,
+      "excerpt_end_line": 38,
+      "excerpt": "    Ok(())\n}\npub(crate) fn prepare(\n    store: &SessionStore,\n    accepted: &AcceptedStudySnapshot,\n    step: &AcceptedWorkerStep,\n    study_step: &fullmag_authoring::StudyStep,\n    case_id: &str,\n) -> Result<PreparedModalExecution> {"
+    },
+    {
+      "id": "E18",
+      "path": "crates/fullmag-api/src/accepted_modal_study_worker.rs",
+      "line": 148,
+      "file_sha256": "961a5a562114bd205fe119ef4af4a66896ba2544b1b9a50008a155b41db1f726",
+      "excerpt_start_line": 146,
+      "excerpt_end_line": 154,
+      "excerpt": "}\n\npub(crate) fn collect_bundle(\n    root: &Path,\n    run_id: &str,\n    stage_id: &str,\n    maximum: usize,\n) -> Result<Vec<u8>> {\n    let capture = fullmag_session::frequency_domain_artifact_generation::capture(root)?"
+    },
+    {
+      "id": "E19",
+      "path": "crates/fullmag-api/src/accepted_relax_equilibrium.rs",
+      "line": 95,
+      "file_sha256": "5c8131f546ba9bdd2b24639170a753f14a9fcd9a3963cb5d7d1994a4d507387e",
+      "excerpt_start_line": 93,
+      "excerpt_end_line": 101,
+      "excerpt": "    };\n    let bytes = fullmag_application::encode_fem_equilibrium_handoff(&bundle, maximum)?;\n    fullmag_runtime_control::study_equilibrium::validate_handoff_bytes(\n        &bytes,\n        maximum,\n        step.claim.run_id.as_str(),\n        &step.step_id,\n        &step.resolved_input.preparation,\n    )"
+    },
+    {
+      "id": "E20",
+      "path": "crates/fullmag-runtime-control/src/study_equilibrium.rs",
+      "line": 43,
+      "file_sha256": "e0fbc3a302907275fc1a3696ca56e0679870712edf7369db02b7404836ae2484",
+      "excerpt_start_line": 41,
+      "excerpt_end_line": 49,
+      "excerpt": "\n/// Publication/completion rebind the bundle to the exact producing task receipt.\npub fn validate_handoff_publication(\n    bytes: &[u8],\n    store: &fullmag_session::SessionStore,\n    accepted: &crate::AcceptedStudySnapshot,\n    claim: &fullmag_application::TaskClaim,\n    step: &fullmag_authoring::StudyStep,\n) -> Result<fullmag_runner::ReplayedFemRelaxation> {"
+    },
+    {
+      "id": "E21",
+      "path": "scripts/verify_eigen_mode_ui.mjs",
+      "line": 227,
+      "file_sha256": "f761c5bde4f122c1ee70a623a8a38aee7f0e0f5a0dee6d1a003320d3d9143ef3",
+      "excerpt_start_line": 225,
+      "excerpt_end_line": 233,
+      "excerpt": "}\n\nconst MODE_FIELD_CONTROLLER_MARK = \"viewport-3d.mode-field-overlay.resource-state\";\nconst MODE_FIELD_RESPONSE_HEADERS = [\n  \"content-type\",\n  \"x-fullmag-artifact-generation-id\",\n  \"x-fullmag-component\",\n  \"x-fullmag-domain-generation-id\",\n  \"x-fullmag-encoding\","
+    },
+    {
+      "id": "E22",
+      "path": "examples/fem_eigen_mode_ui_de_k10.py",
+      "line": 45,
+      "file_sha256": "c9b001912673ac257ddcdc396da17e618d57eb952924d1d38be64eca1bd6ec41",
+      "excerpt_start_line": 43,
+      "excerpt_end_line": 51,
+      "excerpt": "study.stages.add_relax(stage_id=\"relax\", algorithm=\"llg_overdamped\",\n                       dt=5e-15, relax_alpha=0.5, max_steps=50000, tolA=1.0)\nstudy.stages.add_eigenmodes(\n    stage_id=\"eigenmodes\", count=1, target=\"nearest\", target_frequency=11.2e9,\n    operator=\"full_2x2\", include_demag=True,\n    solver_rtol=1e-8, solver_max_outer_iterations=2000,\n    equilibrium_source=\"relax\", normalization=\"unit_l2\", damping_policy=\"ignore\",\n    k_vector=(0.0, 10e6, 0.0),\n    bc=fm.FloquetBC([\"x_faces\", \"y_faces\"],"
+    },
+    {
+      "id": "E23",
+      "path": "examples/fem_eigen_mode_ui_de_signed15.py",
+      "line": 19,
+      "file_sha256": "2da4e6364b9d270ba293ea540313348afcd10be6a20dfb62cc08d041ee7ed1d5",
+      "excerpt_start_line": 17,
+      "excerpt_end_line": 25,
+      "excerpt": "import fullmag as fm\n\nK_RAD_PER_UM = (-25, -20, -15, -10, -7, -5, -2, 0, 2, 5, 7, 10, 15, 20, 25)\nRAD_PER_UM_TO_RAD_PER_M = 1.0e6\nK_Y_RAD_PER_M = tuple(k_y * RAD_PER_UM_TO_RAD_PER_M for k_y in K_RAD_PER_UM)\nK_VECTORS = tuple((0.0, k_y, 0.0) for k_y in K_Y_RAD_PER_M)\nFREQUENCY_MIN_HZ = 8.5e9\nFREQUENCY_MAX_HZ = 16.0e9\n"
+    }
+  ],
+  "missing_module": {
+    "declaration": "crates/fullmag-session/src/docker_desktop_storage.rs",
+    "candidates": {
+      "crates/fullmag-session/src/docker_desktop_storage/failed_worker_maintenance.rs": false,
+      "crates/fullmag-session/src/docker_desktop_storage/failed_worker_maintenance/mod.rs": false
+    }
+  },
+  "runtime": {
+    "url": "http://127.0.0.1:3217",
+    "compose_project": "fullmag-worktree-eigensolve-integration-ui-202610-78b341212cbdaa7d",
+    "backend_id": "524176bffabaf67a95884eb1280e167befe78065051d5e8727f441499613be62",
+    "runtime_commit": "2f99894c54bc6745bc9353634dd06487a106cc51",
+    "runtime_snapshot": "dd4c5627c95ef8415256d3c1fdcaf81c706e3f83a9c7a924cf56b8a09070473f",
+    "solver_state": "waiting_for_compute",
+    "solver_steps": 0,
+    "connectivity": "disconnected",
+    "commandability": "forbidden",
+    "current_run": "run-live-dc3488974c0dc80d00bf30e3b00d5695408dab5be1422a459875f007c46dcef5",
+    "historical_failed_run": "run-live-1847f2c8e4d2f2fe177065a6a4488f3ca4eaf2e006a6db27a2e849508fb2163d",
+    "historical_task_lifecycle": "failed",
+    "historical_lease_state": "active",
+    "historical_host_reservation": "quarantined",
+    "historical_artifact_count": 14,
+    "historical_release_proof": null,
+    "catalog_sha256": "90a7c1fc71aba6ef5129136862276da6c52866af1bf477cfeb59821c4211dd7d",
+    "lease_sha256": "69b451a0c7f5eeb2cc33b21f96e3165df7e6ea18b25557d8ac2d1d40fc7269cc",
+    "exit_receipt_sha256": "f7355de5cac22bead6a834698c59523a4974a65e2b3c5b69b262de91505ad546"
+  },
+  "maintenance_attempt": {
+    "operation_id": "a744cb36-c8a0-4ca6-bb30-e1b0c50e32bc",
+    "candidate_commit": "a6dcd4db3c21c1ec458c09b83958df04bd7124e2",
+    "candidate_snapshot": "be753e4d9209e2ef476e27649db42aee2f5b069e9ccb2ac3403e1e82b2b69a29",
+    "candidate_receipt_sha256": "5303fc0297e71504d06887301be8b350818b490f9fa383e94fef635738b2fce1",
+    "candidate_build": "succeeded",
+    "native_preview": "rejected",
+    "error": "compiled source commit differs from runtime provenance",
+    "prepare_receipt_state": "outcome-unknown-resources-retained",
+    "apply_executed": false,
+    "durable_pins_unchanged_after_preview": true
+  },
+  "ci": [
+    {
+      "id": 40388077731,
+      "name": "bootstrap",
+      "conclusion": "success",
+      "source": "a6dcd4db3c21c1ec458c09b83958df04bd7124e2"
+    },
+    {
+      "id": 40388077670,
+      "name": "eigensolve-method-contracts",
+      "conclusion": "success",
+      "source": "a6dcd4db3c21c1ec458c09b83958df04bd7124e2"
+    },
+    {
+      "id": 40388077971,
+      "name": "dispersion-artifact-consumers",
+      "conclusion": "success",
+      "source": "a6dcd4db3c21c1ec458c09b83958df04bd7124e2"
+    },
+    {
+      "id": 40388077549,
+      "name": "eigensolve-ui-method-contracts",
+      "conclusion": "success",
+      "source": "a6dcd4db3c21c1ec458c09b83958df04bd7124e2"
+    },
+    {
+      "id": 40388077888,
+      "name": "Public documentation",
+      "conclusion": "failure",
+      "source": "a6dcd4db3c21c1ec458c09b83958df04bd7124e2"
+    }
+  ],
+  "verification_limit": "CI and candidate apply only to committed head, not incomplete local cross-build admission WIP"
+}
