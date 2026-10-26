@@ -94,6 +94,8 @@ artifacts/
 !crates/fullmag-runner/src/eigen/artifacts/
 !crates/fullmag-runner/src/eigen/artifacts/*.rs
 *.zarr/
+# Private per-run simulation scratch; never source code.
+.fullmag-tmp/
 # data/
 tmp/
 coverage/
