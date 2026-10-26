@@ -1,7 +1,7 @@
 # Plan refaktoryzacji: uruchomienie eigensolve i trwały zapis danych
 
 Data: 26.10.2026. Audyt i plan zapisano przed wznowieniem celu. Obecny etap:
-**zadanie 6/8 — StepOutput CI PASS; wznowienie Eigen blokuje zmiana inventory owner (A13)**.
+**zadanie 6/8 — A13 runtime PASS; worker Eigen wystartował i zakończył się exit 1; A14 ucina przyczynę błędu**.
 
 Źródło stanu: [audyt wykonania](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.md)
 i [evidence JSON](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.evidence.json).
@@ -477,3 +477,18 @@ Bieżący krok: **6.1a**, review i GitHub CI ponownej walidacji StepOutput.
 Nie ponawiać aktywacji: istniejący run ma udany Relax i przydzielony Eigen bez
 uruchomionego workera. Najpierw sprawdzić zarządzaną ścieżkę wznowienia tego
 admission i zachować jego niezmienne wejścia; nie edytować lease ani receiptów.
+
+
+### Checkpoint 27.10 — wznowienie działa, diagnostyka wymaga poprawki
+
+A13 zamknięto dowodem runtime: ten sam pending admission uruchomił worker,
+po exit 1 nastąpił normalny local/host release, a owner pozostał Ready.
+Bootstrap CI `40415076292` PASS. Szczegóły i niezmienne receipty w audycie A14.
+Zadanie 6 pozostaje otwarte: nie opublikowano częstotliwości ani modu.
+
+- [x] Wznowić oczekujący task po restarcie inventory owner bez nowego Solve.
+- [x] Potwierdzić natywną ścieżkę Floqueta, terminal i normalne zwolnienie zasobów.
+- [ ] A14: wdrożyć poprawkę zachowania początku jawnego błędu workera i uzyskać
+  rzeczywistą przyczynę odmowy; nie obniżać progów ani zgadywać przyczyny.
+- [ ] Odtworzyć historyczny model L2/3 dla ±10, następnie signed15 i refinementy.
+- [ ] Zweryfikować trwałe mody w UI i nowy wykres z analityką.

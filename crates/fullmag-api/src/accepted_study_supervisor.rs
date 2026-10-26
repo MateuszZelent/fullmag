@@ -2314,20 +2314,20 @@ fn worker_failure_reason(outcome: &ObservedWorkerProcess) -> String {
     // Startup and native solver diagnostics precede the actual failure. Keep
     // the worker's explicit error chain (or the stderr tail), not just a
     // successful initialization banner when the bounded receipt is written.
-    let failure = stderr
-        .rsplit_once("accepted worker failed:")
-        .map(|(_, failure)| failure)
-        .unwrap_or(stderr.as_ref());
-    let normalized = failure.split_whitespace().collect::<Vec<_>>().join(" ");
+    let marker = "accepted worker failed:";
+    let report = stderr.rfind(marker).map(|index| &stderr[index..]);
+    let normalized = report
+        .unwrap_or(stderr.as_ref())
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     let detail = if normalized.is_empty() {
         "no worker error output".to_string()
     } else {
-        // Prefer the worker's own error report; diagnostic progress lines
-        // printed around it must not hide the failure. Otherwise keep the tail.
-        let marker = "accepted worker failed:";
-        let report = normalized.rfind(marker).map(|index| &normalized[index..]);
-        let chars = report.unwrap_or(&normalized).chars().collect::<Vec<_>>();
+        let chars = normalized.chars().collect::<Vec<_>>();
         if report.is_some() {
+            // Preserve the error chain before potentially large native JSON
+            // diagnostics. Do not strip the marker and then search for it again.
             chars.iter().take(1024).collect()
         } else {
             let start = chars.len().saturating_sub(512);
@@ -2535,9 +2535,35 @@ mod tests {
         };
         let reason = worker_failure_reason(&outcome);
         assert!(
-            reason.starts_with("accepted worker process failed: accepted worker failed: execute accepted worker Start"),
+            reason.starts_with("accepted worker process failed (exit status: 1): accepted worker failed: execute accepted worker Start"),
             "{reason}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_failure_reason_preserves_cause_before_large_native_diagnostics() {
+        use std::os::unix::process::ExitStatusExt;
+        let stderr = format!(
+            "accepted worker failed: earlier report\naccepted worker failed: execute accepted worker Start: native Floquet rejected: actual cause; diagnostics={{\"provenance\":\"{}\"}}",
+            "ą".repeat(4096),
+        );
+        let outcome = ObservedWorkerProcess {
+            output: Output {
+                status: ExitStatus::from_raw(256),
+                stdout: Vec::new(),
+                stderr: stderr.into_bytes(),
+            },
+            timed_out: false,
+            stop_requested: false,
+            process_id: 7,
+            process_start_token: None,
+            control_failure_reason: None,
+        };
+        let reason = worker_failure_reason(&outcome);
+        assert!(reason.contains("native Floquet rejected: actual cause"), "{reason}");
+        assert!(!reason.contains("earlier report"));
+        assert!(reason.chars().count() < 1100);
     }
 
     fn temporary_store(name: &str) -> (PathBuf, SessionStore) {

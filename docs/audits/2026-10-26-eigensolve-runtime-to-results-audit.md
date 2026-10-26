@@ -255,3 +255,46 @@ tampered proof, monotoniczny owner, brak admission, watermark, consumed/closed,
 nieaktualne zasoby oraz przerwanie publikacji. Niezależne powtórne review nie
 wykazało dalszego błędu w tym zakresie. Syntax/rustfmt nowego modułu i diff
 check PASS; testy kompilowane i runtime nadal wymagają CI oraz nowego buildu.
+
+
+## Aktualizacja 27.10: A13 zweryfikowane w runtime; A14 ucina przyczynę błędu
+
+- Commit `eca1bb24d923a21820fec592fb0d4fdbeb82d1a6`: cały bootstrap CI
+  [40415076292](https://github.com/MateuszZelent/fullmag/actions/runs/40415076292) PASS,
+  w tym pełna sesja, regresje pending inventory oraz integracja host admission.
+- Managed stop `3acf8039dfc148c291e520b67ce0d0c3` zachował rezerwacje.
+  Development `3305c687a5e941ce835afc29b695b7d6` zakończył się sukcesem;
+  backend `f14ddb0a2f54`, config `ad6f840f36fee9a1f30f8595c993e3a665bf8135ada991533b5a45f9bad8221d`.
+  Runtime ma commit `eca1bb24d923a21820fec592fb0d4fdbeb82d1a6` i snapshot
+  `455b7ebbb4606be4d57b3bee1e3a1161d701b200e09fd1b91104e191cb69ab3f`.
+- Ten sam Eigen task/attempt uruchomił worker PID 3502. Rewalidacja epoch 2→6
+  ma niezmienny dowód `4f4ad208fac54fdea3d85f3de2c10451b7a0268f073fe86b76420832b92347af`.
+  Worker wykonał Start i dotarł do natywnej diagnostyki
+  `floquet_sparse_shared_domain_assembly`; zakończył się exit 1.
+- Catalog revision 31: Relax Succeeded, Eigen Failed. Local lease i host
+  reservation Released, launch token Consumed. Normalny release proof
+  `abd69149777883b191232cc500999777d342f7e5d4e9b7531d0670f0e576a225`.
+  Runtime owner nadal Ready. Nie powtórzono Solve ani Relax.
+- [Dokładne receipty i hashe](2026-10-27-eigensolve-resumed-terminal.evidence.json).
+
+### A14 — błąd utrwalania przyczyny awarii workera (wysoki priorytet)
+
+`worker_failure_reason` najpierw usuwał marker `accepted worker failed:` przez
+`rsplit_once`, a następnie szukał tego samego markera w pozostałym tekście.
+W rezultacie zawsze wybierał końcówkę 512 znaków zamiast początku jawnego
+raportu błędu. W tym runie receipt zawiera wyłącznie koniec JSON provenance;
+przyczyna natywnej odmowy nie jest możliwa do ustalenia z tego skrótu.
+Nie klasyfikujemy jej jako błędu fizyki, tolerancji ani solvera bez dowodu.
+
+Poprawka wybiera ostatni marker raz i zachowuje pierwsze 1024 znaki raportu,
+łącznie z łańcuchem przyczyn. Bez markera pozostaje dotychczasowa końcówka;
+status zakończenia nadal wskazuje exit code/sygnał. Dodano regresję długiej
+natywnej diagnostyki z Unicode i wcześniejszym markerem; istniejący test
+przypadku szumu po błędzie otrzymał aktualny prefix zawierający exit status.
+CI jawnie uruchamia oba testy `worker_failure_reason` dla accepted scheduler.
+Lokalna reprodukcja algorytmu potwierdza utratę przyczyny przed poprawką;
+nie zastępuje testów Rust. Runtime poprawki A14: **NOT VERIFIED**.
+
+Dalszy krok: CI i wdrożenie A14, następnie jawne nowe obliczenie po potwierdzonym
+terminalu i release. Oryginalne próby pozostają bez zmian. Odtworzenie L2/3
+oraz wizualizacja rzeczywistych modów i nowego wykresu nadal są otwarte.

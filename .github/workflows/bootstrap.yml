@@ -367,6 +367,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::reaped_child_receipt_survives_unacknowledged_final_heartbeat -- --exact
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_supervisor::tests::host_bound_pre_spawn_retries_writer_busy_without_re_admission -- --exact
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler scheduler_writer_busy_tests
+          cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler worker_failure_reason
           cargo test -p fullmag-runtime-control --lib worker_inbox::tests
           cargo test -p fullmag-runtime-control --lib study::dependency_tests
           cargo test -p fullmag-session --lib pending_inventory_recovery
