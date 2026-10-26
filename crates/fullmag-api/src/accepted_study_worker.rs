@@ -37,18 +37,22 @@ const WORKER_EXECUTION_RECEIPT_SCHEMA: &str = "fullmag.accepted_worker_execution
 // projector reads that sidecar for a `Running` task and turns it into the
 // ordinary current-live resource revisions. The sidecar is not a durable
 // output: it is not CAS-pinned, never replaces the final accepted state, and is
-// removed when the solver returns. Transfer cost is bounded twice: the runner
-// copies magnetization from the device only every
-// `ACCEPTED_LIVE_FIELD_EVERY_N` steps, and the worker writes at most one
-// scalar header per `ACCEPTED_LIVE_SCALAR_MIN_INTERVAL` and one magnetization
-// payload per `ACCEPTED_LIVE_FIELD_MIN_INTERVAL`.
+// removed when the solver returns. The runner owns the field cadence: it
+// copies magnetization (device-to-host on GPU) and evaluates the observation
+// catalog only for steps admitted by `ACCEPTED_LIVE_FIELD_EVERY_N` and at most
+// once per `ACCEPTED_LIVE_FIELD_MIN_INTERVAL` of wall time, and republishes
+// the last accepted step when its loop ends. The worker writes every payload
+// it receives and at most one scalar-only header per
+// `ACCEPTED_LIVE_SCALAR_MIN_INTERVAL`.
 pub(crate) const ACCEPTED_LIVE_OBSERVATION_FILE: &str = "live_observation.v1.json";
 pub(crate) const ACCEPTED_LIVE_OBSERVATION_SCHEMA: &str = "fullmag.accepted_live_observation.v1";
 const ACCEPTED_LIVE_MAGNETIZATION_PREFIX: &str = "live_observation_m.";
 const ACCEPTED_LIVE_MAGNETIZATION_SUFFIX: &str = ".f64le";
 pub(crate) const ACCEPTED_LIVE_FIELD_EVERY_N: u64 = 1;
 const ACCEPTED_LIVE_SCALAR_MIN_INTERVAL: Duration = Duration::from_millis(500);
-const ACCEPTED_LIVE_FIELD_MIN_INTERVAL: Duration = Duration::ZERO;
+/// Half the projector's 500 ms poll period, so each poll sees a payload at
+/// most one interval old while the solver stops paying for unread captures.
+const ACCEPTED_LIVE_FIELD_MIN_INTERVAL: Duration = Duration::from_millis(250);
 pub(crate) const ACCEPTED_OBSERVABLE_CAPTURE_FILE: &str = "accepted_observables_capture.v1.json";
 const ACCEPTED_LIVE_MAX_FIELD_BYTES: u64 = 128 * 1024 * 1024;
 /// Upper bound for one live magnetization payload (2^21 samples = 48 MiB).
@@ -143,7 +147,6 @@ pub(crate) struct AcceptedLiveObservationWriter {
     sequence: u64,
     magnetization_sequence: u64,
     last_scalar_write: Option<Instant>,
-    last_field_write: Option<Instant>,
     current_magnetization: Option<AcceptedLiveMagnetizationRef>,
     recent_clock: std::collections::VecDeque<(u64, f64, f64)>,
     reported_failure: bool,
@@ -193,7 +196,6 @@ impl AcceptedLiveObservationWriter {
             sequence: 0,
             magnetization_sequence: 0,
             last_scalar_write: None,
-            last_field_write: None,
             current_magnetization: None,
             recent_clock: std::collections::VecDeque::new(),
             reported_failure: false,
@@ -203,10 +205,18 @@ impl AcceptedLiveObservationWriter {
         }
     }
 
-    /// Avoid requesting costly device-to-host snapshots when the bounded
-    /// observation writer cannot publish this plan's magnetization domain.
+    /// Runner cadence for live field payloads. Avoids costly device-to-host
+    /// snapshots when the bounded observation writer cannot publish this
+    /// plan's magnetization domain, and caps captures by wall time otherwise.
     /// Scalar headers remain enabled independently of this cadence.
-    pub(crate) fn field_sampling_interval(&self) -> u64 {
+    pub(crate) fn field_cadence(&self) -> fullmag_runner::LiveFieldCadence {
+        fullmag_runner::LiveFieldCadence::new(
+            self.field_sampling_interval(),
+            ACCEPTED_LIVE_FIELD_MIN_INTERVAL,
+        )
+    }
+
+    fn field_sampling_interval(&self) -> u64 {
         let publishable = self.magnetization_domain.as_ref().is_some_and(|domain| {
             domain.sample_count > 0
                 && domain.sample_count <= ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES
@@ -252,10 +262,9 @@ impl AcceptedLiveObservationWriter {
             self.recent_clock.pop_front();
         }
         let now = Instant::now();
-        let field_due = update.magnetization.is_some()
-            && self
-                .last_field_write
-                .is_none_or(|last| now.duration_since(last) >= ACCEPTED_LIVE_FIELD_MIN_INTERVAL);
+        // The runner already applied the field cadence; a payload that
+        // reaches the worker is the newest admitted accepted state.
+        let field_due = update.magnetization.is_some();
         let scalar_due = self
             .last_scalar_write
             .is_none_or(|last| now.duration_since(last) >= ACCEPTED_LIVE_SCALAR_MIN_INTERVAL);
@@ -282,9 +291,6 @@ impl AcceptedLiveObservationWriter {
             return;
         }
         self.last_scalar_write = Some(now);
-        if staged_magnetization.is_some() {
-            self.last_field_write = Some(now);
-        }
         if let Some(previous) = previous_magnetization {
             // Best effort: the header no longer references this payload.
             let _ = fs::remove_file(self.attempt_output_dir.join(previous.file_name));
@@ -2613,7 +2619,7 @@ fn execute_accepted_worker_start_with_snapshot(
             &execution_plan,
             format!("fdm_{}", request.device),
         );
-        let field_sampling_interval = live_observation.field_sampling_interval();
+        let field_cadence = live_observation.field_cadence();
         let runner_result =
         fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
             &problem,
@@ -2622,7 +2628,7 @@ fn execute_accepted_worker_start_with_snapshot(
             until_seconds,
             &attempt_output_dir,
             storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
-            field_sampling_interval,
+            field_cadence,
             &display_selection,
             interrupt_requested,
             false,

@@ -143,7 +143,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    live: Option<(&[u32; 3], crate::LiveFieldCadence, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     execute_reference_fdm_multilayer_with_checkpoint(
@@ -160,7 +160,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], crate::LiveFieldCadence, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
     checkpoint: Option<serde_json::Value>,
 ) -> Result<ExecutedRun, RunError> {
@@ -471,19 +471,19 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
                 &mut artifacts,
             )?;
 
-            if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
-                let magnetization = crate::types::fdm_multilayer_live_field_due(
-                    latest_stats.step,
-                    *field_every_n,
-                )
-                .then(|| flatten_vectors(&observables.magnetization));
+            if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
+                let magnetization = field_cadence
+                    .multilayer_field_due(latest_stats.step)
+                    .then(|| flatten_vectors(&observables.magnetization));
                 let magnetization_carrier = magnetization.as_ref().and_then(|_| {
                     crate::types::fdm_multilayer_live_magnetization_carrier(
                         *layout,
                         &latest_stats,
                     )
                 });
-                let cached_preview_fields = if magnetization.is_some() && *field_every_n == 1 {
+                let cached_preview_fields = if magnetization.is_some()
+                    && field_cadence.publishes_full_catalog()
+                {
                     match live_fields_from_observables(plan, &contexts, &states, &observables, &latest_stats) {
                         Ok(fields) => {
                             latest_stats.field_materialization_states = fields.iter().map(|field| crate::types::LiveFieldMaterializationStatus {
@@ -535,6 +535,22 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
             }
 
             if cancelled || paused {
+                // The native-layer terminal payload below runs only on
+                // completion; republish a step the wall-clock gate skipped.
+                if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
+                    if field_cadence.take_deferred_step().is_some() {
+                        let _ = on_step(crate::live_field_cadence::deferred_magnetization_update(
+                            &latest_stats,
+                            [grid[0], grid[1], grid[2]],
+                            None,
+                            flatten_vectors(&observables.magnetization),
+                            crate::types::fdm_multilayer_live_magnetization_carrier(
+                                *layout,
+                                &latest_stats,
+                            ),
+                        ));
+                    }
+                }
                 break;
             }
 
@@ -686,7 +702,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
     // physical carrier). Publish the final native payload explicitly as a
     // multilayer field; the API then slices it using the artifact layout.
     if !paused && !cancelled {
-        if let Some((grid, _field_every_n, layout, on_step)) = live.as_mut() {
+        if let Some((grid, _field_cadence, layout, on_step)) = live.as_mut() {
             let quantities = crate::quantities::field_materialization_quantity_ids();
             let quantities = active_fdm_multilayer_preview_quantities(plan, &quantities);
             let terminal_magnetization = flatten_vectors(&final_observables.magnetization);

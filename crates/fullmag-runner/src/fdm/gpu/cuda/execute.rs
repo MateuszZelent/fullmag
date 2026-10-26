@@ -1045,8 +1045,7 @@ pub(crate) fn execute_cuda_fdm(
                 );
             }
             if let Some(live) = live.as_mut() {
-                let heavy_payload_every = live.field_every_n.max(1);
-                let heavy_payload_due = stats.step % heavy_payload_every == 0;
+                let heavy_payload_due = live.field_cadence.heavy_payload_due(stats.step);
                 if heavy_payload_due && !due_scalar_row {
                     if magnetization_cache.is_none() {
                         magnetization_cache = Some(backend.copy_m(cell_count)?);
@@ -1138,7 +1137,8 @@ pub(crate) fn execute_cuda_fdm(
                     } else {
                         (None, None)
                     };
-                let full_fields_due = heavy_payload_due && live.field_every_n == 1;
+                let full_fields_due =
+                    heavy_payload_due && live.field_cadence.publishes_full_catalog();
                 let cached_preview_fields = if full_fields_due {
                     let capture_started = Instant::now();
                     match capture_full_active_cuda_fields(

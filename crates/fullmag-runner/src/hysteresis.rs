@@ -2656,7 +2656,7 @@ fn execute_settle_step_at_field(
             let grid = [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]];
             let live = LiveStepConsumer {
                 grid,
-                field_every_n,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(field_every_n),
                 initial_snapshot,
                 display_selection: live_display_selection,
                 interrupt_requested,
@@ -2711,7 +2711,7 @@ fn execute_settle_step_at_field(
             let grid = [mutated_fem.initial_magnetization.len() as u32, 1, 1];
             let live = LiveStepConsumer {
                 grid,
-                field_every_n,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(field_every_n),
                 initial_snapshot,
                 display_selection: live_display_selection,
                 interrupt_requested,

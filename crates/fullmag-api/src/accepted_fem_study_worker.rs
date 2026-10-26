@@ -144,7 +144,7 @@ pub(crate) fn execute_accepted_fem_attempt(
         &prepared.execution_plan,
         format!("fem_{}", prepared.resolved_device),
     );
-    let field_sampling_interval = live_observation.field_sampling_interval();
+    let field_cadence = live_observation.field_cadence();
     let runner_result = fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
         &prepared.problem,
         &prepared.execution_plan,
@@ -152,7 +152,7 @@ pub(crate) fn execute_accepted_fem_attempt(
         prepared.until_seconds,
         attempt_output_dir,
         autosave_root,
-        field_sampling_interval,
+        field_cadence,
         &display_selection,
         interrupt_requested,
         false,

@@ -214,7 +214,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
     native: &NativeStackedCudaPlan,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], crate::LiveFieldCadence, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     let mut backend = NativeFdmBackend::create(&native.combined_plan)?;
@@ -293,6 +293,10 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
         if let Some(next) = native_stats.dt_suggested {
             dt = next;
         }
+        // Admit once per accepted step; the live block below reuses it.
+        let live_fields_due = live.as_mut().is_some_and(|(_, field_cadence, _, _)| {
+            field_cadence.multilayer_field_due(native_stats.step)
+        });
         let need_observables = default_scalar_trace
             || scalar_schedules
                 .iter()
@@ -300,12 +304,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
             || field_schedules
                 .iter()
                 .any(|schedule| is_due(native_stats.time, schedule.next_time))
-            || live.as_ref().is_some_and(|(_, field_every_n, _, _)| {
-                crate::types::fdm_multilayer_live_field_due(
-                    native_stats.step,
-                    *field_every_n,
-                )
-            })
+            || live_fields_due
             || plan.relaxation.is_some();
         let observables = if need_observables {
             Some(observe_native_stacked_cuda(&backend, native)?)
@@ -336,12 +335,9 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
                 &mut field_schedules,
                 &mut artifacts,
             )?;
-            if let Some((_, field_every_n, layout, on_step)) = live.as_mut() {
-                let magnetization = crate::types::fdm_multilayer_live_field_due(
-                    stats.step,
-                    *field_every_n,
-                )
-                .then(|| flatten_vectors(&observables.magnetization));
+            if let Some((_, _field_cadence, layout, on_step)) = live.as_mut() {
+                let magnetization =
+                    live_fields_due.then(|| flatten_vectors(&observables.magnetization));
                 let magnetization_carrier = magnetization.as_ref().and_then(|_| {
                     crate::types::fdm_multilayer_live_magnetization_carrier(*layout, &stats)
                 });
@@ -404,6 +400,36 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
         }
 
         if cancelled || paused {
+            // `latest_stats` is not advanced on this path, so republish a
+            // payload the wall-clock gate skipped from this step's stats.
+            if let Some((_, field_cadence, layout, on_step)) = live.as_mut() {
+                if field_cadence.take_deferred_step().is_some() {
+                    let magnetization = match observables.as_ref() {
+                        Some(observables) => Ok(flatten_vectors(&observables.magnetization)),
+                        None => super::copy_native_stacked_m(&backend, native)
+                            .map(|magnetization| flatten_vectors(&magnetization)),
+                    };
+                    match magnetization {
+                        Ok(magnetization) => {
+                            let _ = on_step(
+                                crate::live_field_cadence::deferred_magnetization_update(
+                                    &stats,
+                                    native.global_grid,
+                                    None,
+                                    magnetization,
+                                    crate::types::fdm_multilayer_live_magnetization_carrier(
+                                        *layout, &stats,
+                                    ),
+                                ),
+                            );
+                        }
+                        Err(error) => eprintln!(
+                            "[fullmag-runner] CUDA multilayer deferred live magnetization: {}",
+                            error.message
+                        ),
+                    }
+                }
+            }
             break;
         }
 
@@ -428,6 +454,19 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
     let final_observables = observe_native_stacked_cuda(&backend, native)?;
     let final_stats =
         latest_stats.unwrap_or_else(|| make_step_stats(0, 0.0, 0.0, 0, &final_observables));
+    // This lane has no terminal live snapshot: republish the completed final
+    // state when the wall-clock gate skipped its payload.
+    if let Some((_, field_cadence, layout, on_step)) = live.as_mut() {
+        if field_cadence.take_deferred_step().is_some() {
+            let _ = on_step(crate::live_field_cadence::deferred_magnetization_update(
+                &final_stats,
+                native.global_grid,
+                None,
+                flatten_vectors(&final_observables.magnetization),
+                crate::types::fdm_multilayer_live_magnetization_carrier(*layout, &final_stats),
+            ));
+        }
+    }
     if !steps
         .iter()
         .any(|step| step.step == final_stats.step && (step.time - final_stats.time).abs() <= 1e-18)

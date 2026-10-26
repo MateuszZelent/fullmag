@@ -349,7 +349,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    live: Option<(&[u32; 3], crate::LiveFieldCadence, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
@@ -922,7 +922,7 @@ fn execute_cuda_assisted_multilayer_double(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], crate::LiveFieldCadence, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
     pure_damping_relax: bool,
     contexts: Vec<LayerContext>,
@@ -1054,11 +1054,8 @@ fn execute_cuda_assisted_multilayer_double(
             &mut artifacts,
         )?;
 
-        if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
-            let fields_due = crate::types::fdm_multilayer_live_field_due(
-                latest_stats.step,
-                *field_every_n,
-            );
+        if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
+            let fields_due = field_cadence.multilayer_field_due(latest_stats.step);
             let update = make_multilayer_live_step_update(
                 plan,
                 &contexts,
@@ -1066,7 +1063,7 @@ fn execute_cuda_assisted_multilayer_double(
                 &latest_stats,
                 [grid[0], grid[1], grid[2]],
                 *layout,
-                *field_every_n,
+                field_cadence.every_n(),
                 &crate::quantities::field_materialization_quantity_ids(),
                 fields_due,
                 false,
@@ -1150,7 +1147,7 @@ fn execute_cuda_assisted_multilayer_double(
         })?;
     }
 
-    if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+    if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
         emit_multilayer_terminal_step_updates(
             plan,
             &contexts,
@@ -1158,7 +1155,7 @@ fn execute_cuda_assisted_multilayer_double(
             &final_stats,
             [grid[0], grid[1], grid[2]],
             *layout,
-            *field_every_n,
+            field_cadence.every_n(),
             None,
             None,
             &mut **on_step,
@@ -1221,7 +1218,7 @@ fn execute_cuda_assisted_multilayer_single(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], crate::LiveFieldCadence, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
     pure_damping_relax: bool,
     contexts: Vec<LayerContext>,
@@ -1335,11 +1332,8 @@ fn execute_cuda_assisted_multilayer_single(
             &mut artifacts,
         )?;
 
-        if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
-            let fields_due = crate::types::fdm_multilayer_live_field_due(
-                latest_stats.step,
-                *field_every_n,
-            );
+        if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
+            let fields_due = field_cadence.multilayer_field_due(latest_stats.step);
             let update = make_multilayer_live_step_update(
                 plan,
                 &contexts,
@@ -1347,7 +1341,7 @@ fn execute_cuda_assisted_multilayer_single(
                 &latest_stats,
                 [grid[0], grid[1], grid[2]],
                 *layout,
-                *field_every_n,
+                field_cadence.every_n(),
                 &crate::quantities::field_materialization_quantity_ids(),
                 fields_due,
                 false,
@@ -1401,7 +1395,7 @@ fn execute_cuda_assisted_multilayer_single(
         0,
         &final_observables,
     );
-    if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+    if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
         emit_multilayer_terminal_step_updates(
             plan,
             &contexts,
@@ -1409,7 +1403,7 @@ fn execute_cuda_assisted_multilayer_single(
             &final_stats,
             [grid[0], grid[1], grid[2]],
             *layout,
-            *field_every_n,
+            field_cadence.every_n(),
             None,
             None,
             &mut **on_step,
@@ -1496,7 +1490,7 @@ fn execute_native_device_resident_cuda_multilayer(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], crate::LiveFieldCadence, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     validate_device_resident_cuda_multilayer_lane(plan)?;
@@ -1577,8 +1571,9 @@ fn execute_native_device_resident_cuda_multilayer(
         let field_output_due = field_schedules
             .iter()
             .any(|schedule| is_due(native_stats.time, schedule.next_time));
-        let live_snapshot_due = live.as_ref().is_some_and(|(_, field_every_n, _, _)| {
-            crate::types::fdm_multilayer_live_field_due(native_stats.step, *field_every_n)
+        // Admit once per accepted step; the live block below reuses it.
+        let live_snapshot_due = live.as_mut().is_some_and(|(_, field_cadence, _, _)| {
+            field_cadence.multilayer_field_due(native_stats.step)
         });
         let snapshot_due = default_scalar_trace
             || scalar_schedules
@@ -1642,11 +1637,8 @@ fn execute_native_device_resident_cuda_multilayer(
             )?;
         }
 
-        if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
-            let fields_due = crate::types::fdm_multilayer_live_field_due(
-                stats.step,
-                *field_every_n,
-            );
+        if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
+            let fields_due = live_snapshot_due;
             let magnetization_override = if observables.is_none() && fields_due {
                 match copy_native_multilayer_m(&backend, plan) {
                     Ok(magnetization) => Some(magnetization),
@@ -1668,7 +1660,7 @@ fn execute_native_device_resident_cuda_multilayer(
                 &stats,
                 [grid[0], grid[1], grid[2]],
                 *layout,
-                *field_every_n,
+                field_cadence.every_n(),
                 &crate::quantities::field_materialization_quantity_ids(),
                 fields_due,
                 false,
@@ -1750,7 +1742,7 @@ fn execute_native_device_resident_cuda_multilayer(
         Some(observables) => observables.magnetization.clone(),
         None => copy_native_multilayer_m(&backend, plan)?,
     };
-    if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+    if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
         let magnetization_override = final_observables
             .is_none()
             .then_some(final_magnetization.as_slice());
@@ -1761,7 +1753,7 @@ fn execute_native_device_resident_cuda_multilayer(
             &final_stats,
             [grid[0], grid[1], grid[2]],
             *layout,
-            *field_every_n,
+            field_cadence.every_n(),
             magnetization_override,
             terminal_observation_error.as_deref(),
             &mut **on_step,
@@ -3621,7 +3613,7 @@ fn execute_native_stacked_cuda_multilayer(
     native: &NativeStackedCudaPlan,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], crate::LiveFieldCadence, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
@@ -3714,8 +3706,9 @@ fn execute_native_stacked_cuda_multilayer(
         let field_output_due = field_schedules
             .iter()
             .any(|schedule| is_due(native_stats.time, schedule.next_time));
-        let live_snapshot_due = live.as_ref().is_some_and(|(_, field_every_n, _, _)| {
-            crate::types::fdm_multilayer_live_field_due(native_stats.step, *field_every_n)
+        // Admit once per accepted step; the live block below reuses it.
+        let live_snapshot_due = live.as_mut().is_some_and(|(_, field_cadence, _, _)| {
+            field_cadence.multilayer_field_due(native_stats.step)
         });
         let need_observables = default_scalar_trace
             || scalar_schedules
@@ -3766,11 +3759,8 @@ fn execute_native_stacked_cuda_multilayer(
                 &mut artifacts,
             )?;
         }
-        if let Some((_, field_every_n, layout, on_step)) = live.as_mut() {
-            let fields_due = crate::types::fdm_multilayer_live_field_due(
-                stats.step,
-                *field_every_n,
-            );
+        if let Some((_, field_cadence, layout, on_step)) = live.as_mut() {
+            let fields_due = live_snapshot_due;
             let magnetization_override = if observables.is_none() && fields_due {
                 match copy_native_stacked_m(&backend, native) {
                     Ok(magnetization) => Some(magnetization),
@@ -3794,7 +3784,7 @@ fn execute_native_stacked_cuda_multilayer(
                 &stats,
                 native.global_grid,
                 *layout,
-                *field_every_n,
+                field_cadence.every_n(),
                 &crate::quantities::field_materialization_quantity_ids(),
                 fields_due,
                 false,
@@ -3863,7 +3853,7 @@ fn execute_native_stacked_cuda_multilayer(
         Some(observables) => observables.magnetization.clone(),
         None => copy_native_stacked_m(&backend, native)?,
     };
-    if let Some((_, field_every_n, layout, on_step)) = live.as_mut() {
+    if let Some((_, field_cadence, layout, on_step)) = live.as_mut() {
         let magnetization_override = final_observables
             .is_none()
             .then_some(final_magnetization.as_slice());
@@ -3874,7 +3864,7 @@ fn execute_native_stacked_cuda_multilayer(
             &final_stats,
             native.global_grid,
             *layout,
-            *field_every_n,
+            field_cadence.every_n(),
             magnetization_override,
             terminal_observation_error.as_deref(),
             &mut **on_step,

@@ -2513,7 +2513,6 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
 
             if let Some(live) = live.as_mut() {
                 let live_materialization_started = Instant::now();
-                let heavy_payload_every = live.field_every_n.max(1);
                 let display_selection = live.display_selection.map(|get| get());
                 let preview_due = display_selection
                     .as_ref()
@@ -2524,7 +2523,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 let preview_targets_global_scalar = display_selection
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
-                let heavy_payload_due = step_count % heavy_payload_every == 0;
+                let heavy_payload_due = live.field_cadence.heavy_payload_due(step_count);
                 let mut preview_field = None;
                 let direct_preview_satisfied = if preview_due && !preview_targets_global_scalar {
                     let selection = display_selection.as_ref().expect("checked preview_due");
@@ -2563,7 +2562,8 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     .as_ref()
                     .map(|selection| selection.revision)
                     .unwrap_or(0);
-                let full_fields_due = heavy_payload_due && live.field_every_n == 1;
+                let full_fields_due =
+                    heavy_payload_due && live.field_cadence.publishes_full_catalog();
                 let mut full_fields_capture_error = None;
                 let cached_preview_fields = if full_fields_due {
                     match accepted_cpu_thermal_capture_context(
@@ -2608,7 +2608,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     ));
                 }
                 let due_scalar_row = step_count <= 1
-                    || step_count % heavy_payload_every == 0
+                    || live.field_cadence.step_due(step_count)
                     || scalar_row_due(&scalar_schedules, state.time_seconds)
                     || (preview_due && preview_targets_global_scalar);
                 let mut update_stats = make_step_stats_from_report(
@@ -2703,6 +2703,22 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             artifacts.record_solver_step(&latest_stats);
 
             if cancelled || paused {
+                // The terminal snapshot below runs only on completion. Keep the
+                // displayed m on the last accepted step after a paused/stopped
+                // loop whose final payload the wall-clock gate skipped.
+                if let Some(live) = live.as_mut() {
+                    if live.field_cadence.take_deferred_step().is_some() {
+                        let _ = (live.on_step)(
+                            crate::live_field_cadence::deferred_magnetization_update(
+                                &latest_stats,
+                                live.grid,
+                                None,
+                                flatten_vectors(state.magnetization()),
+                                None,
+                            ),
+                        );
+                    }
+                }
                 break;
             }
 
@@ -6252,7 +6268,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: u64::MAX,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(u64::MAX),
                 initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: None,
@@ -6306,7 +6322,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: u64::MAX,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(u64::MAX),
                 initial_snapshot: false,
                 display_selection: Some(&display_selection),
                 interrupt_requested: None,
@@ -6384,7 +6400,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: 1,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                 initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: None,
@@ -6473,7 +6489,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: 1,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                 initial_snapshot: false,
                 display_selection: Some(&display_selection),
                 interrupt_requested: None,
@@ -6578,7 +6594,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: 1,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                 initial_snapshot: false,
                 display_selection: Some(&display_selection),
                 interrupt_requested: None,
@@ -6682,7 +6698,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: u64::MAX,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(u64::MAX),
                 initial_snapshot: true,
                 display_selection: Some(&display_selection),
                 interrupt_requested: None,
@@ -6736,7 +6752,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: 1,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                 initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: None,
