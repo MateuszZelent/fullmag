@@ -156,6 +156,66 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
         self.child_lock = lock_patcher.start()
         self.addCleanup(lock_patcher.stop)
 
+    def test_recheck_capture_uses_a_separate_manifest(self) -> None:
+        request_id = _records()["request_id"]
+        manifest = {
+            "manifest_path": f"/build/maintenance/{request_id}/source-verification/.fullmag-live-source/manifest.json",
+            "source_mode": "live-shadow-v1",
+            "resolved_commit": "a" * 40,
+            "source_digest": "b" * 64,
+            "source_snapshot_sha256": "c" * 64,
+            "live_manifest_sha256": "d" * 64,
+        }
+        with patch.object(reconciliation, "_exec", return_value=(
+            reconciliation._canonical_json(manifest), b"",
+        )) as execute:
+            observed, _ = reconciliation._capture_source("f" * 64, request_id, verification=True)
+        self.assertEqual(observed, manifest)
+        self.assertEqual(execute.call_args.args[1][-2:], (request_id, "verification"))
+
+    def test_embedded_capture_preserves_original_file_on_rechecks(self) -> None:
+        import json
+        import tempfile
+        import types
+        from contextlib import redirect_stdout
+
+        request_id = _records()["request_id"]
+        captures = []
+        producer = types.ModuleType("backend_source")
+
+        def capture(_source, _git, build_root):
+            captures.append(build_root)
+            path = build_root / ".fullmag-live-source/manifest.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Model the real producer's distinct identity for each capture.
+            path.write_text(json.dumps({"capture_id": str(len(captures))}))
+            return path
+
+        producer.capture_live_source_manifest = capture
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Redirect only the Docker volume root; execute the actual path logic.
+            marker = 'Path("/build/maintenance")'
+            self.assertEqual(reconciliation.SOURCE_CAPTURE_SCRIPT.count(marker), 1)
+            script = reconciliation.SOURCE_CAPTURE_SCRIPT.replace(marker, f"Path({directory!r})")
+            original = root / request_id / "source-capture/.fullmag-live-source/manifest.json"
+            with patch.dict(sys.modules, {"backend_source": producer}), \
+                 patch.object(sys, "path", sys.path.copy()):
+                original_raw = None
+                for purpose in ("prepare", "verification", "verification"):
+                    output = io.StringIO()
+                    with patch.object(sys, "argv", ["capture", request_id, purpose]), redirect_stdout(output):
+                        exec(script, {})
+                    expected_directory = "source-capture" if purpose == "prepare" else "source-verification"
+                    self.assertEqual(captures[-1], root / request_id / expected_directory)
+                    self.assertEqual(Path(json.loads(output.getvalue())["manifest_path"]),
+                                     captures[-1] / ".fullmag-live-source/manifest.json")
+                    if purpose == "prepare":
+                        original_raw = original.read_bytes()
+                    else:
+                        self.assertEqual(original.read_bytes(), original_raw)
+                        self.assertNotEqual((captures[-1] / ".fullmag-live-source/manifest.json").read_bytes(), original_raw)
+
     def test_child_lock_is_rechecked_after_long_running_work(self) -> None:
         class Lock:
             stopped = False
@@ -207,7 +267,7 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
             if relative in control.records and control.records[relative] != raw:
                 raise reconciliation.ReconciliationError("immutable mismatch")
             control.records[relative] = raw
-        def failed_capture(*_args):
+        def failed_capture(*_args, **_kwargs):
             try:
                 raise CodegenError("client timed out", reconciliation_required=True)
             except CodegenError as error:
@@ -578,6 +638,18 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
             "source_snapshot_sha256": "c" * 64,
             "live_manifest_sha256": "d" * 64,
         }
+        verification_source = dict(
+            source,
+            manifest_path=f"/build/maintenance/{request_id}/source-verification/.fullmag-live-source/manifest.json",
+            # Each producer capture includes a new UUID and timestamp.
+            live_manifest_sha256="f" * 64,
+        )
+        original_capture = [reconciliation._canonical_json({
+            "schema": "fullmag.docker-backend-live-source.v1",
+            **{key: source[key] for key in (
+                "resolved_commit", "source_digest", "source_snapshot_sha256", "live_manifest_sha256",
+            )},
+        })]
         candidate = {
             "schema": "fullmag.direct-compose.backend-build-receipt.v1",
             "state": "succeeded",
@@ -586,6 +658,7 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
             )},
             "artifacts": [{"path": "bin/fullmag-runtime-service", "sha256": "e" * 64}],
         }
+        candidate["source"]["manifest_sha256"] = reconciliation._sha256(original_capture[0])
         candidate_raw = reconciliation._canonical_json(candidate)
         records = _records()
         context = {
@@ -655,12 +728,15 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
 
         with patch.object(reconciliation, "_load_context", return_value=context), \
              patch.object(reconciliation, "_recheck_context"), \
-             patch.object(reconciliation, "_capture_source", return_value=(source, b"capture")), \
+             patch.object(reconciliation, "_capture_source", side_effect=lambda _backend, _id, *, verification=False: (
+                 verification_source if verification else source, b"capture",
+             )), \
              patch.object(reconciliation, "_collect_expected_records", return_value=records), \
              patch.object(reconciliation, "_prepare_candidate", return_value=(
                  f"/build/maintenance/{request_id}/package", candidate, candidate_raw, b"build", b"",
              )), \
              patch.object(reconciliation, "_read_candidate_receipt", return_value=(candidate, candidate_raw)), \
+             patch.object(reconciliation, "_read_original_capture", side_effect=lambda *_: original_capture[0]), \
              patch.object(reconciliation, "_invoke_native", side_effect=invoke), \
              patch.object(reconciliation, "_control_raw", side_effect=read_control), \
              patch.object(reconciliation, "_publish_immutable", side_effect=publish):
@@ -687,6 +763,25 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
                 reconciliation.run(args_for(apply=True))
             self.assertEqual(native_calls, [False])
             control.records[receipt_path] = saved_receipt
+            for key, changed in (("resolved_commit", "1" * 40),
+                                 ("source_digest", "2" * 64),
+                                 ("source_snapshot_sha256", "3" * 64)):
+                previous = verification_source[key]
+                verification_source[key] = changed
+                with self.subTest(source_drift=key), self.assertRaisesRegex(
+                    reconciliation.ReconciliationError, "source capture differs"
+                ):
+                    reconciliation.run(args_for(apply=True))
+                self.assertNotIn(operation_root + "/apply-start.json", control.records)
+                self.assertEqual(native_calls, [False])
+                verification_source[key] = previous
+            saved_capture = original_capture[0]
+            original_capture[0] += b" "
+            with self.assertRaisesRegex(reconciliation.ReconciliationError, "preserved source capture differs"):
+                reconciliation.run(args_for(apply=True))
+            self.assertNotIn(operation_root + "/apply-start.json", control.records)
+            self.assertEqual(native_calls, [False])
+            original_capture[0] = saved_capture
             # A crash after durable applying intent but before a terminal result
             # leaves an unknown outcome; do not invoke native a second time.
             control.records[operation_root + "/apply-start.json"] = b'{}'

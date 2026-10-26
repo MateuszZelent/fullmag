@@ -33,6 +33,7 @@ MAX_RESULT_BYTES = 1024 * 1024
 MAX_RECORD_BYTES = 16 * 1024 * 1024
 MAX_LOG_BYTES = 256 * 1024
 MAX_CANDIDATE_RECEIPT_BYTES = 8 * 1024 * 1024
+MAX_SOURCE_CAPTURE_BYTES = 64 * 1024 * 1024
 MAX_BUILD_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_CONTROL_PUBLISH_BYTES = 256 * 1024
 LOG_TAIL_BYTES = 32 * 1024
@@ -455,17 +456,22 @@ def _publish_log_once(control: Any, relative: str, raw: bytes, request_id: str) 
     _publish_immutable(control, relative, raw)
 
 
-def _capture_source(backend_id: str, request_id: str) -> tuple[dict[str, object], bytes]:
+def _capture_source(
+    backend_id: str, request_id: str, *, verification: bool = False
+) -> tuple[dict[str, object], bytes]:
+    _require_uuid(request_id, "reconciliation request id")
+    purpose = "verification" if verification else "prepare"
+    directory = "source-verification" if verification else "source-capture"
     stdout, _ = _exec(
         backend_id,
-        ("/usr/local/bin/python3", "-B", "-c", SOURCE_CAPTURE_SCRIPT, request_id),
+        ("/usr/local/bin/python3", "-B", "-c", SOURCE_CAPTURE_SCRIPT, request_id, purpose),
         timeout=600,
-        stdout_limit=MAX_CANDIDATE_RECEIPT_BYTES,
+        stdout_limit=MAX_SOURCE_CAPTURE_BYTES,
     )
-    document = _read_json_bytes(stdout, "live source capture", MAX_CANDIDATE_RECEIPT_BYTES)
+    document = _read_json_bytes(stdout, "live source capture", MAX_SOURCE_CAPTURE_BYTES)
     manifest_path = document.get("manifest_path")
     if manifest_path != (
-        "/build/maintenance/" + request_id + "/source-capture/.fullmag-live-source/manifest.json"
+        "/build/maintenance/" + request_id + "/" + directory + "/.fullmag-live-source/manifest.json"
     ):
         _fail("live source capture returned an out-of-scope manifest path")
     if document.get("source_mode") != "live-shadow-v1":
@@ -547,6 +553,34 @@ def _read_candidate_receipt(
     )
     validate_candidate_receipt(receipt, source)
     return receipt, receipt_raw
+
+
+def _validate_original_capture(
+    raw: bytes, stored_source: Mapping[str, object], candidate: Mapping[str, object]
+) -> None:
+    """Bind the preserved preparation manifest to the immutable build receipt."""
+    candidate_source = _object(candidate.get("source"), "candidate source receipt")
+    expected_hash = _require_digest(candidate_source.get("manifest_sha256"), "candidate manifest hash")
+    if _sha256(raw) != expected_hash:
+        _fail("preserved source capture differs from the candidate receipt")
+    document = _read_json_bytes(raw, "preserved source capture", MAX_SOURCE_CAPTURE_BYTES)
+    identity = _object(stored_source.get("source_identity"), "prepared source identity")
+    if document.get("schema") != "fullmag.docker-backend-live-source.v1":
+        _fail("preserved source capture schema differs")
+    for key in ("resolved_commit", "source_digest", "source_snapshot_sha256", "live_manifest_sha256"):
+        if document.get(key) != identity.get(key):
+            _fail("preserved source capture identity differs: " + key)
+
+
+def _read_original_capture(backend_id: str, path: str) -> bytes:
+    raw, _ = _exec(
+        backend_id,
+        ("/usr/local/bin/python3", "-B", "-c", READ_REGULAR_JSON_SCRIPT,
+         path, str(MAX_SOURCE_CAPTURE_BYTES)),
+        timeout=120,
+        stdout_limit=MAX_SOURCE_CAPTURE_BYTES,
+    )
+    return raw
 
 
 def _candidate_executable(package: str) -> str:
@@ -1038,19 +1072,21 @@ def _validate_existing_candidate(
         _fail("prepared candidate has no successful native preview")
     if not isinstance(stored_source, Mapping):
         _fail("prepared candidate has no immutable source capture record")
+    source_identity = _object(stored_source.get("source_identity"), "prepared source identity")
+    expected_manifest = (
+        "/build/maintenance/" + request_id + "/source-capture/.fullmag-live-source/manifest.json"
+    )
+    verification_manifest = (
+        "/build/maintenance/" + request_id + "/source-verification/.fullmag-live-source/manifest.json"
+    )
     if (
         stored_source.get("schema") != "fullmag.docker-failed-worker-reconciliation-source.v1"
         or stored_source.get("operation_id") != request_id
-        or stored_source.get("manifest_path") != source.get("manifest_path")
-        or stored_source.get("source_identity") != {
-            key: source[key]
-            for key in (
-                "resolved_commit",
-                "source_digest",
-                "source_snapshot_sha256",
-                "live_manifest_sha256",
-            )
-        }
+        or stored_source.get("manifest_path") != expected_manifest
+        or source.get("manifest_path") != verification_manifest
+        or any(source_identity.get(key) != source.get(key) for key in (
+            "resolved_commit", "source_digest", "source_snapshot_sha256",
+        ))
     ):
         _fail("prepared candidate source capture differs from the current source")
     candidate_package = receipt.get("candidate_package")
@@ -1065,7 +1101,10 @@ def _validate_existing_candidate(
     candidate = _read_json_bytes(
         candidate_raw, "prepared candidate build receipt", MAX_CANDIDATE_RECEIPT_BYTES
     )
-    validate_candidate_receipt(candidate, source)
+    # The candidate remains bound to the original capture, whose live-manifest
+    # hash includes its unique capture ID and timestamp. The separate current
+    # capture above proves the stable commit/content/snapshot did not drift.
+    validate_candidate_receipt(candidate, source_identity)
     candidate_digest = _sha256(candidate_raw)
     if receipt.get("candidate_receipt_sha256") != candidate_digest:
         _fail("prepared candidate receipt digest differs from its terminal receipt")
@@ -1280,7 +1319,9 @@ def _run_authenticated(
     operation.recordable = True
     operation.prepared_candidate = existing is not None
     operation.phase = "source-capture"
-    source, capture_raw = _capture_source(context["backend_id"], request_id)
+    source, capture_raw = _capture_source(
+        context["backend_id"], request_id, verification=existing is not None
+    )
     _recheck_context(args, context)
     if existing is not None and apply:
         if stored_request is None or stored_request_raw is None:
@@ -1327,11 +1368,14 @@ def _run_authenticated(
             stored_request_raw,
             stored_source,
         )
+        source_identity = _object(stored_source.get("source_identity"), "prepared source identity")
         actual_candidate, actual_candidate_raw = _read_candidate_receipt(
-            context["backend_id"], package, source
+            context["backend_id"], package, source_identity
         )
         if actual_candidate_raw != candidate_receipt_raw or actual_candidate != candidate_receipt:
             _fail("prepared candidate package receipt differs from its immutable control receipt")
+        original_manifest = _read_original_capture(context["backend_id"], stored_source["manifest_path"])
+        _validate_original_capture(original_manifest, stored_source, candidate_receipt)
         if prepare_candidate:
             return existing
     else:
@@ -1566,10 +1610,13 @@ sys.path.insert(0, "/opt/fullmag")
 from backend_source import capture_live_source_manifest
 
 token = sys.argv[1]
+purpose = sys.argv[2]
 if not token or any(character not in "0123456789abcdef-" for character in token):
     raise SystemExit("invalid reconciliation request token")
+if purpose not in {"prepare", "verification"}:
+    raise SystemExit("invalid reconciliation source capture purpose")
 root = Path("/build/maintenance") / token
-capture_root = root / "source-capture"
+capture_root = root / ("source-capture" if purpose == "prepare" else "source-verification")
 capture_root.mkdir(parents=True, exist_ok=True)
 manifest = capture_live_source_manifest(
     Path("/opt/fullmag/source"), Path("/opt/fullmag/source-git"), capture_root
@@ -1659,6 +1706,9 @@ import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+maximum = int(sys.argv[2]) if len(sys.argv) == 3 else 8 * 1024 * 1024
+if not 0 < maximum <= 64 * 1024 * 1024:
+    raise SystemExit("invalid record byte bound")
 if not path.is_absolute() or ".." in path.parts or path.is_symlink():
     raise SystemExit("record path is not canonical")
 if path.parent.resolve(strict=True) != path.parent:
@@ -1668,8 +1718,12 @@ try:
     metadata = os.fstat(fd)
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
         raise SystemExit("record is not one regular file")
-    data = os.read(fd, 8 * 1024 * 1024 + 1)
-    if len(data) != metadata.st_size or len(data) > 8 * 1024 * 1024:
+    data = os.read(fd, maximum + 1)
+    after = os.fstat(fd)
+    signature = lambda item: (item.st_dev, item.st_ino, item.st_mode, item.st_nlink,
+                              item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+    if (len(data) != metadata.st_size or len(data) > maximum
+            or signature(metadata) != signature(after)):
         raise SystemExit("record exceeds its byte bound")
 finally:
     os.close(fd)

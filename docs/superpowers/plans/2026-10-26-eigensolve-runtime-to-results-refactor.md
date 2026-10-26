@@ -1,7 +1,7 @@
 # Plan refaktoryzacji: uruchomienie eigensolve i trwały zapis danych
 
 Data: 26.10.2026. Audyt i plan zapisano przed wznowieniem celu. Obecny etap:
-**zadanie 2/8 — implementacja i weryfikacja kontraktu, bez wykonania apply**.
+**zadanie 3/8 — wznowienie przygotowanego pakietu; pierwsza próba apply odrzucona przed native**.
 
 Źródło stanu: [audyt wykonania](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.md)
 i [evidence JSON](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.evidence.json).
@@ -66,8 +66,8 @@ control/source/package zamiast nowego launchera lub drugiego systemu grantów.
 | Zadanie | Stan przy publikacji planu | Dowód wymagany do zakończenia |
 |---|---|---|
 | 1/8 — audyt i zamrożenie | Zakończone dokumentacyjnie | Audyt, evidence, kopia WIP, ten plan |
-| 2/8 — spójny kontrakt i źródła | Kod w weryfikacji; Python preview PASS, Rust CI i native preview oczekują | Review kontraktu, kompletny zakres kodu, zielony odpowiedni build/CI |
-| 3/8 — zamknięcie zakończonego workera | Kod częściowo istnieje; runtime otwarte | Exact local Released + host Released + normalny proof, dane bez zmian |
+| 2/8 — spójny kontrakt i źródła | Zakończone: Rust CI i native preview PASS dla `ccc38b7c3` | Review kontraktu, kompletny zakres kodu, zielony odpowiedni build/CI |
+| 3/8 — zamknięcie zakończonego workera | W toku: poprawka porównania capture; native apply jeszcze niewywołane | Exact local Released + host Released + normalny proof, dane bez zmian |
 | 4/8 — poprawny start runtime | Otwarte; przyczyna sample admission nieustalona | Ready owner i bieżący sample, działający scheduler bez kwarantanny |
 | 5/8 — zaakceptowany Relax | Historyczny native Relax jest; nowa publikacja otwarta | Certyfikat w CAS i zaakceptowane wyjście do Eigen w nowym runie |
 | 6/8 — rzeczywisty Eigen +10 | Brak wyniku nowego runu | Native frequency + residual + zespolony mod i terminalny sukces |
@@ -119,9 +119,9 @@ w 2.2/2.4, nie jako jedna wielka przebudowa.
 
 **Odbiór:**
 
-- [ ] Kontrakt ma review i brak niepotwierdzonych nowych abstrakcji; zwykłe admission nie osłabione.
-- [ ] Brak brakujących modułów; negatywne testy owner/path/SHA/source/replay i wymagane CI przechodzą dla dokładnego commita.
-- [ ] Zarządzany preview pełnej procedury działa; build aplikacji nie jest utożsamiany z release ani Solve.
+- [x] Kontrakt ma review i brak niepotwierdzonych nowych abstrakcji; zwykłe admission nie osłabione.
+- [x] Brak brakujących modułów; negatywne testy owner/path/SHA/source/replay i wymagane CI przechodzą dla dokładnego commita.
+- [x] Zarządzany preview pełnej procedury działa; build aplikacji nie jest utożsamiany z release ani Solve.
 
 ### Decyzja 2.1–2.2: ograniczony kontrakt cross-build
 
@@ -162,8 +162,13 @@ Stan dowodów tego wycinka: lokalne testy Pythona przechodzą; zarządzany
 preview **bez buildu i apply** przeszedł 26.10.2026 dla operacji
 `741f2ee9-7388-4132-b828-0ca6217af629`. Osobny odczyt potwierdził zgodność
 commita, snapshotu, receiptu i hasha historycznego pakietu z Failed ownerem.
-Kod wymaga jeszcze kompilowanych testów CI oraz native preview nowego pakietu. Bieżąca poprawka nie jest jeszcze
-dowodem zwolnionego lease ani uruchomienia solvera.
+Dalszy odbiór: commit `ccc38b7c3fe9cb1ecde0d85a4e32fc8790938b0a`; bootstrap Rust
+`40398845779` i eigensolve `40398845759` PASS (1817 testów runnera, 0 błędów,
+1 ignored). Linux/Windows artifact attestation `40398845844` PASS. Native preview
+operacji `ada79f8d-9916-41dd-a9ec-c8053c2da6d8` zakończyło się
+`candidate-prepared` / `validated`; receipt pakietu
+`7ffc231f387fb2ee77b71f32f7387164c2774901cde8265aab77bfb84e727299`.
+Nie jest to dowód zwolnionego lease ani uruchomienia solvera.
 
 ## Zadanie 3/8: zamknąć dokładnie historyczny Failed worker
 
@@ -188,12 +193,36 @@ private release helper, testy; poprawki `solution_set.rs`/scheduler już istniej
 
 **Odbiór:**
 
-- [ ] Wstrzyknięta awaria między fazami daje poprawny, idempotentny replay bez sztucznego proof.
+- [x] Wstrzyknięta awaria między fazami daje poprawny, idempotentny replay bez sztucznego proof.
 - [ ] W rzeczywistym runtime lease i rezerwacja są Released, istnieje normalny proof i dokładny scope wszystkich tożsamości.
 - [ ] Failed pozostaje Failed; 14 artifact IDs i raw katalog zachowane, brak ponownego Solve.
 
 **Checkpoint po 2–3:** nie zaczynać restartu z niepotwierdzonym wynikiem apply.
 Odmowa lub timeout wymaga inspect, nie zmiany progu lub ręcznej edycji JSON.
+
+### Korekta 3.5: capture przy wznowieniu
+
+Pierwsze apply operacji `ada79f8d-9916-41dd-a9ec-c8053c2da6d8` odmówiło
+przed native (`native_invoked=false`, `daemon_operation_may_remain=false`):
+`prepared candidate source capture differs from the current source`.
+Commit, `source_digest` i snapshot pozostały identyczne. Producent manifestu
+wiąże `live_manifest_sha256` także z nowym `capture_id` i `created_at`.
+Wrapper błędnie przechwytywał ponownie do oryginalnej ścieżki i wymagał
+identycznego hasha obu zdarzeń capture.
+
+Poprawka zachowuje pierwotny `source-capture`, a aktualny odczyt wykonuje w
+`source-verification`. Stabilny commit/content/snapshot musi pozostać zgodny.
+Pakiet nadal wymaga pierwotnego live hash oraz niezmiennego receiptu;
+bajty zachowanego manifestu są dodatkowo sprawdzane względem
+`candidate.source.manifest_sha256`. Zmienione źródła albo manifest zatrzymują
+procedurę przed `apply-start.json`. Test prepare→apply obejmuje różne hashe
+capture, trzy rodzaje driftu i naruszenie oryginalnych bajtów. Dodatkowy test wykonuje embedded script na
+rzeczywistych plikach tymczasowych i potwierdza zachowanie oryginału po dwóch
+verification captures; 71 testów Pythona PASS. Review nie wykazało błędu
+produkcyjnego; wskazana luka pokrycia została uzupełniona. Nowy rzeczywisty
+prepare→apply pozostaje do wykonania.
+Stara operacja i jej failure receipt zostają zachowane; ponowienie użyje
+nowego UUID i nowego przypiętego commita, bez naprawiania starych manifestów.
 
 ## Zadanie 4/8: wystartować runtime z poprawnym admission
 
@@ -342,6 +371,6 @@ commita i dowodu odbioru. Nie commitować nieukończonych referencji do modułó
 Nie obiecywać, że „następny build na pewno uruchomi solve”. Jeśli etap blokuje
 nieznany kontrakt, raport wskazuje konkretną granicę i zatrzymuje prace zależne.
 
-Następnym działaniem implementacyjnym jest **zadanie 2/8**, a nie kolejny build,
-nowa aktywacja ani dalsza edycja ledgera. Obecne polecenie kończy się oddaniem
-audytu i planu, bez wznowienia implementacji w tle.
+Bieżący krok: **3.5**, review poprawki capture oraz nowy managed prepare→apply.
+Restart i Solve pozostają zależne od rzeczywistego release oraz potwierdzenia
+zachowania katalogu i wszystkich 14 artefaktów.

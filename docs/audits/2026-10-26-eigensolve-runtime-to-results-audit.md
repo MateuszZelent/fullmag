@@ -146,3 +146,23 @@ fikcyjnej częstotliwości ani pola.
 Automatyczna kontrola uprawnień odrzuciła wcześniej dodatkowe rozszerzenie
 na skanowanie wszystkich lease'ów tasku. Nie wdrożono go. Plan pozostaje przy
 konkretnym autorytatywnym process-exit receipt i dokładnym fence zasobów.
+
+## Uzupełnienie z wykonania zadania 3 — 26.10.2026
+
+**A11, P1: wznowienie porównywało tożsamość zdarzenia capture zamiast
+stabilnej zawartości źródeł.** Producent `backend_source.py` dodaje nowe
+`capture_id` i `created_at` przed wyznaczeniem `live_manifest_sha256`.
+Wrapper przechwytywał ponownie do tej samej ścieżki przed apply, nadpisując
+manifest przygotowania. Mimo niezmienionego commita `ccc38b7c3`, source digest
+`a7c78b1ad0b9a7bddc90d7a8c5333601eaaa992caee37f137db8f05b5d92441c`
+i snapshotu `5910b824a084d0d43969ce0b8947d928a723e4162a5f98b9469188c2758166b0`
+hash capture zmienił się z `6ba19b8ce80e46db2366f1659a1cec30d630e0afdc61812e0b5a364ab15ca400`
+na `9cc84a36b1583530ae01053a9d831826baae4c900038ea33c956c01d8d691a0e`.
+
+Dowód: operacja `ada79f8d-9916-41dd-a9ec-c8053c2da6d8` uzyskała
+`candidate-prepared` / native `validated`, a apply zapisało
+`apply-pre-native-failure-6592320f31e2886c6008a0beb338d57b2930e4b3e6ccf5664331525124ffefc0.json`.
+`native_invoked=false`; nie powstał release proof. Odczyt przed apply potwierdził
+oryginalny hash katalogu, 14 artifact IDs, local Active / host Quarantined.
+Nie wykonano naprawy starych danych. Poprawkę i kryteria odbioru opisuje
+zadanie 3.5 planu; jej runtime pozostaje otwarte do nowego prepare→apply.
