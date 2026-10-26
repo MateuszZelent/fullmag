@@ -1,15 +1,20 @@
 import type { DiscoveredInstance } from "../api/apiTypes";
 
-export type SessionTone = "running" | "failed" | "idle";
+export type SessionTone = "running" | "starting" | "waiting" | "failed" | "idle";
 
-/** The dot colour of a session lifecycle word; the word itself stays in the title. */
+/**
+ * The dot colour of a session lifecycle word; the word itself stays in the title.
+ * Only an executing session is green: startup and a model parked for Compute differ.
+ */
 export function sessionTone(status: string | undefined): SessionTone {
   switch (status) {
     case "running":
+      return "running";
     case "activating":
     case "materializing_script":
+      return "starting";
     case "waiting_for_compute":
-      return "running";
+      return "waiting";
     case "failed":
       return "failed";
     default:

@@ -50,6 +50,18 @@ export function statusBarMethodModelsEqual(
     && previous.title === next.title;
 }
 
+/**
+ * The resolved method pill repeats the engine pill once a run names its backend
+ * (e.g. "FEM" beside "FEM GPU double"); before that it is the only method signal.
+ */
+export function statusBarMethodRepeatsEngine(
+  method: Pick<StatusBarMethodModel, "label" | "state">,
+  engine: Pick<StatusBarEngineModel, "label">,
+): boolean {
+  if (method.state !== "resolved") return false;
+  return engine.label.trim().split(/\s+/)[0]?.toUpperCase() === method.label.toUpperCase();
+}
+
 export function buildStatusBarMethodModel(
   status: StatusBarMethodReadback | null | undefined,
 ): StatusBarMethodModel {

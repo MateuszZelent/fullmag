@@ -7,6 +7,7 @@ import {
   buildStatusBarMethodModel,
   buildStatusBarMeshModel,
   formatRuntimeBundleVersionLabel,
+  statusBarMethodRepeatsEngine,
 } from "./statusBarModel";
 
 const statusBarModuleSource = readFileSync(
@@ -248,4 +249,11 @@ it("shows accepted FEM before engine resolution and independently of the last FD
   expect(buildStatusBarMethodModel({ capabilities: { active_lane: { authored: { backend: "fem", discretization: "fem" }, resolved: null } }, domain: { discretization: "fdm" } })).toMatchObject({ label: "FEM", method: "fem" });
   expect(buildStatusBarMethodModel({ capabilities: { active_lane: { authored: { backend: "fem", discretization: "fem" }, resolved: { discretization: "fdm" } } } })).toMatchObject({ label: "FEM", method: "fem" });
   expect(buildStatusBarEngineModel(null).label).toBe("Engine not started");
+});
+
+it("hides the resolved method pill only when the engine pill already names it", () => {
+  const fem = { label: "FEM", state: "resolved" as const };
+  expect(statusBarMethodRepeatsEngine(fem, { label: "FEM GPU double" })).toBe(true);
+  expect(statusBarMethodRepeatsEngine(fem, { label: "Engine not started" })).toBe(false);
+  expect(statusBarMethodRepeatsEngine({ label: "FEM requested", state: "pending" }, { label: "FEM GPU double" })).toBe(false);
 });
