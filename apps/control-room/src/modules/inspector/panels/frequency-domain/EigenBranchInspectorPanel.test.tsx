@@ -103,6 +103,37 @@ function modalManifestResource(
   };
 }
 
+function modalManifestResourceWithSampleEquilibria(
+  sampleEquilibriumIds: readonly string[],
+  owner: Partial<{
+    artifact_set_id: string;
+    run_id: string;
+    session_id: string;
+    stage_id: string;
+  }> = {},
+) {
+  const resource = modalManifestResource(owner);
+  return {
+    ...resource,
+    result_manifest: {
+      ...resource.result_manifest,
+      payload: {
+        ...resource.result_manifest.payload,
+        equilibrium_identity: null,
+        sample_execution_provenance: {
+          schema_version: "frequency_domain_sample_execution_provenance.v1",
+          status: "mixed",
+          sample_count: sampleEquilibriumIds.length,
+          samples: sampleEquilibriumIds.map((equilibriumId, sampleIndex) => ({
+            sample_index: sampleIndex,
+            validation: { equilibrium_artifact_sha256: equilibriumId },
+          })),
+        },
+      },
+    },
+  };
+}
+
 const modalManifestOwner = buildEigenBranchResultManifestOwner(
   modalManifestResource(),
 );
@@ -510,6 +541,91 @@ describe("EigenBranchInspectorPanel open mode owner binding", () => {
     }
   });
 
+  it("uses the exact sample equilibrium for mixed modal branch handoffs", async () => {
+    configurePanelResources({
+      manifest: modalManifestResourceWithSampleEquilibria([
+        "equilibrium-sample-0000",
+        "equilibrium-sample-0001",
+      ]),
+    });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <EigenBranchInspectorPanel selection={branchInspectorSelection()} />,
+        ),
+      );
+
+      const openButton = findButton(container, "Open sample 1 mode 1");
+      const plotButton = findButton(container, "Plot sample 1 mode 1 in 3D");
+      expect(openButton.disabled).toBe(false);
+      expect(plotButton.disabled).toBe(false);
+
+      await act(async () => openButton.click());
+      expect(panelMocks.setSelection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ref: expect.objectContaining({
+            equilibriumId: "equilibrium-sample-0001",
+          }),
+        }),
+        "inspector",
+      );
+
+      await act(async () => plotButton.click());
+      expect(panelMocks.executeCommand).toHaveBeenCalledWith(
+        "analysis.eigen.plot-mode-3d",
+        expect.anything(),
+        expect.objectContaining({
+          equilibriumId: "equilibrium-sample-0001",
+        }),
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it.each([
+    [
+      "branch sample is outside the published provenance",
+      2,
+      ["equilibrium-sample-0000", "equilibrium-sample-0001"],
+    ],
+    ["published provenance omits the selected sample", 1, ["equilibrium-sample-0000"]],
+  ] as const)(
+    "disables open and plot when the selected sample equilibrium is unavailable: %s",
+    async (_label, sampleIndex, sampleEquilibriumIds) => {
+      configurePanelResources({
+        manifest: modalManifestResourceWithSampleEquilibria(sampleEquilibriumIds),
+        sampleIndex,
+      });
+      const dom = installSimulationPreparationTestDom();
+      const container = dom.document.createElement("div");
+      const root = createRoot(container as unknown as Element);
+      try {
+        await act(async () =>
+          root.render(
+            <EigenBranchInspectorPanel selection={branchInspectorSelection()} />,
+          ),
+        );
+
+        expect(
+          findButton(container, `Open sample ${sampleIndex} mode 1`).disabled,
+        ).toBe(true);
+        expect(
+          findButton(container, `Plot sample ${sampleIndex} mode 1 in 3D`).disabled,
+        ).toBe(true);
+        expect(panelMocks.setSelection).not.toHaveBeenCalled();
+        expect(panelMocks.executeCommand).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => root.unmount());
+        dom.restore();
+      }
+    },
+  );
+
   it.each([
     ["resource is still loading", { branchStatus: "loading" }, {}],
     ["artifact belongs to another run", {}, { runId: "other-run" }],
@@ -541,10 +657,17 @@ describe("EigenBranchInspectorPanel open mode owner binding", () => {
 
 function configurePanelResources(options: {
   branchStatus?: string;
+  manifest?: unknown;
   modeFieldAvailable?: boolean;
   runId?: string;
+  sampleIndex?: number;
 } = {}): void {
-  panelMocks.manifest = modalManifestResource();
+  const sampleIndex = options.sampleIndex ?? 1;
+  const sampleId = `sample-${String(sampleIndex).padStart(4, "0")}`;
+  const modeFieldId = `analysis:eigen:${sampleId}:mode-0001`;
+  const modeFieldResourceKey =
+    `data/fields/${encodeURIComponent(modeFieldId)}?view=phase_rotated_real&phase_rad=0`;
+  panelMocks.manifest = options.manifest ?? modalManifestResource();
   panelMocks.manifestStatus = "ready";
   panelMocks.branchStatus = options.branchStatus ?? "ready";
   panelMocks.branchArtifact = {
@@ -564,17 +687,16 @@ function configurePanelResources(options: {
               ...(options.modeFieldAvailable === false
                 ? {}
                 : {
-                    mode_field_id: "analysis:eigen:sample-0001:mode-0001",
-                    mode_field_resource_key:
-                      "data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0001?view=phase_rotated_real&phase_rad=0",
+                    mode_field_id: modeFieldId,
+                    mode_field_resource_key: modeFieldResourceKey,
                   }),
               mode_id: "mode-0001",
               overlap_prev: 0.97,
               path_s_rad_per_m: 1.25e7,
               raw_mode_index: 1,
               residual_norm: 2e-8,
-              sample_id: "sample-0001",
-              sample_index: 1,
+              sample_id: sampleId,
+              sample_index: sampleIndex,
               tracking_confidence: 0.98,
               wavevector_kf: [1.25e7, 0, 0],
             },

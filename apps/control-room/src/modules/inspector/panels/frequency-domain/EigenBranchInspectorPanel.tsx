@@ -17,6 +17,7 @@ import {
   buildEigenBranchPointModeSelectionRef,
   buildEigenBranchesModel,
   eigenModeFieldAvailable,
+  frequencyDomainEquilibriumIdForSample,
   frequencyDomainManifestPayload,
   frequencyDomainResultContextFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -114,7 +115,10 @@ export function buildEigenBranchModePlotHandoff(
   const artifactPath = artifact?.artifact_path;
   const resourceRef = point.modeFieldResourceKey;
   const manifestContext = manifestOwner?.resultContext;
-  const equilibriumId = manifestContext?.equilibriumId;
+  const equilibriumId = frequencyDomainEquilibriumIdForSample(
+    manifestContext,
+    point.sampleIndex,
+  );
   const kContextKind = manifestContext?.classification?.kContext.kind;
   const studyProduct = manifestContext?.studyProduct;
   const wavevectorKf = point.wavevectorKf;
@@ -243,7 +247,10 @@ function buildEigenBranchModeOpenSelectionRef(
   const artifactRevision = artifact?.revision;
   const artifactPath = artifact?.artifact_path;
   const manifestContext = manifestOwner?.resultContext;
-  const equilibriumId = manifestContext?.equilibriumId;
+  const equilibriumId = frequencyDomainEquilibriumIdForSample(
+    manifestContext,
+    point.sampleIndex,
+  );
   const kContextKind = manifestContext?.classification?.kContext.kind;
   if (
     !isNonEmptyString(branchId) ||
