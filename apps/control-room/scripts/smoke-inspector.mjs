@@ -52,6 +52,10 @@ const INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER = {
   stage_id: "frequency-response",
 };
 const INSPECTOR_MODAL_DOMAIN_GENERATION_ID = "1";
+const INSPECTOR_MODAL_SAMPLE_EQUILIBRIUM_IDS = Object.freeze({
+  0: `sha256:${"1".repeat(64)}`,
+  1: `sha256:${"2".repeat(64)}`,
+});
 const INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION = 7;
 const INSPECTOR_MODAL_TOPOLOGY_HASH = "0123456789abcdef".repeat(4);
 const INSPECTOR_MODAL_TOPOLOGY_HEADER_HASH =
@@ -5074,6 +5078,8 @@ function inspectorFieldMeta(path, fixture = {}) {
       default_phase_rad: 0,
       default_view: "phase_rotated_real",
       field_id: fieldId,
+      generation_id: INSPECTOR_MODAL_BRANCH_OWNER.generation_id,
+      generation_status: INSPECTOR_MODAL_BRANCH_OWNER.generation_status,
       missing_reason: null,
       payload_encoding: "f64_interleaved_real_imag_xyz",
       payload_value_count: 72,
@@ -5303,6 +5309,8 @@ function assertInspectorModalModeFieldMetadata(metadata) {
     metadata.schema_version === "frequency_domain_mode_field.v1" &&
       metadata.status === "ready" &&
       metadata.field_id === INSPECTOR_MODAL_FIELD_ID &&
+      metadata.generation_id === INSPECTOR_MODAL_BRANCH_OWNER.generation_id &&
+      metadata.generation_status === INSPECTOR_MODAL_BRANCH_OWNER.generation_status &&
       metadata.value_kind === "complex_spatial_vector" &&
       metadata.component_basis === "global_xyz" &&
       metadata.component_count === 3 &&
@@ -5579,7 +5587,31 @@ function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_respons
   const modalResonance = modal && fixture.modalResonanceQualification === true;
   const resultPayload = modal
     ? {
-        equilibrium_identity: "equilibrium-1",
+        ...(fixture.modalDispersionOwnershipRegression
+          ? {
+              sample_execution_provenance: {
+                schema_version: "frequency_domain_sample_execution_provenance.v1",
+                status: "mixed",
+                sample_count: 2,
+                samples: [
+                  {
+                    sample_index: 0,
+                    validation: {
+                      equilibrium_artifact_sha256:
+                        INSPECTOR_MODAL_SAMPLE_EQUILIBRIUM_IDS[0],
+                    },
+                  },
+                  {
+                    sample_index: 1,
+                    validation: {
+                      equilibrium_artifact_sha256:
+                        INSPECTOR_MODAL_SAMPLE_EQUILIBRIUM_IDS[1],
+                    },
+                  },
+                ],
+              },
+            }
+          : { equilibrium_identity: "equilibrium-1" }),
         observables: modalResonance
           ? [{ identity: "rf-coupling", kind: "rf_coupling", unit: "1" }]
           : [],
@@ -5876,14 +5908,44 @@ function inspectorFrequencyMode(fixture, sampleIndex, modeIndex) {
   const mode = branch?.points.find((point) =>
     point.sample_index === sampleIndex && point.raw_mode_index === modeIndex,
   );
+  const sampleEquilibriumId = fixture.modalDispersionOwnershipRegression
+    ? INSPECTOR_MODAL_SAMPLE_EQUILIBRIUM_IDS[sampleIndex]
+    : null;
   return {
     ...branches,
     artifact_path: `eigen/modes/sample_${String(sampleIndex).padStart(4, "0")}/mode_${String(modeIndex).padStart(4, "0")}.json`,
+    ...(fixture.modalDispersionOwnershipRegression && mode
+      ? {
+          generation_id: INSPECTOR_MODAL_BRANCH_OWNER.generation_id,
+          generation_status: INSPECTOR_MODAL_BRANCH_OWNER.generation_status,
+          revision: `inspector-modal-mode-run-b-s${sampleIndex}-m${modeIndex}-rev-1`,
+        }
+      : {}),
     missing_reason: mode ? null : "fixture_mode_not_present",
     payload: mode ? {
       ...mode,
       branch_id: branch.branch_id,
       frequency_hz: mode.frequency_real_hz,
+      ...(sampleEquilibriumId
+        ? {
+            equilibrium_artifact_sha256: sampleEquilibriumId,
+            candidate_identity: {
+              schema_version: "frequency_domain_candidate_identity.v1",
+              mesh_id: "Inspector fixture mesh",
+              mesh_generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+              topology_fingerprint: INSPECTOR_MODAL_TOPOLOGY_HEADER_HASH,
+              equilibrium_artifact_sha256: sampleEquilibriumId,
+              engine_id: "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+              device: "cpu",
+              source_identity: {
+                built_at_utc: "2026-10-26T00:00:00Z",
+                git_commit: "0123456789abcdef0123456789abcdef01234567",
+                worktree_state: "clean",
+                source_snapshot_sha256: "3".repeat(64),
+              },
+            },
+          }
+        : {}),
       schema_version: "eigen_mode.v2",
       solver_model: branches.payload.solver_model,
     } : null,
