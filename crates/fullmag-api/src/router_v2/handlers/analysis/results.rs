@@ -1458,7 +1458,7 @@ fn result_artifact_stage_id(
     )
 }
 
-fn result_artifact_stage_id_with_identity(
+pub(super) fn result_artifact_stage_id_with_identity(
     artifact_dir: &Path,
     artifact_path: &str,
     captured_run_id: &str,
@@ -1466,6 +1466,33 @@ fn result_artifact_stage_id_with_identity(
     generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
     source_digest: &str,
     source_byte_length: u64,
+) -> Result<String, ApiError> {
+    let legacy = if generation.is_none() {
+        super::frequency_domain::frequency_domain_owner::read_legacy_owner(artifact_dir, artifact_path)?
+    } else {
+        None
+    };
+    let stage_id = result_artifact_stage_id_with_captured_legacy_owner(
+        artifact_dir, artifact_path, captured_run_id, stage_records,
+        generation, source_digest, source_byte_length, legacy.as_ref(),
+    )?;
+    if generation.is_none()
+        && super::frequency_domain::frequency_domain_owner::read_legacy_owner(artifact_dir, artifact_path)? != legacy
+    {
+        return Err(ApiError::conflict("frequency_domain_artifact_set_stale"));
+    }
+    Ok(stage_id)
+}
+
+pub(super) fn result_artifact_stage_id_with_captured_legacy_owner(
+    artifact_dir: &Path,
+    artifact_path: &str,
+    captured_run_id: &str,
+    stage_records: &[StageExecutionRecord],
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+    source_digest: &str,
+    source_byte_length: u64,
+    legacy: Option<&super::frequency_domain::frequency_domain_owner::LegacyOwnerSnapshot>,
 ) -> Result<String, ApiError> {
     // A publication's producer owns only an exact member. Legacy artifacts
     // need one unambiguous stage reference; active stage and payload fields do
@@ -1502,15 +1529,12 @@ fn result_artifact_stage_id_with_identity(
         return Err(result_owner_mismatch());
     }
 
+    // Legacy records can supply evidence only when there is no captured
+    // generation at all. A nonmember or unbound member stays unbound.
     let producer = generation
-        .filter(|generation| {
-            generation
-                .commit
-                .content
-                .members
-                .contains_key(artifact_path)
-        })
-        .and_then(|generation| generation.commit.content.producer.as_ref());
+        .filter(|generation| generation.commit.content.members.contains_key(artifact_path))
+        .and_then(|generation| generation.commit.content.producer.as_ref())
+        .or_else(|| legacy.and_then(|snapshot| snapshot.owner.as_ref()));
     if producer.is_some_and(|producer| {
         producer.run_id.as_str() != captured_run_id || producer.stage_id.trim().is_empty()
     }) {
@@ -1556,9 +1580,11 @@ fn result_artifact_stage_id_with_identity(
         return Ok(producer.stage_id.clone());
     }
 
-    Ok(reference_owner
-        .unwrap_or("stage:analysis")
-        .to_string())
+    Ok(if generation.is_some() {
+        "stage:analysis"
+    } else {
+        reference_owner.unwrap_or("stage:analysis")
+    }.to_string())
 }
 
 fn result_stage_ref_covers_artifact(
@@ -7177,6 +7203,46 @@ mod generation_snapshot_tests {
         }
 
         let app = crate::router_v2::build_v2_router().with_state(state.clone());
+        // Imported read-only snapshots have no active stage. A later unrelated
+        // modal stage in a live snapshot must not replace the committed owner.
+        for unrelated_stage_active in [false, true] {
+            {
+                let mut current = state.current_live_state.write().await;
+                let snapshot = current.as_mut().unwrap();
+                snapshot.stage_execution = if unrelated_stage_active {
+                    snapshot.runtime_status.code = "completed".into();
+                    Some(serde_json::from_value(serde_json::json!({
+                        "total_stages":1,"runtime_state":"completed","active_stage_index":0,
+                        "stages":[{"stage_id":"unrelated-modal-stage","kind":"flat_eigenmodes",
+                            "status":"completed","artifact_refs":["unrelated.json"]}]
+                    })).unwrap())
+                } else {
+                    snapshot.runtime_status.code = "imported_read_only".into();
+                    None
+                };
+            }
+            for route in [
+                "/v2/sessions/current/analysis/frequency-domain/eigen/modes/0/0".to_string(),
+                "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/0/meta".to_string(),
+                format!("/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0000/samples/vector?view=complex&expected_artifact_generation_id={}", first_generation.commit.generation_id),
+            ] {
+                let response = app.clone().oneshot(Request::builder().uri(route.as_str()).body(Body::empty()).unwrap()).await.unwrap();
+                let status = response.status();
+                let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+                assert_eq!(status, StatusCode::OK, "{route}: {}", String::from_utf8_lossy(&bytes));
+                if !route.contains("samples/vector") {
+                    let resource: Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(resource["generation_id"], first_generation.commit.generation_id);
+                    assert_eq!(resource["generation_status"], "member_verified_owner_bound");
+                    if route.ends_with("/modes/0/0") {
+                        assert_eq!(resource["run_id"], "test-run");
+                        assert_eq!(resource["stage_id"], "eigen-stage");
+                    }
+                } else {
+                    assert_eq!(&bytes[..4], b"FMVP");
+                }
+            }
+        }
         let catalog_response = app
             .clone()
             .oneshot(
@@ -7760,4 +7826,20 @@ mod generation_snapshot_tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn legacy_result_owner_binds_exact_records_and_rejects_foreign_run() {
+        let root = TempGenerationRoot::new();
+        let artifact_path = "eigen/spectrum.v2.json";
+        std::fs::create_dir_all(root.0.join("eigen")).unwrap();
+        std::fs::create_dir_all(root.0.join("frequency_domain")).unwrap();
+        std::fs::write(root.0.join(artifact_path), b"{}").unwrap();
+        std::fs::write(root.0.join("frequency_domain/manifest.v1.json"), br#"{"schema_version":"frequency_domain_manifest.v1","study_product":"modal_eigen"}"#).unwrap();
+        std::fs::write(root.0.join("metadata.json"), br#"{"problem_meta":{"runtime_metadata":{"producer_run_id":"archived-run","producer_stage_id":"archived-stage","producer_stage_kind":"eigenmodes"}}}"#).unwrap();
+        assert_eq!(result_artifact_stage_id(&root.0, artifact_path, "archived-run", &[], None).unwrap(), "archived-stage");
+        assert!(result_artifact_stage_id(&root.0, artifact_path, "foreign-run", &[], None).is_err());
+        let foreign_ref = result_stage_record("foreign-stage", vec![artifact_path.into()]);
+        assert!(result_artifact_stage_id(&root.0, artifact_path, "archived-run", &[foreign_ref], None).is_err());
+    }
+
 }

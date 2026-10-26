@@ -5585,7 +5585,7 @@ fn analysis_frequency_response_vector_response(
         generation.as_ref(),
         &relative_path,
     )?;
-    crate::router_v2::handlers::analysis::frequency_domain::
+    let owner_capture = crate::router_v2::handlers::analysis::frequency_domain::
         validate_frequency_domain_field_artifact_owner(snapshot, &relative_path, generation.as_ref())?;
     let metadata = response_field_data_plane_metadata_from_point_artifact(
         &artifact_dir,
@@ -5693,6 +5693,7 @@ fn analysis_frequency_response_vector_response(
         node_index_count,
     );
     insert_artifact_generation_header(&mut resp, artifact_generation_id.as_deref());
+    owner_capture.ensure_current(&artifact_dir, &relative_path, generation.as_ref())?;
     if artifact_generation_id.is_some() != member.is_some() {
         return Err(ApiError::internal(
             "frequency-domain artifact generation membership was not preserved",
@@ -6546,7 +6547,7 @@ fn analysis_eigen_mode_vector_response(
         generation.as_ref(),
         &relative_path,
     )?;
-    crate::router_v2::handlers::analysis::frequency_domain::
+    let owner_capture = crate::router_v2::handlers::analysis::frequency_domain::
         validate_frequency_domain_field_artifact_owner(snapshot, &relative_path, generation.as_ref())?;
     let source_mesh_identity = metadata.source_mesh_identity.as_ref().ok_or_else(|| {
         ApiError::conflict(format!(
@@ -6704,6 +6705,7 @@ fn analysis_eigen_mode_vector_response(
     );
     insert_scope_headers(&mut resp, resolved_scope.as_ref());
     insert_artifact_generation_header(&mut resp, artifact_generation_id.as_deref());
+    owner_capture.ensure_current(&artifact_dir, &relative_path, generation.as_ref())?;
     if artifact_generation_id.is_some() != member.is_some() {
         return Err(ApiError::internal(
             "frequency-domain artifact generation membership was not preserved",

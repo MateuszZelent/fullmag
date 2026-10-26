@@ -1,5 +1,8 @@
 //! Frequency-domain analysis family manifest and artifact resource endpoints.
 
+#[path = "frequency_domain_owner.rs"]
+pub(super) mod frequency_domain_owner;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
@@ -2166,105 +2169,110 @@ struct FrequencyDomainLiveArtifactIdentity {
 }
 
 #[derive(Debug, Clone)]
-struct FrequencyDomainCapturedStageIdentity {
-    stage_id: Option<String>,
-    kind: Option<String>,
-    mesh_generation_id: Option<String>,
-    artifact_refs: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
 struct FrequencyDomainCapturedLiveIdentity {
     session_id: String,
     run_id: Option<String>,
-    stages: Vec<FrequencyDomainCapturedStageIdentity>,
-    active_stage_index: Option<usize>,
+    stages: Vec<crate::types::StageExecutionRecord>,
     latest_mesh_generation_id: Option<String>,
     mesh_generation_id: Option<String>,
 }
 
 impl FrequencyDomainCapturedLiveIdentity {
     fn from_snapshot(snapshot: &SessionStateResponse) -> Self {
-        let (stages, active_stage_index) = snapshot
-            .stage_execution
-            .as_ref()
-            .map(|execution| {
-                (
-                    execution
-                        .stages
-                        .iter()
-                        .map(|stage| FrequencyDomainCapturedStageIdentity {
-                            stage_id: stage.stage_id.clone(),
-                            kind: stage.kind.clone(),
-                            mesh_generation_id: stage.mesh_generation_id.clone(),
-                            artifact_refs: stage.artifact_refs.clone(),
-                        })
-                        .collect(),
-                    execution.active_stage_index,
-                )
-            })
-            .unwrap_or_default();
         Self {
             session_id: snapshot.session.session_id.clone(),
-            run_id: snapshot
-                .run
-                .as_ref()
-                .map(|run| run.run_id.clone())
+            run_id: snapshot.run.as_ref().map(|run| run.run_id.clone())
                 .or_else(|| Some(snapshot.session.run_id.clone())),
-            stages,
-            active_stage_index,
-            latest_mesh_generation_id: snapshot
-                .live_state
-                .as_ref()
+            stages: snapshot.stage_execution.as_ref()
+                .map(|execution| execution.stages.clone()).unwrap_or_default(),
+            latest_mesh_generation_id: snapshot.live_state.as_ref()
                 .and_then(|live| live.latest_step.fem_mesh_generation_id.clone()),
-            mesh_generation_id: snapshot
-                .fem_mesh
-                .as_ref()
-                .and_then(|mesh| mesh.generation_id.clone()),
+            mesh_generation_id: snapshot.fem_mesh.as_ref().and_then(|mesh| mesh.generation_id.clone()),
         }
     }
 
-    fn artifact_identity(&self, artifact_path: &str) -> FrequencyDomainLiveArtifactIdentity {
-        let expected_kind_fragment = if artifact_path.starts_with("eigen/") {
-            Some("eigen")
-        } else if artifact_path.starts_with("response/") {
-            Some("frequency")
-        } else {
-            None
-        };
-        let stage = self
-            .stages
-            .iter()
-            .rev()
-            .find(|stage| {
-                stage.artifact_refs.iter().any(|reference| {
-                    reference == artifact_path || reference.ends_with(artifact_path)
-                })
+    fn same_owner_context(&self, other: &Self) -> bool {
+        self.session_id == other.session_id && self.run_id == other.run_id
+            && self.latest_mesh_generation_id == other.latest_mesh_generation_id
+            && self.mesh_generation_id == other.mesh_generation_id
+            && self.stages.len() == other.stages.len()
+            && self.stages.iter().zip(&other.stages).all(|(left, right)| {
+                left.stage_id == right.stage_id
+                    && left.mesh_generation_id == right.mesh_generation_id
+                    && left.artifact_refs == right.artifact_refs
             })
-            .or_else(|| {
-                expected_kind_fragment.and_then(|fragment| {
-                    self.stages.iter().rev().find(|stage| {
-                        stage
-                            .kind
-                            .as_deref()
-                            .is_some_and(|kind| kind.contains(fragment))
-                    })
-                })
-            })
-            .or_else(|| {
-                self.active_stage_index
-                    .and_then(|index| self.stages.get(index))
-            });
-        FrequencyDomainLiveArtifactIdentity {
+    }
+
+    fn artifact_identity(
+        &self,
+        root: &FsPath,
+        artifact_path: &str,
+        generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+    ) -> Result<(FrequencyDomainLiveArtifactIdentity, Option<frequency_domain_owner::LegacyOwnerSnapshot>), ApiError> {
+        let mut identity = FrequencyDomainLiveArtifactIdentity {
             session_id: Some(self.session_id.clone()),
             run_id: self.run_id.clone(),
-            stage_id: stage.and_then(|stage| stage.stage_id.clone()),
-            mesh_generation_id: stage
-                .and_then(|stage| stage.mesh_generation_id.clone())
-                .or_else(|| self.latest_mesh_generation_id.clone())
-                .or_else(|| self.mesh_generation_id.clone()),
+            stage_id: None,
+            mesh_generation_id: self.latest_mesh_generation_id.clone().or_else(|| self.mesh_generation_id.clone()),
+        };
+        if artifact_path.is_empty() { return Ok((identity, None)); }
+        let legacy = if let Some(generation) = generation {
+            // A committed producer owns only exact members. Neither mutable
+            // aliases nor currently active stages may bind an unowned member.
+            if generation.commit.content.members.contains_key(artifact_path) {
+                super::results::validate_generation_producer(Some(generation), self.run_id.as_deref(), None)?;
+                if let Some(producer) = &generation.commit.content.producer {
+                    identity.run_id = Some(producer.run_id.clone());
+                    identity.stage_id = Some(producer.stage_id.clone());
+                }
+            }
+            None
+        } else {
+            let legacy = frequency_domain_owner::read_legacy_owner(root, artifact_path)?;
+            if let Some(owner) = legacy.as_ref().and_then(|snapshot| snapshot.owner.as_ref()) {
+                if self.run_id.as_deref().is_some_and(|run| run != owner.run_id) {
+                    return Err(ApiError::conflict("frequency_domain_artifact_generation_owner_mismatch"));
+                }
+            }
+            let published_owner = legacy.as_ref().and_then(|snapshot| snapshot.owner.as_ref());
+            if self.stages.iter().all(|stage| stage.artifact_refs.is_empty()) {
+                // Without reference evidence there is nothing to hash for owner
+                // resolution. A missing published owner remains unbound.
+                identity.stage_id = published_owner.map(|owner| owner.stage_id.clone());
+            } else if let Some((digest, byte_length)) = legacy_artifact_identity(root, artifact_path)? {
+                let stage = super::results::result_artifact_stage_id_with_captured_legacy_owner(
+                    root, artifact_path, self.run_id.as_deref().unwrap_or_default(),
+                    &self.stages, None, &digest, byte_length, legacy.as_ref(),
+                )?;
+                if stage != "stage:analysis" { identity.stage_id = Some(stage); }
+            }
+            legacy
+        };
+        if let Some(stage_id) = &identity.stage_id {
+            if let Some(stage) = self.stages.iter().find(|stage| stage.stage_id.as_ref() == Some(stage_id)) {
+                identity.mesh_generation_id = stage.mesh_generation_id.clone().or(identity.mesh_generation_id);
+            }
         }
+        Ok((identity, legacy))
     }
+}
+
+/// Hash legacy bytes without allocating a second complete binary field. Modern
+/// generation members already carry this identity and never enter this path.
+fn legacy_artifact_identity(root: &FsPath, artifact_path: &str) -> Result<Option<(String, u64)>, ApiError> {
+    let Some(path) = try_resolve_artifact_path(root, artifact_path)? else { return Ok(None) };
+    let mut file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() { return Err(ApiError::internal("legacy artifact is not a regular file")); }
+    let mut hasher = Sha256::new();
+    let mut length = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 { break; }
+        hasher.update(&buffer[..count]);
+        length += count as u64;
+    }
+    Ok(Some((format!("sha256:{:x}", hasher.finalize()), length)))
 }
 
 #[derive(Debug, Clone)]
@@ -2276,17 +2284,19 @@ pub(crate) struct FrequencyDomainArtifactSetCapture {
     live_identity: FrequencyDomainCapturedLiveIdentity,
     artifact_path: String,
     identity: FrequencyDomainLiveArtifactIdentity,
+    legacy_owner: Option<frequency_domain_owner::LegacyOwnerSnapshot>,
 }
 
 impl FrequencyDomainArtifactSetCapture {
     fn bind_artifact_path(&mut self, artifact_path: &str) -> Result<(), ApiError> {
+        if self.artifact_path == artifact_path { return Ok(()); }
         self.artifact_path = artifact_path.to_string();
-        self.identity = self.live_identity.artifact_identity(artifact_path);
-        super::results::validate_generation_producer(
-            self.generation.as_ref(),
-            self.identity.run_id.as_deref(),
-            self.identity.stage_id.as_deref(),
-        )
+        let (identity, legacy_owner) = self.live_identity.artifact_identity(
+            &self.artifact_dir, artifact_path, self.generation.as_ref(),
+        )?;
+        self.identity = identity;
+        self.legacy_owner = legacy_owner;
+        Ok(())
     }
 
     fn generation_status(&self) -> Option<FrequencyDomainArtifactGenerationStatus> {
@@ -2318,18 +2328,37 @@ impl FrequencyDomainArtifactSetCapture {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct FrequencyDomainFieldOwnerCapture {
+    legacy_owner: Option<frequency_domain_owner::LegacyOwnerSnapshot>,
+}
+
+impl FrequencyDomainFieldOwnerCapture {
+    pub(crate) fn ensure_current(
+        &self,
+        root: &FsPath,
+        artifact_path: &str,
+        generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+    ) -> Result<(), ApiError> {
+        if generation.is_none()
+            && frequency_domain_owner::read_legacy_owner(root, artifact_path)? != self.legacy_owner
+        {
+            return Err(ApiError::conflict("frequency_domain_artifact_set_stale"));
+        }
+        super::results::ensure_generation_capture_current(root, generation)
+    }
+}
+
 pub(crate) fn validate_frequency_domain_field_artifact_owner(
     snapshot: &SessionStateResponse,
     artifact_path: &str,
     generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
-) -> Result<(), ApiError> {
-    let identity = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot)
-        .artifact_identity(artifact_path);
-    super::results::validate_generation_producer(
-        generation,
-        identity.run_id.as_deref(),
-        identity.stage_id.as_deref(),
-    )
+) -> Result<FrequencyDomainFieldOwnerCapture, ApiError> {
+    let root = crate::session::current_artifact_dir(snapshot)
+        .ok_or_else(|| ApiError::not_found("no artifact directory for analysis field payload"))?;
+    let (_, legacy_owner) = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot)
+        .artifact_identity(&root, artifact_path, generation)?;
+    Ok(FrequencyDomainFieldOwnerCapture { legacy_owner })
 }
 
 fn canonical_frequency_domain_artifact_root(
@@ -2375,14 +2404,9 @@ async fn capture_frequency_domain_artifact_set(
         })?;
     let live_identity = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot);
     let artifact_path = artifact_paths.first().copied().unwrap_or_default();
-    let identity = live_identity.artifact_identity(artifact_path);
-    if !artifact_path.is_empty() {
-        super::results::validate_generation_producer(
-            generation.as_ref(),
-            identity.run_id.as_deref(),
-            identity.stage_id.as_deref(),
-        )?;
-    }
+    let (identity, legacy_owner) = live_identity.artifact_identity(
+        &artifact_dir, artifact_path, generation.as_ref(),
+    )?;
     Ok(FrequencyDomainArtifactSetCapture {
         request_context,
         artifact_dir,
@@ -2391,6 +2415,7 @@ async fn capture_frequency_domain_artifact_set(
         live_identity,
         artifact_path: artifact_path.to_string(),
         identity,
+        legacy_owner,
     })
 }
 
@@ -2410,9 +2435,21 @@ async fn validate_current_frequency_domain_artifact_set(
         .ok_or_else(|| ApiError::not_found("no artifact directory for the active workspace"))?;
     let (artifact_dir, artifact_set_id) = canonical_frequency_domain_artifact_root(&artifact_root)?;
     let live_identity = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot);
+    let (identity, legacy_owner) = if captured.generation.is_none() {
+        if !live_identity.same_owner_context(&captured.live_identity) {
+            return Err(ApiError::conflict("frequency_domain_artifact_set_stale"));
+        }
+        let owner = frequency_domain_owner::read_legacy_owner(&artifact_dir, &captured.artifact_path)?;
+        // The source and exact-reference identity were already captured. Only
+        // owner-record and live-context witnesses need rechecking here.
+        (captured.identity.clone(), owner)
+    } else {
+        live_identity.artifact_identity(&artifact_dir, &captured.artifact_path, captured.generation.as_ref())?
+    };
     if artifact_dir != captured.artifact_dir
         || artifact_set_id != captured.artifact_set_id
-        || live_identity.artifact_identity(&captured.artifact_path) != captured.identity
+        || identity != captured.identity
+        || legacy_owner != captured.legacy_owner
     {
         return Err(ApiError::conflict("frequency_domain_artifact_set_stale"));
     }
@@ -4793,5 +4830,84 @@ mod response_progress_generation_tests {
                 Some(&generation),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod frequency_domain_owner_capture_tests {
+    use super::*;
+
+    struct Root(PathBuf);
+    impl Root {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("frequency-owner-capture-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(root.join("eigen")).unwrap();
+            std::fs::create_dir_all(root.join("frequency_domain")).unwrap();
+            Self(root)
+        }
+    }
+    impl Drop for Root { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+
+    fn live_identity() -> FrequencyDomainCapturedLiveIdentity {
+        FrequencyDomainCapturedLiveIdentity {
+            session_id: "import-session".into(), run_id: Some("archived-run".into()),
+            stages: vec![serde_json::from_value(serde_json::json!({
+                "stage_id":"unrelated-modal-stage", "kind":"flat_eigenmodes", "status":"completed"
+            })).unwrap()],
+            latest_mesh_generation_id: None, mesh_generation_id: None,
+        }
+    }
+
+    #[test]
+    fn committed_owner_identity_ignores_legacy_records_and_unrelated_stages() {
+        let root = Root::new();
+        let path = "eigen/spectrum.v2.json";
+        std::fs::write(root.0.join("metadata.json"), b"invalid mutable alias").unwrap();
+        std::fs::write(root.0.join("frequency_domain/manifest.v1.json"), b"invalid mutable manifest").unwrap();
+        let unbound = super::super::results::write_immutable_result_generation_for_test(
+            &root.0, [(path.into(), b"{}".to_vec())], None,
+        );
+        for member in [path, "eigen/nonmember.json"] {
+            let (identity, witness) = live_identity().artifact_identity(&root.0, member, Some(&unbound)).unwrap();
+            assert!(identity.stage_id.is_none());
+            assert!(witness.is_none());
+        }
+        let producer = fullmag_runner::artifact_generation::PublicationOwner {
+            run_id: "archived-run".into(), stage_id: "published-stage".into(), stage_kind: "eigenmodes".into(),
+        };
+        let bound = super::super::results::write_immutable_result_generation_for_test(
+            &root.0, [(path.into(), b"{}".to_vec())], Some(producer),
+        );
+        let (identity, _) = live_identity().artifact_identity(&root.0, path, Some(&bound)).unwrap();
+        assert_eq!(identity.stage_id.as_deref(), Some("published-stage"));
+        let mut foreign = live_identity();
+        foreign.run_id = Some("foreign-run".into());
+        assert!(foreign.artifact_identity(&root.0, path, Some(&bound)).is_err());
+    }
+
+    #[test]
+    fn legacy_identity_never_infers_owner_from_unreferenced_stage_kind() {
+        let root = Root::new();
+        let path = "eigen/spectrum.v2.json";
+        std::fs::write(root.0.join(path), b"{}").unwrap();
+        let (identity, _) = live_identity().artifact_identity(&root.0, path, None).unwrap();
+        assert!(identity.stage_id.is_none());
+    }
+
+    #[test]
+    fn legacy_binary_owner_capture_fences_even_same_owner_record_changes() {
+        let root = Root::new();
+        let path = "eigen/field.bin";
+        std::fs::write(root.0.join("frequency_domain/manifest.v1.json"), br#"{"schema_version":"frequency_domain_manifest.v1","study_product":"modal_eigen"}"#).unwrap();
+        let metadata = serde_json::json!({"problem_meta":{"runtime_metadata":{
+            "producer_run_id":"archived-run","producer_stage_id":"published-stage","producer_stage_kind":"eigenmodes"}}});
+        std::fs::write(root.0.join("metadata.json"), serde_json::to_vec(&metadata).unwrap()).unwrap();
+        let (_, witness) = live_identity().artifact_identity(&root.0, path, None).unwrap();
+        let capture = FrequencyDomainFieldOwnerCapture { legacy_owner: witness };
+        capture.ensure_current(&root.0, path, None).unwrap();
+        let mut changed = metadata;
+        changed["diagnostic"] = serde_json::json!("changed after capture");
+        std::fs::write(root.0.join("metadata.json"), serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(capture.ensure_current(&root.0, path, None).is_err());
     }
 }

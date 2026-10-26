@@ -327,12 +327,23 @@ jobs:
           # the other router contracts using this existing worker stack size.
           RUST_MIN_STACK: 8388608
         run: |
+          set -euo pipefail
           cargo test -p fullmag-api --bin fullmag-api field_sweep_items_keep_their_owner_identity_and_encode_resource_paths
           cargo test -p fullmag-api --bin fullmag-api spectrum_v3_items_project_durable_field_identity_without_mutating_payload
           cargo test -p fullmag-api --bin fullmag-api openapi_mode_field_availability_is_optional_boolean
           cargo test -p fullmag-api --bin fullmag-api openapi_field_sweep_schema_exposes_typed_dataset_and_sample_contract
           cargo test -p fullmag-api --bin fullmag-api quantities::tests
           cargo test -p fullmag-api --bin fullmag-api frequency_domain_
+          cargo test -p fullmag-api --bin fullmag-api spectrum_v3_projection_field_link_is_bound_to_the_captured_binary_generation -- --nocapture | tee "$RUNNER_TEMP/frequency-owner-field-parity.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/frequency-owner-field-parity.log"
+          cargo test -p fullmag-api --bin fullmag-api immutable_result_owner_uses_only_the_exact_commit_producer -- --nocapture | tee "$RUNNER_TEMP/frequency-owner-immutable.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/frequency-owner-immutable.log"
+          cargo test -p fullmag-api --bin fullmag-api legacy_result_owner_binds_exact_records_and_rejects_foreign_run -- --nocapture | tee "$RUNNER_TEMP/frequency-owner-legacy.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/frequency-owner-legacy.log"
+          cargo test -p fullmag-runner --lib manifest_owner_ -- --nocapture | tee "$RUNNER_TEMP/frequency-manifest-owner.log"
+          grep -F "test result: ok. 2 passed" "$RUNNER_TEMP/frequency-manifest-owner.log"
+          cargo test -p fullmag-runner --lib fem_eigen_writer_publishes_two_immutable_generations_and_preserves_legacy_root -- --nocapture | tee "$RUNNER_TEMP/frequency-owner-writer-publication.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/frequency-owner-writer-publication.log"
           cargo test -p fullmag-api --bin fullmag-api authoring_study_runtime_parallel_patch
           cargo test -p fullmag-api --bin fullmag-api authoring_transaction_ack_
           cargo test -p fullmag-api --bin fullmag-api modal_history_tests
