@@ -122,6 +122,14 @@ pub(crate) fn prepare_accepted_fem_execution(
     let execution_plan =
         crate::accepted_study_worker::materialize_resolved_study_inputs(store, accepted_step)
             .context("materialize accepted FEM CAS inputs for the runner")?;
+    if study_step
+        .outputs
+        .iter()
+        .any(|port| port.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT)
+        && !matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(fem) if fem.relaxation.is_some())
+    {
+        bail!("equilibrium_handoff output requires an accepted FEM Relax plan");
+    }
     let mut problem = accepted_step.problem.clone();
     if matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(fem) if fem.relaxation.is_some()) {
         bind_accepted_fem_relaxation_producer(
@@ -222,8 +230,14 @@ pub(crate) fn execute_accepted_fem_attempt(
     // The shared output collector performs the metadata-size preflight before
     // allocating each explicit artifact. Reuse its owned state bytes instead
     // of reading m_final.json a second time.
-    let outputs = crate::accepted_study_worker::collect_runner_study_outputs(
-        &prepared.output_ports,
+    let state_ports: Vec<_> = prepared
+        .output_ports
+        .iter()
+        .filter(|port| port.port_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT)
+        .cloned()
+        .collect();
+    let mut outputs = crate::accepted_study_worker::collect_runner_study_outputs(
+        &state_ports,
         &prepared.case_id,
         &result,
         &attempt_output_dir,
@@ -297,6 +311,19 @@ pub(crate) fn execute_accepted_fem_attempt(
         )?;
         accepted_state_ref
     };
+
+    if prepared
+        .output_ports
+        .iter()
+        .any(|port| port.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT)
+    {
+        outputs.push(crate::accepted_relax_equilibrium::collect_handoff(
+            accepted_step,
+            prepared,
+            &result,
+            attempt_output_dir,
+        )?);
+    }
 
     Ok(AcceptedFemExecutionOutcome::Completed(
         AcceptedFemExecution {
@@ -641,6 +668,8 @@ pub(crate) fn validate_declared_outputs(outputs: &[StudyOutputPort]) -> Result<(
                 final_state = true;
             }
             StudyPortDataKind::Scalar if output.port_id == "total_energy" => {}
+            StudyPortDataKind::Artifact
+                if output.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT => {}
             _ => bail!(
                 "accepted FEM CPU study output `{}` is outside final_state/total_energy contract",
                 output.port_id

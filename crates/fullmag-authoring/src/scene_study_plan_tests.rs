@@ -323,3 +323,273 @@ fn pipeline_antenna_stage_declares_the_same_output_without_magnetic_state() {
     assert!(plan.steps[0].inputs.is_empty());
     assert_eq!(plan.steps[0].until_seconds, None);
 }
+
+#[test]
+fn fem_eigen_relax_source_adds_typed_handoff_and_orders_relax_first() {
+    let scene = scene_with_study(serde_json::json!({
+        "requested_backend": "fem",
+        "stages": [
+            {
+                "kind": "eigenmodes",
+                "entrypoint_kind": "flat_eigenmodes",
+                "stage_id": "eigen",
+                "eigen_equilibrium_source": "relax"
+            },
+            {
+                "kind": "relax",
+                "entrypoint_kind": "flat_relax",
+                "stage_id": "equilibrium"
+            }
+        ]
+    }));
+
+    let plan = scene_document_to_study_plan(&scene, "fem-eigen", 1, &migration_defaults())
+        .expect("one enabled Relax producer should be inferred");
+    let eigen = plan
+        .steps
+        .iter()
+        .find(|step| step.step_id == "eigen")
+        .unwrap();
+    let relax = plan
+        .steps
+        .iter()
+        .find(|step| step.step_id == "equilibrium")
+        .unwrap();
+
+    assert_eq!(
+        eigen.inputs,
+        vec![crate::StudyInputPort {
+            port_id: crate::EQUILIBRIUM_HANDOFF_PORT_ID.into(),
+            data_kind: crate::StudyPortDataKind::Artifact,
+            required: true,
+            source: crate::StudyInputSource::StepOutput {
+                step_id: "equilibrium".into(),
+                port: crate::EQUILIBRIUM_HANDOFF_PORT_ID.into(),
+                case_id: "default".into(),
+            },
+        }]
+    );
+    assert_eq!(
+        relax.outputs,
+        vec![
+            crate::StudyOutputPort {
+                port_id: "final_state".into(),
+                data_kind: crate::StudyPortDataKind::State,
+            },
+            crate::StudyOutputPort {
+                port_id: "total_energy".into(),
+                data_kind: crate::StudyPortDataKind::Scalar,
+            },
+            crate::StudyOutputPort {
+                port_id: crate::EQUILIBRIUM_HANDOFF_PORT_ID.into(),
+                data_kind: crate::StudyPortDataKind::Artifact,
+            },
+        ]
+    );
+    let order = plan.topological_order().unwrap();
+    assert!(
+        order.iter().position(|id| id == "equilibrium") < order.iter().position(|id| id == "eigen")
+    );
+}
+
+#[test]
+fn fem_eigen_relax_source_rejects_missing_ambiguous_and_disabled_relax_producers() {
+    let cases = [
+        (
+            "missing",
+            serde_json::json!([{
+                "kind": "eigenmodes",
+                "entrypoint_kind": "flat_eigenmodes",
+                "stage_id": "eigen",
+                "eigen_equilibrium_source": "relax"
+            }]),
+            "found none",
+        ),
+        (
+            "ambiguous",
+            serde_json::json!([
+                {"kind": "eigenmodes", "entrypoint_kind": "flat_eigenmodes", "stage_id": "eigen"},
+                {"kind": "relax", "entrypoint_kind": "flat_relax", "stage_id": "relax-a"},
+                {"kind": "relax", "entrypoint_kind": "flat_relax", "stage_id": "relax-b"}
+            ]),
+            "found 2",
+        ),
+        (
+            "disabled",
+            serde_json::json!([
+                {"kind": "eigenmodes", "entrypoint_kind": "flat_eigenmodes", "stage_id": "eigen"},
+                {"kind": "relax", "entrypoint_kind": "flat_relax", "stage_id": "relax", "enabled": false}
+            ]),
+            "found none",
+        ),
+    ];
+
+    for (study_id, stages, expected) in cases {
+        let scene = scene_with_study(serde_json::json!({
+            "requested_backend": "fem",
+            "stages": stages,
+        }));
+        let error = scene_document_to_study_plan(&scene, study_id, 1, &migration_defaults())
+            .expect_err("relax equilibrium source must not guess a producer");
+        assert!(error.to_string().contains(expected), "{study_id}: {error}");
+    }
+}
+
+#[test]
+fn fem_pipeline_projection_applies_the_same_explicit_relax_edge() {
+    let scene = scene_with_study(serde_json::json!({
+        "requested_backend": "fem",
+        "study_pipeline": {
+            "version": "study_pipeline.v1",
+            "nodes": [
+                {
+                    "node_kind": "primitive",
+                    "id": "eigen",
+                    "label": "Eigen",
+                    "stage_kind": "eigenmodes",
+                    "payload": {"eigen_equilibrium_source": "relax"}
+                },
+                {
+                    "node_kind": "primitive",
+                    "id": "equilibrium",
+                    "label": "Relax",
+                    "stage_kind": "relax"
+                }
+            ]
+        }
+    }));
+
+    let plan = scene_document_to_study_plan(&scene, "fem-pipeline", 1, &migration_defaults())
+        .expect("pipeline projection should use the same graph contract");
+    assert_eq!(plan.steps[0].step_id, "eigen");
+    assert_eq!(plan.steps[1].step_id, "equilibrium");
+    assert_eq!(
+        plan.steps[0].inputs[0].source,
+        crate::StudyInputSource::StepOutput {
+            step_id: "equilibrium".into(),
+            port: crate::EQUILIBRIUM_HANDOFF_PORT_ID.into(),
+            case_id: "default".into(),
+        }
+    );
+    assert!(
+        plan.topological_order()
+            .unwrap()
+            .iter()
+            .position(|id| id == "equilibrium")
+            < plan
+                .topological_order()
+                .unwrap()
+                .iter()
+                .position(|id| id == "eigen")
+    );
+}
+
+#[test]
+fn explicit_equilibrium_handoff_binding_and_custom_outputs_are_preserved() {
+    let scene = scene_with_study(serde_json::json!({
+        "requested_backend": "auto",
+        "stages": [
+            {"kind": "eigenmodes", "entrypoint_kind": "flat_eigenmodes", "stage_id": "eigen"},
+            {"kind": "relax", "entrypoint_kind": "flat_relax", "stage_id": "equilibrium"}
+        ]
+    }));
+    let mut plan =
+        scene_document_to_study_plan(&scene, "explicit-handoff", 1, &migration_defaults())
+            .expect("non-FEM projection should remain structurally valid");
+    let custom_outputs = vec![
+        crate::StudyOutputPort {
+            port_id: "custom_table".into(),
+            data_kind: crate::StudyPortDataKind::Table,
+        },
+        crate::StudyOutputPort {
+            port_id: "final_state".into(),
+            data_kind: crate::StudyPortDataKind::State,
+        },
+        crate::StudyOutputPort {
+            port_id: "total_energy".into(),
+            data_kind: crate::StudyPortDataKind::Scalar,
+        },
+        crate::StudyOutputPort {
+            port_id: crate::EQUILIBRIUM_HANDOFF_PORT_ID.into(),
+            data_kind: crate::StudyPortDataKind::Artifact,
+        },
+    ];
+    plan.steps[1].outputs = custom_outputs.clone();
+    plan.steps[0].inputs = vec![crate::StudyInputPort {
+        port_id: crate::EQUILIBRIUM_HANDOFF_PORT_ID.into(),
+        data_kind: crate::StudyPortDataKind::Artifact,
+        required: true,
+        source: crate::StudyInputSource::StepOutput {
+            step_id: "equilibrium".into(),
+            port: crate::EQUILIBRIUM_HANDOFF_PORT_ID.into(),
+            case_id: "default".into(),
+        },
+    }];
+    let original_inputs = plan.steps[0].inputs.clone();
+
+    super::normalize_fem_eigen_relax_dependencies(&mut plan, true)
+        .expect("an explicit typed producer binding must be preserved");
+    assert_eq!(plan.steps[0].inputs, original_inputs);
+    assert_eq!(plan.steps[1].outputs, custom_outputs);
+    plan.validate()
+        .expect("the preserved typed graph remains valid");
+}
+
+#[test]
+fn explicit_relax_outputs_without_handoff_are_rejected_without_deletion() {
+    let scene = scene_with_study(serde_json::json!({
+        "requested_backend": "auto",
+        "stages": [
+            {"kind": "eigenmodes", "entrypoint_kind": "flat_eigenmodes", "stage_id": "eigen"},
+            {"kind": "relax", "entrypoint_kind": "flat_relax", "stage_id": "equilibrium"}
+        ]
+    }));
+    let mut plan =
+        scene_document_to_study_plan(&scene, "custom-conflict", 1, &migration_defaults())
+            .expect("non-FEM projection should remain structurally valid");
+    plan.steps[1].outputs = vec![crate::StudyOutputPort {
+        port_id: "custom_table".into(),
+        data_kind: crate::StudyPortDataKind::Table,
+    }];
+    plan.steps[0].legacy_payload = Some(serde_json::json!({
+        "eigen_equilibrium_source": "relax"
+    }));
+    let error = super::normalize_fem_eigen_relax_dependencies(&mut plan, true)
+        .expect_err("explicit custom outputs must not be silently rewritten");
+    assert!(error.to_string().contains("equilibrium_handoff"));
+    assert_eq!(plan.steps[1].outputs[0].port_id, "custom_table");
+}
+
+#[test]
+fn non_fem_frequency_antenna_and_disabled_eigen_steps_are_unchanged() {
+    let scene = scene_with_study(serde_json::json!({
+        "requested_backend": "fdm",
+        "stages": [
+            {"kind": "eigenmodes", "entrypoint_kind": "flat_eigenmodes", "stage_id": "eigen"},
+            {"kind": "frequency_response", "entrypoint_kind": "flat_frequency_response", "stage_id": "frequency", "equilibrium_source": "relax"},
+            {"kind": "antenna_field_solve", "entrypoint_kind": "flat_antenna_field_solve", "stage_id": "antenna"},
+            {"kind": "eigenmodes", "entrypoint_kind": "flat_eigenmodes", "stage_id": "disabled-eigen", "enabled": false, "eigen_equilibrium_source": "relax"}
+        ]
+    }));
+    let plan = scene_document_to_study_plan(&scene, "non-fem", 1, &migration_defaults())
+        .expect("non-FEM stages must not opt into the FEM handoff contract");
+    assert!(plan
+        .steps
+        .iter()
+        .filter(|step| matches!(
+            &step.kind,
+            StudyStepKind::Primitive {
+                stage_kind: StudyPrimitiveStageKind::Eigenmodes
+                    | StudyPrimitiveStageKind::FrequencyResponse
+            }
+        ))
+        .all(|step| step.inputs.is_empty()));
+    assert!(plan
+        .steps
+        .iter()
+        .find(|step| step.step_id == "antenna")
+        .unwrap()
+        .outputs
+        .iter()
+        .any(|port| port.port_id == crate::ANTENNA_INSPECTION_OUTPUT_PORT_ID));
+}

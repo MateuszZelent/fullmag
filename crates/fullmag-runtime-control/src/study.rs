@@ -1635,6 +1635,18 @@ pub fn publish_study_outputs(
             }
             crate::study_modal::validate_bundle(&output.bytes, claim, step)?;
         }
+        if output.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
+            || output.codec_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
+        {
+            if output.port_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
+                || data_kind != "artifact" || output.case_id != "default"
+                || output.codec_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
+                || output.codec_version != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION
+            { bail!("FEM equilibrium publication differs from its declared typed output"); }
+            crate::study_equilibrium::validate_handoff_publication(
+                &output.bytes, store, accepted, claim, step,
+            )?;
+        }
         if output.codec_id==fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID {
             if accepted_state_ref.is_some() || observation_source.is_some() || output.port_id!="inspection" || output.case_id!="default" { bail!("inspection output cannot fabricate magnetic state or another case"); }
             let problem=accepted.catalog.entries().iter().find(|entry|entry.step_id()==step_id).context("inspection publication ProblemIR missing")?.problem();
@@ -2099,7 +2111,12 @@ pub(crate) fn validate_study_task_completion_for_snapshot(
         let inspection=matches!(source_step.kind,fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. });
         let maximum=if inspection { Some(crate::study_inspection::inspection_bundle_budget(claim)?) } else {None};
         let modal = crate::study_modal::is_modal_step(source_step);
-        let output_bytes = if modal {
+        let equilibrium = output.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
+            || output.codec_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID;
+        let output_bytes = if equilibrium {
+            store.cas().get_bounded(&output.object_ref,
+                crate::study_equilibrium::handoff_budget(claim.lease.budget.storage_bytes) as u64)?
+        } else if modal {
             store.cas().get_bounded(&output.object_ref, crate::study_modal::bundle_budget(claim) as u64)?
         } else if let Some(maximum)=maximum {
             store.cas().get_bounded(&output.object_ref,maximum as u64)?
@@ -2109,6 +2126,16 @@ pub(crate) fn validate_study_task_completion_for_snapshot(
                 output.artifact_id
             )
         })?;
+        if equilibrium {
+            if output.port_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
+                || data_kind != "artifact" || output.case_id != "default"
+                || output.codec_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
+                || output.codec_version != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION
+            { bail!("FEM equilibrium completion differs from its declared typed output"); }
+            crate::study_equilibrium::validate_handoff_publication(
+                &output_bytes, store, accepted, claim, source_step,
+            )?;
+        }
         if modal || output.codec_id == fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID {
             if manifest.accepted_state_ref.is_some() || manifest.observation_source.is_some()
                 || output.port_id != fullmag_application::MODAL_EIGEN_OUTPUT_PORT || output.case_id != "default"

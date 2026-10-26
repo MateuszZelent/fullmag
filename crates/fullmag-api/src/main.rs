@@ -40,6 +40,7 @@ mod accepted_fem_gpu_state;
 mod accepted_fem_study_worker;
 mod accepted_antenna_inspection_worker;
 mod accepted_modal_study_worker;
+mod accepted_relax_equilibrium;
 mod accepted_modal_publication;
 mod accepted_study_worker;
 mod accepted_observation_spool;

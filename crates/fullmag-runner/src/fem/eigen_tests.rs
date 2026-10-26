@@ -774,6 +774,23 @@ fn accepted_relax_completion() -> fullmag_ir::StageCompletionIR {
     }
 }
 
+fn execution_plan_for_modal(plan: FemEigenPlanIR) -> fullmag_ir::ExecutionPlanIR {
+    fullmag_ir::ExecutionPlanIR {
+        common: fullmag_ir::CommonPlanMeta {
+            ir_version: fullmag_ir::IR_VERSION.to_string(),
+            requested_backend: fullmag_ir::BackendTarget::Fem,
+            resolved_backend: fullmag_ir::BackendTarget::Fem,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            material_field_plans: Vec::new(),
+        },
+        backend_plan: fullmag_ir::BackendPlanIR::FemEigen(plan),
+        output_plan: fullmag_ir::OutputPlanIR {
+            outputs: Vec::new(),
+        },
+        provenance: fullmag_ir::ProvenancePlanIR::default(),
+    }
+}
+
 fn accepted_energy_relax_completion() -> fullmag_ir::StageCompletionIR {
     fullmag_ir::StageCompletionIR {
         status: "completed".to_string(),
@@ -1511,6 +1528,150 @@ fn accepted_relax_stage_handoff_revalidates_provided_multik_path_and_rejects_swe
     });
     let error = validate_eigen_equilibrium_certificate(&sweep, None, Some(&handoff))
         .expect_err("a provided continuation must not reuse one m0 for a field sweep");
+    assert!(error
+        .message
+        .contains("provided_continuation_rejects_bias_field_sweep"));
+}
+
+#[test]
+fn accepted_relax_materializer_preserves_path_relaxed_marker_and_exact_m0() {
+    let mut target = minimal_native_modal_plan();
+    target.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+    target.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            KPointIR::gamma(),
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+    target.equilibrium_magnetization = vec![[0.0, 1.0, 0.0]; target.mesh.nodes.len()];
+    let handoff = relax_handoff_from_completion(&target, &accepted_relax_completion())
+        .expect("a path may reuse the same accepted static relaxation");
+    let accepted_m0 = handoff.equilibrium_magnetization.clone();
+    let replayed = crate::ReplayedFemRelaxation {
+        handoff,
+        equilibrium_magnetization: accepted_m0.clone(),
+    };
+
+    let mut authored_target = target;
+    authored_target.equilibrium_magnetization =
+        vec![[9.0, 9.0, 9.0]; authored_target.mesh.nodes.len()];
+    let bound = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(authored_target),
+        &replayed,
+    )
+    .expect("the accepted static endpoint must materialize a K path");
+    let fullmag_ir::BackendPlanIR::FemEigen(bound_eigen) = bound.backend_plan else {
+        panic!("materializer must retain the FEM eigen backend");
+    };
+    assert_eq!(
+        bound_eigen.equilibrium,
+        EquilibriumSourceIR::RelaxedInitialState,
+        "path materialization must retain the authored Relax marker"
+    );
+    assert_eq!(bound_eigen.equilibrium_magnetization, accepted_m0);
+    assert!(matches!(
+        bound_eigen.k_sampling,
+        Some(KSamplingIR::Path { .. })
+    ));
+}
+
+#[test]
+fn accepted_relax_materializer_binds_single_and_rejects_path_drift_or_sweep() {
+    let mut target = minimal_native_modal_plan();
+    target.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+    target.equilibrium_magnetization = vec![[0.0, 1.0, 0.0]; target.mesh.nodes.len()];
+    let handoff = relax_handoff_from_completion(&target, &accepted_relax_completion())
+        .expect("a single K target must accept the static relaxation handoff");
+    let accepted_m0 = handoff.equilibrium_magnetization.clone();
+    let replayed = crate::ReplayedFemRelaxation {
+        handoff,
+        equilibrium_magnetization: accepted_m0.clone(),
+    };
+
+    let mut authored_target = target.clone();
+    authored_target.equilibrium_magnetization =
+        vec![[9.0, 9.0, 9.0]; authored_target.mesh.nodes.len()];
+    let bound = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(authored_target),
+        &replayed,
+    )
+    .expect("the accepted static endpoint must materialize a single K target");
+    let fullmag_ir::BackendPlanIR::FemEigen(bound_eigen) = bound.backend_plan else {
+        panic!("materializer must retain the FEM eigen backend");
+    };
+    assert_eq!(
+        bound_eigen.equilibrium,
+        EquilibriumSourceIR::RelaxedInitialState
+    );
+    assert_eq!(bound_eigen.equilibrium_magnetization, accepted_m0);
+    assert!(matches!(
+        bound_eigen.k_sampling,
+        Some(KSamplingIR::Single { .. })
+    ));
+
+    let mut path_target = target.clone();
+    path_target.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            KPointIR::gamma(),
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+
+    let mut material_drift = path_target.clone();
+    material_drift.material.saturation_magnetisation *= 1.01;
+    let error = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(material_drift),
+        &replayed,
+    )
+    .expect_err("material drift must not cross the accepted handoff boundary");
+    assert!(error
+        .message
+        .contains("equilibrium_material_signature_mismatch"));
+
+    let mut mesh_drift = path_target.clone();
+    mesh_drift.mesh.nodes[0][0] += 1.0e-12;
+    let error = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(mesh_drift),
+        &replayed,
+    )
+    .expect_err("mesh drift must not cross the accepted handoff boundary");
+    assert!(error.message.contains("mesh_identity_mismatch"));
+
+    let mut m0_drift = accepted_m0;
+    m0_drift[0] = [1.0, 0.0, 0.0];
+    let drifted_replayed = crate::ReplayedFemRelaxation {
+        handoff: replayed.handoff.clone(),
+        equilibrium_magnetization: m0_drift,
+    };
+    let error = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(path_target.clone()),
+        &drifted_replayed,
+    )
+    .expect_err("accepted m0 drift must not cross the handoff boundary");
+    assert!(error.message.contains("equilibrium_content_mismatch"));
+
+    let mut sweep = path_target;
+    sweep.bias_field_samples.push(bias_field_sample(
+        0,
+        [1.0, 0.0, 0.0],
+        fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+        fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+    ));
+    let error = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(sweep),
+        &replayed,
+    )
+    .expect_err("one accepted m0 must not be reused for a bias-field sweep");
     assert!(error
         .message
         .contains("provided_continuation_rejects_bias_field_sweep"));

@@ -18,6 +18,7 @@ pub(crate) struct PreparedModalExecution {
     pub mesh: fullmag_runner::StageFemMeshAsset,
     pub maximum_bytes: usize,
     pub case_id: String,
+    pub relax_handoff: fullmag_runner::AcceptedFemRelaxStageHandoff,
 }
 pub(crate) fn validate_declared_outputs(outputs: &[StudyOutputPort]) -> Result<()> {
     if outputs.len() != 1
@@ -91,6 +92,9 @@ pub(crate) fn prepare(
     {
         bail!("process environment cannot override accepted modal CPU intent");
     }
+    let (plan, relax_handoff) =
+        crate::accepted_relax_equilibrium::prepare_modal_handoff(store, accepted, step, &plan)
+            .context("bind exact accepted Relax-to-Eigen equilibrium")?;
     let mut problem = step.problem.clone();
     let owner = [
         ("producer_run_id", step.claim.run_id.as_str()),
@@ -137,6 +141,7 @@ pub(crate) fn prepare(
         mesh,
         maximum_bytes,
         case_id: case_id.into(),
+        relax_handoff,
     })
 }
 
@@ -220,9 +225,18 @@ pub(crate) fn execute(
         "fem_eigen_cpu".into(),
     );
     let display = fullmag_runner::DisplaySelectionState::default;
-    let result = fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
-        &prepared.problem, &prepared.plan, Some(&prepared.mesh.identity), 0.0, root, autosave_root,
-        observation.field_sampling_interval(), &display, interrupted, false,
+    let result = fullmag_runner::run_planned_problem_with_live_preview_and_relax_handoff(
+        &prepared.problem,
+        &prepared.plan,
+        Some(&prepared.mesh.identity),
+        0.0,
+        root,
+        autosave_root,
+        observation.field_sampling_interval(),
+        &display,
+        interrupted,
+        false,
+        &prepared.relax_handoff,
         |update| {
             observation.observe(&update);
             if interrupted.is_some_and(|flag| flag.load(Ordering::Acquire)) {

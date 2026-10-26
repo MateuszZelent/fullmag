@@ -1741,6 +1741,10 @@ fn expected_output_binding(
     port: &StudyOutputPort,
 ) -> Result<(&'static str, &'static str, &'static str)> {
     match port.data_kind {
+        StudyPortDataKind::Artifact if port.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT => Ok((
+            "artifact", fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID,
+            fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION,
+        )),
         StudyPortDataKind::Artifact if port.port_id == fullmag_application::MODAL_EIGEN_OUTPUT_PORT => Ok((
             "artifact", fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID,
             fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_VERSION,
@@ -1976,6 +1980,9 @@ fn recover_completed_worker_execution(
         Ok(())
     };
     for output in &completed.outputs {
+        if output.codec_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
+            && output.byte_count > fullmag_application::FEM_EQUILIBRIUM_HANDOFF_MAX_BYTES as u64
+        { bail!("recovered equilibrium artifact exceeds its codec read budget"); }
         if output.codec_id == "fullmag.antenna.inspection_package"
             && output.byte_count > u64::try_from(
                 fullmag_antenna_artifacts::package::ANTENNA_INSPECTION_PACKAGE_MAX_BYTES,
@@ -2193,6 +2200,20 @@ pub(crate) fn materialize_resolved_study_inputs(
         let artifact = input.study_artifact.as_ref().with_context(|| {
             format!("resolved study input `{port_id}` has no typed CAS artifact binding")
         })?;
+        if port.data_kind == StudyPortDataKind::Artifact
+            && port.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
+        {
+            if !matches!(&execution_plan.backend_plan, BackendPlanIR::FemEigen(_))
+                || artifact.data_kind != "artifact"
+                || artifact.codec_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
+                || artifact.codec_version != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION
+                || !matches!(&port.source, fullmag_authoring::StudyInputSource::StepOutput { port, case_id, .. }
+                    if port == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT && case_id == "default")
+            { bail!("equilibrium input differs from the FEM eigen StepOutput contract"); }
+            // The modal adapter replays this exact typed certificate and binds
+            // its m0; it must never be treated as a generic field-state input.
+            continue;
+        }
         let expected_data_kind = match port.data_kind {
             StudyPortDataKind::InitialState => "initial_state",
             StudyPortDataKind::State => "state",

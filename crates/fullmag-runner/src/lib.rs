@@ -95,6 +95,11 @@ pub use dispatch::{stage_step_time_frame, StageStepTimeFrame};
 pub mod eigen;
 mod fdm;
 mod accepted_materialization;
+mod accepted_relax_replay;
+pub use accepted_relax_replay::{
+    materialize_accepted_fem_relaxation_target, replay_accepted_fem_relaxation,
+    ReplayedFemRelaxation,
+};
 pub use accepted_materialization::{
     accepted_observation_quantity_ids, capture_solver_observables,
     materialize_captured_observables, CapturedSolverObservables,
@@ -4466,6 +4471,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         initial_snapshot,
         on_step,
         None,
+        None,
     )
 }
 
@@ -4499,6 +4505,35 @@ pub fn run_planned_problem_with_live_preview_and_artifact_identity(
         initial_snapshot,
         on_step,
         Some(artifact_identity),
+        None,
+    )
+}
+
+/// Execute a modal target using the exact certified accepted Relax endpoint.
+/// Keeps live observation, interrupt handling and autosave ownership unchanged.
+pub fn run_planned_problem_with_live_preview_and_relax_handoff(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    relax_handoff: &AcceptedFemRelaxStageHandoff,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    if !matches!(&plan.backend_plan, BackendPlanIR::FemEigen(_)) {
+        return Err(RunError {
+            message: "accepted Relax handoff requires a FEM eigen target".into(),
+        });
+    }
+    run_planned_problem_with_live_preview_artifact_context(
+        problem, plan, fem_mesh_identity, until_seconds, output_dir, autosave_root,
+        field_every_n, display_selection, interrupt_requested, initial_snapshot,
+        on_step, None, Some(relax_handoff),
     )
 }
 
@@ -4515,6 +4550,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
     initial_snapshot: bool,
     on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+    relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
 ) -> Result<RunResult, RunError> {
     let mut on_step = bind_live_magnetization_layout(plan, on_step);
     let live_layout = study_magnetization_layout_for_plan(plan).ok();
@@ -4679,15 +4715,27 @@ fn run_planned_problem_with_live_preview_artifact_context(
                         .and_then(|context| context.generation_id()),
                 ))
             };
-            dispatch::execute_fem_eigen_with_progress_and_producer_identity_and_parallel_policy(
-                execution,
-                fem,
-                &runtime_outputs,
-                &mut progress_callback,
-                producer_identity.as_ref(),
-                &parallel_execution.policy,
-                Some(output_dir),
-            )
+            match relax_handoff {
+                Some(handoff) => dispatch::execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity_and_parallel_policy(
+                    execution,
+                    fem,
+                    &runtime_outputs,
+                    &mut progress_callback,
+                    handoff,
+                    producer_identity.as_ref(),
+                    &parallel_execution.policy,
+                    Some(output_dir),
+                ),
+                None => dispatch::execute_fem_eigen_with_progress_and_producer_identity_and_parallel_policy(
+                    execution,
+                    fem,
+                    &runtime_outputs,
+                    &mut progress_callback,
+                    producer_identity.as_ref(),
+                    &parallel_execution.policy,
+                    Some(output_dir),
+                ),
+            }
         }
         BackendPlanIR::AntennaExternalLeadInspection(_) => {
             Err(antenna_plan_requires_dedicated_inspection())

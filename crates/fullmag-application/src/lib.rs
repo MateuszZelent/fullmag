@@ -15,6 +15,7 @@ mod declared_execution;
 mod execution;
 mod execution_profile;
 mod execution_profile_binding;
+mod fem_equilibrium_handoff;
 mod file_repository;
 mod legacy_live_execution;
 mod preparation;
@@ -71,6 +72,12 @@ pub use execution_profile::{
     validate_execution_materialization,
 };
 pub use execution_profile_binding::bind_materialized_execution;
+pub use fem_equilibrium_handoff::{
+    decode_fem_equilibrium_handoff, encode_fem_equilibrium_handoff, FemEquilibriumHandoff,
+    FemEquilibriumHandoffMember, FEM_EQUILIBRIUM_HANDOFF_CODEC_ID,
+    FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION, FEM_EQUILIBRIUM_HANDOFF_MAX_BYTES,
+    FEM_EQUILIBRIUM_HANDOFF_PORT, FEM_EQUILIBRIUM_HANDOFF_SCHEMA,
+};
 pub use legacy_live_execution::{
     legacy_live_execution_profile, migrate_legacy_live_execution,
     LegacyLiveExecutionMigration, LEGACY_LIVE_EXECUTION_PROFILE_ID,

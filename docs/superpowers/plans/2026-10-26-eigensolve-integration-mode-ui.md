@@ -27,7 +27,7 @@ Nie usuwamy niezintegrowanych worktree, wyników, cache ani aktywnych zasobów. 
 | I0: audyt, tożsamość i kopia WIP | Częściowo wykonany | Audyt przeczytany, baza sprawdzona, 40 plików zabezpieczone; pozostałe stare linie zachowane, ich semantyczne review nadal otwarte |
 | I1: mapa selektywnej integracji | W toku | Każdy istotny fix ma decyzję: przenieść / obecny odpowiednik / zastąpiony / otwarty; klasyfikacja po ścieżce nie wystarcza |
 | I2: podpisane osie i tożsamość punktu | Kod wypchnięty; CI UI i browser fixture PASS | Wybór osi kx/ky/kz/path, SI, brak wymyślania znaku, stabilna próbka/mod po zmianie osi; aktualne typecheck/lint/CI |
-| I3: właściciel pola i akcja punkt → mod | Backend wypchnięty, UI w implementacji | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
+| I3: właściciel pola i akcja punkt → mod | Kod backendu/UI wypchnięty; rzeczywiste pole nadal nieodebrane | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
 | I4: rzeczywisty mod w UI | Otwarte | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
 | I5: review, PR, master i cleanup | Otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
 | I6: pozostała integracja solvera | Otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
@@ -155,8 +155,83 @@ Poprawka materializatora zapisana jako `0b64bb67cc638a2da1a2a880b165ab8d3fdae0a3
 | M5 | Pilot DE +10, następnie -10 i signed sweep -25..25 rad/um | Wiersze częstotliwości, residuale, PBC, dynamiczny demag, źródła i równowaga; bez lustrzanego dopisywania numeryki |
 | M6 | Wykres i browser real-mode proof | Wykres z realnych artefaktów; kliknięcie sample/mode, real/imag/abs/phase i animacja; osobno WebGL i naukowa kwalifikacja |
 
-M1–M4 pozostają otwarte. Zmiany preparera i szybkiego błędu zamykają jedynie wcześniejsze blokady, nie te cztery kroki. Samo podniesienie tolerancji, wyłączenie demag lub obejście accepted-run nie jest rozwiązaniem.
+Kod M1–M4 został następnie wdrożony i wypchnięty; odbiór runtime pozostaje otwarty (szczegóły w najnowszym checkpointcie poniżej). Zmiany preparera i szybkiego błędu same zamykały jedynie wcześniejsze blokady. Samo podniesienie tolerancji, wyłączenie demag lub obejście accepted-run nie jest rozwiązaniem.
 
 ### Checkpoint źródeł po ponowieniu
 
 Na remote `codex/eigensolve-integration-ui-20261026` wypchnięto: `6ba5c2321` (nietknięte multi-task recovery, 12 Python PASS), `1a7f1eeca` (native preparation planów częstotliwościowych i regresje), `c0da4b0a6` (dokładny terminalny błąd preparera, retry pozostaje pending), `6c036512c` (kanoniczny modeIntent fixture UI). Nowe testy Rust/frontend wymagają nowego wyniku GitHub Actions; nie były lokalnie kompilowane. Runtime nadal używa snapshotu `a8e7c518...` i zachowanej zatrzymanej próby, więc nowe poprawki nie mają jeszcze dowodu wykonania.
+
+
+## Checkpoint wznowienia pilota — 26.10.2026, accepted modal worker
+
+### Źródła i weryfikacja
+
+- `90a45aaba`: publiczne native static-PBC attestation i współdzielona walidacja domknięcia artefaktów.
+- `10ea1042b`: oddzielny adapter accepted FEM Eigen, typowany pakiet `fullmag.study.modal_eigen_bundle.v1`, trwałe CAS i odtworzenie zakończonego attemptu bez ponowienia solvera.
+- `3ecd9501f` / `d804b12f8`: kompilowany wspólny właściciel polityki PBC oraz zgodny typ `FemEngine` w preview.
+- `af6383263`: publikacja zweryfikowanej modalnej generacji CAS do katalogu aktywnego UI, z blokadą konfliktów właściciela i odświeżeniem rewizji artefaktów.
+- `4342fcf94` / `4f542bfa7`: Results Explorer i akcje gałęzi używają równowagi wybranej próbki, również bez wspólnego equilibrium.
+- `e13f99ba2`: recovery anulowanej aktywacji bazowego development z wieloma zadaniami; 71 testów Python PASS.
+- `efad81f00`: poprawione typy map fixture Rust, pełne provenance próbek w fixture UI i prawdziwy nagłówek generacji fixture pola. To nie zmienia tolerancji, fizyki ani guardów produkcyjnych. Nowe CI: https://github.com/MateuszZelent/fullmag/actions/runs/40331494879 — wynik do odczytu.
+
+| Krok | Aktualny stan | Pozostały odbiór |
+|---|---|---|
+| M1 | Kod wypchnięty; preflight pilota przeszedł do rezerwacji output storage | Rzeczywista relaksacja i dowód wybranego native lane |
+| M2 | Dispatch modalny skompilowany; runtime ujawnił brak przekazania certyfikatu Relax | Jawna zależność DAG, typed CAS handoff, ścisły replay i wykonanie eigensolve |
+| M3 | Codec/CAS/publikacja do UI skompilowane | Prawdziwy kompletny pakiet i odczyt API |
+| M4 | Walidacja zakończonego attemptu wdrożona | Dowód odtworzenia realnej publikacji bez solve |
+| M5 | Pilot ponowiony, nadal bez częstotliwości FEM | Usunąć blokadę storage/lifecycle; potem +10, -10 i signed sweep |
+| M6 | Harness przeglądarkowy przygotowany, jeszcze bez realnego moda | Pole, selekcja, składniki/faza/animacja, WebGL i wykres z rzeczywistych punktów |
+
+### Recovery i zarządzany build
+
+- Anulowana aktywacja `3e79d6b7e6344f54a262268813a9d49d` została zachowująco zamknięta przez managed recovery: `stopped-awaiting-fresh-archive`, `execution_state=not-started`, lease zwolniony, oryginalne rekordy zachowane. Recovery SHA `1d5338aee65d40c5d6cc9ca431958f0dbcd0e339c129270563c645afba425c1a`.
+- Development `6f678bf0e1d145d8be4d6f6914530ae7` zatrzymał się na E0308 preview przed startem API/solvera; poprawka `d804b12f8`.
+- Development **`9ff104c274b74fcba650a384339fdfd8` PASS**, config **`869a5b9724b3c68de1ef1957e2fb04b1289d18b66f4315337994ef5bb27b1db1`**. Build aplikacji 339133 ms, exit 0, walidacja pakietu i gate runtime PASS. UI/API na `http://127.0.0.1:3217`, runtime bundle `0.1.0-dev.20261026.gd804b12f8f7b+9795`. Obrazy i cache użyte ponownie; niczego nie usunięto.
+
+### Faktyczny wynik próby
+
+- Aktywacja `d7aa3a225ee243cbaf791b42a8de4622`, request `eigensolve-ui-de-k10-modal-worker-20261026`, run **`run-live-9ddf7a6d56121142facf17c6a7645effcfd242df5a13ffc88012c3bb83d0cc8e`**. Model załadowany; domena FEM ma 2530 komórek.
+- Oba taski są terminalne `failed`: `project storage preparation failed; no solver was launched: Permission denied (os error 13)`. Zachowane receipty `worker_prelaunch_failed.v1.json` oraz `worker_process_exit_receipt.v1` potwierdzają brak solvera. Sukces aktywacji nie oznacza sukcesu solve.
+- Przyczyna: jawnie skonfigurowany alias outputów wskazuje `examples`, UID/GID 1000:1000 i tryb 0755; proces runtime ma UID 65532 i dodatkową grupę 1000. Utworzono wyłącznie dwa nowe katalogi `examples/fem_eigen_mode_ui_de_k10.zarr` i `examples/.fullmag-tmp` z trybem 0770; nie zmieniono uprawnień istniejących danych/źródeł. Odczyt z kontenera potwierdził zapis do nowego outputu.
+- Nowe żądanie `eigensolve-ui-de-k10-storage-ready-20261026`, aktywacja **`cc5f5118a0c145978af065b8ae7fd5e8`**, zatrzymane na `workspace retirement returned HTTP 409`, stan `outcome-unknown-resources-retained`. Poprzedni run nadal widoczny jako failed; bez ślepego replay. Trwa ustalanie dokładnego powodu oraz istniejącej drogi reconcile/retry.
+- Referencję policzono istniejącymi oracle: przy k=±10 rad/µm otwarty film z profilem grubości (8 funkcji bazy) daje ok. 11.228266 GHz, a jednorodny n=0 11.235414 GHz. **To nie są wyniki Fullmag FEM** i nie stanowią kwalifikacji ani punktów numerycznego wykresu.
+
+**Stan naukowy i UI modów: NOT VERIFIED.** Nie ma jeszcze nowej częstotliwości FEM, zespolonego pola ani nowego wykresu dyspersji na tej bazie.
+
+
+### Kolejny checkpoint: rzeczywista relaksacja i brakujący handoff
+
+- `d804b12f8`: poprawka błędu importu typu preview; managed build `9ff104c274b74fcba650a384339fdfd8` pozostał uruchomiony. Biblioteka FEM jest powiązana z `libslepc.so.3.24` i `libpetsc.so.3.24`; to dowód zależności, nie wykonania EPS.
+- `bac9c350f`: finalizacja odtwarzania przyjmuje wyłącznie token 32-hex albo token z jednym LF (rzeczywisty format writera). Raw bytes pozostają preimage CAS. 105 testów Python PASS.
+- `5e50eeada`: mutable wskaźnik `activation/current.json` można zmienić tylko po zgodności z dokładnym immutable terminalem poprzedniej próby i jej pinami; live/logger-absence CAS, testy driftu i symlinków. 115 testów bounded suite oraz 8 testów refusal PASS.
+- Operacja `cc5f5118a0c145978af065b8ae7fd5e8` zamknięta `failed-confirmed / retirement-replayed / retirement_resume_state=succeeded`. Archiwum starego failed runu: SHA `b9199dd6d00c847aaa6a196abd78e62dce3fe2e773bf1b77667718c6e844d8d5`; oryginalne dane zachowane.
+- Aktywacja **`69626eb846e7483790a57efcca9133dd` PASS**, nowy run **`run-live-ed0a5b070419c663fa5f10431232e5dc3739ec07065d02ce1e02696c5b818944`**. To nowe wykonanie po naprawie dostępu do outputów, bez przebudowy solvera.
+- **Relax: native CPU completed, converged=true, 3 kroki.** Kryterium `max_torque_apm`: `2.6466332450953524e-11 A/m <= 1 A/m`. Poisson CG/AMG: 142 iteracje, końcowy residual `1.6180945995077723e-12`. Dokładne dane są w metadata/qualification i certyfikatach tego worker attemptu. Samo UI pokazało `converged=false`; to osobna luka projekcji, nie podstawa zmiany certyfikatu.
+- **Eigen: failed przed właściwym solve** — `accepted relaxation handoff is required before FEM eigensolve`. Zaakceptowany graf miał dwa niezależne kroki z pustymi inputs; samo `equilibrium_source=relax` nie tworzyło zależności CAS. Nie ma jeszcze częstotliwości ani pola modu.
+- `63234a1ab`: nowo wykonywana accepted relaksacja wiąże certyfikat z dokładnym run/stage/kind przed dispatch; nie zmienia starych sidecarów. Dotychczas native entry point nadawał osobną standalone tożsamość i `stage-001`. CI https://github.com/MateuszZelent/fullmag/actions/runs/40338518632 PASS; zmiana nie jest jeszcze wdrożona w aktywnym pakiecie d804.
+- `2998ccf4d`: gotowy jawny skrypt `examples/fem_eigen_mode_ui_de_signed15.py`; lista `K_RAD_PER_UM` steruje 15 próbkami i zapisem każdego pola. Fizykę/mesh/solver porównano przez AST z pilotem; sweep pozostaje NIEURUCHOMIONY.
+
+#### Domknięcie M2: uzgodniony kontrakt implementacji
+
+1. W authoring, dla jawnego FEM Eigen z `equilibrium_source=relax`, dokładnie jeden enabled Relax dostaje dodatkowy port `equilibrium_handoff: Artifact`; Eigen dostaje required `StepOutput` do tego konkretnego kroku i case `default`. Brak/niejednoznaczność jest błędem przed RunIntent. Poprawne jawne powiązania i inne rodziny obliczeń pozostają zachowane.
+2. Neutralny addytywny codec `fullmag.study.fem_equilibrium_handoff@v1` zachowuje preparation binding, exact owner, fingerprint planu i siedem zahashowanych memberów. Budżet 64 MiB, dokładnie jedna kompletna rodzina certyfikatów v1 albo v2. Istniejące codec State i schema certyfikatów naukowych nie zmieniają semantyki.
+3. Producer pakuje dokładny plan źródłowy, completion i m0 oraz oryginalne bytes accepted/certified fields, recomputed certificate i producer provenance. Używa ścisłego `from_completed_relax_verified_with_exact_artifacts_and_provenance`, nie samego `m_final` ani luźnego konstruktora.
+4. Publication/completion/recovery oraz consumer wiążą dane z exact run/task/attempt/epoch/preparation. Consumer przyjmuje tylko zadeklarowany StepOutput zakończonego Relax; żadnego latest, skanowania katalogu lub przemianowywania certyfikatu.
+5. Runner sprawdza istniejący certyfikat i target plan, wiąże dokładne m0 oraz przyjmuje handoff przez ścieżkę live-preview z zachowaniem obsługi przerwania i autosave. Zmiana `RelaxedInitialState -> Provided` należy do istniejącego natywnego kontraktu.
+6. Następnie wymagane są CI, nowy managed build, ponowienie pilota +10, kontrola artefaktów/moda w UI, -10 oraz signed sweep i wykres. Kod M2 przeszedł przegląd połączeń i kontrole składni; kompilacja/testy CI oraz runtime tego połączenia pozostają otwarte.
+
+Dodatkowa korekta wykryta podczas integracji: registry `ResolvedStudyArtifact` nie dopuszczał modal bundle mimo istniejącego dispatch decode. Dodano exact codec tuple i negatywną regresję wersji/kind; bez wildcard fallback.
+
+
+Źródłowe kotwice kontraktu M2 (stan kodu, nie dowód wykonania):
+
+- `crates/fullmag-authoring/src/scene_study_plan.rs::normalize_fem_eigen_relax_dependencies` — krawędź DAG i jednoznaczność producenta.
+- `crates/fullmag-application/src/fem_equilibrium_handoff.rs::FemEquilibriumHandoff` / `decode_fem_equilibrium_handoff` — typowany, ograniczony transport exact bytes.
+- `crates/fullmag-api/src/accepted_relax_equilibrium.rs::collect_handoff` / `prepare_modal_handoff` — producer, exact catalog lineage i consumer.
+- `crates/fullmag-runner/src/accepted_relax_replay.rs::replay_accepted_fem_relaxation` — ścisły naukowy konstruktor v3; `materialize_accepted_fem_relaxation_target` — exact m0 i preflight targetu.
+- `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs::AcceptedFemRelaxStageHandoff::validate_target_plan` i `validate_provided_continuation_plan` — osobne kontrole single-k i continuation; globalne guardy nie zostały rozluźnione.
+- `crates/fullmag-runner/src/lib.rs::run_planned_problem_with_live_preview_and_relax_handoff` — przekazanie certyfikatu istniejącej ścieżce native z interrupt/autosave.
+- `crates/fullmag-runtime-control/src/study_equilibrium.rs::validate_handoff_publication` — niezależna walidacja przed publication i completion.
+
+Przegląd wykrył i poprawił preflight zewnętrznego KPath: używa istniejącego walidatora continuation na walidacyjnym klonie Provided, zachowując RelaxedInitialState w zwracanym planie. Native path nadal materializuje i waliduje każdy single-k punkt przed solve. Dodano regresje Path/Single, m0, mesh/material drift oraz zakazu reuse przy bias-field sweep.
