@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -114,6 +115,73 @@ def _publish_immutable(control, path, raw):
 
 
 class PreparationAbortArchiveTests(unittest.TestCase):
+    def _task_validator(self):
+        namespace = {}
+        exec(preparation_abort._PREPARATION_TASK_VALIDATION_SOURCE, namespace)
+        return namespace["validate_task_catalog"], namespace["select_task_for_preparation_lease"]
+
+    @staticmethod
+    def _held_task(task_id, *, lifecycle="accepted", readiness=None, artifact_ids=None, fingerprint=None):
+        return {
+            "task_id": task_id,
+            "input_fingerprint": fingerprint or hashlib.sha256(task_id.encode("ascii")).hexdigest(),
+            "lifecycle": lifecycle,
+            "readiness": readiness or {"state": "blocked", "reason": "accepted_task_awaiting_preparation"},
+            "artifact_ids": [] if artifact_ids is None else artifact_ids,
+        }
+
+    def test_multi_task_catalog_selects_the_leased_task_by_identity(self):
+        validate_tasks, select_task = self._task_validator()
+        tasks = [self._held_task("task-relax"), self._held_task("task-eigen")]
+
+        task_by_id = validate_tasks(tasks)
+
+        self.assertEqual(select_task(task_by_id, "task-eigen"), tasks[1])
+
+    def test_multi_task_catalog_rejects_duplicate_invalid_and_later_mutated_tasks(self):
+        validate_tasks, _ = self._task_validator()
+        valid = self._held_task("task-relax")
+        cases = (
+            ("empty task set", []),
+            ("task set exceeds bound", [self._held_task(f"task-{index}") for index in range(4097)]),
+            ("duplicate task identity", [valid, self._held_task("task-relax")]),
+            ("invalid task identity", [self._held_task("../task-eigen")]),
+            ("invalid input fingerprint", [self._held_task("task-eigen", fingerprint="not-a-sha")]),
+            ("later claimed task", [valid, self._held_task("task-eigen", lifecycle="claimed")]),
+            ("later output task", [valid, self._held_task("task-eigen", artifact_ids=["artifact-1"])]),
+        )
+
+        for label, tasks in cases:
+            with self.subTest(label=label), self.assertRaisesRegex(RuntimeError, "task"):
+                validate_tasks(tasks)
+
+    def test_multi_task_catalog_rejects_a_lease_for_an_unknown_task(self):
+        validate_tasks, select_task = self._task_validator()
+        task_by_id = validate_tasks([self._held_task("task-relax"), self._held_task("task-eigen")])
+
+        with self.assertRaisesRegex(RuntimeError, "lease task"):
+            select_task(task_by_id, "task-unknown")
+
+    def test_probe_embeds_the_same_task_validator_used_by_regressions(self):
+        with patch.object(
+            preparation_abort,
+            "docker_capture",
+            return_value=SimpleNamespace(stdout=b"{}"),
+        ) as capture:
+            preparation_abort._store_probe(
+                "backend-id",
+                {
+                    "request_id": "request-id",
+                    "source_sha256": "a" * 64,
+                    "activation_receipt_key": "b" * 64,
+                },
+            )
+
+        source = capture.call_args.args[5]
+        compile(source, "backend-preparation-abort-probe", "exec")
+        self.assertIn(preparation_abort._PREPARATION_TASK_VALIDATION_SOURCE.strip(), source)
+        self.assertIn("select_task_for_preparation_lease(task_by_id, lease.get('task_id'))", source)
+
     def test_older_abort_is_pinned_before_second_rotation_and_survives(self):
         control, record, _, _, old_generation = _fixture()
         abort_before = canonical(control.files[preparation_abort.RECORD])

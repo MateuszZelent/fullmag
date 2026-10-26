@@ -23,6 +23,46 @@ RECORD = "preparation-abort/current.json"
 SCHEMA = "fullmag.docker-unreleased-preparation-abort.v1"
 
 
+_PREPARATION_TASK_VALIDATION_SOURCE = r'''
+MAX_TASKS = 4096
+def _valid_task_id(value):
+    return (isinstance(value, str) and 0 < len(value) <= 128 and value not in ('.', '..')
+        and all(ch.isascii() and (ch.isalnum() or ch in '._-') for ch in value))
+def _valid_task_fingerprint(value):
+    return (isinstance(value, str) and len(value) == 64
+        and all(ch in '0123456789abcdef' for ch in value))
+def validate_task_catalog(tasks):
+    if not isinstance(tasks, list) or not tasks or len(tasks) > MAX_TASKS:
+        raise RuntimeError('activation run catalog has no bounded nonempty task set')
+    tasks_by_id = {}
+    for task in tasks:
+        if not isinstance(task, dict):
+            raise RuntimeError('activation run catalog task is malformed')
+        if set(task) != {'task_id', 'input_fingerprint', 'lifecycle', 'readiness', 'artifact_ids'}:
+            raise RuntimeError('activation run catalog task contains admission or output state')
+        task_id = task.get('task_id')
+        if not _valid_task_id(task_id):
+            raise RuntimeError('activation run catalog task identity is invalid')
+        if not _valid_task_fingerprint(task.get('input_fingerprint')):
+            raise RuntimeError('activation run catalog task fingerprint is invalid')
+        if task_id in tasks_by_id:
+            raise RuntimeError('activation run catalog contains duplicate task identity')
+        if (task.get('lifecycle') != 'accepted'
+            or task.get('readiness') != {'state': 'blocked', 'reason': 'accepted_task_awaiting_preparation'}
+            or task.get('artifact_ids') != []):
+            raise RuntimeError('activation run catalog task is not an untouched blocked accepted task')
+        tasks_by_id[task_id] = task
+    return tasks_by_id
+def select_task_for_preparation_lease(tasks_by_id, task_id):
+    if not isinstance(task_id, str):
+        raise RuntimeError('active preparation lease task identity is invalid')
+    task = tasks_by_id.get(task_id)
+    if task is None:
+        raise RuntimeError('active preparation lease task does not match the accepted catalog')
+    return task
+'''
+
+
 def _fail(message):
     raise BuildControlError(message)
 
@@ -31,7 +71,7 @@ def _store_probe(backend_id, activation):
     # Only the exact current unreleased startup run is eligible. Historical
     # runs remain untouched; an archive-only exception permits one exact
     # pending preparation lease, without cancelling or releasing it.
-    script = "ACTIVATION = " + repr(activation) + "\n" + r'''import fcntl,hashlib,json,os,pathlib,stat
+    script = "ACTIVATION = " + repr(activation) + "\n" + _PREPARATION_TASK_VALIDATION_SOURCE + r'''import fcntl,hashlib,json,os,pathlib,stat
 root=pathlib.Path('/state/runs/docker-all/session-store')
 def raw(path,maximum=16*1024*1024):
     if path.parent.resolve(strict=True)!=path.parent: raise RuntimeError('noncanonical store parent')
@@ -137,15 +177,14 @@ try:
             or params.get('fullmag.accepted_run_start')!={'schema_version':'accepted_run_start_policy.v1','mode':'manual'}
             or command.get('kind')!='startup_script'
             or command.get('source_sha256')!=ACTIVATION['source_sha256']
-            or intent.get('idempotency_key')!='live-http-'+ACTIVATION['activation_receipt_key']
-            or len(tasks)!=1 or tasks[0].get('lifecycle')!='accepted'
-            or tasks[0].get('readiness')!={'state':'blocked','reason':'accepted_task_awaiting_preparation'}
-            or tasks[0].get('artifact_ids')!=[]):
+            or intent.get('idempotency_key')!='live-http-'+ACTIVATION['activation_receipt_key']):
             raise RuntimeError('activation is not an exact unreleased, unprepared manual run')
+        validate_task_catalog(tasks)
         found.append(run.name)
         for p in (intent_path,catalog_path): pins[str(p.relative_to(root))]=hashlib.sha256(raw(p)).hexdigest()
     if len(found)!=1: raise RuntimeError('activation has no unique held RunIntent')
-    run_id=found[0]; run=root/'runs'/run_id; catalog=obj(run/'run_catalog.json'); task=catalog['tasks'][0]
+    run_id=found[0]; run=root/'runs'/run_id; catalog=obj(run/'run_catalog.json')
+    task_by_id=validate_task_catalog(catalog.get('tasks'))
     target_lease=[entry for entry in active_preparation if entry[0]==run_id]
     if not active_rows and not active_preparation:
         mode='unadmitted'
@@ -157,6 +196,7 @@ try:
             raise RuntimeError('archive-only proof requires one exact active preparation reservation and lease')
         mode='held_preparation'
         _,lease_relative,lease,lease_sha=target_lease[0]
+        task=select_task_for_preparation_lease(task_by_id, lease.get('task_id'))
         allowed_lease_keys={'schema_version','resource_id','budget','run_id','task_id','preparation_attempt_id','lease_token','state','acquired_at','heartbeat_at','heartbeat_sequence','released_at','host_launch_binding'}
         required_lease_keys={'schema_version','resource_id','budget','run_id','task_id','preparation_attempt_id','lease_token','state','acquired_at','heartbeat_at','heartbeat_sequence','host_launch_binding'}
         if (not required_lease_keys.issubset(lease) or not set(lease).issubset(allowed_lease_keys)
