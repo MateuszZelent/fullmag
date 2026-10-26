@@ -26,6 +26,7 @@ FREQUENCY_MAX_HZ = 16.0e9
 study = fm.study("eigen-mode-ui-de-signed15")
 study.engine("fem")
 study.device("cpu", precision="double")
+study.parallel_execution(fm.ParallelExecutionPolicy(mode="serial", threads_per_worker=1))
 study.mode("strict")
 study.interactive(False)
 study.wait_for_solve(False)
@@ -41,10 +42,10 @@ body.Aex = 13e-12
 body.alpha = 0.5
 body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 body.mesh.thin_film(
-    minimum_element_size=10e-9, maximum_element_size=10e-9,
-    interface_maximum_element_size=10e-9, interface_thickness=20e-9,
+    minimum_element_size=5e-9, maximum_element_size=5e-9,
+    interface_maximum_element_size=5e-9, interface_thickness=20e-9,
     transition_distance=20e-9, edge_thickness=10e-9, corner_extent=10e-9,
-    layers=6, topology="tetrahedral", order=1,
+    layers=3, topology="tetrahedral", order=1,
 )
 study.b_ext(0.1, 0.0, 0.0)
 study.exchange()
@@ -88,6 +89,10 @@ study.runtime_metadata("mode_ui_verification", {
     "purpose": "real complex fields for signed DE UI sweep",
     "reference_configuration": "examples/fem_eigen_mode_ui_de_k10.py",
     "sampling": "signed-fifteen",
+    "mesh_level": "L2",
+    "through_thickness_elements": 3,
+    "native_krylov_tuning": "current_backend_defaults",
+    "historical_krylov_overrides_applied": False,
     "k_sampling_kind": "path",
     "k_y_signed_rad_per_um": list(K_RAD_PER_UM),
     "k_y_rad_per_m": list(K_Y_RAD_PER_M),

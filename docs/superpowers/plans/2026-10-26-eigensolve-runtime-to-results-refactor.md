@@ -492,3 +492,20 @@ Zadanie 6 pozostaje otwarte: nie opublikowano częstotliwości ani modu.
   rzeczywistą przyczynę odmowy; nie obniżać progów ani zgadywać przyczyny.
 - [ ] Odtworzyć historyczny model L2/3 dla ±10, następnie signed15 i refinementy.
 - [ ] Zweryfikować trwałe mody w UI i nowy wykres z analityką.
+
+
+### Wejście kolejnej próby po A14
+
+`examples/fem_eigen_mode_ui_de_k10.py` skorygowano do historycznej geometrii,
+żądanej siatki L2/3, air growth 1,3, okna 8,5–16 GHz, count=1 i bramki
+residualu 1e−8. Jest to pierwsze porównanie tego samego problemu fizycznego
+na obecnym backendzie; actual mesh musi być zweryfikowana po materializacji.
+
+Ważne ograniczenie: obecna managed konfiguracja nie przekazuje historycznych
+override'ów FGMRES/restart8/KSP1e−9/EPS1e−9. Skrypt jawnie zapisuje tę różnicę
+w metadata i korzysta z bieżących domyślnych ustawień backendu. Nie ustawiamy
+zmiennych w procesie authoringu, udając przekazanie ich do oddzielnego workera.
+Wynik może potwierdzić odtworzenie częstotliwości przy tych samych parametrach
+fizycznych i progu residualu, lecz nie identyczność ustawień iteracyjnych ani
+bitową reprodukcję. Dokładne historyczne tuning overrides pozostają osobną
+pozycją reprodukcji; nie uzasadniają zmiany domyślnych ustawień całego solvera.

@@ -1,6 +1,9 @@
-"""Real FEM field for UI integration; selected mode, not spectrum qualification.
+"""Historical DE L2/3 physical model at +10 rad/um for accepted UI execution.
 
-Uses the DE-SMOKE film and solver settings from examples/fem_de_smoke_numeric.py.
+Matches the film, mesh request, airbox, frequency window and residual gate in
+docs/raports/2026-10-04-de-signed15-runtime.md. Native Krylov tuning uses the
+current backend defaults, not the historical environment overrides; compare
+executed diagnostics before claiming numerical-configuration identity.
 Run only in the selected Docker DEV group. Completion is not a convergence or
 COMSOL validation certificate. No frequencies or fields are synthesized.
 """
@@ -11,6 +14,7 @@ import fullmag as fm
 study = fm.study("eigen-mode-ui-de-k10")
 study.engine("fem")
 study.device("cpu", precision="double")
+study.parallel_execution(fm.ParallelExecutionPolicy(mode="serial", threads_per_worker=1))
 study.mode("strict")
 study.interactive(False)
 study.wait_for_solve(False)
@@ -26,10 +30,10 @@ body.Aex = 13e-12
 body.alpha = 0.5
 body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 body.mesh.thin_film(
-    minimum_element_size=10e-9, maximum_element_size=10e-9,
-    interface_maximum_element_size=10e-9, interface_thickness=20e-9,
+    minimum_element_size=5e-9, maximum_element_size=5e-9,
+    interface_maximum_element_size=5e-9, interface_thickness=20e-9,
     transition_distance=20e-9, edge_thickness=10e-9, corner_extent=10e-9,
-    layers=6, topology="tetrahedral", order=1,
+    layers=3, topology="tetrahedral", order=1,
 )
 study.b_ext(0.1, 0.0, 0.0)
 study.exchange()
@@ -43,7 +47,8 @@ study.build_domain_mesh()
 study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
                        dt=5e-15, relax_alpha=0.5, max_steps=50000, tolA=1.0)
 study.stages.add_eigenmodes(
-    stage_id="eigenmodes", count=1, target="nearest", target_frequency=11.2e9,
+    stage_id="eigenmodes", count=1, target="frequency_window",
+    frequency_min=8.5e9, frequency_max=16e9,
     operator="full_2x2", include_demag=True,
     solver_rtol=1e-8, solver_max_outer_iterations=2000,
     equilibrium_source="relax", normalization="unit_l2", damping_policy="ignore",
@@ -61,7 +66,16 @@ study.save("mode", field="mode", indices=(0,), sample_indices=(0,))
 study.runtime_metadata("mode_ui_verification", {
     "purpose": "real complex field for UI integration",
     "reference_configuration": "examples/fem_de_smoke_numeric.py",
-    "selection_scope": "selected_only",
+    "selection_scope": "frequency_window",
+    "historical_report": "docs/raports/2026-10-04-de-signed15-runtime.md",
+    "mesh_level": "L2",
+    "through_thickness_elements": 3,
+    "native_krylov_tuning": "current_backend_defaults",
+    "historical_krylov_overrides_applied": False,
+    "historical_krylov_overrides": {
+        "shifted_ksp_type": "fgmres", "gmres_restart": 8,
+        "shifted_ksp_rtol": 1e-9, "eps_prefilter_abs": 1e-9,
+    },
     "window_complete": False,
     "qualification": "NOT VERIFIED",
 })
