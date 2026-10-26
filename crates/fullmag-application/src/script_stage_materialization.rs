@@ -2257,6 +2257,10 @@ pub fn materialize_pipeline_eigenmodes(
         .as_ref()
         .map(|current| current.7.clone())
         .unwrap_or_default();
+    let default_operator_kind = match &base_ir.study {
+        fullmag_ir::StudyIR::Eigenmodes { operator, .. } => operator.kind,
+        _ => fullmag_ir::EigenOperatorIR::LinearizedLlg,
+    };
     let bias_field_sweep = match &base_ir.study {
         fullmag_ir::StudyIR::Eigenmodes {
             bias_field_sweep, ..
@@ -2356,12 +2360,15 @@ pub fn materialize_pipeline_eigenmodes(
             .map(|current| current.0.include_demag)
             .unwrap_or(true)
     });
+    let operator_kind = payload_eigen_operator(payload)?.unwrap_or(default_operator_kind);
+    let magnetostatic_bc = payload_eigen_magnetostatic_bc(payload)?
+        .unwrap_or(default_magnetostatic_bc);
 
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
     ir.study = fullmag_ir::StudyIR::Eigenmodes {
         dynamics,
         operator: fullmag_ir::EigenOperatorConfigIR {
-            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            kind: operator_kind,
             include_demag,
         },
         count,
@@ -2375,7 +2382,7 @@ pub fn materialize_pipeline_eigenmodes(
         normalization: payload_eigen_normalization(payload)?.unwrap_or(default_normalization),
         damping_policy: payload_eigen_damping_policy(payload)?.unwrap_or(default_damping_policy),
         spin_wave_bc: payload_spin_wave_bc(payload)?.unwrap_or(default_spin_wave_bc),
-        magnetostatic_bc: default_magnetostatic_bc,
+        magnetostatic_bc,
         sampling: eigen_sampling_from(&sampling, count),
         mode_tracking: None,
     };
@@ -3663,6 +3670,28 @@ fn payload_spin_wave_bc(
     }
 }
 
+fn payload_eigen_operator(
+    payload: &BTreeMap<String, Value>,
+) -> Result<Option<fullmag_ir::EigenOperatorIR>> {
+    let Some(value) = payload.get("eigen_operator") else {
+        return Ok(None);
+    };
+    serde_json::from_value(value.clone())
+        .context("invalid eigen_operator in study pipeline payload")
+        .map(Some)
+}
+
+fn payload_eigen_magnetostatic_bc(
+    payload: &BTreeMap<String, Value>,
+) -> Result<Option<fullmag_ir::MagnetostaticBoundaryConditionIR>> {
+    let Some(value) = payload.get("eigen_magnetostatic_bc") else {
+        return Ok(None);
+    };
+    serde_json::from_value(value.clone())
+        .context("invalid eigen_magnetostatic_bc in study pipeline payload")
+        .map(Some)
+}
+
 fn payload_frequency_magnetostatic_bc(
     payload: &BTreeMap<String, Value>,
 ) -> Result<Option<fullmag_ir::MagnetostaticBoundaryConditionIR>> {
@@ -4363,6 +4392,81 @@ mod pipeline_eigen_solver_policy_tests {
         .expect("eigenmodes pipeline should materialize");
         assert_eq!(stages.len(), 1, "expected exactly one pipeline stage");
         stages.remove(0)
+    }
+
+    fn assert_eigen_operator_and_magnetostatic_bc(
+        stage: &ResolvedScriptStage,
+        expected_operator: fullmag_ir::EigenOperatorIR,
+        expected_magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR,
+    ) {
+        let fullmag_ir::StudyIR::Eigenmodes {
+            operator,
+            magnetostatic_bc,
+            ..
+        } = &stage.ir.study
+        else {
+            panic!("expected materialized eigenmodes study");
+        };
+        assert_eq!(operator.kind, expected_operator);
+        assert_eq!(*magnetostatic_bc, expected_magnetostatic_bc);
+    }
+
+    #[test]
+    fn pipeline_eigenmodes_payload_overrides_operator_and_magnetostatic_bc() {
+        let base = time_evolution_base();
+        let payload = BTreeMap::from([
+            ("eigen_operator".to_string(), serde_json::json!("full_2x2")),
+            (
+                "eigen_magnetostatic_bc".to_string(),
+                serde_json::json!("floquet_airbox"),
+            ),
+        ]);
+
+        let stage = materialize_pipeline_eigenmodes(&base, &payload).unwrap();
+        assert_eigen_operator_and_magnetostatic_bc(
+            &stage,
+            fullmag_ir::EigenOperatorIR::Full2x2,
+            fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox,
+        );
+    }
+
+    #[test]
+    fn pipeline_eigenmodes_without_payload_inherit_existing_eigen_operator_and_bc() {
+        let base = materialize_pipeline_eigenmodes(
+            &time_evolution_base(),
+            &BTreeMap::from([
+                ("eigen_operator".to_string(), serde_json::json!("full_2x2")),
+                (
+                    "eigen_magnetostatic_bc".to_string(),
+                    serde_json::json!("floquet_airbox"),
+                ),
+            ]),
+        )
+        .unwrap()
+        .ir;
+
+        let stage = materialize_pipeline_eigenmodes(&base, &BTreeMap::new()).unwrap();
+        assert_eigen_operator_and_magnetostatic_bc(
+            &stage,
+            fullmag_ir::EigenOperatorIR::Full2x2,
+            fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox,
+        );
+    }
+
+    #[test]
+    fn pipeline_eigenmodes_reject_invalid_operator_and_magnetostatic_bc_payloads() {
+        let base = time_evolution_base();
+        for (key, value) in [
+            ("eigen_operator", serde_json::json!(3)),
+            ("eigen_operator", serde_json::json!("unsupported")),
+            ("eigen_magnetostatic_bc", serde_json::json!(null)),
+            ("eigen_magnetostatic_bc", serde_json::json!("unsupported")),
+        ] {
+            let payload = BTreeMap::from([(key.to_string(), value)]);
+            let error = materialize_pipeline_eigenmodes(&base, &payload)
+                .expect_err("an explicit invalid eigen field must be rejected");
+            assert!(error.to_string().contains(key), "{error}");
+        }
     }
 
     #[test]
