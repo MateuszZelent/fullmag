@@ -90,7 +90,6 @@ pub(crate) fn reconcile_study_solution(
     }
     let step_id = accepted_step_id
         .context("accepted study solution task is not a step in the accepted plan")?;
-    crate::study::validate_study_task_completion(store, claim)?;
     // An unsuccessful attempt may have published its typed output manifest
     // before portable-result conversion failed. Its terminal event must not
     // run that conversion again and turn the same task error into a scheduler
@@ -105,6 +104,7 @@ pub(crate) fn reconcile_study_solution(
     {
         return Ok(());
     }
+    crate::study::validate_study_task_completion(store, claim)?;
     let solution = build_solution(
         store,
         &accepted,

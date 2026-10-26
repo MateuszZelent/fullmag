@@ -197,3 +197,70 @@ fn failed_worker_exit_reconciliation_rejects_stale_or_incomplete_pins_without_mu
         );
     }
 }
+
+#[test]
+fn failed_worker_exit_reconciliation_retains_quarantine_on_host_publication_failure() {
+    let (fixture, request) = failed_worker_exit_reconciliation_fixture();
+    let proofs = fixture.ledger.root.join("proofs");
+    if proofs.exists() {
+        assert!(std::fs::read_dir(&proofs).unwrap().next().is_none());
+        std::fs::remove_dir(&proofs).unwrap();
+    }
+    // Force only the second-phase proof publication to fail. Validation and
+    // the real session release must not turn this into free host capacity.
+    std::fs::write(&proofs, b"fixture: proof parent is temporarily unavailable").unwrap();
+    let catalog_before = fixture
+        .store
+        .read_run_catalog(&request.expected_lease.run_id)
+        .unwrap();
+    assert!(fixture
+        .ledger
+        .reconcile_failed_worker_after_exit(&fixture.store, &request)
+        .is_err());
+    let partial = fixture
+        .store
+        .read_resource_lease(
+            &request.expected_lease.run_id,
+            &request.expected_lease.resource_id,
+            &request.expected_lease.lease_token,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(partial.state, FmsResourceLeaseState::Released);
+    let held = fixture
+        .ledger
+        .read()
+        .unwrap()
+        .reservations
+        .into_iter()
+        .find(|row| row.identity == request.expected_reservation.identity)
+        .unwrap();
+    assert_eq!(held.state, HostResourceReservationState::Quarantined);
+    assert!(held.release_proof_sha256.is_none());
+    assert_eq!(
+        fixture
+            .store
+            .read_run_catalog(&request.expected_lease.run_id)
+            .unwrap(),
+        catalog_before
+    );
+    std::fs::remove_file(&proofs).unwrap();
+    std::fs::create_dir(&proofs).unwrap();
+    let released = fixture
+        .ledger
+        .reconcile_failed_worker_after_exit(&fixture.store, &request)
+        .unwrap();
+    assert_eq!(released.state, HostResourceReservationState::Released);
+    assert_eq!(
+        fixture
+            .store
+            .read_resource_lease(
+                &request.expected_lease.run_id,
+                &request.expected_lease.resource_id,
+                &request.expected_lease.lease_token
+            )
+            .unwrap()
+            .unwrap(),
+        partial
+    );
+}

@@ -26,6 +26,8 @@ struct Request {
     owner_sha256: String,
     expected_owner: RuntimeServiceOwnerDescriptor,
     expected_catalog_sha256: String,
+    // Raw pin for the initial Active file. A Released replay is checked by
+    // exact semantic normalization and its real stored release timestamp.
     expected_lease_sha256: String,
     expected_receipt_sha256: String,
     reconciliation: FailedWorkerExitReconciliation,

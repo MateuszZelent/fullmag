@@ -1169,9 +1169,24 @@ fn task_outcome_settled(store: &SessionStore, run_id: &RunId, task_id: &str) -> 
     ) {
         return Ok(false);
     }
-    let lease = retry_store_writer_busy(|| {
-        store.read_active_resource_lease_for_task(run_id.as_str(), task_id)
-    })?;
+    // Terminal catalog state does not release a physical lease. A worker exit
+    // receipt carries the exact lease path and claim fence and remains valid
+    // after the Failed projection, so inspect it before the lifecycle-gated
+    // task lookup. Do not scan all leases or infer release from the catalog.
+    let lease = if let Some(receipt) =
+        accepted_study_supervisor::worker_process_exit_receipt_for_current_task(
+            store,
+            run_id.as_str(),
+            task_id,
+        )? {
+        retry_store_writer_busy(|| {
+            store.read_active_resource_lease_for_worker_process_exit(&receipt)
+        })?
+    } else {
+        retry_store_writer_busy(|| {
+            store.read_active_resource_lease_for_task(run_id.as_str(), task_id)
+        })?
+    };
     Ok(lease.is_none())
 }
 
@@ -1726,5 +1741,106 @@ mod scheduler_writer_busy_tests {
         let ordinary = format!("{ordinary:#}");
         assert!(ordinary.contains("compute scheduler: build accepted run queue"));
         assert!(ordinary.contains("queue snapshot is corrupt"));
+    }
+}
+
+#[cfg(test)]
+mod task_outcome_tests {
+    use super::task_outcome_settled;
+    use chrono::Utc;
+    use fullmag_application::RunId;
+    use fullmag_session::{
+        FmsResourceBudget, FmsResourceKind, FmsResourceLease, FmsResourceLeaseState, FmsRunCatalog,
+        FmsTaskCatalogEntry, FmsTaskLifecycle, FmsTaskReadiness, FmsWorkerProcessExitReceipt,
+        SessionStore, FMS_RESOURCE_LEASE_SCHEMA, FMS_RUN_CATALOG_SCHEMA,
+        FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA,
+    };
+
+    #[test]
+    fn failed_task_with_worker_exit_lease_is_unsettled_until_physical_release() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let run_id = RunId::parse("run-task-outcome").unwrap();
+        let task_id = "task-task-outcome";
+        let attempt_id = "attempt-task-outcome";
+        let resource_id = "cpu-task-outcome";
+        let lease_token = "lease-task-outcome";
+        let now = Utc::now();
+        let task = FmsTaskCatalogEntry {
+            task_id: task_id.into(),
+            input_fingerprint: "a".repeat(64),
+            lifecycle: FmsTaskLifecycle::Preparing,
+            readiness: FmsTaskReadiness::Ready,
+            observation: None,
+            attempt_id: Some(attempt_id.into()),
+            ownership_epoch: Some(1),
+            resolved_input_fingerprint: None,
+            artifact_ids: Vec::new(),
+            resource_id: Some(resource_id.into()),
+            coordinator_watermark: None,
+            coordinator_genesis: None,
+        };
+        store
+            .commit_run_catalog(&FmsRunCatalog {
+                schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.as_str().into(),
+                revision: 1,
+                updated_at: now,
+                tasks: vec![task],
+            })
+            .unwrap();
+        let lease = FmsResourceLease {
+            schema_version: FMS_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: resource_id.into(),
+            kind: FmsResourceKind::Cpu,
+            budget: FmsResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1,
+            },
+            run_id: run_id.as_str().into(),
+            task_id: task_id.into(),
+            attempt_id: attempt_id.into(),
+            ownership_epoch: 1,
+            lease_token: lease_token.into(),
+            state: FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 0,
+            released_at: None,
+            host_launch_binding: None,
+        };
+        store.commit_resource_lease(&lease).unwrap();
+        let receipt = FmsWorkerProcessExitReceipt {
+            schema_version: FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+            receipt_id: "exit-task-outcome".into(),
+            run_id: run_id.as_str().into(),
+            task_id: task_id.into(),
+            attempt_id: attempt_id.into(),
+            ownership_epoch: 1,
+            resource_id: resource_id.into(),
+            lease_token: lease_token.into(),
+            lease_heartbeat_sequence: 0,
+            process_id: 17,
+            process_start_token: Some("fixture-process-start".into()),
+            status_success: false,
+            exit_code: Some(1),
+            timed_out: false,
+            stop_requested: false,
+            failure_reason: Some("fixture worker failure".into()),
+            observed_at: now,
+        };
+        store.commit_worker_process_exit_receipt(&receipt).unwrap();
+
+        let mut failed_catalog = store.read_run_catalog(run_id.as_str()).unwrap().unwrap();
+        failed_catalog.revision += 1;
+        failed_catalog.updated_at = Utc::now();
+        failed_catalog.tasks[0].lifecycle = FmsTaskLifecycle::Failed;
+        store.commit_run_catalog(&failed_catalog).unwrap();
+
+        assert!(!task_outcome_settled(&store, &run_id, task_id).unwrap());
+        store.release_resource_lease(&lease).unwrap();
+        assert!(task_outcome_settled(&store, &run_id, task_id).unwrap());
     }
 }
