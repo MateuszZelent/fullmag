@@ -736,7 +736,10 @@ mod source_contract_tests {
 
     #[test]
     fn static_pbc_preflight_consumes_runner_attestation_and_exact_mesh_identity() {
-        let source = include_str!("accepted_fem_study_worker.rs");
+        let source = include_str!("accepted_fem_study_worker.rs")
+            .split_once("#[cfg(test)]")
+            .expect("source contract follows the production execution adapter")
+            .0;
         assert!(source.contains("attest_accepted_fem_static_pbc"));
         assert!(source.contains("attestation.mesh_topology_fingerprint"));
         assert!(source.contains("attestation.periodic_node_pair_count"));
