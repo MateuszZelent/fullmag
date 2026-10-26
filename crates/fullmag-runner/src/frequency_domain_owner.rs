@@ -33,7 +33,7 @@ pub(super) fn bind_manifest_owner(
     let legacy_placeholder = matches!(object.get("run_id").and_then(Value::as_str), Some("current" | "run:current"))
         && match object.get("stage_id").and_then(Value::as_str) {
             Some("eigenmodes") => modal,
-            Some("frequency_response") => response,
+            Some("frequency_response" | "frequency-response") => response,
             _ => false,
         };
     for (key, expected) in [("run_id", &owner.run_id), ("stage_id", &owner.stage_id)] {
@@ -77,6 +77,21 @@ mod tests {
             assert_eq!(value["physics"]["normalization"], "unit_l2");
         }
     }
+    #[test]
+    fn response_manifest_owner_binds_the_published_legacy_placeholder() {
+        let response_owner = PublicationOwner {
+            run_id: "run-exact".into(), stage_id: "response-exact".into(),
+            stage_kind: "frequency_response".into(),
+        };
+        let mut artifacts = [artifact(serde_json::json!({
+            "study_product":"driven_response", "run_id":"current", "stage_id":"frequency-response"
+        }))];
+        bind_manifest_owner(&mut artifacts, Some(&response_owner)).unwrap();
+        let value: Value = serde_json::from_slice(&artifacts[0].bytes).unwrap();
+        assert_eq!(value["run_id"], "run-exact");
+        assert_eq!(value["stage_id"], "response-exact");
+    }
+
     #[test]
     fn manifest_owner_rejects_exact_conflicts_and_partial_alias_without_mutation() {
         for identity in [serde_json::json!({"run_id":"foreign","stage_id":"stage-exact"}),

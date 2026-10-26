@@ -86,8 +86,11 @@ fn owner_pair(
             Some("driven_response") => Some("frequency_response"),
             _ => None,
         };
+        let known_stage_placeholder = stage.and_then(Value::as_str) == placeholder_stage
+            || (family == Some("driven_response")
+                && stage.and_then(Value::as_str) == Some("frequency-response"));
         if matches!(run.and_then(Value::as_str), Some("current" | "run:current"))
-            && stage.and_then(Value::as_str) == placeholder_stage
+            && known_stage_placeholder
             && placeholder_stage.is_some()
         {
             return Ok(None);
@@ -160,6 +163,18 @@ mod tests {
         assert_eq!(owner.run_id, "archived-run");
         assert_eq!(owner.stage_id, "archived-stage");
     }
+    #[test]
+    fn legacy_response_writer_placeholder_remains_unbound() {
+        let root = Root::new();
+        root.records(serde_json::json!({
+            "schema_version":"frequency_domain_manifest.v1", "study_product":"driven_response",
+            "run_id":"current", "stage_id":"frequency-response"
+        }), serde_json::json!({}));
+        let snapshot = read_legacy_owner(&root.0, "response/frequency_points/frequency_0000.json")
+            .unwrap().unwrap();
+        assert!(snapshot.owner.is_none());
+    }
+
     #[test]
     fn legacy_owner_rejects_conflict_partial_alias_and_wrong_stage_kind() {
         let root = Root::new();

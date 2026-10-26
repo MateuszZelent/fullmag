@@ -48789,6 +48789,8 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
             .expect("stage execution should exist");
         execution.stages[0].stage_id = Some("eigen-stage".into());
         execution.stages[0].kind = Some("flat_eigenmodes".into());
+        // Ownership comes from an exact artifact reference, never the stage kind.
+        execution.stages[0].artifact_refs = vec!["eigen/".into()];
         execution.stages[0].mesh_generation_id = Some("mesh-generation-eigen".into());
         execution.stages[1].stage_id = Some("later-active-stage".into());
         execution.stages[1].kind = Some("relax".into());
