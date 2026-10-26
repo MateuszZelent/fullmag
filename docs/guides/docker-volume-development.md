@@ -556,3 +556,32 @@ drainu ani wykonania fizyki. Następnie obowiązuje zwykły docker-dev up
 wybranego checkoutu i nowe jawne żądanie skryptu. Implementacja i kontrola
 interpretowana nie zastępują dowodu runtime tej trasy: NOT VERIFIED do
 zakończenia rzeczywistego preflight→apply→API→browser.
+
+
+## Uzgodnienie zakończonego Failed workera
+
+Jeżeli diagnostyczny backend ma historyczny Failed task z autorytatywnym
+niezerowym process-exit receipt, lokalnym Active lease i Quarantined host
+reservation, zarządzana komenda `scripts/docker_dev.py reconcile-failed-worker`
+obsługuje wyłącznie ten przypadek. Nie służy do anulowania żywego workera,
+naprawiania wyników ani ponawiania Solve.
+
+Wymagane piny: `--source-root`, `--attempt`, `--iteration-attempt` (udana bieżąca
+iteracja), `--pending-activation` (helper nadal posiadający blokadę),
+`--config-sha256`, `--port`, `--run-id`, `--task-id`, `--exit-receipt-id`.
+Przypnij również `--request-id` jako jeden UUID dla przygotowania i apply.
+Bez flagi wykonania otrzymujesz preview. `--prepare-candidate` buduje i natywnie
+waliduje izolowany pakiet w istniejącym backendzie; `--apply` wykorzystuje ten
+sam niezmienny request i pakiet. Nie zmieniaj źródeł między tymi fazami.
+
+Receipty przygotowania i apply są oddzielne oraz niezmienne, zapisane pod
+pierwotną aktywacją w wolumenie control. Domyślny preview nie zwalnia zasobów.
+Przed wywołaniem sprawdzane są źródła i rzeczywisty inventory pakietu, a
+runtime-service jest wykonywany z otwartego pliku o potwierdzonym SHA.
+
+Protokół ma dwie fazy: lokalny release, następnie normalny host release proof.
+Przerwanie może pozostawić lokalny Released i host Quarantined; powtarzaj tylko
+dokładny request po sprawdzeniu jego receiptów. Błąd po wywołaniu native oznacza
+nieznany wynik, nie brak skutków. Katalog Failed i artefakty pozostają zachowane.
+Dopiero potwierdzony normalny proof odblokowuje istniejący diagnostic stop oraz
+zachowujące historię odtworzenie usług. Nie zapisuj ręcznie stanów lease/proof.

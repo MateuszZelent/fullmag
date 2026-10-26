@@ -1,6 +1,6 @@
 # Ponowienie obliczeń eigensolve — decyzja po odmowie preflightu
 
-Stan: 26.10.2026, około 16:15 UTC. To checkpoint blokady wykonania, nie kwalifikacja solvera.
+Stan: 26.10.2026. Użytkownik wybrał wariant B: naprawa uzgadniania w obecnym worktree. To checkpoint implementacji i blokady wykonania, nie kwalifikacja solvera.
 
 ## Kod i wykonanie
 
@@ -45,18 +45,36 @@ Obserwowane inne grupy Fullmaga mają osobne wolumeny ledgerów. Nie stwierdzono
 
 ## Dwa możliwe dalsze kroki
 
-### A — osobny izolowany worktree do obliczeń (zalecane dla priorytetu wyników)
+### A — osobny izolowany worktree do obliczeń (wariant niewybrany)
 
 Proponowany nowy zarejestrowany checkout: `worktrees/eigensolve-numeric-ui-20261026`, branch `codex/eigensolve-numeric-ui-20261026`, z końcowego checkpointu obecnego brancha. Uruchomienie tylko przez jego własną grupę Docker Compose, własny stan sesji i ledger. Najpierw ten sam pilot DE +10, następnie zapisany sweep 15 punktów −25…+25 i rzeczywisty mod w UI.
 
 Zachowujemy dotychczasowe worktree, diagnostyczny runtime, kwarantannę, aktywne receipty i wyniki. To świadomy wyjątek od reguły jednego worktree dla zadania; nowy build będzie miał własny koszt i nie daje gwarancji, że inne błędy wykonania nie wystąpią. Nie jest to naprawa starego ledgera ani ukończenie integracji na master.
 
-### B — najpierw naprawa uzgadniania zakończonego workera
+### B — najpierw naprawa uzgadniania zakończonego workera (wybrane)
 
 Potrzebny jest odrębny, testowany kontrakt supervisora/maintenance: exact failed task + claim/attempt/epoch + authoritative process-exit receipt + dokładna lokalna aktywna lease + dokładna quarantined reservation. Po potwierdzeniu zakończenia procesu zamknąć lease i wygenerować istniejący normalny release proof przez właściciela protokołu, bez kwalifikowania artefaktów lub ponownego solve. Obsłużyć częściowe publikacje i idempotentne wznowienie.
 
-Wymaga to testów negatywnych dla wszystkich tożsamości i granic publikacji, review oraz zarządzanej ścieżki maintenance tej samej grupy. Dopiero później można odtworzyć usługę i ponowić obliczenia. Takiej ścieżki jeszcze nie zaimplementowano; nie zastępuje jej ręczny zapis JSON lub pominięcie preflightu.
+Wymaga to testów negatywnych dla wszystkich tożsamości i granic publikacji, review oraz zarządzanej ścieżki maintenance tej samej grupy. Dopiero później można odtworzyć usługę i ponowić obliczenia. Natywny protokół i CLI są zaimplementowane w `7658c1d2753b4cbbd7a8f8dcf4446756fe0ce079`; poprawka przyczyny i test awarii drugiej fazy w `6337f20075bfc1952d0c564623e0d43e9288e4a8`. Zarządzany wrapper jest w weryfikacji przed wykonaniem. Nie zastępuje go ręczny zapis JSON lub pominięcie preflightu.
 
 ## Niezależne prace
 
 Referencja analityczna DE dla 101 punktów od −25 do +25 rad/µm jest przeliczona; +10: coupled thickness N=8 około 11.228266 GHz. To REFERENCE ONLY, nie wynik FEM. Scenariusz `examples/fem_eigen_mode_ui_de_signed15.py` jest zapisany na remote, ale nie został jeszcze wykonany. Harness `scripts/verify_eigen_mode_ui.mjs` wymaga teraz pobrania pola zespolonego z dokładnym field/generation/session scope, zgodnych nagłówków FMVP i markeru gotowości kontrolera po dekodowaniu. Niezależnie sprawdza canvas/WebGL. `node --check` oraz `--help` przeszły; pozytywny browser/runtime pozostaje NOT VERIFIED.
+
+## Kontrakt wdrażanej procedury B
+
+- `reconcile-failed-worker` działa w istniejącym backendzie i pod nadal trzymaną blokadą pierwotnej aktywacji. Wymaga przypięcia udanej iteracji, pełnego kontenera i jego czasu startu, źródeł, konfiguracji, ownera Failed, task/attempt/epoch, exit receipt, lease i rezerwacji hosta.
+- Domyślny preview nie zmienia sesji ani ledgera. `--prepare-candidate` buduje osobny pakiet w `/build/maintenance/<UUID>/package` kanoniczną receptą tego samego backendu, korzystając ze wspólnego cache `/build`. Natywny preview waliduje kontrakt bez release. Pakiet nie zastępuje aktywnego pakietu i nie uruchamia API, schedulera ani Solve.
+- `--apply` wykorzystuje ten sam UUID, niezmienny request i dokładny przygotowany pakiet. Przed wykonaniem sprawdza cały inventory pakietu oraz SHA rzeczywistych bajtów runtime-service; wykonuje otwarty, zweryfikowany deskryptor pliku. Ponowne użycie UUID dla innego run/task/receipt/iteration jest odrzucane.
+- Release ma dwie fazy, nie jest atomową transakcją dwóch magazynów: pod blokadami waliduje wszystkie normalne warunki i zwalnia lokalny lease, następnie istniejący `release_worker_after_exit` publikuje normalny proof i zwalnia host reservation. Awaria drugiej fazy zachowuje host Quarantined; dokładne wznowienie kończy protokół. Test wymusza tę awarię I/O i sprawdza brak zmiany katalogu oraz zachowanie oryginalnego release timestamp.
+- Surowy digest lease obowiązuje dla początkowego Active. Replay po prawdziwym lokalnym release wymaga pełnej zgodności semantycznej poza stanem i timestampem release. Nie dopisuje fikcyjnego proof.
+- Błąd po wywołaniu natywnej procedury pozostaje outcome-unknown; nie wolno wnioskować o braku mutacji. Trzeba zachować request i zbadać oba magazyny przed ponowieniem. Końcowy raw-check katalogu może zgłosić błąd również po faktycznym release.
+- Failed pozostaje Failed, artefakty nie są rekwalifikowane, solver nie jest powtarzany. Dopiero potwierdzony normalny proof pozwala użyć istniejącego diagnostic stop, zachowującej historię archiwizacji i zwykłego restartu tej grupy.
+
+Poprawka prewencyjna: Failed/Cancelled/Interrupted bez SolutionSet nie przechodzą ponownej walidacji poprawności zakończonego rozwiązania, która wcześniej blokowała sprzątanie po utrwaleniu Failed. Nadal obowiązuje walidacja udanego rozwiązania i istniejącego SolutionSet. Scheduler rozpoznaje niewygaszony lease po dokładnym exit receipt, niezależnie od terminalnego lifecycle.
+
+Review wrappera wykryło i skorygowało kontrolę samego deklarowanego SHA zamiast binarnych bajtów oraz niepełny scope replay sukcesu. Rzeczywisty preview ujawnił też błędny budżet 16 MiB dla dokumentów control (właściwy limit pozostaje 8 MiB), alias mountu WSL oraz krótkie ID z `docker ps`; poprawki nie obniżają kontroli tożsamości.
+
+Dodatkowe rozszerzenie na skanowanie lease'ów całego tasku zostało odrzucone przez automatyczną kontrolę uprawnień i nie zostało zastosowane. Obowiązuje węższy kontrakt konkretnego potwierdzonego exit receipt.
+
+Status wykonania: bez nowego punktu FEM i bez pola modu. 61 lekkich testów Pythona przeszło; testy kompilowane Rust wyłącznie w GitHub Actions. Wynik rzeczywistego native preview/apply i restartu należy dopisać po wykonaniu, a nie na podstawie samych testów źródeł.

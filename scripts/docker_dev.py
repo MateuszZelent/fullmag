@@ -2637,6 +2637,42 @@ def _parser() -> argparse.ArgumentParser:
         "--pending-activation",
         help="close one exact unreleased preparation after native owner failure; permits only subsequent fresh-state archival",
     )
+    failed_worker = subparsers.add_parser(
+        "reconcile-failed-worker",
+        help=(
+            "preview or prepare one isolated failed-worker release reconciliation; "
+            "the parent activation helper remains the only control lease"
+        ),
+    )
+    failed_worker.add_argument("--attempt", required=True,
+                               help="exact retained development attempt")
+    failed_worker.add_argument("--iteration-attempt", required=True,
+                               help="exact successful retained idle-restart iteration")
+    failed_worker.add_argument("--config-sha256", required=True,
+                               help="raw SHA-256 of the retained Compose document")
+    failed_worker.add_argument("--source-root", type=Path, required=True,
+                               help="exact registered checkout mounted by the retained group")
+    failed_worker.add_argument("--port", type=int, required=True,
+                               help="retained frontend loopback port")
+    failed_worker.add_argument("--pending-activation", required=True,
+                               help="exact active parent preparation attempt")
+    failed_worker.add_argument("--run-id", required=True,
+                               help="exact failed run containing the task")
+    failed_worker.add_argument("--task-id", required=True,
+                               help="exact failed task to reconcile")
+    failed_worker.add_argument("--exit-receipt-id", required=True,
+                               help="exact worker process exit receipt")
+    failed_worker.add_argument("--request-id",
+                               help="optional canonical UUID, reused for prepare then apply")
+    failed_worker_mode = failed_worker.add_mutually_exclusive_group()
+    failed_worker_mode.add_argument(
+        "--prepare-candidate", action="store_true",
+        help="build and native-validate an isolated candidate without releasing the lease",
+    )
+    failed_worker_mode.add_argument(
+        "--apply", action="store_true",
+        help="invoke native reconciliation with --apply after all pins are revalidated",
+    )
     stop_held = subparsers.add_parser(
         "stop-held-retirement-volume",
         help="preview a pinned diagnostic backend drain; apply requires an explicit UI-reset acknowledgement and plan digest",
@@ -2935,6 +2971,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-diagnostic-volume":
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "reconcile-failed-worker":
+            from docker_volume_failed_worker_reconciliation import run as reconcile_failed_worker
+            result = reconcile_failed_worker(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-held-retirement-volume":
             from docker_volume_stop_held_retirement import apply, plan

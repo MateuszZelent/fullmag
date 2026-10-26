@@ -579,7 +579,9 @@ def _running_service(
         raise CodegenError(f"{service} service environment is mounted from a different source checkout")
     source_mount = _mount_for(document, "/opt/fullmag/source")
     if _path_identity(source_mount.get("Source")) != _path_identity(str(selected)):
-        raise CodegenError(f"{service} inspected source mount differs from the selected checkout")
+        from docker_dev_browser_qa import _source_mount_matches_selected
+        if not _source_mount_matches_selected(source_mount.get("Source"), selected):
+            raise CodegenError(f"{service} inspected source mount differs from the selected checkout")
     return container, document
 
 
