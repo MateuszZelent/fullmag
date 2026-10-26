@@ -52,10 +52,11 @@ use super::eigen_policy::{
 };
 use super::eigen_progress::{emit_fem_eigen_progress, FemEigenProgress, FemEigenProgressCallback};
 use super::eigen_projection::{
+    expand_reference_mode_to_periodic_nodes,
     project_2x2_mode_to_tangent_basis, project_complex_2x2_mode_to_tangent_basis,
     project_complex_mode_to_tangent_basis, project_real_mode_to_tangent_basis, tangent_bases,
 };
-use super::eigen_reduction::build_reduction_map;
+use super::eigen_reduction::{build_reduction_map, validate_materialized_tangent_frame_transport};
 use super::eigen_shared_domain::{
     native_shared_domain_magnetic_assembly_available, native_shared_domain_magnetic_assembly_error,
     shared_domain_k0_runtime_unavailable_error, validate_eigen_equilibrium_certificate,
@@ -2017,6 +2018,7 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
     let (problem, equilibrium, relaxation_steps, observables, source_artifact) =
         materialize_equilibrium(plan, &initial_magnetization, source_relax_handoff)?;
     let topology = &problem.topology;
+    validate_materialized_tangent_frame_transport(plan, topology, &equilibrium)?;
     let mut solver_kind = solver_kind_label(plan);
     let reduction = build_reduction_map(topology, &plan.spin_wave_bc, plan.k_sampling.as_ref())?;
     if reduction.active_nodes.is_empty() {
@@ -2534,10 +2536,10 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
             residual_relative_l2,
             residual_linf,
             mass_norm,
-            real,
-            imag,
-            amplitude,
-            phase,
+            mut real,
+            mut imag,
+            mut amplitude,
+            mut phase,
             max_amplitude,
             norm,
         ) = if complex_reduction {
@@ -2666,6 +2668,9 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
                 message: "FEM eigen reference frequency or linewidth is non-finite".to_string(),
             });
         }
+        expand_reference_mode_to_periodic_nodes(
+            &reduction, &mut real, &mut imag, &mut amplitude, &mut phase,
+        )?;
         let dominant_polarization = classify_polarization(
             &amplitude,
             &reduction.active_nodes,

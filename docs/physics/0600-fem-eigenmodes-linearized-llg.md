@@ -371,6 +371,62 @@ Mode artifacts export:
 
 The current circular polarization export is a tangent-basis reconstruction convenience for visualization. It should be treated as a reference visualization product contract, not yet as a full non-Hermitian modal analysis package.
 
+(reference-mode-reconstruction)=
+### Rekonstrukcja referencyjnego pola modu
+
+Skalarny eksport referencyjny zachowuje istniejące przybliżenie kołowe także
+dla zespolonego współczynnika eigenwektora. Globalna faza mnoży cały fazor
+kartezjański, bez zmiany amplitudy ani trajektorii kołowej. Ta rekonstrukcja
+nie wyznacza fizycznej eliptyczności modu.
+
+```{math}
+:label: eq-0600-scalar-reference-reconstruction
+\delta\mathbf m = a(\mathbf e_1+\mathrm i\mathbf e_2).
+```
+
+Po rekonstrukcji pól skalarnych lub Full2x2 publikacja referencyjna rozwija
+klasy periodyczne na pełną siatkę magnetyczną, z istniejącą ujemną konwencją
+fazy Blocha opisaną w `0710-periodic-and-floquet-boundary-conditions.md`,
+równanie `eq-0710-phase`:
+
+```{math}
+:label: eq-0600-reference-periodic-expansion
+\delta\mathbf m_{\mathrm{dst}} =
+\exp(-\mathrm i\mathbf k\cdot\Delta\mathbf r)\,
+\delta\mathbf m_{\mathrm{src}}.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\delta\mathbf m$ | Zespolony fazor zaburzenia znormalizowanej magnetyzacji | $1$ |
+| $a$ | Zespolony współczynnik skalarnego modu referencyjnego | $1$ |
+| $\mathbf e_1$ | Pierwszy jednostkowy wektor lokalnej bazy stycznej | $1$ |
+| $\mathbf e_2$ | Drugi jednostkowy wektor lokalnej bazy stycznej | $1$ |
+| $\mathrm i$ | Jednostka urojona | $1$ |
+| $\delta\mathbf m_{\mathrm{src}}$ | Fazor reprezentanta klasy periodycznej | $1$ |
+| $\delta\mathbf m_{\mathrm{dst}}$ | Fazor docelowego węzła tej klasy | $1$ |
+| $\mathbf k$ | Zadany wektor falowy | $\mathrm{rad\,m^{-1}}$ |
+| $\Delta\mathbf r$ | Translacja od reprezentanta do węzła docelowego | $\mathrm m$ |
+
+Przed rozwinięciem runner sprawdza transport na zmaterializowanej równowadze,
+a nie wyłącznie na początkowym przybliżeniu. Czyste translacje wymagają
+zgodnych fizycznych wektorów równowagi. Full2x2 dopuszcza wspierane obroty
+lokalnej bazy; skalarna ścieżka nadal wymaga transportu tożsamościowego.
+Normowanie wektora zredukowanego pozostaje bez zmian. Natywny publisher
+zachowuje własną projekcję z transportem baz stycznych. Zmiana dotyczy
+referencyjnej publikacji FEM CPU i nie ustanawia nowej możliwości natywnej,
+FEM GPU, FDM ani pełnej analizy niehermitowskiej.
+
+Właścicielami są
+`crates/fullmag-runner/src/fem/eigen_projection.rs::project_complex_mode_to_tangent_basis`,
+`crates/fullmag-runner/src/fem/eigen_projection.rs::expand_reference_mode_to_periodic_nodes`
+oraz
+`crates/fullmag-runner/src/fem/eigen_reduction.rs::validate_materialized_tangent_frame_transport`.
+Przygotowane regresje publikacji i materializacji są wymienione w indeksie
+źródeł. Nie zostały skompilowane ani wykonane w tym zadaniu integracyjnym;
+managed runtime, browser/WebGL i kwalifikacja naukowa pozostają oddzielnymi
+dowodami: **NOT VERIFIED**.
+
 ## Branch identity at crossings and degeneracies
 
 `KSamplingIR::Path` solves each sample independently, so the order and phase
@@ -949,6 +1005,11 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `crates/fullmag-cli/src/orchestrator.rs` | `accepted_relax_handoff_for_eigen_stage` | Resolve the accepted Relax-stage handoff; direct runner calls without it fail closed. |
 | `crates/fullmag-runner/src/fem/eigen_tests.rs` | `relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation` | Source-fixture regression for one reused handoff across nonzero k samples; not physical or runtime qualification. |
 | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `p00_demag_factor` | Stable analytic P00 reference. |
+| `crates/fullmag-runner/src/fem/eigen_projection.rs` | `project_complex_mode_to_tangent_basis` | Rekonstrukcja skalarnej wizualizacji kołowej z zachowaniem globalnej fazy zespolonej. |
+| `crates/fullmag-runner/src/fem/eigen_projection.rs` | `expand_reference_mode_to_periodic_nodes` | Rozwinięcie kartezjańskiego fazora na pełną siatkę zgodnie z fazą Blocha. |
+| `crates/fullmag-runner/src/fem/eigen_reduction.rs` | `validate_materialized_tangent_frame_transport` | Kontrola końcowej równowagi i wspieranego transportu przed rekonstrukcją. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `reference_mode_publication_expands_periodic_and_signed_floquet_fields` | Przygotowana regresja publikacji scalar/Full2x2 przy Gamma i obu znakach k; wykonanie NOT VERIFIED. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `reference_mode_publication_rejects_materialized_equilibrium_mismatch` | Przygotowana regresja odrzucenia niespójnej zmaterializowanej równowagi; wykonanie NOT VERIFIED. |
 | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | `frequencies_are_degenerate` | Apply the private absolute-plus-relative complex-frequency grouping bound. |
 | `crates/fullmag-runner/src/eigen/tracking.rs` | `frequency_clusters_use_anchored_complex_distance_and_additive_tolerance` | Regress anchored grouping, complex distance, and additive/relative tolerance boundaries; does not qualify physical degeneracy. |
 

@@ -11986,3 +11986,173 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
         serde_json::json!(["per_sample", "global"])
     );
 }
+
+#[test]
+fn materialized_full2x2_guard_accepts_tangent_frame_reference_axis_jump() {
+    let mut plan = bounded_k0_execution_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic FEM mesh is valid");
+    let (_, node_a, node_b) = topology
+        .periodic_node_pairs
+        .first()
+        .expect("fixture must contain a Floquet pair")
+        .clone();
+    assert!(topology.magnetic_node_volumes[node_a as usize] > 0.0);
+    assert!(topology.magnetic_node_volumes[node_b as usize] > 0.0);
+
+    // Keep the equilibrium seam below the 1e-8 m0 tolerance while placing the
+    // two otherwise nearly equal vectors on opposite sides of the
+    // tangent_bases() |m_z|=0.9 reference-axis branch. Native shared-domain
+    // constraints transport the resulting local coordinates with
+    // T_dst^T T_src, so the Rust preflight must allow this valid chart change.
+    let z_a: f64 = 0.9 - 1.0e-10;
+    let z_b: f64 = 0.9 + 1.0e-10;
+    let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    equilibrium[node_a as usize] = [(1.0 - z_a * z_a).sqrt(), 0.0, z_a];
+    equilibrium[node_b as usize] = [(1.0 - z_b * z_b).sqrt(), 0.0, z_b];
+    let seam = (equilibrium[node_a as usize][0] - equilibrium[node_b as usize][0])
+        .hypot(equilibrium[node_a as usize][2] - equilibrium[node_b as usize][2]);
+    assert!(
+        seam < 1.0e-8,
+        "fixture seam must pass the m0 periodic tolerance"
+    );
+
+    validate_materialized_tangent_frame_transport(&plan, &topology, &equilibrium)
+        .expect("a local tangent-frame rotation is valid when physical m0 is periodic");
+}
+
+#[test]
+fn materialized_full2x2_guard_rejects_physical_equilibrium_mismatch() {
+    let mut plan = bounded_k0_execution_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic FEM mesh is valid");
+    let (_, node_a, node_b) = topology
+        .periodic_node_pairs
+        .first()
+        .expect("fixture must contain a Floquet pair")
+        .clone();
+    let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    equilibrium[node_a as usize] = [1.0, 0.0, 0.0];
+    equilibrium[node_b as usize] = [0.0, 1.0, 0.0];
+
+    let error = validate_materialized_tangent_frame_transport(&plan, &topology, &equilibrium)
+        .expect_err("pure-translation Floquet pairs must preserve physical m0");
+    assert!(error
+        .message
+        .contains("matching physical equilibrium vectors"));
+}
+
+
+/// Exercise reference publication rather than only the projection helpers. The
+/// artificial accepted handoff is validation-only and makes no runtime claim.
+#[test]
+fn reference_mode_publication_expands_periodic_and_signed_floquet_fields() {
+    for operator in [
+        fullmag_ir::EigenOperatorIR::LinearizedLlg,
+        fullmag_ir::EigenOperatorIR::Full2x2,
+    ] {
+        for k_x in [0.0, -0.43, 0.43] {
+            let mut plan = minimal_native_modal_plan();
+            add_x_floquet_pair_to_plan(&mut plan);
+            plan.equilibrium = EquilibriumSourceIR::Provided;
+            plan.operator.kind = operator;
+            plan.operator.include_demag = false;
+            plan.enable_demag = false;
+            plan.damping_policy = EigenDampingPolicyIR::Ignore;
+            plan.material.uniaxial_anisotropy = Some(1.0e4);
+            plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+            plan.target = fullmag_ir::EigenTargetIR::Lowest;
+            plan.count = 1;
+            plan.k_sampling = Some(KSamplingIR::Single { k_vector: [k_x, 0.0, 0.0] });
+            let handoff = validation_only_raw_provided_fixture_handoff(&plan)
+                .expect("the reference fixture must bind an accepted equilibrium");
+            let outputs = [OutputIR::EigenMode {
+                field: "mode".to_string(),
+                all_modes: false,
+                indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
+            }];
+            let run = execute_fem_eigen_inner(
+                &plan, &outputs, false, false, None, 0, None, None,
+                Some(&handoff), None, None,
+            ).expect("the small reference fixture must publish a mode without native providers");
+            let payload = eigen_diagnostics_published_json(
+                &run.auxiliary_artifacts, "eigen/modes/mode_0000.json",
+            );
+            let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+            let reduction = build_reduction_map(
+                &topology, &plan.spin_wave_bc, plan.k_sampling.as_ref(),
+            ).unwrap();
+            for key in ["real", "imag", "amplitude", "phase"] {
+                assert_eq!(payload[key].as_array().unwrap().len(), topology.n_nodes);
+            }
+            let read_vector = |key: &str, node: usize| -> Vector3 {
+                std::array::from_fn(|component| payload[key][node][component].as_f64().unwrap())
+            };
+            let max_amplitude = payload["max_amplitude"].as_f64().unwrap();
+            assert!(max_amplitude > 0.0);
+            let mut saw_nonzero_slave = false;
+            for node in 0..topology.n_nodes {
+                let Some(class) = reduction.node_map[node] else { continue };
+                let root = reduction.active_nodes[class];
+                let factor = reduction.node_phases[node];
+                let root_real = read_vector("real", root);
+                let root_imag = read_vector("imag", root);
+                let real = read_vector("real", node);
+                let imag = read_vector("imag", node);
+                for component in 0..3 {
+                    let expected = factor * Complex64::new(root_real[component], root_imag[component]);
+                    let actual = Complex64::new(real[component], imag[component]);
+                    assert!((actual - expected).norm() < 1.0e-10 * max_amplitude,
+                        "operator={operator:?} k_x={k_x} node={node} component={component}");
+                    for phase in [0.0, std::f64::consts::FRAC_PI_2, std::f64::consts::PI,
+                        3.0 * std::f64::consts::FRAC_PI_2] {
+                        let visible = real[component] * phase.cos() - imag[component] * phase.sin();
+                        let expected_visible = (expected * Complex64::from_polar(1.0, phase)).re;
+                        assert!((visible - expected_visible).abs() < 1.0e-10 * max_amplitude);
+                    }
+                }
+                assert_eq!(payload["amplitude"][node], payload["amplitude"][root]);
+                let amplitude = payload["amplitude"][node].as_f64().unwrap();
+                let relative_phase = Complex64::from_polar(
+                    1.0,
+                    payload["phase"][node].as_f64().unwrap()
+                        - payload["phase"][root].as_f64().unwrap(),
+                );
+                assert!((relative_phase - factor).norm() < 1.0e-10);
+                if operator == fullmag_ir::EigenOperatorIR::LinearizedLlg {
+                    let scale = max_amplitude.powi(2);
+                    assert!((dot(real, real) - amplitude.powi(2)).abs() < 1.0e-10 * scale);
+                    assert!((dot(imag, imag) - amplitude.powi(2)).abs() < 1.0e-10 * scale);
+                    assert!(dot(real, imag).abs() < 1.0e-10 * scale);
+                }
+                if node != root && amplitude > 1.0e-12 * max_amplitude {
+                    saw_nonzero_slave = true;
+                }
+            }
+            assert!(saw_nonzero_slave, "fixture must exercise a nonzero periodic slave");
+        }
+    }
+}
+
+#[test]
+fn reference_mode_publication_rejects_materialized_equilibrium_mismatch() {
+    let mut plan = minimal_native_modal_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    plan.equilibrium = EquilibriumSourceIR::Provided;
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+    plan.k_sampling = Some(KSamplingIR::Single { k_vector: [0.0; 3] });
+    let handoff = validation_only_raw_provided_fixture_handoff(&plan).unwrap();
+    // The authored equilibrium passes the pre-materialization checks. Only the
+    // actual override consumed by materialize_equilibrium has a periodic seam.
+    let mut override_m0 = plan.equilibrium_magnetization.clone();
+    override_m0[1] = [0.0, 1.0, 0.0];
+    let error = execute_fem_eigen_inner(
+        &plan, &[], false, false, None, 0, None, Some(&override_m0),
+        Some(&handoff), None, None,
+    ).expect_err("the executor must reject inconsistent materialized m0 before mode publication");
+    assert!(error.message.contains("matching physical equilibrium vectors"),
+        "unexpected guard error: {}", error.message);
+}

@@ -183,6 +183,16 @@ jobs:
       - name: Run deterministic eigen worker input contracts
         run: cargo test -p fullmag-runner eigen_k_worker --no-fail-fast
 
+      - name: Verify reference mode reconstruction and periodic publication
+        run: |
+          set -euo pipefail
+          cargo test -p fullmag-runner --lib scalar_projection_tests -- --nocapture | tee "$RUNNER_TEMP/eigen-projection.log"
+          grep -F "test result: ok. 5 passed" "$RUNNER_TEMP/eigen-projection.log"
+          cargo test -p fullmag-runner --lib materialized_full2x2_guard_ -- --nocapture | tee "$RUNNER_TEMP/eigen-materialized-frame.log"
+          grep -F "test result: ok. 2 passed" "$RUNNER_TEMP/eigen-materialized-frame.log"
+          cargo test -p fullmag-runner --lib reference_mode_publication_ -- --nocapture | tee "$RUNNER_TEMP/eigen-reference-publication.log"
+          grep -F "test result: ok. 2 passed" "$RUNNER_TEMP/eigen-reference-publication.log"
+
       - name: Run native modal cancellation completion contract
         run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
 
