@@ -219,6 +219,8 @@ def retirement_receipt_evidence(operation_id, _inputs_sha256):
     def test_finalizer_resolves_canonical_helper_absence_probe(self):
         operation_id = "a" * 32
         written = []
+        active_raw = operation_id.encode("ascii") + b"\n"
+        receipt_raw = b"receipt"
 
         class _Control:
             namespace = ""
@@ -228,22 +230,40 @@ def retirement_receipt_evidence(operation_id, _inputs_sha256):
                 written.append((relative, payload))
 
         result = {"state": "retirement-only", "retirement": {"operation_id": operation_id}}
-        terminal = {"state": "failed-confirmed", "activation_state": "retirement-replayed"}
+        terminal = {
+            "schema": activate.OPERATION_SCHEMA,
+            "phase": "activation",
+            "state": "failed-confirmed",
+            "attempt": operation_id,
+            "activation_state": "retirement-replayed",
+            "compose_project": "fullmag-worktree-demo",
+            "control_volume": "fullmag-build-control-demo",
+            "development_attempt": "c" * 32,
+            "config_sha256": "d" * 64,
+            "backend_container": "e" * 64,
+            "image_id": "sha256:" + "f" * 64,
+            "source_root": "C:/git/fullmag",
+        }
         with patch.object(reconcile, "_probe_helper_absence", return_value=None), patch.object(
-            activate, "_read_control_bytes", return_value=None
-        ):
+            activate,
+            "_read_control_bytes",
+            side_effect=[None, active_raw, receipt_raw, None, None, None],
+        ), patch.object(activate, "_retirement_live_current_cas") as pointer_cas:
             activate._finalize_retained_retirement(
                 _Control(),
                 operation_id=operation_id,
-                receipt_raw=b"receipt",
+                receipt_raw=receipt_raw,
                 result=result,
                 terminal=terminal,
             )
+        pointer_cas.assert_called_once()
+        self.assertEqual(pointer_cas.call_args.kwargs["active_raw"], active_raw)
+        self.assertEqual(pointer_cas.call_args.kwargs["receipt_raw"], receipt_raw)
+        self.assertIsNone(pointer_cas.call_args.kwargs["expected_previous_current_raw"])
         self.assertEqual(
             [relative for relative, _payload in written],
             [
                 "activation/attempts/" + operation_id + "/result.json",
-                "activation/current.json",
                 "activation/attempts/" + operation_id + "/terminal.json",
             ],
         )
