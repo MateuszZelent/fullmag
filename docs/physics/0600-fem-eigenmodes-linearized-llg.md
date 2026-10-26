@@ -424,10 +424,11 @@ Właścicielami są
 `crates/fullmag-runner/src/fem/eigen_projection.rs::expand_reference_mode_to_periodic_nodes`
 oraz
 `crates/fullmag-runner/src/fem/eigen_reduction.rs::validate_materialized_tangent_frame_transport`.
-Przygotowane regresje publikacji i materializacji są wymienione w indeksie
-źródeł. Nie zostały skompilowane ani wykonane w tym zadaniu integracyjnym;
-managed runtime, browser/WebGL i kwalifikacja naukowa pozostają oddzielnymi
-dowodami: **NOT VERIFIED**.
+Dziewięć regresji projekcji, publikacji i materializacji przeszło w GitHub
+Actions [40292988623](https://github.com/MateuszZelent/fullmag/actions/runs/40292988623)
+dla commita `100340ea2a29aea9e3e72e5ea9acab3521b61c5b`. To dowód kontraktu
+referencyjnej rekonstrukcji; managed runtime, browser/WebGL i kwalifikacja
+naukowa pozostają oddzielnymi dowodami: **NOT VERIFIED**.
 
 ## Branch identity at crossings and degeneracies
 
@@ -1010,8 +1011,8 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `crates/fullmag-runner/src/fem/eigen_projection.rs` | `project_complex_mode_to_tangent_basis` | Rekonstrukcja skalarnej wizualizacji kołowej z zachowaniem globalnej fazy zespolonej. |
 | `crates/fullmag-runner/src/fem/eigen_projection.rs` | `expand_reference_mode_to_periodic_nodes` | Rozwinięcie kartezjańskiego fazora na pełną siatkę zgodnie z fazą Blocha. |
 | `crates/fullmag-runner/src/fem/eigen_reduction.rs` | `validate_materialized_tangent_frame_transport` | Kontrola końcowej równowagi i wspieranego transportu przed rekonstrukcją. |
-| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `reference_mode_publication_expands_periodic_and_signed_floquet_fields` | Przygotowana regresja publikacji scalar/Full2x2 przy Gamma i obu znakach k; wykonanie NOT VERIFIED. |
-| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `reference_mode_publication_rejects_materialized_equilibrium_mismatch` | Przygotowana regresja odrzucenia niespójnej zmaterializowanej równowagi; wykonanie NOT VERIFIED. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `reference_mode_publication_expands_periodic_and_signed_floquet_fields` | Regresja publikacji scalar/Full2x2 przy Gamma i obu znakach k; CI 40292988623 PASS. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `reference_mode_publication_rejects_materialized_equilibrium_mismatch` | Regresja odrzucenia niespójnej równowagi przed nałożeniem więzów; CI 40292988623 PASS. |
 | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | `frequencies_are_degenerate` | Apply the private absolute-plus-relative complex-frequency grouping bound. |
 | `crates/fullmag-runner/src/eigen/tracking.rs` | `frequency_clusters_use_anchored_complex_distance_and_additive_tolerance` | Regress anchored grouping, complex distance, and additive/relative tolerance boundaries; does not qualify physical degeneracy. |
 
