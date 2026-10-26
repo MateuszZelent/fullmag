@@ -4,7 +4,6 @@ import {
   Activity,
   Box,
   Focus,
-  MoreHorizontal,
   BarChart2,
   Database,
   Gauge,
@@ -14,15 +13,10 @@ import {
 } from "lucide-react";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 
-import { PanelChrome } from "@/shared/ui/PanelFrame";
+import { PanelChrome, usePanelChromeControls } from "@/shared/ui/PanelFrame";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/shared/ui/DropdownMenu";
+import { DropdownMenuItem } from "@/shared/ui/DropdownMenu";
 import { ScrollArea } from "@/shared/ui/ScrollArea";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 import { InspectorFooter } from "./InspectorFooter";
@@ -72,6 +66,7 @@ export function InspectorShell({
   onToggleVisibility,
 }: InspectorShellProps) {
   const activeTab = useInspectorActiveTab();
+  const chrome = usePanelChromeControls();
   const contentRef = useRef<HTMLDivElement>(null);
   const nodeId = descriptor.metadata.find((item) => item.label === "Node")?.value;
   const descriptorKey = `${nodeId ?? descriptor.title}:${descriptor.tabs.map((tab) => tab.id).join(",")}`;
@@ -88,7 +83,32 @@ export function InspectorShell({
       className="fm-inspector"
       data-inspector-owner={descriptor.ownerId}
     >
-      <PanelChrome><span className="fm-panel-chrome__title">Inspector</span></PanelChrome>
+      <PanelChrome
+        menuItems={
+          <DropdownMenuItem
+            disabled={!nodeId}
+            onSelect={() => {
+              if (nodeId) void navigator.clipboard?.writeText(nodeId);
+            }}
+          >
+            Copy node ID
+          </DropdownMenuItem>
+        }
+      >
+        <span className="fm-panel-chrome__title">Inspector</span>
+        <Button
+          aria-label="Hide Inspector"
+          className="fm-inspector__panel-toggle"
+          data-panel-toggle="inspector"
+          size="icon"
+          title="Hide Inspector"
+          type="button"
+          variant="ghost"
+          onClick={() => (chrome ? chrome.hideWith(onToggleVisibility) : onToggleVisibility())}
+        >
+          <PanelRightClose size={16} aria-hidden="true" />
+        </Button>
+      </PanelChrome>
       <header className="fm-inspector__header">
         {descriptor.breadcrumbs.length > 0 ? (
           <nav className="fm-inspector__breadcrumbs" aria-label="Selection path">
@@ -128,42 +148,6 @@ export function InspectorShell({
                 </Badge>
               ) : null}
             </div>
-          </div>
-          <div className="fm-inspector__header-actions">
-            <Button
-              aria-label="Hide Inspector"
-              className="fm-inspector__panel-toggle"
-              data-panel-toggle="inspector"
-              size="icon"
-              title="Hide Inspector"
-              type="button"
-              variant="ghost"
-              onClick={onToggleVisibility}
-            >
-              <PanelRightClose size={16} aria-hidden="true" />
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  aria-label="Inspector options"
-                  className="fm-inspector__options-button"
-                  size="icon"
-                  variant="ghost"
-                >
-                  <MoreHorizontal size={16} aria-hidden="true" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  disabled={!nodeId}
-                  onSelect={() => {
-                    if (nodeId) void navigator.clipboard?.writeText(nodeId);
-                  }}
-                >
-                  Copy node ID
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
           </div>
         </div>
         {descriptor.metadata.length > 0 ? (

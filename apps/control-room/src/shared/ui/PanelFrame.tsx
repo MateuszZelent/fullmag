@@ -8,12 +8,23 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 export type PanelMode = "docked" | "floating" | "maximized";
 interface Geometry { x: number; y: number; width: number; height: number }
 const INITIAL_GEOMETRY: Geometry = { x: 96, y: 144, width: 416, height: 560 };
-const ChromeContext = createContext<{ move: ReactNode; actions: ReactNode } | null>(null);
+interface PanelChromeControls {
+  move: ReactNode;
+  actions: (menuItems?: ReactNode) => ReactNode;
+  /** Runs a module's own hide action with the frame's focus and scroll retention. */
+  hideWith: (action: () => void) => void;
+}
+const ChromeContext = createContext<PanelChromeControls | null>(null);
 
-/** One header shared by module tabs/identity and frame controls. */
-export function PanelChrome({ children, className = "" }: { children: ReactNode; className?: string }) {
+/** One header shared by module tabs/identity and frame controls; `menuItems` join the frame menu. */
+export function PanelChrome({ children, className = "", menuItems }: { children: ReactNode; className?: string; menuItems?: ReactNode }) {
   const chrome = useContext(ChromeContext);
-  return <div className={`fm-panel-chrome ${className}`}>{chrome?.move}{children}{chrome?.actions}</div>;
+  return <div className={`fm-panel-chrome ${className}`}>{chrome?.move}{children}{chrome?.actions(menuItems)}</div>;
+}
+
+/** Frame controls of the enclosing PanelFrame, or null outside one. */
+export function usePanelChromeControls(): PanelChromeControls | null {
+  return useContext(ChromeContext);
 }
 
 function constrain(g: Geometry): Geometry {
@@ -29,13 +40,17 @@ interface PanelFrameProps {
   children: ReactNode;
   dockHandle?: ReactNode;
   drawer?: boolean;
+  /** Edge a narrow-screen drawer opens from. */
+  drawerSide?: "left" | "right";
+  /** False pins the frame in the dock: no float, maximize or resize. */
+  floatable?: boolean;
   suspendWhenHidden?: boolean;
   onDockChange: (docked: boolean) => void;
   onHide?: () => void;
   onMove?: (direction: -1 | 1) => void;
 }
 
-export function PanelFrame({ id, title, visible, children, dockHandle, drawer = false, suspendWhenHidden = true, onDockChange, onHide, onMove }: PanelFrameProps) {
+export function PanelFrame({ id, title, visible, children, dockHandle, drawer = false, drawerSide = "right", floatable = true, suspendWhenHidden = true, onDockChange, onHide, onMove }: PanelFrameProps) {
   const storageKey = `fullmag.workspace.panel.${id}.v1`;
   // Keep this frame safe when rendered outside the workspace hydration boundary.
   const [initial] = useState(() => {
@@ -59,7 +74,8 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
   const previousFocus = useRef<HTMLElement | null>(null);
   const scroll = useRef<Array<[HTMLElement, number, number]>>([]);
   const gesture = useRef<{ x: number; y: number; geometry: Geometry; kind: "move" | "resize" } | null>(null);
-  const effectiveMode = drawer && mode === "docked" ? "floating" : mode;
+  // A pinned frame ignores any floating/maximized mode saved before it was pinned.
+  const effectiveMode = !floatable ? "docked" : drawer && mode === "docked" ? "floating" : mode;
   const docked = effectiveMode === "docked";
 
   useEffect(() => {
@@ -96,15 +112,16 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     return () => cancelAnimationFrame(timer);
   }, [visible]);
 
-  const hide = () => {
+  const hideWith = (action: () => void) => {
     if (frame.current) {
       const active = document.activeElement as HTMLElement | null;
       if (active && frame.current.contains(active) && !active.closest(".fm-panel-chrome")) previousFocus.current = active;
       scroll.current = Array.from(frame.current.querySelectorAll<HTMLElement>("*")).filter(e => e.scrollTop || e.scrollLeft).map(e => [e, e.scrollTop, e.scrollLeft]);
     }
-    onHide?.();
+    action();
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-restore-panel="${id}"]`)?.focus());
   };
+  const hide = () => hideWith(() => onHide?.());
   const interactionGeometry = (): Geometry => {
     if (!drawer || mode !== "docked") return geometry;
     const bounds = frame.current?.getBoundingClientRect();
@@ -139,18 +156,20 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     const current = interactionGeometry();
     setGeometry(constrain(kind === "move" ? { ...current, x: current.x + dx, y: current.y + dy } : { ...current, width: current.width + dx, height: current.height + dy }));
   };
-  const controls = {
+  const controls: PanelChromeControls = {
     move: docked ? dockHandle : <Button size="icon" variant="ghost" aria-label={`Move ${title} with arrow keys`} disabled={effectiveMode === "maximized"} onPointerDown={e => begin(e, "move")} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onKeyDown={e => keyboard(e, "move")}><GripVertical size={14} aria-hidden="true" /></Button>,
-    actions: <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={`${title} panel menu`}><MoreHorizontal size={15} aria-hidden="true" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={event => { if (!visible) event.preventDefault(); }}>
-      <DropdownMenuItem onSelect={() => setMode(mode === "floating" ? "docked" : "floating")}>{mode === "floating" ? "Dock panel" : "Float panel"}</DropdownMenuItem>
-      <DropdownMenuItem onSelect={() => { if (mode === "maximized") setMode(restoreMode.current); else { restoreMode.current = mode; setMode("maximized"); } }}>{mode === "maximized" ? "Restore panel" : "Maximize panel"}</DropdownMenuItem>
+    actions: menuItems => <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={`${title} panel menu`}><MoreHorizontal size={15} aria-hidden="true" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={event => { if (!visible) event.preventDefault(); }}>
+      {menuItems ? <>{menuItems}<DropdownMenuSeparator /></> : null}
+      {floatable ? <><DropdownMenuItem onSelect={() => setMode(mode === "floating" ? "docked" : "floating")}>{mode === "floating" ? "Dock panel" : "Float panel"}</DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => { if (mode === "maximized") setMode(restoreMode.current); else { restoreMode.current = mode; setMode("maximized"); } }}>{mode === "maximized" ? "Restore panel" : "Maximize panel"}</DropdownMenuItem></> : null}
       {onMove ? <><DropdownMenuItem onSelect={() => onMove(-1)}>Move panel left</DropdownMenuItem><DropdownMenuItem onSelect={() => onMove(1)}>Move panel right</DropdownMenuItem></> : null}
-      {onHide ? <><DropdownMenuSeparator /><DropdownMenuItem onSelect={hide}>Minimize panel</DropdownMenuItem><DropdownMenuItem onSelect={hide}>Hide panel</DropdownMenuItem><DropdownMenuItem onSelect={hide}>Close panel</DropdownMenuItem></> : null}
+      {onHide ? <><DropdownMenuSeparator /><DropdownMenuItem onSelect={hide}>Hide panel</DropdownMenuItem></> : null}
     </DropdownMenuContent></DropdownMenu>,
+    hideWith,
   };
   return <section ref={frame} className="fm-panel-frame" data-panel-frame={id} data-panel-mode={effectiveMode} hidden={!visible} aria-label={`${title} panel`}
     onFocusCapture={event => { if (frame.current?.contains(event.target as HTMLElement) && !(event.target as HTMLElement).closest(".fm-panel-chrome")) previousFocus.current = event.target as HTMLElement; }}
-    onScrollCapture={() => { if (visible && frame.current) scroll.current = Array.from(frame.current.querySelectorAll<HTMLElement>("*")).filter(e => e.scrollTop || e.scrollLeft).map(e => [e, e.scrollTop, e.scrollLeft]); }} style={!docked ? (effectiveMode === "maximized" ? maxBounds ?? { inset: 8 } : drawer && mode === "docked" ? { right: 8, top: 144, width: "min(416px, calc(100vw - 16px))", height: "calc(100dvh - 180px)" } : { left: geometry.x, top: geometry.y, width: geometry.width, height: geometry.height }) : undefined}>
+    onScrollCapture={() => { if (visible && frame.current) scroll.current = Array.from(frame.current.querySelectorAll<HTMLElement>("*")).filter(e => e.scrollTop || e.scrollLeft).map(e => [e, e.scrollTop, e.scrollLeft]); }} style={!docked ? (effectiveMode === "maximized" ? maxBounds ?? { inset: 8 } : drawer && mode === "docked" ? { ...(drawerSide === "left" ? { left: 8 } : { right: 8 }), top: 144, width: "min(416px, calc(100vw - 16px))", height: "calc(100dvh - 180px)" } : { left: geometry.x, top: geometry.y, width: geometry.width, height: geometry.height }) : undefined}>
     <ChromeContext.Provider value={controls}>
       <Activity mode={!visible && suspendWhenHidden ? "hidden" : "visible"}>{children}</Activity>
     </ChromeContext.Provider>

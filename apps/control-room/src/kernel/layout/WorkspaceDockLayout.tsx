@@ -75,7 +75,7 @@ function SortableWorkspaceColumn({ column, visible, drawer, onDockChange, onHide
   const reportDocked = useCallback((docked: boolean) => onDockChange(column.slotId, docked), [column.slotId, onDockChange]);
   return <SortableItem id={column.slotId}>{({ attributes, isDragging, listeners, setNodeRef, style }) => (
     <div ref={setNodeRef} className="fm-dock-column" data-dragging={isDragging} style={style}>
-      <PanelFrame id={column.slotId} title={column.label} visible={visible} drawer={drawer} suspendWhenHidden={column.slotId !== "panel-right"} onDockChange={reportDocked} onHide={onHide} onMove={onMove}
+      <PanelFrame id={column.slotId} title={column.label} visible={visible} drawer={drawer} drawerSide={column.slotId === "panel-left" ? "left" : "right"} floatable={column.slotId !== "viewport-main"} suspendWhenHidden={column.slotId !== "panel-right"} onDockChange={reportDocked} onHide={onHide} onMove={onMove}
         dockHandle={<Button className="fm-panel-move" size="icon" variant="ghost" aria-label={`Move ${column.label} panel`} {...attributes} {...listeners}><GripVertical size={14} aria-hidden="true" /></Button>}>
         {column.slotId === "viewport-aux" ? <PanelChrome><span className="fm-panel-chrome__title">{column.label}</span></PanelChrome> : null}
         <WorkspaceColumnContent slotId={column.slotId} />
