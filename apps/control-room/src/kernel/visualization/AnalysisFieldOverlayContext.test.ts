@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
+import { createModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
 
 describe("AnalysisFieldOverlay result context", () => {
   it("keeps a changed sample equilibrium as a distinct mode intent", () => {
@@ -46,6 +47,17 @@ describe("AnalysisFieldOverlay result context", () => {
       visualizationPhaseRad: 0.25,
       wavevectorKf: [0, 0, 0],
     });
+  });
+
+  it("keeps complete legacy eigen provenance without a typed intent unverified", () => {
+    const controller = ownedOverlayController();
+    controller.setResultContext("run-1");
+    controller.set({ ...controller.getSnapshot()!, modeIntent: undefined });
+    expect(controller.getContextSnapshot()).toMatchObject({
+      status: "unverified", reason: "Active eigen mode overlay requires a canonical mode intent.",
+    });
+    expect(controller.getRenderableSnapshot()).toBeNull();
+    expect(controller.getSnapshot()?.fieldId).toBe("mode-field");
   });
 
   it("makes a foreign overlay non-renderable when result context changes", () => {
@@ -140,6 +152,12 @@ function ownedOverlayController(): AnalysisFieldOverlayController {
   const controller = new AnalysisFieldOverlayController();
   controller.set({
     fieldId: "mode-field",
+    modeIntent: createModeFieldOverlayIntent({
+      analysisRunId: "run-1", analysisStageId: "stage-eigen", artifactRevision: "7",
+      equilibriumId: "eq-1", fieldId: "mode-field", kind: "results.eigen.mode",
+      modeId: "mode-1", modeIndex: 1, nodeId: "mode-node", sampleId: "sample-0", sampleIndex: 0,
+      type: "frequency-domain",
+    })!,
     frequencyHz: 12.5e9,
     frequencyIndex: 4,
     label: "Mode 1",

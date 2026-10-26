@@ -12,6 +12,7 @@ import {
 
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
 import { AnalysisFieldOverlayContextNotice } from "./AnalysisFieldOverlayContextNotice";
+import { createModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
 
 async function pressNativeButton(button: TestElement, key: " " | "Enter"): Promise<void> {
   button.focus();
@@ -71,6 +72,12 @@ describe("AnalysisFieldOverlayContextNotice", () => {
     controller.setResultContext("run-new");
     const target = {
       fieldId: "field-new",
+      modeIntent: createModeFieldOverlayIntent({
+        analysisRunId: "run-new", analysisStageId: "stage-new", artifactRevision: "8",
+        equilibriumId: "eq-new", fieldId: "field-new", kind: "results.eigen.mode",
+        modeId: "mode-2", modeIndex: 2, nodeId: "mode-new", sampleId: "sample-0", sampleIndex: 0,
+        type: "frequency-domain",
+      })!,
       frequencyHz: 13e9,
       label: "New mode",
       modeIndex: 2,
