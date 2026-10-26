@@ -6,6 +6,7 @@ import {
   installSimulationPreparationTestDom,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { createModeFieldOverlayIntent } from "@/kernel/visualization/ModeFieldOverlayIntent";
 
 import { useAnalysisFieldOverlayResultContext } from "./useAnalysisFieldOverlayResultContext";
 
@@ -30,6 +31,20 @@ describe("useAnalysisFieldOverlayResultContext", () => {
     const controller = new AnalysisFieldOverlayController();
     controller.set({
       fieldId: "field-owned",
+      modeIntent: createModeFieldOverlayIntent({
+        analysisRunId: "run-1",
+        analysisStageId: "stage-1",
+        artifactRevision: "7",
+        equilibriumId: "eq-1",
+        fieldId: "field-owned",
+        kind: "results.eigen.mode",
+        modeId: "mode-2",
+        modeIndex: 2,
+        nodeId: "mode-owned",
+        sampleId: "sample-0",
+        sampleIndex: 0,
+        type: "frequency-domain",
+      })!,
       frequencyHz: 12.5e9,
       label: "Mode 2",
       modeIndex: 2,
