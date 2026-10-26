@@ -678,7 +678,8 @@ async fn load_startup_scene(
             source_snapshot_path.display().to_string(),
         ];
         let scene_output =
-            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &scene_args)?;
+            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &scene_args)
+                .map_err(startup_helper_timeout_rejection)?;
         if !scene_output.status.success() {
             if let Some(message) =
                 script_load_rejection(scene_output.status.code(), &scene_output.stdout)
@@ -720,7 +721,8 @@ async fn load_startup_scene(
             "--skip-geometry-assets".to_string(),
         ];
         let output =
-            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &helper_args)?;
+            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &helper_args)
+                .map_err(startup_helper_timeout_rejection)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(ApiError::bad_request(format!(
@@ -749,6 +751,22 @@ async fn load_startup_scene(
         runtime,
         output_storage_binding,
     })
+}
+
+/// A bounded helper that hit its deadline was killed and reaped before any
+/// live state, RunIntent or catalog entry exists, so the startup request has a
+/// known terminal outcome. Any other helper error keeps its classification.
+fn startup_helper_timeout_rejection(error: ApiError) -> ApiError {
+    if error.code.as_deref() != Some(crate::script::PYTHON_HELPER_TIMEOUT_CODE) {
+        return error;
+    }
+    ApiError::unprocessable_with_code(
+        "validation_error",
+        format!(
+            "startup script loading was not admitted: {}; retry with a new request",
+            error.message
+        ),
+    )
 }
 
 /// Read the helper's typed script-load rejection from the last stdout line.
@@ -3056,6 +3074,29 @@ mod tests {
         noncanonical = request;
         noncanonical.execution.interactive = "caller_override".to_string();
         assert!(validate_request(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn only_a_reaped_helper_timeout_is_a_terminal_startup_rejection() {
+        let mut timeout = ApiError::internal("Python helper exceeded the 30 second deadline");
+        timeout.code = Some(crate::script::PYTHON_HELPER_TIMEOUT_CODE.to_string());
+        let rejected = startup_helper_timeout_rejection(timeout);
+        assert_eq!(
+            rejected.status,
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(rejected.code.as_deref(), Some("validation_error"));
+        assert!(rejected.message.contains("30 second deadline"));
+
+        // An uncoded timeout (cleanup failed) or another failure stays unknown.
+        let unreaped = startup_helper_timeout_rejection(ApiError::internal(
+            "Python helper exceeded the 30 second deadline; process cleanup failed: wait failed",
+        ));
+        assert_eq!(
+            unreaped.status,
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(unreaped.code, None);
     }
 
     #[test]
