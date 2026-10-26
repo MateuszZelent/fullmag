@@ -7,6 +7,14 @@ import { chromium } from "playwright";
 // checks, every assertion measures the visible symptom: overlapping label lines,
 // a one-character host ID, a squeezed project status, duplicate panel chrome.
 // Needs a running DEV group with a loaded model; no solver or physics proof.
+// The DEV proxy serves the API only on loopback, so run the pinned Playwright
+// image inside the frontend container's network namespace:
+//   docker run --rm --network container:<frontend> \
+//     -v <frontend-state-volume>:/state/development:ro \
+//     -v $PWD/apps/control-room/scripts:/state/development/workspace/apps/control-room/scripts:ro \
+//     -v <run-dir>:/out -e CONTROL_ROOM_URL=http://127.0.0.1:8080/workspace \
+//     -e CONTROL_ROOM_DESIGN_REPORT_DIR=/out -w /state/development/workspace/apps/control-room \
+//     mcr.microsoft.com/playwright:v1.62.1-noble node scripts/check-design-acceptance-browser.mjs
 const url = process.env.CONTROL_ROOM_URL ?? "http://127.0.0.1:3230/workspace";
 const objectName = process.env.CONTROL_ROOM_DESIGN_OBJECT ?? "mixed_p1_box_prism";
 const output = process.env.CONTROL_ROOM_DESIGN_REPORT_DIR;
@@ -151,6 +159,31 @@ try {
     results.push({ theme, ribbon, labels: labels.length, workspaceHeader, inspectorMenu, viewportMenu, gl, hostId, homeHeader, drawers });
     await context.close();
   }
+
+  // K3 pending state: a slow host inventory must not push the status pill past the card.
+  const pendingContext = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+  await pendingContext.addInitScript((apiBase) => {
+    window.__FULLMAG_CONFIG__ = { ...(window.__FULLMAG_CONFIG__ ?? {}), controlRoomApiBase: apiBase };
+  }, new URL(url).origin);
+  await pendingContext.route("**/v2/platform/compute/nodes**", () => {});
+  const pendingPage = await pendingContext.newPage();
+  pendingPage.on("pageerror", (error) => errors.push({ theme: "pending", message: error.message }));
+  await pendingPage.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
+  await pendingPage.getByRole("treeitem", { name: objectName, exact: true }).waitFor({ timeout: 120_000 });
+  await pendingPage.getByRole("button", { name: "Home", exact: true }).click();
+  const pendingCard = pendingPage.locator(".fm-start-node-summary__card").first();
+  await pendingCard.waitFor({ timeout: 30_000 });
+  const pending = await pendingCard.evaluate((card) => {
+    const box = card.getBoundingClientRect();
+    const pill = card.querySelector(".fm-start-compute-settings__status").getBoundingClientRect();
+    const title = card.querySelector("h3").getBoundingClientRect();
+    return { cardRight: box.right, pillRight: pill.right, titleHeight: title.height, text: card.textContent };
+  });
+  assert(pending.pillRight <= pending.cardRight + 0.5, `pending status pill stays inside the card ${JSON.stringify(pending)}`);
+  assert(pending.titleHeight < 20, `pending card title stays on one line ${JSON.stringify(pending)}`);
+  await pendingPage.screenshot({ path: resolve(output, "home-pending.png") });
+  results.push({ theme: "pending", pending });
+  await pendingContext.close();
 } finally {
   await browser.close();
   await writeFile(resolve(output, "result.json"), JSON.stringify({ url, objectName, results, errors }, null, 2));

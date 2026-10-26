@@ -374,8 +374,9 @@
 }
 
 /* Save/Apply/Undo/Redo duplicate the ribbon and shortcuts, so they yield
-   first while the full main menu is still shown. */
-@media (width < 1600px) {
+   first while the full main menu is still shown (at 1600px they overflow
+   the header once the project status keeps its minimum width). */
+@media (width < 1700px) {
   .fm-header__quick-actions {
     display: none;
   }
@@ -414,6 +415,11 @@
 @media (width < 600px) {
   .fm-header {
     padding-inline: var(--fm-space-1);
+  }
+
+  /* Phone widths cannot afford the status floor; it ellipsizes freely. */
+  .fm-header__project-status {
+    min-width: 0;
   }
 
   .fm-header__brand {

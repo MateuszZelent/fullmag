@@ -274,12 +274,21 @@
 }
 
 .fm-start-node-summary__head h3 {
-  min-width: 0;
+  flex: none;
   margin: 0;
   color: var(--fm-text-primary);
   font-size: var(--fm-font-size-xs);
   font-weight: var(--fm-font-weight-semibold);
   overflow-wrap: anywhere;
+}
+
+/* Long pending labels truncate instead of running past the card edge. */
+.fm-start-node-summary__head > .fm-start-compute-settings__status {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Own full-width row: the status pill must not squeeze the host ID. */
