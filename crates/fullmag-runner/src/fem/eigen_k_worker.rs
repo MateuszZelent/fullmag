@@ -1164,21 +1164,24 @@ mod tests {
         let request = worker_request(plan);
         let expected = request.expected_plan_sha256.clone();
         let encoded = serde_json::to_string(&request).unwrap();
-        let original_map = serde_json::to_string(&request.plan.mesh.per_domain_quality).unwrap();
-        for domains in [
-            format!(
-                "{{\"0\":{},\"1\":{}}}",
-                serde_json::to_string(&air).unwrap(),
-                serde_json::to_string(&film).unwrap()
-            ),
-            format!(
-                "{{\"1\":{},\"0\":{}}}",
-                serde_json::to_string(&film).unwrap(),
-                serde_json::to_string(&air).unwrap()
-            ),
-        ] {
+        // MeshIR serializes this HashMap in numeric key order. Serializing the
+        // HashMap by itself does not use that field serializer, so its order
+        // cannot be used to locate the map in the complete request.
+        let original_map = format!(
+            "{{\"0\":{},\"1\":{}}}",
+            serde_json::to_string(&air).unwrap(),
+            serde_json::to_string(&film).unwrap()
+        );
+        let reverse_map = format!(
+            "{{\"1\":{},\"0\":{}}}",
+            serde_json::to_string(&film).unwrap(),
+            serde_json::to_string(&air).unwrap()
+        );
+        let original_field = format!("\"per_domain_quality\":{original_map}");
+        assert_eq!(encoded.matches(&original_field).count(), 1);
+        for domains in [original_map, reverse_map] {
             let permuted = encoded.replace(
-                &format!("\"per_domain_quality\":{original_map}"),
+                &original_field,
                 &format!("\"per_domain_quality\":{domains}"),
             );
             assert!(permuted.contains(&format!("\"per_domain_quality\":{domains}")));
