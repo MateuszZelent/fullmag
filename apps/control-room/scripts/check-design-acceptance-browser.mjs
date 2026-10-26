@@ -152,7 +152,6 @@ try {
       };
     });
     for (const item of followup.statusItems) assert(item.ellipsis, `${theme}: status field ellipsizes ${JSON.stringify(item)}`);
-    assert(!(followup.engines.length > 1 && followup.engines[0].split(/\s+/)[0] === followup.engines.at(-1)), `${theme}: method pill does not repeat the engine ${followup.engines}`);
     assert.equal(followup.tabs.length, 5, `${theme}: five Explorer tabs`);
     for (const tab of followup.tabs) assert(tab.inside, `${theme}: Explorer tab ${tab.name} fully visible`);
     assert.equal(followup.treeActions, 3, `${theme}: tree actions in the filter row`);

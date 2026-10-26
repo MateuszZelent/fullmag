@@ -315,7 +315,7 @@ async function verifyResponsiveAnalysisFixtures(page) {
       };
     });
     if (!fixture.visible || !fixture.rootFitsViewport || !fixture.documentFitsViewport) {
-      throw new Error(`Analysis responsive fixture clips a required scientific control at ${width}px.`);
+      throw new Error(`Analysis responsive fixture clips a required scientific control at ${width}px: ${JSON.stringify(fixture)}`);
     }
     if (!/X axis .+\[.+\]\. Y axes .+\[.+\]\./.test(fixture.axisDescription)) {
       throw new Error(`Analysis chart does not expose axis labels and units at ${width}px: ${fixture.axisDescription}`);

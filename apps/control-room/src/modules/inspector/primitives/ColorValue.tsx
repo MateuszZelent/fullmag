@@ -65,7 +65,6 @@ export function ColorValueField({
         <input
           aria-label={`${label} picker`}
           className="fm-inspector-color-field__picker"
-          defaultValue="#ffffff"
           disabled={disabled}
           ref={pickerRef}
           type="color"

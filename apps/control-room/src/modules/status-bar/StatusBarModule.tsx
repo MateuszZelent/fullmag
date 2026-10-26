@@ -26,7 +26,6 @@ import { Button } from "@/shared/ui/Button";
 import {
   buildStatusBarEngineModel,
   buildStatusBarMethodModel,
-  statusBarMethodRepeatsEngine,
   statusBarMethodModelsEqual,
   buildStatusBarMeshModel,
   formatRuntimeBundleVersionLabel,
@@ -262,7 +261,7 @@ export default function StatusBarModule() {
           {compute.pending ? "Submitting…" : "Compute"}
         </Button>
       ) : null}
-      {statusBarMethodRepeatsEngine(method, engine) ? null : <span
+      <span
         className="fm-status-bar__engine"
         data-state={method.state}
         data-method={method.method ?? "unresolved"}
@@ -270,7 +269,7 @@ export default function StatusBarModule() {
         title={method.title}
       >
         <span className="fm-status-bar__engine-label">{method.label}</span>
-      </span>}
+      </span>
     </div>
   );
 }
