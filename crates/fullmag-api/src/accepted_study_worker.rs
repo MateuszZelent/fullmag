@@ -1741,6 +1741,10 @@ fn expected_output_binding(
     port: &StudyOutputPort,
 ) -> Result<(&'static str, &'static str, &'static str)> {
     match port.data_kind {
+        StudyPortDataKind::Artifact if port.port_id == fullmag_application::MODAL_EIGEN_OUTPUT_PORT => Ok((
+            "artifact", fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID,
+            fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_VERSION,
+        )),
         StudyPortDataKind::Artifact if port.port_id == "inspection" => Ok((
             "artifact", fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID,
             fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION,
@@ -2437,6 +2441,10 @@ fn execute_accepted_worker_start_with_snapshot(
             interrupt_requested,
         );
     }
+    if matches!(&accepted_step.execution_plan.backend_plan, fullmag_ir::BackendPlanIR::FemEigen(_)) {
+        validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id)?;
+        return execute_accepted_modal_worker_start(store, accepted, start, accepted_step, study_step, case_id, interrupt_requested);
+    }
     if study_step.outputs.iter().any(|port| port.data_kind == StudyPortDataKind::Artifact) {
         bail!("legacy solver steps cannot publish an inspection artifact");
     }
@@ -2794,6 +2802,64 @@ fn execute_accepted_closed_loop_worker_start(
     if let Some(storage)=&mut storage {
         match &execution { Ok(result) if result.status==RunStatus::Cancelled=>storage.note_outcome("cancelled",None),Err(error)=>storage.note_outcome("failed",Some(format!("{error:#}"))),_=>{} }
         storage.finish(execution.as_ref().is_ok_and(|result|result.status==RunStatus::Completed),&attempt)?;
+    }
+    execution
+}
+
+/// Modal attempts share the durable command/claim boundary and generic CAS
+/// recovery, while retaining a modal output contract instead of a final m.
+fn execute_accepted_modal_worker_start(
+    store: &SessionStore, accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+    start: &fullmag_application::WorkerCommandEnvelope, step: &AcceptedWorkerStep,
+    study: &fullmag_authoring::StudyStep, case_id: &str, interrupted: Option<&AtomicBool>,
+) -> Result<AcceptedRunnerExecution> {
+    crate::accepted_modal_study_worker::validate_declared_outputs(&study.outputs)?;
+    let identity = worker_execution_receipt_identity(start, step, case_id)?;
+    // Validate the exact plan, preparation, lease and native CPU lane on both
+    // fresh execution and recovery, before consulting any completed receipt.
+    let prepared = crate::accepted_modal_study_worker::prepare(store, accepted, step, study, case_id)?;
+    let maximum = prepared.maximum_bytes;
+    let recover = |path: &Path| -> Result<AcceptedRunnerExecution> {
+        refuse_known_prelaunch_failure(path, &identity)?;
+        let result = recover_completed_worker_execution(store, path, &identity, &study.outputs, maximum as u64, None, None)?;
+        if result.completed_step_count != 1 || result.outputs.len() != 1 { bail!("modal completed receipt has another output shape"); }
+        crate::accepted_modal_study_worker::validate_bundle(&result.outputs[0].bytes, step.claim.run_id.as_str(), &step.step_id, maximum)?;
+        Ok(result)
+    };
+    match existing_private_attempt_output_dir(store, &step.claim) {
+        Ok(path) => return recover(&path).context("recover modal output without repeating native solve"),
+        Err(error) if is_not_found_error(&error) => {},
+        Err(error) => return Err(error).context("inspect exact modal attempt"),
+    }
+    crate::accepted_project_storage::AcceptedProjectStorage::preflight(&prepared.problem, store, &step.claim, &step.step_id)?;
+    let attempt = match retry_store_writer_busy(|| create_private_attempt_output_dir(store, &step.claim)) {
+        Ok(path) => path,
+        Err(error) => match existing_private_attempt_output_dir(store, &step.claim) {
+            Ok(path) => return recover(&path),
+            Err(_) => return Err(error).context("reserve exact modal attempt"),
+        },
+    };
+    write_immutable_attempt_receipt(&attempt, WORKER_EXECUTION_STARTED_RECEIPT, &WorkerExecutionStartedReceipt { identity: identity.clone() })?;
+    let mut storage = prepare_accepted_project_storage(&prepared.problem, store, accepted, step, &identity, &attempt)?;
+    let execution: Result<AcceptedRunnerExecution> = (|| {
+        let output = crate::accepted_modal_study_worker::execute(&prepared, step, &attempt,
+            storage.as_ref().map(|s| s.data_root()).unwrap_or(&attempt), interrupted)?;
+        let Some(output) = output else {
+            return Ok(AcceptedRunnerExecution { status: RunStatus::Cancelled, completed_step_count: 0,
+                outputs: vec![], attempt_output_dir: attempt.clone(), recovered_from_receipt: false,
+                accepted_state_ref: None, observation_source: None });
+        };
+        if let Some(storage) = &mut storage { storage.finish(true, &attempt)?; }
+        persist_completed_worker_execution(store, &attempt, &identity, &study.outputs, RunStatus::Completed,
+            1, std::slice::from_ref(&output), None, None)?;
+        Ok(AcceptedRunnerExecution { status: RunStatus::Completed, completed_step_count: 1,
+            outputs: vec![output], attempt_output_dir: attempt.clone(), recovered_from_receipt: false,
+            accepted_state_ref: None, observation_source: None })
+    })();
+    if let Some(storage) = &mut storage {
+        match &execution { Ok(result) if result.status == RunStatus::Cancelled => storage.note_outcome("cancelled", None),
+            Err(error) => storage.note_outcome("failed", Some(format!("{error:#}"))), _ => {} }
+        storage.finish(execution.as_ref().is_ok_and(|r| r.status == RunStatus::Completed), &attempt)?;
     }
     execution
 }

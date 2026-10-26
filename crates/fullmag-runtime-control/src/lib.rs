@@ -3,6 +3,7 @@
 use anyhow::{bail, Context, Result};
 pub mod accepted_store;
 pub mod study_inspection;
+pub mod study_modal;
 mod study_inspection_integrity;
 pub use study_inspection_integrity::{load_saved_inspection, verify_saved_inspection};
 pub mod application_attach;

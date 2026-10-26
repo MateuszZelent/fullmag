@@ -39,6 +39,7 @@ mod accepted_fem_gpu_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
 mod accepted_antenna_inspection_worker;
+mod accepted_modal_study_worker;
 mod accepted_study_worker;
 mod accepted_observation_spool;
 mod accepted_field_binary;

@@ -29,6 +29,7 @@ pub const MAGNETIZATION_STATE_IDENTITY_SCHEMA: &str = "magnetization_state.v1";
 pub enum DecodedStudyArtifact {
     MagnetizationState(MagnetizationStateArtifact),
     Scalar(StudyScalarArtifact),
+    ModalEigen(crate::ModalEigenBundle),
     AntennaClosedLoopInspection(AntennaInspectionBundle),
     AntennaInspection(AntennaInspectionArtifact),
 }
@@ -149,6 +150,10 @@ pub fn decode_study_artifact(
             )
             .map(DecodedStudyArtifact::AntennaInspection)
             .map_err(|error| invalid(format!("decode antenna inspection package: {error}")))
+        }
+        ("artifact", crate::MODAL_EIGEN_BUNDLE_CODEC_ID, crate::MODAL_EIGEN_BUNDLE_CODEC_VERSION) => {
+            crate::decode_modal_eigen_bundle(bytes, crate::MODAL_EIGEN_BUNDLE_MAX_BYTES)
+                .map(DecodedStudyArtifact::ModalEigen)
         }
         _ => Err(invalid("unsupported study artifact codec")),
     }

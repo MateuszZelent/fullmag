@@ -1624,6 +1624,17 @@ pub fn publish_study_outputs(
                 )
             })?;
         let data_kind = study_port_data_kind_label(&declared.data_kind);
+        if crate::study_modal::is_modal_step(step)
+            || output.codec_id == fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID {
+            if accepted_state_ref.is_some() || observation_source.is_some()
+                || output.port_id != fullmag_application::MODAL_EIGEN_OUTPUT_PORT
+                || output.case_id != "default"
+                || output.codec_id != fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID
+                || output.codec_version != fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_VERSION {
+                bail!("modal publication cannot fabricate magnetic state or another codec/case");
+            }
+            crate::study_modal::validate_bundle(&output.bytes, claim, step)?;
+        }
         if output.codec_id==fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID {
             if accepted_state_ref.is_some() || observation_source.is_some() || output.port_id!="inspection" || output.case_id!="default" { bail!("inspection output cannot fabricate magnetic state or another case"); }
             let problem=accepted.catalog.entries().iter().find(|entry|entry.step_id()==step_id).context("inspection publication ProblemIR missing")?.problem();
@@ -2087,7 +2098,10 @@ pub(crate) fn validate_study_task_completion_for_snapshot(
         }
         let inspection=matches!(source_step.kind,fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. });
         let maximum=if inspection { Some(crate::study_inspection::inspection_bundle_budget(claim)?) } else {None};
-        let output_bytes = if let Some(maximum)=maximum {
+        let modal = crate::study_modal::is_modal_step(source_step);
+        let output_bytes = if modal {
+            store.cas().get_bounded(&output.object_ref, crate::study_modal::bundle_budget(claim) as u64)?
+        } else if let Some(maximum)=maximum {
             store.cas().get_bounded(&output.object_ref,maximum as u64)?
         } else { store.cas().get(&output.object_ref)? }.with_context(|| {
             format!(
@@ -2095,6 +2109,15 @@ pub(crate) fn validate_study_task_completion_for_snapshot(
                 output.artifact_id
             )
         })?;
+        if modal || output.codec_id == fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID {
+            if manifest.accepted_state_ref.is_some() || manifest.observation_source.is_some()
+                || output.port_id != fullmag_application::MODAL_EIGEN_OUTPUT_PORT || output.case_id != "default"
+                || output.codec_id != fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID
+                || output.codec_version != fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_VERSION {
+                bail!("modal completion cannot accept a different codec, case or magnetic state");
+            }
+            crate::study_modal::validate_bundle(&output_bytes, claim, source_step)?;
+        }
         if let Some(maximum)=maximum {
             if output.codec_id!=fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID || output.codec_version!=fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION || output.case_id!="default" || manifest.accepted_state_ref.is_some() || manifest.observation_source.is_some() { bail!("inspection completion cannot accept solver outputs or state"); }
             let problem=accepted.catalog.entries().iter().find(|entry|entry.step_id()==source_step.step_id).context("inspection completion ProblemIR missing")?.problem();

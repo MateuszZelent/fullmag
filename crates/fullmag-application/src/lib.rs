@@ -7,6 +7,7 @@
 //! Close semantics.
 
 mod antenna_inspection_bundle;
+mod modal_eigen_bundle;
 mod application;
 mod batch_expansion;
 mod coordinator;
@@ -119,3 +120,5 @@ pub use study_execution_materialization::{
     materialize_captured_study_input, materialize_study_execution, CapturedStudyExecutionInput,
     StudyStepExecutionInput,
 };
+
+pub use modal_eigen_bundle::{decode_modal_eigen_bundle, encode_modal_eigen_bundle, ModalEigenBundle, MODAL_EIGEN_BUNDLE_CODEC_ID, MODAL_EIGEN_BUNDLE_CODEC_VERSION, MODAL_EIGEN_BUNDLE_MAX_BYTES, MODAL_EIGEN_OUTPUT_PORT};
