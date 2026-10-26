@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
+import { designCheckUrl } from "./lib/design-browser-env.mjs";
 
 // Acceptance regressions for the PR #268 follow-up (K1-K6). Unlike overflow-only
 // checks, every assertion measures the visible symptom: overlapping label lines,
@@ -15,7 +16,7 @@ import { chromium } from "playwright";
 //     -v <run-dir>:/out -e CONTROL_ROOM_URL=http://127.0.0.1:8080/workspace \
 //     -e CONTROL_ROOM_DESIGN_REPORT_DIR=/out -w /state/development/workspace/apps/control-room \
 //     mcr.microsoft.com/playwright:v1.62.1-noble node scripts/check-design-acceptance-browser.mjs
-const url = process.env.CONTROL_ROOM_URL ?? "http://127.0.0.1:3230/workspace";
+const url = designCheckUrl();
 const objectName = process.env.CONTROL_ROOM_DESIGN_OBJECT ?? "mixed_p1_box_prism";
 const output = process.env.CONTROL_ROOM_DESIGN_REPORT_DIR;
 assert(output, "Set CONTROL_ROOM_DESIGN_REPORT_DIR to the task's registered run directory.");
