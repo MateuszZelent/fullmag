@@ -582,6 +582,20 @@
   font-variant-numeric: tabular-nums;
 }
 
+.fm-dispersion-mode-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  flex-wrap: wrap;
+  margin-inline-start: auto;
+  min-width: 0;
+}
+
+.fm-dispersion-mode-action > span {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
 /* ===== ChartLegend (12-color palette) =====
  * The external legend shows latest values and units.
  * Series show/hide is now handled by the ECharts in-chart legend.

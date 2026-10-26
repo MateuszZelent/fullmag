@@ -26,6 +26,7 @@ import {
   frequencyResponseSeriesUnit,
   frequencyDomainChartRouteOverrideFromSelection,
   frequencyDomainChartRouteOverrideFromSubview,
+  frequencyDomainEquilibriumIdForSample,
   frequencyDomainManifestSupportsChartRoute,
   frequencyDomainResultContextFromManifest,
   routeFrequencyDomainCalculationMode,
@@ -2215,6 +2216,119 @@ describe("frequencyDomainChartModels", () => {
     expect(context.contractGaps).toContain(
       "stage identity conflicts with artifact owner",
     );
+  });
+
+  it("maps each complete dispersion sample to its own equilibrium identity", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic",
+      geometry_identity: "geometry-1",
+      k_sampling: { kind: "path", label: "Gamma-X", sample_count: 2 },
+      mesh_identity: "mesh-1",
+      run_id: "run-1",
+      stage_id: "stage-1",
+      study_product: "modal_eigen",
+      sample_execution_provenance: {
+        schema_version: "frequency_domain_sample_execution_provenance.v1",
+        status: "mixed",
+        sample_count: 2,
+        samples: [
+          { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-sample-0" } },
+          { sample_index: 1, validation: { equilibrium_artifact_sha256: "eq-sample-1" } },
+        ],
+      },
+    });
+
+    expect(context.sampleEquilibriumProvenance).toBe("valid");
+    expect(context.equilibriumId).toBeNull();
+    expect(context.contractGaps).toEqual([]);
+    expect(context.classification?.resultLabel).toBe("Dispersion Relation · fₙ(k)");
+    expect(frequencyDomainEquilibriumIdForSample(context, 0)).toBe("eq-sample-0");
+    expect(frequencyDomainEquilibriumIdForSample(context, 1)).toBe("eq-sample-1");
+    expect(frequencyDomainEquilibriumIdForSample(context, 2)).toBeNull();
+  });
+
+  it("invalidates incomplete or duplicated sample provenance without using the common id", () => {
+    for (const samples of [
+      [
+        { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-sample-0" } },
+        { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-sample-1" } },
+      ],
+      [
+        { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-sample-0" } },
+        { sample_index: 1, validation: {} },
+      ],
+    ]) {
+      const context = frequencyDomainResultContextFromManifest({
+        boundary_context: "floquet_periodic",
+        equilibrium_identity: "eq-common",
+        geometry_identity: "geometry-1",
+        k_sampling: { kind: "path", sample_count: 2 },
+        mesh_identity: "mesh-1",
+        run_id: "run-1",
+        stage_id: "stage-1",
+        study_product: "modal_eigen",
+        sample_execution_provenance: {
+          schema_version: "frequency_domain_sample_execution_provenance.v1",
+          sample_count: 2,
+          samples,
+        },
+      });
+
+      expect(context.sampleEquilibriumProvenance).toBe("invalid");
+      expect(context.equilibriumId).toBeNull();
+      expect(context.evidence).toBeNull();
+      expect(context.contractGaps).toContain("sample equilibrium provenance invalid");
+      expect(frequencyDomainEquilibriumIdForSample(context, 0)).toBeNull();
+    }
+  });
+
+  it("rejects a declared common equilibrium that contradicts a sample record", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic",
+      equilibrium_artifact_sha256: "eq-common",
+      geometry_identity: "geometry-1",
+      k_sampling: { kind: "path", sample_count: 2 },
+      mesh_identity: "mesh-1",
+      run_id: "run-1",
+      stage_id: "stage-1",
+      study_product: "modal_eigen",
+      sample_execution_provenance: {
+        schema_version: "frequency_domain_sample_execution_provenance.v1",
+        sample_count: 2,
+        samples: [
+          { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-common" } },
+          { sample_index: 1, validation: { equilibrium_artifact_sha256: "eq-sample-1" } },
+        ],
+      },
+    });
+
+    expect(context.sampleEquilibriumProvenance).toBe("invalid");
+    expect(context.evidence).toBeNull();
+    expect(frequencyDomainEquilibriumIdForSample(context, 0)).toBeNull();
+  });
+
+  it("uses a common identity for a legacy single sample but never fans it out over a path", () => {
+    const common = {
+      boundary_context: "floquet_periodic",
+      equilibrium_identity: "eq-common",
+      geometry_identity: "geometry-1",
+      mesh_identity: "mesh-1",
+      run_id: "run-1",
+      stage_id: "stage-1",
+      study_product: "modal_eigen",
+    };
+    const single = frequencyDomainResultContextFromManifest({
+      ...common,
+      k_sampling: { kind: "single", vector_rad_per_m: [0, 0, 0] },
+    });
+    const path = frequencyDomainResultContextFromManifest({
+      ...common,
+      k_sampling: { kind: "path", sample_count: 3 },
+    });
+
+    expect(frequencyDomainEquilibriumIdForSample(single, 0)).toBe("eq-common");
+    expect(frequencyDomainEquilibriumIdForSample(single, 1)).toBeNull();
+    expect(frequencyDomainEquilibriumIdForSample(path, 0)).toBeNull();
   });
 
   it("keeps a claimed response map unavailable without a typed map resource adapter", () => {

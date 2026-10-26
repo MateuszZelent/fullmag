@@ -29,6 +29,7 @@ import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartP
 import { isReferenceChartQuantity } from "@/shared/analysis-charts/frequencyRenderModels";
 import {
   eigenModeFieldAvailable,
+  frequencyDomainEquilibriumIdForSample,
   type FrequencyDomainResultContext,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
@@ -345,7 +346,6 @@ export function frequencyDomainSelectionFromPoint(input: {
     analysisRunId: resultContext?.runId ?? undefined,
     analysisStageId: resultContext?.stageId ?? undefined,
     artifactRevision,
-    equilibriumId: resultContext?.equilibriumId ?? undefined,
     kContextKind,
     normalization: resultContext?.normalization ?? undefined,
     representation: "complex-vector-xyz" as const,
@@ -357,7 +357,7 @@ export function frequencyDomainSelectionFromPoint(input: {
       entry.frequencyIndex === point.point.rowIndex ||
       entry.frequencyHz / 1e9 === point.point.x
     );
-    return { kind: "results.frequency_response.frequency_point", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: compactSelectionRef({ ...identity, calculationMode: input.routeMode, chartId: input.chartId, fieldId: match?.fieldId ?? undefined, frequencyHz: match?.frequencyHz, frequencyIndex: match?.frequencyIndex ?? undefined, kind: "results.frequency_response.frequency_point", nodeId, observableId: match?.observableId, resourceRef: point.source.resourceKey, source: "frequency-response" as const, type: "frequency-domain" as const }) };
+    return { kind: "results.frequency_response.frequency_point", label: `${point.label} ${point.point.y} ${point.unit}`, nodeId, objectId: null, ref: compactSelectionRef({ ...identity, equilibriumId: resultContext?.equilibriumId ?? undefined, calculationMode: input.routeMode, chartId: input.chartId, fieldId: match?.fieldId ?? undefined, frequencyHz: match?.frequencyHz, frequencyIndex: match?.frequencyIndex ?? undefined, kind: "results.frequency_response.frequency_point", nodeId, observableId: match?.observableId, resourceRef: point.source.resourceKey, source: "frequency-response" as const, type: "frequency-domain" as const }) };
   }
   const dispersionMode = input.routeMode === "dispersion_modal"
     ? input.dispersionModel.points[point.point.rowIndex]
@@ -377,6 +377,9 @@ export function frequencyDomainSelectionFromPoint(input: {
       branchId: mode?.branchId ?? undefined,
       calculationMode: input.routeMode,
       chartId: input.chartId,
+      equilibriumId: mode
+        ? frequencyDomainEquilibriumIdForSample(resultContext, mode.sampleIndex) ?? undefined
+        : undefined,
       fieldId: modeFieldAvailable ? mode?.modeFieldId ?? undefined : undefined,
       frequencyHz: mode?.frequencyHz,
       kPathCoordinateRadPerM: dispersionMode?.pathS,

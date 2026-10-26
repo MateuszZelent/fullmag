@@ -22,9 +22,14 @@ import {
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
   eigenModeFieldAvailable,
+  frequencyDomainEquilibriumIdForSample,
   frequencyDomainManifestPayload,
+  frequencyDomainResultContextFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
-import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import type {
+  EigenDispersionPoint,
+  FrequencyDomainResultContext,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz, formatFrequencyRangeHz } from "@/shared/domain/analysis/frequencyUnits";
 
 export interface EigenDispersionPointViewModel {
@@ -36,6 +41,26 @@ export interface EigenDispersionPointViewModel {
   pathCoordinate: number;
   pathUnit: "rad/m";
   pointId: string;
+}
+
+export function eigenDispersionPointEquilibriumId(
+  resultContext: FrequencyDomainResultContext | null | undefined,
+  analysisRunId: string | null | undefined,
+  analysisStageId: string | null | undefined,
+  artifactRevision: number | string | null | undefined,
+  sampleIndex: number,
+): string | null {
+  if (
+    !resultContext?.evidence ||
+    artifactRevision == null ||
+    !analysisRunId ||
+    !analysisStageId ||
+    resultContext.runId !== analysisRunId ||
+    resultContext.stageId !== analysisStageId
+  ) {
+    return null;
+  }
+  return frequencyDomainEquilibriumIdForSample(resultContext, sampleIndex);
 }
 
 export function buildEigenDispersionPointViewModel(
@@ -66,6 +91,14 @@ export function useEigenDispersionInspectorSummary() {
     branchesModel,
   );
   const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
+  const resultManifest = record(manifest.data?.result_manifest);
+  const resultContext = frequencyDomainResultContextFromManifest(
+    manifestPayload,
+    {
+      runId: stringValue(resultManifest?.run_id),
+      stageId: stringValue(resultManifest?.stage_id),
+    },
+  );
   const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const dispersionCapabilities = record(capabilities?.dispersion);
   const boundaryCapabilities = record(capabilities?.boundary);
@@ -99,6 +132,7 @@ export function useEigenDispersionInspectorSummary() {
     branchesModel,
     capabilitySummary: dispersionCapabilitySummary(dispersionCapabilities),
     dispersionModel,
+    resultContext,
     dispersionPointCount: dispersionModel.points.length,
     dispersionResource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
     dispersionSeriesCount: dispersionModel.series.length,

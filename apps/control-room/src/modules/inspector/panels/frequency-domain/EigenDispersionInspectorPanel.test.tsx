@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import type { Selection, SelectionRef } from "@/kernel/selection/selectionTypes";
-import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import {
+  frequencyDomainResultContextFromManifest,
+  type EigenDispersionPoint,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 import {
   buildEigenDispersionPointViewModel,
   dispersionReferenceComparison,
 } from "./EigenDispersionInspectorModel";
-import { buildEigenDispersionPointHandoffContext } from "./EigenDispersionInspectorPanel";
+import {
+  buildEigenDispersionPointHandoffContext,
+  buildEigenDispersionPointSelectionRefFromSelection,
+} from "./EigenDispersionInspectorPanel";
 
 const point: EigenDispersionPoint = {
   analyticFrequencyHz: 12.45e9,
@@ -81,6 +87,89 @@ describe("EigenDispersionInspectorPanel point model", () => {
       pathUnit: "rad/m",
       pointId: "results:eigen:dispersion:sample:4:mode:5",
     });
+  });
+
+  it("resolves the selected sample equilibrium and fails closed when it is missing", () => {
+    const selection: Selection = {
+      kind: "results.eigen.dispersion",
+      label: "Dispersion",
+      moduleSource: "frequency-domain",
+      nodeId: "results:eigen:dispersion",
+      objectId: null,
+      ref: {
+        analysisRunId: "run-published-7",
+        analysisStageId: "stage-eigen-2",
+        equilibriumId: "stale-equilibrium-from-previous-sample",
+        artifactPath: "results/run-published-7/eigen/dispersion.json",
+        artifactRevision: "sha256:published-dispersion-v7",
+        kind: "results.eigen.dispersion",
+        nodeId: "results:eigen:dispersion",
+        type: "frequency-domain",
+      },
+    };
+    const context = (samples: readonly Record<string, unknown>[]) =>
+      frequencyDomainResultContextFromManifest({
+        boundary_context: "floquet_periodic",
+        geometry_identity: "geometry-1",
+        k_sampling: { kind: "path", sample_count: 2 },
+        mesh_identity: "mesh-1",
+        run_id: "run-published-7",
+        stage_id: "stage-eigen-2",
+        study_product: "modal_eigen",
+        sample_execution_provenance: {
+          schema_version: "frequency_domain_sample_execution_provenance.v1",
+          status: "mixed",
+          sample_count: 2,
+          samples,
+        },
+      }, {
+        runId: "run-published-7",
+        stageId: "stage-eigen-2",
+      });
+    const samples = [
+      { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-sample-0" } },
+      { sample_index: 1, validation: { equilibrium_artifact_sha256: "eq-sample-1" } },
+    ];
+
+    const firstSample = buildEigenDispersionPointSelectionRefFromSelection(
+      { ...point, modeId: "sample-0/mode-5", sampleId: "sample-0", sampleIndex: 0 },
+      selection,
+      context(samples),
+    );
+    const secondSample = buildEigenDispersionPointSelectionRefFromSelection(
+      { ...point, modeId: "sample-1/mode-5", sampleId: "sample-1", sampleIndex: 1 },
+      selection,
+      context(samples),
+    );
+    expect(firstSample).toMatchObject({
+      equilibriumId: "eq-sample-0",
+      kind: "results.eigen.mode",
+      sampleIndex: 0,
+    });
+    expect(secondSample).toMatchObject({
+      equilibriumId: "eq-sample-1",
+      kind: "results.eigen.mode",
+      sampleIndex: 1,
+    });
+
+    const missingSample = buildEigenDispersionPointSelectionRefFromSelection(
+      { ...point, modeId: "sample-1/mode-5", sampleId: "sample-1", sampleIndex: 1 },
+      selection,
+      context([
+        samples[0]!,
+        { sample_index: 1, validation: {} },
+      ]),
+    );
+    const noManifest = buildEigenDispersionPointSelectionRefFromSelection(
+      { ...point, sampleId: "sample-1", sampleIndex: 1 },
+      selection,
+      null,
+    );
+    for (const ref of [missingSample, noManifest]) {
+      expect(ref.kind).toBe("results.eigen.dispersion");
+      expect(ref).not.toHaveProperty("fieldId");
+      expect(ref).not.toHaveProperty("equilibriumId");
+    }
   });
 
   it(

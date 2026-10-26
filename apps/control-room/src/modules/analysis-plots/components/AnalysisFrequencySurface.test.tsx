@@ -13,6 +13,7 @@ vi.mock("./EChartsSurface", () => ({ EChartsSurface: ({ allSeries, initialRange,
 import type { ChartSeries } from "../chartTableModel";
 import { AnalysisFrequencySurface } from "./AnalysisFrequencySurface";
 import { classifyFrequencyDomainResult } from "@/shared/domain/analysis/frequencyDomainResultClassification";
+import { frequencyDomainResultContextFromManifest } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 const series: ChartSeries[] = [{
   id: "response",
@@ -55,7 +56,83 @@ const dispersionSeries: ChartSeries[] = [{
   xUnit: "rad/m",
 }];
 
+const dispersionActionSeries: ChartSeries[] = [{
+  id: "dispersion:branch-a",
+  kind: "line",
+  label: "Branch a",
+  points: [{
+    branchId: "a",
+    modeFieldAvailable: true,
+    modeFieldId: "field-sample-1-mode-2",
+    modeFieldResourceKey: "field://sample-1-mode-2",
+    modeId: "sample-1/mode-2",
+    pathS: 25e6,
+    rawModeIndex: 2,
+    rowIndex: 1,
+    sampleId: "sample-1",
+    sampleIndex: 1,
+    wavevectorKf: [0, 1e7, 0],
+    x: 25e6,
+    y: 1.3,
+  }],
+  quantity: "frequency",
+  source: { kind: "analysis.frequency_domain", resourceKey: "artifact://dispersion", tableId: "frequency-domain:eigen-dispersion" },
+  status: "ready",
+  unit: "GHz",
+  xUnit: "rad/m",
+}];
+
 describe("AnalysisFrequencySurface", () => {
+  it("offers the mode action only for the exact projected dispersion sample", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic",
+      geometry_identity: "geometry-1",
+      k_sampling: { kind: "path", sample_count: 2 },
+      mesh_identity: "mesh-1",
+      run_id: "run-1",
+      stage_id: "stage-1",
+      study_product: "modal_eigen",
+      sample_execution_provenance: {
+        schema_version: "frequency_domain_sample_execution_provenance.v1",
+        sample_count: 2,
+        samples: [
+          { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-0" } },
+          { sample_index: 1, validation: { equilibrium_artifact_sha256: "eq-1" } },
+        ],
+      },
+    });
+    const selectedDispersionPoint: AnalysisChartCursorPoint = {
+      label: "Branch a",
+      point: { rowIndex: 1, x: 25e6, y: 1.3 },
+      quantity: "frequency",
+      seriesId: "dispersion:branch-a",
+      source: dispersionActionSeries[0]!.source,
+      unit: "GHz",
+      xUnit: "rad/m",
+    };
+    const html = renderToStaticMarkup(
+      <AnalysisFrequencySurface
+        calculationMode="dispersion_modal"
+        chartId="dispersion:artifact://dispersion"
+        context={context}
+        kernel={{} as KernelApi}
+        onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        presentation={{ kind: "ready", revision: "sha256:dispersion-7" }}
+        selectedPoint={selectedDispersionPoint}
+        selectedSeriesIds={["dispersion:branch-a"]}
+        series={dispersionActionSeries}
+        status="ready"
+        title="Dispersion"
+        unavailableReason={null}
+      />,
+    );
+
+    expect(html).toContain("View selected mode in 3D");
+    expect(html).not.toContain("disabled=");
+    expect(html).toContain("Equilibrium: per sample");
+  });
+
   it("neutralizes an FMR title when typed qualification evidence is absent", () => {
     const html = renderToStaticMarkup(
       <AnalysisFrequencySurface
@@ -278,6 +355,9 @@ describe("AnalysisFrequencySurface", () => {
           classification,
           contractGaps: [],
           equilibriumId: "eq-1",
+          sampleEquilibriumIds: null,
+          sampleEquilibriumProvenance: "absent",
+          sampleCount: null,
           evidence: {
           boundaryContext: "finite_open",
           drive: { identity: "rf-1", kind: "magnetic_rf" },

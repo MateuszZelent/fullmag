@@ -33,11 +33,16 @@ import { EChartsSurface } from "./EChartsSurface";
 import { DispersionAxisControls } from "./DispersionAxisControls";
 import {
   type FmrModalDrivenComparisonModel,
+  frequencyDomainEquilibriumIdForSample,
   frequencyDomainResultTitle,
   type FrequencyDomainChartRoute,
   type FrequencyDomainResultContext,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { AnalysisFrequencyPresentationState } from "../hooks/useAnalysisFrequencyData";
+import {
+  DispersionModeAction,
+  type DispersionModeTarget,
+} from "./DispersionModeAction";
 
 const UNKNOWN_FREQUENCY_SOURCE_IDENTITY = {
   artifactPath: null,
@@ -148,19 +153,21 @@ export function AnalysisFrequencySurface({
     () => buildFrequencyDomainWorkbenchSummary(series, qualifiedCalculationMode, status),
     [qualifiedCalculationMode, series, status],
   );
+  const projectedSelectedPoint = useMemo(() => {
+    if (!selectedPoint || (isDispersion && selectedPoint.source.tableId !== tableId)) {
+      return null;
+    }
+    const selectedSeries = displaySeries.find((entry) => entry.id === selectedPoint.seriesId);
+    const selectedChartPoint = selectedSeries?.points.find(
+      (point) => point.rowIndex === selectedPoint.point.rowIndex,
+    );
+    return selectedChartPoint ? { ...selectedPoint, point: selectedChartPoint } : null;
+  }, [displaySeries, isDispersion, selectedPoint, tableId]);
   const selectedPointSummary = useMemo(
     () => {
       if (!selectedPoint) return null;
-      const selectedSeries = displaySeries.find((entry) => entry.id === selectedPoint.seriesId);
-      const selectedChartPoint = selectedSeries?.points.find(
-        (point) => point.rowIndex === selectedPoint.point.rowIndex,
-      );
-      if (isDispersion && (!selectedChartPoint || selectedPoint.source.tableId !== tableId)) {
-        return null;
-      }
-      const displayPoint = selectedChartPoint
-        ? { ...selectedPoint, point: selectedChartPoint }
-        : selectedPoint;
+      if (isDispersion && !projectedSelectedPoint) return null;
+      const displayPoint = projectedSelectedPoint ?? selectedPoint;
       const summaryPoint = isDispersion && dispersionAxis !== "path"
         ? { ...displayPoint, point: { ...displayPoint.point, label: null } }
         : displayPoint;
@@ -177,10 +184,34 @@ export function AnalysisFrequencySurface({
       displaySeries,
       dispersionAxis,
       isDispersion,
+      projectedSelectedPoint,
       qualifiedCalculationMode,
       selectedPoint,
-      tableId,
     ],
+  );
+  const selectedDispersionPoint = isDispersion ? projectedSelectedPoint : null;
+  const selectedDispersionModePoint = selectedDispersionPoint?.point;
+  const dispersionModeTarget: DispersionModeTarget = {
+    analysisRunId: physicalContext?.runId ?? null,
+    analysisStageId: physicalContext?.stageId ?? null,
+    artifactPath: selectedDispersionPoint?.source.resourceKey ?? null,
+    artifactRevision: frequencyPresentationRevision(presentation),
+    equilibriumId: frequencyDomainEquilibriumIdForSample(
+      physicalContext,
+      selectedDispersionModePoint?.sampleIndex,
+    ),
+    fieldId: selectedDispersionModePoint?.modeFieldId ?? null,
+    modeId: selectedDispersionModePoint?.modeId ?? null,
+    modeIndex: selectedDispersionModePoint?.rawModeIndex ?? null,
+    resourceRef: selectedDispersionModePoint?.modeFieldResourceKey ??
+      selectedDispersionPoint?.source.resourceKey ?? null,
+    sampleId: selectedDispersionModePoint?.sampleId ?? null,
+    sampleIndex: selectedDispersionModePoint?.sampleIndex ?? null,
+  };
+  const selectedDispersionModeFieldAvailable = Boolean(
+    selectedDispersionModePoint?.modeFieldAvailable !== false &&
+    selectedDispersionModePoint?.modeFieldId &&
+    selectedDispersionModePoint?.modeFieldResourceKey,
   );
   const physicalMetadata = frequencyPhysicalMetadata(
     physicalContext,
@@ -299,19 +330,29 @@ export function AnalysisFrequencySurface({
   const workbenchSubtitle = workbenchParts.join(" · ");
 
   // Cursor footer keeps the selected scientific point visible outside the canvas.
-  const footerContent = selectedPointSummary ? (
+  const footerContent = selectedPointSummary || selectedDispersionPoint ? (
     <div
       aria-label="Selected frequency-domain point"
       className="fm-chart-section__footer-row fm-analysis-plots__status--frequency-domain-selection"
     >
-      <span className="fm-analysis-plots__range-cursor">
-        {selectedPointSummary.title}&ensp;{selectedPointSummary.xLabel}: {selectedPointSummary.xValue}&ensp;
-        {selectedPointSummary.yLabel}: {selectedPointSummary.yValue}
-        {"linewidthValue" in selectedPointSummary && selectedPointSummary.linewidthValue
-          ? `  Linewidth: ${selectedPointSummary.linewidthValue}`
-          : null}
-        &ensp;{selectedPointSummary.inspectorTarget}
-      </span>
+      {selectedPointSummary ? (
+        <span className="fm-analysis-plots__range-cursor">
+          {selectedPointSummary.title}&ensp;{selectedPointSummary.xLabel}: {selectedPointSummary.xValue}&ensp;
+          {selectedPointSummary.yLabel}: {selectedPointSummary.yValue}
+          {"linewidthValue" in selectedPointSummary && selectedPointSummary.linewidthValue
+            ? `  Linewidth: ${selectedPointSummary.linewidthValue}`
+            : null}
+          &ensp;{selectedPointSummary.inspectorTarget}
+        </span>
+      ) : null}
+      {selectedDispersionPoint ? (
+        <DispersionModeAction
+          available={selectedDispersionModeFieldAvailable}
+          kernel={kernel}
+          onSelectPoint={() => onPointSelect(selectedDispersionPoint)}
+          target={dispersionModeTarget}
+        />
+      ) : null}
     </div>
   ) : undefined;
 
@@ -445,7 +486,7 @@ function frequencyPhysicalMetadata(
     <div aria-label="Frequency-domain physical context" className="fm-analysis-plots__physical-context">
       <span>Run: {context.runId ?? "unavailable"}</span>
       <span>Stage: {context.stageId ?? "unavailable"}</span>
-      <span>Equilibrium: {context.equilibriumId ?? "unavailable"}</span>
+      <span>Equilibrium: {context.equilibriumId ?? (context.sampleEquilibriumProvenance === "valid" ? "per sample" : "unavailable")}</span>
       <span>Geometry: {context.geometryId ?? "unavailable"}</span>
       <span>Mesh: {context.meshId ?? "unavailable"}</span>
       <span>Boundary: {context.boundaryContext ?? "unavailable"}</span>
@@ -459,6 +500,23 @@ function frequencyPhysicalMetadata(
         : null}
     </div>
   );
+}
+
+function frequencyPresentationRevision(
+  presentation: AnalysisFrequencyPresentationState | undefined,
+): string | null {
+  if (!presentation) return null;
+  switch (presentation.kind) {
+    case "ready":
+    case "empty":
+      return presentation.revision == null ? null : String(presentation.revision);
+    case "refreshing":
+    case "paused":
+    case "stale":
+      return String(presentation.visibleRevision);
+    default:
+      return null;
+  }
 }
 
 function frequencyKContextLabel(context: FrequencyDomainResultContext): string {

@@ -146,6 +146,9 @@ export interface FrequencyDomainResultContext {
   classification: FrequencyDomainResultClassification | null;
   contractGaps: string[];
   equilibriumId: string | null;
+  sampleEquilibriumIds: Readonly<Record<number, string>> | null;
+  sampleEquilibriumProvenance: "absent" | "invalid" | "valid";
+  sampleCount: number | null;
   evidence: FrequencyDomainResultEvidence | null;
   geometryId: string | null;
   kSampling: FrequencyDomainResultEvidence["kSampling"] | null;
@@ -186,7 +189,7 @@ export function frequencyDomainResultContextFromManifest(
   );
   const runId = runOwner.value;
   const stageId = stageOwner.value;
-  const equilibriumId = stringValue(
+  const declaredCommonEquilibriumId = stringValue(
     manifest?.equilibrium_identity ?? manifest?.equilibrium_artifact_sha256,
   );
   const studyProduct = manifest?.study_product === "modal_eigen" || manifest?.study_product === "driven_response"
@@ -203,6 +206,14 @@ export function frequencyDomainResultContextFromManifest(
   const meshId = stringValue(manifest?.mesh_identity) ?? stringValue(owner.meshGenerationId);
   const observables = typedObservableEvidence(manifest?.observables);
   const kSampling = typedKSampling(manifest?.k_sampling ?? requested?.k_sampling);
+  const sampleEquilibrium = sampleEquilibriumProvenanceFromManifest(
+    manifest,
+    kSampling,
+    declaredCommonEquilibriumId,
+  );
+  const equilibriumId = sampleEquilibrium.provenance === "invalid"
+    ? null
+    : sampleEquilibrium.commonEquilibriumId;
   if (runOwner.conflict) {
     contractGaps.push("run identity conflicts with artifact owner");
   } else if (!runId) {
@@ -213,7 +224,12 @@ export function frequencyDomainResultContextFromManifest(
   } else if (!stageId) {
     contractGaps.push("stage identity unavailable");
   }
-  if (!equilibriumId) contractGaps.push("equilibrium identity unavailable");
+  if (!equilibriumId && sampleEquilibrium.provenance !== "valid") {
+    contractGaps.push("equilibrium identity unavailable");
+  }
+  if (sampleEquilibrium.provenance === "invalid") {
+    contractGaps.push("sample equilibrium provenance invalid");
+  }
   if (!studyProduct) contractGaps.push("study product unavailable");
   if (!boundaryContext) contractGaps.push("boundary context unavailable");
   if (!geometryId) contractGaps.push("geometry identity unavailable");
@@ -223,7 +239,8 @@ export function frequencyDomainResultContextFromManifest(
     stageOwner.conflict ||
     !runId ||
     !stageId ||
-    !equilibriumId ||
+    (!equilibriumId && sampleEquilibrium.provenance !== "valid") ||
+    sampleEquilibrium.provenance === "invalid" ||
     !studyProduct ||
     !boundaryContext
   ) {
@@ -232,6 +249,9 @@ export function frequencyDomainResultContextFromManifest(
       classification: null,
       contractGaps,
       equilibriumId,
+      sampleEquilibriumIds: sampleEquilibrium.ids,
+      sampleEquilibriumProvenance: sampleEquilibrium.provenance,
+      sampleCount: sampleEquilibrium.sampleCount,
       evidence: null,
       geometryId,
       kSampling,
@@ -248,7 +268,7 @@ export function frequencyDomainResultContextFromManifest(
   const evidence: FrequencyDomainResultEvidence = {
     boundaryContext,
     ...(drive ? { drive } : {}),
-    equilibriumId,
+    ...(equilibriumId ? { equilibriumId } : {}),
     ...(kSampling ? { kSampling } : {}),
     ...(normalization ? { normalization } : {}),
     observables,
@@ -262,6 +282,9 @@ export function frequencyDomainResultContextFromManifest(
       classification: classifyFrequencyDomainResult(evidence),
       contractGaps,
       equilibriumId,
+      sampleEquilibriumIds: sampleEquilibrium.ids,
+      sampleEquilibriumProvenance: sampleEquilibrium.provenance,
+      sampleCount: sampleEquilibrium.sampleCount,
       evidence,
       geometryId,
       kSampling,
@@ -278,6 +301,9 @@ export function frequencyDomainResultContextFromManifest(
       classification: null,
       contractGaps: [...contractGaps, "k context unavailable"],
       equilibriumId,
+      sampleEquilibriumIds: sampleEquilibrium.ids,
+      sampleEquilibriumProvenance: sampleEquilibrium.provenance,
+      sampleCount: sampleEquilibrium.sampleCount,
       evidence,
       geometryId,
       kSampling,
@@ -289,6 +315,97 @@ export function frequencyDomainResultContextFromManifest(
       studyProduct,
     };
   }
+}
+
+/** Resolves only an exact sample identity, with a common legacy id for one-sample results. */
+export function frequencyDomainEquilibriumIdForSample(
+  context: FrequencyDomainResultContext | null | undefined,
+  sampleIndex: number | null | undefined,
+): string | null {
+  if (!context || !Number.isSafeInteger(sampleIndex) || (sampleIndex ?? -1) < 0) {
+    return null;
+  }
+  if (context.sampleEquilibriumProvenance === "invalid") return null;
+  if (context.sampleEquilibriumProvenance === "valid") {
+    return context.sampleEquilibriumIds?.[sampleIndex as number] ?? null;
+  }
+  const sampleCount = context.sampleCount ?? (context.kSampling?.kind === "single"
+    ? 1
+    : context.kSampling?.sampleCount ?? null);
+  return sampleCount === 1 && sampleIndex === 0
+    ? context.equilibriumId
+    : null;
+}
+
+function sampleEquilibriumProvenanceFromManifest(
+  manifest: JsonRecord | null,
+  kSampling: FrequencyDomainResultEvidence["kSampling"] | null,
+  declaredCommonEquilibriumId: string | null,
+): {
+  commonEquilibriumId: string | null;
+  ids: Readonly<Record<number, string>> | null;
+  provenance: "absent" | "invalid" | "valid";
+  sampleCount: number | null;
+} {
+  const samplingCount = kSampling?.kind === "single"
+    ? 1
+    : kSampling?.sampleCount ?? null;
+  const hasProvenance = manifest !== null &&
+    Object.prototype.hasOwnProperty.call(manifest, "sample_execution_provenance");
+  if (!hasProvenance) {
+    return {
+      commonEquilibriumId: declaredCommonEquilibriumId,
+      ids: null,
+      provenance: "absent",
+      sampleCount: samplingCount,
+    };
+  }
+
+  const provenance = record(manifest?.sample_execution_provenance);
+  const count = provenance?.sample_count;
+  const samples = provenance?.samples;
+  if (
+    provenance?.schema_version !== "frequency_domain_sample_execution_provenance.v1" ||
+    typeof count !== "number" || !Number.isSafeInteger(count) || count < 1 ||
+    !Array.isArray(samples) || samples.length !== count ||
+    (samplingCount !== null && samplingCount !== count)
+  ) {
+    return {
+      commonEquilibriumId: null,
+      ids: null,
+      provenance: "invalid",
+      sampleCount: samplingCount ?? (typeof count === "number" ? count : null),
+    };
+  }
+
+  const ids: Record<number, string> = {};
+  for (const sampleValue of samples) {
+    const sample = record(sampleValue);
+    const validation = record(sample?.validation);
+    const index = sample?.sample_index;
+    const equilibriumId = stringValue(validation?.equilibrium_artifact_sha256);
+    if (
+      typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || index >= count ||
+      Object.prototype.hasOwnProperty.call(ids, index) || !equilibriumId
+    ) {
+      return { commonEquilibriumId: null, ids: null, provenance: "invalid", sampleCount: count };
+    }
+    ids[index] = equilibriumId;
+  }
+  if (Object.keys(ids).length !== count) {
+    return { commonEquilibriumId: null, ids: null, provenance: "invalid", sampleCount: count };
+  }
+  const orderedIds = Array.from({ length: count }, (_, index) => ids[index]);
+  if (orderedIds.some((equilibriumId) => !equilibriumId)) {
+    return { commonEquilibriumId: null, ids: null, provenance: "invalid", sampleCount: count };
+  }
+  if (declaredCommonEquilibriumId && orderedIds.some((id) => id !== declaredCommonEquilibriumId)) {
+    return { commonEquilibriumId: null, ids: null, provenance: "invalid", sampleCount: count };
+  }
+  const commonEquilibriumId = orderedIds.every((id) => id === orderedIds[0])
+    ? orderedIds[0] ?? null
+    : null;
+  return { commonEquilibriumId, ids, provenance: "valid", sampleCount: count };
 }
 
 /** Ignore only the exact historical payload aliases; conflicting exact IDs invalidate ownership. */

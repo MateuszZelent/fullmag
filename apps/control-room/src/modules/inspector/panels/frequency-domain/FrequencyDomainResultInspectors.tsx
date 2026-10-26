@@ -53,7 +53,9 @@ import {
   buildFmrModalDrivenComparisonModel,
   buildFmrPeakTableModel,
   eigenModeFieldAvailable,
+  frequencyDomainEquilibriumIdForSample,
   frequencyDomainManifestPayload,
+  frequencyDomainResultContextFromManifest,
   frequencyResponseSeriesUnit,
   responseFieldResourcesFromManifest,
   routeFrequencyDomainCalculationMode,
@@ -64,6 +66,7 @@ import type {
   EigenSpectrumPoint,
   FmrModalDrivenComparisonPoint,
   FmrPeakPoint,
+  FrequencyDomainResultContext,
   FrequencyResponsePoint,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import {
@@ -1154,7 +1157,11 @@ export function FrequencyDomainDispersionInspectorPanel(
   const summary = useFrequencyDomainDispersionSummary();
   const kernel = useKernel();
   const selectPoint = (point: EigenDispersionPoint): void => {
-    const ref = buildEigenDispersionPointSelectionRefFromSelection(point, props.selection);
+    const ref = buildEigenDispersionPointSelectionRefFromSelection(
+      point,
+      props.selection,
+      summary.resultContext,
+    );
     kernel.selection.set(
       {
         kind: ref.kind,
@@ -1248,19 +1255,36 @@ export function FrequencyDomainDispersionInspectorPanel(
 export function buildEigenDispersionPointSelectionRefFromSelection(
   point: EigenDispersionPoint,
   selection: InspectorPanelProps["selection"],
+  resultContext?: FrequencyDomainResultContext | null,
 ): ReturnType<typeof buildEigenDispersionPointSelectionRef> {
   const ownerRef = selection.ref?.type === "frequency-domain"
     ? selection.ref
     : null;
-  return buildEigenDispersionPointSelectionRef(point, {
-    analysisRunId: ownerRef?.analysisRunId,
-    analysisStageId: ownerRef?.analysisStageId,
+  const resultRunId = resultContext?.runId ?? null;
+  const resultStageId = resultContext?.stageId ?? null;
+  const analysisRunId = ownerRef?.analysisRunId;
+  const analysisStageId = ownerRef?.analysisStageId;
+  const manifestOwnerMatchesSelection = Boolean(
+    resultContext?.evidence &&
+    resultRunId && resultStageId &&
+    ownerRef?.artifactRevision != null &&
+    analysisRunId === resultRunId && analysisStageId === resultStageId,
+  );
+  const equilibriumId = manifestOwnerMatchesSelection
+    ? frequencyDomainEquilibriumIdForSample(resultContext, point.sampleIndex)
+    : null;
+  const safePoint = equilibriumId
+    ? point
+    : { ...point, modeFieldAvailable: false };
+  return buildEigenDispersionPointSelectionRef(safePoint, {
+    analysisRunId,
+    analysisStageId,
     artifactRevision: ownerRef?.artifactRevision,
     datasetId: ownerRef?.datasetId,
     datasetRevision: ownerRef?.datasetRevision,
     artifactPath: ownerRef?.artifactPath,
     calculationMode: "dispersion_modal",
-    equilibriumId: ownerRef?.equilibriumId,
+    equilibriumId,
     kContextKind: ownerRef?.kContextKind,
     normalization: ownerRef?.normalization,
     resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -1274,7 +1298,11 @@ export function EigenKPathInspectorPanel(props: InspectorPanelProps) {
   const summary = useFrequencyDomainDispersionSummary();
   const kernel = useKernel();
   const selectPoint = (point: EigenDispersionPoint): void => {
-    const ref = buildEigenDispersionPointSelectionRefFromSelection(point, props.selection);
+    const ref = buildEigenDispersionPointSelectionRefFromSelection(
+      point,
+      props.selection,
+      summary.resultContext,
+    );
     kernel.selection.set(
       {
         kind: ref.kind,
@@ -4169,6 +4197,14 @@ function useFrequencyDomainDispersionSummary() {
   const pathMetadata = dispersionPathMetadataSummary(
     dispersion.data?.path_metadata,
   );
+  const resultManifest = record(manifest.data?.result_manifest);
+  const resultContext = frequencyDomainResultContextFromManifest(
+    manifestPayload,
+    {
+      runId: stringValue(resultManifest?.run_id),
+      stageId: stringValue(resultManifest?.stage_id),
+    },
+  );
 
   return {
     badge:
@@ -4190,6 +4226,7 @@ function useFrequencyDomainDispersionSummary() {
     pathLabels: pathMetadata.labels,
     pathMetadataArtifact: pathMetadata.artifact,
     pathSampling: pathMetadata.sampling,
+    resultContext,
     primaryBranch: primaryBranch
       ? `${primaryBranch.label ?? primaryBranch.branchId}; ${formatFrequencyRange(
           primaryBranch.points.map((point) => point.frequencyRealHz),

@@ -9,6 +9,7 @@ import {
   buildEigenBranchSelectionRef,
   buildEigenDispersionPointSelectionRef,
   type EigenBranch,
+  type FrequencyDomainResultContext,
   type FrequencyDomainSelectionContext,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -18,6 +19,7 @@ import { FrequencyDomainBranchTable } from "../FrequencyDomainTables";
 import { ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH } from "@/kernel/api/apiPaths";
 import {
   buildEigenDispersionPointViewModel,
+  eigenDispersionPointEquilibriumId,
   useEigenDispersionInspectorSummary,
 } from "./EigenDispersionInspectorModel";
 
@@ -32,9 +34,10 @@ export function EigenDispersionInspectorPanel({
     : null;
 
   const selectPoint = (point: EigenDispersionPoint): void => {
-    const ref = buildEigenDispersionPointSelectionRef(
+    const ref = buildEigenDispersionPointSelectionRefFromSelection(
       point,
-      buildEigenDispersionPointHandoffContext(selection),
+      selection,
+      summary.resultContext,
     );
     kernel.selection.set(
       {
@@ -218,6 +221,28 @@ export function buildEigenDispersionPointHandoffContext(
     datasetRevision: ownerRef?.datasetRevision,
     resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   };
+}
+
+export function buildEigenDispersionPointSelectionRefFromSelection(
+  point: EigenDispersionPoint,
+  selection: InspectorPanelProps["selection"],
+  resultContext: FrequencyDomainResultContext | null | undefined,
+) {
+  const context = buildEigenDispersionPointHandoffContext(selection);
+  const equilibriumId = eigenDispersionPointEquilibriumId(
+    resultContext,
+    context.analysisRunId,
+    context.analysisStageId,
+    context.artifactRevision,
+    point.sampleIndex,
+  );
+  const safePoint = equilibriumId
+    ? point
+    : { ...point, modeFieldAvailable: false };
+  return buildEigenDispersionPointSelectionRef(safePoint, {
+    ...context,
+    equilibriumId,
+  });
 }
 
 function selectedDispersionPoint(
