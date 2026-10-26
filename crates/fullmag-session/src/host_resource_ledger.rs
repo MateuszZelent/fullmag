@@ -34,6 +34,7 @@ use crate::types::{
 };
 use crate::writer::Writer;
 
+mod pending_inventory_recovery;
 mod failed_worker_exit;
 pub use failed_worker_exit::FailedWorkerExitReconciliation;
 
@@ -707,7 +708,11 @@ pub struct HostResourceReservation {
     pub identity: HostReservationIdentity,
     /// Integrity check for the immutable request fields; reservation state is
     /// excluded so safe state transitions retain the same request identity.
+    /// Only proof-backed pre-coordinator inventory revalidation may repin its producer.
     pub request_sha256: String,
+    /// Content-addressed proof for the explicit pre-coordinator inventory revalidation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_inventory_recovery_sha256: Option<String>,
     pub host_id: String,
     pub policy_revision: u64,
     pub host_owner_epoch: u64,
@@ -754,6 +759,7 @@ impl HostResourceReservation {
         Ok(Self {
             identity: request.identity.clone(),
             request_sha256: host_request_sha256(request)?,
+            pending_inventory_recovery_sha256: None,
             host_id: request.expected_host_id.clone(),
             policy_revision: request.expected_policy_revision,
             host_owner_epoch: request.expected_owner_epoch,
@@ -6324,6 +6330,7 @@ fn validate_ledger_document_body(document: &HostResourceLedgerDocument, root: &P
     for reservation in &document.reservations {
         let reservation_policy = document.policy_for_reservation(reservation)?;
         reservation.validate(reservation_policy)?;
+        pending_inventory_recovery::validate_receipt(root, reservation_policy, reservation)?;
         if reservation.node_policy_revision > 0 {
             let current_revision = document
                 .node_policy
@@ -9061,16 +9068,16 @@ mod tests {
         }
     }
 
-    struct V4WorkerLaunchFixture {
+    pub(super) struct V4WorkerLaunchFixture {
         _directory: tempfile::TempDir,
-        store: SessionStore,
-        ledger: HostResourceLedger,
-        inventory_owner: Option<HostInventoryOwner>,
-        request: HostReservationRequest,
-        lease: FmsResourceLease,
+        pub(super) store: SessionStore,
+        pub(super) ledger: HostResourceLedger,
+        pub(super) inventory_owner: Option<HostInventoryOwner>,
+        pub(super) request: HostReservationRequest,
+        pub(super) lease: FmsResourceLease,
     }
 
-    fn v4_worker_launch_fixture(task_id: &str) -> V4WorkerLaunchFixture {
+    pub(super) fn v4_worker_launch_fixture(task_id: &str) -> V4WorkerLaunchFixture {
         let directory = tempfile::tempdir().unwrap();
         let mut policy = policy();
         policy.schema_version = HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2.into();

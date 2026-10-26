@@ -1407,6 +1407,7 @@ mod tests {
                 lease_token: "lease".to_string(),
             },
             request_sha256: digest(b'r'),
+            pending_inventory_recovery_sha256: None,
             host_id: "host".to_string(),
             policy_revision: 1,
             host_owner_epoch: 1,

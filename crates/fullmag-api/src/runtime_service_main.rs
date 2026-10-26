@@ -3276,6 +3276,7 @@ mod tests {
         let mut original = HostResourceReservation {
             identity,
             request_sha256: "a".repeat(64),
+            pending_inventory_recovery_sha256: None,
             host_id: "host".into(),
             policy_revision: 1,
             host_owner_epoch: 1,

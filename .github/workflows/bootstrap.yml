@@ -369,6 +369,9 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler scheduler_writer_busy_tests
           cargo test -p fullmag-runtime-control --lib worker_inbox::tests
           cargo test -p fullmag-runtime-control --lib study::dependency_tests
+          cargo test -p fullmag-session --lib pending_inventory_recovery
+          cargo test -p fullmag-session --lib host_reservation_cannot_cross_compute_node_owner_epoch
+          cargo test -p fullmag-runtime-control --lib host_runtime::recovery_tests
           cargo test -p fullmag-api --bin fullmag-runtime-service orphan_teardown_
           cargo test -p fullmag-runtime-control --lib claim::host_binding_tests::fresh_v2_host_claim_receives_the_canonical_runtime_generation_binding -- --exact
           cargo test -p fullmag-runner --lib fem_gpu_execution_receipt_contract_tests

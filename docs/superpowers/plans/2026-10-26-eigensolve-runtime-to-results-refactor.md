@@ -1,7 +1,7 @@
 # Plan refaktoryzacji: uruchomienie eigensolve i trwały zapis danych
 
 Data: 26.10.2026. Audyt i plan zapisano przed wznowieniem celu. Obecny etap:
-**zadanie 6/8 — naprawa ponownej walidacji StepOutput przed startem Eigen; Relax i publikacja CAS zakończone**.
+**zadanie 6/8 — StepOutput CI PASS; wznowienie Eigen blokuje zmiana inventory owner (A13)**.
 
 Źródło stanu: [audyt wykonania](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.md)
 i [evidence JSON](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.evidence.json).
@@ -70,7 +70,7 @@ control/source/package zamiast nowego launchera lub drugiego systemu grantów.
 | 3/8 — zamknięcie zakończonego workera | Zakończone: local/host Released, normalny proof i zachowane dane | Exact local Released + host Released + normalny proof, dane bez zmian |
 | 4/8 — poprawny start runtime | Start runtime i bieżący sample potwierdzone; późniejsza awaria compute opisana w A12 | Ready owner i bieżący sample, działający scheduler bez kwarantanny |
 | 5/8 — zaakceptowany Relax | Nowy Relax Succeeded, handoff CAS i certyfikat matched; odbiór Eigen blokuje A12 | Certyfikat w CAS i zaakceptowane wyjście do Eigen w nowym runie |
-| 6/8 — rzeczywisty Eigen +10 | Zdiagnozowana odmowa przed startem workera; poprawka i regresja oczekują CI | Native frequency + residual + zespolony mod i terminalny sukces |
+| 6/8 — rzeczywisty Eigen +10 | StepOutput CI PASS; nowy build gotowy, wznowienie blokuje A13 | Native frequency + residual + zespolony mod i terminalny sukces |
 | 7/8 — trwały zapis i UI | Kod istnieje, pozytywny odbiór otwarty | Readback po restarcie bez Solve oraz widoczny właściwy mod |
 | 8/8 — signed sweep i raport | Skrypt przygotowany, nowy sweep niewykonany | 15 rzeczywistych próbek, wykres/provenance i jawne ograniczenia |
 
@@ -287,7 +287,7 @@ host admission oraz wąski test kolejności, tylko jeśli diagnoza potwierdzi b�
 
 **Odbiór:**
 
-- [ ] Nowy Relax ma prawdziwe completed/converged i diagnostyki wymaganej konfiguracji CPU/double.
+- [x] Nowy Relax ma prawdziwe completed/converged i diagnostyki wymaganej konfiguracji CPU/double: 3 kroki, torque 2,6466332450953524e-11 A/m przy progu 1 A/m; demag residual 1,6180945995077723e-12.
 - [x] Certyfikat w CAS i accepted output są spójne z exact planem/siatką/właścicielem.
 - [ ] Eigen otrzymuje ten certyfikat; brak ponownej relaksacji i brak niejawnego fallbacku.
 
@@ -355,6 +355,52 @@ kontrole current attempt/epoch pozostają obowiązkowe. Regresja obejmuje
 resolve→bind→serde→resolve→bind, zmiany siedmiu pól oraz brak payload/manifest
 w CAS. Test włączono do GitHub Actions, bez lokalnej kompilacji. Runtime tej
 poprawki i końcowy Eigen pozostają **NOT VERIFIED**.
+
+### Korekta 6.1b — przekazanie niewystartowanego admission po restarcie
+
+CI commita `d4f0aee42266bff0a11c7fdd46eef99aee444226` zakończone sukcesem.
+Managed stop `08c13cae92414ff08b5d3d6c47b4989e` i recreate
+`c2ec7d4f2b444abf8d693aa5c0e83fdf` zachowały store. Nowy build aplikacji
+udany; development `03460acf40f24ef4b928831c2b4da67c` odrzucony przez
+inventory-owner fence przed Prepare. Szczegóły: A13 audytu oraz
+[evidence restartu](../../audits/2026-10-26-eigensolve-pending-admission-restart.evidence.json).
+
+- [x] Sprawdzić faktyczne old/new Compose: ten sam ledger, source root i runtime generation.
+- [x] Zachować katalog/admission/Relax; potwierdzić brak nowego worker Start.
+- [x] Wybrano jawną rewalidację wyłącznie pre-coordinator Pending, z przypiętym hashem dowodu i niezmienionym zwykłym fencing; review PASS.
+- [x] Dodano regresje restartu, odmów i integralności dowodu; wykonanie kompilowanych testów pozostaje do potwierdzenia w GitHub Actions.
+- [ ] Po CI wznowić normalnym launcherem i potwierdzić odbiór certyfikatu Relax przez Eigen.
+
+### Korekta celu reprodukcji po wskazaniu historycznego wykresu
+
+Użytkownik wskazał wykres `de-signed15-air-refinement.png`. Historyczne obliczenia
+istnieją: [signed15](../../raports/2026-10-04-de-signed15-runtime.md) i
+[manifest dwóch refinementów](../../raports/assets/de-signed15-20261004/two-air-trials-manifest.json).
+Baseline obejmuje 15 rzeczywistych pozycji od −25 do +25 rad/µm, dynamiczny
+demag, film 40×40×10 nm, Ms=800000 A/m, Aex=13e-12 J/m, Bx=0,1 T,
+PBC xy, powietrze po 2 µm, siatkę L2 5 nm / 3 warstwy, air growth1,3.
+Actual mesh: 6138 węzłów i 30012 tetraedrów (1476 film, 28536 air).
+Dwa pomarańczowe punkty +10/+25 używają air growth1,15 przy tym samym filmie.
+
+Dotychczasowy pilot `fem_eigen_mode_ui_de_k10.py` ma 10 nm / 6 warstw,
+wybór nearest i inną aktualną siatkę. Jest testem integracji, **nie reprodukcją
+tego wykresu**. Nie wolno nim zastąpić benchmarku, ani uznać jego wyniku za
+odtworzenie historycznych wartości.
+
+Priorytet zadania 6 po usunięciu blokady wykonania: użyć wersjonowanego
+`examples/fem_de_smoke_numeric.py` z historycznym L2/3 i przypiętymi opcjami
+okna/KSP z manifestu runtime #228; najpierw +10 i −10, następnie pozostałe
+signed15 oraz dwa refinementy. Oczekiwany historyczny +10 baseline:
+11,205285324 GHz; +25:13,557589546 GHz. To wartości porównawcze z raportu,
+nie nowe wyniki. W razie zmiany actual siatki raportować różnicę przed
+porównaniem częstotliwości. Γ zachowuje historyczny selected-only scope;
+nie deklarować pełnej kompletności okna. Nowy UI ma następnie konsumować te
+wyniki; jego pozostałe poprawki nie zastępują odtworzenia obliczeń.
+
+Zachowane są CSV, PNG/PDF i inspection JSON w dokumentacji/visualizations.
+Historycznego rootu raw runs nie znaleziono pod dwiema dokładnymi ścieżkami
+C:/git/fullmag/storage i /home/kkingstoun/git/fullmag/storage; to nie jest
+stwierdzenie, że wszystkie kopie wyników zostały usunięte.
 
 ## Zadanie 7/8: trwale zapisać, odczytać i pokazać mod w UI
 

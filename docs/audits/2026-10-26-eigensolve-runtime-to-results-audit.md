@@ -206,3 +206,52 @@ poprawki i końcowy Eigen pozostają **NOT VERIFIED**.
 Dowód runtime: [captured input, katalog, certyfikat i log](2026-10-26-eigensolve-relax-to-eigen-replay.evidence.json).
 Nie zmieniano danych runu. Obecny runtime jest diagnostyczny po awarii compute;
 nie ma nowej częstotliwości ani pola modu.
+
+
+## A13 — P1: wznowienie niewystartowanego Eigen po zmianie inventory owner
+
+Poprawka A12 w commicie `d4f0aee42266bff0a11c7fdd46eef99aee444226`
+przeszła [bootstrap CI](https://github.com/MateuszZelent/fullmag/actions/runs/40407571491),
+w tym regresję `study::dependency_tests`. Zarządzany build aplikacji zakończył
+się powodzeniem (make 99,790 s; pakowanie 2,370 s), snapshot
+`ae57b1bf8addf8d2323ec7e0d5b01b84a8d44230f6e23d826dbd47cdaffeb299`.
+Development `03460acf40f24ef4b928831c2b4da67c` kończy się jednak
+`failed-confirmed`: nowy compute scheduler odmawia wznowienia na
+`host request is fenced by a different compute-node inventory owner`.
+
+Porównano rzeczywiste stare i nowe Compose: oba używają tego samego wolumenu
+`fullmag-dev-group-ledger-v1-5787a505f9bb481d9ce08ac0`, tożsamości hosta oraz
+generacji `9281648fd4965acf6b42b7c7061e0f36a2b1ecf7da98307c2c5c7629270ed305`.
+Rezerwacja Eigen pozostaje `Committed` / launch gate `Pending`, związana z
+inventory epoch 2; bieżący rekord ownera ma epoch 4. Katalog nadal ma rewizję
+22, to samo task/attempt i brak genesis/Start. Relax nie został powtórzony.
+Numer epoch ledgera zasobów jest odrębny od ownership epoch zadania.
+
+Kontrola `worker_launch_index` poprawnie blokuje użycie historycznego ownera.
+Luką jest brak potwierdzonej ścieżki przekazania takiej rezerwacji w procedurze
+resume. Nie wolno usuwać kontroli epoch, ręcznie przepisywać ledger/admission,
+ani traktować nowego commita jako uprawnienia do startu. Korekta 6.1b wymaga
+jawnej rewalidacji dokładnego niewykorzystanego przydziału albo normalnego
+zamknięcia bez spawn i ponownego admission z zachowaniem Relax; wybór po
+sprawdzeniu istniejących kontraktów i testów. Kolejny build dopiero po regresji.
+
+Dowód: [niezmieniony katalog, Compose, owner i błąd scheduler-a](2026-10-26-eigensolve-pending-admission-restart.evidence.json).
+A12 ma **CI PASS**, ale jego przejście w realnym Eigen pozostaje
+**NOT VERIFIED**, ponieważ A13 występuje wcześniej. Brak nowej częstotliwości
+lub zespolonego modu; API pozostaje diagnostyczne.
+
+Review roboczej korekty A13: blokady host→store i zachowanie zwykłego fencing
+nie wykazały błędu, ale przed commitem/CI trzeba związać receipt recovery
+autorytatywnym digestem z rezerwacją (obecnie usunięcie pliku po publikacji
+nie jest wykrywane), poprawić fixture brakującego admission tak, aby miał
+run intent, i dodać negatywne przypadki starszego epoch/innego producer ID.
+Kod tej korekty pozostaje WIP; nie uruchamiano z niego buildu ani obliczeń.
+
+Domknięcie review A13: dodano `pending_inventory_recovery_sha256` do dokładnej
+rezerwacji i walidację content-addressed receiptu przy każdym odczycie ledgera.
+Receipt zachowuje poprzednią rezerwację, nowy request i powiązanie z admission;
+dopuszcza zmianę tylko epoch tego samego producenta. Testy obejmują missing/
+tampered proof, monotoniczny owner, brak admission, watermark, consumed/closed,
+nieaktualne zasoby oraz przerwanie publikacji. Niezależne powtórne review nie
+wykazało dalszego błędu w tym zakresie. Syntax/rustfmt nowego modułu i diff
+check PASS; testy kompilowane i runtime nadal wymagają CI oraz nowego buildu.

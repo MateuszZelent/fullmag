@@ -1608,7 +1608,7 @@ impl HostRuntimeAdmission {
                 claim.lease.lease_token.as_str(),
             )?
             .context("handoff recovery has no durable local lease")?;
-        if !self.ledger.worker_has_pending_launch(store, &lease)? {
+        if !self.has_current_compute_snapshot()? {
             return Ok(false);
         }
         if claim.lease.kind == fullmag_application::ResourceKind::Gpu
@@ -1617,6 +1617,13 @@ impl HostRuntimeAdmission {
             // Keep the durable reservation and launch gate for exact recovery,
             // but do not turn a transiently unavailable GPU into a scheduler
             // failure or a worker spawn attempt.
+            return Ok(false);
+        }
+        // Only this scheduler recovery path may revalidate an unused durable
+        // admission after the inventory producer restarted. Normal reserve and
+        // spawn retain their exact owner fences and one-use launch token.
+        self.ledger.reconcile_pending_worker_inventory_owner(store, &lease)?;
+        if !self.ledger.worker_has_pending_launch(store, &lease)? {
             return Ok(false);
         }
         self.ensure_solver_claim_committed(store, claim)?;
