@@ -54,6 +54,44 @@ const FREQUENCY_DOMAIN_PATHS = {
   spectrum: "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
 };
 
+const frequencyDomainFixtureGenerationIds = new WeakMap();
+
+function frequencyDomainFixtureGenerationId(fixture) {
+  let generationId = frequencyDomainFixtureGenerationIds.get(fixture);
+  if (!generationId) {
+    // Models a committed API publication for this browser fixture only. It is
+    // not a certificate for solver execution or on-disk generation members.
+    generationId = sha256Digest(Buffer.from(JSON.stringify(fixture), "utf8"));
+    frequencyDomainFixtureGenerationIds.set(fixture, generationId);
+  }
+  return generationId;
+}
+
+function frequencyDomainFixtureEquilibriumId(sampleIndex) {
+  return sha256Digest(Buffer.from(`analysis-frequency-fixture-equilibrium:${sampleIndex}`, "utf8"));
+}
+
+function frequencyDomainFixtureSampleProvenance(fixture) {
+  const spectrumSamples = fixture.spectrumPayload?.samples;
+  const sampleCount = fixture.sampleCount ?? (Array.isArray(spectrumSamples) && spectrumSamples.length > 0
+    ? Math.max(...spectrumSamples.map((sample) => sample.sample_index)) + 1 : null);
+  if (!Number.isSafeInteger(sampleCount) || sampleCount < 1) {
+    throw new Error(`Modal browser fixture ${fixture.id} has no complete sample count.`);
+  }
+  return {
+    schema_version: "frequency_domain_sample_execution_provenance.v1",
+    sample_count: sampleCount,
+    // A chart can omit rows without a retained mode. The publication still
+    // owns every sample, including those omitted by this sparse chart fixture.
+    samples: Array.from({ length: sampleCount }, (_, sampleIndex) => ({
+      sample_index: sampleIndex,
+      validation: {
+        equilibrium_artifact_sha256: frequencyDomainFixtureEquilibriumId(fixture.referenceImport ? 0 : sampleIndex),
+      },
+    })),
+  };
+}
+
 async function main() {
   const playwright = await loadPlaywright();
   if (!playwright?.chromium) {
@@ -1761,13 +1799,30 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
       `Selected eigen mode resource returned HTTP ${modeResponse.status()} for ${expectedModePath}.`,
     );
   }
+  let modeResource = null;
   let modePayload = null;
   try {
-    modePayload = (await modeResponse.json())?.payload ?? null;
+    modeResource = await modeResponse.json();
+    modePayload = modeResource?.payload ?? null;
   } catch (error) {
     throw new Error(
       `Selected eigen mode resource was not valid JSON for ${expectedModePath}: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+  const expectedEquilibriumId = frequencyDomainFixtureEquilibriumId(expected.sampleIndex);
+  const expectedGenerationId = frequencyDomainFixtureGenerationId(fixture);
+  if (
+    modeResource?.run_id !== REFERENCE_FIXTURE_RUN_ID ||
+    modeResource?.stage_id !== REFERENCE_FIXTURE_STAGE_ID ||
+    modeResource?.generation_status !== "member_verified_owner_bound" ||
+    modeResource?.generation_id !== expectedGenerationId ||
+    modePayload?.sample_index !== expected.sampleIndex ||
+    modePayload?.raw_mode_index !== expected.modeIndex ||
+    modePayload?.mode_field_id !== expected.fieldId ||
+    modePayload?.equilibrium_artifact_sha256 !== expectedEquilibriumId ||
+    modePayload?.candidate_identity?.equilibrium_artifact_sha256 !== expectedEquilibriumId
+  ) {
+    throw new Error(`Selected mode did not retain its exact fixture owner/sample/equilibrium/generation: ${JSON.stringify(modeResource)}`);
   }
   const modeDetailCanonicalRelativeL2Present =
     modePayload !== null &&
@@ -1883,6 +1938,8 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
     fieldId: expected.fieldId,
     modeId: expected.modeId,
     modeDetailCanonicalRelativeL2Present,
+    equilibriumId: expectedEquilibriumId,
+    generationId: expectedGenerationId,
     resourceRef: expected.resourceRef,
     renderedClick,
     residualFields,
@@ -2151,6 +2208,7 @@ function createFrequencyDomainChartFixtures() {
     {
       calculationMode: "dispersion_modal",
       expectedSelection: dispersionGap.expected,
+      sampleCount: dispersionGap.sampleCount,
       id: "dispersion-gap-decimation-and-raw-scatter",
       minimumLegendCount: 2,
       minimumRenderedPoints: 10_000,
@@ -2209,6 +2267,7 @@ function makeDecimatedDispersionFixture() {
     ].join(","));
   }
   return {
+    sampleCount: sampleCount + skippedSamples,
     expected: {
       fieldId: targetFieldId,
       frequencyHz: 1e9 + targetSampleIndex * 1e5,
@@ -2520,7 +2579,7 @@ async function fulfillFrequencyDomainFixtureResource(route, pathname, fixture, h
         payload: fixture.spectrumPayload,
         resourceKey: FREQUENCY_DOMAIN_PATHS.spectrum,
         schemaVersion: "frequency_domain_eigen_spectrum.v1",
-      })),
+      }, fixture)),
       contentType: "application/json",
       headers,
       status: 200,
@@ -2534,7 +2593,7 @@ async function fulfillFrequencyDomainFixtureResource(route, pathname, fixture, h
         payload: fixture.responsePayload,
         resourceKey: FREQUENCY_DOMAIN_PATHS.response,
         schemaVersion: "frequency_domain_response_sweep_resource.v1",
-      })),
+      }, fixture)),
       contentType: "application/json",
       headers,
       status: 200,
@@ -2571,7 +2630,7 @@ async function fulfillFrequencyDomainFixtureResource(route, pathname, fixture, h
   }
   if (pathname === FREQUENCY_DOMAIN_PATHS.dispersion && fixture.dispersionText) {
     await route.fulfill({
-      body: JSON.stringify(frequencyDomainTextArtifactFixture(fixture.dispersionText)),
+      body: JSON.stringify(frequencyDomainTextArtifactFixture(fixture.dispersionText, fixture)),
       contentType: "application/json",
       headers,
       status: 200,
@@ -2589,6 +2648,15 @@ async function fulfillFrequencyDomainFixtureResource(route, pathname, fixture, h
           payload: {
             frequency_hz: expectedSelection.frequencyHz,
             frequency_real_hz: expectedSelection.frequencyHz,
+            equilibrium_artifact_sha256: frequencyDomainFixtureEquilibriumId(expectedSelection.sampleIndex),
+            candidate_identity: {
+              schema_version: "frequency_domain_candidate_identity.v1",
+              mesh_id: "analysis-fixture-mesh",
+              mesh_generation_id: "analysis-fixture-mesh",
+              equilibrium_artifact_sha256: frequencyDomainFixtureEquilibriumId(expectedSelection.sampleIndex),
+              engine_id: "browser_fixture",
+              source_identity: { fixture: "analysis-plots-frequency-domain-smoke" },
+            },
             mode_field_id: expectedSelection.fieldId,
             mode_id: expectedSelection.modeId,
             raw_mode_index: expectedSelection.modeIndex,
@@ -2598,7 +2666,7 @@ async function fulfillFrequencyDomainFixtureResource(route, pathname, fixture, h
           },
           resourceKey: pathname,
           schemaVersion: "frequency_domain_eigen_mode_resource.v1",
-        })),
+        }, fixture)),
         contentType: "application/json",
         headers,
         status: 200,
@@ -2622,7 +2690,12 @@ function frequencyDomainManifestFixture(fixture) {
       : { spectrum_v2_path: "eigen/spectrum.v2.json" };
   const payload = {
     artifacts,
-    equilibrium_identity: "analysis-fixture-equilibrium",
+    ...(isResponse
+      ? { equilibrium_identity: "analysis-fixture-equilibrium" }
+      : {
+        ...(fixture.referenceImport ? { equilibrium_identity: frequencyDomainFixtureEquilibriumId(0) } : {}),
+        sample_execution_provenance: frequencyDomainFixtureSampleProvenance(fixture),
+      }),
     geometry_identity: "analysis-fixture-geometry",
     mesh_identity: "analysis-fixture-mesh",
     observables: [],
@@ -2649,6 +2722,8 @@ function frequencyDomainManifestFixture(fixture) {
     artifact_path: "frequency_domain/manifest.v1.json",
     artifact_set_id: "analysis-frequency-fixture-artifact-set",
     content_digest: payloadDigest,
+    generation_id: frequencyDomainFixtureGenerationId(fixture),
+    generation_status: "member_verified_owner_bound",
     mesh_generation_id: "analysis-fixture-mesh",
     payload,
     resource_key: FREQUENCY_DOMAIN_PATHS.manifest,
@@ -2757,12 +2832,14 @@ function frequencyDomainCapabilitiesFixture(calculationMode) {
   };
 }
 
-function frequencyDomainJsonArtifactFixture({ artifactPath, payload, resourceKey, schemaVersion }) {
+function frequencyDomainJsonArtifactFixture({ artifactPath, payload, resourceKey, schemaVersion }, fixture) {
   const contentDigest = sha256Digest(Buffer.from(JSON.stringify(payload), "utf8"));
   return {
     artifact_path: artifactPath,
     artifact_set_id: "analysis-frequency-fixture-artifact-set",
     content_digest: contentDigest,
+    generation_id: frequencyDomainFixtureGenerationId(fixture),
+    generation_status: "member_verified_owner_bound",
     mesh_generation_id: "analysis-fixture-mesh",
     missing_reason: null,
     payload,
@@ -2795,12 +2872,14 @@ function frequencyDomainUnavailableJsonArtifactFixture({ artifactPath, missingRe
   };
 }
 
-function frequencyDomainTextArtifactFixture(text) {
+function frequencyDomainTextArtifactFixture(text, fixture) {
   const contentDigest = sha256Digest(Buffer.from(text, "utf8"));
   return {
     artifact_path: "eigen/dispersion.csv",
     artifact_set_id: "analysis-frequency-fixture-artifact-set",
     content_digest: contentDigest,
+    generation_id: frequencyDomainFixtureGenerationId(fixture),
+    generation_status: "member_verified_owner_bound",
     content_type: "text/csv; charset=utf-8",
     mesh_generation_id: "analysis-fixture-mesh",
     missing_reason: null,
