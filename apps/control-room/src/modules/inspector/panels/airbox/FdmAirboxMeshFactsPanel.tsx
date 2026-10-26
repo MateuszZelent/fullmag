@@ -41,7 +41,9 @@ export function FdmAirboxMeshFactsPanel({
     resource,
     roleEvidence,
   });
-  const support = membership?.magnetic_support;
+  const membershipIsCurrent = model.status === "ready";
+  const currentMembership = membershipIsCurrent ? membership : null;
+  const support = currentMembership?.magnetic_support;
   const warning = model.status === "ready" ? null : model.notice;
 
   return (
@@ -54,11 +56,11 @@ export function FdmAirboxMeshFactsPanel({
         <InspectorGroup title="FDM Airbox quality" badge="structured-grid checks">
           <FieldRow
             label="Descriptor completeness"
-            value={model.status === "error" ? "failed" : "available"}
+            value={model.status}
           />
           <FieldRow
             label="Membership freshness"
-            value={membership?.freshness ?? "not materialized"}
+            value={membershipIsCurrent ? "current" : membership ? "not current for this grid" : "not materialized"}
           />
           <FieldRow label="FEM element quality" value="not applicable" />
         </InspectorGroup>
@@ -70,7 +72,7 @@ export function FdmAirboxMeshFactsPanel({
           <FieldRow label="Magnetic cells" value={count(support?.active_cell_count)} />
           <FieldRow
             label="Owner / region entries"
-            value={count(membership?.region_legend.length)}
+            value={count(currentMembership?.region_legend.length)}
           />
         </InspectorGroup>
       ) : null}
@@ -89,12 +91,12 @@ export function FdmAirboxMeshFactsPanel({
           <FieldRow label="Generation" value={model.generationId ?? "not materialized"} mono />
           <FieldRow
             label="Grid fingerprint"
-            value={membership?.grid_fingerprint ?? "not materialized"}
+            value={currentMembership?.grid_fingerprint ?? "not materialized or identity mismatch"}
             mono
           />
           <FieldRow
             label="Membership revision"
-            value={count(membership?.region_membership_revision)}
+            value={count(currentMembership?.region_membership_revision)}
           />
           <FieldRow label="Standalone mesh build" value="not applicable" />
         </InspectorGroup>

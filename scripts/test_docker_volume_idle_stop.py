@@ -197,10 +197,15 @@ class IdleStopFixture:
 class DockerVolumeIdleStopTests(unittest.TestCase):
     def _patches(self, fixture, drain):
         import docker_volume_stop_unadmitted as stop
+        import docker_volume_cancelled_activation_guard as cancelled_guard
 
         fixture.control.read.side_effect = fixture.read
         finish = patch.object(dev, "_finish")
         patchers = (
+            # This test covers the idle-stop boundary with no cancelled
+            # activation recovery record. The control-volume helper read is
+            # represented as an authenticated optional absence.
+            patch.object(cancelled_guard, "_read_control_bytes", return_value=None),
             patch.object(dev, "require_host"),
             patch.object(docker_dev, "_select_source", return_value=(SOURCE, {"runtime_root": Path("/state")})),
             patch.object(docker_dev, "_compose_identity", return_value=fixture.identity),

@@ -522,6 +522,11 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "airbox.multilayer.target";
     return {
       ...airboxStateFacets(node),
+      ...(node.contractGap !== undefined
+        ? { contractGap: node.contractGap }
+        : node.statusReason
+          ? { contractGap: node.statusReason }
+          : {}),
       kind: node.kind,
       nodeId: node.id,
       type: "airbox",

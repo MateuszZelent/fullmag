@@ -1123,6 +1123,10 @@ export function selectionRefEquals(
         right.type === "airbox" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        left.availability === right.availability &&
+        nullableStringEquals(left.contractGap, right.contractGap) &&
+        left.executionState === right.executionState &&
+        left.resourceState === right.resourceState &&
         nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
         (left.boundaryFaceIndex ?? null) ===
           (right.boundaryFaceIndex ?? null) &&

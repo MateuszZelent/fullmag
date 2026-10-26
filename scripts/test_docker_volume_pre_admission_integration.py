@@ -298,6 +298,7 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
     def _run(self, harness: _Harness, *, helper: types.ModuleType, accepted_module: types.ModuleType | None = None):
         import docker_build_control
         import docker_dev
+        import docker_volume_cancelled_activation_guard
         import docker_volume_activation_reconcile
         import docker_volume_dev as dev
 
@@ -307,6 +308,14 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
         identity = harness.identity
         started = mock.Mock(return_value={"started": True})
         patches = [
+            # The retained recreation cases in this harness have no cancelled
+            # activation recovery record; model that optional helper read as
+            # an authenticated absence while exercising the real guard.
+            mock.patch.object(
+                docker_volume_cancelled_activation_guard,
+                "_read_control_bytes",
+                return_value=None,
+            ),
             mock.patch.object(dev, "require_host"),
             mock.patch.object(docker_dev, "_select_source", return_value=(harness.source, {"runtime_root": str(harness.state)})),
             mock.patch.object(docker_dev, "_compose_identity", return_value=identity),

@@ -220,12 +220,16 @@ function membershipCompatible(
   descriptor: StructuredGridDescriptor,
   membership: FdmRegionMembershipResource,
   expectedFingerprint: string | null | undefined,
+  expectedGenerationId: string,
 ): boolean {
   const shape = tuple3(descriptor.shape, [0, 0, 0]);
   const spacing = tuple3(descriptor.spacing, [0, 0, 0]);
   const origin = tuple3(descriptor.origin, [0, 0, 0]);
   const expectedCellCount = gridCellCount(shape);
   return (
+    membership.domain_generation_id === expectedGenerationId &&
+    Number.isSafeInteger(membership.mesh_revision) &&
+    membership.mesh_revision > 0 &&
     membership.counts.length >= 3 &&
     membership.counts[0] === shape[0] &&
     membership.counts[1] === shape[1] &&
@@ -585,6 +589,7 @@ export function buildDomainPresentation(
         meta.grid,
         membership,
         input.expectedFdmGridFingerprint,
+        meta.generation_id,
       );
     const resourceStatus =
       !descriptorCellCountCompatible

@@ -69,6 +69,8 @@ import {
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_UNIVERSE_QUALITY_PATH,
+  MESHING_UNIVERSE_REPORT_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_MATERIAL_FIELDS_PATH,
   MODEL_READINESS_PATH,
@@ -1691,6 +1693,8 @@ describe("RealtimeInvalidationBridge", () => {
       DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
       scopedFdmMembershipKey,
       revisionScopedFdmMembershipKey,
+      MESHING_UNIVERSE_QUALITY_PATH,
+      MESHING_UNIVERSE_REPORT_PATH,
       DATA_MESH_REGION_MEMBERSHIPS_PATH,
     ]) {
       resources.subscribe(resourceKey, () => {});
@@ -1727,6 +1731,12 @@ describe("RealtimeInvalidationBridge", () => {
       "mesh-build-9",
     );
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(
+      "mesh-build-9",
+    );
+    expect(resources.getRevision(MESHING_UNIVERSE_QUALITY_PATH)).toBe(
+      "mesh-build-9",
+    );
+    expect(resources.getRevision(MESHING_UNIVERSE_REPORT_PATH)).toBe(
       "mesh-build-9",
     );
     expect(

@@ -6,11 +6,14 @@ import {
 
 import {
   airboxInspectorRuntimeStatusEquals,
+  hasPublishedFemTopologyInspectionLane,
   isExplicitFdmAirboxRuntime,
   isExplicitFemAirboxRuntime,
+  matchesAirboxTopologyIdentity,
   resolveAirboxInspectorLane,
   resolveAirboxInspectorAuthoringLane,
   selectAirboxInspectorRuntimeStatus,
+  shouldLoadAirboxMeshManifest,
 } from "./airboxInspectorRuntimeStatus";
 
 describe("airboxInspectorRuntimeStatus", () => {
@@ -26,8 +29,17 @@ describe("airboxInspectorRuntimeStatus", () => {
     ).toEqual({
       authoring: { method: "fem", state: "known", reason: null },
       capabilities: { explicit_topology: true },
-      domain: { discretization: "fem" },
-      resources: { mesh_build_revision: 7, mesh_revision: 8 },
+      domain: {
+        cell_count: undefined,
+        discretization: "fem",
+        generation_id: undefined,
+      },
+      resources: {
+        domain_generation_id: undefined,
+        mesh_build_revision: 7,
+        mesh_revision: 8,
+        topology_revision: undefined,
+      },
     });
   });
 
@@ -46,6 +58,18 @@ describe("airboxInspectorRuntimeStatus", () => {
         ...left!,
         domain: { discretization: "fem" },
       } as never),
+    ).toBe(false);
+    expect(
+      airboxInspectorRuntimeStatusEquals(left, {
+        ...left!,
+        domain: { ...left!.domain, generation_id: "generation-next" },
+      }),
+    ).toBe(false);
+    expect(
+      airboxInspectorRuntimeStatusEquals(left, {
+        ...left!,
+        resources: { ...left!.resources, topology_revision: 3 },
+      }),
     ).toBe(false);
   });
 
@@ -90,6 +114,77 @@ describe("airboxInspectorRuntimeStatus", () => {
     };
     expect(shouldLoadRuntimeMeshSummary(true, available)).toBe(true);
     expect(shouldLoadRuntimeMeshManifest(true, available)).toBe(true);
+  });
+
+  it("opens only the read-only FEM topology lane for a matching published unresolved artifact", () => {
+    const status = selectAirboxInspectorRuntimeStatus({
+      data: {
+        capabilities: {
+          explicit_topology: false,
+          active_lane: {
+            authored: { discretization: "fem" },
+            resolved: null,
+          },
+        },
+        domain: {
+          cell_count: 24,
+          discretization: "fem",
+          generation_id: "generation-7",
+        },
+        resources: {
+          domain_generation_id: "generation-7",
+          mesh_build_revision: 0,
+          mesh_revision: 11,
+          topology_revision: 12,
+        },
+      } as never,
+    });
+
+    expect(isExplicitFemAirboxRuntime(status)).toBe(false);
+    expect(hasPublishedFemTopologyInspectionLane(status)).toBe(true);
+    expect(shouldLoadAirboxMeshManifest(true, status)).toBe(true);
+    expect(matchesAirboxTopologyIdentity(status, {
+      generation_id: "generation-7",
+      revision: 11,
+    } as never)).toBe(true);
+    expect(matchesAirboxTopologyIdentity(status, {
+      generation_id: "generation-6",
+      revision: 11,
+    } as never)).toBe(false);
+    expect(matchesAirboxTopologyIdentity(status, {
+      generation_id: "generation-7",
+      revision: 10,
+    } as never)).toBe(false);
+  });
+
+  it.each([
+    { generation_id: "generation-6", cell_count: 24, mesh_revision: 11, topology_revision: 12 },
+    { generation_id: "generation-7", cell_count: 0, mesh_revision: 11, topology_revision: 12 },
+    { generation_id: "generation-7", cell_count: 24, mesh_revision: 0, topology_revision: 12 },
+    { generation_id: "generation-7", cell_count: 24, mesh_revision: 11, topology_revision: 0 },
+  ])("rejects incomplete or conflicting FEM artifact identity %#", (identity) => {
+    const status = selectAirboxInspectorRuntimeStatus({
+      data: {
+        capabilities: {
+          explicit_topology: false,
+          active_lane: { authored: { discretization: "fem" }, resolved: null },
+        },
+        domain: {
+          cell_count: identity.cell_count,
+          discretization: "fem",
+          generation_id: identity.generation_id,
+        },
+        resources: {
+          domain_generation_id: "generation-7",
+          mesh_build_revision: 0,
+          mesh_revision: identity.mesh_revision,
+          topology_revision: identity.topology_revision,
+        },
+      } as never,
+    });
+
+    expect(hasPublishedFemTopologyInspectionLane(status)).toBe(false);
+    expect(shouldLoadAirboxMeshManifest(true, status)).toBe(false);
   });
 
   it("treats only an explicit current FDM lane as FDM Airbox semantics", () => {

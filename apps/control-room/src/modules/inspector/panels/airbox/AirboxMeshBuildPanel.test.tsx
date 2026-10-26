@@ -180,15 +180,20 @@ describe("AirboxMeshBuildPanel", () => {
     expect(html).toContain("meshing/manifest/7");
     expect(html).toContain("mesh-6");
     expect(html).toContain("Latest Successful Build");
+    expect(html).toContain("Build history resource revision");
+    expect(html).not.toContain("Latest successful revision");
+    expect(html).toContain("Artifact");
+    expect(html).toContain("published");
   });
 
   it("renders bounded metadata instead of an oversized universe report", () => {
     testState.meshBuildRevision = 8;
+    testState.meshRevision = 7;
     testState.current = null;
     testState.latest = null;
     testState.report = {
       report: { payload: "x".repeat(5_000), status: "FAILED" },
-      revision: 8,
+      revision: 7,
     };
 
     const html = renderToStaticMarkup(

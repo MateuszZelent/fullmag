@@ -1017,7 +1017,9 @@ async function loadCachedBinaryResourceEntry<TData, TMetadata = undefined>(
     recordVisualizationDebugPerformanceMetric("cacheMisses");
   }
   const inflight = getInflightBinaryResource(cache, key);
-  if (inflight) {
+  // An entry whose last consumer aborted stays registered until its promise
+  // settles; joining it would hand a fresh load that abort as its own result.
+  if (inflight && !inflight.controller.signal.aborted) {
     retainInflightBinaryResource(inflight, options.signal);
     return inflight.promise as Promise<ResourceCacheEntry<TData, TMetadata> | null>;
   }

@@ -22,6 +22,12 @@ export function boundedItems<T>(items: readonly T[]): readonly T[] {
   return items.slice(0, AIRBOX_DISPLAY_MAX_ITEMS);
 }
 
+export function airboxEffectiveLengthUnit(key: string): "m" | undefined {
+  return ["airbox_hmax", "airbox_hmin", "padding", "size", "center"].includes(key)
+    ? "m"
+    : undefined;
+}
+
 export function AirboxFieldRow(props: ComponentProps<typeof FieldRow>) {
   const value = typeof props.value === "string" || typeof props.value === "number"
     ? boundedDisplayText(String(props.value)) ?? ""

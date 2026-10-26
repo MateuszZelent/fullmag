@@ -914,14 +914,14 @@ function checkMeshDetailsPanelSessionStatusSelector() {
 function checkAirboxInspectorPanelsResourceOwnership() {
   const readPanel = (file) =>
     readFileSync(path.join(airboxInspectorPanelsPath, file), "utf8");
-  const manifestPattern = /useMeshSharedDomainManifestResource\s*\(\s*\{\s*enabled:\s*shouldLoadRuntimeMeshManifest\s*\(\s*true\s*,\s*runtimeStatus\s*\)\s*,?\s*\}\s*\)/s;
+  const manifestPattern = /useMeshSharedDomainManifestResource\s*\(\s*\{\s*enabled:\s*shouldLoadAirboxMeshManifest\s*\(\s*true\s*,\s*runtimeStatus\s*\)\s*,?\s*\}\s*\)/s;
   for (const file of [
     "AirboxOverviewPanel.tsx",
     "AirboxMeshOverviewPanel.tsx",
     "AirboxMeshTopologyPanel.tsx",
   ]) {
     requirePatterns(readPanel(file), `${file} manifest gate`, [
-      [manifestPattern, "manifest hook gated by shouldLoadRuntimeMeshManifest"],
+      [manifestPattern, "manifest hook gated by shouldLoadAirboxMeshManifest"],
     ]);
   }
 
@@ -960,7 +960,7 @@ function checkAirboxInspectorPanelsResourceOwnership() {
     "authored.airbox_center",
   ]);
   requireTokens(readPanel("AirboxMeshTopologyPanel.tsx"), "Airbox topology marker honesty", [
-    'label="Canonical marker" value="not published"',
+    'label="Canonical marker" value="not published by the topology manifest"',
   ]);
 
   requirePatterns(

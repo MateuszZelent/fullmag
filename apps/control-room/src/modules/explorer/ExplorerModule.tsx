@@ -73,6 +73,7 @@ import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResource
 import { useObservationFrameListResource } from "@/kernel/resources/observationFrameResources";
 import { useCurrentTransportsResource } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { matchesAirboxTopologyIdentity } from "@/kernel/resources/meshTopologyIdentity";
 import {
   usePlatformCapabilitiesResource,
   usePlatformHealthResource,
@@ -727,6 +728,40 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         (modelSnapshot.objects ?? []).map((object) => object.id),
       ),
     });
+    const currentSceneRevision = modelResource.status === "ready"
+      ? revisionValue(modelResourceRecord?.revision ?? modelResourceRecord?.scene_revision)
+      : null;
+    const currentManifestParts = Array.isArray(manifest.data?.mesh_parts)
+      ? manifest.data.mesh_parts
+      : null;
+    const manifestSceneRevision = revisionValue(manifest.data?.source_scene_revision);
+    const sceneRevisionMatches = currentSceneRevision !== null &&
+      manifestSceneRevision !== null &&
+      String(currentSceneRevision) === String(manifestSceneRevision);
+    const topologyIdentityMatches = matchesAirboxTopologyIdentity(
+      sessionStatusData,
+      manifest.data,
+    );
+    const outerBoundaryEvidenceStatus: NonNullable<
+      ModelTreeMeshSnapshot["outerBoundaryEvidenceStatus"]
+    > = manifest.status === "error" || modelResource.status === "error"
+      ? "error"
+      : manifest.status === "stale" || modelResource.status === "stale"
+        ? "stale"
+        : manifest.status === "loading" || modelResource.status === "loading"
+          ? "loading"
+          : manifest.status === "ready" && modelResource.status === "ready"
+            ? currentSceneRevision !== null && manifestSceneRevision !== null &&
+                !sceneRevisionMatches
+              ? "stale"
+              : topologyIdentityMatches && sceneRevisionMatches && currentManifestParts !== null
+                ? "verified"
+                : "unknown"
+            : "unknown";
+    const outerBoundaryPartCount = outerBoundaryEvidenceStatus === "verified" &&
+      currentManifestParts !== null
+      ? currentManifestParts.filter(isUniverseOuterBoundaryCarrier).length
+      : null;
     const mesh: ModelTreeMeshSnapshot = {
       activeBuildStatus: meshPipelineStatusIsActive(activeBuildStatus)
         ? activeBuildStatus
@@ -747,8 +782,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       meshName: manifest.data?.mesh_name,
       meshRevision: meshSummary.data?.revision ?? manifest.data?.revision,
       objectSegmentCount: manifest.data?.object_segments?.length ?? null,
-      outerBoundaryPartCount:
-        manifest.data?.mesh_parts?.filter(isUniverseOuterBoundaryCarrier).length ?? null,
+      outerBoundaryEvidenceStatus,
+      outerBoundaryPartCount,
       partCount: manifest.data?.mesh_parts?.length ?? null,
       qualityStatus: qualityStatus(qualityGates.data?.gates),
       realizedSizeFieldCount:
@@ -966,6 +1001,28 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     if (selectionRefEquals(selectedRef, currentRef)) return;
     selectExplorerNode(kernel, currentNode, "explorer");
   }, [activeTab, baseNodes, kernel, nodes, selectedNodeId, selectedRef]);
+
+  useEffect(() => {
+    if (
+      !modelTabActive ||
+      selectedRef?.type !== "airbox" ||
+      !selectedNodeId
+    ) {
+      return;
+    }
+    const currentNode = resolveCurrentExplorerSelectionNode(
+      baseNodes,
+      selectedNodeId,
+      selectedRef,
+      baseNodes,
+    );
+    if (!currentNode || !currentNode.kind.startsWith("airbox.")) return;
+    const currentRef = selectionRefFromNode(currentNode);
+    if (selectionRefEquals(selectedRef, currentRef)) return;
+    // Refresh only the selected node's resource facets. Selection identity and
+    // inspector routing remain stable as mesh resources invalidate.
+    selectExplorerNode(kernel, currentNode, "explorer");
+  }, [baseNodes, kernel, modelTabActive, selectedNodeId, selectedRef]);
 
   useEffect(() => {
     const unsubscribe = subscribeExplorerTextureLoadNodeRequested(

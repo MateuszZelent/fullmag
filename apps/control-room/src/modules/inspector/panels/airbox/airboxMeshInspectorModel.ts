@@ -8,6 +8,7 @@ import type {
   MeshUniverseQualityResource,
   MeshUniverseReportResource,
 } from "@/kernel/api/apiTypes";
+import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import {
   isVisualizationAirboxId,
   isVisualizationAirboxRole,
@@ -64,11 +65,12 @@ export interface AirboxMeshBuildModel {
   freshness: "current" | "stale" | "unknown";
   status: "current" | "degraded" | "missing";
   latestSuccess: {
+    artifactPublished: boolean;
     effectiveAirboxTarget: JsonRecord | null;
     geometryRealizationRevision: number | null;
     lastBuildError: string | null;
     lastSuccess: unknown;
-    revision: number | null;
+    resourceRevision: number | null;
     sourceSceneRevision: number | null;
   };
 }
@@ -115,11 +117,18 @@ export function buildAirboxMeshBuildModel({
     stringField(reportRecord, "error"),
   );
   const missing = !current && !report;
+  const latestSuccessArtifact = asJsonRecord(latest?.last_success);
+  const latestSuccessArtifactPublished = latestSuccessArtifact !== null;
+  const latestSuccessGeometryRealization = asJsonRecord(
+    latestSuccessArtifact?.geometry_realization,
+  );
   const sourceSceneRevision =
     current?.source_scene_revision ??
     current?.provenance?.source_scene_revision ??
     null;
   const sceneRevision = finiteRevision(currentSceneRevision);
+  const reportTarget = asJsonRecord(reportRecord?.effective_airbox_target);
+  const summaryTarget = asJsonRecord(current?.last_build_summary?.effective_airbox_target);
   const freshness =
     sourceSceneRevision === null || sceneRevision === null
       ? "unknown"
@@ -129,7 +138,10 @@ export function buildAirboxMeshBuildModel({
   return {
     buildMode: boundedDisplayText(buildReport?.build_mode),
     effectiveAirboxTarget: asJsonRecord(
-      buildReport?.effective_airbox_target ?? current?.effective_airbox_target,
+      buildReport?.effective_airbox_target ??
+        current?.effective_airbox_target ??
+        summaryTarget ??
+        reportTarget,
     ),
     fallbacks: fallbacks.map((fallback) => boundedDisplayText(fallback) ?? ""),
     fallbacksPublished,
@@ -195,13 +207,20 @@ export function buildAirboxMeshBuildModel({
     freshness,
     status: missing ? "missing" : degraded ? "degraded" : "current",
     latestSuccess: {
+      artifactPublished: latestSuccessArtifactPublished,
       effectiveAirboxTarget: asJsonRecord(latest?.effective_airbox_target),
       geometryRealizationRevision:
-        latest?.geometry_realization_revision ?? null,
+        latestSuccessArtifactPublished
+          ? numericField(latestSuccessArtifact, "realization_revision") ??
+            numericField(latestSuccessGeometryRealization, "realization_revision")
+          : null,
       lastBuildError: boundedDisplayText(latest?.last_build_error),
       lastSuccess: null,
-      revision: latest?.revision ?? null,
-      sourceSceneRevision: latest?.source_scene_revision ?? null,
+      resourceRevision: latest?.revision ?? null,
+      sourceSceneRevision: latestSuccessArtifactPublished
+        ? numericField(latestSuccessArtifact, "source_scene_revision") ??
+          numericField(latestSuccessGeometryRealization, "source_scene_revision")
+        : null,
     },
   };
 }
@@ -276,8 +295,19 @@ export interface AirboxMeshInspectorModel {
   };
   qualityGates: {
     evidence: "backend" | "ui-derived";
+    marker: number | null;
     reason: string;
+    scope: string | null;
+    source: string | null;
     status: "pass" | "fail" | "unknown";
+    checks: readonly {
+      comparison: string | null;
+      id: string;
+      status: "pass" | "fail" | "unknown";
+      threshold: number | null;
+      unit: string | null;
+      value: number | null;
+    }[];
   };
   statistics: {
     boundaryFaceCount: number | null;
@@ -288,6 +318,8 @@ export interface AirboxMeshInspectorModel {
     tet4Count: number | null;
     volumeElementCountScope: "airbox-parts" | "shared-domain" | "unpublished";
     volumeElementsByType: readonly { count: number; family: string }[];
+    qualityByFamily: readonly AirboxMeshFamilyQuality[];
+    qualityScope: { label: string | null; marker: number | null };
   };
   topology: {
     bounds: { max: readonly number[]; min: readonly number[] } | null;
@@ -297,6 +329,109 @@ export interface AirboxMeshInspectorModel {
       ownership: "shared";
     };
   };
+}
+
+export interface AirboxMeshFamilyQualityMetric {
+  belowThresholdCount: number | null;
+  belowThresholdFraction: number | null;
+  max: number | null;
+  mean: number | null;
+  min: number | null;
+  p05: number | null;
+  reason: string | null;
+  source: string | null;
+  status: "available" | "unavailable" | "unknown";
+  threshold: number | null;
+}
+
+export interface AirboxMeshFamilyQuality {
+  cellCount: number | null;
+  family: string;
+  gamma: AirboxMeshFamilyQualityMetric | null;
+  mixedTopologyScaledJacobian: AirboxMeshFamilyQualityMetric & {
+    metric: string | null;
+    certificateFingerprint: string | null;
+  } | null;
+  sicn: AirboxMeshFamilyQualityMetric | null;
+  source: string | null;
+}
+
+export function airboxSizeDistributionPresentation(distribution: {
+  id: "edge_length" | "tetra_size" | "volume";
+  label: string;
+}): { label: string; unit: "m" | "m³" } {
+  return {
+    label: distribution.id === "tetra_size"
+      ? "Equivalent tetrahedral size"
+      : distribution.label,
+    unit: distribution.id === "volume" ? "m³" : "m",
+  };
+}
+
+function currentAirboxMeshEvidence<T extends { revision: number }>(
+  resource: Pick<
+    ResourceResult<T>,
+    "data" | "error" | "refreshError" | "status"
+  >,
+  topologyIdentityMatches: boolean,
+  currentMeshRevision: number | null | undefined,
+): T | null {
+  if (
+    !topologyIdentityMatches ||
+    resource.status !== "ready" ||
+    resource.error ||
+    resource.refreshError ||
+    !resource.data ||
+    !matchesCurrentAirboxMeshRevision(
+      resource.data.revision,
+      currentMeshRevision,
+    )
+  ) {
+    return null;
+  }
+  return resource.data;
+}
+
+export function matchesCurrentAirboxMeshRevision(
+  resourceRevision: number | null | undefined,
+  currentMeshRevision: number | null | undefined,
+): boolean {
+  return (
+    typeof currentMeshRevision === "number" &&
+    Number.isSafeInteger(currentMeshRevision) &&
+    currentMeshRevision > 0 &&
+    resourceRevision === currentMeshRevision
+  );
+}
+
+export function currentAirboxQualityEvidence(
+  resource: Pick<
+    ResourceResult<MeshUniverseQualityResource>,
+    "data" | "error" | "refreshError" | "status"
+  >,
+  topologyIdentityMatches: boolean,
+  currentMeshRevision: number | null | undefined,
+): MeshUniverseQualityResource | null {
+  return currentAirboxMeshEvidence(
+    resource,
+    topologyIdentityMatches,
+    currentMeshRevision,
+  );
+}
+
+export function currentAirboxReportEvidence(
+  resource: Pick<
+    ResourceResult<MeshUniverseReportResource>,
+    "data" | "error" | "refreshError" | "status"
+  >,
+  topologyIdentityMatches: boolean,
+  currentMeshRevision: number | null | undefined,
+): MeshUniverseReportResource | null {
+  return currentAirboxMeshEvidence(
+    resource,
+    topologyIdentityMatches,
+    currentMeshRevision,
+  );
 }
 
 export function findCanonicalAirboxPart(
@@ -519,24 +654,25 @@ export function buildAirboxMeshInspectorModel({
   const airboxBounds = aggregateAirboxBounds(airboxParts);
   const reportRecord = asJsonRecord(report?.report);
   const qualityRecord = asJsonRecord(quality?.quality);
-  const resolvedTarget = asJsonRecord(summary?.effective_airbox_target);
-  const evidenceRevisions = [manifest?.revision, quality?.revision, report?.revision]
-    .filter((revision): revision is number => typeof revision === "number");
-  const oldestEvidenceRevision = evidenceRevisions.length
-    ? Math.min(...evidenceRevisions)
-    : null;
-  const stale =
-    oldestEvidenceRevision !== null && oldestEvidenceRevision < policy.revision;
+  const reportTarget = asJsonRecord(reportRecord?.effective_airbox_target);
+  const resolvedTarget =
+    asJsonRecord(summary?.effective_airbox_target) ?? reportTarget;
   const sceneRevision = finiteRevision(currentSceneRevision);
   const sourceSceneRevision = finiteRevision(manifest?.source_scene_revision);
   const sceneEvidenceStale =
     sceneRevision !== null &&
-    (sourceSceneRevision === null || sourceSceneRevision !== sceneRevision);
+    sourceSceneRevision !== null &&
+    sourceSceneRevision !== sceneRevision;
+  const sceneEvidenceCurrent =
+    sceneRevision !== null &&
+    sourceSceneRevision !== null &&
+    sourceSceneRevision === sceneRevision;
   const reportStatus = stringField(reportRecord, "status");
   const reportReason = stringField(reportRecord, "reason");
   const reportError = stringField(reportRecord, "error");
   const reportDegraded =
     isDegradedBuildStatus(reportStatus) || reportError !== null;
+  const globalQuality = asJsonRecord(qualityRecord?.global);
   const airboxElementCountsByType = aggregateElementCountsByType(airboxParts);
   const sharedDomainElementCountsByType = asJsonRecord(
     asJsonRecord(manifest)?.element_counts_by_type,
@@ -575,25 +711,30 @@ export function buildAirboxMeshInspectorModel({
             revision: report.revision,
             status: "complete",
           },
-    lifecycle: stale || sceneEvidenceStale
+    lifecycle: sceneEvidenceStale
       ? {
-          reason: sceneEvidenceStale
-            ? sourceSceneRevision === null
-              ? "Mesh evidence does not publish a source scene revision."
-              : `Mesh source scene revision ${sourceSceneRevision} is older than current scene revision ${sceneRevision}.`
-            : `Mesh evidence revision ${oldestEvidenceRevision} is older than policy revision ${policy.revision}.`,
+          reason: `Mesh source scene revision ${sourceSceneRevision} does not match current scene revision ${sceneRevision}.`,
           status: "stale",
         }
-      : oldestEvidenceRevision === null
-        ? { reason: "No realized mesh evidence is available.", status: "missing" }
-        : { reason: "Mesh evidence is current with the authored policy.", status: "current" },
+      : !manifest || !sceneEvidenceCurrent
+        ? {
+            reason: manifest
+              ? "Source scene provenance is unavailable; mesh freshness cannot be verified."
+              : "No realized mesh evidence is available.",
+            status: "missing",
+          }
+        : { reason: "Mesh source scene provenance matches the current scene.", status: "current" },
     parameters: {
       authored: policy.config ?? null,
       effective: policy.effective_config ?? null,
       resolvedTarget,
     },
     qualityGates: buildAirboxQualityGateModel(qualityRecord, {
-      stale: sceneEvidenceStale,
+      freshness: sceneEvidenceStale
+        ? "stale"
+        : sceneEvidenceCurrent
+          ? "current"
+          : "unknown",
     }),
     statistics: {
       boundaryFaceCount: meshPartAggregate.boundaryFaceCount,
@@ -604,6 +745,11 @@ export function buildAirboxMeshInspectorModel({
       tet4Count: numericField(elementCountsByType, "tet4"),
       volumeElementCountScope,
       volumeElementsByType,
+      qualityByFamily: normalizeAirboxFamilyQuality(globalQuality?.quality_by_family),
+      qualityScope: {
+        label: stringField(globalQuality, "label"),
+        marker: numericField(globalQuality, "marker"),
+      },
     },
     topology: {
       bounds:
@@ -621,31 +767,154 @@ export function buildAirboxMeshInspectorModel({
 
 function buildAirboxQualityGateModel(
   quality: JsonRecord | null,
-  options: { stale?: boolean } = {},
+  options: { freshness?: "current" | "stale" | "unknown" } = {},
 ) {
   const scoped = asJsonRecord(quality?.airbox_quality_gates);
   if (!scoped) {
     return {
       evidence: "backend" as const,
       reason: "Airbox-scoped quality gates are not published by the backend.",
+      scope: null,
+      marker: null,
+      source: null,
       status: "unknown" as const,
-    };
-  }
-  if (options.stale) {
-    return {
-      evidence: "backend" as const,
-      reason: "Airbox quality gates are stale for the current scene revision.",
-      status: "unknown" as const,
+      checks: [],
     };
   }
   const status = stringField(scoped, "status");
+  const scope = stringField(scoped, "scope");
+  const marker = numericField(scoped, "marker");
+  const source = stringField(scoped, "source");
+  const checks = normalizeQualityGateChecks(scoped.checks);
+  if (options.freshness !== "current") {
+    return {
+      evidence: "backend" as const,
+      reason: options.freshness === "stale"
+        ? "Airbox quality gates are stale for the current source scene."
+        : "Airbox quality gate source scene provenance is not verified.",
+      scope,
+      marker,
+      source,
+      status: "unknown" as const,
+      checks,
+    };
+  }
+  if (scope !== "airbox" || marker !== 0 || !source) {
+    return {
+      evidence: "backend" as const,
+      reason: "Backend quality evidence does not identify Airbox marker 0 and its source.",
+      scope,
+      marker,
+      source,
+      status: "unknown" as const,
+      checks,
+    };
+  }
   return {
     evidence: "backend" as const,
     reason:
       stringField(scoped, "reason") ??
       (status ? `Backend Airbox gate status is ${status}.` : "Backend did not provide a gate reason."),
+    scope,
+    marker,
+    source,
     status: status === "pass" ? ("pass" as const) : status === "fail" ? ("fail" as const) : ("unknown" as const),
+    checks,
   };
+}
+
+function normalizeAirboxFamilyQuality(value: unknown): AirboxMeshFamilyQuality[] {
+  const families = asJsonRecord(value);
+  if (!families) return [];
+  return Object.entries(families).flatMap(([family, raw]) => {
+    const record = asJsonRecord(raw);
+    if (!record) return [];
+    const mixedMetric = normalizeMixedTopologyScaledJacobian(
+      record.mixed_topology_scaled_jacobian,
+    );
+    const mixedRecord = asJsonRecord(record.mixed_topology_scaled_jacobian);
+    const mixed = mixedMetric
+      ? {
+          ...mixedMetric,
+          metric: stringField(mixedRecord, "metric"),
+          certificateFingerprint:
+            stringField(mixedRecord, "certificate_fingerprint") ??
+            stringField(mixedRecord, "topology_fingerprint"),
+        }
+      : null;
+    return [{
+      cellCount: safeMeshCount(record.cell_count),
+      family,
+      gamma: normalizeFamilyMetric(record.gamma),
+      mixedTopologyScaledJacobian: mixed,
+      sicn: normalizeFamilyMetric(record.sicn),
+      source: stringField(record, "source"),
+    }];
+  });
+}
+
+function normalizeMixedTopologyScaledJacobian(
+  value: unknown,
+): AirboxMeshFamilyQualityMetric | null {
+  const record = asJsonRecord(value);
+  if (!record) return null;
+  if (stringField(record, "status") === "unavailable") {
+    return normalizeFamilyMetric(record);
+  }
+  if (
+    numericField(record, "min") === null &&
+    numericField(record, "p05") === null
+  ) {
+    return normalizeFamilyMetric(record);
+  }
+  return {
+    belowThresholdCount: null,
+    belowThresholdFraction: null,
+    max: null,
+    mean: null,
+    min: numericField(record, "min"),
+    p05: numericField(record, "p05"),
+    reason: null,
+    source: stringField(record, "source"),
+    status: "available",
+    threshold: null,
+  };
+}
+
+function normalizeFamilyMetric(value: unknown): AirboxMeshFamilyQualityMetric | null {
+  const record = asJsonRecord(value);
+  if (!record) return null;
+  const status = stringField(record, "status");
+  return {
+    belowThresholdCount: safeMeshCount(record.below_threshold_count),
+    belowThresholdFraction: numericField(record, "below_threshold_fraction"),
+    max: numericField(record, "max"),
+    mean: numericField(record, "mean"),
+    min: numericField(record, "min"),
+    p05: numericField(record, "p05"),
+    reason: stringField(record, "reason"),
+    source: stringField(record, "source"),
+    status: status === "available" ? "available" : status === "unavailable" ? "unavailable" : "unknown",
+    threshold: numericField(record, "threshold"),
+  };
+}
+
+function normalizeQualityGateChecks(value: unknown): AirboxMeshInspectorModel["qualityGates"]["checks"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw) => {
+    const record = asJsonRecord(raw);
+    const id = stringField(record, "id");
+    if (!record || !id) return [];
+    const status = stringField(record, "status");
+    return [{
+      comparison: stringField(record, "comparison"),
+      id,
+      status: status === "pass" ? "pass" as const : status === "fail" ? "fail" as const : "unknown" as const,
+      threshold: numericField(record, "threshold"),
+      unit: stringField(record, "unit"),
+      value: numericField(record, "value"),
+    }];
+  });
 }
 
 function asJsonRecord(value: unknown): JsonRecord | null {

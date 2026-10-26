@@ -169,11 +169,12 @@ pub(crate) fn spawn(state: Arc<AppState>) {
         let mut interval = tokio::time::interval(POLL_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut cursor: Option<ProjectionCursor> = None;
+        let mut study_cache: Option<Arc<fullmag_runtime_control::AcceptedStudySnapshot>> = None;
         // The poll repeats every interval; report each distinct deferral once.
         let mut last_deferral: Option<String> = None;
         loop {
             interval.tick().await;
-            match poll_once(&state, &mut cursor).await {
+            match poll_once(&state, &mut cursor, &mut study_cache).await {
                 Ok(()) => {
                     last_deferral = None;
                     // This poller is the Docker runtime's publication path. A
@@ -204,6 +205,7 @@ pub(crate) fn spawn(state: Arc<AppState>) {
 async fn poll_once(
     state: &Arc<AppState>,
     cursor: &mut Option<ProjectionCursor>,
+    study_cache: &mut Option<Arc<fullmag_runtime_control::AcceptedStudySnapshot>>,
 ) -> Result<(), ApiError> {
     let Some(context) = capture_context(state).await? else {
         return Ok(());
@@ -217,6 +219,8 @@ async fn poll_once(
             && previous.session_epoch == context.session_epoch
             && matches!(previous.status, "completed" | "failed" | "cancelled")
     }) {
+        // Release the projected run's Study; a next run has its own intent.
+        *study_cache = None;
         return Ok(());
     }
     let Some(store_root) = state.submit_store_root.clone() else {
@@ -224,11 +228,20 @@ async fn poll_once(
     };
     let expected = context.clone();
     let previous_cursor = cursor.clone();
-    let projection = tokio::task::spawn_blocking(move || {
-        load_durable_projection(&store_root, &expected, previous_cursor.as_ref())
+    let mut cached_study = study_cache.take();
+    let (projection, cached_study) = tokio::task::spawn_blocking(move || {
+        let projection = load_durable_projection(
+            &store_root,
+            &expected,
+            previous_cursor.as_ref(),
+            &mut cached_study,
+        );
+        (projection, cached_study)
     })
     .await
-    .map_err(|error| ApiError::internal(format!("accepted projection task failed: {error}")))??;
+    .map_err(|error| ApiError::internal(format!("accepted projection task failed: {error}")))?;
+    *study_cache = cached_study;
+    let projection = projection?;
     let Some(mut projection) = projection else {
         return Ok(());
     };
@@ -382,6 +395,7 @@ fn load_durable_projection(
     store_root: &std::path::Path,
     context: &ProjectionContext,
     previous_cursor: Option<&ProjectionCursor>,
+    study_cache: &mut Option<Arc<fullmag_runtime_control::AcceptedStudySnapshot>>,
 ) -> Result<Option<DurableProjection>, ApiError> {
     let store = fullmag_session::SessionStore::open_existing(store_root).map_err(|error| {
         ApiError::with_status_and_code(
@@ -526,16 +540,7 @@ fn load_durable_projection(
             "accepted RunIntent specification differs from the current live run",
         ));
     }
-    let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
-        &store,
-        &specification.run_id,
-        &specification.snapshot.project_id,
-    )
-    .map_err(|error| {
-        ApiError::conflict(format!(
-            "accepted Study snapshot cannot be loaded for projection: {error:#}"
-        ))
-    })?;
+    let accepted = cached_accepted_study_snapshot(&store, &intent, &specification, study_cache)?;
     let task_order = accepted
         .lowered
         .steps
@@ -745,6 +750,35 @@ fn load_durable_projection(
         live_magnetization_sequence,
         stage_execution,
     }))
+}
+
+/// The accepted Study is a pure function of the immutable RunIntent and the
+/// content-addressed objects it names. Loading it reads, re-hashes, decodes
+/// and lowers the whole per-step ProblemIR catalog (tens of MB for a large
+/// grid or mesh), so a running task reuses the snapshot validated for the
+/// identical intent instead of rebuilding it on every poll.
+fn cached_accepted_study_snapshot(
+    store: &fullmag_session::SessionStore,
+    intent: &fullmag_session::FmsRunIntent,
+    specification: &fullmag_application::RunSpecification,
+    cache: &mut Option<Arc<fullmag_runtime_control::AcceptedStudySnapshot>>,
+) -> Result<Arc<fullmag_runtime_control::AcceptedStudySnapshot>, ApiError> {
+    if let Some(cached) = cache.as_ref().filter(|cached| cached.run.intent == *intent) {
+        return Ok(Arc::clone(cached));
+    }
+    let snapshot = fullmag_runtime_control::load_accepted_study_snapshot(
+        store,
+        &specification.run_id,
+        &specification.snapshot.project_id,
+    )
+    .map_err(|error| {
+        ApiError::conflict(format!(
+            "accepted Study snapshot cannot be loaded for projection: {error:#}"
+        ))
+    })?;
+    let snapshot = Arc::new(snapshot);
+    *cache = Some(Arc::clone(&snapshot));
+    Ok(snapshot)
 }
 
 /// Rebuild plan-scoped provider capabilities only after the accepted state has

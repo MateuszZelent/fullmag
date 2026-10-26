@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 module = importlib.import_module("docker_volume_activation_reconcile")
+cancelled_activation_guard = importlib.import_module("docker_volume_cancelled_activation_guard")
 from docker_build_control import BuildControl, BuildControlError, canonical, control_read_script
 
 
@@ -103,6 +104,18 @@ def reconciliation_receipt(*, state: str = "failed-confirmed") -> dict[str, obje
     }
 
 
+def _read_absent_cancelled_activation_recovery(
+    _control: object,
+    relative: str,
+    *,
+    optional: bool = False,
+    **_kwargs: object,
+) -> None:
+    if relative != cancelled_activation_guard.RECORD or not optional:
+        raise AssertionError("expected the optional cancelled-activation recovery record")
+    return None
+
+
 class UnknownActivationTests(unittest.TestCase):
     def test_control_read_authenticates_parent_chain_before_optional_absence(self) -> None:
         script = control_read_script("/control/activation/attempts/" + ATTEMPT + "/receipt.json")
@@ -166,7 +179,11 @@ class UnknownActivationTests(unittest.TestCase):
         def read_json(_control, relative, optional=False):
             return record if relative == "activation/unresolved.json" else None
 
-        with patch.object(module, "_read_json", side_effect=read_json):
+        with patch.object(
+            cancelled_activation_guard,
+            "_read_control_bytes",
+            side_effect=_read_absent_cancelled_activation_recovery,
+        ), patch.object(module, "_read_json", side_effect=read_json):
             with self.assertRaisesRegex(BuildControlError, "unknown outcome"):
                 module.assert_no_unresolved_activation(
                     Control(),
@@ -241,7 +258,11 @@ class UnknownActivationTests(unittest.TestCase):
                 module._probe_helper_absence(helper_name)
 
     def test_no_quarantine_allows_guard_to_finish_without_docker(self) -> None:
-        with patch.object(module, "_read_json", return_value=None):
+        with patch.object(
+            cancelled_activation_guard,
+            "_read_control_bytes",
+            side_effect=_read_absent_cancelled_activation_recovery,
+        ), patch.object(module, "_read_json", return_value=None):
             module.assert_no_unresolved_activation(
                 Control(),
                 development_attempt=DEV_ATTEMPT,

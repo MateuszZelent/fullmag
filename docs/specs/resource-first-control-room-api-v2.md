@@ -1423,6 +1423,29 @@ the unsupported request at the same mesh revision.
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/quality` | `GET` | Read object mesh quality diagnostics; when the object marker is known, `quality.global` is the object's mesh-quality scope. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/size-field` | `GET` | Read object realized size-field projection. |
 
+Zasób `universe/quality` opisuje marker `0`, a nie całą domenę. Pole
+`quality.airbox_quality_gates` zawiera `status` (`pass`, `fail`, `unknown`),
+`reason`, zakres `airbox`, źródło, liczbę elementów i listę `checks`
+(`id`, `status`, `value`, `threshold`, `comparison`, `unit`). Bramka wymaga
+zgodności liczby elementów z opublikowaną siatką oraz pochodzenia Gmsh;
+brak miary lub niezgodne pokrycie nie oznaczają akceptacji. Gamma nie
+kwalifikuje piramid ani heksaedrów. Ten wynik nie zastępuje pełnej kwalifikacji
+naukowej ani dowodów certyfikatu mixed-P1.
+
+`universe/report` publikuje `report.shared_interface_node_count`: liczbę
+unikalnych węzłów należących jednocześnie do komórek markera `0` oraz
+co najmniej jednego markera materiałowego. Źródłem jest kanoniczna
+konektywność, nie przybliżone zakresy segmentów. Niepełne członkostwo lub
+nieprawidłowe indeksy dają `null`. Parametry efektywne są odczytywane także
+z raportu opublikowanej siatki; `null` na wyższym poziomie nie przesłania
+istniejącego raportu. Parametry efektywne opisują ustawienia generatora,
+a nie osiągnięty rozmiar każdego elementu.
+
+Inspector może wyświetlać zgodny artefakt FEM przy nierozstrzygniętym
+wykonaniu solvera. Samo istnienie artefaktu nie rozstrzyga aktywnego backendu
+i nie odblokowuje poleceń wykonawczych. Zasoby zachowują kontrolę aktualności
+rewizji, a stan nieopublikowany, ładowanie i błąd są prezentowane oddzielnie.
+
 Certyfikat rozłącznych ciał mixed-P1 v2 jest addytywnym, opcjonalnym polem
 `mixed_layer_topology_certificate_v2` w raporcie i manifeście shared-domain.
 Podsumowanie zawiera wersję, status, fingerprint, wersję Gmsh oraz

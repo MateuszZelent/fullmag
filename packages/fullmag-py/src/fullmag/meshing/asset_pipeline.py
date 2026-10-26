@@ -56,7 +56,7 @@ from ._gmsh_swept import (
     generate_disconnected_mixed_p1_mesh,
     _supports_scoped_layer_partitioned_box,
 )
-from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS
+from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, MeshQualityReport
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -101,6 +101,80 @@ class MeshQualityUnavailableError(ValueError):
             },
         }
 
+
+def _rekey_per_domain_quality_for_markers(
+    source_markers: np.ndarray | list[int],
+    assigned_markers: np.ndarray | list[int],
+    per_domain_quality: Mapping[int, MeshQualityReport] | None,
+) -> dict[int, MeshQualityReport] | None:
+    """Rekey reports only when classification preserves whole marker scopes.
+
+    A one-to-one marker relabel preserves each report's exact population and
+    percentiles. A split or merge needs aligned per-element samples, so this
+    helper returns unavailable instead of attaching a report to the wrong
+    final marker.
+    """
+    if per_domain_quality is None:
+        return None
+    source = np.asarray(source_markers, dtype=np.int32).reshape(-1)
+    assigned = np.asarray(assigned_markers, dtype=np.int32).reshape(-1)
+    if source.shape != assigned.shape or source.size == 0:
+        return None
+    source_to_target: dict[int, int] = {}
+    targets: set[int] = set()
+    for source_marker in np.unique(source):
+        mapped = np.unique(assigned[source == source_marker])
+        if mapped.size != 1:
+            return None
+        target_marker = int(mapped[0])
+        if target_marker in targets:
+            return None
+        targets.add(target_marker)
+        source_to_target[int(source_marker)] = target_marker
+    if len(source_to_target) != len(per_domain_quality):
+        return None
+    remapped: dict[int, MeshQualityReport] = {}
+    for source_marker, target_marker in source_to_target.items():
+        report = per_domain_quality.get(source_marker)
+        if report is None or target_marker in remapped:
+            return None
+        remapped[target_marker] = report
+    return remapped
+
+
+def _quality_reports_for_final_mixed_markers(
+    mesh: MeshData,
+    assigned_markers: np.ndarray | list[int],
+) -> dict[int, MeshQualityReport] | None:
+    """Keep exact marker reports or recompute them from aligned cell arrays."""
+    remapped = _rekey_per_domain_quality_for_markers(
+        mesh.element_markers,
+        assigned_markers,
+        mesh.per_domain_quality,
+    )
+    if remapped is not None:
+        return remapped
+    quality = mesh.quality
+    if quality is None or quality.element_sicn is None or quality.element_volume is None:
+        return None
+    sicn = np.asarray(quality.element_sicn, dtype=np.float64)
+    volumes = np.asarray(quality.element_volume, dtype=np.float64)
+    if sicn.size != mesh.n_elements or volumes.size != mesh.n_elements:
+        return None
+    if quality.element_gamma is None:
+        gamma = np.full(mesh.n_elements, np.nan, dtype=np.float64)
+    else:
+        gamma = np.asarray(quality.element_gamma, dtype=np.float64)
+        if gamma.size != mesh.n_elements:
+            return None
+    return extract_per_domain_quality(
+        np.asarray(assigned_markers, dtype=np.int32),
+        sicn,
+        gamma,
+        volumes,
+        np.asarray(mesh.cell_types, dtype=np.str_),
+    )
+
 # PR 2: target resolution extracted into _mesh_targets
 from ._mesh_targets import (
     ResolvedAirboxTarget,
@@ -111,7 +185,10 @@ from ._mesh_targets import (
     resolve_object_preview_target,
     resolve_shared_domain_targets,
 )
-from ._gmsh_extraction import build_per_domain_quality_from_mesh_arrays
+from ._gmsh_extraction import (
+    build_per_domain_quality_from_mesh_arrays,
+    extract_per_domain_quality,
+)
 from .mesh_build_report import _build_mesh_operation_statuses, _build_shared_domain_build_report
 from ._mesh_targets import (
     _canonicalize_geometry_owner_mapping as _canonicalize_geometry_owner_mapping,
@@ -3840,6 +3917,20 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
 
         tet4_only = bool(np.all(mesh.cell_types == "tet4"))
         markers_unchanged = np.array_equal(assigned_markers, mesh.element_markers)
+        if tet4_only:
+            final_per_domain_quality = build_per_domain_quality_from_mesh_arrays(
+                mesh.nodes,
+                mesh.elements,
+                assigned_markers,
+                mesh.quality,
+            ) or mesh.per_domain_quality
+        elif markers_unchanged:
+            final_per_domain_quality = mesh.per_domain_quality
+        else:
+            final_per_domain_quality = _quality_reports_for_final_mixed_markers(
+                mesh,
+                assigned_markers,
+            )
         if markers_unchanged and not tet4_only:
             # The canonical mixed shared-domain route already carries the
             # complete certificate on this exact MeshData.  Classification
@@ -3866,16 +3957,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 periodic_node_pairs=mesh.periodic_node_pairs,
                 periodic_mesh_certificate=mesh.periodic_mesh_certificate,
                 quality=mesh.quality,
-                per_domain_quality=(
-                    build_per_domain_quality_from_mesh_arrays(
-                        mesh.nodes,
-                        mesh.elements,
-                        assigned_markers,
-                        mesh.quality,
-                    )
-                    if tet4_only
-                    else None
-                ) or mesh.per_domain_quality,
+                per_domain_quality=final_per_domain_quality,
                 realization_report=mesh.realization_report,
                 mixed_layer_topology_certificate=(
                     mesh.mixed_layer_topology_certificate

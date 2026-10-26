@@ -27,6 +27,149 @@ def _load_qa_module():
     return module
 
 
+def _airbox_inspector_result_fixture(qa):
+    public_url = "http://127.0.0.1:3269"
+    browser_url = "http://frontend:8080"
+    script_sha256 = "a" * 64
+    expected_panels = [
+        ("root", "model:airbox", "airbox.root", "Airbox", "Airbox Overview"),
+        ("mesh", "model:airbox:mesh", "airbox.mesh", "Mesh", "Airbox Mesh Overview"),
+        ("parameters", "model:airbox:mesh:parameters", "airbox.mesh.parameters", "Parameters", "Canonical Authored Parameters"),
+        ("quality-gates", "model:airbox:mesh:quality-gates", "airbox.mesh.quality-gates", "Quality Gates", "Airbox Quality Gates"),
+        ("statistics", "model:airbox:mesh:statistics", "airbox.mesh.statistics", "Statistics", "Airbox Mesh Statistics"),
+        ("topology", "model:airbox:mesh:topology", "airbox.mesh.topology", "Topology", "Airbox Mesh Topology"),
+        ("build", "model:airbox:mesh:build", "airbox.mesh.build", "Build & Provenance", "Airbox Mesh Build"),
+    ]
+    synthetic_pass = {
+        "requests": 1,
+        "revision": 7,
+        "rendered_pass": True,
+        "revision_matches_live": True,
+    }
+    proof = {
+        "schema": "fullmag.airbox-inspector-browser-proof.v1",
+        "script_sha256": script_sha256,
+        "authored_method": "fem",
+        "published_fem_with_unresolved_runtime": True,
+        "generic_unknown_header_rejected": True,
+        "no_authoring_mutations": True,
+        "no_solve_commands": True,
+        "visualization_client_acknowledgements": [],
+        "unresolved_status_probe": {
+            "only_active_lane_resolved_changed": True,
+            "domain_discretization": "fem",
+            "domain_generation_id": "generation-1",
+            "mesh_revision": 11,
+            "topology_revision": 12,
+        },
+        "canvas": {
+            "visible": True,
+            "context_lost": False,
+            "drawing_buffer_width": 1440,
+            "drawing_buffer_height": 1000,
+        },
+        "panels": [
+            {
+                "id": panel_id,
+                "node_id": node_id,
+                "selection_kind": selection_kind,
+                "header": header,
+                "group": group,
+                "required_group": group,
+                "verified": True,
+            }
+            for panel_id, node_id, selection_kind, header, group in expected_panels
+        ],
+        "api_comparisons": {
+            "airbox_carrier_count": 2,
+            "node_count": 100,
+            "element_count": 80,
+            "boundary_face_count": 120,
+            "surface_face_count": 80,
+            "mixed_element_families": ["tet4", "prism6", "pyramid5"],
+            "counts_verified": True,
+            "length_units_verified": True,
+            "quality_scope": "airbox",
+            "quality_marker": 0,
+            "quality_source_verified": True,
+            "length_units": ["m"],
+        },
+        "initial_quality_loading": {
+            "resource_status": "loading",
+            "panel_status": "loading",
+            "gate_result": "unknown",
+            "live_response_preserved": True,
+            "recovered_to_ready": True,
+        },
+        "synthetic_quality_fault_injection": {
+            "live_baseline": {"resource_status": "ready", "gate_result": "unknown", "revision": 7},
+            "evidence_kind": "fault-injected-ui-only-not-scientific",
+            "synthetic_pass_control": deepcopy(synthetic_pass),
+            "delayed_live_get": {
+                "cached_synthetic_gate_status": "pass",
+                "resource_status": "stale",
+                "panel_status": "stale",
+                "gate_result": "unknown",
+                "live_response_preserved": True,
+                "live_response_status": 200,
+                "requests": 1,
+                "restored_to_live_unknown": True,
+            },
+            "synthetic_pass_control_for_error": deepcopy(synthetic_pass),
+            "synthetic_error_get": {
+                "cached_synthetic_gate_status": "pass",
+                "http_status": 503,
+                "resource_status": "error",
+                "resource_error_observed": True,
+                "panel_resource_status": "refresh error",
+                "panel_reason_reports_failed_load": True,
+                "gate_result": "unknown",
+                "refresh_error_visible_in_statistics": True,
+                "cached_quality_withheld": True,
+                "requests": 1,
+                "restored_to_live_unknown": True,
+            },
+            "final_live_state": {
+                "resource_status": "ready",
+                "gate_result": "unknown",
+                "revision_matches_live": True,
+            },
+        },
+        "resource_refresh": {
+            "resource_path": "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+            "same_root": True,
+            "live_response_preserved": True,
+            "status": 200,
+            "request_count": 1,
+            "delay_ms": 350,
+        },
+    }
+    payload = {
+        "schema": qa.AIRBOX_INSPECTOR_RESULT_SCHEMA,
+        "state": "passed",
+        "scenario": "airbox-inspector",
+        "public_url": public_url,
+        "probe_url": browser_url,
+        "playwright_version": qa.PLAYWRIGHT_VERSION,
+        "browser_gpu_mode": "swiftshader-webgl-requested",
+        "page_errors": 0,
+        "console_errors": 0,
+        "request_failures": 0,
+        "http_errors": [],
+        "startup_request_events": [],
+        "startup_unmount_cancellation_probes": [],
+        "synthetic_http_errors": [
+            "503 GET /v2/sessions/current/meshing/meshes/universe/quality",
+        ],
+        "synthetic_console_errors": [],
+        "resource_responses": [
+            {"url": browser_url + "/v2/sessions/current/status", "status": 200},
+        ],
+        "inspector_proof": proof,
+    }
+    return payload, public_url, browser_url, script_sha256
+
+
 def _recovery_fixture(qa):
     selected = ROOT.resolve()
     identity = {
@@ -836,6 +979,288 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "/state/development/workspace/apps/control-room/scripts",
         })
 
+    def test_airbox_inspector_compose_is_opt_in_and_uses_the_managed_readonly_runner(self):
+        identity = {
+            "project_name": "fullmag-worktree-fixture",
+            "network_name": "fullmag-worktree-fixture_fullmag",
+            "project_id": "fullmag",
+            "worktree_id": "fixture",
+            "checkout_kind": "worktree",
+            "source_root": str(ROOT),
+        }
+        standard = self.qa._compose_document(
+            ROOT, identity, self.qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3269, 180,
+        )
+        self.assertNotIn("CONTROL_ROOM_BROWSER_QA_SCENARIO", standard["services"]["browser-qa"]["environment"])
+        self.assertEqual(standard["services"]["browser-qa"]["command"][-1],
+                         "/state/development/workspace/apps/control-room/scripts/docker-dev-browser-qa.mjs")
+
+        inspector = self.qa._compose_document(
+            ROOT, identity, self.qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3269, 180,
+            airbox_inspector=True,
+        )
+        service = inspector["services"]["browser-qa"]
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_SCENARIO"], "airbox-inspector")
+        self.assertEqual(service["command"], [
+            "node",
+            "/state/development/workspace/apps/control-room/scripts/verify-airbox-inspector.mjs",
+        ])
+        self.assertTrue(service["read_only"])
+        self.assertNotIn("ports", service)
+        self.assertTrue(all(mount["read_only"] for mount in service["volumes"]))
+        with self.assertRaises(self.qa.BuildControlError):
+            self.qa._compose_document(
+                ROOT, identity, self.qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3269, 180,
+                canvas_only=False,
+                airbox_inspector=True,
+            )
+
+        class FakeControl:
+            project = identity["project_name"]
+
+        browser_id = "sha256:" + "c" * 64
+        inspect_document = {
+            "Id": browser_id,
+            "Image": browser_id,
+            "Config": {
+                "User": "65532:65532",
+                "Cmd": service["command"],
+                "Env": [f"{key}={value}" for key, value in service["environment"].items()],
+                "Labels": {
+                    **self.qa.source_labels(identity),
+                    "com.docker.compose.project": identity["project_name"],
+                    "com.docker.compose.service": "browser-qa",
+                },
+            },
+            "HostConfig": {
+                "GroupAdd": self.qa._script_bind_groups(ROOT),
+                "ReadonlyRootfs": True,
+                "NetworkMode": identity["network_name"],
+                "PortBindings": None,
+                "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"},
+                "CapDrop": ["ALL"],
+                "SecurityOpt": ["no-new-privileges:true"],
+                "ExtraHosts": None,
+            },
+            "State": {"Running": False, "ExitCode": 0},
+            "NetworkSettings": {
+                "Networks": {identity["network_name"]: {}},
+                "Ports": {},
+            },
+            "Mounts": [
+                {
+                    "Type": "volume",
+                    "Name": "fullmag-frontend-state",
+                    "Destination": "/state/development",
+                    "RW": False,
+                },
+                {
+                    "Type": "bind",
+                    "Source": str(ROOT / "apps/control-room/scripts"),
+                    "Destination": "/state/development/workspace/apps/control-room/scripts",
+                    "RW": False,
+                },
+            ],
+        }
+        self.qa._validate_browser_helper(
+            inspect_document, FakeControl(), identity, "fullmag-frontend-state",
+            browser_id, 0, ROOT, airbox_inspector=True,
+        )
+        wrong_command = deepcopy(inspect_document)
+        wrong_command["Config"]["Cmd"][-1] = "/state/development/workspace/apps/control-room/scripts/docker-dev-browser-qa.mjs"
+        with self.assertRaises(self.qa.ControlOutcomeUnknown):
+            self.qa._validate_browser_helper(
+                wrong_command, FakeControl(), identity, "fullmag-frontend-state",
+                browser_id, 0, ROOT, airbox_inspector=True,
+            )
+
+    def test_airbox_inspector_result_parser_requires_specific_routes_and_nonvacuous_quality_control(self):
+        payload, public_url, browser_url, script_sha256 = _airbox_inspector_result_fixture(self.qa)
+        encoded = lambda value: (json.dumps(value) + "\n").encode("utf-8")
+        parsed = self.qa._parse_airbox_inspector_result(
+            encoded(payload), public_url, browser_url, script_sha256,
+        )
+        self.assertEqual(parsed["inspector_proof"]["synthetic_quality_fault_injection"]["evidence_kind"],
+                         "fault-injected-ui-only-not-scientific")
+
+        cancelled_path = "/v2/sessions/current/diagnostics/cpu"
+        startup_cancelled = deepcopy(payload)
+        startup_cancelled["startup_request_events"] = [
+            {
+                "request_id": 1,
+                "method": "GET",
+                "path": cancelled_path,
+                "resource_type": "fetch",
+                "same_origin": True,
+                "started_phase": "workspace-navigation",
+                "started_elapsed_ms": 2600,
+                "outcome": "request-failed",
+                "response_status": None,
+                "finished": False,
+                "finished_elapsed_ms": None,
+                "error": "net::ERR_ABORTED",
+                "failure_phase": "workspace-navigation",
+                "failure_elapsed_ms": 3000,
+                "failure_message": "GET " + cancelled_path + ": net::ERR_ABORTED",
+            },
+            {
+                "request_id": 2,
+                "method": "GET",
+                "path": cancelled_path,
+                "resource_type": "fetch",
+                "same_origin": True,
+                "started_phase": "quality-state-probes",
+                "started_elapsed_ms": 3900,
+                "outcome": "finished",
+                "response_status": 200,
+                "finished": True,
+                "finished_elapsed_ms": 4200,
+                "error": None,
+                "failure_phase": None,
+                "failure_elapsed_ms": None,
+                "failure_message": None,
+            },
+        ]
+        startup_cancelled["startup_unmount_cancellation_probes"] = [{
+            "classification": "startup-unmount-cancellation-followed-by-read-probe",
+            "cancelled_request_id": 1,
+            "probe_request_id": 2,
+            "method": "GET",
+            "path": cancelled_path,
+            "cancellation_error": "net::ERR_ABORTED",
+            "cancellation_phase": "workspace-navigation",
+            "cancellation_started_elapsed_ms": 2600,
+            "cancellation_failed_elapsed_ms": 3000,
+            "probe_started_elapsed_ms": 3900,
+            "probe_finished_elapsed_ms": 4200,
+            "probe_response_status": 200,
+            "probe_body_bytes": 128,
+            "probe_resource_type": "fetch",
+            "workspace_ready": True,
+            "home_overlay_visible": False,
+        }]
+        self.qa._parse_airbox_inspector_result(
+            encoded(startup_cancelled), public_url, browser_url, script_sha256,
+        )
+
+        missing_followup = deepcopy(startup_cancelled)
+        missing_followup["startup_unmount_cancellation_probes"] = []
+        with self.assertRaises(self.qa.BuildControlError):
+            self.qa._parse_airbox_inspector_result(
+                encoded(missing_followup), public_url, browser_url, script_sha256,
+            )
+
+        followup_before_cancel = deepcopy(startup_cancelled)
+        followup_before_cancel["startup_request_events"][1]["started_elapsed_ms"] = 2900
+        followup_before_cancel["startup_unmount_cancellation_probes"][0]["probe_started_elapsed_ms"] = 2900
+        with self.assertRaises(self.qa.BuildControlError):
+            self.qa._parse_airbox_inspector_result(
+                encoded(followup_before_cancel), public_url, browser_url, script_sha256,
+            )
+
+        acknowledged = deepcopy(payload)
+        acknowledgement = {
+            "method": "POST",
+            "path": "/v2/sessions/current/visualization/client-acks",
+            "outcome": "recorded", "response_status": 200,
+            "payload": {"body_valid_json": True, "client_id_present": True,
+                        "viewport_id_present": True, "status": "rendered",
+                        "error_present": False, "revision": 7},
+        }
+        acknowledged["inspector_proof"]["visualization_client_acknowledgements"] = [acknowledgement]
+        self.qa._parse_airbox_inspector_result(
+            encoded(acknowledged), public_url, browser_url, script_sha256,
+        )
+        for invalid in (
+            {**acknowledgement, "path": "/v2/sessions/current/simulation/commands"},
+            {**acknowledgement, "outcome": "pending", "response_status": None},
+            {**acknowledgement, "payload": {**acknowledgement["payload"], "status": "failed"}},
+        ):
+            acknowledged["inspector_proof"]["visualization_client_acknowledgements"] = [invalid]
+            with self.assertRaises(self.qa.BuildControlError):
+                self.qa._parse_airbox_inspector_result(
+                    encoded(acknowledged), public_url, browser_url, script_sha256,
+                )
+
+        generic_header = deepcopy(payload)
+        generic_header["inspector_proof"]["panels"][0]["header"] = "Inspector"
+        with self.assertRaises(self.qa.BuildControlError):
+            self.qa._parse_airbox_inspector_result(
+                encoded(generic_header), public_url, browser_url, script_sha256,
+            )
+
+        stale_control = deepcopy(payload)
+        stale_control["inspector_proof"]["synthetic_quality_fault_injection"]["synthetic_pass_control"]["revision"] += 1
+        with self.assertRaises(self.qa.BuildControlError):
+            self.qa._parse_airbox_inspector_result(
+                encoded(stale_control), public_url, browser_url, script_sha256,
+            )
+
+        for field, invalid_value in (
+            ("resource_error_observed", False),
+            ("panel_resource_status", "stale"),
+            ("panel_reason_reports_failed_load", False),
+            ("cached_quality_withheld", False),
+            ("refresh_error_visible_in_statistics", False),
+        ):
+            with self.subTest(field=field, invalid="false"):
+                invalid_error_proof = deepcopy(payload)
+                invalid_error_proof["inspector_proof"]["synthetic_quality_fault_injection"]["synthetic_error_get"][field] = invalid_value
+                with self.assertRaises(self.qa.BuildControlError):
+                    self.qa._parse_airbox_inspector_result(
+                        encoded(invalid_error_proof), public_url, browser_url, script_sha256,
+                    )
+            with self.subTest(field=field, invalid="missing"):
+                invalid_error_proof = deepcopy(payload)
+                del invalid_error_proof["inspector_proof"]["synthetic_quality_fault_injection"]["synthetic_error_get"][field]
+                with self.assertRaises(self.qa.BuildControlError):
+                    self.qa._parse_airbox_inspector_result(
+                        encoded(invalid_error_proof), public_url, browser_url, script_sha256,
+                    )
+
+        over_budget_error_get = deepcopy(payload)
+        over_budget_error_get["inspector_proof"]["synthetic_quality_fault_injection"]["synthetic_error_get"]["requests"] = 7
+        with self.assertRaises(self.qa.BuildControlError):
+            self.qa._parse_airbox_inspector_result(
+                encoded(over_budget_error_get), public_url, browser_url, script_sha256,
+            )
+
+        over_budget_http_errors = deepcopy(payload)
+        over_budget_http_errors["synthetic_http_errors"] = [
+            "503 GET /v2/sessions/current/meshing/meshes/universe/quality"
+        ] * 7
+        with self.assertRaises(self.qa.BuildControlError):
+            self.qa._parse_airbox_inspector_result(
+                encoded(over_budget_http_errors), public_url, browser_url, script_sha256,
+            )
+
+        over_budget_console_errors = deepcopy(payload)
+        over_budget_console_errors["synthetic_console_errors"] = [
+            "http://frontend:8080/v2/sessions/current/meshing/meshes/universe/quality: Failed to load resource: 503",
+        ] * 7
+        with self.assertRaises(self.qa.BuildControlError):
+            self.qa._parse_airbox_inspector_result(
+                encoded(over_budget_console_errors), public_url, browser_url, script_sha256,
+            )
+
+        scoped_console = deepcopy(payload)
+        scoped_console["synthetic_console_errors"] = [
+            "http://frontend:8080/v2/sessions/current/meshing/meshes/universe/quality: Failed to load resource: 503",
+        ]
+        parsed_scoped_console = self.qa._parse_airbox_inspector_result(
+            encoded(scoped_console), public_url, browser_url, script_sha256,
+        )
+        self.assertEqual(parsed_scoped_console["synthetic_console_errors"], scoped_console["synthetic_console_errors"])
+
+        unrelated_console = deepcopy(payload)
+        unrelated_console["synthetic_console_errors"] = [
+            "http://frontend:8080/v2/sessions/current/status: Failed to load resource: 503",
+        ]
+        with self.assertRaises(self.qa.BuildControlError):
+            self.qa._parse_airbox_inspector_result(
+                encoded(unrelated_console), public_url, browser_url, script_sha256,
+            )
+
     def test_compose_fixture_keeps_owned_volume_readonly_to_matching_uid(self):
         identity = {
             "project_name": "fullmag-worktree-fixture",
@@ -897,6 +1322,7 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
                 "PortBindings": None,
                 "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"},
                 "CapDrop": ["ALL"],
+                "GroupAdd": qa._script_bind_groups(ROOT),
                 "SecurityOpt": ["no-new-privileges:true"],
                 "ExtraHosts": None,
             },
@@ -968,6 +1394,10 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
         writable_mount["Mounts"][0]["RW"] = True
         with self.assertRaises(qa.ControlOutcomeUnknown):
             qa._validate_browser_helper(writable_mount, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT)
+        wrong_read_group = deepcopy(document)
+        wrong_read_group["HostConfig"]["GroupAdd"] = qa._script_bind_groups(ROOT) + ["99999999"]
+        with self.assertRaises(qa.ControlOutcomeUnknown):
+            qa._validate_browser_helper(wrong_read_group, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT)
 
     def test_control_volume_preflight_is_read_only_and_fail_closed_when_absent(self):
         qa = self.qa
@@ -1175,7 +1605,7 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
                 return SimpleNamespace(returncode=1, stdout=b"", stderr=b"not found")
             raise AssertionError(f"unexpected daemon command: {args!r}")
 
-        def fake_parse(*_args):
+        def fake_parse(*_args, **_kwargs):
             raise qa.BuildControlError("invalid canvas evidence")
 
         with patch.object(qa, "_probe_public_loopback", return_value={"state": "passed"}), \
@@ -1224,6 +1654,11 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "probe_url": "http://frontend:8080",
             "playwright_version": "1.62.1",
             "browser_gpu_mode": "swiftshader-webgl-requested",
+            "canvas_only": False,
+            "expect_live_field": None,
+            "expect_airbox_vectors": False,
+            "qa_scope": "full-browser-qa",
+            "skipped_areas": [],
             "home_round_trip": True,
             "session": {
                 "session_id": "session-1",
@@ -1236,6 +1671,28 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "page_errors": 0,
             "console_errors": 0,
             "request_failures": 0,
+            "http_errors": [],
+            "viewport_dom_observations": {
+                "field_data_proven": False,
+                "note": self.qa.VIEWPORT_DOM_OBSERVATIONS_NOTE,
+                "before_home": {
+                    "dataset": {},
+                    "quantity_labels": [],
+                    "dataset_entry_count": 0,
+                    "quantity_label_count": 0,
+                    "dataset_truncated": False,
+                    "quantity_labels_truncated": False,
+                },
+                "after_home": {
+                    "dataset": {},
+                    "quantity_labels": [],
+                    "dataset_entry_count": 0,
+                    "quantity_label_count": 0,
+                    "dataset_truncated": False,
+                    "quantity_labels_truncated": False,
+                },
+            },
+            "resource_responses": [],
         }
         encoded = lambda value: (json.dumps(value) + "\n").encode("utf-8")
         self.assertEqual(self.qa._parse_result(encoded(payload), payload["public_url"], payload["probe_url"]), payload)
@@ -1274,7 +1731,9 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "canvas_dom_stable",
         ):
             self.assertIn(required, text)
-        self.assertNotIn("screenshot", text.lower())
+        self.assertIn("const captureCanvasScreenshot = async", text)
+        live_field_result = text.split("...(expectedLiveField ? {", 1)[1].split("} : {}),", 1)[0]
+        self.assertIn("canvas_screenshot: await captureCanvasScreenshot(page, after)", live_field_result)
         self.assertNotIn('http://127.0.0.1:32871', text.split("const publicUrl", 1)[1].split("const probeUrl", 1)[0])
         self.assertNotIn("CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION", text)
 

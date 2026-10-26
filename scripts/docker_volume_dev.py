@@ -1666,6 +1666,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     else:
         control = provided_control
         toolchain, images = _validate_prepared_start_context(prepared)
+    from docker_volume_cancelled_activation_guard import assert_start_allowed
+    assert_start_allowed(control, getattr(args, "request_id", None), reuse_state=reuse_state)
     image = images["backend"]["image_id"]
     device_access = _verify_docker_gpu_access(device_access, policy, image, control.project)
     _assert_no_running_fullmag(control.project, identity, **admission_context)
@@ -5032,6 +5034,8 @@ def _retained_operation(
     document = control.read(previous_root + "/compose.json")
     if hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256 or document.get("name") != control.project:
         raise BuildControlError("Resume Compose identity/CAS differs")
+    from docker_volume_cancelled_activation_guard import require_fresh_recreation
+    require_fresh_recreation(control, args, previous, recreate_services=recreate_services)
     from docker_volume_preparation_abort import require_fresh_archive
     preparation_abort = require_fresh_archive(control, args, previous, document, recreate_services=recreate_services)
     operator_probe_record = _operator_probe_record_from_retained(previous, document)
@@ -5740,6 +5744,9 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 "runtime_config"
             ]["sha256"]
             recovery_context["post_build_generation"] = post_build_generation
+        if fresh_state:
+            from docker_volume_cancelled_activation_guard import pin_archive
+            pin_archive(control)
         reuse = None if fresh_state else {"state": state, "host_certificate": certificate_path,
             "owner_marker": owner_path, "receipt": {"image_id": image},
             "operator_probe_environment_record": operator_probe_record}

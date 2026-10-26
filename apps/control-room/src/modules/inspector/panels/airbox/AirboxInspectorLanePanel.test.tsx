@@ -5,6 +5,10 @@ const testState = vi.hoisted(() => ({
   calls: [] as boolean[],
   discretization: "fdm" as "fdm" | "fem" | null,
   authoringMethod: null as "fdm" | "fem" | null,
+  publishedTopology: false,
+  topologyResourceGenerationId: "generation-1",
+  fdmMembershipGenerationId: "generation-1",
+  fdmMembershipStatus: "ready" as "ready" | "loading" | "stale" | "error",
   resolvedDiscretization: null as "fdm" | "fem" | null,
 }));
 
@@ -18,17 +22,33 @@ vi.mock("@/kernel/KernelContext", () => ({ useKernel: () => kernelMocks }));
 vi.mock("@/kernel/commands/commandContext", () => ({ createCommandContext: () => ({}) }));
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  SESSION_STATUS_RESOURCE_KEY: "session:status",
   useSessionStatusSelector: (selector: (value: unknown) => unknown) =>
     selector({
-      data: testState.discretization === null ? null : {
+      data: testState.discretization === null && !testState.authoringMethod
+        ? null
+        : {
         capabilities: {
           explicit_topology: false,
           ...(testState.authoringMethod
             ? { active_lane: { authored: { discretization: testState.authoringMethod }, requested: { discretization: testState.authoringMethod }, resolved: testState.resolvedDiscretization ? { discretization: testState.resolvedDiscretization } : null } }
             : {}),
         },
-        domain: { discretization: testState.discretization },
-        resources: { mesh_build_revision: 0, mesh_revision: 0 },
+        domain: {
+          cell_count: testState.publishedTopology ? 2 : undefined,
+          discretization: testState.publishedTopology
+            ? "fem"
+            : testState.discretization,
+          generation_id: testState.publishedTopology ? "generation-1" : undefined,
+        },
+        resources: {
+          domain_generation_id: testState.publishedTopology
+            ? testState.topologyResourceGenerationId
+            : undefined,
+          mesh_build_revision: 0,
+          mesh_revision: testState.publishedTopology ? 5 : 0,
+          topology_revision: testState.publishedTopology ? 6 : 0,
+        },
       },
     }),
 }));
@@ -64,6 +84,7 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
         cell_count: 2,
         cell_m: [1, 1, 1],
         counts: [2, 1, 1],
+        domain_generation_id: testState.fdmMembershipGenerationId,
         encoding: "u32le",
         freshness: "current",
         grid_fingerprint: "grid-1",
@@ -83,7 +104,7 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
         schema_version: "fdm_region_membership.v2",
       } : null,
       error: null,
-      status: enabled ? "ready" : "idle",
+      status: enabled ? testState.fdmMembershipStatus : "idle",
     };
   },
   useSceneResource: ({ enabled }: { enabled: boolean }) => ({
@@ -158,6 +179,10 @@ describe("AirboxInspectorLanePanel", () => {
     parameterPanelLanes.values.length = 0;
     testState.discretization = "fdm";
     testState.authoringMethod = null;
+    testState.publishedTopology = false;
+    testState.topologyResourceGenerationId = "generation-1";
+    testState.fdmMembershipGenerationId = "generation-1";
+    testState.fdmMembershipStatus = "ready";
     testState.resolvedDiscretization = null;
   });
 
@@ -243,8 +268,95 @@ describe("AirboxInspectorLanePanel", () => {
     );
 
     expect(html).toContain("fem policy editor");
+    expect(html).not.toContain("FEM topology (read-only)");
     expect(parameterPanelLanes.values).toEqual([{ lane: "fem", runtimeLane: null }]);
     expect(testState.calls).toEqual([false, false]);
+  });
+
+  it.each([
+    AirboxMeshQualityGatesLanePanel,
+    AirboxMeshStatisticsLanePanel,
+    AirboxMeshTopologyLanePanel,
+  ])("allows read-only published FEM topology inspection from an unresolved runtime for %s", (Panel) => {
+    testState.discretization = null;
+    testState.authoringMethod = "fem";
+    testState.publishedTopology = true;
+
+    const html = renderToStaticMarkup(<Panel selection={selection} />);
+
+    expect(html).toContain("FEM Airbox child");
+    expect(html).toContain("runtime lane unresolved");
+    expect(html).toContain("FEM topology (read-only)");
+    expect(html).toContain("Runtime lane remains unresolved");
+    expect(testState.calls).toEqual([false, false]);
+  });
+
+  it("keeps FEM topology inspection closed when the published generation identity conflicts", () => {
+    testState.discretization = null;
+    testState.authoringMethod = "fem";
+    testState.publishedTopology = true;
+    testState.topologyResourceGenerationId = "generation-old";
+
+    const html = renderToStaticMarkup(
+      <AirboxMeshTopologyLanePanel selection={selection} />,
+    );
+
+    expect(html).not.toContain("FEM Airbox child");
+    expect(html).not.toContain("FEM topology (read-only)");
+    expect(html).toContain("Mesh facts and build actions wait for runtime-lane resolution.");
+  });
+
+  it.each([
+    ["loading", "loading"],
+    ["stale", "stale"],
+    ["error", "error"],
+  ] as const)("does not report FDM descriptor completeness as available while membership is %s", (membershipStatus, expectedStatus) => {
+    testState.discretization = "fdm";
+    testState.fdmMembershipStatus = membershipStatus;
+
+    const html = renderToStaticMarkup(
+      <AirboxMeshQualityGatesLanePanel selection={selection} />,
+    );
+
+    expect(html).toContain("FDM Airbox quality");
+    expect(html).toContain(`>${expectedStatus}<`);
+    expect(html).toContain("not current for this grid");
+  });
+
+  it.each([
+    ["loading", "FDM membership data is loading"],
+    ["stale", "FDM membership data is stale"],
+    ["error", "FDM membership data failed to load"],
+  ] as const)(
+    "withholds cached FDM membership counts and shows the model notice while membership is %s",
+    (membershipStatus, expectedNotice) => {
+      testState.discretization = "fdm";
+      testState.fdmMembershipStatus = membershipStatus;
+
+      const html = renderToStaticMarkup(
+        <AirboxMeshStatisticsLanePanel selection={selection} />,
+      );
+
+      expect(html).toContain("Airbox cells");
+      expect(html).toMatch(/Airbox cells<\/span><span[^>]*>not materialized<\/span>/);
+      expect(html).toContain(expectedNotice);
+      expect(html).not.toContain("Membership freshness");
+      expect(html).not.toContain("not current for this grid");
+    },
+  );
+
+  it("withholds FDM membership counts when cached membership belongs to another generation", () => {
+    testState.discretization = "fdm";
+    testState.fdmMembershipGenerationId = "generation-old";
+
+    const html = renderToStaticMarkup(
+      <AirboxMeshStatisticsLanePanel selection={selection} />,
+    );
+
+    expect(html).toContain("does not match the current structured grid");
+    expect(html).not.toContain("Membership freshness");
+    expect(html).not.toContain("not current for this grid");
+    expect(html).toMatch(/Airbox cells<\/span><span[^>]*>not materialized<\/span>/);
   });
 
   it("does not expose runtime actions when the resolved lane conflicts with authored intent", () => {

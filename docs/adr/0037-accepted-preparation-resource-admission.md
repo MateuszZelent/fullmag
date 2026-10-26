@@ -83,6 +83,66 @@ kontraktu; solverowa pula celowo przyjmuje tylko CPU/GPU.
 
 ## Konsekwencje
 
+### Recovery anulowanej aktywacji Docker DEV (25.10.2026)
+
+Nieudany preparer może zwolnić lease, a zaakceptowane polecenie Stop może
+anulować task, zanim zakończy się HTTP aktywacji. Launcher zachowuje wtedy
+niejednoznaczny receipt i blokadę operacji. Samo anulowanie nie uprawnia do
+usunięcia tej blokady ani ponowienia poprzedniej aktywacji.
+
+`recover-cancelled-activation` dodaje osobną, jawną procedurę dla tego stanu.
+Podgląd przypina grupę Compose, checkout, próbę development i jej ostatnią
+iterację, obraz i tożsamość kontenera, oryginalny helper operacji, surowe
+receipty oraz tożsamość sesji/runu i request scope. Warunkiem jest anulowany
+manualny run bez kroków solvera i artefaktów, trwały failed exit preparera
+oraz zgodny, zwolniony lease. Inne stany pozostają odrzucone.
+
+Wykonanie wymaga skrótu zaakceptowanego planu i ponownej walidacji. Najpierw
+zapisuje trwały intent recovery, następnie zatrzymuje wyłącznie przypięty
+kontener backendu przez zarządzaną ścieżkę launchera. Warunkiem zakończenia
+jest niezmieniona tożsamość kontenera, exit code 0 bez OOM oraz receipt
+native drain należący do tego samego ownera, z potwierdzonym zakończeniem
+procesów potomnych. Dopiero ten dowód pozwala opublikować terminalny wynik
+oryginalnej operacji. Oryginalny helper sam zwalnia swoją blokadę.
+
+Recovery zachowuje oryginalny niejednoznaczny receipt, marker aktywacji,
+inwentarz runu i fizyczny stan sesji. Nie kwalifikuje aktywacji
+jako udanej, nie obiecuje pełnego checkpointu niezapisanego stanu przeglądarki,
+nie uruchamia Solve, nie powtarza przygotowania, nie resetuje ownera i nie
+usuwa wolumenów. Po utracie odpowiedzi na stop sprawdza zakończenie tej samej
+instancji bez powtórzenia stop ani zmiany celu. Stary request i wznowienie
+starego runtime pozostają zabronione.
+
+Kolejną dozwoloną operacją jest przypięte `recreate-volume --fresh-state`.
+Istniejąca procedura zachowuje całe drzewo runtime-control w archiwum i dawny
+state root, następnie tworzy nowy runtime w tej samej grupie z zachowanym
+cache. Start wymaga zgodnych receiptów archiwizacji: źródeł, poprzedniego
+state root, obu usuniętych kontenerów i skrótu intentu. Trwały odnośnik do
+zweryfikowanego archiwum zachowuje ten dowód po kolejnych zmianach generacji.
+Jest to zachowanie danych runtime, nie potwierdzenie kanonicznego checkpointu
+UI przez API. Niepowodzenie walidacji pozostawia stan zablokowany; rollback
+nie może wznowić anulowanej próby.
+
+Procedura recovery wznawia publikację dowodów po utracie odpowiedzi na stop.
+Nie rozszerza istniejącego `--resume-recreation` na częściowo wykonaną
+archiwizację świeżego runtime. Awaria hosta między rozpoczęciem archiwizacji
+a terminalnym receiptem `recreate-services` pozostawia zachowane dane i
+blokadę oryginalnego helpera; wymaga osobnej, przypiętej rekonsyliacji tej
+operacji. Nie wolno w tym stanie usuwać blokady ani deklarować zakończenia
+recovery całego runtime.
+Procedura nie zastępuje automatycznie rekordu wcześniejszego recovery tej
+samej grupy: podgląd odrzuca taki konflikt przed stopem. Rotacja historii
+recovery wymaga osobnej, zweryfikowanej procedury; nie jest uprawnieniem do
+usunięcia poprzednich dowodów.
+
+Zakres implementacji: `scripts/docker_volume_cancelled_activation.py`,
+blokady startu w `scripts/docker_volume_cancelled_activation_guard.py`,
+adapter CLI w `scripts/docker_dev.py` i interpretowane regresje odmów,
+zmienionych pinów, utraty odpowiedzi oraz zachowania dowodów. Publiczny
+OpenAPI, semantyka ProblemIR, requested/resolved execution i kontrakty
+istniejących procedur recovery pozostają bez zmian. Wdrożenie wymaga
+niezależnego review, podglądu rzeczywistego stanu i receiptu wykonania.
+
 - Task ma rozłączne fazy durable preparation i solver execution bez
   przeciążania istniejącego lifecycle ani ownership epoch.
 - Store zyskuje drugi typ lease i osobny katalog, ale globalna wyłączność

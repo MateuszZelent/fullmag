@@ -6125,6 +6125,7 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
                 mixed_layer_topology_certificate: None,
                 mixed_layer_topology_certificate_v2: None,
                 mixed_topology_provenance: None,
+                mesh_statistics: None,
             }),
         }),
     });
@@ -6198,6 +6199,12 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
             "coordinate_quantization_m": 1e-12,
             "digest": "44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642"
         }],
+        "mesh_statistics": {
+            "mesh_name": "shared_domain",
+            "quality_source": "gmsh",
+            "global": {"element_count": 3, "quality_by_family": {"tet4": {"cell_count": 3}}},
+            "scopes": []
+        },
         "degraded": false,
         "authored_regions_count": 3,
         "realized_regions_count": 2
@@ -6221,6 +6228,10 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
     assert_eq!(report.authored_regions_count, Some(3));
     assert_eq!(report.realized_regions_count, Some(2));
     assert_eq!(report.magnetic_submesh_signatures[0].node_count, 708);
+    assert_eq!(
+        report.mesh_statistics.as_ref().unwrap()["global"]["quality_by_family"]["tet4"]["cell_count"],
+        3
+    );
     assert_eq!(
         report.magnetic_submesh_signatures[0].digest.as_deref(),
         Some("44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642")
@@ -6246,6 +6257,10 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
     );
     assert_eq!(round_trip["authored_regions_count"], 3);
     assert_eq!(round_trip["realized_regions_count"], 2);
+    assert_eq!(
+        round_trip["mesh_statistics"]["global"]["quality_by_family"]["tet4"]["cell_count"],
+        3
+    );
     assert_eq!(
         round_trip["magnetic_submesh_signatures"][0]["digest"],
         "44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642"

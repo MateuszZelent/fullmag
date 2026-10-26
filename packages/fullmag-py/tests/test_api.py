@@ -23,6 +23,7 @@ from unittest.mock import patch
 import numpy as np
 
 import fullmag as fm
+import fullmag.model.problem as problem_model
 import fullmag.world as flat_world
 from fullmag.meshing.voxelization import VoxelMaskData
 from fullmag.runtime import cli as runtime_cli
@@ -32,7 +33,7 @@ from fullmag.runtime.scene_document import build_scene_document_from_builder
 from fullmag.runtime.scene_document import build_builder_from_scene_document
 from fullmag.runtime.scene_document import builder_overrides_from_scene_document
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
-from fullmag.meshing.gmsh_bridge import MeshData
+from fullmag.meshing.gmsh_bridge import MeshData, MeshQualityReport
 from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.model.problem import (
     _fem_mesh_cache_key,
@@ -319,6 +320,33 @@ class ProblemApiTests(unittest.TestCase):
             )
 
         self.assertEqual(realize.call_count, 2)
+
+    def test_shared_domain_cache_schema_invalidates_raw_air_marker_reports(self) -> None:
+        geometry = fm.Box(size=(10e-9, 10e-9, 10e-9), name="box")
+        hints = fm.FEM(order=1, maximum_element_size=2e-9)
+        kwargs = {
+            "study_universe": None,
+            "mesh_workflow": None,
+            "per_object_recipes": None,
+            "object_regions": None,
+            "cache_identity": None,
+        }
+
+        key, document = problem_model._fem_shared_domain_cache_document(
+            [geometry], hints, **kwargs
+        )
+        with patch.object(
+            problem_model,
+            "_FEM_SHARED_DOMAIN_CACHE_SCHEMA",
+            "fullmag.fem.shared-domain-cache.v1",
+        ):
+            old_key, old_document = problem_model._fem_shared_domain_cache_document(
+                [geometry], hints, **kwargs
+            )
+
+        self.assertEqual(document["schema"], "fullmag.fem.shared-domain-cache.v2")
+        self.assertEqual(old_document["schema"], "fullmag.fem.shared-domain-cache.v1")
+        self.assertNotEqual(key, old_key)
 
     def test_per_object_fem_cache_publish_is_atomic_and_reloadable(self) -> None:
         mesh = MeshData.from_legacy_tet4(
@@ -5488,6 +5516,282 @@ class ProblemApiTests(unittest.TestCase):
                 {"geometry_name": "right_geom", "marker": 2},
             ],
         )
+
+    def test_shared_domain_build_report_preserves_mixed_mesh_statistics(self) -> None:
+        def metric(value: float) -> dict[str, object]:
+            return {
+                "status": "available",
+                "source": "gmsh",
+                "min": value,
+                "p05": value,
+                "mean": value,
+                "max": value,
+            }
+
+        def family_quality(
+            family: str,
+            value: float,
+            *,
+            gamma_value: float | None,
+        ) -> dict[str, object]:
+            return {
+                "cell_count": 1,
+                "source": "gmsh",
+                "sicn": metric(value),
+                "gamma": (
+                    metric(gamma_value)
+                    if gamma_value is not None
+                    else {
+                        "status": "unavailable",
+                        "reason": f"Gmsh gamma is undefined for {family}.",
+                    }
+                ),
+            }
+
+        pyramid_quality = MeshQualityReport(
+            n_elements=1,
+            sicn_min=0.72,
+            sicn_max=0.72,
+            sicn_mean=0.72,
+            sicn_p5=0.72,
+            sicn_histogram=[0] * 20,
+            gamma_min=0.0,
+            gamma_mean=0.0,
+            gamma_histogram=[0] * 20,
+            volume_min=4.0 / 3.0,
+            volume_max=4.0 / 3.0,
+            volume_mean=4.0 / 3.0,
+            volume_std=0.0,
+            avg_quality=0.72,
+            gamma_element_count=0,
+            quality_by_family={
+                "pyramid5": family_quality(
+                    "pyramid5", 0.72, gamma_value=None
+                )
+            },
+        )
+        tet_quality = MeshQualityReport(
+            n_elements=1,
+            sicn_min=0.92,
+            sicn_max=0.92,
+            sicn_mean=0.92,
+            sicn_p5=0.92,
+            sicn_histogram=[0] * 20,
+            gamma_min=0.84,
+            gamma_mean=0.84,
+            gamma_histogram=[0] * 20,
+            volume_min=1.0 / 6.0,
+            volume_max=1.0 / 6.0,
+            volume_mean=1.0 / 6.0,
+            volume_std=0.0,
+            avg_quality=0.92,
+            gamma_element_count=1,
+            quality_by_family={
+                "tet4": family_quality("tet4", 0.92, gamma_value=0.84)
+            },
+        )
+        mixed_mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0],
+                    [2.0, 2.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [1.0, 1.0, 1.0],
+                    [4.0, 0.0, 0.0],
+                    [5.0, 0.0, 0.0],
+                    [4.0, 1.0, 0.0],
+                    [4.0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            ),
+            cell_types=np.asarray(["pyramid5", "tet4"], dtype=np.str_),
+            cell_offsets=np.asarray([0, 5, 9], dtype=np.int64),
+            cell_nodes=np.asarray([0, 1, 2, 3, 4, 5, 6, 7, 8], dtype=np.int32),
+            element_markers=np.asarray([0, 1], dtype=np.int32),
+            facet_types=np.asarray(
+                ["quad4", "tri3", "tri3", "tri3", "tri3", "tri3", "tri3", "tri3", "tri3"],
+                dtype=np.str_,
+            ),
+            facet_roles=np.asarray(["exterior"] * 9, dtype=np.str_),
+            facet_offsets=np.asarray(
+                [0, 4, 7, 10, 13, 16, 19, 22, 25, 28], dtype=np.int64
+            ),
+            facet_nodes=np.asarray(
+                [
+                    0, 3, 2, 1,
+                    0, 1, 4,
+                    1, 2, 4,
+                    2, 3, 4,
+                    3, 0, 4,
+                    5, 6, 7,
+                    5, 6, 8,
+                    5, 7, 8,
+                    6, 7, 8,
+                ],
+                dtype=np.int32,
+            ),
+            boundary_markers=np.asarray([99] * 9, dtype=np.int32),
+            cell_global_ordinals=np.asarray([0, 1], dtype=np.int64),
+            facet_global_ordinals=np.arange(9, dtype=np.int64),
+            quality=MeshQualityReport(
+                n_elements=2,
+                sicn_min=0.72,
+                sicn_max=0.92,
+                sicn_mean=0.82,
+                sicn_p5=0.73,
+                sicn_histogram=[0] * 20,
+                gamma_min=0.84,
+                gamma_mean=0.84,
+                gamma_histogram=[0] * 20,
+                volume_min=1.0 / 6.0,
+                volume_max=4.0 / 3.0,
+                volume_mean=0.75,
+                volume_std=0.0,
+                avg_quality=0.82,
+                gamma_element_count=1,
+                quality_by_family={
+                    "pyramid5": family_quality(
+                        "pyramid5", 0.72, gamma_value=None
+                    ),
+                    "tet4": family_quality("tet4", 0.92, gamma_value=0.84),
+                },
+            ),
+            per_domain_quality={0: pyramid_quality, 1: tet_quality},
+        )
+
+        fm.reset()
+        study = fm.study("mixed_statistics_build_report")
+        study.engine("fem")
+        study.universe(
+            mode="manual",
+            size=(12.0, 12.0, 12.0),
+            center=(0.0, 0.0, 0.0),
+        )
+        body = study.geometry(fm.Box(size=(2.0, 2.0, 2.0), name="body"), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+        problem = flat_world._build_problem()
+        build_report = {"build_mode": "mixed_fixture", "degraded": False}
+
+        with patch.dict(os.environ, {"FULLMAG_FEM_MESH_CACHE_DIR": ""}), patch(
+            "fullmag.meshing.asset_pipeline.realize_fem_domain_mesh_asset_from_components_with_report",
+            return_value=(
+                mixed_mesh,
+                [{"geometry_name": "body_geom", "marker": 1}],
+                build_report,
+            ),
+        ), patch("fullmag._core.validate_mesh_ir", return_value=True):
+            ir = problem.to_ir(requested_backend=fm.BackendTarget.FEM)
+
+        domain_asset = ir["geometry_assets"]["fem_domain_mesh_asset"]
+        self.assertNotIn("per_domain_quality", domain_asset["mesh"])
+        report = domain_asset["build_report"]
+        self.assertEqual(report["build_mode"], "mixed_fixture")
+        statistics = report["mesh_statistics"]
+        self.assertEqual(statistics["mesh_name"], "study_domain")
+        airbox_scope = next(
+            scope
+            for scope in statistics["scopes"]
+            if scope["scope_id"] == "part:airbox"
+        )
+        self.assertEqual(airbox_scope["marker"], 0)
+        pyramid = airbox_scope["quality_by_family"]["pyramid5"]
+        self.assertEqual(pyramid["cell_count"], 1)
+        self.assertEqual(pyramid["sicn"]["status"], "available")
+        self.assertAlmostEqual(pyramid["sicn"]["min"], 0.72)
+        self.assertEqual(pyramid["gamma"]["status"], "unavailable")
+        object_scope = next(
+            scope for scope in statistics["scopes"] if scope["marker"] == 1
+        )
+        self.assertEqual(
+            object_scope["quality_by_family"]["tet4"]["sicn"]["status"],
+            "available",
+        )
+
+        realized_domain_meshes: list[tuple[object, list[dict[str, object]], object]] = []
+        with patch.dict(os.environ, {"FULLMAG_FEM_MESH_CACHE_DIR": ""}), patch(
+            "fullmag.meshing.asset_pipeline.realize_fem_domain_mesh_asset_from_components_with_report",
+            return_value=(
+                mixed_mesh,
+                [{"geometry_name": "body_geom", "marker": 1}],
+                build_report,
+            ),
+        ):
+            sink_assets = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[fm.Box(size=(2.0, 2.0, 2.0), name="body")],
+                discretization=fm.DiscretizationHints(
+                    fem=fm.FEM(order=1, maximum_element_size=2.0)
+                ),
+                study_universe={
+                    "mode": "manual",
+                    "size": [12.0, 12.0, 12.0],
+                    "center": [0.0, 0.0, 0.0],
+                },
+                _include_domain_mesh_ir=False,
+                _realized_domain_mesh_sink=realized_domain_meshes,
+            )
+
+        self.assertEqual(len(realized_domain_meshes), 1)
+        self.assertIs(realized_domain_meshes[0][0], mixed_mesh)
+        self.assertIsNone(sink_assets["fem_domain_mesh_asset"]["mesh"])
+        sink_report = realized_domain_meshes[0][2]
+        self.assertIsInstance(sink_report, dict)
+        self.assertEqual(
+            sink_report["mesh_statistics"]["scopes"],
+            sink_assets["fem_domain_mesh_asset"]["build_report"]["mesh_statistics"]
+            ["scopes"],
+        )
+        sink_airbox = next(
+            scope
+            for scope in sink_report["mesh_statistics"]["scopes"]
+            if scope["scope_id"] == "part:airbox"
+        )
+        self.assertEqual(
+            sink_airbox["quality_by_family"]["pyramid5"]["sicn"]["status"],
+            "available",
+        )
+
+    def test_shared_domain_without_build_report_keeps_report_omitted(self) -> None:
+        mesh = MeshData.from_legacy_tet4(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1], dtype=np.int32),
+            boundary_faces=np.asarray([[0, 1, 2]], dtype=np.int32),
+            boundary_markers=np.asarray([99], dtype=np.int32),
+        )
+
+        with patch.dict(os.environ, {"FULLMAG_FEM_MESH_CACHE_DIR": ""}), patch(
+            "fullmag.meshing.asset_pipeline.realize_fem_domain_mesh_asset_from_components_with_report",
+            return_value=(mesh, [{"geometry_name": "body_geom", "marker": 1}], None),
+        ), patch("fullmag._core.validate_mesh_ir", return_value=True):
+            assets = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[fm.Box(size=(1.0, 1.0, 1.0), name="body")],
+                discretization=fm.DiscretizationHints(
+                    fem=fm.FEM(order=1, maximum_element_size=1.0)
+                ),
+                study_universe={
+                    "mode": "manual",
+                    "size": [3.0, 3.0, 3.0],
+                    "center": [0.0, 0.0, 0.0],
+                },
+            )
+
+        domain_asset = assets["fem_domain_mesh_asset"]
+        self.assertNotIn("build_report", domain_asset)
+        self.assertIn("mesh_statistics", domain_asset["mesh"])
 
     def test_surface_only_imported_geometry_is_rejected_for_executable_fem_assets(self) -> None:
         geometry = fm.ImportedGeometry(

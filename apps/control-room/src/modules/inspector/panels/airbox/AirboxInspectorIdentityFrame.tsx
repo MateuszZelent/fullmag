@@ -24,37 +24,63 @@ function laneLabel(lane: AirboxInspectorLane): string {
   return "runtime lane unresolved";
 }
 
-function statusForSelection(selection: Selection, lane: AirboxInspectorLane) {
+function statusForSelection(
+  selection: Selection,
+  lane: AirboxInspectorLane,
+  artifactLane: "fem" | "fdm" | null,
+) {
   const ref = selection.ref?.type === "airbox" ? selection.ref : null;
   return {
-    availability: ref?.availability ?? (lane === "conflict" ? "unsupported" : "unknown"),
-    execution: ref?.executionState ?? "unknown",
-    resource: ref?.resourceState ?? "unknown",
+    availability:
+      ref?.availability ??
+      (lane === "conflict"
+        ? "unsupported"
+        : artifactLane
+          ? "partial"
+          : lane === "unresolved"
+            ? "unavailable"
+            : "unknown"),
+    execution: ref?.executionState ?? (lane === "unresolved" ? "not_started" : "unknown"),
+    resource: ref?.resourceState ?? (artifactLane ? "loading" : lane === "unresolved" ? "idle" : "unknown"),
   };
 }
 
-function diagnosticsForSelection(selection: Selection, lane: AirboxInspectorLane): string[] {
+function diagnosticsForSelection(
+  selection: Selection,
+  lane: AirboxInspectorLane,
+  runtimeReason: string | null,
+  artifactLane: "fem" | "fdm" | null,
+): string[] {
   const ref = selection.ref?.type === "airbox" ? selection.ref : null;
   return [
     ...(ref?.contractGap ? [ref.contractGap] : []),
     ...(lane === "conflict"
       ? ["The selected Airbox target does not match the current runtime lane."]
       : []),
+    ...(lane === "unresolved"
+      ? [runtimeReason ?? (artifactLane
+          ? "Runtime lane remains unresolved. FEM topology inspection is read-only and does not enable build or solve."
+          : "Runtime lane is unresolved; mesh execution facts and build actions are pending backend resolution.")]
+      : []),
   ];
 }
 
 export function AirboxInspectorIdentityFrame({
   children,
+  artifactLane = null,
   lane,
+  runtimeReason = null,
   owner = "airbox-inspector",
   selection,
 }: InspectorPanelProps & {
   children: ReactNode;
+  artifactLane?: "fem" | "fdm" | null;
   lane: AirboxInspectorLane;
+  runtimeReason?: string | null;
   owner?: string;
 }) {
   const ref = selection.ref?.type === "airbox" ? selection.ref : null;
-  const status = statusForSelection(selection, lane);
+  const status = statusForSelection(selection, lane, artifactLane);
   const title = TITLES[selection.kind ?? ""] ?? "Airbox Inspector";
   const target = ref?.visualizationTargetId ?? "airbox";
 
@@ -62,13 +88,16 @@ export function AirboxInspectorIdentityFrame({
     <div className="fm-airbox-inspector-frame" data-inspector-owner={owner}>
       <ScientificInspectorTemplate
         breadcrumbs={["Model", "Airbox", title]}
-        diagnostics={diagnosticsForSelection(selection, lane)}
+        diagnostics={diagnosticsForSelection(selection, lane, runtimeReason, artifactLane)}
         methodLabel={laneLabel(lane)}
         physicalLabel="Airbox"
         properties={[
           { label: "Target", mono: true, value: target },
           { label: "Inspector kind", mono: true, value: selection.kind },
           { label: "Runtime lane", value: lane },
+          ...(artifactLane
+            ? [{ label: "Artifact inspection", value: `${artifactLane.toUpperCase()} topology (read-only)` }]
+            : []),
         ]}
         provenance={[
           { label: "Explorer node", mono: true, value: selection.nodeId },

@@ -320,6 +320,13 @@ describe("control-room Next dev proxy config", () => {
       }
     }
   });
+
+  it("serves every tab address with the workspace page", async () => {
+    const rewrites = await nextConfig.rewrites?.();
+    for (const source of ["/home", "/session/:slug", "/instance/:port"]) {
+      expect(rewrites).toContainEqual({ source, destination: "/workspace" });
+    }
+  });
 });
 
 describe("instance tab framing (ADR 0069)", () => {

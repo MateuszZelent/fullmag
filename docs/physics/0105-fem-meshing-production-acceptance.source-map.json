@@ -273,7 +273,103 @@
       "id": "gmsh-metrics",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py",
       "symbol": "_extract_quality_metrics",
-      "responsibility": "Extracts current Gmsh SICN, gamma, and volume arrays."
+      "responsibility": "Extracts Gmsh SICN for supported volume families and gamma only for families where Gmsh defines it."
+    },
+    {
+      "id": "mesh-statistics",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_build_mesh_statistics_report",
+      "responsibility": "Builds bounded global and marker-scope statistics with truthful per-family availability and volume/edge histograms."
+    },
+    {
+      "id": "accepted-mesh-statistics-carrier",
+      "path": "crates/fullmag-ir/src/mesh_assets.rs",
+      "symbol": "FemSharedDomainBuildReportIR",
+      "responsibility": "Preserves optional rich mesh_statistics independently of legacy gamma-bearing marker reports through accepted preparation."
+    },
+    {
+      "id": "accepted-mesh-statistics-api",
+      "path": "crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs",
+      "symbol": "workspace_mesh_statistics",
+      "responsibility": "Reads rich statistics from the current canonical mesh build report before legacy workspace diagnostics and projects marker-scoped quality."
+    },
+    {
+      "id": "legacy-marker-quality-serialization",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_legacy_per_domain_quality_is_complete",
+      "responsibility": "Allows the gamma-bearing legacy marker map only when canonical marker coverage, counts, and Gmsh gamma eligibility are complete."
+    },
+    {
+      "id": "quality-semantic-marker-mapping",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py",
+      "symbol": "_extract_element_markers_for_tags",
+      "responsibility": "Uses the topology semantic marker mapping for quality scopes while detecting overlaps by raw physical group identity."
+    },
+    {
+      "id": "mesh-size-histograms",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_size_histogram_bins",
+      "responsibility": "Builds bounded scale-aware histograms for finite cell-volume and characteristic-size samples."
+    },
+    {
+      "id": "mesh-edge-histograms",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_mesh_edge_histogram_bins",
+      "responsibility": "Accumulates canonical per-cell edge-length histograms over bounded vectorized chunks."
+    },
+    {
+      "id": "scoped-family-quality",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_quality_by_family_for_scope",
+      "responsibility": "Rejects preaggregated family summaries with stale counts and only recomputes metrics from aligned per-cell data."
+    },
+    {
+      "id": "scoped-certificate-quality",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_certificate_scaled_jacobian_for_scope",
+      "responsibility": "Projects mesh-wide family minimum and p05 into a marker only when the complete family is contained in that marker."
+    },
+    {
+      "id": "mixed-cell-statistics-geometry",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_mesh_cell_geometry",
+      "responsibility": "Computes SI cell volumes and sampled orientation and degeneracy for supported mixed cell families."
+    },
+    {
+      "id": "legacy-mixed-geometry-statistics",
+      "path": "crates/fullmag-api/src/router_v2/handlers/meshing/mesh_cell_geometry.rs",
+      "symbol": "cell_geometry",
+      "responsibility": "Computes canonical cell volumes and real edges for legacy publications without inventing quality metrics."
+    },
+    {
+      "id": "mixed-cell-edge-statistics",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_mesh_edge_statistics",
+      "responsibility": "Aggregates lengths of canonical edges for each supported cell family in bounded chunks."
+    },
+    {
+      "id": "mixed-v2-quality-source",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_disconnected_mixed_p1_mesh",
+      "responsibility": "Attaches requested Gmsh quality reports to the mixed mesh and converts volume channels to SI."
+    },
+    {
+      "id": "marker-quality-rekey",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_rekey_per_domain_quality_for_markers",
+      "responsibility": "Preserves per-domain reports only for exact one-to-one final marker relabels."
+    },
+    {
+      "id": "mixed-marker-quality-reaggregation",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_quality_reports_for_final_mixed_markers",
+      "responsibility": "Recomputes mixed per-domain reports from quality arrays aligned to final element markers."
+    },
+    {
+      "id": "quality-orientation-invalidation",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "oriented_copy",
+      "responsibility": "Invalidates signed quality and topology certification when cell connectivity is reoriented."
     },
     {
       "id": "jacobian-sampling",

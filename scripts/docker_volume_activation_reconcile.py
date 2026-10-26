@@ -804,6 +804,8 @@ def assert_no_unresolved_activation(
     """Block every new activation while one prior activation is unknown."""
     from docker_control_namespace import assert_namespace_activation
     assert_namespace_activation(control, request_id)
+    from docker_volume_cancelled_activation_guard import assert_start_allowed
+    assert_start_allowed(control, request_id)
     aborted = _read_json(control, "preparation-abort/current.json", optional=True)
     if aborted is not None:
         from docker_volume_preparation_abort import has_fresh_archive

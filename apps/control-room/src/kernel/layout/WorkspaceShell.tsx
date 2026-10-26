@@ -4,6 +4,7 @@ import { InstanceTabFrames } from "./InstanceTabFrames";
 import { InstanceTabStrip } from "./InstanceTabStrip";
 import { useEmbeddedInstanceTab, useInstanceTabs } from "./instanceTabs";
 import { ScriptImportBanner } from "./ScriptImportBanner";
+import { TabRouteSync } from "./TabRouteSync";
 import { WorkspaceShellClient } from "./WorkspaceShellClient";
 
 export function WorkspaceShell() {
@@ -13,6 +14,7 @@ export function WorkspaceShell() {
   const instanceInFront = !embedded && activePort !== null;
   return (
     <div className="fm-workspace-frame">
+      {embedded ? null : <TabRouteSync />}
       {embedded ? null : <InstanceTabStrip />}
       <ScriptImportBanner />
       <div className="fm-instance-stage">

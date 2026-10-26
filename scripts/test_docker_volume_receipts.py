@@ -17,6 +17,7 @@ class VolumeReceiptTests(unittest.TestCase):
         import hashlib
         from types import SimpleNamespace
         import docker_volume_dev as dev
+        import docker_volume_cancelled_activation_guard
         import docker_dev
         import docker_build_control
         project_name = "fullmag-master"
@@ -56,6 +57,7 @@ class VolumeReceiptTests(unittest.TestCase):
                          mock.patch.object(docker_dev, "_compose_identity", return_value={}), \
                          mock.patch.object(docker_build_control, "toolchain_configuration", return_value=configuration), \
                          mock.patch.object(dev, "BuildControl", return_value=control), \
+                         mock.patch.object(docker_volume_cancelled_activation_guard, "_read_control_bytes", return_value=None), \
                          mock.patch.object(dev, "_operator_probe_record_from_retained", return_value={}), \
                          mock.patch.object(dev, "compose_capture", side_effect=RuntimeError("observing services")) as capture:
                         if policy in {"auto", "required", "disabled"}:

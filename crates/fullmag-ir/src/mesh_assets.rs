@@ -2243,6 +2243,11 @@ pub struct FemSharedDomainBuildReportIR {
     pub mixed_layer_topology_certificate_v2: Option<MixedLayerTopologyCertificateV2IR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mixed_topology_provenance: Option<crate::FemMixedTopologyProvenanceIR>,
+    /// Rich computed mesh-quality and geometric statistics retained from the
+    /// Python meshing producer. This remains separate from the legacy
+    /// gamma-bearing per-domain quality carrier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_statistics: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
