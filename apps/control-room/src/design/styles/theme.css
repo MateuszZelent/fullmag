@@ -31,7 +31,7 @@
   --fm-text-secondary: #bac2de;
   --fm-text-tertiary: #a6adc8;
   --fm-text-muted: var(--fm-text-tertiary);
-  --fm-text-disabled: #8c91a8;
+  --fm-text-disabled: #7f849c; /* Overlay1: legible, clearly below tertiary */
   --fm-text-inverse: #11111b;
   --fm-text-on-accent: #1e1e2e;
 
@@ -150,10 +150,10 @@
   --fm-border-disabled: var(--fm-border-muted);
 
   --fm-text-primary: #4c4f69;
-  --fm-text-secondary: #5c5f77;
+  --fm-text-secondary: #525570; /* between Text and tertiary; AA on every surface incl. selected */
   --fm-text-tertiary: #585c71;
   --fm-text-muted: var(--fm-text-tertiary);
-  --fm-text-disabled: #62677d;
+  --fm-text-disabled: #7c7f93; /* Overlay2: legible, clearly below tertiary */
   --fm-text-inverse: #eff1f5;
   --fm-text-on-accent: #ffffff;
 

@@ -96,6 +96,8 @@ const surfaceTokens = [
 const categoryNames = ["runtime", "solver", "magnetization", "energy"];
 
 for (const [name, values] of themes) {
+  const primary = resolveColor(values, "--fm-text-primary");
+  const secondary = resolveColor(values, "--fm-text-secondary");
   const tertiary = resolveColor(values, "--fm-text-tertiary");
   const disabled = resolveColor(values, "--fm-text-disabled");
   const disabledBg = resolveColor(values, "--fm-bg-disabled");
@@ -106,14 +108,30 @@ for (const [name, values] of themes) {
   ensure(mutedToken === "var(--fm-text-tertiary)", `${name} muted remains a compatible alias to accessible tertiary text`);
   ensure(values.get("--fm-text-disabled") !== values.get("--fm-text-tertiary"), `${name} disabled is independent from tertiary`);
 
-  for (const surfaceToken of surfaceTokens) {
-    const ratio = contrast(tertiary, resolveColor(values, surfaceToken));
-    ensure(ratio >= 4.5, `${name} tertiary on ${surfaceToken} is ${ratio.toFixed(2)}:1 (needs 4.5:1)`);
-    reports.push(`${name} tertiary/${surfaceToken}: ${ratio.toFixed(2)}:1`);
+  // Hierarchy: each text role stands out from the app background at least as much as the next one.
+  const app = resolveColor(values, "--fm-bg-app");
+  ensure(
+    contrast(primary, app) >= contrast(secondary, app) && contrast(secondary, app) >= contrast(tertiary, app),
+    `${name} text hierarchy primary >= secondary >= tertiary on --fm-bg-app`,
+  );
+
+  for (const [role, color] of [["secondary", secondary], ["tertiary", tertiary]]) {
+    for (const surfaceToken of surfaceTokens) {
+      const ratio = contrast(color, resolveColor(values, surfaceToken));
+      ensure(ratio >= 4.5, `${name} ${role} on ${surfaceToken} is ${ratio.toFixed(2)}:1 (needs 4.5:1)`);
+      reports.push(`${name} ${role}/${surfaceToken}: ${ratio.toFixed(2)}:1`);
+    }
   }
 
+  // WCAG 2.1 SC 1.4.3 exempts inactive controls from 4.5:1. Disabled text stays
+  // readable (3:1) but must be visibly dimmer than every active text role.
   const disabledRatio = contrast(disabled, disabledBg);
-  ensure(disabledRatio >= 4.5, `${name} disabled text/background is ${disabledRatio.toFixed(2)}:1`);
+  ensure(disabledRatio >= 3, `${name} disabled text/background is ${disabledRatio.toFixed(2)}:1 (needs 3:1)`);
+  for (const [role, color] of [["secondary", secondary], ["tertiary", tertiary]]) {
+    const separation = contrast(disabled, color);
+    ensure(separation >= 1.5, `${name} disabled vs ${role} is ${separation.toFixed(2)}:1 (needs 1.5:1)`);
+    reports.push(`${name} disabled vs ${role}: ${separation.toFixed(2)}:1`);
+  }
   const primaryRatio = contrast(textOnAccent, accent);
   ensure(primaryRatio >= 4.5, `${name} primary button text/accent is ${primaryRatio.toFixed(2)}:1`);
   reports.push(`${name} disabled/bg: ${disabledRatio.toFixed(2)}:1`);
