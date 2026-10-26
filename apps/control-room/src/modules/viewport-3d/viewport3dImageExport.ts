@@ -348,7 +348,9 @@ function compositeAnnotations(
 
   const hud = root.querySelector<HTMLElement>(".fm-viewport-3d__hud");
   if (hud && isVisible(hud, view)) {
-    for (const badge of hud.querySelectorAll<HTMLElement>(":scope > span")) {
+    for (const badge of hud.querySelectorAll<HTMLElement>(
+      ":scope > span, :scope > .fm-viewport-3d__hud-info > span",
+    )) {
       if (!isVisible(badge, view) || !elementText(badge)) continue;
       const rect = canvasRectForElement(badge, canvasRect, scaleX, scaleY);
       const style = view.getComputedStyle(badge);

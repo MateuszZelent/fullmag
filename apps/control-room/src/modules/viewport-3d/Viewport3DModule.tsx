@@ -2266,6 +2266,14 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     meshQualityMetric,
     meshQualityRange,
   );
+  const hudSampleSummary = artifactField.model
+    ? `${artifactField.model.count} owned samples · historical inspection · ${artifactField.model.unit}`
+    : antennaFieldOverlay
+      ? `${antennaFieldOverlay.count} samples`
+      : domainSummary;
+  const meshSizeHighlightSummary = sceneProps.meshSizeHighlightModel
+    ? `${sceneProps.meshSizeHighlightModel.label} · ${sceneProps.meshSizeHighlightModel.sampledElementCount.toLocaleString("en-US")}/${sceneProps.meshSizeHighlightModel.matchedElementCount.toLocaleString("en-US")} highlighted`
+    : null;
   const colorbarTopologyModel = sceneProps.topologyModel;
   const getColorbarPartSettings = sceneProps.getPartSettings;
   const colorbarParts = useMemo<Viewport3DColorbarTargetPart[]>(
@@ -2801,7 +2809,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         <Viewport3DAppearanceHud onOpenSettings={() => { void kernel.commands.execute("viewport-3d.open-settings", { source: "menu", layout: kernel.layout, selection: kernel.selection }); }} />
         {fieldDataIssue ? (
           <div className="fm-viewport-3d__issue-banner" role="status">
-            <span className="fm-viewport-3d__issue-banner-text">
+            <span
+              className="fm-viewport-3d__issue-banner-text"
+              title={`${fieldDataIssue.quantityId} cannot be rendered: ${fieldDataIssue.message}`}
+            >
               {`${fieldDataIssue.quantityId} cannot be rendered: ${fieldDataIssue.message}`}
             </span>
             <Button onClick={() => setResourceIssueOpen(true)} size="sm" type="button" variant="secondary">
@@ -2837,34 +2848,29 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             </Button>
           </fieldset>
         ) : null}
-        <Viewport3DFieldLabel quantityId={antennaFieldOverlay?.intent.quantity ?? quantityId} label={antennaFieldOverlay ? antennaFieldDisplayLabel(antennaFieldOverlay.intent) : quantityLabel} historical={!antennaFieldOverlay && artifactField.historical} model={artifactField.model} error={artifactField.error} liveDataAvailable={antennaFieldOverlay ? undefined : liveQuantityDataAvailable} />
-        <span title={antennaFieldSourceLabel ?? selectedLabel}>{antennaFieldSourceLabel ?? selectedLabel}</span>
-        {hysteresisReplayLabel ? <span>{hysteresisReplayLabel}</span> : null}
-        <span>{artifactField.model ? `${artifactField.model.count} owned samples · historical inspection · ${artifactField.model.unit}` : antennaFieldOverlay ? `${antennaFieldOverlay.count} samples` : domainSummary}</span>
+        {/* Informational pills share one shrinkable lane so they truncate with
+            a tooltip instead of wrapping the HUD into extra rows. */}
+        <div className="fm-viewport-3d__hud-info">
+          <Viewport3DFieldLabel quantityId={antennaFieldOverlay?.intent.quantity ?? quantityId} label={antennaFieldOverlay ? antennaFieldDisplayLabel(antennaFieldOverlay.intent) : quantityLabel} historical={!antennaFieldOverlay && artifactField.historical} model={artifactField.model} error={artifactField.error} liveDataAvailable={antennaFieldOverlay ? undefined : liveQuantityDataAvailable} />
+          <span title={antennaFieldSourceLabel ?? selectedLabel}>{antennaFieldSourceLabel ?? selectedLabel}</span>
+          {hysteresisReplayLabel ? <span title={hysteresisReplayLabel}>{hysteresisReplayLabel}</span> : null}
+          <span title={hudSampleSummary}>{hudSampleSummary}</span>
+          {artifactField.error ? <span role="status" title={artifactField.error}>{artifactField.error}</span> : null}
+          {antennaFieldOverlay?.intent.kind === "inspection" ? (
+            <span title={ANTENNA_INSPECTION_HUD_NOTE}>{ANTENNA_INSPECTION_HUD_NOTE}</span>
+          ) : null}
+          {meshQualityLegend ? <span title={meshQualityLegend}>{meshQualityLegend}</span> : null}
+          {meshSizeHighlightSummary ? (
+            <span title={meshSizeHighlightSummary}>{meshSizeHighlightSummary}</span>
+          ) : null}
+          <span title={status || undefined}>{status}</span>
+        </div>
         {!antennaFieldOverlay && artifactField.candidates.length > 0 ? (
           <Select value={artifactField.selectedStageId} onValueChange={artifactField.select}>
             <SelectTrigger aria-label="Field inspection source and execution" className="fm-viewport-artifact-owner-select"><SelectValue placeholder="Select source and execution" /></SelectTrigger>
             <SelectContent>{artifactField.candidates.map(candidate => <SelectItem key={candidate.runtimeStageId} value={candidate.runtimeStageId}>{candidate.sourceObjectId} · {candidate.authoredStageId} · {candidate.runtimeStageId} · {candidate.status}</SelectItem>)}</SelectContent>
           </Select>
         ) : null}
-        {artifactField.error ? <span role="status">{artifactField.error}</span> : null}
-        {antennaFieldOverlay?.intent.kind === "inspection" ? (
-          <span>inspection only · external electrode truncation · not qualified for LLG</span>
-        ) : null}
-        {meshQualityLegend ? <span>{meshQualityLegend}</span> : null}
-        {sceneProps.meshSizeHighlightModel ? (
-          <span>
-            {sceneProps.meshSizeHighlightModel.label} ·{" "}
-            {sceneProps.meshSizeHighlightModel.sampledElementCount.toLocaleString(
-              "en-US",
-            )}
-            /
-            {sceneProps.meshSizeHighlightModel.matchedElementCount.toLocaleString(
-              "en-US",
-            )} highlighted
-          </span>
-        ) : null}
-        <span>{status}</span>
         {sceneProps.primitiveModel?.diagnostics?.map((issue) => (
           <span key={issue.objectId} role="alert">
             Geometry preview unavailable · {issue.objectId}: {issue.message}
@@ -3126,6 +3132,8 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   );
 });
 
+const ANTENNA_INSPECTION_HUD_NOTE =
+  "inspection only · external electrode truncation · not qualified for LLG";
 const INSPECT_TOOLTIP_OFFSET_PX = 14;
 
 const VIEWPORT_FIELD_FRESHNESS_LABEL: Record<

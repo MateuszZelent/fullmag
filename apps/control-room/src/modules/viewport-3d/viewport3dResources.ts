@@ -1583,10 +1583,20 @@ export function useViewport3DAnalysisFieldVector(
   return useViewport3DFieldVectorRequest(request, enabled, options);
 }
 
+export interface Viewport3DFieldVectorRequestOptions {
+  /**
+   * Whether a load failure is also announced as a global toast. Callers whose
+   * failure is already the viewport's foreground surface (the field-data issue
+   * banner) pass `false`; resource state and hook diagnostics are kept.
+   */
+  notifyOnError?: boolean;
+  pauseLoad?: boolean;
+}
+
 export function useViewport3DFieldVectorRequest(
   request: Viewport3DFieldResourceRequest,
   enabled = true,
-  options: { pauseLoad?: boolean } = {},
+  options: Viewport3DFieldVectorRequestOptions = {},
 ) {
   const { api, resources } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
@@ -1644,6 +1654,7 @@ export function useViewport3DFieldVectorRequest(
     enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
+    notifyOnError: options.notifyOnError ?? true,
     pauseLoad: options.pauseLoad,
     retryPolicy: FIELD_VECTOR_RETRY_POLICY,
     resolveRevision,
@@ -1681,6 +1692,7 @@ export function validateViewport3DObservationFrameMagnetization(
 export function useViewport3DObservationFrameMagnetization(
   frameId: string | null | undefined,
   enabled = true,
+  options: Pick<Viewport3DFieldVectorRequestOptions, "notifyOnError"> = {},
 ) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
@@ -1727,6 +1739,7 @@ export function useViewport3DObservationFrameMagnetization(
     abortStaleInflight: true,
     enabled: enabled && Boolean(frameId) && sessionIdentity !== null,
     load,
+    notifyOnError: options.notifyOnError ?? true,
     pauseLoad: false,
     retryPolicy: FIELD_VECTOR_RETRY_POLICY,
     resolveRevision,
