@@ -51,7 +51,11 @@ function headerGeometry(page) {
 try {
   for (const theme of ["light", "dark"]) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
-    await context.addInitScript((value) => localStorage.setItem("fullmag.control-room.theme", value), theme);
+    await context.addInitScript(({ theme, apiBase }) => {
+      localStorage.setItem("fullmag.control-room.theme", theme);
+      // The page origin proxies the API, also when reached through a container alias.
+      window.__FULLMAG_CONFIG__ = { ...(window.__FULLMAG_CONFIG__ ?? {}), controlRoomApiBase: apiBase };
+    }, { theme, apiBase: new URL(url).origin });
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push({ theme, message: error.message }));
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
@@ -119,6 +123,12 @@ try {
     await host.waitFor({ timeout: 30_000 });
     const hostId = await host.evaluate((code) => ({ text: code.textContent, client: code.clientWidth, scroll: code.scrollWidth }));
     assert(hostId.client >= 60 && hostId.scroll <= hostId.client + 1, `${theme}: host ID readable ${JSON.stringify(hostId)}`);
+    const metrics = await page.evaluate(() => {
+      const body = document.querySelector(".fm-start-env__body").getBoundingClientRect();
+      const last = [...document.querySelectorAll(".fm-start-node-summary__metric")].at(-1).getBoundingClientRect();
+      return { bodyBottom: body.bottom, lastBottom: last.bottom };
+    });
+    assert(metrics.lastBottom <= metrics.bodyBottom + 1, `${theme}: compute metrics not clipped ${JSON.stringify(metrics)}`);
     const homeHeader = await headerGeometry(page);
     assert.equal(homeHeader.runControls, 0, `${theme}: no run controls on Home`);
     assert.equal(homeHeader.quickActions, 0, `${theme}: no quick actions on Home`);

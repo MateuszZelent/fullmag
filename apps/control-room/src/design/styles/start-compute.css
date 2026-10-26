@@ -9,7 +9,8 @@
   flex-direction: column;
   gap: var(--fm-space-2);
   min-height: 0;
-  max-height: min(38vh, 22rem);
+  /* Room for the full node card; the body scrolls only on short windows. */
+  max-height: min(60vh, 34rem);
   overflow: hidden;
   overscroll-behavior: contain;
 }
@@ -48,7 +49,6 @@
   flex-direction: column;
   gap: var(--fm-space-2);
   min-height: 0;
-  max-height: min(28vh, 16rem);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
