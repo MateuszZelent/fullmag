@@ -10122,9 +10122,7 @@ mod tests {
 
         assert!(
             source.contains("artifacts.record_scalar(&accepted_stats)?;")
-                && source.contains(
-                    "let magnetization = if current_stats.step % heavy_payload_every == 0"
-                )
+                && source.contains("let magnetization = if heavy_payload_due && !full_catalog_due {")
                 && source.contains("stats: live_stats,")
                 && source.contains("magnetization,")
                 && source.contains("let action = (live.on_step)(StepUpdate {")
