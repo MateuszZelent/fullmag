@@ -1106,6 +1106,61 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
     });
   });
 
+  it("retains modal results with distinct verified equilibria per sample", () => {
+    const eq0 = `sha256:${"1".repeat(64)}`;
+    const eq1 = `sha256:${"2".repeat(64)}`;
+    const input = {
+      currentRun: { revision: 30, run_id: "run-modal-samples" },
+      manifest: { result_manifest: {
+        status: "ready",
+        run_id: "run-modal-samples",
+        stage_id: "eigen",
+        payload: {
+          study_product: "modal_eigen",
+          run_id: "run-modal-samples",
+          stage_id: "eigen",
+          geometry_identity: "geometry-exact",
+          mesh_identity: "mesh-exact",
+          requested_execution: {
+            boundary_context: "floquet_periodic",
+            k_sampling: { kind: "grid", sample_count: 2 },
+          },
+          sample_execution_provenance: {
+            schema_version: "frequency_domain_sample_execution_provenance.v1",
+            status: "mixed",
+            sample_count: 2,
+            samples: [
+              { sample_index: 0, validation: { equilibrium_artifact_sha256: eq0 } },
+              { sample_index: 1, validation: { equilibrium_artifact_sha256: eq1 } },
+            ],
+          },
+        },
+      } },
+      dispersion: {
+        status: "ready",
+        path_metadata: { sampling: { kind: "grid", points: [
+          { k_vector: [0, 0, 0] }, { k_vector: [0, 1e7, 0] },
+        ] } },
+      },
+      spectrum: {
+        status: "ready",
+        payload: { modes: [{ frequency_hz: 11e9, raw_mode_index: 0, sample_index: 1,
+          mode_field_id: "field-sample-1", mode_field_resource_key: "data/fields/field-sample-1" }] },
+      },
+    };
+    const adapted = physicsFirstResultsSnapshotFromResources(input);
+    expect(adapted.contractGaps).toEqual([]);
+    expect(adapted.snapshot.entries).toHaveLength(1);
+    expect(adapted.snapshot.entries[0]?.equilibriumId).toBeUndefined();
+    const mode = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot))
+      .find((node) => node.kind === "results.dispersion.modal.mode_at_k");
+    expect(mode).toMatchObject({ sampleIndex: 1, equilibriumId: eq1 });
+
+    input.manifest.result_manifest.payload.sample_execution_provenance.samples[1]!
+      .validation.equilibrium_artifact_sha256 = "invalid";
+    expect(physicsFirstResultsSnapshotFromResources(input).snapshot.entries).toEqual([]);
+  });
+
   it("fails closed when owner, equilibrium, or boundary evidence is absent", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
       currentRun: { revision: 2, run_id: "run-2" },

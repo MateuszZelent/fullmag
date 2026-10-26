@@ -17,6 +17,7 @@ import {
 } from "@/shared/domain/analysis/frequencyDomainResultClassification";
 import {
   frequencyDomainResultContextFromManifest,
+  frequencyDomainEquilibriumIdForSample,
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
@@ -68,6 +69,7 @@ export interface PhysicsFirstResultEntry extends FrequencyDomainResultEvidence {
 }
 
 export interface PhysicsFirstAnalysisFieldTarget {
+  equilibriumId?: string;
   fieldId: string;
   frequencyHz: number;
   frequencyIndex?: number;
@@ -475,17 +477,19 @@ export function physicsFirstResultsSnapshotFromResources(
   if (!runId || !payload) return { contractGaps, snapshot: emptySnapshot };
 
   const studyProduct = nonEmptyString(payload.study_product);
-  const equilibriumId = nonEmptyString(payload.equilibrium_identity);
+  const declaredEquilibriumId = nonEmptyString(payload.equilibrium_identity);
+  const hasSampleEquilibrium = payload.sample_execution_provenance != null ||
+    payload.native_provenance_by_sample != null;
   const requested = record(payload.requested_execution);
   const boundaryContext = nonEmptyString(requested?.boundary_context);
-  if (!equilibriumId) {
+  if (!declaredEquilibriumId && !hasSampleEquilibrium) {
     addContractGap("Frequency-domain artifact does not publish equilibrium_identity");
   }
   if (boundaryContext !== "finite_open" && boundaryContext !== "floquet_periodic") {
     addContractGap("Frequency-domain artifact does not publish boundary_context");
   }
   if (
-    !equilibriumId ||
+    (!declaredEquilibriumId && !hasSampleEquilibrium) ||
     (studyProduct !== "modal_eigen" && studyProduct !== "driven_response") ||
     (boundaryContext !== "finite_open" && boundaryContext !== "floquet_periodic")
   ) {
@@ -512,6 +516,10 @@ export function physicsFirstResultsSnapshotFromResources(
   });
   for (const gap of frequencyContext.contractGaps) {
     addContractGap(gap);
+  }
+  const equilibriumId = frequencyContext.equilibriumId;
+  if (!equilibriumId && frequencyContext.sampleEquilibriumProvenance !== "valid") {
+    return { contractGaps, snapshot: { ...emptySnapshot, contractGaps: [...contractGaps] } };
   }
   const ownerRunId = frequencyContext.runId;
   const ownerStageId = frequencyContext.stageId;
@@ -548,12 +556,20 @@ export function physicsFirstResultsSnapshotFromResources(
             dispersion: input.dispersion,
             ...(kSampling ? { kSampling } : {}),
             spectrum: input.spectrum,
+          }).map((target) => {
+            const sampleEquilibriumId = frequencyDomainEquilibriumIdForSample(
+              frequencyContext, target.sampleIndex,
+            );
+            return {
+              ...target,
+              ...(sampleEquilibriumId ? { equilibriumId: sampleEquilibriumId } : {}),
+            };
           })
         : responseFieldTargets(payload, input.responseSweep, kSampling ?? undefined),
     artifactRevision,
     boundaryContext,
     ...(drive ? { drive } : {}),
-    equilibriumId,
+    ...(equilibriumId ? { equilibriumId } : {}),
     ...(kSampling ? { kSampling } : {}),
     observables: observablesFromPayload(payload.observables),
     ...(frequencyContext.normalization ? { normalization: frequencyContext.normalization } : {}),
@@ -683,7 +699,7 @@ function analysisFieldTargetNodes(
         analysisRunId: entry.runId,
         analysisStageId: entry.stageId,
         artifactRevision: entry.artifactRevision,
-        equilibriumId: entry.equilibriumId,
+        equilibriumId: target.equilibriumId ?? entry.equilibriumId,
         fieldId: target.fieldId,
         frequencyHz: target.frequencyHz,
         ...(target.frequencyIndex !== undefined
