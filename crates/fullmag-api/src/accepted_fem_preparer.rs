@@ -165,8 +165,11 @@ pub(crate) fn prepare_accepted_fem_task(
             &specification, task_id, step, entry.problem(), native)?)
     } else {
         let solver = match &execution_plan.backend_plan {
-            BackendPlanIR::Fem(_) => accepted.materialize_fem_preparation_receipt(
-                preparation_id, &step.step_id, &native),
+            BackendPlanIR::Fem(_)
+            | BackendPlanIR::FemEigen(_)
+            | BackendPlanIR::FemFrequencyResponse(_) => {
+                accepted.materialize_fem_preparation_receipt(preparation_id, &step.step_id, &native)
+            }
             BackendPlanIR::AntennaExternalLeadInspection(_) => accepted
                 .materialize_antenna_external_lead_inspection_preparation_receipt(
                     preparation_id, &step.step_id, &native),
@@ -213,10 +216,12 @@ pub(crate) fn prepare_accepted_fem_task(
 fn accepted_preparation_mesh(plan: &BackendPlanIR) -> Result<(&fullmag_ir::MeshIR, u32)> {
     match plan {
         BackendPlanIR::Fem(fem) => Ok((&fem.mesh, fem.fe_order)),
+        BackendPlanIR::FemEigen(fem) => Ok((&fem.mesh, fem.fe_order)),
+        BackendPlanIR::FemFrequencyResponse(fem) => Ok((&fem.mesh, fem.fe_order)),
         BackendPlanIR::AntennaExternalLeadInspection(antenna) => {
             Ok((&antenna.input.combined_mesh, 1))
         }
-        _ => bail!("accepted FEM preparer requires a time-domain FEM or antenna inspection plan"),
+        _ => bail!("accepted FEM preparer requires a magnetic FEM or antenna inspection plan"),
     }
 }
 
@@ -250,7 +255,7 @@ mod tests {
     use anyhow::Error;
 
     #[test]
-    fn mesh_selection_preserves_magnetic_mesh_order_and_rejects_fdm() {
+    fn mesh_selection_preserves_magnetic_mesh_order_for_all_fem_studies() {
         let mut fem = fullmag_ir::FemPlanIR::default();
         fem.fe_order = 2;
         let plan = BackendPlanIR::Fem(fem);
@@ -262,11 +267,128 @@ mod tests {
         // Selection must not silently coerce magnetic order; native H1
         // validation remains responsible for rejecting unsupported orders.
         assert_eq!(order, 2);
-        let error = accepted_preparation_mesh(
-            &BackendPlanIR::Fdm(fullmag_ir::FdmPlanIR::default()),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("time-domain FEM or antenna inspection"));
+
+        for study in [
+            fullmag_ir::StudyIR::Eigenmodes {
+                dynamics: fullmag_ir::ProblemIR::bootstrap_example()
+                    .study
+                    .dynamics()
+                    .clone(),
+                operator: fullmag_ir::EigenOperatorConfigIR {
+                    kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                    include_demag: false,
+                },
+                count: 1,
+                target: fullmag_ir::EigenTargetIR::Lowest,
+                equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+                k_sampling: None,
+                bias_field_sweep: None,
+                normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+                damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+                spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+                magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+                sampling: fullmag_ir::SamplingIR {
+                    table_autosave: None,
+                    stage_autosave: None,
+                    outputs: Vec::new(),
+                },
+                mode_tracking: None,
+            },
+            fullmag_ir::StudyIR::FrequencyResponse {
+                dynamics: fullmag_ir::ProblemIR::bootstrap_example()
+                    .study
+                    .dynamics()
+                    .clone(),
+                operator: fullmag_ir::EigenOperatorConfigIR {
+                    kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                    include_demag: false,
+                },
+                equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+                k_sampling: None,
+                normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+                damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+                spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+                magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+                excitation: fullmag_ir::FrequencyExcitationIR {
+                    field_au_per_m: [0.0, 0.0, 1.0],
+                    phase_rad: 0.0,
+                },
+                frequencies_hz: fullmag_ir::FrequencySweepIR {
+                    values_hz: vec![1.0e9],
+                },
+                solver_policy: None,
+                sampling: fullmag_ir::SamplingIR {
+                    table_autosave: None,
+                    stage_autosave: None,
+                    outputs: Vec::new(),
+                },
+            },
+        ] {
+            let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+            problem.backend_policy.requested_backend = BackendTarget::Fem;
+            problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+                fdm: None,
+                fem: Some(fullmag_ir::FemHintsIR {
+                    order: 1,
+                    hmax: 2.0e-9,
+                    mesh: Some("meshes/preparation-tet.msh".into()),
+                    demag_solver_policy: None,
+                }),
+                hybrid: None,
+            });
+            let expected_mesh = fullmag_ir::MeshIR::from_legacy_tet4(
+                "preparation-tet".into(),
+                vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0e-9, 0.0, 0.0],
+                    [0.0, 1.0e-9, 0.0],
+                    [0.0, 0.0, 1.0e-9],
+                ],
+                vec![[0, 1, 2, 3]],
+                vec![7],
+                vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+                vec![11, 12, 13, 14],
+                Vec::new(),
+                Vec::new(),
+                std::collections::HashMap::new(),
+            );
+            problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+                fdm_grid_assets: Vec::new(),
+                fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+                    geometry_name: "strip".into(),
+                    mesh_source: Some("meshes/preparation-tet.msh".into()),
+                    mesh: Some(expected_mesh.clone()),
+                }],
+                fem_domain_mesh_asset: None,
+            });
+            problem.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+            problem.study = study;
+            let mut planned = fullmag_plan::plan(&problem)
+                .expect("modal FEM preparation test fixture should plan")
+                .backend_plan;
+            match &mut planned {
+                BackendPlanIR::FemEigen(plan) => plan.fe_order = 2,
+                BackendPlanIR::FemFrequencyResponse(plan) => plan.fe_order = 2,
+                other => panic!("expected a frequency-domain FEM plan, got {other:?}"),
+            }
+            let (selected_mesh, selected_order) = match &planned {
+                BackendPlanIR::FemEigen(plan) => (&plan.mesh, plan.fe_order),
+                BackendPlanIR::FemFrequencyResponse(plan) => (&plan.mesh, plan.fe_order),
+                other => panic!("expected a frequency-domain FEM plan, got {other:?}"),
+            };
+            let (mesh, order) = accepted_preparation_mesh(&planned).unwrap();
+            assert!(std::ptr::eq(mesh, selected_mesh));
+            assert_eq!(mesh, &expected_mesh);
+            assert_eq!(order, selected_order);
+            assert_eq!(order, 2);
+        }
+
+        let error =
+            accepted_preparation_mesh(&BackendPlanIR::Fdm(fullmag_ir::FdmPlanIR::default()))
+                .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("magnetic FEM or antenna inspection"));
     }
 
     #[test]
