@@ -1,7 +1,7 @@
 # Plan refaktoryzacji: uruchomienie eigensolve i trwały zapis danych
 
 Data: 26.10.2026. Audyt i plan zapisano przed wznowieniem celu. Obecny etap:
-**zadanie 3/8 — wznowienie przygotowanego pakietu; pierwsza próba apply odrzucona przed native**.
+**zadanie 4/8 — kontrolowany restart po potwierdzonym zwolnieniu historycznej rezerwacji**.
 
 Źródło stanu: [audyt wykonania](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.md)
 i [evidence JSON](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.evidence.json).
@@ -67,7 +67,7 @@ control/source/package zamiast nowego launchera lub drugiego systemu grantów.
 |---|---|---|
 | 1/8 — audyt i zamrożenie | Zakończone dokumentacyjnie | Audyt, evidence, kopia WIP, ten plan |
 | 2/8 — spójny kontrakt i źródła | Zakończone: Rust CI i native preview PASS dla `ccc38b7c3` | Review kontraktu, kompletny zakres kodu, zielony odpowiedni build/CI |
-| 3/8 — zamknięcie zakończonego workera | W toku: poprawka porównania capture; native apply jeszcze niewywołane | Exact local Released + host Released + normalny proof, dane bez zmian |
+| 3/8 — zamknięcie zakończonego workera | Zakończone: local/host Released, normalny proof i zachowane dane | Exact local Released + host Released + normalny proof, dane bez zmian |
 | 4/8 — poprawny start runtime | Otwarte; przyczyna sample admission nieustalona | Ready owner i bieżący sample, działający scheduler bez kwarantanny |
 | 5/8 — zaakceptowany Relax | Historyczny native Relax jest; nowa publikacja otwarta | Certyfikat w CAS i zaakceptowane wyjście do Eigen w nowym runie |
 | 6/8 — rzeczywisty Eigen +10 | Brak wyniku nowego runu | Native frequency + residual + zespolony mod i terminalny sukces |
@@ -194,8 +194,8 @@ private release helper, testy; poprawki `solution_set.rs`/scheduler już istniej
 **Odbiór:**
 
 - [x] Wstrzyknięta awaria między fazami daje poprawny, idempotentny replay bez sztucznego proof.
-- [ ] W rzeczywistym runtime lease i rezerwacja są Released, istnieje normalny proof i dokładny scope wszystkich tożsamości.
-- [ ] Failed pozostaje Failed; 14 artifact IDs i raw katalog zachowane, brak ponownego Solve.
+- [x] W rzeczywistym runtime lease i rezerwacja są Released, istnieje normalny proof i dokładny scope wszystkich tożsamości.
+- [x] Failed pozostaje Failed; 14 artifact IDs i raw katalog zachowane, brak ponownego Solve.
 
 **Checkpoint po 2–3:** nie zaczynać restartu z niepotwierdzonym wynikiem apply.
 Odmowa lub timeout wymaga inspect, nie zmiany progu lub ręcznej edycji JSON.
@@ -220,9 +220,28 @@ capture, trzy rodzaje driftu i naruszenie oryginalnych bajtów. Dodatkowy test w
 rzeczywistych plikach tymczasowych i potwierdza zachowanie oryginału po dwóch
 verification captures; 71 testów Pythona PASS. Review nie wykazało błędu
 produkcyjnego; wskazana luka pokrycia została uzupełniona. Nowy rzeczywisty
-prepare→apply pozostaje do wykonania.
-Stara operacja i jej failure receipt zostają zachowane; ponowienie użyje
-nowego UUID i nowego przypiętego commita, bez naprawiania starych manifestów.
+prepare→apply zakończył się sukcesem; dowody poniżej.
+Stara operacja i jej failure receipt zostały zachowane bez naprawiania manifestów.
+
+### Odbiór zadania 3 — rzeczywisty runtime
+
+Commit `4a99aaf1d4b7f661d77d15b72310714da0a0a9f9`, operacja
+`218d327b-eb0a-4fde-8c0a-af6d2385f21e`: prepare i apply zakończone kodem 0,
+`state=succeeded`, native `disposition=released`. Receipt kandydata:
+`0b158e32153f1883d8dabcb471f66d982af209f7416e43fe7d7024231cbb4096`.
+Normalny plik `host_resource_release_proof.v1` odczytano niezależnie i
+sprawdzono jego SHA-256:
+`570303f0d011757e00a3e3a0a62f8de47b3caddc1f8ab17b577e71addd745597`.
+
+Proof wiąże konkretny historyczny run/task/attempt/epoch=1 i lease
+`lease-ad1b7669c0c247f3b012afcc3a19b279` z process-exit receipt
+`worker-process-exit-a81cd4224bf8f2fe21c3377c1c59945373a18f3fc96318f0b6c71715d13bd17f`.
+Local i host mają `released`; timestamp `2026-10-26T21:21:22.644006017Z`.
+Task pozostaje Failed, katalog zachował SHA-256
+`90a7c1fc71aba6ef5129136862276da6c52866af1bf477cfeb59821c4211dd7d`
+i wszystkie 14 artifact IDs. `solver_replayed=false`,
+`artifacts_requalified=false`; oryginalny manifest zachował zgodność z receiptem.
+To dowód odzyskania zasobów, nie nowy wynik fizyczny.
 
 ## Zadanie 4/8: wystartować runtime z poprawnym admission
 
@@ -371,6 +390,5 @@ commita i dowodu odbioru. Nie commitować nieukończonych referencji do modułó
 Nie obiecywać, że „następny build na pewno uruchomi solve”. Jeśli etap blokuje
 nieznany kontrakt, raport wskazuje konkretną granicę i zatrzymuje prace zależne.
 
-Bieżący krok: **3.5**, review poprawki capture oraz nowy managed prepare→apply.
-Restart i Solve pozostają zależne od rzeczywistego release oraz potwierdzenia
-zachowania katalogu i wszystkich 14 artefaktów.
+Bieżący krok: **4.2–4.3**, managed diagnostic stop i odtworzenie runtime.
+Release potwierdzony; nowy Relax/Eigen, trwały odczyt i UI pozostają do wykonania.

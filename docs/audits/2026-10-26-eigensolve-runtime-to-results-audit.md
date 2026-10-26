@@ -166,3 +166,23 @@ Dowód: operacja `ada79f8d-9916-41dd-a9ec-c8053c2da6d8` uzyskała
 oryginalny hash katalogu, 14 artifact IDs, local Active / host Quarantined.
 Nie wykonano naprawy starych danych. Poprawkę i kryteria odbioru opisuje
 zadanie 3.5 planu; jej runtime pozostaje otwarte do nowego prepare→apply.
+
+## Zamknięcie A11 i historycznej rezerwacji
+
+Commit `4a99aaf1d4b7f661d77d15b72310714da0a0a9f9`, operacja
+`218d327b-eb0a-4fde-8c0a-af6d2385f21e`: prepare i apply zakończone kodem 0,
+`state=succeeded`, native `disposition=released`. Receipt kandydata:
+`0b158e32153f1883d8dabcb471f66d982af209f7416e43fe7d7024231cbb4096`.
+Normalny plik `host_resource_release_proof.v1` odczytano niezależnie i
+sprawdzono jego SHA-256:
+`570303f0d011757e00a3e3a0a62f8de47b3caddc1f8ab17b577e71addd745597`.
+
+Proof wiąże konkretny historyczny run/task/attempt/epoch=1 i lease
+`lease-ad1b7669c0c247f3b012afcc3a19b279` z process-exit receipt
+`worker-process-exit-a81cd4224bf8f2fe21c3377c1c59945373a18f3fc96318f0b6c71715d13bd17f`.
+Local i host mają `released`; timestamp `2026-10-26T21:21:22.644006017Z`.
+Task pozostaje Failed, katalog zachował SHA-256
+`90a7c1fc71aba6ef5129136862276da6c52866af1bf477cfeb59821c4211dd7d`
+i wszystkie 14 artifact IDs. `solver_replayed=false`,
+`artifacts_requalified=false`; oryginalny manifest zachował zgodność z receiptem.
+To dowód odzyskania zasobów, nie nowy wynik fizyczny.
