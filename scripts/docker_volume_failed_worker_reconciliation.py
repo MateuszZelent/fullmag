@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -43,6 +44,22 @@ CONTAINER_RE = re.compile(r"[0-9a-f]{64}\Z")
 UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z"
 )
+
+
+@dataclass
+class ReconciliationOperation:
+    """One child operation under the retained parent activation lease."""
+
+    request_id: str
+    root: str
+    phase: str = "context"
+    recordable: bool = False
+    prepared_candidate: bool = False
+    native_invoked: bool = False
+    terminal_recorded: bool = False
+
+    def path(self, name: str) -> str:
+        return self.root + "/" + name
 
 
 class ReconciliationError(BuildControlError):
@@ -708,7 +725,14 @@ def _load_context(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def _assert_child_lock_alive(context: Mapping[str, object]) -> None:
+    lock_process = context.get("maintenance_lock_process")
+    if lock_process is not None and lock_process.poll() is not None:
+        _fail("maintenance child lock exited; inspect the operation before retrying")
+
+
 def _recheck_context(args: argparse.Namespace, context: Mapping[str, object]) -> None:
+    _assert_child_lock_alive(context)
     from docker_volume_activation_reconcile import (
         _validate_activation_receipt,
         _validate_helper,
@@ -863,6 +887,8 @@ def _receipt_document(
     error: str | None = None,
     candidate_receipt_sha256: str | None = None,
     candidate_package: str | None = None,
+    phase: str | None = None,
+    native_invoked: bool | None = None,
 ) -> dict[str, object]:
     document: dict[str, object] = {
         "schema": RECEIPT_SCHEMA,
@@ -884,6 +910,10 @@ def _receipt_document(
     }
     if error is not None:
         document["error"] = " ".join(str(error).split())[-2048:]
+    if phase is not None:
+        document["phase"] = phase
+    if native_invoked is not None:
+        document["native_invoked"] = native_invoked
     return document
 
 
@@ -912,6 +942,12 @@ def _existing_operation(
     dict[str, object] | None,
     dict[str, object] | None,
 ]:
+    prior_failure_raw = _control_raw(control, operation_root + "/pre-native-failure.json", optional=True)
+    if prior_failure_raw is not None:
+        prior_failure = _read_json_bytes(prior_failure_raw, "prior pre-native failure")
+        if prior_failure.get("schema") != RECEIPT_SCHEMA or prior_failure.get("operation_id") != request_id:
+            _fail("prior pre-native failure has a foreign identity")
+        _fail("this operation failed before native execution; inspect it before a new request")
     # Preparation and apply have separate immutable terminals.  A native apply
     # may have released the lease before the client was interrupted; never try
     # to overwrite the preparation receipt while recovering that outcome.
@@ -949,11 +985,17 @@ def _invoke_native(
     *,
     apply: bool,
     candidate_receipt_sha256: str,
+    candidate_receipt_path: str,
 ) -> tuple[bytes, bytes]:
     _require_digest(candidate_receipt_sha256, "candidate receipt digest")
     command = native_command(
         _candidate_executable(package), config_path, request_path, apply=apply
     )
+    request_parent = str(PurePosixPath(request_path).parent)
+    if candidate_receipt_path != request_parent + "/candidate-receipt.json":
+        _fail("maintenance candidate receipt is outside the immutable request scope")
+    command.extend(("--candidate-receipt", candidate_receipt_path,
+                    "--candidate-receipt-sha256", candidate_receipt_sha256))
     environment = {
         "FULLMAG_RUNTIME_ROOT": package,
         "FULLMAG_RUNTIME_PACKAGE_ROOT": package,
@@ -983,6 +1025,17 @@ def _validate_existing_candidate(
 ) -> tuple[str, dict[str, object], bytes]:
     if stored_request_raw != request_raw:
         _fail("prepared candidate request differs from the current durable pins")
+    request = _read_json_bytes(request_raw, "prepared candidate native request")
+    reconciliation = _object(request.get("reconciliation"), "prepared candidate reconciliation")
+    lease = _object(reconciliation.get("expected_lease"), "prepared candidate lease")
+    exit_receipt = _object(reconciliation.get("expected_receipt"), "prepared candidate exit receipt")
+    native_result = validate_native_result(
+        _object(receipt.get("native_result"), "prepared native preview"),
+        _sha256(request_raw), lease.get("run_id"), lease.get("task_id"),
+        lease.get("lease_token"), exit_receipt.get("receipt_id"), request_id=request_id,
+    )
+    if native_result.get("disposition") != "validated" or native_result.get("release_proof_sha256") is not None:
+        _fail("prepared candidate has no successful native preview")
     if not isinstance(stored_source, Mapping):
         _fail("prepared candidate has no immutable source capture record")
     if (
@@ -1079,16 +1132,98 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     except RuntimeError as error:
         raise ReconciliationError("failed-worker context validation failed: " + str(error)) from error
     request_id = _request_id_for_args(args)
+    operation = ReconciliationOperation(
+        request_id=request_id,
+        root=_operation_root(args.pending_activation) + "/" + request_id,
+    )
+    # Serialize maintenance children and resource changes while retaining the
+    # original activation helper as the only /control/active owner.
+    with _maintenance_lock(context["control"], args.pending_activation) as lock_process:
+        if lock_process is None or lock_process.poll() is not None:
+            _fail("maintenance child lock is not alive")
+        context["maintenance_lock_process"] = lock_process
+        return _run_with_failure_receipt(args, context, operation)
+
+
+def _maintenance_lock(control: Any, activation_attempt: str):
+    from docker_volume_resources import _resource_lock
+
+    _require_attempt(activation_attempt, "pending activation")
+    return _resource_lock(control, "activation/attempts/" + activation_attempt, activation_attempt)
+
+
+def _run_with_failure_receipt(
+    args: argparse.Namespace,
+    context: Mapping[str, object],
+    operation: ReconciliationOperation,
+) -> dict[str, object]:
+    try:
+        return _run_authenticated(args, context, operation)
+    except Exception as error:
+        if (operation.recordable and not operation.native_invoked and not operation.terminal_recorded
+                and (getattr(args, "prepare_candidate", False) or getattr(args, "apply", False))):
+            try:
+                _record_pre_native_failure(args, context, operation, error)
+            except Exception as record_error:
+                raise ReconciliationError(
+                    "failure before native execution could not be recorded safely: " + str(record_error)
+                ) from error
+        raise
+
+
+def _record_pre_native_failure(
+    args: argparse.Namespace,
+    context: Mapping[str, object],
+    operation: ReconciliationOperation,
+    error: Exception,
+) -> None:
+    # Only publish under a still-authenticated parent helper. A client timeout
+    # may leave a Docker-side capture/build running, even though native release
+    # was never invoked; record that uncertainty separately from ledger state.
+    _recheck_context(args, context)
+    cause = error.__cause__
+    document = {
+        "schema": RECEIPT_SCHEMA,
+        "state": "failed-before-native",
+        "operation_id": operation.request_id,
+        "phase": operation.phase,
+        "development_attempt": args.attempt,
+        "iteration_attempt": args.iteration_attempt,
+        "activation_attempt": args.pending_activation,
+        "compose_project": context["control"].project,
+        "control_volume": context["control"].volume,
+        "backend_container_id": context["backend_id"],
+        "run_id": args.run_id,
+        "task_id": args.task_id,
+        "exit_receipt_id": args.exit_receipt_id,
+        "native_invoked": False,
+        "daemon_operation_may_remain": bool(getattr(cause, "reconciliation_required", False)),
+        "error": " ".join(str(error).split())[-2048:],
+    }
+    raw = _canonical_json(document)
+    if operation.prepared_candidate:
+        name = "apply-pre-native-failure-" + _sha256(raw) + ".json"
+    else:
+        name = "pre-native-failure.json"
+    _publish_immutable(context["control"], operation.path(name), raw)
+
+
+def _run_authenticated(
+    args: argparse.Namespace,
+    context: Mapping[str, object],
+    operation: ReconciliationOperation,
+) -> dict[str, object]:
+    request_id = operation.request_id
     control = context["control"]
-    operation_root = _operation_root(args.pending_activation) + "/" + request_id
-    request_relative = operation_root + "/request.json"
-    source_relative = operation_root + "/source.json"
-    candidate_relative = operation_root + "/candidate-receipt.json"
-    prepare_log_relative = operation_root + "/prepare-log.json"
-    prepare_receipt_relative = operation_root + "/prepare-receipt.json"
-    apply_log_relative = operation_root + "/apply-log.json"
-    terminal_relative = operation_root + "/terminal.json"
-    operation_relative = operation_root + "/operation.json"
+    operation_root = operation.root
+    request_relative = operation.path("request.json")
+    source_relative = operation.path("source.json")
+    candidate_relative = operation.path("candidate-receipt.json")
+    prepare_log_relative = operation.path("prepare-log.json")
+    prepare_receipt_relative = operation.path("prepare-receipt.json")
+    apply_log_relative = operation.path("apply-log.json")
+    terminal_relative = operation.path("terminal.json")
+    operation_relative = operation.path("operation.json")
 
     _recheck_context(args, context)
     existing, stored_request_raw, stored_request, stored_source = _existing_operation(
@@ -1138,6 +1273,13 @@ def run(args: argparse.Namespace) -> dict[str, object]:
 
     prepare_candidate = bool(getattr(args, "prepare_candidate", False))
     apply = bool(getattr(args, "apply", False))
+    if apply and existing is None:
+        _fail("apply requires the same successfully prepared and native-validated candidate")
+    if apply and _control_raw(control, operation.path("apply-start.json"), optional=True) is not None:
+        _fail("a previous apply may still be running or have committed; inspect its durable outcome")
+    operation.recordable = True
+    operation.prepared_candidate = existing is not None
+    operation.phase = "source-capture"
     source, capture_raw = _capture_source(context["backend_id"], request_id)
     _recheck_context(args, context)
     if existing is not None and apply:
@@ -1153,6 +1295,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         )
         request_raw = stored_request_raw
     else:
+        operation.phase = "collect-durable-records"
         durable = _collect_expected_records(
             context["backend_id"], args.run_id, args.task_id, args.exit_receipt_id
         )
@@ -1171,6 +1314,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     build_stdout = b""
     build_stderr = b""
     if existing is not None:
+        operation.phase = "validate-prepared-candidate"
         if stored_request is None or stored_request_raw is None:
             _fail("prepared candidate has no immutable request")
         package, candidate_receipt, candidate_receipt_raw = _validate_existing_candidate(
@@ -1191,9 +1335,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         if prepare_candidate:
             return existing
     else:
+        operation.phase = "publish-request"
+        _assert_child_lock_alive(context)
         _publish_immutable(control, request_relative, request_raw)
+        _assert_child_lock_alive(context)
         _publish_immutable(control, source_relative, _canonical_json(_source_record(request_id, source)))
-        operation = {
+        operation_record = {
             "schema": SUBOPERATION_SCHEMA,
             "state": "request-published",
             "operation_id": request_id,
@@ -1214,11 +1361,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             },
             "mode": "prepare-candidate" if prepare_candidate else "apply",
         }
-        _publish_immutable(control, operation_relative, _canonical_json(operation))
+        _assert_child_lock_alive(context)
+        _publish_immutable(control, operation_relative, _canonical_json(operation_record))
         _recheck_context(args, context)
+        operation.phase = "candidate-build"
         package, candidate_receipt, candidate_receipt_raw, build_stdout, build_stderr = _prepare_candidate(
             context["backend_id"], request_id, source
         )
+        _recheck_context(args, context)
         _publish_immutable(control, candidate_relative, candidate_receipt_raw)
 
     if package is None or candidate_receipt is None or candidate_receipt_raw is None:
@@ -1231,7 +1381,27 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     native_started = False
     try:
         _recheck_context(args, context)
+        if apply:
+            # Persist the fence before invoking native. A lost client response
+            # cannot silently turn an uncertain mutation into a fresh retry.
+            apply_start = {
+                "schema": SUBOPERATION_SCHEMA,
+                "state": "applying",
+                "operation_id": request_id,
+                "activation_attempt": args.pending_activation,
+                "iteration_attempt": args.iteration_attempt,
+                "request_sha256": _sha256(request_raw),
+                "candidate_receipt_sha256": candidate_receipt_sha256,
+                "backend_container_id": context["backend_id"],
+                "backend_started_at": context["backend_started_at"],
+                "run_id": args.run_id,
+                "task_id": args.task_id,
+                "exit_receipt_id": args.exit_receipt_id,
+            }
+            _publish_immutable(control, operation.path("apply-start.json"), _canonical_json(apply_start))
         native_started = True
+        operation.native_invoked = True
+        operation.phase = "native-apply" if apply else "native-preview"
         native_stdout, native_stderr = _invoke_native(
             context["backend_id"],
             package,
@@ -1239,6 +1409,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             request_path,
             apply=apply,
             candidate_receipt_sha256=candidate_receipt_sha256,
+            candidate_receipt_path="/opt/fullmag/control/" + candidate_relative,
         )
         native_result = _native_output(native_stdout)
         reconciliation = native_request["reconciliation"]
@@ -1299,8 +1470,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         # A candidate build/probe failure is known before native mutation. A
         # native timeout/nonzero result is retained as unknown because the
         # writer may have committed before the client observed it.
-        state = "outcome-unknown-resources-retained" if native_started else "failed-confirmed"
+        state = "outcome-unknown-resources-retained" if apply and native_started else "failed-confirmed"
         try:
+            _recheck_context(args, context)
             _publish_log_once(
                 control,
                 apply_log_relative if apply else prepare_log_relative,
@@ -1329,12 +1501,15 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                         error=error,
                         candidate_receipt_sha256=candidate_receipt_sha256,
                         candidate_package=package,
+                        phase=operation.phase,
+                        native_invoked=native_started,
                     )
                 ),
             )
+            operation.terminal_recorded = True
         except Exception as record_error:
             raise ReconciliationError(
-                "failed-worker reconciliation outcome is unknown and its receipt could not be retained: "
+                "failed-worker reconciliation outcome requires inspection and its receipt could not be retained: "
                 + str(record_error)
             ) from error
         raise
@@ -1421,7 +1596,7 @@ import stat
 import sys
 
 sys.path.insert(0, "/opt/fullmag")
-from backend_dev import _validated_package
+from backend_dev import _validated_package, _assert_direct_candidate_inventory
 
 root = Path(sys.argv[1])
 expected_receipt_sha256 = sys.argv[2]
@@ -1433,6 +1608,13 @@ for parent in (*reversed(root.parents), root):
     if not stat.S_ISDIR(metadata.st_mode):
         raise RuntimeError("candidate package parent is not a regular directory")
 receipt, receipt_raw, _ = _validated_package(root, "failed-worker maintenance")
+# Reuse the image-owned package tree gate before executing anything. The
+# legacy prepare route may contain the known, unused launcher bin/fullmag.
+records = list(receipt["artifacts"])
+legacy_launcher = root / "bin/fullmag"
+if legacy_launcher.exists() or legacy_launcher.is_symlink():
+    records.append({"path": "bin/fullmag"})
+_assert_direct_candidate_inventory(root, records, include_receipt=True)
 if hashlib.sha256(receipt_raw).hexdigest() != expected_receipt_sha256:
     raise RuntimeError("candidate receipt differs from immutable control receipt")
 binary = root / "bin/fullmag-runtime-service"
@@ -1576,32 +1758,29 @@ if task.get("lifecycle") != "failed":
 for key in ("attempt_id", "ownership_epoch", "resource_id"):
     if task.get(key) is None:
         raise RuntimeError("failed task has no durable " + key)
-resource_id = task["resource_id"]
-lease_root = run_root / "resource_leases" / resource_id
-if lease_root.is_symlink() or not lease_root.is_dir():
-    raise RuntimeError("failed task resource lease directory is unavailable")
-leases = []
-for entry in sorted(lease_root.iterdir(), key=lambda item: item.name):
-    if entry.is_symlink() or not entry.is_file() or not entry.name.endswith(".json"):
-        raise RuntimeError("resource lease inventory contains an unknown entry")
-    value_raw = raw(entry)
-    value = obj(value_raw, "resource lease")
-    if (value.get("run_id") == RUN_ID and value.get("task_id") == TASK_ID
-            and value.get("attempt_id") == task.get("attempt_id")
-            and value.get("ownership_epoch") == task.get("ownership_epoch")):
-        leases.append((value, value_raw))
-if len(leases) != 1:
-    raise RuntimeError("failed task does not have one exact resource lease")
-lease, lease_raw = leases[0]
-if lease.get("state") != "active":
-    raise RuntimeError("failed task resource lease is not active")
+# The authoritative exit receipt identifies the exact lease; never scan the
+# resource directory and infer a lease from a terminal task alone.
 receipt_path = run_root / "worker_process_exit_receipts" / (RECEIPT_ID + ".json")
 receipt_raw = raw(receipt_path)
 receipt = obj(receipt_raw, "worker process exit receipt")
-if (receipt.get("receipt_id") != RECEIPT_ID or receipt.get("run_id") != RUN_ID
-        or receipt.get("task_id") != TASK_ID
-        or receipt.get("lease_token") != lease.get("lease_token")):
+resource_id = receipt.get("resource_id")
+lease_token = receipt.get("lease_token")
+if (not valid_id(resource_id) or not valid_id(lease_token)
+        or receipt.get("receipt_id") != RECEIPT_ID or receipt.get("run_id") != RUN_ID
+        or receipt.get("task_id") != TASK_ID or resource_id != task.get("resource_id")
+        or receipt.get("attempt_id") != task.get("attempt_id")
+        or receipt.get("ownership_epoch") != task.get("ownership_epoch")):
     raise RuntimeError("worker process exit receipt identity differs")
+lease_path = run_root / "resource_leases" / resource_id / (lease_token + ".json")
+lease_raw = raw(lease_path)
+lease = obj(lease_raw, "resource lease")
+if (lease.get("state") != "active" or lease.get("run_id") != RUN_ID
+        or lease.get("task_id") != TASK_ID or lease.get("resource_id") != resource_id
+        or lease.get("lease_token") != lease_token
+        or lease.get("attempt_id") != task.get("attempt_id")
+        or lease.get("ownership_epoch") != task.get("ownership_epoch")
+        or lease.get("heartbeat_sequence") != receipt.get("lease_heartbeat_sequence")):
+    raise RuntimeError("exact resource lease differs from the observed failed worker")
 
 ledger_path = pathlib.Path("/host-ledger/ledger/HOST_RESOURCE_LEDGER.json")
 ledger_raw = raw(ledger_path)

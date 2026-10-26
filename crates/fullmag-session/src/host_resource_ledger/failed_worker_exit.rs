@@ -1,7 +1,7 @@
 //! Reconcile resource cleanup after an observed failed worker, independently
 //! of scientific output publication. This never completes or retries a task.
 use super::*;
-use crate::{FmsTaskCatalogEntry, FmsTaskLifecycle};
+use crate::{FailedWorkerMaintenanceStorageAdmission, FmsTaskCatalogEntry, FmsTaskLifecycle};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -18,6 +18,7 @@ impl HostResourceLedger {
         &self,
         store: &SessionStore,
         request: &FailedWorkerExitReconciliation,
+        store_id: &str,
     ) -> Result<FmsResourceLease> {
         let expected = &request.expected_lease;
         expected.validate()?;
@@ -86,9 +87,8 @@ impl HostResourceLedger {
             released.state = FmsResourceLeaseState::Released;
             released.released_at = Some(chrono::Utc::now());
         }
-        let store_id = Self::store_id(store.root())?;
         let document = self.read_document_locked()?;
-        let identity = worker_lease_identity(&store_id, expected);
+        let identity = worker_lease_identity(store_id, expected);
         let reservation = document
             .reservations
             .iter()
@@ -124,7 +124,7 @@ impl HostResourceLedger {
         validate_reservation_matches_worker_exit(
             reservation,
             policy,
-            &store_id,
+            store_id,
             &receipt,
             &released,
         )?;
@@ -136,9 +136,40 @@ impl HostResourceLedger {
         store: &SessionStore,
         request: &FailedWorkerExitReconciliation,
     ) -> Result<()> {
+        self.preview_failed_worker_with_admission(store, request, None)
+    }
+
+    /// Cross-build admission is explicit and scoped to this exact failed exit.
+    pub fn preview_failed_worker_exit_reconciliation_with_maintenance(
+        &self,
+        store: &SessionStore,
+        request: &FailedWorkerExitReconciliation,
+        admission: &FailedWorkerMaintenanceStorageAdmission<'_>,
+    ) -> Result<()> {
+        self.preview_failed_worker_with_admission(store, request, Some(admission))
+    }
+
+    fn failed_worker_store_id(
+        store: &SessionStore,
+        request: &FailedWorkerExitReconciliation,
+        admission: Option<&FailedWorkerMaintenanceStorageAdmission<'_>>,
+    ) -> Result<String> {
+        match admission {
+            Some(admission) => admission.validate_for(store.root(), request),
+            None => Self::store_id(store.root()),
+        }
+    }
+
+    fn preview_failed_worker_with_admission(
+        &self,
+        store: &SessionStore,
+        request: &FailedWorkerExitReconciliation,
+        admission: Option<&FailedWorkerMaintenanceStorageAdmission<'_>>,
+    ) -> Result<()> {
         let _host_writer = self.writer.acquire()?;
         let _store_writer = store.write_transaction()?;
-        self.validate_failed_worker_exit_reconciliation_locked(store, request)?;
+        let store_id = Self::failed_worker_store_id(store, request, admission)?;
+        self.validate_failed_worker_exit_reconciliation_locked(store, request, &store_id)?;
         Ok(())
     }
 
@@ -147,21 +178,40 @@ impl HostResourceLedger {
         store: &SessionStore,
         request: &FailedWorkerExitReconciliation,
     ) -> Result<HostResourceReservation> {
+        self.reconcile_failed_worker_with_admission(store, request, None)
+    }
+
+    pub fn reconcile_failed_worker_after_exit_with_maintenance(
+        &self,
+        store: &SessionStore,
+        request: &FailedWorkerExitReconciliation,
+        admission: &FailedWorkerMaintenanceStorageAdmission<'_>,
+    ) -> Result<HostResourceReservation> {
+        self.reconcile_failed_worker_with_admission(store, request, Some(admission))
+    }
+
+    fn reconcile_failed_worker_with_admission(
+        &self,
+        store: &SessionStore,
+        request: &FailedWorkerExitReconciliation,
+        admission: Option<&FailedWorkerMaintenanceStorageAdmission<'_>>,
+    ) -> Result<HostResourceReservation> {
         {
             let _host_writer = self.writer.acquire()?;
             let _store_writer = store.write_transaction()?;
-            let lease = self.validate_failed_worker_exit_reconciliation_locked(store, request)?;
+            let store_id = Self::failed_worker_store_id(store, request, admission)?;
+            let lease =
+                self.validate_failed_worker_exit_reconciliation_locked(store, request, &store_id)?;
             if lease.state == FmsResourceLeaseState::Active {
                 store.release_resource_lease_unlocked(&lease)?;
             }
         }
-        // An interrupted second phase leaves the real local Released lease
-        // for the existing normal reconciliation path. Its timestamp is never
-        // regenerated, so both partial and completed replays are idempotent.
-        self.release_worker_after_exit(
+        // Two-phase replay retains the actual first release timestamp.
+        self.release_worker_after_exit_with_store_identity(
             store,
             &request.expected_lease.run_id,
             &request.expected_receipt.receipt_id,
+            || Self::failed_worker_store_id(store, request, admission),
         )
     }
 }

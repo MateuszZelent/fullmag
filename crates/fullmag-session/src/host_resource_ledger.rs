@@ -5026,9 +5026,23 @@ impl HostResourceLedger {
         run_id: &str,
         receipt_id: &str,
     ) -> Result<HostResourceReservation> {
+        self.release_worker_after_exit_with_store_identity(store, run_id, receipt_id, || {
+            Self::store_id(store.root())
+        })
+    }
+
+    // Only the ordinary admission above and exact failed-worker maintenance
+    // below can supply the validated store identity. No public string override.
+    fn release_worker_after_exit_with_store_identity(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+        receipt_id: &str,
+        store_identity: impl FnOnce() -> Result<String>,
+    ) -> Result<HostResourceReservation> {
         let _host_writer = self.writer.acquire()?;
         let _store_writer = store.write_transaction()?;
-        let store_id = Self::store_id(store.root())?;
+        let store_id = store_identity()?;
         let mut document = self.read_document_locked()?;
         let receipt = store
             .read_worker_process_exit_receipt(run_id, receipt_id)?

@@ -149,6 +149,154 @@ def _records() -> dict[str, object]:
 
 
 class FailedWorkerReconciliationContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from contextlib import nullcontext
+        live_lock = type("LiveLock", (), {"poll": lambda self: None})()
+        lock_patcher = patch.object(reconciliation, "_maintenance_lock", side_effect=lambda *_: nullcontext(live_lock))
+        self.child_lock = lock_patcher.start()
+        self.addCleanup(lock_patcher.stop)
+
+    def test_child_lock_is_rechecked_after_long_running_work(self) -> None:
+        class Lock:
+            stopped = False
+            def poll(self):
+                return 1 if self.stopped else None
+        lock = Lock()
+        context = {"maintenance_lock_process":lock}
+        reconciliation._assert_child_lock_alive(context)
+        lock.stopped = True
+        with self.assertRaisesRegex(reconciliation.ReconciliationError, "child lock exited"):
+            reconciliation._assert_child_lock_alive(context)
+
+    def test_dead_child_lock_prevents_any_operation(self) -> None:
+        from contextlib import nullcontext
+        control = type("Control", (), {"project":"project", "volume":"control"})()
+        context = {"control":control, "backend_id":"f" * 64}
+        args = _args(source_root=Path(__file__).resolve().parent,
+                     request_id=_records()["request_id"], prepare_candidate=True)
+        dead_lock = type("DeadLock", (), {"poll":lambda self: 1})()
+        self.child_lock.side_effect = lambda *_: nullcontext(dead_lock)
+        with patch.object(reconciliation, "_load_context", return_value=context), \
+             patch.object(reconciliation, "_capture_source") as capture, \
+             patch.object(reconciliation, "_invoke_native") as native:
+            with self.assertRaisesRegex(reconciliation.ReconciliationError, "child lock is not alive"):
+                reconciliation.run(args)
+            capture.assert_not_called()
+            native.assert_not_called()
+
+    def test_source_failure_records_phase_and_fences_retry(self) -> None:
+        import json
+        from docker_dev_codegen import CodegenError
+
+        class Control:
+            project = "project"
+            volume = "control"
+            records: dict[str, bytes] = {}
+
+        control = Control()
+        context = {"control": control, "backend_id": "f" * 64}
+        args = _args(source_root=Path(__file__).resolve().parent,
+                     request_id=_records()["request_id"], prepare_candidate=True)
+        def read(_control, relative, *, optional=False, maximum=0):
+            del maximum
+            value = control.records.get(relative)
+            if value is None and not optional:
+                raise reconciliation.ReconciliationError("missing " + relative)
+            return value
+        def publish(_control, relative, raw):
+            if relative in control.records and control.records[relative] != raw:
+                raise reconciliation.ReconciliationError("immutable mismatch")
+            control.records[relative] = raw
+        def failed_capture(*_args):
+            try:
+                raise CodegenError("client timed out", reconciliation_required=True)
+            except CodegenError as error:
+                raise reconciliation.ReconciliationError("capture observation timed out") from error
+        with patch.object(reconciliation, "_load_context", return_value=context), \
+             patch.object(reconciliation, "_recheck_context"), \
+             patch.object(reconciliation, "_control_raw", side_effect=read), \
+             patch.object(reconciliation, "_publish_immutable", side_effect=publish), \
+             patch.object(reconciliation, "_capture_source", side_effect=failed_capture) as capture:
+            with self.assertRaisesRegex(reconciliation.ReconciliationError, "capture observation"):
+                reconciliation.run(args)
+            root = reconciliation._operation_root(args.pending_activation) + "/" + args.request_id
+            failure = json.loads(control.records[root + "/pre-native-failure.json"])
+            self.assertEqual(failure["phase"], "source-capture")
+            self.assertFalse(failure["native_invoked"])
+            self.assertTrue(failure["daemon_operation_may_remain"])
+            with self.assertRaisesRegex(reconciliation.ReconciliationError, "failed before native"):
+                reconciliation.run(args)
+            self.assertEqual(capture.call_count, 1)
+            self.child_lock.assert_called_with(control, args.pending_activation)
+
+    def test_apply_requires_prepared_candidate_before_capture_or_build(self) -> None:
+        control = type("Control", (), {"project":"project", "volume":"control"})()
+        context = {"control":control, "backend_id":"f" * 64}
+        args = _args(source_root=Path(__file__).resolve().parent,
+                     request_id=_records()["request_id"], apply=True, prepare_candidate=False)
+        with patch.object(reconciliation, "_load_context", return_value=context), \
+             patch.object(reconciliation, "_recheck_context"), \
+             patch.object(reconciliation, "_existing_operation", return_value=(None, None, None, None)), \
+             patch.object(reconciliation, "_capture_source") as capture, \
+             patch.object(reconciliation, "_invoke_native") as native:
+            with self.assertRaisesRegex(reconciliation.ReconciliationError, "requires.*prepared"):
+                reconciliation.run(args)
+            capture.assert_not_called()
+            native.assert_not_called()
+
+    def test_plain_preview_never_publishes_failure_receipt(self) -> None:
+        control = type("Control", (), {"project":"project", "volume":"control"})()
+        context = {"control":control, "backend_id":"f" * 64}
+        args = _args(source_root=Path(__file__).resolve().parent,
+                     request_id=_records()["request_id"], prepare_candidate=False)
+        with patch.object(reconciliation, "_load_context", return_value=context), \
+             patch.object(reconciliation, "_recheck_context"), \
+             patch.object(reconciliation, "_existing_operation", return_value=(None, None, None, None)), \
+             patch.object(reconciliation, "_capture_source", side_effect=reconciliation.ReconciliationError("capture failed")), \
+             patch.object(reconciliation, "_publish_immutable") as publish:
+            with self.assertRaisesRegex(reconciliation.ReconciliationError, "capture failed"):
+                reconciliation.run(args)
+            publish.assert_not_called()
+
+    def test_collector_reads_receipt_scoped_lease_and_rejects_drift(self) -> None:
+        import json
+        import subprocess
+        import tempfile
+
+        records = _records()
+        task = records["expected_task"]
+        lease = records["expected_lease"]
+        exit_receipt = records["expected_receipt"]
+        reservation = records["expected_reservation"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "session-store"
+            run = root / "runs" / lease["run_id"]
+            receipt_path = run / "worker_process_exit_receipts" / (exit_receipt["receipt_id"] + ".json")
+            lease_path = run / "resource_leases" / lease["resource_id"] / (lease["lease_token"] + ".json")
+            ledger_path = Path(directory) / "HOST_RESOURCE_LEDGER.json"
+            receipt_path.parent.mkdir(parents=True)
+            lease_path.parent.mkdir(parents=True)
+            def put(path, value):
+                path.write_text(json.dumps(value), encoding="utf-8")
+            put(run / "run_catalog.json", {"schema_version":"run_catalog.v1", "run_id":lease["run_id"],
+                "revision":records["catalog_revision"], "tasks":[task]})
+            put(receipt_path, exit_receipt)
+            put(lease_path, lease)
+            put(ledger_path, {"schema_version":"host_resource_ledger.v4", "reservations":[reservation]})
+            script = reconciliation.COLLECT_EXPECTED_SCRIPT.replace(
+                'pathlib.Path("/state/runs/docker-all/session-store")', f'pathlib.Path({str(root)!r})'
+            ).replace('pathlib.Path("/host-ledger/ledger/HOST_RESOURCE_LEDGER.json")',
+                      f'pathlib.Path({str(ledger_path)!r})')
+            command = [sys.executable, "-B", "-c", script, lease["run_id"], task["task_id"], exit_receipt["receipt_id"]]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["expected_lease"]["lease_token"], lease["lease_token"])
+            exit_receipt["lease_heartbeat_sequence"] += 1
+            put(receipt_path, exit_receipt)
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("exact resource lease differs", result.stderr)
+
     def test_control_reads_use_the_actual_control_document_budget(self) -> None:
         from docker_build_control import MAX_DOCUMENT_BYTES, control_read_script
 
@@ -159,6 +307,25 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
 
         with patch("docker_volume_unclaimed_cancellation._control_raw", side_effect=bounded_read):
             self.assertEqual(reconciliation._control_raw(object(), "terminal.json"), b"{}")
+
+    def test_existing_package_gate_rejects_unattested_files(self) -> None:
+        import tempfile
+        backend_scripts = Path(__file__).resolve().parents[1] / "docker/all-in-one"
+        sys.path.insert(0, str(backend_scripts))
+        try:
+            from backend_dev import BackendBuildError, _assert_direct_candidate_inventory
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "bin").mkdir()
+                (root / "bin/fullmag-runtime-service").write_bytes(b"binary")
+                (root / "backend-build-receipt.json").write_bytes(b"{}")
+                artifacts = [{"path":"bin/fullmag-runtime-service"}]
+                _assert_direct_candidate_inventory(root, artifacts, include_receipt=True)
+                (root / "bin/unexpected.so").write_bytes(b"unexpected")
+                with self.assertRaisesRegex(BackendBuildError, "unrecognized file inventory"):
+                    _assert_direct_candidate_inventory(root, artifacts, include_receipt=True)
+        finally:
+            sys.path.remove(str(backend_scripts))
 
     def test_candidate_execution_checks_actual_bytes_and_uses_verified_descriptor(self) -> None:
         import hashlib
@@ -178,6 +345,7 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
             receipt_raw = reconciliation._canonical_json(receipt)
             fake_backend = types.ModuleType("backend_dev")
             fake_backend._validated_package = lambda *_args: (receipt, receipt_raw, {})
+            fake_backend._assert_direct_candidate_inventory = lambda *_args, **_kwargs: None
             argv = ["probe", str(root), reconciliation._sha256(receipt_raw), str(binary), "--reconcile-failed-worker-exit"]
             def execute(fd, command, environment):
                 self.assertIsInstance(fd, int)
@@ -316,6 +484,27 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
         self.assertNotIn("fullmag-api", " ".join(command))
         self.assertNotIn("--apply", command)
 
+    def test_native_invoke_binds_candidate_receipt_to_exact_request_directory(self) -> None:
+        root = "/opt/fullmag/control/activation/attempts/" + "c" * 32 + "/failed-worker-reconciliation/request"
+        digest = "a" * 64
+        with patch.object(reconciliation, "_exec", return_value=(b"{}", b"")) as execute:
+            reconciliation._invoke_native(
+                "f" * 64, "/build/maintenance/request/package", "/control/config.json",
+                root + "/request.json", apply=False, candidate_receipt_sha256=digest,
+                candidate_receipt_path=root + "/candidate-receipt.json",
+            )
+            command = execute.call_args.args[1]
+            self.assertIn(reconciliation.VALIDATE_AND_EXEC_CANDIDATE_SCRIPT, command)
+            self.assertEqual(command[-4:], ("--candidate-receipt", root + "/candidate-receipt.json",
+                                            "--candidate-receipt-sha256", digest))
+            with self.assertRaisesRegex(reconciliation.ReconciliationError, "immutable request scope"):
+                reconciliation._invoke_native(
+                    "f" * 64, "/build/maintenance/request/package", "/control/config.json",
+                    root + "/request.json", apply=False, candidate_receipt_sha256=digest,
+                    candidate_receipt_path="/control/other/candidate-receipt.json",
+                )
+            self.assertEqual(execute.call_count, 1)
+
     def test_prepare_and_apply_are_mutually_exclusive_and_cli_is_bounded(self) -> None:
         request_id = _records()["request_id"]
         parsed = reconciliation._parser().parse_args([
@@ -429,8 +618,12 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
                 raise reconciliation.ReconciliationError("immutable overwrite " + relative)
             control.records[relative] = raw
 
-        def invoke(_backend, _package, _config, request_path, *, apply, candidate_receipt_sha256):
+        def invoke(_backend, _package, _config, request_path, *, apply, candidate_receipt_sha256, candidate_receipt_path):
             self.assertEqual(candidate_receipt_sha256, reconciliation._sha256(candidate_raw))
+            self.assertEqual(candidate_receipt_path, str(Path(request_path).parent) + "/candidate-receipt.json")
+            if apply:
+                relative = str(Path(request_path.removeprefix("/opt/fullmag/control/")).parent)
+                self.assertIn(relative + "/apply-start.json", control.records)
             native_calls.append(apply)
             request_raw = control.records[request_path.removeprefix("/opt/fullmag/control/")]
             request = reconciliation._read_json_bytes(request_raw, "request")
@@ -471,7 +664,46 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
              patch.object(reconciliation, "_invoke_native", side_effect=invoke), \
              patch.object(reconciliation, "_control_raw", side_effect=read_control), \
              patch.object(reconciliation, "_publish_immutable", side_effect=publish):
+            # A native preview cannot mutate the lease; its failure is distinct
+            # from an apply whose outcome may be unknown.
+            import json
+            operation_root = reconciliation._operation_root("c" * 32) + "/" + request_id
+            with patch.object(reconciliation, "_invoke_native", side_effect=reconciliation.ReconciliationError("preview failed")):
+                with self.assertRaisesRegex(reconciliation.ReconciliationError, "preview failed"):
+                    reconciliation.run(args_for(prepare=True))
+            failed_preview = json.loads(control.records[operation_root + "/prepare-receipt.json"])
+            self.assertEqual(failed_preview["state"], "failed-confirmed")
+            self.assertEqual(failed_preview["phase"], "native-preview")
+            self.assertTrue(failed_preview["native_invoked"])
+            # Reset only the in-memory fixture to exercise a fresh preparation.
+            control.records.clear()
             prepared = reconciliation.run(args_for(prepare=True))
+            receipt_path = operation_root + "/prepare-receipt.json"
+            saved_receipt = control.records[receipt_path]
+            forged = dict(prepared)
+            forged["native_result"] = dict(prepared["native_result"], disposition="released")
+            control.records[receipt_path] = reconciliation._canonical_json(forged)
+            with self.assertRaisesRegex(reconciliation.ReconciliationError, "no successful native preview"):
+                reconciliation.run(args_for(apply=True))
+            self.assertEqual(native_calls, [False])
+            control.records[receipt_path] = saved_receipt
+            # A crash after durable applying intent but before a terminal result
+            # leaves an unknown outcome; do not invoke native a second time.
+            control.records[operation_root + "/apply-start.json"] = b'{}'
+            with self.assertRaisesRegex(reconciliation.ReconciliationError, "previous apply"):
+                reconciliation.run(args_for(apply=True))
+            self.assertEqual(native_calls, [False])
+            del control.records[operation_root + "/apply-start.json"]
+            before_apply = dict(control.records)
+            with patch.object(reconciliation, "_invoke_native", side_effect=reconciliation.ReconciliationError("apply observation lost")):
+                with self.assertRaisesRegex(reconciliation.ReconciliationError, "apply observation lost"):
+                    reconciliation.run(args_for(apply=True))
+            unknown = json.loads(control.records[operation_root + "/terminal.json"])
+            self.assertEqual(unknown["state"], "outcome-unknown-resources-retained")
+            self.assertEqual(unknown["phase"], "native-apply")
+            self.assertIn(operation_root + "/apply-start.json", control.records)
+            # Restore only the in-memory fixture to exercise a separate success.
+            control.records = before_apply
             applied = reconciliation.run(args_for(apply=True))
             self.assertEqual(reconciliation.run(args_for(apply=True)), applied)
             for key, value in (("run_id", "other-run"), ("task_id", "other-task"),
@@ -487,6 +719,7 @@ class FailedWorkerReconciliationContractTests(unittest.TestCase):
         self.assertEqual(native_calls, [False, True])
         self.assertIn(operation_root + "/prepare-receipt.json", control.records)
         self.assertIn(operation_root + "/terminal.json", control.records)
+        self.assertIn(operation_root + "/apply-start.json", control.records)
         self.assertNotIn(operation_root + "/receipt.json", control.records)
 
 

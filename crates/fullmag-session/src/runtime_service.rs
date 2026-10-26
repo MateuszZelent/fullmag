@@ -702,6 +702,18 @@ pub struct RuntimeServiceOwnerLockGuard {
 }
 
 impl RuntimeServiceOwnerLockGuard {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn validate_store_binding(&self, root: &Path) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let path = checked_path(root, RUNTIME_SERVICE_OWNER_LOCK_PATH)?;
+        let expected = fs::symlink_metadata(path)?;
+        let held = self._lock.metadata()?;
+        if !expected.is_file() || expected.dev() != held.dev() || expected.ino() != held.ino() {
+            bail!("runtime service owner guard belongs to another store");
+        }
+        Ok(())
+    }
+
     /// Try to hold the existing owner lock without creating it.
     pub fn try_acquire_existing(root: &Path) -> Result<Option<Self>> {
         let path = checked_path(root, RUNTIME_SERVICE_OWNER_LOCK_PATH)?;

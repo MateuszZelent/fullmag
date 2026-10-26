@@ -9,7 +9,7 @@ use fullmag_session::{
         RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
     },
     runtime_service_startup::RuntimeServiceStartupGuard,
-    SessionStore,
+    FailedWorkerMaintenanceStorageAdmission, SessionStore,
 };
 use serde::{Deserialize, Serialize};
 use std::{ffi::OsString, path::PathBuf};
@@ -67,11 +67,15 @@ impl Request {
     }
 }
 
-fn parse_args(args: impl Iterator<Item = OsString>) -> Result<(PathBuf, PathBuf, bool)> {
+fn parse_args(
+    args: impl Iterator<Item = OsString>,
+) -> Result<(PathBuf, PathBuf, bool, Option<(PathBuf, String)>)> {
     let mut args = args;
     let mut config = None;
     let mut request = None;
     let mut apply = false;
+    let mut candidate_receipt = None;
+    let mut candidate_sha256 = None;
     while let Some(flag) = args.next() {
         match flag.to_str() {
             Some("--config") if config.is_none() => {
@@ -84,6 +88,19 @@ fn parse_args(args: impl Iterator<Item = OsString>) -> Result<(PathBuf, PathBuf,
                     args.next().context("missing --request value")?,
                 ))
             }
+            Some("--candidate-receipt") if candidate_receipt.is_none() => {
+                candidate_receipt = Some(PathBuf::from(
+                    args.next().context("missing --candidate-receipt value")?,
+                ));
+            }
+            Some("--candidate-receipt-sha256") if candidate_sha256.is_none() => {
+                candidate_sha256 = Some(
+                    args.next()
+                        .context("missing --candidate-receipt-sha256 value")?
+                        .into_string()
+                        .map_err(|_| anyhow::anyhow!("candidate receipt SHA is not UTF-8"))?,
+                );
+            }
             Some("--apply") if !apply => apply = true,
             _ => bail!("invalid or duplicate failed-worker reconciliation argument"),
         }
@@ -93,14 +110,44 @@ fn parse_args(args: impl Iterator<Item = OsString>) -> Result<(PathBuf, PathBuf,
     if !config.is_absolute() || !request.is_absolute() {
         bail!("maintenance paths must be absolute");
     }
-    Ok((config, request, apply))
+    let candidate = match (candidate_receipt, candidate_sha256) {
+        (None, None) => None,
+        (Some(path), Some(sha256)) => {
+            if !path.is_absolute()
+                || sha256.len() != 64
+                || !sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                bail!("maintenance candidate receipt needs an absolute path and lowercase SHA-256");
+            }
+            Some((path, sha256))
+        }
+        _ => bail!("maintenance candidate receipt path and SHA-256 are required together"),
+    };
+    Ok((config, request, apply, candidate))
+}
+
+fn require_same_request_directory(
+    request: &std::path::Path,
+    candidate: &std::path::Path,
+) -> Result<()> {
+    if candidate.file_name().and_then(|name| name.to_str()) != Some("candidate-receipt.json")
+        || request.as_os_str() != candidate.with_file_name("request.json").as_os_str()
+    {
+        bail!("native request and candidate receipt do not share the exact operation directory");
+    }
+    Ok(())
 }
 
 pub(super) fn reconcile(args: impl Iterator<Item = OsString>) -> Result<()> {
-    let (config_path, request_path, apply) = parse_args(args)?;
+    let (config_path, request_path, apply, candidate) = parse_args(args)?;
     let request_raw = super::read_stable_absolute_operational_file(&request_path, MAX_BYTES)?;
     let request: Request = serde_json::from_slice(&request_raw)?;
     request.validate()?;
+    if let Some((candidate_path, _)) = candidate.as_ref() {
+        require_same_request_directory(&request_path, candidate_path)?;
+    }
     let config_raw = super::read_stable_absolute_operational_file(&config_path, 65536)?;
     if fullmag_session::hex_sha256(&config_raw) != request.config_sha256 {
         bail!("service config pin changed");
@@ -173,9 +220,35 @@ pub(super) fn reconcile(args: impl Iterator<Item = OsString>) -> Result<()> {
             binding.policy.clone(),
         )
     })?;
-    ledger.preview_failed_worker_exit_reconciliation(&store, r)?;
+    // Explicit cross-build admission authenticates both the retained runtime
+    // and this candidate. It never changes canonical provenance or normal
+    // storage admission, and cannot be inherited by a worker or API process.
+    let maintenance = candidate
+        .as_ref()
+        .map(|(path, sha256)| {
+            FailedWorkerMaintenanceStorageAdmission::admit(
+                store.root(),
+                &request.request_id,
+                &owner,
+                r,
+                &fullmag_session::hex_sha256(&request_raw),
+                path,
+                sha256,
+                &_owner,
+            )
+        })
+        .transpose()?;
+    if let Some(admission) = maintenance.as_ref() {
+        ledger.preview_failed_worker_exit_reconciliation_with_maintenance(&store, r, admission)?;
+    } else {
+        ledger.preview_failed_worker_exit_reconciliation(&store, r)?;
+    }
     let proof = if apply {
-        let released = ledger.reconcile_failed_worker_after_exit(&store, r)?;
+        let released = if let Some(admission) = maintenance.as_ref() {
+            ledger.reconcile_failed_worker_after_exit_with_maintenance(&store, r, admission)?
+        } else {
+            ledger.reconcile_failed_worker_after_exit(&store, r)?
+        };
         Some(
             released
                 .release_proof_sha256
@@ -207,6 +280,26 @@ pub(super) fn reconcile(args: impl Iterator<Item = OsString>) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn candidate_receipt_must_share_the_exact_request_directory() {
+        let candidate = std::path::Path::new("/control/operation/candidate-receipt.json");
+        assert!(require_same_request_directory(
+            std::path::Path::new("/control/operation/request.json"),
+            candidate
+        )
+        .is_ok());
+        assert!(require_same_request_directory(
+            std::path::Path::new("/control/other/request.json"),
+            candidate
+        )
+        .is_err());
+        assert!(require_same_request_directory(
+            std::path::Path::new("/control/operation/./request.json"),
+            candidate
+        )
+        .is_err());
+    }
+
+    #[test]
     fn maintenance_defaults_to_preview_and_rejects_ambiguous_arguments() {
         let args = [
             "--config",
@@ -232,5 +325,24 @@ mod tests {
                 .map(OsString::from)
         )
         .is_err());
+        assert!(parse_args(
+            args.into_iter()
+                .chain(["--candidate-receipt", "/control/candidate.json"])
+                .map(OsString::from)
+        )
+        .is_err());
+        let digest = "a".repeat(64);
+        let candidate = parse_args(
+            args.into_iter()
+                .chain([
+                    "--candidate-receipt",
+                    "/control/candidate.json",
+                    "--candidate-receipt-sha256",
+                    &digest,
+                ])
+                .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(candidate.3.unwrap().1, digest);
     }
 }

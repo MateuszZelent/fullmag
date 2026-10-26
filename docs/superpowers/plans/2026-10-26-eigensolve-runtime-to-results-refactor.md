@@ -1,7 +1,7 @@
 # Plan refaktoryzacji: uruchomienie eigensolve i trwały zapis danych
 
-Data: 26.10.2026. Tryb obecny: **audyt i plan; dalsza implementacja wstrzymana
-zgodnie z poleceniem użytkownika**.
+Data: 26.10.2026. Audyt i plan zapisano przed wznowieniem celu. Obecny etap:
+**zadanie 2/8 — implementacja i weryfikacja kontraktu, bez wykonania apply**.
 
 Źródło stanu: [audyt wykonania](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.md)
 i [evidence JSON](../../audits/2026-10-26-eigensolve-runtime-to-results-audit.evidence.json).
@@ -66,7 +66,7 @@ control/source/package zamiast nowego launchera lub drugiego systemu grantów.
 | Zadanie | Stan przy publikacji planu | Dowód wymagany do zakończenia |
 |---|---|---|
 | 1/8 — audyt i zamrożenie | Zakończone dokumentacyjnie | Audyt, evidence, kopia WIP, ten plan |
-| 2/8 — spójny kontrakt i źródła | Otwarte | Review kontraktu, kompletny zakres kodu, zielony odpowiedni build/CI |
+| 2/8 — spójny kontrakt i źródła | Kod w weryfikacji; Python preview PASS, Rust CI i native preview oczekują | Review kontraktu, kompletny zakres kodu, zielony odpowiedni build/CI |
 | 3/8 — zamknięcie zakończonego workera | Kod częściowo istnieje; runtime otwarte | Exact local Released + host Released + normalny proof, dane bez zmian |
 | 4/8 — poprawny start runtime | Otwarte; przyczyna sample admission nieustalona | Ready owner i bieżący sample, działający scheduler bez kwarantanny |
 | 5/8 — zaakceptowany Relax | Historyczny native Relax jest; nowa publikacja otwarta | Certyfikat w CAS i zaakceptowane wyjście do Eigen w nowym runie |
@@ -122,6 +122,48 @@ w 2.2/2.4, nie jako jedna wielka przebudowa.
 - [ ] Kontrakt ma review i brak niepotwierdzonych nowych abstrakcji; zwykłe admission nie osłabione.
 - [ ] Brak brakujących modułów; negatywne testy owner/path/SHA/source/replay i wymagane CI przechodzą dla dokładnego commita.
 - [ ] Zarządzany preview pełnej procedury działa; build aplikacji nie jest utożsamiany z release ani Solve.
+
+### Decyzja 2.1–2.2: ograniczony kontrakt cross-build
+
+Zwykłe admission nadal wiąże uruchomiony executable z kanonicznym pakietem i
+provenance. W tym przypadku istniejący owner Failed pochodzi z wcześniejszego
+buildu, a program realizujący naprawę z nowego. Normalny managed restart nie
+jest alternatywą przed zwolnieniem rezerwacji, bo jego preflight słusznie
+odrzuca Active/Quarantined. Nie ma podstaw do dodania innego opener-a sesji.
+
+Kontrakt maintenance używa jawnego dowodu typowanego i wiąże jego czas życia
+z faktycznym guardem ownera konkretnego magazynu. Pod istniejącymi blokadami
+sprawdza ponownie: ścieżkę i root store, Failed owner i dokładny request,
+exit receipt/lease/reservation, host/engine/image/fs/sentinele/probe/namespace,
+kanoniczny historyczny pakiet i provenance względem builda ownera oraz osobny
+pakiet kandydata względem compiled commit/snapshot, niezmiennego receipt,
+źródeł i operation record. Hashowane są rzeczywiste pliki inventory;
+wykonywany inode musi należeć do pakietu kandydata. Standardowe admission i
+normalny publiczny release nie przyjmują dowolnego store ID lub zmiennej
+środowiskowej znoszącej weryfikację. Inne profile storage odmawiają tej
+ścieżki, dopóki nie mają własnego kontraktu.
+
+| Faza | Trwały stan | Zachowanie po przerwaniu |
+|---|---|---|
+| Inspekcja | Preview, bez receiptu mutacji | Powtórzyć tylko po ponownym sprawdzeniu kontekstu. |
+| Capture/build | Request/operation, ewentualnie `pre-native-failure.json` | Brak uruchomienia native; po timeout sprawdzić, czy proces Dockera nadal działa. Ten UUID nie wznawia automatycznie buildu. |
+| Native preview | `prepare-receipt.json`: `candidate-prepared` wyłącznie po `validated` | Zmiana źródła, ownera, receipt lub scope odrzuca apply. Odmowa preview nie jest release. |
+| Apply | Niezmienny `apply-start.json` przed wywołaniem native | Brak terminala oznacza wynik nieznany; wrapper nie ponawia go automatycznie. |
+| Release | `terminal.json` z normalnym proof | Odtworzenie sukcesu wymaga tego samego requestu i exact scope. |
+| Częściowe apply | outcome unknown, lokalny Released i host Quarantined są możliwe | Najpierw odczyt obu magazynów i ocena liveness workera; operacyjne wznowienie po potwierdzeniu brzegów jest częścią zadania 3, nie symulacją ani ręczną edycją JSON. |
+
+Pod jednym aktywnym helperem rodzica wykorzystujemy istniejący kontrolowany
+`resource-budget.lock` do serializacji operacji maintenance i zmiany zasobów.
+Nie tworzy on nowego właściciela `/control/active`. Pojedynczy kontekst
+`ReconciliationOperation` prowadzi fazę oraz informację, czy wywołano native;
+błędy po timeout klienta zachowują informację o możliwym procesie Dockera.
+
+Stan dowodów tego wycinka: lokalne testy Pythona przechodzą; zarządzany
+preview **bez buildu i apply** przeszedł 26.10.2026 dla operacji
+`741f2ee9-7388-4132-b828-0ca6217af629`. Osobny odczyt potwierdził zgodność
+commita, snapshotu, receiptu i hasha historycznego pakietu z Failed ownerem.
+Kod wymaga jeszcze kompilowanych testów CI oraz native preview nowego pakietu. Bieżąca poprawka nie jest jeszcze
+dowodem zwolnionego lease ani uruchomienia solvera.
 
 ## Zadanie 3/8: zamknąć dokładnie historyczny Failed worker
 

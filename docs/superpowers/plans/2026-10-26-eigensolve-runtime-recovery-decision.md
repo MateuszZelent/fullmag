@@ -77,4 +77,40 @@ Review wrappera wykryło i skorygowało kontrolę samego deklarowanego SHA zamia
 
 Dodatkowe rozszerzenie na skanowanie lease'ów całego tasku zostało odrzucone przez automatyczną kontrolę uprawnień i nie zostało zastosowane. Obowiązuje węższy kontrakt konkretnego potwierdzonego exit receipt.
 
-Status wykonania: bez nowego punktu FEM i bez pola modu. 61 lekkich testów Pythona przeszło; testy kompilowane Rust wyłącznie w GitHub Actions. Wynik rzeczywistego native preview/apply i restartu należy dopisać po wykonaniu, a nie na podstawie samych testów źródeł.
+Status podczas pierwotnego checkpointu: bez nowego punktu FEM i bez pola modu. 61 lekkich testów Pythona przeszło; testy kompilowane Rust wyłącznie w GitHub Actions. Wynik rzeczywistego native preview/apply i restartu należy dopisać po wykonaniu, a nie na podstawie samych testów źródeł.
+
+
+## Rzeczywiste wykonanie maintenance i ujawniona granica pochodzenia
+
+Checkpoint wrappera: `a6dcd4db3c21c1ec458c09b83958df04bd7124e2`, wypchnięty na PR #262.
+Zarządzany preview przeszedł, a izolowany pakiet został zbudowany w tej samej
+grupie. Candidate receipt SHA: `5303fc0297e71504d06887301be8b350818b490f9fa383e94fef635738b2fce1`;
+source snapshot: `be753e4d9209e2ef476e27649db42aee2f5b069e9ccb2ac3403e1e82b2b69a29`.
+Operacja `a744cb36-c8a0-4ca6-bb30-e1b0c50e32bc` zakończyła natywny preview
+odmową `compiled source commit differs from runtime provenance`. Nie wywołano
+`--apply`. Konserwatywny prepare receipt zachował outcome-unknown; oddzielny
+odczyt potwierdził niezmienione raw SHA katalogu, lease i exit receipt, lokalne
+Active, host Quarantined, brak proof oraz zachowane 14 artifact IDs. API nadal
+raportuje waiting_for_compute / disconnected / commandability forbidden.
+
+Przyczyna: normalna delegacja storage dopuszcza bieżący executable wyłącznie
+z kanonicznego runtime/provenance. Osobny nowy pakiet maintenance ma inny
+commit i binarne SHA. Sam pomyślny build nie rozwiązuje tego kontraktu.
+
+Wdrażana korekta to jawny typ `FailedWorkerMaintenanceStorageAdmission`.
+Nie jest globalną flagą pominięcia kontroli. Wiąże konkretny root magazynu,
+UUID operacji, Failed owner, dokładny request uzgodnienia oraz niezmienny
+candidate receipt. Zachowuje wszystkie kontrole profilu linux-native-v1
+(host, engine, image, filesystem, owner, sentinele, probe i namespace).
+Osobno potwierdza historyczny kanoniczny runtime względem ownera oraz nowy
+executable względem compiled commit/snapshot i rzeczywistych hashy inventory
+kandydata. Dowód jest przekazywany tylko do dwóch metod Failed-worker;
+normalne store identity oraz pozostałe release/admission pozostają ścisłe.
+Nie zmienia kanonicznego pakietu ani provenance. Inne profile storage nie
+otrzymują automatycznego cross-build fallbacku.
+
+Kolejne bramki: negatywne testy tożsamości i plików w CI, review granicy
+admission, nowy izolowany candidate i native preview, dopiero potem exact
+apply i zwykły diagnostic stop/recreate. Pierwsza odmówiona operacja pozostaje
+w historii; nowa poprawiona kapsuła otrzyma osobny UUID. Mod i nowe punkty FEM
+pozostają NOT VERIFIED do rzeczywistego Solve oraz pobrania pola w UI.

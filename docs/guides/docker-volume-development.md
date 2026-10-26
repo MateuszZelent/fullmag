@@ -580,8 +580,22 @@ Przed wywołaniem sprawdzane są źródła i rzeczywisty inventory pakietu, a
 runtime-service jest wykonywany z otwartego pliku o potwierdzonym SHA.
 
 Protokół ma dwie fazy: lokalny release, następnie normalny host release proof.
-Przerwanie może pozostawić lokalny Released i host Quarantined; powtarzaj tylko
-dokładny request po sprawdzeniu jego receiptów. Błąd po wywołaniu native oznacza
-nieznany wynik, nie brak skutków. Katalog Failed i artefakty pozostają zachowane.
+Przerwanie może pozostawić lokalny Released i host Quarantined. Natywny protokół
+obsługuje dokładny replay, ale obecny wrapper zatrzymuje się, gdy istnieje
+`apply-start.json` bez potwierdzonego terminala. Sprawdź oba magazyny i liveness;
+zarządzane wznowienie tego przypadku jest osobnym krokiem zadania 3. Błąd po
+wywołaniu native oznacza nieznany wynik, nie brak skutków. Katalog Failed i artefakty pozostają zachowane.
 Dopiero potwierdzony normalny proof odblokowuje istniejący diagnostic stop oraz
 zachowujące historię odtworzenie usług. Nie zapisuj ręcznie stanów lease/proof.
+
+
+Izolowany pakiet maintenance spoza kanonicznego runtime wymaga jawnego typowanego
+`FailedWorkerMaintenanceStorageAdmission`, przekazanego tylko do dwóch metod
+uzgadniania Failed. Native CLI otrzymuje `--candidate-receipt` (dokładna kopia
+w control pod tym samym UUID) oraz `--candidate-receipt-sha256`. Obie opcje są
+wymagane razem; nie zastępują raw pinów requestu ani sprawdzenia plików.
+Nowy program potwierdza zarówno historyczny runtime/provenance względem
+Failed ownera, jak i własny pakiet względem skompilowanej tożsamości źródeł.
+Zwykły storage admission nie przyjmuje alternatywnego SHA lub source commit.
+Ta dodatkowa ścieżka jest jawnie ograniczona do linux-native-v1; pozostałe
+profile zachowują normalne kontrole i wymagają osobnej implementacji.
