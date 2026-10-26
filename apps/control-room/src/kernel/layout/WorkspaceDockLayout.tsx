@@ -66,8 +66,8 @@ function persistWorkspaceLayout(layout: typeof DEFAULT_WORKSPACE_LAYOUT): void {
   }
 }
 
-function SortableWorkspaceColumn({ column, visible, drawer, onDockChange, onHide, onMove }: SortableWorkspaceColumnProps & {
-  visible: boolean; drawer: boolean;
+function SortableWorkspaceColumn({ column, visible, drawer, drawerShared, onDockChange, onHide, onMove }: SortableWorkspaceColumnProps & {
+  visible: boolean; drawer: boolean; drawerShared: boolean;
   onDockChange: (id: string, docked: boolean) => void;
   onHide?: () => void;
   onMove: (direction: -1 | 1) => void;
@@ -75,7 +75,7 @@ function SortableWorkspaceColumn({ column, visible, drawer, onDockChange, onHide
   const reportDocked = useCallback((docked: boolean) => onDockChange(column.slotId, docked), [column.slotId, onDockChange]);
   return <SortableItem id={column.slotId}>{({ attributes, isDragging, listeners, setNodeRef, style }) => (
     <div ref={setNodeRef} className="fm-dock-column" data-dragging={isDragging} style={style}>
-      <PanelFrame id={column.slotId} title={column.label} visible={visible} drawer={drawer} drawerSide={column.slotId === "panel-left" ? "left" : "right"} floatable={column.slotId !== "viewport-main"} suspendWhenHidden={column.slotId !== "panel-right"} onDockChange={reportDocked} onHide={onHide} onMove={onMove}
+      <PanelFrame id={column.slotId} title={column.label} visible={visible} drawer={drawer} drawerSide={column.slotId === "panel-left" ? "left" : "right"} drawerShared={drawerShared} floatable={column.slotId !== "viewport-main"} suspendWhenHidden={column.slotId !== "panel-right"} onDockChange={reportDocked} onHide={onHide} onMove={onMove}
         dockHandle={<Button className="fm-panel-move" size="icon" variant="ghost" aria-label={`Move ${column.label} panel`} {...attributes} {...listeners}><GripVertical size={14} aria-hidden="true" /></Button>}>
         {column.slotId === "viewport-aux" ? <PanelChrome><span className="fm-panel-chrome__title">{column.label}</span></PanelChrome> : null}
         <WorkspaceColumnContent slotId={column.slotId} />
@@ -126,6 +126,9 @@ export function WorkspaceDockLayout() {
 
   const columns = dockState.layout.columns.filter(column => column.slotId !== "viewport-aux" || hasAuxViewportModule);
   const visible = (id: string) => id === "panel-left" ? panelVisible.left : id === "panel-right" ? panelVisible.right : true;
+  const isDrawer = (id: string) => id === "panel-right" && windowWidth < 1180 || id === "panel-left" && windowWidth < 760;
+  // Explorer and Inspector drawers open together only below 760px; they then split the width.
+  const drawersShared = isDrawer("panel-left") && isDrawer("panel-right") && panelVisible.left && panelVisible.right;
   const move = (id: string, direction: -1 | 1) => {
     const index = columns.findIndex(column => column.slotId === id);
     const neighbour = columns[index + direction];
@@ -143,7 +146,7 @@ export function WorkspaceDockLayout() {
           <ResizablePanelGroup autoSaveId={`fullmag-workspace-columns:retained-v1:${columns.map(column => column.slotId).join("|")}`} direction="horizontal" panelCount={columns.length}>
             {columns.map((column, index) => <Fragment key={column.slotId}>
               <ResizablePanel id={column.slotId} defaultSize={column.defaultSize} minSize={column.slotId === "panel-right" ? "240px" : "160px"} maxSize={column.slotId === "panel-right" ? "560px" : column.maxSize} groupResizeBehavior={column.resizeBehavior} collapsible collapsedSize={0} panelRef={handle => { panels.current[column.slotId] = handle; }}>
-                <SortableWorkspaceColumn column={column} visible={visible(column.slotId)} drawer={column.slotId === "panel-right" && windowWidth < 1180 || column.slotId === "panel-left" && windowWidth < 760} onDockChange={onDockChange} onHide={column.slotId === "panel-left" ? () => kernel.layout.setPanelVisible("left", false) : column.slotId === "panel-right" ? () => kernel.layout.setPanelVisible("right", false) : undefined} onMove={direction => move(column.slotId, direction)} />
+                <SortableWorkspaceColumn column={column} visible={visible(column.slotId)} drawer={isDrawer(column.slotId)} drawerShared={drawersShared && isDrawer(column.slotId)} onDockChange={onDockChange} onHide={column.slotId === "panel-left" ? () => kernel.layout.setPanelVisible("left", false) : column.slotId === "panel-right" ? () => kernel.layout.setPanelVisible("right", false) : undefined} onMove={direction => move(column.slotId, direction)} />
               </ResizablePanel>
               {index < columns.length - 1 ? <ResizableHandle className="fm-resize-handle--vertical" aria-label={`Resize ${column.label} and ${columns[index + 1].label} panels`} onDoubleClick={column.slotId === "panel-right" || columns[index + 1].slotId === "panel-right" ? resetInspectorWidth : undefined} style={dockedPanels[column.slotId] === false || dockedPanels[columns[index + 1].slotId] === false ? { display: "none" } : undefined} /> : null}
             </Fragment>)}
