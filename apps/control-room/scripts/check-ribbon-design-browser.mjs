@@ -40,18 +40,10 @@ try {
         await page.getByRole("button", { name: /^Ribbon density:/ }).click();
         await page.getByRole("menuitemradio", { name: density, exact: true }).click();
         console.log(JSON.stringify({ theme, width, density, completed: results.length }));
-        for (const name of [
-          "Workspace",
-          "View",
-          "Definitions",
-          "Geometry",
-          "Materials",
-          "Physics",
-          "Mesh",
-          "Study",
-          "Results",
-          "Automation",
-        ]) {
+        // Definitions and Automation stay hidden while they have no working action.
+        const tabNames = await ribbon.getByRole("tab").allTextContents();
+        for (const hidden of ["Definitions", "Automation"]) assert(!tabNames.includes(hidden), `${hidden} tab is hidden`);
+        for (const name of ["Workspace", "View", "Geometry", "Materials", "Physics", "Mesh", "Study", "Results"]) {
           const tab = ribbon.getByRole("tab", { name, exact: true });
           await tab.click();
           assert.equal(await tab.getAttribute("aria-selected"), "true");

@@ -280,6 +280,8 @@
 }
 
 .fm-status-bar__button.fm-status-bar__item {
+  /* Block, not the button's inline-flex, so the label can ellipsize. */
+  display: block;
   border: 0;
   background: transparent;
   color: inherit;
