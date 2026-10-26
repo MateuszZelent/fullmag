@@ -9,7 +9,8 @@ import {
   buildAnalysisContextTabContent,
   buildRibbonTabContent,
   resolveRibbonVisualizationTarget,
-  stripProductionRibbonPlaceholders,
+  ribbonTabHasContent,
+  stripRibbonPlaceholders,
 } from "./ribbonContributions";
 import {
   RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
@@ -539,12 +540,10 @@ describe("ribbon structure", () => {
           id: "home-panels:bottom-dock",
           type: "checkbox",
         }),
-        expect.objectContaining({
-          disabled: true,
-          id: "home-panels:reset-layout",
-        }),
       ]),
     });
+    expect(panelAction?.menu?.map((node) => node.id)).not.toContain("home-panels:reset-layout");
+    expect(panelAction?.menu?.at(-1)?.type).not.toBe("separator");
   });
 
   it("keeps ribbon visual tokens theme-driven instead of hardcoded", () => {
@@ -4288,7 +4287,7 @@ describe("ribbon structure", () => {
     });
   });
 
-  it("keeps unsupported Mesh policy controls disabled while wiring 3D view navigation", () => {
+  it("removes placeholder Mesh policy controls while wiring 3D view navigation", () => {
     const commands = createControlRoomCommandRegistry();
     const visualization = new ObjectVisualizationController();
     const content = buildRibbonTabContent("mesh", {
@@ -4316,14 +4315,9 @@ describe("ribbon structure", () => {
       .find((group) => group.id === "mesh-view")
       ?.actions.find((action) => action.id === "mesh-3d");
 
-    expect(transitionAction).toMatchObject({
-      disabled: true,
-      label: "Transitions",
-    });
-    expect(mesherAction).toMatchObject({
-      disabled: true,
-      label: "Mesher",
-    });
+    // Policy controls whose menus are all placeholders are removed, not shown disabled.
+    expect(transitionAction).toBeUndefined();
+    expect(mesherAction).toBeUndefined();
     expect(mesh3dAction).toMatchObject({
       commandId: "viewport-3d.open",
       disabled: false,
@@ -4695,7 +4689,7 @@ describe("ribbon structure", () => {
     });
   });
 
-  it("keeps Study script sync disabled until a command contract exists", () => {
+  it("removes the Study script sync placeholder until a command contract exists", () => {
     const content = buildRibbonTabContent("study", {
       commands: createControlRoomCommandRegistry(),
       commandContext: { source: "test" },
@@ -4716,11 +4710,11 @@ describe("ribbon structure", () => {
     const syncMenuItems =
       syncAction?.menu?.filter((node) => node.type === "item") ?? [];
 
-    expect(syncAction).toMatchObject({
-      disabled: true,
-      label: "Sync Script",
-    });
-    expect(syncMenuItems.map((node) => node.disabled)).toEqual([true, true, true]);
+    expect(ALL_TAB_CONTENT.study.groups
+      .find((group) => group.id === "builder-sync")
+      ?.actions.find((action) => action.id === "study-sync")).toMatchObject({ preview: true });
+    expect(syncAction).toBeUndefined();
+    expect(syncMenuItems).toEqual([]);
   });
 
   it("keeps Automation script sync disabled until a command contract exists", () => {
@@ -5614,8 +5608,39 @@ function createVisualizationRibbonContext(
   };
 }
 
-describe("stripProductionRibbonPlaceholders", () => {
+describe("stripRibbonPlaceholders", () => {
   const commands = createControlRoomCommandRegistry();
+
+  it("strips preview placeholders outside production builds", () => {
+    expect(process.env.NODE_ENV).not.toBe("production");
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("home", {
+      commands,
+      commandContext: { source: "test" },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const actions = content?.groups.flatMap((group) => group.actions) ?? [];
+
+    expect(actions.length).toBeGreaterThan(0);
+    expect(actions.filter((action) => action.preview)).toEqual([]);
+  });
+
+  it("hides only the tabs left without working actions", () => {
+    const hidden = RIBBON_TABS
+      .filter((tab) => !ribbonTabHasContent(tab.id, commands))
+      .map((tab) => tab.id);
+
+    expect(hidden).toEqual(["definitions", "automation"]);
+  });
 
   it("removes explicitly marked previews and keeps unmarked disabled actions", () => {
     const content: RibbonTabContent = {
@@ -5644,7 +5669,7 @@ describe("stripProductionRibbonPlaceholders", () => {
       ],
     };
 
-    const stripped = stripProductionRibbonPlaceholders(content, commands);
+    const stripped = stripRibbonPlaceholders(content, commands);
 
     expect(stripped.groups).toHaveLength(1);
     expect(stripped.groups[0].actions.map((action) => action.id)).toEqual([
@@ -5677,7 +5702,7 @@ describe("stripProductionRibbonPlaceholders", () => {
       ],
     };
 
-    const stripped = stripProductionRibbonPlaceholders(content, commands);
+    const stripped = stripRibbonPlaceholders(content, commands);
 
     expect(stripped.groups[0].actions).toHaveLength(1);
     expect(stripped.groups[0].actions[0].menu).toEqual([]);
@@ -5716,7 +5741,7 @@ describe("stripProductionRibbonPlaceholders", () => {
       ],
     };
 
-    const stripped = stripProductionRibbonPlaceholders(content, commands);
+    const stripped = stripRibbonPlaceholders(content, commands);
 
     expect(stripped.groups[0].actions).toHaveLength(1);
     expect(stripped.groups[0].actions[0].menu).toHaveLength(2);
@@ -5753,7 +5778,7 @@ describe("stripProductionRibbonPlaceholders", () => {
       ],
     };
 
-    const stripped = stripProductionRibbonPlaceholders(content, commands);
+    const stripped = stripRibbonPlaceholders(content, commands);
 
     const radioGroup = stripped.groups[0].actions[0].menu?.[0];
     expect(radioGroup?.type).toBe("radio-group");

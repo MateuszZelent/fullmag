@@ -76,6 +76,7 @@ import {
   buildAnalysisContextTabContent,
   buildRibbonTabContent,
   resolveRibbonVisualizationTarget,
+  ribbonTabHasContent,
 } from "./ribbonContributions";
 import {
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
@@ -207,7 +208,15 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const [pendingGlobalQuantity, setPendingGlobalQuantity] =
     useState<ApplyGlobalQuantityInput | null>(null);
-  const activeTab = useLayoutSelector((layout) => layout.activeModuleTab);
+  const visibleRibbonTabs = useMemo(
+    () => RIBBON_TABS.filter((tab) => ribbonTabHasContent(tab.id, kernel.commands)),
+    [kernel.commands],
+  );
+  const storedActiveTab = useLayoutSelector((layout) => layout.activeModuleTab);
+  // A restored tab that no longer has working actions falls back to Workspace.
+  const activeTab = visibleRibbonTabs.some((tab) => tab.id === storedActiveTab)
+    ? storedActiveTab
+    : "home";
   const activeViewportMainModuleId = useLayoutSelector(
     (layout) => layout.activeViewportMainModuleId,
   );
@@ -450,14 +459,14 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   );
   const stripActiveTab: RibbonStripTabId = contextTabActive ? ANALYSIS_CONTEXT_TAB_ID : activeTab;
   const stripTabs = useMemo<readonly RibbonStripTabDef[]>(() => {
-    if (!contextModuleTitle) return RIBBON_TABS;
-    const resultsIndex = RIBBON_TABS.findIndex((tab) => tab.id === "results");
+    if (!contextModuleTitle) return visibleRibbonTabs;
+    const resultsIndex = visibleRibbonTabs.findIndex((tab) => tab.id === "results");
     return [
-      ...RIBBON_TABS.slice(0, resultsIndex + 1),
+      ...visibleRibbonTabs.slice(0, resultsIndex + 1),
       { contextual: true, id: ANALYSIS_CONTEXT_TAB_ID, label: contextModuleTitle },
-      ...RIBBON_TABS.slice(resultsIndex + 1),
+      ...visibleRibbonTabs.slice(resultsIndex + 1),
     ];
-  }, [contextModuleTitle]);
+  }, [contextModuleTitle, visibleRibbonTabs]);
   const handleTabClick = useCallback(
     (tabId: RibbonStripTabId) => {
       if (tabId === ANALYSIS_CONTEXT_TAB_ID) {

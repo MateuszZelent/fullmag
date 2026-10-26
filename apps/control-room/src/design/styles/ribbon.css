@@ -167,41 +167,44 @@
   background: color-mix(in srgb, var(--fm-category-energy) 5%, transparent);
 }
 
-/* ── Group label (bottom) ── */
+/* ── Group label (bottom) ──
+   One line inside the fixed 18px row: the title keeps priority and the
+   subtitle follows it and truncates first, so the two never stack. */
 .fm-ribbon-group__label {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
+  align-items: baseline;
+  justify-content: center;
+  gap: var(--fm-space-1);
+  min-width: 0;
   height: 18px;
+  overflow: hidden;
   color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-sm);
+  font-size: var(--fm-font-size-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
-  line-height: 1;
+  line-height: 18px;
   text-transform: uppercase;
-}
-
-.fm-ribbon-group__label > span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.fm-ribbon-group__label > span {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .fm-ribbon-group__label small {
-  display: block;
-  max-width: 100%;
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   letter-spacing: 0.02em;
-  line-height: 1.1;
-  overflow: hidden;
   text-overflow: ellipsis;
   text-transform: none;
-  white-space: nowrap;
 }
 
 /* ── Group actions row ──

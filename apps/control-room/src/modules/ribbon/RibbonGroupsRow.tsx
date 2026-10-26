@@ -394,7 +394,10 @@ function RibbonGroup({
           ))}
         </div>
       )}
-      <div className="fm-ribbon-group__label">
+      <div
+        className="fm-ribbon-group__label"
+        title={group.subtitle ? `${group.title} · ${group.subtitle}` : group.title}
+      >
         <span>{group.title}</span>
         {group.subtitle ? <small>{group.subtitle}</small> : null}
       </div>

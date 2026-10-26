@@ -1051,9 +1051,7 @@ export function buildRibbonTabContent(
     ? applyCommandState(resolvedContent, context)
     : resolvedContent;
 
-  return isProductionRibbonBuild()
-    ? stripProductionRibbonPlaceholders(withCommandState, context?.commands)
-    : withCommandState;
+  return stripRibbonPlaceholders(withCommandState, context?.commands);
 }
 
 /**
@@ -1090,16 +1088,20 @@ export function buildAnalysisContextTabContent(context?: RibbonBuildContext): Ri
     ],
   };
   const withCommandState = context?.commands ? applyCommandState(content, context) : content;
-  return isProductionRibbonBuild()
-    ? stripProductionRibbonPlaceholders(withCommandState, context?.commands)
-    : withCommandState;
+  return stripRibbonPlaceholders(withCommandState, context?.commands);
 }
 
-function isProductionRibbonBuild(): boolean {
-  return process.env.NODE_ENV === "production";
+/**
+ * A tab is offered only while at least one action survives placeholder
+ * removal, so a tab whose actions are all `preview` stays out of the strip
+ * until it gains a working command.
+ */
+export function ribbonTabHasContent(tabId: string, commands?: CommandRegistry): boolean {
+  const content = ALL_TAB_CONTENT[tabId];
+  return Boolean(content) && stripRibbonPlaceholders(content, commands).groups.length > 0;
 }
 
-function stripProductionMenuPlaceholders(
+function stripMenuPlaceholders(
   nodes: RibbonMenuNode[],
 ): RibbonMenuNode[] {
   const result: RibbonMenuNode[] = [];
@@ -1107,8 +1109,8 @@ function stripProductionMenuPlaceholders(
     if (node.preview) continue;
 
     if (node.type === "submenu") {
-      const children = stripProductionMenuPlaceholders(node.nodes);
-      if (hasProductionMenuContent(children)) {
+      const children = stripMenuPlaceholders(node.nodes);
+      if (hasMenuContent(children)) {
         result.push({ ...node, nodes: children });
       }
       continue;
@@ -1120,26 +1122,32 @@ function stripProductionMenuPlaceholders(
       continue;
     }
 
-    if (node.type === "label" || node.type === "separator" || node.type === "status") {
-      result.push(node);
+    if (node.type === "separator") {
+      // Collapse separators left adjacent or trailing by removed placeholders.
+      if (result.length > 0 && result[result.length - 1].type !== "separator") result.push(node);
       continue;
     }
 
     result.push(node);
   }
+  while (result.length > 0 && result[result.length - 1].type === "separator") result.pop();
   return result;
 }
 
-function hasProductionMenuContent(nodes: RibbonMenuNode[]): boolean {
+function hasMenuContent(nodes: RibbonMenuNode[]): boolean {
   return nodes.some((node) => {
     if (node.type === "label" || node.type === "separator") return false;
-    if (node.type === "submenu") return hasProductionMenuContent(node.nodes);
+    if (node.type === "submenu") return hasMenuContent(node.nodes);
     if (node.type === "radio-group") return node.items.length > 0;
     return true;
   });
 }
 
-export function stripProductionRibbonPlaceholders(
+/**
+ * Removes actions and menu entries explicitly marked `preview` in every build,
+ * so development and production render the same set of working commands.
+ */
+export function stripRibbonPlaceholders(
   content: RibbonTabContent,
   commands?: CommandRegistry,
 ): RibbonTabContent {
@@ -1148,8 +1156,8 @@ export function stripProductionRibbonPlaceholders(
     groups: content.groups.flatMap((group) => {
       const actions = group.actions.flatMap((action) => {
         if (action.preview) return [];
-        const strippedMenu = stripProductionMenuPlaceholders(action.menu ?? []);
-        const menu = hasProductionMenuContent(strippedMenu) ? strippedMenu : [];
+        const strippedMenu = stripMenuPlaceholders(action.menu ?? []);
+        const menu = hasMenuContent(strippedMenu) ? strippedMenu : [];
         const hadMenu = Boolean(action.menu?.length);
         const hasNoMenuAction = hadMenu && menu.length === 0;
         const hasActionCommand = Boolean(
