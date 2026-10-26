@@ -3,6 +3,24 @@ import { describe, expect, it } from "vitest";
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
 
 describe("AnalysisFieldOverlay result context", () => {
+  it("keeps a changed sample equilibrium as a distinct mode intent", () => {
+    const controller = ownedOverlayController();
+    const initial = controller.getSnapshot()!;
+    const modeIntent = {
+      analysisRunId: "run-1", analysisStageId: "stage-eigen", artifactRevision: "sha256:mode-v1",
+      equilibriumId: "eq-1", fieldId: initial.fieldId, metadataResourceKey: "mode-meta",
+      modeId: "mode-1", modeIndex: 1, nodeId: "mode-node", sampleId: "sample-0", sampleIndex: 0,
+    };
+    controller.set({ ...initial, modeIntent });
+    let notifications = 0;
+    const unsubscribe = controller.subscribe(() => { notifications += 1; });
+    // Isolate mode-intent equality: the other overlay fields stay identical.
+    controller.set({ ...controller.getSnapshot()!, modeIntent: { ...modeIntent, equilibriumId: "eq-2" } });
+    expect(notifications).toBe(1);
+    expect(controller.getSnapshot()?.modeIntent?.equilibriumId).toBe("eq-2");
+    unsubscribe();
+  });
+
   it("preserves the complete immutable result identity", () => {
     const controller = ownedOverlayController();
 

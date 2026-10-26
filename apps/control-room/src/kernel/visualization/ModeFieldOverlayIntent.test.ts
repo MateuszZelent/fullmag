@@ -13,6 +13,7 @@ import {
 const selection: Extract<SelectionRef, { type: "frequency-domain" }> = {
   analysisRunId: "run-k0",
   analysisStageId: "stage-eigen",
+  equilibriumId: "sha256:eq-k0",
   artifactRevision: "sha256:artifact-v1",
   fieldId: "analysis:eigen:sample-k0:mode-1:delta_m_xyz",
   kind: "results.eigen.mode",
@@ -48,6 +49,8 @@ const metadata: FrequencyDomainFieldResource = {
   quantity: "delta_m",
   resource_key: "data/fields/analysis%3Aeigen%3Asample-k0%3Amode-1%3Adelta_m_xyz",
   schema_version: "frequency_domain_mode_field.v1",
+    generation_id: "publication-14",
+    generation_status: "member_verified_owner_bound",
   source_family: "analysis/eigen",
   status: "ready",
   value_kind: "complex_spatial_vector",
@@ -88,6 +91,12 @@ describe("ModeFieldOverlayIntent", () => {
       sampleId: "sample-k0",
     });
     expect(Object.isFrozen(intent)).toBe(true);
+  });
+
+  it("requires an explicit sample equilibrium for every eigenmode intent", () => {
+    expect(createModeFieldOverlayIntent({ ...selection, equilibriumId: undefined })).toBeNull();
+    expect(createModeFieldOverlayIntent({ ...selection, equilibriumId: " " })).toBeNull();
+    expect(createModeFieldOverlayIntent(selection)?.equilibriumId).toBe("sha256:eq-k0");
   });
 
   it("accepts only canonical ready global XYZ complex field metadata", () => {

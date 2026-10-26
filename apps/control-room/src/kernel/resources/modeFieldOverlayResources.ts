@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import type { FrequencyDomainFieldResource } from "../api/apiTypes";
+import type { FrequencyDomainFieldResource, FrequencyDomainJsonArtifactResource } from "../api/apiTypes";
+import type { ControlRoomApi } from "../api/ControlRoomApi";
+import { ownedModeArtifactGeneration } from "../visualization/ModeFieldOverlayModeArtifact";
 import { useKernel } from "../KernelContext";
 import type { ResourceResult, ResourceStatus } from "./resourceTypes";
 import {
@@ -21,7 +23,7 @@ import {
 import { sessionRequestScopeKey } from "./sessionResourceIdentity";
 import { useSessionResourceIdentity } from "./useSessionStatus";
 
-import { useFrequencyDomainEigenModeFieldMetaResource } from "./studyRuntimeResources";
+import { useFrequencyDomainEigenModeFieldMetaResource, useFrequencyDomainEigenModeResource } from "./studyRuntimeResources";
 
 export interface ModeFieldOverlayResource {
   readonly binaryResourceKey: string | null;
@@ -50,9 +52,7 @@ function modeFieldArtifactGenerationError(
     );
   }
   if (
-    (status === "member_verified_owner_bound" && generationId === null) ||
-    (status === "legacy_unverified" && generationId !== null) ||
-    (status !== "member_verified_owner_bound" && status !== "legacy_unverified")
+    status !== "member_verified_owner_bound" || generationId === null
   ) {
     return new Error("Mode-field artifact generation identity is incomplete or inconsistent.");
   }
@@ -62,9 +62,13 @@ function modeFieldArtifactGenerationError(
 export function resolveModeFieldOverlayMetadataRevision(
   intent: ModeFieldOverlayIntent,
   metadata: FrequencyDomainFieldResource,
+  modeArtifact?: FrequencyDomainJsonArtifactResource,
 ): string {
   return JSON.stringify({
     artifactRevision: intent.artifactRevision,
+    equilibriumId: intent.equilibriumId ?? null,
+    modeArtifactRevision: modeArtifact?.revision ?? modeArtifact?.content_digest ?? null,
+    modeArtifactGenerationId: modeArtifact?.generation_id ?? null,
     artifactPath: metadata.artifact_path,
     artifactGenerationId: metadata.generation_id ?? null,
     artifactGenerationStatus: metadata.generation_status ?? null,
@@ -85,6 +89,7 @@ export function resolveModeFieldOverlayResource(
     ResourceResult<FrequencyDomainFieldResource | null>,
     "data" | "error" | "revision" | "status"
   >,
+  modeArtifactResource?: Pick<ResourceResult<FrequencyDomainJsonArtifactResource | null>, "data" | "error" | "revision" | "status">,
 ): ModeFieldOverlayResource {
   if (!intent) {
     return {
@@ -96,6 +101,16 @@ export function resolveModeFieldOverlayResource(
     };
   }
 
+  if (!intent.equilibriumId || !modeArtifactResource ||
+    (modeArtifactResource.status === "ready" && !ownedModeArtifactGeneration(intent, modeArtifactResource.data))) {
+    return { binaryResourceKey: null, error: MODE_FIELD_METADATA_INVALID,
+      metadata: null, metadataStatus: "error", status: "error" };
+  }
+  if (modeArtifactResource.status !== "ready") {
+    return { binaryResourceKey: null, error: modeArtifactResource.error,
+      metadata: null, metadataStatus: modeArtifactResource.status, status: modeArtifactResource.status };
+  }
+
   if (resource.status !== "ready" || resource.data === null) {
     return {
       binaryResourceKey: null,
@@ -104,6 +119,11 @@ export function resolveModeFieldOverlayResource(
       metadataStatus: resource.status,
       status: resource.status,
     };
+  }
+
+  if (resource.data.generation_id !== ownedModeArtifactGeneration(intent, modeArtifactResource.data)) {
+    return { binaryResourceKey: null, error: MODE_FIELD_METADATA_INVALID,
+      metadata: null, metadataStatus: "error", status: "error" };
   }
 
   const generationError = modeFieldArtifactGenerationError(resource.data);
@@ -120,7 +140,7 @@ export function resolveModeFieldOverlayResource(
   const metadata = resolveModeFieldOverlayMetadata(
     intent,
     resource.data,
-    resource.revision,
+    JSON.stringify([resource.revision, resolveModeFieldOverlayMetadataRevision(intent, resource.data, modeArtifactResource.data ?? undefined)]),
   );
   if (!metadata) {
     return {
@@ -151,20 +171,52 @@ export function useModeFieldOverlayResource(
   { enabled = true }: { enabled?: boolean } = {},
 ): ModeFieldOverlayResource {
   const sessionIdentity = useSessionResourceIdentity();
+  const modeArtifactResource = useFrequencyDomainEigenModeResource(
+    intent?.sampleIndex, intent?.modeIndex,
+    { enabled: enabled && Boolean(intent?.equilibriumId) && sessionIdentity !== null },
+  );
+  const ownedGeneration = intent && modeArtifactResource.status === "ready"
+    ? ownedModeArtifactGeneration(intent, modeArtifactResource.data) : null;
   const metadataResource = useFrequencyDomainEigenModeFieldMetaResource(
     intent?.sampleIndex,
     intent?.modeIndex,
-    { enabled: enabled && Boolean(intent) && sessionIdentity !== null },
+    { enabled: enabled && ownedGeneration !== null && sessionIdentity !== null },
   );
   return useMemo(
-    () => resolveModeFieldOverlayResource(intent, metadataResource),
-    [intent, metadataResource],
+    () => resolveModeFieldOverlayResource(intent, metadataResource, modeArtifactResource),
+    [intent, metadataResource, modeArtifactResource],
   );
 }
 
 export type ModeFieldOverlayMetadataResource = ResourceResult<
   FrequencyDomainFieldResource | null
 >;
+
+function ensureNotAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException("Mode-field request was aborted.", "AbortError");
+}
+
+export async function loadEigenModeFieldOverlayMetadata(
+  api: Pick<ControlRoomApi["analysis"]["frequencyDomain"], "eigenMode" | "eigenModeFieldMeta">,
+  intent: ModeFieldOverlayIntent,
+  sessionScopeKey: string,
+  signal: AbortSignal,
+): Promise<{ data: FrequencyDomainFieldResource; revision: string }> {
+  ensureNotAborted(signal);
+  if (!intent.equilibriumId) throw MODE_FIELD_METADATA_INVALID;
+  const options = { sessionScopeKey, signal };
+  const modeArtifact = await api.eigenMode(intent.sampleIndex, intent.modeIndex, options);
+  ensureNotAborted(signal);
+  const generation = ownedModeArtifactGeneration(intent, modeArtifact);
+  if (!generation) throw MODE_FIELD_METADATA_INVALID;
+  const data = await api.eigenModeFieldMeta(intent.sampleIndex, intent.modeIndex, options);
+  ensureNotAborted(signal);
+  const revision = resolveModeFieldOverlayMetadataRevision(intent, data, modeArtifact);
+  if (data.generation_id !== generation || !resolveModeFieldOverlayMetadata(intent, data, revision)) {
+    throw MODE_FIELD_METADATA_INVALID;
+  }
+  return { data, revision };
+}
 
 /**
  * Owns the mounted viewport's complete metadata -> binary demand. Both facade
@@ -289,15 +341,9 @@ export function useModeFieldOverlayIntentResource({
               revision: activeIntent.fieldRevision,
             };
           }
-          const data = await api.analysis.frequencyDomain.eigenModeFieldMeta(
-            activeIntent.sampleIndex,
-            activeIntent.modeIndex,
-            { sessionScopeKey: sessionScope, signal },
+          return loadEigenModeFieldOverlayMetadata(
+            api.analysis.frequencyDomain, activeIntent, sessionScope, signal,
           );
-          return {
-            data,
-            revision: resolveModeFieldOverlayMetadataRevision(activeIntent, data),
-          };
         },
         loadBinary: async (metadata, signal) => {
           const response = await api.data.fields.vector(

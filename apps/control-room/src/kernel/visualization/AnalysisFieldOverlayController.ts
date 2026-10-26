@@ -475,6 +475,9 @@ function modeFieldOverlayIntentEquals(
     left.analysisRunId === right.analysisRunId &&
     left.analysisStageId === right.analysisStageId &&
     left.artifactRevision === right.artifactRevision &&
+    left.equilibriumId === right.equilibriumId &&
+    left.sampleIndex === right.sampleIndex &&
+    left.modeIndex === right.modeIndex &&
     left.fieldId === right.fieldId &&
     left.metadataResourceKey === right.metadataResourceKey &&
     left.modeId === right.modeId &&
