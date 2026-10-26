@@ -6,7 +6,9 @@ import { chromium } from "playwright";
 const styles = await Promise.all(["tokens.css", "explorer.css", "inspector-mesh.css"].map(
   (name) => readFile(new URL(`../src/design/styles/${name}`, import.meta.url), "utf8"),
 ));
-const browser = await chromium.launch({ channel: "chrome" });
+// Same channel switch as check-start-screen-browser; the Playwright image uses "chromium".
+const browserChannel = process.env.CONTROL_ROOM_BROWSER_CHANNEL ?? "chrome";
+const browser = await chromium.launch(browserChannel === "chromium" ? {} : { channel: browserChannel });
 try {
   const page = await browser.newPage();
   await page.setContent(`
