@@ -31,7 +31,7 @@ pub struct AcceptedFemStaticPbcNativeAttestation {
     pub periodic_mesh_certificate: fullmag_ir::PeriodicMeshCertificateV6IR,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FemStaticPbcLane {
     /// No periodic node pairs; native path unconditionally.
     None,
