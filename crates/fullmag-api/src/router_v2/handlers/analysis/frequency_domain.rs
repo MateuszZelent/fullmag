@@ -1279,6 +1279,7 @@ pub async fn get_frequency_domain_eigen_dispersion(
         &captured.artifact_dir,
         "eigen/dispersion/path.json",
         captured.generation.as_ref(),
+        csv_snapshot.as_ref().map(|(text, _)| text.as_str()),
     )?;
     captured.bind_artifact_path("eigen/dispersion.csv")?;
     if let (Some((text, _)), Some(path_metadata)) = (csv_snapshot.as_ref(), path_metadata.as_ref())
@@ -3360,6 +3361,7 @@ fn read_dispersion_path_metadata_resource(
     artifact_dir: &std::path::Path,
     artifact_path: &str,
     generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+    csv_content: Option<&str>,
 ) -> Result<Option<FrequencyDomainKPathMetadataResource>, ApiError> {
     let Some((value, _)) = super::results::read_result_artifact_snapshot_in_generation(
         artifact_dir,
@@ -3374,12 +3376,57 @@ fn read_dispersion_path_metadata_resource(
     } else {
         serde_json::json!({ "sampling": value })
     };
+    if normalized["sampling"]["kind"] == "single" {
+        validate_single_dispersion_sampling(&normalized, csv_content)
+            .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
+        // A single sample is not a path. Its coordinates remain in the CSV;
+        // do not invent control points or relax the typed path contract.
+        return Ok(None);
+    }
     let mut resource =
         serde_json::from_value::<FrequencyDomainKPathMetadataResource>(normalized)
             .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
     normalize_and_validate_dispersion_path_metadata(&mut resource)
         .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
     Ok(Some(resource))
+}
+
+fn validate_single_dispersion_sampling(
+    value: &serde_json::Value,
+    csv_content: Option<&str>,
+) -> Result<(), String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SingleSampling {
+        kind: String,
+        k_vector: [f64; 3],
+    }
+    let sampling: SingleSampling = serde_json::from_value(value["sampling"].clone())
+        .map_err(|error| error.to_string())?;
+    if sampling.kind != "single" || !sampling.k_vector.iter().all(|v| v.is_finite()) {
+        return Err("single sampling requires a finite three-component k_vector".into());
+    }
+    if let Some(legacy_vector) = value.get("k_vector") {
+        let vector: [f64; 3] = serde_json::from_value(legacy_vector.clone())
+            .map_err(|error| error.to_string())?;
+        if vector != sampling.k_vector {
+            return Err("single sampling disagrees with legacy k_vector".into());
+        }
+    }
+    if let Some(csv) = csv_content {
+        let samples = parse_dispersion_csv_path_samples(csv)?;
+        if samples.len() > 1 {
+            return Err("single sampling cannot describe multiple CSV samples".into());
+        }
+        for sample in samples.values() {
+            if sample.k_vector.iter().zip(sampling.k_vector.iter())
+                .any(|(actual, expected)| (actual - expected).abs() > 1.0e-6)
+            {
+                return Err("single sampling k_vector disagrees with dispersion.csv".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn normalize_and_validate_dispersion_path_metadata(

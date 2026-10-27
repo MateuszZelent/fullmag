@@ -917,7 +917,13 @@ for k-path sampling metadata. The shared frequency-domain chart model may use
 `path_metadata.sampling.points[].label` and `samples_per_segment` to restore
 high-symmetry point labels on dispersion chart points when a legacy or partial
 CSV row omits the `label` value; `dispersion.csv` remains the canonical numeric
-series source. The resource endpoint rejects malformed `path_metadata` sidecars
+series source. A legacy sidecar with `sampling.kind = single` is validated
+against its three-component finite k-vector and the CSV's sole sample (including
+any duplicated top-level `k_vector`). It returns `path_metadata = null`: a
+single sample is not a path, and no synthetic control points are introduced.
+Unknown sampling fields, conflicting vectors and multiple CSV samples are rejected.
+This compatibility read does not materialize a single-k resource as a k-path.
+The resource endpoint rejects malformed `path_metadata` sidecars
 before exposing them to UI consumers: `kind` must be `path`, at least two
 control points are required, `samples_per_segment` entries must be positive,
 and the segment count must match open or closed path semantics. When the CSV is

@@ -128,7 +128,7 @@ function parseArgs(argv) {
   try {
     options.url = new URL(options.url).toString();
     options.apiBase = new URL(
-      apiBaseExplicit ? options.apiBase : options.url,
+      apiBaseExplicit ? options.apiBase : new URL(options.url).origin,
     ).toString().replace(/\/$/, "");
   } catch (error) {
     throw new Error(`Invalid --url/--api-base: ${error.message}`);
@@ -909,7 +909,8 @@ async function openAndInspectUi(page, options, proof, uiEvidence, deadline) {
   });
   await page.locator("main").first().waitFor({ state: "visible", timeout: remainingTimeout(deadline, "Control Room shell") });
   const analysisTab = page.locator(".fm-viewport-tabs__trigger").filter({ hasText: /^Analysis$/ }).first();
-  if ((await page.locator(".fm-analysis-plots").count()) === 0 && (await analysisTab.count()) > 0) {
+  if ((await page.locator(".fm-analysis-plots").count()) === 0) {
+    await analysisTab.waitFor({ state: "visible", timeout: remainingTimeout(deadline, "workspace Analysis tab") });
     await analysisTab.click({ timeout: remainingTimeout(deadline, "Analysis tab") });
   }
   await page.locator(".fm-analysis-plots").waitFor({ state: "visible", timeout: remainingTimeout(deadline, "analysis surface") });
@@ -917,7 +918,7 @@ async function openAndInspectUi(page, options, proof, uiEvidence, deadline) {
   if (options.selectMode) {
     const selected = await selectModeInResultsTree(page, proof, options, deadline);
     assert(selected, "Could not locate the requested eigenmode field in the live Results tree; pass --no-select-mode only when the field is already selected.");
-    const modelTab = page.locator(".fm-viewport-tabs__trigger").filter({ hasText: /^Model$/ }).first();
+    const modelTab = page.locator(".fm-viewport-tabs__trigger").filter({ hasText: /^(Model|3D Viewport)$/ }).first();
     if ((await modelTab.count()) > 0 && (await modelTab.getAttribute("aria-selected")) !== "true") {
       await modelTab.click({ timeout: remainingTimeout(deadline, "Model tab") });
     }

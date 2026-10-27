@@ -49692,6 +49692,36 @@ async fn frequency_domain_dispersion_missing_resource_has_no_artifact_identity()
 }
 
 #[tokio::test]
+async fn frequency_domain_dispersion_single_sampling_preserves_csv_without_inventing_path() {
+    for (sampling, expected_status) in [
+        (serde_json::json!({"kind":"single", "k_vector":[0.0, 10000000.0, 0.0]}), StatusCode::OK),
+        (serde_json::json!({"kind":"single", "k_vector":[0.0, -10000000.0, 0.0]}), StatusCode::INTERNAL_SERVER_ERROR),
+        (serde_json::json!({"kind":"single", "k_vector":[0.0, 10000000.0]}), StatusCode::INTERNAL_SERVER_ERROR),
+        (serde_json::json!({"kind":"single", "k_vector":[0.0, 10000000.0, 0.0], "points":[]}), StatusCode::INTERNAL_SERVER_ERROR),
+    ] {
+        let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+        let eigen_dir = artifact_dir.join("eigen");
+        fs::create_dir_all(eigen_dir.join("dispersion")).unwrap();
+        let csv = "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n0,0,0,10000000,0,,0,0,11211886649.716702\n";
+        fs::write(eigen_dir.join("dispersion.csv"), csv).unwrap();
+        fs::write(eigen_dir.join("dispersion/path.json"), serde_json::to_vec(
+            &serde_json::json!({"sampling":sampling})
+        ).unwrap()).unwrap();
+        let response = app.oneshot(Request::builder().method("GET")
+            .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+            .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), expected_status);
+        let payload: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).unwrap();
+        if expected_status == StatusCode::OK {
+            assert_eq!(payload["status"], "ready");
+            assert_eq!(payload["text"], csv);
+            assert!(payload["path_metadata"].is_null());
+        }
+        let _ = fs::remove_dir_all(&artifact_dir);
+    }
+}
+
+#[tokio::test]
 async fn frequency_domain_dispersion_resource_rejects_invalid_path_metadata() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let eigen_dir = artifact_dir.join("eigen");
