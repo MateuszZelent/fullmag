@@ -9542,6 +9542,9 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
               contains(window_result.diagnostics_json,
                        "\"additional_modes_may_exist\":true"),
           "native merge preserves the exact incomplete best_effort window status");
+    check(contains(window_result.diagnostics_json, "\"certified_refill_target\":1,") &&
+              contains(window_result.diagnostics_json, "\"first_attempt_unique_certified_modes\":"),
+          "best_effort production window passes the public one-mode refill goal and reports the first certified pool");
     check(!contains(window_result.diagnostics_json,
                     "\"shifted_ksp_failure_probe\":"),
           "successful window subsolves omit the failure-only shifted-KSP probe");

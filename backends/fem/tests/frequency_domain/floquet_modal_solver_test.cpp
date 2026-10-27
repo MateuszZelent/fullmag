@@ -1796,9 +1796,50 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
                 probe.true_probe_measurement_failure_count));
     };
 
+    // A best-effort publication limit must not become the larger EPS guard
+    // goal. Keep the identical initial search space and certify/deduplicate
+    // the actual first pool before applying the separate refill target.
+    auto one_mode_goal_request = make_refill_request(2, 160);
+    one_mode_goal_request.certified_refill_target = 1;
+    const auto one_mode_goal_result =
+        fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            refill_operator_view, one_mode_goal_request);
+    check(one_mode_goal_result.ok &&
+              one_mode_goal_result.accepted_mode_count == 1 &&
+              one_mode_goal_result.eps_attempt_count == 1 &&
+              one_mode_goal_result.eps_first_attempt_unique_certified_mode_count_available &&
+              one_mode_goal_result.eps_first_attempt_unique_certified_mode_count == 1 &&
+              one_mode_goal_result.eps_certified_refill_target == 1 &&
+              one_mode_goal_result.eps_converged_reason > 0 &&
+              one_mode_goal_result.max_relative_residual <= one_mode_goal_request.residual_tolerance,
+          "explicit one-mode goal stops after one converged residual-certified mass-deduplicated pool");
+    for (int invalid_goal : {-1, 3}) {
+        auto invalid_request = make_refill_request(2, 160);
+        invalid_request.certified_refill_target = invalid_goal;
+        const auto invalid_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            refill_operator_view, invalid_request);
+        check(!invalid_result.ok && invalid_result.status != nullptr &&
+                  std::strcmp(invalid_result.status, "validation_error") == 0 &&
+                  invalid_result.eps_attempt_count == 0,
+              "invalid explicit refill goals are rejected before EPS execution");
+    }
+
     const auto refill_request = make_refill_request(2, 160);
     const auto refill_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
         refill_operator_view, refill_request);
+    check(one_mode_goal_result.eps_initial_nev == refill_result.eps_initial_nev &&
+              one_mode_goal_result.eps_initial_ncv == refill_result.eps_initial_ncv &&
+              one_mode_goal_result.eps_initial_mpd == refill_result.eps_initial_mpd,
+          "separate certified refill goal preserves initial NEV NCV and MPD");
+    auto two_mode_goal_request = refill_request;
+    two_mode_goal_request.certified_refill_target = 2;
+    const auto two_mode_goal_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        refill_operator_view, two_mode_goal_request);
+    check(two_mode_goal_result.ok && two_mode_goal_result.accepted_mode_count == 2 &&
+              two_mode_goal_result.eps_attempt_count > 1 &&
+              two_mode_goal_result.eps_certified_refill_target == 2 &&
+              two_mode_goal_result.max_relative_residual <= two_mode_goal_request.residual_tolerance,
+          "explicit multi-mode goal still refills after an insufficient one-mode first pool");
     const double expected_first_refill_frequency_hz =
         refill_spectral_center_hz + refill_frequency_offsets_hz[1u];
     const double expected_second_refill_frequency_hz =
@@ -1954,6 +1995,31 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
               budget_limited_result.eps_cumulative_iterations_available &&
               budget_limited_result.outer_iterations == 1,
           "refill cannot reset or exceed the resolved total EPS iteration budget");
+
+    auto one_mode_budget_request = budget_limited_request;
+    one_mode_budget_request.certified_refill_target = 1;
+    const auto one_mode_budget_result =
+        fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            refill_operator_view, one_mode_budget_request);
+    // The fixture may converge its first EPS search in its last allowed
+    // iteration. Only the two-mode refill then lacks budget; a certified
+    // one-mode request is already satisfied. A negative EPS reason must
+    // still fail even when a residual-certified candidate was extracted.
+    const bool first_search_converged =
+        budget_limited_result.eps_converged_reason_available &&
+        budget_limited_result.eps_converged_reason > 0 &&
+        budget_limited_result.eps_converged_reason != EPS_CONVERGED_USER;
+    check(one_mode_budget_result.ok == first_search_converged &&
+              one_mode_budget_result.accepted_mode_count == 1 &&
+              one_mode_budget_result.eps_solved_attempt_count == 1 &&
+              one_mode_budget_result.outer_iterations <= one_mode_budget_request.max_outer_iterations,
+          "one-mode goal succeeds at the budget boundary only if EPS actually converged");
+    check(!one_mode_budget_result.ok ||
+              (one_mode_budget_result.eps_converged_reason_available &&
+               one_mode_budget_result.eps_converged_reason > 0 &&
+               one_mode_budget_result.eps_converged_reason != EPS_CONVERGED_USER &&
+               one_mode_budget_result.relative_residual <= one_mode_budget_request.residual_tolerance),
+          "budget-boundary success retains EPS convergence and full residual certification");
 
     CancelAfterPolls cancellation{};
     auto cancellation_request = make_request(2, 160);

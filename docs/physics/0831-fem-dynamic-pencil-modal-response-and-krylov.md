@@ -6234,3 +6234,43 @@ resolved completeness; native diagnostics pozostają dowodem wykonania.
 Nowe pole jest obsługiwane w zapisanej scenie i eksporcie; ten etap nie
 wprowadza osobnej kontrolki Inspectora. Runtime pozostaje NOT VERIFIED do
 uruchomienia nowego builda i odczytu rzeczywistych artefaktów.
+
+
+### Oddzielny cel refillu dla best_effort Floquet (A17)
+
+W produkcyjnym FEM CPU Floquet rozmiar początkowej puli EPS i cel refillu
+są odrębnymi liczbami. `guard_modes_per_shift` nadal ustala początkowe NEV,
+NCV/MPD i maksymalną pulę finalizatora. Dla jawnego best_effort cel refillu
+wynosi min(publiczne count, guard_modes_per_shift). Dopiero po zbieżnym EPS,
+pełnych residualach deskryptora, rekonstrukcji potencjału i deduplikacji
+w dodatniej metryce masy można zatrzymać refill po osiągnięciu tego celu.
+Nadwyżka już znalezionych modów pozostaje w puli do scalania całego okna;
+nie obcinamy kandydatów przed końcową deduplikacją. Wszystkie podokna nadal
+są wykonywane. Nie jest to dowód kompletności: complete=false,
+certification_method=none i additional_modes_may_exist=true pozostają jawne.
+
+Nowe pole wewnętrznego żądania `SLEPcSparseGyrotropicModalEigenRequest::
+certified_refill_target` ma wartość 0 dla dotychczasowego zachowania;
+niezerowy cel musi należeć do [1, requested_mode_count]. Ustawia go tylko
+`production_cpu_modal_eigen.cpp::solve_sparse_production_modal_window_payload` dla
+shared-domain Floquet best_effort. Funkcja `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context`
+nie interpretuje wyczerpania iteracji, anulowania, błędu EPS ani błędu
+rekonstrukcji jako osiągnięcia nowego celu. Bez override i przy strict
+zachowujemy dotychczasowy cel guard. Budżety iteracji i progi residualu
+pozostają niezmienione. Początkowe wymiary Kryłowa pozostają niezmienione.
+
+Nie zmienia to równań LLG, znaku fazy Floqueta, operatora demag, jednostek
+ani siatki. FDM oraz FEM GPU nie używają tej zmiany. Publiczny Python/IR
+pozostaje kontraktem A16; C ABI i schematy sesji nie zmieniają się.
+Diagnostyka refillu ujawnia zastosowany cel i liczbę unikalnych modów po
+pierwszej finalizacji. Walidacja obejmuje natywny fixture real-split z jednym
+modem w pierwszej puli, późniejszym drugim modem, niezmienionymi wymiarami,
+nieprawidłowym celem i wyczerpaniem budżetu. Testy kompilowane tylko w CI.
+Runtime, rzeczywiste mody i dyspersja po tej poprawce pozostają NOT VERIFIED.
+
+
+| Źródło A17 | Ścieżka | Symbol | Odpowiedzialność i dowód |
+| --- | --- | --- | --- |
+| Native refill | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Cel po finalizacji; residuale i błędy pozostają bramką |
+| Dispatcher window | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_payload` | Wejście do adaptera okna z odrębnym celem best_effort |
+| Regresja SLEPc | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `void refills_native_floquet_nev_before_tangent_mass_cap` | Jeden/wiele modów, wymiary, walidacja celu i budżet; wykonanie CI oczekuje |

@@ -1048,6 +1048,12 @@ std::string floquet_shifted_ksp_diagnostics_json_fields(
         "\"attempt_count\":" + std::to_string(result.eps_attempt_count) +
         ",\"solved_attempt_count\":" +
         std::to_string(result.eps_solved_attempt_count) +
+        ",\"certified_refill_target\":" +
+        std::to_string(result.eps_certified_refill_target) +
+        ",\"first_attempt_unique_certified_modes\":" +
+        (result.eps_first_attempt_unique_certified_mode_count_available
+            ? std::to_string(result.eps_first_attempt_unique_certified_mode_count)
+            : std::string("null")) +
         ",\"initial_nev\":" +
         (result.eps_initial_nev > 0
             ? std::to_string(result.eps_initial_nev)
@@ -4703,6 +4709,10 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         slepc_request.floquet_shared_domain_operator =
             request.floquet_shared_domain_operator;
         slepc_request.requested_mode_count = subwindow.guard_modes_per_shift;
+        if (shared_domain_floquet && request.completeness_policy == 0) {
+            slepc_request.certified_refill_target = std::min(
+                request.requested_mode_count, subwindow.guard_modes_per_shift);
+        }
         slepc_request.target_frequency_hz = subwindow.shift_hz;
         slepc_request.frequency_min_hz = subwindow.search_min_hz;
         slepc_request.frequency_max_hz = subwindow.search_max_hz;

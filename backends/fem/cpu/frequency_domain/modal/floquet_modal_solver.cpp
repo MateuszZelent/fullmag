@@ -7487,6 +7487,16 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.max_floquet_magnetic_relative_residual = not_measured;
     result.max_floquet_potential_relative_residual = not_measured;
 
+    if (spectral_request.certified_refill_target < 0 ||
+        spectral_request.certified_refill_target > spectral_request.requested_mode_count) {
+        result.status = "validation_error";
+        result.unsupported_reason = "floquet_invalid_certified_refill_target";
+        return result;
+    }
+    result.eps_certified_refill_target = spectral_request.certified_refill_target > 0
+        ? spectral_request.certified_refill_target
+        : std::max(1, spectral_request.requested_mode_count);
+
     const int advertised_dimension = spectral_request.tangent_dof_count;
     const char *operator_invalid_reason =
         floquet_shared_operator_invalid_reason(&operator_view, advertised_dimension);
@@ -9421,10 +9431,17 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         close_local_state_before_return();
         return result;
     }
-    const PetscInt requested_certified_modes = std::max<PetscInt>(
-        1, static_cast<PetscInt>(spectral_request.requested_mode_count));
-    if (static_cast<PetscInt>(result.accepted_mode_count) >=
-        requested_certified_modes) {
+    const bool hard_candidate_failure =
+        saw_phi_failure || saw_eigenpair_evaluation_failure ||
+        saw_mode_vector_failure || saw_descriptor_failure;
+    const bool explicit_refill_target_can_finish =
+        spectral_request.certified_refill_target == 0 ||
+        (converged_reason > 0 && converged_reason != EPS_CONVERGED_USER &&
+         !hard_candidate_failure);
+    const PetscInt requested_certified_modes =
+        static_cast<PetscInt>(result.eps_certified_refill_target);
+    if (explicit_refill_target_can_finish &&
+        static_cast<PetscInt>(result.accepted_mode_count) >= requested_certified_modes) {
         result.ok = true;
         result.status = "ok";
         result.unsupported_reason = "";
@@ -9433,9 +9450,6 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         return result;
     }
 
-    const bool hard_candidate_failure =
-        saw_phi_failure || saw_eigenpair_evaluation_failure ||
-        saw_mode_vector_failure || saw_descriptor_failure;
     const bool refill_candidate_pool_available =
         saw_window_candidate || saw_residual_rejection;
     const bool eps_reason_allows_refill =

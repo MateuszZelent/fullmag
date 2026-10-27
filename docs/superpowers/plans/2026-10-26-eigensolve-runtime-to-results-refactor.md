@@ -581,3 +581,56 @@ pozycją reprodukcji; nie uzasadniają zmiany domyślnych ustawień całego solv
 - A15 commit `865c3e683b357ee9523936c5876fabc9268e61af` na remote;
   bootstrap CI `40423974808` obserwowano jako in_progress. Brak nowej
   częstotliwości i zespolonego modu; zadania 6–8 pozostają otwarte.
+
+
+### Runtime A15/A16 — uruchomiona próba +10, 27.10
+
+- Przyrostowy build/restart `46b14c761a9145d5b55dc2e70ba0249c`: succeeded,
+  API i runtime Ready. Źródła `29b1587b2a0d98b4a5c03c3f3c57d77ccd62ff4f`,
+  grupa `fullmag-worktree-eigensolve-integration-ui-202610-78b341212cbdaa7d`,
+  backend `f14ddb0a2f54`, port 3217. Cache i dane poprzednich prób zachowane;
+  przed buildem /build i control miały 271 GiB, /state 6,3 GiB wolnego.
+  Nie usuwano danych: cache jest używany, wyniki nieudanej próby potrzebne diagnozie.
+- Aktywacja `93c9058e41654f9d9936b1617823e91e`, request
+  `eigensolve-de-l2-k10-best-effort-20261027-29b1587b2`, source SHA
+  `aa6f9ae92a0e596285b1fc466cb512900ba2d69792fc4d2e8a7ae0737a9f9465`.
+- Run `run-live-e6659da78e02a743dd99fa873d6bc481d7b657ac322dbf1ec369e0ea36b710bf`,
+  session `docker-startup-c16aa4edf15fb8bcc49ae8b7da0a36eafba76665dc644ab756bd10208859d96b`.
+  Catalog revision 33: Relax succeeded, Eigen running.
+  Task Eigen `task-3b447fd11d52eda9e9b5b9743041500cb8bd30c9e2f064a9c187f0b3fa6c2305`,
+  attempt `attempt-cee508db05d34b659d7952c044742c88`, aktywny PID 5590.
+- Nie jest to jeszcze wynik: brak nowej zaakceptowanej częstotliwości i dowodu
+  pola w UI. Następny odczyt dotyczy tego samego runu; nie powtarzać aktywacji
+  na podstawie timeout obserwacji. Obecne ustawienia Kryłowa nadal domyślne,
+  a identyczność historycznej siatki powietrza nie jest potwierdzona.
+- CI bootstrap `40425386896`: job Python success, Rust in_progress
+  (Run Rust quantity, API and CLI contracts). Nie uznawać całego CI za zielone.
+
+
+### Terminal A16 i kolejny krok A17
+
+Run `run-live-e6659da78e02a743dd99fa873d6bc481d7b657ac322dbf1ec369e0ea36b710bf`
+jest terminalny: catalog revision 428, Relax succeeded / Eigen failed.
+Worker PID5590 zakończony; nie uruchomiono kolejnego Solve. Zachowano pełną
+natywną diagnostykę w `docs/audits/2026-10-27-eigensolve-best-effort-terminal.evidence.json`.
+CI bootstrap40425386896 success; nowe testy A15/A16 faktycznie wykonane.
+
+A17 z audytu zastępuje zgadywanie tolerancji: dwa podokna wyczerpały EPS
+w refill NEV8→31 przy NCV32, choć jest jeden mod z residualem1,03e−13.
+Publiczne count1 jest zastąpione wewnętrznym guard count przy wywołaniu
+sparse. Naprawę trzeba oprzeć na rozdzieleniu obu celów i regresjach,
+bez dopuszczenia obecnego nieudanego runu. Mod11,211886650GHz pozostaje
+wyłącznie diagnostyczny, nie jest jeszcze punktem zaakceptowanego wykresu.
+
+
+### Implementacja A17 — oddzielny cel refillu
+
+- Wewnętrzny sparse request ma opcjonalny certified_refill_target (0=stary
+  kontrakt). Produkcyjny CPU Floquet ustawia min(count, guard) wyłącznie
+  dla best_effort. Początkowe NEV/NCV/MPD i pojemność finalizatora pozostają.
+- Wcześniejsze zakończenie wymaga certyfikowanej puli po deduplikacji w metryce masy oraz dodatniego powodu zbieżności EPS, bez błędów rekonstrukcji.
+  Nie konwertuje istniejącej próby failed na sukces ani nie ignoruje budżetu.
+- Dodano natywne regresje jednego/wielu modów, wymiarów Kryłowa,
+  nieprawidłowego celu i budżetu; C ABI sprawdza przekazany cel w telemetry.
+  Native testy i runtime A17 jeszcze NOT VERIFIED. Wymagany dedykowany CI
+  workflow_dispatch contract_scope=floquet-modal-slepc oraz zwykłe CI.

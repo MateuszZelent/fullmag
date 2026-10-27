@@ -4617,6 +4617,24 @@
       "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
       "symbol": "void modal_certified_recovery_controlled_breakdown_contract",
       "responsibility": "Test-only false default-convergence scenario with a measured same-attempt strict-progress probe, one injected BREAKDOWN, actual sparse-owner recovery under the original strict rtol/atol and eight-iteration budget, and independent final b-Ax; not evidence of natural FEM breakdown or solver qualification"
+    },
+    {
+      "id": "source-a17-refill-goal",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context",
+      "responsibility": "Separate optional certified-pool goal from initial EPS dimensions; retain descriptor residual, positive-mass deduplication, cancellation and EPS failure gates"
+    },
+    {
+      "id": "source-a17-window-goal",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "solve_sparse_production_modal_payload",
+      "responsibility": "Unique production dispatcher enters the window adapter that passes public count as bounded best_effort Floquet refill goal without changing strict policy or completeness"
+    },
+    {
+      "id": "source-a17-refill-regression",
+      "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+      "symbol": "void refills_native_floquet_nev_before_tangent_mass_cap",
+      "responsibility": "Actual SLEPc first-pool deduplication, separate one/multi-mode goals, invariant initial dimensions, invalid goals and iteration budget regression; runtime scientific qualification remains separate"
     }
   ],
   "public_api": {

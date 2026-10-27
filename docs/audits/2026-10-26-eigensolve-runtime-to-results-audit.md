@@ -298,3 +298,37 @@ nie zastępuje testów Rust. Runtime poprawki A14: **NOT VERIFIED**.
 Dalszy krok: CI i wdrożenie A14, następnie jawne nowe obliczenie po potwierdzonym
 terminalu i release. Oryginalne próby pozostają bez zmian. Odtworzenie L2/3
 oraz wizualizacja rzeczywistych modów i nowego wykresu nadal są otwarte.
+
+
+## A17 — refill żąda wewnętrznego guard count, a nie limitu publikacji (27.10)
+
+[Pełna diagnostyka](2026-10-27-eigensolve-best-effort-terminal.evidence.json)
+pochodzi z runtime `29b1587b2`, runu `run-live-e6659da…`, catalog revision 428.
+Relax succeeded; Eigen failed, exit1. A15 zachowało całe 26055 bajtów stderr
+bez ucięcia. A16 zostało potwierdzone: `window_completeness.policy=best_effort`.
+Bootstrap CI `40425386896` success, w logu potwierdzone wykonanie nowych testów.
+
+Native znalazło jednego kandydata po deduplikacji, około 11,211886650 GHz,
+relative_residual_max=1,0316027197209396e−13. Jest to wynik diagnostyczny
+odrzuconego runu: nie opublikowano poprawnego artefaktu ani pola UI.
+Dwa z trzech podokien wyczerpały 2000 iteracji EPS (`EPS reason=-1`),
+po trzech próbach NEV od 8 do 31 przy niezmiennym NCV=MPD=32.
+Każde ma jeden unikalny certyfikowany mod. Trzecie podokno zakończyło EPS
+po 3 iteracjach, ale nie miało dodatniego modu w swoim oknie. Wewnętrzne
+KSP mają zero naruszeń true-residual criterion. Nie wskazuje to na przekroczenie
+progu residualu moda ani błąd demag; wyczerpano zewnętrzny refill.
+
+Źródło: `production_cpu_modal_eigen.cpp` przekazuje do sparse adaptera
+`subwindow.guard_modes_per_shift` jako `requested_mode_count`.
+`floquet_modal_solver.cpp` porównuje z tą liczbą liczbę unikalnych modów
+po pełnej walidacji i zwiększa NEV aż do limitu ncv−1. Publiczne count=1
+nie jest kryterium zakończenia tego refillu. To potwierdzona rozbieżność
+między limitem publikacji i wewnętrznym zapotrzebowaniem na kandydatów;
+nie dowodzi jeszcze konkretnego sposobu naprawy.
+
+Następny krok: rozdzielić guard/rozmiar przestrzeni od jawnego celu refillu
+best_effort, z testem rzadkiego widma, duplikatów real-split, odrzuconych
+residualów i niespełnionego żądania wielu modów. Zachować strict-policy,
+pełne residuale, obsługę błędów EPS i `complete=false` bez certyfikatu.
+Nie przeklasyfikowywać obecnego nieudanego runu na sukces ani nie obniżać
+progów. Osobno zachować różnice siatki i historycznych ustawień Kryłowa.
