@@ -29,8 +29,15 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api session_persistence::accepted_fms_persistence_tests -- --nocapture | tee "$RUNNER_TEMP/accepted-modal-roundtrip.log"
           grep -F "accepted_solved_modal_archive_reopens_without_original_store ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
           grep -F "archived_metadata_revision_requires_exact_versioned_physical_binding ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
+          grep -F "binary_upload_started_empty_preserves_newer_workspace ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
           grep -F "accepted_fms_export_inspect_readonly_import_and_tamper_rejection ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
           cargo test --locked -p fullmag-api --bin fullmag-api accepted_modal_publication::tests -- --nocapture
+      - name: Preserve bounded binary archive intake and cancellation cleanup
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api session_persistence::file_transport::tests -- --nocapture | tee "$RUNNER_TEMP/fms-file-intake.log"
+          grep -F "exact_limit_preserves_file_bytes_and_leaves_no_named_upload ... ok" "$RUNNER_TEMP/fms-file-intake.log"
+          grep -F "stream_error_and_timeout_leave_no_named_upload ... ok" "$RUNNER_TEMP/fms-file-intake.log"
       - name: Run session ownership and physical field contracts
         run: cargo test --locked -p fullmag-api --bin fullmag-api session::tests --no-fail-fast
       - name: Preserve dataset source paths and byte revisions

@@ -1194,6 +1194,16 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::persistence::commit_session),
         )
         .route(
+            "/v2/persistence/imports/file-inspections",
+            post(handlers::persistence::inspect_project_archive_file)
+                .layer(axum::extract::DefaultBodyLimit::max(crate::session_persistence::MAX_FMS_FILE_BYTES)),
+        )
+        .route(
+            "/v2/sessions/current/persistence/file-imports",
+            post(handlers::persistence::commit_session_file)
+                .layer(axum::extract::DefaultBodyLimit::max(crate::session_persistence::MAX_FMS_FILE_BYTES)),
+        )
+        .route(
             "/v2/sessions/current/persistence/assets/import",
             post(handlers::persistence::import_asset),
         )

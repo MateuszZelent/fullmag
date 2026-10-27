@@ -9,9 +9,13 @@ mod accepted_modal;
 #[path = "session_persistence_accepted_scene.rs"]
 mod accepted_scene;
 
+#[path = "session_persistence_file_transport.rs"]
+mod file_transport;
+pub(crate) use file_transport::MAX_FMS_FILE_BYTES;
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -1876,6 +1880,61 @@ mod accepted_fms_persistence_tests {
         state
     }
 
+    #[tokio::test]
+    async fn binary_invalid_archive_preserves_current_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let state = destination_state(root.path()).await;
+        let original = state.current_live_state.read().await.as_ref().unwrap().session.session_id.clone();
+        let request = axum::http::Request::builder().header("content-type", "application/octet-stream")
+            .body(axum::body::Body::from("not an archive")).unwrap();
+        let error = crate::router_v2::handlers::persistence::session::commit_session_file(
+            State(state.clone()), axum::extract::Query(crate::router_v2::handlers::persistence::session::SessionFileImportQuery {
+                restore_mode: SessionRestoreMode::VisualizationOnly,
+            }), request).await.unwrap_err();
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(state.current_live_state.read().await.as_ref().unwrap().session.session_id, original);
+        assert!(!root.path().join("accepted-store-unused").exists());
+    }
+
+    #[tokio::test]
+    async fn binary_upload_refuses_scope_changed_during_transfer() {
+        let root = tempfile::tempdir().unwrap();
+        let state = destination_state(root.path()).await;
+        let producer = state.clone();
+        let body = axum::body::Body::from_stream(async_stream::stream! {
+            producer.current_live_state.write().await.as_mut().unwrap().session.session_id = "newer-session".into();
+            producer.current_live_session_epoch.fetch_add(1, Ordering::AcqRel);
+            yield Ok::<_, std::io::Error>(b"not an archive".to_vec());
+        });
+        let request = axum::http::Request::builder().header("content-type", "application/octet-stream").body(body).unwrap();
+        let error = crate::router_v2::handlers::persistence::session::commit_session_file(
+            State(state.clone()), axum::extract::Query(crate::router_v2::handlers::persistence::session::SessionFileImportQuery {
+                restore_mode: SessionRestoreMode::VisualizationOnly,
+            }), request).await.unwrap_err();
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(state.current_live_state.read().await.as_ref().unwrap().session.session_id, "newer-session");
+    }
+
+    #[tokio::test]
+    async fn binary_upload_started_empty_preserves_newer_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let state = destination_state(root.path()).await;
+        let original = state.current_live_state.write().await.take().unwrap();
+        let original_id = original.session.session_id.clone();
+        let expected_epoch = state.current_live_session_epoch.load(Ordering::Acquire);
+        let producer = state.clone();
+        let body = axum::body::Body::from_stream(async_stream::stream! {
+            *producer.current_live_state.write().await = Some(original);
+            producer.current_live_session_epoch.fetch_add(1, Ordering::AcqRel);
+            yield Ok::<_, std::io::Error>(b"not a zip".to_vec());
+        });
+        let request = axum::http::Request::builder().header("content-type", "application/octet-stream").body(body).unwrap();
+        let error = import_session_file_commit(state.clone(), request, SessionRestoreMode::VisualizationOnly, None, Some(expected_epoch)).await.unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("session_import_scope_changed"));
+        assert_eq!(state.current_live_state.read().await.as_ref().unwrap().session.session_id, original_id);
+        assert!(!root.path().join("accepted-store-unused").exists());
+    }
+
     #[test]
     fn archived_metadata_revision_requires_exact_versioned_physical_binding() {
         let original = scene(17);
@@ -1908,7 +1967,8 @@ mod accepted_fms_persistence_tests {
         fs::write(&script, b"study = fullmag.Study()\n").unwrap();
         let (commit, tasks, artifacts, bytes, payloads) = accepted_modal::tests::fixture();
         let accepted = SessionStore::open(&accepted_root).unwrap();
-        let accepted_scene_identity = fullmag_authoring::scene_execution_input_identity(&scene(17)).unwrap();
+        let accepted_scene_identity =
+            fullmag_authoring::scene_execution_input_identity(&scene(17)).unwrap();
         accepted
             .commit_run_intent(&fullmag_session::FmsRunIntent::new(
                 "run-modal",
@@ -1923,8 +1983,11 @@ mod accepted_fms_persistence_tests {
             artifacts.entries[0].content_sha256
         );
         accepted.commit_run_catalog(&tasks).unwrap();
-        fs::write(accepted.root().join("runs/run-modal/artifact_catalog.json"),
-            serde_json::to_vec(&artifacts).unwrap()).unwrap();
+        fs::write(
+            accepted.root().join("runs/run-modal/artifact_catalog.json"),
+            serde_json::to_vec(&artifacts).unwrap(),
+        )
+        .unwrap();
         drop(accepted);
         let candidate = crate::accepted_modal_publication::ModalPublicationCandidate {
             task_order: 0,
@@ -2006,40 +2069,64 @@ mod accepted_fms_persistence_tests {
         // must reconstruct solely from the archive in a new application state.
         drop(state);
         drop(source);
-        let root = tempfile::tempdir().unwrap();
-        let destination = destination_state(root.path()).await;
-        import_session_inspect(
-            State(destination.clone()),
-            Json(SessionImportInspectRequest {
-                fms_base64: base64::engine::general_purpose::STANDARD.encode(&archive),
-            }),
-        )
-        .await
-        .expect("inspect cold archive");
-        import_session_commit(
-            State(destination.clone()),
-            Json(SessionImportCommitRequest {
-                fms_base64: base64::engine::general_purpose::STANDARD.encode(&archive),
-                restore_mode: SessionRestoreMode::VisualizationOnly,
-            }),
-        )
-        .await
-        .expect("cold visualization import");
-        assert!(!root.path().join("accepted-store-unused").exists());
-        let current = destination.current_live_state.read().await;
-        let snapshot = current.as_ref().unwrap();
-        let artifact = crate::session::current_artifact_dir(snapshot).unwrap();
-        let capture = fullmag_session::frequency_domain_artifact_generation::capture(&artifact)
-            .unwrap()
-            .unwrap();
-        assert_eq!(capture.commit, commit);
-        for (path, expected) in payloads {
-            assert_eq!(
-                capture
-                    .read_member_bounded(&artifact, &path, expected.len() as u64)
-                    .unwrap(),
-                expected
-            );
+        for binary in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let destination = destination_state(root.path()).await;
+            if binary {
+                use crate::router_v2::handlers::persistence::session::{
+                    SessionFileImportQuery, commit_session_file, inspect_project_archive_file,
+                };
+                let request = || {
+                    axum::http::Request::builder()
+                        .header("content-type", "application/octet-stream")
+                        .body(axum::body::Body::from(archive.clone()))
+                        .unwrap()
+                };
+                inspect_project_archive_file(State(destination.clone()), request())
+                    .await
+                    .expect("inspect nonempty binary archive");
+                commit_session_file(
+                    State(destination.clone()),
+                    axum::extract::Query(SessionFileImportQuery {
+                        restore_mode: SessionRestoreMode::VisualizationOnly,
+                    }),
+                    request(),
+                )
+                .await
+                .expect("commit nonempty binary archive");
+            } else {
+                import_session_inspect(
+                    State(destination.clone()),
+                    Json(SessionImportInspectRequest {
+                        fms_base64: base64::engine::general_purpose::STANDARD.encode(&archive),
+                    }),
+                )
+                .await
+                .expect("inspect cold archive");
+                import_session_commit(
+                    State(destination.clone()),
+                    Json(SessionImportCommitRequest {
+                        fms_base64: base64::engine::general_purpose::STANDARD.encode(&archive),
+                        restore_mode: SessionRestoreMode::VisualizationOnly,
+                    }),
+                )
+                .await
+                .expect("cold visualization import");
+            }
+            assert!(!root.path().join("accepted-store-unused").exists());
+            let current = destination.current_live_state.read().await;
+            let snapshot = current.as_ref().unwrap();
+            let artifact = crate::session::current_artifact_dir(snapshot).unwrap();
+            let capture = fullmag_session::frequency_domain_artifact_generation::capture(&artifact)
+                .unwrap()
+                .unwrap();
+            assert_eq!(capture.commit, commit);
+            for (path, expected) in &payloads {
+                let actual = capture
+                    .read_member_bounded(&artifact, path, expected.len() as u64)
+                    .unwrap();
+                assert_eq!(&actual, expected);
+            }
         }
     }
 
@@ -3005,11 +3092,44 @@ pub(crate) async fn import_session_inspect(
     let fms_bytes = base64_decode(&req.fms_base64)
         .map_err(|e| ApiError::bad_request(format!("invalid base64: {e}")))?;
 
-    let decoding_root = session_store_root(&state).join("imports");
-    std::fs::create_dir_all(&decoding_root)
-        .map_err(|error| ApiError::internal(format!("creating archive decode root: {error}")))?;
-    let staged = preflight_fms_staged(Cursor::new(&fms_bytes), &[], &decoding_root)
-        .map_err(|error| archive_preflight_error(error, "invalid_fms_preflight"))?;
+    let staged = stage_import_archive(&state, Cursor::new(fms_bytes), false).await?;
+    inspect_staged_import(staged)
+}
+
+pub(crate) async fn import_session_file_inspect(
+    state: Arc<AppState>,
+    request: axum::extract::Request,
+) -> Result<Json<SessionImportInspectResponse>, ApiError> {
+    let file = file_transport::receive(&state, request).await?;
+    let staged = stage_import_archive(&state, file, false).await?;
+    inspect_staged_import(staged)
+}
+
+async fn stage_import_archive<R: Read + Seek + Send + 'static>(
+    state: &AppState,
+    source: R,
+    include_snapshot: bool,
+) -> Result<FmsStagedPreflight, ApiError> {
+    let decoding_root = session_store_root(state).join("imports");
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&decoding_root).map_err(|error| {
+            ApiError::internal(format!("creating archive decode root: {error}"))
+        })?;
+        let required: &[&str] = if include_snapshot {
+            &["project/current_live_snapshot.json"]
+        } else {
+            &[]
+        };
+        preflight_fms_staged(source, required, &decoding_root)
+            .map_err(|error| archive_preflight_error(error, "invalid_fms_preflight"))
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("archive preflight worker: {error}")))?
+}
+
+fn inspect_staged_import(
+    staged: FmsStagedPreflight,
+) -> Result<Json<SessionImportInspectResponse>, ApiError> {
     if staged.session.accepted_provenance_ref.is_some() {
         let snapshot_bytes = staged
             .read_document("project/current_live_snapshot.json")
@@ -3018,8 +3138,8 @@ pub(crate) async fn import_session_inspect(
                     "invalid_fms_accepted_provenance: persisted snapshot is missing: {error}"
                 ))
             })?;
-        let persisted: PersistedCurrentLiveSnapshot =
-            serde_json::from_slice(&snapshot_bytes).map_err(|error| {
+        let persisted: PersistedCurrentLiveSnapshot = serde_json::from_slice(&snapshot_bytes)
+            .map_err(|error| {
                 ApiError::bad_request(format!(
                     "invalid_fms_accepted_provenance: persisted snapshot is invalid: {error}"
                 ))
@@ -3422,19 +3542,70 @@ pub(crate) async fn import_session_commit_with_context(
     let fms_bytes = base64_decode(&req.fms_base64)
         .map_err(|e| ApiError::bad_request(format!("invalid base64: {e}")))?;
 
-    // The archive, persisted snapshot, presentation migration, and semantic
-    // report must all be valid before opening a SessionStore or mutating live
-    // application state.
-    let decoding_root = session_store_root(&state).join("imports");
-    std::fs::create_dir_all(&decoding_root)
-        .map_err(|error| ApiError::internal(format!("creating archive decode root: {error}")))?;
-    let preflight = preflight_fms_staged(
-        Cursor::new(&fms_bytes),
-        &["project/current_live_snapshot.json"],
-        &decoding_root,
+    let preflight = stage_import_archive(&state, Cursor::new(fms_bytes), true).await?;
+    commit_staged_import(state, preflight, req.restore_mode, request_context, None).await
+}
+
+pub(crate) async fn import_session_file_commit(
+    state: Arc<AppState>,
+    request: axum::extract::Request,
+    restore_mode: SessionRestoreMode,
+    request_context: Option<&crate::types::CurrentLiveRequestContext>,
+    empty_session_epoch: Option<u64>,
+) -> Result<Json<SessionImportCommitResponse>, ApiError> {
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
+    validate_empty_import_scope(&state, empty_session_epoch).await?;
+    let file = file_transport::receive(&state, request).await?;
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
+    validate_empty_import_scope(&state, empty_session_epoch).await?;
+    let preflight = stage_import_archive(&state, file, true).await?;
+    commit_staged_import(
+        state,
+        preflight,
+        restore_mode,
+        request_context,
+        empty_session_epoch,
     )
-    .map_err(|error| archive_preflight_error(error, "invalid_fms_preflight"))?;
-    let snapshot_bytes = preflight.read_document("project/current_live_snapshot.json")
+    .await
+}
+
+async fn validate_empty_import_scope(
+    state: &AppState,
+    expected_epoch: Option<u64>,
+) -> Result<(), ApiError> {
+    if let Some(expected) = expected_epoch {
+        if state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire)
+            != expected
+            || state.current_live_state.read().await.is_some()
+        {
+            return Err(ApiError::conflict_with_code(
+                "session_import_scope_changed",
+                "A different workspace became active during archive upload.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn commit_staged_import(
+    state: Arc<AppState>,
+    preflight: FmsStagedPreflight,
+    restore_mode: SessionRestoreMode,
+    request_context: Option<&crate::types::CurrentLiveRequestContext>,
+    empty_session_epoch: Option<u64>,
+) -> Result<Json<SessionImportCommitResponse>, ApiError> {
+    // Both transports enter the exact same validation and publication boundary.
+    if let Some(context) = request_context {
+        crate::validate_current_live_request_context(&state, context).await?;
+    }
+    let snapshot_bytes = preflight
+        .read_document("project/current_live_snapshot.json")
         .map_err(|error| ApiError::bad_request(format!("invalid_fms_snapshot: {error}")))?;
     let mut persisted: PersistedCurrentLiveSnapshot = serde_json::from_slice(&snapshot_bytes)
         .map_err(|error| ApiError::bad_request(format!("invalid_fms_snapshot: {error}")))?;
@@ -3453,7 +3624,7 @@ pub(crate) async fn import_session_commit_with_context(
     let mut warnings = preflight.inspection.warnings.clone();
     warnings.extend(compatibility.warnings());
 
-    if matches!(req.restore_mode, SessionRestoreMode::Resume) {
+    if matches!(restore_mode, SessionRestoreMode::Resume) {
         return Err(ApiError::conflict(
             "checkpoint_restore_unsupported: this runtime cannot restore an FMS checkpoint",
         ));
@@ -3485,7 +3656,8 @@ pub(crate) async fn import_session_commit_with_context(
     }
     let restored: SessionStateResponse = persisted.clone().into();
     validate_imported_snapshot_run(&preflight, &persisted)?;
-    let restored_ui_state = preflight.read_document("project/ui_state.json")
+    let restored_ui_state = preflight
+        .read_document("project/ui_state.json")
         .map_err(|error| ApiError::bad_request(format!("invalid_fms_ui_state: {error}")))
         .map(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())?;
 
@@ -3498,6 +3670,7 @@ pub(crate) async fn import_session_commit_with_context(
     if let Some(context) = request_context {
         crate::validate_current_live_request_context(&state, context).await?;
     }
+    validate_empty_import_scope(&state, empty_session_epoch).await?;
     publish_imported_session(&state, &preflight, &persisted, &import_id)?;
 
     // Drop queues, replay, and other session-owned side channels before the
@@ -3541,7 +3714,7 @@ pub(crate) async fn import_session_commit_with_context(
 
     Ok(Json(SessionImportCommitResponse {
         session_id: preflight.session.session_id.clone(),
-        restore_mode: req.restore_mode,
+        restore_mode: restore_mode,
         restore_class: preflight.inspection.restore_class,
         warnings,
         compatibility,
