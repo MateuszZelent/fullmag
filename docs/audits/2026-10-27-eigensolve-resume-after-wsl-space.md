@@ -94,3 +94,29 @@ Kwalifikacja runtime tej korekty: NOT VERIFIED do ponownego przebiegu.
 Dokumentacja SLEPc sprawdzona przez Context7 /gitlab_slepc/slepc:
 https://gitlab.com/slepc/slepc/-/blob/main/doc/source/documentation/hands-on/hands-on1.md
 (opcja zwiększenia NCV przy niedostatecznej zbieżności, kosztem pamięci).
+
+## Nowy runtime i odrębny błąd przed uruchomieniem workera
+
+Managed rebuild succeeded: development 7f3fb666598749d38cf43e0dddd59ef5,
+config 3cfcfd19ec16c4f144170074e15880c6e59615981194fd773cba59280c58aa78,
+pakiet 7261e2b8068260afb607410842f17e7e9640709c. CI MFEM 40495171889
+uruchomione; nie uznano go z góry za PASS.
+
+Gamma floor32 run 9e60157a… nie dotarł do solvera. Compute scheduler
+zakończył się na load exact accepted worker step for CPU environment:
+typowany StoreWriterBusy po krótkim retry. Usługa zamknęła admission,
+API pozostało diagnostyczne. To nie jest wynik eksperymentu NCV.
+
+Korekta w accepted_study_supervisor.rs: tylko odczyt konfiguracji CPU
+przed host launch token i spawn klasyfikuje StoreWriterBusy jako istniejący
+WorkerLaunchDeferred. Zwalnia wyłącznie slot supervision; zachowuje claim,
+lease i oryginalny durable Start. Scheduler już obsługuje ten typ przez
+deferral tej samej pracy z możliwością cancellation/drain. Nie zmieniono
+obsługi błędów po spawn ani błędów niezgodności danych. Regresja sprawdza
+typowaną przyczynę, zachowanie błędu o podobnym tekście i sukces.
+
+Stop-diagnostic-volume bez modyfikacji lease zatrzymał dokładną instancję
+ze statusem stopped-execution-unknown, zachowując owner/process receipts.
+Próba ścieżki pending-activation odmówiła, bo helper 331e7112… już nie istniał;
+nie zmieniano ręcznie markerów ani rezerwacji. Następny krok: managed fresh
+archive/recreate i ponowienie Gamma; nowy sweep nadal NIE został wykonany.

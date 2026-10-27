@@ -40,6 +40,19 @@ impl std::fmt::Display for WorkerLaunchDeferred {
 
 impl std::error::Error for WorkerLaunchDeferred {}
 
+/// Only for idempotent configuration reads before launch authorization.
+/// Preserve the durable Start/claim when writer contention outlasts the short
+/// retry, so the scheduler can service cancellation and try the same launch.
+fn classify_prelaunch_store_busy<T>(result: Result<T>) -> Result<T> {
+    result.map_err(|error| {
+        if is_store_writer_busy(&error) {
+            error.context(WorkerLaunchDeferred)
+        } else {
+            error
+        }
+    })
+}
+
 #[derive(Debug)]
 pub(crate) struct SupervisedWorkerResult {
     pub(crate) recovered_terminal_completion: bool,
@@ -594,7 +607,10 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     {
         bail!("pending cancellation requires reconciliation before worker spawn");
     }
-    let cpu_thread_environment = if host.is_some() {
+    let cpu_thread_environment = classify_prelaunch_store_busy((|| {
+        if host.is_none() {
+            return Ok(Vec::new());
+        }
         let starts = recovered_before_spawn
             .commands
             .iter()
@@ -631,9 +647,18 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
             &accepted_step.execution_plan,
             &cpu_ids,
             gpu_uuid.is_some(),
-        )?
-    } else {
-        Vec::new()
+        )
+    })());
+    let cpu_thread_environment = match cpu_thread_environment {
+        Ok(environment) => environment,
+        Err(error) if error.downcast_ref::<WorkerLaunchDeferred>().is_some() => {
+            // No token or process exists yet. Only the supervision slot ends;
+            // the admitted claim and original durable Start remain unchanged.
+            slot.release()
+                .context("release CPU-configuration deferred supervision slot")?;
+            return Err(error);
+        }
+        Err(error) => return Err(error),
     };
     #[cfg(windows)]
     let cpu_rate_limit = if host.is_some() {
@@ -2783,6 +2808,21 @@ mod tests {
             _inventory_owner: inventory_owner,
             _root: root,
         }
+    }
+
+    #[test]
+    fn prelaunch_cpu_configuration_defers_only_typed_writer_contention() {
+        let busy: Result<()> = Err(anyhow::Error::new(fullmag_session::StoreWriterBusy)
+            .context("load exact accepted worker step for CPU environment"));
+        let deferred = classify_prelaunch_store_busy(busy).unwrap_err();
+        assert!(deferred.downcast_ref::<WorkerLaunchDeferred>().is_some());
+        assert!(deferred.chain().any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()));
+
+        let invalid: Result<()> = Err(anyhow::anyhow!("session store writer is busy: invalid claim"));
+        let invalid = classify_prelaunch_store_busy(invalid).unwrap_err();
+        assert!(invalid.downcast_ref::<WorkerLaunchDeferred>().is_none());
+        assert!(invalid.to_string().contains("invalid claim"));
+        assert_eq!(classify_prelaunch_store_busy(Ok(7)).unwrap(), 7);
     }
 
     #[test]
