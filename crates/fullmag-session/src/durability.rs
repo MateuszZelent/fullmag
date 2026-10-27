@@ -370,8 +370,42 @@ fn rename_directory_noreplace(staging: &Path, destination: &Path) -> Result<()> 
             libc::RENAME_NOREPLACE,
         )
     };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| {
+    let error = (result != 0).then(std::io::Error::last_os_error);
+    // A Windows-folder store (9p/drvfs) rejects RENAME_NOREPLACE with EINVAL,
+    // so every directory publication there failed. Without the flag, rename
+    // refuses a non-empty destination but would replace an empty directory;
+    // check that no entry exists first. Callers hold the store writer and use
+    // a unique destination per operation, so no other writer creates it in
+    // between.
+    if let Some(error) = error
+        .as_ref()
+        .filter(|error| matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS)))
+    {
+        let staging_path = Path::new(std::ffi::OsStr::from_bytes(staging.as_bytes()));
+        let destination_path = Path::new(std::ffi::OsStr::from_bytes(destination.as_bytes()));
+        return match fs::symlink_metadata(destination_path) {
+            Ok(_) => Err(anyhow::Error::new(std::io::Error::from_raw_os_error(libc::EEXIST)))
+                .with_context(|| {
+                    format!(
+                        "publishing directory {} without replacing an existing destination",
+                        destination_path.display()
+                    )
+                }),
+            Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {
+                fs::rename(staging_path, destination_path).with_context(|| {
+                    format!(
+                        "publishing directory {} after RENAME_NOREPLACE was rejected ({error})",
+                        destination_path.display()
+                    )
+                })
+            }
+            Err(other) => Err(anyhow::Error::new(other)).with_context(|| {
+                format!("checking directory destination {}", destination_path.display())
+            }),
+        };
+    }
+    if let Some(error) = error {
+        return Err(error).with_context(|| {
             format!(
                 "publishing directory {} without replacing an existing destination",
                 destination.to_string_lossy()
