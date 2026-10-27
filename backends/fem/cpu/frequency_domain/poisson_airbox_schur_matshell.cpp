@@ -287,9 +287,14 @@ BoundedKrylovDimensions bounded_krylov_dimensions(
     const std::uint64_t basis_multiplier = frequency_window ? 4u : 2u;
     const std::uint64_t oversampled_nev =
         nev > dimension / basis_multiplier ? dimension : basis_multiplier * nev;
+    // A one-mode window requests NEV=4. A 16-vector restarted basis can
+    // stagnate even when the 32-vector refinement converges. Retain at least
+    // 32 vectors for window searches, capped by the actual split dimension.
+    // This changes workspace only; NEV, residuals and coverage gates stay fixed.
+    const std::uint64_t minimum_basis = frequency_window ? 32u : 0u;
     const std::uint64_t ncv = std::min(
         dimension,
-        std::max(nev + 1u, oversampled_nev));
+        std::max({nev + 1u, oversampled_nev, minimum_basis}));
     return {nev, ncv, ncv > nev && ncv <= dimension};
 }
 
@@ -4998,7 +5003,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
                 "\"search_stability\":{\"status\":\"not_established\",\"requested_cluster_limit_covered\":false},"
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
-                "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
+                "\"krylov_subspace_policy\":\"bounded_quadruple_nev_floor32_window_v3\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
                 "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
                 "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
@@ -5351,7 +5356,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
                 "\"search_stability\":{\"status\":\"not_established\",\"requested_cluster_limit_covered\":false},"
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
-                "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
+                "\"krylov_subspace_policy\":\"bounded_quadruple_nev_floor32_window_v3\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
                 "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
                 "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"
@@ -5695,7 +5700,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
             "\"search_stability\":{\"status\":\"%s\",\"requested_cluster_limit_covered\":%s},"
             "\"method\":\"shift_nev_refinement_subspace_v1\","
-            "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
+            "\"krylov_subspace_policy\":\"bounded_quadruple_nev_floor32_window_v3\","
             "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
             "\"requested_mode_count\":%u,\"requested_nev\":%llu,\"requested_ncv\":%llu,"
             "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,\"refined_ncv\":%llu,"

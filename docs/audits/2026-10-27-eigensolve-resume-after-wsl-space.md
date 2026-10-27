@@ -43,3 +43,54 @@ Własne tymczasowe zależności wykresów przeniesiono z /tmp/eigen-plot-package
 Wznowienie wymaga zwolnienia co najmniej kilku GB (roboczo 5–10 GB, lepiej 15–20 GB) wewnątrz WSL lub konkretnego autoryzowanego planu dla zbędnych danych. Pytanie do użytkownika pozostaje otwarte. Nie tworzyć zastępczych zadań tylko dla kolejnych zielonych kontroli: krytyczna ścieżka to uruchomienie solvera.
 
 Po zmianie stanu dysku: sprawdzić df i aktywnych ownerów; uzgodnić dokładny retirement; przeprowadzić Gamma window na zachowanej fizyce i źródłach; zdiagnozować ewentualną awarię native; załadować zweryfikowane nowe źródła przez managed Docker lifecycle; wykonać signed15 i pozostałe bramki naukowe, wykres i UI; dopiero potem I5. Zachować wszystkie istniejące dirty/untracked pliki — są wymienione przez git status i nie należały do ostatnich commitów.
+
+## Aktualizacja po zwolnieniu miejsca — faktycznie wznowione obliczenia
+
+Odczyt 27.10.2026: WSL początkowo 5,2 GiB wolnego, C: 21 GiB. Blokada
+miejsca opisana powyżej jest historyczna. Managed retirement bce31153…
+został dokończony przez wznowienie istniejącego żądania; nie edytowano lease.
+
+Gamma frequency-window, run 83027577…, CPU/double, runtime fde189663,
+dotarł do solvera. Relaksacja succeeded; eigensolve exit 1. Wyszukiwanie
+ukończyło 49/50 podokien i znalazło kandydat około 9,299249697 GHz z pełnym
+residualem rzędu 1e-11. Cały wynik został prawidłowo odrzucony jako
+frequency_window_subwindow_failed; nie jest gotowym widmem ani dowodem
+kompletności. Pełny zachowany ogon diagnostyki i tożsamości są w
+2026-10-27-eigensolve-gamma-window-space-resumed.evidence.json.
+
+Nowy run 7c8847d7… został przyjęty i faktycznie uruchomił eigenmodes.
+Budżet solver_max_outer_iterations zwiększono 2000 → 10000 w Gamma-window
+i signed15; nie zmieniono residualu 1e-8, EPS/KSP 1e-9, restart8,
+dynamicznego demag, geometrii, Dirichleta, okna ani siatki. To próba
+zwiększenia budżetu zbieżności, nie potwierdzona naprawa przyczyny.
+Odbiór tego przebiegu i uruchomienie signed15 pozostają otwarte.
+
+Postprocesor przyjmuje teraz aktualne API evidence z przypięciem SHA
+skryptu, run/stage/generation, pełnego residualu i parametrów analityki.
+Zachowana referencja 1D jest dopuszczana tylko po zgodności towarzyszącej
+krzywej finite-airbox z bieżącą fizyką. Siedem lekkich regresji Python PASS;
+legacy render do /tmp PASS. Nie generowano fikcyjnych nowych punktów FEM.
+
+Postprocesor i regresje zapisano na origin w commicie 1b8cb43a2.
+
+## Wynik eksperymentu iteracji i następna korekta
+
+Run 7c8847d7… zakończył się failed po około 21 minutach. Ponownie 49/50
+podokien succeeded; samo zwiększenie max_outer_iterations do 10000 nie
+naprawiło wyszukiwania. Dowód: gamma-window-outer10000.evidence.json.
+Przywrócono 2000 w obu przykładach; nie mnożymy kosztu signed15 bez dowodu.
+
+CPU window NEV=4 miał NCV=16, natomiast refinement NEV=8/NCV=32 przeszedł
+34/34 podokna. To przesłanka do sprawdzenia niedostatecznej podprzestrzeni,
+nie ostateczny dowód przyczyny. Zmieniono wyłącznie politykę workspace:
+NCV=min(split_dimension, max(NEV+1, 4*NEV, 32)) dla window; standalone
+pozostaje bez zmian. Polityka raportowana jako
+bounded_quadruple_nev_floor32_window_v3. NEV, tolerancje, coverage i niezależne
+residuale pozostają niezmienione. Nowy test kontroluje jeden fizyczny mod,
+NEV=4 i NCV=32 na fixture o split_dimension≥32; istniejące testy kontrolują
+cap wymiaru oraz każde z 50 podokien. Kompilacja testów wyłącznie w CI.
+Kwalifikacja runtime tej korekty: NOT VERIFIED do ponownego przebiegu.
+
+Dokumentacja SLEPc sprawdzona przez Context7 /gitlab_slepc/slepc:
+https://gitlab.com/slepc/slepc/-/blob/main/doc/source/documentation/hands-on/hands-on1.md
+(opcja zwiększenia NCV przy niedostatecznej zbieżności, kosztem pamięci).
