@@ -4822,6 +4822,110 @@ mod tests {
         assert_eq!(stages[0].ir.current_density, Some([0.0, 2.5e10, 0.0]));
     }
 
+    fn script_stage_node(id: &str, stage_kind: &str, payload: Value) -> StudyPipelineNode {
+        StudyPipelineNode::Primitive {
+            id: id.to_string(),
+            label: String::new(),
+            enabled: true,
+            notes: None,
+            source: Some("script_imported".to_string()),
+            stage_kind: stage_kind.to_string(),
+            payload: serde_json::from_value(payload).expect("payload"),
+        }
+    }
+
+    #[test]
+    fn script_stages_use_the_external_field_active_when_they_were_called() {
+        // mumax3 order: relax() at B=0, then run() at 10 mT; the end-of-script
+        // base problem holds the last b_ext (99 mT), which no stage saw.
+        let mut ir = sample_problem_ir();
+        ir.energy_terms
+            .push(fullmag_ir::EnergyTermIR::Zeeman { b: [0.099, 0.0, 0.0] });
+        let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    script_stage_node(
+                        "stage_1_relax",
+                        "relax",
+                        json!({
+                            "kind": "relax",
+                            "entrypoint_kind": "flat_relax",
+                            "relax_algorithm": "llg_overdamped",
+                            "torque_tolerance": "1e-4",
+                            "max_steps": "25",
+                            "external_field": [0.0, 0.0, 0.0]
+                        }),
+                    ),
+                    script_stage_node(
+                        "stage_2_run",
+                        "run",
+                        json!({
+                            "kind": "run",
+                            "entrypoint_kind": "flat_run",
+                            "until_seconds": "1e-12",
+                            "external_field": [0.01, 0.0, 0.0]
+                        }),
+                    ),
+                    script_stage_node(
+                        "stage_3_run",
+                        "run",
+                        json!({
+                            "kind": "run",
+                            "entrypoint_kind": "flat_run",
+                            "until_seconds": "1e-12"
+                        }),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        assert_eq!(stages.len(), 3);
+        assert_eq!(zeeman_field(&stages[0].ir), Some([0.0, 0.0, 0.0]));
+        assert_eq!(zeeman_field(&stages[1].ir), Some([0.01, 0.0, 0.0]));
+        // The override is stage-local: a stage without one keeps the base field.
+        assert_eq!(zeeman_field(&stages[2].ir), Some([0.099, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn script_stage_external_field_rejects_malformed_vectors() {
+        for field in [json!([0.0, 0.0]), json!("0.01"), json!([0.0, "x", 0.0])] {
+            let config = ScriptExecutionConfig {
+                antenna_inventory: Default::default(),
+                ir: sample_problem_ir(),
+                shared_geometry_assets: None,
+                default_until_seconds: None,
+                study_pipeline: Some(StudyPipelineDocument {
+                    version: "study_pipeline.v1".to_string(),
+                    nodes: vec![script_stage_node(
+                        "stage_1_relax",
+                        "relax",
+                        json!({
+                            "kind": "relax",
+                            "entrypoint_kind": "flat_relax",
+                            "relax_algorithm": "llg_overdamped",
+                            "torque_tolerance": "1e-4",
+                            "max_steps": "25",
+                            "external_field": field
+                        }),
+                    )],
+                }),
+                stages: vec![],
+            };
+            let error = materialize_script_stages(config).expect_err("malformed field must fail");
+            assert!(
+                format!("{error:#}").contains("external_field"),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
     #[test]
     fn materialize_script_stages_sets_exact_solved_current_electrodes() {
         let mut ir = sample_problem_ir();

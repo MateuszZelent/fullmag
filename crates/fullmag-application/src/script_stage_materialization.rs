@@ -2086,6 +2086,28 @@ fn apply_relax_alpha(ir: &mut ProblemIR, payload: &BTreeMap<String, Value>) -> R
     Ok(())
 }
 
+/// A script stage carries the uniform B_ext (tesla) that was active when the
+/// script called it, if that differs from the end-of-script base problem
+/// (mumax3 sequential semantics); it applies to this stage only.
+fn apply_stage_external_field(ir: &mut ProblemIR, payload: &BTreeMap<String, Value>) -> Result<()> {
+    let Some(value) = payload.get("external_field").filter(|value| !value.is_null()) else {
+        return Ok(());
+    };
+    let components = value
+        .as_array()
+        .filter(|components| components.len() == 3)
+        .context("stage external_field must be a 3-component array in tesla")?;
+    let mut field_t = [0.0; 3];
+    for (slot, component) in field_t.iter_mut().zip(components) {
+        *slot = component
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .context("stage external_field components must be finite numbers")?;
+    }
+    apply_pipeline_external_field(ir, field_t);
+    Ok(())
+}
+
 fn reject_direct_minimizer_llg_payload(
     algorithm: fullmag_ir::RelaxationAlgorithmIR,
     payload: &BTreeMap<String, Value>,
@@ -2152,6 +2174,7 @@ fn materialize_pipeline_run_primitive(
         dynamics,
         sampling: base_ir.study.sampling().clone(),
     };
+    apply_stage_external_field(&mut ir, payload)?;
     materialize_pipeline_run(&ir, payload, default_until_seconds)
 }
 
@@ -2160,7 +2183,8 @@ fn validate_pipeline_run_primitive_payload(payload: &BTreeMap<String, Value>) ->
         .keys()
         .filter(|key| match key.as_str() {
             "entrypoint_kind" | "kind" | "stage_id" | "until_seconds" | "output_every_seconds"
-            | "autosave" | "integrator" | "fixed_timestep" | "demag_interval_s" | "sampling" => {
+            | "autosave" | "integrator" | "fixed_timestep" | "demag_interval_s" | "sampling"
+            | "external_field" => {
                 false
             }
             // Script-exported Run drafts carry empty relaxation and spectral placeholders.
@@ -2220,6 +2244,7 @@ pub fn materialize_pipeline_relax(
     payload: &BTreeMap<String, Value>,
 ) -> Result<ResolvedScriptStage> {
     let mut ir = base_ir.clone();
+    apply_stage_external_field(&mut ir, payload)?;
     let mut sampling = time_domain_sampling_from(ir.study.sampling());
     if let Some(value) = payload.get("table_autosave") {
         let table: TableAutosaveIR = serde_json::from_value(value.clone())

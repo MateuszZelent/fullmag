@@ -219,7 +219,15 @@ przez `fullmag skrypt.py` jak dziś (`capture`).
   `energy_tolerance_j`, `max_steps`, `max_relaxation_time_s`,
   `relax_algorithm`, `relax_alpha`, `fixed_timestep`, `max_error`);
   `fm.minimize` deleguje do `relax`; `until_seconds` w `run` to długość
-  odcinka. Komenda ma warunek `scene_revision` równy rewizji zbudowanej przez
+  odcinka. A captured stage runs in the world state it saw when the script
+  called it, like mumax3. Pipeline materialization starts each stage from the
+  end-of-script problem, so a `relax`/`run` payload whose uniform `b_ext`
+  differs from that problem carries it as `external_field` (tesla, 3 numbers;
+  `[0, 0, 0]` when no field was set yet). The override applies to that stage only.
+  Changing `b_ext` before an eigenmodes or frequency-response stage, or
+  changing material parameters between stages (other than `relax_alpha`), is
+  rejected at export instead of silently using the end-of-script values.
+  Komenda ma warunek `scene_revision` równy rewizji zbudowanej przez
   skrypt, czeka na stan końcowy i zwraca `LiveCommandResult`. Odrzucona,
   nieudana lub anulowana komenda zgłasza `CommandFailedError`.
 - `fm.pause()`, `fm.resume()`, `fm.stop()`, `fm.skip()` wysyłają komendy o

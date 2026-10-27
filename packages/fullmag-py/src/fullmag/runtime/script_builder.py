@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import math
 import re
@@ -340,7 +341,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "universe": _export_universe(base_problem),
         "domain_frame": _export_domain_frame(base_problem, source_root=source_root),
         "stages": [
-            _export_stage_draft_with_identity(stage)
+            _export_stage_draft_with_identity(stage, base_problem=base_problem)
             for stage in _builder_stage_sequence(loaded)
         ],
         "study_pipeline": export_study_pipeline_document(loaded),
@@ -2752,17 +2753,23 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
     stages = _builder_stage_sequence(loaded)
     if not stages:
         return None
+    base_problem = _builder_base_problem(loaded)
     return {
         "version": "study_pipeline.v1",
         "nodes": [
-            _export_study_pipeline_node(stage, index=index)
+            _export_study_pipeline_node(stage, index=index, base_problem=base_problem)
             for index, stage in enumerate(stages)
         ],
     }
 
 
-def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
+def _export_stage_draft_with_identity(
+    stage: LoadedStage,
+    *,
+    base_problem: Problem,
+) -> dict[str, object]:
     payload = _export_stage_draft(stage)
+    _bind_stage_world_state(payload, stage, base_problem)
     if stage.stage_id is not None:
         payload["stage_id"] = stage.stage_id
     if stage.output_every_seconds is not None:
@@ -2772,8 +2779,13 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
     return payload
 
 
-def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, object]:
-    draft = _export_stage_draft_with_identity(stage)
+def _export_study_pipeline_node(
+    stage: LoadedStage,
+    *,
+    index: int,
+    base_problem: Problem,
+) -> dict[str, object]:
+    draft = _export_stage_draft_with_identity(stage, base_problem=base_problem)
     stage_kind = _infer_pipeline_stage_kind(draft)
     if stage_kind == "antenna_field_solve":
         definition = cast(dict[str, object], draft["definition"])
@@ -2793,6 +2805,69 @@ def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, 
         "stage_kind": stage_kind,
         "payload": draft,
     }
+
+
+def _bind_stage_world_state(
+    payload: dict[str, object],
+    stage: LoadedStage,
+    base_problem: Problem,
+) -> None:
+    """Keep the world state a script stage saw when it was called (mumax3 order).
+
+    Pipeline materialization starts every stage from the end-of-script base
+    problem. A relax/run stage therefore carries its own uniform B_ext when it
+    differs from that base; other differences would be silently replaced by the
+    end-of-script values, so they are rejected here.
+    """
+    if stage.action is not None or stage.problem.study is None:
+        return
+    stage_kind = _infer_pipeline_stage_kind(payload)
+    study = stage.problem.study
+    _reject_stage_material_changes(
+        stage,
+        base_problem,
+        ignore_alpha=isinstance(study, Relaxation) and study.algorithm == "llg_overdamped",
+    )
+    if stage_kind == "hysteresis":
+        # Every hysteresis point sets its own field.
+        return
+    stage_field = _problem_external_field(stage.problem)
+    if stage_field == _problem_external_field(base_problem):
+        return
+    if stage_kind not in {"relax", "run"}:
+        raise ValueError(
+            f"b_ext() changes before a {stage_kind} stage are not supported yet; "
+            "set the field once for the whole script"
+        )
+    payload["external_field"] = stage_field if stage_field is not None else [0.0, 0.0, 0.0]
+
+
+def _reject_stage_material_changes(
+    stage: LoadedStage,
+    base_problem: Problem,
+    *,
+    ignore_alpha: bool,
+) -> None:
+    base_materials = {magnet.name: magnet.material for magnet in base_problem.magnets}
+    for magnet in stage.problem.magnets:
+        expected = base_materials.get(magnet.name)
+        if expected is None:
+            continue
+        actual = magnet.material
+        if ignore_alpha:
+            # relax(relax_alpha=...) travels as the stage's relax_alpha.
+            actual = dataclasses.replace(actual, alpha=expected.alpha)
+        if actual == expected:
+            continue
+        changed = sorted(
+            parameter.name
+            for parameter in dataclasses.fields(expected)
+            if getattr(actual, parameter.name) != getattr(expected, parameter.name)
+        )
+        raise ValueError(
+            f"material parameters of {magnet.name!r} ({', '.join(changed)}) change between "
+            "script stages; per-stage material changes are not supported yet"
+        )
 
 
 def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
