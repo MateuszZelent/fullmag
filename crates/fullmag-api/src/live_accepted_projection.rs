@@ -1234,14 +1234,23 @@ fn catalog_status(tasks: &[fullmag_session::FmsTaskCatalogEntry]) -> &'static st
 }
 
 fn terminal_catalog_without_outputs(tasks: &[fullmag_session::FmsTaskCatalogEntry]) -> bool {
-    !tasks.is_empty()
+    use fullmag_session::{FmsTaskLifecycle as Life, FmsTaskReadiness};
+    let is_failed_terminal = |task: &fullmag_session::FmsTaskCatalogEntry| {
+        matches!(task.lifecycle, Life::Failed | Life::Interrupted | Life::Cancelled)
+    };
+    // A failed upstream stage leaves downstream tasks accepted and blocked.
+    // They cannot have produced a catalog, and must not hide the durable failure.
+    tasks.iter().any(is_failed_terminal)
         && tasks.iter().all(|task| {
-            matches!(
-                task.lifecycle,
-                fullmag_session::FmsTaskLifecycle::Failed
-                    | fullmag_session::FmsTaskLifecycle::Interrupted
-                    | fullmag_session::FmsTaskLifecycle::Cancelled
-            ) && task.artifact_ids.is_empty()
+            let unstarted_dependency = task.lifecycle == Life::Accepted
+                && matches!(&task.readiness, FmsTaskReadiness::Blocked { reason }
+                    if reason == fullmag_session::FMS_TASK_AWAITING_DEPENDENCY_RESOLUTION_REASON)
+                && task.attempt_id.is_none()
+                && task.ownership_epoch.is_none()
+                && task.resource_id.is_none()
+                && task.coordinator_watermark.is_none()
+                && task.coordinator_genesis.is_none();
+            task.artifact_ids.is_empty() && (is_failed_terminal(task) || unstarted_dependency)
         })
 }
 
@@ -2711,6 +2720,31 @@ mod tests {
             catalog_status(&[task(fullmag_session::FmsTaskLifecycle::Succeeded)]),
             "completed"
         );
+    }
+
+    #[test]
+    fn outputless_failure_allows_only_unstarted_dependency_blocked_siblings() {
+        use fullmag_session::{FmsTaskLifecycle as Life, FmsTaskReadiness};
+        let mut blocked = task(Life::Accepted);
+        blocked.readiness = FmsTaskReadiness::Blocked {
+            reason: fullmag_session::FMS_TASK_AWAITING_DEPENDENCY_RESOLUTION_REASON.into(),
+        };
+        assert!(terminal_catalog_without_outputs(&[task(Life::Failed), blocked.clone()]));
+        assert!(!terminal_catalog_without_outputs(&[blocked.clone()]));
+        for life in [Life::Queued, Life::Preparing, Life::Running, Life::Stopping, Life::Succeeded] {
+            let mut sibling = blocked.clone();
+            sibling.lifecycle = life;
+            assert!(!terminal_catalog_without_outputs(&[task(Life::Failed), sibling]));
+        }
+        let mut ready = blocked.clone();
+        ready.readiness = FmsTaskReadiness::Ready;
+        assert!(!terminal_catalog_without_outputs(&[task(Life::Failed), ready]));
+        let mut claimed = blocked.clone();
+        claimed.attempt_id = Some("attempt-existing".into());
+        assert!(!terminal_catalog_without_outputs(&[task(Life::Failed), claimed]));
+        let mut output = blocked;
+        output.artifact_ids.push("artifact-existing".into());
+        assert!(!terminal_catalog_without_outputs(&[task(Life::Failed), output]));
     }
 
     #[test]
