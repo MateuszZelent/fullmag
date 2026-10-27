@@ -23,6 +23,6 @@ Zachować istniejące FMR, driven i dynamics. Dane serwerowe tylko przez resourc
 
 ## Checkpoint wdrożenia
 
-Etapy 1–3: kod wdrożony na branchu; główna dyspersja i pięć rzeczywistych pól potwierdzone w browserze. Etap 4: browserowa ścieżka benchmarku PASS; pełna bramka frontendowa i dedykowana bramka metodyczna PASS. Szersza bramka browserowa wymaga ponowienia po dostosowaniu jawnej nawigacji Analysis→3D w teście ownership-race. Starszy globalny Spectrum Inspector ma nową bramkę właściciela i testy, ale jego osobna ścieżka runtime pozostaje NOT VERIFIED.
+Etapy 1–3: wdrożone. Etap 4: PASS w zakresie benchmarku — pełne CI frontend/browser `40589135703`, metoda/Doctor `40586700787` oraz rzeczywiste pięć pól i piętnaście punktów na `d99aa5b2c`. Domyślne punkty FEM i opcjonalne linie opublikowanych gałęzi mają osobne, sprawdzone tryby.
 
-Dowody i otwarte ograniczenia: `docs/audits/2026-10-27-eigensolve-modal-workbench-ui.md`. HTTP 500 katalogu artefaktów, FMS roundtrip oraz naukowa kwalifikacja kompletności/zbieżności nie są zamknięte przez tę przebudowę UI.
+Dowody i ograniczenia: `docs/audits/2026-10-27-eigensolve-modal-workbench-ui.md`. HTTP 500 katalogu artefaktów, FMS roundtrip, osobna kwalifikacja starszego globalnego Spectrum na danych runtime oraz kompletność i zbieżność naukowa nie są zamknięte przez tę przebudowę UI.

@@ -47,7 +47,7 @@ node scripts/verify_eigensolve_modal_workbench_ui.mjs \
 
 Wstępna kontrola potwierdziła pola `sample-0000`, `sample-0003`, `sample-0007`, `sample-0011`, `sample-0014`, każde z 5127 wartościami zespolonymi bufora. To 3 składowe dla 1709 węzłów całej siatki; widoczna powierzchnia to sam ferromagnetyk. Ta liczba nie jest liczbą modów ani fizyczną amplitudą pobudzenia.
 
-Kontrola architektury frontendu: PASS. Składnia skryptu Node: PASS. Kompilowane testy uruchamiane wyłącznie w GitHub Actions. Pierwsze CI: typecheck/lint PASS, sześć regresji oczekiwań UI/kontraktu; poprawione bez usuwania kontroli wartości i identyfikatorów. Kolejne CI ujawniło niepoprawnie ogólny string trybu Spectrum; zastąpiony typowanym `free_modes`. Końcowy wynik CI i raport browserowy uzupełniane po ich zakończeniu.
+Kontrola architektury frontendu: PASS. Składnia skryptu Node: PASS. Kompilowane testy uruchamiane wyłącznie w GitHub Actions. Pierwsze CI: typecheck/lint PASS, sześć regresji oczekiwań UI/kontraktu; poprawione bez usuwania kontroli wartości i identyfikatorów. Kolejne CI ujawniło niepoprawnie ogólny string trybu Spectrum; zastąpiony typowanym `free_modes`. Końcowe wyniki CI i raport browserowy są zapisane w sekcji odbioru poniżej.
 
 ## Granice i dalsza praca
 
@@ -59,7 +59,7 @@ Kontrola architektury frontendu: PASS. Składnia skryptu Node: PASS. Kompilowane
 
 ## Dowody końcowego przebiegu browserowego
 
-Raport: [2026-10-27-eigensolve-modal-workbench-ui.evidence.json](2026-10-27-eigensolve-modal-workbench-ui.evidence.json). Interakcje sprawdzono na `2e3f45ed9`, a końcowy opis osi i zrzut na `d8fb82e30`.
+Raport: [2026-10-27-eigensolve-modal-workbench-ui.evidence.json](2026-10-27-eigensolve-modal-workbench-ui.evidence.json). Końcowy przebieg rzeczywistego UI i zrzuty pochodzą z `d99aa5b2c`; wybór stylu i selektor k sprawdzono dodatkowo na `f4728cb28`.
 
 - PASS: wszystkie 15 częstotliwości renderowanych punktów zgodne z opublikowanym spectrum.v2 (tolerancja porównania reprezentacji 1e-12).
 - PASS: pięć rzeczywistych przejść punkt→zespolone pole; próbki 0/3/7/11/14.
@@ -76,8 +76,20 @@ CI `40581494110` na `d8fb82e30`: typecheck/lint PASS, 8895 testów PASS, jedna r
 
 - `40582878262`, job `control-room-contracts`, commit `c6a5a2034`: PASS — typecheck, lint, 8896 testów (13 wcześniejszych pominiętych), dodatkowe 3 testy oraz produkcyjny build aplikacji.
 - `40583860596`, commit `c6a5a2034`: PASS — dedykowane kontrakty eigensolve UI, architektura, typowanie i React Doctor. Doctor: 90/100, 7 ostrzeżeń. Cztery nowe ostrzeżenia o łańcuchach iteracji w liście modów i porównaniu referencji poprawiono przez pojedyncze `flatMap` z warunkami. Pozostałe trzy wskazania dotyczą istniejącego importu zbiorczego w `ModeFieldOverlayIntent.ts` oraz istniejących eksportów helperów w plikach komponentów. Nie wyciszono reguł.
-- Szerszy job browserowy zatrzymał się w `qualifyModalArtifactOwnershipRace`: po nowym automatycznym otwarciu Analysis test oczekiwał widocznego płótna 3D bez przełączenia widoku. Fixture dostał jawne kliknięcie **3D Viewport** przed kontrolą shadera obiektu. Kontrole obcego runu, braku pobrania pola i zdrowego WebGL pozostają bez zmian. Ponowna bramka browserowa jest wymagana. Nazwa zbiorczego kroku CI obejmuje również DMI, ale log wskazał ten scenariusz modalny.
+- Szerszy job browserowy zatrzymał się w `qualifyModalArtifactOwnershipRace`: po nowym automatycznym otwarciu Analysis test oczekiwał widocznego płótna 3D bez przełączenia widoku. Fixture dostał jawne kliknięcie **3D Viewport** przed kontrolą shadera obiektu. Kontrole obcego runu, braku pobrania pola i zdrowego WebGL pozostają bez zmian. Ponowna bramka browserowa zakończyła się PASS w przebiegu `40589135703`. Nazwa zbiorczego kroku CI obejmuje również DMI, ale log wskazał ten scenariusz modalny.
 
 ![Dyspersja w głównym UI](../raports/assets/eigensolve-modal-workbench-20261027/dispersion-ui-1600.png)
 
 ![Rzeczywisty mod Gamma na samym ferromagnetyku](../raports/assets/eigensolve-modal-workbench-20261027/gamma-mode-ui.png)
+
+## Odbiór końcowy przebudowy UI
+
+- Commit kodu UI: `d99aa5b2cb39359f0e1ae7e3eb7c504d961db02f`.
+- [Pełna bramka frontendowa i browserowa 40589135703](https://github.com/MateuszZelent/fullmag/actions/runs/40589135703): **PASS** — typowanie, lint, 8897 testów (13 wcześniejszych pominiętych), 3 dodatkowe testy, produkcyjny build oraz pełny browser smoke. Test źródłowy nie uznaje już klikniętego punktu scatter za własnego konkurenta; próg izolacji innych punktów pozostał bez zmian.
+- [Dedykowana bramka eigensolve UI 40586700787](https://github.com/MateuszZelent/fullmag/actions/runs/40586700787): **PASS**, 1096 testów. React Doctor: 90/100; tylko 3 opisane wcześniej ostrzeżenia istniejącego kodu, bez czterech nowych ostrzeżeń iteracji.
+- Rzeczywisty UI: **PASS w zakresie benchmarku** — 15 zgodnych częstotliwości, obie referencje, pięć właściwych pól, widoczne płótna i sprawne WebGL (703×594, bez utraty kontekstu), obie osie i brak obcięcia w obu kierunkach przy 1600/1440/1100 px.
+- Wybór **Numerical points → Tracked branch lines → Numerical points** zachowuje dokładnie te same dane. Linie łączą wyłącznie opublikowane gałęzie; surowe mody i referencje zachowują odrębne znaczenie. Kontrolka znajduje się pod wykresem obok wyboru k.
+- Etykiety k budowane są jednym przebiegiem po danych; duży sweep nie skanuje całej serii osobno dla każdej opcji selektora.
+- Zwykły widok tabel/dynamiki zachowuje dotychczasowy nagłówek i provenance.
+
+Ten odbiór **nie zamyka** HTTP 500 katalogu artefaktów w starej binarce, FMS roundtrip ani naukowej kwalifikacji kompletności i zbieżności. Nie przebudowywano tutaj backendu ani nie ponawiano solvera.

@@ -3,7 +3,7 @@
   "url": "http://localhost:3217/workspace",
   "run": "run-live-f6e511007567b55c1e3fad2a56f9c85e914ddce3d5fb6d5565c0df3a40e65a88",
   "stage": "eigenmodes",
-  "sourceSha": "2e3f45ed9",
+  "sourceSha": "d99aa5b2c",
   "scope": "UI against published FEM artifacts; SwiftShader rendering is not hardware GPU or convergence qualification",
   "errors": [],
   "httpFailures": [
@@ -25,6 +25,12 @@
         "seriesIndex": 0,
         "x": 447.72216796875,
         "y": 540.0760003834291
+      },
+      "canvasVisible": true,
+      "webgl": {
+        "contextLost": false,
+        "width": 703,
+        "height": 594
       },
       "surface": {
         "partId": "part:film_geom",
@@ -54,6 +60,12 @@
         "x": 605.94140625,
         "y": 626.0462976255661
       },
+      "canvasVisible": true,
+      "webgl": {
+        "contextLost": false,
+        "width": 703,
+        "height": 594
+      },
       "surface": {
         "partId": "part:film_geom",
         "surfaceIndexCount": 1560,
@@ -81,6 +93,12 @@
         "seriesIndex": 0,
         "x": 711.4208984375,
         "y": 696.0474610871094
+      },
+      "canvasVisible": true,
+      "webgl": {
+        "contextLost": false,
+        "width": 703,
+        "height": 594
       },
       "surface": {
         "partId": "part:film_geom",
@@ -110,6 +128,12 @@
         "x": 816.900390625,
         "y": 626.0449486254371
       },
+      "canvasVisible": true,
+      "webgl": {
+        "contextLost": false,
+        "width": 703,
+        "height": 594
+      },
       "surface": {
         "partId": "part:film_geom",
         "surfaceIndexCount": 1560,
@@ -137,6 +161,12 @@
         "seriesIndex": 0,
         "x": 975.11962890625,
         "y": 540.0705487249231
+      },
+      "canvasVisible": true,
+      "webgl": {
+        "contextLost": false,
+        "width": 703,
+        "height": 594
       },
       "surface": {
         "partId": "part:film_geom",
@@ -305,12 +335,12 @@
         },
         {
           "x": 320.234375,
-          "y": 454.5,
-          "width": 708,
+          "y": 512.5,
+          "width": 342.390625,
           "height": 194.453125,
-          "top": 454.5,
-          "right": 1028.234375,
-          "bottom": 648.953125,
+          "top": 512.5,
+          "right": 662.625,
+          "bottom": 706.953125,
           "left": 320.234375
         }
       ]
@@ -2999,45 +3029,59 @@
   ],
   "comparisonSummary": [
     "FEM / reference comparison \u00b7 Finite Dirichlet airbox, n=0 analytical model (reference): max |\u0394f/f| 0.8271% \u00b7 Open-air 1D reference (different boundary) (reference): max |\u0394f/f| 0.5936%Descriptive comparison of returned modes. This does not establish mode matching, spectrum completeness, or convergence.Finite Dirichlet airbox, n=0 analytical model (reference)SampleFEM frequencyReference frequency\u0394f/f [%]013.560765 GHz13.673868 GHz-0.82715112.819133 GHz12.898113 GHz-0.61234212.041291 GHz12.089703 GHz-0.40044311.211850 GHz11.235414 GHz-0.20973410.681046 GHz10.693658 GHz-0.11794510.310202 GHz10.317376 GHz-0.06953369.7240352 GHz9.7254030 GHz-0.01406579.2992497 GHz9.2992497 GHz5.5023e-1189.7240748 GHz9.7254030 GHz-0.013658910.310352 GHz10.317376 GHz-0.0680781010.681153 GHz10.693658 GHz-0.116941111.211887 GHz11.235414 GHz-0.209411212.041316 GHz12.089703 GHz-0.400241312.819200 GHz12.898113 GHz-0.611811413.560914 GHz13.673868 GHz-0.82606Open-air 1D reference (different boundary) (reference)SampleFEM frequencyReference frequency\u0394f/f [%]013.560765 GHz13.641746 GHz-0.59363112.819133 GHz12.875388 GHz-0.43692212.041291 GHz12.075446 GHz-0.28285311.211850 GHz11.228266 GHz-0.14620410.681046 GHz10.689867 GHz-0.082521510.310202 GHz10.315330 GHz-0.04971169.7240352 GHz9.7253659 GHz-0.01368279.2992497 GHz9.3098137 GHz-0.1134789.7240748 GHz9.7253659 GHz-0.013275910.310352 GHz10.315330 GHz-0.0482561010.681153 GHz10.689867 GHz-0.0815191111.211887 GHz11.228266 GHz-0.145881212.041316 GHz12.075446 GHz-0.282641312.819200 GHz12.875388 GHz-0.436401413.560914 GHz13.641746 GHz-0.59254",
-    "Physical context and workflowDataset provenance: /v2/sessions/current/analysis/frequency-domain/eigen/dispersionRun: run-live-f6e511007567b55c1e3fad2a56f9c85e914ddce3d5fb6d5565c0df3a40e65a88Stage: eigenmodesEquilibrium: per sampleGeometry: unavailableMesh: 5e7608e94cf557751d029b7a4da40e1b811ec13062adf97de1f385d115e85b8bBoundary: floquet_periodicNormalization: unitl2k: k pathObservable: unavailableSI axes: k\u1d67 [rad/m] \u2192 frequency [GHz], reference_frequency [GHz], reference_frequency [GHz]Display units: k\u1d67 [rad/m]; automatic SI scalingContract gap: geometry identity unavailableEigenmode dispersion15 points9.2992 GHz-13.561 GHzselect branch point -> mode overlayreadyWorkflow: Eigenmode dispersionNext: select branch point to mode overlayMode fields: Mode fieldsdispersion point inspector"
+    "Physical context and workflowDataset provenance/v2/sessions/current/analysis/frequency-domain/eigen/dispersionRun: run-live-f6e511007567b55c1e3fad2a56f9c85e914ddce3d5fb6d5565c0df3a40e65a88Stage: eigenmodesEquilibrium: per sampleGeometry: unavailableMesh: 5e7608e94cf557751d029b7a4da40e1b811ec13062adf97de1f385d115e85b8bBoundary: floquet_periodicNormalization: unitl2k: k pathObservable: unavailableSI axes: k\u1d67 [rad/m] \u2192 frequency [GHz], reference_frequency [GHz], reference_frequency [GHz]Display units: k\u1d67 [rad/m]; automatic SI scalingContract gap: geometry identity unavailableEigenmode dispersion15 points9.2992 GHz-13.561 GHzselect branch point -> mode overlayreadyWorkflow: Eigenmode dispersionNext: select branch point to mode overlayMode fields: Mode fieldsdispersion point inspector"
   ],
   "referenceHasModeAction": 0,
   "runtimeVersion": "0.1.0-dev.20261027.gfe06a6573bc0+9796",
-  "finalPresentation": {
-    "sourceSha": "d8fb82e30f80070ec8c7f57ddf74ba49aad16831",
-    "series": [
-      {
-        "label": "Branch 0 [GHz]",
-        "type": "scatter",
-        "count": 15
-      },
-      {
-        "label": "Finite Dirichlet airbox, n=0 analytical model (reference) [GHz]",
-        "type": "line",
-        "count": 501
-      },
-      {
-        "label": "Open-air 1D reference (different boundary) (reference) [GHz]",
-        "type": "line",
-        "count": 15
-      }
-    ],
-    "yAxisLabel": "Frequency [GHz]",
-    "note": "After the interaction acceptance lane, only the physical ordinate label and its test changed. Final screenshot captured after HMR.",
-    "labelObservation": "Frequency [GHz] and k\u1d67 [rad/\u00b5m] read from the final browser screenshot."
+  "plotStyleCheck": {
+    "sourceSha": "f4728cb28",
+    "default": "scatter",
+    "tracked": "line",
+    "after": "scatter",
+    "numericalDataUnchanged": true,
+    "chooserFieldQuantity": "analysis:eigen:sample-0007:mode-0000",
+    "errors": []
+  },
+  "uiCommit": "d99aa5b2cb39359f0e1ae7e3eb7c504d961db02f",
+  "qualification": {
+    "published_modal_plot_and_five_mode_interactions": "PASS",
+    "workspace_artifact_catalog": "OPEN_HTTP_500",
+    "legacy_global_spectrum_runtime": "NOT_VERIFIED",
+    "scientific_completeness_and_convergence": "NOT_VERIFIED"
+  },
+  "ci": {
+    "frontend_and_broader_browser": {
+      "run": 40589135703,
+      "commit": "d99aa5b2cb39359f0e1ae7e3eb7c504d961db02f",
+      "conclusion": "success",
+      "passed_tests": 8897,
+      "preexisting_skipped_tests": 13,
+      "additional_tests": 3,
+      "production_build": "success",
+      "browser_fixture_smoke": "success"
+    },
+    "eigensolve_method": {
+      "run": 40586700787,
+      "commit": "f4728cb2849e4659551ee23c84801df97e53d318",
+      "conclusion": "success",
+      "passed_tests": 1096,
+      "doctor_score": 90,
+      "doctor_warnings": 3,
+      "new_iteration_warnings": 0
+    }
   },
   "files": [
     {
       "path": "docs/raports/assets/eigensolve-modal-workbench-20261027/dispersion-ui-1100.png",
-      "sha256": "6516df110677e960d9f7c566ce1828cca823d77b94bbb9db89a112a3f4ae9a1e"
+      "sha256": "691f896d1dc3f457fc0b51c0a25bda4ecc04b098baf371735044d77a268a1a1a"
     },
     {
       "path": "docs/raports/assets/eigensolve-modal-workbench-20261027/dispersion-ui-1440.png",
-      "sha256": "19dc56f0d37a853dc38567e48c3f93eba25a905049c7da6bae4af49c7e73a7b0"
+      "sha256": "4eb100060f40227c8542ce5f3ef53e1d901a9fd7337a5768453432b9ee7e1142"
     },
     {
       "path": "docs/raports/assets/eigensolve-modal-workbench-20261027/dispersion-ui-1600.png",
-      "sha256": "53befcae27856d5435866331554f829fa0930f4c9c0b3bac190258b063680505"
+      "sha256": "2bed7a4f9f2d8ba7aaf05b7b72212c9889e9313239d90fe0cc26aa6fdbb4c63d"
     },
     {
       "path": "docs/raports/assets/eigensolve-modal-workbench-20261027/finite-dirichlet-n0-ui-reference.csv",
@@ -3055,34 +3099,5 @@
       "path": "docs/raports/assets/eigensolve-modal-workbench-20261027/reference-provenance.json",
       "sha256": "77c18b51ff683ddf6e99f10b09f29734435309cbc4d8019a9be5a2ac994b914f"
     }
-  ],
-  "qualification": {
-    "published_modal_plot_and_five_mode_interactions": "PASS",
-    "workspace_artifact_catalog": "OPEN_HTTP_500",
-    "legacy_global_spectrum_runtime": "NOT_VERIFIED",
-    "scientific_completeness_and_convergence": "NOT_VERIFIED"
-  },
-  "ci": {
-    "frontend": {
-      "run": 40582878262,
-      "commit": "c6a5a2034",
-      "job": "control-room-contracts",
-      "conclusion": "success",
-      "passed_tests": 8896,
-      "preexisting_skipped_tests": 13
-    },
-    "eigensolve_method": {
-      "run": 40583860596,
-      "commit": "c6a5a2034",
-      "conclusion": "success",
-      "doctor_score": 90,
-      "doctor_warnings": 7
-    },
-    "broader_browser": {
-      "run": 40582878262,
-      "conclusion": "failure",
-      "diagnosis": "ownership-race expected a visible 3D canvas after Results navigation now opens Analysis",
-      "fixture_correction": "explicitly select 3D Viewport before unchanged shader ownership and WebGL checks"
-    }
-  }
+  ]
 }
