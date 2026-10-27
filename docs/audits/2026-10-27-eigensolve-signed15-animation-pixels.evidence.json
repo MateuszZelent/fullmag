@@ -1,0 +1,11 @@
+{
+  "scope": "pixel comparison only; strict browser run failed on artifact-list HTTP 500",
+  "animation_changed_pixels": [
+    40032,
+    40044,
+    40044,
+    40004
+  ],
+  "stopped_changed_pixels": 0,
+  "pixels_verified": true
+}

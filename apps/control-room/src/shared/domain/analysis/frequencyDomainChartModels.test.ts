@@ -2218,6 +2218,39 @@ describe("frequencyDomainChartModels", () => {
     );
   });
 
+  it("classifies the native KSamplingIR path wire contract without a UI sample_count", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic", equilibrium_identity: "eq",
+      geometry_identity: "film", mesh_identity: "mesh", run_id: "run", stage_id: "eigen",
+      study_product: "modal_eigen",
+      k_sampling: {
+        kind: "path", closed: false,
+        points: [{ k_vector: [0, -1e7, 0] }, { k_vector: [0, 0, 0] }, { k_vector: [0, 1e7, 0] }],
+        samples_per_segment: [1, 1],
+      },
+    });
+    expect(context.kSampling).toEqual({ kind: "path", sampleCount: 3 });
+    expect(context.classification?.kContext.kind).toBe("k_path");
+    expect(context.contractGaps).toEqual([]);
+  });
+
+  it("validates native path subdivisions and conflicting summary counts", () => {
+    const sampling = { kind: "path", closed: false,
+      points: [{ k_vector: [0, 0, 0] }, { k_vector: [0, 1e7, 0] }],
+      samples_per_segment: [2] };
+    for (const invalid of [
+      { ...sampling, samples_per_segment: [0] },
+      { ...sampling, samples_per_segment: [1, 1] },
+      { ...sampling, samples_per_segment: [1.5] },
+      { ...sampling, sample_count: 99 },
+      { ...sampling, points: [{ k_vector: [0, 0, 0] }, { k_vector: [0, null, 0] }] },
+      { ...sampling, points: [{ k_vector: [0, 0, 0] }, { k_vector: [0, Infinity, 0] }] },
+    ]) expect(frequencyDomainResultContextFromManifest({ k_sampling: invalid }).kSampling).toBeNull();
+    expect(frequencyDomainResultContextFromManifest({ k_sampling: {
+      ...sampling, closed: true, samples_per_segment: [2, 3],
+    } }).kSampling).toEqual({ kind: "path", sampleCount: 6 });
+  });
+
   it("maps each complete dispersion sample to its own equilibrium identity", () => {
     const context = frequencyDomainResultContextFromManifest({
       boundary_context: "floquet_periodic",

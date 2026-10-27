@@ -457,6 +457,31 @@ function typedKSampling(value: unknown): FrequencyDomainResultEvidence["kSamplin
     sampling.vector_rad_per_m.length === 3 && sampling.vector_rad_per_m.every((item) => typeof item === "number" && Number.isFinite(item))) {
     return { kind: "single", vectorRadPerM: sampling.vector_rad_per_m as [number, number, number] };
   }
+  // Native KSamplingIR publishes control points and segment subdivisions,
+  // rather than the legacy UI summary's sample_count. Validate that wire
+  // contract before deriving the count; never infer a path from its mode rows.
+  if (sampling?.kind === "path" &&
+    ("points" in sampling || "samples_per_segment" in sampling || "closed" in sampling)) {
+    const points = sampling.points;
+    const counts = sampling.samples_per_segment;
+    const closed = sampling.closed ?? false;
+    if (!Array.isArray(points) || points.length < 2 ||
+      points.some((point) => {
+        const vector = record(point)?.k_vector;
+        return !Array.isArray(vector) || vector.length !== 3 ||
+          vector.some((value) => typeof value !== "number" || !Number.isFinite(value));
+      }) ||
+      typeof closed !== "boolean" || !Array.isArray(counts) ||
+      counts.length !== points.length - (closed ? 0 : 1) ||
+      counts.some((count) => typeof count !== "number" || !Number.isSafeInteger(count) || count < 1 || count > 0xffffffff)) {
+      return null;
+    }
+    const sampleCount = counts.reduce((total: number, count: number) => total + count, 1);
+    if (!Number.isSafeInteger(sampleCount) ||
+      (sampling.sample_count !== undefined && sampling.sample_count !== sampleCount)) return null;
+    const label = stringValue(sampling.label);
+    return { kind: "path", sampleCount, ...(label ? { label } : {}) };
+  }
   if ((sampling?.kind === "path" || sampling?.kind === "grid") &&
     typeof sampling.sample_count === "number" && Number.isSafeInteger(sampling.sample_count) && sampling.sample_count > 0) {
     if (sampling.kind === "grid") return { kind: "grid", sampleCount: sampling.sample_count };

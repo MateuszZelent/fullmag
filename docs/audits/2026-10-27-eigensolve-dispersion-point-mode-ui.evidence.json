@@ -1,0 +1,574 @@
+{
+  "run_id": "run-live-f6e511007567b55c1e3fad2a56f9c85e914ddce3d5fb6d5565c0df3a40e65a88",
+  "scope": "Actual pointer click on signed ky chart, then enabled View selected mode in 3D; strict whole-browser gate remains failed due unrelated artifact-list header overflow",
+  "sample_index": 7,
+  "raw_mode_index": 0,
+  "rendered_chart_point": {
+    "data": [
+      0,
+      9.299249697073517,
+      7
+    ],
+    "dataIndex": 7,
+    "seriesIndex": 0,
+    "x": 711.4208984375,
+    "y": 660.6514046044825
+  },
+  "rendered_series": [
+    {
+      "name": "Branch 0 [GHz]",
+      "data": [
+        [
+          -25000000,
+          13.560765016846203,
+          0
+        ],
+        [
+          -20000000,
+          12.81913318502152,
+          1
+        ],
+        [
+          -15000000,
+          12.04129055206685,
+          2
+        ],
+        [
+          -10000000,
+          11.2118497916512,
+          3
+        ],
+        [
+          -7000000,
+          10.68104569195441,
+          4
+        ],
+        [
+          -5000000,
+          10.310201976016174,
+          5
+        ],
+        [
+          -2000000,
+          9.72403520805018,
+          6
+        ],
+        [
+          0,
+          9.299249697073517,
+          7
+        ],
+        [
+          2000000,
+          9.72407478319701,
+          8
+        ],
+        [
+          5000000,
+          10.310352014352716,
+          9
+        ],
+        [
+          7000000,
+          10.681152764143361,
+          10
+        ],
+        [
+          10000000,
+          11.211886649578224,
+          11
+        ],
+        [
+          15000000,
+          12.04131582963064,
+          12
+        ],
+        [
+          20000000,
+          12.819200390629957,
+          13
+        ],
+        [
+          25000000,
+          13.5609139692644,
+          14
+        ]
+      ]
+    }
+  ],
+  "mode_surface_binding": {
+    "partId": "part:film_geom",
+    "surfaceIndexCount": 1560,
+    "fieldQuantity": "analysis:eigen:sample-0007:mode-0000",
+    "requestedQuantity": "analysis:eigen:sample-0007:mode-0000",
+    "surfaceVisible": true,
+    "surfaceColorSource": "magnitude",
+    "bufferQuantity": "analysis:eigen:sample-0007:mode-0000",
+    "bufferRepresentation": "phase_rotated_real",
+    "bufferMin": 0,
+    "bufferMax": 250000000000.0078,
+    "complexValueCount": 5127,
+    "rgbValueCount": 0
+  },
+  "before": {
+    "button": {
+      "x": 861.296875,
+      "y": 749.5,
+      "width": 174.296875,
+      "height": 26,
+      "top": 749.5,
+      "right": 1035.59375,
+      "bottom": 775.5,
+      "left": 861.296875
+    },
+    "cover": [
+      {
+        "tag": "CANVAS",
+        "cls": "",
+        "rect": {
+          "x": 371.859375,
+          "y": 542,
+          "width": 676,
+          "height": 326,
+          "top": 542,
+          "right": 1047.859375,
+          "bottom": 868,
+          "left": 371.859375
+        },
+        "style": {
+          "position": "absolute",
+          "display": "block",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "",
+        "rect": {
+          "x": 371.859375,
+          "y": 542,
+          "width": 676,
+          "height": 326,
+          "top": 542,
+          "right": 1047.859375,
+          "bottom": 868,
+          "left": 371.859375
+        },
+        "style": {
+          "position": "relative",
+          "display": "block",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "fm-analysis-plots__echarts",
+        "rect": {
+          "x": 371.859375,
+          "y": 542,
+          "width": 675.734375,
+          "height": 326,
+          "top": 542,
+          "right": 1047.59375,
+          "bottom": 868,
+          "left": 371.859375
+        },
+        "style": {
+          "position": "relative",
+          "display": "block",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "fm-analysis-chart-surface",
+        "rect": {
+          "x": 371.859375,
+          "y": 542,
+          "width": 675.734375,
+          "height": 326,
+          "top": 542,
+          "right": 1047.59375,
+          "bottom": 868,
+          "left": 371.859375
+        },
+        "style": {
+          "position": "relative",
+          "display": "block",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "fm-analysis-plots__chart-frame",
+        "rect": {
+          "x": 371.859375,
+          "y": 542,
+          "width": 675.734375,
+          "height": 360,
+          "top": 542,
+          "right": 1047.59375,
+          "bottom": 902,
+          "left": 371.859375
+        },
+        "style": {
+          "position": "relative",
+          "display": "flex",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "fm-analysis-plots__chart-frame",
+        "rect": {
+          "x": 371.859375,
+          "y": 542,
+          "width": 675.734375,
+          "height": 360,
+          "top": 542,
+          "right": 1047.59375,
+          "bottom": 902,
+          "left": 371.859375
+        },
+        "style": {
+          "position": "relative",
+          "display": "flex",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "fm-chart-section__body",
+        "rect": {
+          "x": 371.859375,
+          "y": 508.5,
+          "width": 675.734375,
+          "height": 360,
+          "top": 508.5,
+          "right": 1047.59375,
+          "bottom": 868.5,
+          "left": 371.859375
+        },
+        "style": {
+          "position": "relative",
+          "display": "block",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "BUTTON",
+        "cls": "fm-button inline-flex min-w-0 items-center justify-center border rounded-fm-control font-fm-ui font-medium outline-none transition-[transform,background-color,border-color,color,box-shadow] duration-150 active:scale-[0.98] motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-fm-accent disabled:cursor-not-allowed disabled:border-fm-disabled-border disabled:bg-fm-disabled disabled:text-fm-disabled-text disabled:opacity-100 disabled:active:scale-100 fm-button--primary border-fm-accent bg-fm-accent text-fm-inverse shadow-fm-control hover:border-fm-strong hover:shadow-fm-control-hover active:shadow-fm-control-pressed fm-button--sm h-fm-control-sm gap-2 px-2 text-fm-control",
+        "rect": {
+          "x": 861.296875,
+          "y": 749.5,
+          "width": 174.296875,
+          "height": 26,
+          "top": 749.5,
+          "right": 1035.59375,
+          "bottom": 775.5,
+          "left": 861.296875
+        },
+        "style": {
+          "position": "static",
+          "display": "flex",
+          "gridRows": "none"
+        }
+      }
+    ],
+    "section": [
+      {
+        "cls": "fm-chart-section__header",
+        "rect": {
+          "x": 371.859375,
+          "y": 341.5,
+          "width": 675.734375,
+          "height": 124,
+          "top": 341.5,
+          "right": 1047.59375,
+          "bottom": 465.5,
+          "left": 371.859375
+        },
+        "gridRow": "auto",
+        "overflow": "visible"
+      },
+      {
+        "cls": "fm-chart-section__legend",
+        "rect": {
+          "x": 371.859375,
+          "y": 465.5,
+          "width": 675.734375,
+          "height": 43,
+          "top": 465.5,
+          "right": 1047.59375,
+          "bottom": 508.5,
+          "left": 371.859375
+        },
+        "gridRow": "auto",
+        "overflow": "visible"
+      },
+      {
+        "cls": "fm-chart-section__body",
+        "rect": {
+          "x": 371.859375,
+          "y": 508.5,
+          "width": 675.734375,
+          "height": 360,
+          "top": 508.5,
+          "right": 1047.59375,
+          "bottom": 868.5,
+          "left": 371.859375
+        },
+        "gridRow": "auto",
+        "overflow": "hidden"
+      },
+      {
+        "cls": "fm-chart-section__footer",
+        "rect": {
+          "x": 371.859375,
+          "y": 744.5,
+          "width": 675.734375,
+          "height": 35,
+          "top": 744.5,
+          "right": 1047.59375,
+          "bottom": 779.5,
+          "left": 371.859375
+        },
+        "gridRow": "auto",
+        "overflow": "visible"
+      }
+    ]
+  },
+  "after_css": {
+    "button": {
+      "x": 861.296875,
+      "y": 838,
+      "width": 174.296875,
+      "height": 26,
+      "top": 838,
+      "right": 1035.59375,
+      "bottom": 864,
+      "left": 861.296875
+    },
+    "cover": [
+      {
+        "tag": "BUTTON",
+        "cls": "fm-button inline-flex min-w-0 items-center justify-center border rounded-fm-control font-fm-ui font-medium outline-none transition-[transform,background-color,border-color,color,box-shadow] duration-150 active:scale-[0.98] motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-fm-accent disabled:cursor-not-allowed disabled:border-fm-disabled-border disabled:bg-fm-disabled disabled:text-fm-disabled-text disabled:opacity-100 disabled:active:scale-100 fm-button--primary border-fm-accent bg-fm-accent text-fm-inverse shadow-fm-control hover:border-fm-strong hover:shadow-fm-control-hover active:shadow-fm-control-pressed fm-button--sm h-fm-control-sm gap-2 px-2 text-fm-control",
+        "rect": {
+          "x": 861.296875,
+          "y": 838,
+          "width": 174.296875,
+          "height": 26,
+          "top": 838,
+          "right": 1035.59375,
+          "bottom": 864,
+          "left": 861.296875
+        },
+        "style": {
+          "position": "static",
+          "display": "flex",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "fm-dispersion-mode-action",
+        "rect": {
+          "x": 861.296875,
+          "y": 838,
+          "width": 174.296875,
+          "height": 26,
+          "top": 838,
+          "right": 1035.59375,
+          "bottom": 864,
+          "left": 861.296875
+        },
+        "style": {
+          "position": "static",
+          "display": "flex",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "fm-chart-section__footer-row fm-analysis-plots__status--frequency-domain-selection",
+        "rect": {
+          "x": 371.859375,
+          "y": 834,
+          "width": 675.734375,
+          "height": 34,
+          "top": 834,
+          "right": 1047.59375,
+          "bottom": 868,
+          "left": 371.859375
+        },
+        "style": {
+          "position": "static",
+          "display": "flex",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "fm-chart-section__footer",
+        "rect": {
+          "x": 371.859375,
+          "y": 833,
+          "width": 675.734375,
+          "height": 35,
+          "top": 833,
+          "right": 1047.59375,
+          "bottom": 868,
+          "left": 371.859375
+        },
+        "style": {
+          "position": "static",
+          "display": "block",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "SECTION",
+        "cls": "fm-chart-section fm-analysis-plots__subchart--frequency-domain",
+        "rect": {
+          "x": 370.859375,
+          "y": 429.5,
+          "width": 677.734375,
+          "height": 440,
+          "top": 429.5,
+          "right": 1048.59375,
+          "bottom": 869.5,
+          "left": 370.859375
+        },
+        "style": {
+          "position": "static",
+          "display": "grid",
+          "gridRows": "124px 43px 593.5px 35px"
+        }
+      },
+      {
+        "tag": "SECTION",
+        "cls": "fm-analysis-plots__panel fm-analysis-plots__panel--primary",
+        "rect": {
+          "x": 369.859375,
+          "y": 338,
+          "width": 679.734375,
+          "height": 580,
+          "top": 338,
+          "right": 1049.59375,
+          "bottom": 918,
+          "left": 369.859375
+        },
+        "style": {
+          "position": "static",
+          "display": "grid",
+          "gridRows": "90.5px 440px 0px 280px 0px"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "fm-analysis-plots",
+        "rect": {
+          "x": 357.859375,
+          "y": 286,
+          "width": 703.734375,
+          "height": 594.453125,
+          "top": 286,
+          "right": 1061.59375,
+          "bottom": 880.453125,
+          "left": 357.859375
+        },
+        "style": {
+          "position": "static",
+          "display": "flex",
+          "gridRows": "none"
+        }
+      },
+      {
+        "tag": "DIV",
+        "cls": "fm-viewport-tabs__surface",
+        "rect": {
+          "x": 357.859375,
+          "y": 286,
+          "width": 703.734375,
+          "height": 594.453125,
+          "top": 286,
+          "right": 1061.59375,
+          "bottom": 880.453125,
+          "left": 357.859375
+        },
+        "style": {
+          "position": "static",
+          "display": "block",
+          "gridRows": "none"
+        }
+      }
+    ],
+    "section": [
+      {
+        "cls": "fm-chart-section__header",
+        "rect": {
+          "x": 371.859375,
+          "y": 72.5,
+          "width": 675.734375,
+          "height": 124,
+          "top": 72.5,
+          "right": 1047.59375,
+          "bottom": 196.5,
+          "left": 371.859375
+        },
+        "gridRow": "auto",
+        "overflow": "visible"
+      },
+      {
+        "cls": "fm-chart-section__legend",
+        "rect": {
+          "x": 371.859375,
+          "y": 196.5,
+          "width": 675.734375,
+          "height": 43,
+          "top": 196.5,
+          "right": 1047.59375,
+          "bottom": 239.5,
+          "left": 371.859375
+        },
+        "gridRow": "auto",
+        "overflow": "visible"
+      },
+      {
+        "cls": "fm-chart-section__body",
+        "rect": {
+          "x": 371.859375,
+          "y": 239.5,
+          "width": 675.734375,
+          "height": 593.5,
+          "top": 239.5,
+          "right": 1047.59375,
+          "bottom": 833,
+          "left": 371.859375
+        },
+        "gridRow": "auto",
+        "overflow": "hidden"
+      },
+      {
+        "cls": "fm-chart-section__footer",
+        "rect": {
+          "x": 371.859375,
+          "y": 833,
+          "width": 675.734375,
+          "height": 35,
+          "top": 833,
+          "right": 1047.59375,
+          "bottom": 868,
+          "left": 371.859375
+        },
+        "gridRow": "auto",
+        "overflow": "visible"
+      }
+    ]
+  },
+  "source_sha256": {
+    "apps/control-room/src/design/styles/analysis-plots.css": "6db8b2277aac4cbd3c3c0c1b3d19a15cb6f9f1e23a4bf33310999c1cf7945954",
+    "apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts": "2e9610e9adad3b7657163929e718d74b58f1990097aa26915c4b24b4eaedf82c"
+  },
+  "axis_switch_identity": "NOT VERIFIED"
+}

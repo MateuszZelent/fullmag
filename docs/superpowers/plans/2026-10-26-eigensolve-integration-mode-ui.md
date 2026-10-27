@@ -31,7 +31,7 @@ Nie usuwamy niezintegrowanych worktree, wyników, cache ani aktywnych zasobów. 
 | I4: rzeczywisty mod w UI | Gamma nearest i ±10: rzeczywiste pola, Real/Imag/Abs/Phase, WebGL2, animacja i zrzut samego magnetyka PASS; pełny sweep pozostaje w I7 | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
 | I5: review, PR, master i cleanup | Otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
 | I6: pozostała integracja solvera | Otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
-| I7: kwalifikacja naukowa | Częściowe dowody Gamma nearest i 14 nonzero-k; pełny nowy sweep z Gamma window i kwalifikacja nadal NOT VERIFIED | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
+| I7: kwalifikacja naukowa | 15/15 z Gamma window opublikowane w aktualnym API; kompletność, zbieżność, serial/adaptive i COMSOL nadal NOT VERIFIED | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
 
 Nie podajemy zbiorczego procentu: liczba commitów poza masterem nie mierzy ukończenia funkcji. S00–S12 oraz U1–U7 nie są zamknięte przez ten checkpoint.
 
@@ -297,3 +297,17 @@ odczytu CPU przed spawn) są na origin. Runtime potwierdza eb15c8520.
 CI MFEM 40495171889 PASS; Rust 40497276333 jeszcze nie odebrane.
 Signed15 33b8b56d… rzeczywiście running; nie zamykamy pełnego sweepa,
 wykresu ani pozostałych bramek I7 przed odbiorem wyników.
+
+
+## Checkpoint pełnego signed15 — 27.10.2026
+
+Bieżące obliczenia, wykres i dodatkowe poprawki UI/FMS opisuje [raport odbioru](../../../audits/2026-10-27-eigensolve-signed15-published-and-ui.md).
+
+- [x] Ukończyć i opublikować w bieżącym API pełne 15 próbek z Gamma i dynamicznym demag.
+- [x] Wygenerować aktualny wykres z analityką i zachować numeryczne CSV/provenance.
+- [x] Pokazać rzeczywisty mod Gamma w 3D, cztery reprezentacje i zmieniającą się/zatrzymaną animację (oddzielny dowód wizualny).
+- [ ] Naprawić ETag dużego katalogu artefaktów i uzyskać strict browser PASS bez HTTP 500.
+- [ ] Dokończyć odbiór punkt → mod po naprawie zasłoniętego przycisku i po zmianie osi.
+- [ ] Naprawić pełny round trip accepted-v2 FMS z projekcjami modów i typed AcceptedStateRef; nie usuwać guardów kompletności.
+
+Pozostałe bramki I0/I1/I5/I6/I7 zachowują oryginalny zakres. Cel pozostaje aktywny.

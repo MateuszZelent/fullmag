@@ -442,6 +442,12 @@
   flex-shrink: 0;
 }
 
+/* Frequency-domain bodies include provenance above a fixed-height canvas.
+   Their grid track must fit that content before placing the mode action. */
+.fm-analysis-plots__subchart--frequency-domain {
+  grid-template-rows: auto auto minmax(min-content, 1fr) auto;
+}
+
 .fm-chart-section__header {
   display: flex;
   align-items: center;
