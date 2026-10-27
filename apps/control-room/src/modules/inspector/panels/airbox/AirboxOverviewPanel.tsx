@@ -6,6 +6,7 @@ import {
   useUniverseMeshPolicyResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { resolveAirboxVisualizationSettingsFromState } from "@/kernel/visualization/ObjectVisualizationController";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { useKernel } from "@/kernel/KernelContext";
 import { Button } from "@/shared/ui/Button";
@@ -120,7 +121,14 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Elements (all carriers)" value={aggregate.elementCount?.toLocaleString("en-US") ?? "not available"} />
         <FieldRow label="Boundary faces (all carriers)" value={aggregate.boundaryFaceCount?.toLocaleString("en-US") ?? "not available"} />
         <FieldRow label="Node-count source" value={aggregate.nodeCountExact ? "deduplicated published carrier coverage" : "not fully published"} />
-        <FieldRow label="Active quantity" value={visualization.data?.active_quantity_id ?? "not available"} />
+        {/* The Airbox renders its own target quantity (default H_demag), not the
+            scene-wide quantity, which is usually the magnetic-only m. */}
+        <FieldRow
+          label="Active quantity"
+          value={visualization.data
+            ? resolveAirboxVisualizationSettingsFromState(visualization.data).activeQuantityId
+            : "not available"}
+        />
         <FieldRow label="Manifest state" value={manifest.status === "ready" && !topologyMatches ? "stale identity" : manifest.status} />
         <FieldRow label="Visualization state" value={visualization.status} />
         <FieldRow
