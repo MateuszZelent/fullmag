@@ -1299,7 +1299,7 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
               std::strcmp(result.factorization_package, "petsc_default_lu") == 0,
           "native Floquet result exposes the shifted GMRES/LU policy");
 #if FULLMAG_FEM_WITH_SLEPC
-    check(result.ksp_restart == 8 &&
+    check(result.ksp_restart == 30 &&
               std::abs(result.ksp_breakdown_tolerance - 2.0) <=
                   std::numeric_limits<double>::epsilon(),
           "native Floquet result exposes the bounded GMRES restart and residual replacement policy");

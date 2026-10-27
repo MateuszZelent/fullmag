@@ -2115,7 +2115,7 @@ earlier restart; the resolved value is reported with the subwindow solver
 policy. The experiment retains the same right preconditioning, shifts,
 tolerances, original-block gate and measurement of each completed inner solve.
 
-The shifted Floquet GMRES sets its default restart length to `8` and PETSc's
+The shifted Floquet GMRES sets its default restart length to `30` and PETSc's
 restart-breakdown tolerance to `2.0`, reporting both values. At every restart,
 PETSc compares the explicitly recomputed residual with the recursive residual
 against the residual norm at the beginning of the cycle. The Floquet Schur
@@ -6274,3 +6274,16 @@ Runtime, rzeczywiste mody i dyspersja po tej poprawce pozostają NOT VERIFIED.
 | Native refill | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Cel po finalizacji; residuale i błędy pozostają bramką |
 | Dispatcher window | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_payload` | Wejście do adaptera okna z odrębnym celem best_effort |
 | Regresja SLEPc | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `void refills_native_floquet_nev_before_tangent_mass_cap` | Jeden/wiele modów, wymiary, walidacja celu i budżet; wykonanie CI oczekuje |
+
+
+### Eksperyment odtworzenia signed15 — 27.10.2026
+
+Dla k_y=−25e6 rad/m runtime8c048d36d zakończył pierwszy solve GMRES
+po8 iteracjach z reason−5. Rzeczywisty residual3.84823e−13 przekraczał
+normę RHS1.24195e−13; próg1.24195e−24 nie został spełniony.
+Zwiększono domyślną przestrzeń restartu do30 jako kontrolowany eksperyment
+numeryczny. Nie zmieniono tolerancji, budżetu iteracji, preconditionera,
+bramek true-residual ani pełnego deskryptora. Potrzebne nowe CI i runtime;
+sama zmiana parametru nie dowodzi rozwiązania breakdown ani kwalifikacji.
+Dokumentacja PETSc: https://petsc.org/release/manualpages/KSP/KSPGMRESSetRestart/.
+Dowód wejściowy: docs/audits/2026-10-27-eigensolve-signed15-native-failure.evidence.json.

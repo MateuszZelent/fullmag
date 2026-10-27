@@ -1288,7 +1288,9 @@ FloquetFullDescriptorDiagnostics certify_floquet_full_descriptor(
 // that residual, then restart from the explicitly rebuilt vector.  This does
 // not relax convergence: KSP remains error-if-not-converged and independent
 // shifted-system and original-descriptor residuals remain mandatory below.
-constexpr PetscInt kFloquetShiftedGmresDefaultRestart = 8;
+// Keep a larger Krylov basis before restart; certification tolerances are unchanged.
+// The signed-15 pilot with restart 8 failed at the first cycle for k_y=-25e6.
+constexpr PetscInt kFloquetShiftedGmresDefaultRestart = 30;
 // Materializing the exact Schur action is bounded to the small validation
 // systems for which it is inexpensive.  It gives shift-invert an LU
 // preconditioner containing the dynamic-demag feedback that the sparse
