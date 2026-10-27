@@ -2716,6 +2716,17 @@ def _parser() -> argparse.ArgumentParser:
     stop_bootstrap.add_argument("--resume-attempt", required=True)
     stop_bootstrap.add_argument("--source-root", type=Path, required=True)
     stop_bootstrap.add_argument("--port", type=int, required=True)
+    stop_iteration = subparsers.add_parser(
+        "stop-startup-iteration-volume",
+        help="stop an exact failed idle iteration retaining only a startup-fenced API and drained prior owner",
+    )
+    stop_iteration.add_argument("--attempt", required=True)
+    stop_iteration.add_argument("--iteration-attempt", required=True)
+    stop_iteration.add_argument("--config-sha256", required=True)
+    stop_iteration.add_argument("--source-root", type=Path, required=True)
+    stop_iteration.add_argument("--port", type=int, required=True)
+    stop_iteration.add_argument("--reconcile-stop-attempt", help="finalize one exact confirmed stop whose original helper still holds the lease")
+    stop_iteration.add_argument("--apply", action="store_true", help="stop after revalidating the preview under the control lease")
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")
     recreate_volume.add_argument("--attempt", required=True)
     recreate_volume.add_argument("--config-sha256", required=True)
@@ -2993,6 +3004,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-bootstrap-volume":
             from docker_volume_stop_bootstrap import stop_bootstrap
             result = stop_bootstrap(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "stop-startup-iteration-volume":
+            from docker_volume_stop_startup_iteration import stop_iteration
+            result = stop_iteration(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "recreate-volume":
             if args.resume_recreation is not None:

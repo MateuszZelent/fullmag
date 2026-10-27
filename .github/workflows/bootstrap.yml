@@ -831,6 +831,7 @@ jobs:
           python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
           python -B scripts/test_docker_volume_readiness_receipt.py -v
           python -B scripts/test_docker_volume_stop_failed.py -v
+          python -B scripts/test_docker_volume_stop_startup_iteration.py -v
           python -B scripts/test_docker_volume_activation_reconcile.py -v
           python -B scripts/test_docker_native_failed_recreate.py -v
           python -B scripts/test_docker_retained_recovery_context.py -v
