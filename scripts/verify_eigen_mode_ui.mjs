@@ -618,7 +618,10 @@ async function waitForModeFieldBinaryEvidence(page, proof, uiRequests, uiRespons
         headers["x-fullmag-quantity-id"] === proof.fieldId &&
         headers["x-fullmag-component"] === "full" &&
         headers["x-fullmag-field-indexing"] === "full_domain" &&
-        headers["x-fullmag-scope-kind"] === "full" &&
+        // The native full-domain lane returns no ResolvedFieldScope and omits
+        // this optional header. The request above still requires scope_kind=full,
+        // and full_domain indexing plus exact generation/quantity remain required.
+        (headers["x-fullmag-scope-kind"] == null || headers["x-fullmag-scope-kind"] === "full") &&
         /^FMVP;version=(?:3|5)(?:;.*)?$/i.test(headers["x-fullmag-encoding"] ?? "") &&
         /^application\/octet-stream(?:;|$)/i.test(headers["content-type"] ?? "") &&
         nonEmptyString(headers["x-fullmag-domain-generation-id"]) !== null &&
@@ -1127,6 +1130,12 @@ async function main() {
     throw error;
   } finally {
     if (page) {
+      report.ui.modeControllerDiagnostics = await page.evaluate(() => {
+        const artifact = window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.();
+        return (artifact?.streams?.timeline ?? []).filter((entry) =>
+          entry.name?.startsWith("viewport-3d.mode-field-overlay"),
+        ).slice(-12);
+      }).catch((error) => ({ error: String(error) }));
       const screenshot = report.config.output.replace(/\.json$/i, "") + ".png";
       try {
         await page.screenshot({ fullPage: true, path: screenshot });

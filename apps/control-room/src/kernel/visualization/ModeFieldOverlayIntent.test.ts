@@ -162,6 +162,25 @@ describe("ModeFieldOverlayIntent", () => {
     ).toBeNull();
   });
 
+  it("matches native FMVP digest bytes to the qualified shared-domain fingerprint", () => {
+    const resolved = resolveModeFieldOverlayMetadata(
+      createModeFieldOverlayIntent(selection)!, metadata, "sha256:field-v1",
+    )!;
+    const hash = "75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4";
+    const binary = { ...validBinary(5), meshTopologyHash: hash };
+    const qualified = { ...topology, meshTopologyHash: `sha256:${hash}` };
+    expect(validateModeFieldOverlayBinary(resolved, binary, qualified)).not.toBeNull();
+    expect(validateModeFieldOverlayBinary(resolved, binary, {
+      ...qualified, meshTopologyHash: `sha256:${"0".repeat(64)}`,
+    })).toBeNull();
+    expect(validateModeFieldOverlayBinary(resolved, binary, {
+      ...qualified, meshTopologyRevision: "other-revision",
+    })).toBeNull();
+    expect(validateModeFieldOverlayBinary(resolved, binary, {
+      ...qualified, meshTopologyHash: `sha256:${hash.slice(1)}`,
+    })).toBeNull();
+  });
+
   it("fails closed for stale topology, invalid shape, or non-finite binary values", () => {
     const intent = createModeFieldOverlayIntent(selection)!;
     const resolved = resolveModeFieldOverlayMetadata(

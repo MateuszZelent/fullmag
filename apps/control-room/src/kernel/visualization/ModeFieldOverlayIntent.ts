@@ -264,7 +264,7 @@ export function validateModeFieldOverlayBinary(
     !requiredString(field.domainGenerationId) ||
     field.domainGenerationId !== topology.domainGenerationId ||
     !requiredString(field.meshTopologyHash) ||
-    field.meshTopologyHash !== topology.meshTopologyHash ||
+    !sameMeshTopologyHash(field.meshTopologyHash, topology.meshTopologyHash) ||
     !requiredString(field.meshTopologyRevision) ||
     field.meshTopologyRevision !== topology.meshTopologyRevision ||
     field.indexing !== "full_domain" ||
@@ -292,6 +292,18 @@ function isResolvedAnalysisResultModeFieldOverlayMetadata(
     "analysisResultFieldRef" in metadata &&
     isAnalysisResultFieldOverlayIntent(metadata.intent)
   );
+}
+
+// FMVP stores the raw 32-byte SHA-256; the shared-domain manifest qualifies
+// the same digest with "sha256:". Normalize that representation only, keeping
+// the generation, topology revision, shape and payload checks independent.
+function sameMeshTopologyHash(left: string | null, right: string | null): boolean {
+  if (!left || !right) return false;
+  const digest = (value: string) => {
+    const match = /^(?:sha256:)?([0-9a-f]{64})$/i.exec(value);
+    return match ? match[1].toLowerCase() : value;
+  };
+  return digest(left) === digest(right);
 }
 
 function requiredString(value: unknown): string | null {
