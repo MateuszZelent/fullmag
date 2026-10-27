@@ -570,5 +570,31 @@
     "apps/control-room/src/design/styles/analysis-plots.css": "6db8b2277aac4cbd3c3c0c1b3d19a15cb6f9f1e23a4bf33310999c1cf7945954",
     "apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts": "2e9610e9adad3b7657163929e718d74b58f1990097aa26915c4b24b4eaedf82c"
   },
-  "axis_switch_identity": "NOT VERIFIED"
+  "axis_switch_identity": "PASS: ky to path, same selected sample 7/raw mode 0 and complex field; range/rendered point position after switch NOT VERIFIED",
+  "after_axis_point": {
+    "data": [
+      25000000,
+      9.299249697073517,
+      7
+    ],
+    "dataIndex": 7,
+    "seriesIndex": 0,
+    "x": -8613.5791015625,
+    "y": 949.6514046044825
+  },
+  "after_axis_selection": "dispersion point\u2002k-label: Gamma\u2002frequency: 9.2992 GHz\u2002Dispersion point inspector",
+  "after_axis_surface_binding": {
+    "partId": "part:film_geom",
+    "surfaceIndexCount": 1560,
+    "fieldQuantity": "analysis:eigen:sample-0007:mode-0000",
+    "requestedQuantity": "analysis:eigen:sample-0007:mode-0000",
+    "surfaceVisible": true,
+    "surfaceColorSource": "magnitude",
+    "bufferQuantity": "analysis:eigen:sample-0007:mode-0000",
+    "bufferRepresentation": "phase_rotated_real",
+    "bufferMin": 0,
+    "bufferMax": 250000000000.0078,
+    "complexValueCount": 5127,
+    "rgbValueCount": 0
+  }
 }

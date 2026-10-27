@@ -307,7 +307,8 @@ Bieżące obliczenia, wykres i dodatkowe poprawki UI/FMS opisuje [raport odbioru
 - [x] Wygenerować aktualny wykres z analityką i zachować numeryczne CSV/provenance.
 - [x] Pokazać rzeczywisty mod Gamma w 3D, cztery reprezentacje i zmieniającą się/zatrzymaną animację (oddzielny dowód wizualny).
 - [ ] Naprawić ETag dużego katalogu artefaktów i uzyskać strict browser PASS bez HTTP 500.
-- [ ] Dokończyć odbiór punkt → mod po naprawie zasłoniętego przycisku i po zmianie osi.
+- [x] Kliknięcie punktu Gamma → właściwe pole 3D po naprawie układu i readera KSamplingIR; tożsamość pola zachowana po ky → path.
+- [ ] Sprawdzić zakres i widoczność punktów wykresu po zmianie osi oraz pełny strict browser bez błędów.
 - [ ] Naprawić pełny round trip accepted-v2 FMS z projekcjami modów i typed AcceptedStateRef; nie usuwać guardów kompletności.
 
 Pozostałe bramki I0/I1/I5/I6/I7 zachowują oryginalny zakres. Cel pozostaje aktywny.
