@@ -25,6 +25,20 @@
   min-width: 0;
 }
 
+.fm-explorer-tabs .fm-tabs-trigger {
+  gap: var(--fm-space-1);
+}
+
+@container fm-explorer-panel (max-width: 420px) {
+  .fm-explorer-tabs .fm-tabs-trigger {
+    padding-inline: var(--fm-space-2);
+  }
+
+  .fm-explorer-tabs .fm-tabs-trigger[data-state="inactive"] .fm-explorer-tabs__label {
+    display: none;
+  }
+}
+
 /* ── Filter bar ── */
 .fm-explorer-filter {
   display: flex;
@@ -504,34 +518,40 @@
   opacity: 0.7;
 }
 
-/* ── Bottom toolbar ── */
-.fm-explorer-toolbar {
+/* ── Filter row: filter field plus icon-only tree actions ── */
+.fm-explorer-filter-row {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: var(--fm-space-1);
-  padding: var(--fm-space-1) var(--fm-space-2);
-  border-top: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-panel);
-  min-height: var(--fm-control-height-regular);
-  flex-shrink: 0;
+  margin: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-explorer-filter-row > .fm-explorer-filter {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.fm-explorer-toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
 }
 
 .fm-explorer-toolbar__action {
   display: inline-flex;
   align-items: center;
-  gap: var(--fm-space-1);
+  justify-content: center;
+  width: var(--fm-control-height-compact);
   height: var(--fm-control-height-compact);
-  padding: 0 var(--fm-space-2);
+  padding: 0;
   border: 1px solid transparent;
   border-radius: var(--fm-radius-sm);
   background: transparent;
   color: var(--fm-text-muted);
   cursor: pointer;
-  font-family: var(--fm-font-ui);
-  font-size: var(--fm-font-size-xs);
-  font-weight: 500;
-  white-space: nowrap;
   transition:
     background-color var(--fm-transition-fast),
     border-color var(--fm-transition-fast),
@@ -584,17 +604,6 @@
   }
 }
 
-@container fm-explorer-panel (max-width: 360px) {
-  .fm-explorer-toolbar__action {
-    width: var(--fm-control-height-compact);
-    justify-content: center;
-    padding-inline: 0;
-  }
-
-  .fm-explorer-toolbar__action > span {
-    display: none;
-  }
-}
 
 /* Resource names stay readable; the status glyph/badge carries its own tone. */
 .fm-explorer-tree-row[data-status] { color: var(--fm-text-primary); }

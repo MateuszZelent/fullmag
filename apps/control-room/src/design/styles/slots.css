@@ -135,14 +135,26 @@
   overflow: hidden;
 }
 
+/* Text-only fields: a block box lets text-overflow draw the ellipsis
+   (an inline-flex box clips its anonymous text item mid-glyph). */
 .fm-status-bar__item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--fm-space-1);
-  white-space: nowrap;
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 30ch;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 30ch;
+  white-space: nowrap;
+}
+
+/* The lifecycle word is the one field that must stay whole. */
+.fm-status-bar__item--state {
+  flex-shrink: 0;
+}
+
+.fm-status-bar__axis,
+.fm-status-bar__engine {
+  flex-shrink: 0;
 }
 
 .fm-status-bar__sep {
@@ -234,8 +246,7 @@
   margin-inline-start: var(--fm-space-1);
 }
 
-.fm-status-bar__compute-cta[aria-disabled="true"],
-.fm-footer-telemetry__compute-cta[aria-disabled="true"] {
+.fm-status-bar__compute-cta[aria-disabled="true"] {
   cursor: not-allowed;
   border-color: var(--fm-border-disabled);
   background: var(--fm-bg-disabled);
@@ -269,6 +280,8 @@
 }
 
 .fm-status-bar__button.fm-status-bar__item {
+  /* Block, not the button's inline-flex, so the label can ellipsize. */
+  display: block;
   border: 0;
   background: transparent;
   color: inherit;

@@ -190,8 +190,9 @@ export default function StatusBarModule() {
       />
       <button
         type="button"
-        className="fm-status-bar__button fm-status-bar__item fm-status-bar__item--clickable"
+        className="fm-status-bar__button fm-status-bar__item fm-status-bar__item--clickable fm-status-bar__item--state"
         onClick={() => handleItemClick("telemetry")}
+        title={sessionState}
       >
         {sessionState}
       </button>
@@ -200,11 +201,12 @@ export default function StatusBarModule() {
         type="button"
         className="fm-status-bar__button fm-status-bar__item fm-status-bar__item--clickable"
         onClick={() => handleItemClick("telemetry")}
+        title={sessionName}
       >
         {sessionName}
       </button>
       <span className="fm-status-bar__sep" aria-hidden="true" />
-      <span className="fm-status-bar__item">{runtimeVersion}</span>
+      <span className="fm-status-bar__item" title={runtimeVersion}>{runtimeVersion}</span>
       <span className="fm-status-bar__sep" aria-hidden="true" />
       <button
         type="button"

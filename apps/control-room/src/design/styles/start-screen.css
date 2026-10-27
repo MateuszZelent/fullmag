@@ -484,13 +484,19 @@
 }
 
 .fm-start-tile__name {
+  min-width: 0;
+  overflow: hidden;
   font-size: var(--fm-font-size-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: var(--fm-font-weight-semibold);
   letter-spacing: -0.005em;
 }
 
-.fm-start-tile__top .fm-start-kbd {
+.fm-start-tile__foot .fm-start-kbd {
+  flex: none;
   margin-left: auto;
+  font-family: var(--fm-font-ui);
 }
 
 .fm-start-tile__desc {
@@ -500,6 +506,9 @@
 }
 
 .fm-start-tile__foot {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--fm-space-2);
   margin-top: auto;
   color: var(--fm-start-meta);
   font-family: var(--fm-font-mono);

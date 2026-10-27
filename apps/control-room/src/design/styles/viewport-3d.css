@@ -93,7 +93,24 @@
   font-size: var(--fm-font-size-control);
 }
 
-.fm-viewport-3d__hud > span {
+/* Controls keep their size; informational text lives in __hud-info and is the
+   part that gives way, so the HUD stays one row until controls alone overflow. */
+.fm-viewport-3d__hud > * {
+  flex: none;
+}
+
+.fm-viewport-3d__hud-info {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: nowrap;
+  gap: var(--fm-space-1);
+  align-items: center;
+  min-width: min(12rem, 100%);
+  overflow: hidden;
+}
+
+.fm-viewport-3d__hud > span,
+.fm-viewport-3d__hud-info > span {
   min-width: 0;
   max-width: 12rem;
   overflow: hidden;
@@ -116,8 +133,13 @@
 }
 
 /* Empty HUD spans (e.g. undefined status) are hidden */
-.fm-viewport-3d__hud > span:empty {
+.fm-viewport-3d__hud > span:empty,
+.fm-viewport-3d__hud-info > span:empty {
   display: none;
+}
+
+.fm-viewport-3d__hud-info > span {
+  flex: 0 1 auto;
 }
 
 .fm-viewport-3d__hud > fieldset {
@@ -836,6 +858,9 @@
 
 .fm-viewport-3d__issue-banner {
   display: flex;
+  /* Own line, single text row: Details opens the full message. */
+  flex: 1 0 100%;
+  min-width: 0;
   align-items: center;
   gap: var(--fm-space-2);
   padding: var(--fm-space-1) var(--fm-space-2);
@@ -847,8 +872,11 @@
 }
 
 .fm-viewport-3d__issue-banner-text {
+  flex: 1 1 auto;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-viewport-3d__freshness-badge {

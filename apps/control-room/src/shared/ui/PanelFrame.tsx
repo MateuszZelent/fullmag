@@ -42,6 +42,8 @@ interface PanelFrameProps {
   drawer?: boolean;
   /** Edge a narrow-screen drawer opens from. */
   drawerSide?: "left" | "right";
+  /** Another drawer is open on the opposite edge: take half the width so they never overlap. */
+  drawerShared?: boolean;
   /** False pins the frame in the dock: no float, maximize or resize. */
   floatable?: boolean;
   suspendWhenHidden?: boolean;
@@ -50,7 +52,7 @@ interface PanelFrameProps {
   onMove?: (direction: -1 | 1) => void;
 }
 
-export function PanelFrame({ id, title, visible, children, dockHandle, drawer = false, drawerSide = "right", floatable = true, suspendWhenHidden = true, onDockChange, onHide, onMove }: PanelFrameProps) {
+export function PanelFrame({ id, title, visible, children, dockHandle, drawer = false, drawerSide = "right", drawerShared = false, floatable = true, suspendWhenHidden = true, onDockChange, onHide, onMove }: PanelFrameProps) {
   const storageKey = `fullmag.workspace.panel.${id}.v1`;
   // Keep this frame safe when rendered outside the workspace hydration boundary.
   const [initial] = useState(() => {
@@ -169,7 +171,7 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
   };
   return <section ref={frame} className="fm-panel-frame" data-panel-frame={id} data-panel-mode={effectiveMode} hidden={!visible} aria-label={`${title} panel`}
     onFocusCapture={event => { if (frame.current?.contains(event.target as HTMLElement) && !(event.target as HTMLElement).closest(".fm-panel-chrome")) previousFocus.current = event.target as HTMLElement; }}
-    onScrollCapture={() => { if (visible && frame.current) scroll.current = Array.from(frame.current.querySelectorAll<HTMLElement>("*")).filter(e => e.scrollTop || e.scrollLeft).map(e => [e, e.scrollTop, e.scrollLeft]); }} style={!docked ? (effectiveMode === "maximized" ? maxBounds ?? { inset: 8 } : drawer && mode === "docked" ? { ...(drawerSide === "left" ? { left: 8 } : { right: 8 }), top: 144, width: "min(416px, calc(100vw - 16px))", height: "calc(100dvh - 180px)" } : { left: geometry.x, top: geometry.y, width: geometry.width, height: geometry.height }) : undefined}>
+    onScrollCapture={() => { if (visible && frame.current) scroll.current = Array.from(frame.current.querySelectorAll<HTMLElement>("*")).filter(e => e.scrollTop || e.scrollLeft).map(e => [e, e.scrollTop, e.scrollLeft]); }} style={!docked ? (effectiveMode === "maximized" ? maxBounds ?? { inset: 8 } : drawer && mode === "docked" ? { ...(drawerSide === "left" ? { left: 8 } : { right: 8 }), top: 144, width: drawerShared ? "calc(50vw - 12px)" : "min(416px, calc(100vw - 16px))", height: "calc(100dvh - 180px)" } : { left: geometry.x, top: geometry.y, width: geometry.width, height: geometry.height }) : undefined}>
     <ChromeContext.Provider value={controls}>
       <Activity mode={!visible && suspendWhenHidden ? "hidden" : "visible"}>{children}</Activity>
     </ChromeContext.Provider>

@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
@@ -188,22 +189,34 @@ def retirement_receipt_evidence(operation_id, _inputs_sha256):
         self.assertEqual(diagnostic["retirement"]["state"], "pending")
         self.assertEqual(diagnostic["retirement"]["marker_sha256"], "e" * 64)
 
+    @unittest.skipUnless(sys.platform.startswith("linux") and all(
+        shutil.which(tool) for tool in ("bash", "flock", "sync", "sha256sum")
+    ), "requires Linux shell CAS tools")
     def test_cas_rejects_dangling_active_and_hardlinks_on_already_finalized_records(self):
-        script = activate._retirement_cas_script(
-            operation_id="a" * 32,
-            active_raw=b"a" * 32,
-            receipt_raw=b"receipt",
-            result_raw=b"result",
-            terminal_raw=b"terminal",
-            current_raw=b"current",
-        )
-        self.assertIn("if test ! -L /control/active && test ! -e /control/active; then", script)
-        for path in (
-            "/control/activation/attempts/" + "a" * 32 + "/result.json",
-            "/control/activation/current.json",
-            "/control/activation/attempts/" + "a" * 32 + "/terminal.json",
-        ):
-            self.assertIn(f'test "$(stat -c %h {path})" = 1;', script)
+        operation = "a" * 32
+        payloads = dict(active_raw=operation.encode(), receipt_raw=b"receipt",
+                        result_raw=b"result", terminal_raw=b"terminal", current_raw=b"current")
+        for case in ("dangling-active", "result", "current", "terminal"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "control"
+                attempt = root / "activation/attempts" / operation
+                attempt.mkdir(parents=True)
+                paths = {name: attempt / (name + ".json") for name in ("receipt", "result", "terminal")}
+                paths["current"] = root / "activation/current.json"
+                for name, path in paths.items():
+                    path.write_bytes(payloads[name + "_raw"])
+                if case == "dangling-active":
+                    (root / "active").symlink_to(root / "missing")
+                else:
+                    import os
+                    os.link(paths[case], root / "retained-hardlink")
+                script = activate._retirement_cas_script(operation_id=operation, **payloads)
+                completed = subprocess.run(["bash", "-c", script.replace("/control", str(root))],
+                                           capture_output=True, timeout=5)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertEqual(paths["terminal"].read_bytes(), payloads["terminal_raw"])
+                if case == "dangling-active":
+                    self.assertTrue((root / "active").is_symlink())
 
     def test_cas_rejects_a_foreign_active_operation_before_rendering(self):
         with self.assertRaises(activate.ControlOutcomeUnknown):
@@ -217,36 +230,14 @@ def retirement_receipt_evidence(operation_id, _inputs_sha256):
             )
 
     def test_finalizer_resolves_canonical_helper_absence_probe(self):
-        operation_id = "a" * 32
-        written = []
-
-        class _Control:
-            namespace = ""
-            namespace_registry_sha256 = None
-
-            def write_bytes(self, relative, payload):
-                written.append((relative, payload))
-
-        result = {"state": "retirement-only", "retirement": {"operation_id": operation_id}}
-        terminal = {"state": "failed-confirmed", "activation_state": "retirement-replayed"}
-        with patch.object(reconcile, "_probe_helper_absence", return_value=None), patch.object(
-            activate, "_read_control_bytes", return_value=None
-        ):
-            activate._finalize_retained_retirement(
-                _Control(),
-                operation_id=operation_id,
-                receipt_raw=b"receipt",
-                result=result,
-                terminal=terminal,
-            )
-        self.assertEqual(
-            [relative for relative, _payload in written],
-            [
-                "activation/attempts/" + operation_id + "/result.json",
-                "activation/current.json",
-                "activation/attempts/" + operation_id + "/terminal.json",
-            ],
-        )
+        operation = "a" * 32
+        with patch.object(reconcile, "_probe_helper_absence", return_value={"state": "absent"}) as probe, \
+             patch.object(activate, "_read_control_bytes", side_effect=activate.ControlOutcomeUnknown("read fence")):
+            with self.assertRaisesRegex(activate.ControlOutcomeUnknown, "read fence"):
+                activate._finalize_retained_retirement(
+                    SimpleNamespace(), operation_id=operation, receipt_raw=b"receipt",
+                    result={"state": "retired"}, terminal={"state": "failed-confirmed"})
+        probe.assert_called_once_with("fullmag-control-" + operation)
 
 
 class RetirementRejectionDetailTests(unittest.TestCase):

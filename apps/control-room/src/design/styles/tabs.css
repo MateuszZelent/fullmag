@@ -53,14 +53,14 @@
   color: var(--fm-text-primary);
 }
 
-.fm-tabs-list--line > .fm-tabs-trigger {
+.fm-tabs-list--line .fm-tabs-trigger {
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
 }
 
-.fm-tabs-list--line > .fm-tabs-trigger[data-state="active"]:not(:disabled) {
+.fm-tabs-list--line .fm-tabs-trigger[data-state="active"]:not(:disabled) {
   border-bottom-color: var(--fm-accent);
   color: var(--fm-text-primary);
   font-weight: 650;

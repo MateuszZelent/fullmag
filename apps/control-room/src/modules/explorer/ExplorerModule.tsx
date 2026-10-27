@@ -1091,16 +1091,55 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           }}
           rebindDisabledReason={rebindDisabledReason}
         />
-        <label className="fm-explorer-filter">
-          <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
-          <input
-            aria-label="Filter explorer"
-            value={filterText}
-            onChange={(event) => setExplorerFilterText(event.target.value)}
-            placeholder="Filter nodes..."
-            type="search"
-          />
-        </label>
+        {/* Tree actions share the filter row instead of a separate footer row. */}
+        <div className="fm-explorer-filter-row">
+          <label className="fm-explorer-filter">
+            <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
+            <input
+              aria-label="Filter explorer"
+              value={filterText}
+              onChange={(event) => setExplorerFilterText(event.target.value)}
+              placeholder="Filter nodes..."
+              type="search"
+            />
+          </label>
+          <div aria-label="Explorer tree actions" className="fm-explorer-toolbar" role="group">
+            <button
+              className="fm-explorer-toolbar__action"
+              aria-label="Expand all explorer nodes"
+              title="Expand All"
+              type="button"
+              onClick={() => {
+                expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+              }}
+            >
+              <ChevronsUpDown size={13} aria-hidden="true" />
+            </button>
+            <button
+              className="fm-explorer-toolbar__action"
+              aria-label="Collapse all explorer nodes"
+              title="Collapse All"
+              type="button"
+              onClick={() => {
+                collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+              }}
+            >
+              <ChevronsDownUp size={13} aria-hidden="true" />
+            </button>
+            <button
+              className="fm-explorer-toolbar__action"
+              aria-label="Reset explorer filter and expand nodes"
+              title="Reset filter and expand nodes"
+              type="button"
+              onClick={() => {
+                setExplorerFilterText("");
+                expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+              }}
+            >
+              <RefreshCw size={13} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
         <ExplorerTreeView
           activeNodeId={selectedNodeId}
           expandedIds={expandedIds}
@@ -1113,45 +1152,6 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           }
           tabId={activeTab}
         />
-        <footer className="fm-explorer-toolbar">
-          <button
-            className="fm-explorer-toolbar__action"
-            aria-label="Expand all explorer nodes"
-            title="Expand All"
-            type="button"
-            onClick={() => {
-              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-            }}
-          >
-            <ChevronsUpDown size={13} aria-hidden="true" />
-            <span>Expand All</span>
-          </button>
-          <button
-            className="fm-explorer-toolbar__action"
-            aria-label="Collapse all explorer nodes"
-            title="Collapse All"
-            type="button"
-            onClick={() => {
-              collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-            }}
-          >
-            <ChevronsDownUp size={13} aria-hidden="true" />
-            <span>Collapse All</span>
-          </button>
-          <button
-            className="fm-explorer-toolbar__action"
-            aria-label="Reset explorer filter and expand nodes"
-            title="Reset filter and expand nodes"
-            type="button"
-            onClick={() => {
-              setExplorerFilterText("");
-              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-            }}
-          >
-            <RefreshCw size={13} aria-hidden="true" />
-            <span>Reset filter</span>
-          </button>
-        </footer>
       </section>
     </WorkspaceRenderProfiler>
   );

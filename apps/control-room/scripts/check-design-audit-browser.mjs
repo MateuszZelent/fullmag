@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
+import { designCheckUrl } from "./lib/design-browser-env.mjs";
 
 // Exercises the compiled application against an explicitly empty-session fixture.
 // This verifies UI behavior, not backend readiness, physics or WebGL execution.
-const url = process.env.CONTROL_ROOM_URL ?? "http://127.0.0.1:3230/workspace";
+const url = designCheckUrl();
 const output = process.env.CONTROL_ROOM_DESIGN_REPORT_DIR;
 assert(output, "Set CONTROL_ROOM_DESIGN_REPORT_DIR to the task's registered run directory.");
 await mkdir(output, { recursive: true });
@@ -18,15 +19,18 @@ try {
   for (const theme of ["light", "dark"]) {
     for (const width of [1440, 900, 450]) {
       const context = await browser.newContext({ viewport: { width, height: 1000 }, deviceScaleFactor: 1 });
-      await context.addInitScript(({ theme, apiBase }) => {
-        localStorage.setItem("fullmag.control-room.theme", theme);
-        window.__FULLMAG_CONFIG__ = {
-          ...(window.__FULLMAG_CONFIG__ ?? {}),
-          allowMissingSessionSmoke: true,
-          controlRoomApiBase: apiBase,
-          disableRealtime: true,
-        };
-      }, { theme, apiBase: new URL(url).origin });
+      await context.addInitScript(
+        ({ theme, apiBase }) => {
+          localStorage.setItem("fullmag.control-room.theme", theme);
+          window.__FULLMAG_CONFIG__ = {
+            ...(window.__FULLMAG_CONFIG__ ?? {}),
+            allowMissingSessionSmoke: true,
+            controlRoomApiBase: apiBase,
+            disableRealtime: true,
+          };
+        },
+        { theme, apiBase: new URL(url).origin },
+      );
       const page = await context.newPage();
       page.on("pageerror", (error) => errors.push({ theme, width, message: error.message }));
       page.on("console", (message) => {
@@ -43,8 +47,11 @@ try {
           status: sessions ? 200 : 404,
           contentType: "application/json",
           headers: { "x-api-contract-version": "1.0.0" },
-          body: JSON.stringify(sessions ? { schema_version: "2.0.0", sessions: [] }
-            : { error: { code: "design_audit_fixture_unavailable", path } }),
+          body: JSON.stringify(
+            sessions
+              ? { schema_version: "2.0.0", sessions: [] }
+              : { error: { code: "design_audit_fixture_unavailable", path } },
+          ),
         });
       });
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120_000 });
@@ -72,7 +79,9 @@ try {
         await page.getByRole("menuitem", { name: "Home", exact: true }).waitFor();
         await page.getByRole("menuitem", { name: "File", exact: true }).waitFor();
         await page.keyboard.press("Escape");
-        await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Main menu", { timeout: 5000 });
+        await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Main menu", {
+          timeout: 5000,
+        });
         assert(await compact.evaluate((el) => el === document.activeElement), "Menu restores trigger focus");
       } else {
         await page.getByRole("button", { name: "File", exact: true }).click();
@@ -122,10 +131,20 @@ try {
   throw error;
 } finally {
   await browser.close();
-  await writeFile(resolve(output, "result.json"), JSON.stringify({
-    scope: "Compiled task frontend, mocked empty-session API, DPR 1. No solver or runtime proof.",
-    results, errors, mutations, failure,
-  }, null, 2));
+  await writeFile(
+    resolve(output, "result.json"),
+    JSON.stringify(
+      {
+        scope: "Compiled task frontend, mocked empty-session API, DPR 1. No solver or runtime proof.",
+        results,
+        errors,
+        mutations,
+        failure,
+      },
+      null,
+      2,
+    ),
+  );
 }
 assert.deepEqual(errors, [], "No uncaught application errors");
 assert.deepEqual(mutations, [], "Navigation never submits runtime mutations");

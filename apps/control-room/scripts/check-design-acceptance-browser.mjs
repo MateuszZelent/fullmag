@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
+import { designCheckUrl } from "./lib/design-browser-env.mjs";
 
 // Acceptance regressions for the PR #268 follow-up (K1-K6). Unlike overflow-only
 // checks, every assertion measures the visible symptom: overlapping label lines,
@@ -15,7 +16,7 @@ import { chromium } from "playwright";
 //     -v <run-dir>:/out -e CONTROL_ROOM_URL=http://127.0.0.1:8080/workspace \
 //     -e CONTROL_ROOM_DESIGN_REPORT_DIR=/out -w /state/development/workspace/apps/control-room \
 //     mcr.microsoft.com/playwright:v1.62.1-noble node scripts/check-design-acceptance-browser.mjs
-const url = process.env.CONTROL_ROOM_URL ?? "http://127.0.0.1:3230/workspace";
+const url = designCheckUrl();
 const objectName = process.env.CONTROL_ROOM_DESIGN_OBJECT ?? "mixed_p1_box_prism";
 const output = process.env.CONTROL_ROOM_DESIGN_REPORT_DIR;
 assert(output, "Set CONTROL_ROOM_DESIGN_REPORT_DIR to the task's registered run directory.");
@@ -125,6 +126,39 @@ try {
     await inspector.getByRole("button", { name: "Hide Inspector", exact: true }).waitFor();
     await page.screenshot({ path: resolve(output, `workspace-${theme}.png`) });
 
+    // Audit section 3: status bar, Explorer, Inspector colours, Telemetry.
+    const followup = await page.evaluate(() => {
+      const statusItems = [...document.querySelectorAll(".fm-status-bar__item")].map((item) => ({
+        text: item.textContent,
+        clipped: item.scrollWidth > item.clientWidth + 1,
+        ellipsis: getComputedStyle(item).textOverflow === "ellipsis" && getComputedStyle(item).display === "block",
+      }));
+      const engines = [...document.querySelectorAll(".fm-status-bar__engine-label")].map((label) => label.textContent.trim());
+      const explorer = document.querySelector('[data-panel-frame="panel-left"]').getBoundingClientRect();
+      const tabs = [...document.querySelectorAll('[aria-label="Explorer resource families"] [role="tab"]')].map((tab) => {
+        const box = tab.getBoundingClientRect();
+        return { name: tab.getAttribute("aria-label"), inside: box.left >= explorer.left - 1 && box.right <= explorer.right + 1 && box.width > 0 };
+      });
+      const filterRow = document.querySelector(".fm-explorer-filter-row");
+      const inspectorText = document.querySelector('[data-panel-frame="panel-right"]').innerText;
+      return {
+        statusItems,
+        engines,
+        tabs,
+        treeActions: filterRow ? filterRow.querySelectorAll(".fm-explorer-toolbar__action").length : 0,
+        footerToolbar: document.querySelectorAll("footer.fm-explorer-toolbar").length,
+        rawCssInInspector: /var\(--fm-/.test(inspectorText),
+        telemetryCompute: document.querySelectorAll(".fm-footer-telemetry__compute-cta").length,
+      };
+    });
+    for (const item of followup.statusItems) assert(item.ellipsis, `${theme}: status field ellipsizes ${JSON.stringify(item)}`);
+    assert.equal(followup.tabs.length, 5, `${theme}: five Explorer tabs`);
+    for (const tab of followup.tabs) assert(tab.inside, `${theme}: Explorer tab ${tab.name} fully visible`);
+    assert.equal(followup.treeActions, 3, `${theme}: tree actions in the filter row`);
+    assert.equal(followup.footerToolbar, 0, `${theme}: no Explorer footer row`);
+    assert.equal(followup.rawCssInInspector, false, `${theme}: Inspector shows no raw var(--fm-…)`);
+    assert.equal(followup.telemetryCompute, 0, `${theme}: Telemetry does not repeat Compute`);
+
     // K3/K4: Home shows the full host ID row and no simulation transport.
     await page.getByRole("button", { name: "Home", exact: true }).click();
     const host = page.locator(".fm-start-node-summary__host code").first();
@@ -142,6 +176,11 @@ try {
     assert.equal(homeHeader.quickActions, 0, `${theme}: no quick actions on Home`);
     assert(homeHeader.headerScroll <= homeHeader.headerClient + 1, `${theme}: Home header does not overflow`);
     assert(homeHeader.status.client >= 60, `${theme}: Home project status legible ${JSON.stringify(homeHeader.status)}`);
+    const tileNames = await page.evaluate(() => [...document.querySelectorAll(".fm-start-tile__name")].map((name) => ({
+      text: name.textContent, lines: name.getBoundingClientRect().height <= parseFloat(getComputedStyle(name).fontSize) * 1.8 ? 1 : 2,
+      clipped: name.scrollWidth > name.clientWidth + 1,
+    })));
+    for (const name of tileNames) assert(name.lines <= 1 && !name.clipped, `${theme}: launch tile title on one line ${JSON.stringify(name)}`);
     await page.screenshot({ path: resolve(output, `home-${theme}.png`) });
     await page.getByRole("button", { name: "Back to simulation", exact: true }).click();
 
@@ -155,8 +194,9 @@ try {
     })));
     if (drawers["panel-left"]) assert(drawers["panel-left"][0] <= 16, `${theme}: left drawer at left edge ${drawers["panel-left"]}`);
     if (drawers["panel-right"]) assert(drawers["panel-right"][1] >= 700 - 16, `${theme}: right drawer at right edge ${drawers["panel-right"]}`);
+    if (drawers["panel-left"] && drawers["panel-right"]) assert(drawers["panel-left"][1] <= drawers["panel-right"][0] + 1, `${theme}: open drawers do not overlap ${JSON.stringify(drawers)}`);
 
-    results.push({ theme, ribbon, labels: labels.length, workspaceHeader, inspectorMenu, viewportMenu, gl, hostId, homeHeader, drawers });
+    results.push({ theme, ribbon, labels: labels.length, workspaceHeader, inspectorMenu, viewportMenu, gl, followup, hostId, homeHeader, tileNames, drawers });
     await context.close();
   }
 

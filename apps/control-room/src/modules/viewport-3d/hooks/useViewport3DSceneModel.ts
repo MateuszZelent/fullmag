@@ -427,6 +427,7 @@ import {
   type Viewport3DAirboxFieldVectorPartState,
   useViewport3DUniverse,
   type Viewport3DFieldVectorEnvelope,
+  type Viewport3DFieldVectorRequestOptions,
 } from "../viewport3dResources";
 import type { Viewport3DFieldRefreshState } from "../viewport3dRefreshCountdown";
 import {
@@ -485,6 +486,13 @@ export function resolveViewport3DFdmGridVectorScale(
     scope,
   );
 }
+
+/**
+ * Primary field-vector failures are owned by the viewport issue banner
+ * (`fieldDataIssue`), so they do not also raise a global toast.
+ */
+export const VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS: Viewport3DFieldVectorRequestOptions =
+  Object.freeze({ notifyOnError: false });
 
 const EMPTY_FDM_MULTILAYER_AIRBOX_FIELD_REQUEST: Viewport3DFieldResourceRequest = {
   consumers: [],
@@ -1890,6 +1898,30 @@ export function resolveViewport3DFieldDataIssue({
     resourceKey: fieldVectorResourceKey,
     retry: fieldVectorRefetch,
   };
+}
+
+/**
+ * HUD status text with field-data failures removed when the viewport issue
+ * banner already reports them (R24: one foreground failure surface). Only the
+ * exact messages the banner owns are dropped; any other status, including
+ * higher-priority topology/build errors, is kept.
+ */
+export function resolveViewport3DHudStatus({
+  bannerOwnedMessages,
+  fieldDataIssue,
+  status,
+}: {
+  bannerOwnedMessages: ReadonlyArray<string | null | undefined>;
+  fieldDataIssue: Pick<Viewport3DFieldDataIssue, "message"> | null;
+  status: string;
+}): string {
+  if (!fieldDataIssue) return status;
+  const normalizedStatus = status.trim();
+  if (normalizedStatus === fieldDataIssue.message.trim()) return "";
+  for (const message of bannerOwnedMessages) {
+    if (message && normalizedStatus === message.trim()) return "";
+  }
+  return status;
 }
 
 export function resolveViewport3DSelectedSnapshotId(
@@ -5018,17 +5050,23 @@ export function useViewport3DSceneModel({
     primaryZFieldMeta.data,
     scalarRangeModeFlags,
   ]);
+  // The primary field vector is enabled exactly when `fieldDataIssue` can
+  // report its failure, so the viewport issue banner is its single foreground
+  // surface (R24). Suppress the duplicate global toast; resource-hook
+  // diagnostics still record the failure as history.
   const liveFieldVector = useViewport3DFieldVectorRequest(
     primaryFieldRequest,
     liveViewportResourcesEnabled &&
       fieldVectorEnabled &&
       !pinnedObservationActive,
+    VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,
   );
   const observationFieldVector = useViewport3DObservationFrameMagnetization(
     pinnedObservationSource?.frameId,
     liveViewportResourcesEnabled &&
       fieldVectorEnabled &&
       pinnedObservationActive,
+    VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,
   );
   const fieldVector = pinnedObservationActive
     ? observationFieldVector
@@ -7259,6 +7297,20 @@ export function useViewport3DSceneModel({
     fieldVectorResourceKey,
     primaryFieldQuantityId,
   ]);
+  // The issue banner is the foreground surface for these failures; the HUD
+  // status pill must not repeat them. The FDM mismatch wording differs from the
+  // banner text, so it is matched only while the domain issue owns the banner.
+  const hudStatus = resolveViewport3DHudStatus({
+    bannerOwnedMessages:
+      !fieldDataIssue &&
+      fieldDomainIssue &&
+      fdmLaneActive &&
+      fdmFieldCompatibility?.status === "mismatch"
+        ? [`FDM field degraded: ${fdmFieldCompatibility.reason}`]
+        : [],
+    fieldDataIssue: fieldDataIssue ?? fieldDomainIssue,
+    status,
+  });
 
   return {
     artifactInspectionDefinitions: !savedSelectionActive && scene.status === "ready" ? scene.data?.antenna_field_solve_stages ?? [] : [],
@@ -7415,7 +7467,7 @@ export function useViewport3DSceneModel({
       : semanticTargetCatalog,
     status: savedSelectionActive
       ? savedViewportStatus ?? "Saved FEM field ready · representation not verified"
-      : status,
+      : hudStatus,
     renderedMeshRevision: effectiveViewportTopologyModel?.meshRevision ?? null,
     topology: effectiveViewportTopology,
     topologyRevision: effectiveViewportTopologyRevision,

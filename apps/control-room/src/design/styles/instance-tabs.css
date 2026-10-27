@@ -86,6 +86,14 @@
   background: var(--fm-success);
 }
 
+.fm-instance-tabs__dot[data-tone="starting"] {
+  background: var(--fm-accent);
+}
+
+.fm-instance-tabs__dot[data-tone="waiting"] {
+  background: var(--fm-warning);
+}
+
 .fm-instance-tabs__dot[data-tone="failed"] {
   background: var(--fm-danger);
 }

@@ -96,6 +96,20 @@
   --fm-stale: #cba6f7;
   --fm-degraded: #fab387;
 
+  /* Status hues as small text. Mocha's palette clears 4.5:1 on its surfaces
+     except danger on the selected row, which is lightened. */
+  --fm-success-text: var(--fm-success);
+  --fm-warning-text: var(--fm-chart-yellow);
+  --fm-danger-text: #f592ad; /* 4.75:1 on the selected row */
+  --fm-degraded-text: var(--fm-degraded);
+  --fm-teal-text: var(--fm-chart-teal);
+  --fm-accent-text: var(--fm-accent);
+  --fm-mauve-text: var(--fm-chart-mauve);
+
+  /* Viewport thumbnails stay dark in both themes (they are viewport renders). */
+  --fm-viewport-thumb-bg: #11111b;
+  --fm-viewport-thumb-text: #a6adc8; /* 7.9:1 on the thumbnail frame */
+
   --fm-syntax-string: #a6e3a1;
   --fm-surface-3: #313244;
 
@@ -217,6 +231,19 @@
   --fm-danger: #d20f39;
   --fm-stale: #8839ef;
   --fm-degraded: #fe640b;
+
+  /* Status hues as small text. Latte is an accent palette: the raw hues miss
+     4.5:1 on light surfaces, so these keep the hue and clear AA. */
+  --fm-success-text: #256b15; /* 4.51:1 */
+  --fm-warning-text: #865006; /* 4.55:1 */
+  --fm-danger-text: #ba092f; /* 4.54:1 */
+  --fm-degraded-text: #a13b00; /* 4.58:1 */
+  --fm-teal-text: #09676c; /* 4.54:1 */
+  --fm-accent-text: #044ee0; /* 4.54:1, also on --fm-bg-selected */
+  --fm-mauve-text: #771af0; /* 4.51:1 */
+
+  --fm-viewport-thumb-bg: #11111b;
+  --fm-viewport-thumb-text: #a6adc8;
 
   --fm-syntax-string: #40a02b;
   --fm-surface-3: #e6e9ef;

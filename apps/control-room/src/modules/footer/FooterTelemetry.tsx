@@ -42,8 +42,6 @@ import {
   resolveRuntimeUserSolvePhase,
   type RuntimeUserSolvePhase,
 } from "@/kernel/runtime/runtimeStateDisplay";
-import { useAwaitingComputeCommand } from "@/kernel/runtime/useAwaitingComputeCommand";
-import { Button } from "@/shared/ui/Button";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
@@ -129,10 +127,6 @@ export function FooterTelemetry({
   const stageExecutionUnpublished =
     stageExecution.data === null &&
     (stageExecution.status === "ready" || stageExecution.status === "idle");
-  const compute = useAwaitingComputeCommand({
-    enabled: userSolvePhase === "awaiting_user_solve",
-    sourceDetail: "footer.awaiting-compute",
-  });
   const telemetry = buildFooterTelemetryModel(
     status,
     objectId && objectMetrics.data?.object_id === objectId ? objectMetrics.data : null,
@@ -160,19 +154,6 @@ export function FooterTelemetry({
         <span className="text-fm-xs text-fm-secondary whitespace-nowrap truncate">
           {telemetry.onlineTitle}
         </span>
-        {telemetry.awaitingCompute ? (
-          <Button
-            aria-disabled={compute.disabledReason !== null || compute.pending}
-            className="fm-footer-telemetry__compute-cta flex-shrink-0"
-            onClick={compute.run}
-            size="sm"
-            title={compute.title}
-            type="button"
-            variant="primary"
-          >
-            {compute.pending ? "Submitting…" : "Compute"}
-          </Button>
-        ) : null}
         {telemetry.frequencyDomainProgress ? (
           <>
             <span className="w-px h-3 bg-fm-subtle flex-shrink-0 mx-fm-1" aria-hidden="true" />

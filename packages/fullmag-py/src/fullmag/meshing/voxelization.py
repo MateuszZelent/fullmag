@@ -373,9 +373,13 @@ def _geometry_bounds(
         # axis, the cap disc spans r*sqrt(1 - a_i^2) and the axis h/2*|a_i|.
         r = geometry.radius
         half_height = geometry.height / 2.0
+        axis = geometry.axis
+        # The transverse norm avoids cancellation in sqrt(1 - a_i^2)
+        # for axes that are almost aligned with a world axis.
         extents = tuple(
-            float(np.sqrt(r * r * (1.0 - a * a) + half_height * half_height * a * a))
-            for a in geometry.axis
+            r * float(np.hypot(axis[(i + 1) % 3], axis[(i + 2) % 3]))
+            + half_height * abs(a)
+            for i, a in enumerate(axis)
         )
         return (
             (-extents[0], -extents[1], -extents[2]),
