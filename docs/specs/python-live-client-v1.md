@@ -227,6 +227,10 @@ przez `fullmag skrypt.py` jak dziś (`capture`).
   Changing `b_ext` before an eigenmodes or frequency-response stage, or
   changing material parameters between stages (other than `relax_alpha`), is
   rejected at export instead of silently using the end-of-script values.
+  Rendering a SceneDocument or a loaded problem back to Python (workspace
+  capture, canonical export) emits `fm.b_ext(...)` before each stage whose
+  field differs and restores the end-of-script field after the last stage, so
+  the round trip keeps every stage's `external_field`.
   Komenda ma warunek `scene_revision` równy rewizji zbudowanej przez
   skrypt, czeka na stan końcowy i zwraca `LiveCommandResult`. Odrzucona,
   nieudana lub anulowana komenda zgłasza `CommandFailedError`.

@@ -127,3 +127,55 @@ def test_material_change_between_stages_is_rejected(tmp_path):
             fm.run(1e-12)
             """,
         )
+
+
+def _scene_round_trip(tmp_path, body: str):
+    script = tmp_path / "stages.py"
+    script.write_text(textwrap.dedent(HEADER) + textwrap.dedent(body), encoding="utf-8")
+    loaded = load_problem_from_script(script, lightweight_assets=True)
+    scene = json.loads(json.dumps(build_scene_document_from_builder(export_builder_draft(loaded))))
+    rendered = tmp_path / "rendered.py"
+    rendered.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+    return loaded, load_problem_from_script(rendered, lightweight_assets=True)
+
+
+def _stage_payloads(loaded) -> list[tuple[str, object]]:
+    document = export_study_pipeline_document(loaded)
+    assert document is not None
+    return [
+        (node["stage_kind"], node["payload"].get("external_field"))
+        for node in document["nodes"]
+    ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # mumax3 example 3: relax at B=0 before a sweep that ends at 2 mT.
+        """
+        fm.relax(solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)
+        for B in (0.0, 1e-3, 2e-3):
+            fm.b_ext(B, 0, 0)
+            fm.minimize(tolA=1.0)
+            fm.tablesave()
+        """,
+        """
+        fm.b_ext(0.0, 0.0, 5e-3)
+        fm.relax(solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)
+        fm.b_ext(1e-2, 0.0, 0.0)
+        fm.run(1e-12)
+        fm.b_ext(0.0, 2e-2, 0.0)
+        """,
+    ],
+)
+def test_stage_fields_survive_the_scene_round_trip(tmp_path, body):
+    # Retiring a live workspace renders its SceneDocument back to a script.
+    loaded, reloaded = _scene_round_trip(tmp_path, body)
+    assert _stage_payloads(reloaded) == _stage_payloads(loaded)
+    assert _end_of_script_field(reloaded) == _end_of_script_field(loaded)
+
+
+def _end_of_script_field(loaded):
+    from fullmag.runtime.script_builder import _builder_base_problem, _problem_external_field
+
+    return _problem_external_field(_builder_base_problem(loaded))

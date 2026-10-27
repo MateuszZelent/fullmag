@@ -679,6 +679,7 @@ def render_loaded_problem_as_script(
         surface=surface,
         magnet_vars=magnet_vars,
         initial_outputs=_study_outputs(base_problem.study),
+        base_problem=base_problem,
     )
     if stage_lines:
         lines.append("")
@@ -1297,13 +1298,9 @@ def _render_scene_document_bootstrap(
     if demag_enabled is False:
         lines.append("study.disable_demag()")
 
-    external_field = builder.get("external_field")
-    if isinstance(external_field, (list, tuple)) and len(external_field) == 3:
-        values = tuple(_finite_number(value) for value in external_field)
-        if all(value is not None for value in values):
-            lines.append(
-                "fm.b_ext(" + ", ".join(_python_literal(value) for value in values) + ")"
-            )
+    base_field_line = _render_b_ext_line(builder.get("external_field"))
+    if base_field_line is not None:
+        lines.append(base_field_line)
 
     universe = builder.get("universe")
     if isinstance(universe, Mapping):
@@ -1335,10 +1332,27 @@ def _render_scene_document_bootstrap(
         if not isinstance(raw_stages, list):
             raise ValueError("SceneDocument stages must be a list")
         authored_stages = _scene_antenna_stage_sequence(builder)
+        # A stage's own external_field is the b_ext() active when the script
+        # called it; stages capture the world field when they are added.
+        world_field_line = base_field_line
         for index, stage in enumerate(_enabled_scene_stages(authored_stages)):
             if not isinstance(stage, Mapping):
                 raise ValueError(f"SceneDocument stages[{index}] must be an object")
+            stage_field_line = base_field_line
+            if stage.get("external_field") is not None:
+                stage_field_line = _render_b_ext_line(stage["external_field"])
+                if stage_field_line is None:
+                    raise ValueError(
+                        f"SceneDocument stages[{index}] external_field must be "
+                        "3 finite numbers in tesla"
+                    )
+            if stage_field_line != world_field_line:
+                lines.append(stage_field_line or _render_b_ext_line([0.0, 0.0, 0.0]))
+                world_field_line = stage_field_line
             lines.extend(_render_scene_stage_bootstrap(stage, index=index, solver=solver, magnet_vars=snapshot_handles))
+        if world_field_line != base_field_line:
+            # The base problem is the end-of-script world state.
+            lines.append(base_field_line or _render_b_ext_line([0.0, 0.0, 0.0]))
     elif include_legacy_relax_stages:
         for stage in raw_stages:
             if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
@@ -1557,6 +1571,16 @@ def _enabled_scene_stages(stages: list[object]) -> list[object]:
     return enabled
 
 
+def _render_b_ext_line(external_field: object) -> str | None:
+    """Render a uniform B_ext (tesla) as ``fm.b_ext(...)``; None if unusable."""
+    if not isinstance(external_field, (list, tuple)) or len(external_field) != 3:
+        return None
+    values = tuple(_finite_number(value) for value in external_field)
+    if any(value is None for value in values):
+        return None
+    return "fm.b_ext(" + ", ".join(_python_literal(value) for value in values) + ")"
+
+
 def _render_scene_stage_bootstrap(
     stage: Mapping[str, object],
     *,
@@ -1610,6 +1634,7 @@ def _render_scene_stage_bootstrap(
                 "autosave",
                 "table_autosave",
                 "relax_alpha",
+                "external_field",
             },
         )
         kwargs = _scene_relax_stage_kwargs(stage, solver=solver)
@@ -1643,6 +1668,7 @@ def _render_scene_stage_bootstrap(
                 "g",
                 "autosave",
                 "sampling",
+                "external_field",
             },
         )
         until_seconds = _finite_number(stage.get("until_seconds"))
@@ -1684,6 +1710,7 @@ def _render_scene_stage_bootstrap(
                 "g",
                 "autosave",
                 "table_autosave",
+                "external_field",
             },
         )
         kwargs = _scene_relax_stage_kwargs(stage, solver=solver)
@@ -2013,7 +2040,13 @@ def _render_scene_stage_bootstrap(
             hysteresis_args = ", ".join(_render_hysteresis_payload_args(stage))
         # The current public hysteresis builder allocates IDs internally. A
         # custom ID cannot be faithfully replayed through that public API.
-        if stage_id is not None and not stage_id.startswith("hysteresis-"):
+        # ``stage_<n>_hysteresis`` is the pipeline's positional ID for an
+        # unnamed stage; replaying the stage at its position regenerates it.
+        if (
+            stage_id is not None
+            and not stage_id.startswith("hysteresis-")
+            and re.fullmatch(r"stage_[0-9]+_hysteresis", stage_id) is None
+        ):
             raise ValueError(
                 "SceneDocument hysteresis stage IDs must use the public generated form"
             )
@@ -4902,21 +4935,30 @@ def _render_external_field(
     overrides: dict[str, object],
     surface: str,
 ) -> list[str]:
-    explicit_override = _override_external_field(overrides.get("external_field"))
-    if explicit_override is not None:
-        return [
-            "# External field",
-            f"{_surface_call(surface, 'b_ext')}({_py_number(explicit_override[0])}, {_py_number(explicit_override[1])}, {_py_number(explicit_override[2])})",
-        ]
-    if "external_field" in overrides and overrides.get("external_field") is None:
-        return []
-    field = _problem_external_field(problem)
+    field = _rendered_external_field(problem, overrides=overrides)
     if field is None:
         return []
-    return [
-        "# External field",
-        f"{_surface_call(surface, 'b_ext')}({_py_number(field[0])}, {_py_number(field[1])}, {_py_number(field[2])})",
-    ]
+    return ["# External field", _render_b_ext_call(field, surface=surface)]
+
+
+def _rendered_external_field(
+    problem: Problem,
+    *,
+    overrides: dict[str, object],
+) -> list[float] | None:
+    explicit_override = _override_external_field(overrides.get("external_field"))
+    if explicit_override is not None:
+        return [float(value) for value in explicit_override]
+    if "external_field" in overrides and overrides.get("external_field") is None:
+        return None
+    return _problem_external_field(problem)
+
+
+def _render_b_ext_call(field: Sequence[float], *, surface: str) -> str:
+    return (
+        f"{_surface_call(surface, 'b_ext')}"
+        f"({_py_number(field[0])}, {_py_number(field[1])}, {_py_number(field[2])})"
+    )
 
 
 def _render_region_ref_payload(payload: object) -> str:
@@ -8245,6 +8287,7 @@ def _render_stages(
     surface: str,
     magnet_vars: dict[str, str],
     initial_outputs: Sequence[object],
+    base_problem: Problem,
 ) -> list[str]:
     if not stages:
         return []
@@ -8254,6 +8297,12 @@ def _render_stages(
     active_outputs = list(initial_outputs)
     lines = ["# Stages" if is_study_surface else "# Run"]
     previous_dynamics_signature: dict[str, object] | None = None
+    # Each stage captured the b_ext() active when the script called it (mumax3
+    # order). A stage that saw the end-of-script field follows the rendered base
+    # field, so an edited scene field still applies to it.
+    script_base_field = _problem_external_field(base_problem)
+    rendered_base_field = _rendered_external_field(base_problem, overrides=overrides)
+    world_field = rendered_base_field
     for index, stage in enumerate(stages):
         if is_study_surface and stage.problem.study is not None:
             output_lines, active_outputs = _sync_stage_output_snapshot(
@@ -8525,6 +8574,11 @@ def _render_stages(
             continue
         study = stage.problem.study
         stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
+        stage_field = _problem_external_field(stage.problem)
+        target_field = rendered_base_field if stage_field == script_base_field else stage_field
+        if target_field != world_field:
+            lines.append(_render_b_ext_call(target_field or [0.0, 0.0, 0.0], surface=surface))
+            world_field = target_field
         if isinstance(study, Hysteresis):
             if not is_study_surface:
                 raise ValueError("canonical hysteresis rewrite requires the study API surface")
@@ -8935,6 +8989,9 @@ def _render_stages(
             lines.append(run_call)
         else:
             lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
+    if world_field != rendered_base_field:
+        # The base problem is the end-of-script world state.
+        lines.append(_render_b_ext_call(rendered_base_field or [0.0, 0.0, 0.0], surface=surface))
     return lines
 
 
@@ -11986,7 +12043,10 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
             }
             for magnet in problem.magnets
         ],
-        "energy_terms": [term.to_ir() for term in problem.energy],
+        # A uniform B_ext per stage is rendered as fm.b_ext() before the stage.
+        "energy_terms": [
+            term.to_ir() for term in problem.energy if not isinstance(term, Zeeman)
+        ],
         "current_modules": _stage_current_module_signatures(problem),
         "spin_torque_modules": [module.to_ir_module() for module in problem.spin_torques],
         "excitation_analysis": problem.excitation_analysis.to_ir()
