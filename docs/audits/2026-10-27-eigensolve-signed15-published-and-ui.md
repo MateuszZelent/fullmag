@@ -40,3 +40,11 @@ Zwykły restart-idle zachował SessionStore, lecz nie odtworzył aktywnej sesji 
 ## CI i aktywne okno po poprawkach
 
 Commit `8714a84d5222ce43a90cd0c06859120e8f90e44c` jest na remote. CI Rust [40569633928](https://github.com/MateuszZelent/fullmag/actions/runs/40569633928) i frontend/browser [40569637108](https://github.com/MateuszZelent/fullmag/actions/runs/40569637108) uruchomione; nie deklarujemy PASS przed wynikiem. Backend nadal `fe06a6573`; poprawki CSS/KSamplingIR załadowano przez frontend HMR. Ograniczony ETag wymaga późniejszego wdrożenia backendu. Widoczne okno Chromium jest otwierane z dokładnym polem Gamma; jego proces jest obserwowany osobno od trwałych usług Docker.
+
+
+## Kontynuacja naprawy eksportu
+
+Frontend/browser CI `40569637108` zakończone PASS; backend nie był ponownie restartowany. FMS1/FMS2 oraz pozostałe prace mają [osobny plan kontraktów i odbioru](../superpowers/plans/2026-10-27-eigensolve-fms-roundtrip-repair.md). W źródłach dodano typowanie AcceptedStateRef i jawnie ograniczone źródło CAS accepted closure dla grafu live snapshot. Nie zmieniono jeszcze zamkniętego namespace v2 i nie deklarujemy gotowego eksportu modów.
+
+
+CI Rust `40569633928` zakończone PASS na `8714a84d5`, w tym test ograniczonego ETag i wszystkie kontrakty fullmag-session. Nowe zmiany FMS1/FMS2 powstały później i wymagają odrębnego CI; nie przenosimy na nie poprzedniego wyniku.

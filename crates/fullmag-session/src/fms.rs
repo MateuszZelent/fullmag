@@ -324,6 +324,7 @@ fn pack_fms_inner<W: Write + Seek>(
         &batch_entries,
         &solution_entries,
         documents,
+        provenance,
     )?;
     validate_export_plan(
         session,
@@ -516,6 +517,7 @@ fn plan_cas_entries(
     batch_entries: &[PackEntry],
     solution_entries: &[PackEntry],
     project_documents: &HashMap<String, Vec<u8>>,
+    provenance: Option<&AcceptedProvenancePlan>,
 ) -> Result<Vec<CasPackEntry>> {
     let mut documents = HashMap::new();
     for entry in run_entries
@@ -547,6 +549,13 @@ fn plan_cas_entries(
         .get("current_live_snapshot.json")
         .or_else(|| project_documents.get("project/current_live_snapshot.json"));
     let has_synthetic_run = run_entries.iter().any(|entry| entry.inline_data.is_some());
+    let accepted_objects = provenance.map(|plan| plan.cas_objects.iter()
+        .map(|object| (object.object_ref.clone(), object.byte_count)).collect::<BTreeMap<_, _>>())
+        .unwrap_or_default();
+    let accepted_cas = provenance.map(|plan| reachability::ExportCasSource {
+        root: &plan.source_root,
+        objects: &accepted_objects,
+    });
     let report = if has_synthetic_run {
         // A synthetic v2 run manifest is deliberately sanitized to have no
         // outbound authority or CAS references.  Do not ask the file-backed
@@ -557,7 +566,9 @@ fn plan_cas_entries(
             .iter()
             .map(|(name, data)| Ok((project_archive_path(name)?, data.clone())))
             .collect::<Result<HashMap<_, _>>>()?;
-        reachability::walk_export_file_documents_with_project(&empty, canonical_root, &inline)?
+        reachability::walk_export_file_documents_with_project_and_cas(
+            &empty, canonical_root, &inline, accepted_cas,
+        )?
     } else if let Some(snapshot) = snapshot {
         let inline = HashMap::from([(
             "project/current_live_snapshot.json".to_string(),
@@ -573,6 +584,9 @@ fn plan_cas_entries(
     let mut object_refs = report.object_refs.into_iter().collect::<Vec<_>>();
     object_refs.sort_unstable();
     for hash in object_refs {
+        // Already streamed, verified and deduplicated by the detached
+        // provenance writer. Never copy accepted CAS into the live store.
+        if accepted_objects.contains_key(&hash) { continue; }
         let archive_path = format!("objects/sha256/{hash}");
         validate_portable_namespace_path(&archive_path)?;
         let source = store_root.join(&archive_path);
@@ -4019,6 +4033,7 @@ mod tests {
             &[],
             &entries,
             &HashMap::new(),
+            None,
         )
         .unwrap();
         assert_eq!(plan.len(), 1);
@@ -4031,7 +4046,8 @@ mod tests {
                 &[],
                 &[],
                 &entries,
-                &HashMap::new()
+                &HashMap::new(),
+                None,
             )
             .is_err()
         );

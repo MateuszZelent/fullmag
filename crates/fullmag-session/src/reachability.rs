@@ -385,6 +385,7 @@ pub fn walk_archive_documents(
     let mut walker = ArchiveWalker {
         documents: ArchiveDocuments::Memory(documents),
         cas_root: None,
+        external_cas: None,
         mode,
         report: ReachabilityReport::new(),
         seen_checkpoints: HashSet::new(),
@@ -410,6 +411,7 @@ pub(crate) fn walk_export_file_documents(
             root: &root,
         },
         cas_root: Some(&root),
+        external_cas: None,
         mode: ReachabilityMode::Export,
         report: ReachabilityReport::new(),
         seen_checkpoints: HashSet::new(),
@@ -429,6 +431,22 @@ pub(crate) fn walk_export_file_documents_with_project(
     root: &Path,
     inline_project_documents: &HashMap<String, Vec<u8>>,
 ) -> Result<ReachabilityReport> {
+    walk_export_file_documents_with_project_and_cas(documents, root, inline_project_documents, None)
+}
+
+/// An explicitly pinned accepted closure, never an unrestricted second store.
+#[derive(Clone, Copy)]
+pub(crate) struct ExportCasSource<'a> {
+    pub root: &'a Path,
+    pub objects: &'a std::collections::BTreeMap<String, u64>,
+}
+
+pub(crate) fn walk_export_file_documents_with_project_and_cas(
+    documents: &HashMap<String, ArchiveFileSnapshot>,
+    root: &Path,
+    inline_project_documents: &HashMap<String, Vec<u8>>,
+    external_cas: Option<ExportCasSource<'_>>,
+) -> Result<ReachabilityReport> {
     for name in inline_project_documents.keys() {
         validate_file_ref(name)
             .with_context(|| format!("invalid inline project document `{name}`"))?;
@@ -447,6 +465,7 @@ pub(crate) fn walk_export_file_documents_with_project(
             inline: inline_project_documents,
         },
         cas_root: Some(&root),
+        external_cas,
         mode: ReachabilityMode::Export,
         report: ReachabilityReport::new(),
         seen_checkpoints: HashSet::new(),
@@ -468,6 +487,7 @@ pub(crate) fn walk_import_file_documents(
             root: &root,
         },
         cas_root: Some(&root),
+        external_cas: None,
         mode: ReachabilityMode::Restore,
         report: ReachabilityReport::new(),
         seen_checkpoints: HashSet::new(),
@@ -2785,6 +2805,7 @@ enum ReferenceKind {
 struct ArchiveWalker<'a> {
     documents: ArchiveDocuments<'a>,
     cas_root: Option<&'a Path>,
+    external_cas: Option<ExportCasSource<'a>>,
     mode: ReachabilityMode,
     report: ReachabilityReport,
     seen_checkpoints: HashSet<String>,
@@ -2794,27 +2815,37 @@ struct ArchiveWalker<'a> {
 }
 
 impl<'a> ArchiveWalker<'a> {
-    fn object_length(&self, object_ref: &str) -> Result<Option<u64>> {
+    fn object_source_path(&self, object_ref: &str) -> Result<Option<PathBuf>> {
         validate_object_ref(object_ref)?;
         let relative = format!("objects/sha256/{object_ref}");
         if let Some(root) = self.cas_root {
             reject_link_chain(root, &relative)?;
             let path = root.join(&relative);
             match fs::symlink_metadata(&path) {
-                Ok(_) => {
-                    return crate::cas::verified_file_length(&path, object_ref)
-                        .with_context(|| {
-                            format!("CAS SHA-256 verification failed for `{relative}`")
-                        })
-                        .map(Some);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Ok(_) => return Ok(Some(path)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
         }
-        let Some(data) = self.documents.read(&relative)? else {
-            return Ok(None);
-        };
+        if let Some(source) = self.external_cas.filter(|source| source.objects.contains_key(object_ref)) {
+            return crate::repository_path::checked_path(source.root, &relative).map(Some);
+        }
+        Ok(None)
+    }
+
+    fn object_length(&self, object_ref: &str) -> Result<Option<u64>> {
+        validate_object_ref(object_ref)?;
+        let relative = format!("objects/sha256/{object_ref}");
+        if let Some(path) = self.object_source_path(object_ref)? {
+            let length = crate::cas::verified_file_length(&path, object_ref)
+                .with_context(|| format!("CAS SHA-256 verification failed for `{relative}`"))?;
+            if let Some(expected) = self.external_cas.and_then(|source| source.objects.get(object_ref)) {
+                if length != *expected { bail!("accepted CAS object length differs from its pinned closure"); }
+            }
+            return Ok(Some(length));
+        }
+        if self.cas_root.is_some() { return Ok(None); }
+        let Some(data) = self.documents.read(&relative)? else { return Ok(None); };
         if crate::cas::hex_sha256(&data) != object_ref {
             bail!("CAS SHA-256 mismatch for `{relative}`");
         }
@@ -2823,12 +2854,11 @@ impl<'a> ArchiveWalker<'a> {
 
     fn object_document(&self, object_ref: &str) -> Result<Vec<u8>> {
         let relative = format!("objects/sha256/{object_ref}");
-        if let Some(root) = self.cas_root {
+        if let Some(path) = self.object_source_path(object_ref)? {
             use std::io::Read;
             const MAX_EXPORT_OBJECT_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
-            reject_link_chain(root, &relative)?;
             let mut data = Vec::new();
-            fs::File::open(root.join(&relative))?
+            fs::File::open(path)?
                 .take(MAX_EXPORT_OBJECT_DOCUMENT_BYTES + 1)
                 .read_to_end(&mut data)?;
             if data.len() as u64 > MAX_EXPORT_OBJECT_DOCUMENT_BYTES {
@@ -2839,9 +2869,8 @@ impl<'a> ArchiveWalker<'a> {
             }
             return Ok(data);
         }
-        self.documents
-            .read(&relative)?
-            .map(|data| data.into_owned())
+        if self.cas_root.is_some() { bail!("validated archive object disappeared: `{object_ref}`"); }
+        self.documents.read(&relative)?.map(|data| data.into_owned())
             .context("validated archive object disappeared")
     }
 
@@ -3798,18 +3827,8 @@ impl<'a> ArchiveWalker<'a> {
     fn bounded_archive_object(&self, object_ref: &str, max_bytes: u64) -> Result<Option<Vec<u8>>> {
         validate_object_ref(object_ref)?;
         let relative = format!("objects/sha256/{object_ref}");
-        let file_root = self.cas_root.or_else(|| match &self.documents {
-            ArchiveDocuments::Files { root, .. }
-            | ArchiveDocuments::FilesWithInline { root, .. } => Some(*root),
-            ArchiveDocuments::Memory(_) => None,
-        });
-        if let Some(root) = file_root {
+        if let Some(path) = self.object_source_path(object_ref)? {
             use std::io::Read;
-            let path = crate::repository_path::checked_path(root, &relative)?;
-            if !path.exists() {
-                return Ok(None);
-            }
-            reject_link_chain(root, &relative)?;
             let mut data = Vec::new();
             fs::File::open(path)?
                 .take(max_bytes + 1)
@@ -3822,6 +3841,7 @@ impl<'a> ArchiveWalker<'a> {
             }
             return Ok(Some(data));
         }
+        if self.cas_root.is_some() { return Ok(None); }
         let Some(data) = self.documents.read(&relative)? else {
             return Ok(None);
         };
@@ -5244,6 +5264,70 @@ mod tests {
             snapshot["metadata"] = json!({"legacy_payload_ref": "not-a-cas-object"});
         }
         serde_json::to_vec(&snapshot).unwrap()
+    }
+
+    #[test]
+    fn accepted_export_snapshot_reads_only_pinned_external_cas_without_copying() {
+        let directory = tempfile::tempdir().unwrap();
+        let live = directory.path().join("live");
+        let accepted = directory.path().join("accepted");
+        fs::create_dir_all(&live).unwrap();
+        fs::create_dir_all(accepted.join("objects/sha256")).unwrap();
+        let payload = b"accepted primary state bytes";
+        let object_ref = crate::hex_sha256(payload);
+        let path = accepted.join("objects/sha256").join(&object_ref);
+        fs::write(&path, payload).unwrap();
+        let mut snapshot: serde_json::Value = serde_json::from_slice(
+            &live_snapshot_bytes("run-live", &[], false)).unwrap();
+        snapshot["latest_fields"] = json!({"m": {"state_object_ref": object_ref.clone()}});
+        let inline = HashMap::from([("project/current_live_snapshot.json".to_string(),
+            serde_json::to_vec(&snapshot).unwrap())]);
+        let documents = HashMap::new();
+        let objects = BTreeMap::from([(object_ref.clone(), payload.len() as u64)]);
+        let source = ExportCasSource { root: &accepted, objects: &objects };
+        let report = walk_export_file_documents_with_project_and_cas(
+            &documents, &live, &inline, Some(source)).unwrap();
+        report.require_complete().unwrap();
+        assert!(report.object_refs.contains(&object_ref));
+        assert!(!live.join("objects").exists(), "export planning must never copy accepted CAS");
+
+        let unpinned = BTreeMap::new();
+        let report = walk_export_file_documents_with_project_and_cas(
+            &documents, &live, &inline,
+            Some(ExportCasSource { root: &accepted, objects: &unpinned })).unwrap();
+        assert!(report.require_complete().is_err(), "the second store is not an unrestricted fallback");
+        let wrong_length = BTreeMap::from([(object_ref.clone(), payload.len() as u64 + 1)]);
+        assert!(walk_export_file_documents_with_project_and_cas(
+            &documents, &live, &inline,
+            Some(ExportCasSource { root: &accepted, objects: &wrong_length })).is_err());
+        fs::write(&path, b"tampered").unwrap();
+        assert!(walk_export_file_documents_with_project_and_cas(
+            &documents, &live, &inline, Some(source)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn accepted_export_external_cas_rejects_symlink_sources() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let live = directory.path().join("live");
+        let accepted = directory.path().join("accepted");
+        fs::create_dir_all(&live).unwrap();
+        fs::create_dir_all(accepted.join("objects/sha256")).unwrap();
+        let payload = b"state";
+        let object_ref = crate::hex_sha256(payload);
+        let foreign = directory.path().join("foreign.bin");
+        fs::write(&foreign, payload).unwrap();
+        symlink(&foreign, accepted.join("objects/sha256").join(&object_ref)).unwrap();
+        let mut snapshot: serde_json::Value = serde_json::from_slice(
+            &live_snapshot_bytes("run-live", &[], false)).unwrap();
+        snapshot["latest_fields"] = json!({"m": {"state_object_ref": object_ref.clone()}});
+        let inline = HashMap::from([("project/current_live_snapshot.json".to_string(),
+            serde_json::to_vec(&snapshot).unwrap())]);
+        let objects = BTreeMap::from([(object_ref, payload.len() as u64)]);
+        assert!(walk_export_file_documents_with_project_and_cas(
+            &HashMap::new(), &live, &inline,
+            Some(ExportCasSource { root: &accepted, objects: &objects })).is_err());
     }
 
     #[test]
