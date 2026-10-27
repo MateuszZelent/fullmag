@@ -240,6 +240,12 @@ export function AnalysisFrequencySurface({
     isDispersion ? DISPERSION_AXIS_LABELS[dispersionAxis] : undefined,
   );
 
+  const datasetMetadata = datasetProvenance ? (
+    <details className="fm-analysis-plots__dataset-provenance">
+      <summary>Dataset provenance</summary><p>{datasetProvenance}</p>
+    </details>
+  ) : null;
+
   if (series.length === 0) {
     if (calculationMode === "fmr_modal_driven") {
       const comparison = comparisonModel ?? {
@@ -253,6 +259,7 @@ export function AnalysisFrequencySurface({
           title={surfaceTitle}
           status={{ presentation, primary: status, trust: "unknown" }}
         >
+          {datasetMetadata}
           {physicalMetadata}
           <div
             aria-label="Modal-driven comparison"
@@ -283,6 +290,7 @@ export function AnalysisFrequencySurface({
           trust: "unknown",
         }}
       >
+        {datasetMetadata}
         {physicalMetadata}
         <div className="fm-analysis-plots__empty" role="status">
           {unavailableReason ?? formatFrequencyDomainEmptyState(status)}
@@ -487,7 +495,7 @@ export function AnalysisFrequencySurface({
       ) : null}
       <details className="fm-analysis-plots__physical-details">
         <summary>Physical context and workflow</summary>
-        {datasetProvenance ? <p>Dataset provenance: {datasetProvenance}</p> : null}
+        {datasetMetadata}
       {physicalMetadata}
       {/* Workbench summary row (mirrors old Frequency-domain workbench pill row) */}
       <div
