@@ -50,7 +50,25 @@
         "scripts/windows/run_fullmag_docker.ps1",
         "scripts/windows/run_fullmag_wsl.ps1"
       ],
-      "disposition": "pending-semantic-review"
+      "disposition": "partially-adapted",
+      "semantic_review": {
+        "date": "2026-10-27",
+        "report": "docs/audits/2026-10-27-eigensolve-exact-gamma-selective-review.md",
+        "adapted_slices": [
+          "native C ABI pure-Neumann boundary marker sentinel validation",
+          "shared-domain exterior-facet proof for pure-Neumann marker zero"
+        ],
+        "current_counterparts": [
+          "mode-field source topology is supplied by modal_source_topology_fingerprint",
+          "relax recompute derives topology SHA from FemMeshPayload rather than treating cache generation as SHA"
+        ],
+        "remaining": [
+          "automatic K0 pure-Neumann planner policy and GPU lane implications",
+          "demag solver policy propagation and bias relaxation budget",
+          "toolchain/build and remaining test/documentation hunks"
+        ],
+        "qualification": "source adaptation; runtime and native CI not yet verified"
+      }
     },
     {
       "sign": "+",

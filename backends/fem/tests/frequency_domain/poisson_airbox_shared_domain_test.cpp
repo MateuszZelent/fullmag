@@ -3868,6 +3868,20 @@ int main()
     check(film_air_result.a_qq.row_count == 2u && film_air_result.a_qq.values.size() > 0u,
           "magnetic+airbox importer compacts native magnetic exchange to declared classes");
 
+    FullmagFemModalSharedDomainPayload film_air_pure_neumann_payload = film_air_payload;
+    film_air_pure_neumann_payload.boundary_kind = "pure_neumann";
+    film_air_pure_neumann_payload.robin_beta = 0.0;
+    film_air_pure_neumann_payload.boundary_marker = 0u;
+    fd::PoissonAirboxSharedDomainAssemblyResult film_air_pure_neumann_result{};
+    check(fd::assemble_poisson_airbox_shared_domain_payload(
+              film_air_pure_neumann_payload, &film_air_pure_neumann_result) ==
+              fd::FrequencyDomainStatus::ok,
+          film_air_pure_neumann_result.error_message);
+    check(std::strcmp(film_air_pure_neumann_result.boundary_kind, "pure_neumann") == 0 &&
+              std::strcmp(film_air_pure_neumann_result.gauge_policy,
+                          "mean_zero_augmented") == 0,
+          "pure-Neumann payload accepts exterior facets with mean-zero gauge");
+
     // The payload adapter forwards descriptor alpha into its private request,
     // but the default false opt-in keeps the production Ignore operator intact.
     FullmagFemModalLinearizationDescriptor film_air_without_alpha_descriptor =

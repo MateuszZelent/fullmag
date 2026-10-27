@@ -5328,7 +5328,23 @@ void modal_certificate_boundary_rejects_stale_and_mismatched_identity()
           "modal C ABI reports the unknown marker with a stable token");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
+    payload.boundary_kind = "pure_neumann";
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(!contains(result.diagnostics_json, "unknown_airbox_marker"),
+          "modal C ABI accepts marker sentinel zero for pure Neumann");
+    check(!contains(result.diagnostics_json, "pure_neumann_boundary_marker_must_be_zero"),
+          "modal C ABI keeps marker zero bound to pure Neumann");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
     payload.boundary_marker = 1;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects a physical marker for pure Neumann");
+    check(contains(result.diagnostics_json, "pure_neumann_boundary_marker_must_be_zero"),
+          "modal C ABI reports the invalid pure-Neumann marker");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload.boundary_kind = "periodic";
     payload.equilibrium_digest =
         "sha256:6123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     result = fullmag_fem_modal_eigen_solve(&request);

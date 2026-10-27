@@ -3451,10 +3451,17 @@ static FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve_impl(
                 "native FEM shared-domain payload has a certificate pair-count mismatch",
                 "certificate_pair_count_mismatch");
         }
-        if (payload->boundary_marker == 0u) {
+        const bool payload_pure_neumann =
+            std::strcmp(payload->boundary_kind, "pure_neumann") == 0;
+        if (payload->boundary_marker == 0u && !payload_pure_neumann) {
             return validation_error(
                 "native FEM shared-domain payload has an unknown airbox boundary marker",
                 "unknown_airbox_marker");
+        }
+        if (payload->boundary_marker != 0u && payload_pure_neumann) {
+            return validation_error(
+                "native FEM pure-Neumann shared-domain payload must use boundary marker sentinel 0",
+                "pure_neumann_boundary_marker_must_be_zero");
         }
         if (has_modal_v17_certificate_tail) {
             const bool request_mesh_identity_missing =
