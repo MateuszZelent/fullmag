@@ -46,6 +46,12 @@ study.build_domain_mesh()
 # %% Accepted equilibrium, followed by one actual nonzero-k mode
 study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
                        dt=5e-15, relax_alpha=0.5, max_steps=50000, tolA=1.0)
+# Output selection is captured when the eigen stage is added.
+study.save("spectrum")
+study.save("dispersion", include_branch_table=True)
+study.save("diagnostics")
+study.save("mode", field="mode", indices=(0,), sample_indices=(0,))
+
 study.stages.add_eigenmodes(
     stage_id="eigenmodes", count=1, target="frequency_window",
     frequency_min=8.5e9, frequency_max=16e9,
@@ -59,10 +65,6 @@ study.stages.add_eigenmodes(
 )
 
 # %% Persist the actual complex field and numerical diagnostics
-study.save("spectrum")
-study.save("dispersion", include_branch_table=True)
-study.save("diagnostics")
-study.save("mode", field="mode", indices=(0,), sample_indices=(0,))
 study.runtime_metadata("mode_ui_verification", {
     "purpose": "real complex field for UI integration",
     "reference_configuration": "examples/fem_de_smoke_numeric.py",

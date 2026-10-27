@@ -634,3 +634,86 @@ wyłącznie diagnostyczny, nie jest jeszcze punktem zaakceptowanego wykresu.
   nieprawidłowego celu i budżetu; C ABI sprawdza przekazany cel w telemetry.
   Native testy i runtime A17 jeszcze NOT VERIFIED. Wymagany dedykowany CI
   workflow_dispatch contract_scope=floquet-modal-slepc oraz zwykłe CI.
+
+
+### Checkpoint A17 — kod na remote, weryfikacja i build w toku
+
+- Commit `a85fdf0bb701680b7f8f6bb0e492d18e7088662c` wypchnięty na branch
+  `codex/eigensolve-integration-ui-20261026`. Walidacja zmienionej noty
+  naukowej i source-map względem 29b1587b2 przeszła.
+- Test budżetu rozróżnia zakończoną zbieżność EPS w ostatniej dopuszczonej
+  iteracji od ujemnego statusu EPS. W pierwszym przypadku osiągnięty cel
+  jednego modu może zakończyć obliczenie; drugi nie jest akceptowany.
+- Natywne CI: https://github.com/MateuszZelent/fullmag/actions/runs/40430469653
+  (job121946616991, kompilacja obrazu MFEM i kontrakt Floquet/SLEPc w toku).
+  Zwykłe CI: https://github.com/MateuszZelent/fullmag/actions/runs/40430393405
+  również w toku. Nie są jeszcze dowodem PASS.
+- Uruchomiono zarządzany restart/build w dotychczasowej grupie Compose,
+  z bazowym attempt3305c687a5e941ce835afc29b695b7d6 i niezmienionym pinem
+  konfiguracji. Przed startem brak procesu workera obliczeń; /build265GiB
+  wolnego, /state6,2GiB. Launcher dopuścił przebudowę; trwa kompilacja.
+- Nie uruchomiono kolejnej aktywacji. Po kontroli CI i API Ready następny
+  request ma odtworzyć `examples/fem_eigen_mode_ui_de_k10.py`; wymagany
+  terminalny sukces, zapis zespolonych modów i rzeczywisty dowód UI.
+  Wynik A16 pozostaje diagnostyczny. Signed15 i nowy wykres nadal otwarte.
+
+
+### A17 — runtime gotowy, obliczenie +10 uruchomione
+
+- Managed build/restart `bd14a0751e9e433fbf66be6e402d566b`: succeeded.
+  API Ready, runtime_bundle `0.1.0-dev.20261027.ga85fdf0bb701+9796`.
+- Aktywacja `18ab9594f10c4de9a1e244d80aa21011`: succeeded (przyjęcie,
+  nie ukończenie obliczeń), request
+  `eigensolve-de-l2-k10-refill-target-20261027-a85fdf0bb`.
+- Run `run-live-a89e1a9e31d2a78e228919b17398bc1325f6c5dfb85250e83878bdbb2b5f7c06`,
+  session `docker-startup-ec022f7550939c23d7324782b43a4dbda4ddbf2236e7a95a71088d97e57999a3`.
+  Catalog revision27: Relax succeeded, Eigen running. Eigen task
+  `task-5ef4df49336aadf2eecb65eff64718a4b6ccb766c024070ffaf41397051853e3`,
+  attempt `attempt-e0d0bb1a5e9942a8a1832410f3a2e581`.
+- Proces workera potwierdzony przez Docker top (host PID86036,
+  około97% jednego CPU przy pierwszej obserwacji). Native CI nadal w toku;
+  próba runtime to niezależna weryfikacja i nie zastępuje testów.
+- Obserwować ten run; brak powodu do kolejnej aktywacji lub restartu.
+
+
+### A17 terminal PASS; A18 — utracone żądanie zapisu modu
+
+Run A17 zakończony: oba taski succeeded (catalog revision48), API run
+completed. Widmo opublikowane: k=(0,1e7,0)rad/m, f=11211886649,716702Hz,
+pełny residual1,0316027197209396e−13; CPU/double, źródła a85fdf0bb.
+To wynik zaakceptowany, nie kandydat z poprzedniej próby. Nie dowodzi
+kompletności widma, zbieżności siatki ani zakończenia całej kwalifikacji.
+
+Weryfikator UI zakończył się `mode is not ready: missing`.
+Widmo zawiera mode_field_available=false, endpointy mode JSON i field meta
+zwracają missing. Nie ma dowodu wizualizacji modu. Dowody zapisano w
+`docs/audits/2026-10-27-eigensolve-a17-success-mode-output-gap.evidence.json`.
+
+Nowa konkretna przyczyna do naprawy A18: zapisany snapshot definicji
+cc3749fdbc74e467de0018c084e3d8420d0bbc4cced1c32604fb7f9fc3464bd6
+ma scene.outputs={}, mimo study.save(mode, indices=(0,), sample_indices=(0,))
+w skrypcie. Python runtime/scene_document.py emituje puste outputs.items,
+a scene_document_ir.py odrzuca niepustą listę jako unsupported.
+Należy prześledzić i zachować selektory zapisu Python→SceneDocument→ProblemIR
+oraz accepted modal worker, z regresją roundtrip. Nie zmieniać flagi
+mode_field_available na true bez zapisania rzeczywistych danych.
+Natywne CI A17 nadal w toku przy ostatnim odczycie.
+
+
+### A18 — doprecyzowanie przyczyny i poprawka skryptów
+
+Puste globalne scene.outputs nie dowodzi samo błędu kontraktu globalnego.
+Etapy przejmują snapshot ustawień w chwili add_stage. W obu przykładach
+save(mode) następowało po add_eigenmodes: bezpośrednio załadowany Python
+miał jedynie domyślne eigen_spectrum. Przeniesiono cztery deklaracje save
+przed dodanie etapu eigen (po Relax), bez zmiany fizyki ani selektorów.
+Regresja test_eigen_mode_ui_examples.py: przed poprawką 2 FAIL (brak mode),
+po poprawce 2 PASS; obejmuje dokładne próbki [0] oraz [0..14].
+
+Pozostała niezależna luka: export_builder_draft dla poprawionego wejścia
+nadal emituje etap eigen bez sampling. Renderer sceny nie odtwarza zapisów
+modalnych. Następny krok wymaga pełnego roundtrip stage sampling i jego
+przekazania w Rust materialization, bez wprowadzania drugiego mechanizmu
+zapisu ani sztucznego mode_field_available. Należy także zachować
+EigenDiagnostics, którego eigen_sampling_from obecnie nie uwzględnia.
+Zwykłe CI40430393405 zakończone success; natywne CI nadal in_progress.

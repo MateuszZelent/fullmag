@@ -58,6 +58,13 @@ study.build_domain_mesh()
 # %% Accepted equilibrium, followed by one mode at every signed k_y sample
 study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped",
                        dt=5e-15, relax_alpha=0.5, max_steps=50000, tolA=1.0)
+# Output selection is captured when the eigen stage is added.
+study.save("spectrum")
+study.save("dispersion", include_branch_table=True)
+study.save("diagnostics")
+study.save("mode", field="mode", indices=(0,),
+           sample_indices=tuple(range(len(K_RAD_PER_UM))))
+
 study.stages.add_eigenmodes(
     stage_id="eigenmodes", count=1, target="frequency_window",
     frequency_min=FREQUENCY_MIN_HZ, frequency_max=FREQUENCY_MAX_HZ,
@@ -80,11 +87,6 @@ study.stages.add_eigenmodes(
 )
 
 # %% Persist mode 0 for every sample and numerical diagnostics
-study.save("spectrum")
-study.save("dispersion", include_branch_table=True)
-study.save("diagnostics")
-study.save("mode", field="mode", indices=(0,),
-           sample_indices=tuple(range(len(K_RAD_PER_UM))))
 study.runtime_metadata("mode_ui_verification", {
     "purpose": "real complex fields for signed DE UI sweep",
     "reference_configuration": "examples/fem_eigen_mode_ui_de_k10.py",
