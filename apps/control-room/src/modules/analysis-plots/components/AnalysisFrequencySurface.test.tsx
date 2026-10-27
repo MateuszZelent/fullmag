@@ -398,3 +398,15 @@ describe("AnalysisFrequencySurface", () => {
     expect(html).not.toContain("FMR driven");
   });
 });
+
+
+it("counts computed modal points separately from analytical reference samples", () => {
+  const reference = { ...dispersionSeries[0]!, id: "reference", quantity: "reference_frequency", label: "Analytical reference" };
+  const html = renderToStaticMarkup(<AnalysisFrequencySurface kernel={{} as KernelApi}
+    calculationMode="dispersion_modal" onPointSelect={() => undefined} onSelectedSeriesIdsChange={() => undefined}
+    selectedSeriesIds={[dispersionSeries[0]!.id, reference.id]} selectedPoint={null}
+    series={[...dispersionSeries, reference]} status="ready" title="Dispersion" unavailableReason={null} />);
+  expect(html).toContain("3 points");
+  expect(html).toContain("1 reference curve");
+  expect(html).not.toContain("6 points");
+});

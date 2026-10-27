@@ -51,3 +51,12 @@ describe("chart scale policy", () => {
     });
   });
 });
+
+
+it("labels million radians per metre as radians per micrometre without changing stored coordinates", () => {
+  const transform = createChartDisplayTransform("rad/m", [2e6, 25e6]);
+  expect(transform.factor).toBe(1e6);
+  expect(transform.displayUnit).toBe("rad/µm");
+  expect(transform.formatValue(-25e6)).toContain("-25");
+  expect(chartAxisName("kᵧ", transform)).toBe("kᵧ [rad/µm]");
+});

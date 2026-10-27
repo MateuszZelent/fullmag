@@ -168,7 +168,7 @@ export function AnalysisFrequencySurface({
     [qualifiedCalculationMode, tableId],
   );
   const workbench = useMemo(
-    () => buildFrequencyDomainWorkbenchSummary(series, qualifiedCalculationMode, status),
+    () => buildFrequencyDomainWorkbenchSummary(series.filter((entry) => !isReferenceChartQuantity(entry.quantity)), qualifiedCalculationMode, status),
     [qualifiedCalculationMode, series, status],
   );
   const projectedSelectedPoint = useMemo(() => {
@@ -341,9 +341,11 @@ export function AnalysisFrequencySurface({
   );
 
   // Build subtitle for the header from workbench summary fields
+  const referenceCount = series.filter((entry) => isReferenceChartQuantity(entry.quantity)).length;
   const workbenchParts = [
     workbench.chartKind,
     workbench.pointCount,
+    referenceCount ? `${referenceCount} reference curve${referenceCount === 1 ? "" : "s"}` : null,
     workbench.frequencyRange,
   ].filter(Boolean);
   const workbenchSubtitle = workbenchParts.join(" · ");
@@ -364,14 +366,7 @@ export function AnalysisFrequencySurface({
           &ensp;{selectedPointSummary.inspectorTarget}
         </span>
       ) : null}
-      {selectedDispersionPoint ? (
-        <DispersionModeAction
-          available={selectedDispersionModeFieldAvailable}
-          kernel={kernel}
-          onSelectPoint={() => onPointSelect(selectedDispersionPoint)}
-          target={dispersionModeTarget}
-        />
-      ) : null}
+
     </div>
   ) : undefined;
 
@@ -398,6 +393,14 @@ export function AnalysisFrequencySurface({
         })}
       />
     ) : null}
+      {selectedDispersionPoint ? (
+        <DispersionModeAction
+          available={selectedDispersionModeFieldAvailable}
+          kernel={kernel}
+          onSelectPoint={() => onPointSelect(selectedDispersionPoint)}
+          target={dispersionModeTarget}
+        />
+      ) : null}
     <ChartDisplayUnitControls displayUnits={displayUnits ?? {}} onDisplayUnitsChange={onDisplayUnitsChange} series={series} />
   </>;
 
