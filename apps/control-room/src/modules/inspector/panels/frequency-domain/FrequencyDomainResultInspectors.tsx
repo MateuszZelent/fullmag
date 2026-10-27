@@ -1443,7 +1443,7 @@ export function buildEigenSpectrumPointSelectionRefFromSelection(
   return buildEigenModeSelectionRef(equilibriumId ? point : { ...point, modeFieldAvailable: false }, {
     analysisRunId: owner?.analysisRunId, analysisStageId: owner?.analysisStageId,
     artifactRevision: owner?.artifactRevision, artifactPath: owner?.artifactPath,
-    calculationMode: owner?.calculationMode ?? "free_modes", equilibriumId,
+    calculationMode: "free_modes", equilibriumId,
     kContextKind: resultContext?.classification?.kContext.kind,
     normalization: resultContext?.normalization, representation: "complex-vector-xyz",
     resourceRef: point.modeFieldResourceKey, studyProduct: resultContext?.studyProduct,

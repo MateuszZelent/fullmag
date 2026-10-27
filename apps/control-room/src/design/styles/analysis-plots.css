@@ -1197,8 +1197,8 @@
     position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
   }
   .fm-analysis-plots__subchart--frequency-domain .fm-dispersion-axis-controls__label { display: none; }
-  .fm-analysis-plots__subchart--frequency-domain .fm-chart-legend { flex-wrap: nowrap; overflow-x: auto; }
-  .fm-analysis-plots__subchart--frequency-domain .fm-chart-legend__item { flex-shrink: 0; }
+  .fm-analysis-plots__subchart--frequency-domain .fm-chart-legend { display: flex; flex-wrap: nowrap; overflow-x: auto; }
+  .fm-analysis-plots__subchart--frequency-domain .fm-chart-legend__item { flex: 0 0 220px; }
   .fm-analysis-plots__subchart--frequency-domain .fm-analysis-plots__frequency-canvas {
     height: clamp(180px, calc(100cqh - 220px), 440px); min-height: 180px;
   }

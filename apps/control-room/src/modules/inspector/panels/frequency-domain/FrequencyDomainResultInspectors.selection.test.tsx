@@ -226,3 +226,26 @@ it("does not expose a spectrum mode field without a matching published owner and
   expect(ref.fieldId).toBeUndefined();
   expect(ref.resourceRef).toBeUndefined();
 });
+
+
+it("binds Spectrum selection to the clicked sample equilibrium rather than a stale selected equilibrium", () => {
+  const point = { branchId: null, dampingRateHz: null, displayModeIndex: 0,
+    frequencyHz: 10e9, imaginaryFrequencyHz: null, modeFieldAvailable: true,
+    modeFieldId: "field-1", modeFieldResourceKey: "field-1-resource", modeId: "mode-1-0",
+    rawModeIndex: 0, residualNorm: 1e-11, sampleIndex: 1, sampleId: "sample-1", tangentLeakageMax: null,
+  };
+  const selection: Selection = { ...EMPTY_SELECTION, ref: {
+    type: "frequency-domain", kind: "results.eigen.spectrum", nodeId: "spectrum",
+    analysisRunId: "run-published-7", analysisStageId: "stage-eigen-2",
+    artifactRevision: "sha256:manifest", equilibriumId: "stale-equilibrium",
+  } };
+  const context = dispersionResultContext([
+    { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-0" } },
+    { sample_index: 1, validation: { equilibrium_artifact_sha256: "eq-1" } },
+  ]);
+  const ref = buildEigenSpectrumPointSelectionRefFromSelection(point, selection, context);
+  expect(ref).toMatchObject({ sampleIndex: 1, modeIndex: 0, equilibriumId: "eq-1", fieldId: "field-1", resourceRef: "field-1-resource" });
+  const foreign = buildEigenSpectrumPointSelectionRefFromSelection(point, selection, { ...context, runId: "foreign-run" });
+  if (foreign.type !== "frequency-domain") throw new Error("Expected a frequency-domain mode selection");
+  expect(foreign.fieldId).toBeUndefined();
+});
