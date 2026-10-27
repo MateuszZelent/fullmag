@@ -310,7 +310,9 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             sample_count,
             mode_metadata_paths.len()
         ),
-        "session_id": "current",
+        // The solver has no live-session identity. Like single-k output, omit
+        // this optional field rather than inventing a session named "current".
+        // Accepted publication separately validates the exact run/stage owner.
         "run_id": "current",
         "stage_id": "eigenmodes",
         "stage_kind": "eigenmodes",

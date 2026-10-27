@@ -246,3 +246,12 @@ Dokładne próby, tożsamości, historyczna aktywna lease w kwarantannie, odmowa
 Harness UI wymaga pobrania binarnego pola zespolonego o dokładnej generacji oraz markeru gotowości po dekodowaniu; zdrowy canvas i metadata-only `3D field ready` nie są takim dowodem. Wykres odniesienia 101 punktów jest tylko analityczny. Nie ma nowych punktów FEM do dodania do wykresu.
 
 Harness zapisano w osobnym checkpointcie `6a913922ada2c5325acdbf430a16f9fc0fd026f7` po `node --check` i `--help`; czyta wyłącznie API, blokuje mutacje i wymaga dokładnej generacji binarnego pola oraz gotowości kontrolera. Nie ma jeszcze pozytywnego uruchomienia na rzeczywistym modzie.
+
+## Aktualizacja odbioru — 27.10.2026, Gamma i pełny nonzero sweep
+
+- I3/I4: rzeczywisty Gamma odebrany: run `bd97005a…`, 9,299249697 GHz, residual 2,7356e-13; pole zespolone, Real/Imag/Abs/Phase, WebGL i animacja PASS. Dowody: `docs/audits/2026-10-27-eigensolve-gamma-after-docker.evidence.json` i `2026-10-27-eigensolve-gamma-ui.evidence.json`. Wcześniejsze stwierdzenia braku jakiegokolwiek wyniku/UI są historyczne.
+- I7: Gamma nearest zgadza się z continuum n=0 finite-airbox do błędu numerycznego. Nie kwalifikuje to kompletności frequency-window ani COMSOL.
+- Signed14: native tasks succeeded, 14 rzeczywistych modów; finalne odwzorowanie do sesji UI zablokował literalny session_id=current. Diagnoza i dowody: `docs/audits/2026-10-27-eigensolve-path-session-mismatch.md`. Poprawka producenta i regresja przygotowane; wymagane CI, managed build, nowe wykonanie i UI.
+- Następnie: wykres 15 opublikowanych próbek, rzeczywisty wybór modów ±k w UI; zbieżność/kompletność oraz COMSOL A1 nadal NOT VERIFIED.
+- I5: PR262 draft/open, mergeStateStatus DIRTY — konflikty z nowszym masterem wymagają rozwiązania po zachowaniu bieżących danych.
+- Korekty infrastruktury: ograniczone oczekiwanie na przejściowy ledger writer busy podczas retirement; jawne raportowanie odrzuconej publikacji zamiast bezterminowego running.

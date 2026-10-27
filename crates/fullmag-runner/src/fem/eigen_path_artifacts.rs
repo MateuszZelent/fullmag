@@ -1003,6 +1003,8 @@ mod output_publication_tests {
             let manifest = build_eigen_path_frequency_domain_manifest(
                 FemEngine::CpuNative, &result, &artifacts,
                 &residual_transport_test_plan(), &[]);
+            assert!(manifest.get("session_id").is_none(),
+                "native path output must not fabricate a live-session identity");
             assert_eq!(manifest["requested_execution"]["outputs"], serde_json::json!([]));
             assert!(manifest["artifacts"]["eigen_diagnostics_v2_path"].is_null());
             assert!(manifest["resources"]["eigen_diagnostics_resource_key"].is_null());
