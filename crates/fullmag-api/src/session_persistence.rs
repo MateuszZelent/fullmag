@@ -1766,7 +1766,7 @@ fn validate_imported_accepted_provenance(
     {
         if let Some(marked_scene_revision) = startup.get("scene_revision") {
             accepted_scene::validate_startup_revision(
-                staged,
+                preflight,
                 &manifest,
                 scene,
                 marked_scene_revision,
