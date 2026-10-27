@@ -590,7 +590,9 @@ fn normalize_terminal_outcome(outcome: &str) -> &str {
 
 fn open_retirement_store(state: &AppState) -> Result<fullmag_session::SessionStore, ApiError> {
     let root = retirement_store_root(state)?;
-    fullmag_session::SessionStore::open_existing(root).map_err(|error| {
+    fullmag_runtime_control::retry_store_writer_busy(|| {
+        fullmag_session::SessionStore::open_existing(&root)
+    }).map_err(|error| {
         ApiError::conflict_with_code(
             "live_retirement_terminal_evidence_unknown",
             format!("cannot open the accepted run store: {error:#}"),
@@ -619,10 +621,15 @@ fn with_terminal_evidence_fence<T>(
         bail!("runtime service configuration belongs to another session store");
     }
     let binding = config.host_execution.context("runtime service has no host binding")?;
-    let ledger = fullmag_session::host_resource_ledger::HostResourceLedger::open_for_current_application(
-        &binding.ledger_root,
-        binding.policy,
-    )?;
+    // Opening the existing ledger is read/validation admission, before the
+    // once-only callback. Wait only for typed writer contention; identity and
+    // terminal-evidence failures still return immediately.
+    let ledger = fullmag_runtime_control::retry_store_writer_busy(|| {
+        fullmag_session::host_resource_ledger::HostResourceLedger::open_for_current_application(
+            &binding.ledger_root,
+            binding.policy.clone(),
+        )
+    })?;
     ledger.with_terminal_run_evidence_fence(store, run_id, |snapshot, evidence_sha256| {
         operation(snapshot, evidence_sha256)
     })
