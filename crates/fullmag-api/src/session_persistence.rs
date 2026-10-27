@@ -6,6 +6,9 @@ mod antenna_import;
 #[path = "session_persistence_accepted_modal.rs"]
 mod accepted_modal;
 
+#[path = "session_persistence_accepted_scene.rs"]
+mod accepted_scene;
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Read, Write};
@@ -1733,24 +1736,21 @@ fn validate_imported_accepted_provenance(
             "invalid_fms_accepted_provenance: captured session does not match persisted snapshot",
         ));
     }
-    let scene_revision = persisted
-        .scene_document
-        .as_ref()
-        .map(|scene| scene.revision)
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "invalid_fms_accepted_provenance: persisted snapshot has no scene revision",
-            )
-        })?;
+    let scene = persisted.scene_document.as_ref().ok_or_else(|| {
+        ApiError::bad_request(
+            "invalid_fms_accepted_provenance: persisted snapshot has no scene revision",
+        )
+    })?;
+    let scene_revision = scene.revision;
     if manifest.captured_scene_revision != scene_revision.to_string() {
         return Err(ApiError::bad_request(
             "invalid_fms_accepted_provenance: captured scene revision does not match persisted snapshot",
         ));
     }
 
-    // The startup metadata is an optional duplicate marker. If present, it is
-    // part of the same binding and must not silently disagree with the typed
-    // run/scene identity above.
+    // The startup marker retains its execution revision. A newer archived
+    // presentation document requires the immutable versioned physical binding;
+    // matching run/session/current document revisions alone is insufficient.
     let snapshot: SessionStateResponse = persisted.clone().into();
     if let Some(marked_run_id) = declared_accepted_run_id(&snapshot)? {
         if marked_run_id != manifest.accepted_run_id {
@@ -1765,11 +1765,12 @@ fn validate_imported_accepted_provenance(
         .and_then(|metadata| metadata.get("docker_startup"))
     {
         if let Some(marked_scene_revision) = startup.get("scene_revision") {
-            if marked_scene_revision.as_u64() != Some(scene_revision) {
-                return Err(ApiError::bad_request(
-                    "invalid_fms_accepted_provenance: startup scene revision does not match closure",
-                ));
-            }
+            accepted_scene::validate_startup_revision(
+                staged,
+                &manifest,
+                scene,
+                marked_scene_revision,
+            )?;
         }
     }
     Ok(())
@@ -1875,6 +1876,28 @@ mod accepted_fms_persistence_tests {
         state
     }
 
+    #[test]
+    fn archived_metadata_revision_requires_exact_versioned_physical_binding() {
+        let original = scene(17);
+        let identity = fullmag_authoring::scene_execution_input_identity(&original).unwrap();
+        let intent = fullmag_session::FmsRunIntent::new("run-modal", "intent-modern", serde_json::json!({
+            "run_id": "run-modal", "parameters": {"live_workspace": {"scene_revision": 17, "execution_input": identity}}
+        }));
+        let mut presentation = original.clone(); presentation.revision = 19;
+        assert!(accepted_scene::validate_intent_scene(&intent, "run-modal", &presentation, 17).is_ok());
+        assert!(accepted_scene::validate_intent_scene(&intent, "another-run", &presentation, 17).is_err());
+        assert!(accepted_scene::validate_intent_scene(&intent, "run-modal", &presentation, 16).is_err());
+        let mut changed: serde_json::Value = serde_json::to_value(&presentation).unwrap();
+        changed["materials"][0]["properties"]["Ms"] = serde_json::json!(700e3);
+        let changed = serde_json::from_value(changed).unwrap();
+        assert!(accepted_scene::validate_intent_scene(&intent, "run-modal", &changed, 17).is_err());
+        let legacy = fullmag_session::FmsRunIntent::new("run-modal", "intent-legacy", serde_json::json!({
+            "run_id": "run-modal", "parameters": {"live_workspace": {"scene_revision": 17}}
+        }));
+        assert!(accepted_scene::validate_intent_scene(&legacy, "run-modal", &presentation, 17).is_err());
+        assert!(accepted_scene::validate_intent_scene(&legacy, "run-modal", &original, 17).is_ok());
+    }
+
     #[tokio::test]
     async fn accepted_solved_modal_archive_reopens_without_original_store() {
         let source = tempfile::tempdir().unwrap();
@@ -1885,11 +1908,14 @@ mod accepted_fms_persistence_tests {
         fs::write(&script, b"study = fullmag.Study()\n").unwrap();
         let (commit, tasks, artifacts, bytes, payloads) = accepted_modal::tests::fixture();
         let accepted = SessionStore::open(&accepted_root).unwrap();
+        let accepted_scene_identity = fullmag_authoring::scene_execution_input_identity(&scene(17)).unwrap();
         accepted
             .commit_run_intent(&fullmag_session::FmsRunIntent::new(
                 "run-modal",
                 "intent-modal",
-                serde_json::json!({"run_id": "run-modal", "solver": "fixture"}),
+                serde_json::json!({"run_id": "run-modal", "solver": "fixture", "parameters": {
+                    "live_workspace": {"scene_revision": 17, "execution_input": accepted_scene_identity}
+                }}),
             ))
             .unwrap();
         assert_eq!(
@@ -1951,7 +1977,8 @@ mod accepted_fms_persistence_tests {
                 final_e_total: None,
                 artifact_dir: artifact_root.display().to_string(),
             });
-            snapshot.scene_document = Some(scene(17));
+            // A presentation-only document revision must not rewrite execution provenance.
+            snapshot.scene_document = Some(scene(18));
             snapshot.metadata = Some(
                 serde_json::json!({"docker_startup": {"run_id": "run-modal", "scene_revision": 17}})
                     .into(),

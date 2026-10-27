@@ -28,6 +28,7 @@ jobs:
           grep -F "rejects_unowned_stale_ambiguous_and_corrupt_bundles ... ok" "$RUNNER_TEMP/accepted-modal-archive.log"
           cargo test --locked -p fullmag-api --bin fullmag-api session_persistence::accepted_fms_persistence_tests -- --nocapture | tee "$RUNNER_TEMP/accepted-modal-roundtrip.log"
           grep -F "accepted_solved_modal_archive_reopens_without_original_store ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
+          grep -F "archived_metadata_revision_requires_exact_versioned_physical_binding ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
           grep -F "accepted_fms_export_inspect_readonly_import_and_tamper_rejection ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
           cargo test --locked -p fullmag-api --bin fullmag-api accepted_modal_publication::tests -- --nocapture
       - name: Run session ownership and physical field contracts
