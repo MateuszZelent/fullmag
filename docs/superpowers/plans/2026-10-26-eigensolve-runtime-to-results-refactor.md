@@ -777,3 +777,20 @@ telemetrię wyniku oraz identycznego kontrolnego solve z domyślnym celem,
 bez zmiany warunku zaliczenia. Następne CI ma ujawnić EPS reason, liczbę
 prób, finalizowaną pulę i residual. Nie zakładać automatycznie błędu fixture
 ani dopuszczać niezbiegłych wyników.
+
+
+### A19 — rozpoznawanie early-startup failure bez zmiany starego OWNER
+
+Readiness loop otrzymał kontrolę logu wyłącznie bieżącej inkarnacji
+kontenera i odczyt dokładnie wskazanego pliku api-failure-UUID.json przez
+bounded regular-file reader w kanonicznym technical root. Waliduje schemat,
+stage i reason, zapisuje startup-failure.json operacji i kończy oczekiwanie
+błędem z zachowaniem usług. Nie nadpisuje starego process-tree/OWNER.
+
+Pięć testów PASS. Odczyt tego samego helpera na aktualnym kontenerze potwierdził
+fence1bec93455db748338edb8bd99180ab25 i timeout nvidia-smi. Nie jest to recovery:
+wcześniej uruchomiony obserwator iterationdfb2be8228464d1d989ff0d6d072b482
+nadal wykonuje stary kod w pamięci. Nie uruchomiono ponownie obliczeń ani
+nie zmieniono ręcznie lease. Następny krok musi zamknąć tę konkretną obserwację
+zarządzaną ścieżką i wznowić startup po potwierdzeniu braku workerów.
+Native CI40434089875 nadal in_progress przy ostatnim odczycie.

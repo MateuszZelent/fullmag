@@ -219,6 +219,37 @@ except FileNotFoundError:
 else:
  print(raw.decode('utf-8'))
 """
+def _early_startup_failure(backend_id, logs):
+    """Read the exact fence emitted by this container incarnation; never recover it."""
+    match = re.search(
+        r"Runtime startup failed; starting diagnostic API only: [\s\S]*?"
+        r"\. Diagnostic: (/opt/fullmag/runtime-control/runtime-service/api-failure-[0-9a-f]{32}\.json)(?:\s|$)",
+        logs,
+    )
+    if match is None:
+        return None
+    path = match.group(1)
+    probe = """import json,sys,pathlib
+sys.path.insert(0,'/opt/fullmag')
+import runtime_service
+path=pathlib.Path(sys.argv[1])
+expected=runtime_service.process_receipt_path(runtime_service.canonical_paths()).parent
+if path.parent != expected:
+ raise RuntimeError('startup fence is outside the configured technical root')
+raw=runtime_service._bounded_regular(path,'startup failure fence')
+print(raw.decode('utf-8'))
+"""
+    fence = json.loads(docker_text("exec", backend_id, "/usr/local/bin/python3", "-B",
+                                  "-c", probe, path))
+    if (not isinstance(fence, dict)
+            or fence.get("schema") != "fullmag.api-runtime-failure-fence.v1"
+            or fence.get("stage") != "runtime_startup"
+            or not isinstance(fence.get("reason"), str)
+            or not fence["reason"].strip()):
+        raise BuildControlError("Invalid early startup failure fence")
+    return {"path": path, "fence": fence}
+
+
 BACKEND_PROCESS_RECEIPT_SCRIPT = _PROCESS_RECEIPT_PROBE
 
 _NEW_WINDOWS_RUNTIME_STATE_DIRECTORIES = (
@@ -2219,9 +2250,16 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
             if not observed.get("State", {}).get("Running"):
                 raise BuildControlError("DEV service exited before readiness: " + service)
         process_receipt = json.loads(docker_text("exec", backend_id, "/usr/local/bin/python3", "-B", "-c", _PROCESS_RECEIPT_PROBE))
-        if str(process_receipt.get("state", "")).startswith("failed"):
+        if (str(process_receipt.get("state", "")).startswith("failed")
+                or not all(service.get("State", {}).get("Health", {}).get("Status") == "healthy"
+                           for service in services)):
             logs = docker_text("logs", "--since", operation["receipt"]["backend_started_at"],
                                "--tail", "100", backend_id, combined=True)
+            early_failure = _early_startup_failure(backend_id, logs)
+            if early_failure is not None:
+                control.write(operation["root"] + "/startup-failure.json", early_failure)
+                raise BuildControlError("Runtime startup failed; services retained: " +
+                                        early_failure["fence"]["reason"][:4096])
             if "Startup or runtime failed; admission closed:" in logs:
                 control.write(operation["root"] + "/process-failure.json", process_receipt)
                 raise BuildControlError("Runtime admission failed; services retained: " + str(process_receipt.get("error", "unknown failure"))[:4096])
