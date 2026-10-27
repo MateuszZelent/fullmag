@@ -353,3 +353,11 @@ describe("EChartsSurface", () => {
     expect(phoneRules).toContain("width: 100%");
   });
 });
+
+
+it("names the common ordinate Frequency when numerical modes and references share Hz units", () => {
+  const entries = ["frequency", "reference_frequency"].map((quantity) => ({
+    ...series[0]!, id: quantity, quantity, unit: "GHz", label: quantity,
+  }));
+  expect(tableSeriesRenderModel(entries, entries, "k").yAxes[0]).toMatchObject({ label: "Frequency", unit: "GHz" });
+});
