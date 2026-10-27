@@ -6125,7 +6125,20 @@
         "docs/physics/r4-equilibrium-identity-preimage-replay.source-map.json",
         "docs/superpowers/plans/2026-09-12-eigensolve-dispersion-implementation-status.md"
       ],
-      "disposition": "pending-semantic-review"
+      "disposition": "partially-adapted",
+      "semantic_review": {
+        "date": "2026-10-27",
+        "report": "docs/audits/2026-10-27-eigensolve-imported-certificate-selective-review.md",
+        "adapted_slices": [
+          "validated imported periodic certificate returns current outer digest, matching fresh construction",
+          "regression distinguishes inner/outer digest and rejects stale certificate identity/map"
+        ],
+        "remaining": [
+          "971-line legacy boundary-kind import compatibility module not copied",
+          "physical/boundary-kind migration must be reviewed against current accepted handoff and immutable generation contracts"
+        ],
+        "qualification": "source adaptation; compiled and runtime proof pending"
+      }
     },
     {
       "sign": "+",
