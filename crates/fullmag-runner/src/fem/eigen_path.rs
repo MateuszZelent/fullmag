@@ -2514,7 +2514,9 @@ pub(super) fn track_bias_field_sweep_samples(
     )?;
     retain_selected_eigen_path_mode_artifacts(&mut mode_artifacts, selection.field_mode_ids());
     validate_eigen_path_selected_mode_artifacts(&mode_artifacts, selection.field_mode_ids())?;
-    bind_eigen_path_tracked_mode_metadata(&mut mode_artifacts, &path_result)?;
+    bind_eigen_path_tracked_mode_metadata(
+        &mut mode_artifacts, &path_result, eigen_path_sample_id_prefix(plan),
+    )?;
     let mode_output_selection_path = append_eigen_mode_output_selection(
         &mut mode_artifacts,
         selection.field_mode_ids_by_field(),
@@ -4036,7 +4038,9 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
 
     retain_selected_eigen_path_mode_artifacts(&mut mode_artifacts, selection.field_mode_ids());
     validate_eigen_path_selected_mode_artifacts(&mode_artifacts, selection.field_mode_ids())?;
-    bind_eigen_path_tracked_mode_metadata(&mut mode_artifacts, &path_result)?;
+    bind_eigen_path_tracked_mode_metadata(
+        &mut mode_artifacts, &path_result, eigen_path_sample_id_prefix(plan),
+    )?;
     let mode_output_selection_path = append_eigen_mode_output_selection(
         &mut mode_artifacts,
         selection.field_mode_ids_by_field(),

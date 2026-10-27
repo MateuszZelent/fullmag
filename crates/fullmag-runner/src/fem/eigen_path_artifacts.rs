@@ -88,6 +88,7 @@ pub(super) fn retain_selected_eigen_path_mode_artifacts(
 pub(super) fn bind_eigen_path_tracked_mode_metadata(
     artifacts: &mut [AuxiliaryArtifact],
     result: &crate::eigen::PathSolveResult,
+    sample_id_prefix: &str,
 ) -> Result<(), RunError> {
     let branches = result
         .samples
@@ -127,6 +128,9 @@ pub(super) fn bind_eigen_path_tracked_mode_metadata(
                     serde_json::json!(branches.get(&id).copied().flatten()),
                 );
                 object.insert("sample_index".into(), serde_json::json!(id.sample_index));
+                // Match spectrum/dispersion identity after promoting a single-k solve.
+                object.insert("sample_id".into(),
+                    serde_json::json!(format!("{sample_id_prefix}-{:04}", id.sample_index)));
                 object.insert(
                     "raw_mode_index".into(),
                     serde_json::json!(id.raw_mode_index),
@@ -971,6 +975,21 @@ mod output_publication_tests {
             k0_kittel_validation: None, solver_policy: None,
             dispersion_analytic_reference: None, k0_kittel_periodic_airbox_demag: None,
         };
+        for prefix in ["k-path-sample", "bias-field-sample", "k-sample"] {
+            let mut mode_artifacts = vec![AuxiliaryArtifact {
+                relative_path: "eigen/modes/sample_0002/mode_0007.json".into(),
+                bytes: serde_json::to_vec(&serde_json::json!({
+                    "sample_id": "k-sample-0000", "sample_index": 0,
+                    "raw_mode_index": 7, "equilibrium_artifact_sha256": "sha256:retained",
+                })).unwrap(),
+            }];
+            bind_eigen_path_tracked_mode_metadata(&mut mode_artifacts, &result, prefix).unwrap();
+            let mode: Value = serde_json::from_slice(&mode_artifacts[0].bytes).unwrap();
+            assert_eq!(mode["sample_id"], format!("{prefix}-0002"));
+            assert_eq!(mode["sample_index"], 2);
+            assert_eq!(mode["raw_mode_index"], 7);
+            assert_eq!(mode["equilibrium_artifact_sha256"], "sha256:retained");
+        }
         for version in ["v1", "v2"] {
             let mut artifacts = Vec::new();
             for sample_index in [0, 2, 7] {
