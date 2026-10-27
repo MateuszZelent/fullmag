@@ -27,7 +27,7 @@ Nie usuwamy niezintegrowanych worktree, wyników, cache ani aktywnych zasobów. 
 | I0: audyt, tożsamość i kopia WIP | Częściowo wykonany | Audyt przeczytany, baza sprawdzona, 40 plików zabezpieczone; pozostałe stare linie zachowane, ich semantyczne review nadal otwarte |
 | I1: mapa selektywnej integracji | W toku; częściowe review historycznego fixa exact Gamma f0986ede, adaptacja 148075e43 | Każdy istotny fix ma decyzję: przenieść / obecny odpowiednik / zastąpiony / otwarty; klasyfikacja po ścieżce nie wystarcza |
 | I2: podpisane osie i tożsamość punktu | Kod wypchnięty; CI UI i browser fixture PASS | Wybór osi kx/ky/kz/path, SI, brak wymyślania znaku, stabilna próbka/mod po zmianie osi; aktualne typecheck/lint/CI |
-| I3: właściciel pola i akcja punkt → mod | Owner-bound JSON/meta/binary i wybór modów ±10 z Results PASS; pełny odbiór punkt → mod na wykresie nadal otwarty | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
+| I3: właściciel pola i akcja punkt → mod | Owner-bound JSON/meta/binary i pięć rzeczywistych przejść punkt → mod (próbki 0/3/7/11/14) PASS; FMS runtime otwarte | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
 | I4: rzeczywisty mod w UI | Gamma nearest i ±10: rzeczywiste pola, Real/Imag/Abs/Phase, WebGL2, animacja i zrzut samego magnetyka PASS; pełny sweep pozostaje w I7 | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
 | I5: review, PR, master i cleanup | Otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
 | I6: pozostała integracja solvera | Otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
@@ -308,7 +308,20 @@ Bieżące obliczenia, wykres i dodatkowe poprawki UI/FMS opisuje [raport odbioru
 - [x] Pokazać rzeczywisty mod Gamma w 3D, cztery reprezentacje i zmieniającą się/zatrzymaną animację (oddzielny dowód wizualny).
 - [ ] Naprawić ETag dużego katalogu artefaktów i uzyskać strict browser PASS bez HTTP 500.
 - [x] Kliknięcie punktu Gamma → właściwe pole 3D po naprawie układu i readera KSamplingIR; tożsamość pola zachowana po ky → path.
-- [ ] Sprawdzić zakres i widoczność punktów wykresu po zmianie osi oraz pełny strict browser bez błędów.
+- [x] Sprawdzić zakres i widoczność punktów wykresu po zmianie osi (15 punktów, końce i Gamma, oba warianty osi, trzy rozmiary okna).
+- [ ] Pełny strict browser bez błędów, w tym katalog artefaktów po aktualizacji backendu.
 - [ ] Naprawić pełny round trip accepted-v2 FMS z projekcjami modów i typed AcceptedStateRef; nie usuwać guardów kompletności.
 
 Pozostałe bramki I0/I1/I5/I6/I7 zachowują oryginalny zakres. Cel pozostaje aktywny.
+
+## Checkpoint przeglądarki i zapisu modów — 27.10.2026
+
+Przebudowana główna przeglądarka Analysis pokazuje wszystkie 15 punktów signed15, widmo filtrowane według k, referencje importowane z tych samych CSV co Python oraz akcję punkt→3D. Odbiór rzeczywistego UI: `docs/audits/2026-10-27-eigensolve-modal-workbench-ui.md` i jego evidence JSON. Pięć wybranych próbek ma potwierdzone owner-bound kompleksowe bufory, widoczną powierzchnię magnetyka i zdrowy WebGL. CI frontendu na `d99aa5b2c` zakończone sukcesem.
+
+Naprawy FMS są w źródłach i przeszły pełny workflow `40594365988` na `26408e119`: 437 testów sesji, niepusty Zarr bundle, negatywne przypadki catalog/owner/epoch/chunk i pełny cold import w nowym stanie API bez oryginalnego store. To dowód transportu; rzeczywisty archive round trip signed15 pozostaje otwarty w `2026-10-27-eigensolve-fms-roundtrip-repair.md`.
+
+Przed przebudową własnej grupy zabezpieczono 304 pliki (132501653 bajty) generacji `sha256:94a4698432bb417fd3e0758c39300ef98661c84a7d3b7e6638e74b10b9ca7f4f`, z kontrolą każdego rozmiaru i SHA-256. Kopia danych użytkownika: `/state/runs/eigensolve-checkpoints/signed15-94a4698432bb-1793140585978662568`. Nie jest archiwum FMS ani uprawnieniem schedulera. Oryginalne wyniki i accepted CAS zachowano. Dowód i status aktualizacji: `docs/audits/2026-10-27-eigensolve-modal-runtime-update.evidence.json`.
+
+Wybrano kontrolowaną aktualizację i ponowienie tego samego rzeczywistego benchmarku na nowej binarce. Istniejąca private reattach ścieżka jest odzyskiwaniem po awarii, a zwykły restart przenosi model, nie pełny wynik; nie poluzowano tych kontraktów ani nie wstrzyknięto starego snapshotu. Ponowienie ma nową tożsamość runu i nie zastępuje starego wyniku. Pozwala uzyskać rzeczywisty export/reopen na poprawionej binarce i ponownie odebrać cały wykres oraz pola.
+
+Nie zamyka to I0/I1/I5/I6 ani naukowych bramek I7 (kompletność widma, zbieżność, serial/adaptive i COMSOL A1).

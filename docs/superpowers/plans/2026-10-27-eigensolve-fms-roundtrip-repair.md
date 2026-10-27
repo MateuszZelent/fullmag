@@ -51,3 +51,17 @@ FMS5 dzielimy na dwa jawne kroki:
 2. **FMS5b: wdrożyć i odebrać rzeczywisty archive round trip.** Dopiero po FMS5a przyrostowo zbudować właściwą grupę przez managed launcher, potwierdzić nową binarkę/proweniencję, wyeksportować solved signed15 i zanotować SHA archiwum. W nowym stanie API otworzyć visualization_only, sprawdzić 15 częstotliwości, generację i pola oraz strict browser bez katalogowego HTTP 500. Nie traktować testowego 48-bajtowego pola jako zastępstwa dla tego odbioru.
 
 W tym checkpointcie nie restartowano backendu ani innych grup, nie usunięto danych i nie zmieniono solvera ani progów fizycznych. FMS5 i pozostałe bramki I0/I1/I5/I6/I7 nadal są otwarte.
+
+## Wybrana realizacja aktualizacji — zachowanie danych i nowy benchmark
+
+Dla zdrowej ukończonej sesji nie udowodniono obsługi pełnego wyniku przez dotychczasowe recovery reattach. Zamiast rozszerzać jego uprawnienia wybrano ponowienie rzeczywistego signed15 na nowej binarce po zachowaniu starej generacji. Jest to nowe wykonanie autoryzowanego benchmarku, nie ponowienie polecenia o nieznanym wyniku. Przed restartem API potwierdziło solver=completed i dokładną tożsamość starego runu.
+
+W `/state/runs/eigensolve-checkpoints/signed15-94a4698432bb-1793140585978662568` zapisano wszystkie 304 członki (132501653 bajty), marker i receipt, z weryfikacją źródłowych i docelowych SHA-256 oraz rozmiarów. Kopia zachowuje wynik do odczytu, nie tworzy FMS ani prawa do wykonania. Oryginał i accepted CAS również pozostają zachowane.
+
+FMS5a: zabezpieczenie danych PASS. Managed `restart-idle-volume --allow-terminal-catalog` dla attempt `1f32c0d42ed344fca1428a9c29020dbc` rozpoczął aktualizację własnej grupy i ponowne przechwytywanie źródeł. Po jej ukończeniu należy jawnie aktywować signed15 jako nowy run, porównać jego punkty z zachowanym wynikiem i analityką, a następnie wykonać solved export/cold import oraz strict browser. Wcześniejszy zakaz wstrzykiwania starego snapshotu i przenoszenia authority nadal obowiązuje; nowe obliczenie nie odtwarza tożsamości starego runu.
+
+### Wdrożenie backendu i uruchomienie nowego signed15
+
+Managed iteration `2c5aab51243e495585dac88e88a25375`: SUCCESS. Działa pakiet `0.1.0-dev.20261027.ga63b4e44e6f4+9796`, source snapshot `53f20b09770bf17dd2930c2b3221107a44e89eb7d0b8e1128e6d1256c01b7157`. API i native runtime są ready. Nowa aktywacja `681c82422afd449eb46e88e5a60e29f3` przyjęła run `run-live-93df870d6af7a8e9d70a3742a0de6e7860b5a072c98b7359c3463c18b49113de`. Siatka ma ponownie 7134 komórki; relax jest completed, eigenmodes running. Brak opublikowanego widma podczas aktywnego eigensolve nie jest wynikiem ani błędem końcowym.
+
+Pierwszy katalog artefaktów po wdrożeniu zwrócił HTTP 200 i linię ETag długości 89 znaków. Duży katalog po publikacji i strict browser nadal wymagają odbioru. Monitor `/tmp/eigen-fms-refresh-capture.py` zbiera dane wyłącznie przypięte do nowego runu; po gotowym widmie podejmie pojedynczy eksport solved. Otwarta obserwacja: sesja narzędzia `12697`; nie ponawiać aktywacji po timeoutcie obserwacji.
