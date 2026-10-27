@@ -773,6 +773,31 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
     });
   });
 
+  it.each([
+    { requested: {}, boundary: "floquet_periodic", sampling: { kind: "single", vector_rad_per_m: [0, 1e7, 0] }, accepted: true },
+    { requested: { boundary_context: "finite_open" }, boundary: "floquet_periodic", sampling: { kind: "single", vector_rad_per_m: [0, 1e7, 0] }, accepted: false },
+    { requested: { k_sampling: { kind: "single", vector_rad_per_m: [0, 1e7, 0] } }, boundary: "floquet_periodic", sampling: { kind: "single", vector_rad_per_m: [0, null, 0] }, accepted: false },
+  ])("reads canonical manifest coordinates without hiding conflicts: $accepted / $requested", ({ requested, boundary, sampling, accepted }) => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 20, run_id: "native-k10" },
+      manifest: { result_manifest: { status: "ready", run_id: "native-k10", stage_id: "eigenmodes", payload: {
+        study_product: "modal_eigen", equilibrium_identity: "eq-k10",
+        boundary_context: boundary, k_sampling: sampling, requested_execution: requested,
+        run_id: "native-k10", stage_id: "eigenmodes",
+      } } },
+      spectrum: { status: "ready" },
+    });
+    expect(adapted.snapshot.entries).toHaveLength(accepted ? 1 : 0);
+    if (accepted) {
+      expect(adapted.snapshot.entries[0]).toMatchObject({
+        boundaryContext: "floquet_periodic",
+        kSampling: { kind: "single", vectorRadPerM: [0, 1e7, 0] },
+      });
+    } else {
+      expect(adapted.contractGaps.length).toBeGreaterThan(0);
+    }
+  });
+
   it("uses the CSV wavevector when path metadata is absent", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
       currentRun: { revision: 27, run_id: "runtime-run-27" },

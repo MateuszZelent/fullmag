@@ -481,7 +481,13 @@ export function physicsFirstResultsSnapshotFromResources(
   const hasSampleEquilibrium = payload.sample_execution_provenance != null ||
     payload.native_provenance_by_sample != null;
   const requested = record(payload.requested_execution);
-  const boundaryContext = nonEmptyString(requested?.boundary_context);
+  const manifestBoundary = nonEmptyString(payload.boundary_context);
+  const requestedBoundary = nonEmptyString(requested?.boundary_context);
+  if (manifestBoundary && requestedBoundary && manifestBoundary !== requestedBoundary) {
+    addContractGap("Frequency-domain artifact has conflicting boundary_context declarations");
+    return { contractGaps, snapshot: emptySnapshot };
+  }
+  const boundaryContext = manifestBoundary ?? requestedBoundary;
   if (!declaredEquilibriumId && !hasSampleEquilibrium) {
     addContractGap("Frequency-domain artifact does not publish equilibrium_identity");
   }
@@ -496,9 +502,12 @@ export function physicsFirstResultsSnapshotFromResources(
     return { contractGaps, snapshot: emptySnapshot };
   }
 
-  const kSampling =
-    kSamplingFromMetadata(input.dispersion?.path_metadata) ??
-    kSamplingFromRequestedExecution(requested);
+  // The native manifest publishes sampling at the top level. An explicit
+  // invalid declaration must not fall back to a different requested sample.
+  const kSampling = payload.k_sampling !== undefined
+    ? samplingFromRecord(record(payload.k_sampling))
+    : kSamplingFromMetadata(input.dispersion?.path_metadata) ??
+      kSamplingFromRequestedExecution(requested);
   if (boundaryContext === "floquet_periodic" && !kSampling) {
     addContractGap("Periodic/Floquet artifact does not publish a supported k sampling resource");
     return {
