@@ -272,7 +272,7 @@ pub(super) fn validate_import(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use fullmag_session::frequency_domain_artifact_generation::{
         GenerationBody, GenerationMember, PublicationOwner,
@@ -281,7 +281,7 @@ mod tests {
 
     // A transport fixture with a nonempty complex field, not a solver or
     // scientific qualification fixture. Every referenced Zarr member is real.
-    fn fixture() -> (
+    pub(crate) fn fixture() -> (
         GenerationCommit,
         FmsRunCatalog,
         FmsArtifactCatalog,

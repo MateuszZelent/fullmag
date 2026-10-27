@@ -3708,9 +3708,13 @@ mod tests {
                 ] {
                     let polluted = archive_with_added_entry(&archive, extra, b"{}");
                     let polluted_staging = tempfile::tempdir().unwrap();
-                    let staged =
-                        preflight_fms_staged(Cursor::new(&polluted), &[], polluted_staging.path())
-                            .unwrap();
+                    let preflight = preflight_fms_staged(Cursor::new(&polluted), &[], polluted_staging.path());
+                    if extra.contains("resource_leases/") {
+                        let error = preflight.unwrap_err();
+                        assert!(error.to_string().contains("reserved run namespace"));
+                        continue;
+                    }
+                    let staged = preflight.unwrap();
                     let destination = tempfile::tempdir().unwrap();
                     let store = SessionStore::open(destination.path().join("store")).unwrap();
                     assert!(unpack_fms_staged_readonly(&staged, &store).is_err());

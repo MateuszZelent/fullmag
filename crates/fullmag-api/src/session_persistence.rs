@@ -1876,6 +1876,147 @@ mod accepted_fms_persistence_tests {
     }
 
     #[tokio::test]
+    async fn accepted_solved_modal_archive_reopens_without_original_store() {
+        let source = tempfile::tempdir().unwrap();
+        let accepted_root = source.path().join("accepted-store");
+        let live_root = source.path().join("live-store");
+        let artifact_root = source.path().join("modal-artifacts");
+        let script = source.path().join("scene.py");
+        fs::write(&script, b"study = fullmag.Study()\n").unwrap();
+        let (commit, tasks, artifacts, bytes, payloads) = accepted_modal::tests::fixture();
+        let accepted = SessionStore::open(&accepted_root).unwrap();
+        accepted
+            .commit_run_intent(&fullmag_session::FmsRunIntent::new(
+                "run-modal",
+                "intent-modal",
+                serde_json::json!({"run_id": "run-modal", "solver": "fixture"}),
+            ))
+            .unwrap();
+        assert_eq!(
+            accepted.cas().put(&bytes).unwrap(),
+            artifacts.entries[0].content_sha256
+        );
+        accepted.commit_run_catalog(&tasks).unwrap();
+        fs::write(accepted.root().join("runs/run-modal/artifact_catalog.json"),
+            serde_json::to_vec(&artifacts).unwrap()).unwrap();
+        drop(accepted);
+        let candidate = crate::accepted_modal_publication::ModalPublicationCandidate {
+            task_order: 0,
+            task_id: tasks.tasks[0].task_id.clone(),
+            attempt_id: "attempt-modal".into(),
+            ownership_epoch: 1,
+            step_id: "eigen".into(),
+            object_ref: artifacts.entries[0].content_sha256.clone(),
+            bundle: fullmag_application::decode_modal_eigen_bundle(
+                &bytes,
+                fullmag_application::MODAL_EIGEN_BUNDLE_MAX_BYTES,
+            )
+            .unwrap(),
+        };
+        crate::accepted_modal_publication::publish_modal_bundle(
+            &artifact_root,
+            "session-modal",
+            "run-modal",
+            &candidate,
+        )
+        .unwrap();
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let mutable = Arc::get_mut(&mut state).unwrap();
+        mutable.repo_root = source.path().to_path_buf();
+        mutable.current_workspace_root = source.path().to_path_buf();
+        mutable.submit_store_root = Some(accepted_root);
+        mutable.current_command_journal_store_root = Some(live_root);
+        mutable
+            .current_live_session_epoch
+            .store(7, Ordering::Release);
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.session.session_id = "session-modal".into();
+            snapshot.session.run_id = "run-modal".into();
+            snapshot.session.script_path = script.display().to_string();
+            snapshot.session.artifact_dir = artifact_root.display().to_string();
+            snapshot.run = Some(crate::types::RunManifest {
+                run_id: "run-modal".into(),
+                session_id: "session-modal".into(),
+                status: "completed".into(),
+                total_steps: 0,
+                final_time: None,
+                final_e_ex: None,
+                final_e_demag: None,
+                final_e_ext: None,
+                final_e_ani: None,
+                final_e_dmi: None,
+                final_e_rotated_dmi: None,
+                final_e_total: None,
+                artifact_dir: artifact_root.display().to_string(),
+            });
+            snapshot.scene_document = Some(scene(17));
+            snapshot.metadata = Some(
+                serde_json::json!({"docker_startup": {"run_id": "run-modal", "scene_revision": 17}})
+                    .into(),
+            );
+        }
+        let exported = export_session_with_context(
+            State(state.clone()),
+            Json(SessionExportRequest {
+                profile: SaveProfile::Solved,
+                name: Some("Nonempty accepted mode".into()),
+                compression: Some(fullmag_session::CompressionProfile::Speed),
+                ui_state: None,
+                target_path: None,
+                save_to_source: None,
+            }),
+            None,
+        )
+        .await
+        .expect("export nonempty modal archive")
+        .0;
+        let archive = base64::engine::general_purpose::STANDARD
+            .decode(exported.fms_base64)
+            .unwrap();
+        // The source API and both original stores are now unavailable. Import
+        // must reconstruct solely from the archive in a new application state.
+        drop(state);
+        drop(source);
+        let root = tempfile::tempdir().unwrap();
+        let destination = destination_state(root.path()).await;
+        import_session_inspect(
+            State(destination.clone()),
+            Json(SessionImportInspectRequest {
+                fms_base64: base64::engine::general_purpose::STANDARD.encode(&archive),
+            }),
+        )
+        .await
+        .expect("inspect cold archive");
+        import_session_commit(
+            State(destination.clone()),
+            Json(SessionImportCommitRequest {
+                fms_base64: base64::engine::general_purpose::STANDARD.encode(&archive),
+                restore_mode: SessionRestoreMode::VisualizationOnly,
+            }),
+        )
+        .await
+        .expect("cold visualization import");
+        assert!(!root.path().join("accepted-store-unused").exists());
+        let current = destination.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        let artifact = crate::session::current_artifact_dir(snapshot).unwrap();
+        let capture = fullmag_session::frequency_domain_artifact_generation::capture(&artifact)
+            .unwrap()
+            .unwrap();
+        assert_eq!(capture.commit, commit);
+        for (path, expected) in payloads {
+            assert_eq!(
+                capture
+                    .read_member_bounded(&artifact, &path, expected.len() as u64)
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn accepted_fms_export_inspect_readonly_import_and_tamper_rejection() {
         let source_root = tempfile::tempdir().expect("source temp root");
         let accepted_root = source_root.path().join("accepted-store");
