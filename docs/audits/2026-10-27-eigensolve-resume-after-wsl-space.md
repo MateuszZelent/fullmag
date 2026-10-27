@@ -168,3 +168,25 @@ wpis running jest historyczny. Gamma-window i jego browser PASS zachowane.
 Diagnostyka kolejnej akcji: sprawdzić checkpointy poszczególnych k, odtworzyć
 przejście nonzero → Gamma i uzyskać natywny backtrace; nie zastępować pełnego
 sweepa wyłącznie zachowanym sukcesem Gamma.
+
+## Potwierdzony duży stos na wejściu K0
+
+Checkpointy raw_native_returned istnieją dla sample-0000…0006 (ostatni ky=-2e6);
+brak checkpointu Gamma sample-0007. Nie są to zaakceptowane publiczne wyniki
+całego sweepa. Walidator poisson_airbox_modal_eigen.cpp nadal wykonywał
+`*result = PoissonAirboxModalEigenResult{}`. Disassembly aktualnej biblioteki
+libfullmag_fem.so, validate_problem przy 0x26f0d0, rezerwuje 0xc3000+0x168
+bajtów stosu; to około 780 KiB przed sprawdzeniem wejścia.
+
+Usunięto ten tymczasowy obiekt przez destrukcję i placement new w pamięci
+obiektu caller-owned, identycznie jak już w entry CPU Schur. Dodano test
+publicznego wejścia na pthread stack 256 KiB: odrzuca niepoprawne żądanie,
+wraca bez SIGSEGV i czyści poprzednią zawartość modów. Kompilacja testu tylko
+w CI. Związek z SIGSEGV signed15 wymaga ponownego runtime, a nie samej analizy
+źródeł. Referencyjne lokalne validation_result w pozostałych ścieżkach nadal
+wymagają osobnej oceny; nie uznano całego kontraktu stosu za zamknięty.
+
+Po re-atestacji resume 49bffae4… zatrzymał się poprawnie na starej tożsamości
+native ownera vs nowy build. Istniejąca procedura stop-bootstrap-volume
+potwierdziła dokładną diagnostyczną instancję i zatrzymała ją, zachowując
+OWNER i wszystkie lease. Kolejne odtworzenie: fresh-state przez launcher.

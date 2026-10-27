@@ -19,6 +19,10 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
+#if defined(__linux__)
+#include <pthread.h>
+#endif
 #include <string>
 #include <vector>
 
@@ -1742,6 +1746,49 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
           "window certificate must publish a bounded refinement ncv greater than nev");
 }
 
+void PublicPoissonValidationDoesNotMaterializeResultOnWorkerStack()
+{
+#if defined(__linux__)
+    struct Probe {
+        fd::PoissonAirboxEigenBlockProblem problem{};
+        std::unique_ptr<fd::PoissonAirboxModalEigenResult> result =
+            std::make_unique<fd::PoissonAirboxModalEigenResult>();
+        fd::FrequencyDomainStatus status = fd::FrequencyDomainStatus::ok;
+        bool returned = false;
+    } probe;
+    probe.problem.requested_mode_count = 0u;
+    probe.result->accepted_modes.emplace_back();
+    probe.result->frequency_hz = 123.0;
+    pthread_attr_t attributes;
+    const int initialized = pthread_attr_init(&attributes);
+    check(initialized == 0, "small-stack validation attributes must initialize");
+    if (initialized != 0) return;
+    const int configured = pthread_attr_setstacksize(&attributes, 256u * 1024u);
+    check(configured == 0, "validation regression must use a 256 KiB worker stack");
+    if (configured != 0) {
+        pthread_attr_destroy(&attributes);
+        return;
+    }
+    pthread_t worker;
+    const int started = pthread_create(&worker, &attributes, [](void *opaque) -> void * {
+        auto &state = *static_cast<Probe *>(opaque);
+        state.status = fd::solve_poisson_airbox_modal_eigen_cpu_slepc(
+            state.problem, state.result.get());
+        state.returned = true;
+        return nullptr;
+    }, &probe);
+    pthread_attr_destroy(&attributes);
+    check(started == 0, "small-stack validation worker must start");
+    if (started != 0) return;
+    const int joined = pthread_join(worker, nullptr);
+    check(joined == 0 && probe.returned,
+          "public K0 validation must return without a large result temporary on the stack");
+    check(probe.status == fd::FrequencyDomainStatus::validation_error &&
+              probe.result->accepted_modes.empty() && probe.result->frequency_hz == 0.0,
+          "in-place reset must preserve invalid-input rejection and clear previous modes");
+#endif
+}
+
 void FrequencyWindowOneModeKeepsMinimumRestartSubspace()
 {
     const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
@@ -3185,6 +3232,7 @@ int main()
     PublishesCanonicalResidualFieldsAndSolverReasons();
     FrequencyWindowPublishesSelectedSearchStabilityWithoutCount();
     FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated();
+    PublicPoissonValidationDoesNotMaterializeResultOnWorkerStack();
     FrequencyWindowOneModeKeepsMinimumRestartSubspace();
     FrequencyWindowRetainsInteriorModesBeforePublicationCap();
     FrequencyWindowCoversBothClippedEdges();
