@@ -344,6 +344,8 @@ mod output_publication_tests {
             crate::eigen::EigenSolverModel::ReferenceScalarTangent,
             None,
         );
+        assert_eq!(v2["mode_id"], v3["mode_id"]);
+        assert!(v2["mode_id"].as_str().is_some_and(|id| id.starts_with("sample-0000/mode-")));
         for value in [&v2, &v3] {
             assert_eq!(value["residual_absolute_l2"], 1.0e-9);
             assert_eq!(value["residual_relative_l2"], 2.5e-10);
@@ -2995,6 +2997,7 @@ pub(super) fn eigen_path_mode_json(
     };
 
     let mut value = serde_json::json!({
+        "mode_id": format!("sample-{:04}/mode-{:04}", sample.sample_index, mode.raw_mode_index),
         "index": mode.raw_mode_index,
         "raw_mode_index": mode.raw_mode_index,
         "branch_id": mode.branch_id,

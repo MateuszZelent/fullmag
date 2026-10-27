@@ -87,7 +87,8 @@ export function createModeFieldOverlayIntent(
   selection: FrequencyDomainSelectionRef | null | undefined,
 ): ModeFieldOverlayIntent | null {
   if (!selection || !(selection.kind.startsWith("results.eigen") ||
-    selection.kind === "results.resonance.modal.mode")) return null;
+    selection.kind === "results.resonance.modal.mode" ||
+    selection.kind === "results.dispersion.modal.mode_at_k")) return null;
   const analysisRunId = requiredString(selection.analysisRunId);
   const analysisStageId = requiredString(selection.analysisStageId);
   const artifactRevision = requiredString(selection.artifactRevision);

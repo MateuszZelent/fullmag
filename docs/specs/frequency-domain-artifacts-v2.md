@@ -150,7 +150,11 @@ jednoznaczną referencję do branch, metadanych i payloadu; brakujący lub czę�
 payload żądanego eksportu jest błędem writera, nie zerowym wektorem zastępczym.
 
 `sample_id` i `mode_id` są stabilną tożsamością danych, natomiast
-`sample_index`/`raw_mode_index` są indeksami prezentacyjnymi. Każdy mode field
+`sample_index`/`raw_mode_index` są indeksami prezentacyjnymi. Natywne publikacje single-k i k-path zapisują
+`mode_id` w widmie v2 tak samo jak w v3 (`sample-####/mode-####`);
+metadane single-k zapisują również `sample_id`. UI nie odtwarza tych
+identyfikatorów z pozycji wiersza. Rewizja przekazywana do kontrolera pola
+pochodzi z zasobu manifestu, a nie z licznika postępu runu. Każdy mode field
 referuje Cartesian complex payload; sam tangent-local vector bez rekonstrukcji
 `global_xyz` nie jest poprawnym `mode_field_id` do wizualizacji.
 

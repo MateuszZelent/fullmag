@@ -841,6 +841,14 @@ async function inspectVisibleField(page, options, proof, deadline) {
   );
   await controls.waitFor({ state: "visible", timeout: remainingTimeout(deadline, "eigenmode 3D controls") });
   const activeViews = controls.locator('button[aria-pressed="true"]');
+  // Selecting Results establishes ownership; explicitly request the rendered
+  // component through the same inspector action available to the user.
+  if (await activeViews.count() === 0) {
+    const rotated = controls.getByRole("button", {
+      name: "Plot selected eigen mode with phase-rotated real display", exact: true,
+    });
+    await rotated.click({ timeout: remainingTimeout(deadline, "plot eigenmode component") });
+  }
   await pollUntil(
     deadline,
     "active eigenmode 3D visualization view",
@@ -937,6 +945,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const observations = [];
   const mutationAttempts = [];
+  const visualizationRequests = [];
   const browserConsole = { errors: [], warnings: [], pageErrors: [] };
   const uiRequests = [];
   const uiResponses = [];
@@ -960,7 +969,12 @@ async function main() {
     safety: {
       mutationAttempts,
       mutationRequestsAborted: true,
-      permittedApiMethods: ["GET"],
+      visualizationRequests,
+      permittedApiMethods: ["GET", "HEAD", "OPTIONS"],
+      permittedVisualizationMutations: [
+        "PATCH /v2/sessions/current/visualization/state",
+        "POST /v2/sessions/current/visualization/client-acks",
+      ],
     },
   };
   let browser = null;
@@ -1017,6 +1031,16 @@ async function main() {
         return;
       }
       const path = pathForUrl(request.url());
+      const sameApiOrigin = new URL(request.url()).origin === new URL(options.apiBase).origin;
+      const visualizationOnly = sameApiOrigin && (
+        request.method() === "PATCH" && path === "/v2/sessions/current/visualization/state" ||
+        request.method() === "POST" && path === "/v2/sessions/current/visualization/client-acks"
+      );
+      if (visualizationOnly) {
+        visualizationRequests.push({ method: request.method(), path, url: request.url() });
+        await route.continue();
+        return;
+      }
       mutationAttempts.push({ method: request.method(), path, url: request.url() });
       await route.abort("blockedbyclient");
     });

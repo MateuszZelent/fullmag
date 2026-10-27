@@ -780,7 +780,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
   ])("reads canonical manifest coordinates without hiding conflicts: $accepted / $requested", ({ requested, boundary, sampling, accepted }) => {
     const adapted = physicsFirstResultsSnapshotFromResources({
       currentRun: { revision: 20, run_id: "native-k10" },
-      manifest: { result_manifest: { status: "ready", run_id: "native-k10", stage_id: "eigenmodes", payload: {
+      manifest: { result_manifest: { status: "ready", revision: "sha256:manifest-k10", run_id: "native-k10", stage_id: "eigenmodes", payload: {
         study_product: "modal_eigen", equilibrium_identity: "eq-k10",
         boundary_context: boundary, k_sampling: sampling, requested_execution: requested,
         run_id: "native-k10", stage_id: "eigenmodes",
@@ -790,6 +790,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
     expect(adapted.snapshot.entries).toHaveLength(accepted ? 1 : 0);
     if (accepted) {
       expect(adapted.snapshot.entries[0]).toMatchObject({
+        artifactRevision: "sha256:manifest-k10",
         boundaryContext: "floquet_periodic",
         kSampling: { kind: "single", vectorRadPerM: [0, 1e7, 0] },
       });

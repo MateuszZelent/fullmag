@@ -93,6 +93,12 @@ describe("ModeFieldOverlayIntent", () => {
     expect(Object.isFrozen(intent)).toBe(true);
   });
 
+  it("accepts an exact nonzero-k Results mode and rejects missing stable identity", () => {
+    const atK = { ...selection, kind: "results.dispersion.modal.mode_at_k" as const };
+    expect(createModeFieldOverlayIntent(atK)?.modeId).toBe(selection.modeId);
+    expect(createModeFieldOverlayIntent({ ...atK, modeId: undefined })).toBeNull();
+  });
+
   it("requires an explicit sample equilibrium for every eigenmode intent", () => {
     expect(createModeFieldOverlayIntent({ ...selection, equilibriumId: undefined })).toBeNull();
     expect(createModeFieldOverlayIntent({ ...selection, equilibriumId: " " })).toBeNull();

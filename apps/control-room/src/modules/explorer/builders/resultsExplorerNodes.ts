@@ -112,6 +112,7 @@ interface ResultResourceLike {
 }
 
 interface ResultManifestLike extends ResultResourceLike {
+  revision?: string | null;
   mesh_generation_id?: string | null;
   payload?: unknown;
   run_id?: string | null;
@@ -540,6 +541,7 @@ export function physicsFirstResultsSnapshotFromResources(
   }
   const stageId = ownerStageId;
   const artifactRevision =
+    nonEmptyString(resultManifest?.revision) ??
     nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
   const products: PhysicsFirstResultProducts =
     studyProduct === "modal_eigen"

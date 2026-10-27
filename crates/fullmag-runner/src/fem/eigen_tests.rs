@@ -5380,6 +5380,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         .get("component_participation")
         .is_none());
     assert_eq!(spectrum_v2["samples"][0]["sample_id"], "k-sample-0000");
+    assert_eq!(spectrum_v2["samples"][0]["modes"][0]["mode_id"], "sample-0000/mode-0000");
     assert!(spectrum_v2["samples"][0].get("method_evidence").is_none());
     assert_eq!(spectrum_v2["solve_succeeded"], true);
     assert_eq!(spectrum_v2["fields_available"], true);
