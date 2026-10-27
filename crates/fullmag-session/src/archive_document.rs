@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 pub(crate) const MAX_CONTROL_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -36,10 +36,17 @@ impl ArchiveFileSnapshot {
         if self.byte_count > MAX_CONTROL_DOCUMENT_BYTES {
             bail!("structural export document `{relative}` exceeds metadata budget");
         }
+        self.read_bounded(root, relative, MAX_CONTROL_DOCUMENT_BYTES)
+    }
+
+    pub fn read_bounded(&self, root: &Path, relative: &str, maximum: u64) -> Result<Vec<u8>> {
+        if self.byte_count > maximum {
+            bail!("archive payload `{relative}` exceeds its byte budget");
+        }
         let path = crate::repository_path::checked_path(root, relative)?;
         let mut data = Vec::new();
         File::open(&path)?
-            .take(MAX_CONTROL_DOCUMENT_BYTES + 1)
+            .take(maximum.saturating_add(1))
             .read_to_end(&mut data)?;
         if data.len() as u64 != self.byte_count
             || crate::cas::hex_sha256(&data) != self.content_sha256
@@ -70,9 +77,9 @@ impl<'a> ArchiveDocuments<'a> {
         match self {
             Self::Memory(documents) => Box::new(documents.keys()),
             Self::Files { snapshots, .. } => Box::new(snapshots.keys()),
-            Self::FilesWithInline { snapshots, inline, .. } => {
-                Box::new(snapshots.keys().chain(inline.keys()))
-            }
+            Self::FilesWithInline {
+                snapshots, inline, ..
+            } => Box::new(snapshots.keys().chain(inline.keys())),
         }
     }
 
@@ -80,9 +87,9 @@ impl<'a> ArchiveDocuments<'a> {
         match self {
             Self::Memory(documents) => documents.contains_key(path),
             Self::Files { snapshots, .. } => snapshots.contains_key(path),
-            Self::FilesWithInline { snapshots, inline, .. } => {
-                snapshots.contains_key(path) || inline.contains_key(path)
-            }
+            Self::FilesWithInline {
+                snapshots, inline, ..
+            } => snapshots.contains_key(path) || inline.contains_key(path),
         }
     }
 
@@ -93,7 +100,9 @@ impl<'a> ArchiveDocuments<'a> {
                 .get(path)
                 .map(|data| ArchiveFileSnapshot::from_bytes(data)),
             Self::Files { snapshots, .. } => snapshots.get(path).cloned(),
-            Self::FilesWithInline { snapshots, inline, .. } => inline
+            Self::FilesWithInline {
+                snapshots, inline, ..
+            } => inline
                 .get(path)
                 .map(|data| ArchiveFileSnapshot::from_bytes(data))
                 .or_else(|| snapshots.get(path).cloned()),
@@ -116,7 +125,11 @@ impl<'a> ArchiveDocuments<'a> {
                         .with_context(|| format!("reading planned export document `{path}`"))
                 })
                 .transpose(),
-            Self::FilesWithInline { snapshots, root, inline } => {
+            Self::FilesWithInline {
+                snapshots,
+                root,
+                inline,
+            } => {
                 if let Some(data) = inline.get(path) {
                     return Ok(Some(Cow::Borrowed(data.as_slice())));
                 }
@@ -151,20 +164,26 @@ mod tests {
             b"{\"version\":1}"
         );
         std::fs::write(&path, b"{\"version\":2}").unwrap();
-        assert!(snapshot
-            .read_control(directory.path(), "control.json")
-            .is_err());
+        assert!(
+            snapshot
+                .read_control(directory.path(), "control.json")
+                .is_err()
+        );
         std::fs::remove_file(&path).unwrap();
-        assert!(snapshot
-            .read_control(directory.path(), "control.json")
-            .is_err());
+        assert!(
+            snapshot
+                .read_control(directory.path(), "control.json")
+                .is_err()
+        );
         let oversized = ArchiveFileSnapshot {
             byte_count: MAX_CONTROL_DOCUMENT_BYTES + 1,
             content_sha256: snapshot.content_sha256,
         };
-        assert!(oversized
-            .read_control(directory.path(), "control.json")
-            .is_err());
+        assert!(
+            oversized
+                .read_control(directory.path(), "control.json")
+                .is_err()
+        );
     }
     #[test]
     fn lazy_file_inventory_supports_inline_project_document_overlay() {
@@ -202,5 +221,4 @@ mod tests {
             b"spectrum"
         );
     }
-
 }

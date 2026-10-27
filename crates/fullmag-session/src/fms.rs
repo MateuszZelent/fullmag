@@ -65,6 +65,9 @@ use crate::reachability::{self, ReachabilityMode, ReachabilityReport};
 use crate::store::SessionStore;
 use crate::types::*;
 
+#[path = "fms_accepted_projection.rs"]
+mod accepted_projection;
+
 /// Options controlling how the `.fms` file is written.
 pub struct PackOptions {
     pub compression: CompressionProfile,
@@ -292,6 +295,7 @@ fn pack_fms_inner<W: Write + Seek>(
             &canonical_root,
             session,
             &provenance.manifest.accepted_run_id,
+            export_profile,
         )?
     } else {
         plan_run_entries(store.root(), &canonical_root, session, export_profile)?
@@ -561,13 +565,14 @@ fn plan_cas_entries(
         // outbound authority or CAS references.  Do not ask the file-backed
         // walker to open its absent live-store path; only project documents
         // can contribute ordinary live-store CAS references here.
-        let empty = HashMap::new();
+        let projected = run_entries.iter().filter(|entry| entry.inline_data.is_none())
+            .map(|entry| (entry.archive_path.clone(), entry.snapshot.clone())).collect();
         let inline = project_documents
             .iter()
             .map(|(name, data)| Ok((project_archive_path(name)?, data.clone())))
             .collect::<Result<HashMap<_, _>>>()?;
         reachability::walk_export_file_documents_with_project_and_cas(
-            &empty, canonical_root, &inline, accepted_cas,
+            &projected, canonical_root, &inline, accepted_cas,
         )?
     } else if let Some(snapshot) = snapshot {
         let inline = HashMap::from([(
@@ -784,6 +789,7 @@ fn plan_v2_synthetic_run_entries(
     canonical_root: &Path,
     session: &FmsSessionManifest,
     accepted_run_id: &str,
+    profile: &FmsExportProfile,
 ) -> Result<Vec<PackEntry>> {
     let expected_ref = format!("runs/{accepted_run_id}/run_manifest.json");
     if session.run_refs.len() != 1 || session.run_refs.first() != Some(&expected_ref) {
@@ -820,7 +826,13 @@ fn plan_v2_synthetic_run_entries(
     };
     let bytes = serde_json::to_vec_pretty(&sanitized)
         .context("serializing accepted synthetic run manifest")?;
-    Ok(vec![PackEntry::from_inline_bytes(expected_ref, bytes)])
+    let mut entries = vec![PackEntry::from_inline_bytes(expected_ref, bytes)];
+    if profile.include_artifacts() {
+        plan_artifact_entries(store_root, canonical_root, accepted_run_id, &mut entries)?;
+    }
+    let inventory = entries.iter().map(|entry| entry.archive_path.clone()).collect();
+    accepted_projection::validate(canonical_root, accepted_run_id, &inventory, profile.include_artifacts())?;
+    Ok(entries)
 }
 
 fn plan_run_entries(
@@ -1895,9 +1907,12 @@ fn validate_export_plan(
         if session.run_refs.len() != 1 || session.run_refs.first() != Some(&expected_run_ref) {
             bail!("fullmag.session.v2 must contain only its accepted synthetic run manifest");
         }
-        if run_entries.len() != 1
+        let projection_prefix = format!("runs/{accepted_run_id}/artifacts/");
+        if run_entries.is_empty()
             || run_entries[0].archive_path != expected_run_ref
             || run_entries[0].inline_data.is_none()
+            || run_entries.iter().skip(1).any(|entry|
+                entry.inline_data.is_some() || !entry.archive_path.starts_with(&projection_prefix))
         {
             bail!("fullmag.session.v2 run entry is not a synthetic run manifest");
         }
@@ -2222,6 +2237,14 @@ pub struct FmsStagedPreflight {
 impl FmsStagedPreflight {
     pub fn contains_document(&self, name: &str) -> bool {
         self.documents.contains_key(name)
+    }
+
+    /// Read one explicit inventoried payload with a caller-supplied byte bound.
+    /// Paths and bytes remain pinned to this private decoded inventory.
+    pub fn read_payload_bounded(&self, name: &str, maximum: u64) -> Result<Vec<u8>> {
+        validate_portable_namespace_path(name)?;
+        self.documents.get(name).context("required archive payload is missing")?
+            .read_bounded(&self.root, name, maximum)
     }
 
     /// Read one explicitly requested control document within the metadata budget.
@@ -2564,12 +2587,16 @@ fn validate_v2_readonly_archive(preflight: &FmsStagedPreflight) -> Result<()> {
         bail!("v2 synthetic run manifest carries an authority reference");
     }
 
+    let inventory = preflight.documents.keys().cloned().collect();
+    let projections = accepted_projection::validate(&preflight.root, &reference.accepted_run_id,
+        &inventory, preflight.export_profile.include_artifacts() && preflight.session.profile != SaveProfile::Compact)?;
     for name in preflight.documents.keys() {
         let allowed = name == "manifest/session.json"
             || name == "manifest/workspace.json"
             || name == "manifest/export_profile.json"
             || name == FMS_ACCEPTED_PROVENANCE_MANIFEST_REF
             || name == &expected_run_ref
+            || projections.contains(name)
             || name.starts_with("project/")
             || name.starts_with("accepted_provenance/");
         if name.starts_with("objects/sha256/") {
@@ -3466,153 +3493,231 @@ mod tests {
 
     #[test]
     fn v2_accepted_provenance_uses_readonly_import_namespace() {
-        let directory = tempfile::tempdir().unwrap();
-        let accepted_root = directory.path().join("accepted-store");
-        let accepted = SessionStore::open(&accepted_root).unwrap();
-        let intent = FmsRunIntent::new(
-            "run-accepted",
-            "intent-accepted",
-            serde_json::json!({"run_id": "run-accepted", "solver": "fixture"}),
-        );
-        accepted.commit_run_intent(&intent).unwrap();
-        accepted
-            .commit_run_catalog(&FmsRunCatalog {
-                schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
-                run_id: "run-accepted".into(),
-                revision: 1,
-                updated_at: chrono::Utc::now(),
-                tasks: Vec::new(),
-            })
-            .unwrap();
-        drop(accepted);
-
-        let provenance = crate::accepted_provenance::plan_accepted_provenance(
-            &accepted_root,
-            &crate::accepted_provenance::AcceptedProvenanceContext {
-                source_store_binding: format!("sha256:{}", "a".repeat(64)),
-                accepted_run_id: "run-accepted".into(),
-                captured_live_session_id: "session-live".into(),
-                captured_live_session_epoch: 1,
-                captured_scene_revision: "scene-1".into(),
-            },
-        )
-        .unwrap();
-
-        let source_store = SessionStore::open(directory.path().join("live-store")).unwrap();
-        source_store.commit_run(&test_run("run-accepted")).unwrap();
-        // These are deliberately polluted live-store authority records.  The
-        // v2 packer must ignore them and emit only the sanitized manifest.
-        source_store
-            .write_import_document(
-                "runs/run-accepted/run_intent.json",
-                br#"{"run_id":"run-accepted","polluted":true}"#,
-            )
-            .unwrap();
-        source_store
-            .write_import_document(
-                "runs/run-accepted/start_release.json",
-                br#"{"polluted":true}"#,
-            )
-            .unwrap();
-        let script = b"print('accepted provenance')".to_vec();
-        let workspace = test_workspace(&script);
-        let export_profile = FmsExportProfile::for_profile(SaveProfile::Compact);
-        let mut session = FmsSessionManifest::new("session-v2", "Accepted", SaveProfile::Compact);
-        session.format = FMS_SESSION_FORMAT_V2.into();
-        session.accepted_provenance_ref = Some(FmsAcceptedProvenanceReference {
-            manifest_ref: FMS_ACCEPTED_PROVENANCE_MANIFEST_REF.into(),
-            accepted_run_id: "run-accepted".into(),
-            closure_sha256: provenance.manifest.closure_sha256.clone(),
-        });
-        session
-            .run_refs
-            .push("runs/run-accepted/run_manifest.json".into());
-        let mut documents = HashMap::new();
-        documents.insert("main.py".into(), script);
-        let mut archive = Cursor::new(Vec::new());
-        pack_fms_with_accepted_provenance(
-            &mut archive,
-            &source_store,
-            &session,
-            &workspace,
-            &export_profile,
-            &documents,
-            &PackOptions::default(),
-            &provenance,
-        )
-        .unwrap();
-
-        let archive = archive.into_inner();
-        let polluted_archive = archive_with_added_entry(
-            &archive,
-            "runs/run-accepted/run_intent.json",
-            &serde_json::to_vec(&intent).unwrap(),
-        );
-        let polluted_staging = tempfile::tempdir().unwrap();
-        let polluted =
-            preflight_fms_staged(Cursor::new(&polluted_archive), &[], polluted_staging.path())
+        for profile in [SaveProfile::Compact, SaveProfile::Solved] {
+            let directory = tempfile::tempdir().unwrap();
+            let accepted_root = directory.path().join("accepted-store");
+            let accepted = SessionStore::open(&accepted_root).unwrap();
+            let intent = FmsRunIntent::new(
+                "run-accepted",
+                "intent-accepted",
+                serde_json::json!({"run_id": "run-accepted", "solver": "fixture"}),
+            );
+            accepted.commit_run_intent(&intent).unwrap();
+            accepted
+                .commit_run_catalog(&FmsRunCatalog {
+                    schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+                    run_id: "run-accepted".into(),
+                    revision: 1,
+                    updated_at: chrono::Utc::now(),
+                    tasks: Vec::new(),
+                })
                 .unwrap();
-        let polluted_destination = tempfile::tempdir().unwrap();
-        let polluted_store = SessionStore::open(polluted_destination.path().join("store")).unwrap();
-        let error = unpack_fms_staged_readonly(&polluted, &polluted_store).unwrap_err();
-        assert!(error.to_string().contains("authority archive entry"));
+            drop(accepted);
 
-        let staging_parent = tempfile::tempdir().unwrap();
-        let staged =
-            preflight_fms_staged(Cursor::new(&archive), &[], staging_parent.path()).unwrap();
-        assert!(
-            staged.reachability.complete,
-            "{:?}",
-            staged.reachability.warnings
-        );
-        let synthetic: FmsRunManifest = serde_json::from_slice(
-            &staged
-                .read_document("runs/run-accepted/run_manifest.json")
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(synthetic.plan_ref.is_none());
-        assert!(synthetic.latest_checkpoint_ref.is_none());
-        assert!(!staged.contains_document("runs/run-accepted/run_intent.json"));
-        assert!(!staged.contains_document("runs/run-accepted/start_release.json"));
-        assert!(
-            staged
-                .documents
-                .keys()
-                .all(|name| !name.starts_with("solutions/")),
-            "compact v2 archive must not carry solution outputs"
-        );
-        let imported_parent = tempfile::tempdir().unwrap();
-        let imported = SessionStore::open(imported_parent.path().join("store")).unwrap();
-        let loaded = unpack_fms_staged_readonly(&staged, &imported).unwrap();
-        assert_eq!(loaded.format, FMS_SESSION_FORMAT_V2);
-        assert!(
-            imported
-                .root()
-                .join("imports/accepted_provenance/manifest.json")
-                .is_file()
-        );
-        assert!(
-            imported
-                .root()
-                .join("imports/accepted_provenance/runs/run-accepted/run_intent.json")
-                .is_file()
-        );
-        assert!(
-            !imported
-                .root()
-                .join("runs/run-accepted/run_intent.json")
-                .exists()
-        );
-        assert!(imported.read_run_intent("run-accepted").unwrap().is_none());
-        assert_eq!(
-            imported
-                .current_session()
-                .unwrap()
-                .unwrap()
-                .accepted_provenance_ref,
-            session.accepted_provenance_ref
-        );
+            let provenance = crate::accepted_provenance::plan_accepted_provenance(
+                &accepted_root,
+                &crate::accepted_provenance::AcceptedProvenanceContext {
+                    source_store_binding: format!("sha256:{}", "a".repeat(64)),
+                    accepted_run_id: "run-accepted".into(),
+                    captured_live_session_id: "session-live".into(),
+                    captured_live_session_epoch: 1,
+                    captured_scene_revision: "scene-1".into(),
+                },
+            )
+            .unwrap();
+
+            let source_store = SessionStore::open(directory.path().join("live-store")).unwrap();
+            source_store.commit_run(&test_run("run-accepted")).unwrap();
+            // These are deliberately polluted live-store authority records.  The
+            // v2 packer must ignore them and emit only the sanitized manifest.
+            source_store
+                .write_import_document(
+                    "runs/run-accepted/run_intent.json",
+                    br#"{"run_id":"run-accepted","polluted":true}"#,
+                )
+                .unwrap();
+            source_store
+                .write_import_document(
+                    "runs/run-accepted/start_release.json",
+                    br#"{"polluted":true}"#,
+                )
+                .unwrap();
+            let script = b"print('accepted provenance')".to_vec();
+            let workspace = test_workspace(&script);
+            let mut projected_member = None;
+            if profile == SaveProfile::Solved {
+                use crate::frequency_domain_artifact_generation as generation;
+                let payload = [1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0]
+                    .into_iter()
+                    .flat_map(f64::to_le_bytes)
+                    .collect::<Vec<_>>();
+                let body = generation::GenerationBody {
+                    schema_version: generation::IMMUTABLE_SCHEMA.into(),
+                    producer: Some(generation::PublicationOwner {
+                        run_id: "run-accepted".into(),
+                        stage_id: "eigen".into(),
+                        stage_kind: "eigenmodes".into(),
+                    }),
+                    members: BTreeMap::from([(
+                        "eigen/vector.bin".into(),
+                        generation::GenerationMember {
+                            byte_length: payload.len() as u64,
+                            sha256: generation::digest(&payload),
+                        },
+                    )]),
+                };
+                let commit = generation::GenerationCommit {
+                    generation_id: generation::generation_id(&body).unwrap(),
+                    content: body,
+                };
+                let artifact = source_store.root().join("runs/run-accepted/artifacts");
+                let relative = format!(
+                    "{}/{}/eigen/vector.bin",
+                    generation::GENERATION_DIRECTORY,
+                    commit.generation_id.strip_prefix("sha256:").unwrap()
+                );
+                fs::create_dir_all(artifact.join(&relative).parent().unwrap()).unwrap();
+                fs::create_dir_all(
+                    artifact
+                        .join(generation::IMMUTABLE_COMMIT_PATH)
+                        .parent()
+                        .unwrap(),
+                )
+                .unwrap();
+                fs::write(artifact.join(&relative), &payload).unwrap();
+                fs::write(
+                    artifact.join(generation::IMMUTABLE_COMMIT_PATH),
+                    serde_json::to_vec_pretty(&commit).unwrap(),
+                )
+                .unwrap();
+                projected_member = Some((format!("runs/run-accepted/artifacts/{relative}"), payload));
+            }
+            let export_profile = FmsExportProfile::for_profile(profile);
+            let mut session = FmsSessionManifest::new("session-v2", "Accepted", profile);
+            session.format = FMS_SESSION_FORMAT_V2.into();
+            session.accepted_provenance_ref = Some(FmsAcceptedProvenanceReference {
+                manifest_ref: FMS_ACCEPTED_PROVENANCE_MANIFEST_REF.into(),
+                accepted_run_id: "run-accepted".into(),
+                closure_sha256: provenance.manifest.closure_sha256.clone(),
+            });
+            session
+                .run_refs
+                .push("runs/run-accepted/run_manifest.json".into());
+            let mut documents = HashMap::new();
+            documents.insert("main.py".into(), script);
+            let mut archive = Cursor::new(Vec::new());
+            pack_fms_with_accepted_provenance(
+                &mut archive,
+                &source_store,
+                &session,
+                &workspace,
+                &export_profile,
+                &documents,
+                &PackOptions::default(),
+                &provenance,
+            )
+            .unwrap();
+
+            let archive = archive.into_inner();
+            let polluted_archive = archive_with_added_entry(
+                &archive,
+                "runs/run-accepted/run_intent.json",
+                &serde_json::to_vec(&intent).unwrap(),
+            );
+            let polluted_staging = tempfile::tempdir().unwrap();
+            let polluted =
+                preflight_fms_staged(Cursor::new(&polluted_archive), &[], polluted_staging.path())
+                    .unwrap();
+            let polluted_destination = tempfile::tempdir().unwrap();
+            let polluted_store = SessionStore::open(polluted_destination.path().join("store")).unwrap();
+            let error = unpack_fms_staged_readonly(&polluted, &polluted_store).unwrap_err();
+            assert!(error.to_string().contains("authority archive entry"));
+
+            let staging_parent = tempfile::tempdir().unwrap();
+            let staged =
+                preflight_fms_staged(Cursor::new(&archive), &[], staging_parent.path()).unwrap();
+            assert!(
+                staged.reachability.complete,
+                "{:?}",
+                staged.reachability.warnings
+            );
+            let synthetic: FmsRunManifest = serde_json::from_slice(
+                &staged
+                    .read_document("runs/run-accepted/run_manifest.json")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(synthetic.plan_ref.is_none());
+            assert!(synthetic.latest_checkpoint_ref.is_none());
+            assert!(!staged.contains_document("runs/run-accepted/run_intent.json"));
+            assert!(!staged.contains_document("runs/run-accepted/start_release.json"));
+            assert!(
+                staged
+                    .documents
+                    .keys()
+                    .all(|name| !name.starts_with("solutions/")),
+                "compact v2 archive must not carry solution outputs"
+            );
+            let imported_parent = tempfile::tempdir().unwrap();
+            let imported = SessionStore::open(imported_parent.path().join("store")).unwrap();
+            let loaded = unpack_fms_staged_readonly(&staged, &imported).unwrap();
+            assert_eq!(loaded.format, FMS_SESSION_FORMAT_V2);
+            assert!(
+                imported
+                    .root()
+                    .join("imports/accepted_provenance/manifest.json")
+                    .is_file()
+            );
+            assert!(
+                imported
+                    .root()
+                    .join("imports/accepted_provenance/runs/run-accepted/run_intent.json")
+                    .is_file()
+            );
+            assert!(
+                !imported
+                    .root()
+                    .join("runs/run-accepted/run_intent.json")
+                    .exists()
+            );
+            assert!(imported.read_run_intent("run-accepted").unwrap().is_none());
+            assert_eq!(
+                imported
+                    .current_session()
+                    .unwrap()
+                    .unwrap()
+                    .accepted_provenance_ref,
+                session.accepted_provenance_ref
+            );
+            if let Some((name, expected)) = projected_member {
+                assert_eq!(
+                    staged
+                        .read_payload_bounded(&name, expected.len() as u64)
+                        .unwrap(),
+                    expected
+                );
+                assert!(
+                    staged
+                        .read_payload_bounded(&name, (expected.len() - 1) as u64)
+                        .is_err()
+                );
+                assert_eq!(fs::read(imported.root().join(&name)).unwrap(), expected);
+                for extra in [
+                    "runs/run-accepted/resource_leases/forged.json",
+                    "runs/run-accepted/artifacts/claim.json",
+                ] {
+                    let polluted = archive_with_added_entry(&archive, extra, b"{}");
+                    let polluted_staging = tempfile::tempdir().unwrap();
+                    let staged =
+                        preflight_fms_staged(Cursor::new(&polluted), &[], polluted_staging.path())
+                            .unwrap();
+                    let destination = tempfile::tempdir().unwrap();
+                    let store = SessionStore::open(destination.path().join("store")).unwrap();
+                    assert!(unpack_fms_staged_readonly(&staged, &store).is_err());
+                    assert!(store.current_session().unwrap().is_none());
+                }
+            }
+        }
     }
 
     fn portable_solution(object_ref: String, byte_length: u64) -> SolutionSet {

@@ -80,7 +80,7 @@ pub(crate) fn publish_verified_modal_outputs(
     )
 }
 
-fn publish_modal_bundle(
+pub(crate) fn publish_modal_bundle(
     artifact_root: &Path,
     session_id: &str,
     expected_run_id: &str,
@@ -161,7 +161,7 @@ fn validate_snapshot_context(
     Ok(())
 }
 
-fn validate_candidate_identity(
+pub(crate) fn validate_candidate_identity(
     session_id: &str,
     expected_run_id: &str,
     candidate: &ModalPublicationCandidate,
@@ -192,7 +192,7 @@ fn validate_candidate_identity(
     Ok(())
 }
 
-fn validate_bundle_payload(
+pub(crate) fn validate_bundle_payload(
     session_id: &str,
     expected_run_id: &str,
     candidate: &ModalPublicationCandidate,

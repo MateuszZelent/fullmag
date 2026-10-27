@@ -19,6 +19,15 @@ jobs:
         run: git rev-parse HEAD
       - name: Run complete FMS and typed session document contracts
         run: cargo test --locked -p fullmag-session --lib --no-fail-fast
+      - name: Preserve accepted modal archive projection and cold import contracts
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api session_persistence::accepted_modal::tests -- --nocapture | tee "$RUNNER_TEMP/accepted-modal-archive.log"
+          grep -F "selects_and_publishes_exact_nonempty_complex_bundle ... ok" "$RUNNER_TEMP/accepted-modal-archive.log"
+          grep -F "rejects_missing_zarr_chunk_even_when_new_digest_and_commit_match ... ok" "$RUNNER_TEMP/accepted-modal-archive.log"
+          grep -F "rejects_unowned_stale_ambiguous_and_corrupt_bundles ... ok" "$RUNNER_TEMP/accepted-modal-archive.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api session_persistence::tests -- --nocapture
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_modal_publication::tests -- --nocapture
       - name: Run session ownership and physical field contracts
         run: cargo test --locked -p fullmag-api --bin fullmag-api session::tests --no-fail-fast
       - name: Preserve dataset source paths and byte revisions

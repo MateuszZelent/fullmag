@@ -3,6 +3,9 @@
 #[path = "session_persistence_antenna_import.rs"]
 mod antenna_import;
 
+#[path = "session_persistence_accepted_modal.rs"]
+mod accepted_modal;
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Read, Write};
@@ -2722,6 +2725,11 @@ pub(crate) async fn export_session_with_context(
     let _transaction = store
         .write_transaction()
         .map_err(|error| ApiError::conflict(error.to_string()))?;
+    if export_profile.include_artifacts() {
+        if let Some(capture) = accepted_capture.as_ref() {
+            accepted_modal::capture(&store, &snapshot, &capture.provenance)?;
+        }
+    }
     if export_profile.include_artifacts() && accepted_capture.is_none() {
         let (run_manifest, artifact_source) = run_capture.as_ref().ok_or_else(|| {
             ApiError::conflict("solved session export requires an active run artifact directory")
@@ -2849,6 +2857,7 @@ pub(crate) async fn import_session_inspect(
                 ))
             })?;
         validate_imported_accepted_provenance(&staged, &persisted)?;
+        accepted_modal::validate_import(&staged, &persisted)?;
     }
     let inspection = staged.inspection.clone();
 
@@ -3286,6 +3295,7 @@ pub(crate) async fn import_session_commit_with_context(
     // archive before any presentation/reference normalization can rewrite
     // identity-bearing fields.
     validate_imported_accepted_provenance(&preflight, &persisted)?;
+    accepted_modal::validate_import(&preflight, &persisted)?;
     antenna_import::normalize_registered_refs(&mut persisted, &preflight)?;
     normalize_imported_read_only(&mut persisted);
     let import_id = format!(
