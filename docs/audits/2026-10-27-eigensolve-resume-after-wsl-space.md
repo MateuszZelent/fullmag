@@ -190,3 +190,29 @@ Po re-atestacji resume 49bffae4… zatrzymał się poprawnie na starej tożsamo�
 native ownera vs nowy build. Istniejąca procedura stop-bootstrap-volume
 potwierdziła dokładną diagnostyczną instancję i zatrzymała ją, zachowując
 OWNER i wszystkie lease. Kolejne odtworzenie: fresh-state przez launcher.
+
+## Pełny signed15 zakończony natywnie; naprawa projekcji po retry
+
+Na runtime 4f6469b1c run d09693e8… miał pierwszy attempt Relax odrzucony
+przed solverem przez nieaktualny compute-node sample. Po potwierdzeniu
+publikowanych bieżących pomiarów wykonano publiczny POST task/retry:
+retry-de-signed15-current-node-sample-20261027, expected_catalog_revision=10.
+API zwróciło 202 i revision=11; zachowano ten sam run oraz zależności.
+Nie poluzowano progu świeżości ani nie edytowano ledgeru.
+
+Retry Relax epoch 2 i Eigen epoch 1 zakończyły się succeeded. Catalog revision
+213; 15 checkpointów, w tym Gamma sample 7 i oba końce ±25. Maksymalny pełny
+residual 2,7173e-11 < 1e-8. Gamma 9,299249697073517 GHz; −25:
+13,560765016846203 GHz, +25: 13,5609139692644 GHz. Dokładne wszystkie
+częstotliwości, residuale, katalog i SHA widma: signed15-stack-fixed-native
+.evidence.json. Przejście Floquet → Gamma w tym runie nie miało SIGSEGV.
+CI MFEM 40560264377 (w tym publiczne wejście na stosie 256 KiB) PASS.
+
+API pozostawało na starym failed/revision=6. Ustalona przyczyna:
+live_accepted_projection::poll_once przestawało czytać durable catalog po
+terminalnym wyniku tego samego runu. Poprawka zachowuje ochronę starych
+wyników po zmianie computational input, lecz dla niezmienionego input dalej
+obserwuje katalog i explicit retry. Regresja obejmuje failed/cancelled/completed,
+metadata-only edit, zmienioną fizykę i nowy run. Runtime/UI tej poprawki
+pozostają do odebrania po kontrolowanym przeładowaniu; nie nazywamy starego
+stanu API sukcesem. Chronimy ukończoną generację przed ponownym Solve.

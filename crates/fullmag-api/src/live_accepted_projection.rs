@@ -211,14 +211,11 @@ async fn poll_once(
     let Some(context) = capture_context(state).await? else {
         return Ok(());
     };
-    // A terminal run whose final state is already projected has nothing left
-    // to publish. Editing the model after it (the normal live workflow between
-    // commands) changes the input identity and must not retry it forever.
+    // Model edits after a terminal result must not republish that result into
+    // changed computational inputs. With unchanged inputs keep observing the
+    // durable catalog: an explicit task retry can advance the same run ID.
     if cursor.as_ref().is_some_and(|previous| {
-        previous.run_id == context.run_id
-            && previous.session_id == context.session_id
-            && previous.session_epoch == context.session_epoch
-            && matches!(previous.status, "completed" | "failed" | "cancelled")
+        terminal_projection_has_different_inputs(previous, &context)
     }) {
         // Release the projected run's Study; a next run has its own intent.
         *study_cache = None;
@@ -1064,6 +1061,17 @@ fn load_stage_terminal_details(
         reasons.insert(task.task_id.clone(), detail);
     }
     Ok(reasons)
+}
+
+fn terminal_projection_has_different_inputs(
+    previous: &ProjectionCursor,
+    context: &ProjectionContext,
+) -> bool {
+    previous.run_id == context.run_id
+        && previous.session_id == context.session_id
+        && previous.session_epoch == context.session_epoch
+        && matches!(previous.status, "completed" | "failed" | "cancelled")
+        && !cursor_matches_context(previous, context)
 }
 
 fn cursor_matches_context(cursor: &ProjectionCursor, context: &ProjectionContext) -> bool {
@@ -2927,6 +2935,54 @@ mod tests {
             ),
         };
         assert!(!cursor_matches_context(&previous, &context));
+    }
+
+    #[test]
+    fn terminal_projection_keeps_observing_retry_of_same_inputs() {
+        let mut context = ProjectionContext {
+            api_instance_id: "instance".into(),
+            session_id: "session".into(),
+            session_epoch: 1,
+            scene_revision: 7,
+            execution_input: Some(SceneExecutionInputIdentity {
+                schema_version: "scene_execution_input.v1".into(),
+                sha256: "a".repeat(64),
+            }),
+            run_id: "run".into(),
+            allow_api_instance_rebind: false,
+        };
+        let mut previous = ProjectionCursor {
+            api_instance_id: "instance".into(),
+            session_id: "session".into(),
+            session_epoch: 1,
+            scene_revision: 7,
+            execution_input_sha256: Some("a".repeat(64)),
+            run_id: "run".into(),
+            run_revision: 10,
+            artifact_revision: None,
+            status: "failed",
+            latest_output_identity: None,
+            live_observation_identity: None,
+            live_observation_sequence: None,
+            live_magnetization_sequence: None,
+            stage_execution: crate::session::accepted_stage_execution_state(
+                Vec::new(), crate::types::RuntimeLifecycleState::Unknown,
+            ),
+        };
+        for status in ["failed", "cancelled", "completed"] {
+            previous.status = status;
+            assert!(!terminal_projection_has_different_inputs(&previous, &context),
+                "terminal same-run results must still poll the catalog for explicit retry");
+        }
+        context.scene_revision += 1;
+        assert!(!terminal_projection_has_different_inputs(&previous, &context),
+            "metadata-only edits must not hide a durable retry");
+        context.execution_input.as_mut().unwrap().sha256 = "b".repeat(64);
+        assert!(terminal_projection_has_different_inputs(&previous, &context),
+            "changed physics must not republish an old terminal result");
+        context.run_id = "next-run".into();
+        assert!(!terminal_projection_has_different_inputs(&previous, &context),
+            "a new run must always be observed");
     }
 
     #[test]
