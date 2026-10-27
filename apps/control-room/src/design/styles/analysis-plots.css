@@ -1180,3 +1180,26 @@
 .fm-analysis-plots__comparison-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .fm-analysis-plots__comparison-table th,
 .fm-analysis-plots__comparison-table td { padding: var(--fm-space-2); text-align: right; border-bottom: 1px solid var(--fm-border-subtle); }
+
+/* Size the chart against its actual docked viewport, including narrow layouts. */
+.fm-analysis-plots:has(.fm-analysis-plots__frequency-canvas) {
+  container: modal-workbench / size;
+}
+.fm-analysis-plots__subchart--frequency-domain .fm-analysis-plots__frequency-canvas {
+  height: clamp(200px, calc(100cqh - 255px), 440px);
+  min-height: 200px;
+}
+.fm-analysis-plots__subchart--frequency-domain .fm-dispersion-axis-controls[data-has-signed-components="true"] .fm-dispersion-axis-controls__hint {
+  display: none;
+}
+@container modal-workbench (max-width: 450px) {
+  .fm-analysis-plots__subchart--frequency-domain .fm-chart-section__subtitle {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+  .fm-analysis-plots__subchart--frequency-domain .fm-dispersion-axis-controls__label { display: none; }
+  .fm-analysis-plots__subchart--frequency-domain .fm-chart-legend { flex-wrap: nowrap; overflow-x: auto; }
+  .fm-analysis-plots__subchart--frequency-domain .fm-chart-legend__item { flex-shrink: 0; }
+  .fm-analysis-plots__subchart--frequency-domain .fm-analysis-plots__frequency-canvas {
+    height: clamp(180px, calc(100cqh - 220px), 440px); min-height: 180px;
+  }
+}

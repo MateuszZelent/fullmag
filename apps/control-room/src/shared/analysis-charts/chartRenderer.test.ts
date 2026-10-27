@@ -171,8 +171,8 @@ describe("chart renderer owner", () => {
       ],
     });
     expect(option.series).toEqual([
-      expect.objectContaining({ id: "computed", silent: false, showSymbol: true, symbolSize: 4 }),
-      expect.objectContaining({ id: "reference", silent: true, showSymbol: true, symbolSize: 4 }),
+      expect.objectContaining({ id: "computed", silent: false, showSymbol: true, symbolSize: 4, z: 4 }),
+      expect.objectContaining({ id: "reference", silent: true, showSymbol: true, symbolSize: 4, z: 2 }),
     ]);
   });
 

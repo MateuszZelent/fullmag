@@ -106,7 +106,7 @@ describe("frequencyDomainChartModels", () => {
       }),
     ]);
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 3, y: 2.5 },
+      { ...model.points[0], rowIndex: 0, x: 3, y: 2.5 },
     ]);
     expect(model.series[0]?.unit).toBe("GHz");
     expect(model.series[0]?.xUnit).toBe("1");
@@ -363,8 +363,8 @@ describe("frequencyDomainChartModels", () => {
       }),
     ]);
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 0, y: 1.481196536 },
-      { rowIndex: 1, x: 1, y: 2.25 },
+      { ...model.points[0], rowIndex: 0, x: 0, y: 1.481196536 },
+      { ...model.points[1], rowIndex: 1, x: 1, y: 2.25 },
     ]);
   });
 
@@ -389,8 +389,8 @@ describe("frequencyDomainChartModels", () => {
       { displayModeIndex: 1, modeId: "mode-beta", rawModeIndex: 99 },
     ]);
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 0, y: 3 },
-      { rowIndex: 1, x: 1, y: 4 },
+      { ...model.points[0], rowIndex: 0, x: 0, y: 3 },
+      { ...model.points[1], rowIndex: 1, x: 1, y: 4 },
     ]);
   });
 

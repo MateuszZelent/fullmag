@@ -48,6 +48,7 @@ import {
   buildEigenDispersionChartModel,
   buildEigenDispersionPointSelectionRef,
   buildEigenSpectrumChartModel,
+  buildEigenModeSelectionRef,
   buildFrequencyResponsePointSelectionRef,
   buildFrequencyResponseChartModel,
   buildFmrModalDrivenComparisonModel,
@@ -1430,15 +1431,41 @@ export function FrequencyDomainResponseMapInspectorPanel(
   );
 }
 
+export function buildEigenSpectrumPointSelectionRefFromSelection(
+  point: EigenSpectrumPoint,
+  selection: InspectorPanelProps["selection"],
+  resultContext?: FrequencyDomainResultContext | null,
+) {
+  const owner = selection.ref?.type === "frequency-domain" ? selection.ref : null;
+  const equilibriumId = owner?.artifactRevision != null && resultContext?.evidence &&
+    owner.analysisRunId === resultContext.runId && owner.analysisStageId === resultContext.stageId
+    ? frequencyDomainEquilibriumIdForSample(resultContext, point.sampleIndex) : null;
+  return buildEigenModeSelectionRef(equilibriumId ? point : { ...point, modeFieldAvailable: false }, {
+    analysisRunId: owner?.analysisRunId, analysisStageId: owner?.analysisStageId,
+    artifactRevision: owner?.artifactRevision, artifactPath: owner?.artifactPath,
+    calculationMode: owner?.calculationMode ?? "free_modes", equilibriumId,
+    kContextKind: resultContext?.classification?.kContext.kind,
+    normalization: resultContext?.normalization, representation: "complex-vector-xyz",
+    resourceRef: point.modeFieldResourceKey, studyProduct: resultContext?.studyProduct,
+    wavevectorKf: owner?.wavevectorKf,
+  });
+}
+
 export function EigenSpectrumInspectorPanel(props: InspectorPanelProps) {
-  void props;
   const summary = useEigenSpectrumSummary();
   const kernel = useKernel();
+  const selectMode = (point: EigenSpectrumPoint): void => {
+    const ref = buildEigenSpectrumPointSelectionRefFromSelection(point, props.selection, summary.resultContext);
+    kernel.selection.set({ kind: ref.kind, label: `Sample ${point.sampleIndex}, mode ${point.rawModeIndex}`, nodeId: ref.nodeId, objectId: null, ref }, "inspector");
+  };
   const plotMode = (
     point: EigenSpectrumPoint,
     action: FrequencyDomainModeTableAction = "phase_rotated_real",
   ): void => {
-    if (!eigenModeFieldAvailable(point) || !point.modeFieldId || action === "inspect") return;
+    selectMode(point);
+    if (action === "inspect" || !eigenModeFieldAvailable(point) || !point.modeFieldId) return;
+    const selected = kernel.selection.get().ref;
+    if (selected?.type !== "frequency-domain" || selected.fieldId !== point.modeFieldId) return;
     void kernel.commands.execute(
       "analysis.eigen.plot-mode-3d",
       createCommandContext("inspector", kernel, {
@@ -1488,6 +1515,7 @@ export function EigenSpectrumInspectorPanel(props: InspectorPanelProps) {
         <FrequencyDomainSpectrumChart
           model={summary.spectrumModel}
           onPlotMode={(point) => plotMode(point)}
+          onSelectMode={selectMode}
         />
       </InspectorGroup>
       <InspectorGroup title="Mode Table" badge={summary.badge}>
@@ -4530,7 +4558,12 @@ function useEigenSpectrumSummary() {
       : null,
   ].filter((value): value is string => value != null);
 
+  const resultContext = frequencyDomainResultContextFromManifest(manifest.data?.result_manifest?.payload, {
+    runId: spectrum.data?.run_id, stageId: spectrum.data?.stage_id,
+    meshGenerationId: spectrum.data?.mesh_generation_id,
+  });
   return {
+    resultContext,
     badge:
       spectrum.status === "ready"
         ? `${spectrumModel.points.length} mode(s)`

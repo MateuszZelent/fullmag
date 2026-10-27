@@ -7,7 +7,7 @@ import {
   type EigenDispersionPoint,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
-import { buildEigenDispersionPointSelectionRefFromSelection } from "./FrequencyDomainResultInspectors";
+import { buildEigenDispersionPointSelectionRefFromSelection, buildEigenSpectrumPointSelectionRefFromSelection } from "./FrequencyDomainResultInspectors";
 
 const dispersionPoint: EigenDispersionPoint = {
   analyticFrequencyHz: null,
@@ -211,4 +211,18 @@ describe("dispersion Inspector selection handoff", () => {
     expect(ref.type === "frequency-domain" ? createModeFieldOverlayIntent(ref) : null)
       .toBeNull();
   });
+});
+
+
+it("does not expose a spectrum mode field without a matching published owner and equilibrium", () => {
+  const point = { branchId: null, dampingRateHz: null, displayModeIndex: 0,
+    frequencyHz: 9.3e9, imaginaryFrequencyHz: null, modeFieldAvailable: true,
+    modeFieldId: "field-7", modeFieldResourceKey: "field-7-resource", modeId: "mode-7-0",
+    rawModeIndex: 0, residualNorm: 1e-11, sampleIndex: 7, sampleId: "sample-7", tangentLeakageMax: null,
+  };
+  const ref = buildEigenSpectrumPointSelectionRefFromSelection(point, { ref: null } as never, null);
+  expect(ref).toMatchObject({ sampleIndex: 7, sampleId: "sample-7", modeIndex: 0, modeId: "mode-7-0" });
+  if (ref.type !== "frequency-domain") throw new Error("Expected a frequency-domain mode selection");
+  expect(ref.fieldId).toBeUndefined();
+  expect(ref.resourceRef).toBeUndefined();
 });

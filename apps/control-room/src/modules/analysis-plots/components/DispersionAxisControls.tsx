@@ -17,7 +17,7 @@ export function DispersionAxisControls({
 }) {
   const hasSignedComponents = axes.some((value) => value !== "path");
   return (
-    <div className="fm-dispersion-axis-controls" data-dispersion-axis={axis}>
+    <div className="fm-dispersion-axis-controls" data-dispersion-axis={axis} data-has-signed-components={hasSignedComponents}>
       <span className="fm-dispersion-axis-controls__label">Horizontal coordinate</span>
       <Select
         value={axis}

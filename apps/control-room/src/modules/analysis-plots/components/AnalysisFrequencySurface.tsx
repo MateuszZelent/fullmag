@@ -69,6 +69,7 @@ export function AnalysisFrequencySurface({
   context,
   displayUnits,
   descriptorId,
+  datasetProvenance,
   kernel,
   onPointSelect,
   onRangeChange = () => undefined,
@@ -89,6 +90,7 @@ export function AnalysisFrequencySurface({
   context?: FrequencyDomainResultContext;
   displayUnits?: Readonly<Record<string, string>>;
   descriptorId?: string;
+  datasetProvenance?: string | null;
   kernel: KernelApi;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onRangeChange?: (range: ChartValueRange) => void;
@@ -482,6 +484,7 @@ export function AnalysisFrequencySurface({
       ) : null}
       <details className="fm-analysis-plots__physical-details">
         <summary>Physical context and workflow</summary>
+        {datasetProvenance ? <p>Dataset provenance: {datasetProvenance}</p> : null}
       {physicalMetadata}
       {/* Workbench summary row (mirrors old Frequency-domain workbench pill row) */}
       <div

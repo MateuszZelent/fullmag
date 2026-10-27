@@ -489,6 +489,8 @@ export function chartRenderModelToEChartsOption(
         symbol: "circle",
         symbolSize: series.kind === "line" ? 2 : 4,
         type: series.kind,
+        // Numerical markers remain selectable where an analytical curve crosses them.
+        z: series.kind === "scatter" && series.selectable !== false ? 4 : 2,
         yAxisIndex: series.yAxis,
       };
     }),
