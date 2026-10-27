@@ -25,3 +25,9 @@ Uruchomiono aktywację signed14 z request_id=eigensolve-signed14-after-terminal-
 Aktywacja 094965cd3f41459183df988d75f4248a zakończona succeeded. Nowy run run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279: relax succeeded; eigenmodes running. Potwierdzono żywy worker PID6439 oraz sześć zapisanych checkpointów (katalog rev105). Nie jest to jeszcze ukończony sweep.
 
 Skrypt wykresu odczytuje siedem checkpointów poprzedniej próby z walidacją residualów i osobnym oznaczeniem. PNG/PDF wygenerowane oraz PNG obejrzane. Provenance zachowuje hash dowodów i stan nieukończonego sweepa. AST obu nowych przykładów PASS; przykład Gamma jeszcze nie wykonany.
+
+## Wynik obliczeń signed14
+
+Run 78af971e wykonał wszystkie 14 próbek i zapisał checkpointy. Worker zakończył się kodem1 podczas publikacji: deferred physical-potential artifact ownership is inconsistent at eigen/mode_fields/sample_0000/mode_0000/physical_potential.v1.json. Katalog rev189: relax succeeded, eigenmodes failed. API poprawnie failed/rev73. Wszystkie14 checkpointów mają full_descriptor_certified=true i eps_full <= 2.72e-11 przy progu1e-8. Zapisano osobny evidence JSON i wykres z jawnym oznaczeniem błędu publikacji; nie jest to zatwierdzony wynik końcowy. Gamma nadal nie wykonana.
+
+Po zakończeniu workera zniknął cel dowiązania /usr/bin/docker -> /mnt/wsl/docker-desktop/cli-tools/usr/bin/docker. API nadal odpowiadało health=ok. Nie restartowano Dockera/WSL. Pozostaje ustalić dokładną rozbieżność manifestu z certyfikatem modu w eigen_path_artifacts.rs::materialize_selected_path_physical_potential_artifacts; walidator nie został osłabiony.

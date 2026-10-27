@@ -21,7 +21,7 @@ def main():
     historical_path = root / "docs/raports/2026-10-04-de-signed15-runtime.csv"
     with historical_path.open() as stream:
         historical = list(csv.DictReader(stream))
-    checkpoint_path = root / "docs/audits/2026-10-27-eigensolve-fgmres-signed15-gamma-crash.evidence.json"
+    checkpoint_path = root / "docs/audits/2026-10-27-eigensolve-signed14-publication-failure.evidence.json"
     checkpoint_data = json.loads(checkpoint_path.read_text())
     checkpoints = checkpoint_data["checkpoint_samples"]
     for sample in checkpoints:
@@ -57,7 +57,7 @@ def main():
     ax.scatter([k], [f], color="#d44827", marker="D", s=65,
                label="Nowe FEM — 27.10, zapisane pole modu (1 punkt)", zorder=4)
     ax.scatter(checkpoint_k, checkpoint_f, color="#7d3c98", marker="x", s=65,
-               label="Nowe checkpointy FEM — przerwany sweep (7 punktów)", zorder=5)
+               label="Nowe checkpointy FEM — błąd publikacji (14 punktów)", zorder=5)
     ax.annotate(f"FEM: {f:.6f} GHz\nΔ względem 1D: {100*(f/open_air_reference-1):+.3f}%",
                 xy=(k, f), xytext=(-5, 12.4), arrowprops={"arrowstyle":"->", "color":"#d44827"})
     ax.set(ylabel="Częstotliwość [GHz]",
