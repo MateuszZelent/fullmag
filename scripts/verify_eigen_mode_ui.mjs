@@ -46,6 +46,7 @@ function usage() {
     "  --mode INDEX          raw mode index (default: 0)",
     "  --output PATH         JSON report path (default: /tmp/fullmag-eigen-mode-ui-report.json)",
     "  --timeout-ms N        bounded browser/API observation timeout (default: 60000)",
+    "  --verify-animation    capture live animation and stopped frames for pixel review",
     "  --headed              show Chromium instead of running headless",
     "  --no-select-mode      do not navigate the Results tree; require an already visible field",
     "  --help                print this help",
@@ -60,6 +61,7 @@ function parseArgs(argv) {
   const options = {
     apiBase: DEFAULT_API_BASE,
     headed: false,
+    verifyAnimation: false,
     modeIndex: 0,
     output: DEFAULT_OUTPUT,
     sampleIndex: 0,
@@ -82,6 +84,10 @@ function parseArgs(argv) {
     if (argument === "--help" || argument === "-h") {
       console.log(usage());
       process.exit(0);
+    }
+    if (argument === "--verify-animation") {
+      options.verifyAnimation = true;
+      continue;
     }
     if (argument === "--headed") {
       options.headed = true;
@@ -964,6 +970,7 @@ async function main() {
       output: options.output,
       sampleIndex: options.sampleIndex,
       selectMode: options.selectMode,
+      verifyAnimation: options.verifyAnimation,
       timeoutMs: options.timeoutMs,
       url: options.url,
     },
@@ -1133,6 +1140,35 @@ async function main() {
       const screenshot = report.config.output.replace(/\.json$/i, "") + `-${view}.png`;
       await page.screenshot({ path: screenshot, fullPage: true });
       report.ui.displayChecks.push({ view, binding, screenshot });
+    }
+    if (options.verifyAnimation) {
+      // Captures are evidence for pixel review, not an automatic physics pass:
+      // some modes legitimately have a phase-independent vector magnitude.
+      report.ui.animationProbe = { frames: [], stoppedFrames: [], pixelsVerified: false };
+      const canvas = page.locator(".fm-viewport-3d canvas").first();
+      const captureFrame = async (kind, index) => {
+        const screenshot = report.config.output.replace(/\.json$/i, "") + `-${kind}-${index}.png`;
+        await canvas.screenshot({ path: screenshot });
+        return { index, screenshot, timeMs: Date.now() };
+      };
+      await page.getByRole("button", {
+        name: "Animate selected eigen mode phase in 3D", exact: true,
+      }).click();
+      try {
+        await sleep(1200);
+        for (let index = 0; index < 5; index++) {
+          await sleep(350);
+          report.ui.animationProbe.frames.push(await captureFrame("animation", index));
+        }
+      } finally {
+        await page.getByRole("button", {
+          name: "Stop selected eigen mode animation", exact: true,
+        }).click();
+      }
+      await sleep(750);
+      report.ui.animationProbe.stoppedFrames.push(await captureFrame("stopped", 0));
+      await sleep(750);
+      report.ui.animationProbe.stoppedFrames.push(await captureFrame("stopped", 1));
     }
     assert(mutationAttempts.length === 0, `The UI attempted ${mutationAttempts.length} mutating HTTP request(s); they were blocked for safety: ${JSON.stringify(mutationAttempts.slice(0, 8))}`);
     assert(browserConsole.errors.length === 0, `Unexpected browser console errors: ${JSON.stringify(browserConsole.errors.slice(0, 8))}`);

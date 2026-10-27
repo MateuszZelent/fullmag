@@ -1,0 +1,182 @@
+{
+  "comparisons": [
+    {
+      "index": 1,
+      "changed_bounds": [
+        156,
+        161,
+        455,
+        390
+      ],
+      "mean_rgb_absolute_difference": [
+        18.21520722615538,
+        11.808936295406033,
+        9.491471208678398
+      ]
+    },
+    {
+      "index": 2,
+      "changed_bounds": [
+        156,
+        161,
+        454,
+        389
+      ],
+      "mean_rgb_absolute_difference": [
+        2.97190976069307,
+        5.812710872409282,
+        2.503023417400612
+      ]
+    },
+    {
+      "index": 3,
+      "changed_bounds": [
+        156,
+        161,
+        455,
+        390
+      ],
+      "mean_rgb_absolute_difference": [
+        0.12988488479089594,
+        2.1856897836034377,
+        0.5758858988563595
+      ]
+    },
+    {
+      "index": 4,
+      "changed_bounds": [
+        156,
+        162,
+        455,
+        390
+      ],
+      "mean_rgb_absolute_difference": [
+        10.964038234023775,
+        9.924026465856667,
+        6.404324175445844
+      ]
+    }
+  ],
+  "stop_changed_bounds": null,
+  "browser_status": "passed",
+  "run": {
+    "requested": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+    "status": "completed",
+    "currentRun": {
+      "runId": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+      "revision": 26,
+      "status": "completed"
+    },
+    "session": {
+      "header": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1",
+      "sessionId": "docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789",
+      "sessionEpoch": "docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789@1793074082533",
+      "requestScopeEpoch": "a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9:1"
+    }
+  },
+  "artifacts": {
+    "owner": {
+      "artifactSetId": "sha256:626ec36eeafef735085489e33c8b25f13d4c02750b9b49b1616ff6d4ad36ee79",
+      "sessionId": "docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789",
+      "runId": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+      "stageId": "eigenmodes"
+    },
+    "generationId": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+    "members": {
+      "manifest": {
+        "artifactPath": "frequency_domain/manifest.v1.json",
+        "contentDigest": "sha256:cca55df812f7984643cea697ed9635f5233997177640448ac5a11590d794eba5",
+        "generationId": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "generationStatus": "member_verified_owner_bound",
+        "label": "manifest result",
+        "resourceKey": "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+        "revision": "sha256:cca55df812f7984643cea697ed9635f5233997177640448ac5a11590d794eba5",
+        "stageId": "eigenmodes",
+        "status": "ready"
+      },
+      "spectrum": {
+        "artifactPath": "eigen/spectrum.v2.json",
+        "contentDigest": "sha256:f47978deaa71d7230ae0dbe7ee93b70c9a3c441e9abf24b32c5d941f1c8975cd",
+        "generationId": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "generationStatus": "member_verified_owner_bound",
+        "label": "spectrum",
+        "resourceKey": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+        "revision": "sha256:f47978deaa71d7230ae0dbe7ee93b70c9a3c441e9abf24b32c5d941f1c8975cd",
+        "stageId": "eigenmodes",
+        "status": "ready"
+      },
+      "mode": {
+        "artifactPath": "eigen/modes/sample_0000/mode_0000.json",
+        "contentDigest": "sha256:ae4ebdd3c82618c4aa606482253e6e82555545ef956282e16ae65350cf9791cb",
+        "generationId": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "generationStatus": "member_verified_owner_bound",
+        "label": "mode",
+        "resourceKey": "/v2/sessions/current/analysis/frequency-domain/eigen/modes/0/0",
+        "revision": "sha256:ae4ebdd3c82618c4aa606482253e6e82555545ef956282e16ae65350cf9791cb",
+        "stageId": "eigenmodes",
+        "status": "ready"
+      },
+      "field": {
+        "artifactPath": "eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0",
+        "contentDigest": "sha256:842f29bea2edd615523e32a3186982e000e300d9417bc7fbe10015df1841a40c",
+        "generationId": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "generationStatus": "member_verified_owner_bound",
+        "label": "mode field metadata",
+        "resourceKey": "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0&expected_artifact_generation_id=sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "revision": "sha256:842f29bea2edd615523e32a3186982e000e300d9417bc7fbe10015df1841a40c",
+        "stageId": null,
+        "status": "ready"
+      }
+    },
+    "sample": {
+      "sampleId": "k-sample-0000",
+      "sampleIndex": 0
+    },
+    "mode": {
+      "fieldId": "analysis:eigen:sample-0000:mode-0000",
+      "modeId": "sample-0000/mode-0000",
+      "modeIndex": 0,
+      "frequencyHz": 11211886649.715792,
+      "payloadSampleIndex": 0,
+      "payloadRawModeIndex": 0
+    }
+  },
+  "source_commit": "8c22f4dcb4e030e70b7af33aa7f253a51aa27164",
+  "captures": [
+    {
+      "path": "/tmp/eigen-mode-animation-durable-animation-0.png",
+      "sha256": "63c9b450ea027d2bd98a66e30a60275dba1dd87f81065aeb1586b339b7196076"
+    },
+    {
+      "path": "/tmp/eigen-mode-animation-durable-animation-1.png",
+      "sha256": "8172664ff5c8f36c8ac4199a31d6d3a626aad0a87b526524bacd811b72b803da"
+    },
+    {
+      "path": "/tmp/eigen-mode-animation-durable-animation-2.png",
+      "sha256": "f95583f4d9c69a73673d112d93a895b5545b8914d5e16466f3c321c48412feb4"
+    },
+    {
+      "path": "/tmp/eigen-mode-animation-durable-animation-3.png",
+      "sha256": "85d3e4f21150435bb0562d2b9359c6f02cfa46e9d3a566f677b03755d37c0802"
+    },
+    {
+      "path": "/tmp/eigen-mode-animation-durable-animation-4.png",
+      "sha256": "99b25eabcffe186e55d282d5480bbd13239aa1be619f0e26e2546c938f0d5815"
+    },
+    {
+      "path": "/tmp/eigen-mode-animation-durable-stopped-0.png",
+      "sha256": "884cbf9a726b0be83501d4d3f182c911f86fbe9abcff3ad74379095cca7b1104"
+    },
+    {
+      "path": "/tmp/eigen-mode-animation-durable-stopped-1.png",
+      "sha256": "884cbf9a726b0be83501d4d3f182c911f86fbe9abcff3ad74379095cca7b1104"
+    }
+  ],
+  "qualification": {
+    "real_mode_animation": "PASS: four comparisons change only within film bounds",
+    "stop": "PASS: pixel-identical stopped captures",
+    "all_modes_and_scientific_correctness": "NOT VERIFIED",
+    "hardware_gpu": "NOT VERIFIED"
+  },
+  "retained_capture_directory": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/eigensolve-current-results"
+}
