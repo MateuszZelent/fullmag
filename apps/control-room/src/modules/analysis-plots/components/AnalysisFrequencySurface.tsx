@@ -1,5 +1,10 @@
 import { useMemo, useState } from "react";
 
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
+import { Button } from "@/shared/ui/Button";
+import { isReferenceChartQuantity } from "@/shared/analysis-charts/frequencyRenderModels";
+import { dispersionReferenceComparisons } from "@/shared/domain/analysis/dispersionReferenceComparison";
+import { modalSpectrumSampleIndices, modalSpectrumSeriesAtSample } from "@/shared/domain/analysis/modalSpectrumSamples";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { descriptorForFrequencyTable } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
@@ -112,6 +117,7 @@ export function AnalysisFrequencySurface({
   );
   const tableId = series[0]?.source.tableId ?? "frequency-domain";
   const isDispersion = tableId === "frequency-domain:eigen-dispersion";
+  const isSpectrum = tableId === "frequency-domain:eigen-spectrum";
   const availableAxes = useMemo(
     () => availableDispersionAxes(isDispersion ? series : []),
     [isDispersion, series],
@@ -126,6 +132,15 @@ export function AnalysisFrequencySurface({
     physicalContext?.runId ?? null,
     physicalContext?.stageId ?? null,
   ]);
+  const samples = useMemo(() => modalSpectrumSampleIndices(isSpectrum || isDispersion ? series.filter((entry) => !isReferenceChartQuantity(entry.quantity)) : []), [isDispersion, isSpectrum, series]);
+  const [samplePreference, setSamplePreference] = useState<{ datasetKey: string; sample: number } | null>(null);
+  const selectedSample = selectedPoint?.source.resourceKey === firstSeries?.source.resourceKey
+    ? selectedPoint?.point.sampleIndex : undefined;
+  const sampleIndex = selectedSample != null && samples.includes(selectedSample)
+    ? selectedSample : samplePreference?.datasetKey === dispersionDatasetKey && samples.includes(samplePreference.sample)
+      ? samplePreference.sample : samples[0] ?? 0;
+  const sampleSeries = useMemo(() => isSpectrum && samples.length > 0
+    ? modalSpectrumSeriesAtSample(series, sampleIndex) : series, [isSpectrum, sampleIndex, samples.length, series]);
   const [dispersionAxisPreference, setDispersionAxisPreference] = useState<{
     datasetKey: string;
     axis: DispersionAxis;
@@ -135,9 +150,10 @@ export function AnalysisFrequencySurface({
     ? dispersionAxisPreference.axis
     : defaultDispersionAxis(isDispersion ? series : []);
   const displaySeries = useMemo(
-    () => isDispersion ? projectDispersionSeries(series, dispersionAxis) : series,
-    [dispersionAxis, isDispersion, series],
+    () => isDispersion ? projectDispersionSeries(series, dispersionAxis) : sampleSeries,
+    [dispersionAxis, isDispersion, sampleSeries, series],
   );
+  const comparisons = useMemo(() => isDispersion ? dispersionReferenceComparisons(series) : [], [isDispersion, series]);
   const xAxisLabel = isDispersion
     ? `${DISPERSION_AXIS_LABELS[dispersionAxis]} [${firstSeries?.xUnit ?? descriptor.xAxis.unit}]`
     : frequencyDomainXAxisLabel(series);
@@ -189,7 +205,8 @@ export function AnalysisFrequencySurface({
       selectedPoint,
     ],
   );
-  const selectedDispersionPoint = isDispersion ? projectedSelectedPoint : null;
+  const selectedDispersionPoint = (isDispersion || isSpectrum) && projectedSelectedPoint &&
+    !isReferenceChartQuantity(projectedSelectedPoint.quantity) ? projectedSelectedPoint : null;
   const selectedDispersionModePoint = selectedDispersionPoint?.point;
   const dispersionModeTarget: DispersionModeTarget = {
     analysisRunId: physicalContext?.runId ?? null,
@@ -309,7 +326,7 @@ export function AnalysisFrequencySurface({
     };
   });
 
-  const visibleSeries = series.filter(({ id }) => selected.has(id));
+  const visibleSeries = displaySeries.filter(({ id }) => selected.has(id));
   const visibleDisplaySeries = displaySeries.filter(({ id }) => selected.has(id));
 
   const legend = (
@@ -369,7 +386,6 @@ export function AnalysisFrequencySurface({
     </div>
   ) : null;
   const toolbar = <>
-    {workflowToolbar}
     {isDispersion ? (
       <DispersionAxisControls
         axis={dispersionAxis}
@@ -389,6 +405,7 @@ export function AnalysisFrequencySurface({
       footer={footerContent}
       legend={legend}
       status={{
+        collapseMetadata: true,
         presentation,
         primary: status === "ready" ? "Ready" : status,
         revision: series[0]?.dataRevision ?? null,
@@ -402,22 +419,8 @@ export function AnalysisFrequencySurface({
       title={surfaceTitle}
       toolbar={toolbar}
     >
-      {physicalMetadata}
-      {/* Workbench summary row (mirrors old Frequency-domain workbench pill row) */}
       <div
-        data-analysis-handoff={descriptor.handoff}
-        data-analysis-inspector-route={descriptor.inspectorRouteId}
-        aria-label="Frequency-domain workbench"
-        className="fm-analysis-plots__status fm-analysis-plots__status--frequency-domain-workbench"
-      >
-        <span>{workbench.chartKind}</span>
-        <span>{workbench.pointCount}</span>
-        <span>{workbench.frequencyRange}</span>
-        <span>{workbench.fieldHandoff}</span>
-        <span>{workbench.status}</span>
-      </div>
-      <div
-        className="fm-analysis-plots__chart-frame"
+        className="fm-analysis-plots__chart-frame fm-analysis-plots__frequency-canvas"
         data-resource-key={series[0]?.source.resourceKey}
       >
         {visibleSeries.length === 0 ? (
@@ -440,6 +443,61 @@ export function AnalysisFrequencySurface({
           />
         )}
       </div>
+      {comparisons.length > 0 ? <details className="fm-analysis-plots__physical-details">
+        <summary>FEM / reference comparison · {comparisons.map((entry) => `${entry.label}: max |Δf/f| ${entry.maximumAbsoluteErrorPercent.toPrecision(4)}%`).join(" · ")}</summary>
+        <p>Descriptive comparison of returned modes. This does not establish mode matching, spectrum completeness, or convergence.</p>
+        {comparisons.map((entry) => <div key={entry.id} className="fm-analysis-plots__comparison-table-wrap">
+          <table className="fm-analysis-plots__comparison-table" aria-label={entry.label}>
+            <caption>{entry.label}</caption>
+            <thead><tr><th>Sample</th><th>FEM frequency</th><th>Reference frequency</th><th>Δf/f [%]</th></tr></thead>
+            <tbody>{entry.rows.map((row) => <tr key={`${row.seriesId}:${row.rowIndex}`}><td>{row.sampleIndex ?? "—"}</td><td>{row.computedFrequency.toPrecision(8)} {row.unit}</td><td>{row.referenceFrequency.toPrecision(8)} {row.unit}</td><td>{row.relativeErrorPercent.toPrecision(5)}</td></tr>)}</tbody>
+          </table>
+        </div>)}
+      </details> : null}
+      {isSpectrum || isDispersion ? (
+        <div className="fm-analysis-plots__mode-list" aria-label="Modes at selected wavevector">
+    {(isSpectrum || isDispersion) && samples.length > 0 ? (
+      <label className="fm-analysis-plots__sample-selector">
+        <span>Wavevector sample</span>
+        <Select value={String(sampleIndex)} onValueChange={(value) => {
+          const sample = Number(value);
+          setSamplePreference({ datasetKey: dispersionDatasetKey, sample });
+          const entry = series.find((item) => !isReferenceChartQuantity(item.quantity) && item.points.some((point) => point.sampleIndex === sample));
+          const point = entry?.points.find((item) => item.sampleIndex === sample);
+          if (entry && point) onPointSelect({ label: entry.label, point, quantity: entry.quantity, seriesId: entry.id, source: entry.source, unit: entry.unit, xUnit: entry.xUnit });
+        }}>
+          <SelectTrigger aria-label="Spectrum wavevector sample"><SelectValue /></SelectTrigger>
+          <SelectContent>{samples.map((sample) => <SelectItem key={sample} value={String(sample)}>{sampleOptionLabel(series, sample)}</SelectItem>)}</SelectContent>
+        </Select>
+      </label>
+    ) : null}
+
+          <p>{sampleOptionLabel(series, sampleIndex)} · computed modes at this k. Mode rank is diagnostic; no intensity weighting.</p>
+          {displaySeries.filter((entry) => !isReferenceChartQuantity(entry.quantity)).map((entry) => entry.points.filter((point) => point.sampleIndex === sampleIndex).map((point) => (
+            <Button key={`${entry.id}:${point.rowIndex}`} size="sm" variant="secondary" onClick={() => onPointSelect({ label: entry.label, point, quantity: entry.quantity, seriesId: entry.id, source: entry.source, unit: entry.unit, xUnit: entry.xUnit })}>
+              Mode {point.rawModeIndex ?? point.x}: {point.y.toPrecision(6)} {entry.unit} · {point.modeFieldAvailable !== false && point.modeFieldId ? "3D field available" : "field unavailable"}
+            </Button>
+          )))}
+        </div>
+      ) : null}
+      <details className="fm-analysis-plots__physical-details">
+        <summary>Physical context and workflow</summary>
+      {physicalMetadata}
+      {/* Workbench summary row (mirrors old Frequency-domain workbench pill row) */}
+      <div
+        data-analysis-handoff={descriptor.handoff}
+        data-analysis-inspector-route={descriptor.inspectorRouteId}
+        aria-label="Frequency-domain workbench"
+        className="fm-analysis-plots__status fm-analysis-plots__status--frequency-domain-workbench"
+      >
+        <span>{workbench.chartKind}</span>
+        <span>{workbench.pointCount}</span>
+        <span>{workbench.frequencyRange}</span>
+        <span>{workbench.fieldHandoff}</span>
+        <span>{workbench.status}</span>
+      </div>
+        {workflowToolbar}
+      </details>
     </ChartSection>
   );
 }
@@ -527,4 +585,12 @@ function frequencyKContextLabel(context: FrequencyDomainResultContext): string {
   if (sampling.kind === "single") return `k = [${sampling.vectorRadPerM.join(", ")}] rad/m`;
   if (sampling.kind === "path") return sampling.label ? `k path ${sampling.label}` : "k path";
   return "k grid";
+}
+
+function sampleOptionLabel(series: readonly ChartSeries[], sample: number): string {
+  const point = series.flatMap((entry) => entry.points).find((entry) => entry.sampleIndex === sample);
+  const vector = point?.wavevectorKf;
+  return vector
+    ? `Sample ${sample} · k = (${vector.map((value) => Number((value / 1e6).toPrecision(6))).join(", ")}) rad/µm`
+    : `Sample ${sample}`;
 }

@@ -16,6 +16,7 @@ import {
   FrequencyDomainSpectrumChart,
   frequencyDomainSpectrumChartRenderModel,
   spectrumPointIndexFromChartEvent,
+  spectrumModelAtSample,
 } from "./FrequencyDomainCharts";
 
 describe("FrequencyDomainCharts", () => {
@@ -618,5 +619,30 @@ describe("FrequencyDomainCharts", () => {
       { rowIndex: 0, x: 7.5, y: 1 },
       { rowIndex: 1, x: 8.25, y: 1 },
     ]);
+  });
+});
+
+
+describe("per-k spectrum isolation", () => {
+  it("never collapses equal modal ranks from different wavevectors", () => {
+    const source = { kind: "analysis.frequency_domain" as const, resourceKey: "spectrum", tableId: "frequency-domain:eigen-spectrum" };
+    const model = {
+      dataSourceVersion: "unknown" as const, diagnostics: [], droppedPointCount: 0,
+      points: [0, 1, 2].map((sampleIndex) => ({
+        sampleIndex, rawModeIndex: 0, displayModeIndex: 0, frequencyHz: (9 + sampleIndex) * 1e9,
+        branchId: null, dampingRateHz: null, imaginaryFrequencyHz: null,
+        modeFieldId: null, modeFieldResourceKey: null, modeId: null,
+        residualNorm: null, tangentLeakageMax: null,
+      })),
+      series: [{ id: "frequency", label: "Frequency", quantity: "frequency", source,
+        status: "ready" as const, unit: "GHz", xUnit: "1",
+        points: [0, 1, 2].map((rowIndex) => ({ rowIndex, x: 0, y: 9 + rowIndex })),
+      }],
+    };
+    expect(spectrumModelAtSample(model, 1).points.map((point) => point.sampleIndex)).toEqual([1]);
+    expect(spectrumModelAtSample(model, 1).series[0]?.points).toEqual([{ rowIndex: 1, x: 0, y: 10 }]);
+    expect(frequencyDomainSpectrumChartRenderModel(model, 2).series[0]?.points).toHaveLength(1);
+    expect(spectrumModelAtSample(model, 99).points).toEqual([]);
+    expect(model.points).toHaveLength(3);
   });
 });

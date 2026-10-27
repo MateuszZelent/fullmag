@@ -129,7 +129,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   );
   const frequencyDomainProvenance = useMemo(
     () => frequency.frequencyDomainSeries[0]
-      ? `${frequency.frequencyDomainSeries[0].source.resourceKey} · revision ${frequency.frequencyDomainSeries[0].dataRevision}`
+      ? `${frequency.frequencyDomainSeries[0].source.resourceKey}${frequency.frequencyDomainSeries[0].dataRevision == null ? "" : ` · revision ${frequency.frequencyDomainSeries[0].dataRevision}`}`
       : null,
     [frequency.frequencyDomainSeries],
   );

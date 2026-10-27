@@ -709,3 +709,11 @@
   font-size: var(--fm-font-size-xs);
   line-height: var(--fm-line-height-normal);
 }
+
+/* Each sample owns its own spectrum; mode rows stay in normal document flow. */
+.fm-frequency-domain-chart__point-actions { grid-column: 1 / -1; }
+.fm-frequency-domain-chart__point-actions > .fm-frequency-domain-chart__mode {
+  height: auto;
+  min-height: var(--fm-control-height-sm);
+  white-space: normal;
+}

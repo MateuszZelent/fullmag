@@ -22,6 +22,7 @@ import type {
 import { eigenModeFieldAvailable } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { Button } from "@/shared/ui/Button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 
 function formatNumber(value: number): string {
   if (!Number.isFinite(value)) return "n/a";
@@ -31,12 +32,30 @@ function formatNumber(value: number): string {
   return Number(value.toPrecision(5)).toLocaleString("en-US");
 }
 
-/** Preserve the modal artifact axes: display mode rank versus physical Hz. */
+/** Only one published k sample may occupy the modal-rank axis. */
+export function spectrumModelAtSample(
+  model: FrequencyDomainChartBuildResult<EigenSpectrumPoint>, sampleIndex: number,
+): FrequencyDomainChartBuildResult<EigenSpectrumPoint> {
+  const rowIndices = new Set(model.points.flatMap((point, row) =>
+    point.sampleIndex === sampleIndex ? [row] : [],
+  ));
+  return {
+    ...model,
+    points: model.points.filter((point) => point.sampleIndex === sampleIndex),
+    series: model.series.map((entry) => ({
+      ...entry,
+      points: entry.points.filter((point) => rowIndices.has(point.rowIndex)),
+    })),
+  };
+}
+
+/** Preserve the original row indices for selection into the published artifact. */
 export function frequencyDomainSpectrumChartRenderModel(
   model: FrequencyDomainChartBuildResult<EigenSpectrumPoint>,
+  sampleIndex = model.points[0]?.sampleIndex ?? 0,
 ): ChartRenderModel {
   return frequencySeriesRenderModel(
-    model.series,
+    spectrumModelAtSample(model, sampleIndex).series,
     "FMR / eigen modal spectrum",
     "mode rank",
   );
@@ -53,8 +72,16 @@ export function FrequencyDomainSpectrumChart({
   onSelectMode?: (point: EigenSpectrumPoint) => void;
   selectedModeKey?: string | null;
 }) {
-  const chartModel = frequencyDomainSpectrumChartRenderModel(model);
-  const data = model.points.map((point, rowIndex) => {
+  const samples = [...new Set(model.points.map((point) => point.sampleIndex))].sort((a, b) => a - b);
+  const [sampleChoice, setSampleChoice] = useState<{ owner: string; index: number } | null>(null);
+  const owner = JSON.stringify(model.series.map((entry) => [entry.source.resourceKey, model.dataSourceVersion, model.points[0]?.modeFieldResourceKey]));
+  const selectedSample = selectedModeKey == null ? null : Number(selectedModeKey.split(":")[0]);
+  const sampleIndex = sampleChoice?.owner === owner && samples.includes(sampleChoice.index)
+    ? sampleChoice.index : selectedSample != null && samples.includes(selectedSample)
+      ? selectedSample : samples[0] ?? 0;
+  const chartModel = frequencyDomainSpectrumChartRenderModel(model, sampleIndex);
+  const data = model.points.flatMap((point, rowIndex) => {
+    if (point.sampleIndex !== sampleIndex) return [];
     return {
       dampingRateHz: point.dampingRateHz,
       frequencyLabel: formatFrequencyHz(point.frequencyHz),
@@ -86,8 +113,18 @@ export function FrequencyDomainSpectrumChart({
         (count, series) => count + series.points.length,
         0,
       )}
-      title="FMR / eigen modal spectrum"
+      title={`Eigen spectrum · sample ${sampleIndex}`}
     >
+      <div className="fm-frequency-domain-chart__controls">
+        <label className="fm-frequency-domain-chart__control">
+          <span>Wavevector sample</span>
+          <Select value={String(sampleIndex)} onValueChange={(value) => setSampleChoice({ owner, index: Number(value) })}>
+            <SelectTrigger aria-label="Spectrum wavevector sample"><SelectValue /></SelectTrigger>
+            <SelectContent>{samples.map((sample) => <SelectItem key={sample} value={String(sample)}>Sample {sample}</SelectItem>)}</SelectContent>
+          </Select>
+        </label>
+        <span>Mode rank at this k; no intensity weighting. Showing {data.length} modes.</span>
+      </div>
       {chartModel.series.slice(0, 4).map((series) => (
         <span key={series.id}>
           {series.label}: {series.points.length} samples

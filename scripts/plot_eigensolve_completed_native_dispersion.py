@@ -174,6 +174,26 @@ def main():
         row['error_1d_percent']=100*(row['frequency_hz']/row['reference_1d_open_air_hz']-1)
     out=args.output_dir or ROOT/'docs/raports/assets/de-native-completed-20261027';out.mkdir(parents=True,exist_ok=True)
     ks=[v/10 for v in range(-250,251)]
+    if current_api:
+        # The UI reference contract uses unsigned path distance, not signed ky.
+        # Verify this exact published straight DE path before changing coordinates.
+        samples = loaded[0][0]['spectrum']['payload']['samples']
+        origin = min(row['ky_rad_per_um'] for row in rows)
+        for sample in samples:
+            k = sample['k_vector']
+            if isinstance(k, dict):
+                k = [k['kx'], k['ky'], k['kz']]
+            if (k[0] != 0 or k[2] != 0 or not math.isclose(
+                    sample['path_s'], k[1] - origin * 1e6, abs_tol=1e-7)):
+                raise ValueError('Reference CSV export requires the published straight signed-ky path')
+        for filename, values in (
+            ('finite-dirichlet-n0-ui-reference.csv', [(k-origin, finite_dirichlet_n0_frequency_hz(k_rad_m=k*1e6, **params)/1e9) for k in ks]),
+            ('open-air-1d-ui-reference.csv', [(k-origin, reference[k]/1e9) for k in sorted(reference)]),
+        ):
+            with (out/filename).open('w', newline='') as stream:
+                writer = csv.writer(stream, lineterminator='\n')
+                writer.writerow(['path_s_rad_per_um', 'frequency_GHz'])
+                writer.writerows(values)
     fig,(ax,err)=plt.subplots(2,1,figsize=(10,7),sharex=True,layout='constrained',gridspec_kw={'height_ratios':[3,1]})
     ax.plot(ks,[finite_dirichlet_n0_frequency_hz(k_rad_m=k*1e6,**params)/1e9 for k in ks],label='Analityka n=0, skończony airbox Dirichleta',color='#17638d')
     ax.plot(expected,[reference[k]/1e9 for k in expected],label='Referencja 1D open-air, basis16 (zachowana tabela)',color='black',linestyle='--')

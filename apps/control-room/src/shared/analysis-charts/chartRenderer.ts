@@ -593,6 +593,8 @@ export function chartRenderModelToEChartsOption(
           fontWeight: "bold",
         },
         position: index === 0 ? "left" : "right",
+        // Eigenfrequencies have no intensity baseline. Preserve their resolved range.
+        scale: ["Hz", "kHz", "MHz", "GHz", "THz"].includes(axis.unit),
         splitLine: {
           lineStyle: {
             color: borderSubtle,

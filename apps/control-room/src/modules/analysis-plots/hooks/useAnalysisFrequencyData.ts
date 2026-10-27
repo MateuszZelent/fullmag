@@ -244,7 +244,7 @@ export function useAnalysisFrequencyData(
   });
   const referenceDefinitions = postprocessingDefinitions.data?.definitions ?? EMPTY_DEFINITIONS;
   const referenceDatasetRevision = publishedReferenceDatasetRevision(
-    frequencyDomainManifest.data?.result_manifest?.payload,
+    frequencyDomainManifest.data?.result_manifest,
   );
   const frequencyDomainSeries = useMemo<ChartSeries[]>(() => {
     if (surfaceMismatch || resultContextMismatch) return [];
@@ -252,7 +252,7 @@ export function useAnalysisFrequencyData(
       case "dispersion": {
         const computed = frequencyDomainChartSeriesForAnalysisPlots(
           frequencyDomainDispersionModel,
-        );
+        ).map((entry) => entry.quantity === "frequency" ? { ...entry, kind: "scatter" as const } : entry);
         return [
           ...computed,
           ...referenceOverlaySeries(computed, referenceDefinitions, {

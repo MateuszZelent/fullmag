@@ -164,13 +164,13 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
       className="fm-analysis-plots__panel fm-analysis-plots__panel--primary"
       data-analysis-surface={surfaceDescriptor.surface}
     >
-      <header className="fm-analysis-plots__header">
-        <div><h3>{surfaceDescriptor.title}</h3>{provenance ? <span>Dataset provenance: {provenance}</span> : null}</div>
-        {surface !== "comparison" ? <Select value={selectedDatasetRef ?? ""} onValueChange={(value) => onDatasetRefChange(value || null)}>
+      {!isFrequencySubview ? <header className="fm-analysis-plots__header">
+        <div><h3>{surfaceDescriptor.title}</h3>{provenance ? <details className="fm-analysis-plots__dataset-provenance"><summary>Dataset provenance</summary><span>{provenance}</span></details> : null}</div>
+        {surface !== "comparison" && !isFrequencySubview ? <Select value={selectedDatasetRef ?? ""} onValueChange={(value) => onDatasetRefChange(value || null)}>
           <SelectTrigger aria-label="Analysis dataset"><SelectValue placeholder="Select a dataset" /></SelectTrigger>
           <SelectContent>{datasetRefs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent>
         </Select> : null}
-      </header>
+      </header> : null}
       {activeSubview === "dynamics.time-traces" ? (resolvedDatasetRef ? <AnalysisTableSurface chartId={chartId} chartSeries={chartSeries} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status={tableUnsupportedReason ? "unsupported" : resolvedTableStatus} table={resolvedTable} unsupportedReason={tableUnsupportedReason} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)} /> : datasetPrompt) : null}
       {activeSubview === "dynamics.temporal-fft" ? <SpinWaveGammaView onFeatureSelect={onGammaFeatureSelect} resource={spinWaveGamma} status={spinWaveGammaStatus} /> : null}
       {isDynamicStructureFactorSubview ? <DynamicStructureFactorView onPointSelect={onDsfPointSelect} resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} /> : null}
