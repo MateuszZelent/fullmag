@@ -981,6 +981,7 @@ function createReferenceImportFixture() {
 async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseUrl) {
   const page = await browser.newPage({ viewport: { height: 1000, width: 1440 } });
   const fixture = createReferenceImportFixture();
+  const expectedArtifactRevision = frequencyDomainManifestFixture(fixture).result_manifest.revision;
   const fixtureState = await installAnalysisDatasetFixtureRoutes(page, fixture);
   const errors = [];
   const resourceRequests = [];
@@ -1068,7 +1069,7 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
     const inspector = page.locator(".fm-inspector");
     await inspector.waitFor({ state: "visible", timeout: timeoutMs });
     const ownerText = (await inspector.innerText()).replace(/\s+/g, " ");
-    for (const expected of [runId, stageId, "Artifact revision", "17"]) {
+    for (const expected of [runId, stageId, "Artifact revision", expectedArtifactRevision]) {
       if (!ownerText.includes(expected)) {
         throw new Error("Selected dispersion Inspector is missing owner identity " + expected + ": " + ownerText);
       }
@@ -1129,7 +1130,7 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
       validCreate?.body?.expected_scene_revision !== 0 ||
       definition?.data_ref?.run_id !== runId ||
       definition?.data_ref?.dataset_id !== stageId ||
-      definition?.data_ref?.dataset_revision !== "17" ||
+      definition?.data_ref?.dataset_revision !== expectedArtifactRevision ||
       JSON.stringify(definition?.settings?.points) !== JSON.stringify(expectedPoints) ||
       definition?.settings?.source_units?.path !== "rad/um" ||
       definition?.settings?.source_units?.frequency !== "GHz"
@@ -1247,7 +1248,7 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
 
     await assertNoVisibleResourceErrors(page, errors);
     return {
-      artifactRevision: 17,
+      artifactRevision: expectedArtifactRevision,
       fixture: fixture.id,
       owner: { runId, stageId },
       proof: {

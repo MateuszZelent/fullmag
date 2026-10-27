@@ -72,6 +72,36 @@ function analysisResultSelection(
 }
 
 describe("analysis field overlay commands", () => {
+  it("plots a native nonzero-k Results mode with its exact immutable identity", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = {
+      ...canonicalEigenRef("analysis:eigen:sample-0000:mode-0000", 0),
+      kind: "results.dispersion.modal.mode_at_k" as const,
+      artifactRevision: "sha256:native-manifest",
+      sampleId: "k-sample-0000",
+      modeId: "sample-0000/mode-0000",
+      sampleIndex: 0,
+      wavevectorKf: [0, 1e7, 0] as [number, number, number],
+    };
+    selection.set({ kind: ref.kind, label: "Mode at +10", nodeId: ref.nodeId,
+      objectId: null, ref }, "results-navigator");
+    const context = { analysisFieldOverlay: overlay, selection, source: "test" } as const;
+    expect(commands.isEnabled("analysis.eigen.plot-mode-3d", context)).toBe(true);
+    const result = await commands.execute("analysis.eigen.plot-mode-3d", context);
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      fieldId: ref.fieldId,
+      wavevectorKf: [0, 1e7, 0],
+      modeIntent: {
+        analysisRunId: ref.analysisRunId, analysisStageId: ref.analysisStageId,
+        equilibriumId: ref.equilibriumId, artifactRevision: ref.artifactRevision,
+        sampleId: ref.sampleId, modeId: ref.modeId,
+      },
+    });
+  });
+
   it("hands a result item field reference to the shared eigen overlay intent", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
