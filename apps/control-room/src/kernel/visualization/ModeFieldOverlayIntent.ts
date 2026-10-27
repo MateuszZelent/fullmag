@@ -297,7 +297,9 @@ function isResolvedAnalysisResultModeFieldOverlayMetadata(
 // FMVP stores the raw 32-byte SHA-256; the shared-domain manifest qualifies
 // the same digest with "sha256:". Normalize that representation only, keeping
 // the generation, topology revision, shape and payload checks independent.
-function sameMeshTopologyHash(left: string | null, right: string | null): boolean {
+function sameMeshTopologyHash(
+  left: string | null | undefined, right: string | null | undefined,
+): boolean {
   if (!left || !right) return false;
   const digest = (value: string) => {
     const match = /^(?:sha256:)?([0-9a-f]{64})$/i.exec(value);
