@@ -274,30 +274,34 @@ void adaptive_d2d_copies_use_compute_stream() {
             std::string::npos,
         "adaptive RK23/DP45 D2D z-component copies must be bound to an explicit stream");
 
-    check(
-        adaptive_sources.find("copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx))") !=
-            std::string::npos,
-        "adaptive RK23/DP45 fp64 initial backup copies must use the Context compute stream");
-    check(
-        adaptive_sources.find("copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx))") !=
-            std::string::npos,
-        "adaptive RK23/DP45 fp64 reject restores must use the Context compute stream");
-    check(
-        adaptive_sources.find("copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx))") !=
-            std::string::npos,
-        "adaptive RK23/DP45 fp64 FSAL reuse copies must use the Context compute stream");
-    check(
-        adaptive_sources.find("copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx))") !=
-            std::string::npos,
-        "adaptive RK23/DP45 fp32 initial backup copies must use the Context compute stream");
-    check(
-        adaptive_sources.find("copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx))") !=
-            std::string::npos,
-        "adaptive RK23/DP45 fp32 reject restores must use the Context compute stream");
-    check(
-        adaptive_sources.find("copy_field_d2d_fp32(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx))") !=
-            std::string::npos,
-        "adaptive RK23/DP45 fp32 FSAL reuse copies must use the Context compute stream");
+    // The stage kernels of the non-graph RK23/DP45 step run on the legacy
+    // default stream.  The state copies they read must be ordered on that
+    // same stream: the nonblocking compute stream does not synchronize with
+    // it, so a copy there lets a stage read a stale m0 or k1.
+    for (const auto *copy : {
+             "copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, nullptr)",
+             "copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, nullptr)",
+             "copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, nullptr)",
+             "copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, nullptr)",
+             "copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, nullptr)",
+             "copy_field_d2d_fp32(ctx.k1, ctx.k_fsal, ctx.cell_count, nullptr)",
+         }) {
+        check(
+            adaptive_sources.find(copy) != std::string::npos,
+            "adaptive RK23/DP45 backup, restore and FSAL copies must use the stage-kernel stream");
+    }
+    for (const auto *copy : {
+             "copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx))",
+             "copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx))",
+             "copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx))",
+             "copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx))",
+             "copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx))",
+             "copy_field_d2d_fp32(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx))",
+         }) {
+        check(
+            adaptive_sources.find(copy) == std::string::npos,
+            "adaptive RK23/DP45 state copies must not race the stage kernels on the compute stream");
+    }
 }
 
 void adaptive_integrators_accept_device_owned_dt() {

@@ -674,7 +674,10 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         return;
     }
 
-    copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
+    // Stage kernels run on the legacy default stream; the m/k state copies
+    // must stay on that stream, since the nonblocking compute stream does not
+    // order against it and a stale tmp or k1 makes the step nondeterministic.
+    copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, nullptr);
 
     for (;;) {
         ctx.trial_dt = dt;
@@ -683,7 +686,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         const FsalReuseDecision fsal_decision = rhs_allows_fsal_reuse(ctx, dt);
         context_note_fsal_decision(ctx, fsal_decision);
         if (fsal_decision.allowed) {
-            copy_field_d2d_fp32(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
+            copy_field_d2d_fp32(ctx.k1, ctx.k_fsal, ctx.cell_count, nullptr);
         } else {
             if (!compute_rhs_into_fp32(ctx, ctx.k1, n, grid, gamma_bar_f, alpha_f,
                                        step_start_time)) return;
@@ -799,7 +802,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (policy.dt_min_exhausted) {
             context_invalidate_fsal_cache(
                 ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
-            copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+            copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, nullptr);
             context_refresh_observables(ctx);
             ctx.last_error = "dt_min_exhausted";
             return;
@@ -807,7 +810,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (policy.failed) {
             context_invalidate_fsal_cache(
                 ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
-            copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+            copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, nullptr);
             context_refresh_observables(ctx);
             return;
         }
@@ -859,7 +862,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         dt = policy.dt_candidate;
         context_invalidate_fsal_cache(
             ctx, FULLMAG_FDM_FSAL_INVALIDATION_REJECTED_STEP); // fsal_rejected_step
-        copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+        copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, nullptr);
     }
 }
 
