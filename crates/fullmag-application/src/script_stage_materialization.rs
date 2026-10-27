@@ -1964,6 +1964,7 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
                 fullmag_ir::OutputIR::EigenSpectrum { .. }
                     | fullmag_ir::OutputIR::EigenMode { .. }
                     | fullmag_ir::OutputIR::DispersionCurve { .. }
+                    | fullmag_ir::OutputIR::EigenDiagnostics { .. }
             )
         })
         .cloned()
@@ -2207,7 +2208,25 @@ pub fn materialize_pipeline_eigenmodes(
     let mut ir = base_ir.clone();
     let mut dynamics = required_study_dynamics(&ir.study, "eigenmodes pipeline stage")?;
     apply_dynamics_overrides(&mut dynamics, payload)?;
-    let sampling = ir.study.sampling().clone();
+    let mut sampling = ir.study.sampling().clone();
+    if let Some(value) = payload.get("sampling") {
+        let snapshot = value.as_object().context("eigen sampling must be an object")?;
+        if snapshot.keys().any(|key| key != "outputs") {
+            bail!("eigen sampling contains unsupported fields");
+        }
+        let outputs: Vec<fullmag_ir::OutputIR> = serde_json::from_value(
+            snapshot.get("outputs").cloned().unwrap_or_else(|| serde_json::json!([])),
+        ).context("eigen sampling outputs are invalid")?;
+        if outputs.iter().any(|output| !matches!(output,
+            fullmag_ir::OutputIR::EigenSpectrum { .. }
+                | fullmag_ir::OutputIR::EigenMode { .. }
+                | fullmag_ir::OutputIR::DispersionCurve { .. }
+                | fullmag_ir::OutputIR::EigenDiagnostics { .. }
+        )) {
+            bail!("eigen sampling contains a non-modal output");
+        }
+        sampling.outputs = outputs;
+    }
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_eigenmodes".to_string());
     let current_eigen = match &base_ir.study {
@@ -4356,6 +4375,27 @@ mod eigen_sampling_selector_tests {
 #[cfg(test)]
 mod pipeline_eigen_solver_policy_tests {
     use super::*;
+
+    #[test]
+    fn pipeline_eigen_sampling_preserves_mode_selectors_and_diagnostics() {
+        let outputs = serde_json::json!([
+            {"kind":"eigen_mode", "field":"mode", "indices":[0],
+             "sample_selector":{"sample_indices":[0,2],"sample_labels":["Gamma"]}},
+            {"kind":"eigen_diagnostics", "include_tracking":false,
+             "include_residuals":true,"include_overlaps":false,
+             "include_tangent_leakage":true,"include_orthogonality":false}
+        ]);
+        let payload = BTreeMap::from([("sampling".into(), serde_json::json!({"outputs":outputs}))]);
+        let stage = materialize_pipeline_eigenmodes(&time_evolution_base(), &payload).unwrap();
+        let expected: Vec<fullmag_ir::OutputIR> = serde_json::from_value(outputs).unwrap();
+        assert_eq!(stage.ir.study.sampling().outputs, expected);
+        for invalid in [serde_json::json!(false), serde_json::json!({"unexpected":1}),
+            serde_json::json!({"outputs":[{"kind":"unknown"}]}),
+            serde_json::json!({"outputs":[{"kind":"field","name":"m","every_seconds":1e-12}]})] {
+            assert!(materialize_pipeline_eigenmodes(&time_evolution_base(),
+                &BTreeMap::from([("sampling".into(), invalid)])).is_err());
+        }
+    }
 
     #[test]
     fn pipeline_eigen_completeness_preserves_inherits_clears_and_rejects() {

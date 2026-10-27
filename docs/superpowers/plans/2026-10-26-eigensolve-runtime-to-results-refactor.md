@@ -717,3 +717,22 @@ przekazania w Rust materialization, bez wprowadzania drugiego mechanizmu
 zapisu ani sztucznego mode_field_available. Należy także zachować
 EigenDiagnostics, którego eigen_sampling_from obecnie nie uwzględnia.
 Zwykłe CI40430393405 zakończone success; natywne CI nadal in_progress.
+
+
+### A18 — implementacja przekazania wyjść etapu
+
+- Eksport Python dodaje sampling.outputs do istniejącego payloadu etapu
+  eigenmodes. Renderer sceny odtwarza kanoniczne SaveSpectrum, SaveMode,
+  SaveDispersion i SaveEigenDiagnostics przed dodaniem etapu; zachowuje
+  selektory indeksów, gałęzi, all_modes, próbek i etykiet. Nie wprowadzono
+  globalnego scene.outputs ani alternatywnego formatu plików wynikowych.
+- Rust materialization stosuje jawny snapshot sampling.outputs; przy braku
+  pola zachowuje dziedziczenie. Odrzuca niewłaściwe typy oraz wyjścia spoza
+  rodziny modalnej. eigen_sampling_from zachowuje teraz EigenDiagnostics.
+- Regresje obu rzeczywistych przykładów przechodzą pełny obieg
+  loaded Python→builder→scene→rendered Python→loaded sampling (dokładna
+  równość). Zestawy roundtrip i problem_ir: 71 PASS; dodatkowe negatywne
+  przypadki selektorów sprawdzone osobno. Nowy test Rust zostanie wykonany
+  w GitHub Actions; lokalnie nie kompilowano testów.
+- Nie jest to jeszcze dowód zapisania pola przez runtime. Wymagane CI,
+  managed rebuild i ponowienie +10, potem actual mode UI verifier.

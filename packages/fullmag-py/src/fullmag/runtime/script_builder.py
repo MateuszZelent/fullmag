@@ -1711,6 +1711,7 @@ def _render_scene_stage_bootstrap(
                 "gamma",
                 "g",
                 "eigen_count",
+                "sampling",
                 "eigen_solver_completeness",
                 "eigen_solver_rtol",
                 "eigen_solver_residual_tolerance",
@@ -1840,7 +1841,7 @@ def _render_scene_stage_bootstrap(
             call_parts.append(f"bc={_render_spin_wave_bc_expr(bc)}")
         spec = f"fm.eigenmodes_stage({', '.join(call_parts)})"
         solver_call = _render_scene_solver_call(stage)
-        solver_lines = [solver_call] if solver_call is not None else []
+        solver_lines = ([solver_call] if solver_call is not None else []) + _render_scene_eigen_outputs(stage.get("sampling"), magnet_vars)
         if stage_id is not None:
             return [
                 *solver_lines,
@@ -3038,6 +3039,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         return {
             "kind": "eigenmodes",
             "entrypoint_kind": stage.entrypoint_kind,
+            "sampling": {"outputs": [output.to_ir() for output in _study_outputs(study)]},
             "integrator": dynamics.integrator,
             "fixed_timestep": _text_number(dynamics.fixed_timestep),
             "until_seconds": "",
@@ -7801,6 +7803,39 @@ def _render_solver(
     if dynamics is None:
         return []
     return ["# Solver", _render_solver_call(dynamics, solver_override, surface=surface)]
+
+
+def _render_scene_eigen_outputs(value: object, magnet_vars: dict[str, str]) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, Mapping):
+        raise ValueError("SceneDocument eigen sampling must be an object")
+    _reject_unrendered_scene_nested_fields(value, context="eigen_sampling", rendered_fields={"outputs"})
+    raw_outputs = value.get("outputs", [])
+    if not isinstance(raw_outputs, list):
+        raise ValueError("SceneDocument eigen sampling outputs must be a list")
+    constructors = {
+        "eigen_spectrum": (SaveSpectrum, {"quantity", "scope"}),
+        "dispersion_curve": (SaveDispersion, {"name", "include_branch_table"}),
+        "eigen_diagnostics": (SaveEigenDiagnostics, {"include_tracking", "include_residuals", "include_overlaps", "include_tangent_leakage", "include_orthogonality"}),
+        "eigen_mode": (SaveMode, {"field", "indices", "branches", "all_modes", "sample_selector"}),
+    }
+    outputs = []
+    for raw in raw_outputs:
+        if not isinstance(raw, Mapping) or raw.get("kind") not in constructors:
+            raise ValueError("SceneDocument eigen sampling output kind is unsupported")
+        constructor, fields = constructors[raw["kind"]]
+        _reject_unrendered_scene_nested_fields(raw, context="eigen_sampling_output", rendered_fields=fields | {"kind"})
+        kwargs = {key: val for key, val in raw.items() if key != "kind"}
+        if raw["kind"] == "eigen_mode":
+            selector = kwargs.pop("sample_selector", None)
+            if selector is not None:
+                if not isinstance(selector, Mapping):
+                    raise ValueError("SceneDocument eigen sample selector must be an object")
+                _reject_unrendered_scene_nested_fields(selector, context="eigen_sample_selector", rendered_fields={"sample_indices", "sample_labels"})
+                kwargs.update(selector)
+        outputs.append(constructor(**kwargs))
+    return ["study.clear_outputs()", *_render_output_specs(outputs, magnet_vars, surface="study")]
 
 
 def _render_scene_sampling_outputs(value: object, magnet_vars: dict[str, str]) -> list[str]:
