@@ -2573,6 +2573,7 @@ fn frequency_payload_as_eigen_payload(
         ),
         ("frequency_damping_policy", "eigen_damping_policy"),
         ("frequency_k_vector", "eigen_k_vector"),
+        ("frequency_k_path", "eigen_k_path"),
         ("frequency_spin_wave_bc", "eigen_spin_wave_bc"),
         ("frequency_spin_wave_bc_config", "eigen_spin_wave_bc_config"),
     ] {
@@ -3680,10 +3681,72 @@ fn payload_k_sampling(
         }
         _ => bail!("eigen_k_vector must be a comma-separated string or 3-element array"),
     };
-    Ok(match parsed {
-        Some(k_vector) => Some(fullmag_ir::KSamplingIR::Single { k_vector }),
-        None => default_sampling,
-    })
+    let path = match payload.get("eigen_k_path") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if value.trim().is_empty() => None,
+        Some(Value::String(value)) => Some(parse_pipeline_k_path(value)?),
+        _ => bail!("eigen_k_path must be a path string"),
+    };
+    if parsed.is_some() && path.is_some() {
+        bail!("cannot set both eigen_k_vector and eigen_k_path");
+    }
+    if let Some(k_vector) = parsed {
+        if !k_vector.iter().all(|value| value.is_finite()) {
+            bail!("eigen_k_vector components must be finite");
+        }
+        return Ok(Some(fullmag_ir::KSamplingIR::Single { k_vector }));
+    }
+    Ok(path.or(default_sampling))
+}
+
+fn parse_pipeline_k_path(raw: &str) -> Result<fullmag_ir::KSamplingIR> {
+    let (point_text, options) = raw.split_once('|').unwrap_or((raw, ""));
+    let mut points = Vec::new();
+    for entry in point_text.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        let fallback = format!("k{}", points.len());
+        let (label, vector) = entry.split_once(':').unwrap_or((&fallback, entry));
+        let components = vector.split(',').map(|part| part.trim().parse::<f64>())
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("invalid eigen_k_path vector")?;
+        if components.len() != 3 || !components.iter().all(|v| v.is_finite()) {
+            bail!("eigen_k_path vectors must contain three finite components");
+        }
+        points.push(fullmag_ir::KPointIR {
+            label: Some(if label.trim().is_empty() { fallback } else { label.trim().to_string() }),
+            k_vector: [components[0], components[1], components[2]],
+        });
+    }
+    if points.len() < 2 { bail!("eigen_k_path requires at least two control points"); }
+    let mut samples: Option<Vec<u32>> = None;
+    let mut closed: Option<bool> = None;
+    for option in options.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        let (key, value) = option.split_once('=').context("invalid eigen_k_path option")?;
+        match key.trim().to_ascii_lowercase().as_str() {
+            "samples" | "samples_per_segment" => {
+                if samples.is_some() { bail!("duplicate eigen_k_path samples option"); }
+                let counts = value.split(',').map(|part| part.trim().parse::<u32>())
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .context("invalid eigen_k_path sample counts")?;
+                if counts.iter().any(|count| *count == 0) { bail!("eigen_k_path samples must be positive"); }
+                samples = Some(counts);
+            }
+            "closed" => {
+                if closed.is_some() { bail!("duplicate eigen_k_path closed option"); }
+                closed = Some(match value.trim().to_ascii_lowercase().as_str() {
+                    "true" | "1" | "yes" => true,
+                    "false" | "0" | "no" => false,
+                    _ => bail!("invalid eigen_k_path closed option"),
+                });
+            }
+            _ => bail!("unknown eigen_k_path option: {}", key.trim()),
+        }
+    }
+    let closed = closed.unwrap_or(false);
+    let segments = if closed { points.len() } else { points.len() - 1 };
+    let mut samples_per_segment = samples.unwrap_or_else(|| vec![41; segments]);
+    if samples_per_segment.len() == 1 { samples_per_segment.resize(segments, samples_per_segment[0]); }
+    if samples_per_segment.len() != segments { bail!("eigen_k_path segment/sample count mismatch"); }
+    Ok(fullmag_ir::KSamplingIR::Path { points, samples_per_segment, closed })
 }
 
 fn payload_spin_wave_bc(
@@ -4375,6 +4438,47 @@ mod eigen_sampling_selector_tests {
 #[cfg(test)]
 mod pipeline_eigen_solver_policy_tests {
     use super::*;
+
+    #[test]
+    fn pipeline_eigen_signed15_preserves_k_path_through_materialization() {
+        let ks = [-25, -20, -15, -10, -7, -5, -2, 0, 2, 5, 7, 10, 15, 20, 25];
+        let text = ks.iter().map(|k| format!("DE{k}:0,{},0", k * 1_000_000))
+            .collect::<Vec<_>>().join("; ") + " | samples=1";
+        let payload = BTreeMap::from([("eigen_k_path".into(), Value::String(text))]);
+        let stage = materialize_pipeline_eigenmodes(&time_evolution_base(), &payload).unwrap();
+        let fullmag_ir::StudyIR::Eigenmodes { k_sampling: Some(fullmag_ir::KSamplingIR::Path {
+            points, samples_per_segment, closed }), .. } = stage.ir.study else {
+            panic!("materialization lost signed k path");
+        };
+        assert!(!closed);
+        assert_eq!(samples_per_segment, vec![1; 14]);
+        assert_eq!(points.len(), 15);
+        for (point, k) in points.iter().zip(ks) {
+            assert_eq!(point.k_vector, [0.0, f64::from(k) * 1e6, 0.0]);
+            assert_eq!(point.label.as_deref(), Some(format!("DE{k}").as_str()));
+        }
+        assert_eq!(points[7].k_vector, [0.0; 3]);
+    }
+
+    #[test]
+    fn pipeline_k_path_rejects_ambiguous_or_invalid_inputs() {
+        for text in ["G:0,0,0", "G:0,0,0;X:0,NaN,0 | samples=1",
+            "G:0,0,0;X:0,1,0 | samples=0", "G:0,0,0;X:0,1,0 | samples=1,2",
+            "G:0,0,0;X:0,1,0 | unknown=1", "G:0,0,0;X:0,1,0 | closed=maybe"] {
+            assert!(parse_pipeline_k_path(text).is_err(), "accepted {text}");
+        }
+        let payload = BTreeMap::from([
+            ("eigen_k_path".into(), serde_json::json!("G:0,0,0;X:0,1,0 | samples=1")),
+            ("eigen_k_vector".into(), serde_json::json!([0, 1, 0])),
+        ]);
+        assert!(payload_k_sampling(&payload, None).is_err());
+        let fullmag_ir::KSamplingIR::Path { samples_per_segment, closed, .. } =
+            parse_pipeline_k_path("G:0,0,0;X:0,1,0 | samples=2;closed=true").unwrap() else {
+                panic!("expected path");
+            };
+        assert!(closed);
+        assert_eq!(samples_per_segment, vec![2, 2]);
+    }
 
     #[test]
     fn pipeline_eigen_sampling_preserves_mode_selectors_and_diagnostics() {
