@@ -2520,10 +2520,12 @@ export function resolveViewport3DFieldRenderModelBuildOptions({
   };
 }
 
-function applyAnalysisOverlayAppearance(
+export function applyAnalysisOverlayAppearance(
   settings: VisualizationTargetSettings,
   appearance: AnalysisFieldOverlayAppearanceState | null | undefined,
+  fieldId?: string,
 ): VisualizationTargetSettings {
+  if (fieldId) settings = { ...settings, activeQuantityId: fieldId };
   if (!appearance) return settings;
   const surfaceColorSource =
     appearance.surfaceColorSource ?? settings.surfaceColorSource;
@@ -3875,7 +3877,7 @@ export function useViewport3DSceneModel({
       && modeFieldOverlay.status === "ready"
       ? resolveFemMagneticModeBounds(femDomain)
       : null,
-    [analysisFieldIntent, analysisOverlay?.modeIntent, femDomain, modeFieldOverlay.status],
+    [analysisFieldIntent, analysisOverlay, femDomain, modeFieldOverlay.status],
   );
   const bounds = savedSelectionActive
     ? savedViewportBounds
@@ -4262,6 +4264,10 @@ export function useViewport3DSceneModel({
       airboxSettings.activeQuantityId,
       availableQuantityIdsForPlanning,
     );
+  const analysisMagneticPartIds = useMemo(
+    () => new Set(femDomain.magneticParts.map((part) => part.id)),
+    [femDomain.magneticParts],
+  );
   const getPartSettings = useCallback(
     (part: Viewport3DMeshPart) =>
       applyAnalysisOverlayAppearance(
@@ -4998,7 +5004,7 @@ export function useViewport3DSceneModel({
     const configuredMax = analysisOverlay?.appearance?.colorRangeMax;
     const configuredMin = analysisOverlay?.appearance?.colorRangeMin;
     if (mode === "manual" && configuredMin != null && configuredMax != null) {
-      const denominator = Math.max(gain, Number.EPSILON);
+      const denominator = analysisFieldIntent ? 1 : Math.max(gain, Number.EPSILON);
       const range = {
         max: configuredMax / denominator,
         min: configuredMin / denominator,
@@ -5007,13 +5013,15 @@ export function useViewport3DSceneModel({
         entries.push([scalarMode, range]);
       }
     } else if (mode === "symmetric" && configuredMax != null) {
-      const extent = Math.abs(configuredMax) / Math.max(gain, Number.EPSILON);
+      const extent = Math.abs(configuredMax) /
+        (analysisFieldIntent ? 1 : Math.max(gain, Number.EPSILON));
       for (const scalarMode of enabledScalarRangeModes(scalarRangeModeFlags)) {
         entries.push([scalarMode, { max: extent, min: -extent }]);
       }
     }
     return entries.length > 0 ? new Map(entries) : undefined;
   }, [
+    analysisFieldIntent,
     analysisOverlay?.appearance?.colorRangeMax,
     analysisOverlay?.appearance?.colorRangeMin,
     analysisOverlay?.appearance?.colorRangeMode,
@@ -6711,8 +6719,10 @@ export function useViewport3DSceneModel({
               modeFieldOverlay.phasorAmplitudeMax !== null
                 ? {
                     phasorAmplitudeMax: modeFieldOverlay.phasorAmplitudeMax,
-                    representation:
-                      modeFieldOverlay.metadata?.availableViews[0] ?? "complex",
+                    representation: analysisOverlay?.query.view ?? "phase_rotated_real",
+                    autoRange: !analysisOverlay?.appearance?.colorRangeMode ||
+                      analysisOverlay.appearance.colorRangeMode === "auto",
+                    displayGain: analysisOverlay?.appearance?.displayGain ?? 1,
                   }
                 : null,
             scalarRangesByMode: fieldScalarRangesByMode,
@@ -6747,12 +6757,7 @@ export function useViewport3DSceneModel({
     topology.revision,
     vectorColorMode,
     vectorScale,
-    analysisOverlay?.cellOrigin,
-    analysisOverlay?.floquetSpatialConvention,
-    analysisOverlay?.phasorConvention,
-    analysisOverlay?.wavevectorKf,
-    analysisOverlay?.source,
-    modeFieldOverlay.metadata?.availableViews,
+    analysisOverlay,
     modeFieldOverlay.phasorAmplitudeMax,
   ]);
   const visualizationDebugTargets = viewportVisualizationTargets.map((target) => {
@@ -6927,9 +6932,39 @@ export function useViewport3DSceneModel({
   const effectiveViewportPartSettings = useCallback(
     (part: Viewport3DMeshPart) => savedSelectionActive
       ? effectiveViewportFallbackSettings
-      : getPartSettings(part),
-    [effectiveViewportFallbackSettings, getPartSettings, savedSelectionActive],
+      : applyAnalysisOverlayAppearance(
+          getPartSettings(part), undefined,
+          analysisMagneticPartIds.has(part.id) ? analysisOverlay?.fieldId : undefined,
+        ),
+    [analysisMagneticPartIds, analysisOverlay?.fieldId,
+      effectiveViewportFallbackSettings, getPartSettings, savedSelectionActive],
   );
+  const modeSurfaceDiagnosticRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!analysisFieldIntent) return;
+    const part = fieldCompatibleTopologyRenderModel?.magneticParts[0];
+    const settings = part ? effectiveViewportPartSettings(part.part) : null;
+    const buffer = part ? fieldRenderModel?.targetPasses.get(part.part.id)?.surface.scalarColors : null;
+    const detail = {
+      partId: part?.part.id ?? null,
+      surfaceIndexCount: part?.surfaceIndices?.length ?? 0,
+      fieldQuantity: fieldRenderModel?.quantityData?.quantityId ?? null,
+      requestedQuantity: settings?.activeQuantityId ?? null,
+      surfaceVisible: settings?.shaderVisible ?? false,
+      surfaceColorSource: settings?.surfaceColorSource ?? null,
+      bufferQuantity: buffer?.quantityId ?? null,
+      bufferRepresentation: buffer?.complexRepresentation ?? null,
+      bufferMin: buffer?.range.min ?? null,
+      bufferMax: buffer?.range.max ?? null,
+      complexValueCount: buffer?.complexRealValues?.length ?? 0,
+      rgbValueCount: buffer?.colors.length ?? 0,
+    };
+    const key = JSON.stringify(detail);
+    if (modeSurfaceDiagnosticRef.current === key) return;
+    modeSurfaceDiagnosticRef.current = key;
+    diagnosticRecorder.mark("viewport-3d.mode-surface-binding", detail, "viewport-3d");
+  }, [analysisFieldIntent, diagnosticRecorder, effectiveViewportPartSettings,
+    fieldCompatibleTopologyRenderModel, fieldRenderModel]);
   const domainSummary = fdmDomain
     ? formatFdmDisplaySamplingSummary({
         budget: fdmDomain.displayCellBudget,

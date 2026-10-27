@@ -294,6 +294,8 @@ export interface Viewport3DFieldRenderOptions {
   modeOverlay?: {
     phasorAmplitudeMax: number;
     representation: string;
+    autoRange?: boolean;
+    displayGain?: number;
   } | null;
   partFieldVectors?: ReadonlyMap<string, Viewport3DFieldVector>;
   partTargetFieldBuffers?: ReadonlyMap<string, Viewport3DTargetFieldBuffer>;
@@ -834,6 +836,9 @@ export function buildViewport3DFieldRenderModel(
     options.floquetSpatialConvention,
     options.phasorConvention,
   );
+  for (const [mode, buffer] of scalarColorsByMode) {
+    scalarColorsByMode.set(mode, applyModeSurfaceAppearance(buffer, options));
+  }
   const scalarColors =
     scalarColorsByMode.get(options.vectorColorMode ?? "magnitude") ?? null;
   const partVectorBuilds = new Map<
@@ -1115,7 +1120,9 @@ export function buildViewport3DFieldRenderModel(
             );
           }
         }
-        partScalarColorsByMode.set(colorMode, scalarColorsWithIdentity);
+        partScalarColorsByMode.set(
+          colorMode, applyModeSurfaceAppearance(scalarColorsWithIdentity, options),
+        );
       }
       scalarColorsByPartAndMode.set(partId, partScalarColorsByMode);
     }
@@ -1346,6 +1353,37 @@ export function buildViewport3DFieldRenderModel(
     targetDiagnostics,
     targetPasses,
     visualizationPhaseRad,
+  };
+}
+
+function applyModeSurfaceAppearance(
+  buffer: ScalarColorBuffer | null,
+  options: Viewport3DFieldRenderOptions,
+): ScalarColorBuffer | null {
+  const overlay = options.modeOverlay;
+  if (!buffer || !overlay || !options.analysisFieldIntentActive ||
+      !buffer.complexRealValues || !buffer.complexImagValues) return buffer;
+  const representation = overlay.representation;
+  if (representation !== "real" && representation !== "imag" &&
+      representation !== "abs" && representation !== "phase" &&
+      representation !== "phase_rotated_real") return buffer;
+  const gain = Number.isFinite(overlay.displayGain)
+    ? Math.max(0, overlay.displayGain ?? 1) : 1;
+  const extent = Math.max(overlay.phasorAmplitudeMax * gain, 1e-30);
+  const autoRange = overlay.autoRange !== false && Number.isFinite(extent);
+  // Clone the view wrapper: cached raw buffers can serve different displays.
+  return {
+    ...buffer,
+    // Precomputed RGB represents the old real projection. A complex display
+    // must use its shader attributes, including phase and representation.
+    colors: new Float32Array(0),
+    amplitudeScale: gain,
+    complexRepresentation: representation,
+    range: autoRange
+      ? representation === "phase"
+        ? { min: -Math.PI, max: Math.PI }
+        : { min: representation === "abs" || buffer.colorMode === "magnitude" ? 0 : -extent, max: extent }
+      : buffer.range,
   };
 }
 

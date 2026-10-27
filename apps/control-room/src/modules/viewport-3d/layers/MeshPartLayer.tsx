@@ -1098,7 +1098,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       scalarShaderMaterialFront.toneMapped =
         materialProfile.magneticSurface.toneMapped ?? false;
     }
+    // Uniform updates do not schedule a frame in the demand-driven canvas.
+    invalidate();
   }, [
+    invalidate,
     committedScalarColorState.buffer,
     committedScalarColorState.pipeline,
     materialProfile.magneticSurface.shadeStrength,

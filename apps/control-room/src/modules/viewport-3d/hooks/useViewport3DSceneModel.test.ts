@@ -28,6 +28,7 @@ import {
 import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DFieldVectorEnvelope } from "../viewport3dResources";
 import {
+  applyAnalysisOverlayAppearance,
   buildViewport3DAirboxSyntheticVectorField,
   applyViewport3DFieldLayerDiagnosticOverrides,
   resolveViewport3DActiveQuantityId,
@@ -5776,5 +5777,19 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("preparedRevision: fieldVectorPreparedRevision");
     expect(source).toContain("displayedRevision: fieldVectorDisplayedRevision");
     expect(source).toContain("selectedTargetId: selectedVisualizationTargetId, tracker");
+  });
+});
+
+
+describe("analysis surface quantity binding", () => {
+  it("uses the selected mode without mutating or replacing stored object settings", () => {
+    const original = { ...DEFAULT_OBJECT_VISUALIZATION, activeQuantityId: "m" };
+    const fieldId = "analysis:eigen:sample-0000:mode-0000";
+    const rendered = applyAnalysisOverlayAppearance(original, undefined, fieldId);
+    expect(rendered.activeQuantityId).toBe(fieldId);
+    expect(original.activeQuantityId).toBe("m");
+    expect(applyAnalysisOverlayAppearance(original, undefined)).toBe(original);
+    expect(applyAnalysisOverlayAppearance(original, { shaderVisible: true }, fieldId))
+      .toMatchObject({ activeQuantityId: fieldId, shaderVisible: true });
   });
 });

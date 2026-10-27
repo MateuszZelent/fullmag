@@ -1110,6 +1110,30 @@ async function main() {
     await fitView.click({ timeout: Math.max(uiDeadline - Date.now(), 1) });
     report.ui.modeViewportBounds = await page.locator("[data-viewport-bounds]").first()
       .getAttribute("data-viewport-bounds");
+    report.ui.displayChecks = [];
+    for (const [view, label] of [
+      ["real", "Plot selected eigen mode real component"],
+      ["imag", "Plot selected eigen mode imaginary component"],
+      ["abs", "Plot selected eigen mode complex magnitude"],
+      ["phase", "Plot selected eigen mode phase"],
+    ]) {
+      const control = page.getByRole("button", { name: label, exact: true });
+      await control.click();
+      const binding = await pollUntil(Date.now() + 15000, `${view} complex surface binding`, async () => {
+        if (await control.getAttribute("aria-pressed") !== "true") return false;
+        const marker = await page.evaluate(() =>
+          (window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.()?.streams?.timeline ?? [])
+            .filter((entry) => entry.name === "viewport-3d.mode-surface-binding").at(-1));
+        const detail = marker?.detail;
+        return detail?.bufferRepresentation === view && detail?.complexValueCount > 0 &&
+          detail?.rgbValueCount === 0 && detail?.bufferQuantity === report.artifacts.mode.fieldId &&
+          detail?.requestedQuantity === report.artifacts.mode.fieldId ? detail : false;
+      });
+      await sleep(750);
+      const screenshot = report.config.output.replace(/\.json$/i, "") + `-${view}.png`;
+      await page.screenshot({ path: screenshot, fullPage: true });
+      report.ui.displayChecks.push({ view, binding, screenshot });
+    }
     assert(mutationAttempts.length === 0, `The UI attempted ${mutationAttempts.length} mutating HTTP request(s); they were blocked for safety: ${JSON.stringify(mutationAttempts.slice(0, 8))}`);
     assert(browserConsole.errors.length === 0, `Unexpected browser console errors: ${JSON.stringify(browserConsole.errors.slice(0, 8))}`);
     assert(browserConsole.pageErrors.length === 0, `Unexpected browser page errors: ${JSON.stringify(browserConsole.pageErrors.slice(0, 8))}`);
