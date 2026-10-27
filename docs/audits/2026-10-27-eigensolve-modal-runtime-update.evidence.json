@@ -41,18 +41,20 @@
     "request_id": "modal-ui-signed15-fms-20261027-a63b4e44e",
     "script_sha256": "8d48ad08356352d69713b29465a70e2c0ea4135f66069f3d82c2ce853dacfa2f",
     "session_id": "docker-startup-dd62c87abc74113ead93cc5b36b99d5043bd50acf2814ce577f899bd3ccdc268",
-    "status": "running",
+    "status": "completed",
     "mesh_cell_count": 7134,
     "relax_stage": "completed",
-    "eigen_stage": "running",
-    "final_spectrum_published": false
+    "eigen_stage": "completed",
+    "final_spectrum_published": true,
+    "generation_id": "sha256:094bf14b5f4e43d1622336ab43a09cbdce64b3e558519dfbb6c616473a5c215b"
   },
-  "actual_solved_archive_roundtrip": "NOT_VERIFIED",
-  "strict_browser_without_artifact_500": "NOT_VERIFIED",
+  "actual_solved_archive_roundtrip": "EXPORT_PASS; import open in 2026-10-28-eigensolve-large-fms-transport.md",
+  "strict_browser_without_artifact_500": "PASS: workbench and strict Gamma on new actual run",
   "scientific_qualification": "NOT_VERIFIED",
   "artifact_catalog_during_compute": {
     "http_status": 200,
     "etag_header_line_length": 89,
-    "full_postsolve_catalog": "NOT_VERIFIED"
-  }
+    "full_postsolve_catalog": "PASS: HTTP 200, ETag value length 83"
+  },
+  "final_results_evidence": "2026-10-28-eigensolve-modal-runtime-results.evidence.json"
 }

@@ -306,10 +306,10 @@ Bieżące obliczenia, wykres i dodatkowe poprawki UI/FMS opisuje [raport odbioru
 - [x] Ukończyć i opublikować w bieżącym API pełne 15 próbek z Gamma i dynamicznym demag.
 - [x] Wygenerować aktualny wykres z analityką i zachować numeryczne CSV/provenance.
 - [x] Pokazać rzeczywisty mod Gamma w 3D, cztery reprezentacje i zmieniającą się/zatrzymaną animację (oddzielny dowód wizualny).
-- [ ] Naprawić ETag dużego katalogu artefaktów i uzyskać strict browser PASS bez HTTP 500.
+- [x] Naprawić ETag dużego katalogu artefaktów i uzyskać strict browser PASS bez HTTP 500 (nowy backend ga63, nowy signed15, oba browserowe odbiory PASS).
 - [x] Kliknięcie punktu Gamma → właściwe pole 3D po naprawie układu i readera KSamplingIR; tożsamość pola zachowana po ky → path.
 - [x] Sprawdzić zakres i widoczność punktów wykresu po zmianie osi (15 punktów, końce i Gamma, oba warianty osi, trzy rozmiary okna).
-- [ ] Pełny strict browser bez błędów, w tym katalog artefaktów po aktualizacji backendu.
+- [x] Pełny strict browser bez błędów, w tym katalog artefaktów po aktualizacji backendu (Gamma oraz 15-punktowa przeglądarka).
 - [ ] Naprawić pełny round trip accepted-v2 FMS z projekcjami modów i typed AcceptedStateRef; nie usuwać guardów kompletności.
 
 Pozostałe bramki I0/I1/I5/I6/I7 zachowują oryginalny zakres. Cel pozostaje aktywny.
@@ -325,3 +325,9 @@ Przed przebudową własnej grupy zabezpieczono 304 pliki (132501653 bajty) gener
 Wybrano kontrolowaną aktualizację i ponowienie tego samego rzeczywistego benchmarku na nowej binarce. Istniejąca private reattach ścieżka jest odzyskiwaniem po awarii, a zwykły restart przenosi model, nie pełny wynik; nie poluzowano tych kontraktów ani nie wstrzyknięto starego snapshotu. Ponowienie ma nową tożsamość runu i nie zastępuje starego wyniku. Pozwala uzyskać rzeczywisty export/reopen na poprawionej binarce i ponownie odebrać cały wykres oraz pola.
 
 Nie zamyka to I0/I1/I5/I6 ani naukowych bramek I7 (kompletność widma, zbieżność, serial/adaptive i COMSOL A1).
+
+## Odbiór nowego runtime i signed15 — 28.10.2026
+
+Pełne wyniki ponowiono w `run-live-93df870d6af7a8e9d70a3742a0de6e7860b5a072c98b7359c3463c18b49113de` na backendzie ga63; wszystkie 15 częstotliwości jest identycznych z poprzednim wykonaniem. Obie referencje są w nowym UI. Przeszły workbench (15 punktów, pięć pól, osie i okna) oraz strict Gamma z reprezentacjami i animacją. Zero błędów HTTP/JS w odbiorze; wdrożony ograniczony ETag zamyka poprzedni błąd katalogu. Zapisano rzeczywisty solved FMS z referencjami.
+
+Dowód: `docs/audits/2026-10-28-eigensolve-modal-runtime-results.md` / `.evidence.json`. Wykres i mod są dostępne w aktualnym UI. FMS export nie oznacza round trip: rzeczywisty import ujawnił limity 10 MiB proxy oraz 128 MiB JSON, a archiwum referencji wymaga poprawnego rozdzielenia revision dokumentu i execution input. Naprawy L1–L4: `2026-10-28-eigensolve-large-fms-transport.md`. To otwarta część I3/I6; nie zamyka I0/I1/I5/I6/I7.
