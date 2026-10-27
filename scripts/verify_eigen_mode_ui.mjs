@@ -1106,6 +1106,10 @@ async function main() {
       binaryEvidence.response.observedAtMs,
       uiDeadline,
     );
+    const fitView = page.getByRole("button", { name: "Fit view", exact: true });
+    await fitView.click({ timeout: Math.max(uiDeadline - Date.now(), 1) });
+    report.ui.modeViewportBounds = await page.locator("[data-viewport-bounds]").first()
+      .getAttribute("data-viewport-bounds");
     assert(mutationAttempts.length === 0, `The UI attempted ${mutationAttempts.length} mutating HTTP request(s); they were blocked for safety: ${JSON.stringify(mutationAttempts.slice(0, 8))}`);
     assert(browserConsole.errors.length === 0, `Unexpected browser console errors: ${JSON.stringify(browserConsole.errors.slice(0, 8))}`);
     assert(browserConsole.pageErrors.length === 0, `Unexpected browser page errors: ${JSON.stringify(browserConsole.pageErrors.slice(0, 8))}`);

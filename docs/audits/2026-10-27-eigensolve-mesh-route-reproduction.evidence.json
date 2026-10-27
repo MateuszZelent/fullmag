@@ -1,0 +1,106 @@
+{
+  "scope": "Observed mesh-generation route for the completed +10 rad/um FEM CPU run; not a new solve or mesh convergence proof",
+  "run_id": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+  "run_status": "completed",
+  "mesh_report_endpoint": "/v2/sessions/current/meshing/meshes/shared-domain/report",
+  "mesh_report_sha256": "960637520bc5d99801227bb75cbb1b55ef86769ee3c3eabcbe6acac5e5797ced",
+  "mesh_revision": 2,
+  "runtime_source_commit": "59f23cd815c6ed24dd9ea5201002cd7918ba24ab",
+  "build_mode": "single_geometry_geo_layered_box",
+  "operation_statuses": [
+    {
+      "details": {
+        "optimize_iters": 1
+      },
+      "kind": "optimizer",
+      "reason": "optimize_iters > 0 but no optimizer method is selected",
+      "requested": true,
+      "scope": "global",
+      "status": "skipped"
+    },
+    {
+      "actual_method": "Delaunay",
+      "details": {
+        "preexisting_background_field_count": 1,
+        "resolved_curvature_samples": 0,
+        "resolved_narrow_region_count": 0,
+        "size_field_count": 13
+      },
+      "kind": "algorithm_3d",
+      "requested": true,
+      "requested_method": "Delaunay",
+      "scope": "global",
+      "status": "applied"
+    },
+    {
+      "actual_method": "bbox",
+      "details": {
+        "build_mode": "single_geometry_geo_layered_box"
+      },
+      "kind": "airbox_shape",
+      "requested": true,
+      "requested_method": "bbox",
+      "scope": "global",
+      "status": "applied"
+    },
+    {
+      "actual_method": "geo_layer_partitioned_tetrahedral",
+      "details": {
+        "airbox_present": true,
+        "build_mode": "single_geometry_geo_layered_box",
+        "layer_mesh_mode": "unstructured_tetrahedra_per_layer_volume",
+        "layer_plane_verification": "verified",
+        "layer_planes_realized": true,
+        "requested_sweep_direction": "auto",
+        "resolved_layer_partitions": 3,
+        "resolved_layer_planes_m": [
+          -5e-09,
+          -1.6666666666666667e-09,
+          1.6666666666666667e-09,
+          5e-09
+        ],
+        "resolved_sweep_direction": "z",
+        "through_thickness_elements": 3
+      },
+      "kind": "thin_film",
+      "requested": true,
+      "requested_method": "thin_film_tetrahedral",
+      "scope": "film_geom",
+      "status": "applied"
+    }
+  ],
+  "effective_airbox_target": {
+    "growth_rate": 1.3,
+    "maximum_element_size": 1e-07
+  },
+  "effective_per_object_targets": {
+    "film_geom": {
+      "corner_extent": 1e-08,
+      "corner_maximum_element_size": 5e-09,
+      "edge_maximum_element_size": 5e-09,
+      "edge_thickness": 1e-08,
+      "interface_maximum_element_size": 5e-09,
+      "interface_thickness": 2e-08,
+      "marker": 1,
+      "maximum_element_size": 5e-09,
+      "source": "local_override",
+      "transition_distance": 2e-08,
+      "transition_distance_effective": 2e-08,
+      "transition_distance_requested": 2e-08,
+      "transition_realization": "explicit"
+    }
+  },
+  "node_count": 1709,
+  "element_count": 7134,
+  "historical": {
+    "source_commit": "57182911c6e8e721b8ee9705aa7f70491c70fe94",
+    "report": "docs/raports/2026-10-04-de-signed15-runtime.md",
+    "node_count": 6138,
+    "magnetic_tetrahedra": 1476,
+    "air_tetrahedra": 28536,
+    "extrusion": "Every z interval extrudes the premeshed source with numElements=[1], heights=[1.0], recombine=True"
+  },
+  "current_route": "geo_layer_partitioned_tetrahedral: magnetic intervals extruded; air intervals geometry-only then separately meshed",
+  "source": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py: scoped_layer_partitioning branch",
+  "conclusion": "Runtime report confirms the newer component-scoped meshing route. Historical z-plane scheduling agrees, but volumetric discretization differs. Same requested mesh parameters do not establish reproduction. Do not disable component scoping globally to recover historical counts."
+}

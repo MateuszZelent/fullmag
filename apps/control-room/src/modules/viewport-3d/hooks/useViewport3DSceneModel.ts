@@ -259,6 +259,7 @@ import {
   adaptFdmMultilayerAirboxDomain,
   adaptFdmMultilayerNativeLayerDomains,
   adaptFemSharedDomainManifest,
+  resolveFemMagneticModeBounds,
   resolveFdmNativeLayerActiveMaskForRendering,
   resolveViewport3DFdmRealizedRegionIds,
   type FdmNativeLayerRenderView,
@@ -3869,9 +3870,16 @@ export function useViewport3DSceneModel({
   const effectiveCameraState = savedSelectionActive
     ? savedViewportCamera.cameraState
     : cameraView.cameraState;
+  const magneticModeBounds = useMemo(
+    () => analysisOverlay?.modeIntent && analysisFieldIntent === analysisOverlay.modeIntent
+      && modeFieldOverlay.status === "ready"
+      ? resolveFemMagneticModeBounds(femDomain)
+      : null,
+    [analysisFieldIntent, analysisOverlay?.modeIntent, femDomain, modeFieldOverlay.status],
+  );
   const bounds = savedSelectionActive
     ? savedViewportBounds
-    : liveBounds;
+    : magneticModeBounds ?? liveBounds;
   const planarMonitorFramePreview = useMemo(
     () => planarMonitorDraft
       ? planarMonitorFramePreviewFromDraft(planarMonitorDraft, bounds, "draft")

@@ -15,6 +15,7 @@ import {
   resolveViewport3DFdmRealizedRegionIds,
   resolveFemPartSelectionByBoundaryFace,
   resolveMeshPartBounds,
+  resolveFemMagneticModeBounds,
   selectionForMeshPart,
 } from "./viewport3dDomainAdapter";
 
@@ -508,5 +509,25 @@ describe("viewport3dDomainAdapter", () => {
       center: [1, 1, 1],
       size: [2, 2, 2],
     });
+  });
+});
+
+describe("magnetic mode framing", () => {
+  it("excludes the airbox and includes all translated magnetic parts", () => {
+    const domain = adaptFemSharedDomainManifest(manifestFixture());
+    const first = { ...domain.magneticParts[0]!, bounds_min: [10, 20, 30], bounds_max: [12, 24, 31] };
+    domain.magneticParts = [first, { ...first, id: "second", bounds_min: [-4, 20, 30], bounds_max: [-2, 24, 31] }];
+    expect(resolveFemMagneticModeBounds(domain)).toMatchObject({
+      center: [4, 22, 30.5], size: [16, 4, 1],
+    });
+  });
+
+  it("falls back when any magnetic carrier has missing or invalid bounds", () => {
+    const domain = adaptFemSharedDomainManifest(manifestFixture());
+    expect(resolveFemMagneticModeBounds(domain)).toBeNull();
+    domain.magneticParts = [{ ...domain.magneticParts[0]!, bounds_min: [0, 0, 0], bounds_max: [1, NaN, 1] }];
+    expect(resolveFemMagneticModeBounds(domain)).toBeNull();
+    domain.magneticParts = [];
+    expect(resolveFemMagneticModeBounds(domain)).toBeNull();
   });
 });
