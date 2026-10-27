@@ -2723,6 +2723,13 @@ def _parser() -> argparse.ArgumentParser:
     cancelled_activation.add_argument("--port", type=int, required=True)
     cancelled_activation.add_argument("--apply", action="store_true")
     cancelled_activation.add_argument("--expected-plan-sha256")
+    restarted = subparsers.add_parser("stop-restarted-terminal-volume", help="stop a pinned diagnostic-only restarted namespace after proving all tasks terminal and reservations released")
+    restarted.add_argument("--attempt", required=True)
+    restarted.add_argument("--resume-attempt", required=True)
+    restarted.add_argument("--config-sha256", required=True)
+    restarted.add_argument("--source-root", type=Path, required=True)
+    restarted.add_argument("--port", type=int, required=True)
+    restarted.add_argument("--apply", action="store_true")
     stop_bootstrap = subparsers.add_parser(
         "stop-bootstrap-volume",
         help="stop one pinned backend retaining only its exact pre-owner startup-fenced diagnostic API",
@@ -3017,6 +3024,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_cancelled_activation import run as recover_cancelled_activation
             result = recover_cancelled_activation(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "stop-restarted-terminal-volume":
+            from docker_volume_restart_recovery import run as stop_restarted
+            print(json.dumps(stop_restarted(args), ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-bootstrap-volume":
             from docker_volume_stop_bootstrap import stop_bootstrap
             result = stop_bootstrap(args)
