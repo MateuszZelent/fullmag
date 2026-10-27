@@ -1203,3 +1203,14 @@
     height: clamp(180px, calc(100cqh - 220px), 440px); min-height: 180px;
   }
 }
+
+/* Select labels and mode rows must not enlarge a docked scientific canvas. */
+.fm-analysis-plots__panel:has(> .fm-analysis-plots__subchart--frequency-domain),
+.fm-analysis-plots__subchart--frequency-domain { grid-template-columns: minmax(0, 1fr); }
+.fm-analysis-plots__mode-list { min-width: 0; max-width: 100%; }
+.fm-analysis-plots__mode-list > p { overflow-wrap: anywhere; }
+.fm-analysis-plots__sample-selector { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.fm-analysis-plots__sample-selector .fm-select-trigger { min-width: 0; max-width: 100%; }
+.fm-analysis-plots__sample-selector .fm-select-trigger > span:first-child {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

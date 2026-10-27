@@ -1533,6 +1533,8 @@ async function inspectFrequencyDomainPointSpacing(page, expected) {
           : Number.POSITIVE_INFINITY,
       }))
       .filter((candidate) =>
+        // A scatter target is not its own competing click target.
+        !(scatterIndex === seriesIndex && candidate.dataIndex === dataIndex) &&
         Array.isArray(candidate.row) &&
         typeof candidate.row[1] === "number" &&
         typeof candidate.row[2] === "number" &&

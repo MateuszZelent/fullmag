@@ -59,7 +59,14 @@ try{
   await p.waitForFunction(field=>{
     const all=window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.()?.streams?.timeline??[];const e=all.filter(x=>x.name==='viewport-3d.mode-surface-binding').at(-1)?.detail;return e?.bufferQuantity===field&&e?.complexValueCount>0&&e?.surfaceVisible;
   },field,{timeout:60000});
-  proof.modes.push({sample,point,surface:await p.evaluate(()=>{const all=window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.()?.streams?.timeline??[];return all.filter(x=>x.name==='viewport-3d.mode-surface-binding').at(-1)?.detail;})});
+  const modeCanvas=p.locator('.fm-viewport-3d canvas').first();
+  await modeCanvas.waitFor({state:'visible',timeout:60000});
+  const webgl = await modeCanvas.evaluate(canvas=>{
+    const gl=canvas.getContext('webgl2')??canvas.getContext('webgl');
+    return {contextLost:gl?.isContextLost()??true,width:gl?.drawingBufferWidth??0,height:gl?.drawingBufferHeight??0};
+  });
+  if(webgl.contextLost||webgl.width<=0||webgl.height<=0)throw Error(`Mode ${sample} has no healthy WebGL drawing buffer`);
+  proof.modes.push({sample,point,canvasVisible:true,webgl,surface:await p.evaluate(()=>{const all=window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.()?.streams?.timeline??[];return all.filter(x=>x.name==='viewport-3d.mode-surface-binding').at(-1)?.detail;})});
   await p.getByRole('button',{name:'Fit view',exact:true}).click();
   if(sample===7)await p.screenshot({path:`${screenshots}/modal-sample-${sample}-3d.png`});
   await p.locator('.fm-viewport-tabs__trigger').filter({hasText:/^Analysis$/}).click();
@@ -89,6 +96,8 @@ try{
  for(const viewport of [{width:1600,height:1100},{width:1440,height:1000},{width:1100,height:900}]){
   await p.setViewportSize(viewport);await p.locator('.fm-analysis-plots').evaluate(e=>e.scrollTop=0);await p.waitForTimeout(800);
   const bounds=await p.locator('.fm-analysis-plots, .fm-analysis-plots__frequency-canvas').evaluateAll(es=>es.map(e=>e.getBoundingClientRect().toJSON()));
+  const [host,plot]=bounds;
+  if(!host||!plot||plot.left<host.left||plot.right>host.right||plot.top<host.top||plot.bottom>host.bottom)throw Error(`Plot clipped at ${viewport.width}×${viewport.height}: ${JSON.stringify(bounds)}`);
   proof.layouts.push({viewport,bounds});await p.screenshot({path:`${screenshots}/modal-workbench-${viewport.width}.png`});
  }
  proof.runtimeVersion=(await p.locator('body').innerText()).match(/0\.1\.0-dev\.[^\s]+/)?.[0]??null;
