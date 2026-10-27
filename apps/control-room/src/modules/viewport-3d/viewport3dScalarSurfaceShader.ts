@@ -304,6 +304,8 @@ uniform int fmColorModeId;
 uniform int fmRepresentationId;
 uniform float fmPhaseRad;
 uniform float fmAmplitudeScale;
+uniform float fmScalarMin;
+uniform float fmScalarMax;
 uniform vec3 fmWavevectorKf;
 uniform vec3 fmCellOrigin;
 uniform float fmSpatialPhaseSign;
@@ -354,7 +356,14 @@ void main() {
   vec3 complexReal = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
   vec3 complexImag = ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
   vec3 projected = projectComplex(complexReal, complexImag, theta);
-  vScalarValue = scalarFromVector(projected);
+  // Unlike the real scalar attribute, complex attributes contain raw values.
+  // The shared fragment shader expects a normalized palette coordinate.
+  // Phase is already a scalar angle replicated across projected components.
+  float scalar = fmRepresentationId == 4 ? projected.x : scalarFromVector(projected);
+  float span = fmScalarMax - fmScalarMin;
+  float scale = max(abs(fmScalarMax), abs(fmScalarMin));
+  vScalarValue = span <= 1e-6 * max(scale, 1.0)
+    ? 0.5 : (scalar - fmScalarMin) / span;
   vNormalView = normalize(normalMatrix * normal);
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
   #include <clipping_planes_vertex>

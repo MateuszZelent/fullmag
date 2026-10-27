@@ -501,6 +501,19 @@ describe("viewport3dScalarSurfaceShader", () => {
     });
   });
 
+  it("normalizes raw complex projections once and preserves signed phase", () => {
+    const material = createScalarSurfaceShaderMaterial(complexBuffer(), {
+      depthTest: true, depthWrite: true, opacity: 1, polygonOffset: false,
+      polygonOffsetFactor: 0, polygonOffsetUnits: 0, side: 2, transparent: false,
+    });
+    expect(material.vertexShader).toContain("uniform float fmScalarMin;");
+    expect(material.vertexShader).toContain("uniform float fmScalarMax;");
+    expect(material.vertexShader).toContain("fmRepresentationId == 4 ? projected.x : scalarFromVector(projected)");
+    expect(material.vertexShader).toContain("(scalar - fmScalarMin) / span");
+    expect(material.fragmentShader).toContain("clamp(v, 0.0, 1.0)");
+    material.dispose();
+  });
+
   describe("S-12 · Safe arctangent and modal phase projection in complex shaders", () => {
     const source = readFileSync(
       new URL("./viewport3dScalarSurfaceShader.ts", import.meta.url),
