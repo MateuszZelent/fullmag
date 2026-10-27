@@ -2,11 +2,17 @@ name: eigensolve-api-source-contracts
 
 on:
   workflow_dispatch:
+    inputs:
+      generated_only:
+        description: "Generate the complete API source artifact; reuse unchanged backend test evidence"
+        type: boolean
+        default: false
 permissions:
   contents: read
 
 jobs:
   physical-field-source-contracts:
+    if: ${{ !inputs.generated_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -69,6 +75,7 @@ jobs:
           grep -F "test router_v2::tests::v2_progress_keeps_live_magnetization_at_its_original_observation_step ... ok" "$RUNNER_TEMP/field-freshness.log"
 
   postprocessing-revision-contracts:
+    if: ${{ !inputs.generated_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -125,5 +132,6 @@ jobs:
             apps/control-room/src/kernel/api/generated/openapi-v2.json
             apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
             apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+            apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts
             apps/control-room/src/kernel/api/generated/source-commit.txt
           if-no-files-found: error
