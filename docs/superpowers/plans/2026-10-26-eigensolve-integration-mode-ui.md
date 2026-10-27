@@ -274,3 +274,10 @@ Nowe źródła, jeszcze nieobecne w uruchomionym runtime fde189663:
 - [Stan runtime i miejsca](../../audits/2026-10-27-eigensolve-runtime-continuation-blockers.md): po zachowującym kopię przeniesieniu własnych zależności odzyskano ok. 157 MiB; bieżący odczyt wolnego miejsca WSL ok. 147 MiB. Lokalny build i bezpieczny pełny sweep blokuje brak miejsca; użytkownik został poproszony o zwolnienie przestrzeni WSL. Nie ruszano cudzych danych.
 
 Pełny cel i I5/I6/I7 pozostają otwarte. Po zwolnieniu miejsca: domknąć dokładną operację retirement bce31153098a456a8f7e67326e3760a4, dokończyć Gamma window na tym samym modelu, następnie signed15 i aktualny wykres/wybór modów w UI. Oczekujące kontrole nie są wynikiem PASS.
+
+
+## Checkpoint po końcowych kontrolach źródeł — 27.10.2026
+
+Wszystkie pięć uruchomionych bramek źródeł PASS: API/retirement 40481439173, C ABI 40482575121, MFEM 40482578832, runner/import certificate 40483507450, UI 40486139519 (testy, architektura, complete typecheck, React Doctor). Browser pozytywny/negatywny UI PASS. Te dowody nie zastępują nowego Gamma i pełnego sweepa. Backend nadal fde189663.
+
+Powtarzająca się blokada wykonania: /dev/sdf WSL ~60 MiB wolnego. Własne bezpieczne sprzątanie zakończone, brak przestrzeni nadal wymaga działania operatora. [Pełny punkt wznowienia i macierz pozostałych wymagań](../../audits/2026-10-27-eigensolve-resume-after-wsl-space.md). Cel nie jest zakończony; I0/I1/I3/I5/I6/I7 mają otwarty zakres. Nie uruchomiono kolejnej symulacji przy pełnym dysku.
