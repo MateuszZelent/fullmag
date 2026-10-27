@@ -25,13 +25,13 @@ Nie usuwamy niezintegrowanych worktree, wyników, cache ani aktywnych zasobów. 
 | Etap | Stan | Kryterium odbioru |
 |---|---|---|
 | I0: audyt, tożsamość i kopia WIP | Częściowo wykonany | Audyt przeczytany, baza sprawdzona, 40 plików zabezpieczone; pozostałe stare linie zachowane, ich semantyczne review nadal otwarte |
-| I1: mapa selektywnej integracji | W toku | Każdy istotny fix ma decyzję: przenieść / obecny odpowiednik / zastąpiony / otwarty; klasyfikacja po ścieżce nie wystarcza |
+| I1: mapa selektywnej integracji | W toku; częściowe review historycznego fixa exact Gamma f0986ede, adaptacja 148075e43 | Każdy istotny fix ma decyzję: przenieść / obecny odpowiednik / zastąpiony / otwarty; klasyfikacja po ścieżce nie wystarcza |
 | I2: podpisane osie i tożsamość punktu | Kod wypchnięty; CI UI i browser fixture PASS | Wybór osi kx/ky/kz/path, SI, brak wymyślania znaku, stabilna próbka/mod po zmianie osi; aktualne typecheck/lint/CI |
-| I3: właściciel pola i akcja punkt → mod | Kod backendu/UI wypchnięty; rzeczywiste pole nadal nieodebrane | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
-| I4: rzeczywisty mod w UI | Otwarte | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
+| I3: właściciel pola i akcja punkt → mod | Owner-bound JSON/meta/binary i wybór modów ±10 z Results PASS; pełny odbiór punkt → mod na wykresie nadal otwarty | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
+| I4: rzeczywisty mod w UI | Gamma nearest i ±10: rzeczywiste pola, Real/Imag/Abs/Phase, WebGL2, animacja i zrzut samego magnetyka PASS; pełny sweep pozostaje w I7 | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
 | I5: review, PR, master i cleanup | Otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
 | I6: pozostała integracja solvera | Otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
-| I7: kwalifikacja naukowa | NOT VERIFIED dla nowej bazy | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
+| I7: kwalifikacja naukowa | Częściowe dowody Gamma nearest i 14 nonzero-k; pełny nowy sweep z Gamma window i kwalifikacja nadal NOT VERIFIED | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
 
 Nie podajemy zbiorczego procentu: liczba commitów poza masterem nie mierzy ukończenia funkcji. S00–S12 oraz U1–U7 nie są zamknięte przez ten checkpoint.
 
@@ -262,3 +262,15 @@ Harness zapisano w osobnym checkpointcie `6a913922ada2c5325acdbf430a16f9fc0fd026
 I3/I4: oba rzeczywiste mody ±10 odebrane na runtime fde189663; pola zespolone, Real/Imag/Abs/Phase, WebGL2 i animacja z kontrolą pikseli PASS. Poprawiono brak pól manifestu multi-k i sprzeczny sample_id. [Dowody](../../audits/2026-10-27-eigensolve-multik-mode-ui-contract.md). Nie zamyka to całego I7 ani I5.
 
 Następny krok I7: odtworzenie i diagnoza Gamma frequency_window na tej samej fizyce/siatce przez `examples/fem_eigen_mode_ui_de_gamma_window.py`, następnie pełny signed15 i wykres. Historyczny sukces nearest-Gamma nie zastępuje bramki frequency-window. Zakończoną sesję ±10 zachowujemy przez managed retirement, bez edycji wyników.
+
+
+## Kontynuacja integracji przy blokadzie dysku — 27.10.2026
+
+Nowe źródła, jeszcze nieobecne w uruchomionym runtime fde189663:
+
+- 97c6c430d: ograniczone oczekiwanie na typed StoreWriterBusy przy otwieraniu store/host ledger dla retirement. CI bootstrap/rust 40481439173 w toku.
+- 148075e43: częściowa adaptacja historycznego f0986ede: C ABI i exterior-facet proof akceptują sentinel zero pure Neumann. CI native-modal 40482575121 oraz positive-mass 40482578832 w toku. Nie zmienia to zadanych warunków finite Dirichlet ani nie dowodzi rozwiązania awarii Gamma window.
+- [Review semantyczne](../../audits/2026-10-27-eigensolve-exact-gamma-selective-review.md) i inwentarz odróżniają fragmenty zaadaptowane, obecne odpowiedniki oraz pozostałe części starego commita.
+- [Stan runtime i miejsca](../../audits/2026-10-27-eigensolve-runtime-continuation-blockers.md): po zachowującym kopię przeniesieniu własnych zależności odzyskano ok. 157 MiB; bieżący odczyt wolnego miejsca WSL ok. 147 MiB. Lokalny build i bezpieczny pełny sweep blokuje brak miejsca; użytkownik został poproszony o zwolnienie przestrzeni WSL. Nie ruszano cudzych danych.
+
+Pełny cel i I5/I6/I7 pozostają otwarte. Po zwolnieniu miejsca: domknąć dokładną operację retirement bce31153098a456a8f7e67326e3760a4, dokończyć Gamma window na tym samym modelu, następnie signed15 i aktualny wykres/wybór modów w UI. Oczekujące kontrole nie są wynikiem PASS.
