@@ -23,3 +23,10 @@ To ograniczona poprawka: zajętość podczas późniejszego zdobywania samego ev
 /dev/sdf: 344 GB, około 326 GB użyte, mniej niż 1 MB dostępne w chwili błędu sandboxu. C: miał około 26 GB i jest innym woluminem. Wstrzymano nowe buildy. Większość dużych katalogów /tmp ma właścicieli innych zadań — nie usuwano ich. Własne biblioteki /tmp/eigen-plot-packages (~157 MB) są kopiowane do katalogu wizualizacji użytkownika; źródło wolno usunąć dopiero po porównaniu SHA256 każdego pliku. Receipt relocation ma być zapisany obok zachowanej kopii. Dopóki operacja nie zakończy się i df nie potwierdzi odzysku, nie raportować wykonanego sprzątania.
 
 Dalsza kolejność: odzyskać miejsce WSL, dokończyć dokładną operację retirement, uruchomić Gamma window, rozwiązać ewentualną awarię native, następnie signed15, wykres i odbiór UI. COMSOL A1, zbieżność, kompletność oraz integracja PR/master pozostają otwarte.
+
+
+## Potwierdzenie małego odzysku miejsca
+
+Przeniesienie własnych zależności zakończone: 4198 plików porównano przez SHA256 przed usunięciem wyłącznie /tmp/eigen-plot-packages. Zachowana kopia: katalog wizualizacji użytkownika /eigensolve-plot-python-dependencies; receipt eigensolve-plot-dependencies-relocation.json. df po operacji: około 169 MiB wolnego na WSL, nadal 100%. Nie usunięto wyników, logów ani cudzych cache. Python dla wykresów należy wskazywać przez PYTHONPATH na zachowaną kopię. Brak miejsca nadal blokuje nowy managed build i bezpieczne uruchomienie pełnej serii.
+
+Poprawka otwierania rejestru: commit 97c6c430d2a42bcff3a8d56da99fb29fe127a6b2; CI bootstrap/rust 40481439173 uruchomione. Pełny cel pozostaje aktywny. Prośba do użytkownika dotyczy miejsca wewnątrz WSL, nie wyłącznie wolnego miejsca C:.
