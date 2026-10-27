@@ -5012,7 +5012,7 @@ def _retained_operation(
     args, *, recreate_services, restart_idle_service=False, stop_after_drain=False,
     resume_recreation_id=None,
 ):
-    """Resume observation/admission of one exact failed start; never restart the backend."""
+    """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
     from docker_dev import _select_source, _compose_identity
     require_host()
     selected, layout = _select_source(Path(args.repo_root).resolve(strict=True), args.source_root)
@@ -5025,10 +5025,11 @@ def _retained_operation(
         raise BuildControlError("Resume requires an exact attempt UUID")
     previous_root = "development/attempts/" + args.attempt
     previous = control.read(previous_root + "/terminal.json")
-    allowed = {"failed-confirmed", "succeeded"} if (
-        recreate_services or resume_recreation_id is not None
-        or restart_idle_service or getattr(args, "restart_backend", False)
-    ) else {"failed-confirmed"}
+    # A successfully admitted group can subsequently lose its frontend (for
+    # example a Next.js heap failure). Resume still validates both exact
+    # container incarnations below and requires backend running/frontend
+    # stopped; the historical startup receipt must remain immutable.
+    allowed = {"failed-confirmed", "succeeded"}
     if previous.get("state") not in allowed or previous.get("compose_project") != control.project:
         raise BuildControlError("Retained start has no admissible terminal outcome")
     document = control.read(previous_root + "/compose.json")

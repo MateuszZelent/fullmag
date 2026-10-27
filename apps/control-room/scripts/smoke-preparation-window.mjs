@@ -144,6 +144,17 @@ try {
   await button("ready").click();
   assert.equal(await panel.count(), 0);
   assert.equal(await button("Show simulation preparation").count(), 0);
+  const statusEntry = button("Show simulation preparation: Simulation ready");
+  assert.equal(await statusEntry.textContent(), "Preparation: Ready");
+  await statusEntry.click();
+  await panel.waitFor();
+  assert.equal(await panel.getByText("Simulation ready", { exact: true }).isVisible(), true);
+  await button("Close simulation preparation").click();
+  assert.equal(await panel.count(), 0);
+  assert.equal(await statusEntry.isVisible(), true);
+  await statusEntry.press("Enter");
+  await panel.waitFor();
+  report.steps.push("ready closes the window by itself; the status bar entry reopens it after close");
   assert.deepEqual(report.errors, []);
   report.state = "passed";
 } catch (error) {

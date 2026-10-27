@@ -1,3 +1,4 @@
+@import "../src/design/styles/fonts.css";
 @import "tailwindcss" source(none);
 @source "./**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";
 @source "../src/**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";

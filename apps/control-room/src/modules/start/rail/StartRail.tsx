@@ -94,6 +94,7 @@ export function StartRail({
               <li key={entry.id}>
                 <button
                   aria-current={active ? "page" : undefined}
+                  aria-label={entry.label}
                   aria-keyshortcuts={entry.keys}
                   className="fm-start-rail__item"
                   data-section={entry.id}
@@ -103,6 +104,7 @@ export function StartRail({
                     itemRefs.current[index] = node;
                   }}
                   tabIndex={active ? 0 : -1}
+                  title={entry.label}
                   type="button"
                 >
                   <Icon aria-hidden="true" size={16} />

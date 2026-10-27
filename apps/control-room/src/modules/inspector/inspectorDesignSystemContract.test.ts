@@ -22,8 +22,12 @@ describe("Inspector design-system reference contract", () => {
     const tokens = read("src/design/styles/tokens.css");
     const segmented = read("src/shared/ui/SegmentedControl.tsx");
 
-    expect(tokens).toContain("--fm-control-height-compact: 26px");
+    expect(tokens).toContain("--fm-control-height-compact: 28px");
+    expect(tokens).toContain("--fm-field-row-min-height: 28px");
     expect(tokens).toContain("--fm-slider-hit-height: 28px");
+    expect(tokens).toContain("--fm-font-size-control: 12px");
+    expect(tokens).toContain("--fm-font-size-field-label: 12px");
+    expect(tokens).toContain("--fm-font-size-help: 11px");
     expect(tokens).toContain("--fm-radius-input: 7px");
     expect(tokens).toContain("--fm-radius-segment: 8px");
     expect(tokens).toContain("--fm-radius-disclosure: 10px");

@@ -11,19 +11,19 @@
       "source": "MengTo/Skills",
       "sourceType": "github",
       "skillPath": "agent-skills/web-design/beautiful-shadows/SKILL.md",
-      "computedHash": "cf03e5deece9d7cf226779789c0de6826821e38d90750c2e94839a7354fd352a"
+      "computedHash": "6abcd3ab6141c617f4e8514886d0ac744a1d6c1e4b0ccbd7087a19bedd5746f1"
     },
     "better-interface": {
       "source": "jakubkrehel/skills",
       "sourceType": "github",
       "skillPath": "skills/better-interface/SKILL.md",
-      "computedHash": "bc2252e67c8529c26f881ec2b0adfd6459ee18707efc0766ca4741cf8ce81961"
+      "computedHash": "c4f8a7862c00e63ae0df73fa29137f01a7fdd16354919e718dcf7e9f1a3f9445"
     },
     "brainstorming": {
       "source": "obra/superpowers",
       "sourceType": "github",
       "skillPath": "skills/brainstorming/SKILL.md",
-      "computedHash": "da48054155b36bfe3fc2ad24f97087af4a495e1b6a4e352233cc1a77550838e5"
+      "computedHash": "759eaa3b4b3d06d9e1c98c24bcd58eeb4d2faf724b3239f81e8559aa41e28fdd"
     },
     "browser-testing-with-devtools": {
       "source": "addyosmani/agent-skills",
@@ -77,7 +77,7 @@
       "source": "Superfuture/design-review",
       "sourceType": "github",
       "skillPath": "design-review/skills/design-review/SKILL.md",
-      "computedHash": "3b53647c5b6db7574c78d07c7c058527d15ffe37335d7833878703fe5f1f167c"
+      "computedHash": "dc79cec4dc0df7e3e96ba9f4f13a392a2cc9e0a158566c3950e547b114747cd7"
     },
     "design-taste-frontend": {
       "source": "Leonxlnx/taste-skill",
@@ -106,7 +106,7 @@
       "source": "obra/superpowers",
       "sourceType": "github",
       "skillPath": "skills/executing-plans/SKILL.md",
-      "computedHash": "8e1b5cfea8dc1660d4d7c86cf028f1f84bbcddd5d33ef0ff26a219de9d7f60d0"
+      "computedHash": "cc778643e7d4cf455da8fab2d435d6ba26e59c0fc4aef29d892540185a54ff60"
     },
     "finishing-a-development-branch": {
       "source": "obra/superpowers",
@@ -118,7 +118,7 @@
       "source": "anthropics/skills",
       "sourceType": "github",
       "skillPath": "skills/frontend-design/SKILL.md",
-      "computedHash": "106acf230014cbb43ca34e6410371321b56ca742f9ee0442e8ec05bf02eb0384"
+      "computedHash": "89496d5dd00f4810205f351759594fc2742bf8eea85a2f2b2d1de59f4bd91576"
     },
     "frontend-ui-engineering": {
       "source": "addyosmani/agent-skills",
@@ -163,7 +163,7 @@
       "source": "wshobson/agents",
       "sourceType": "github",
       "skillPath": "plugins/ui-design/skills/interaction-design/SKILL.md",
-      "computedHash": "d2e2127b91c76b2ed6706ce78bfc7eddcb6b340333f94d3d53d9f65e3253dea2"
+      "computedHash": "1fac9a5aff8463e98b935a0a1b48452d71afcfa50a3bc4b7af9510bfdd8a1731"
     },
     "interview-me": {
       "source": "addyosmani/agent-skills",
@@ -216,7 +216,7 @@
       "source": "shadcn-ui/ui",
       "sourceType": "github",
       "skillPath": "skills/shadcn/SKILL.md",
-      "computedHash": "7859e9a064940a1a0010c992b63e4633c4f5f39ed367a23c16f24029816b1703"
+      "computedHash": "b864a958765563321f485a96f4d59c0bb6539f4286ab6d8b8b66895b7ebd302d"
     },
     "shipping-and-launch": {
       "source": "addyosmani/agent-skills",
@@ -240,7 +240,7 @@
       "source": "obra/superpowers",
       "sourceType": "github",
       "skillPath": "skills/subagent-driven-development/SKILL.md",
-      "computedHash": "eb19d7078aeabe22efa59d74b1141d40a4e3d8be4f5c7a3a4f8d7998abf50f5b"
+      "computedHash": "92a9fefb8e11bfc77e95bb1557a1b01b390261a53fa71b3aa773a5c8aa2cf3a9"
     },
     "systematic-debugging": {
       "source": "obra/superpowers",
@@ -288,7 +288,7 @@
       "source": "obra/superpowers",
       "sourceType": "github",
       "skillPath": "skills/writing-skills/SKILL.md",
-      "computedHash": "7fe2d3c93865d88b5ee1ae0e20637bce31f4d9a43822ed26c7064628bed792ec"
+      "computedHash": "5dfeb4768effae27e94cc7ce27420f461a09fbca4c6e3846cf7acb1765d5d3d7"
     }
   }
 }

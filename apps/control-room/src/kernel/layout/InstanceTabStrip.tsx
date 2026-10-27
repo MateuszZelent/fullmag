@@ -27,6 +27,15 @@ function selectTab(next: string): void {
   }
 }
 
+function closeTab(port: number, element: HTMLElement): void {
+  const item = element.closest(".fm-instance-tabs__item");
+  const next = item?.nextElementSibling?.querySelector<HTMLButtonElement>('[role="tab"]')
+    ?? item?.previousElementSibling?.querySelector<HTMLButtonElement>('[role="tab"]')
+    ?? element.closest(".fm-instance-tabs")?.querySelector<HTMLButtonElement>('[data-tab-kind="home"]');
+  instanceTabs.close(port);
+  requestAnimationFrame(() => next?.focus());
+}
+
 /**
  * Home, this instance's session and one tab per other Fullmag instance on the
  * host (ADR 0069). Switching tabs never stops a session: Home and other
@@ -84,6 +93,12 @@ export function InstanceTabStrip() {
                 <TabsTrigger
                   className="fm-instance-tabs__tab"
                   data-instance-port={port}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Delete") return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    closeTab(port, event.currentTarget);
+                  }}
                   data-tab-kind="instance"
                   data-unavailable={unavailable || undefined}
                   title={`${label} — port ${port}${session ? ` — ${session.status}` : ""}`}
@@ -100,7 +115,7 @@ export function InstanceTabStrip() {
                 <Button
                   aria-label={`Close tab ${label} (port ${port})`}
                   className="fm-instance-tabs__close"
-                  onClick={() => instanceTabs.close(port)}
+                  onClick={(event) => closeTab(port, event.currentTarget)}
                   size="icon"
                   type="button"
                   variant="ghost"

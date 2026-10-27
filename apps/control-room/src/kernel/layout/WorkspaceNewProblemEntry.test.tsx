@@ -38,7 +38,7 @@ import { SHELL_COMMANDS } from "./shellCommands";
 import { WorkspaceShellClient } from "./WorkspaceShellClient";
 
 vi.mock("@/design/theme/ThemeProvider", () => ({
-  useTheme: () => ({ theme: "dark", setTheme: vi.fn() }),
+  useTheme: () => ({ theme: "dark", preference: "system", setTheme: vi.fn() }),
 }));
 
 vi.mock("@/shared/ui/Dialog", () => ({
@@ -93,6 +93,10 @@ vi.mock("@/shared/ui/DropdownMenu", () => {
       </button>
     ),
     DropdownMenuLabel: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+    DropdownMenuRadioGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+    DropdownMenuRadioItem: ({ children }: { children: ReactNode }) => (
+      <button type="button" role="radio" aria-checked={false}>{children}</button>
+    ),
     DropdownMenuSeparator: () => <hr />,
     DropdownMenuSub: ({ children }: { children: ReactNode }) => <>{children}</>,
     DropdownMenuSubContent: ({ children }: { children: ReactNode }) => <>{children}</>,

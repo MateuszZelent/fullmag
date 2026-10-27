@@ -8,6 +8,10 @@ import { SESSION_STATUS_PATH } from "@/kernel/api/apiPaths";
 import { KernelProvider } from "@/kernel/KernelProvider";
 
 const appMenuBarSourceUrl = new URL("./AppMenuBar.tsx", import.meta.url);
+const themeSwitcherSourceUrl = new URL(
+  "../../shared/ui/ThemeSwitcher.tsx",
+  import.meta.url,
+);
 
 import { AppMenuBar } from "./AppMenuBar";
 import {
@@ -61,8 +65,22 @@ describe("AppMenuBar", () => {
     expect(html).toContain('aria-current="page"');
     expect(html).not.toContain("fm-header__app-trigger");
     expect(html).toContain("Command search");
-    expect(html).toContain("Runtime controls");
-    expect(html).toContain('aria-label="Switch to light theme"');
+    // The no-session header sits over the start screen, which has no transport.
+    expect(html).not.toContain("Runtime controls");
+    expect(html).not.toContain("data-run-control");
+    expect(html).toContain('aria-label="Color theme: System (currently dark)"');
+
+    const themeSwitcherSource = readFileSync(themeSwitcherSourceUrl, "utf8");
+    expect(themeSwitcherSource).toContain("<DropdownMenuLabel>Color theme</DropdownMenuLabel>");
+    expect(themeSwitcherSource).toContain(
+      '<DropdownMenuRadioItem value="light">Light</DropdownMenuRadioItem>',
+    );
+    expect(themeSwitcherSource).toContain(
+      '<DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>',
+    );
+    expect(themeSwitcherSource).toContain(
+      '<DropdownMenuRadioItem value="system">System</DropdownMenuRadioItem>',
+    );
   });
 
   it("connects the API error dialog to its accessible description", () => {

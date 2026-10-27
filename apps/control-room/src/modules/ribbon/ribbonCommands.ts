@@ -21,6 +21,7 @@ import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
 import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
+import { cycleRibbonDensity } from "./ribbonPreference";
 import {
   BACKEND_INTERACTION_IDS,
   findInteractionSpec,
@@ -136,6 +137,18 @@ export function visualizationAirboxCommandInput(
 }
 
 export const RIBBON_COMMANDS: CommandContribution[] = [
+  {
+    id: "ribbon.display.cycle-density",
+    title: "Cycle ribbon density",
+    group: "ribbon-display",
+    category: "View",
+    scope: "global",
+    shortcut: "Ctrl+F1",
+    run: () => {
+      cycleRibbonDensity();
+      return { status: "completed" };
+    },
+  },
   {
     id: RIBBON_ANALYSIS_SHOW_CHART_COMMAND,
     title: "Show analysis chart",

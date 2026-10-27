@@ -30,7 +30,7 @@ struct ProjectionContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ProjectionPublicationFence {
+pub(crate) struct ProjectionPublicationFence {
     session_id: String,
     session_status: String,
     run_id: String,
@@ -51,7 +51,7 @@ struct ProjectionPublicationFence {
 }
 
 impl ProjectionPublicationFence {
-    fn capture(snapshot: &SessionStateResponse) -> Result<Self, ApiError> {
+    pub(crate) fn capture(snapshot: &SessionStateResponse) -> Result<Self, ApiError> {
         let run = snapshot.run.as_ref().ok_or_else(|| {
             ApiError::conflict_with_code(
                 "accepted_projection_current_run_changed",
@@ -725,8 +725,23 @@ fn load_durable_projection(
         .pointer("/parameters/live_workspace/command/kind")
         .and_then(Value::as_str)
         .is_some_and(|kind| kind != "startup_script");
-    let resolved_capabilities = if matches!(status, "completed" | "failed" | "cancelled") {
-        finished_step_capabilities(&accepted, &intent.specification)
+    // Provider truth belongs to the resolved plan, not to the run lifecycle.
+    // A prepared session waiting for Compute installs it too, so the catalog
+    // offers every active quantity instead of only the prepared m. A running
+    // stage is left to the worker-lane check on the live observation. Before
+    // a terminal state only a plan that provides m is installed: modal and
+    // frequency studies provide no magnetization, and the prepared m must
+    // stay readable there. A run's plan is immutable, so it is re-resolved
+    // only when durable state changes, never on each live observation.
+    let terminal_status = matches!(status, "completed" | "failed" | "cancelled");
+    let resolved_capabilities = if durable_changed && (terminal_status || active_task.is_none()) {
+        accepted_step_capabilities(&accepted, &intent.specification).filter(|capabilities| {
+            terminal_status
+                || capabilities
+                    .resolved_quantity_registry
+                    .as_ref()
+                    .is_some_and(|registry| registry.field_quantities.iter().any(|id| id == "m"))
+        })
     } else {
         None
     };
@@ -1134,11 +1149,12 @@ fn validate_live_intent(
     Ok(())
 }
 
-/// Runtime capabilities of the step a finished accepted run executed. The
-/// in-process runner publishes these with its fields; an accepted run left the
-/// session with the scratch authoring capabilities, whose registry is not a
-/// resolved plan, so its published fields (m, H_eff, ...) were not readable.
-fn finished_step_capabilities(
+/// Runtime capabilities of the accepted step the RunIntent targets. The
+/// in-process runner publishes these with its fields; without them an
+/// accepted run keeps the scratch authoring capabilities, whose registry is
+/// not a resolved plan, so the quantity catalog and field routes refuse every
+/// field except the prepared m.
+fn accepted_step_capabilities(
     accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
     specification: &Value,
 ) -> Option<fullmag_runner::BackendCapabilities> {
@@ -1815,28 +1831,35 @@ async fn clear_stale_magnetization(
     context: &ProjectionContext,
 ) -> Result<(), ApiError> {
     let transition = state.current_live_session_transition.lock().await;
-    let mut current = state.current_live_state.write().await;
-    let snapshot = current
-        .as_mut()
+    // Build the cleared candidate from a read-side clone; the write lock is
+    // held only for the fenced swap so health/status readers do not queue
+    // behind the frame application on large domains.
+    let mut next = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .cloned()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    ensure_projection_context(state, context, snapshot)?;
-    if snapshot.latest_fields.get("m").is_none() {
+    ensure_projection_context(state, context, &next)?;
+    if next.latest_fields.get("m").is_none() {
         return Ok(());
     }
-    let mut fields = snapshot.latest_fields.clone();
+    let publication_fence = ProjectionPublicationFence::capture(&next)?;
+    let mut fields = next.latest_fields.clone();
     fields.remove("m");
     let stale = fields.entries().filter(|(_, value)| {
         value.pointer("/provenance/source").and_then(Value::as_str) == Some("accepted_live_observation")
     }).map(|(id, _)| id.clone()).collect::<Vec<_>>();
     for id in stale { fields.remove(&id); }
-    let sequence = snapshot
+    let sequence = next
         .terminal_field_generations
         .get(&context.run_id)
         .copied()
         .unwrap_or_default()
         .saturating_add(1);
-    crate::session::apply_current_live_field_frame(
-        snapshot,
+    crate::session::apply_current_live_field_frame_to_candidate(
+        &mut next,
         CurrentLiveFieldFrameRequest {
             session_id: context.session_id.clone(),
             latest_fields: Some(fields),
@@ -1848,14 +1871,30 @@ async fn clear_stale_magnetization(
             preview_fields: None,
             clear_preview_cache: true,
         },
+        None,
     )?;
-    let cleared = snapshot.clone();
-    drop(current);
-    drop(transition);
-    crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;
     let display_revision = state.current_display_selection.read().await.revision;
     let realtime_state =
-        crate::current_live_realtime_state_from_snapshot(state, &cleared, display_revision).await;
+        crate::current_live_realtime_state_from_snapshot(state, &next, display_revision).await;
+    let previous = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        ensure_projection_context(state, context, snapshot)?;
+        if ProjectionPublicationFence::capture(snapshot)? != publication_fence {
+            return Err(ApiError::conflict_with_code(
+                "accepted_projection_current_state_changed",
+                "current live resources changed while stale magnetization was being cleared",
+            ));
+        }
+        std::mem::replace(&mut *current, Some(next))
+    };
+    drop(transition);
+    if let Some(previous) = previous {
+        let _ = tokio::task::spawn_blocking(move || drop(previous));
+    }
+    crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;
     crate::publish_current_live_realtime_batch_changed(state, &realtime_state, true, 100).await
 }
 

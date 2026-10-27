@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 import {
+  DEFAULT_RUN_OPTIONS,
   RUN_NEEDS_DESKTOP,
   reduceRun,
   type RunEvent,
@@ -29,6 +30,8 @@ import { WorkspaceHostError } from "./workspaceItems";
  */
 const IDLE: RunPhase = { kind: "idle" };
 const phases = new Map<number, RunPhase>();
+// A prepared ticket owns these local choices across responsive panel remounts.
+const preparedOptions = new Map<string, ScriptRunOptions>();
 const watchers = new Set<() => void>();
 const unsubscribers = new Map<number, () => void>();
 const finishedCallbacks = new Set<() => void>();
@@ -41,6 +44,9 @@ function dispatch(itemId: number, event: RunEvent): RunPhase {
   const before = phases.get(itemId) ?? IDLE;
   const after = reduceRun(before, event);
   if (after !== before) {
+    const beforeTicket = "handle" in before ? before.handle.ticket : null;
+    const afterTicket = "handle" in after ? after.handle.ticket : null;
+    if (beforeTicket && beforeTicket !== afterTicket) preparedOptions.delete(beforeTicket);
     phases.set(itemId, after);
     emitChange();
     if (before.kind === "active" && after.kind === "finished") {
@@ -153,6 +159,20 @@ const subscribe = (callback: () => void): (() => void) => {
   };
 };
 
+/** Local draft choices belong to a prepared host ticket, never to panel geometry. */
+export function usePreparedScriptRunOptions(ticket: string) {
+  const options = useSyncExternalStore(
+    subscribe,
+    () => preparedOptions.get(ticket) ?? DEFAULT_RUN_OPTIONS,
+    () => DEFAULT_RUN_OPTIONS,
+  );
+  const setOptions = useCallback((next: ScriptRunOptions) => {
+    preparedOptions.set(ticket, next);
+    emitChange();
+  }, [ticket]);
+  return [options, setOptions] as const;
+}
+
 /** The run controller of one script. `onFinished` fires when any run ends. */
 export function useScriptRun(itemId: number, onFinished?: () => void): ScriptRunController {
   const phase = useSyncExternalStore(
@@ -198,5 +218,6 @@ export function resetScriptRunStore(): void {
   for (const release of unsubscribers.values()) release();
   unsubscribers.clear();
   phases.clear();
+  preparedOptions.clear();
   emitChange();
 }

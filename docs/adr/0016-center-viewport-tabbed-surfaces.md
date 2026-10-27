@@ -1,7 +1,7 @@
 # ADR 0016: Center Viewport Tabbed Surfaces
 
 - Status: accepted
-- Date: 2026-05-30; amended 2026-08-03
+- Date: 2026-05-30; amended 2026-08-03 and 2026-10-26 (ADR 0070)
 
 ## Context
 
@@ -11,7 +11,7 @@ The product invariant remains one unified workspace and one resource-first brows
 
 ## Decision
 
-`viewport-main` becomes a tabbed center surface host. The active center surface is the only mounted heavy visualization module. `viewport-3d` remains the only default WebGL/R3F surface. Mesh cross-section visualization moves from the live `viewport-2d` WebGL module to a server-rendered PNG resource:
+`viewport-main` becomes a tabbed center surface host. The active center surface and, only when explicitly selected, one distinct companion are the mounted heavy visualization modules (ADR 0070). All other center modules are unmounted. `viewport-3d` remains the only default WebGL/R3F surface. Mesh cross-section visualization moves from the live `viewport-2d` WebGL module to a server-rendered PNG resource:
 
 `GET /v2/sessions/current/meshing/meshes/shared-domain/cross-section/image`
 
@@ -31,7 +31,7 @@ Chart** is not a center surface: it is active-tab-only content owned by
 
 ## Consequences
 
-- Switching to a non-3D center tab must unmount `Viewport3DModule`; hiding it with CSS is not sufficient.
+- Switching to a non-3D center tab must unmount `Viewport3DModule` unless it is the explicitly selected companion; hiding an unselected module with CSS is not sufficient.
 - `Live Charts` and `Analysis` are independent registered center modules; neither imports the other's store or controller.
 - Quick Chart imports neither center module and does not change the active center surface.
 - Inactive center tabs must not keep resource hooks, WebGL canvases, animation frames, object URLs, workers, or large render buffers alive.
@@ -42,7 +42,7 @@ Chart** is not a center surface: it is active-tab-only content owned by
 ## Implementation Obligations
 
 - Add the PNG resource to backend routing, OpenAPI v2, generated frontend paths/types, `ControlRoomApi`, and a resource hook that owns object URL lifecycle.
-- Add a generic `ViewportTabHost` in kernel layout. It reads manifests for `viewport-main` and mounts only the active manifest.
+- Add a generic `ViewportTabHost` in kernel layout. It reads manifests for `viewport-main` and mounts the active manifest and at most one explicitly selected distinct companion.
 - Persist the active center surface in `LayoutController` state.
 - Replace `viewport-2d` registration and commands with `cross-section-image` commands and module registration.
 - Remove `viewport-2d:fit-requested` when the WebGL module is deleted.
@@ -53,7 +53,7 @@ Chart** is not a center surface: it is active-tab-only content owned by
 - Backend route tests cover PNG magic bytes, `image/png`, invalid query rejection, `204`, ETag, and `304`.
 - Frontend API/resource tests cover facade use, ETag/304 handling, cache keys, and `URL.revokeObjectURL`.
 - Layout tests prove inactive tab modules are not mounted and stale active surface ids fall back safely.
-- Browser smoke proves zero active 3D canvas nodes while cross-section or plot tabs are active and exactly one WebGL canvas when `3D Scene` is active.
+- Browser smoke proves zero active 3D canvas nodes while cross-section or plot tabs are active without a 3D companion, and exactly one WebGL canvas when 3D is active or explicitly selected as companion.
 - API hygiene checks prove no direct component `fetch()` and no hand-built `/v2/...` strings in modules.
 
 ## Rollback

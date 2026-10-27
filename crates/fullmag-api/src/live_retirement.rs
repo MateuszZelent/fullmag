@@ -37,6 +37,9 @@ const MANIFEST_PATH: &str = "project/retirement-manifest.json";
 const MAX_MANIFEST_BYTES: usize = 512 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TOTAL_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
+/// Outcome of a Docker startup workspace whose script was rejected before any
+/// RunIntent was accepted. Its evidence is exact run-store absence.
+const UNADMITTED_OUTCOME: &str = "startup_failed";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -274,8 +277,8 @@ pub(crate) async fn retire_current_live(
             ApiError::conflict_with_code("live_retirement_predecessor_required", error.to_string())
         })?;
         let store = open_retirement_store(&state)?;
-        with_terminal_evidence_fence(&store, &request.run_id, |snapshot, evidence_sha256| {
-            let evidence = collect_terminal_evidence(&store, snapshot, evidence_sha256, &request.run_id, None)?;
+        let unadmitted = proof.terminal_outcome == UNADMITTED_OUTCOME;
+        with_retirement_evidence(&store, &request.run_id, unadmitted, None, |evidence| {
             validate_evidence_for_proof(&proof, &evidence)?;
             Ok(())
         })
@@ -310,6 +313,7 @@ pub(crate) async fn retire_current_live(
     let terminal_outcome = terminal_snapshot_outcome(&current).map_err(|error| {
         ApiError::conflict_with_code("live_retirement_runtime_not_terminal", error.to_string())
     })?;
+    let unadmitted = terminal_outcome == UNADMITTED_OUTCOME;
     let current_fence = current_retirement_fence(&state, &current);
 
     // A publication may have succeeded immediately before a process failure.
@@ -333,17 +337,16 @@ pub(crate) async fn retire_current_live(
             current.display_selection.revision,
         )
         .await;
-        let replay_result = with_terminal_evidence_fence(&store, &request.run_id, |snapshot, evidence_sha256| {
-            let evidence = collect_terminal_evidence(
-                &store,
-                snapshot,
-                evidence_sha256,
-                &request.run_id,
-                Some(&proof.terminal_outcome),
-            )?;
-            validate_evidence_for_proof(&proof, &evidence)?;
-            clear_current_workspace_pointer(&state, &current_fence)
-        });
+        let replay_result = with_retirement_evidence(
+            &store,
+            &request.run_id,
+            unadmitted,
+            Some(&proof.terminal_outcome),
+            |evidence| {
+                validate_evidence_for_proof(&proof, &evidence)?;
+                clear_current_workspace_pointer(&state, &current_fence)
+            },
+        );
         if let Err(error) = replay_result {
             return Err(ApiError::conflict_with_code(
                 "live_retirement_current_changed",
@@ -365,16 +368,13 @@ pub(crate) async fn retire_current_live(
         )));
     }
 
-    let initial_evidence = with_terminal_evidence_fence(&store, &request.run_id, |snapshot, evidence_sha256| {
-        let evidence = collect_terminal_evidence(
-            &store,
-            snapshot,
-            evidence_sha256,
-            &request.run_id,
-            Some(terminal_outcome),
-        )?;
-        Ok(evidence)
-    })
+    let initial_evidence = with_retirement_evidence(
+        &store,
+        &request.run_id,
+        unadmitted,
+        Some(terminal_outcome),
+        Ok,
+    )
     .map_err(|error| {
         ApiError::conflict_with_code(
             "live_retirement_terminal_evidence_unknown",
@@ -432,21 +432,18 @@ pub(crate) async fn retire_current_live(
         current.display_selection.revision,
     )
     .await;
-    let final_result = with_terminal_evidence_fence(&store, &request.run_id, |snapshot, evidence_sha256| {
-        let final_evidence = collect_terminal_evidence(
-            &store,
-            snapshot,
-            evidence_sha256,
-            &request.run_id,
-            Some(&proof.terminal_outcome),
-        )?;
-        if final_evidence
-            != initial_evidence
-        {
-            bail!("terminal evidence changed after archive publication");
-        }
-        clear_current_workspace_pointer(&state, &current_fence)
-    });
+    let final_result = with_retirement_evidence(
+        &store,
+        &request.run_id,
+        unadmitted,
+        Some(&proof.terminal_outcome),
+        |final_evidence| {
+            if final_evidence != initial_evidence {
+                bail!("terminal evidence changed after archive publication");
+            }
+            clear_current_workspace_pointer(&state, &current_fence)
+        },
+    );
     if let Err(error) = final_result {
         return Err(ApiError::conflict_with_code(
             "live_retirement_current_changed_after_publication",
@@ -513,10 +510,16 @@ fn validate_current_request(
     if request.request_scope_epoch != current_scope {
         bail!("request scope belongs to another API incarnation or epoch");
     }
+    // An unadmitted startup failure has no run manifest; the session's
+    // placeholder run identity is the only one to fence.
+    let unadmitted = is_unadmitted_startup_failure(current)?;
     if current.session.session_id != request.session_id
         || current.session.run_id != request.run_id
-        || current.run.as_ref().map(|run| run.run_id.as_str()) != Some(request.run_id.as_str())
-        || current.run.as_ref().map(|run| run.session_id.as_str()) != Some(request.session_id.as_str())
+        || (!unadmitted
+            && (current.run.as_ref().map(|run| run.run_id.as_str())
+                != Some(request.run_id.as_str())
+                || current.run.as_ref().map(|run| run.session_id.as_str())
+                    != Some(request.session_id.as_str())))
     {
         bail!("session/run identity differs from the current workspace");
     }
@@ -526,7 +529,15 @@ fn validate_current_request(
     Ok(())
 }
 
+fn is_unadmitted_startup_failure(current: &SessionStateResponse) -> Result<bool> {
+    crate::router_v2::handlers::platform::development_restart::is_unadmitted_startup_failure(current)
+        .map_err(|error| anyhow::anyhow!(error.message))
+}
+
 fn terminal_snapshot_outcome(current: &SessionStateResponse) -> Result<&'static str> {
+    if is_unadmitted_startup_failure(current)? {
+        return Ok(UNADMITTED_OUTCOME);
+    }
     let outcome = match current.runtime_status.kind {
         fullmag_runner::RuntimeStatus::Completed => "completed",
         fullmag_runner::RuntimeStatus::Failed => "failed",
@@ -610,6 +621,51 @@ fn with_terminal_evidence_fence<T>(
         &str,
     ) -> Result<T>,
 ) -> Result<T> {
+    open_retirement_ledger(store)?.with_terminal_run_evidence_fence(
+        store,
+        run_id,
+        |snapshot, evidence_sha256| operation(snapshot, evidence_sha256),
+    )
+}
+
+/// Read retirement evidence for one run under its host-before-store fence.
+/// An unadmitted startup failure proves exact run absence instead of a
+/// terminal catalog; the callback sees the same evidence shape either way.
+fn with_retirement_evidence<T>(
+    store: &fullmag_session::SessionStore,
+    run_id: &str,
+    unadmitted: bool,
+    expected_outcome: Option<&str>,
+    operation: impl FnOnce(TerminalRetirementEvidence) -> Result<T>,
+) -> Result<T> {
+    if unadmitted {
+        return open_retirement_ledger(store)?.with_unadmitted_run_absence_fence(
+            store,
+            run_id,
+            |evidence_sha256| {
+                operation(TerminalRetirementEvidence {
+                    terminal_outcome: UNADMITTED_OUTCOME.to_string(),
+                    terminal_catalog_revision: 0,
+                    terminal_evidence_sha256: evidence_sha256.to_string(),
+                    host_released_reservations: Vec::new(),
+                })
+            },
+        );
+    }
+    with_terminal_evidence_fence(store, run_id, |snapshot, evidence_sha256| {
+        operation(collect_terminal_evidence(
+            store,
+            snapshot,
+            evidence_sha256,
+            run_id,
+            expected_outcome,
+        )?)
+    })
+}
+
+fn open_retirement_ledger(
+    store: &fullmag_session::SessionStore,
+) -> Result<fullmag_session::host_resource_ledger::HostResourceLedger> {
     let config_path = std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|| store.root().join("runtime-services/APPLICATION.json"));
@@ -619,13 +675,10 @@ fn with_terminal_evidence_fence<T>(
         bail!("runtime service configuration belongs to another session store");
     }
     let binding = config.host_execution.context("runtime service has no host binding")?;
-    let ledger = fullmag_session::host_resource_ledger::HostResourceLedger::open_for_current_application(
+    fullmag_session::host_resource_ledger::HostResourceLedger::open_for_current_application(
         &binding.ledger_root,
         binding.policy,
-    )?;
-    ledger.with_terminal_run_evidence_fence(store, run_id, |snapshot, evidence_sha256| {
-        operation(snapshot, evidence_sha256)
-    })
+    )
 }
 
 fn collect_terminal_evidence(
@@ -937,10 +990,17 @@ fn validate_proof_shape(proof: &LiveRetirementProof, operation_id: &str) -> Resu
     fullmag_session::repository_path::validate_store_id(&proof.run_id)?;
     validate_scope(&proof.request_scope_epoch, "proof request scope")?;
     if proof.session_epoch == 0 { bail!("retirement proof session epoch is zero"); }
-    if proof.terminal_catalog_revision == 0 {
+    if proof.terminal_outcome == UNADMITTED_OUTCOME {
+        if proof.terminal_catalog_revision != 0 || !proof.host_released_reservations.is_empty() {
+            bail!("unadmitted retirement proof carries run catalog or host evidence");
+        }
+    } else if proof.terminal_catalog_revision == 0 {
         bail!("retirement proof has no terminal catalog revision");
     }
-    if !matches!(proof.terminal_outcome.as_str(), "completed" | "failed" | "cancelled") {
+    if !matches!(
+        proof.terminal_outcome.as_str(),
+        "completed" | "failed" | "cancelled" | UNADMITTED_OUTCOME
+    ) {
         bail!("retirement proof terminal outcome is unsupported");
     }
     for digest in [proof.terminal_evidence_sha256.as_str()] {

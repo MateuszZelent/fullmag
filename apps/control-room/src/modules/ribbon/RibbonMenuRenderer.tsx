@@ -80,6 +80,7 @@ function renderNode(
           key={node.id}
           checked={node.checked}
           disabled={node.disabled}
+          title={node.tooltip}
           onCheckedChange={(checked) => {
             const next = Boolean(checked);
             if (node.commandId) {
@@ -94,6 +95,9 @@ function renderNode(
           onSelect={(event) => event.preventDefault()}
         >
           {node.label}
+          {node.disabled && node.tooltip ? (
+            <span className="fm-dropdown-reason">{node.tooltip}</span>
+          ) : null}
         </DropdownMenuCheckboxItem>
       );
 
@@ -106,6 +110,7 @@ function renderNode(
               <DropdownMenuRadioItem
                 key={`${node.id}:${item.value}`}
                 disabled={node.disabled || item.disabled}
+                title={item.tooltip}
                 value={item.value}
                 onSelect={() => {
                   if (item.value === node.value) return;
@@ -113,6 +118,9 @@ function renderNode(
                 }}
               >
                 {item.label}
+                {item.disabled && item.tooltip ? (
+                  <span className="fm-dropdown-reason">{item.tooltip}</span>
+                ) : null}
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
@@ -134,8 +142,11 @@ function renderNode(
     case "submenu":
       return (
         <DropdownMenuSub key={node.id}>
-          <DropdownMenuSubTrigger disabled={node.disabled}>
+          <DropdownMenuSubTrigger disabled={node.disabled} title={node.tooltip}>
             {node.label}
+            {node.disabled && node.tooltip ? (
+              <span className="fm-dropdown-reason">{node.tooltip}</span>
+            ) : null}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <RibbonMenuRenderer nodes={node.nodes} onCommand={onCommand} />

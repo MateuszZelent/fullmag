@@ -286,5 +286,48 @@ class RecreatedOperationCallerTests(unittest.TestCase):
 
 
 
+
+class FrontendOnlyResumeTests(unittest.TestCase):
+    """A later frontend failure does not invalidate the successful start receipt."""
+
+    def run_resume(self, *, frontend_stopped=True, backend_stopped=False):
+        from contextlib import ExitStack
+        import hashlib
+        from test_docker_volume_idle_stop import IdleStopFixture, DockerVolumeIdleStopTests
+
+        fixture = IdleStopFixture()
+        self.last_fixture = fixture
+        fixture.frontend_stopped = frontend_stopped
+        fixture.backend_stopped = backend_stopped
+        fixture.args.port = 3230
+        fixture.environment.update(FULLMAG_SOURCE_GIT_COMMON="/opt/fullmag/source-git", FULLMAG_TOOLCHAIN_IMAGE_ID="fixture-toolchain")
+        fixture.args.config_sha256 = hashlib.sha256(docker_dev.canonical(fixture.document)).hexdigest()
+        helper = DockerVolumeIdleStopTests()
+        with ExitStack() as stack:
+            mocks = [stack.enter_context(patcher) for patcher in helper._patches(fixture, (b"", {}))]
+            prepare = stack.enter_context(patch.object(docker_dev, "_frontend"))
+            stack.enter_context(patch.object(docker_dev, "_retained_ledger_profile", return_value={}))
+            compose = stack.enter_context(patch.object(docker_dev, "compose_capture", side_effect=fixture.compose))
+            docker_dev.resume(fixture.args)
+            self.assertEqual(fixture.previous["state"], "succeeded")
+            self.assertTrue(prepare.called)
+            mocks[-1].assert_called_once()
+            self.assertEqual([call.args[1:] for call in compose.call_args_list if call.args[1:2] == ("start",)], [("start", "frontend")])
+            self.assertFalse(any(event[0] == "stop" for event in fixture.events))
+
+    def test_successful_start_resumes_only_later_stopped_frontend(self):
+        self.run_resume()
+
+    def test_running_frontend_is_rejected_without_lifecycle_change(self):
+        with self.assertRaisesRegex(docker_dev.BuildControlError, "backend running and frontend stopped"):
+            self.run_resume(frontend_stopped=False)
+        self.assertFalse(self.last_fixture.control.operation.called)
+
+    def test_stopped_backend_is_rejected_without_implicit_restart(self):
+        with self.assertRaisesRegex(docker_dev.BuildControlError, "backend running and frontend stopped"):
+            self.run_resume(backend_stopped=True)
+        self.assertFalse(self.last_fixture.control.operation.called)
+
+
 if __name__ == "__main__":
     unittest.main()

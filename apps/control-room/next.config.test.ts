@@ -14,12 +14,17 @@ import nextConfig, {
   DOCKER_DEV_WATCH_POLLING_DEFAULT_MS,
   INSTANCE_TAB_FRAME_ANCESTORS,
   instanceTabFrameSources,
+  instanceTabPortsClientValue,
   isDockerDevGeneratedWatchPath,
   resolveControlRoomDistDir,
   resolveDockerDevWatchOptions,
   resolveDockerDevWatchPollingMs,
   validateManagedControlRoomStorage,
 } from "./next.config";
+import {
+  isInstanceTabHostOrigin,
+  parseInstanceTabPortWindow,
+} from "./src/kernel/layout/instanceTabVisibility";
 
 describe("control-room Next dev proxy config", () => {
   it("redirects the bootstrap root before lazily compiling the workspace", async () => {
@@ -350,5 +355,19 @@ describe("instance tab framing (ADR 0069)", () => {
     ]);
     expect(() => instanceTabFrameSources("4001-4000")).toThrow();
     expect(() => instanceTabFrameSources("3000-3256")).toThrow();
+  });
+
+  it("gives the client the same window its CSP lists", () => {
+    expect(nextConfig.env?.FULLMAG_INSTANCE_TAB_PORTS).toBe(
+      instanceTabPortsClientValue(process.env.FULLMAG_INSTANCE_DISCOVERY_PORTS),
+    );
+    expect(instanceTabPortsClientValue(undefined)).toBe("3197-3260");
+    const ports = parseInstanceTabPortWindow(instanceTabPortsClientValue("4000-4001"));
+    expect(ports).toEqual({ first: 4000, last: 4001 });
+    for (const origin of instanceTabFrameSources("4000-4001").slice(1)) {
+      expect(isInstanceTabHostOrigin(origin, ports)).toBe(true);
+    }
+    expect(isInstanceTabHostOrigin("http://localhost:3999", ports)).toBe(false);
+    expect(isInstanceTabHostOrigin("http://localhost:4002", ports)).toBe(false);
   });
 });

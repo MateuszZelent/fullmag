@@ -20,6 +20,7 @@ import {
 } from "../InspectorEditSession";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
+import { InspectorFooter } from "../InspectorFooter";
 import { ObjectGeneralPanel } from "./ObjectGeneralPanel";
 import { GeometryObjectPanel } from "./GeometryObjectPanel";
 
@@ -219,6 +220,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
         <InspectorEditSessionProvider>
           <ObjectGeneralPanel selection={selection} />
           <InspectorSessionProbe />
+        <InspectorFooter focusDisabled onFocus={() => undefined} />
         </InspectorEditSessionProvider>,
       ));
       await act(async () => changeInput(container, "Name", "Updated magnet"));
@@ -282,7 +284,8 @@ describe("ObjectGeneralPanel staged identity edits", () => {
     const renderPanel = (activeSelection: Selection) => (
       <InspectorEditSessionProvider>
         <ObjectGeneralPanel selection={activeSelection} />
-      </InspectorEditSessionProvider>
+      <InspectorFooter focusDisabled onFocus={() => undefined} />
+        </InspectorEditSessionProvider>
     );
     try {
       await act(async () => root.render(renderPanel(selection)));
@@ -362,6 +365,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
       await act(async () => root.render(
         <InspectorEditSessionProvider>
           <ObjectGeneralPanel selection={createdSelection} />
+        <InspectorFooter focusDisabled onFocus={() => undefined} />
         </InspectorEditSessionProvider>,
       ));
 
@@ -410,6 +414,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
       await act(async () => root.render(
         <InspectorEditSessionProvider>
           <ObjectGeneralPanel selection={selection} />
+        <InspectorFooter focusDisabled onFocus={() => undefined} />
         </InspectorEditSessionProvider>,
       ));
       await act(async () => changeInput(container, "Name", "Submitted name"));
@@ -477,6 +482,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
       await act(async () => root.render(
         <InspectorEditSessionProvider>
           <ObjectGeneralPanel selection={selection} />
+        <InspectorFooter focusDisabled onFocus={() => undefined} />
         </InspectorEditSessionProvider>,
       ));
       await act(async () => changeInput(container, "Name", "Submitted name"));
@@ -582,6 +588,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
           <ObjectGeneralPanel selection={selection} />
           <GeometryObjectPanel selection={selection} />
           <InspectorSessionProbe />
+        <InspectorFooter focusDisabled onFocus={() => undefined} />
         </InspectorEditSessionProvider>,
       ));
       await act(async () => changeInput(container, "Name", "Updated magnet"));
@@ -612,7 +619,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
 
       expect(mocks.patchObject).toHaveBeenCalledWith(
         "object-a",
-        { base_revision: 10, name: "Updated magnet", notes: "Original notes" },
+        { base_revision: 10, name: "Updated magnet" },
         { sessionScopeKey: "session=A&epoch=1" },
       );
       expect(mocks.commitTransaction).toHaveBeenCalledOnce();
@@ -633,6 +640,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
         draft: {
           baseRevision: 12,
           name: "Newer raw magnet",
+          notes: "Original notes",
           objectId: "object-a",
         },
       });
@@ -655,6 +663,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
         <InspectorEditSessionProvider>
           <ObjectGeneralPanel selection={selection} />
           <InspectorSessionProbe />
+        <InspectorFooter focusDisabled onFocus={() => undefined} />
         </InspectorEditSessionProvider>,
       ));
       await act(async () => changeInput(container, "Name", "Updated magnet"));
@@ -695,6 +704,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
         <InspectorEditSessionProvider>
           <ObjectGeneralPanel selection={selection} />
           <InspectorSessionProbe />
+        <InspectorFooter focusDisabled onFocus={() => undefined} />
         </InspectorEditSessionProvider>,
       ));
 
@@ -740,6 +750,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
         <InspectorEditSessionProvider>
           <ObjectGeneralPanel selection={selection} />
           <InspectorSessionProbe />
+        <InspectorFooter focusDisabled onFocus={() => undefined} />
         </InspectorEditSessionProvider>,
       ));
 
@@ -785,6 +796,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
           <ObjectGeneralPanel selection={selection} />
           <GeometryObjectPanel selection={selection} />
           <InspectorSessionProbe />
+        <InspectorFooter focusDisabled onFocus={() => undefined} />
         </InspectorEditSessionProvider>,
       ));
       await act(async () => changeInput(container, "Size X", "2e-7"));
@@ -851,7 +863,7 @@ describe("ObjectGeneralPanel staged identity edits", () => {
       });
       expect(mocks.publishCommittedScene).toHaveBeenCalledOnce();
       expect(mocks.recordHistory).toHaveBeenCalledOnce();
-      expect(container.textContent).toContain("Object placement committed.");
+      expect(container.textContent).toContain("Geometry and placement committed.");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

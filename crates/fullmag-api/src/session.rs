@@ -3027,6 +3027,18 @@ pub(crate) fn apply_current_live_accepted_field_frame(
     Ok(())
 }
 
+/// Apply a field frame directly to a disposable candidate snapshot that the
+/// caller built outside the live-state lock and will publish only after its
+/// own fence check. On error the candidate may be partially updated and must
+/// be discarded; this avoids a second full-snapshot clone on large domains.
+pub(crate) fn apply_current_live_field_frame_to_candidate(
+    candidate: &mut SessionStateResponse,
+    frame: CurrentLiveFieldFrameRequest,
+    accepted_source_frame: Option<&crate::schemas::common::AcceptedObservationFrameRef>,
+) -> Result<(), ApiError> {
+    apply_current_live_field_frame_in_place(candidate, frame, accepted_source_frame)
+}
+
 fn apply_current_live_field_frame_in_place(
     current: &mut SessionStateResponse,
     mut frame: CurrentLiveFieldFrameRequest,

@@ -158,6 +158,15 @@ case "${recipe}" in
     fi
     exec "${bash_executable}" -euo pipefail -c "${recipe}"
     ;;
+  *"scripts/docker_dev_release_unknown_activation.py"*)
+    # Operator release of one proven pre-mutation lease; no build or heavy slot.
+    release_unknown_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_release_unknown_activation.py\" --repo-root \"[^\"]+\" --source-root '[^']+' --activation '[0-9a-f]{32}'[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${release_unknown_pattern} ]]; then
+      echo "[fullmag just] invalid unknown activation release recipe" >&2
+      exit 2
+    fi
+    exec "${bash_executable}" -euo pipefail -c "${recipe}"
+    ;;
   *"scripts/docker_volume_checks.py"*)
     volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '[^']+'[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${volume_checks_pattern} ]]; then

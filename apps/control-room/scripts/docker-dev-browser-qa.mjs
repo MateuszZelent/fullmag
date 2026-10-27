@@ -819,7 +819,7 @@ const main = async () => {
     const canvasHandle = await page.locator(".fm-viewport-3d canvas").first().elementHandle();
     if (!canvasHandle) throw new Error("before Home: could not retain the workspace canvas element");
 
-    const start = page.getByRole("button", { name: "Start", exact: true });
+    const start = page.getByRole("button", { name: "Home", exact: true });
     await start.waitFor({ state: "visible", timeout });
     await start.click();
     await home.waitFor({ state: "visible", timeout });

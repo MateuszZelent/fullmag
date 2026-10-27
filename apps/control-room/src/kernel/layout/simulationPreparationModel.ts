@@ -463,7 +463,10 @@ export function resolveSimulationPreparationViewModel(
     eyebrow: "Simulation preparation",
     failure,
     isTerminal: isFailed || isReady,
-    isVisible: !isReady || isStale,
+    // Ready is terminal: a later transport disruption cannot undo it, so it
+    // must not reopen the window or hold the startup gate. A new attempt
+    // publishes a new snapshot that is not ready.
+    isVisible: !isReady,
     kind,
     liveSummary: resolveLiveSummary({
       activeStage,

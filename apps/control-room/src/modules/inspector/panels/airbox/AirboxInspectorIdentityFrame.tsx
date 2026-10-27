@@ -87,11 +87,13 @@ export function AirboxInspectorIdentityFrame({
   return (
     <div className="fm-airbox-inspector-frame" data-inspector-owner={owner}>
       <ScientificInspectorTemplate
+        showIdentity={false}
         breadcrumbs={["Model", "Airbox", title]}
         diagnostics={diagnosticsForSelection(selection, lane, runtimeReason, artifactLane)}
         methodLabel={laneLabel(lane)}
         physicalLabel="Airbox"
         properties={[
+          { label: "Method", value: laneLabel(lane) },
           { label: "Target", mono: true, value: target },
           { label: "Inspector kind", mono: true, value: selection.kind },
           { label: "Runtime lane", value: lane },

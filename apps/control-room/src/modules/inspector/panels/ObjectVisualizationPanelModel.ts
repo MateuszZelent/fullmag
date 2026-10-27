@@ -27,6 +27,7 @@ import {
   isScalarSpatialQuantityId,
   quantityCatalogEntrySupportsAirbox,
   quantityCatalogEntrySupportsSpatialVisualization,
+  quantityCatalogPickerItem,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
 import {
@@ -2291,10 +2292,9 @@ export function visualizationQuantityItems(
             ? quantityCatalogEntrySupportsAirbox
             : quantityCatalogEntrySupportsSpatialVisualization,
         )
-        .map((quantity) => ({
-          label: quantity.label || quantity.id,
-          value: quantity.id,
-        }))
+        .map((quantity) =>
+          quantityCatalogPickerItem(quantity, quantity.label || quantity.id),
+        )
     : [];
   const fieldItems = fieldCatalog
     ? fieldCatalog.quantities
@@ -2377,10 +2377,10 @@ export function visualizationQuantityItems(
 }
 
 function mergeVisualizationQuantityItems(
-  capabilityItems: Array<{ label: string; value: string }>,
+  capabilityItems: Array<{ disabled?: boolean; label: string; value: string }>,
   fieldItems: Array<{ label: string; value: string }>,
-): Array<{ label: string; value: string }> {
-  const merged = new Map<string, { label: string; value: string }>();
+): Array<{ disabled?: boolean; label: string; value: string }> {
+  const merged = new Map<string, { disabled?: boolean; label: string; value: string }>();
   for (const item of capabilityItems) merged.set(item.value, item);
   for (const item of fieldItems) {
     if (!merged.has(item.value)) merged.set(item.value, item);

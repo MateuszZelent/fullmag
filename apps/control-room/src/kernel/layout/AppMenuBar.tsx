@@ -2,7 +2,7 @@
 
 import { isProjectWorkspaceCommand } from "../commands/projectWorkspaceCommandPolicy";
 
-import { ArrowLeft, House, Search } from "lucide-react";
+import { ArrowLeft, House, Menu, Search } from "lucide-react";
 import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
@@ -221,13 +221,86 @@ function HeaderDropdown({
   );
 }
 
+interface HeaderNavigationProps {
+  homeActive: boolean;
+  returnLabel?: string;
+  onHome: () => void;
+  commandDisabledReason: CommandDisabledReasonResolver;
+  isCommandActive: (commandId: string) => boolean;
+  isCommandDisabled: (commandId: string) => boolean;
+  onCommand: (commandId: string, input?: unknown) => void;
+}
+
+/** Both menu presentations share the same nodes, command guards and reasons. */
+function HeaderNavigation({ homeActive, returnLabel, onHome, ...commands }: HeaderNavigationProps) {
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    clientHydratedSnapshot,
+    serverHydratedSnapshot,
+  );
+  return (
+    <>
+      <nav className="fm-header__nav" aria-label="Main menu">
+        <StartNavItem active={homeActive} returnLabel={returnLabel} onCommand={onHome} />
+        {MAIN_MENUS.map((menu) => <HeaderDropdown key={menu.id} menu={menu} {...commands} />)}
+      </nav>
+      <div className="fm-header__compact-menu">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button aria-label="Main menu" disabled={!hydrated} size="icon" variant="ghost" type="button">
+              <Menu aria-hidden="true" size={16} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onSelect={onHome}>
+              <House aria-hidden="true" size={14} />
+              {homeActive && returnLabel ? returnLabel : "Home"}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {MAIN_MENUS.map((node) => <MenuNode key={node.id} node={node} {...commands} />)}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </>
+  );
+}
+
+function HeaderRunControls({
+  commandDisabledReason,
+  isCommandDisabled,
+  onCommand,
+}: Pick<HeaderNavigationProps, "commandDisabledReason" | "isCommandDisabled" | "onCommand">) {
+  return (
+    <div className="fm-header__run-controls" aria-label="Runtime controls">
+      {RUN_CONTROLS.map((action) => (
+        <Button
+          key={action.id}
+          className="fm-header__run-btn"
+          data-command-id={action.id}
+          data-run-control={action.id.replace(/^study\./, "")}
+          disabled={Boolean(action.disabled || isCommandDisabled(action.id))}
+          disabledReason={commandDisabledReason(action.id)}
+          aria-label={action.label}
+          size="icon"
+          title={commandDisabledReason(action.id) ? undefined : action.label}
+          type="button"
+          variant="ghost"
+          onClick={() => onCommand(action.id)}
+        >
+          {action.icon}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 function HeaderBrand({ subtitle }: { readonly subtitle: string }) {
   return (
     <div className="fm-header__brand">
       <FullmagMark size={20} className="fm-header__logo" />
       <span className="fm-header__brand-copy">
         <span className="fm-header__title">Fullmag</span>
-        <span className="fm-header__subtitle">{subtitle}</span>
+        <span className="fm-header__subtitle" title={subtitle}>{subtitle}</span>
       </span>
     </div>
   );
@@ -244,7 +317,7 @@ function StartNavItem({
   readonly returnLabel?: string;
 }) {
   const returning = active && Boolean(returnLabel);
-  const label = returning ? returnLabel : "Start";
+  const label = returning ? returnLabel : "Home";
   return (
     <Button
       aria-current={active && !returning ? "page" : undefined}
@@ -508,27 +581,17 @@ function NoSessionAppMenuBar({
       <HeaderBrand
         subtitle={resolveNoSessionSubtitle(state)}
       />
-      <nav className="fm-header__nav" aria-label="Main menu">
-        <StartNavItem
-          active={homeVisible}
-          returnLabel={project.state === "ready" ? "Back to project" : undefined}
-          onCommand={() =>
-            runCommand(project.state === "ready"
-              ? homeOpen ? "workspace.return-to-workspace" : "workspace.home"
-              : "start.section.home")
-          }
-        />
-        {MAIN_MENUS.map((menu) => (
-          <HeaderDropdown
-            key={menu.id}
-            commandDisabledReason={commandDisabledReason}
-            isCommandActive={(commandId) => kernel.commands.isActive(commandId, commandContext)}
-            isCommandDisabled={isCommandDisabled}
-            menu={menu}
-            onCommand={runCommand}
-          />
-        ))}
-      </nav>
+      <HeaderNavigation
+        homeActive={homeVisible}
+        returnLabel={project.state === "ready" ? "Back to project" : undefined}
+        onHome={() => runCommand(project.state === "ready"
+          ? homeOpen ? "workspace.return-to-workspace" : "workspace.home"
+          : "start.section.home")}
+        commandDisabledReason={commandDisabledReason}
+        isCommandActive={(commandId) => kernel.commands.isActive(commandId, commandContext)}
+        isCommandDisabled={isCommandDisabled}
+        onCommand={runCommand}
+      />
       <button
         className="fm-header__search"
         disabled={isCommandDisabled("workspace.command-palette")}
@@ -540,26 +603,17 @@ function NoSessionAppMenuBar({
         <span className="fm-header__search-label">Command search</span>
         <kbd className="fm-header__kbd">Ctrl ⇧ P</kbd>
       </button>
-      <div className="fm-header__separator" />
-      <div className="fm-header__run-controls" aria-label="Runtime controls">
-        {RUN_CONTROLS.map((action) => (
-          <Button
-            key={action.id}
-            className="fm-header__run-btn"
-            data-run-control={action.id}
-            disabled={(action.disabled || isCommandDisabled(action.id)) || undefined}
-            disabledReason={commandDisabledReason(action.id)}
-            aria-label={action.label}
-            size="icon"
-            title={commandDisabledReason(action.id) ? undefined : action.label}
-            type="button"
-            variant="ghost"
-            onClick={() => runCommand(action.id)}
-          >
-            {action.icon}
-          </Button>
-        ))}
-      </div>
+      {/* The start screen offers no simulation transport. */}
+      {homeVisible ? null : (
+        <>
+          <div className="fm-header__separator" />
+          <HeaderRunControls
+            commandDisabledReason={commandDisabledReason}
+            isCommandDisabled={isCommandDisabled}
+            onCommand={runCommand}
+          />
+        </>
+      )}
       <div className="fm-header__actions">
         <ProjectDocumentStatus />
         <ThemeSwitcher theme={theme} onThemeChange={setTheme} />
@@ -692,32 +746,30 @@ function SessionAppMenuBar() {
     <header className="fm-header">
       <HeaderBrand subtitle={sessionDisplay.subtitle} />
 
-      <nav className="fm-header__nav" aria-label="Main menu">
-        <StartNavItem active={homeOpen} returnLabel="Back to simulation"
-          onCommand={() => runCommand(homeOpen ? "workspace.return-to-workspace" : "workspace.home")} />
-        {MAIN_MENUS.map((menu) => (
-          <HeaderDropdown
-            key={menu.id}
-            commandDisabledReason={commandDisabledReason}
-            isCommandActive={isCommandActive}
-            isCommandDisabled={isCommandDisabled}
-            menu={menu}
-            onCommand={runCommand}
-          />
-        ))}
-      </nav>
+      <HeaderNavigation
+        homeActive={homeOpen}
+        returnLabel="Back to simulation"
+        onHome={() => runCommand(homeOpen ? "workspace.return-to-workspace" : "workspace.home")}
+        commandDisabledReason={commandDisabledReason}
+        isCommandActive={isCommandActive}
+        isCommandDisabled={isCommandDisabled}
+        onCommand={runCommand}
+      />
 
-      <div className="fm-header__quick-actions">
-        {QUICK_ACTIONS.map((action) => (
-          <QuickActionButton
-            key={action.id}
-            action={action}
-            disabled={isCommandDisabled(action.id)}
-            disabledReason={commandDisabledReason(action.id)}
-            onCommand={runCommand}
-          />
-        ))}
-      </div>
+      {/* Home shows neither document edits nor simulation transport. */}
+      {homeOpen ? null : (
+        <div className="fm-header__quick-actions">
+          {QUICK_ACTIONS.map((action) => (
+            <QuickActionButton
+              key={action.id}
+              action={action}
+              disabled={isCommandDisabled(action.id)}
+              disabledReason={commandDisabledReason(action.id)}
+              onCommand={runCommand}
+            />
+          ))}
+        </div>
+      )}
 
       <button
         className="fm-header__search"
@@ -798,29 +850,16 @@ function SessionAppMenuBar() {
         open={dialogState.communicationOpen}
       />
 
-      <div className="fm-header__separator" />
-
-      <div className="fm-header__run-controls" aria-label="Runtime controls">
-        {RUN_CONTROLS.map((action) => (
-          <Button
-            key={action.id}
-            className="fm-header__run-btn"
-            data-run-control={action.id}
-            disabled={
-              (action.disabled || isCommandDisabled(action.id)) || undefined
-            }
-            disabledReason={commandDisabledReason(action.id)}
-            aria-label={action.label}
-            size="icon"
-            title={commandDisabledReason(action.id) ? undefined : action.label}
-            type="button"
-            variant="ghost"
-            onClick={() => runCommand(action.id)}
-          >
-            {action.icon}
-          </Button>
-        ))}
-      </div>
+      {homeOpen ? null : (
+        <>
+          <div className="fm-header__separator" />
+          <HeaderRunControls
+            commandDisabledReason={commandDisabledReason}
+            isCommandDisabled={isCommandDisabled}
+            onCommand={runCommand}
+          />
+        </>
+      )}
 
       <div className="fm-header__separator" />
 

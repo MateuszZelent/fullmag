@@ -17,7 +17,7 @@ import { ContinueCard } from "./ContinueCard";
 import { LaunchTiles } from "./LaunchTiles";
 import { RecentProjects } from "./RecentProjects";
 
-const dateFormat = new Intl.DateTimeFormat(undefined, {
+const dateFormat = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   month: "long",
   weekday: "long",
@@ -133,9 +133,6 @@ export function HomeSection({
       {onOpenActiveSession ? (
         <ActiveSessions onOpen={onOpenActiveSession} sessions={activeSessions} />
       ) : null}
-      {onOpenInstance ? (
-        <OtherInstances instances={otherInstances} onOpen={onOpenInstance} />
-      ) : null}
       {session && resolution && continueEntry ? (
         <section aria-labelledby="fm-start-continue-title" className="fm-start-section">
           <SectionHeader id="fm-start-continue-title" title="Continue where you left off" />
@@ -178,6 +175,9 @@ export function HomeSection({
         scriptFlowNotice={scriptFlowNotice}
         onOpen={onOpenRecent}
       />
+      {onOpenInstance ? (
+        <OtherInstances instances={otherInstances} onOpen={onOpenInstance} />
+      ) : null}
     </>
   );
 }

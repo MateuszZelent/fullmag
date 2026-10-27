@@ -825,11 +825,9 @@ export function ObjectMeshTransactionsSection({
   isDirty,
   objectId,
   sessionAvailable = true,
-  onApply,
   onBuild,
   onBuildSharedDomain,
   buildLabel,
-  onRevert,
   pending,
   buildPending = false,
   validationError,
@@ -841,10 +839,8 @@ export function ObjectMeshTransactionsSection({
   isDirty: boolean;
   objectId: string | null | undefined;
   sessionAvailable?: boolean;
-  onApply: () => void;
   onBuild: () => void;
   onBuildSharedDomain?: () => void;
-  onRevert: () => void;
   pending: boolean;
 }) {
   return (
@@ -852,13 +848,10 @@ export function ObjectMeshTransactionsSection({
       {isDirty ? (
         <FeedbackBanner
           kind="warning"
-          message="Unapplied changes. Apply Policy or Apply & Build Mesh before trusting the current mesh."
+          message="Unapplied changes. Use Apply in the Inspector footer or Apply & Build Mesh before trusting the current mesh."
         />
       ) : null}
       <div className="fm-inspector-toolbar">
-        <Button disabled={!sessionAvailable || pending || !objectId || Boolean(validationError)} size="sm" type="button" variant="primary" onClick={onApply}>
-          Apply Policy
-        </Button>
         <Button disabled={!sessionAvailable || pending || buildPending || !objectId || Boolean(validationError)} size="sm" type="button" variant="secondary" onClick={onBuild}>
           {buildPending ? "Waiting for mesh build…" : buildLabel}
         </Button>
@@ -867,9 +860,6 @@ export function ObjectMeshTransactionsSection({
             Build Shared-Domain Mesh
           </Button>
         ) : null}
-        <Button disabled={pending} size="sm" type="button" variant="ghost" onClick={onRevert}>
-          Revert
-        </Button>
       </div>
       {validationError ? <FeedbackBanner kind="error" message={validationError} /> : null}
       {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
@@ -1377,19 +1367,8 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
             isDirty={isDirty}
             objectId={objectId}
             sessionAvailable={sessionScopeKey !== null}
-            onApply={() => void (inspectorEditSession?.apply() ?? applyPolicy())}
             onBuild={() => void buildMesh("mesh.build-selected")}
             onBuildSharedDomain={() => void buildMesh("mesh.build-shared-domain")}
-            onRevert={() => {
-              setDraftState(
-                initialInspectorDraftState({
-                  baseDraft,
-                  baseKey: draftKey,
-                  identityKey: draftIdentityKey,
-                }),
-              );
-              setFeedback(null);
-            }}
             pending={pending}
             buildPending={buildPending}
             validationError={"error" in validation ? validation.error : topologyCapabilityError}

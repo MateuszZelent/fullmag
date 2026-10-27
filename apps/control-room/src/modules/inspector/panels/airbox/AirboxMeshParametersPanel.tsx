@@ -565,7 +565,7 @@ export function AirboxMeshParametersPanel({
     });
     setFeedback({
       kind: "success",
-      message: "Backend-effective Airbox defaults loaded into the draft. Click Apply Airbox Policy to commit.",
+      message: "Backend-effective Airbox defaults loaded into the draft. Use Apply in the Inspector footer to commit.",
     });
   };
 
@@ -590,8 +590,8 @@ export function AirboxMeshParametersPanel({
           <FeedbackBanner
             kind="warning"
             message={runtimeLane === "fdm"
-              ? "Apply Airbox Policy saves the canonical policy and queues an FDM grid replan."
-              : "Apply Airbox Policy saves canonical authoring. FDM grid actions wait for runtime lane resolution."}
+              ? "Apply in the Inspector footer saves the canonical policy and queues an FDM grid replan."
+              : "Apply in the Inspector footer saves canonical authoring. FDM grid actions wait for runtime lane resolution."}
           />
         ) : null}
         {!draft.authoredConfigPresent && resource.effective_config ? (
@@ -606,16 +606,13 @@ export function AirboxMeshParametersPanel({
             message={
               isFdm
                 ? runtimeLane === "fdm"
-                  ? "Unapplied changes. Apply Airbox Policy to save and queue the FDM grid replan."
-                  : "Unapplied changes. Apply Airbox Policy to save the canonical policy."
-                : "Unapplied changes. Apply Airbox Policy or Apply & Build before trusting the current Airbox mesh."
+                  ? "Unapplied changes. Use Apply in the Inspector footer to save and queue the FDM grid replan."
+                  : "Unapplied changes. Use Apply in the Inspector footer to save the canonical policy."
+                : "Unapplied changes. Use Apply in the Inspector footer or Apply & Build before trusting the current Airbox mesh."
             }
           />
         ) : null}
         <div className="fm-inspector-toolbar">
-          <Button disabled={!sessionScopeKey || pending || validationError !== null} size="sm" type="button" variant="primary" onClick={() => void (inspectorEditSession?.apply() ?? applyPolicy())}>
-            Apply Airbox Policy
-          </Button>
           {!isFdm && runtimeLane === "fem" ? (
             <Button disabled={!sessionScopeKey || pending || buildPending || validationError !== null} size="sm" type="button" variant="secondary" onClick={() => void build()}>
               {buildPending ? "Waiting for mesh build…" : dirty ? "Apply & Build Shared-Domain Mesh" : "Build Shared-Domain Mesh"}
@@ -626,9 +623,6 @@ export function AirboxMeshParametersPanel({
               Load Effective Defaults
             </Button>
           ) : null}
-          <Button disabled={pending} size="sm" type="button" variant="ghost" onClick={revert}>
-            Revert
-          </Button>
         </div>
         {validationError ? <FeedbackBanner kind="error" message={validationError} /> : null}
         {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}

@@ -7,6 +7,7 @@
  * generic fallback.
  */
 
+import { EmptyState } from "@/shared/ui/EmptyState";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FmrPeakInspector } from "./FmrPeakInspector";
 import { FieldRow } from "../../primitives/FieldRow";
@@ -396,9 +397,7 @@ function FmrComparisonPairTable({
 }) {
   if (pairs.length === 0) {
     return (
-      <div className="fm-frequency-domain-table-empty" role="status">
-        No modal-driven FMR pairs available.
-      </div>
+      <EmptyState className="fm-frequency-domain-table-empty" role="status" size="compact" heading="No modal-driven FMR pairs available." />
     );
   }
 
@@ -1748,9 +1747,7 @@ function FmrPeakBrowser({
 }) {
   if (peaks.length === 0) {
     return (
-      <div className="fm-frequency-domain-table-empty" role="status">
-        No modal or driven FMR peaks available.
-      </div>
+      <EmptyState className="fm-frequency-domain-table-empty" role="status" size="compact" heading="No modal or driven FMR peaks available." />
     );
   }
 
@@ -2281,9 +2278,7 @@ function FmrComparisonPairBrowser({
 }) {
   if (pairs.length === 0) {
     return (
-      <div className="fm-frequency-domain-table-empty" role="status">
-        No modal-driven FMR comparison pairs available.
-      </div>
+      <EmptyState className="fm-frequency-domain-table-empty" role="status" size="compact" heading="No modal-driven FMR comparison pairs available." />
     );
   }
 

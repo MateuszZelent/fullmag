@@ -93,10 +93,48 @@ Rozważone warianty:
    najwyżej 4 konteksty WebGL na stronę, wyraźnie poniżej limitu
    przeglądarki (zwykle 16 aktywnych na stronę).
 
-   Ukryta ramka nie jest wstrzymywana: w ramce `document.visibilityState`
-   pozostaje `visible`, więc jej WebSocket, odpytywanie i viewport działają
-   dalej. Sygnał widoczności przekazywany do ramki (`postMessage`) i
-   wstrzymanie jej viewportu to otwarta praca.
+   **Wstrzymanie ukrytej ramki.** Ramkę ukrywa CSS hosta, więc w ramce
+   `document.visibilityState` pozostaje `visible`. Dlatego host sam mówi
+   ramce, czy jej zakładka jest na wierzchu. Obie strony wysyłają
+   `postMessage` z jawnym `targetOrigin` (originem drugiej strony), nigdy
+   z `*`:
+   - host → ramka: `{type: "fullmag.instance-tab.visibility", visible}`.
+     Host wysyła go przy aktywacji i dezaktywacji zakładki, po zdarzeniu
+     `load` ramki i w odpowiedzi na `ready`. `targetOrigin` to origin
+     instancji ramki.
+   - ramka → host: `{type: "fullmag.instance-tab.ready"}`, gdy ramka zacznie
+     nasłuchiwać. Skrypty ramki mogą ruszyć dopiero po jej `load`, więc
+     komunikat wysłany przy `load` może przepaść. Origin hosta ramka bierze
+     z `location.ancestorOrigins`, a bez niego (Firefox) z
+     `document.referrer`. Wysyła `ready` tylko wtedy, gdy ten origin
+     przechodzi tę samą kontrolę co komunikaty hosta. Host odpowiada tylko
+     zamontowanej ramce, której okno (`event.source`) i origin się zgadzają.
+
+   Osadzone UI przyjmuje komunikat widoczności tylko wtedy, gdy spełnione
+   są wszystkie warunki:
+   - `window.name === "fullmag-instance-tab"`;
+   - `event.source === window.parent`;
+   - `event.origin` to `http://127.0.0.1:<port>` albo
+     `http://localhost:<port>` z portem z okna wykrywania.
+
+   Okno pochodzi z tej samej zmiennej `FULLMAG_INSTANCE_DISCOVERY_PORTS` co
+   CSP (decyzja 4). `next.config.ts` przekazuje je klientowi jako
+   `FULLMAG_INSTANCE_TAB_PORTS` w postaci `<od>-<do>`. Bez tej wartości UI
+   nie ufa żadnemu hostowi i ramka nie wstrzymuje pracy.
+
+   Gdy zakładka jest ukryta, osadzone UI:
+   - przełącza pętlę renderowania viewportu R3F z `demand` na `never`.
+     Korzeń R3F, kontekst WebGL i stan widoku zostają. Powrót do `demand`
+     unieważnia widok i rysuje klatkę bez ponownego montowania;
+   - wstrzymuje wszystkie ładowania zasobów (`ResourceRuntimeStore`).
+     Zmiany z realtime i odświeżanie z timerów zapisują tylko ostatnie
+     żądanie każdego zasobu, a po powrocie każdy zasób ładuje się raz;
+   - zatrzymuje lokalną animację fazy nakładki analizy, tak jak przy
+     ukrytej karcie przeglądarki.
+
+   Sesja, run i WebSocket realtime działają dalej. Po powrocie widok
+   nadrabia zmiany z zapisanych żądań, bez pełnej resynchronizacji.
+
    Lista otwartych zakładek jest wygodą przeglądającego:
    trzymana w `localStorage` originu strony, odczyt i zapis w `try/catch`,
    bez wpływu na poprawność przy braku magazynu. Zakładka instancji, której
@@ -154,6 +192,12 @@ on tylko tę instancję; sekcja innych instancji jest tam ukryta.
 - Awaria jednej instancji nie zamyka zakładek innych.
 - Każda osadzona instancja ładuje własny bundle UI i własny kontekst WebGL;
   przy wielu zakładkach rośnie zużycie pamięci przeglądarki.
+- Ukryta ramka nie rysuje i nie wysyła zapytań do swojego API. Jej
+  WebSocket zostaje otwarty, więc dane wypychane przez realtime (np.
+  próbki skalarne) nadal aktualizują stan React w ramce. Ten koszt CPU
+  zostaje.
+- Workspace hosta pod aktywną zakładką instancji jest tylko `inert` i nie
+  jest wstrzymywany; ten sygnał dotyczy wyłącznie ramek.
 - Ograniczenie: na silniku Docker bez Docker Desktop porty opublikowane na
   `127.0.0.1` hosta nie są osiągalne z kontenera przez bramę hosta; wtedy
   wykrywanie zwraca tylko własną instancję, chyba że
@@ -173,9 +217,51 @@ on tylko tę instancję; sekcja innych instancji jest tam ukryta.
 - Testy vitest: magazyn zakładek (otwieranie, zamykanie, aktywacja, LRU
   ramek, rozpoznanie ramki po nazwie, odporność na brak `localStorage`),
   etykiety paska, sekcja Home, lista originów CSP.
+- Testy vitest wstrzymania ramki (`instanceTabVisibility.test.tsx`,
+  `hiddenInstanceTabResourcePolicy.test.ts`,
+  `Viewport3DCanvas.lifecycle.test.tsx`,
+  `AnalysisFieldOverlayPhaseAnimation.test.ts`, `next.config.test.ts`):
+  - walidacja komunikatu (nazwa ramki, `source`, origin, okno portów,
+    kształt danych);
+  - `ready` i jego odpowiedź;
+  - magazyn widoczności z renderem SSR;
+  - wstrzymanie i wznowienie zasobów (jedno ładowanie najnowszego
+    żądania);
+  - pętla `demand` → `never` → `demand` na tym samym korzeniu R3F;
+  - zgodność okna klienta z CSP.
 - Dowód runtime: zob. niżej. **NOT VERIFIED:** viewport 3D w ramce po
-  przełączeniu zakładek (canvas, `isContextLost()`, bufor rysowania),
-  ponieważ sprawdzana instancja nie miała otwartej sesji z viewportem.
+  przełączeniu zakładek (canvas, `isContextLost()`, bufor rysowania)
+  oraz brak renderowania i zapytań w ukrytej ramce. Szczegóły w
+  „Dowód runtime (26.10.2026)”.
+
+### Dowód runtime (26.10.2026, grupy DEV 3221 i 3223)
+
+Dwie grupy z kodem `ecac0fff9`: host 3221 (worktree zadania) i ramka
+3223 (osobny worktree w tym samym commicie, sesja
+`fdm_cpu_relax_smoke`).
+
+Sprawdzone:
+- `GET /v2/platform/instances` z 3221 zwrócił 3223 z jej sesją.
+- Strona `http://localhost:3221` otworzyła zakładkę 3223. Ramka ma nazwę
+  `fullmag-instance-tab`, `src` `http://localhost:3223/workspace`, jest
+  aktywna i `visibility: visible`.
+- Żądania ramki są widoczne w logu sieci strony hosta, więc tym samym
+  logiem da się sprawdzić ciszę ukrytej ramki.
+- `next.config.test.ts` w grupie 3223 (świeży seed z nowym
+  `next.config.ts`): test zgodności okna klienta z CSP przechodzi.
+
+Nie sprawdzono (**NOT VERIFIED**):
+- Ani strona hosta, ani ramka nie skończyły hydratacji. Na hoście
+  działało wtedy 11 frontendów DEV na checkoutach Windows z odpytywaniem
+  9p. Serwer Next podawał 17–20 MB `app/workspace/page.js` z prędkością
+  50–60 KB/s (89–390 s), także wewnątrz kontenera. Webpack przerywa
+  ładowanie chunka po 120 s (`ChunkLoadError`).
+- Dlatego brak dowodu z przeglądarki dla wymiany `ready` i komunikatu
+  widoczności, wstrzymania pętli R3F i zapytań w ukrytej ramce oraz
+  canvas, `gl.isContextLost() === false` i niezerowego bufora rysowania
+  po powrocie.
+- Wariant z wejściem na 3223 bezpośrednio (z `window.name` ramki)
+  potrzebuje tego samego pakietu, więc też nie był wykonalny.
 
 ### Dowód runtime (24.10.2026, grupa DEV 3199)
 

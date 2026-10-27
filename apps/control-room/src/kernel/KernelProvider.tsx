@@ -67,6 +67,8 @@ import {
 import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
+import { createHiddenInstanceTabResourcePauseController } from "./resources/hiddenInstanceTabResourcePolicy";
+import { listenForInstanceTabVisibility } from "./layout/instanceTabVisibility";
 import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeResources";
 import { confirmedSessionResourceIdentity, sessionRequestScopeKey, sessionScopedResourceKey, type SessionResourceIdentity } from "./resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "./resources/useSessionStatus";
@@ -819,6 +821,14 @@ function Viewport3DResourceLifecycleConnector({
   return null;
 }
 
+/** Pauses this page's background work while its instance tab is hidden (ADR 0069). */
+function InstanceTabVisibilityConnector() {
+  useEffect(() => listenForInstanceTabVisibility(window), []);
+  useEffect(() => createHiddenInstanceTabResourcePauseController(), []);
+
+  return null;
+}
+
 export function KernelProvider({ children }: KernelProviderProps) {
   const [kernel] = useState(() => createKernel());
 
@@ -829,6 +839,7 @@ export function KernelProvider({ children }: KernelProviderProps) {
       <DiagnosticRecorderConnector kernel={kernel} />
       <PerformanceDiagnosticsConnector kernel={kernel} />
       <Viewport3DResourceLifecycleConnector kernel={kernel} />
+      <InstanceTabVisibilityConnector />
       {children}
     </KernelContext.Provider>
   );

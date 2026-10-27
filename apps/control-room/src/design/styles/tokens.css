@@ -23,7 +23,7 @@
   --fm-ribbon-tabs-height: 34px;
   --fm-status-height: 26px;
   --fm-panel-header-height: 38px;
-  --fm-control-height-compact: 26px;
+  --fm-control-height-compact: 28px;
   --fm-control-height-regular: 30px;
   --fm-control-height-sm: var(--fm-control-height-compact);
   --fm-control-height-md: var(--fm-control-height-regular);
@@ -96,9 +96,9 @@
   --fm-font-size-xl: 18px;
   --fm-line-height-tight: 1.1;
   --fm-line-height-normal: 1.4;
-  --fm-font-size-field-label: 11px;
-  --fm-font-size-control: 11px;
-  --fm-font-size-help: 10px;
+  --fm-font-size-field-label: 12px;
+  --fm-font-size-control: 12px;
+  --fm-font-size-help: 11px;
   --fm-line-height-control: 1.35;
 
   /* Control geometry and states */

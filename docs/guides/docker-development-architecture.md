@@ -615,3 +615,7 @@ zadania w rozwiązanym storage, nie do rosnącej historii komend w tym przewodni
 Aktualizacje postępu używają „Zadanie X/13”. Numery oznaczają etapy;
 nie są deklaracją ukończenia. Zmiana z ADR 0061 wymaga ponownego sprawdzenia
 cyklu start/restart, zanim wcześniejsze dowody zostaną do niego przypisane.
+
+### Wznowienie samego frontendu po udanym starcie
+
+`just docker-dev-resume <start-attempt> <config-sha256> <source-root> <port>` może wznowić zatrzymany frontend także wtedy, gdy historyczny start zakończył się `succeeded`. Launcher sprawdza dokładne incarnation ID, project, image, source i mounty obu usług oraz wymaga działającego backendu i zatrzymanego frontendu. Startuje wyłącznie frontend; nie zmienia historycznego receipt, nie restartuje backendu i nie powtarza aktywacji ani Solve. Ścieżkę odtworzono po błędzie V8 heap frontendu; wynik zapisywany jest jako nowa operacja `resume`.

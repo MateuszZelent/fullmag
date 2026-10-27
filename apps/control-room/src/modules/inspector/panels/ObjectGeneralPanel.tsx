@@ -54,6 +54,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { ObjectExtensionsSection } from "../extensions/ObjectExtensionsSection";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
+import { ColorValue, ColorValueField } from "../primitives/ColorValue";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -926,22 +927,21 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         )}
         {object.mode === "committed" && visualizationSettings ? (
           <>
-            <FormField
+            <ColorValueField
+              description="Viewport-local primitive preference; a solid shader override takes precedence."
               label="Primitive color"
-              mono={false}
-              type="text"
               value={visualizationSettings.primitiveMonoColor ?? ""}
-              hint="Viewport-local primitive preference; a solid shader override takes precedence."
-              onChange={(event) => patchObjectColor("primitiveColor", event.target.value)}
+              onChange={(value) => patchObjectColor("primitiveColor", value)}
             />
-            <FieldRow label="Preview color" value={primitiveColor?.color ?? "unavailable"} />
+            <FieldRow
+              label="Preview color"
+              value={primitiveColor ? <ColorValue value={primitiveColor.color} /> : "unavailable"}
+            />
             <FieldRow label="Preview color source" value={primitiveColor?.source ?? "unavailable"} />
-            <FormField
+            <ColorValueField
               label="Frame color"
-              mono={false}
-              type="text"
               value={visualizationSettings.wireframeColor}
-              onChange={(event) => patchObjectColor("frameColor", event.target.value)}
+              onChange={(value) => patchObjectColor("frameColor", value)}
             />
           </>
         ) : null}
@@ -983,25 +983,6 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         <div className="fm-inspector-toolbar">
           {object.mode === "committed" && (
             <>
-              <Button
-                disabled={pending || Boolean(sceneMutationLockReason) || !inspectorDirty}
-                size="sm"
-                type="button"
-                title={sceneMutationLockReason}
-                onClick={() => void applyRegisteredDrafts()}
-              >
-                {identityDraftDirty && !objectEditDraftDirty ? "Apply Identity" : "Apply"}
-              </Button>
-              <Button
-                disabled={pending || Boolean(sceneMutationLockReason) || !inspectorDirty}
-                size="sm"
-                type="button"
-                variant="ghost"
-                title={sceneMutationLockReason}
-                onClick={revertAllDrafts}
-              >
-                Revert
-              </Button>
               <Button
                 size="sm"
                 type="button"

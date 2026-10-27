@@ -1,5 +1,6 @@
 "use client";
 
+import { instanceTabVisibility } from "../layout/instanceTabVisibility";
 import type { AnalysisFieldOverlayState } from "./AnalysisFieldOverlayController";
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
 
@@ -105,19 +106,21 @@ export function startAnalysisFieldOverlayPhaseAnimation(
     }
   };
 
+  // A hidden instance tab counts as a hidden page (ADR 0069).
+  const pageHidden = () =>
+    (documentAvailable && globalThis.document.visibilityState === "hidden") ||
+    instanceTabVisibility.hidden();
+
   const sync = () => {
     if (stopped) return;
     if (
       !isAnimatingAnalysisOverlay(controller.getSnapshot()) ||
       reducedMotion ||
-      (documentAvailable && globalThis.document.visibilityState === "hidden")
+      pageHidden()
     ) {
       stopInterval();
       stopFrame();
-      if (
-        reducedMotion ||
-        (documentAvailable && globalThis.document.visibilityState === "hidden")
-      ) {
+      if (reducedMotion || pageHidden()) {
         pauseAnimation();
       }
       return;
@@ -134,6 +137,7 @@ export function startAnalysisFieldOverlayPhaseAnimation(
   };
 
   const unsubscribe = controller.subscribe(sync);
+  const unsubscribeInstanceTab = instanceTabVisibility.subscribe(sync);
   if (documentAvailable) {
     globalThis.document.addEventListener("visibilitychange", sync);
   }
@@ -145,6 +149,7 @@ export function startAnalysisFieldOverlayPhaseAnimation(
       stopInterval();
       stopFrame();
       unsubscribe();
+      unsubscribeInstanceTab();
       if (documentAvailable) {
         globalThis.document.removeEventListener("visibilitychange", sync);
       }

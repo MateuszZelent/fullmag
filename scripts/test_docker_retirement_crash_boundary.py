@@ -142,6 +142,17 @@ def _partial_terminal_case(state: str) -> tuple[dict[str, object], bytes, bytes,
 
 
 class CrashBoundaryTests(unittest.TestCase):
+    def test_retained_context_rejects_noncanonical_lease_before_receipt_read(self):
+        token = OPERATION_ID.encode("ascii")
+        for raw in (b" " + token, token + b" ", token + b"\r\n", token + b"\n\n"):
+            with self.subTest(raw=raw), patch.object(activate, "_read_control_bytes", return_value=raw) as read:
+                with self.assertRaisesRegex(activate.BuildControlError, "identity is invalid"):
+                    activate._retained_retirement_context(
+                        SimpleNamespace(), development_attempt="b" * 32,
+                        config_sha256="c" * 64, source_root="/source", image_id="sha256:" + "d" * 64,
+                        backend_id="e" * 64)
+                self.assertEqual(read.call_count, 1)
+
     @contextmanager
     def _resume(self, *, run, finalize=None):
         if finalize is None:
@@ -184,6 +195,60 @@ class CrashBoundaryTests(unittest.TestCase):
             self.assertIsNone(call.kwargs["retirement_identity"])
             self.assertIsNone(call.kwargs["retirement_predecessor"])
         self.assertEqual(len(finalizations), 1)
+
+    def test_retained_retirement_accepts_producer_active_lease_newline(self):
+        """The active lease producer writes the exact token followed by one LF."""
+        finalizations = []
+
+        def finalize(*args, **kwargs):
+            finalizations.append(kwargs)
+
+        with self._resume(
+            run=lambda *args, **kwargs: _retired_response(), finalize=finalize
+        ):
+            with patch.object(
+                activate,
+                "_read_control_bytes",
+                side_effect=[OPERATION_ID.encode("ascii") + b"\n", RECEIPT_RAW],
+            ):
+                activate._resume_retained_retirement(
+                    object(), backend_id="b" * 64, operation_id=OPERATION_ID,
+                    context=_missing_context(), receipt=_receipt(), receipt_raw=RECEIPT_RAW,
+                    helper_sha256=HELPER_SHA256, activation_timeout_seconds=1,
+                )
+
+        self.assertEqual(len(finalizations), 1)
+
+    def test_retained_retirement_rejects_noncanonical_active_lease_bytes(self):
+        """Only the exact token and its producer's single LF are valid leases."""
+        token = OPERATION_ID.encode("ascii")
+        invalid_active_values = (
+            b" " + token,
+            token + b" ",
+            token + b"\n\n",
+            token + b"\r\n",
+            b"b" * 32 + b"\n",
+        )
+
+        for active in invalid_active_values:
+            with self.subTest(active=active):
+                with self._resume(run=lambda *args, **kwargs: _retired_response()) as (
+                    _runner,
+                    finalizer,
+                ):
+                    with patch.object(
+                        activate,
+                        "_read_control_bytes",
+                        side_effect=[active, RECEIPT_RAW],
+                    ):
+                        with self.assertRaises(activate.ControlOutcomeUnknown):
+                            activate._resume_retained_retirement(
+                                object(), backend_id="b" * 64, operation_id=OPERATION_ID,
+                                context=_missing_context(), receipt=_receipt(), receipt_raw=RECEIPT_RAW,
+                                helper_sha256=HELPER_SHA256, activation_timeout_seconds=1,
+                            )
+
+                finalizer.assert_not_called()
 
     def test_host_crash_after_refusal_78_closes_confirmed_marker(self):
         """A durable rejected intent can close the retained operation without a POST."""

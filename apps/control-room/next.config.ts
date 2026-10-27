@@ -346,6 +346,15 @@ export const INSTANCE_TAB_FRAME_ANCESTORS = instanceTabFrameSources(
 );
 
 /**
+ * The same window for the client: an embedded Control Room accepts tab
+ * visibility messages only from these loopback origins (ADR 0069).
+ */
+export function instanceTabPortsClientValue(value: string | undefined): string {
+  const { first, last } = resolveInstanceDiscoveryPorts(value);
+  return `${first}-${last}`;
+}
+
+/**
  * Addresses of Control Room tabs, served by the workspace page. A static
  * export has no rewrites; its server answers unknown paths with the root
  * page, which renders the same workspace.
@@ -387,6 +396,11 @@ function securityHeaders() {
 const nextConfig: NextConfig = {
   allowedDevOrigins,
   distDir,
+  env: {
+    FULLMAG_INSTANCE_TAB_PORTS: instanceTabPortsClientValue(
+      process.env[INSTANCE_DISCOVERY_PORTS_ENV],
+    ),
+  },
   // R3F v9 force-loses WebGL during React development strict remounts.
   reactStrictMode: false,
   ...(staticExport

@@ -51,7 +51,7 @@ Slots are stable mount points owned by the kernel:
 
 Slots are not feature flags. A disabled module means its manifest is not registered or its capability gate fails; the slot remains valid.
 
-When multiple modules are eligible for `viewport-main`, the kernel renders them through a tab host. Only the active center-surface module is mounted. Inactive center surfaces must not be retained through hidden DOM panels, CSS-only hiding, cached React subtrees, or Radix `forceMount`. This is a lifecycle contract: switching away from `viewport-3d` releases its WebGL context, resource subscriptions, timers, render buffers, and client-ack effects.
+When multiple modules are eligible for `viewport-main`, the kernel renders them through a tab host. The active center-surface module and at most one explicitly selected, distinct companion are mounted, each once (ADR 0070). Inactive center surfaces must not be retained through hidden DOM panels, CSS-only hiding, cached React subtrees, or Radix `forceMount`. This is a lifecycle contract: switching away from `viewport-3d` releases its WebGL context, resource subscriptions, timers, render buffers, and client-ack effects.
 
 Chart ownership is intentionally split. `live-charts` is the **Live Charts**
 center module for active-run time series. `analysis-plots` is the **Analysis**
@@ -220,3 +220,7 @@ Removing a manifest disables the module. Capability gates only hide modules when
 - Kernel service: 300 lines hard review threshold.
 
 Crossing a review trigger requires checking whether the file has mixed responsibilities. Split only when a boundary reduces real complexity or lifecycle risk; do not create extra files just to satisfy a line count. The current migration-only exception set is bounded by `docs/adr/0015-frontend-v2-migration-governance-boundary.md`; no new oversized file is covered by that ADR.
+
+## Retained panel chrome (ADR 0070)
+
+Hide/minimize retains side-panel drafts and DOM; it does not send a backend command. Explorer/dock suspend effects via Activity. Inspector keeps its pending-form registry and selection guard active. This exception does not retain unselected center surfaces. PanelChrome shares the title/tabs row with a separate accessible move handle and panel menu.

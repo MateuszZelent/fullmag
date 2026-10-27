@@ -348,7 +348,10 @@ describe("SimulationStartupOverlay", () => {
       // snapshot stale; a refetch in flight alone does not.
       true,
     );
-    expect(shouldRefreshSimulationStartupStatus(staleReady)).toBe(true);
+    // Ready is terminal, so a disruption afterwards neither reopens the
+    // window nor keeps the startup gate or its polling alive.
+    expect(staleReady).toMatchObject({ isVisible: false, kind: "stale" });
+    expect(shouldRefreshSimulationStartupStatus(staleReady)).toBe(false);
   });
 
   it("renders option A with determinate progress, ordered stages, and a visible log", () => {

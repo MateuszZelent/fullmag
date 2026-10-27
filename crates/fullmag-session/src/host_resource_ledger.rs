@@ -4345,6 +4345,42 @@ impl HostResourceLedger {
         operation(&snapshot, &evidence_sha256)
     }
 
+    /// Prove, under the same host-before-store writer order, that an exact run
+    /// identity was never admitted: it has no durable run catalog and no host
+    /// reservation row in this store. The digest binds that absence to the
+    /// store and run so a retirement archive cannot be replayed onto a run
+    /// that was admitted later.
+    pub fn with_unadmitted_run_absence_fence<T>(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+        operation: impl FnOnce(&str) -> Result<T>,
+    ) -> Result<T> {
+        crate::repository_path::validate_store_id(run_id)?;
+        let store_id = Self::store_id(store.root())?;
+        let _host_writer = self.writer.acquire()?;
+        let _store_writer = store.write_transaction()?;
+        let document = self.read_document_locked()?;
+        if document
+            .reservations
+            .iter()
+            .any(|row| row.identity.store_id == store_id && row.identity.run_id == run_id)
+        {
+            bail!("unadmitted run identity has a host reservation row");
+        }
+        if store.read_run_catalog(run_id)?.is_some() {
+            bail!("unadmitted run identity has a durable run catalog");
+        }
+        let evidence = serde_json::json!({
+            "schema": "fullmag.unadmitted-run-absence.v1",
+            "store_id": store_id,
+            "run_id": run_id,
+            "run_catalog": null,
+            "exact_host_rows": [],
+        });
+        operation(&canonical_json_sha256(&evidence))
+    }
+
     /// Reserve capacity tentatively. Exact retries return the existing record;
     /// changed identities or request contents are rejected.
     pub fn reserve(&self, request: &HostReservationRequest) -> Result<HostResourceReservation> {

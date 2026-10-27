@@ -28,6 +28,13 @@ export function SegmentedControl<T extends string>({
   value,
   onValueChange,
 }: SegmentedControlProps<T>) {
+  const selectedEnabledIndex = options.findIndex(
+    (option) => option.value === value && !option.disabled,
+  );
+  const keyboardEntryIndex = selectedEnabledIndex >= 0
+    ? selectedEnabledIndex
+    : options.findIndex((option) => !option.disabled);
+
   function selectByKeyboard(
     event: KeyboardEvent<HTMLButtonElement>,
     currentIndex: number,
@@ -95,7 +102,7 @@ export function SegmentedControl<T extends string>({
               "active:scale-[0.98] motion-reduce:active:scale-100",
               "hover:bg-fm-raised focus-visible:ring-2 focus-visible:ring-fm-accent",
               checked
-                ? "bg-fm-accent font-medium text-fm-inverse shadow-fm-control"
+                ? "bg-fm-accent font-medium text-fm-on-accent shadow-fm-control"
                 : "bg-transparent text-fm-secondary",
               itemDisabled &&
                 "cursor-not-allowed bg-transparent text-fm-disabled-text opacity-100 active:scale-100",
@@ -106,7 +113,7 @@ export function SegmentedControl<T extends string>({
             disabled={itemDisabled}
             key={option.value}
             role="radio"
-            tabIndex={checked && !itemDisabled ? 0 : -1}
+            tabIndex={index === keyboardEntryIndex && !itemDisabled ? 0 : -1}
             title={option.accessibleLabel}
             type="button"
             onClick={() => {

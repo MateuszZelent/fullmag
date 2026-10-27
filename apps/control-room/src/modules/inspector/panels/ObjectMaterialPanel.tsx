@@ -1457,29 +1457,6 @@ function ObjectMaterialPanelView({
                     Apply Anisotropy
                   </Button>
                 ) : null}
-                <Button
-                  disabled={
-                    pendingOperations.has("assignment") ||
-                    pendingOperations.has("parameters") ||
-                    pendingOperations.has("anisotropy")
-                  }
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => {
-                    setDraftState(
-                      initialInspectorDraftState({
-                        baseDraft,
-                        baseKey: draftKey,
-                        identityKey: draftIdentityKey,
-                      }),
-                    );
-                    setAnisotropyDraftState({ draft: baseAnisotropyDraft, dirtyFields: new Set(), key: "", scopeKey, scopeToken });
-                    setFeedback(null);
-                  }}
-                >
-                  Revert
-                </Button>
               </div>
               {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
             </InspectorGroup>

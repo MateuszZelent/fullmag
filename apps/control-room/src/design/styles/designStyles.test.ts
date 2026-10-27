@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -34,12 +34,30 @@ describe("control-room design styles", () => {
           statement.startsWith("@import ") || statement.startsWith("@source "),
       ),
     ).toBe(true);
-    expect(statements.slice(0, 3)).toEqual([
+    expect(statements.slice(0, 4)).toEqual([
+      '@import "../src/design/styles/fonts.css";',
       '@import "tailwindcss" source(none);',
       '@source "./**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";',
       '@source "../src/**/*.{html,js,cjs,mjs,ts,cts,mts,jsx,tsx,md,mdx,json,css,mx3,vue,svelte}";',
     ]);
     expect(globalsCss).toContain('inspector-visualization.css" layer(fm-modules)');
+  });
+
+  it("loads the bundled UI and monospaced variable fonts from local assets", () => {
+    const fontsCss = readAppFile("src/design/styles/fonts.css");
+    const interFont = path.join(appRoot, "public/fonts/InterVariable-v4.1.woff2");
+    const jetBrainsMonoFont = path.join(
+      appRoot,
+      "public/fonts/JetBrainsMono-Variable-v2.304.ttf",
+    );
+
+    expect(fontsCss).toContain('font-family: "Inter";');
+    expect(fontsCss).toContain('font-family: "JetBrains Mono";');
+    expect(fontsCss).toContain('src: url("/fonts/InterVariable-v4.1.woff2")');
+    expect(fontsCss).toContain('src: url("/fonts/JetBrainsMono-Variable-v2.304.ttf")');
+    expect(fontsCss.match(/font-display: swap;/g)).toHaveLength(2);
+    expect(existsSync(interFont)).toBe(true);
+    expect(existsSync(jetBrainsMonoFont)).toBe(true);
   });
 
   it("defines light and dark themes through central fm tokens", () => {
@@ -86,9 +104,19 @@ describe("control-room design styles", () => {
     expect(themeCss).toContain("--fm-info: #04a5e5;");
   });
 
+  it("keeps raw palette values out of the start-screen token layer", () => {
+    const startTokens = readAppFile("src/design/styles/start-screen.tokens.css")
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+
+    // Colours resolve through theme.css; only comments may quote hex values.
+    expect(startTokens).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(startTokens).toContain("--fm-start-meta: var(--fm-text-tertiary);");
+  });
+
   it("keeps motion tokens concrete and action text theme-aware", () => {
     const tokensCss = readAppFile("src/design/styles/tokens.css");
-    const inspectorCss = readAppFile("src/design/styles/inspector.css");
+    const themeCss = readAppFile("src/design/styles/theme.css");
+    const primitivesCss = readAppFile("src/design/styles/primitives.css");
 
     expect(tokensCss).toContain("--fm-duration-instant: 80ms;");
     expect(tokensCss).toContain("--fm-duration-fast: 120ms;");
@@ -99,8 +127,20 @@ describe("control-room design styles", () => {
     expect(tokensCss).not.toMatch(
       /(--fm-duration-(?:instant|fast|normal|moderate|slow|loading)):\s*var\(\1\)/,
     );
-    expect(inspectorCss).toContain("color: var(--fm-text-inverse) !important;");
-    expect(inspectorCss).not.toContain("color: white !important;");
+    expect(themeCss).toContain("--fm-text-on-accent: #1e1e2e;");
+    expect(themeCss).toContain("--fm-text-on-accent: #ffffff;");
+    expect(primitivesCss).toMatch(
+      /\.fm-button--primary\s*\{[^}]*color: var\(--fm-text-on-accent\);/,
+    );
+    expect(primitivesCss).toMatch(
+      /\.fm-button--primary:hover[^\{]*\{[^}]*color: var\(--fm-text-on-accent\);/,
+    );
+    expect(primitivesCss).not.toMatch(
+      /\.fm-button--primary[^\{]*\{[^}]*!important/,
+    );
+    expect(primitivesCss).not.toMatch(
+      /\.fm-button--primary[^\{]*\{[^}]*color:\s*white\b/,
+    );
   });
 
   it("keeps Explorer semantic icon colors in the Catppuccin token system", () => {

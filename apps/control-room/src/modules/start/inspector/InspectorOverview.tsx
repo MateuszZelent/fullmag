@@ -40,7 +40,7 @@ export function InspectorOverview({
     ...kvRow("Excitation", summary.excitation),
   ];
   const outputs = [
-    ...kvRow("Frames", summary.outputFrames?.toLocaleString()),
+    ...kvRow("Frames", summary.outputFrames?.toLocaleString("en-US")),
     ...kvRow("Size", summary.outputBytes === undefined ? undefined : formatBytes(summary.outputBytes)),
     ...kvRow("Fields", chipList(summary.outputFields)),
   ];

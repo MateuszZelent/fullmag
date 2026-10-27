@@ -1715,7 +1715,7 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             'require("playwright/package.json")',
             "1.62.1",
             '.fm-home-overlay[data-state="home-overlay"]',
-            'name: "Start"',
+            'name: "Home"',
             'name: "Back to simulation"',
             '"/v2/sessions/current/status"',
             'elementHandle()',

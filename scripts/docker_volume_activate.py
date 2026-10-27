@@ -822,9 +822,12 @@ def _record_activation_result(operation: dict[str, object], result: Mapping[str,
     if isinstance(result.get("retirement"), Mapping):
         receipt["retirement"] = dict(result["retirement"])
     if result["state"] == "rejected":
-        raise BuildControlError(
+        error = BuildControlError(
             "Backend activation was rejected; terminal activation receipt retained and retry is forbidden"
         )
+        if isinstance(result.get("rejection"), Mapping):
+            setattr(error, "rejection", dict(result["rejection"]))
+        raise error
 
 
 def _read_control_bytes(
@@ -1093,7 +1096,8 @@ def _retained_retirement_context(
     if active_raw is None:
         return None
     operation_id = active_raw.decode("utf-8", "replace").strip()
-    if not ATTEMPT_RE.fullmatch(operation_id):
+    if (not ATTEMPT_RE.fullmatch(operation_id)
+            or not _retirement_lease_matches(active_raw, operation_id)):
         raise BuildControlError("retained active operation identity is invalid")
     receipt_relative = "activation/attempts/" + operation_id + "/receipt.json"
     receipt_raw = _read_control_bytes(control, receipt_relative)
@@ -1229,6 +1233,37 @@ def _ensure_control_record(
     return expected
 
 
+def _retirement_lease_matches(raw: bytes, operation_id: str) -> bool:
+    expected = operation_id.encode("ascii")
+    return raw in (expected, expected + b"\n")
+
+
+def _retirement_previous_current(control: BuildControl, target: bytes) -> bytes | None:
+    previous = _read_control_bytes(control, "activation/current.json", optional=True,
+                                   maximum=RETIREMENT_CAS_PAYLOAD_BYTES)
+    if previous is None or previous == target:
+        return previous
+    try:
+        record = json.loads(previous)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise ControlOutcomeUnknown("retained retirement current pointer is invalid") from error
+    if (not isinstance(record, dict)
+            or record.get("schema") != OPERATION_SCHEMA
+            or record.get("phase") != "activation"
+            or record.get("state") not in {"succeeded", "failed-confirmed"}
+            or record.get("compose_project") != control.project
+            or record.get("control_volume") != control.volume
+            or not isinstance(record.get("attempt"), str)
+            or ATTEMPT_RE.fullmatch(record["attempt"]) is None):
+        raise ControlOutcomeUnknown("retained retirement current pointer is not a terminal of this group")
+    predecessor = _read_control_bytes(
+        control, "activation/attempts/" + record["attempt"] + "/terminal.json",
+        maximum=RETIREMENT_CAS_PAYLOAD_BYTES)
+    if predecessor != previous:
+        raise ControlOutcomeUnknown("retained retirement current pointer differs from its terminal")
+    return previous
+
+
 def _retirement_cas_script(
     *,
     operation_id: str,
@@ -1238,104 +1273,108 @@ def _retirement_cas_script(
     terminal_raw: bytes,
     current_raw: bytes,
     namespace_registry_sha256: str | None = None,
+    expected_current_raw: bytes | None = None,
+    logger_present: bool = False,
 ) -> str:
-    """Build the bounded no-logger finalizer used after helper absence proof."""
-
+    """CAS-publish records; a live, authenticated logger releases its own lease."""
     if not ATTEMPT_RE.fullmatch(operation_id):
         raise BuildControlError("retirement CAS operation id is invalid")
+    payloads = (receipt_raw, result_raw, terminal_raw, current_raw)
     if (not active_raw or len(active_raw) > 256 or not receipt_raw
-            or any(len(payload) > RETIREMENT_CAS_PAYLOAD_BYTES
-                   for payload in (receipt_raw, result_raw, terminal_raw, current_raw))):
+            or any(len(payload) > RETIREMENT_CAS_PAYLOAD_BYTES for payload in payloads)
+            or (expected_current_raw is not None
+                and len(expected_current_raw) > RETIREMENT_CAS_PAYLOAD_BYTES)):
         raise BuildControlError("retirement CAS expected records are incomplete")
-    expected_active_raw = operation_id.encode("ascii")
-    if active_raw != expected_active_raw:
-        raise ControlOutcomeUnknown(
-            "retained retirement active lease belongs to another operation"
-        )
+    if not _retirement_lease_matches(active_raw, operation_id):
+        raise ControlOutcomeUnknown("retained retirement active lease belongs to another operation")
     if (namespace_registry_sha256 is not None
             and (not isinstance(namespace_registry_sha256, str)
                  or SHA256_RE.fullmatch(namespace_registry_sha256) is None)):
         raise BuildControlError("retirement CAS namespace registry digest is invalid")
     root = "/control/activation/attempts/" + operation_id
-    active = "/control/active"
-    receipt = root + "/receipt.json"
-    result = root + "/result.json"
-    terminal = root + "/terminal.json"
+    active, receipt = "/control/active", root + "/receipt.json"
+    result, terminal = root + "/result.json", root + "/terminal.json"
     current = "/control/activation/current.json"
 
-    def encoded(payload: bytes) -> str:
-        return base64.b64encode(payload).decode("ascii")
+    def digest(raw: bytes) -> str:
+        return hashlib.sha256(raw).hexdigest()
 
-    def digest(payload: bytes) -> str:
-        return hashlib.sha256(payload).hexdigest()
+    def verify(path: str, raw: bytes) -> str:
+        return f"verify {shlex.quote(path)} '{digest(raw)}'; "
 
-    # All paths are derived from the validated operation token.  Payloads are
-    # base64 literals, so shell metacharacters from a JSON record never enter
-    # the helper command.
-    if namespace_registry_sha256 is None:
-        admission = (
-            "test ! -L /control/operation.lock; "
-            "exec 9>/control/operation.lock; flock -n 9; "
-        )
-    else:
-        admission = (
-            "test ! -L /control/operation.lock; "
-            "exec 9</registry/operation.lock; flock -n 9; "
+    def publish(path: str, raw: bytes, predecessor: bytes | None = None) -> str:
+        encoded = base64.b64encode(raw).decode("ascii")
+        old = digest(predecessor) if predecessor is not None else ""
+        return f"publish {shlex.quote(path)} '{digest(raw)}' '{encoded}' '{old}'; "
+
+    admission = "test ! -L /control/operation.lock; "
+    if not logger_present:
+        lock = "/registry/operation.lock" if namespace_registry_sha256 else "/control/operation.lock"
+        mode = "<" if namespace_registry_sha256 else ">"
+        admission += f"exec 9{mode}{lock}; flock -n 9; "
+    if namespace_registry_sha256 is not None:
+        admission += (
             "test \"$(stat -c '%d:%i' /control/operation.lock)\" = "
             "\"$(stat -c '%d:%i' /registry/operation.lock)\"; "
             "test \"$(sha256sum /registry/namespaces/current.json | cut -d ' ' -f 1)\" = "
             f"'{namespace_registry_sha256}'; "
         )
-    return (
-        "umask 027; set -eu; "
-        + admission
+    guard_current = f"test ! -L {current}; "
+    if expected_current_raw is None:
+        guard_current += f"if test -e {current}; then " + verify(current, current_raw) + "fi; "
+    else:
+        guard_current += (
+            f"if test \"$(sha256sum {current} | cut -d ' ' -f 1)\" = '{digest(current_raw)}'; then "
+            + verify(current, current_raw) + "else "
+            + verify(current, expected_current_raw) + "fi; "
+        )
+        if expected_current_raw != current_raw:
+            try:
+                predecessor = json.loads(expected_current_raw)
+            except (ValueError, UnicodeDecodeError) as error:
+                raise BuildControlError("retirement CAS predecessor is invalid") from error
+            predecessor_id = predecessor.get("attempt") if isinstance(predecessor, dict) else None
+            if not isinstance(predecessor_id, str) or ATTEMPT_RE.fullmatch(predecessor_id) is None:
+                raise BuildControlError("retirement CAS predecessor attempt is invalid")
+            predecessor_root = "/control/activation/attempts/" + predecessor_id
+            guard_current += (
+                f"test -d {predecessor_root}; test ! -L {predecessor_root}; "
+                + verify(predecessor_root + "/terminal.json", expected_current_raw)
+            )
+    # Fixed paths and base64 payloads keep record text out of shell syntax.
+    script = (
+        "umask 027; set -eu; " + admission
         + "test -d /control; test ! -L /control; "
         "test -d /control/activation; test ! -L /control/activation; "
         "test -d /control/activation/attempts; test ! -L /control/activation/attempts; "
-        f"test -d {shlex.quote(root)}; test ! -L {shlex.quote(root)}; "
-        f"test -f {shlex.quote(receipt)}; test ! -L {shlex.quote(receipt)}; "
-        f"test \"$(stat -c %h {shlex.quote(receipt)})\" = 1; "
-        f"test \"$(sha256sum {shlex.quote(receipt)} | cut -d ' ' -f 1)\" = "
-        f"'{digest(receipt_raw)}'; "
-        f"if test ! -L {shlex.quote(active)} && test ! -e {shlex.quote(active)}; then "
-        f"test -f {shlex.quote(result)}; test ! -L {shlex.quote(result)}; "
-        f"test \"$(stat -c %h {shlex.quote(result)})\" = 1; "
-        f"test \"$(sha256sum {shlex.quote(result)} | cut -d ' ' -f 1)\" = "
-        f"'{digest(result_raw)}'; "
-        f"test -f {shlex.quote(current)}; test ! -L {shlex.quote(current)}; "
-        f"test \"$(stat -c %h {shlex.quote(current)})\" = 1; "
-        f"test \"$(sha256sum {shlex.quote(current)} | cut -d ' ' -f 1)\" = "
-        f"'{digest(current_raw)}'; "
-        f"test -f {shlex.quote(terminal)}; test ! -L {shlex.quote(terminal)}; "
-        f"test \"$(stat -c %h {shlex.quote(terminal)})\" = 1; "
-        f"test \"$(sha256sum {shlex.quote(terminal)} | cut -d ' ' -f 1)\" = "
-        f"'{digest(terminal_raw)}'; printf 'ALREADY_FINALIZED\\n'; exit 0; fi; "
-        f"test -f {shlex.quote(active)}; test ! -L {shlex.quote(active)}; "
-        f"test \"$(stat -c %h {shlex.quote(active)})\" = 1; "
-        f"test \"$(sha256sum {shlex.quote(active)} | cut -d ' ' -f 1)\" = "
-        f"'{digest(active_raw)}'; "
-        "publish() { "
-        "  p=\"$1\"; expected=\"$2\"; payload=\"$3\"; "
-        "  test ! -L \"$p\"; "
-        "  parent=\"${p%/*}\"; test -d \"$parent\"; test ! -L \"$parent\"; "
-        "  if test -e \"$p\"; then test -f \"$p\"; test ! -L \"$p\"; "
-        "    test \"$(stat -c %h \"$p\")\" = 1; "
-        "    test \"$(sha256sum \"$p\" | cut -d ' ' -f 1)\" = \"$expected\"; return; fi; "
-        "  t=$(mktemp \"$parent/.retirement.XXXXXXXX\"); "
-        "  trap 'rm -f -- \"$t\"' EXIT; "
-        "  printf '%s' \"$payload\" | base64 -d > \"$t\"; sync \"$t\"; "
-        "  test \"$(sha256sum \"$t\" | cut -d ' ' -f 1)\" = \"$expected\"; "
-        "  mv -T -- \"$t\" \"$p\"; sync \"$parent\"; "
-        "}; "
-        f"publish {shlex.quote(result)} '{digest(result_raw)}' '{encoded(result_raw)}'; "
-        f"publish {shlex.quote(current)} '{digest(current_raw)}' '{encoded(current_raw)}'; "
-        f"publish {shlex.quote(terminal)} '{digest(terminal_raw)}' '{encoded(terminal_raw)}'; "
-        f"test -f {shlex.quote(active)}; test ! -L {shlex.quote(active)}; "
-        f"test \"$(stat -c %h {shlex.quote(active)})\" = 1; "
-        f"test \"$(sha256sum {shlex.quote(active)} | cut -d ' ' -f 1)\" = "
-        f"'{digest(active_raw)}'; rm -- {shlex.quote(active)}; sync /control; sync {shlex.quote(root)}; "
-        "printf 'FINALIZED\\n'"
+        f"test -d {root}; test ! -L {root}; "
+        "verify() { test -f \"$1\"; test ! -L \"$1\"; "
+        "test \"$(stat -c %h \"$1\")\" = 1; "
+        "test \"$(sha256sum \"$1\" | cut -d ' ' -f 1)\" = \"$2\"; }; "
+        + verify(receipt, receipt_raw)
+        + f"if test ! -L {active} && test ! -e {active}; then "
+        + verify(result, result_raw) + verify(current, current_raw) + verify(terminal, terminal_raw)
+        + "printf 'ALREADY_FINALIZED\\n'; exit 0; fi; "
+        + verify(active, active_raw) + guard_current
+        + f"if test -e {result} || test -L {result}; then " + verify(result, result_raw) + "fi; "
+        + f"if test -e {terminal} || test -L {terminal}; then " + verify(terminal, terminal_raw) + "fi; "
+        + "publish() { p=\"$1\"; expected=\"$2\"; payload=\"$3\"; old=\"$4\"; "
+        "test ! -L \"$p\"; parent=\"${p%/*}\"; test -d \"$parent\"; test ! -L \"$parent\"; "
+        "if test -e \"$p\"; then "
+        "if test \"$(sha256sum \"$p\" | cut -d ' ' -f 1)\" = \"$expected\"; then "
+        "verify \"$p\" \"$expected\"; return; fi; "
+        "test \"$p\" = /control/activation/current.json; test -n \"$old\"; verify \"$p\" \"$old\"; fi; "
+        "t=$(mktemp \"$parent/.retirement.XXXXXXXX\"); trap 'rm -f -- \"$t\"' EXIT; "
+        "printf '%s' \"$payload\" | base64 -d > \"$t\"; sync \"$t\"; verify \"$t\" \"$expected\"; "
+        "mv -T -- \"$t\" \"$p\"; sync \"$parent\"; }; "
+        + publish(result, result_raw)
+        + publish(current, current_raw, expected_current_raw)
+        + publish(terminal, terminal_raw)
     )
+    if logger_present:
+        return script + "printf 'RECORDS_PUBLISHED\\n'"
+    return (script + verify(active, active_raw)
+            + f"rm -- {active}; sync /control; sync {root}; printf 'FINALIZED\\n'")
 
 
 def _wait_retirement_lease_release(
@@ -1349,8 +1388,7 @@ def _wait_retirement_lease_release(
         remaining = _read_control_bytes(control, "active", optional=True, maximum=256)
         if remaining is None:
             return True
-        if (remaining != remaining.strip()
-                or remaining.decode("utf-8", "replace").strip() != operation_id):
+        if not _retirement_lease_matches(remaining, operation_id):
             raise ControlOutcomeUnknown("retained retirement control lease changed after finalization")
         time.sleep(0.1)
     return False
@@ -1363,99 +1401,69 @@ def _finalize_retained_retirement(
     receipt_raw: bytes,
     result: Mapping[str, object],
     terminal: Mapping[str, object],
+    retained_receipt: Mapping[str, object] | None = None,
 ) -> None:
-    """Publish replay records in order, or CAS-finalize after logger absence."""
-
-    # Reuse the canonical Docker absence proof without importing the
-    # reconciliation module during module initialization.  The reconciler
-    # does not import this activation module, but keeping this edge deferred
-    # preserves that boundary for image-side source checks.
+    """CAS the latest pointer before publishing terminal and releasing the lease."""
     from docker_volume_activation_reconcile import _probe_helper_absence
+    from docker_dev_host import docker_argv
 
     root = "activation/attempts/" + operation_id
     result_raw = _record_payload(result, "retained retirement result")
     terminal_raw = _record_payload(terminal, "retained retirement terminal")
-    current_raw = _record_payload(terminal, "retained retirement current pointer")
     helper_name = "fullmag-control-" + operation_id
-    absence = _probe_helper_absence(helper_name)
-    if absence is None:
-        _ensure_control_record(control, root + "/result.json", result, label="retained retirement result")
-        _ensure_control_record(control, "activation/current.json", terminal, label="retained retirement current pointer")
-        _ensure_control_record(control, root + "/terminal.json", terminal, label="retained retirement terminal")
-    else:
+    for retry in range(2):
+        logger_present = _probe_helper_absence(helper_name) is None
+        helper = None
+        if logger_present:
+            try:
+                decoded = json.loads(receipt_raw)
+            except (ValueError, UnicodeDecodeError) as error:
+                raise ControlOutcomeUnknown("retained retirement helper receipt is invalid") from error
+            retained = dict(retained_receipt) if retained_receipt is not None else decoded
+            if (not isinstance(retained, dict) or retained != decoded
+                    or retained.get("attempt") != operation_id
+                    or retained.get("phase") != "activation"):
+                raise ControlOutcomeUnknown("retained retirement helper receipt identity differs")
+            helper = control._inspect_operation_helper({"receipt": retained})
         active_raw = _read_control_bytes(control, "active", optional=True, maximum=256)
         if active_raw is None:
             if (
                 _read_control_bytes(control, root + "/result.json", optional=True) == result_raw
-                and _read_control_bytes(control, "activation/current.json", optional=True) == current_raw
+                and _read_control_bytes(control, "activation/current.json", optional=True) == terminal_raw
                 and _read_control_bytes(control, root + "/terminal.json", optional=True) == terminal_raw
             ):
                 return
             raise ControlOutcomeUnknown("retained retirement active lease disappeared before records were complete")
-        if active_raw != operation_id.encode("ascii"):
-            raise ControlOutcomeUnknown(
-                "retained retirement active lease changed to another operation"
-            )
+        if not _retirement_lease_matches(active_raw, operation_id):
+            raise ControlOutcomeUnknown("retained retirement active lease changed to another operation")
         receipt_now = _read_control_bytes(control, root + "/receipt.json")
         if receipt_now != receipt_raw:
             raise ControlOutcomeUnknown("retained retirement receipt changed before logger-absence finalization")
+        previous = _retirement_previous_current(control, terminal_raw)
         script = _retirement_cas_script(
-            operation_id=operation_id,
-            active_raw=active_raw,
-            receipt_raw=receipt_now,
-            result_raw=result_raw,
-            terminal_raw=terminal_raw,
-            current_raw=current_raw,
+            operation_id=operation_id, active_raw=active_raw, receipt_raw=receipt_now,
+            result_raw=result_raw, terminal_raw=terminal_raw, current_raw=terminal_raw,
             namespace_registry_sha256=control.namespace_registry_sha256,
+            expected_current_raw=previous, logger_present=logger_present,
         )
-        outcome = bounded_capture(control.helper_args(script), data=b"", timeout=90)
-        if outcome.returncode:
+        if logger_present:
+            control._inspect_operation_helper({"receipt": retained}, expected_id=helper)
+            command = [*docker_argv("exec"), "--user", "65532:65532", helper,
+                       "/bin/bash", "-euo", "pipefail", "-c", control._namespace_guard(script)]
+        else:
+            command = control.helper_args(script)
+        outcome = bounded_capture(command, data=b"", timeout=90)
+        proofs = (b"RECORDS_PUBLISHED\n", b"ALREADY_FINALIZED\n") if logger_present else (
+            b"FINALIZED\n", b"ALREADY_FINALIZED\n")
+        if outcome.returncode or not any(proof in outcome.stdout for proof in proofs):
             raise ControlOutcomeUnknown(
-                "retained retirement logger-absence CAS did not finalize: "
-                + outcome.stderr.decode("utf-8", "replace")[-2048:]
-            )
-        if b"FINALIZED\n" not in outcome.stdout and b"ALREADY_FINALIZED\n" not in outcome.stdout:
-            raise ControlOutcomeUnknown("retained retirement logger-absence CAS returned no terminal proof")
-        return
-    if _wait_retirement_lease_release(control, operation_id=operation_id):
-        return
-    absence = _probe_helper_absence(helper_name)
-    if absence is None:
-        raise ControlOutcomeUnknown("retained retirement control lease did not finalize")
-    active_raw = _read_control_bytes(control, "active", optional=True, maximum=256)
-    if active_raw is None:
-        if (
-            _read_control_bytes(control, root + "/result.json", optional=True) == result_raw
-            and _read_control_bytes(control, "activation/current.json", optional=True) == current_raw
-            and _read_control_bytes(control, root + "/terminal.json", optional=True) == terminal_raw
-        ):
+                "retained retirement CAS did not finalize: "
+                + outcome.stderr.decode("utf-8", "replace")[-2048:])
+        if not logger_present or _wait_retirement_lease_release(control, operation_id=operation_id):
             return
-        raise ControlOutcomeUnknown("retained retirement active lease disappeared before retry records were complete")
-    if active_raw != operation_id.encode("ascii"):
-        raise ControlOutcomeUnknown(
-            "retained retirement active lease changed to another operation"
-        )
-    receipt_now = _read_control_bytes(control, root + "/receipt.json")
-    if receipt_now != receipt_raw:
-        raise ControlOutcomeUnknown("retained retirement receipt changed before retry finalization")
-    script = _retirement_cas_script(
-        operation_id=operation_id,
-        active_raw=active_raw,
-        receipt_raw=receipt_now,
-        result_raw=result_raw,
-        terminal_raw=terminal_raw,
-        current_raw=current_raw,
-        namespace_registry_sha256=control.namespace_registry_sha256,
-    )
-    outcome = bounded_capture(control.helper_args(script), data=b"", timeout=90)
-    if outcome.returncode or (
-        b"FINALIZED\n" not in outcome.stdout
-        and b"ALREADY_FINALIZED\n" not in outcome.stdout
-    ):
-        raise ControlOutcomeUnknown(
-            "retained retirement logger-absence retry did not finalize: "
-            + outcome.stderr.decode("utf-8", "replace")[-2048:]
-        )
+        if _probe_helper_absence(helper_name) is None or retry:
+            raise ControlOutcomeUnknown("retained retirement control lease did not finalize")
+    raise ControlOutcomeUnknown("retained retirement control lease did not finalize")
 
 
 def _resume_retained_retirement(
@@ -1488,6 +1496,7 @@ def _resume_retained_retirement(
             control,
             operation_id=operation_id,
             receipt_raw=receipt_raw,
+            retained_receipt=receipt,
             result=dict(existing_result),
             terminal=dict(existing_terminal),
         )
@@ -1535,8 +1544,7 @@ def _resume_retained_retirement(
             if retirement.get("state") != "rejected":
                 raise BuildControlError("retained retirement refusal evidence is not rejected") from error
             active_after = _read_control_bytes(control, "active", maximum=256)
-            if (active_after != active_after.strip()
-                    or active_after.decode("utf-8", "replace").strip() != operation_id):
+            if not _retirement_lease_matches(active_after, operation_id):
                 raise ControlOutcomeUnknown("retained retirement control lease changed before refusal finalization")
             receipt_after = _read_control_bytes(control, root + "/receipt.json")
             if receipt_after != receipt_raw:
@@ -1552,6 +1560,7 @@ def _resume_retained_retirement(
                 control,
                 operation_id=operation_id,
                 receipt_raw=receipt_raw,
+                retained_receipt=receipt,
                 result={"state": "retirement-only", "retirement": dict(retirement)},
                 terminal=terminal,
             )
@@ -1627,7 +1636,7 @@ def _resume_retained_retirement(
         "managed retirement replay API incarnation",
     )
     active_after = _read_control_bytes(control, "active", maximum=256)
-    if active_after != active_after.strip() or active_after.decode("utf-8", "replace").strip() != operation_id:
+    if not _retirement_lease_matches(active_after, operation_id):
         raise ControlOutcomeUnknown("retained retirement control lease changed before finalization")
     receipt_after = _read_control_bytes(control, root + "/receipt.json")
     if receipt_after != receipt_raw:
@@ -1643,6 +1652,7 @@ def _resume_retained_retirement(
         control,
         operation_id=operation_id,
         receipt_raw=receipt_raw,
+        retained_receipt=receipt,
         result=result,
         terminal=terminal,
     )

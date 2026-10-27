@@ -357,17 +357,31 @@ export class TestElement extends TestNode {
     return this.attributes.has(this.normalizeAttributeName(name));
   }
 
-  /** Matches the simple tag and single-class selectors modeled by this test DOM. */
+  /** Matches tag, single-class, and single-attribute selectors used by this test DOM. */
   matches(selector: string): boolean {
-    if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(selector)) {
-      return this.tagName.toLowerCase() === selector.toLowerCase();
+    const normalized = selector.trim();
+    if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(normalized)) {
+      return this.tagName.toLowerCase() === normalized.toLowerCase();
     }
-    const className = /^\.([A-Za-z_][A-Za-z0-9_-]*)$/.exec(selector)?.[1];
+    const className = /^\.([A-Za-z_][A-Za-z0-9_-]*)$/.exec(normalized)?.[1];
     if (className !== undefined) {
       return (this.getAttribute("class") ?? "")
         .split(/\s+/)
         .includes(className);
     }
+
+    const attributeSelector = /^(?:([A-Za-z_][A-Za-z0-9_-]*)|\*)?\[([A-Za-z_][A-Za-z0-9_:-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]+)))?\]$/.exec(normalized);
+    if (attributeSelector) {
+      const [, tagName, attributeName, doubleQuoted, singleQuoted, unquoted] = attributeSelector;
+      if (tagName && tagName !== "*" && this.tagName.toLowerCase() !== tagName.toLowerCase()) {
+        return false;
+      }
+      const actual = this.getAttribute(attributeName!);
+      if (actual === null) return false;
+      const expected = doubleQuoted ?? singleQuoted ?? unquoted;
+      return expected === undefined || actual === expected;
+    }
+
     return false;
   }
 
@@ -387,6 +401,15 @@ export class TestElement extends TestNode {
     return findElements(this, (element) => element !== this && element.matches(selector))[0] as
       | TElement
       | undefined ?? null;
+  }
+
+  querySelectorAll<TElement extends TestElement = TestElement>(
+    selector: string,
+  ): TElement[] {
+    return findElements(
+      this,
+      (element) => element !== this && element.matches(selector),
+    ) as TElement[];
   }
 
   removeAttribute(name: string): void {

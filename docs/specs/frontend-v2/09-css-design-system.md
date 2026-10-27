@@ -11,9 +11,18 @@ Frontend v2 must feel like a **premium professional application** — beautiful,
 
 1. **Tokens (`--fm-*` custom properties)** — the source of truth for all visual decisions: colors, spacing, typography, geometry. Dark and light themes swap Catppuccin Mocha/Latte token values.
 2. **Tailwind CSS** — utility layer for layout, spacing, and responsive behavior. Tailwind utilities consume tokens where possible (`bg-[var(--fm-bg-panel)]`).
-3. **shadcn/ui** — accessible pre-built components and patterns (menu, ribbon controls, command palette, dialogs, dropdowns, context menus, tabs, resizable panels, switches, segmented controls, tooltips). shadcn components are styled through tokens and Tailwind, not through custom CSS overrides.
+3. **shadcn/ui** — accessible pre-built components and patterns (menu, ribbon controls, command palette, dialogs, dropdowns, context menus, tabs, resizable panels, switches, segmented controls, tooltips). Shared primitives retain their accessible behavior. Each primitive has one visual owner: semantic `fm-*` CSS classes selected by CVA, or token-backed utilities. Do not define competing visual properties in both layers. Button and Tabs use semantic classes; utilities remain available for consumer layout.
 
-Custom `fm-*` classes are used for layout geometry and domain-specific component contracts that don't map to shadcn or Tailwind utilities.
+Custom `fm-*` classes define shared primitive variants, layout geometry and domain-specific contracts. They do not replace accessible behavior. Migrate one primitive at a time without globally reordering cascade layers.
+
+### Control and tab contract (design audit, 2026-10-26)
+
+- Compact controls are 28 px, regular controls 30 px; interactive hit areas are at least 24 px. Control labels default to 12 px. Scientific data and dense annotations can use documented smaller roles.
+- Tabs switch a named content panel. Segmented value choices retain radiogroup/radio semantics; independent toggles retain their own semantics.
+- Shared Tabs has line and segmented presentations with one CSS owner. A line tab uses neutral readable text and an accent underline; selected state is not conveyed only by text color. A panel-specific 44 px Inspector row must not become the global minimum height.
+- Tab lists preserve visible overflow and keyboard reachability. Enabled hover styles never replace disabled styles, and focus remains visible.
+- A segmented radiogroup always offers one keyboard entry when any option is enabled, even if its current value is missing or disabled. Focus fallback does not change the value until the user acts.
+
 
 ### File ownership
 
@@ -47,7 +56,7 @@ Dark and light themes are implemented through a `data-theme` attribute on `<html
 }
 ```
 
-The active theme is stored in user preferences (layout store). `prefers-color-scheme` sets the default. All components consume tokens, so theme switching is instantaneous with zero re-renders.
+Preferencja `light` / `dark` / `system` jest zapisywana pod dotychczasowym kluczem `fullmag.control-room.theme`. Skrypt w head ustala efektywny motyw przed parsowaniem body; System reaguje na `prefers-color-scheme` bez nadpisywania preferencji użytkownika. Style korzystają z tokenów, a komponent sterujący prezentuje wybór i efektywny motyw. Inter i JetBrains Mono są lokalnymi, licencjonowanymi zasobami w `public/fonts`; manifest zawiera źródła i SHA256.
 
 ## 2. Surface Model
 

@@ -22,8 +22,11 @@ export function useProjectDocumentSnapshot() {
 }
 
 export function ProjectDocumentStatus() {
-  const snapshot = useProjectDocumentSnapshot();
+  return <ProjectDocumentStatusLabel snapshot={useProjectDocumentSnapshot()} />;
+}
 
+export function ProjectDocumentStatusLabel({ snapshot }: { readonly snapshot: ProjectDocumentSnapshot }) {
+  const dirty = snapshot.state === "ready" && snapshot.resource.dirty;
   const label = projectStatusLabel(snapshot);
   return (
     <span
@@ -32,7 +35,10 @@ export function ProjectDocumentStatus() {
       data-project-document-state={snapshot.state}
       title={snapshot.error ?? snapshot.fileName ?? label}
     >
-      {label}
+      <span className="fm-header__project-status-name">
+        {snapshot.state === "ready" ? snapshot.resource.name : label}
+      </span>
+      {dirty ? <span className="fm-header__project-status-dirty"> · unsaved</span> : null}
     </span>
   );
 }

@@ -31,6 +31,12 @@ import { useSimulationPreparation } from "../resources/useSimulationPreparation"
 import type { KernelApi } from "../types";
 import { SimulationPreparationLog } from "./SimulationPreparationLog";
 import {
+  simulationPreparationWindow,
+  storedPreparationWindowMode,
+  useSimulationPreparationWindow,
+  type SimulationPreparationWindowMode,
+} from "./simulationPreparationWindow";
+import {
   preparationAdmissionBlocker,
   preparationAwaitsAdmission,
 } from "./simulationPreparationAdmission";
@@ -128,18 +134,45 @@ export function SimulationStartupOverlayView({
 }: {
   state: SimulationStartupOverlayState;
 }) {
-  if (!state.isVisible) return null;
+  // A finished preparation stays mounted but closed, so the status bar can
+  // reopen it with its stages and log.
+  const hasPreparation = state.kind !== "hidden" && state.preparation !== null;
+  if (!state.isVisible && !hasPreparation) return null;
 
+  const preparationId = state.preparation?.preparation_id ?? "pending";
   return (
     <SimulationPreparationWindow
-      key={state.preparation?.preparation_id ?? "pending"}
+      key={preparationId}
+      preparationId={preparationId}
       state={state}
     />
   );
 }
 
-function SimulationPreparationWindow({ state }: { state: SimulationStartupOverlayState }) {
-  const [mode, setMode] = useState<"open" | "minimized" | "closed">("open");
+function SimulationPreparationWindow({
+  preparationId,
+  state,
+}: {
+  preparationId: string;
+  state: SimulationStartupOverlayState;
+}) {
+  const windowState = useSimulationPreparationWindow();
+  const storedMode = storedPreparationWindowMode(windowState, preparationId);
+  // Until someone picks a mode, the window follows the preparation: open while
+  // it runs, closed once it is ready.
+  const mode: SimulationPreparationWindowMode =
+    storedMode ?? (state.isVisible ? "open" : "closed");
+  const setMode = (next: SimulationPreparationWindowMode) =>
+    simulationPreparationWindow.setMode(preparationId, next);
+  const wasVisible = useRef(state.isVisible);
+  useEffect(() => {
+    // Close once on completion; a window reopened afterwards stays open.
+    if (wasVisible.current && !state.isVisible && storedMode !== null) {
+      simulationPreparationWindow.setMode(preparationId, "closed");
+    }
+    wasVisible.current = state.isVisible;
+  }, [preparationId, state.isVisible, storedMode]);
+  usePublishPreparationWindowSummary(preparationId, state);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const hostRef = useRef<HTMLElement>(null);
   const previousMode = useRef(mode);
@@ -162,7 +195,7 @@ function SimulationPreparationWindow({ state }: { state: SimulationStartupOverla
       className="fm-simulation-startup"
       data-state={state.kind}
     >
-      {mode !== "open" ? (
+      {mode !== "open" && state.isVisible ? (
         <div className="fm-simulation-startup__restore" data-mode={mode}>
           <Button
             data-preparation-restore
@@ -377,6 +410,28 @@ function SimulationPreparationWindow({ state }: { state: SimulationStartupOverla
       </DraggablePanel>
     </aside>
   );
+}
+
+function usePublishPreparationWindowSummary(
+  preparationId: string,
+  state: SimulationStartupOverlayState,
+): void {
+  const failed = state.failure !== null || state.kind === "resource-error";
+  const ready = !failed && state.preparation?.status === "ready";
+  const tone = failed ? "failed" : ready ? "ready" : "running";
+  const label = failed
+    ? "Failed"
+    : ready
+      ? "Ready"
+      : state.progress.kind === "determinate"
+        ? `${state.progress.value}%`
+        : "Running";
+  const title = state.title;
+
+  useEffect(() => {
+    simulationPreparationWindow.setSummary({ label, preparationId, title, tone });
+  }, [label, preparationId, title, tone]);
+  useEffect(() => () => simulationPreparationWindow.setSummary(null), []);
 }
 
 function PreparationStageList({

@@ -29,9 +29,11 @@
 
   --fm-text-primary: #cdd6f4;
   --fm-text-secondary: #bac2de;
-  --fm-text-muted: #6c7086;
-  --fm-text-disabled: var(--fm-text-muted);
+  --fm-text-tertiary: #a6adc8;
+  --fm-text-muted: var(--fm-text-tertiary);
+  --fm-text-disabled: #7f849c; /* Overlay1: legible, clearly below tertiary */
   --fm-text-inverse: #11111b;
+  --fm-text-on-accent: #1e1e2e;
 
   --fm-accent: #89b4fa;
   --fm-accent-strong: #b4befe;
@@ -51,6 +53,12 @@
   --fm-chart-lavender: #b4befe;
   --fm-chart-flamingo: #f2cdcd;
   --fm-chart-rosewater: #f5e0dc;
+
+  /* Telemetry identity is a UI category palette, separate from chart and status roles. */
+  --fm-category-runtime: #89b4fa;
+  --fm-category-solver: #a6e3a1;
+  --fm-category-magnetization: #cba6f7;
+  --fm-category-energy: #fab387;
 
   --fm-explorer-icon-group: var(--fm-accent-strong);
   --fm-explorer-icon-object: var(--fm-chart-peach);
@@ -87,6 +95,20 @@
   --fm-danger: #f38ba8;
   --fm-stale: #cba6f7;
   --fm-degraded: #fab387;
+
+  /* Status hues as small text. Mocha's palette clears 4.5:1 on its surfaces
+     except danger on the selected row, which is lightened. */
+  --fm-success-text: var(--fm-success);
+  --fm-warning-text: var(--fm-chart-yellow);
+  --fm-danger-text: #f592ad; /* 4.75:1 on the selected row */
+  --fm-degraded-text: var(--fm-degraded);
+  --fm-teal-text: var(--fm-chart-teal);
+  --fm-accent-text: var(--fm-accent);
+  --fm-mauve-text: var(--fm-chart-mauve);
+
+  /* Viewport thumbnails stay dark in both themes (they are viewport renders). */
+  --fm-viewport-thumb-bg: #11111b;
+  --fm-viewport-thumb-text: #a6adc8; /* 7.9:1 on the thumbnail frame */
 
   --fm-syntax-string: #a6e3a1;
   --fm-surface-3: #313244;
@@ -142,10 +164,12 @@
   --fm-border-disabled: var(--fm-border-muted);
 
   --fm-text-primary: #4c4f69;
-  --fm-text-secondary: #5c5f77;
-  --fm-text-muted: #9ca0b0;
-  --fm-text-disabled: var(--fm-text-muted);
+  --fm-text-secondary: #525570; /* between Text and tertiary; AA on every surface incl. selected */
+  --fm-text-tertiary: #585c71;
+  --fm-text-muted: var(--fm-text-tertiary);
+  --fm-text-disabled: #7c7f93; /* Overlay2: legible, clearly below tertiary */
   --fm-text-inverse: #eff1f5;
+  --fm-text-on-accent: #ffffff;
 
   --fm-accent: #1e66f5;
   --fm-accent-strong: #7287fd;
@@ -165,6 +189,12 @@
   --fm-chart-lavender: #7287fd;
   --fm-chart-flamingo: #dd7878;
   --fm-chart-rosewater: #dc8a78;
+
+  /* Keep telemetry group identity independent of status and scientific chart roles. */
+  --fm-category-runtime: #1e66f5;
+  --fm-category-solver: #40a02b;
+  --fm-category-magnetization: #8839ef;
+  --fm-category-energy: #fe640b;
 
   --fm-explorer-icon-group: var(--fm-accent-strong);
   --fm-explorer-icon-object: var(--fm-chart-peach);
@@ -201,6 +231,19 @@
   --fm-danger: #d20f39;
   --fm-stale: #8839ef;
   --fm-degraded: #fe640b;
+
+  /* Status hues as small text. Latte is an accent palette: the raw hues miss
+     4.5:1 on light surfaces, so these keep the hue and clear AA. */
+  --fm-success-text: #256b15; /* 4.51:1 */
+  --fm-warning-text: #865006; /* 4.55:1 */
+  --fm-danger-text: #ba092f; /* 4.54:1 */
+  --fm-degraded-text: #a13b00; /* 4.58:1 */
+  --fm-teal-text: #09676c; /* 4.54:1 */
+  --fm-accent-text: #044ee0; /* 4.54:1, also on --fm-bg-selected */
+  --fm-mauve-text: #771af0; /* 4.51:1 */
+
+  --fm-viewport-thumb-bg: #11111b;
+  --fm-viewport-thumb-text: #a6adc8;
 
   --fm-syntax-string: #40a02b;
   --fm-surface-3: #e6e9ef;

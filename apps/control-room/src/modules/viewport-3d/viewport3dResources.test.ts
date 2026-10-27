@@ -2337,3 +2337,17 @@ describe("viewport3dResources", () => {
     expect(cache.peek("newest")?.etag).toBe('"new"');
   });
 });
+
+describe("viewport field-vector failure notification policy", () => {
+  it("threads the caller's notifyOnError choice into the resource hook, defaulting to toast", () => {
+    const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
+
+    expect(source).toContain("options: Viewport3DFieldVectorRequestOptions = {},");
+    expect(source).toContain(
+      'options: Pick<Viewport3DFieldVectorRequestOptions, "notifyOnError"> = {},',
+    );
+    expect(
+      source.match(/notifyOnError: options\.notifyOnError \?\? true,/g),
+    ).toHaveLength(2);
+  });
+});

@@ -1,5 +1,6 @@
 "use client";
 
+import { EmptyState } from "@/shared/ui/EmptyState";
 import { Activity, Download, Eye } from "lucide-react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -433,9 +434,7 @@ function BranchSampleTable({
 
   if (!branch || branch.points.length === 0) {
     return (
-      <div className="fm-frequency-domain-table-empty" role="status">
-        No tracked samples available for this branch.
-      </div>
+      <EmptyState className="fm-frequency-domain-table-empty" role="status" size="compact" heading="No tracked samples available for this branch." />
     );
   }
 

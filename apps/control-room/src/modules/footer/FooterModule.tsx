@@ -1,5 +1,6 @@
 "use client";
 
+import { PanelChrome } from "@/shared/ui/PanelFrame";
 import {
   Activity,
   CircleAlert,
@@ -34,6 +35,11 @@ import {
   type FooterDirectionFilter,
   serializeTransportEntry,
 } from "./footerModel";
+import {
+  setFooterChannelFilter,
+  setFooterDirectionFilter,
+  useFooterUiState,
+} from "./footerUiStore";
 import { CommandAuditTable } from "./CommandAuditTable";
 import { FooterDiagnostics } from "./FooterDiagnostics";
 import { FooterTelemetry } from "./FooterTelemetry";
@@ -73,7 +79,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
       }
       className="fm-footer"
     >
-      <div className="fm-footer__bar">
+      <PanelChrome className="fm-footer__bar">
         <TabsList className="fm-footer__tabs" aria-label="Bottom diagnostics">
           <TabsTrigger value="logs" className="fm-footer__tab">
             <Activity size={14} aria-hidden="true" />
@@ -104,23 +110,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             Quick Chart
           </TabsTrigger>
         </TabsList>
-        <div className="fm-footer__summary" aria-label="Footer log summary">
-          <span className="fm-footer__summary-item">HTTP + WS + Perf</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Clear footer logs"
-            title="Clear footer logs"
-            onClick={() => {
-              kernel.commandDiagnostics.clear();
-              kernel.diagnostics.clear();
-            }}
-          >
-            <Trash2 size={14} aria-hidden="true" />
-          </Button>
-        </div>
-      </div>
+      </PanelChrome>
 
       <TabsContent value="logs" className={FOOTER_CONTENT_CLASS_NAME}>
         {activeTab === "logs" ? <FooterLogs kernel={kernel} /> : null}
@@ -182,8 +172,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
 }
 
 function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
-  const [direction, setDirection] = useState<FooterDirectionFilter>("all");
-  const [channel, setChannel] = useState<FooterChannelFilter>("transport");
+  const { direction, channel } = useFooterUiState();
   const filteredEntries = useTransportDiagnostics(kernel, {
     channel,
     direction,
@@ -204,47 +193,62 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
       <div className="fm-footer__filters shrink-0" aria-label="Log filters">
         <FilterButton
           active={direction === "all"}
-          onClick={() => setDirection("all")}
+          onClick={() => setFooterDirectionFilter("all")}
         >
           All
         </FilterButton>
         <FilterButton
           active={direction === "rx"}
-          onClick={() => setDirection("rx")}
+          onClick={() => setFooterDirectionFilter("rx")}
         >
           RX
         </FilterButton>
         <FilterButton
           active={direction === "tx"}
-          onClick={() => setDirection("tx")}
+          onClick={() => setFooterDirectionFilter("tx")}
         >
           TX
         </FilterButton>
         <span className="fm-footer__filter-sep" aria-hidden="true" />
         <FilterButton
           active={channel === "transport"}
-          onClick={() => setChannel("transport")}
+          onClick={() => setFooterChannelFilter("transport")}
         >
           HTTP + WS
         </FilterButton>
         <FilterButton
           active={channel === "http"}
-          onClick={() => setChannel("http")}
+          onClick={() => setFooterChannelFilter("http")}
         >
           HTTP
         </FilterButton>
         <FilterButton
           active={channel === "websocket"}
-          onClick={() => setChannel("websocket")}
+          onClick={() => setFooterChannelFilter("websocket")}
         >
           WS
         </FilterButton>
         <FilterButton
           active={channel === "performance"}
-          onClick={() => setChannel("performance")}
+          onClick={() => setFooterChannelFilter("performance")}
         >
           Perf
         </FilterButton>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="fm-footer__clear"
+          aria-label="Clear command and transport logs"
+          title="Clear command and transport logs"
+          onClick={() => {
+            kernel.commandDiagnostics.clear();
+            kernel.diagnostics.clear();
+          }}
+        >
+          <Trash2 size={14} aria-hidden="true" />
+          Clear
+        </Button>
         <Button
           type="button"
           variant="ghost"
@@ -318,6 +322,7 @@ function FilterButton({
       type="button"
       className="fm-footer__filter"
       data-active={active}
+      aria-pressed={active}
       onClick={onClick}
     >
       {children}

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -750,7 +752,7 @@ describe("scoped mesh quality panels", () => {
     }
   });
 
-  it("warns when object mesh policy edits are not applied", () => {
+  it("leaves Apply to the Inspector footer while preserving the local mesh-build action", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["transactions"]}>
         <ObjectMeshTransactionsSection
@@ -758,27 +760,52 @@ describe("scoped mesh quality panels", () => {
           feedback={null}
           isDirty
           objectId="waveguide"
-          onApply={vi.fn()}
           onBuild={vi.fn()}
-          onRevert={vi.fn()}
           pending={false}
         />
       </Accordion>,
     );
 
     expect(html).toContain("Unapplied changes");
-    expect(html).toContain("Apply Policy or Apply &amp; Build Mesh");
+    expect(html).toContain(
+      "Apply in the Inspector footer or Apply &amp; Build Mesh before trusting the current mesh.",
+    );
+    const localActions =
+      html.match(/<div class="fm-inspector-toolbar">([\s\S]*?)<\/div>/)?.[1] ?? "";
+    expect(localActions.match(/<button\b/g)).toHaveLength(1);
+    expect(localActions).toContain(">Apply &amp; Build Mesh</button>");
   });
 
-  it("warns when airbox mesh policy edits are not applied", () => {
+  it("keeps policy Apply registered to the footer and the mesh-build action local", () => {
     const html = renderToStaticMarkup(
       <AirboxMeshParametersPanel
+        runtimeLane="fem"
         selection={{ ...airboxSelection, kind: "airbox.mesh.parameters" }}
       />,
     );
 
     expect(html).toContain("Transactions");
-    expect(html).toContain("Apply Airbox Policy");
+    expect(html).toContain("Build Shared-Domain Mesh");
+    expect(html).not.toContain("Apply Airbox Policy");
+    expect(html).not.toContain(">Apply</button>");
+    expect(html).not.toContain(">Revert</button>");
+
+    const airboxPanelSource = readFileSync(
+      new URL("./airbox/AirboxMeshParametersPanel.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(airboxPanelSource).toContain('useRegisterInspectorEditSession(\n    "staged",');
+    expect(airboxPanelSource).toContain("    applyPolicy,\n    revert,\n  );");
+  });
+
+  it("withholds FEM mesh builds until the runtime lane is resolved", () => {
+    const html = renderToStaticMarkup(
+      <AirboxMeshParametersPanel
+        selection={{ ...airboxSelection, kind: "airbox.mesh.parameters" }}
+      />,
+    );
+    expect(html).not.toContain("Build Shared-Domain Mesh");
+    expect(html).toContain("Shared-domain mesh actions require a resolved runtime lane.");
   });
 
   it("renders scoped Airbox quality summaries and unique topology counts", () => {
@@ -841,7 +868,7 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Padding X");
     expect(html).toContain("Center X");
     expect(html).toContain(
-      "Apply Airbox Policy saves the canonical policy and queues an FDM grid replan.",
+      "Apply in the Inspector footer saves the canonical policy and queues an FDM grid replan.",
     );
     expect(html).not.toContain("Maximum element growth rate");
     expect(html).not.toContain("Curvature factor");

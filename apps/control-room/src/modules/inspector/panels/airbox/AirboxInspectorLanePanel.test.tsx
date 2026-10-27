@@ -193,13 +193,13 @@ describe("AirboxInspectorLanePanel", () => {
     AirboxMeshStatisticsLanePanel,
     AirboxMeshTopologyLanePanel,
     AirboxMeshBuildLanePanel,
-  ])("uses the shared scientific identity frame for %s", (Panel) => {
+  ])("preserves resource and provenance details without a duplicate result path for %s", (Panel) => {
     testState.discretization = "fem";
 
     const html = renderToStaticMarkup(<Panel selection={selection} />);
 
     expect(html).toContain('data-inspector-owner="airbox-inspector"');
-    expect(html).toContain('aria-label="Scientific result path"');
+    expect(html).not.toContain('aria-label="Scientific result path"');
     expect(html).toContain("Resource");
     expect(html).toContain("Provenance");
   });

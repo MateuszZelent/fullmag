@@ -678,8 +678,19 @@ async fn load_startup_scene(
             source_snapshot_path.display().to_string(),
         ];
         let scene_output =
-            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &scene_args)?;
+            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &scene_args)
+                .map_err(startup_helper_timeout_rejection)?;
         if !scene_output.status.success() {
+            if let Some(message) =
+                script_load_rejection(scene_output.status.code(), &scene_output.stdout)
+            {
+                // The script raised before any live state, RunIntent or catalog
+                // entry exists, so this is a known terminal rejection.
+                return Err(ApiError::unprocessable_with_code(
+                    "validation_error",
+                    message,
+                ));
+            }
             let stderr = String::from_utf8_lossy(&scene_output.stderr);
             return Err(ApiError::internal(format!(
                 "python SceneDocument helper failed: {}",
@@ -710,7 +721,8 @@ async fn load_startup_scene(
             "--skip-geometry-assets".to_string(),
         ];
         let output =
-            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &helper_args)?;
+            crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &helper_args)
+                .map_err(startup_helper_timeout_rejection)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(ApiError::bad_request(format!(
@@ -739,6 +751,55 @@ async fn load_startup_scene(
         runtime,
         output_storage_binding,
     })
+}
+
+/// A bounded helper that hit its deadline was killed and reaped before any
+/// live state, RunIntent or catalog entry exists, so the startup request has a
+/// known terminal outcome. Any other helper error keeps its classification.
+fn startup_helper_timeout_rejection(error: ApiError) -> ApiError {
+    if error.code.as_deref() != Some(crate::script::PYTHON_HELPER_TIMEOUT_CODE) {
+        return error;
+    }
+    ApiError::unprocessable_with_code(
+        "validation_error",
+        format!(
+            "startup script loading was not admitted: {}; retry with a new request",
+            error.message
+        ),
+    )
+}
+
+/// Read the helper's typed script-load rejection from the last stdout line.
+/// Any other non-zero helper exit stays an internal (outcome-unknown) failure.
+fn script_load_rejection(exit_code: Option<i32>, stdout: &[u8]) -> Option<String> {
+    if exit_code != Some(2) {
+        return None;
+    }
+    let line = stdout
+        .split(|byte| *byte == b'\n')
+        .rev()
+        .find(|line| !line.iter().all(u8::is_ascii_whitespace))?;
+    let value = serde_json::from_slice::<Value>(line).ok()?;
+    let envelope = value.as_object()?;
+    if envelope.len() != 5
+        || envelope.get("schema").and_then(Value::as_str)
+            != Some("fullmag.script-load-rejection.v1")
+        || envelope.get("code").and_then(Value::as_str) != Some("script_load_failed")
+    {
+        return None;
+    }
+    let error_type = envelope.get("error_type")?.as_str()?.trim();
+    let message = envelope.get("message")?.as_str()?.trim();
+    if error_type.is_empty() || message.is_empty() {
+        return None;
+    }
+    let location = match envelope.get("script_line")? {
+        Value::Null => String::new(),
+        line => format!(" (script line {})", line.as_u64()?),
+    };
+    Some(format!(
+        "startup script failed while loading{location}: {error_type}: {message}"
+    ))
 }
 
 /// Resolve the Docker output policy for one admitted source path without
@@ -3013,6 +3074,66 @@ mod tests {
         noncanonical = request;
         noncanonical.execution.interactive = "caller_override".to_string();
         assert!(validate_request(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn only_a_reaped_helper_timeout_is_a_terminal_startup_rejection() {
+        let mut timeout = ApiError::internal("Python helper exceeded the 30 second deadline");
+        timeout.code = Some(crate::script::PYTHON_HELPER_TIMEOUT_CODE.to_string());
+        let rejected = startup_helper_timeout_rejection(timeout);
+        assert_eq!(
+            rejected.status,
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(rejected.code.as_deref(), Some("validation_error"));
+        assert!(rejected.message.contains("30 second deadline"));
+
+        // An uncoded timeout (cleanup failed) or another failure stays unknown.
+        let unreaped = startup_helper_timeout_rejection(ApiError::internal(
+            "Python helper exceeded the 30 second deadline; process cleanup failed: wait failed",
+        ));
+        assert_eq!(
+            unreaped.status,
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(unreaped.code, None);
+    }
+
+    #[test]
+    fn only_the_typed_script_load_envelope_is_a_terminal_rejection() {
+        let envelope = json!({
+            "schema": "fullmag.script-load-rejection.v1",
+            "code": "script_load_failed",
+            "error_type": "ValueError",
+            "message": "LLG relaxation requires an explicit timestep policy",
+            "script_line": 38,
+        })
+        .to_string();
+        let stdout = format!("user print\n\n{envelope}\n");
+        assert_eq!(
+            script_load_rejection(Some(2), stdout.as_bytes()).as_deref(),
+            Some(
+                "startup script failed while loading (script line 38): \
+                 ValueError: LLG relaxation requires an explicit timestep policy"
+            )
+        );
+        let without_line = envelope.replace("38", "null");
+        assert_eq!(
+            script_load_rejection(Some(2), without_line.as_bytes()).as_deref(),
+            Some(
+                "startup script failed while loading: \
+                 ValueError: LLG relaxation requires an explicit timestep policy"
+            )
+        );
+        // Another exit code, schema or shape keeps the unknown 500 outcome.
+        assert!(script_load_rejection(Some(1), envelope.as_bytes()).is_none());
+        assert!(script_load_rejection(None, envelope.as_bytes()).is_none());
+        assert!(script_load_rejection(Some(2), b"Traceback (most recent call last):\n").is_none());
+        let other_schema = envelope.replace("script-load-rejection", "scene-render-rejection");
+        assert!(script_load_rejection(Some(2), other_schema.as_bytes()).is_none());
+        let empty_message =
+            envelope.replace("LLG relaxation requires an explicit timestep policy", " ");
+        assert!(script_load_rejection(Some(2), empty_message.as_bytes()).is_none());
     }
 
     #[test]

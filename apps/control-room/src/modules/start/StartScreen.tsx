@@ -10,6 +10,15 @@ import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocument
 import { useSessionCollection } from "@/kernel/resources/useSessionCollection";
 import { useSessionResourceIdentity, useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { ModuleProps } from "@/kernel/types";
+import { Button } from "@/shared/ui/Button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/shared/ui/Sheet";
 
 import { HomeSection } from "./home/HomeSection";
 import { LAUNCH_TILES } from "./home/LaunchTiles";
@@ -50,6 +59,23 @@ const subscribeNever = () => () => undefined;
 
 const SESSION_UNCONFIRMED =
   "Fullmag could not confirm that no session is running. Retry the session list first.";
+
+const START_INSPECTOR_MEDIA_QUERY = "(max-width: 1180px)";
+
+function subscribeStartInspectorLayout(onChange: () => void): () => void {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return () => undefined;
+  }
+  const query = window.matchMedia(START_INSPECTOR_MEDIA_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+function getStartInspectorLayout(): boolean {
+  return typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(START_INSPECTOR_MEDIA_QUERY).matches;
+}
 
 /**
  * The launcher shown in place of a workspace. It occupies the body row only,
@@ -329,6 +355,14 @@ export function StartScreen({ kernel }: ModuleProps) {
     results.state.kind === "ready" && selectedResultId !== null
       ? (results.state.items.find((item) => item.id === selectedResultId) ?? null)
       : null;
+  const showInspector =
+    section !== "home" || Boolean(selectedEntry || selectedScript || selectedResult);
+  const isCompact = useSyncExternalStore(
+    subscribeStartInspectorLayout,
+    getStartInspectorLayout,
+    () => false,
+  );
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   // The backend reads the selected item's file; only an API item has an id to ask for.
   const selectedApiId =
@@ -365,7 +399,12 @@ export function StartScreen({ kernel }: ModuleProps) {
   const previousSection = useRef(section);
 
   useEffect(() => {
-    initialFocusRef.current?.focus();
+    // Lazy Home mounting must not steal focus from a menu the user opened
+    // while resources were loading.
+    const active = document.activeElement;
+    if (!active || active === document.body || active === document.documentElement) {
+      initialFocusRef.current?.focus();
+    }
   }, []);
 
   // A section change moves focus to the new content, except when it came from
@@ -378,8 +417,75 @@ export function StartScreen({ kernel }: ModuleProps) {
     mainRef.current?.focus();
   }, [section]);
 
+  const projectInspector = showInspector ? (
+    <ProjectInspector
+      compute={compute}
+      detail={itemDetail}
+      entry={selectedEntry}
+      onOpenResults={openResults}
+      onSelectResult={(id) => startScreenStore.setSelectedResult(id)}
+      archiveUrl={workspaceApi.archiveUrl}
+      onForget={(projectId) => {
+        startScreenStore.setSelectedProject(null);
+        void recent.forget(projectId);
+      }}
+      onOpen={openRecent}
+      onTogglePin={(projectId, pinned) => void recent.pin(projectId, pinned)}
+      openDisabledReason={browseDisabledReason}
+      result={selectedResult}
+      resultActions={{
+        readOnly: scripts.readOnly,
+        thumbnailUrl: workspaceApi.thumbnailUrl,
+        archiveUrl: workspaceApi.archiveUrl,
+        loadFrames: workspaceApi.loadFrames,
+        onTogglePin: results.pin,
+        onForget: (id) => {
+          startScreenStore.setSelectedResult(null);
+          void results.forget(id);
+        },
+        onSelectSource: selectApiItem,
+        onOpenResults: async (project) => {
+          const entry =
+            recent.state.kind === "ready"
+              ? recent.state.index.entries.find((e) => e.workspaceId === project.id)
+              : undefined;
+          return entry
+            ? openResults(entry)
+            : `${project.name} is not in the project list; refresh the list and try again.`;
+        },
+      }}
+      script={selectedScript}
+      scriptActions={{
+        readOnly: scripts.readOnly,
+        desktopIdOf: scripts.desktopIdOf,
+        thumbnailUrl: workspaceApi.thumbnailUrl,
+        onSelectResult: (id) => startScreenStore.setSelectedResult(id),
+        onOpen: scripts.open,
+        onReveal: scripts.reveal,
+        onReadText: scripts.readText,
+        onRunFinished: () => void scripts.refresh(),
+        onTogglePin: scripts.pin,
+        onForget: (id) => {
+          startScreenStore.setSelectedScript(null);
+          void scripts.forget(id);
+        },
+        executionAvailability,
+      }}
+      projectCreator={projectCreator}
+      scriptSaver={scriptSaver}
+      section={section}
+      templateId={selectedTemplateId}
+      session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}
+      index={recent.state}
+    />
+  ) : null;
+
   return (
-    <div className="fm-start" data-section={section}>
+    <Sheet
+      open={isCompact && detailsOpen && showInspector}
+      onOpenChange={setDetailsOpen}
+    >
+      <div className="fm-start" data-inspector={showInspector ? "visible" : "hidden"} data-section={section}>
       <StartRail
         compute={compute}
         nodeInventory={computeProbe.nodeInventory}
@@ -392,6 +498,13 @@ export function StartScreen({ kernel }: ModuleProps) {
         section={section}
       />
       <main className="fm-start__content" id="fm-main-content" ref={mainRef} tabIndex={-1}>
+        {isCompact && showInspector ? (
+          <div className="fm-start__details-action">
+            <SheetTrigger asChild>
+              <Button data-start-details-trigger size="sm" type="button" variant="secondary">Details</Button>
+            </SheetTrigger>
+          </div>
+        ) : null}
         <div className="fm-start__content-inner">
           {section === "home" ? (
             <HomeSection
@@ -450,68 +563,33 @@ export function StartScreen({ kernel }: ModuleProps) {
           )}
         </div>
       </main>
-      <ProjectInspector
-        compute={compute}
-        detail={itemDetail}
-        entry={selectedEntry}
-        onOpenResults={openResults}
-        onSelectResult={(id) => startScreenStore.setSelectedResult(id)}
-        archiveUrl={workspaceApi.archiveUrl}
-        onForget={(projectId) => {
-          startScreenStore.setSelectedProject(null);
-          void recent.forget(projectId);
-        }}
-        onOpen={openRecent}
-        onTogglePin={(projectId, pinned) => void recent.pin(projectId, pinned)}
-        openDisabledReason={browseDisabledReason}
-        result={selectedResult}
-        resultActions={{
-          readOnly: scripts.readOnly,
-          thumbnailUrl: workspaceApi.thumbnailUrl,
-          archiveUrl: workspaceApi.archiveUrl,
-          loadFrames: workspaceApi.loadFrames,
-          onTogglePin: results.pin,
-          onForget: (id) => {
-            startScreenStore.setSelectedResult(null);
-            void results.forget(id);
-          },
-          onSelectSource: selectApiItem,
-          onOpenResults: async (project) => {
-            const entry =
-              recent.state.kind === "ready"
-                ? recent.state.index.entries.find((e) => e.workspaceId === project.id)
-                : undefined;
-            return entry
-              ? openResults(entry)
-              : `${project.name} is not in the project list; refresh the list and try again.`;
-          },
-        }}
-        script={selectedScript}
-        scriptActions={{
-          readOnly: scripts.readOnly,
-          desktopIdOf: scripts.desktopIdOf,
-          thumbnailUrl: workspaceApi.thumbnailUrl,
-          onSelectResult: (id) => startScreenStore.setSelectedResult(id),
-          onOpen: scripts.open,
-          onReveal: scripts.reveal,
-          onReadText: scripts.readText,
-          onRunFinished: () => void scripts.refresh(),
-          onTogglePin: scripts.pin,
-          onForget: (id) => {
-            startScreenStore.setSelectedScript(null);
-            void scripts.forget(id);
-          },
-          executionAvailability,
-        }}
-        projectCreator={projectCreator}
-        scriptSaver={scriptSaver}
-        section={section}
-        templateId={selectedTemplateId}
-        session={recent.state.kind === "ready" ? recent.state.index.continue : undefined}
-        index={recent.state}
-      />
+      {projectInspector ? (
+        isCompact ? (
+          <SheetContent
+            aria-describedby="fm-start-details-description"
+            className="fm-start-details-sheet"
+            onCloseAutoFocus={(event) => {
+              setDetailsOpen(false);
+              const trigger = document.querySelector<HTMLElement>("[data-start-details-trigger]");
+              if (trigger?.isConnected && trigger.getClientRects().length > 0) return;
+              event.preventDefault();
+              mainRef.current?.focus();
+            }}
+            side="right"
+          >
+            <SheetHeader className="fm-start-details-sheet__header">
+              <SheetTitle>Details</SheetTitle>
+              <SheetDescription id="fm-start-details-description">
+                Context, help, or actions for this section or selection.
+              </SheetDescription>
+            </SheetHeader>
+            {projectInspector}
+          </SheetContent>
+        ) : projectInspector
+      ) : null}
       <StartStatusBar compute={compute} index={recent.state} preferences={preferences}
         sessionLabel={sessionIdentity ? `Simulation open: ${sessionName ?? "Untitled simulation"}` : "No active session"} />
-    </div>
+      </div>
+    </Sheet>
   );
 }

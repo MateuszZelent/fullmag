@@ -135,14 +135,26 @@
   overflow: hidden;
 }
 
+/* Text-only fields: a block box lets text-overflow draw the ellipsis
+   (an inline-flex box clips its anonymous text item mid-glyph). */
 .fm-status-bar__item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--fm-space-1);
-  white-space: nowrap;
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 30ch;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 30ch;
+  white-space: nowrap;
+}
+
+/* The lifecycle word is the one field that must stay whole. */
+.fm-status-bar__item--state {
+  flex-shrink: 0;
+}
+
+.fm-status-bar__axis,
+.fm-status-bar__engine {
+  flex-shrink: 0;
 }
 
 .fm-status-bar__sep {
@@ -234,8 +246,7 @@
   margin-inline-start: var(--fm-space-1);
 }
 
-.fm-status-bar__compute-cta[aria-disabled="true"],
-.fm-footer-telemetry__compute-cta[aria-disabled="true"] {
+.fm-status-bar__compute-cta[aria-disabled="true"] {
   cursor: not-allowed;
   border-color: var(--fm-border-disabled);
   background: var(--fm-bg-disabled);
@@ -259,18 +270,106 @@
   text-overflow: ellipsis;
 }
 
+.fm-status-bar__button {
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  appearance: none;
+  font: inherit;
+}
+
+.fm-status-bar__button.fm-status-bar__item {
+  /* Block, not the button's inline-flex, so the label can ellipsize. */
+  display: block;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: start;
+}
+
+.fm-status-bar__button.fm-status-bar__preparation[data-tone="ready"] {
+  color: var(--fm-success);
+}
+
+.fm-status-bar__button.fm-status-bar__preparation[data-tone="failed"] {
+  color: var(--fm-danger);
+}
+
+.fm-status-bar__button.fm-status-bar__engine {
+  font-family: var(--fm-font-mono);
+  text-align: start;
+}
+
+.fm-status-bar__axis {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 22ch;
+  flex-shrink: 1;
+  align-items: center;
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-secondary);
+  overflow: hidden;
+  padding-inline: var(--fm-space-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-status-bar__axis + .fm-status-bar__axis,
+.fm-status-bar__axis + .fm-status-bar__engine {
+  margin-inline-start: var(--fm-space-1);
+}
+
+.fm-status-bar__axis[data-state="connected"],
+.fm-status-bar__axis[data-state="ready"] {
+  border-color: color-mix(
+    in srgb,
+    var(--fm-success) 34%,
+    var(--fm-border-default)
+  );
+}
+
+.fm-status-bar__axis[data-state="connecting"],
+.fm-status-bar__axis[data-state="loading"],
+.fm-status-bar__axis[data-state="stale"] {
+  border-color: color-mix(
+    in srgb,
+    var(--fm-warning) 54%,
+    var(--fm-border-default)
+  );
+}
+
+.fm-status-bar__axis[data-state="disconnected"],
+.fm-status-bar__axis[data-state="error"] {
+  border-color: color-mix(
+    in srgb,
+    var(--fm-danger) 54%,
+    var(--fm-border-default)
+  );
+}
+
 .fm-status-bar__item--clickable {
   cursor: pointer;
   transition: color var(--fm-transition-fast);
 }
-.fm-status-bar__item--clickable:hover {
+.fm-status-bar__item--clickable:hover,
+.fm-status-bar__item--clickable:focus-visible {
   color: var(--fm-text-primary);
 }
 .fm-status-bar__engine--clickable {
   cursor: pointer;
   transition: background var(--fm-transition-fast), border-color var(--fm-transition-fast);
 }
-.fm-status-bar__engine--clickable:hover {
+.fm-status-bar__engine--clickable:hover,
+.fm-status-bar__engine--clickable:focus-visible {
   background: color-mix(in srgb, var(--fm-text-muted) 8%, var(--fm-bg-panel-raised));
   border-color: var(--fm-border-strong);
+}
+
+/* The shell owns this row; a nested border must not clip the header. */
+.fm-slot[data-slot-id="app-menu"] {
+  border: 0;
 }

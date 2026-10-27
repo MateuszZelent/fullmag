@@ -711,6 +711,7 @@ export function MagneticTextureActionsSection({
   onRevert,
   onSave,
   pending,
+  stagedDraft = false,
 }: {
   capability?: ActiveLaneOperationResolution | null;
   dirty: boolean;
@@ -721,23 +722,26 @@ export function MagneticTextureActionsSection({
   onRevert: () => void;
   onSave: () => void;
   pending: boolean;
+  stagedDraft?: boolean;
 }) {
   return (
     <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
-        <Button
-          disabled={
-            pending ||
-            model.mode !== "committed" ||
-            (capability !== null && !capability.enabled)
-          }
-          size="sm"
-          type="button"
-          variant="primary"
-          onClick={onSave}
-        >
-          Save Texture
-        </Button>
+        {!stagedDraft ? (
+          <Button
+            disabled={
+              pending ||
+              model.mode !== "committed" ||
+              (capability !== null && !capability.enabled)
+            }
+            size="sm"
+            type="button"
+            variant="primary"
+            onClick={onSave}
+          >
+            Save Texture
+          </Button>
+        ) : null}
         <Button
           disabled={pending || model.mode !== "committed" || model.targetKind !== "object"}
           size="sm"
@@ -747,15 +751,17 @@ export function MagneticTextureActionsSection({
         >
           Load Texture
         </Button>
-        <Button
-          disabled={pending}
-          size="sm"
-          type="button"
-          variant="ghost"
-          onClick={onRevert}
-        >
-          Revert
-        </Button>
+        {!stagedDraft ? (
+          <Button
+            disabled={pending}
+            size="sm"
+            type="button"
+            variant="ghost"
+            onClick={onRevert}
+          >
+            Revert
+          </Button>
+        ) : null}
         <Button
           disabled={pending || model.mode !== "committed"}
           size="sm"
@@ -1180,6 +1186,7 @@ export function ObjectMagneticTexturePanel({
           onRevert={resetDraft}
           onSave={() => void saveTexture()}
           pending={pending}
+          stagedDraft={editableTextureView}
         />
       ) : null}
     </div>

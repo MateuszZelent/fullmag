@@ -1,12 +1,29 @@
 //! API adoption of immutable worker-published accepted observables.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, path::Path, sync::Arc};
 use anyhow::Result;
+use fullmag_runner::AcceptedMaterializationBatch;
 use serde_json::{json, Value};
 use crate::accepted_field_binary::AcceptedFieldReader;
-use crate::accepted_field_materialization_worker::{field_key, load_latest_bundle, SCHEMA};
+use crate::accepted_field_materialization_worker::{field_key, load_latest_bundle, LoadedBundle, SCHEMA};
 use crate::error::ApiError;
-use crate::types::{AppState, CurrentLiveFieldFrameRequest};
+use crate::live_accepted_projection::ProjectionPublicationFence;
+use crate::schemas::runtime::FieldMaterializationRequirement;
+use crate::types::{AppState, CurrentLiveFieldFrameRequest, SessionStateResponse};
+
+/// Other live-state writers (artifact import, display selection, ...) do not
+/// take the caller's transition fence; a candidate they invalidate is rebuilt
+/// from the newer snapshot instead of overwriting their update.
+const ADOPTION_PUBLICATION_ATTEMPTS: usize = 3;
+
+/// Identity the bundle was admitted against. A change is a conflict, not a
+/// reason to rebuild the candidate.
+struct AdmittedSource {
+    session_id: String,
+    scene_revision: Option<u64>,
+    run_id: Option<String>,
+}
+
 /// Caller owns the transition fence. This path only reads CAS; it cannot solve,
 /// allocate devices, or reinterpret a bundle belonging to an older scene.
 pub(crate) async fn adopt_current_bundle(
@@ -43,9 +60,9 @@ async fn adopt_bundle(
     let loaded = tokio::task::spawn_blocking(move || load_latest_bundle(&root, &run_id)).await
         .map_err(|error| ApiError::internal(error.to_string()))?
         .map_err(|error| ApiError::conflict_with_code("accepted_materialization_unavailable", format!("{error:#}")))?;
-    let record = loaded.record;
-    let batch = record.batch.ok_or_else(|| ApiError::conflict_with_code(
-        "accepted_materialization_unsupported", record.error.unwrap_or_default()))?;
+    let record = &loaded.record;
+    let batch = record.batch.as_ref().ok_or_else(|| ApiError::conflict_with_code(
+        "accepted_materialization_unsupported", record.error.clone().unwrap_or_default()))?;
     let automatic_requirements;
     let requirements = if all_fields {
         automatic_requirements = vec![crate::schemas::runtime::FieldMaterializationRequirement {
@@ -62,14 +79,61 @@ async fn adopt_bundle(
         return Err(ApiError::conflict("bundle source differs"));
     }
     batch.clock.validate().map_err(|error| ApiError::conflict(error.to_string()))?;
-    let mut current = state.current_live_state.write().await;
-    let snapshot = current.as_mut().ok_or_else(|| ApiError::not_found("no current workspace"))?;
-    if snapshot.session.session_id != before.session.session_id
-        || snapshot.scene_document.as_ref().map(|scene| scene.revision) != before.scene_document.as_ref().map(|scene| scene.revision)
-        || snapshot.run.as_ref().map(|run| &run.run_id) != before.run.as_ref().map(|run| &run.run_id) {
+    let admitted = AdmittedSource {
+        session_id: before.session.session_id.clone(),
+        scene_revision: before.scene_document.as_ref().map(|scene| scene.revision),
+        run_id: before.run.as_ref().map(|run| run.run_id.clone()),
+    };
+    // Candidate construction (full-snapshot clone, frame application with
+    // effective-source hashing, spatial-field resolution) is heavy on large
+    // domains. Build it outside the live-state lock and hold the write lock
+    // only for the fenced swap, so health/status readers never queue behind
+    // it on the fair RwLock. Same shape as `apply_projection`.
+    let mut base = Some(before);
+    for _ in 0..ADOPTION_PUBLICATION_ATTEMPTS {
+        let candidate = match base.take() {
+            Some(snapshot) => snapshot,
+            None => state.current_live_state.read().await.as_ref().cloned()
+                .ok_or_else(|| ApiError::not_found("no current workspace"))?,
+        };
+        let fence = ProjectionPublicationFence::capture(&candidate)?;
+        let next = adopted_candidate(state, candidate, &admitted, &loaded, batch, &reader_root,
+            energies_only, include_energies, requirements)?;
+        let mut current = state.current_live_state.write().await;
+        let unchanged = current.as_ref().is_some_and(|snapshot| {
+            ProjectionPublicationFence::capture(snapshot).is_ok_and(|now| now == fence)
+        });
+        if !unchanged {
+            drop(current);
+            drop(next);
+            continue;
+        }
+        let previous = std::mem::replace(&mut *current, Some(next));
+        drop(current);
+        if let Some(previous) = previous {
+            let _ = tokio::task::spawn_blocking(move || drop(previous));
+        }
+        return Ok(());
+    }
+    Err(ApiError::conflict("current live state kept changing during accepted adoption"))
+}
+
+/// Build the published snapshot from a disposable clone. Pure with respect to
+/// the shared live state: the caller publishes it only after its fence check.
+#[allow(clippy::too_many_arguments)]
+fn adopted_candidate(
+    state: &AppState, mut next: SessionStateResponse, admitted: &AdmittedSource,
+    loaded: &LoadedBundle, batch: &AcceptedMaterializationBatch, reader_root: &Path,
+    energies_only: bool, include_energies: bool,
+    requirements: &[FieldMaterializationRequirement],
+) -> Result<SessionStateResponse, ApiError> {
+    let record = &loaded.record;
+    if next.session.session_id != admitted.session_id
+        || next.scene_document.as_ref().map(|scene| scene.revision) != admitted.scene_revision
+        || next.run.as_ref().map(|run| &run.run_id) != admitted.run_id.as_ref() {
         return Err(ApiError::conflict("current accepted source changed"));
     }
-    let scene = snapshot.scene_document.as_ref().ok_or_else(|| ApiError::conflict("accepted scene missing"))?;
+    let scene = next.scene_document.as_ref().ok_or_else(|| ApiError::conflict("accepted scene missing"))?;
     let execution_input = crate::live_execution_binding::input_identity(scene)?;
     crate::live_execution_binding::validate_input_binding(&loaded.specification,
         &execution_input, scene.revision)?;
@@ -77,15 +141,15 @@ async fn adopt_bundle(
     if live.and_then(|value| value.get("api_instance_id")).and_then(Value::as_str)
         != Some(state.request_scope_instance_id.as_str())
         || live.and_then(|value| value.get("session_id")).and_then(Value::as_str)
-            != Some(snapshot.session.session_id.as_str())
+            != Some(next.session.session_id.as_str())
         || live.and_then(|value| value.get("session_epoch")).and_then(Value::as_u64)
             != Some(state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire)) {
         return Err(ApiError::conflict("accepted bundle belongs to another live owner"));
     }
-    let m = snapshot.latest_fields.get("m").ok_or_else(|| ApiError::conflict("accepted state projection is pending"))?;
-    let domain_generation = crate::router_v2::handlers::sessions::status::domain_generation_id(snapshot);
+    let m = next.latest_fields.get("m").ok_or_else(|| ApiError::conflict("accepted state projection is pending"))?;
+    let domain_generation = crate::router_v2::handlers::sessions::status::domain_generation_id(&next);
     if requirements.iter().any(|requirement| requirement.generation_id != domain_generation)
-        || !crate::session::latest_field_source_is_qualified(snapshot, "m", m)
+        || !crate::session::latest_field_source_is_qualified(&next, "m", m)
     {
         return Err(ApiError::conflict("materialization domain changed after command admission"));
     }
@@ -97,9 +161,8 @@ async fn adopt_bundle(
         || m.get("source_time_seconds").and_then(Value::as_f64) != Some(batch.clock.time_seconds) {
         return Err(ApiError::conflict("displayed magnetization differs from materialized state"));
     }
-    let frame = crate::session::accepted_observation_frame_ref(snapshot,
+    let frame = crate::session::accepted_observation_frame_ref(&next,
         batch.clock.accepted_step, Some(batch.clock.time_seconds));
-    let mut next = snapshot.clone();
     let wanted = requirements.iter().flat_map(|requirement| requirement.quantity_ids.iter()
         .map(String::as_str)).collect::<BTreeSet<_>>();
     let mut fields = crate::types::LatestFields::default();
@@ -158,7 +221,7 @@ async fn adopt_bundle(
                 raw["accepted_binary_field"] = serde_json::to_value(reference)
                     .map_err(|error| ApiError::internal(error.to_string()))?;
                 readers.push((field.quantity_id.clone(), Arc::new(
-                    AcceptedFieldReader::new(reader_root.clone(), reference.clone())?)));
+                    AcceptedFieldReader::new(reader_root.to_path_buf(), reference.clone())?)));
             } else { raw["values"] = json!(field.values); }
             fields.insert(field.quantity_id.clone(), raw);
         }
@@ -205,10 +268,10 @@ async fn adopt_bundle(
         // separate stages may reuse that clock. These global results retain
         // the full accepted source identity in the same quantity data plane.
     }
-    crate::session::apply_current_live_accepted_field_frame(&mut next, CurrentLiveFieldFrameRequest {
-        session_id: before.session.session_id, latest_fields: Some(fields), replace_latest_fields: false,
+    crate::session::apply_current_live_field_frame_to_candidate(&mut next, CurrentLiveFieldFrameRequest {
+        session_id: admitted.session_id.clone(), latest_fields: Some(fields), replace_latest_fields: false,
         field_generation: None, preview_fields: None, clear_preview_cache: false,
-    }, frame)?;
+    }, Some(&frame))?;
     if !energies_only {
         // A newly materialized target can appear before the previous catalog
         // knew about it. Validate it even when it was not an existing command
@@ -247,8 +310,7 @@ async fn adopt_bundle(
             }
         }
     }
-    *snapshot = next;
-    Ok(())
+    Ok(next)
 }
 
 /// A global observation is a single value in joules, never a spatial field.

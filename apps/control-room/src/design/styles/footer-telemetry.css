@@ -68,8 +68,8 @@
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-2xs);
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  text-transform: none;
+  letter-spacing: 0;
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -138,9 +138,16 @@
    instead of being locked to the column track width from full rows above
    (which is the limitation of CSS Grid auto-fit). */
 
-.fm-footer-telemetry__metrics-grid {
+.fm-footer-telemetry__metrics {
   container-type: size;
   container-name: footer-metrics;
+  min-width: 0;
+  min-height: 0;
+}
+
+.fm-footer-telemetry__metrics-grid {
+  box-sizing: border-box;
+  height: 100%;
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
@@ -164,7 +171,7 @@
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  flex: 1 0 155px;
+  flex: 1 0 200px;
   min-width: 0;
   min-height: 64px;
   max-height: 144px;
@@ -192,10 +199,9 @@
   border-color: color-mix(in srgb, var(--fm-metric-color) 55%, var(--fm-border-default));
   background: linear-gradient(
     160deg,
-    color-mix(in srgb, var(--fm-bg-panel-raised) 82%, var(--fm-metric-color)) 0%,
-    color-mix(in srgb, var(--fm-bg-panel-raised) 94%, var(--fm-metric-color)) 100%
+    color-mix(in srgb, var(--fm-bg-panel-raised) 92%, var(--fm-metric-color)) 0%,
+    color-mix(in srgb, var(--fm-bg-panel-raised) 97%, var(--fm-metric-color)) 100%
   );
-  transform: translateY(-1px);
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, var(--fm-metric-color) 22%, transparent),
     var(--fm-shadow-md);
@@ -213,8 +219,8 @@
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-xs);
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  text-transform: none;
+  letter-spacing: 0;
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -235,7 +241,7 @@
   display: flex;
   align-items: baseline;
   min-width: 0;
-  gap: 3px;
+  gap: var(--fm-space-1);
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-lg);
@@ -245,12 +251,12 @@
   line-height: 1.15;
   margin-block: var(--fm-space-1);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  flex-shrink: 0;
 }
 
 .fm-footer-telemetry__metric-unit {
-  color: var(--fm-text-muted);
+  color: var(--fm-text-tertiary);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-2xs);
   font-weight: 500;
@@ -262,7 +268,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  color: var(--fm-text-muted);
+  color: var(--fm-text-tertiary);
   font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   line-height: 1.35;
@@ -294,7 +300,7 @@
   }
 
   .fm-footer-telemetry__metric {
-    flex: 1 0 140px;
+    flex: 1 0 260px;
     flex-direction: row;
     align-items: center;
     min-height: 0;
@@ -305,13 +311,12 @@
   }
 
   .fm-footer-telemetry__metric-label {
-    font-size: var(--fm-font-size-2xs);
+    font-size: var(--fm-font-size-control);
   }
 
   .fm-footer-telemetry__metric-value {
-    font-size: var(--fm-font-size-xs);
-    flex: 1;
-    min-width: 0;
+    font-size: var(--fm-font-size-control);
+    flex: none;
     margin-block: 0;
   }
 
@@ -328,7 +333,7 @@
   }
 
   .fm-footer-telemetry__metric {
-    flex: 1 0 145px;
+    flex: 1 0 190px;
     min-height: 48px;
     max-height: 96px;
     padding: var(--fm-space-1) var(--fm-space-2);
@@ -344,18 +349,11 @@
   }
 }
 
-/* ── Group color definitions (dark theme — Catppuccin Mocha) ── */
-
-.fm-footer-telemetry__metric[data-group="runtime"]      { --fm-metric-color: #89b4fa; } /* blue   */
-.fm-footer-telemetry__metric[data-group="solver"]       { --fm-metric-color: #a6e3a1; } /* green  */
-.fm-footer-telemetry__metric[data-group="magnetization"]{ --fm-metric-color: #cba6f7; } /* mauve  */
-.fm-footer-telemetry__metric[data-group="energy"]       { --fm-metric-color: #fab387; } /* peach  */
-
-/* Light theme overrides (Catppuccin Latte) */
-[data-fm-theme="light"] .fm-footer-telemetry__metric[data-group="runtime"]       { --fm-metric-color: #1e66f5; }
-[data-fm-theme="light"] .fm-footer-telemetry__metric[data-group="solver"]        { --fm-metric-color: #40a02b; }
-[data-fm-theme="light"] .fm-footer-telemetry__metric[data-group="magnetization"] { --fm-metric-color: #8839ef; }
-[data-fm-theme="light"] .fm-footer-telemetry__metric[data-group="energy"]        { --fm-metric-color: #fe640b; }
+/* Group hues are semantic UI categories, defined per theme in theme.css. */
+.fm-footer-telemetry__metric[data-group="runtime"] { --fm-metric-color: var(--fm-category-runtime); }
+.fm-footer-telemetry__metric[data-group="solver"] { --fm-metric-color: var(--fm-category-solver); }
+.fm-footer-telemetry__metric[data-group="magnetization"] { --fm-metric-color: var(--fm-category-magnetization); }
+.fm-footer-telemetry__metric[data-group="energy"] { --fm-metric-color: var(--fm-category-energy); }
 
 /* Compact tiers: reduce the 2px accent top border to 1px to keep chips tight */
 @container footer-metrics (height <= 112px) {

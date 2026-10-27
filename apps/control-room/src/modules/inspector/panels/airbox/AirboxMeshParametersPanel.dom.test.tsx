@@ -1,9 +1,11 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
+import { InspectorFooter } from "@/modules/inspector/InspectorFooter";
+import { InspectorEditSessionProvider } from "@/modules/inspector/InspectorEditSession";
 import {
   findElement,
   installSimulationPreparationTestDom,
@@ -57,6 +59,17 @@ function kernel(): KernelApi {
   } as unknown as KernelApi;
 }
 
+function inspectorTree(children: ReactNode) {
+  return (
+    <InspectorEditSessionProvider>
+      <KernelContext.Provider value={kernel()}>
+        {children}
+        <InspectorFooter onFocus={() => undefined} />
+      </KernelContext.Provider>
+    </InspectorEditSessionProvider>
+  );
+}
+
 function control(container: Parameters<typeof findElement>[0], label: string) {
   return findElement(
     container,
@@ -78,11 +91,9 @@ describe("AirboxMeshParametersPanel session fencing", () => {
     const root = createRoot(container as unknown as Element);
 
     try {
-      await act(async () => root.render(
-        <KernelContext.Provider value={kernel()}>
-          <AirboxMeshParametersPanel selection={null as never} />
-        </KernelContext.Provider>,
-      ));
+      await act(async () => root.render(inspectorTree(
+        <AirboxMeshParametersPanel selection={null as never} />,
+      )));
 
       const mode = control(container, "Domain mode");
       expect(mode.textContent).toContain("Auto");
@@ -116,21 +127,25 @@ describe("AirboxMeshParametersPanel session fencing", () => {
     const root = createRoot(container as unknown as Element);
 
     try {
-      await act(async () => root.render(
-        <KernelContext.Provider value={kernel()}>
-          <AirboxMeshParametersPanel selection={null as never} />
-        </KernelContext.Provider>,
-      ));
+      await act(async () => root.render(inspectorTree(
+        <AirboxMeshParametersPanel selection={null as never} />,
+      )));
       const maximumSize = control(container, "Maximum element size");
       maximumSize.value = "2e-9";
       await act(async () => {
         maximumSize.dispatchEvent(new TestEvent("input", { bubbles: true }));
       });
+      expect(
+        findElements(
+          container,
+          (element) => element.tagName === "BUTTON" && element.textContent.includes("Apply Airbox Policy"),
+        ),
+      ).toHaveLength(0);
 
       const apply = findElement(
         container,
-        (element) => element.tagName === "BUTTON" && element.textContent.includes("Apply Airbox Policy"),
-        "Apply Airbox Policy button",
+        (element) => element.tagName === "BUTTON" && element.textContent.trim() === "Apply",
+        "Inspector footer Apply button",
       );
       await act(async () => {
         apply.dispatchEvent(new TestEvent("click", { bubbles: true }));
@@ -156,20 +171,24 @@ describe("AirboxMeshParametersPanel session fencing", () => {
     const root = createRoot(container as unknown as Element);
 
     try {
-      await act(async () => root.render(
-        <KernelContext.Provider value={kernel()}>
-          <AirboxMeshParametersPanel selection={null as never} />
-        </KernelContext.Provider>,
-      ));
+      await act(async () => root.render(inspectorTree(
+        <AirboxMeshParametersPanel selection={null as never} />,
+      )));
       const maximumSize = control(container, "Maximum element size");
       maximumSize.value = "2e-9";
       await act(async () => {
         maximumSize.dispatchEvent(new TestEvent("input", { bubbles: true }));
       });
+      expect(
+        findElements(
+          container,
+          (element) => element.tagName === "BUTTON" && element.textContent.includes("Apply Airbox Policy"),
+        ),
+      ).toHaveLength(0);
       const apply = findElement(
         container,
-        (element) => element.tagName === "BUTTON" && element.textContent.includes("Apply Airbox Policy"),
-        "Apply Airbox Policy button",
+        (element) => element.tagName === "BUTTON" && element.textContent.trim() === "Apply",
+        "Inspector footer Apply button",
       );
       await act(async () => {
         apply.dispatchEvent(new TestEvent("click", { bubbles: true }));

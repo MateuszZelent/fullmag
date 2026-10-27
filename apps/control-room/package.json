@@ -67,6 +67,8 @@
     "verify:mesh-build-new-object": "node scripts/verify-mesh-build-new-object.mjs",
     "test": "vitest run",
     "typecheck": "node scripts/typecheck-control-room.mjs",
+    "check:design": "node scripts/check-design-t1.mjs",
+    "check:design:browser": "node scripts/run-design-browser-checks.mjs",
     "smoke:compute-performance": "node scripts/smoke-compute-performance.mjs",
     "smoke:fem-preview-freshness": "node scripts/smoke-fem-preview-freshness.mjs",
     "bench:compute-performance": "vitest run src/kernel/performance/computePerformanceMicrobench.test.ts --pool=threads"
