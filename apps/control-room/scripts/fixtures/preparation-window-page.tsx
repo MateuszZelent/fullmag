@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 
 import type { SimulationPreparationResource } from "@/kernel/api/apiTypes";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
@@ -18,11 +18,16 @@ import { Input } from "@/shared/ui/Input";
 
 type Phase = "running" | "stale" | "failed" | "ready";
 
+const subscribeToHydration = () => () => {};
+
 // Local UI fixture: no API client, session mutation or solver command.
 export default function PreparationWindowPreview() {
   const [phase, setPhase] = useState<Phase>("running");
   const [attempt, setAttempt] = useState(1);
   const [entryCount, setEntryCount] = useState(60);
+  // Browser checks wait for this marker: server markup is visible before
+  // React attaches the window's pointer and keyboard handlers.
+  const hydrated = useSyncExternalStore(subscribeToHydration, () => true, () => false);
   const kernel = useMemo(() => {
     const bus = new EventBus<KernelEventMap>();
     return {
@@ -62,7 +67,7 @@ export default function PreparationWindowPreview() {
 
   return (
     <KernelContext.Provider value={kernel}>
-      <main className="fm-preparation-preview" id="fm-main-content">
+      <main className="fm-preparation-preview" data-hydrated={hydrated || undefined} id="fm-main-content">
         <h1>Preparation window · UI preview</h1>
         <p>Production components with controlled data. No live simulation commands.</p>
         <div className="fm-preparation-preview__controls">
