@@ -486,11 +486,11 @@ export function AnalysisFrequencySurface({
     ) : null}
 
           <p>{sampleOptionLabel(series, sampleIndex)} · computed modes at this k. Mode rank is diagnostic; no intensity weighting.</p>
-          {displaySeries.filter((entry) => !isReferenceChartQuantity(entry.quantity)).map((entry) => entry.points.filter((point) => point.sampleIndex === sampleIndex).map((point) => (
+          {displaySeries.flatMap((entry) => isReferenceChartQuantity(entry.quantity) ? [] : entry.points.flatMap((point) => point.sampleIndex !== sampleIndex ? [] : [
             <Button key={`${entry.id}:${point.rowIndex}`} size="sm" variant="secondary" onClick={() => onPointSelect({ label: entry.label, point, quantity: entry.quantity, seriesId: entry.id, source: entry.source, unit: entry.unit, xUnit: entry.xUnit })}>
               Mode {point.rawModeIndex ?? point.x}: {point.y.toPrecision(6)} {entry.unit} · {point.modeFieldAvailable !== false && point.modeFieldId ? "3D field available" : "field unavailable"}
-            </Button>
-          )))}
+            </Button>,
+          ]))}
         </div>
       ) : null}
       <details className="fm-analysis-plots__physical-details">

@@ -2943,6 +2943,9 @@ async function qualifyModalArtifactOwnershipRace(
     owner: "object-visualization",
     label: "Object viewport with unmatched run A artifact",
   });
+  // A dispersion Results selection now opens Analysis. The object-shader
+  // ownership probe must explicitly return to the spatial viewport.
+  await page.locator(".fm-viewport-tabs__trigger").filter({ hasText: /^3D Viewport$/ }).click();
   await assertHealthyViewportCanvas(page, "unmatched run A modal artifacts");
   const staleUniforms = await page.evaluate(
     (start) => window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.slice(start) ?? [],

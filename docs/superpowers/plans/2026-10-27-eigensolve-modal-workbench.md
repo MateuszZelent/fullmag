@@ -20,3 +20,9 @@ Cel: te same opublikowane wyniki FEM i krzywe odniesienia dostępne w głównym 
 ## Granice
 
 Zachować istniejące FMR, driven i dynamics. Dane serwerowe tylko przez resource hooks; stan UI przechowuje identyfikatory i preferencje. Referencja analityczna musi opisywać model i warunki brzegowe; dopasowanie jednej gałęzi nie kwalifikuje kompletności widma. Niedokończona migracja FMS pozostaje oddzielna. Pełne zamknięcie wymaga przejścia bramek, a nie tylko poprawnego kodu.
+
+## Checkpoint wdrożenia
+
+Etapy 1–3: kod wdrożony na branchu; główna dyspersja i pięć rzeczywistych pól potwierdzone w browserze. Etap 4: browserowa ścieżka benchmarku PASS; pełna bramka frontendowa i dedykowana bramka metodyczna PASS. Szersza bramka browserowa wymaga ponowienia po dostosowaniu jawnej nawigacji Analysis→3D w teście ownership-race. Starszy globalny Spectrum Inspector ma nową bramkę właściciela i testy, ale jego osobna ścieżka runtime pozostaje NOT VERIFIED.
+
+Dowody i otwarte ograniczenia: `docs/audits/2026-10-27-eigensolve-modal-workbench-ui.md`. HTTP 500 katalogu artefaktów, FMS roundtrip oraz naukowa kwalifikacja kompletności/zbieżności nie są zamknięte przez tę przebudowę UI.
