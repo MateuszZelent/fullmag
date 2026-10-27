@@ -2408,14 +2408,16 @@ def _assert_private_restart_network(actual, ids, project):
         raise BuildControlError("Idle restart bridge has unknown consumers; no backend will be stopped")
 
 
-def _terminal_session_restart_probe(backend_id, *, allow_prepared=False, startup_enabled=False):
+def _terminal_session_restart_probe(backend_id, *, allow_prepared=False, startup_enabled=False, allow_terminal_catalog=False):
     """Allow drain after a terminal task or an exact pre-acceptance failure.
 
     Called only with the private frontend stopped and the group control lease
     held. This is admission to graceful drain, not proof of process absence:
     the existing native drain receipt remains mandatory before restart.
     """
-    script = ('ALLOW_PREPARED = ' + repr(bool(allow_prepared)) + '\n'
+    from docker_terminal_catalog_probe import PROBE as native_terminal_probe
+    script = ('ALLOW_TERMINAL_CATALOG = ' + repr(bool(allow_terminal_catalog)) + '\n'
+        + native_terminal_probe + '\n' + 'ALLOW_PREPARED = ' + repr(bool(allow_prepared)) + '\n'
         + 'STARTUP_ENABLED = ' + repr(bool(startup_enabled)) + '\n' + r'''import hashlib,json,os,re,stat,urllib.error,urllib.request
 MAX=1024*1024
 MAX_STARTUP_RECEIPT=2*MAX
@@ -2752,12 +2754,16 @@ if not all(isinstance(v,str) and v for v in identity):
     raise RuntimeError("terminal restart has no current session identity")
 run=get("/v2/sessions/current/simulation/runs/current",optional=True)
 terminal={"completed","failed","cancelled","stopped"}
+native_terminal=None
+if (ALLOW_TERMINAL_CATALOG and not STARTUP_ENABLED and run
+        and run.get("status")=="running" and status.get("solver",{}).get("state")=="running"):
+    native_terminal=native_terminal_catalog_proof(run.get("run_id"))
 prepared=bool(ALLOW_PREPARED and run and run.get("status")=="waiting_for_solve"
     and status.get("solver",{}).get("state")=="awaiting_command")
 if (not STARTUP_ENABLED and run is None
         and status.get("solver",{}).get("state")=="startup_failed"):
     print(json.dumps(startup_failed_preacceptance(status,run,identity),sort_keys=True))
-elif STARTUP_ENABLED or run is None or (run.get("status") not in terminal and not prepared):
+elif STARTUP_ENABLED or run is None or (run.get("status") not in terminal and not prepared and native_terminal is None):
     print("null")
 else:
     run_id=run.get("run_id")
@@ -2765,7 +2771,7 @@ else:
             or run.get("session_id")!=identity[0]
             or status.get("run",{}).get("run_id")!=run_id
             or status.get("solver",{}).get("state") not in
-                (terminal|{"idle"}|({"awaiting_command"} if prepared else set()))):
+                (terminal|{"idle"}|({"awaiting_command"} if prepared else set())|({"running"} if native_terminal else set()))):
         raise RuntimeError("terminal run differs from the current session")
     queue=get("/v2/platform/compute/queue")
     runtime=get("/v2/platform/runtime-service")
@@ -2811,11 +2817,17 @@ else:
         raise RuntimeError("prepared session changed before drain")
     if held_runs and held_run_proofs(held_items)!=held_runs:
         raise RuntimeError("manual start gate changed before drain")
+    if native_terminal:
+        if (native_terminal_catalog_proof(run_id)!=native_terminal
+                or get("/v2/platform/compute/queue")!=queue
+                or get("/v2/sessions/current/simulation/commands").get("commands")!=[]):
+            raise RuntimeError("native terminal evidence changed or commands are pending")
     result={"schema":("fullmag.docker-prepared-session-drain-preflight.v1" if prepared
             else "fullmag.docker-terminal-session-drain-preflight.v1"),
         "api_instance_id":instance,"session_id":identity[0],"session_epoch":identity[1],
         "request_scope_epoch":identity[2],"run":run,"compute_queue":queue,
         "runtime_service":runtime}
+    if native_terminal: result["native_terminal_catalog_proof"]=native_terminal
     if held_runs: result["held_run_intent_sha256"]=held_runs
     print(json.dumps(result,sort_keys=True))
 '''
@@ -5190,6 +5202,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         raise BuildControlError("Backend has an active session; idle restart refused")
                     terminal_session = _terminal_session_restart_probe(
                         ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
+                        allow_terminal_catalog=getattr(args, "allow_terminal_catalog", False),
                     )
                     if terminal_session is not None:
                         control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)

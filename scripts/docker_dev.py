@@ -2584,6 +2584,10 @@ def _parser() -> argparse.ArgumentParser:
         "--allow-prepared-session", action="store_true",
         help="allow graceful drain with never-started manual Studies, including held queue entries after a terminal task; retain accepted inputs and never release Solve",
     )
+    idle_restart.add_argument("--allow-terminal-catalog", action="store_true",
+        help="permit graceful drain for a stale API-running projection only with terminal native tasks and released reservations")
+    idle_restart.add_argument("--stop-only", action="store_true",
+        help="stop after authenticated drain; retain all data for managed recreation")
     resources = subparsers.add_parser(
         "increase-resources", help="increase a pinned pre-API backend's budget without restarting its build"
     )
@@ -2988,8 +2992,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.action == "build":
             build(args)
         elif args.action == "restart-idle-volume":
-            from docker_volume_dev import restart_idle
-            restart_idle(args)
+            from docker_volume_dev import restart_idle, stop_idle
+            (stop_idle if args.stop_only else restart_idle)(args)
         elif args.action == "increase-resources":
             from docker_volume_resources import increase
             increase(args)
