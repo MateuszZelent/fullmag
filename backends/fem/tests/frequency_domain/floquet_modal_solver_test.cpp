@@ -1835,10 +1835,16 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
     two_mode_goal_request.certified_refill_target = 2;
     const auto two_mode_goal_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
         refill_operator_view, two_mode_goal_request);
-    check(two_mode_goal_result.ok && two_mode_goal_result.accepted_mode_count == 2 &&
-              two_mode_goal_result.eps_attempt_count > 1 &&
-              two_mode_goal_result.eps_certified_refill_target == 2 &&
-              two_mode_goal_result.max_relative_residual <= two_mode_goal_request.residual_tolerance,
+    const bool explicit_multi_mode_contract =
+        two_mode_goal_result.ok && two_mode_goal_result.accepted_mode_count == 2 &&
+        two_mode_goal_result.eps_attempt_count > 1 &&
+        two_mode_goal_result.eps_certified_refill_target == 2 &&
+        two_mode_goal_result.max_relative_residual <= two_mode_goal_request.residual_tolerance;
+    if (!explicit_multi_mode_contract) {
+        report_refill_diagnostics("explicit multi-mode refill", two_mode_goal_result);
+        report_refill_diagnostics("default multi-mode refill control", refill_result);
+    }
+    check(explicit_multi_mode_contract,
           "explicit multi-mode goal still refills after an insufficient one-mode first pool");
     const double expected_first_refill_frequency_hz =
         refill_spectral_center_hz + refill_frequency_offsets_hz[1u];

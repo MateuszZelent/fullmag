@@ -736,3 +736,44 @@ Zwykłe CI40430393405 zakończone success; natywne CI nadal in_progress.
   w GitHub Actions; lokalnie nie kompilowano testów.
 - Nie jest to jeszcze dowód zapisania pola przez runtime. Wymagane CI,
   managed rebuild i ponowienie +10, potem actual mode UI verifier.
+
+
+### A18 startup i terminalne CI A17 — dwie niezależne przeszkody
+
+- Build A18 b60f94a22 skompilowany, pakiet zweryfikowany, API uruchomione
+  wyłącznie diagnostycznie. Fence api-failure-1bec93455db748338edb8bd99180ab25.json:
+  native Docker host profile initialization failed / nvidia-smi bounded timeout.
+  Kontrolny odczyt nvidia-smi później PASS (RTX4080SUPER). Nie aktywowano Solve.
+- Iteration dfb2be8228464d1d989ff0d6d072b482 nadal obserwowana przez launcher.
+  Early diagnostic API celowo zachowuje poprzedni drained process-tree;
+  readiness loop docker_volume_dev.py sprawdza failed process receipt i inny
+  tekst logu, więc nie rozpoznaje tej awarii. Nie restartować ręcznie ani
+  nie usuwać lease. Potrzebny kontrolowany terminal/recovery tej próby,
+  uwzględniający dokładny startup fence i brak aktywnego runtime/workera.
+- Native CI A17 run40430469653/job121946616991 zakończone FAILURE:
+  15/21 PASS, sześć failures. Pobraną diagnostykę opisuje
+  `2026-10-27-eigensolve-a17-native-ci-failures.evidence.json`.
+  Assertions: explicit multi-mode goal; best_effort incomplete coverage;
+  dimension-limited best_effort (cztery warianty hard-KSP).
+  Nie obniżać wymagań automatycznie: porównać rzeczywiste statusy i cel
+  fixture z nową semantyką osobnego celu refillu. Runtime +10 pozostaje
+  udanym punktem, ale nie kwalifikuje całego kontraktu solvera.
+- Porównanie zaakceptowanego +10 z istniejącym finite-Dirichlet n=0 oracle:
+  FEM11,2118866497GHz / referencja11,2354141789GHz, różnica−0,20940509%.
+  Nie jest to certyfikat zbieżności ani kompletności widma.
+
+
+### Korekta regresji po A17
+
+Dwie rodziny fixture count1 oczekiwały dawnego wyczerpania internal guard,
+choć celem A17 jest właśnie zakończenie na publicznym count1. Oczekiwania
+native i C ABI dopasowano do not_certified (lub rzeczywistego truncation),
+bez komunikatu niewykonanego dimension-limit refillu. Zachowano wymagania
+complete=false, certification_method=none i residualów. Nie jest to jeszcze
+PASS — wymaga kolejnego natywnego CI.
+
+Regresja explicit multi-mode pozostaje nierozstrzygnięta. Dodano pełną
+telemetrię wyniku oraz identycznego kontrolnego solve z domyślnym celem,
+bez zmiany warunku zaliczenia. Następne CI ma ujawnić EPS reason, liczbę
+prób, finalizowaną pulę i residual. Nie zakładać automatycznie błędu fixture
+ani dopuszczać niezbiegłych wyników.

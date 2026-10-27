@@ -4211,7 +4211,7 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
             return accepted_modes_before_cap >
                     static_cast<double>(requested_mode_count)
                 ? "truncated_by_requested_count"
-                : "partial_convergence";
+                : "not_certified";
         };
     const char *native_window_status = best_effort_window_status(
         native_result.diagnostics_json.c_str(),
@@ -4227,13 +4227,13 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
                   "\"complete\":false,\"execution_lane\":\"production_cpu\"") !=
                   std::string::npos &&
               native_result.diagnostics_json.find(
-                  "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") !=
+                  "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") ==
                   std::string::npos &&
               native_result.diagnostics_json.find(
                   native_diagnostics_window_status) != std::string::npos &&
               native_result.result_json.find(native_result_window_status) !=
                   std::string::npos,
-          "native best_effort result preserves incomplete coverage and the actual refill reason");
+          "native best_effort meets its publication goal without claiming complete coverage");
     check(native_result.diagnostics_json.find(
               "\"operator_diagnostics\":{\"operator_family\":\"mfem_linearized_llg\","
               "\"payload_kind\":\"certified_shared_domain\","
@@ -4287,10 +4287,10 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
                    "\"complete\":false,\"execution_lane\":\"production_cpu\"") &&
               contains(result.diagnostics_json,
                        cabi_diagnostics_window_status.c_str()) &&
-              contains(result.diagnostics_json,
-                       "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") &&
+              !contains(result.diagnostics_json,
+                        "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") &&
               contains(result.result_json, cabi_result_window_status.c_str()),
-          "best_effort C ABI result preserves incomplete coverage and its refill reason");
+          "best_effort C ABI meets the requested goal while preserving uncertified coverage");
     check(contains(result.diagnostics_json,
                    "\"deduplication_inner_product\":\"floquet_positive_tangent_mass\"") &&
               contains(result.diagnostics_json,
@@ -9675,7 +9675,7 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     const char *expected_dimension_limited_one_window_status =
         dimension_limited_one_truncated
             ? "truncated_by_requested_count"
-            : "partial_convergence";
+            : "not_certified";
     const std::string expected_dimension_limited_one_result_status =
         "\"window_completeness\":\"" +
         std::string(expected_dimension_limited_one_window_status) + "\"";
@@ -9689,9 +9689,11 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                        expected_dimension_limited_one_diagnostic_status.c_str()) &&
               contains(dimension_limited_one_result.result_json,
                        expected_dimension_limited_one_result_status.c_str()) &&
+              !contains(dimension_limited_one_result.diagnostics_json,
+                        "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") &&
               contains(dimension_limited_one_result.diagnostics_json,
-                       "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\""),
-          "dimension-limited best_effort preserves its exact incomplete-window status and internal-limit evidence");
+                       "\"certified_refill_target\":1,"),
+          "one-mode best_effort meets the certified target without reporting an unused guard limit");
     if (dimension_limited_one_truncated) {
         check(contains(dimension_limited_one_result.diagnostics_json,
                        "\"result_truncated\":true") &&
