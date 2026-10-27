@@ -255,3 +255,10 @@ Harness zapisano w osobnym checkpointcie `6a913922ada2c5325acdbf430a16f9fc0fd026
 - Następnie: wykres 15 opublikowanych próbek, rzeczywisty wybór modów ±k w UI; zbieżność/kompletność oraz COMSOL A1 nadal NOT VERIFIED.
 - I5: PR262 draft/open, mergeStateStatus DIRTY — konflikty z nowszym masterem wymagają rozwiązania po zachowaniu bieżących danych.
 - Korekty infrastruktury: ograniczone oczekiwanie na przejściowy ledger writer busy podczas retirement; jawne raportowanie odrzuconej publikacji zamiast bezterminowego running.
+
+
+## Odbiór modów ±10 i kolejny krok — 27.10.2026
+
+I3/I4: oba rzeczywiste mody ±10 odebrane na runtime fde189663; pola zespolone, Real/Imag/Abs/Phase, WebGL2 i animacja z kontrolą pikseli PASS. Poprawiono brak pól manifestu multi-k i sprzeczny sample_id. [Dowody](../../audits/2026-10-27-eigensolve-multik-mode-ui-contract.md). Nie zamyka to całego I7 ani I5.
+
+Następny krok I7: odtworzenie i diagnoza Gamma frequency_window na tej samej fizyce/siatce przez `examples/fem_eigen_mode_ui_de_gamma_window.py`, następnie pełny signed15 i wykres. Historyczny sukces nearest-Gamma nie zastępuje bramki frequency-window. Zakończoną sesję ±10 zachowujemy przez managed retirement, bez edycji wyników.
