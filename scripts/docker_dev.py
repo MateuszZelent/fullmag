@@ -125,15 +125,30 @@ class DirectDockerOutcomeUnknown(DirectDockerError):
     """The Docker client timed out while the daemon may still own resources."""
 
 
+# Optional tokens match modal_krylov_tuning.hpp. Absence preserves native
+# defaults and the exact digest of retained two-key v1 receipts.
+MODAL_KRYLOV_ENVIRONMENT_ALLOWED = {
+    "FULLMAG_MODAL_EPS_PREFILTER_ABS": frozenset(f"1e-{n}" for n in range(6, 14)),
+    "FULLMAG_MODAL_SHIFTED_KSP_RTOL": frozenset(f"1e-{n}" for n in range(6, 14)),
+    "FULLMAG_MODAL_GMRES_RESTART": frozenset({"8", "10", "12", "16", "30"}),
+    "FULLMAG_MODAL_SHIFTED_KSP_TYPE": frozenset({"gmres", "fgmres"}),
+}
+
+
 def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[str, str]:
     """Validate the bounded operator-probe environment without ambient passthrough."""
 
-    if not isinstance(value, Mapping) or set(value) != set(OPERATOR_PROBE_ENVIRONMENT_ALLOWED):
+    if (not isinstance(value, Mapping)
+            or not set(OPERATOR_PROBE_ENVIRONMENT_ALLOWED).issubset(value)
+            or not set(value).issubset(
+                OPERATOR_PROBE_ENVIRONMENT_ALLOWED.keys() | MODAL_KRYLOV_ENVIRONMENT_ALLOWED.keys())):
         raise _fail(
-            "operator_probe_environment must contain exactly the bounded probe controls"
+            "operator_probe_environment must contain exactly the required controls and optional bounded modal tuning"
         )
     normalized: dict[str, str] = {}
-    for name, allowed in OPERATOR_PROBE_ENVIRONMENT_ALLOWED.items():
+    allowed_controls = {**OPERATOR_PROBE_ENVIRONMENT_ALLOWED, **MODAL_KRYLOV_ENVIRONMENT_ALLOWED}
+    for name in value:
+        allowed = allowed_controls[name]
         raw = value[name]
         if not isinstance(raw, str):
             raise _fail(f"{name} must be a string")
@@ -146,11 +161,13 @@ def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[s
 
 
 def _operator_probe_environment_from_host() -> dict[str, str]:
-    """Capture the two allowed host controls once for one backend start."""
+    """Capture only bounded controls once for one backend start."""
 
     return _normalize_operator_probe_environment({
-        name: os.environ.get(name, default)
-        for name, default in OPERATOR_PROBE_ENVIRONMENT_DEFAULTS.items()
+        **{name: os.environ.get(name, default)
+           for name, default in OPERATOR_PROBE_ENVIRONMENT_DEFAULTS.items()},
+        **{name: os.environ[name] for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED
+           if name in os.environ},
     })
 
 
@@ -1575,7 +1592,7 @@ def _environment(layout: Mapping[str, object], selected: Path, run_root: Path,
         "FULLMAG_WORKSPACE_STATE_ROOT": str(workspace_state_root),
         "FULLMAG_BACKEND_BUILD_STATE_ROOT": str(build_state_root),
     })
-    # Only these two workload controls may cross the host -> Compose boundary.
+    # Only the recorded bounded workload controls may cross the host -> Compose boundary.
     # The caller captures them once before image/cache preparation.  Never
     # reread the mutable ambient host environment here and never let a cache
     # profile smuggle a stale workload choice into a new run.
@@ -2255,8 +2272,7 @@ def _backend_start_inputs(
             "FULLMAG_DEVELOPMENT_INPUTS_PATH": f"{control_root}/frontend/development-inputs.json",
             "FULLMAG_BUILD_CONTROL_VOLUME": control_volume,
             "FULLMAG_BACKEND_HOSTNAME": "fullmag-direct-backend-" + resolved_run_id[:12],
-            "FULLMAG_MIXED_P1_DEVICE": operator_probe_environment["FULLMAG_MIXED_P1_DEVICE"],
-            "FULLMAG_ARTIFACT_FIELD_STORAGE": operator_probe_environment["FULLMAG_ARTIFACT_FIELD_STORAGE"],
+            **operator_probe_environment,
             "FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256": operator_probe_environment_sha256,
         }
 

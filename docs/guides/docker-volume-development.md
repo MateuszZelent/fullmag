@@ -599,3 +599,36 @@ Failed ownera, jak i własny pakiet względem skompilowanej tożsamości źróde
 Zwykły storage admission nie przyjmuje alternatywnego SHA lub source commit.
 Ta dodatkowa ścieżka jest jawnie ograniczona do linux-native-v1; pozostałe
 profile zachowują normalne kontrole i wymagają osobnej implementacji.
+
+
+## Zapisane ustawienia Kryłowa dla reprodukcji modalnej
+
+Nowy start DEV może opcjonalnie przejąć z jawnego środowiska operatora cztery
+parametry obsługiwane już przez `modal_krylov_tuning.hpp`:
+
+| Zmienna | Dozwolone wartości | Historyczny DE 04.10 |
+| --- | --- | --- |
+| `FULLMAG_MODAL_EPS_PREFILTER_ABS` | `1e-6` … `1e-13` (całkowite wykładniki) | `1e-9` |
+| `FULLMAG_MODAL_SHIFTED_KSP_RTOL` | `1e-6` … `1e-13` (całkowite wykładniki) | `1e-9` |
+| `FULLMAG_MODAL_GMRES_RESTART` | `8`, `10`, `12`, `16`, `30` | `8`; osobna próba +15: `30` |
+| `FULLMAG_MODAL_SHIFTED_KSP_TYPE` | `gmres`, `fgmres` | `fgmres` |
+
+To ustawienia iteracji, nie zmiana progu certyfikacji pełnego residualu ani
+fizyki. Brak zmiennej zachowuje natywny default; stare dwupolowe dokumenty
+`fullmag.operator-probe-environment.v1` zachowują dokładnie ten sam hash.
+Opcjonalne wartości są normalizowane, walidowane, włączone do tego dokumentu
+i jego SHA-256, a następnie do środowiska backendu. Nie trafiają do frontendu.
+Nieznany klucz, token lub niezapisana wartość w zachowanej konfiguracji jest
+odrzucana. Nakładka cache nie może nadpisać zapisanego wyboru.
+
+Istniejący kontener, resume i recreate nadal zachowują przypięty dokument:
+sam eksport zmiennych na hoście **nie aktualizuje działającego runtime**.
+Zmiana wymaga jawnego nowego startu przez zarządzaną procedurę z zachowaniem
+wyników i kontroli aktywnych workerów. Nie edytuj ręcznie receiptów ani
+środowiska uruchomionego kontenera. Ostatecznym dowodem zastosowania są
+konfiguracja nowego kontenera oraz diagnostyka wykonanego solvera.
+
+Kontrole źródłowe: `scripts/test_modal_launcher_tuning.py`,
+`scripts/test_docker_cpu_access.py`, `scripts/test_docker_volume_receipts.py`.
+Na etapie wdrożenia tej granicy nie potwierdzono jeszcze nowego wykonania
+historycznego sweepa z tymi ustawieniami.

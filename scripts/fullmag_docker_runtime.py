@@ -94,15 +94,30 @@ def _validate_device_access(value: object) -> str:
     return str(value)
 
 
-def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[str, str]:
-    """Validate the exact two-key operator-probe boundary."""
+# Optional tokens match modal_krylov_tuning.hpp. Absence preserves native
+# defaults and the exact digest of retained two-key v1 receipts.
+MODAL_KRYLOV_ENVIRONMENT_ALLOWED = {
+    "FULLMAG_MODAL_EPS_PREFILTER_ABS": frozenset(f"1e-{n}" for n in range(6, 14)),
+    "FULLMAG_MODAL_SHIFTED_KSP_RTOL": frozenset(f"1e-{n}" for n in range(6, 14)),
+    "FULLMAG_MODAL_GMRES_RESTART": frozenset({"8", "10", "12", "16", "30"}),
+    "FULLMAG_MODAL_SHIFTED_KSP_TYPE": frozenset({"gmres", "fgmres"}),
+}
 
-    if not isinstance(value, Mapping) or set(value) != set(OPERATOR_PROBE_ENVIRONMENT_ALLOWED):
+
+def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[str, str]:
+    """Validate required controls and optional, recorded native modal tuning."""
+
+    if (not isinstance(value, Mapping)
+            or not set(OPERATOR_PROBE_ENVIRONMENT_ALLOWED).issubset(value)
+            or not set(value).issubset(
+                OPERATOR_PROBE_ENVIRONMENT_ALLOWED.keys() | MODAL_KRYLOV_ENVIRONMENT_ALLOWED.keys())):
         raise ValueError(
-            "operator_probe_environment must contain exactly the bounded probe controls"
+            "operator_probe_environment must contain exactly the required controls and optional bounded modal tuning"
         )
     normalized: dict[str, str] = {}
-    for name, allowed in OPERATOR_PROBE_ENVIRONMENT_ALLOWED.items():
+    allowed_controls = {**OPERATOR_PROBE_ENVIRONMENT_ALLOWED, **MODAL_KRYLOV_ENVIRONMENT_ALLOWED}
+    for name in value:
+        allowed = allowed_controls[name]
         raw = value[name]
         if not isinstance(raw, str):
             raise ValueError(f"{name} must be a string")
@@ -894,8 +909,8 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
     operator_probe_sha256 = None
     if inputs is not None or backend_start is not None:
         # Keep the workload boundary explicit.  The direct development
-        # service may receive only the two controls used by the mixed-P1
-        # operator probe; arbitrary host environment variables are never
+        # service receives bounded operator and optional modal controls;
+        # arbitrary host environment variables are never
         # copied into Compose.  A direct backend_start receipt must carry the
         # already validated mapping and hash so the rendered Compose stays
         # bound to the exact build-start inputs.  The defaults are used only
@@ -1046,6 +1061,21 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
     configured = json.loads(docker("compose", "--project-name", project,
                                    "--project-directory", str(repo), *definitions,
                                    "config", "--format", "json", environment=environment))
+    if operator_probe_values is not None:
+        backend_environment = configured.get("services", {}).get("backend", {}).get("environment", {})
+        if not isinstance(backend_environment, dict):
+            raise ValueError("Versioned Compose backend environment is not an object")
+        for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED:
+            if name not in operator_probe_values:
+                backend_environment.pop(name, None)
+    if operator_probe_values is not None and any(
+            name in operator_probe_values for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED):
+        backend = configured.get("services", {}).get("backend")
+        if not isinstance(backend, dict) or not isinstance(backend.get("environment", {}), dict):
+            raise ValueError("Versioned Compose backend environment is not an object")
+        # Optional keys need not appear in the static interpolation template.
+        backend.setdefault("environment", {}).update(operator_probe_values)
+        backend["environment"]["FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256"] = operator_probe_sha256
     if previous_config_sha256 is not None:
         backend = configured.get("services", {}).get("backend")
         if not isinstance(backend, dict):

@@ -1339,6 +1339,9 @@ def _operator_probe_record_from_retained(previous, document):
     if not isinstance(environment, Mapping):
         raise BuildControlError("retained backend environment is malformed")
     values = record["operator_probe_environment"]
+    from docker_dev import MODAL_KRYLOV_ENVIRONMENT_ALLOWED
+    if any(name in environment and name not in values for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED):
+        raise BuildControlError("retained backend has unrecorded modal Krylov controls")
     if any(environment.get(name) != value for name, value in values.items()):
         raise BuildControlError("retained backend operator probe environment differs from its receipt")
     if environment.get("FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256") != record["operator_probe_environment_sha256"]:
@@ -1375,6 +1378,10 @@ def _reassert_operator_probe_environment(document, record):
     backend_environment = backend["environment"]
     if not isinstance(backend_environment, dict):
         raise BuildControlError("DEV backend environment is malformed")
+    from docker_dev import MODAL_KRYLOV_ENVIRONMENT_ALLOWED
+    for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED:
+        if name not in record["operator_probe_environment"]:
+            backend_environment.pop(name, None)
     backend_environment.update(record["operator_probe_environment"])
     backend_environment["FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256"] = record[
         "operator_probe_environment_sha256"
