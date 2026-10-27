@@ -1055,6 +1055,7 @@ pub(super) fn execute_native_modal_window(
         shared_domain_identity.as_ref(),
         solver_diagnostics.as_object_mut(),
     ) {
+        bind_shared_domain_assembly_kind(diagnostics)?;
         if let Some(identity_object) = identity.as_object() {
             for (key, value) in identity_object {
                 diagnostics.insert(key.clone(), value.clone());
@@ -2435,6 +2436,53 @@ pub(super) fn native_solver_diagnostics_json(
         gpu_attestation,
         None,
     )
+}
+
+/// Bind the assembly contract only after the typed shared-domain producer was
+/// selected. Window aggregation may omit this field; a contradictory native
+/// identity must never be overwritten with the expected value.
+fn bind_shared_domain_assembly_kind(
+    diagnostics: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), RunError> {
+    const EXPECTED: &str = "mfem_weak_form_shared_domain";
+    if let Some(value) = diagnostics.get("assembly_kind") {
+        if !value.is_null() && value.as_str() != Some(EXPECTED) {
+            return Err(RunError {
+                message: format!(
+                    "shared-domain modal producer has conflicting assembly_kind: {value}"
+                ),
+            });
+        }
+    }
+    diagnostics.insert("assembly_kind".into(), serde_json::json!(EXPECTED));
+    Ok(())
+}
+
+#[cfg(test)]
+mod shared_domain_assembly_identity_tests {
+    use super::*;
+
+    #[test]
+    fn fills_missing_window_identity_and_preserves_exact_native_identity() {
+        for value in [serde_json::json!({}), serde_json::json!({"assembly_kind": null}),
+            serde_json::json!({"assembly_kind": "mfem_weak_form_shared_domain"})] {
+            let mut diagnostics = value.as_object().unwrap().clone();
+            diagnostics.insert("operator_input_signature_sha256".into(), serde_json::json!("unchanged"));
+            bind_shared_domain_assembly_kind(&mut diagnostics).unwrap();
+            assert_eq!(diagnostics["assembly_kind"], "mfem_weak_form_shared_domain");
+            assert_eq!(diagnostics["operator_input_signature_sha256"], "unchanged");
+        }
+    }
+
+    #[test]
+    fn rejects_conflicting_native_identity_without_rewriting_it() {
+        for value in [serde_json::json!("runner_dense"), serde_json::json!(""), serde_json::json!(7)] {
+            let mut diagnostics = serde_json::Map::new();
+            diagnostics.insert("assembly_kind".into(), value.clone());
+            assert!(bind_shared_domain_assembly_kind(&mut diagnostics).is_err());
+            assert_eq!(diagnostics["assembly_kind"], value);
+        }
+    }
 }
 
 pub(super) fn native_solver_diagnostics_json_with_expected_digest(
