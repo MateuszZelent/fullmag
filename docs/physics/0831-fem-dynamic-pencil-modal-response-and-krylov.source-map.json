@@ -4431,6 +4431,12 @@
       "responsibility": "Exact invocation/attempt/callback pairing, unavailable and contradiction rejection"
     },
     {
+      "id": "source-failed-shifted-action-probe",
+      "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp",
+      "symbol": "report_floquet_failed_action_probe",
+      "responsibility": "Diagnostic-only repeatability and scaling probe after rejected shifted solve; no acceptance or tolerance change"
+    },
+    {
       "id": "source-g5-certified-recovery-factory",
       "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp",
       "symbol": "create_floquet_shifted_ksp_certified_recovery_shell",

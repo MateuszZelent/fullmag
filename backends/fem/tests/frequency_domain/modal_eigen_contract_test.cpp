@@ -11055,6 +11055,21 @@ void modal_certified_recovery_exhausted_budget_contract()
           "initialize the isolated algebraic budget process");
     AlgebraicCertifiedRecoveryFixture fixture{};
     initialize_algebraic_certified_recovery_fixture(fixture, 1);
+    Vec probe_original = nullptr;
+    check(VecDuplicate(fixture.rhs, &probe_original) == PETSC_SUCCESS &&
+              VecCopy(fixture.rhs, probe_original) == PETSC_SUCCESS,
+          "preserve candidate before diagnostic-only action probe");
+    fd::detail::FloquetFailedActionProbeResult probe{};
+    check(fd::detail::report_floquet_failed_action_probe(
+              fixture.inner, fixture.rhs, &probe) == PETSC_SUCCESS &&
+              std::abs(probe.action_norm - std::sqrt(30.0)) < 1.0e-12 &&
+              probe.repeat_defect == 0.0 && probe.scale_defect < 1.0e-12,
+          "linear diagonal operator has repeatable scale-consistent action");
+    PetscBool candidate_unchanged = PETSC_FALSE;
+    check(VecEqual(fixture.rhs, probe_original, &candidate_unchanged) == PETSC_SUCCESS &&
+              candidate_unchanged == PETSC_TRUE &&
+              VecDestroy(&probe_original) == PETSC_SUCCESS,
+          "action probe leaves candidate unchanged and releases owned scratch");
     const PetscErrorCode solve_error = KSPSolve(fixture.outer, fixture.rhs, fixture.solution);
     // Cached values only after the failed outer call. This selector deliberately
     // makes no claim about teardown of a partially unwound PETSc solve graph.

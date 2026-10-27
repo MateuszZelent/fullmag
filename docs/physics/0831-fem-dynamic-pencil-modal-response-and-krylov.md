@@ -5703,6 +5703,7 @@ log SHA256 `db05b54dbe361a6ba77273e79721f60dd9ab233af3edee5c30a0a0ecb626ffd0`.
 
 | Ścieżka | Symbol | Zakres |
 |---|---|---|
+| `backends/fem/cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp` | `report_floquet_failed_action_probe` | Diagnostic-only repeatability and scaling after rejected solve; runtime pending |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp` | `create_floquet_shifted_ksp_certified_recovery_shell` | Public PETSc owner/reference; implementation pending hosted proof |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp` | `floquet_shifted_certified_recovery_shell_apply` | Original RHS threshold i cumulative requested budget |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp` | `destroy_floquet_shifted_ksp_certified_recovery_shell` | Checked destruction/quarantine; first/cleanup errors oddzielne |
@@ -6287,3 +6288,18 @@ bramek true-residual ani pełnego deskryptora. Potrzebne nowe CI i runtime;
 sama zmiana parametru nie dowodzi rozwiązania breakdown ani kwalifikacji.
 Dokumentacja PETSc: https://petsc.org/release/manualpages/KSP/KSPGMRESSetRestart/.
 Dowód wejściowy: docs/audits/2026-10-27-eigensolve-signed15-native-failure.evidence.json.
+
+
+### Diagnostyka działania operatora po odrzuconym solve
+
+`report_floquet_failed_action_probe` wykonuje trzy działania rzeczywistego
+operatora shifted KSP: dwa dla tego samego kandydata x oraz jedno dla
+x/||x||. Raportuje ||A(x)−A(x)|| z niezależnych wywołań i
+||||x||A(x/||x||)−A(x)||. Własne cztery wektory robocze mają koszt pamięci
+O(n); nie materializuje macierzy i nie zmienia kandydata. Pomiar następuje
+wyłącznie po zakończonym, odrzuconym solve; nie nadaje certyfikatu i nie
+zmienia progu ani pierwotnego błędu. Błąd API/cleanup sondy oznacza
+niebezpieczny stan grafu i kończy dalszą obsługę PETSc. Wynik trafia do
+stderr workera z prefiksem FULLMAG_SHIFTED_FAILED_ACTION_PROBE.
+Regresja diagonalnego operatora sprawdza normy i niezmienność kandydata.
+Runtime tej diagnostyki pozostaje NOT VERIFIED do nowego wykonania.
