@@ -252,7 +252,7 @@ export function useAnalysisFrequencyData(
       case "dispersion": {
         const computed = frequencyDomainChartSeriesForAnalysisPlots(
           frequencyDomainDispersionModel,
-        ).map((entry) => entry.quantity === "frequency" ? { ...entry, kind: "scatter" as const } : entry);
+        );
         return [
           ...computed,
           ...referenceOverlaySeries(computed, referenceDefinitions, {

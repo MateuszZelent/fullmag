@@ -4,7 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/shared/ui/Button";
 import { isReferenceChartQuantity } from "@/shared/analysis-charts/frequencyRenderModels";
 import { dispersionReferenceComparisons } from "@/shared/domain/analysis/dispersionReferenceComparison";
-import { modalSpectrumSampleIndices, modalSpectrumSeriesAtSample } from "@/shared/domain/analysis/modalSpectrumSamples";
+import { modalSpectrumSampleIndices, modalSpectrumSampleLabels, modalSpectrumSeriesAtSample } from "@/shared/domain/analysis/modalSpectrumSamples";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { descriptorForFrequencyTable } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
@@ -135,6 +135,7 @@ export function AnalysisFrequencySurface({
     physicalContext?.stageId ?? null,
   ]);
   const samples = useMemo(() => modalSpectrumSampleIndices(isSpectrum || isDispersion ? series.filter((entry) => !isReferenceChartQuantity(entry.quantity)) : []), [isDispersion, isSpectrum, series]);
+  const sampleLabels = useMemo(() => modalSpectrumSampleLabels(series), [series]);
   const [samplePreference, setSamplePreference] = useState<{ datasetKey: string; sample: number } | null>(null);
   const selectedSample = selectedPoint?.source.resourceKey === firstSeries?.source.resourceKey
     ? selectedPoint?.point.sampleIndex : undefined;
@@ -147,13 +148,20 @@ export function AnalysisFrequencySurface({
     datasetKey: string;
     axis: DispersionAxis;
   } | null>(null);
+  const [dispersionStylePreference, setDispersionStylePreference] = useState<{ datasetKey: string; style: "points" | "tracked-branches" } | null>(null);
+  const dispersionStyle = dispersionStylePreference?.datasetKey === dispersionDatasetKey ? dispersionStylePreference.style : "points";
   const dispersionAxis = dispersionAxisPreference?.datasetKey === dispersionDatasetKey &&
     availableAxes.includes(dispersionAxisPreference.axis)
     ? dispersionAxisPreference.axis
     : defaultDispersionAxis(isDispersion ? series : []);
   const displaySeries = useMemo(
-    () => isDispersion ? projectDispersionSeries(series, dispersionAxis) : sampleSeries,
-    [dispersionAxis, isDispersion, sampleSeries, series],
+    () => {
+      const projected = isDispersion ? projectDispersionSeries(series, dispersionAxis) : sampleSeries;
+      return isDispersion && dispersionStyle === "points"
+        ? projected.map((entry) => entry.quantity === "frequency" ? { ...entry, kind: "scatter" as const } : entry)
+        : projected;
+    },
+    [dispersionAxis, dispersionStyle, isDispersion, sampleSeries, series],
   );
   const comparisons = useMemo(() => isDispersion ? dispersionReferenceComparisons(series) : [], [isDispersion, series]);
   const xAxisLabel = isDispersion
@@ -440,7 +448,7 @@ export function AnalysisFrequencySurface({
           <div className="fm-analysis-plots__empty" role="status">Select at least one signal</div>
         ) : (
           <EChartsSurface
-            key={`${chartId ?? tableId}:${dispersionAxis}`}
+            key={`${chartId ?? tableId}:${dispersionAxis}:${dispersionStyle}`}
             allSeries={displaySeries}
             bus={kernel.bus}
             chartId={chartId}
@@ -480,12 +488,23 @@ export function AnalysisFrequencySurface({
           if (entry && point) onPointSelect({ label: entry.label, point, quantity: entry.quantity, seriesId: entry.id, source: entry.source, unit: entry.unit, xUnit: entry.xUnit });
         }}>
           <SelectTrigger aria-label="Spectrum wavevector sample"><SelectValue /></SelectTrigger>
-          <SelectContent>{samples.map((sample) => <SelectItem key={sample} value={String(sample)}>{sampleOptionLabel(series, sample)}</SelectItem>)}</SelectContent>
+          <SelectContent>{samples.map((sample) => <SelectItem key={sample} value={String(sample)}>{sampleLabels.get(sample) ?? `Sample ${sample}`}</SelectItem>)}</SelectContent>
         </Select>
       </label>
     ) : null}
 
-          <p>{sampleOptionLabel(series, sampleIndex)} · computed modes at this k. Mode rank is diagnostic; no intensity weighting.</p>
+          {isDispersion && series.some((entry) => entry.quantity === "frequency" && entry.kind === "line") ? (
+            <label className="fm-analysis-plots__sample-selector">
+              <span>Plot style</span>
+              <Select value={dispersionStyle} onValueChange={(style) => {
+                if (style === "points" || style === "tracked-branches") setDispersionStylePreference({ datasetKey: dispersionDatasetKey, style });
+              }}>
+                <SelectTrigger aria-label="Dispersion plot style"><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="points">Numerical points</SelectItem><SelectItem value="tracked-branches">Tracked branch lines</SelectItem></SelectContent>
+              </Select>
+            </label>
+          ) : null}
+          <p>{sampleLabels.get(sampleIndex) ?? `Sample ${sampleIndex}`} · computed modes at this k. Mode rank is diagnostic; no intensity weighting.</p>
           {displaySeries.flatMap((entry) => isReferenceChartQuantity(entry.quantity) ? [] : entry.points.flatMap((point) => point.sampleIndex !== sampleIndex ? [] : [
             <Button key={`${entry.id}:${point.rowIndex}`} size="sm" variant="secondary" onClick={() => onPointSelect({ label: entry.label, point, quantity: entry.quantity, seriesId: entry.id, source: entry.source, unit: entry.unit, xUnit: entry.xUnit })}>
               Mode {point.rawModeIndex ?? point.x}: {point.y.toPrecision(6)} {entry.unit} · {point.modeFieldAvailable !== false && point.modeFieldId ? "3D field available" : "field unavailable"}
@@ -599,12 +618,4 @@ function frequencyKContextLabel(context: FrequencyDomainResultContext): string {
   if (sampling.kind === "single") return `k = [${sampling.vectorRadPerM.join(", ")}] rad/m`;
   if (sampling.kind === "path") return sampling.label ? `k path ${sampling.label}` : "k path";
   return "k grid";
-}
-
-function sampleOptionLabel(series: readonly ChartSeries[], sample: number): string {
-  const point = series.flatMap((entry) => entry.points).find((entry) => entry.sampleIndex === sample);
-  const vector = point?.wavevectorKf;
-  return vector
-    ? `Sample ${sample} · k = (${vector.map((value) => Number((value / 1e6).toPrecision(6))).join(", ")}) rad/µm`
-    : `Sample ${sample}`;
 }

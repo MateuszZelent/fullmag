@@ -873,6 +873,10 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
       await selectFrequencyDomainSubview(page, fixture);
 
       const legend = await waitForFrequencyChart(page, fixture);
+      if (fixture.requireDispersionRenderEvidence) {
+        await page.getByRole("combobox", { name: "Dispersion plot style", exact: true }).click();
+        await page.getByRole("option", { name: "Tracked branch lines", exact: true }).click();
+      }
       const renderedSeries = await inspectFrequencyChartOption(page, fixture);
       if (!frequencyRequests.includes(fixture.resourcePath)) {
         throw new Error(
@@ -2139,7 +2143,7 @@ function createFrequencyDomainChartFixtures() {
         resourceRef: frequencyModeFieldResourceKey(spectrumFieldId),
         sampleId: "spectrum-sample-0003",
         sampleIndex: 3,
-        seriesType: "line",
+        seriesType: "scatter",
         frequencyHz: 2.25e9,
         tooltipTerms: ["mode index: 1", "Eigen frequency", "2.25 GHz"],
         residualFields: {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { modalSpectrumSampleIndices, modalSpectrumSeriesAtSample } from "./modalSpectrumSamples";
+import { modalSpectrumSampleIndices, modalSpectrumSampleLabels, modalSpectrumSeriesAtSample } from "./modalSpectrumSamples";
 import type { ChartSeries } from "./chartSeries";
 
 describe("modal sample chart identity", () => {
@@ -14,4 +14,14 @@ describe("modal sample chart identity", () => {
     expect(modalSpectrumSeriesAtSample(series, 99)[0]?.points).toEqual([]);
     expect(series[0]?.points).toHaveLength(3);
   });
+});
+
+
+it("derives signed k labels once from the published vectors", () => {
+  const labels = modalSpectrumSampleLabels([{ quantity: "frequency", points: [
+    { rowIndex: 0, sampleIndex: 0, x: 0, y: 13, wavevectorKf: [0, -25e6, 0] },
+    { rowIndex: 1, sampleIndex: 7, x: 25e6, y: 9.3, wavevectorKf: [0, 0, 0] },
+  ] }] as ChartSeries[]);
+  expect(labels.get(0)).toBe("Sample 0 · k = (0, -25, 0) rad/µm");
+  expect(labels.get(7)).toBe("Sample 7 · k = (0, 0, 0) rad/µm");
 });
