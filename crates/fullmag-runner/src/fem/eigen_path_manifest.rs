@@ -302,6 +302,9 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         "schema_version": "frequency_domain_manifest.v1",
         "analysis_family": "magnetic_frequency_domain",
         "study_product": "modal_eigen",
+        "mesh_identity": crate::artifacts::solver_mesh_signature(&plan.mesh),
+        "boundary_context": crate::fem::eigen_output::modal_boundary_context(plan),
+        "k_sampling": crate::fem::eigen_output::modal_k_sampling_manifest(plan.k_sampling.as_ref()),
         "spectrum_output_scopes":
             crate::eigen::output_selection::eigen_spectrum_output_scopes(outputs),
         "revision": format!(

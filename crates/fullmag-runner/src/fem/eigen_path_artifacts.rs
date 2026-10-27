@@ -1003,6 +1003,13 @@ mod output_publication_tests {
             let manifest = build_eigen_path_frequency_domain_manifest(
                 FemEngine::CpuNative, &result, &artifacts,
                 &residual_transport_test_plan(), &[]);
+            let manifest_plan = residual_transport_test_plan();
+            assert_eq!(manifest["boundary_context"],
+                crate::fem::eigen_output::modal_boundary_context(&manifest_plan));
+            assert_eq!(manifest["k_sampling"],
+                crate::fem::eigen_output::modal_k_sampling_manifest(manifest_plan.k_sampling.as_ref()));
+            assert_eq!(manifest["mesh_identity"],
+                crate::artifacts::solver_mesh_signature(&manifest_plan.mesh));
             assert!(manifest.get("session_id").is_none(),
                 "native path output must not fabricate a live-session identity");
             assert_eq!(manifest["requested_execution"]["outputs"], serde_json::json!([]));
