@@ -32,13 +32,13 @@ def _airbox_inspector_result_fixture(qa):
     browser_url = "http://frontend:8080"
     script_sha256 = "a" * 64
     expected_panels = [
-        ("root", "model:airbox", "airbox.root", "Airbox", "Airbox Overview"),
-        ("mesh", "model:airbox:mesh", "airbox.mesh", "Mesh", "Airbox Mesh Overview"),
-        ("parameters", "model:airbox:mesh:parameters", "airbox.mesh.parameters", "Parameters", "Canonical Authored Parameters"),
-        ("quality-gates", "model:airbox:mesh:quality-gates", "airbox.mesh.quality-gates", "Quality Gates", "Airbox Quality Gates"),
-        ("statistics", "model:airbox:mesh:statistics", "airbox.mesh.statistics", "Statistics", "Airbox Mesh Statistics"),
-        ("topology", "model:airbox:mesh:topology", "airbox.mesh.topology", "Topology", "Airbox Mesh Topology"),
-        ("build", "model:airbox:mesh:build", "airbox.mesh.build", "Build & Provenance", "Airbox Mesh Build"),
+        ("root", "model:airbox", "airbox.root", "Airbox Overview", "Domain policy"),
+        ("mesh", "model:airbox:mesh", "airbox.mesh", "Airbox Mesh Overview", "Airbox Mesh Overview"),
+        ("parameters", "model:airbox:mesh:parameters", "airbox.mesh.parameters", "Airbox Mesh Parameters", "Canonical Authored Parameters"),
+        ("quality-gates", "model:airbox:mesh:quality-gates", "airbox.mesh.quality-gates", "Airbox Mesh Quality Gates", "Airbox Quality Gates"),
+        ("statistics", "model:airbox:mesh:statistics", "airbox.mesh.statistics", "Airbox Mesh Statistics", "Airbox Mesh Statistics"),
+        ("topology", "model:airbox:mesh:topology", "airbox.mesh.topology", "Airbox Mesh Topology", "Airbox Mesh Topology"),
+        ("build", "model:airbox:mesh:build", "airbox.mesh.build", "Airbox Mesh Build", "Airbox Mesh Build"),
     ]
     synthetic_pass = {
         "requests": 1,

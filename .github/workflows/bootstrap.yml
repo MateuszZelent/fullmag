@@ -186,6 +186,9 @@ jobs:
       - name: Run native modal cancellation completion contract
         run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
 
+      - name: Run CPU periodic Newell kernel cache regressions
+        run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
+
       - name: Run typed active eigen Stop and Pause contracts
         run: |
           cargo test -p fullmag-engine fem_sparse::tests::lobpcg_control_ --lib

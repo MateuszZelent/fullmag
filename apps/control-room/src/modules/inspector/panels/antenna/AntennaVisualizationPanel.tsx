@@ -69,7 +69,7 @@ function AntennaLegacyVisualizationView({ selection, scene }: InspectorPanelProp
       <FieldRow label="Source object" value={objectId ?? "none"} mono />
       {stages.length ? <Select value={stage?.id} onValueChange={(value) => { setPreferredStage(value); visualization.setAntennaFieldIntent(null); }}>
         <SelectTrigger aria-label="Antenna visualization solve"><SelectValue /></SelectTrigger>
-        <SelectContent>{stages.map((item) => <SelectItem key={item.id} value={item.id}>{item.id}</SelectItem>)}</SelectContent>
+        <SelectContent className="fm-inspector-select-content">{stages.map((item) => <SelectItem key={item.id} value={item.id}>{item.id}</SelectItem>)}</SelectContent>
       </Select> : <p role="status">No antenna field-solve stage is configured. Configure and execute a standalone antenna solve before inspecting numerical results; LLG is not required.</p>}
       <p>Source FFT belongs to Antenna → Spectrum; it is not a magnetization response.</p>
     </InspectorGroup>
@@ -156,7 +156,7 @@ function AntennaPublishedVisualization({ objectId, stageId, scene, sceneStatus }
           }
         }}>
           <SelectTrigger aria-label="Antenna visualization execution"><SelectValue placeholder="Select an inspection execution" /></SelectTrigger>
-          <SelectContent>{mapping.candidates.map((candidate) => <SelectItem key={candidate.runtimeStageId} value={candidate.runtimeStageId}>{candidate.runtimeStageId} · {candidate.status}</SelectItem>)}</SelectContent>
+          <SelectContent className="fm-inspector-select-content">{mapping.candidates.map((candidate) => <SelectItem key={candidate.runtimeStageId} value={candidate.runtimeStageId}>{candidate.runtimeStageId} · {candidate.status}</SelectItem>)}</SelectContent>
         </Select>
         {mapping.state !== "mapped" ? <p role="status">{mapping.message}</p> : null}
         <VisualizationDisplayPassesControl items={[
@@ -169,7 +169,7 @@ function AntennaPublishedVisualization({ objectId, stageId, scene, sceneStatus }
         <FieldRow label="Quantity" value={quantitySpec.label} />
         <Select disabled={!available} value={effectiveQuantity} onValueChange={(value) => { setQuantity(value as AntennaFieldQuantity); setDisplay({ quantity: value as AntennaFieldQuantity, surface: false, wireframe: false, vectors: value === "electric_potential_per_ampere" || value === "device_potential" ? false : active?.vectors ?? false }); }}>
           <SelectTrigger aria-label="Antenna quantity"><SelectValue /></SelectTrigger>
-          <SelectContent>{Object.entries(inspectionMode ? closed ? ANTENNA_CLOSED_LOOP_QUANTITIES : ANTENNA_RAW_QUANTITIES : ANTENNA_BASIS_QUANTITIES).filter(([id]) => id !== "current_density" || currentAvailable).map(([id, spec]) => <SelectItem key={id} value={id}>{spec.label} [{spec.unit}]</SelectItem>)}</SelectContent>
+          <SelectContent className="fm-inspector-select-content">{Object.entries(inspectionMode ? closed ? ANTENNA_CLOSED_LOOP_QUANTITIES : ANTENNA_RAW_QUANTITIES : ANTENNA_BASIS_QUANTITIES).filter(([id]) => id !== "current_density" || currentAvailable).map(([id, spec]) => <SelectItem key={id} value={id}>{spec.label} [{spec.unit}]</SelectItem>)}</SelectContent>
         </Select>
         <FormField label="Snapshot" type="select" value={inspectionMode ? "inspection" : "basis"} onChange={(event) => { setQuantity(effectiveQuantity); setDisplaySource(event.target.value); visualization.setAntennaFieldIntent(null); }}><option value="basis" disabled={!basisAvailable}>Published per-ampere basis</option><option value="inspection" disabled={!rawAvailable}>Inspection only · raw current · NOT VERIFIED</option></FormField>
         <FormField label="Port mode" type="select" disabled={!available} value={port} onChange={(event) => { setPreferredPort(event.target.value); setDisplay({ portModeId: event.target.value }); }}><option value="" disabled>Select a published port</option>{ports.map((id) => <option key={id} value={id}>{id}</option>)}</FormField>

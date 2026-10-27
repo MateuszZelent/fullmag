@@ -908,7 +908,7 @@
   min-width: 0;
   color: var(--fm-start-meta);
   font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-2xs);
+  font-size: var(--fm-font-size-sm);
 }
 
 .fm-start-inspector__path > span {
@@ -1050,12 +1050,14 @@
   color: var(--fm-start-meta);
 }
 .fm-start-run-field select {
-  min-height: var(--fm-control-height-md, 28px);
+  min-height: var(--fm-inspector-control-height);
   border: 1px solid var(--fm-border-default);
-  border-radius: var(--fm-radius-control, 4px);
+  border-radius: var(--fm-inspector-control-radius);
   background: var(--fm-bg-panel-raised);
-  color: var(--fm-text-primary, inherit);
+  color: var(--fm-text-primary);
   font: inherit;
+  font-size: var(--fm-inspector-control-font-size);
+  padding-inline: var(--fm-space-2);
 }
 .fm-start-run-results {
   display: grid;
@@ -1124,6 +1126,11 @@
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-sm);
   overflow-wrap: anywhere;
+}
+
+.fm-start-inspector .fm-start-kv__row dt,
+.fm-start-inspector .fm-start-kv__row dd {
+  font-size: var(--fm-inspector-control-font-size);
 }
 
 .fm-start-inspector__foot {

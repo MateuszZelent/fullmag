@@ -23,5 +23,7 @@ describe("colorValueLabel", () => {
     expect(computedRgbToHex("rgb(30, 102, 245)")).toBe("#1e66f5");
     expect(computedRgbToHex("rgba(0, 0, 0, 0.5)")).toBe("#000000");
     expect(computedRgbToHex("transparent")).toBeNull();
+    expect(computedRgbToHex(undefined)).toBeNull();
+    expect(computedRgbToHex(null)).toBeNull();
   });
 });

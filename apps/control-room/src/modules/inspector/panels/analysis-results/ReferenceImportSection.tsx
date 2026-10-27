@@ -159,7 +159,7 @@ export function ReferenceImportSection() {
           <InspectorPropertyRow label="Path coordinate">
             <Select value={pathColumn} onValueChange={setPathColumn}>
               <SelectTrigger aria-label="Path coordinate column"><SelectValue /></SelectTrigger>
-              <SelectContent>
+              <SelectContent className="fm-inspector-select-content">
                 {columnOptions.map((option) => (
                   <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                 ))}
@@ -180,7 +180,7 @@ export function ReferenceImportSection() {
           <InspectorPropertyRow label="Frequency">
             <Select value={frequencyColumn} onValueChange={setFrequencyColumn}>
               <SelectTrigger aria-label="Frequency column"><SelectValue /></SelectTrigger>
-              <SelectContent>
+              <SelectContent className="fm-inspector-select-content">
                 {columnOptions.map((option) => (
                   <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                 ))}

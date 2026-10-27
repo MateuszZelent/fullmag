@@ -189,6 +189,29 @@ describe("control-room design styles", () => {
     expect(footerModule).toContain("[&>*]:h-full");
   });
 
+  it("keeps ribbon action status dot and menu chevron in separate corners", () => {
+    const ribbonCss = readAppFile("src/design/styles/ribbon.css");
+
+    expect(ribbonCss).toMatch(
+      /\.fm-ribbon-action__status\s*\{[^}]*top:\s*4px;[^}]*left:\s*5px;/,
+    );
+    expect(ribbonCss).toMatch(
+      /\.fm-ribbon-action__chevron\s*\{[^}]*top:\s*3px;[^}]*right:\s*3px;/,
+    );
+  });
+
+  it("spaces status bar dot and adjacent engine/method pills", () => {
+    const slotsCss = readAppFile("src/design/styles/slots.css");
+
+    expect(slotsCss).toMatch(
+      /\.fm-status-bar__dot\s*\{[^}]*margin-inline-end:\s*var\(--fm-space-1\);/,
+    );
+    expect(slotsCss).toContain(".fm-status-bar__engine + .fm-status-bar__engine");
+    expect(slotsCss).toContain(
+      ".fm-status-bar__compute-cta + .fm-status-bar__engine",
+    );
+  });
+
   it("defines every shared CSS custom property used by design styles", () => {
     const defined = new Set<string>();
     const used = new Set<string>();

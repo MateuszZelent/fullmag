@@ -35,10 +35,12 @@
   line-height: 1.4;
 }
 
-.fm-antenna-inspection__execution-select {
+.fm-antenna-inspection .fm-antenna-inspection__execution-select {
   min-width: 0;
   height: auto;
-  min-height: var(--fm-control-height-regular);
+  min-height: var(--fm-inspector-control-height);
+  border-radius: var(--fm-inspector-control-radius);
+  font-size: var(--fm-inspector-control-font-size);
   text-align: left;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -84,10 +86,37 @@
 }
 
 .fm-antenna-points__table input {
-  min-width: 6rem;
   width: 100%;
+  min-width: 6rem;
+  height: var(--fm-inspector-control-height);
+  min-height: var(--fm-inspector-control-height);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-inspector-control-radius);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
+  font-size: var(--fm-inspector-control-font-size);
   font-variant-numeric: tabular-nums;
+  padding-inline: var(--fm-space-2);
+  outline: none;
+}
+
+.fm-antenna-points__table input:focus-visible {
+  border-color: var(--fm-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 18%, transparent);
+}
+
+.fm-antenna-points__table input[aria-invalid="true"] {
+  border-color: var(--fm-danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-danger) 18%, transparent);
+}
+
+.fm-antenna-points__table input:disabled {
+  border-color: var(--fm-border-disabled);
+  background: var(--fm-bg-disabled);
+  color: var(--fm-text-disabled);
+  opacity: 1;
+  cursor: not-allowed;
 }
 
 .fm-antenna-points__error {

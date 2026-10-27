@@ -518,7 +518,7 @@ describe("GeometryObjectPanel primitive transaction", () => {
     try {
       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
       await act(async () => changeInput(container, "Size X", "0"));
-      await act(async () => findButton(container, "Apply Draft").click());
+      expect(findButton(container, "Apply Draft").disabled).toBe(true);
 
       expect(mocks.commitTransaction).not.toHaveBeenCalled();
       expect(container.textContent).toContain("greater than 0");

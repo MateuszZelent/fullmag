@@ -58,7 +58,7 @@ function AntennaInspectionSource({ source }: { source: ReturnType<typeof useAnte
       visualization.setArtifactFieldSelection(owner);
     }}>
       <SelectTrigger aria-label="Antenna inspection execution"><SelectValue placeholder="Select an execution explicitly" /></SelectTrigger>
-      <SelectContent>{candidates.map(candidate => <SelectItem key={candidate.runtimeStageId} value={candidate.runtimeStageId}>{candidate.authoredStageId} · {candidate.runtimeStageId} · {candidate.status}</SelectItem>)}</SelectContent>
+      <SelectContent className="fm-inspector-select-content">{candidates.map(candidate => <SelectItem key={candidate.runtimeStageId} value={candidate.runtimeStageId}>{candidate.authoredStageId} · {candidate.runtimeStageId} · {candidate.status}</SelectItem>)}</SelectContent>
     </Select>
     {selected ? <><FieldRow label="Run ID" value={selected.runId} mono /><FieldRow label="Authored solve" value={selected.authoredStageId} mono /><FieldRow label="Runtime stage" value={selected.runtimeStageId} mono /><FieldRow label="Carrier scope" value={pin?.carrierScopeKind ? `${pin.carrierScopeKind}: ${pin.carrierScopeId ?? "full"}` : "Awaiting immutable carrier metadata"} mono /></> : null}
     {error ? <FeedbackBanner kind="warning" message={error} /> : candidates.length === 0 ? <p role="status">No retained execution is available for this source. A solve definition alone is not a numerical result.</p> : null}

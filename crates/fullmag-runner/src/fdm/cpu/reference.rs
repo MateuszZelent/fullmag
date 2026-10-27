@@ -2045,6 +2045,15 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         while !all_active_dofs_frozen
             && !stage_endpoint_reached(state.time_seconds, stage_end_time_s, dt)
         {
+            if live
+                .as_ref()
+                .and_then(|consumer| consumer.interrupt_requested)
+                .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+            {
+                cancelled = true;
+                break;
+            }
+
             if step_count == 0
                 && live
                     .as_ref()
@@ -6269,6 +6278,45 @@ mod tests {
         assert!(
             observe_calls <= 3,
             "scalar-only live updates should reuse StepReport instead of reobserving every step; observe_state calls: {observe_calls}"
+        );
+    }
+
+    #[test]
+    fn pre_requested_live_interrupt_cancels_before_the_first_step() {
+        let plan = make_test_plan();
+        let interrupt_requested = std::sync::atomic::AtomicBool::new(true);
+        let mut live_updates = 0usize;
+        let mut on_step = |_update: StepUpdate| -> StepAction {
+            live_updates += 1;
+            StepAction::Continue
+        };
+
+        let executed = execute_reference_fdm(
+            &plan,
+            3e-14,
+            &[],
+            Some(LiveStepConsumer {
+                grid: plan.grid.cells,
+                field_every_n: u64::MAX,
+                initial_snapshot: false,
+                display_selection: None,
+                interrupt_requested: Some(&interrupt_requested),
+                on_step: &mut on_step,
+            }),
+            None,
+        )
+        .expect("pre-requested CPU interrupt should cancel cleanly");
+
+        assert_eq!(executed.result.status, RunStatus::Cancelled);
+        assert_eq!(live_updates, 0);
+        assert_eq!(
+            executed
+                .provenance
+                .fdm_cpu_step_transaction_telemetry
+                .as_ref()
+                .expect("CPU step transaction telemetry")
+                .accepted_step_count,
+            0
         );
     }
 

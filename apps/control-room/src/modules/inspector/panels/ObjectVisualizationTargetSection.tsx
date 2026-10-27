@@ -10,7 +10,7 @@ import {
   Box,
   SquareDashed,
 } from "lucide-react";
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   type FieldCatalogResource,
   type FieldMetaResource,
@@ -93,7 +93,7 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-import { colorValueLabel, isThemeColorToken } from "@/shared/color/colorValueLabel";
+import { colorValueLabel, computedRgbToHex, isThemeColorToken } from "@/shared/color/colorValueLabel";
 import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
 
 const GEOMETRY_SCOPES = [
@@ -1204,20 +1204,51 @@ export function ColorField({
   onChange: (value: string) => void;
 }) {
   const inputId = useId();
+  const swatchRef = useRef<HTMLSpanElement>(null);
+  const pickerRef = useRef<HTMLInputElement>(null);
+  const themeToken = isThemeColorToken(value);
+  const seedPicker = useCallback(() => {
+    const hex = swatchRef.current && typeof getComputedStyle === "function"
+      ? computedRgbToHex(getComputedStyle(swatchRef.current)?.backgroundColor)
+      : null;
+    if (hex && pickerRef.current) pickerRef.current.value = hex;
+    else if (!themeToken && pickerRef.current) pickerRef.current.value = colorPickerInputValue(value);
+  }, [themeToken, value]);
+  useEffect(() => {
+    seedPicker();
+    if (typeof MutationObserver !== "function" || typeof document === "undefined" || !document.documentElement) {
+      return undefined;
+    }
+    const observer = new MutationObserver(seedPicker);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    return () => observer.disconnect();
+  }, [seedPicker, value]);
   return (
     <InspectorPropertyRow label={label}>
       <div
         className="flex min-w-0 w-full items-center justify-end gap-2"
         data-slot="visualization-color-control"
       >
+        <span
+          aria-hidden="true"
+          className="fm-inspector-color-value__swatch"
+          ref={swatchRef}
+          style={value ? { background: value } : undefined}
+        />
         <input
           aria-label={`${label} picker`}
           className="fm-viz-color-swatch h-fm-control-sm w-fm-control-sm shrink-0 cursor-pointer rounded-fm-control border border-fm-subtle bg-fm-canvas p-1 disabled:cursor-not-allowed disabled:border-fm-disabled-border disabled:bg-fm-disabled disabled:opacity-100"
+          defaultValue={themeToken ? undefined : colorPickerInputValue(value)}
           disabled={disabled}
           id={inputId}
+          ref={pickerRef}
           type="color"
-          value={colorPickerInputValue(value)}
           onChange={(event) => onChange(event.currentTarget.value)}
+          onFocus={seedPicker}
+          onPointerDown={seedPicker}
         />
         <input
           aria-label={`${label} value`}
@@ -1229,7 +1260,7 @@ export function ColorField({
           placeholder={colorValueLabel(value)}
           title={value}
           type="text"
-          value={isThemeColorToken(value) ? "" : value}
+          value={themeToken ? "" : value}
           onChange={(event) => onChange(event.currentTarget.value)}
         />
       </div>

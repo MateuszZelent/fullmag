@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { colorValueLabel, computedRgbToHex, isThemeColorToken } from "@/shared/color/colorValueLabel";
 import { InspectorPropertyRow } from "./InspectorPropertyRow";
@@ -40,10 +40,21 @@ export function ColorValueField({
   const swatchRef = useRef<HTMLSpanElement>(null);
   const pickerRef = useRef<HTMLInputElement>(null);
   const themeToken = isThemeColorToken(value);
-  const seedPicker = () => {
-    const hex = swatchRef.current ? computedRgbToHex(getComputedStyle(swatchRef.current).backgroundColor) : null;
+  const seedPicker = useCallback(() => {
+    const hex = swatchRef.current && typeof getComputedStyle === "function"
+      ? computedRgbToHex(getComputedStyle(swatchRef.current)?.backgroundColor)
+      : null;
     if (hex && pickerRef.current) pickerRef.current.value = hex;
-  };
+  }, []);
+  useEffect(() => {
+    seedPicker();
+    if (typeof MutationObserver !== "function" || typeof document === "undefined" || !document.documentElement) {
+      return undefined;
+    }
+    const observer = new MutationObserver(seedPicker);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, [seedPicker, value]);
   return (
     <InspectorPropertyRow description={description} label={label}>
       <span className="fm-inspector-color-field" title={value || undefined}>

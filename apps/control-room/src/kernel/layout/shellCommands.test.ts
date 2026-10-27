@@ -279,4 +279,31 @@ describe("SHELL_COMMANDS", () => {
     expect(apply).toHaveBeenCalledOnce();
     expect(reset).toHaveBeenCalledOnce();
   });
+
+  it("keeps a form-specific Apply blocker visible to the workspace command", async () => {
+    const registry = new PendingFormRegistry();
+    const reason = "Resolve the scene revision conflict before applying this draft.";
+    const apply = vi.fn(async () => true);
+    registry.register(Symbol("blocked-inspector"), {
+      apply,
+      applyBlockReason: reason,
+      applying: false,
+      dirty: true,
+      mode: "staged",
+      reset: vi.fn(async () => undefined),
+      valid: true,
+    });
+    const applyCommand = SHELL_COMMANDS.find(
+      (candidate) => candidate.id === "workspace.apply-inspector",
+    );
+    const context = { source: "test", pendingForms: registry };
+
+    expect(applyCommand?.isEnabled?.(context)).toBe(false);
+    expect(applyCommand?.disabledReason?.(context)).toBe(reason);
+    await expect(applyCommand?.run(context)).resolves.toEqual({
+      message: reason,
+      status: "failed",
+    });
+    expect(apply).not.toHaveBeenCalled();
+  });
 });

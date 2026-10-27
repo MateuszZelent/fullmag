@@ -68,7 +68,7 @@ export function LiveChartInspectorPanel({ selection }: InspectorPanelProps) {
             <SelectTrigger id="fm-live-chart-preset" aria-label="Live Chart preset" className="fm-live-chart-inspector__select">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="fm-inspector-select-content">
               <SelectItem value="magnetization">Magnetization</SelectItem>
               <SelectItem value="energy">Energy</SelectItem>
               <SelectItem value="convergence">Convergence</SelectItem>
@@ -90,7 +90,7 @@ export function LiveChartInspectorPanel({ selection }: InspectorPanelProps) {
             <SelectTrigger id="fm-live-chart-range" aria-label="Live Chart window" className="fm-live-chart-inspector__select">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="fm-inspector-select-content">
               {descriptor?.range.mode === "fixed" ? <SelectItem value="fixed" disabled>Selected range</SelectItem> : null}
               <SelectItem value="follow">Follow tail</SelectItem>
               <SelectItem value="tailRows">Last 120 rows</SelectItem>

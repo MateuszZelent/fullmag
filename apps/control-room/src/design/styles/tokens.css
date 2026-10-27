@@ -34,6 +34,9 @@
   --fm-inspector-padding-inline: 10px;
   --fm-inspector-row-gap: 2px;
   --fm-inspector-control-gap: 2px;
+  --fm-inspector-control-height: 35px;
+  --fm-inspector-control-radius: 8px;
+  --fm-inspector-control-font-size: 13px;
   --fm-inspector-group-gap: 8px;
   --fm-inspector-tab-height: 44px;
   --fm-inspector-icon-size: 44px;

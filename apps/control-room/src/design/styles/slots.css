@@ -168,6 +168,7 @@
 .fm-status-bar__dot {
   width: var(--fm-space-1);
   height: var(--fm-space-1);
+  margin-inline-end: var(--fm-space-1);
   border-radius: 50%;
   background: var(--fm-text-muted);
   flex-shrink: 0;
@@ -319,7 +320,9 @@
 }
 
 .fm-status-bar__axis + .fm-status-bar__axis,
-.fm-status-bar__axis + .fm-status-bar__engine {
+.fm-status-bar__axis + .fm-status-bar__engine,
+.fm-status-bar__engine + .fm-status-bar__engine,
+.fm-status-bar__compute-cta + .fm-status-bar__engine {
   margin-inline-start: var(--fm-space-1);
 }
 

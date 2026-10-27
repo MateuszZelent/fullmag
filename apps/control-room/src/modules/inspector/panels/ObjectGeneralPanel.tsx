@@ -831,7 +831,19 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
       const hasGeometryChanges =
         !geometryDraftGeometryEquals(editState.draft, acknowledgedDraft) ||
         !geometryDraftTranslationEquals(editState.draft, acknowledgedDraft);
-      if (hasGeometryChanges) return applyObjectEditPatch(identityAck);
+      if (hasGeometryChanges) {
+        const geometryApplied = await applyObjectEditPatch(identityAck);
+        if (
+          !geometryApplied &&
+          (kernel.commands.getSessionScopeKey() ?? null) === sessionScopeKey &&
+          kernel.objectEditSession.getSnapshot().identity === editState.identity
+        ) {
+          throw new Error(
+            "Object identity was committed. Geometry and placement could not be confirmed. Review the draft and panel feedback before retrying Apply.",
+          );
+        }
+        return geometryApplied;
+      }
       return true;
     }
 
@@ -895,6 +907,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
             <FormField
               label="Notes"
               type="textarea"
+              rows={3}
               value={draftNotes}
               onChange={(event) => updateDraft("notes", event.target.value)}
             />
@@ -925,27 +938,31 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
             <FieldRow label="Region" value={object.region} />
           </>
         )}
-        {object.mode === "committed" && visualizationSettings ? (
-          <>
-            <ColorValueField
-              description="Viewport-local primitive preference; a solid shader override takes precedence."
-              label="Primitive color"
-              value={visualizationSettings.primitiveMonoColor ?? ""}
-              onChange={(value) => patchObjectColor("primitiveColor", value)}
-            />
-            <FieldRow
-              label="Preview color"
-              value={primitiveColor ? <ColorValue value={primitiveColor.color} /> : "unavailable"}
-            />
-            <FieldRow label="Preview color source" value={primitiveColor?.source ?? "unavailable"} />
-            <ColorValueField
-              label="Frame color"
-              value={visualizationSettings.wireframeColor}
-              onChange={(value) => patchObjectColor("frameColor", value)}
-            />
-          </>
-        ) : null}
       </InspectorGroup>
+
+      {object.mode === "committed" && visualizationSettings ? (
+        <InspectorGroup title="Viewport display" badge="Live" collapsible defaultOpen>
+          <p className="fm-inspector-form-field__hint">
+            Display colors apply immediately and are not affected by the draft Apply or Revert.
+          </p>
+          <ColorValueField
+            description="Viewport-local primitive preference; a solid shader override takes precedence."
+            label="Primitive color"
+            value={visualizationSettings.primitiveMonoColor ?? ""}
+            onChange={(value) => patchObjectColor("primitiveColor", value)}
+          />
+          <FieldRow
+            label="Preview color"
+            value={primitiveColor ? <ColorValue value={primitiveColor.color} /> : "unavailable"}
+          />
+          <FieldRow label="Preview color source" value={primitiveColor?.source ?? "unavailable"} />
+          <ColorValueField
+            label="Frame color"
+            value={visualizationSettings.wireframeColor}
+            onChange={(value) => patchObjectColor("frameColor", value)}
+          />
+        </InspectorGroup>
+      ) : null}
 
       {!antennaWithoutMagnetization ? <InspectorGroup title="Energies" badge={metricsModel.status} collapsible defaultOpen>
         <FieldRow label="Fetch state" value={objectMetrics.status} />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { SCENE_RESOURCE_KEY, useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
@@ -23,10 +23,16 @@ import {
   buildAbsorbingBoundaryPatch,
   type AbsorbingBoundaryDraft,
 } from "./ObjectAbsorbingBoundaryPanelModel";
+import {
+  objectMaterialMutationCoordinator,
+  type ObjectMaterialMutationCoordinator,
+} from "./ObjectMaterialPanelEditSession";
 
 interface ObjectAbsorbingBoundaryPanelProps {
   objectId: string;
   baseRevision: number | null;
+  mutationCoordinator?: ObjectMaterialMutationCoordinator;
+  mutationScopeKey?: string;
 }
 
 type Feedback = { kind: "error" | "success"; message: string } | null;
@@ -34,6 +40,8 @@ type Feedback = { kind: "error" | "success"; message: string } | null;
 export function ObjectAbsorbingBoundaryPanel({
   objectId,
   baseRevision,
+  mutationCoordinator: sharedMutationCoordinator,
+  mutationScopeKey,
 }: ObjectAbsorbingBoundaryPanelProps) {
   const { api, authoringHistory, commands, resources } = useKernel();
   const scene = useSceneResource();
@@ -69,6 +77,14 @@ export function ObjectAbsorbingBoundaryPanel({
   }, [draft]);
   const [pending, setPending] = useState(false);
   const applyInFlight = useRef(false);
+  const mutationCoordinator = sharedMutationCoordinator ?? objectMaterialMutationCoordinator;
+  useSyncExternalStore(
+    mutationCoordinator.subscribe,
+    mutationCoordinator.getVersion,
+    mutationCoordinator.getVersion,
+  );
+  const objectMutationScopeKey = mutationScopeKey ?? `session:unknown|${objectId}`;
+  const mutationBusy = mutationCoordinator.getActive(objectMutationScopeKey) !== null;
   const [feedback, setFeedback] = useState<Feedback>(null);
   const update = (patch: Partial<AbsorbingBoundaryDraft>) => {
     const next = { ...draftRef.current, ...patch };
@@ -83,7 +99,7 @@ export function ObjectAbsorbingBoundaryPanel({
 
   const acknowledgeAppliedDraft = useRegisterInspectorEditSession(
     object ? "staged" : null,
-    pending,
+    pending || mutationBusy,
     dirty,
     valid,
     undefined,
@@ -121,6 +137,14 @@ export function ObjectAbsorbingBoundaryPanel({
     });
 
   function resetDraft(): void {
+    const active = mutationCoordinator.getActive(objectMutationScopeKey);
+    if (active) {
+      setFeedback({
+        kind: "error",
+        message: `${active.operation} is still saving. Wait for its acknowledgement before reverting.`,
+      });
+      return;
+    }
     draftRef.current = effectiveBaseDraft;
     setDraftState({ key: baseKey, draft: effectiveBaseDraft });
     setFeedback(null);
@@ -141,6 +165,20 @@ export function ObjectAbsorbingBoundaryPanel({
     const historyContext = createHistoryMutationContext();
     if (!historyContext.sessionScopeKey) {
       setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
+      return false;
+    }
+    const mutationLease = mutationCoordinator.acquire(
+      objectMutationScopeKey,
+      "Absorbing boundary",
+    );
+    if (!mutationLease) {
+      const active = mutationCoordinator.getActive(objectMutationScopeKey);
+      setFeedback({
+        kind: "error",
+        message: active
+          ? `${active.operation} is still saving. Wait for its acknowledgement before starting another update.`
+          : "Another update is still saving. Wait for its acknowledgement before trying again.",
+      });
       return false;
     }
     applyInFlight.current = true;
@@ -193,6 +231,7 @@ export function ObjectAbsorbingBoundaryPanel({
     } finally {
       applyInFlight.current = false;
       setPending(false);
+      mutationCoordinator.finish(mutationLease);
     }
   }
 
@@ -265,7 +304,7 @@ export function ObjectAbsorbingBoundaryPanel({
           </div>
         </>
       ) : null}
-      <Button type="button" size="sm" variant="primary" disabled={pending} onClick={() => void apply()}>
+      <Button type="button" size="sm" variant="primary" disabled={mutationBusy} onClick={() => void apply()}>
         {pending ? "Saving…" : "Apply boundary"}
       </Button>
       {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
