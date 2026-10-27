@@ -11,7 +11,7 @@ mod accepted_scene;
 
 #[path = "session_persistence_file_transport.rs"]
 mod file_transport;
-pub(crate) use file_transport::MAX_FMS_FILE_BYTES;
+pub(crate) use file_transport::{MAX_FMS_FILE_BYTES, FmsFileUpload};
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
@@ -3101,7 +3101,7 @@ pub(crate) async fn import_session_file_inspect(
     request: axum::extract::Request,
 ) -> Result<Json<SessionImportInspectResponse>, ApiError> {
     let file = file_transport::receive(&state, request).await?;
-    let staged = stage_import_archive(&state, file, false).await?;
+    let staged = stage_import_archive(&state, file.0, false).await?;
     inspect_staged_import(staged)
 }
 
@@ -3562,7 +3562,7 @@ pub(crate) async fn import_session_file_commit(
         crate::validate_current_live_request_context(&state, context).await?;
     }
     validate_empty_import_scope(&state, empty_session_epoch).await?;
-    let preflight = stage_import_archive(&state, file, true).await?;
+    let preflight = stage_import_archive(&state, file.0, true).await?;
     commit_staged_import(
         state,
         preflight,

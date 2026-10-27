@@ -14,6 +14,11 @@ use tokio::io::AsyncWriteExt;
 use crate::error::ApiError;
 use crate::types::AppState;
 
+/// Owned binary upload. OpenAPI describes the bytes, not a JSON number array.
+#[derive(utoipa::ToSchema)]
+#[schema(value_type = String, format = Binary)]
+pub(crate) struct FmsFileUpload(pub(super) File);
+
 pub(crate) const MAX_FMS_FILE_BYTES: usize = 512 * 1024 * 1024;
 const FILE_UPLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -28,9 +33,11 @@ fn too_large() -> ApiError {
     )
 }
 
-pub(super) async fn receive(state: &AppState, request: Request) -> Result<File, ApiError> {
+pub(super) async fn receive(state: &AppState, request: Request) -> Result<FmsFileUpload, ApiError> {
     let root = super::session_store_root(state).join("imports");
-    receive_in(&root, request, MAX_FMS_FILE_BYTES, FILE_UPLOAD_TIMEOUT).await
+    receive_in(&root, request, MAX_FMS_FILE_BYTES, FILE_UPLOAD_TIMEOUT)
+        .await
+        .map(FmsFileUpload)
 }
 
 async fn receive_in(
@@ -160,6 +167,15 @@ mod tests {
             builder = builder.header(header::CONTENT_LENGTH, length);
         }
         builder.body(body).unwrap()
+    }
+
+    #[test]
+    fn file_upload_schema_describes_binary_bytes() {
+        let schema =
+            serde_json::to_value(<FmsFileUpload as utoipa::PartialSchema>::schema()).unwrap();
+        assert_eq!(schema["type"], "string");
+        assert_eq!(schema["format"], "binary");
+        assert!(schema.get("items").is_none());
     }
 
     #[tokio::test]

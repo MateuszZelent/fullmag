@@ -123,6 +123,22 @@ jobs:
         run: >-
           python -B scripts/fullmag_storage.py run --profile linux-host --
           pnpm --dir apps/control-room generate:api
+      - name: Validate binary file import schema and required restore policy
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          contract = json.loads(Path("apps/control-room/src/kernel/api/generated/openapi-v2.json").read_text())
+          for path in ("/v2/persistence/imports/file-inspections", "/v2/sessions/current/persistence/file-imports"):
+              operation = contract["paths"][path]["post"]
+              assert operation["requestBody"]["required"]
+              schema = operation["requestBody"]["content"]["application/octet-stream"]["schema"]
+              if "$ref" in schema:
+                  schema = contract["components"]["schemas"][schema["$ref"].split("/")[-1]]
+              assert schema["type"] == "string" and schema["format"] == "binary"
+              assert "items" not in schema
+          parameters = contract["paths"]["/v2/sessions/current/persistence/file-imports"]["post"]["parameters"]
+          assert any(parameter.get("name") == "restore_mode" and parameter.get("required") for parameter in parameters)
       - name: Preserve generated contract and source identity
         run: git rev-parse HEAD > apps/control-room/src/kernel/api/generated/source-commit.txt
       - uses: actions/upload-artifact@v7

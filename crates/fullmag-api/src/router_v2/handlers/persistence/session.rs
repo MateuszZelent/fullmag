@@ -8,7 +8,7 @@ use axum::Json;
 
 use crate::error::ApiError;
 use crate::session_persistence::{
-    CheckpointCreateRequest, CheckpointCreateResponse, CheckpointEntry, CheckpointListResponse,
+    CheckpointCreateRequest, CheckpointCreateResponse, CheckpointEntry, CheckpointListResponse, FmsFileUpload,
     CheckpointRestoreRequest, CheckpointRestoreResponse, FieldStateExportRequest,
     FieldStateExportResponse, FieldStateImportRequest, FieldStateImportResponse,
     FieldStateInspectRequest, FieldStateInspectResponse, RecoveryClearResponse,
@@ -83,7 +83,7 @@ pub async fn commit_session(
 #[utoipa::path(
     post,
     path = "/v2/persistence/imports/file-inspections",
-    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
+    request_body(content = FmsFileUpload, content_type = "application/octet-stream", description = "Original .fms ZIP bytes; nonempty, at most 512 MiB"),
     responses(
         (status = 200, description = "Project archive inspection", body = SessionImportInspectResponse),
         (status = 400, description = "Invalid archive"),
@@ -108,7 +108,7 @@ pub struct SessionFileImportQuery {
     post,
     path = "/v2/sessions/current/persistence/file-imports",
     params(("restore_mode" = SessionRestoreMode, Query, description = "Explicit archive restore policy")),
-    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
+    request_body(content = FmsFileUpload, content_type = "application/octet-stream", description = "Original .fms ZIP bytes; nonempty, at most 512 MiB"),
     responses(
         (status = 200, description = "Session import committed", body = SessionImportCommitResponse),
         (status = 400, description = "Invalid archive or restore policy"),
