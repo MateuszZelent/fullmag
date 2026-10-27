@@ -1,0 +1,263 @@
+{
+  "schemaVersion": "fullmag.eigen_mode_ui_verification.v1",
+  "status": "passed",
+  "startedAt": "2026-10-27T11:45:16.843Z",
+  "config": {
+    "apiBase": "http://localhost:3217",
+    "expectedRunId": "run-live-afe29d88b930ee8c5c0f1c0bb68b3f31aa603b7d457a871334e08155fc281c6d",
+    "expectedStageId": "eigenmodes",
+    "modeIndex": 0,
+    "output": "/tmp/eigen-gamma-floor32-ui.json",
+    "sampleIndex": 0,
+    "selectMode": true,
+    "verifyAnimation": true,
+    "timeoutMs": 180000,
+    "url": "http://localhost:3217/workspace"
+  },
+  "run": {
+    "requested": "run-live-afe29d88b930ee8c5c0f1c0bb68b3f31aa603b7d457a871334e08155fc281c6d",
+    "status": "completed",
+    "currentRun": {
+      "runId": "run-live-afe29d88b930ee8c5c0f1c0bb68b3f31aa603b7d457a871334e08155fc281c6d",
+      "revision": 121,
+      "status": "completed"
+    },
+    "session": {
+      "header": "session=docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4&epoch=docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4%401793101276881&request_scope_epoch=31f81b0d-9b9a-424a-a88f-25e2b8df106c%3A1",
+      "sessionId": "docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4",
+      "sessionEpoch": "docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4@1793101276881",
+      "requestScopeEpoch": "31f81b0d-9b9a-424a-a88f-25e2b8df106c:1"
+    }
+  },
+  "safety": {
+    "mutationAttempts": [],
+    "mutationRequestsAborted": true,
+    "visualizationRequests": [
+      {
+        "method": "POST",
+        "path": "/v2/sessions/current/visualization/client-acks",
+        "url": "http://localhost:3217/v2/sessions/current/visualization/client-acks"
+      },
+      {
+        "method": "PATCH",
+        "path": "/v2/sessions/current/visualization/state",
+        "url": "http://localhost:3217/v2/sessions/current/visualization/state"
+      },
+      {
+        "method": "POST",
+        "path": "/v2/sessions/current/visualization/client-acks",
+        "url": "http://localhost:3217/v2/sessions/current/visualization/client-acks"
+      }
+    ],
+    "permittedApiMethods": [
+      "GET",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "permittedVisualizationMutations": [
+      "PATCH /v2/sessions/current/visualization/state",
+      "POST /v2/sessions/current/visualization/client-acks"
+    ]
+  },
+  "finishedAt": "2026-10-27T11:46:41.863Z",
+  "ui": {
+    "visibleField": {
+      "activeField": null,
+      "activeView": "Plot selected eigen mode with phase-rotated real display",
+      "inspectorText": "Eigen Mode Control\nsample 0, mode 0\nCanonical object\nEigenmodes mode\nMode identity\nsample 0, mode 0\nFrequency\n9.299 GHz\nImaginary frequency\n0 Hz\nDecay rate \u0393 / 2\u03c0 (Hz)\n0 Hz\nStability\nundamped\nLifetime\nnot available\nLinewidth (FWHM)\n0 Hz\nQ-factor\nnot available\nAngular frequency\n5.843e+10 rad/s\nMode field\nanalysis:eigen:sample-0000:mode-0000; ready for spatial XYZ field\nMode field resource\n/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0\nAvailable field views\ncomplex, real, imag, abs, amplitude, phase, phase_rotated_real\nAbsolute residual (L2)\nnot available\nRelative residual (L2)\n1.653e-13\nResidual scope\nFull native descriptor\nSpectrum residual (type unspecified)\nnot available\nTangent leakage max\n8.272e-25\nDominant polarization\nuniform\n3D workflow\nphasor reconstruction; 1709 real samples, 1709 imag samples\nEigen Mode 3D Visualization\nMode field available\nField ID\nanalysis:eigen:sample-0000:mode-0000\nField resource\n/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0\nDefault view\nPhase-rotated real\nPhase convention\nnot available\nShared style preset\none shared eigen/response mode visualization preset; switching modes keeps color, shader, vector, phase, and colormap controls\nVolume inspection roadmap\nclip planes and shader opacity remain planned for internal-mode inspection\nMode field view\nPhase-rotated real\nComplex (abs)\nReal\nImag\nPhase\nMode component\n|delta m|\ndelta m_x\ndelta m_y\ndelta m_z\nDisplay passes\nSurface\nVectors\nMode color source\nSolid (plain material)\nHSL orientation\nComponent X\nComponent Y\nComponent Z\nMagnitude |m|\nColormap\nMode solid color\nMode colormap\nViridis\nInferno\nMagma\nCoolwarm\nJet\nColor range\nAuto\nSymmetric\nManual\nColor minimum\nColor maximum\nDisplay gain\nVector budget\nVector scope\nSurface\nFull\nVector scale\n\nVisualization only \u2014 these controls do not change the computed mode.\n\nRotated\nReal\nImag\nAbs\nPhase\nAnimate\nStop animate",
+      "webgl": {
+        "canvasHeight": 516,
+        "canvasWidth": 617,
+        "context": "webgl2",
+        "cssHeight": 516.453125,
+        "cssWidth": 617.234375,
+        "drawingBufferHeight": 516,
+        "drawingBufferWidth": 617,
+        "isContextLost": false
+      }
+    },
+    "modeFieldBinary": {
+      "path": "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0000/samples/vector",
+      "query": {
+        "component": "full",
+        "expected_artifact_generation_id": "sha256:a930b1a5c7d95e8766d4889bb70dc428a76a73708bedc9d8ab17273ee5b3b3ba",
+        "scope_kind": "full",
+        "view": "complex"
+      },
+      "requestObservedAtMs": 1793101548787,
+      "requestScopeHeader": "session=docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4&epoch=docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4%401793101276881&request_scope_epoch=31f81b0d-9b9a-424a-a88f-25e2b8df106c%3A1",
+      "response": {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0000/samples/vector",
+        "query": {
+          "component": "full",
+          "expected_artifact_generation_id": "sha256:a930b1a5c7d95e8766d4889bb70dc428a76a73708bedc9d8ab17273ee5b3b3ba",
+          "scope_kind": "full",
+          "view": "complex"
+        },
+        "status": 200,
+        "observedAtMs": 1793101548802,
+        "headers": {
+          "content-type": "application/octet-stream",
+          "x-fullmag-artifact-generation-id": "sha256:a930b1a5c7d95e8766d4889bb70dc428a76a73708bedc9d8ab17273ee5b3b3ba",
+          "x-fullmag-component": "full",
+          "x-fullmag-domain-generation-id": "8623634477479487831",
+          "x-fullmag-encoding": "FMVP;version=5",
+          "x-fullmag-field-indexing": "full_domain",
+          "x-fullmag-field-revision": "13403488745954034018",
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": "6",
+          "x-fullmag-point-count": "1709",
+          "x-fullmag-quantity-id": "analysis:eigen:sample-0000:mode-0000",
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": "10254"
+        }
+      }
+    },
+    "modeFieldController": {
+      "name": "viewport-3d.mode-field-overlay.resource-state",
+      "lane": "viewport-3d",
+      "timestampMs": 1793101548826,
+      "detail": {
+        "controllerStatus": "ready",
+        "controllerHasError": false,
+        "enabled": true,
+        "hasIntent": true,
+        "hasSession": true,
+        "hasTopology": true,
+        "topologyIdentityComplete": true
+      }
+    },
+    "modeViewportBounds": "{\"center\":[0,0,0],\"radius\":2.8722813232690143e-8,\"size\":[4e-8,4e-8,1e-8]}",
+    "displayChecks": [
+      {
+        "view": "real",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "bufferRepresentation": "real",
+          "bufferMin": 0,
+          "bufferMax": 250000000000.0078,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-gamma-floor32-ui-real.png"
+      },
+      {
+        "view": "imag",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "bufferRepresentation": "imag",
+          "bufferMin": 0,
+          "bufferMax": 250000000000.0078,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-gamma-floor32-ui-imag.png"
+      },
+      {
+        "view": "abs",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "bufferRepresentation": "abs",
+          "bufferMin": 0,
+          "bufferMax": 250000000000.0078,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-gamma-floor32-ui-abs.png"
+      },
+      {
+        "view": "phase",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "bufferRepresentation": "phase",
+          "bufferMin": -3.141592653589793,
+          "bufferMax": 3.141592653589793,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-gamma-floor32-ui-phase.png"
+      }
+    ],
+    "animationProbe": {
+      "frames": [
+        {
+          "index": 0,
+          "screenshot": "/tmp/eigen-gamma-floor32-ui-animation-0.png",
+          "timeMs": 1793101585149
+        },
+        {
+          "index": 1,
+          "screenshot": "/tmp/eigen-gamma-floor32-ui-animation-1.png",
+          "timeMs": 1793101587916
+        },
+        {
+          "index": 2,
+          "screenshot": "/tmp/eigen-gamma-floor32-ui-animation-2.png",
+          "timeMs": 1793101590621
+        },
+        {
+          "index": 3,
+          "screenshot": "/tmp/eigen-gamma-floor32-ui-animation-3.png",
+          "timeMs": 1793101596114
+        },
+        {
+          "index": 4,
+          "screenshot": "/tmp/eigen-gamma-floor32-ui-animation-4.png",
+          "timeMs": 1793101598771
+        }
+      ],
+      "stoppedFrames": [
+        {
+          "index": 0,
+          "screenshot": "/tmp/eigen-gamma-floor32-ui-stopped-0.png",
+          "timeMs": 1793101600743
+        },
+        {
+          "index": 1,
+          "screenshot": "/tmp/eigen-gamma-floor32-ui-stopped-1.png",
+          "timeMs": 1793101601593
+        }
+      ],
+      "pixelsVerified": false
+    }
+  },
+  "browser": {
+    "console": {
+      "errors": [],
+      "warnings": [
+        "THREE.Clock: This module has been deprecated. Please use THREE.Timer instead.",
+        "[.WebGL-0x1b1400158200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+        "[.WebGL-0x1b1400158200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+        "[.WebGL-0x1b1400158200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+        "[.WebGL-0x1b1400158200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+        "THREE.Clock: This module has been deprecated. Please use THREE.Timer instead."
+      ],
+      "pageErrors": []
+    }
+  }
+}

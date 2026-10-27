@@ -281,3 +281,19 @@ Pełny cel i I5/I6/I7 pozostają otwarte. Po zwolnieniu miejsca: domknąć dokł
 Wszystkie pięć uruchomionych bramek źródeł PASS: API/retirement 40481439173, C ABI 40482575121, MFEM 40482578832, runner/import certificate 40483507450, UI 40486139519 (testy, architektura, complete typecheck, React Doctor). Browser pozytywny/negatywny UI PASS. Te dowody nie zastępują nowego Gamma i pełnego sweepa. Backend nadal fde189663.
 
 Powtarzająca się blokada wykonania: /dev/sdf WSL ~60 MiB wolnego. Własne bezpieczne sprzątanie zakończone, brak przestrzeni nadal wymaga działania operatora. [Pełny punkt wznowienia i macierz pozostałych wymagań](../../audits/2026-10-27-eigensolve-resume-after-wsl-space.md). Cel nie jest zakończony; I0/I1/I3/I5/I6/I7 mają otwarty zakres. Nie uruchomiono kolejnej symulacji przy pełnym dysku.
+
+## Aktualizacja 27.10.2026 — Gamma window i UI po naprawie runtime
+
+I7 Gamma frequency-window PASS dla wybranego modu: run afe29d88…,
+9,299249697 GHz, pełny residual 1,65e-13, 50/50 podokien,
+search_stability=stable, NCV=32. window_complete=false: brak niezależnego
+count certificate pozostaje otwarty. Porównanie finite-Dirichlet 5,5e-11%.
+I4 browser real/imag/abs/phase i animacja Gamma window PASS; bounds samego
+filmu 40x40x10 nm. Dokładne dowody w audycie resume-after-wsl-space oraz
+2026-10-27-eigensolve-gamma-floor32-{published,ui}.evidence.json.
+
+Naprawy źródłowe 7261e2b80 (minimalny NCV) i eb15c8520 (typed busy deferral
+odczytu CPU przed spawn) są na origin. Runtime potwierdza eb15c8520.
+CI MFEM 40495171889 PASS; Rust 40497276333 jeszcze nie odebrane.
+Signed15 33b8b56d… rzeczywiście running; nie zamykamy pełnego sweepa,
+wykresu ani pozostałych bramek I7 przed odbiorem wyników.

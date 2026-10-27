@@ -632,3 +632,31 @@ Kontrole źródłowe: `scripts/test_modal_launcher_tuning.py`,
 `scripts/test_docker_cpu_access.py`, `scripts/test_docker_volume_receipts.py`.
 Na etapie wdrożenia tej granicy nie potwierdzono jeszcze nowego wykonania
 historycznego sweepa z tymi ustawieniami.
+
+
+## Linux/WSL: ponowne potwierdzenie numeru urządzenia po restarcie
+
+Kernelowy `st_dev` może zmienić się po restarcie WSL. Zwykły resume nadal
+odrzuca niezgodny certyfikat. Dla tej jednej zmiany istnieje odrębna operacja:
+
+```sh
+python3 -B scripts/docker_dev.py reattest-linux-device --source-root "$source" --attempt "$attempt" --config-sha256 "$config"
+# Po odczycie planu powtórz te same piny z:
+# --apply --expected-plan-sha256 <plan_sha256>
+```
+
+Wymagane są zatrzymane oba dokładne kontenery, brak aktywnych konsumentów
+wybranego storage oraz zgodny silnik, obraz, właściciel, inode i ścieżka.
+Sentinel, restart readback i poprzedni probe muszą wiązać ten sam certyfikat.
+Plan przypina także hashe implementacji. Pod blokadą BuildControl następuje
+ponowna walidacja i trzy uruchomienia istniejącego testu storage w izolowanych
+kontenerach bez sieci, API i solvera. Certyfikat zachowuje inode bindu;
+zmienia się numer urządzenia oraz przechodzi ponownie bramka restart readback.
+Lease i wyniki naukowe pozostają niezmienione. Receipt oraz kopia starych
+technicznych dowodów trafiają do `linux-device-reattest/attempts` w control.
+
+Timeout procesu testującego nie jest sukcesem ani dowodem jego zakończenia.
+W takim przypadku operacja zachowuje nieznany wynik i dowody do uzgodnienia;
+nie wolno ponawiać publikacji ani ręcznie poprawiać OWNER/certyfikatu.
+Po sukcesie użyj normalnego pinned `resume-volume`; re-atestacja sama nie
+uruchamia instancji ani nie ponawia Solve.

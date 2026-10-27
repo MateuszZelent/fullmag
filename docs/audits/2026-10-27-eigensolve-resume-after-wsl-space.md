@@ -120,3 +120,51 @@ ze statusem stopped-execution-unknown, zachowując owner/process receipts.
 Próba ścieżki pending-activation odmówiła, bo helper 331e7112… już nie istniał;
 nie zmieniano ręcznie markerów ani rezerwacji. Następny krok: managed fresh
 archive/recreate i ponowienie Gamma; nowy sweep nadal NIE został wykonany.
+
+## Gamma frequency-window odebrane na poprawionym runtime
+
+Pakiet eb15c85205eac95ea6f16a3fdcb2c16471b3a24c, development
+cddca28e50fd4bceaf176a1d384c41fd, config
+42b32463f1a205b05121d6af4a49b47a5669e3e47c3a99072fa314b4fe0b8649.
+Run afe29d88…: obie fazy succeeded, API completed i owner-bound generation
+sha256:a930b1a5c7d95e8766d4889bb70dc428a76a73708bedc9d8ab17273ee5b3b3ba.
+Gamma 9299249697,073517 Hz, eps_full=1,652629543376944e-13 przy 1e-8.
+Analityka finite-Dirichlet: 9299249697,068401 Hz; różnica 5,5e-11%.
+
+Natywny certyfikat potwierdza 50/50 podokien (base 16, refinement 34),
+NCV=32/32, NEV=4/8, min_subspace_overlap=1, search_stability=stable.
+window_complete=false i count_certificate=not_performed pozostają jawne:
+to zaakceptowane wybrane widmo, nie dowód wszystkich modów w oknie.
+Dowód: 2026-10-27-eigensolve-gamma-floor32-published.evidence.json.
+
+Browser PASS: actual complex binary, Real/Imag/Abs/Phase, aktywny WebGL,
+animacja i zatrzymanie. Bounds [40,40,10] nm obejmują magnetyk bez airboxu.
+Dowód: 2026-10-27-eigensolve-gamma-floor32-ui.evidence.json; zrzuty zachowane
+w eigensolve-current-results/gamma-window-floor32-*.png w wizualizacjach.
+CI MFEM 40495171889 PASS; CI Rust 40497276333 w toku.
+
+Signed15 run 33b8b56d… przyjęty i rzeczywiście running. Model source SHA
+8d48ad08356352d69713b29465a70e2c0ea4135f66069f3d82c2ce853dacfa2f.
+Zakres [-25,-20,-15,-10,-7,-5,-2,0,2,5,7,10,15,20,25] rad/um.
+Odbiór 15 punktów, wykresu i modów sweepa pozostaje otwarty do terminala.
+
+## Wznowienie po kolejnym restarcie WSL/Docker
+
+Oba zachowane kontenery były Exited 255; port 3217 nie odpowiadał.
+18 GiB wolnego WSL i 169 GiB C: potwierdzone. Ścisły resume odmówił na
+host_device 2128 → 2096, przy zgodnym inode 4599197, root ext4 i engine
+81a2002d-4c88-48aa-b4da-fed771788cfa. Nie edytowano ręcznie certyfikatu.
+
+Dodano managed `reattest-linux-device`: preview/plan SHA, kontrola zatrzymanych
+konsumentów i źródeł, starego ownera/sentinela/probe; następnie ponowny native
+probe pod blokadą BuildControl. Dwanaście lekkich testów Python PASS.
+Rzeczywista re-atestacja succeeded: cb18b531e3d945868bed78915fe564ec,
+plan 3bddc5473e80f7b24f307f04a407f096abae0fcfceb09de7501ffde53865d548,
+cert SHA c13de118b9ee2762b6e103c72ebf8d92b70b9e74e99833627170804516caf5bf.
+Nie uruchomiła API ani solvera i nie zmieniła żadnego lease/wyniku.
+
+Signed15 33b8b56d… zakończył się SIGSEGV w procesie workera; wcześniejszy
+wpis running jest historyczny. Gamma-window i jego browser PASS zachowane.
+Diagnostyka kolejnej akcji: sprawdzić checkpointy poszczególnych k, odtworzyć
+przejście nonzero → Gamma i uzyskać natywny backtrace; nie zastępować pełnego
+sweepa wyłącznie zachowanym sukcesem Gamma.

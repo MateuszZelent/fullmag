@@ -2528,6 +2528,12 @@ def _parser() -> argparse.ArgumentParser:
     empty_quarantine.add_argument("--activation", required=True)
     empty_quarantine.add_argument("--recovery-id", required=True)
     empty_quarantine.add_argument("--apply", action="store_true", help="commit after exact stopped-namespace and empty-store proofs; default is dry-run")
+    reattest = subparsers.add_parser("reattest-linux-device", help="preview/apply storage-only re-attestation after Linux device renumbering; never start a runtime")
+    reattest.add_argument("--source-root", type=Path, required=True)
+    reattest.add_argument("--attempt", required=True)
+    reattest.add_argument("--config-sha256", required=True)
+    reattest.add_argument("--apply", action="store_true")
+    reattest.add_argument("--expected-plan-sha256")
     resume_parser = subparsers.add_parser("resume-volume", help="Observe one exact retained volume DEV start without restarting backend")
     resume_parser.add_argument("--attempt", required=True)
     resume_parser.add_argument("--config-sha256", required=True)
@@ -3006,6 +3012,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-unadmitted":
             from docker_volume_stop_unadmitted import stop
             stop(args)
+        elif args.action == "reattest-linux-device":
+            from docker_volume_linux_reattest import run as reattest_linux_device
+            print(json.dumps(reattest_linux_device(args), ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-diagnostic-volume":
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
