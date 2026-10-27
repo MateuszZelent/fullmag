@@ -15,3 +15,13 @@ Poprawka projekcji dopuszcza brak katalogu artefaktów po failed/cancelled/inter
 ## Weryfikacja i dalsza praca
 
 Dodano regresję pozytywną oraz negatywne przypadki etapów aktywnych, sukcesu, gotowości, attempt i artefaktów. diff --check PASS. Testy Rust wymagają GitHub Actions; lokalnie ich nie kompilowano. Poprawka nie została jeszcze zbudowana w runtime. Potrzebne: CI, zarządzany build, potwierdzenie projekcji failed oraz wznowienie signed14 i osobnego Gamma. Automatyczny preflight zapisu nowych katalogów pozostaje do uzupełnienia.
+
+## Kontrolowane odblokowanie istniejącego runtime
+
+Publiczne API cancellation przyjęło zamknięcie wyłącznie nieuruchomionego eigenmodes z kontrolą expected_catalog_revision=13 i cancellation_id=cancel-blocked-signed14-storage-20261027 (HTTP202, revision14). Scheduler wykonał żądanie; kolejka jest pusta, live API przeszło z running/rev6 na failed/rev7. Nie edytowano katalogu runu, lease ani receiptów. To potwierdza mechanizm awarii projekcji, ale nie jest wykonaniem nowej poprawki Rust.
+
+Uruchomiono aktywację signed14 z request_id=eigensolve-signed14-after-terminal-20261027 na istniejącym runtime 7cabba8; wynik należy sprawdzić w receipcie aktywacji i aktualnym procesie workera.
+
+Aktywacja 094965cd3f41459183df988d75f4248a zakończona succeeded. Nowy run run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279: relax succeeded; eigenmodes running. Potwierdzono żywy worker PID6439 oraz sześć zapisanych checkpointów (katalog rev105). Nie jest to jeszcze ukończony sweep.
+
+Skrypt wykresu odczytuje siedem checkpointów poprzedniej próby z walidacją residualów i osobnym oznaczeniem. PNG/PDF wygenerowane oraz PNG obejrzane. Provenance zachowuje hash dowodów i stan nieukończonego sweepa. AST obu nowych przykładów PASS; przykład Gamma jeszcze nie wykonany.
