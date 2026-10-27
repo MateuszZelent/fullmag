@@ -1,0 +1,352 @@
+{
+  "minus10": {
+    "status": "passed",
+    "animation_difference_bounds": [
+      [
+        156,
+        161,
+        455,
+        390
+      ],
+      [
+        156,
+        161,
+        455,
+        390
+      ],
+      [
+        156,
+        161,
+        455,
+        390
+      ],
+      [
+        156,
+        161,
+        455,
+        390
+      ]
+    ],
+    "stopped_difference_bounds": null,
+    "webgl": {
+      "canvasHeight": 516,
+      "canvasWidth": 617,
+      "context": "webgl2",
+      "cssHeight": 516.453125,
+      "cssWidth": 617.234375,
+      "drawingBufferHeight": 516,
+      "drawingBufferWidth": 617,
+      "isContextLost": false
+    },
+    "mode": {
+      "fieldId": "analysis:eigen:sample-0000:mode-0000",
+      "modeId": "sample-0000/mode-0000",
+      "modeIndex": 0,
+      "frequencyHz": 11211849791.651201,
+      "payloadSampleIndex": 0,
+      "payloadRawModeIndex": 0
+    },
+    "generation": "sha256:6c219d9f7be1511979806a26ed3fe90e23520d2dbc809335a9f11c331b53b6a1",
+    "binary": {
+      "path": "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0000/samples/vector",
+      "query": {
+        "component": "full",
+        "expected_artifact_generation_id": "sha256:6c219d9f7be1511979806a26ed3fe90e23520d2dbc809335a9f11c331b53b6a1",
+        "scope_kind": "full",
+        "view": "complex"
+      },
+      "requestObservedAtMs": 1793091496549,
+      "requestScopeHeader": "session=docker-startup-ba9bda04c93599b4ab6a005e85f71fecb651ab95a0f3eab8a9cc9a27c8da3f64&epoch=docker-startup-ba9bda04c93599b4ab6a005e85f71fecb651ab95a0f3eab8a9cc9a27c8da3f64%401793091341746&request_scope_epoch=8f5c5f30-b99e-4557-b96b-ad51f102c8f1%3A1",
+      "response": {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0000/samples/vector",
+        "query": {
+          "component": "full",
+          "expected_artifact_generation_id": "sha256:6c219d9f7be1511979806a26ed3fe90e23520d2dbc809335a9f11c331b53b6a1",
+          "scope_kind": "full",
+          "view": "complex"
+        },
+        "status": 200,
+        "observedAtMs": 1793091496569,
+        "headers": {
+          "content-type": "application/octet-stream",
+          "x-fullmag-artifact-generation-id": "sha256:6c219d9f7be1511979806a26ed3fe90e23520d2dbc809335a9f11c331b53b6a1",
+          "x-fullmag-component": "full",
+          "x-fullmag-domain-generation-id": "8623634477479487831",
+          "x-fullmag-encoding": "FMVP;version=5",
+          "x-fullmag-field-indexing": "full_domain",
+          "x-fullmag-field-revision": "2480216168918025201",
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": "6",
+          "x-fullmag-point-count": "1709",
+          "x-fullmag-quantity-id": "analysis:eigen:sample-0000:mode-0000",
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": "10254"
+        }
+      }
+    },
+    "controller": {
+      "name": "viewport-3d.mode-field-overlay.resource-state",
+      "lane": "viewport-3d",
+      "timestampMs": 1793091496597,
+      "detail": {
+        "controllerStatus": "ready",
+        "controllerHasError": false,
+        "enabled": true,
+        "hasIntent": true,
+        "hasSession": true,
+        "hasTopology": true,
+        "topologyIdentityComplete": true
+      }
+    },
+    "display_checks": [
+      {
+        "view": "real",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "bufferRepresentation": "real",
+          "bufferMin": 0,
+          "bufferMax": 250195761918.84866,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-mode-final-minus10-ui-real.png"
+      },
+      {
+        "view": "imag",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "bufferRepresentation": "imag",
+          "bufferMin": 0,
+          "bufferMax": 250195761918.84866,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-mode-final-minus10-ui-imag.png"
+      },
+      {
+        "view": "abs",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "bufferRepresentation": "abs",
+          "bufferMin": 0,
+          "bufferMax": 250195761918.84866,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-mode-final-minus10-ui-abs.png"
+      },
+      {
+        "view": "phase",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "bufferRepresentation": "phase",
+          "bufferMin": -3.141592653589793,
+          "bufferMax": 3.141592653589793,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-mode-final-minus10-ui-phase.png"
+      }
+    ]
+  },
+  "plus10": {
+    "status": "passed",
+    "animation_difference_bounds": [
+      [
+        156,
+        161,
+        455,
+        390
+      ],
+      [
+        156,
+        161,
+        455,
+        390
+      ],
+      [
+        156,
+        161,
+        455,
+        390
+      ],
+      [
+        156,
+        161,
+        455,
+        390
+      ]
+    ],
+    "stopped_difference_bounds": null,
+    "webgl": {
+      "canvasHeight": 516,
+      "canvasWidth": 617,
+      "context": "webgl2",
+      "cssHeight": 516.453125,
+      "cssWidth": 617.234375,
+      "drawingBufferHeight": 516,
+      "drawingBufferWidth": 617,
+      "isContextLost": false
+    },
+    "mode": {
+      "fieldId": "analysis:eigen:sample-0001:mode-0000",
+      "modeId": "sample-0001/mode-0000",
+      "modeIndex": 0,
+      "frequencyHz": 11211886649.578224,
+      "payloadSampleIndex": 1,
+      "payloadRawModeIndex": 0
+    },
+    "generation": "sha256:6c219d9f7be1511979806a26ed3fe90e23520d2dbc809335a9f11c331b53b6a1",
+    "binary": {
+      "path": "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0000/samples/vector",
+      "query": {
+        "component": "full",
+        "expected_artifact_generation_id": "sha256:6c219d9f7be1511979806a26ed3fe90e23520d2dbc809335a9f11c331b53b6a1",
+        "scope_kind": "full",
+        "view": "complex"
+      },
+      "requestObservedAtMs": 1793091594210,
+      "requestScopeHeader": "session=docker-startup-ba9bda04c93599b4ab6a005e85f71fecb651ab95a0f3eab8a9cc9a27c8da3f64&epoch=docker-startup-ba9bda04c93599b4ab6a005e85f71fecb651ab95a0f3eab8a9cc9a27c8da3f64%401793091341746&request_scope_epoch=8f5c5f30-b99e-4557-b96b-ad51f102c8f1%3A1",
+      "response": {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0000/samples/vector",
+        "query": {
+          "component": "full",
+          "expected_artifact_generation_id": "sha256:6c219d9f7be1511979806a26ed3fe90e23520d2dbc809335a9f11c331b53b6a1",
+          "scope_kind": "full",
+          "view": "complex"
+        },
+        "status": 200,
+        "observedAtMs": 1793091594229,
+        "headers": {
+          "content-type": "application/octet-stream",
+          "x-fullmag-artifact-generation-id": "sha256:6c219d9f7be1511979806a26ed3fe90e23520d2dbc809335a9f11c331b53b6a1",
+          "x-fullmag-component": "full",
+          "x-fullmag-domain-generation-id": "8623634477479487831",
+          "x-fullmag-encoding": "FMVP;version=5",
+          "x-fullmag-field-indexing": "full_domain",
+          "x-fullmag-field-revision": "7406695370392933306",
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": "6",
+          "x-fullmag-point-count": "1709",
+          "x-fullmag-quantity-id": "analysis:eigen:sample-0001:mode-0000",
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": "10254"
+        }
+      }
+    },
+    "controller": {
+      "name": "viewport-3d.mode-field-overlay.resource-state",
+      "lane": "viewport-3d",
+      "timestampMs": 1793091594251,
+      "detail": {
+        "controllerStatus": "ready",
+        "controllerHasError": false,
+        "enabled": true,
+        "hasIntent": true,
+        "hasSession": true,
+        "hasTopology": true,
+        "topologyIdentityComplete": true
+      }
+    },
+    "display_checks": [
+      {
+        "view": "real",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "bufferRepresentation": "real",
+          "bufferMin": 0,
+          "bufferMax": 250202010640.80307,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-mode-final-plus10-ui-real.png"
+      },
+      {
+        "view": "imag",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "bufferRepresentation": "imag",
+          "bufferMin": 0,
+          "bufferMax": 250202010640.80307,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-mode-final-plus10-ui-imag.png"
+      },
+      {
+        "view": "abs",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "bufferRepresentation": "abs",
+          "bufferMin": 0,
+          "bufferMax": 250202010640.80307,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-mode-final-plus10-ui-abs.png"
+      },
+      {
+        "view": "phase",
+        "binding": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0001:mode-0000",
+          "bufferRepresentation": "phase",
+          "bufferMin": -3.141592653589793,
+          "bufferMax": 3.141592653589793,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        },
+        "screenshot": "/tmp/eigen-mode-final-plus10-ui-phase.png"
+      }
+    ]
+  }
+}

@@ -20,3 +20,17 @@ Stan odbioru UI: NOT VERIFIED — potrzebny nowy build, wynik i renderowanie obu
 Build `99912248f74074af26614049c7df1bd293b68fa3` i workflow [40474011717](https://github.com/MateuszZelent/fullmag/actions/runs/40474011717) PASS. Ponowny run `run-live-641696c7856a4825140c6ad67d247740640ed8ecefceec30be34e3cfc59476ec` completed; obie częstotliwości powtórzone. Drzewo Dispersion/Modes at k działa, WebGL2 aktywny, ale kontroler odrzuca pole przed pobraniem binarnym: tabela/spectrum podaje `k-path-sample-0000`, a mode JSON `k-sample-0000`. To pozostałość promocji wyników single-k do kolekcji.
 
 Poprawka wiąże sample_id w metadanych pola przez ten sam prefix planu co widmo, dla ścieżki k i sweepa pola. Tożsamość równowagi, liczby i payload binarny pozostają zachowane; kontrola UI nadal wymaga dokładnej zgodności. Regresja sprawdza przenumerowanie niezerowego indeksu, trzy rodzaje prefixu i zachowanie identyfikatora równowagi. Potrzebny kolejny build i odbiór UI.
+
+## Odbiór końcowy dwóch modów — PASS
+
+Runtime `fde189663bbe7195b5fda7c6efba13399b1c54f2`, managed development `d78ffec013fb4611926ef9afd2f4e0a9`, config SHA256 `642e5110681eb90a39057e3c33c64e87549e36f01c8c6bccf7f6c131a31443a4`. Run `run-live-e6b21c5672fcd80130b516dbe977983889c9b09aff7042680c3fdee327f7fa8e` completed. Generacja `sha256:6c219d9f7be1511979806a26ed3fe90e23520d2dbc809335a9f11c331b53b6a1`.
+
+Obie częstotliwości i residuale powtórzone jak w tabeli. Canonical sample_id w widmie, CSV i polach zgodne. Testy przeglądarkowe obu próbek PASS: rzeczywiste owner-bound FMVP complex XYZ, zgodny run/stage/sample/mode/generation, kontroler ready, real/imag/abs/phase, widoczny WebGL2 z niezerowym buforem i bez context loss. Porównanie pikseli: 4/4 kolejnych par klatek zmienia się w obszarze filmu dla każdego modu; po Stop dwie klatki identyczne. To dowód działania renderowania i animacji, nie pełnej kwalifikacji fizycznej ani GPU.
+
+Workflow [40475902018](https://github.com/MateuszZelent/fullmag/actions/runs/40475902018) — pełne default-feature runner contracts PASS. Lokalnie nie kompilowano testów jednostkowych.
+
+UI: http://localhost:3217/workspace. Results → Dispersion & k-resolved response → eigenmodes · Modal → Modes at k. Sample 0 = −10 rad/µm, Sample 1 = +10 rad/µm. W inspektorze Animate uruchamia fazę. Pozostawiono widoczne okno Chromium z animacją Sample 1. Przy otwarciu nowego okna wybór modu trzeba wykonać ponownie.
+
+Dowody: `2026-10-27-eigensolve-signed2-mode-ui.evidence.json`. Zrzuty i pełne raporty browser znajdują się w katalogu użytkownika `eigensolve-current-results`, prefix `eigen-mode-final-`.
+
+Nadal otwarte: ponowny pełny sweep z k=0 i odbiór wszystkich punktów w UI, kwalifikacja mesh/airbox oraz integracja PR/master. Sukces pary ±10 nie zamyka tych zadań. Root Results może pokazywać osobną lukę geometry_identity; nie blokuje już wskazanych pól. UI powinno też precyzyjniej wyświetlać przyczynę błędu kontrolera, gdy metadane inspektora są gotowe, a pole zostało odrzucone.
