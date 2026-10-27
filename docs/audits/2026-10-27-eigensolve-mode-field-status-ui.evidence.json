@@ -1,0 +1,94 @@
+{
+  "schema": "fullmag.eigen-mode-status-browser-evidence.v1",
+  "negative_browser_local_only": {
+    "schema": "fullmag.mode-field-error-browser-probe.v1",
+    "status": "passed",
+    "scope": "browser-local malformed metadata only; no solver rerun",
+    "runId": "run-live-016c843af31ca21339d8be8854dd6cb5ecc6a15af2373a8e9152e6658be4d874",
+    "fieldId": "analysis:eigen:sample-0001:mode-0000",
+    "intercepted": 2,
+    "binaryRequests": 0,
+    "visibleError": "Mode field unavailable: Mode-field metadata is incomplete, stale, or not a global complex XYZ field."
+  },
+  "positive_real_mode": {
+    "status": "passed",
+    "run": {
+      "requested": "run-live-016c843af31ca21339d8be8854dd6cb5ecc6a15af2373a8e9152e6658be4d874",
+      "status": "completed",
+      "currentRun": {
+        "runId": "run-live-016c843af31ca21339d8be8854dd6cb5ecc6a15af2373a8e9152e6658be4d874",
+        "revision": 33,
+        "status": "completed"
+      },
+      "session": {
+        "header": "session=docker-startup-dba072e4d6558e412606ea44fe7e20095d9158406370d402dbc0f71d657f742c&epoch=docker-startup-dba072e4d6558e412606ea44fe7e20095d9158406370d402dbc0f71d657f742c%401793092738957&request_scope_epoch=8f5c5f30-b99e-4557-b96b-ad51f102c8f1%3A3",
+        "sessionId": "docker-startup-dba072e4d6558e412606ea44fe7e20095d9158406370d402dbc0f71d657f742c",
+        "sessionEpoch": "docker-startup-dba072e4d6558e412606ea44fe7e20095d9158406370d402dbc0f71d657f742c@1793092738957",
+        "requestScopeEpoch": "8f5c5f30-b99e-4557-b96b-ad51f102c8f1:3"
+      }
+    },
+    "mode": {
+      "fieldId": "analysis:eigen:sample-0001:mode-0000",
+      "modeId": "sample-0001/mode-0000",
+      "modeIndex": 0,
+      "frequencyHz": 11211886649.578224,
+      "payloadSampleIndex": 1,
+      "payloadRawModeIndex": 0
+    },
+    "generation": "sha256:3294f496748d265b397bc661282b2566a469997444107e7704f42815e0188d6c",
+    "webgl": {
+      "canvasHeight": 516,
+      "canvasWidth": 617,
+      "context": "webgl2",
+      "cssHeight": 516.453125,
+      "cssWidth": 617.234375,
+      "drawingBufferHeight": 516,
+      "drawingBufferWidth": 617,
+      "isContextLost": false
+    },
+    "animation_difference_bounds": [
+      [
+        146,
+        155,
+        464,
+        399
+      ],
+      [
+        146,
+        155,
+        464,
+        398
+      ],
+      [
+        81,
+        155,
+        464,
+        472
+      ],
+      [
+        81,
+        155,
+        464,
+        472
+      ]
+    ],
+    "stopped_difference_bounds": null
+  },
+  "compiled_backend": "fde189663bbe7195b5fda7c6efba13399b1c54f2",
+  "frontend_scope": "live source changes in EigenModeInspectorPanel.tsx and useViewport3DSceneModel.ts",
+  "negative_title_check": {
+    "status": "passed",
+    "report": {
+      "schema": "fullmag.mode-field-error-browser-probe.v1",
+      "status": "passed",
+      "scope": "browser-local malformed metadata only; no solver rerun",
+      "runId": "run-live-016c843af31ca21339d8be8854dd6cb5ecc6a15af2373a8e9152e6658be4d874",
+      "fieldId": "analysis:eigen:sample-0001:mode-0000",
+      "intercepted": 2,
+      "binaryRequests": 0,
+      "visibleError": "Mode field unavailable: Mode-field metadata is incomplete, stale, or not a global complex XYZ field."
+    },
+    "assertion": "status title equals full visibleError text after actual Plot action",
+    "probe_sha256": "2df18f91283fb1cd410eab652f3f2d78159c8d932c51939ba1e8e0c82fc1d93a"
+  }
+}

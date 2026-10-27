@@ -447,7 +447,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
           : "mode field metadata not available";
 
   return {
-    actionBadge: field3DReady ? "3D field ready" : "3D unavailable",
+    actionBadge: field3DReady ? "Mode field available" : "3D unavailable",
     angularFrequency:
       angularFrequency == null
         ? "not available"

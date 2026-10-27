@@ -6838,6 +6838,9 @@ export function useViewport3DSceneModel({
     ? resolveViewport3DTopologyFreshnessLabel(topologyFreshness)
     : null;
   const status =
+    (modeFieldOverlayEnabled && modeFieldOverlay.error
+      ? `Mode field unavailable: ${modeFieldOverlay.error.message}`
+      : null) ??
     (femLaneActive ? topology.error?.message : null) ??
     (fdmLaneActive ? fdmBuildState?.error?.message : null) ??
     (renderingState?.clip?.enabled ? clipCrossSection.error?.message : null) ??
@@ -6856,6 +6859,9 @@ export function useViewport3DSceneModel({
     domainMeta.error?.message ??
     (femLaneActive ? sharedDomainManifest.error?.message : null) ??
     visualizationState.error?.message ??
+    (modeFieldOverlayEnabled && modeFieldOverlay.status === "loading"
+      ? "Loading mode field"
+      : null) ??
     (femLaneActive ? topologyFreshnessStatus ?? topology.status : null) ??
     "idle";
   const savedViewportStatus = savedSelectionActive

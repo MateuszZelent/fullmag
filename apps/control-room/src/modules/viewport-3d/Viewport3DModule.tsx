@@ -2860,7 +2860,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             )} highlighted
           </span>
         ) : null}
-        <span>{status}</span>
+        <span role="status" title={status}>{status}</span>
         {sceneProps.primitiveModel?.diagnostics?.map((issue) => (
           <span key={issue.objectId} role="alert">
             Geometry preview unavailable · {issue.objectId}: {issue.message}
