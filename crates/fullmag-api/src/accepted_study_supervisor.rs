@@ -19,6 +19,9 @@ mod owned_worker_process;
 #[path = "compute_operator_env.rs"]
 mod compute_operator_env;
 use owned_worker_process::OwnedWorkerProcess;
+#[path = "worker_output_diagnostic.rs"]
+mod worker_output_diagnostic;
+use worker_output_diagnostic::process_output_diagnostic;
 
 const SUPERVISOR_DIRECTORY: &str = "supervisor-slots";
 const LEGACY_SINGLE_WORKER_SLOT: &str = "slot-0";
@@ -715,6 +718,7 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
             );
         }
     };
+    publish_worker_process_observation(&process_exit_receipt, &outcome);
     accepted_supervisor_test_fail_after_process_exit_receipt()?;
     match final_heartbeat_result {
         Ok(FinalHeartbeatReconciliation::Reconciled) => {}
@@ -1998,6 +2002,35 @@ fn persist_worker_process_exit_receipt(
     let receipt = worker_process_exit_receipt(claim, lease, outcome)?;
     retry_store_writer_busy(|| store.commit_worker_process_exit_receipt(&receipt))?;
     Ok(receipt)
+}
+
+fn publish_worker_process_observation(
+    receipt: &FmsWorkerProcessExitReceipt,
+    outcome: &ObservedWorkerProcess,
+) {
+    // The runtime service persists scheduler stderr. Keep the CLI stdout contract
+    // and the durable receipt unchanged; logging failure cannot block release.
+    let event = serde_json::json!({
+        "schema_version": "worker_process_observed.v1",
+        "receipt_id": receipt.receipt_id,
+        "run_id": receipt.run_id,
+        "task_id": receipt.task_id,
+        "attempt_id": receipt.attempt_id,
+        "status_success": receipt.status_success,
+        "exit_code": receipt.exit_code,
+        "stdout": process_output_diagnostic(&outcome.output.stdout, &receipt.lease_token),
+        "stderr": process_output_diagnostic(&outcome.output.stderr, &receipt.lease_token),
+    });
+    let result = (|| -> Result<()> {
+        let mut stderr = std::io::stderr().lock();
+        serde_json::to_writer(&mut stderr, &event)?;
+        stderr.write_all(b"\n")?;
+        stderr.flush()?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        eprintln!("could not publish worker process diagnostic: {error:#}");
+    }
 }
 
 pub(crate) fn worker_process_exit_receipt_for_current_task(

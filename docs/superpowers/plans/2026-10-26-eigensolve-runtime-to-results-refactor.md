@@ -509,3 +509,56 @@ Wynik może potwierdzić odtworzenie częstotliwości przy tych samych parametra
 fizycznych i progu residualu, lecz nie identyczność ustawień iteracyjnych ani
 bitową reprodukcję. Dokładne historyczne tuning overrides pozostają osobną
 pozycją reprodukcji; nie uzasadniają zmiany domyślnych ustawień całego solvera.
+
+
+### Checkpoint 27.10 — nowa próba L2/3 uruchomiona
+
+- A14: bootstrap CI [40418572140](https://github.com/MateuszZelent/fullmag/actions/runs/40418572140)
+  PASS; kod diagnostyki wdrożony. Nie wystąpił jeszcze kolejny błąd natywny,
+  więc poprawność komunikatu w tym runtime nie jest oddzielnie potwierdzona.
+- Model L2/3 zapisany i wysłany jako `d8dc2fb61887fab68cad0d07f844f13e5a40877a`.
+  Kontrolowany restart `9d96f99e9a7e4876ad48a1ae2c07744e` PASS, backend
+  `f14ddb0a2f54`, snapshot `99d73672279d8f1cac9292baa03701b596230bbb24f30246c8663636d432fd37`.
+- Aktywacja `b473278fa5124f37891dd4f1ca750f1f`, request
+  `eigensolve-de-l2-k10-20261027-d8dc2fb61`, source SHA
+  `c1538636bd59bd6258f910b9add19392aeeae86b7b603ba17d90ccb5e68a46e2`.
+- Run `run-live-90f9afb5b6531a4f5e5600bf355e5715f6b857d7709eca56a258168697bcc724`;
+  session `docker-startup-51ba6bbc896cc2bf19641a1c378ed98d28ed20e3fc234fa050f0bb04e4159484`.
+- Catalog revision 147: Relax Succeeded (14 artefaktów), Eigen Running (0
+  opublikowanych artefaktów). Worker Eigen PID 3607 potwierdzony aktywny.
+  Task `task-f370c6f7db8847d319bc6dd3b62d4479091c6fd9838148936a108c3ec4369010`,
+  attempt `attempt-7eb2346d3f4c4f3d98ece676945d31ce`.
+- API ma aktywny model i domain.cell_count=7134. Historyczna siatka miała
+  30012 tetraedrów: ta sama zadana L2/3 nie odtworzyła tej samej actual mesh.
+  Wymagany pomiar magnetic/air topology przed interpretacją różnicy f.
+- Receipt procesu Relax wskazuje błąd końcowego heartbeat po utracie aktywnego
+  claim, mimo opublikowanego Succeeded. Nie traktować tego receiptu jako sukcesu
+  procesu; przed kwalifikacją sprawdzić terminalny protokół i handoff CAS.
+- Nie ma jeszcze nowej częstotliwości, zespolonego modu ani dowodu renderowania.
+  Kontynuować obserwację tego runu; nie ponawiać aktywacji przy samym timeout.
+
+
+### Checkpoint 27.10 — terminal L2/3 i różnica względem historycznego solvera
+
+- Ponowny odczyt runu `run-live-90f9afb5b6531a4f5e5600bf355e5715f6b857d7709eca56a258168697bcc724`:
+  catalog revision 399, receipt Eigen `worker-process-exit-d21c2082417a8a878d43f7b0337737de2c31d489cc17bce59f7e200e2c494805`,
+  exit_code=1, status_success=false. Poprzedni checkpoint Running jest historyczny.
+- A14 potwierdzone w runtime: komunikat zachował przyczynę
+  `Floquet window remained incomplete after bounded refill`. Nie ma nowej
+  zaakceptowanej częstotliwości ani modu; nie ponowiono Solve.
+- Porównano kod z historycznym commitem `57182911c6e8e721b8ee9705aa7f70491c70fe94`:
+  również wtedy Rust przekazywał `completeness_policy: 1`. Nowy backend ma
+  jawny guard `native_floquet_certified_count_unavailable`; historyczny plik
+  tego guarda nie zawierał. Sam hardcode adaptera nie jest nową regresją.
+  Błąd refill oraz brak certyfikatu kompletności wymagają osobnego rozpoznania.
+- A15: dodano ograniczony, redagowany zapis stdout/stderr zakończonego workera
+  do trwałego logu schedulera (`worker_process_observed.v1`, 64 KiB/strumień,
+  jawne total_bytes/truncated). Wspólny helper z preparation zachowuje ochronę
+  tokenu również na granicy ucięcia. Receipt i bramki solvera bez zmian.
+  Testy regresji skierowano do GitHub Actions; wykonanie i nowy runtime jeszcze
+  NOT VERIFIED. Nie jest to trwały artefakt naukowy ani gwarancja zachowania
+  całego JSON większego niż limit.
+- Kolejność: CI A15 → jawny kontrakt wyboru kompletności i historycznych
+  ustawień Kryłowa → pomiar rzeczywistej siatki → jeden +10 → trwały mod/UI
+  → signed15 i analityka. Nie zastępować odtworzenia luźniejszym residualem,
+  nearest-only ani nie przedstawiać best_effort jako kompletnego widma.
