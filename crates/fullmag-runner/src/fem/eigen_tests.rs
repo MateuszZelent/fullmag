@@ -11707,6 +11707,7 @@ fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provid
 
     let mut policy_plan = plan.clone();
     policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        completeness: None,
         residual_tolerance: Some(1.0e-8),
         max_outer_iterations: None,
         max_linear_iterations: None,
@@ -11815,6 +11816,7 @@ fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provid
 
     let mut empty_policy_plan = plan.clone();
     empty_policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        completeness: None,
         residual_tolerance: None,
         max_outer_iterations: None,
         max_linear_iterations: None,
@@ -11973,6 +11975,7 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
         closed: false,
     });
     plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        completeness: None,
         residual_tolerance: None,
         max_outer_iterations: None,
         max_linear_iterations: None,
@@ -12022,6 +12025,7 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
 
     let mut policy_plan = plan.clone();
     policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        completeness: None,
         residual_tolerance: None,
         max_outer_iterations: Some(24),
         max_linear_iterations: None,

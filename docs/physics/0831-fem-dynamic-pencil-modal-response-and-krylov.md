@@ -6214,3 +6214,23 @@ kwalifikacji dynamic demag, DE/BV lub A1.
 | `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md` | `DOC-ANCHOR:g5-sparse-recovery-dense-bridge-boundary` | Zatwierdzony kontrakt; runtime do oddzielnej weryfikacji |
 | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `void modal_shared_domain_floquet_mixed_dense_real_split_contract` | Oddzielny sparse recovery i caller-dense descriptor validation |
 | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `void modal_certified_recovery_controlled_breakdown_contract` | Deterministyczny rzeczywisty sparse-owner recovery i niezależny residual |
+
+
+### Jawny wybór kompletności w publicznym authoringu (27.10.2026)
+
+`study.stages.add_eigenmodes(solver_completeness="best_effort")` przekazuje
+żądanie przez `FemEigenSolverPolicy.completeness`, SceneDocument
+`eigen_solver_completeness` i typowany `FemEigenSolverPolicyIR` do obu
+adapterów native window. Alternatywą jest `certified_count`. Pominięcie
+zachowuje dotychczasowe strict (`certified_count`); null/puste pole sceny
+usuwa override. Nieznane wartości są odrzucane. Stare plany bez pola
+pozostają czytelne; żadna migracja wyników ani endpointów nie jest wymagana.
+Eksport sceny i canonical rewrite muszą zachować jawny wybór.
+
+Wybór nie zmienia residualów, budżetu iteracji ani reguł opisanych w sekcji
+„Bounded NEV refill w native Floquet”. `best_effort` nie gwarantuje sukcesu,
+pełnego pasma ani wymaganej liczby modów. Provenance rozróżnia requested i
+resolved completeness; native diagnostics pozostają dowodem wykonania.
+Nowe pole jest obsługiwane w zapisanej scenie i eksporcie; ten etap nie
+wprowadza osobnej kontrolki Inspectora. Runtime pozostaje NOT VERIFIED do
+uruchomienia nowego builda i odczytu rzeczywistych artefaktów.

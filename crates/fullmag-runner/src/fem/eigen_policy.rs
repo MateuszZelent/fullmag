@@ -10,6 +10,7 @@ use fullmag_ir::{
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct NativeModalSolverPolicy {
+    pub(super) completeness: i32,
     pub(super) residual_tolerance: f64,
     pub(super) max_outer_iterations: i32,
     pub(super) max_linear_iterations: i32,
@@ -22,6 +23,7 @@ pub(super) struct NativeModalSolverPolicy {
 pub(super) fn native_modal_solver_policy(plan: &FemEigenPlanIR) -> NativeModalSolverPolicy {
     let requested = plan.solver_policy.as_ref();
     NativeModalSolverPolicy {
+        completeness: native_modal_completeness(requested.and_then(|policy| policy.completeness)),
         residual_tolerance: requested
             .and_then(|policy| policy.residual_tolerance)
             .unwrap_or(0.0),
@@ -338,4 +340,27 @@ pub(super) fn resolved_demag_realization(
         plan.demag_realization
             .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin),
     )
+}
+
+fn native_modal_completeness(requested: Option<fullmag_ir::FemEigenCompletenessPolicyIR>) -> i32 {
+    match requested {
+        Some(fullmag_ir::FemEigenCompletenessPolicyIR::BestEffort) => 0,
+        Some(fullmag_ir::FemEigenCompletenessPolicyIR::CertifiedCount) | None => 1,
+    }
+}
+
+#[cfg(test)]
+mod completeness_tests {
+    use super::*;
+
+    #[test]
+    fn requested_completeness_reaches_native_abi_and_omission_remains_strict() {
+        assert_eq!(native_modal_completeness(None), 1);
+        for (requested, expected) in [("best_effort", 0), ("certified_count", 1)] {
+            let policy: fullmag_ir::FemEigenSolverPolicyIR = serde_json::from_value(
+                serde_json::json!({"completeness": requested})
+            ).unwrap();
+            assert_eq!(native_modal_completeness(policy.completeness), expected);
+        }
+    }
 }

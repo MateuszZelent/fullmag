@@ -562,3 +562,22 @@ pozycją reprodukcji; nie uzasadniają zmiany domyślnych ustawień całego solv
   ustawień Kryłowa → pomiar rzeczywistej siatki → jeden +10 → trwały mod/UI
   → signed15 i analityka. Nie zastępować odtworzenia luźniejszym residualem,
   nearest-only ani nie przedstawiać best_effort jako kompletnego widma.
+
+
+### A16 — jawna polityka kompletności, 27.10
+
+- Dodano opcjonalne `solver_completeness` do authoringu etapów: `best_effort`
+  lub `certified_count`. Ominięcie zachowuje strict. Python → scena → canonical
+  rewrite → IR/plan → native window zachowuje wybór; provenance rozróżnia
+  requested/resolved. Puste/null pole sceny usuwa override, błędne jest odrzucane.
+- Trzy testy Python (walidacja, pełny round-trip i kasowanie override) PASS;
+  57 testów `test_script_builder_roundtrip.py` PASS; trzy istniejące testy
+  `test_api.py -k eigen_solver_policy` PASS. Regresje Rust IR, materializacji,
+  planera i mapowania ABI dopisane do GitHub Actions, wykonanie NOT VERIFIED.
+- Przykłady +10 i signed15 jawnie żądają best_effort: celem jest zapis modów
+  spełniających residual, bez fałszywego certyfikatu pełnego pasma. Nadal nie
+  odtworzono historycznych ustawień Kryłowa ani rzeczywistej siatki powietrza.
+  Nie uruchomiono nowego Solve; aktualny runtime nie zawiera jeszcze A15/A16.
+- A15 commit `865c3e683b357ee9523936c5876fabc9268e61af` na remote;
+  bootstrap CI `40423974808` obserwowano jako in_progress. Brak nowej
+  częstotliwości i zespolonego modu; zadania 6–8 pozostają otwarte.

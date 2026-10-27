@@ -369,6 +369,9 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler scheduler_writer_busy_tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler worker_failure_reason
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler worker_output_diagnostic::tests
+          cargo test -p fullmag-ir --lib fem_eigen_completeness_policy
+          cargo test -p fullmag-plan --lib eigen_completeness_request_tests
+          cargo test -p fullmag-runner --lib completeness_tests
           cargo test -p fullmag-runtime-control --lib worker_inbox::tests
           cargo test -p fullmag-runtime-control --lib study::dependency_tests
           cargo test -p fullmag-session --lib pending_inventory_recovery
@@ -956,6 +959,9 @@ jobs:
 
       - name: Run bounded mesh failure diagnostic contracts
         run: python -B -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -k MeshFailureDiagnosticTests -v
+
+      - name: Run eigen completeness authoring roundtrip contracts
+        run: python -B -m unittest discover -s packages/fullmag-py/tests -p test_eigen_completeness.py -v
 
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v

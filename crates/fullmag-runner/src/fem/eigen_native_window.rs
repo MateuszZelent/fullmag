@@ -968,7 +968,7 @@ pub(super) fn execute_native_modal_window(
         // runner; its optional native diagnostic writer is reserved for the
         // explicit artifact-action contracts below.
         write_partial_artifacts: false,
-        completeness_policy: 1,
+        completeness_policy: solver_policy.completeness,
         eigensolver_family: 1,
         spectral_transform_kind: 1,
         execution_target,
@@ -1743,7 +1743,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex_with_pr
         max_linear_iterations: solver_policy.max_linear_iterations,
         output_directory: None,
         write_partial_artifacts: false,
-        completeness_policy: 1,
+        completeness_policy: solver_policy.completeness,
         eigensolver_family: 1,
         spectral_transform_kind: 1,
         execution_target: native_fem::NativeModalExecutionTarget::ProductionCpu,
@@ -2525,6 +2525,9 @@ pub(super) fn native_solver_diagnostics_json_with_expected_digest(
                 "native_petsc_slepc_defaults"
             },
             "delegates_to_native_defaults": requested_policy.is_none(),
+            "requested_completeness": requested_policy.and_then(|policy| policy.completeness),
+            "resolved_completeness": requested_policy.and_then(|policy| policy.completeness)
+                .unwrap_or(fullmag_ir::FemEigenCompletenessPolicyIR::CertifiedCount),
             "requested_residual_tolerance": requested_policy.and_then(|policy| policy.residual_tolerance),
             "requested_max_outer_iterations": requested_policy.and_then(|policy| policy.max_outer_iterations),
             "requested_max_linear_iterations": requested_policy.and_then(|policy| policy.max_linear_iterations),

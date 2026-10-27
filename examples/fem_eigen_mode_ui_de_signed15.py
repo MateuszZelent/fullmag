@@ -62,7 +62,7 @@ study.stages.add_eigenmodes(
     stage_id="eigenmodes", count=1, target="frequency_window",
     frequency_min=FREQUENCY_MIN_HZ, frequency_max=FREQUENCY_MAX_HZ,
     operator="full_2x2", include_demag=True,
-    solver_rtol=1e-8, solver_max_outer_iterations=2000,
+    solver_completeness="best_effort", solver_rtol=1e-8, solver_max_outer_iterations=2000,
     equilibrium_source="relax", normalization="unit_l2", damping_policy="ignore",
     k_sampling=fm.KPath(
         points=[
@@ -91,6 +91,8 @@ study.runtime_metadata("mode_ui_verification", {
     "sampling": "signed-fifteen",
     "mesh_level": "L2",
     "through_thickness_elements": 3,
+    "requested_completeness": "best_effort",
+    "claims_complete_spectrum": False,
     "native_krylov_tuning": "current_backend_defaults",
     "historical_krylov_overrides_applied": False,
     "k_sampling_kind": "path",

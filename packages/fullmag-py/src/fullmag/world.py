@@ -3320,11 +3320,13 @@ def eigenmodes_stage(
     solver_rtol: float | None = None,
     solver_max_outer_iterations: int | None = None,
     solver_max_linear_iterations: int | None = None,
+    solver_completeness: str | None = None,
 ) -> EigenmodesStageSpec:
     solver_policy = _fem_eigen_solver_policy(
         solver_rtol=solver_rtol,
         solver_max_outer_iterations=solver_max_outer_iterations,
         solver_max_linear_iterations=solver_max_linear_iterations,
+        solver_completeness=solver_completeness,
     )
     return EigenmodesStageSpec(
         count=count,
@@ -3433,17 +3435,20 @@ def _fem_eigen_solver_policy(
     solver_rtol: float | None,
     solver_max_outer_iterations: int | None,
     solver_max_linear_iterations: int | None,
+    solver_completeness: str | None = None,
 ) -> FemEigenSolverPolicy | None:
     if (
         solver_rtol is None
         and solver_max_outer_iterations is None
         and solver_max_linear_iterations is None
+        and solver_completeness is None
     ):
         return None
     return FemEigenSolverPolicy(
         residual_tolerance=solver_rtol,
         max_outer_iterations=solver_max_outer_iterations,
         max_linear_iterations=solver_max_linear_iterations,
+        completeness=solver_completeness,
     )
 
 
@@ -4758,6 +4763,7 @@ class StudyStagesBuilder:
         solver_rtol: float | None = None,
         solver_max_outer_iterations: int | None = None,
         solver_max_linear_iterations: int | None = None,
+        solver_completeness: str | None = None,
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             eigenmodes_stage(
@@ -4780,6 +4786,7 @@ class StudyStagesBuilder:
                 solver_rtol=solver_rtol,
                 solver_max_outer_iterations=solver_max_outer_iterations,
                 solver_max_linear_iterations=solver_max_linear_iterations,
+                solver_completeness=solver_completeness,
             ),
             stage_id=stage_id,
             id_kind="eigenmodes",

@@ -1263,7 +1263,8 @@ fn eigen_solver_policy(problem: &ProblemIR) -> Result<Option<FemEigenSolverPolic
                 )],
             }
         })?;
-    if policy.residual_tolerance.is_none()
+    if policy.completeness.is_none()
+        && policy.residual_tolerance.is_none()
         && policy.max_outer_iterations.is_none()
         && policy.max_linear_iterations.is_none()
     {
@@ -6651,5 +6652,20 @@ fn selected_frequency_response_periodic_pair_ids(plan: &FemFrequencyResponsePlan
             .collect()
     } else {
         requested_pair_ids.into_iter().map(str::to_string).collect()
+    }
+}
+
+#[cfg(test)]
+mod eigen_completeness_request_tests {
+    use super::*;
+
+    #[test]
+    fn completeness_only_policy_is_not_discarded_as_empty() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "modal_solver_policy".into(), serde_json::json!({"completeness":"best_effort"}),
+        );
+        let policy = eigen_solver_policy(&problem).unwrap().unwrap();
+        assert_eq!(policy.completeness, Some(fullmag_ir::FemEigenCompletenessPolicyIR::BestEffort));
     }
 }

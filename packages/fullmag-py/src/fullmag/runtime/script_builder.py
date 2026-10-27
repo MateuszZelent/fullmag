@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
+from fullmag.model.study import FemEigenSolverPolicy
+
 from fullmag._validation import (
     AUTO_SINC_NYQUIST_GUARD_FACTOR,
     SamplingPeriod,
@@ -1709,6 +1711,7 @@ def _render_scene_stage_bootstrap(
                 "gamma",
                 "g",
                 "eigen_count",
+                "eigen_solver_completeness",
                 "eigen_solver_rtol",
                 "eigen_solver_residual_tolerance",
                 "eigen_solver_max_outer_iterations",
@@ -1764,6 +1767,11 @@ def _render_scene_stage_bootstrap(
         equilibrium_artifact = _text_value(stage.get("eigen_equilibrium_artifact"))
         if equilibrium_artifact:
             kwargs["equilibrium_artifact"] = equilibrium_artifact
+        completeness = stage.get("eigen_solver_completeness")
+        if completeness not in (None, ""):
+            kwargs["solver_completeness"] = FemEigenSolverPolicy(
+                completeness=completeness
+            ).completeness
         solver_fields = (
             ("solver_rtol", "eigen_solver_rtol", ("eigen_solver_residual_tolerance",)),
             (
@@ -3053,6 +3061,9 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
             "eigen_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
             "eigen_magnetostatic_bc": study.magnetostatic_bc,
+            "eigen_solver_completeness": (
+                solver_policy.completeness or "" if solver_policy is not None else ""
+            ),
             "eigen_solver_rtol": _text_number(
                 solver_policy.residual_tolerance if solver_policy is not None else None
             ),
@@ -8528,6 +8539,13 @@ def _render_stages(
                 call_parts.append(
                     f"solver_max_outer_iterations={solver_max_outer_iterations}"
                 )
+            solver_completeness = stage_override.get(
+                "eigen_solver_completeness",
+                solver_policy.completeness if solver_policy is not None else None,
+            )
+            if solver_completeness not in (None, ""):
+                FemEigenSolverPolicy(completeness=solver_completeness)
+                call_parts.append(f"solver_completeness={solver_completeness!r}")
             solver_max_linear_iterations = _override_int(
                 stage_override,
                 "eigen_solver_max_linear_iterations",

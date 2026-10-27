@@ -2274,6 +2274,7 @@ pub fn materialize_pipeline_eigenmodes(
         _ => fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
     };
     let solver_policy_keys = [
+        "eigen_solver_completeness",
         "eigen_solver_rtol",
         "eigen_solver_max_outer_iterations",
         "eigen_solver_max_linear_iterations",
@@ -2333,12 +2334,27 @@ pub fn materialize_pipeline_eigenmodes(
                 bail!("{key} must fit the native signed iteration limit");
             }
         }
+        let completeness = if payload.contains_key("eigen_solver_completeness") {
+            match payload.get("eigen_solver_completeness") {
+                Some(Value::Null) => None,
+                Some(Value::String(value)) if value.trim().is_empty() => None,
+                Some(value) => Some(
+                    serde_json::from_value::<fullmag_ir::FemEigenCompletenessPolicyIR>(value.clone())
+                        .context("invalid eigen_solver_completeness")?,
+                ),
+                None => None,
+            }
+        } else {
+            base_solver_policy.as_ref().and_then(|policy| policy.completeness)
+        };
         let solver_policy = fullmag_ir::FemEigenSolverPolicyIR {
+            completeness,
             residual_tolerance,
             max_outer_iterations,
             max_linear_iterations,
         };
-        if solver_policy.residual_tolerance.is_none()
+        if solver_policy.completeness.is_none()
+            && solver_policy.residual_tolerance.is_none()
             && solver_policy.max_outer_iterations.is_none()
             && solver_policy.max_linear_iterations.is_none()
         {
@@ -4340,6 +4356,34 @@ mod eigen_sampling_selector_tests {
 #[cfg(test)]
 mod pipeline_eigen_solver_policy_tests {
     use super::*;
+
+    #[test]
+    fn pipeline_eigen_completeness_preserves_inherits_clears_and_rejects() {
+        let mut base = time_evolution_base();
+        base.problem_meta.runtime_metadata.insert("modal_solver_policy".into(),
+            serde_json::json!({"completeness":"certified_count", "residual_tolerance":1e-8}));
+        for (value, expected) in [
+            (serde_json::json!("best_effort"), Some(fullmag_ir::FemEigenCompletenessPolicyIR::BestEffort)),
+            (Value::Null, None),
+            (serde_json::json!(""), None),
+        ] {
+            let payload = BTreeMap::from([("eigen_solver_completeness".into(), value)]);
+            let stage = materialize_pipeline_eigenmodes(&base, &payload).unwrap();
+            let policy = policy_from_stage(&stage).unwrap();
+            assert_eq!(policy.completeness, expected);
+            assert_eq!(policy.residual_tolerance, Some(1e-8));
+        }
+        let inherited = materialize_pipeline_eigenmodes(&base,
+            &BTreeMap::from([("eigen_solver_rtol".into(), serde_json::json!(2e-8))])).unwrap();
+        assert_eq!(policy_from_stage(&inherited).unwrap().completeness,
+            Some(fullmag_ir::FemEigenCompletenessPolicyIR::CertifiedCount));
+        for value in [serde_json::json!(false), serde_json::json!({}), serde_json::json!("invalid")] {
+            let error = materialize_pipeline_eigenmodes(&base,
+                &BTreeMap::from([("eigen_solver_completeness".into(), value)])).unwrap_err();
+            assert!(error.to_string().contains("eigen_solver_completeness"));
+        }
+    }
+
 
     fn time_evolution_base() -> ProblemIR {
         let base = ProblemIR::bootstrap_example();

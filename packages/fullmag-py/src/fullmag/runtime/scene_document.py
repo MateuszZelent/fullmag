@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from fullmag.model.geometry import RigidTransform
-from fullmag.model.study import _MAX_FEM_EIGEN_SOLVER_ITERATIONS
+from fullmag.model.study import FemEigenSolverPolicy, _MAX_FEM_EIGEN_SOLVER_ITERATIONS
 from fullmag.model.compute_resources import ComputeResources
 from fullmag.model.output_storage import OutputStorage
 from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer, _parallel_execution_lane
@@ -2457,6 +2457,10 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     else None
                 ),
                 "eigen_magnetostatic_bc": stage.get("eigen_magnetostatic_bc") or None,
+                "eigen_solver_completeness": FemEigenSolverPolicy(
+                    completeness=(None if stage.get("eigen_solver_completeness") in (None, "")
+                                  else stage.get("eigen_solver_completeness"))
+                ).completeness,
                 "eigen_solver_rtol": _eigen_solver_rtol_or_none(
                     stage.get("eigen_solver_rtol")
                     if stage.get("eigen_solver_rtol") not in (None, "")

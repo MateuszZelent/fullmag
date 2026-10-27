@@ -184,8 +184,13 @@ class FemEigenSolverPolicy:
     residual_tolerance: float | None = None
     max_outer_iterations: int | None = None
     max_linear_iterations: int | None = None
+    completeness: str | None = None
 
     def __post_init__(self) -> None:
+        if self.completeness is not None and self.completeness not in (
+            "certified_count", "best_effort"
+        ):
+            raise ValueError("completeness must be certified_count or best_effort")
         if self.residual_tolerance is not None:
             if isinstance(self.residual_tolerance, bool):
                 raise TypeError("residual_tolerance must be a real number")
@@ -212,6 +217,8 @@ class FemEigenSolverPolicy:
 
     def to_ir(self) -> dict[str, object]:
         policy: dict[str, object] = {}
+        if self.completeness is not None:
+            policy["completeness"] = self.completeness
         if self.residual_tolerance is not None:
             policy["residual_tolerance"] = self.residual_tolerance
         if self.max_outer_iterations is not None:
