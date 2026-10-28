@@ -5,6 +5,10 @@ const out=process.env.FULLMAG_UX_EVIDENCE ?? '/tmp/fullmag-results-ux';
 await (await import('node:fs/promises')).mkdir(out,{recursive:true});
 const injectMissingField = process.env.FULLMAG_UX_MISSING_FIELD === '1';
 const origin=process.env.FULLMAG_UI_URL ?? 'http://localhost:3217';
+const initialSample=Number(process.env.FULLMAG_INITIAL_SAMPLE ?? 5);
+const targetSample=Number(process.env.FULLMAG_TARGET_SAMPLE ?? 7);
+if(![initialSample,targetSample].every(n=>Number.isSafeInteger(n)&&n>=0))throw Error('Sample indexes must be nonnegative integers');
+const sampleId=n=>String(n).padStart(4,'0');
 const status=await (await fetch(origin+'/v2/sessions/current/status')).json();
 const run=status.run.run_id;
 const browser=await chromium.launch({headless:true,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
@@ -24,7 +28,7 @@ try{
  console.log('tree'); const root=`results:run:${run}`, family=root+':k-resolved', stage=family+':stage:eigenmodes:modal_eigen';
  await expand(root);await expand(family);await tree(family).click(); 
  await expand(stage);await expand(stage+':modes-at-k');
- const mode=page.locator('[role="treeitem"][data-node-id*="sample-0005"][data-node-id*="mode-0000"]').last();
+ const mode=page.locator(`[role="treeitem"][data-node-id*="sample-${sampleId(initialSample)}"][data-node-id*="mode-0000"]`).last();
  await mode.click();await page.waitForTimeout(700);
 
  console.log('activate'); await page.getByRole('button',{name:'Show selected eigen mode in 3D',exact:true}).click();
@@ -43,9 +47,9 @@ try{
  await page.locator('.fm-analysis-plots__frequency-canvas canvas').waitFor({state:'visible'});
  await canvas.waitFor({state:'visible'});
  evidence.splitBefore={primary:await host.getAttribute('data-active-module-id'),companion:await host.getAttribute('data-companion-module-id')};
- await page.getByRole('combobox',{name:'Mode wavevector',exact:true}).selectOption('7');
+ await page.getByRole('combobox',{name:'Mode wavevector',exact:true}).selectOption(String(targetSample));
  await page.getByRole('button',{name:'Animate selected eigen mode phase in 3D',exact:true}).click();
- await page.waitForFunction(()=>window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.()?.streams?.timeline?.filter(x=>x.name==='viewport-3d.mode-surface-binding').at(-1)?.detail?.bufferQuantity==='analysis:eigen:sample-0007:mode-0000',null,{timeout:60000});
+ await page.waitForFunction(quantity=>window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.()?.streams?.timeline?.filter(x=>x.name==='viewport-3d.mode-surface-binding').at(-1)?.detail?.bufferQuantity===quantity,`analysis:eigen:sample-${sampleId(targetSample)}:mode-0000`,{timeout:60000});
  await page.getByRole('button',{name:'Stop selected eigen mode animation',exact:true}).click();
  await page.getByRole('button',{name:'Fit mode',exact:true}).click();
  evidence.splitAfter={primary:await host.getAttribute('data-active-module-id'),companion:await host.getAttribute('data-companion-module-id')};

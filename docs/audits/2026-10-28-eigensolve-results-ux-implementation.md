@@ -1,6 +1,6 @@
 # Wdrożenie audytu Results UX — 2026-10-28
 
-Wdrożono aplikacyjne zmiany R1–R5 z [audytu](2026-10-28-eigensolve-results-ux-audit.md). Testy automatyczne i rzeczywista przeglądarka potwierdzają opisany poniżej zakres. R6 pozostaje otwarte dla próby podczas aktywnego solvera oraz ręcznego odbioru użyteczności; nie utożsamiamy go z samym Playwrightem.
+Wdrożono aplikacyjne zmiany R1–R5 z [audytu](2026-10-28-eigensolve-results-ux-audit.md). Testy automatyczne i rzeczywista przeglądarka potwierdzają opisany poniżej zakres. Techniczna próba R6 podczas aktywnego solvera jest zakończona PASS; otwarty pozostaje ręczny odbiór użyteczności z nową osobą. Nie utożsamiamy go z samym Playwrightem.
 
 Worktree: `/home/kkingstoun/git/fullmag/worktrees/eigensolve-integration-ui-20261026`. Branch: `codex/eigensolve-integration-ui-20261026`. UI: http://localhost:3217/session/eigen-mode-ui-de-signed15. [PR 262](https://github.com/MateuszZelent/fullmag/pull/262) pozostaje draftem szerszej integracji; ten raport kwalifikuje wyłącznie zmiany UX.
 
@@ -13,7 +13,7 @@ Worktree: `/home/kkingstoun/git/fullmag/worktrees/eigensolve-integration-ui-2026
 | R3 | Implementacja, CI i browser PASS | Explorer, wybór próbki i selekcja z wykresu używają Γ / podpisanego k / GHz. Surowe identyfikatory pozostają w danych. Zachowano run/stage/revision/sample/mode oraz węzły nawigacji; Back to chart wraca do istniejącego wykresu. |
 | R4 | Implementacja, CI i browser PASS | Jedno Color by; solid, scalar range i vectors mają warunkowe controls. Wygląd i Stop są dostępne tylko dla tej samej tożsamości aktywnego pola. Po wyborze innego k pojawia się jawna informacja o poprzednim aktywnym modzie. |
 | R5 | Implementacja, CI i browser PASS w podanym zakresie | Elastyczna wysokość wykresu, Show / hide lower panel, szczegóły telemetryki na żądanie. Status pozostaje widoczny. Sprawdzono trzy rozmiary okna oraz przywrócenie wysokości po hide/show; nie zmieniono właściciela paneli, cache zasobów ani cyklu życia obliczeń. |
-| R6 | Częściowo zweryfikowane; aktywny solver ZABLOKOWANY | Pierwotna macierz 1267 testów i browser PASS. Dodatkowe poprawki animacji, kolorów i selektora k/f opisano poniżej wraz z nowym CI. Rzeczywisty test dock/float podczas obliczenia nie wystartował przez `live_retirement_busy`; brak podstaw do zamknięcia R6. Badanie z nową osobą również NOT VERIFIED. |
+| R6 | Techniczny lifecycle podczas solvera PASS; odbiór użyteczności otwarty | Naprawiono `live_retirement_busy`; rzeczywisty pilot FEM zakończony i widmo opublikowane. Wszystkie 10 operacji panelowych przy running przed i po, ten sam run ID, zero błędów/mutacji. Split Chart + mode zweryfikowany w przeglądarce. Badanie z nową osobą NOT VERIFIED. Szczegóły w raporcie R6 z tego samego dnia. |
 
 ## Co potwierdzono
 
@@ -96,7 +96,7 @@ sprawdzenie cyklu życia paneli podczas rzeczywistego obliczenia i aktualizacja 
    indeksowane modami przy „Back to chart”. Dodano regresję routingu; wyniki
    bez ścieżki k nadal prowadzą do widma.
 
-### R6: stan obliczeń i blokada
+### R6: historyczny checkpoint przed naprawą blokady
 
 **Test paneli podczas aktywnego solvera: NOT VERIFIED.** Żaden nowy solver nie
 wystartował w tej próbie. Wskazanie `completed` dotyczy odtworzonego archiwum.
@@ -197,7 +197,7 @@ z 15 punktami i dwiema krzywymi referencyjnymi.
 Screeny w tym katalogu: `gamma-mode-controls.png` i
 `dispersion-after-mode-picker.png`. SwiftShader potwierdza rendering WebGL;
 nie stanowi kwalifikacji sprzętowego GPU ani ponownego testu fizyki solvera.
-Aktywny solver nadal **NOT VERIFIED** — powyższy PASS nie zamyka tej części R6.
+W tym wcześniejszym checkpointcie aktywny solver był **NOT VERIFIED**; aktualne potwierdzenie opisano poniżej.
 
 Ostateczne źródła UI: `223ba56533a5aed735c382b1b6279e33759b4474`.
 [CI 40765299446](https://github.com/MateuszZelent/fullmag/actions/runs/40765299446):
@@ -217,3 +217,12 @@ wybór +25 → Γ, fazę 0 → π/2, nieruchomy obraz po pauzie, zatrzymanie ani
 przez statyczny Real, osiem operacji panelowych podczas animacji, odpowiedź
 powierzchni po dokowaniu i powrót do dyspersji. Brak błędów JS i niedozwolonych
 mutacji; run ID pozostał niezmieniony. Zestaw nie wysyła Solve.
+
+## Aktualizacja końcowa R6 (28.10, po rzeczywistym obliczeniu)
+
+[Raport naprawy, runtime i split](2026-10-28-eigensolve-r6-runtime-and-split.md)
+oraz [evidence](2026-10-28-eigensolve-r6-runtime-and-split.evidence.json)
+zastępują wcześniejszy status blokady. CI Rust i UI: PASS. Aktywacja z importu,
+rzeczywisty solver i publikacja: PASS. Float/move/resize/maximize/restore/hide/
+show/dock podczas solvera: PASS. Podział widoku z zachowaniem modu podczas
+Show/Animate: PASS. Ręczna próba z nową osobą pozostaje otwarta.
