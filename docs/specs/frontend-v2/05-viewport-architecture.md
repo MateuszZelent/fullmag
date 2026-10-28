@@ -174,3 +174,16 @@ or pointer cancellation restores the pre-gesture placement. Interior release
 keeps the window floating. Preview animation respects reduced-motion preferences.
 Only docking anchors and frame placement change; renderer keys/parents and solver
 state do not. Separator resizing remains available after snapping.
+
+### Workspace-wide panel docking
+
+Explorer, Inspector, Diagnostics and the viewport group use a persisted binary
+split tree. The tree contains measurement anchors only; keyed workspace windows
+remain siblings under a stable parent, including while moved between nested
+horizontal and vertical splits. Floating/hidden panels retain their tree position
+but have no active anchor. A fresh drop can target a workspace edge or a visible
+panel edge. Menus provide keyboard-accessible directions and reset.
+An explicit modes-left/chart-right preset restores both center windows to the
+dock without changing selected result ownership; when no frequency-domain result
+is selected, the UI explains the Results selection step. Back-to-chart focuses an
+already visible chart without collapsing the modes-left arrangement.

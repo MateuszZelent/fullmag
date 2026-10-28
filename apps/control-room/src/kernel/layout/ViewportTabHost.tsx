@@ -1,7 +1,7 @@
 "use client";
 
 import { Columns2, Rows2, ArrowLeftRight, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PanelChrome, PanelFrame, usePanelChromeControls, type PanelMode, type PanelModeRequest, type PanelMoveEvent } from "@/shared/ui/PanelFrame";
 import { Button } from "@/shared/ui/Button";
@@ -11,38 +11,15 @@ import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 import { useKernel } from "../KernelContext";
 import type { ModuleManifest } from "../types";
 import { MountedModule } from "./SlotHost";
+import { DockAnchor, type DockBounds } from "./DockAnchor";
 import { hitTestDockEdge, planViewportDock, type DockEdge } from "./viewportDocking";
+import { useSelectionSelector } from "../selection/useSelection";
 import { useLayoutActions, useLayoutSelector } from "./useLayout";
 
-interface DockBounds { left: number; top: number; width: number; height: number }
 const ignoreDockChange = () => undefined;
 
 function selectActiveViewportModule(modules: ModuleManifest[], activeModuleId: string): ModuleManifest | null {
   return modules.find(module => module.id === activeModuleId) ?? modules[0] ?? null;
-}
-
-/** Only anchors participate in the splitter. Renderer parents never move. */
-function DockAnchor({ id, surface, onBounds }: {
-  id: string;
-  surface: RefObject<HTMLDivElement | null>;
-  onBounds: (id: string, bounds: DockBounds) => void;
-}) {
-  const anchor = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const node = anchor.current;
-    const host = surface.current;
-    if (!node || !host) return;
-    const measure = () => {
-      const rect = node.getBoundingClientRect(), parent = host.getBoundingClientRect();
-      onBounds(id, { left: rect.left - parent.left, top: rect.top - parent.top, width: rect.width, height: rect.height });
-    };
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    observer.observe(host);
-    measure();
-    return () => observer.disconnect();
-  }, [id, onBounds, surface]);
-  return <div ref={anchor} className="fm-viewport-dock-anchor" data-dock-anchor={id} aria-hidden="true" />;
 }
 
 function WindowChrome({ title, onHide }: { title: string; onHide: () => void }) {
@@ -89,6 +66,8 @@ export function ViewportTabHost() {
   const companionModule = companion && companion.moduleId !== activeModule?.id
     ? modules.find(module => module.id === companion.moduleId) ?? null : null;
   const surface = useRef<HTMLDivElement>(null);
+  const [presetRequested, setPresetRequested] = useState(false);
+  const frequencyResultSelected = useSelectionSelector(selection => selection.ref?.type === "frequency-domain");
   const [preview, setPreview] = useState<{ id: string; edge: DockEdge | null } | null>(null);
   const [modeRequests, setModeRequests] = useState<Record<string, PanelModeRequest>>({});
   const [layoutRequest, setLayoutRequest] = useState<{ layout: Record<string, number>; onApplied: () => void } | undefined>();
@@ -141,6 +120,19 @@ export function ViewportTabHost() {
     kernel.layout.replace({ ...kernel.layout.get(), activeViewportMainModuleId: plan.primaryId,
       viewportCompanion: plan.companionId ? { moduleId: plan.companionId, placement: plan.placement } : null });
   };
+  const showModesLeft = () => {
+    setPresetRequested(true);
+    const ids = ["viewport-3d", "analysis-plots"];
+    setHidden(previous => ({ ...previous, "viewport-3d": false, "analysis-plots": false }));
+    setModes(previous => ({ ...previous, "viewport-3d": "docked", "analysis-plots": "docked" }));
+    setModeRequests(previous => {
+      const next = { ...previous };
+      for (const id of ids) next[id] = { mode: "docked", sequence: (previous[id]?.sequence ?? 0) + 1 };
+      return next;
+    });
+    setLayoutRequest({ layout: { "viewport-window:first": 50, "viewport-window:second": 50 }, onApplied: () => setLayoutRequest(undefined) });
+    kernel.layout.replace({ ...kernel.layout.get(), activeViewportMainModuleId: "viewport-3d", viewportCompanion: { moduleId: "analysis-plots", placement: "beside" } });
+  };
   const select = (id: string) => {
     setHidden(previous => previous[id] ? { ...previous, [id]: false } : previous);
     // Selecting a visible floating/companion window focuses it, preserving the
@@ -179,6 +171,8 @@ export function ViewportTabHost() {
             {module.title}
           </TabsTrigger>)}
         </TabsList>
+        {modules.some(module => module.id === "viewport-3d") && modules.some(module => module.id === "analysis-plots") ?
+          <Button size="sm" variant="secondary" aria-label="Arrange modes left and spectrum right" title="3D modes on the left; spectrum on the right. Select a result in Results to populate the views." onClick={showModesLeft}><Columns2 size={14} aria-hidden="true" />Modes | Spectrum</Button> : null}
         {companionModule && companion ? <>
           <Button aria-label="Arrange viewport windows side by side" size="icon" variant="ghost" onClick={() => setViewportCompanion({ ...companion, placement: "beside" })}><Columns2 aria-hidden="true" size={14} /></Button>
           <Button aria-label="Arrange viewport windows vertically" size="icon" variant="ghost" onClick={() => setViewportCompanion({ ...companion, placement: "below" })}><Rows2 aria-hidden="true" size={14} /></Button>
@@ -186,6 +180,7 @@ export function ViewportTabHost() {
           <Button aria-label={`Close ${companionModule.title} split view`} size="icon" variant="ghost" onClick={() => setViewportCompanion(null)}><X aria-hidden="true" size={14} /></Button>
         </> : null}
       </PanelChrome>
+      {presetRequested && !frequencyResultSelected ? <p className="fm-layout-hint" role="status">Choose a mode in Results → Modes at k, then select Show mode in 3D.</p> : null}
       <div ref={surface} className="fm-viewport-tabs__surface">
         {docked.length === 2 ? <ResizablePanelGroup autoSaveId={`fullmag.viewport-windows.split.${direction}`} direction={direction} panelCount={2} layoutRequest={layoutRequest}>
           <ResizablePanel defaultSize={50} id="viewport-window:first" minSize={20}><DockAnchor id={docked[0].id} surface={surface} onBounds={reportBounds} /></ResizablePanel>

@@ -267,3 +267,14 @@
 
 .fm-panel-frame__move { cursor: grab; touch-action: none; }
 .fm-panel-frame__move:active { cursor: grabbing; }
+
+/* Every workspace panel has a stable owner outside the recursive docking tree. */
+.fm-workspace-docking-tree { position: absolute; inset: 0; min-width: 0; min-height: 0; }
+.fm-workspace-window { position: absolute; min-width: 0; min-height: 0; pointer-events: none; }
+.fm-workspace-window[hidden] { display: none; }
+.fm-workspace-window > .fm-panel-frame { pointer-events: auto; }
+.fm-workspace-dock-preview { position: absolute; pointer-events: none; z-index: 76; display: grid; place-items: center; border: 2px solid var(--fm-accent); border-radius: var(--fm-radius-md); background: color-mix(in srgb, var(--fm-accent) 18%, transparent); animation: fm-dock-preview-in var(--fm-transition-fast); }
+.fm-workspace-dock-preview span { padding: var(--fm-space-2) var(--fm-space-3); border-radius: var(--fm-radius-md); background: var(--fm-bg-panel); color: var(--fm-text-primary); box-shadow: var(--fm-shadow-elevated); }
+@media (prefers-reduced-motion: reduce) { .fm-workspace-dock-preview { animation: none; } }
+
+.fm-layout-hint { margin: 0; padding: var(--fm-space-2); color: var(--fm-text-secondary); background: var(--fm-bg-panel); font-size: var(--fm-font-size-sm); }

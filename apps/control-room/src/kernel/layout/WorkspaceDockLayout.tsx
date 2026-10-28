@@ -1,20 +1,13 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import type { PanelImperativeHandle } from "react-resizable-panels";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { Button } from "@/shared/ui/Button";
-import { PanelChrome, PanelFrame } from "@/shared/ui/PanelFrame";
-import { GripVertical } from "lucide-react";
-
-import {
-  DEFAULT_WORKSPACE_LAYOUT,
-  moveWorkspaceColumn,
-  restoreWorkspaceLayout,
-  serializeWorkspaceLayout,
-  WORKSPACE_LAYOUT_RESTORED_EVENT,
-  WORKSPACE_LAYOUT_STORAGE_KEY,
-  type WorkspaceColumnLayout,
-} from "./layoutModel";
+import { PanelChrome, PanelFrame, type PanelModeRequest, type PanelMoveEvent } from "@/shared/ui/PanelFrame";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/shared/ui/Resizable";
+import { DEFAULT_WORKSPACE_LAYOUT, WORKSPACE_LAYOUT_RESTORED_EVENT, type WorkspaceColumnLayout } from "./layoutModel";
+import { DockAnchor, type DockBounds } from "./DockAnchor";
+import { defaultWorkspaceTree, dockWorkspacePane, filterWorkspaceTree, resizeWorkspaceSplit, restoreWorkspaceTree, WORKSPACE_TREE_KEY, type WorkspaceDockTree, type WorkspacePaneId } from "./workspaceDocking";
+import { hitTestDockEdge, type DockEdge } from "./viewportDocking";
 import { SlotHost } from "./SlotHost";
 import { ViewportTabHost } from "./ViewportTabHost";
 import { useWorkspaceContentScope } from "./WorkspaceContentScope";
@@ -22,22 +15,6 @@ import { useKernel } from "../KernelContext";
 import type { SavedResultsPlaybackSelection } from "../saved-results/SavedResultsPlaybackController";
 import { useSavedResultsPlaybackSelection } from "../saved-results/useSavedResultsPlayback";
 import { useLayoutSelector } from "./useLayout";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/shared/ui/Resizable";
-import { SortableItem, SortableList } from "@/shared/ui/Sortable";
-
-interface SortableWorkspaceColumnProps {
-  column: WorkspaceColumnLayout;
-  playbackSelection: SavedResultsPlaybackSelection | null;
-}
-
-interface WorkspaceDockState {
-  layout: typeof DEFAULT_WORKSPACE_LAYOUT;
-  restored: boolean;
-}
 
 function WorkspaceColumnContent({
   playbackSelection,
@@ -87,124 +64,133 @@ function WorkspaceColumnContent({
   return <SlotHost slotId={slotId} />;
 }
 
-function persistWorkspaceLayout(layout: typeof DEFAULT_WORKSPACE_LAYOUT): void {
-  try {
-    window.localStorage.setItem(
-      WORKSPACE_LAYOUT_STORAGE_KEY,
-      serializeWorkspaceLayout(layout),
-    );
-  } catch {
-    return;
-  }
+
+/** Layout containers hold measuring anchors, never live module content. */
+function TreeAnchors({ tree, surface, onBounds, onResize }: {
+  tree: WorkspaceDockTree; surface: RefObject<HTMLDivElement | null>;
+  onBounds: (id: string, bounds: DockBounds) => void;
+  onResize: (id: string, ratio: number) => void;
+}) {
+  if (tree.kind === "pane") return <DockAnchor id={tree.pane} surface={surface} onBounds={onBounds} />;
+  const firstId = `${tree.id}:first`, secondId = `${tree.id}:second`;
+  return <ResizablePanelGroup key={tree.id} direction={tree.axis} panelCount={2}
+    onLayoutChanged={layout => onResize(tree.id, layout[firstId])}>
+    <ResizablePanel id={firstId} defaultSize={`${tree.ratio}%`} minSize={tree.axis === "horizontal" ? "100px" : "80px"}>
+      <TreeAnchors tree={tree.first} surface={surface} onBounds={onBounds} onResize={onResize} />
+    </ResizablePanel>
+    <ResizableHandle className={tree.axis === "horizontal" ? "fm-resize-handle--vertical" : "fm-resize-handle--horizontal"} aria-label="Resize adjacent workspace panels" />
+    <ResizablePanel id={secondId} defaultSize={`${100-tree.ratio}%`} minSize={tree.axis === "horizontal" ? "100px" : "80px"}>
+      <TreeAnchors tree={tree.second} surface={surface} onBounds={onBounds} onResize={onResize} />
+    </ResizablePanel>
+  </ResizablePanelGroup>;
 }
 
-function SortableWorkspaceColumn({ column, playbackSelection, visible, drawer, drawerShared, onDockChange, onHide, onMove }: SortableWorkspaceColumnProps & {
-  visible: boolean; drawer: boolean; drawerShared: boolean;
-  onDockChange: (id: string, docked: boolean) => void;
-  onHide?: () => void;
-  onMove: (direction: -1 | 1) => void;
-}) {
-  const reportDocked = useCallback((docked: boolean) => onDockChange(column.slotId, docked), [column.slotId, onDockChange]);
-  const title = playbackSelection && column.slotId === "panel-left" ? "Saved folder" : column.label;
-  return <SortableItem id={column.slotId}>{({ attributes, isDragging, listeners, setNodeRef, style }) => (
-    <div ref={setNodeRef} className="fm-dock-column" data-dragging={isDragging} style={style}>
-      <PanelFrame id={column.slotId} title={title} visible={visible} drawer={drawer} drawerSide={column.slotId === "panel-left" ? "left" : "right"} drawerShared={drawerShared} floatable={column.slotId !== "viewport-main"} suspendWhenHidden={column.slotId !== "panel-right"} onDockChange={reportDocked} onHide={onHide} onMove={onMove}
-        dockHandle={<Button className="fm-panel-move" size="icon" variant="ghost" aria-label={`Move ${title} panel`} {...attributes} {...listeners}><GripVertical size={14} aria-hidden="true" /></Button>}>
-        {column.slotId === "viewport-aux" ? <PanelChrome><span className="fm-panel-chrome__title">{column.label}</span></PanelChrome> : null}
-        <WorkspaceColumnContent playbackSelection={playbackSelection} slotId={column.slotId} />
-      </PanelFrame>
-    </div>
-  )}</SortableItem>;
+interface WorkspaceWindowProps {
+  id: WorkspacePaneId; title: string; visible: boolean; drawer: boolean; drawerShared: boolean;
+  bounds?: DockBounds; request?: PanelModeRequest; playbackSelection: SavedResultsPlaybackSelection | null;
+  onDockChange: (id: WorkspacePaneId, docked: boolean) => void;
+  onMoveGesture: (id: WorkspacePaneId, event: PanelMoveEvent) => void;
+  onDockTo: (id: WorkspacePaneId, edge: DockEdge) => void; onHide?: () => void;
 }
+function WorkspaceWindow({ id, title, visible, drawer, drawerShared, bounds, request, playbackSelection, onDockChange, onMoveGesture, onDockTo, onHide }: WorkspaceWindowProps) {
+  const report = useCallback((docked: boolean) => onDockChange(id, docked), [id, onDockChange]);
+  const move = (event: PanelMoveEvent) => onMoveGesture(id, event);
+  return <div className="fm-workspace-window" data-workspace-pane={id} hidden={!visible} style={bounds ?? { inset: 0 }}>
+    <PanelFrame id={id} title={title} visible={visible} dragToFloat drawer={drawer} drawerSide={id === "panel-left" ? "left" : "right"} drawerShared={drawerShared}
+      suspendWhenHidden={id !== "panel-right"} modeRequest={request} onMoveGesture={move} onDockChange={report} onHide={onHide}
+      placementActions={[...(["left", "right", "top", "bottom"] as const).map(edge => ({ label: `Dock to ${edge} of workspace`, onSelect: () => onDockTo(id, edge) })), { label: "Reset panel arrangement", onSelect: () => window.dispatchEvent(new Event(WORKSPACE_LAYOUT_RESTORED_EVENT)) }]}>
+      {id === "viewport-aux" ? <PanelChrome><span className="fm-panel-chrome__title">{title}</span></PanelChrome> : null}
+      {id === "panel-bottom" ? <SlotHost slotId="panel-bottom" /> : <WorkspaceColumnContent playbackSelection={playbackSelection} slotId={id} />}
+    </PanelFrame>
+  </div>;
+}
+interface DockTarget { edge: DockEdge; target: WorkspacePaneId | null; bounds: DockBounds; title: string }
 
 export function WorkspaceDockLayout() {
   const kernel = useKernel();
   const playbackSelection = useSavedResultsPlaybackSelection();
   const playbackOnly = playbackSelection !== null;
   const projectOnly = useWorkspaceContentScope() === "project";
-  const panelVisible = useLayoutSelector((layout) => layout.panelVisible);
-  const hasAuxViewportModule = !projectOnly && !playbackOnly && kernel.modules.forSlot("viewport-aux").length > 0;
-  const [dockState, setDockState] = useState<WorkspaceDockState>({ layout: DEFAULT_WORKSPACE_LAYOUT, restored: false });
-  const [dockedPanels, setDockedPanels] = useState<Record<string, boolean>>({});
+  const panelVisible = useLayoutSelector(layout => layout.panelVisible);
+  const hasAux = !projectOnly && !playbackOnly && kernel.modules.forSlot("viewport-aux").length > 0;
+  const [tree, setTree] = useState<WorkspaceDockTree>(defaultWorkspaceTree);
+  const [restored, setRestored] = useState(false);
   const [windowWidth, setWindowWidth] = useState(1440);
-  const panels = useRef<Record<string, PanelImperativeHandle | null>>({});
+  const [docked, setDocked] = useState<Partial<Record<WorkspacePaneId, boolean>>>({});
+  const [bounds, setBounds] = useState<Record<string, DockBounds>>({});
+  const [requests, setRequests] = useState<Partial<Record<WorkspacePaneId, PanelModeRequest>>>({});
+  const [preview, setPreview] = useState<DockTarget | null>(null);
+  const surface = useRef<HTMLDivElement>(null);
+  const columns = DEFAULT_WORKSPACE_LAYOUT.columns.filter(column => column.slotId !== "viewport-aux" || hasAux);
+  const panes = [...columns.map(column => ({ id: column.slotId as WorkspacePaneId, title: playbackOnly && column.slotId === "panel-left" ? "Saved folder" : column.label })),
+    ...(!projectOnly && !playbackOnly ? [{ id: "panel-bottom" as const, title: "Diagnostics" }] : [])];
+  const available = new Set(panes.map(pane => pane.id));
+  const visible = (id: WorkspacePaneId) => id === "panel-left" ? panelVisible.left : id === "panel-right" ? playbackOnly || panelVisible.right : id === "panel-bottom" ? panelVisible.bottom : true;
+  // Explicit docking takes priority over automatic compact-screen drawers.
+  const drawer = (id: WorkspacePaneId) => requests[id]?.mode !== "docked" && ((id === "panel-right" && windowWidth < 1180) || (id === "panel-left" && windowWidth < 760));
+  const kept = (id: WorkspacePaneId) => available.has(id) && visible(id) && (docked[id] ?? !drawer(id));
+  const activeTree = filterWorkspaceTree(tree, kept);
 
   useEffect(() => {
-    const restore = () => {
-      let layout = DEFAULT_WORKSPACE_LAYOUT;
-      try { layout = restoreWorkspaceLayout(localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)); } catch { /* Storage is optional. */ }
-      setDockState({ layout, restored: true });
-    };
-    restore();
-    window.addEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, restore);
+    try { setTree(restoreWorkspaceTree(localStorage.getItem(WORKSPACE_TREE_KEY))); } catch { /* Optional layout preference. */ }
+    setRestored(true);
+    const reset = () => { setTree(defaultWorkspaceTree()); setRequests({}); setDocked({}); setPreview(null); };
     const resize = () => setWindowWidth(window.innerWidth);
-    resize(); window.addEventListener("resize", resize);
-    return () => { window.removeEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, restore); window.removeEventListener("resize", resize); };
+    resize();window.addEventListener("resize", resize);window.addEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, reset);
+    return () => { window.removeEventListener("resize", resize);window.removeEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, reset); };
   }, []);
-  useEffect(() => { if (dockState.restored) persistWorkspaceLayout(dockState.layout); }, [dockState]);
-  const onDockChange = useCallback((id: string, docked: boolean) => {
-    setDockedPanels(previous => previous[id] === docked ? previous : { ...previous, [id]: docked });
-  }, []);
-  const bottomDockChange = useCallback((docked: boolean) => onDockChange("panel-bottom", docked), [onDockChange]);
-  const resetInspectorWidth = useCallback(() => {
-    const initial = DEFAULT_WORKSPACE_LAYOUT.columns.find(column => column.slotId === "panel-right");
-    if (initial) panels.current["panel-right"]?.resize(initial.defaultSize);
-  }, []);
-
-  useEffect(() => {
-    for (const [id, panel] of Object.entries(panels.current)) {
-      if (!panel || dockedPanels[id] === undefined) continue;
-      if (dockedPanels[id]) { if (panel.isCollapsed()) panel.expand(); }
-      else if (!panel.isCollapsed()) panel.collapse();
-    }
-  }, [dockedPanels, dockState.restored]);
-
-  const columns = dockState.layout.columns.filter(column => column.slotId !== "viewport-aux" || hasAuxViewportModule);
-  const visible = (id: string) => playbackOnly && id === "panel-right"
-    ? true
-    : id === "panel-left" ? panelVisible.left : id === "panel-right" ? panelVisible.right : true;
-  const isDrawer = (id: string) => id === "panel-right" && windowWidth < 1180 || id === "panel-left" && windowWidth < 760;
-  // Explorer and Inspector drawers open together only below 760px; they then split the width.
-  const drawersShared = isDrawer("panel-left") && isDrawer("panel-right") && visible("panel-left") && visible("panel-right");
-  const move = (id: string, direction: -1 | 1) => {
-    const index = columns.findIndex(column => column.slotId === id);
-    const neighbour = columns[index + direction];
-    if (neighbour) setDockState(current => ({ ...current, layout: moveWorkspaceColumn(current.layout, id, neighbour.slotId) }));
+  useEffect(() => { if (restored) { try { localStorage.setItem(WORKSPACE_TREE_KEY, JSON.stringify(tree)); } catch { /* Optional preference. */ } } }, [tree, restored]);
+  const reportDocked = useCallback((id: WorkspacePaneId, value: boolean) => setDocked(old => old[id] === value ? old : { ...old, [id]: value }), []);
+  const reportBounds = useCallback((id: string, next: DockBounds) => setBounds(old => {
+    const previous = old[id];
+    return previous && previous.left === next.left && previous.top === next.top && previous.width === next.width && previous.height === next.height ? old : { ...old, [id]: next };
+  }), []);
+  const resizeSplit = useCallback((id: string, ratio: number) => setTree(old => resizeWorkspaceSplit(old, id, ratio)), []);
+  const applyDock = (id: WorkspacePaneId, target: WorkspacePaneId | null, edge: DockEdge) => {
+    setPreview(null);
+    const splitId = crypto.randomUUID();
+    setTree(old => dockWorkspacePane(old, id, target, edge, splitId));
+    setRequests(old => ({ ...old, [id]: { mode: "docked", sequence: (old[id]?.sequence ?? 0)+1 } }));
+    setDocked(old => ({ ...old, [id]: true }));
   };
-  if (!dockState.restored) return <div className="fm-workspace-body" data-dock-hydration-pending="true" id="fm-main-content" tabIndex={-1}>
+  const moveGesture = (id: WorkspacePaneId, event: PanelMoveEvent) => {
+    if (event.phase === "cancel") { setPreview(null); return; }
+    const root = surface.current?.getBoundingClientRect();
+    if (!root) return;
+    let target: DockTarget | null = null;
+    const rootEdge = hitTestDockEdge(root, event);
+    const rootDistance = rootEdge === "left" ? Math.abs(event.x-root.left) : rootEdge === "right" ? Math.abs(event.x-root.right) : rootEdge === "top" ? Math.abs(event.y-root.top) : Math.abs(event.y-root.bottom);
+    if (rootEdge && rootDistance <= 12) target = { edge: rootEdge, target: null, bounds: { left: 0, top: 0, width: root.width, height: root.height }, title: "workspace" };
+    else for (const pane of panes) {
+      const b = bounds[pane.id];
+      if (pane.id === id || !kept(pane.id) || !b) continue;
+      if (event.x < root.left+b.left || event.x > root.left+b.left+b.width || event.y < root.top+b.top || event.y > root.top+b.top+b.height) continue;
+      const edge = hitTestDockEdge({ left: root.left+b.left, top: root.top+b.top, width: b.width, height: b.height }, event);
+      if (edge) { target = { edge, target: pane.id, bounds: b, title: pane.title };break; }
+    }
+    if (event.phase === "drop") { if (target) applyDock(id, target.target, target.edge); else setPreview(null); return; }
+    setPreview(previous => previous?.edge === target?.edge && previous?.target === target?.target && previous?.bounds.left === target?.bounds.left && previous?.bounds.top === target?.bounds.top && previous?.bounds.width === target?.bounds.width && previous?.bounds.height === target?.bounds.height ? previous : target);
+  };
+  const hide = (id: WorkspacePaneId) => id === "panel-left" ? () => kernel.layout.setPanelVisible("left", false)
+    : id === "panel-right" && !playbackOnly ? () => kernel.layout.setPanelVisible("right", false)
+    : id === "panel-bottom" ? () => kernel.layout.setPanelVisible("bottom", false) : undefined;
+
+  if (!restored) return <div className="fm-workspace-body" data-dock-hydration-pending="true" id="fm-main-content" tabIndex={-1}>
     {columns.filter(column => visible(column.slotId)).map(column => <div key={column.slotId} className="fm-dock-column"><section className="fm-slot" data-slot-id={column.slotId} aria-label={column.label} aria-busy="true" /></div>)}
     {!projectOnly && !playbackOnly && panelVisible.bottom ? <div className="fm-workspace-bottom-panel"><section className="fm-slot" data-slot-id="panel-bottom" aria-label="Diagnostics" aria-busy="true" /></div> : null}
   </div>;
-
-  return <div className="fm-workspace-body" id="fm-main-content" tabIndex={-1}>
-    <ResizablePanelGroup autoSaveId="fullmag-workspace-main:retained-v1" direction="vertical" panelCount={projectOnly || playbackOnly ? 1 : 2}>
-      <ResizablePanel defaultSize="78%" id="workspace-main" minSize="160px">
-        <SortableList id="workspace-dock-columns" items={columns.map(column => column.slotId)} onMove={(activeId, overId) => setDockState(current => ({ ...current, layout: moveWorkspaceColumn(current.layout, activeId, overId) }))}>
-          <ResizablePanelGroup autoSaveId={`fullmag-workspace-columns:retained-v1:${columns.map(column => column.slotId).join("|")}`} direction="horizontal" panelCount={columns.length}>
-            {columns.map((column, index) => <Fragment key={column.slotId}>
-              <ResizablePanel id={column.slotId} defaultSize={column.defaultSize} minSize={column.slotId === "panel-right" ? "240px" : "160px"} maxSize={column.slotId === "panel-right" ? "560px" : column.maxSize} groupResizeBehavior={column.resizeBehavior} collapsible collapsedSize={0} panelRef={handle => { panels.current[column.slotId] = handle; }}>
-                <SortableWorkspaceColumn column={column} playbackSelection={playbackSelection} visible={visible(column.slotId)} drawer={isDrawer(column.slotId)} drawerShared={drawersShared && isDrawer(column.slotId)} onDockChange={onDockChange} onHide={column.slotId === "panel-left" ? () => kernel.layout.setPanelVisible("left", false) : column.slotId === "panel-right" && !playbackOnly ? () => kernel.layout.setPanelVisible("right", false) : undefined} onMove={direction => move(column.slotId, direction)} />
-              </ResizablePanel>
-              {index < columns.length - 1 ? <ResizableHandle className="fm-resize-handle--vertical" aria-label={`Resize ${column.label} and ${columns[index + 1].label} panels`} onDoubleClick={column.slotId === "panel-right" || columns[index + 1].slotId === "panel-right" ? resetInspectorWidth : undefined} style={dockedPanels[column.slotId] === false || dockedPanels[columns[index + 1].slotId] === false ? { display: "none" } : undefined} /> : null}
-            </Fragment>)}
-          </ResizablePanelGroup>
-        </SortableList>
-      </ResizablePanel>
-      {!projectOnly && !playbackOnly ? <>
-        <ResizableHandle className="fm-resize-handle--horizontal" aria-label="Resize bottom diagnostics" style={dockedPanels["panel-bottom"] === false ? { display: "none" } : undefined} />
-        <ResizablePanel defaultSize={`${dockState.layout.bottomDockDefaultSize}%`} minSize="100px" className="fm-workspace-bottom-panel" id="panel-bottom" collapsible collapsedSize={0} panelRef={handle => { panels.current["panel-bottom"] = handle; }}>
-          <PanelFrame id="panel-bottom" title="Diagnostics" visible={panelVisible.bottom} onDockChange={bottomDockChange} onHide={() => kernel.layout.setPanelVisible("bottom", false)}>
-            <SlotHost slotId="panel-bottom" />
-          </PanelFrame>
-        </ResizablePanel>
-      </> : null}
-    </ResizablePanelGroup>
-    {!playbackOnly ? (
-      <div className="fm-panel-restore-bar" aria-label="Restore hidden panels">
-        {!panelVisible.left ? <Button data-restore-panel="panel-left" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("left", true)}>Restore Explorer</Button> : null}
-        {!panelVisible.right ? <Button data-restore-panel="panel-right" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("right", true)}>Restore Inspector</Button> : null}
-        {!projectOnly && !panelVisible.bottom ? <Button data-restore-panel="panel-bottom" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("bottom", true)}>Restore Diagnostics</Button> : null}
-      </div>
-    ) : null}
+  const previewStyle = preview ? { left: preview.bounds.left + (preview.edge === "right" ? preview.bounds.width/2 : 0), top: preview.bounds.top + (preview.edge === "bottom" ? preview.bounds.height/2 : 0),
+    width: preview.bounds.width / (preview.edge === "left" || preview.edge === "right" ? 2 : 1), height: preview.bounds.height / (preview.edge === "top" || preview.edge === "bottom" ? 2 : 1) } : undefined;
+  return <div ref={surface} className="fm-workspace-body" id="fm-main-content" tabIndex={-1}>
+    <div className="fm-workspace-docking-tree">{activeTree ? <TreeAnchors tree={activeTree} surface={surface} onBounds={reportBounds} onResize={resizeSplit} /> : <div className="fm-slot__empty">Drag a window to an edge to dock it.</div>}</div>
+    {panes.map(pane => <WorkspaceWindow key={pane.id} id={pane.id} title={pane.title} visible={visible(pane.id)} drawer={drawer(pane.id)}
+      drawerShared={drawer("panel-left") && drawer("panel-right") && visible("panel-left") && visible("panel-right")} bounds={bounds[pane.id]} request={requests[pane.id]} playbackSelection={playbackSelection}
+      onDockChange={reportDocked} onMoveGesture={moveGesture} onDockTo={(id, edge) => applyDock(id, null, edge)} onHide={hide(pane.id)} />)}
+    {preview ? <div className="fm-workspace-dock-preview" data-workspace-dock-preview={preview.edge} data-dock-target={preview.target ?? "workspace"} style={previewStyle} role="status"><span>Release to dock {preview.edge} of {preview.title}</span></div> : null}
+    {!playbackOnly ? <div className="fm-panel-restore-bar" aria-label="Restore hidden panels">
+      {!panelVisible.left ? <Button data-restore-panel="panel-left" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("left", true)}>Restore Explorer</Button> : null}
+      {!panelVisible.right ? <Button data-restore-panel="panel-right" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("right", true)}>Restore Inspector</Button> : null}
+      {!projectOnly && !panelVisible.bottom ? <Button data-restore-panel="panel-bottom" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("bottom", true)}>Restore Diagnostics</Button> : null}
+    </div> : null}
   </div>;
 }

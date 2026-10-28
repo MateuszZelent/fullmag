@@ -302,7 +302,7 @@ function EigenMode3DActions({
         const result = await kernel.commands.execute("ribbon.analysis.show-chart-and-field", createCommandContext("inspector", kernel));
         if (result.status === "completed") plot(normalizeAnalysisFieldView(settings.view));
       }}>Chart + mode</Button>
-      <Button size="sm" variant="secondary" onClick={() => kernel.layout.setActiveViewportMainModule("analysis-plots")}>Back to chart</Button>
+      <Button size="sm" variant="secondary" onClick={() => { if (kernel.layout.get().viewportCompanion?.moduleId !== "analysis-plots") kernel.layout.setActiveViewportMainModule("analysis-plots"); kernel.layout.setFocusedSlot("viewport-main"); }}>Back to chart</Button>
       {sameModeResultOwner(settings.activeAnalysisFieldOverlay?.modeIntent, summary.owner) ? <Button size="sm" variant="secondary" onClick={() => void kernel.commands.execute("viewport-3d.fit", createCommandContext("inspector", kernel, { sourceDetail: "results.eigen.mode" }))}>Fit mode</Button> : null}
     </div>
   );

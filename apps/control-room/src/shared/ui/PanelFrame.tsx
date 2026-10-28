@@ -41,6 +41,7 @@ interface PanelFrameProps {
   visible: boolean;
   children: ReactNode;
   dockHandle?: ReactNode;
+  placementActions?: ReadonlyArray<{ label: string; onSelect: () => void }>;
   drawer?: boolean;
   /** Edge a narrow-screen drawer opens from. */
   drawerSide?: "left" | "right";
@@ -62,7 +63,7 @@ interface PanelFrameProps {
   onMove?: (direction: -1 | 1) => void;
 }
 
-export function PanelFrame({ id, title, visible, children, dockHandle, drawer = false, drawerSide = "right", drawerShared = false, floatable = true, suspendWhenHidden = true, dragToFloat = false, modeRequest, onMoveGesture, onModeChange, onDock, onDockChange, onHide, onMove }: PanelFrameProps) {
+export function PanelFrame({ id, title, visible, children, dockHandle, placementActions, drawer = false, drawerSide = "right", drawerShared = false, floatable = true, suspendWhenHidden = true, dragToFloat = false, modeRequest, onMoveGesture, onModeChange, onDock, onDockChange, onHide, onMove }: PanelFrameProps) {
   const storageKey = `fullmag.workspace.panel.${id}.v1`;
   // Keep this frame safe when rendered outside the workspace hydration boundary.
   const [initial] = useState(() => {
@@ -223,6 +224,8 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
   const controls: PanelChromeControls = {
     move: docked && !dragToFloat ? dockHandle : <Button className="fm-panel-frame__move" size="icon" variant="ghost" aria-label={`Move ${title} with arrow keys`} disabled={effectiveMode === "maximized"} onPointerDown={e => begin(e, "move")} onPointerMove={move} onPointerUp={end} onPointerCancel={cancel} onLostPointerCapture={cancel} onKeyDown={e => keyboard(e, "move")}><GripVertical size={14} aria-hidden="true" /></Button>,
     actions: menuItems => <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={`${title} panel menu`}><MoreHorizontal size={15} aria-hidden="true" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={event => { if (!visible) event.preventDefault(); }}>
+      {placementActions?.map(action => <DropdownMenuItem key={action.label} onSelect={action.onSelect}>{action.label}</DropdownMenuItem>)}
+      {placementActions?.length ? <DropdownMenuSeparator /> : null}
       {menuItems ? <>{menuItems}<DropdownMenuSeparator /></> : null}
       {floatable ? <><DropdownMenuItem onSelect={toggleFloat}>{mode === "floating" ? "Dock panel" : "Float panel"}</DropdownMenuItem>
       <DropdownMenuItem onSelect={() => { if (mode === "maximized") setMode(restoreMode.current); else { restoreMode.current = mode; setMode("maximized"); } }}>{mode === "maximized" ? "Restore panel" : "Maximize panel"}</DropdownMenuItem></> : null}
