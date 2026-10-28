@@ -744,3 +744,10 @@ niezmieniony. Nie jest to ogólne odzyskiwanie lease ani trasa dla aktywnego run
 
 Po sukcesie użyj zwykłego przypiętego resume-volume --restart-backend.
 Inne zmiany tożsamości, aktywny/nieznany konsument albo różne piny blokują zapis.
+
+
+## Wznowienie po awarii z zatrzymanym frontendem
+
+`stop-restarted-terminal-volume` dopuszcza także dokładnie przypięty frontend w stanie `exited`, z PID 0 i bez paused/restarting/dead. Domyślny stop diagnostyczny nadal wymaga obu usług działających. Recovery sprawdza zakończone katalogi zadań, potwierdzone zwolnienia rezerwacji, tożsamość poprzedniego właściciela oraz brak jego procesów. Po zatrzymaniu backendu sieć obu zatrzymanych usług musi być pusta; obcy lub pozostały endpoint blokuje operację. Zmiana lifecycle/procesu frontendu blokuje apply, lecz aktualizacja samego health logu nie oznacza nowej inkarnacji.
+
+Po zatwierdzonym preview tej operacji `--apply` zatrzymuje jedynie diagnostyczny backend i zachowuje wszystkie wyniki, właścicieli oraz receipty. Następnie zarządzane `recreate-volume --fresh-state` archiwizuje stary namespace. Wyniki FMS można otworzyć przez UI jako `visualization_only`, bez Solve.

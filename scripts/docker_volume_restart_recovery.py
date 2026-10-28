@@ -30,6 +30,16 @@ def validate_terminal_evidence(catalogs, ledger):
                 "Recovery refuses unreleased or unproven reservations")
 
 
+def frontend_process_state(row):
+    # Health probes update their history while a running frontend stays in the
+    # same incarnation. Pin lifecycle/process identity, not that rolling log.
+    state = row["State"]
+    return {key: state.get(key) for key in (
+        "Status", "Running", "Pid", "Paused", "Restarting", "Dead", "OOMKilled",
+        "ExitCode", "StartedAt", "FinishedAt",
+    )}
+
+
 def validate_failed_helper(row, name, project, image, volume):
     require(row.get("Name") == "/" + name and row.get("Image") == image,
             "Failed helper identity differs")
@@ -120,12 +130,12 @@ def run(args):
         _port_matches(document,args.port)
         _operator_probe_record_from_retained(parent,document)
         effective=dict(parent,backend_started_at=resume['backend_started_at'])
-        image,ids,actual=_container_snapshot(args,selected,identity,control,effective,document)
+        image,ids,actual=_container_snapshot(args,selected,identity,control,effective,document,allow_stopped_frontend=True)
         result=docker_capture('exec',ids['backend'],'/usr/local/bin/python3','-B','-c',PROBE,timeout=40)
         require(result.returncode==0,'Restart preflight failed: '+result.stderr.decode('utf-8','replace')[-2000:])
         probe=json.loads(result.stdout)
         validate_terminal_evidence(probe['catalogs'],probe['ledger'])
-        proof=dict(receipts=[_sha256(r) for r in raws],probe=probe,ids=ids,image=image,starts={s:actual[s]['State']['StartedAt'] for s in ids})
+        proof=dict(receipts=[_sha256(r) for r in raws],probe=probe,ids=ids,image=image,starts={s:actual[s]['State']['StartedAt'] for s in ids},frontend_state=frontend_process_state(actual['frontend']))
         return proof,document,effective
     initial,_,_=observe()
     if not args.apply:
@@ -155,8 +165,8 @@ def run(args):
         control._assert_live_operation_helper(operation)
         operation['daemon_pending']=True
         compose_capture(document,'stop','--timeout','60','backend',timeout=90)
-        image,ids,actual=_container_snapshot(args,selected,identity,control,effective,document,allow_stopped_backend=True)
-        require(not actual['backend']['State']['Running'] and actual['frontend']['State']['StartedAt']==initial['starts']['frontend'],'Pinned stop not confirmed')
+        image,ids,actual=_container_snapshot(args,selected,identity,control,effective,document,allow_stopped_backend=True,allow_stopped_frontend=True)
+        require(not actual['backend']['State']['Running'] and frontend_process_state(actual['frontend'])==initial['frontend_state'],'Pinned stop not confirmed')
         require([_sha256(_read_raw(control,p)) for p in paths]==initial['receipts'],'Original receipts changed')
         _assert_group_consumers(control,operation,ids)
         operation['daemon_pending']=False
