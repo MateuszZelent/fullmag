@@ -15,7 +15,8 @@ const b=await chromium.launch({headless:true,args:['--use-angle=swiftshader','--
 const p=await b.newPage({viewport:{width:1600,height:1100}});const proof={schema:'eigensolve.modal-workbench-ui.v1',url,run,stage,sourceSha:value('--source-sha',null),scope:'UI against published FEM artifacts; SwiftShader rendering is not hardware GPU or convergence qualification',errors:[],httpFailures:[],modes:[],layouts:[]};
 p.setDefaultTimeout(30000);
 proof.blockedMutations=[];
-await p.route('**/*', async route=>{ const request=route.request(); const path=new URL(request.url()).pathname; if(['GET','HEAD','OPTIONS'].includes(request.method()) || request.method()==='POST' && path==='/v2/sessions/current/visualization/client-acks') return route.continue(); proof.blockedMutations.push({method:request.method(),path});return route.abort(); });
+proof.presentationWrites=[];
+await p.route('**/*', async route=>{ const request=route.request(); const path=new URL(request.url()).pathname; if(request.method()==='PATCH' && path==='/v2/sessions/current/visualization/state'){proof.presentationWrites.push({method:request.method(),path});return route.continue();} if(['GET','HEAD','OPTIONS'].includes(request.method()) || request.method()==='POST' && path==='/v2/sessions/current/visualization/client-acks') return route.continue(); proof.blockedMutations.push({method:request.method(),path});return route.abort(); });
 p.on('pageerror',e=>proof.errors.push(e.message));
 p.on('response',response=>{if(response.status()>=400)proof.httpFailures.push({path:new URL(response.url()).pathname,status:response.status()});});
 await p.addInitScript(origin=>{window.__FULLMAG_ENABLE_CHART_DIAGNOSTICS__=true;window.__FULLMAG_CONFIG__={enableDiagnosticRecorder:true,controlRoomApiBase:origin};},new URL(url).origin);
