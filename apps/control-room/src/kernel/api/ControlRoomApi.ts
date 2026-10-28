@@ -1112,7 +1112,7 @@ export class ControlRoomApi {
   private readonly retryDelayMs: number;
   private readonly requestIdFactory: () => string;
   private readonly transport: OpenApiV2Transport;
-  private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
+  private readonly fieldMaterializationRequests = new Map<string, Promise<boolean>>();
   private readonly meshFreshnessRequests = new Map<string, Promise<boolean>>();
 
   readonly sessions = {
@@ -3885,7 +3885,9 @@ export class ControlRoomApi {
       if (await this.meshIsStale(options)) {
         throw error;
       }
-      await this.materializeFieldsForQuantity(quantityId, options);
+      if (!await this.materializeFieldsForQuantity(quantityId, options)) {
+        throw error;
+      }
       return this.retryFieldMetaUntilReady(quantityId, path, params, options);
     }
   }
@@ -4411,7 +4413,9 @@ export class ControlRoomApi {
     if (await this.meshIsStale(options)) {
       return result;
     }
-    await this.materializeFieldsForQuantity(quantityId, options);
+    if (!await this.materializeFieldsForQuantity(quantityId, options)) {
+      return result;
+    }
     return this.retryFieldVectorUntilReady(
       path,
       pathParams,
@@ -4453,9 +4457,9 @@ export class ControlRoomApi {
   private async materializeFieldsForQuantity(
     quantityId: string,
     options: RequestOptions = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (quantityId.startsWith("analysis:")) {
-      return;
+      return false;
     }
     throwIfAborted(options.signal);
     const key = options.sessionScopeKey ?? FIELD_MATERIALIZATION_REQUEST_KEY;
@@ -4464,8 +4468,13 @@ export class ControlRoomApi {
       return existing;
     }
     const requestedQuantityId = resolveCanonicalQuantityId(quantityId);
-    const request = this.commands
-      .submit(
+    const request = (async () => {
+      const status = await this.requestOptionalJson<LiveStatusResource>(SESSION_STATUS_PATH, options);
+      // Persisted results can serve fields but have no live computation authority.
+      // Missing/unknown commandability must never turn a read into a solver command.
+      if (status?.lifecycle?.commandability !== "allowed") return false;
+      throwIfAborted(options.signal);
+      await this.commands.submit(
         {
           client_intent_id: `field-on-demand:${requestedQuantityId}:${Date.now()}`,
           kind: "compute_fields",
@@ -4474,11 +4483,11 @@ export class ControlRoomApi {
           target: { kind: "study" },
         },
         options,
-      )
-      .then(() => undefined)
-      .finally(() => {
-        this.fieldMaterializationRequests.delete(key);
-      });
+      );
+      return true;
+    })().finally(() => {
+      this.fieldMaterializationRequests.delete(key);
+    });
     this.fieldMaterializationRequests.set(key, request);
     return request;
   }

@@ -2317,6 +2317,26 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it.each(["forbidden", "read_only", undefined])(
+    "does not compute missing archived fields with commandability %s",
+    async (commandability) => {
+      const mutations: string[] = [];
+      const api = new ControlRoomApi({ baseUrl: "http://127.0.0.1:8765", fetchImpl: async (url, init) => {
+        const path = String(url);
+        if (init?.method === "POST") { mutations.push(path); throw new Error("Unexpected compute"); }
+        if (path.endsWith("/model/geometry/validation")) return jsonResponse({ dirty: false });
+        if (path.endsWith("/simulation/solver/status")) return jsonResponse({ is_busy: false });
+        if (path.endsWith("/status")) return jsonResponse({ lifecycle: { commandability } });
+        if (path.includes("/samples/vector")) return new Response(null, { status: 204, headers: contractHeaders });
+        if (path.includes("/meta")) return jsonResponse({ message: "field not available in memory" }, { status: 404 });
+        throw new Error(`Unexpected request ${path}`);
+      } });
+      await expect(api.data.fields.meta("m")).rejects.toMatchObject({ status: 404 });
+      expect((await api.data.fields.vector("m")).status).toBe("not-applicable");
+      expect(mutations).toEqual([]);
+    },
+  );
+
   it("materializes missing field metadata on demand before retrying", async () => {
     const calls: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     let metaRequests = 0;
@@ -2334,6 +2354,7 @@ describe("ControlRoomApi", () => {
         }
         if (requestUrl.endsWith("/v2/sessions/current/status")) {
           return jsonResponse({
+            lifecycle: { commandability: "allowed" },
             resources: { mesh_revision: 1, mesh_build_revision: 1 },
           });
         }
@@ -2411,6 +2432,9 @@ describe("ControlRoomApi", () => {
         if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
           freshnessScopes.push(new Headers(init?.headers).get("x-fullmag-session-scope"));
           return jsonResponse({ dirty: false, scene_revision: 1 });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/status")) {
+          return jsonResponse({ lifecycle: { commandability: "allowed" } });
         }
         if (requestUrl.endsWith("/v2/sessions/current/simulation/commands")) {
           commandRequests += 1;
@@ -2634,6 +2658,7 @@ describe("ControlRoomApi", () => {
         }
         if (requestUrl.endsWith("/v2/sessions/current/status")) {
           return jsonResponse({
+            lifecycle: { commandability: "allowed" },
             resources: { mesh_revision: 1, mesh_build_revision: 1 },
           });
         }

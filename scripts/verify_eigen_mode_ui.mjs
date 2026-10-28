@@ -1051,7 +1051,12 @@ async function main() {
         await route.continue();
         return;
       }
-      mutationAttempts.push({ method: request.method(), path, url: request.url() });
+      let commandKind = null;
+      try {
+        const body = request.postDataJSON();
+        commandKind = body?.kind ?? body?.command?.kind ?? null;
+      } catch { /* A non-JSON body still remains blocked below. */ }
+      mutationAttempts.push({ method: request.method(), path, url: request.url(), commandKind });
       await route.abort("blockedbyclient");
     });
     page.on("console", (message) => {
