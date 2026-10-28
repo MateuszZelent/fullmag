@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { ScientificInspectorTemplate } from "../../components/ScientificInspectorTemplate";
+import { useInspectorActiveTab } from "../../InspectorTabState";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -8,65 +8,53 @@ import { physicsFirstResultInspectorModel } from "./physicsFirstResultInspectorM
 
 interface PhysicsFirstResultInspectorFrameProps {
   children?: ReactNode;
+  contentTabs?: readonly string[];
   selection: InspectorPanelProps["selection"];
 }
 
+/** A collection has no single artifact; resource metadata belongs in its own tab. */
 export function PhysicsFirstResultInspectorFrame({
   children,
+  contentTabs = ["overview"],
   selection,
 }: PhysicsFirstResultInspectorFrameProps) {
+  const activeTab = useInspectorActiveTab();
   const model = physicsFirstResultInspectorModel(selection.kind ?? "");
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
-  if (!model) {
-    return (
-      <InspectorGroup title="Unsupported result">
-        <FieldRow label="Kind" value={selection.kind} mono />
-        <FieldRow label="Reason" value="No physics-first panel model owns this selection." />
-      </InspectorGroup>
-    );
-  }
-
-  const diagnostics = ref
-    ? [
-        ...(ref.contractGap ? [ref.contractGap] : []),
-        ...(ref.availability === "unsupported"
-          ? ["This result product is not supported by the published runtime contract."]
-          : []),
-        ...(ref.availability === "unavailable"
-          ? ["The typed result resource is currently unavailable."]
-          : []),
-      ]
-    : ["Typed result owner is unavailable; visualization and comparison are disabled."];
-
+  const collection = selection.kind?.endsWith(".root") ?? false;
+  if (!model) return <InspectorGroup title="Unsupported result"><FieldRow label="Reason" value="No inspector owns this result type." /></InspectorGroup>;
+  const diagnostics = [
+    ...(ref?.contractGap ? [ref.contractGap] : []),
+    ...(!collection && !ref ? ["Result identity is missing; visualization and comparison are disabled."] : []),
+    ...(ref?.availability === "unsupported" ? ["This operation is not supported for the selected result."] : []),
+    ...(ref?.availability === "unavailable" && !collection ? ["The selected result is unavailable. Check its published artifacts."] : []),
+  ];
   return (
-    <ScientificInspectorTemplate
-      breadcrumbs={["Results", model.physicalLabel]}
-      diagnostics={diagnostics}
-      methodLabel={model.methodLabel}
-      physicalLabel={model.physicalLabel}
-      properties={[
-        { label: "Product", value: ref?.studyProduct ?? "Not applicable" },
-        { label: "k context", value: ref?.kContextKind ?? "Not applicable" },
-        ...(ref?.resourceRef
-          ? [{ label: "Dataset / resource", mono: true, value: ref.resourceRef }]
-          : []),
-        { label: "Meaning", value: model.description },
-      ]}
-      provenance={[
-        { label: "Run", mono: true, value: ref?.analysisRunId ?? "Unavailable" },
-        { label: "Stage", mono: true, value: ref?.analysisStageId ?? "Unavailable" },
-        { label: "Equilibrium", mono: true, value: ref?.equilibriumId ?? "Unavailable" },
-        ...(ref?.normalization ? [{ label: "Normalization", mono: true, value: ref.normalization }] : []),
-        { label: "Artifact revision", mono: true, value: ref?.artifactRevision ?? "Unavailable" },
-      ]}
-      status={{
-        availability: ref?.availability ?? "unavailable",
-        execution: ref?.executionState ?? "unknown",
-        resource: ref?.resourceState ?? "unavailable",
-      }}
-      title={selection.label || model.title}
-    >
-      {children}
-    </ScientificInspectorTemplate>
+    <div className="fm-result-inspector" data-result-tab={activeTab}>
+      {diagnostics.length > 0 ? <div role="status" className="fm-result-inspector__notice">{diagnostics.join(" ")}</div> : null}
+      {activeTab === "overview" && collection ? <p className="fm-result-inspector__help">Select a published study below this collection to inspect its chart or fields.</p> : null}
+      {activeTab === "data" ? <InspectorGroup title="Result context">
+        {ref?.studyProduct ? <FieldRow label="Product" value={ref.studyProduct.replaceAll("_", " ")} /> : null}
+        {ref?.kContextKind ? <FieldRow label="Wavevector sampling" value={ref.kContextKind.replaceAll("_", " ")} /> : null}
+        <FieldRow label="Result" value={model.description} />
+      </InspectorGroup> : null}
+      {activeTab === "provenance" ? <InspectorGroup title="Artifact provenance">
+        <FieldRow label="Run" mono value={ref?.analysisRunId ?? "Owner identity not published"} />
+        {!collection ? <>
+          <FieldRow label="Stage" mono value={ref?.analysisStageId ?? "Stage identity not published"} />
+          <FieldRow label="Equilibrium" mono value={ref?.equilibriumId ?? "Equilibrium identity not published"} />
+          <FieldRow label="Artifact revision" mono value={ref?.artifactRevision ?? "Revision not published"} />
+          {ref?.normalization ? <FieldRow label="Normalization" value={ref.normalization} /> : null}
+          {ref?.resourceRef ? <FieldRow label="Resource" mono value={ref.resourceRef} /> : null}
+        </> : null}
+      </InspectorGroup> : null}
+      {activeTab === "diagnostics" ? <InspectorGroup title="Resource diagnostics">
+        <FieldRow label="Resource" value={ref?.resourceState ?? "Not loaded"} />
+        <FieldRow label="Execution" value={ref?.executionState ?? "Not reported"} />
+        <FieldRow label="Availability" value={ref?.availability ?? "Not reported"} />
+        <p className="fm-result-inspector__help">Resource readiness does not certify convergence or completeness of the spectrum.</p>
+      </InspectorGroup> : null}
+      {contentTabs.includes(activeTab) ? children : null}
+    </div>
   );
 }

@@ -34,7 +34,7 @@ function ScientificFrameRoute({
   props: InspectorPanelProps;
 }) {
   return (
-    <PhysicsFirstResultInspectorFrame selection={props.selection}>
+    <PhysicsFirstResultInspectorFrame selection={props.selection} contentTabs={Panel === EigenModeInspectorPanel ? ["overview", "data", "diagnostics"] : ["overview"]}>
       <Panel {...props} />
     </PhysicsFirstResultInspectorFrame>
   );
