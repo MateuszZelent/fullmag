@@ -750,6 +750,7 @@ export interface FrequencyDomainSelectionContext {
   calculationMode?: FrequencyDomainCalculationMode | null;
   equilibriumId?: string | null;
   kContextKind?: AnalysisFieldOverlayKContextKind | null;
+  kPathCoordinateRadPerM?: number | null;
   nodeId?: string | null;
   normalization?: string | null;
   representation?: AnalysisFieldOverlayRepresentation | null;
@@ -1248,6 +1249,7 @@ export function buildEigenModeSelectionRef(
     frequencyHz: point.frequencyHz,
     equilibriumId: context.equilibriumId ?? undefined,
     kContextKind: context.kContextKind ?? undefined,
+    kPathCoordinateRadPerM: context.kPathCoordinateRadPerM ?? undefined,
     kind: "results.eigen.mode",
     modeId: point.modeId ?? undefined,
     modeIndex: point.rawModeIndex,

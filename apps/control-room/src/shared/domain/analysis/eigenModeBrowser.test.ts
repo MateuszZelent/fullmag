@@ -4,10 +4,10 @@ import { buildEigenModeBrowser, modePickerPage, MODE_PICKER_PAGE_SIZE } from "./
 
 const spectrum = { status: "ready", schema_version: "eigen_spectrum.v2", artifact_path: "eigen/spectrum.v2.json", missing_reason: null,
  run_id: "run-a", stage_id: "eigen", revision: "revision-a", payload: { samples: [
-  { sample_index: 7, sample_id: "gamma", modes: [
+  { sample_index: 7, sample_id: "gamma", path_s: 25e6, modes: [
     { raw_mode_index: 8, frequency_hz: 9e9, k_vector: [0,0,0], mode_id: "gamma-8" },
     { raw_mode_index: 3, frequency_hz: 9e9, k_vector: [0,0,0], mode_id: "gamma-3" } ] },
-  { sample_index: 2, sample_id: "negative", modes: [{ raw_mode_index: 0, frequency_hz: 11e9, k_vector: [0,-10e6,0], mode_id: "negative-0" }] },
+  { sample_index: 2, sample_id: "negative", path_s: 0, modes: [{ raw_mode_index: 0, frequency_hz: 11e9, k_vector: [0,-10e6,0], mode_id: "negative-0" }] },
  ] } } as FrequencyDomainJsonArtifactResource;
 
 describe("mode browser", () => {
@@ -19,6 +19,8 @@ describe("mode browser", () => {
   expect(new Set(data.samples[1].modes.map(m=>m.frequencyLabel)).size).toBe(2);
   const ref=data.samples[1].modes[0].selection.ref;
   expect(ref).toMatchObject({analysisRunId:"run-a",analysisStageId:"eigen",artifactRevision:"revision-a",sampleIndex:7,modeIndex:8,wavevectorKf:[0,0,0]});
+  expect(ref).toMatchObject({ kPathCoordinateRadPerM: 25e6 });
+  expect(data.samples[0].modes[0].selection.ref).toMatchObject({ kPathCoordinateRadPerM: 0 });
   expect(ref).not.toHaveProperty("fieldId");
   expect(ref).not.toHaveProperty("equilibriumId");
  });

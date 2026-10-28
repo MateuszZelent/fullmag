@@ -15,9 +15,13 @@ export function buildEigenModeBrowser(resource: FrequencyDomainJsonArtifactResou
   const spectrumModel = buildEigenSpectrumChartModel(resource);
   const context = frequencyDomainResultContextFromManifest(frequencyDomainManifestPayload(manifest), { runId: resource?.run_id, stageId: resource?.stage_id });
   const rawVectors = new Map<string, [number, number, number]>();
+  const pathCoordinates = new Map<number, number>();
   const samples = record(resource?.payload).samples;
   if (Array.isArray(samples)) for (const rawSample of samples) {
     const sample = record(rawSample);
+    if (typeof sample.sample_index === "number" && typeof sample.path_s === "number" && Number.isFinite(sample.path_s)) {
+      pathCoordinates.set(sample.sample_index, sample.path_s);
+    }
     if (!Array.isArray(sample.modes)) continue;
     for (const rawMode of sample.modes) {
       const mode = record(rawMode);
@@ -35,6 +39,7 @@ export function buildEigenModeBrowser(resource: FrequencyDomainJsonArtifactResou
       equilibriumId: frequencyDomainEquilibriumIdForSample(context, point.sampleIndex),
       wavevectorKf: k, nodeId, representation: "complex-vector-xyz", studyProduct: "modal_eigen",
       kContextKind: context.classification?.kContext.kind,
+      kPathCoordinateRadPerM: pathCoordinates.get(point.sampleIndex),
     });
     const selection: Selection = { kind: "results.eigen.mode", moduleSource: "inspector", nodeId, objectId: null, label: modeResultLabel(k, point.frequencyHz), ref };
     let group = grouped.get(point.sampleIndex);
