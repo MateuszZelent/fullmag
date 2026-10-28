@@ -163,3 +163,14 @@ Global realtime invalidation and registry controllers may remain active, but the
 Kontrolki 3D zajmują oddzielny wiersz nad canvasem. Nazwany region zachowuje appearance/settings, Details/Retry, freshness, quantity, target, źródło historyczne, mesh quality/size, Regions, Airbox, Frozen Spins, countdown oraz Render details. Dopuszczalne jest zawijanie i przewijanie narzędzi; nie redukuje ono danych ani domyślnej jakości sceny. ViewCube, legendy i wymiary zachowują dotychczasową semantykę.
 
 Floating center windows use the same frame controls and geometry persistence as Inspector. A stable window layer is independent of measured docking anchors; resizing anchors never reparents a renderer. Returning an inactive floating window to the dock selects it as the companion. Tabs restore hidden windows. Layout controls do not own solver commands or numerical state.
+
+### Drag-to-edge docking of center views
+
+Dragging a center view grip near the center workspace edge shows a non-interactive
+preview. Release docks left/right in a horizontal 50/50 split or top/bottom in a
+vertical 50/50 split. An existing visible neighbour is redocked; a displaced third
+view stays floating. With no visible neighbour, the view fills the dock. Escape
+or pointer cancellation restores the pre-gesture placement. Interior release
+keeps the window floating. Preview animation respects reduced-motion preferences.
+Only docking anchors and frame placement change; renderer keys/parents and solver
+state do not. Separator resizing remains available after snapping.

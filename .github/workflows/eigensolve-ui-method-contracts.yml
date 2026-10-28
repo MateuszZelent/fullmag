@@ -57,6 +57,8 @@ on:
       - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
       - 'apps/control-room/src/kernel/analysis-modules/analysisSurfaceRouting*'
       - 'apps/control-room/src/kernel/layout/ViewportTabHost*'
+      - 'apps/control-room/src/kernel/layout/viewportDocking*'
+      - 'apps/control-room/src/shared/ui/Resizable*'
       - 'apps/control-room/src/shared/ui/PanelFrame*'
       - 'apps/control-room/src/design/styles/slots.css'
       - 'apps/control-room/src/modules/inspector/inspectorRouteCatalog*'
@@ -118,6 +120,8 @@ on:
       - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
       - 'apps/control-room/src/kernel/analysis-modules/analysisSurfaceRouting*'
       - 'apps/control-room/src/kernel/layout/ViewportTabHost*'
+      - 'apps/control-room/src/kernel/layout/viewportDocking*'
+      - 'apps/control-room/src/shared/ui/Resizable*'
       - 'apps/control-room/src/shared/ui/PanelFrame*'
       - 'apps/control-room/src/design/styles/slots.css'
       - 'apps/control-room/src/modules/inspector/inspectorRouteCatalog*'
@@ -220,6 +224,8 @@ jobs:
           src/modules/explorer/builders/resultsExplorerNodes.test.ts
           src/modules/explorer/explorerSelection.test.ts
           src/kernel/layout/ViewportTabHost.test.tsx
+          src/kernel/layout/viewportDocking.test.ts
+          src/shared/ui/Resizable.test.ts
           src/kernel/layout/WorkspaceDockLayout.test.tsx
           src/kernel/selection/selectionTypes.modeVisualization.test.ts
           src/kernel/analysis-modules/analysisSurfaceRouting.test.ts

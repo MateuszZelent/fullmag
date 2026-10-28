@@ -18,6 +18,8 @@ type ResizablePanelGroupProps = Omit<
   autoSaveId?: string;
   direction?: "horizontal" | "vertical";
   panelCount?: number;
+  /** One-shot layout request, consumed after the group applies it. */
+  layoutRequest?: { layout: Layout; onApplied: () => void };
 };
 
 const PANEL_LAYOUT_TOTAL = 100;
@@ -103,6 +105,7 @@ export function ResizablePanelGroup({
   direction = "horizontal",
   onLayoutChanged,
   panelCount,
+  layoutRequest,
   ...props
 }: ResizablePanelGroupProps) {
   const groupRef = useRef<GroupImperativeHandle | null>(null);
@@ -129,6 +132,12 @@ export function ResizablePanelGroup({
       }
     }
   }, [autoSaveId, panelCount]);
+
+  useEffect(() => {
+    if (!layoutRequest || !groupRef.current) return;
+    groupRef.current.setLayout(layoutRequest.layout);
+    layoutRequest.onApplied();
+  }, [layoutRequest]);
 
   function handleLayoutChanged(layout: Layout): void {
     if (autoSaveId && canPersistLayoutRef.current) {

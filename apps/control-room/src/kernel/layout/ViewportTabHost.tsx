@@ -3,7 +3,7 @@
 import { Columns2, Rows2, ArrowLeftRight, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
-import { PanelChrome, PanelFrame, usePanelChromeControls, type PanelMode } from "@/shared/ui/PanelFrame";
+import { PanelChrome, PanelFrame, usePanelChromeControls, type PanelMode, type PanelModeRequest, type PanelMoveEvent } from "@/shared/ui/PanelFrame";
 import { Button } from "@/shared/ui/Button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/shared/ui/Resizable";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
@@ -11,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 import { useKernel } from "../KernelContext";
 import type { ModuleManifest } from "../types";
 import { MountedModule } from "./SlotHost";
+import { hitTestDockEdge, planViewportDock, type DockEdge } from "./viewportDocking";
 import { useLayoutActions, useLayoutSelector } from "./useLayout";
 
 interface DockBounds { left: number; top: number; width: number; height: number }
@@ -53,22 +54,25 @@ function WindowChrome({ title, onHide }: { title: string; onHide: () => void }) 
   </PanelChrome>;
 }
 
-function ViewportWindow({ manifest, visible, bounds, onModeChange, onDock, onHide }: {
+function ViewportWindow({ manifest, visible, bounds, modeRequest, onMoveGesture, onModeChange, onDock, onHide }: {
   manifest: ModuleManifest;
   visible: boolean;
   bounds?: DockBounds;
+  modeRequest?: PanelModeRequest;
+  onMoveGesture: (id: string, event: PanelMoveEvent) => void;
   onModeChange: (id: string, mode: PanelMode) => void;
   onDock: (id: string) => void;
   onHide: (id: string) => void;
 }) {
   const kernel = useKernel();
   const reportMode = useCallback((mode: PanelMode) => onModeChange(manifest.id, mode), [manifest.id, onModeChange]);
+  const moveGesture = useCallback((event: PanelMoveEvent) => onMoveGesture(manifest.id, event), [manifest.id, onMoveGesture]);
   const dock = useCallback(() => onDock(manifest.id), [manifest.id, onDock]);
   const hide = useCallback(() => onHide(manifest.id), [manifest.id, onHide]);
   return <div className="fm-viewport-window" id={`fm-viewport-window-${manifest.id}`} data-viewport-window={manifest.id}
     hidden={!visible} style={bounds ?? { inset: 0 }}>
     <PanelFrame id={`viewport-module:${manifest.id}`} title={manifest.title} visible={visible}
-      dragToFloat onModeChange={reportMode} onDockChange={ignoreDockChange} onDock={dock} onHide={hide}>
+      dragToFloat modeRequest={modeRequest} onMoveGesture={moveGesture} onModeChange={reportMode} onDockChange={ignoreDockChange} onDock={dock} onHide={hide}>
       <WindowChrome title={manifest.title} onHide={hide} />
       {visible ? <div className="fm-viewport-window__content"><MountedModule kernel={kernel} manifest={manifest} slotId="viewport-main" /></div> : null}
     </PanelFrame>
@@ -85,6 +89,9 @@ export function ViewportTabHost() {
   const companionModule = companion && companion.moduleId !== activeModule?.id
     ? modules.find(module => module.id === companion.moduleId) ?? null : null;
   const surface = useRef<HTMLDivElement>(null);
+  const [preview, setPreview] = useState<{ id: string; edge: DockEdge | null } | null>(null);
+  const [modeRequests, setModeRequests] = useState<Record<string, PanelModeRequest>>({});
+  const [layoutRequest, setLayoutRequest] = useState<{ layout: Record<string, number>; onApplied: () => void } | undefined>();
   const [modes, setModes] = useState<Record<string, PanelMode>>({});
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
   const [bounds, setBounds] = useState<Record<string, DockBounds>>({});
@@ -105,6 +112,35 @@ export function ViewportTabHost() {
       kernel.layout.setViewportCompanion({ moduleId: id, placement: layout.viewportCompanion?.placement ?? "beside" });
     }
   }, [kernel.layout]);
+  const moveGesture = (id: string, event: PanelMoveEvent) => {
+    if (event.phase === "cancel") { setPreview(null); return; }
+    const area = surface.current?.getBoundingClientRect();
+    const edge = area ? hitTestDockEdge(area, event) : null;
+    if (event.phase === "move") {
+      setPreview(previous => previous?.id === id && previous.edge === edge ? previous : { id, edge });
+      return;
+    }
+    setPreview(null);
+    if (!edge || !activeModule) return;
+    const selectedIds = [activeModule.id, ...(companionModule ? [companionModule.id] : [])];
+    const visibleIds = modules.filter(module => !hidden[module.id] &&
+      (selectedIds.includes(module.id) || modes[module.id] === "floating" || modes[module.id] === "maximized")).map(module => module.id);
+    const dockedIds = selectedIds.filter(moduleId => visibleIds.includes(moduleId) && (!modes[moduleId] || modes[moduleId] === "docked"));
+    const plan = planViewportDock(id, edge, selectedIds, visibleIds, dockedIds);
+    const placements: Record<string, "docked" | "floating"> = {};
+    for (const displaced of plan.displacedIds) placements[displaced] = "floating";
+    placements[plan.primaryId] = "docked";
+    if (plan.companionId) placements[plan.companionId] = "docked";
+    setModeRequests(previous => {
+      const next = { ...previous };
+      for (const [moduleId, mode] of Object.entries(placements)) next[moduleId] = { mode, sequence: (previous[moduleId]?.sequence ?? 0) + 1 };
+      return next;
+    });
+    setModes(previous => ({ ...previous, ...placements }));
+    if (plan.companionId) setLayoutRequest({ layout: { "viewport-window:first": 50, "viewport-window:second": 50 }, onApplied: () => setLayoutRequest(undefined) });
+    kernel.layout.replace({ ...kernel.layout.get(), activeViewportMainModuleId: plan.primaryId,
+      viewportCompanion: plan.companionId ? { moduleId: plan.companionId, placement: plan.placement } : null });
+  };
   const select = (id: string) => {
     setHidden(previous => previous[id] ? { ...previous, [id]: false } : previous);
     // Selecting a visible floating/companion window focuses it, preserving the
@@ -130,6 +166,7 @@ export function ViewportTabHost() {
   const isSelected = (id: string) => id === activeModule.id || id === companionModule?.id;
   const isFloating = (id: string) => modes[id] === "floating" || modes[id] === "maximized";
   const docked = [activeModule, companionModule].filter((module): module is ModuleManifest => Boolean(module && !hidden[module.id] && !isFloating(module.id)));
+  const previewHasPeer = preview && modules.some(module => module.id !== preview.id && !hidden[module.id] && (isSelected(module.id) || isFloating(module.id)));
   const direction = companion?.placement === "below" ? "vertical" : "horizontal";
 
   return <section className="fm-slot fm-viewport-tabs" data-active-module-id={activeModule.id}
@@ -150,7 +187,7 @@ export function ViewportTabHost() {
         </> : null}
       </PanelChrome>
       <div ref={surface} className="fm-viewport-tabs__surface">
-        {docked.length === 2 ? <ResizablePanelGroup autoSaveId={`fullmag.viewport-windows.split.${direction}`} direction={direction} panelCount={2}>
+        {docked.length === 2 ? <ResizablePanelGroup autoSaveId={`fullmag.viewport-windows.split.${direction}`} direction={direction} panelCount={2} layoutRequest={layoutRequest}>
           <ResizablePanel defaultSize={50} id="viewport-window:first" minSize={20}><DockAnchor id={docked[0].id} surface={surface} onBounds={reportBounds} /></ResizablePanel>
           <ResizableHandle className={direction === "vertical" ? "fm-resize-handle--horizontal" : "fm-resize-handle--vertical"} />
           <ResizablePanel defaultSize={50} id="viewport-window:second" minSize={20}><DockAnchor id={docked[1].id} surface={surface} onBounds={reportBounds} /></ResizablePanel>
@@ -158,7 +195,13 @@ export function ViewportTabHost() {
           : <div className="fm-slot__empty">Windows are floating or hidden. Use a window menu to dock, or a tab to restore.</div>}
         {modules.map(module => <ViewportWindow key={module.id} manifest={module}
           visible={!hidden[module.id] && (isSelected(module.id) || isFloating(module.id))}
-          bounds={bounds[module.id]} onModeChange={reportMode} onDock={dock} onHide={hide} />)}
+          bounds={bounds[module.id]} modeRequest={modeRequests[module.id]} onMoveGesture={moveGesture} onModeChange={reportMode} onDock={dock} onHide={hide} />)}
+        {preview ? <div className="fm-dock-guides" aria-hidden="true">
+          {(["left", "right", "top", "bottom"] as const).map(edge => <span key={edge} className={`fm-dock-guide fm-dock-guide--${edge}`} data-active={preview.edge === edge}>{edge === "left" ? "◀" : edge === "right" ? "▶" : edge === "top" ? "▲" : "▼"}</span>)}
+        </div> : null}
+        {preview?.edge ? <div className={`fm-dock-preview fm-dock-preview--${previewHasPeer ? preview.edge : "full"}`} data-dock-preview={preview.edge} role="status">
+          <span>Release to dock {preview.edge}</span>
+        </div> : null}
       </div>
     </Tabs>
   </section>;

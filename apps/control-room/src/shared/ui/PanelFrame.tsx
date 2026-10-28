@@ -6,6 +6,8 @@ import { Button } from "./Button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./DropdownMenu";
 
 export type PanelMode = "docked" | "floating" | "maximized";
+export interface PanelMoveEvent { phase: "move" | "drop" | "cancel"; x: number; y: number }
+export interface PanelModeRequest { sequence: number; mode: "docked" | "floating" }
 interface Geometry { x: number; y: number; width: number; height: number }
 const INITIAL_GEOMETRY: Geometry = { x: 96, y: 144, width: 416, height: 560 };
 interface PanelChromeControls {
@@ -49,6 +51,9 @@ interface PanelFrameProps {
   suspendWhenHidden?: boolean;
   /** A viewport window can detach directly by dragging its docked grip. */
   dragToFloat?: boolean;
+  /** Parent-issued placement command; sequence changes for each explicit request. */
+  modeRequest?: PanelModeRequest;
+  onMoveGesture?: (event: PanelMoveEvent) => void;
   onModeChange?: (mode: PanelMode) => void;
   /** Explicit dock intent, distinct from visibility-driven onDockChange. */
   onDock?: () => void;
@@ -57,7 +62,7 @@ interface PanelFrameProps {
   onMove?: (direction: -1 | 1) => void;
 }
 
-export function PanelFrame({ id, title, visible, children, dockHandle, drawer = false, drawerSide = "right", drawerShared = false, floatable = true, suspendWhenHidden = true, dragToFloat = false, onModeChange, onDock, onDockChange, onHide, onMove }: PanelFrameProps) {
+export function PanelFrame({ id, title, visible, children, dockHandle, drawer = false, drawerSide = "right", drawerShared = false, floatable = true, suspendWhenHidden = true, dragToFloat = false, modeRequest, onMoveGesture, onModeChange, onDock, onDockChange, onHide, onMove }: PanelFrameProps) {
   const storageKey = `fullmag.workspace.panel.${id}.v1`;
   // Keep this frame safe when rendered outside the workspace hydration boundary.
   const [initial] = useState(() => {
@@ -80,7 +85,7 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
   const [maxBounds, setMaxBounds] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   const scroll = useRef<Array<[HTMLElement, number, number]>>([]);
-  const gesture = useRef<{ x: number; y: number; geometry: Geometry; kind: "move" | "resize" } | null>(null);
+  const gesture = useRef<{ x: number; y: number; geometry: Geometry; initialMode: PanelMode; kind: "move" | "resize" } | null>(null);
   // A pinned frame ignores any floating/maximized mode saved before it was pinned.
   const effectiveMode = !floatable ? "docked" : drawer && mode === "docked" ? "floating" : mode;
   const docked = effectiveMode === "docked";
@@ -89,6 +94,15 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     if (gesture.current) return;
     try { localStorage.setItem(storageKey, JSON.stringify({ mode, geometry })); } catch { /* Layout preference only. */ }
   }, [geometry, mode, storageKey]);
+
+  useEffect(() => {
+    if (!modeRequest) return;
+    if (modeRequest.mode === "floating") {
+      const bounds = frame.current?.getBoundingClientRect();
+      if (bounds) setGeometry(constrain({ x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height }));
+    }
+    setMode(modeRequest.mode);
+  }, [modeRequest]);
 
   useEffect(() => { if (docked) frame.current?.style.removeProperty("z-index"); }, [docked]);
   useEffect(() => { onModeChange?.(effectiveMode); }, [effectiveMode, onModeChange]);
@@ -142,20 +156,33 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     event.preventDefault();
     const current = interactionGeometry();
     setGeometry(current);
-    gesture.current = { x: event.clientX, y: event.clientY, geometry: current, kind };
+    gesture.current = { x: event.clientX, y: event.clientY, geometry: current, initialMode: mode, kind };
+    event.currentTarget.focus({ preventScroll: true });
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const move = (event: ReactPointerEvent<HTMLButtonElement>) => {
     const start = gesture.current;
     if (!start) return;
     const dx = event.clientX - start.x, dy = event.clientY - start.y;
+    if (start.kind === "move") onMoveGesture?.({ phase: "move", x: event.clientX, y: event.clientY });
     setGeometry(constrain(start.kind === "move" ? { ...start.geometry, x: start.geometry.x + dx, y: start.geometry.y + dy } : { ...start.geometry, width: start.geometry.width + dx, height: start.geometry.height + dy }));
   };
-  const end = () => {
+  const end = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const start = gesture.current;
     gesture.current = null;
+    if (start?.kind === "move") onMoveGesture?.({ phase: "drop", x: event.clientX, y: event.clientY });
     try { localStorage.setItem(storageKey, JSON.stringify({ mode, geometry })); } catch { /* Layout preference only. */ }
   };
+  const cancel = () => {
+    const start = gesture.current;
+    if (!start) return;
+    gesture.current = null;
+    setGeometry(start.geometry);
+    setMode(start.initialMode);
+    if (start.kind === "move") onMoveGesture?.({ phase: "cancel", x: start.x, y: start.y });
+  };
   const keyboard = (event: ReactKeyboardEvent, kind: "move" | "resize") => {
+    if (event.key === "Escape" && gesture.current) { event.preventDefault(); event.stopPropagation(); cancel(); return; }
     if (effectiveMode === "maximized") return;
     const step = event.shiftKey ? 40 : 10;
     const dx = event.key === "ArrowRight" ? step : event.key === "ArrowLeft" ? -step : 0;
@@ -184,7 +211,7 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     windows.forEach((element, index) => { element.style.zIndex = String(60 + index); });
   };
   const controls: PanelChromeControls = {
-    move: docked && !dragToFloat ? dockHandle : <Button className="fm-panel-frame__move" size="icon" variant="ghost" aria-label={`Move ${title} with arrow keys`} disabled={effectiveMode === "maximized"} onPointerDown={e => begin(e, "move")} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onKeyDown={e => keyboard(e, "move")}><GripVertical size={14} aria-hidden="true" /></Button>,
+    move: docked && !dragToFloat ? dockHandle : <Button className="fm-panel-frame__move" size="icon" variant="ghost" aria-label={`Move ${title} with arrow keys`} disabled={effectiveMode === "maximized"} onPointerDown={e => begin(e, "move")} onPointerMove={move} onPointerUp={end} onPointerCancel={cancel} onLostPointerCapture={cancel} onKeyDown={e => keyboard(e, "move")}><GripVertical size={14} aria-hidden="true" /></Button>,
     actions: menuItems => <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={`${title} panel menu`}><MoreHorizontal size={15} aria-hidden="true" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={event => { if (!visible) event.preventDefault(); }}>
       {menuItems ? <>{menuItems}<DropdownMenuSeparator /></> : null}
       {floatable ? <><DropdownMenuItem onSelect={toggleFloat}>{mode === "floating" ? "Dock panel" : "Float panel"}</DropdownMenuItem>
@@ -201,6 +228,6 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     <ChromeContext.Provider value={controls}>
       <Activity mode={!visible && suspendWhenHidden ? "hidden" : "visible"}>{children}</Activity>
     </ChromeContext.Provider>
-    {!docked && effectiveMode !== "maximized" ? <Button className="fm-panel-frame__resize" size="icon" variant="ghost" aria-label={`Resize ${title} with arrow keys`} onPointerDown={e => begin(e, "resize")} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onKeyDown={e => keyboard(e, "resize")}><MoveDiagonal2 size={14} aria-hidden="true" /></Button> : null}
+    {!docked && effectiveMode !== "maximized" ? <Button className="fm-panel-frame__resize" size="icon" variant="ghost" aria-label={`Resize ${title} with arrow keys`} onPointerDown={e => begin(e, "resize")} onPointerMove={move} onPointerUp={end} onPointerCancel={cancel} onLostPointerCapture={cancel} onKeyDown={e => keyboard(e, "resize")}><MoveDiagonal2 size={14} aria-hidden="true" /></Button> : null}
   </section>;
 }
