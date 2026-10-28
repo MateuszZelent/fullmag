@@ -1,9 +1,11 @@
-// Runtime-free commands allowed without a confirmed available session.
+// Commands that can create/open a workspace without an existing active session.
 // The start.* ids mirror START_COMMANDS in the start-screen module; the kernel
 // cannot import module internals, so a module test keeps the two in step.
 const PROJECT_WORKSPACE_COMMAND_IDS = new Set([
   "workspace.new-project",
   "workspace.open-project",
+  // Archive inspection/import owns its own session transition and empty-epoch guard.
+  "study.import-state",
   "workspace.save-project",
   "workspace.close-project",
   "workspace.home",

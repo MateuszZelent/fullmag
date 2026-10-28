@@ -1,0 +1,37 @@
+{
+  "schema": "fullmag.eigensolve.file-transport-source-gates.v1",
+  "source_sha": "82a4bf3712e333e3af423357a016e8f987722fe1",
+  "backend_ci": {
+    "run": 40605186626,
+    "status": "success"
+  },
+  "frontend_ci": {
+    "run": 40606621173,
+    "status": "success",
+    "test_files": 51,
+    "tests": 1220
+  },
+  "generated_artifact": {
+    "id": 12779783608,
+    "source_sha": "55bef985337d8efa854763261c0ff4c141b3f727",
+    "file_upload_schema": {
+      "type": "string",
+      "format": "binary"
+    }
+  },
+  "current_runtime_browser": {
+    "report": "/tmp/eigen-modal-current-verification/report.json",
+    "errors": [],
+    "httpFailures": [],
+    "verified_samples": [
+      0,
+      3,
+      7,
+      11,
+      14
+    ],
+    "complex_values_each": 5127,
+    "scope": "existing deployed ga63 runtime, not file transport deployment"
+  },
+  "cold_import": "not_verified"
+}

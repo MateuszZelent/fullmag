@@ -150,6 +150,7 @@ jobs:
         run: >-
           python -B scripts/fullmag_storage.py run --profile linux-host --
           pnpm --dir apps/control-room exec vitest run
+          src/kernel/commands/projectWorkspaceCommandPolicy.test.ts
           next.config.test.ts
           src/shared/domain/persistence/fmsFileTransport.test.ts
           src/kernel/runtime/studyRuntimeCommandContributions.test.ts
