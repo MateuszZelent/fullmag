@@ -36,7 +36,7 @@ export function buildEigenModeBrowser(resource: FrequencyDomainJsonArtifactResou
       wavevectorKf: k, nodeId, representation: "complex-vector-xyz", studyProduct: "modal_eigen",
       kContextKind: context.classification?.kContext.kind,
     });
-    const selection: Selection = { kind: "results.eigen.mode", nodeId, objectId: null, label: modeResultLabel(k, point.frequencyHz), ref };
+    const selection: Selection = { kind: "results.eigen.mode", moduleSource: "inspector", nodeId, objectId: null, label: modeResultLabel(k, point.frequencyHz), ref };
     let group = grouped.get(point.sampleIndex);
     if (!group) { group = { index: point.sampleIndex, label: k ? formatModeWavevector(k) : `Sample ${point.sampleIndex} · wavevector not published`, modes: [] }; grouped.set(point.sampleIndex, group); }
     group.modes.push({ key, frequencyLabel: formatFrequencyHz(point.frequencyHz), selection });
