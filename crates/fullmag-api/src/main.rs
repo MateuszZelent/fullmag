@@ -78,6 +78,8 @@ mod live_accepted_execution;
 mod live_retirement;
 mod live_accepted_projection;
 mod live_scene_preparation;
+mod prepared_observation_adoption;
+mod prepared_observation_bundle;
 mod docker_startup;
 mod openapi_v2;
 mod orientation_color;

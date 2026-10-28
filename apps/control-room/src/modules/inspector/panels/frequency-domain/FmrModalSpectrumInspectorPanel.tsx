@@ -1,5 +1,6 @@
 "use client";
 
+import { EmptyState } from "@/shared/ui/EmptyState";
 import { useState } from "react";
 import { Eye, RotateCw } from "lucide-react";
 
@@ -204,9 +205,7 @@ function FmrResonanceBrowser({
 }) {
   if (points.length === 0) {
     return (
-      <div className="fm-frequency-domain-table-empty" role="status">
-        No modal FMR resonances available.
-      </div>
+      <EmptyState className="fm-frequency-domain-table-empty" role="status" size="compact" heading="No modal FMR resonances available." />
     );
   }
 

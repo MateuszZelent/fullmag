@@ -1275,8 +1275,11 @@ function checkPerformanceDiagnosticsExport() {
     'export type TransportChannel = "http" | "performance" | "websocket"',
   ]);
   requireTokens(footer, "Footer performance diagnostics filter", [
-    'setChannel("performance")',
-    "HTTP + WS + Perf",
+    'setFooterChannelFilter("performance")',
+    'active={channel === "performance"}',
+    'setFooterChannelFilter("transport")',
+    'aria-label="Log filters"',
+    "HTTP + WS",
   ]);
   requireTokens(footerModel, "Footer performance diagnostics preview", [
     'entry.channel === "performance"',

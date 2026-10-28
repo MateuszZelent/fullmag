@@ -923,6 +923,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::workspace_items::get_item_frames),
         )
         .route(
+            "/v2/workspace/items/:id/playback",
+            get(handlers::workspace_items::get_item_playback),
+        )
+        .route(
+            "/v2/workspace/items/:id/playback/frames/:frame_index",
+            get(handlers::workspace_items::get_item_playback_frame),
+        )
+        .route(
             "/v2/workspace/settings/:key",
             get(handlers::workspace_items::get_setting)
                 .put(handlers::workspace_items::put_setting),

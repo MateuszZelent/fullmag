@@ -79,51 +79,39 @@ impl VolumeWeightedTransfer {
         let scratch_count = scratch_cells[0] * scratch_cells[1] * scratch_cells[2];
         let mut overlaps = vec![Vec::new(); scratch_count];
 
+        // Both grids are axis-aligned, so a cell overlap is the product of
+        // three 1-D interval overlaps. Tabulating the non-zero 1-D overlaps
+        // per scratch coordinate replaces the all-pairs scan (scratch cells x
+        // native cells, ~6e10 for a 2.2M-cell scratch and a 28k-cell layer)
+        // with the same products, in the same order and association.
+        let axis_overlaps = |axis: usize| -> Vec<Vec<(usize, f64)>> {
+            (0..scratch_cells[axis])
+                .map(|s| {
+                    let scratch_lo = scratch_origin[axis] + s as f64 * scratch_cell_size[axis];
+                    let scratch_hi = scratch_lo + scratch_cell_size[axis];
+                    (0..native_cells[axis])
+                        .filter_map(|n| {
+                            let native_lo = native_origin[axis] + n as f64 * native_cell_size[axis];
+                            let native_hi = native_lo + native_cell_size[axis];
+                            let length =
+                                overlap_length_open(scratch_lo, scratch_hi, native_lo, native_hi);
+                            (length > 0.0).then_some((n, length))
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let [x_overlaps, y_overlaps, z_overlaps] = [axis_overlaps(0), axis_overlaps(1), axis_overlaps(2)];
+
         for sz in 0..scratch_cells[2] {
             for sy in 0..scratch_cells[1] {
                 for sx in 0..scratch_cells[0] {
                     let scratch_index =
                         sz * scratch_cells[1] * scratch_cells[0] + sy * scratch_cells[0] + sx;
-                    let scratch_lo = [
-                        scratch_origin[0] + sx as f64 * scratch_cell_size[0],
-                        scratch_origin[1] + sy as f64 * scratch_cell_size[1],
-                        scratch_origin[2] + sz as f64 * scratch_cell_size[2],
-                    ];
-                    let scratch_hi = [
-                        scratch_lo[0] + scratch_cell_size[0],
-                        scratch_lo[1] + scratch_cell_size[1],
-                        scratch_lo[2] + scratch_cell_size[2],
-                    ];
-
-                    for nz in 0..native_cells[2] {
-                        for ny in 0..native_cells[1] {
-                            for nx in 0..native_cells[0] {
-                                let native_lo = [
-                                    native_origin[0] + nx as f64 * native_cell_size[0],
-                                    native_origin[1] + ny as f64 * native_cell_size[1],
-                                    native_origin[2] + nz as f64 * native_cell_size[2],
-                                ];
-                                let native_hi = [
-                                    native_lo[0] + native_cell_size[0],
-                                    native_lo[1] + native_cell_size[1],
-                                    native_lo[2] + native_cell_size[2],
-                                ];
-                                let overlap = overlap_length_open(
-                                    scratch_lo[0],
-                                    scratch_hi[0],
-                                    native_lo[0],
-                                    native_hi[0],
-                                ) * overlap_length_open(
-                                    scratch_lo[1],
-                                    scratch_hi[1],
-                                    native_lo[1],
-                                    native_hi[1],
-                                ) * overlap_length_open(
-                                    scratch_lo[2],
-                                    scratch_hi[2],
-                                    native_lo[2],
-                                    native_hi[2],
-                                );
+                    for &(nz, oz) in &z_overlaps[sz] {
+                        for &(ny, oy) in &y_overlaps[sy] {
+                            for &(nx, ox) in &x_overlaps[sx] {
+                                let overlap = ox * oy * oz;
                                 if overlap > 0.0 {
                                     let native_index = nz * native_cells[1] * native_cells[0]
                                         + ny * native_cells[0]
@@ -909,6 +897,54 @@ fn trilinear_sample_f32_with_boundary_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separable_overlap_stencil_equals_the_all_pairs_scan() {
+        let native_cells = [3, 4, 5];
+        let native_size = [1.0e-8, 1.0e-8, 1.6e-9];
+        let native_origin = [-2.5e-8, -1.5e-7, 1.08e-8];
+        let scratch_cells = [7, 9, 11];
+        let scratch_size = [1.0e-8, 1.0e-8, 1.6e-9];
+        let scratch_origin = [-4.0e-8, -1.6e-7, -8.0e-10];
+        let transfer = VolumeWeightedTransfer::new(
+            native_cells, native_size, native_origin,
+            scratch_cells, scratch_size, scratch_origin,
+            TransferBoundaryPolicy::OPEN,
+        )
+        .unwrap();
+
+        for sz in 0..scratch_cells[2] {
+            for sy in 0..scratch_cells[1] {
+                for sx in 0..scratch_cells[0] {
+                    let lo = |axis: usize, s: usize| scratch_origin[axis] + s as f64 * scratch_size[axis];
+                    let mut expected = Vec::new();
+                    for nz in 0..native_cells[2] {
+                        for ny in 0..native_cells[1] {
+                            for nx in 0..native_cells[0] {
+                                let n = [nx, ny, nz];
+                                let s = [sx, sy, sz];
+                                let length = |axis: usize| {
+                                    let native_lo = native_origin[axis] + n[axis] as f64 * native_size[axis];
+                                    overlap_length_open(
+                                        lo(axis, s[axis]),
+                                        lo(axis, s[axis]) + scratch_size[axis],
+                                        native_lo,
+                                        native_lo + native_size[axis],
+                                    )
+                                };
+                                let overlap = length(0) * length(1) * length(2);
+                                if overlap > 0.0 {
+                                    expected.push((nz * native_cells[1] * native_cells[0] + ny * native_cells[0] + nx, overlap));
+                                }
+                            }
+                        }
+                    }
+                    let index = sz * scratch_cells[1] * scratch_cells[0] + sy * scratch_cells[0] + sx;
+                    assert_eq!(transfer.overlaps[index], expected);
+                }
+            }
+        }
+    }
 
     #[test]
     fn identity_transfer_is_noop() {

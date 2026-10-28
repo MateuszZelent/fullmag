@@ -1,4 +1,6 @@
 "use client";
+import { useSavedResultsPlaybackSelection } from "@/kernel/saved-results/useSavedResultsPlayback";
+import SavedResultsPlaybackViewport from "./SavedResultsPlaybackViewport";
 import { hasViewport3DQuantityData } from "./model/viewport3DQuantityData";
 import { Viewport3DFieldLabel } from "./Viewport3DFieldLabel";
 import { artifactRenderedSurfaceRanges } from "./model/artifactFieldOverlayModel";
@@ -43,6 +45,7 @@ import {
   viewport3DOrbitDebugEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
+import { useInstanceTabHidden } from "@/kernel/layout/instanceTabVisibility";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { sessionResourceIdentityKey, type SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
@@ -1477,7 +1480,12 @@ interface Viewport3DFrameProps
   visualizationDebugSource: Viewport3DVisualizationDebugSource;
 }
 
-export default function Viewport3DModule({
+export default function Viewport3DModule(props: ModuleProps) {
+  const saved = useSavedResultsPlaybackSelection();
+  return saved ? <SavedResultsPlaybackViewport /> : <LiveViewport3DModule {...props} />;
+}
+
+function LiveViewport3DModule({
   kernel,
   moduleId,
   slotId,
@@ -2158,6 +2166,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     effectAntialias,
   );
   const canvasContextKey = `viewport-3d-canvas-aa:${canvasGlOptions.antialias ? "1" : "0"}-preserve:${canvasGlOptions.preserveDrawingBuffer ? "1" : "0"}`;
+  // A hidden instance tab renders nothing; the root, its WebGL context and the
+  // view stay, and going back to `demand` invalidates once (ADR 0069).
+  const canvasFrameloop = useInstanceTabHidden() ? "never" : VIEWPORT_3D_FRAMELOOP;
   const orbitDebugEnabled = viewport3DOrbitDebugEnabledFromBrowserConfig();
   const hysteresisReplayLabel = formatHysteresisReplayLabel(hysteresisReplayTarget);
   const [orbitDebugAngles, setOrbitDebugAngles] =
@@ -2262,6 +2273,14 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     meshQualityMetric,
     meshQualityRange,
   );
+  const hudSampleSummary = artifactField.model
+    ? `${artifactField.model.count} owned samples · historical inspection · ${artifactField.model.unit}`
+    : antennaFieldOverlay
+      ? `${antennaFieldOverlay.count} samples`
+      : domainSummary;
+  const meshSizeHighlightSummary = sceneProps.meshSizeHighlightModel
+    ? `${sceneProps.meshSizeHighlightModel.label} · ${sceneProps.meshSizeHighlightModel.sampledElementCount.toLocaleString("en-US")}/${sceneProps.meshSizeHighlightModel.matchedElementCount.toLocaleString("en-US")} highlighted`
+    : null;
   const colorbarTopologyModel = sceneProps.topologyModel;
   const getColorbarPartSettings = sceneProps.getPartSettings;
   const colorbarParts = useMemo<Viewport3DColorbarTargetPart[]>(
@@ -2793,11 +2812,14 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-antenna-field-sample-count={antennaFieldOverlay?.count}
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
     >
-      <div className="fm-viewport-3d__hud">
+      <div className="fm-viewport-3d__hud" role="group" aria-label="3D view controls">
         <Viewport3DAppearanceHud onOpenSettings={() => { void kernel.commands.execute("viewport-3d.open-settings", { source: "menu", layout: kernel.layout, selection: kernel.selection }); }} />
         {fieldDataIssue ? (
           <div className="fm-viewport-3d__issue-banner" role="status">
-            <span className="fm-viewport-3d__issue-banner-text">
+            <span
+              className="fm-viewport-3d__issue-banner-text"
+              title={`${fieldDataIssue.quantityId} cannot be rendered: ${fieldDataIssue.message}`}
+            >
               {`${fieldDataIssue.quantityId} cannot be rendered: ${fieldDataIssue.message}`}
             </span>
             <Button onClick={() => setResourceIssueOpen(true)} size="sm" type="button" variant="secondary">
@@ -2833,34 +2855,29 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             </Button>
           </fieldset>
         ) : null}
-        <Viewport3DFieldLabel quantityId={antennaFieldOverlay?.intent.quantity ?? quantityId} label={antennaFieldOverlay ? antennaFieldDisplayLabel(antennaFieldOverlay.intent) : quantityLabel} historical={!antennaFieldOverlay && artifactField.historical} model={artifactField.model} error={artifactField.error} liveDataAvailable={antennaFieldOverlay ? undefined : liveQuantityDataAvailable} />
-        <span>{antennaFieldSourceLabel ?? selectedLabel}</span>
-        {hysteresisReplayLabel ? <span>{hysteresisReplayLabel}</span> : null}
-        <span>{artifactField.model ? `${artifactField.model.count} owned samples · historical inspection · ${artifactField.model.unit}` : antennaFieldOverlay ? `${antennaFieldOverlay.count} samples` : domainSummary}</span>
+        {/* Informational pills share one shrinkable lane so they truncate with
+            a tooltip instead of wrapping the HUD into extra rows. */}
+        <div className="fm-viewport-3d__hud-info">
+          <Viewport3DFieldLabel quantityId={antennaFieldOverlay?.intent.quantity ?? quantityId} label={antennaFieldOverlay ? antennaFieldDisplayLabel(antennaFieldOverlay.intent) : quantityLabel} historical={!antennaFieldOverlay && artifactField.historical} model={artifactField.model} error={artifactField.error} liveDataAvailable={antennaFieldOverlay ? undefined : liveQuantityDataAvailable} />
+          <span title={antennaFieldSourceLabel ?? selectedLabel}>{antennaFieldSourceLabel ?? selectedLabel}</span>
+          {hysteresisReplayLabel ? <span title={hysteresisReplayLabel}>{hysteresisReplayLabel}</span> : null}
+          <span title={hudSampleSummary}>{hudSampleSummary}</span>
+          {artifactField.error ? <span role="status" title={artifactField.error}>{artifactField.error}</span> : null}
+          {antennaFieldOverlay?.intent.kind === "inspection" ? (
+            <span title={ANTENNA_INSPECTION_HUD_NOTE}>{ANTENNA_INSPECTION_HUD_NOTE}</span>
+          ) : null}
+          {meshQualityLegend ? <span title={meshQualityLegend}>{meshQualityLegend}</span> : null}
+          {meshSizeHighlightSummary ? (
+            <span title={meshSizeHighlightSummary}>{meshSizeHighlightSummary}</span>
+          ) : null}
+          <span title={status || undefined}>{status}</span>
+        </div>
         {!antennaFieldOverlay && artifactField.candidates.length > 0 ? (
           <Select value={artifactField.selectedStageId} onValueChange={artifactField.select}>
             <SelectTrigger aria-label="Field inspection source and execution" className="fm-viewport-artifact-owner-select"><SelectValue placeholder="Select source and execution" /></SelectTrigger>
             <SelectContent>{artifactField.candidates.map(candidate => <SelectItem key={candidate.runtimeStageId} value={candidate.runtimeStageId}>{candidate.sourceObjectId} · {candidate.authoredStageId} · {candidate.runtimeStageId} · {candidate.status}</SelectItem>)}</SelectContent>
           </Select>
         ) : null}
-        {artifactField.error ? <span role="status">{artifactField.error}</span> : null}
-        {antennaFieldOverlay?.intent.kind === "inspection" ? (
-          <span>inspection only · external electrode truncation · not qualified for LLG</span>
-        ) : null}
-        {meshQualityLegend ? <span>{meshQualityLegend}</span> : null}
-        {sceneProps.meshSizeHighlightModel ? (
-          <span>
-            {sceneProps.meshSizeHighlightModel.label} ·{" "}
-            {sceneProps.meshSizeHighlightModel.sampledElementCount.toLocaleString(
-              "en-US",
-            )}
-            /
-            {sceneProps.meshSizeHighlightModel.matchedElementCount.toLocaleString(
-              "en-US",
-            )} highlighted
-          </span>
-        ) : null}
-        <span role="status" title={status}>{status}</span>
         {sceneProps.primitiveModel?.diagnostics?.map((issue) => (
           <span key={issue.objectId} role="alert">
             Geometry preview unavailable · {issue.objectId}: {issue.message}
@@ -3021,7 +3038,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           className="fm-viewport-3d__canvas"
           dpr={canvasDpr}
           events={createCanvasEvents}
-          frameloop={VIEWPORT_3D_FRAMELOOP}
+          frameloop={canvasFrameloop}
           gl={canvasGlOptions}
           key={canvasContextKey}
           onCreated={handleCanvasCreated}
@@ -3122,6 +3139,8 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   );
 });
 
+const ANTENNA_INSPECTION_HUD_NOTE =
+  "inspection only · external electrode truncation · not qualified for LLG";
 const INSPECT_TOOLTIP_OFFSET_PX = 14;
 
 const VIEWPORT_FIELD_FRESHNESS_LABEL: Record<

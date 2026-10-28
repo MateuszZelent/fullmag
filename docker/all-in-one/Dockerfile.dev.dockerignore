@@ -8,9 +8,11 @@
 !scripts/docker_startup_script.py
 !scripts/fullmag_storage.py
 !docker/all-in-one/entrypoint.py
+!docker/all-in-one/backend_auto_maintenance.py
 !docker/all-in-one/windows_folder_probe.py
 !docker/all-in-one/linux_native_probe.py
 !docker/all-in-one/runtime_service.py
+!docker/all-in-one/runtime_service_unclaimed_cancellation.py
 !docker/all-in-one/frontend_dev.py
 !docker/all-in-one/healthcheck.py
 
@@ -18,9 +20,11 @@
 !Dockerfile.dev
 !Dockerfile.dev.dockerignore
 !entrypoint.py
+!backend_auto_maintenance.py
 !windows_folder_probe.py
 !linux_native_probe.py
 !runtime_service.py
+!runtime_service_unclaimed_cancellation.py
 !frontend_dev.py
 !healthcheck.py
 !docker_startup_script.py

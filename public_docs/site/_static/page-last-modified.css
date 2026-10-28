@@ -6,7 +6,7 @@
   gap: 0.32rem;
   max-width: 100%;
   margin: -0.45rem 0 1.3rem;
-  color: color-mix(in srgb, currentColor 66%, transparent);
+  color: var(--fm-docs-text-muted, color-mix(in srgb, currentColor 66%, transparent));
   font-size: 0.82rem;
   line-height: 1.45;
 }
@@ -26,14 +26,14 @@
 }
 
 .fm-page-last-modified__changelog {
-  color: inherit;
+  color: var(--fm-docs-accent-text, inherit);
   font-weight: 600;
   text-decoration-thickness: 0.08em;
   text-underline-offset: 0.16em;
 }
 
 .fm-page-last-modified__changelog:hover {
-  color: currentColor;
+  color: var(--fm-docs-accent, currentColor);
 }
 
 @media (max-width: 32rem) {

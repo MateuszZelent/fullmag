@@ -50,10 +50,10 @@ export function inspectorActionState(session: InspectorEditSession | null): Insp
   if (session.mode === "immediate") {
     return { applyReason: "Actions in this view run immediately", canApply: false, canReset: false };
   }
-  const applyReason = !session.dirty
-    ? "No unapplied changes"
-    : session.applying
-      ? "Applying changes"
+  const applyReason = session.applying
+    ? "Applying changes"
+    : !session.dirty
+      ? "No unapplied changes"
       : session.applyBlockReason ?? (!session.valid
         ? "Resolve validation errors before applying"
         : null);

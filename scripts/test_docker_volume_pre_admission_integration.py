@@ -379,6 +379,33 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
         )
         return module
 
+    def test_offline_proof_is_rechecked_with_exact_lease_before_removal(self) -> None:
+        import docker_volume_offline_reconcile as offline
+
+        harness = _Harness()
+        self.addCleanup(harness.close)
+        helper = _helper_module(harness)
+        harness.args.offline_reconciliation = "7" * 32
+        calls = []
+
+        def validate(*_args, **kwargs):
+            calls.append(kwargs)
+            self.assertEqual(kwargs["expected_operation_attempt"], "7" * 32)
+            if len(calls) == 1:
+                self.assertNotIn("lease-enter", harness.events)
+                self.assertNotIn("current_operation", kwargs)
+                return True
+            self.assertIn("lease-enter", harness.events)
+            self.assertIs(kwargs["current_operation"], harness.control.operation_value.value)
+            raise BuildControlError("offline proof changed under lease")
+
+        with mock.patch.object(offline, "validate_for_recreate", side_effect=validate):
+            with self.assertRaisesRegex(BuildControlError, "offline proof changed under lease"):
+                self._run(harness, helper=helper)
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("rm", harness.events)
+        harness.archive_runtime_control.assert_not_called()
+
     def test_exact_failure_proofs_are_revalidated_under_lease_before_rm(self) -> None:
         harness = _Harness()
         self.addCleanup(harness.close)

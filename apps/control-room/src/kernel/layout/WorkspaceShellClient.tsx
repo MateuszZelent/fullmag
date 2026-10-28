@@ -20,12 +20,14 @@ import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
 import { WorkspaceContentScopeProvider } from "./WorkspaceContentScope";
 import { useProjectDocumentSnapshot } from "../persistence/ProjectDocumentStatus";
 import { useKernel } from "../KernelContext";
+import { useSavedResultsPlaybackSelection } from "../saved-results/useSavedResultsPlayback";
 import { sessionRequestScopeKey } from "../resources/sessionResourceIdentity";
 import { homeView, useHomeViewOpen } from "./homeView";
 import { useLayoutSelector } from "./useLayout";
 import { useRealtimeConnection } from "../realtime/useRealtimeConnection";
 
 export function WorkspaceShellClient() {
+  const savedPlayback = useSavedResultsPlaybackSelection();
   const sessions = useSessionCollection();
   const project = useProjectDocumentSnapshot();
   const sessionStatus = useSessionBootstrapStatus({
@@ -104,6 +106,8 @@ export function WorkspaceShellClient() {
     homeView.close();
   }, [sessionScopeKey, startOwnsPage]);
 
+  if (savedPlayback) return <SavedResultsWorkspaceShell />;
+
   if (sessionState !== "ready" && project.state === "ready") {
     return <ProjectWorkspaceShell sessionState={sessionState} onRetry={onRetry} />;
   }
@@ -121,6 +125,40 @@ export function WorkspaceShellClient() {
   }
 
   return <ActiveWorkspaceShell />;
+}
+
+function SavedResultsWorkspaceShell() {
+  const kernel = useKernel();
+  const selection = useSavedResultsPlaybackSelection();
+  if (!selection) return null;
+
+  return (
+    <WorkspaceContentScopeProvider scope="session">
+      <SlotHost slotId="app-menu" />
+      <section
+        aria-label="Saved results playback"
+        className="fm-saved-results-playback-shell__header"
+        data-saved-results-playback="read-only"
+      >
+        <div className="fm-saved-results-playback-shell__identity">
+          <h1 className="fm-saved-results-playback-shell__title">Saved results · read only</h1>
+          <p className="fm-saved-results-playback-shell__name" title={selection.name}>{selection.name}</p>
+        </div>
+        <Button
+          className="fm-saved-results-playback-shell__close"
+          onClick={() => kernel.savedResultsPlayback?.close()}
+          type="button"
+          variant="secondary"
+        >
+          Close playback
+        </Button>
+      </section>
+      <WorkspaceRenderProfiler id="WorkspaceDockLayout">
+        <WorkspaceDockLayout />
+      </WorkspaceRenderProfiler>
+      <CommandFeedbackPresenter />
+    </WorkspaceContentScopeProvider>
+  );
 }
 
 function ProjectWorkspaceShell({

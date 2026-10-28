@@ -257,6 +257,40 @@ fn read_required_string<'a>(
         .ok_or_else(|| format!("{context} {field} is missing or malformed"))
 }
 
+/// Decoded Airbox field values keyed by their validated `field_artifact_sha256`.
+/// A multilayer Airbox field is millions of JSON triplets in the store; one
+/// vector request used to re-read, hash and parse all of them (~8 s on a
+/// Windows-folder store) to return a few thousand samples. The key is the
+/// content digest the manifest already verifies, so a hit is the same data.
+const AIRBOX_VALUES_CACHE_ENTRIES: usize = 2;
+
+static AIRBOX_VALUES_CACHE: std::sync::Mutex<
+    std::collections::VecDeque<(String, std::sync::Arc<Vec<f64>>)>,
+> = std::sync::Mutex::new(std::collections::VecDeque::new());
+
+fn cached_airbox_values(field_hash: &str) -> Option<Vec<f64>> {
+    let cache = AIRBOX_VALUES_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .iter()
+        .find(|(hash, _)| hash == field_hash)
+        .map(|(_, values)| values.as_ref().clone())
+}
+
+fn remember_airbox_values(field_hash: &str, values: &[f64]) {
+    let mut cache = AIRBOX_VALUES_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.iter().any(|(hash, _)| hash == field_hash) {
+        return;
+    }
+    if cache.len() == AIRBOX_VALUES_CACHE_ENTRIES {
+        cache.pop_front();
+    }
+    cache.push_back((field_hash.to_string(), std::sync::Arc::new(values.to_vec())));
+}
+
 /// Reads the runner-origin Airbox carrier without ever projecting it onto the
 /// common FFT layout.  A malformed carrier is deliberately indistinguishable
 /// from an unavailable field to browser callers, but is retained here as a
@@ -495,7 +529,15 @@ fn load_fdm_multilayer_airbox_carrier_values(
             return Err("Airbox binary values lack their exact validated JSON artifact binding".into());
         }
     }
-    let values = if include_values && binary_reference.is_some() {
+    let cached_values = if include_values {
+        cached_airbox_values(expected_field_hash)
+    } else {
+        None
+    };
+    let cache_hit = cached_values.is_some();
+    let values = if let Some(values) = cached_values {
+        values
+    } else if include_values && binary_reference.is_some() {
         let reader = snapshot.latest_fields.binary_reader(requested_quantity)
             .ok_or_else(|| "Airbox binary field has no trusted runtime owner".to_string())?;
         reader.read_referenced_values(binary_reference.as_ref().unwrap()).map_err(|error| error.to_string())?
@@ -579,6 +621,9 @@ fn load_fdm_multilayer_airbox_carrier_values(
     }
     values
     } else { Vec::new() };
+    if include_values && !cache_hit {
+        remember_airbox_values(expected_field_hash, &values);
+    }
     let expected_carrier_fingerprint = if schema == FDM_MULTILAYER_AIRBOX_SCHEMA {
         fdm_multilayer_airbox_carrier_fingerprint(
         quantity_id,

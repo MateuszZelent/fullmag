@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import sys
+import traceback
 from pathlib import Path
 from typing import Sequence
 
@@ -39,6 +40,33 @@ from fullmag.runtime.script_builder import (
 
 
 MAX_SOURCE_SNAPSHOT_BYTES = 1024 * 1024
+SCRIPT_LOAD_REJECTION_SCHEMA = "fullmag.script-load-rejection.v1"
+MAX_SCRIPT_LOAD_REJECTION_MESSAGE_CHARS = 1024
+
+
+class ScriptLoadRejected(Exception):
+    """The selected user script raised while the canonical loader ran it."""
+
+    def __init__(self, cause: Exception, script_path: Path) -> None:
+        self.cause = cause
+        self.script_path = script_path.resolve()
+        super().__init__(f"{type(cause).__name__}: {cause}")
+
+    def envelope(self) -> dict[str, object]:
+        script_line = None
+        for frame in traceback.extract_tb(self.cause.__traceback__):
+            if Path(frame.filename).resolve() == self.script_path:
+                script_line = frame.lineno
+        message = str(self.cause).strip() or type(self.cause).__name__
+        if len(message) > MAX_SCRIPT_LOAD_REJECTION_MESSAGE_CHARS:
+            message = message[: MAX_SCRIPT_LOAD_REJECTION_MESSAGE_CHARS - 3] + "..."
+        return {
+            "schema": SCRIPT_LOAD_REJECTION_SCHEMA,
+            "code": "script_load_failed",
+            "error_type": type(self.cause).__name__,
+            "message": message,
+            "script_line": script_line,
+        }
 
 
 def _write_executed_problem_ir_identity(problem_ir: dict[str, object]) -> None:
@@ -415,7 +443,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "export-scene-document":
         emit_progress(f"Loading Python script {Path(args.script).name}")
-        loaded = _load_script(args, lightweight_assets=True)
+        source_bytes = _read_source_snapshot(getattr(args, "source_snapshot", None))
+        try:
+            loaded = load_problem_from_script(
+                Path(args.script),
+                lightweight_assets=True,
+                source_bytes=source_bytes,
+            )
+        except Exception as error:
+            # The script itself failed for these exact bytes; the caller has
+            # changed nothing yet.  The snapshot read above and the export
+            # below keep their original, unclassified failure.
+            raise ScriptLoadRejected(error, Path(args.script)) from error
         print(json.dumps(build_scene_document_from_builder(export_builder_draft(loaded))))
         emit_progress("Scene document exported")
         return 0
@@ -542,6 +581,14 @@ def _run_cli(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
         return main(arguments)
+    except ScriptLoadRejected as rejection:
+        traceback.print_exception(
+            type(rejection.cause), rejection.cause, rejection.cause.__traceback__
+        )
+        # The envelope is the last stdout line, after anything the script printed.
+        print()
+        print(json.dumps(rejection.envelope()))
+        return 2
     except IncompletePhysicsError:
         if arguments[:1] != ["render-scene-document"]:
             raise

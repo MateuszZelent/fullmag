@@ -935,3 +935,123 @@ async fn the_frame_and_settings_routes_are_wired() {
 
     std::env::remove_var("FULLMAG_STATE_DIR");
 }
+
+fn write_playback_descriptor(dir: &Path) -> Vec<u8> {
+    let array = dir.join("stages/relax/fields/m");
+    fs::create_dir_all(&array).unwrap();
+    fs::write(
+        &array.join(".zarray"),
+        json!({
+            "zarr_format": 2,
+            "shape": [1, 3],
+            "chunks": [1, 3],
+            "dtype": "<f8",
+            "compressor": null,
+            "fill_value": null,
+            "order": "C",
+            "filters": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let values = [0.25_f64, -0.5, 1.0];
+    let mut bytes = Vec::with_capacity(values.len() * 8);
+    for value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    fs::write(array.join("0.0"), &bytes).unwrap();
+    fs::write(
+        dir.join("stages/relax/manifest.json"),
+        r#"{"complete":true}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("playback.json"),
+        json!({
+            "schema": "fullmag.saved_playback.v1",
+            "complete": true,
+            "name": "saved result",
+            "source_note": "Recovered publication context.",
+            "grid_cells_xyz": [1, 1, 1],
+            "cell_size_m": [1e-9, 1e-9, 1e-9],
+            "origin_m": [0.0, 0.0, 0.0],
+            "stages": [{
+                "stage_id": "relax",
+                "array_path": "stages/relax/fields/m",
+                "times_s": [1e-12],
+                "quantity_ids": ["m"],
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    bytes
+}
+
+#[tokio::test]
+async fn saved_playback_routes_return_metadata_and_revision_checked_binary_frames() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let fixture = Fixture::new();
+    let work = fixture.work();
+    std::env::set_var("FULLMAG_STATE_DIR", fixture.dir.path().join("state"));
+    let app = build_v2_router().with_state(test_app_state());
+
+    let results = work.join("run.zarr");
+    write_results(&results, None);
+    let expected_frame = write_playback_descriptor(&results);
+    let added = call(
+        &app,
+        Method::POST,
+        "/v2/workspace/items",
+        Some(json!({"path": results.display().to_string()})),
+        &[],
+    )
+    .await;
+    assert_eq!(added.status(), StatusCode::OK);
+    let id = body_json(added).await["id"].as_str().unwrap().to_string();
+
+    let playback = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(playback.status(), StatusCode::OK);
+    let resource = body_json(playback).await;
+    assert_eq!(resource["schema"], "fullmag.saved_playback.v1");
+    assert_eq!(resource["source_note"], "Recovered publication context.");
+    assert_eq!(resource["stages"][0]["frame_count"], 1);
+    assert!(resource["stages"][0].get("array_path").is_none());
+    let revision = resource["revision"].as_str().unwrap();
+
+    let path = format!(
+        "/v2/workspace/items/{id}/playback/frames/0?stage_id=relax&revision={revision}"
+    );
+    let frame = call(&app, Method::GET, &path, None, &[]).await;
+    assert_eq!(frame.status(), StatusCode::OK);
+    assert_eq!(frame.headers()[header::CONTENT_TYPE], "application/octet-stream");
+    assert_eq!(body_bytes(frame).await, expected_frame);
+
+    let stale = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback/frames/0?stage_id=relax&revision=stale"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let missing_revision = call(
+        &app,
+        Method::GET,
+        &format!("/v2/workspace/items/{id}/playback/frames/0?stage_id=relax"),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(missing_revision.status(), StatusCode::BAD_REQUEST);
+
+    std::env::remove_var("FULLMAG_STATE_DIR");
+}

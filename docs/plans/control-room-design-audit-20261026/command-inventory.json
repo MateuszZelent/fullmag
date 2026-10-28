@@ -1,0 +1,836 @@
+{
+  "scope": "Static literal id/commandId references; dynamic contributions and actual registration require runtime verification",
+  "base_commit": "1afcb531630d6cd5b8caba1f8a4d4593bb29cdb7",
+  "commands": {
+    "airbox.visualization": [
+      "apps/control-room/src/modules/inspector/panels/airbox/AirboxVisualizationPanel.tsx:13"
+    ],
+    "analysis-plots.open": [
+      "apps/control-room/src/modules/analysis-plots/manifest.ts:85",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:262",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:303"
+    ],
+    "analysis.dispersion": [
+      "apps/control-room/src/kernel/analysis-modules/analysisModuleManifests.ts:9",
+      "apps/control-room/src/modules/analysis-dispersion/dispersionAnalysisModule.ts:3"
+    ],
+    "analysis.eigen.plot-mode-3d": [
+      "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.tsx:85"
+    ],
+    "analysis.eigen.set-mode-3d-animation": [
+      "apps/control-room/src/kernel/visualization/analysisFieldOverlayCommandContributions.ts:956"
+    ],
+    "analysis.eigen.set-mode-3d-phase": [
+      "apps/control-room/src/kernel/visualization/analysisFieldOverlayCommandContributions.ts:949"
+    ],
+    "analysis.frequency-domain.clear-3d-overlay": [
+      "apps/control-room/src/kernel/visualization/analysisFieldOverlayCommandContributions.ts:1099",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:930",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1078"
+    ],
+    "analysis.frequency-domain.rebind-3d-overlay": [
+      "apps/control-room/src/kernel/visualization/analysisFieldOverlayCommandContributions.ts:1056"
+    ],
+    "analysis.frequency-domain.set-3d-animation": [
+      "apps/control-room/src/kernel/visualization/analysisFieldOverlayCommandContributions.ts:969"
+    ],
+    "analysis.frequency-domain.set-3d-appearance": [
+      "apps/control-room/src/kernel/visualization/analysisFieldOverlayCommandContributions.ts:981"
+    ],
+    "analysis.frequency-domain.set-3d-phase": [
+      "apps/control-room/src/kernel/visualization/analysisFieldOverlayCommandContributions.ts:962"
+    ],
+    "analysis.frequency-domain.stop-3d-animation": [
+      "apps/control-room/src/kernel/visualization/analysisFieldOverlayCommandContributions.ts:975",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1077"
+    ],
+    "analysis.frequency-response.plot-response-field-3d": [
+      "apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx:2439"
+    ],
+    "analysis.hysteresis": [
+      "apps/control-room/src/kernel/analysis-modules/analysisModuleManifests.ts:152",
+      "apps/control-room/src/modules/analysis-hysteresis/hysteresisAnalysisModule.ts:3"
+    ],
+    "analysis.resonance": [
+      "apps/control-room/src/kernel/analysis-modules/analysisModuleManifests.ts:82",
+      "apps/control-room/src/modules/analysis-resonance/resonanceAnalysisModule.ts:3"
+    ],
+    "analysis.time-domain": [
+      "apps/control-room/src/kernel/analysis-modules/analysisModuleManifests.ts:130",
+      "apps/control-room/src/modules/analysis-time-domain/timeDomainAnalysisModule.ts:3"
+    ],
+    "couplings.delete": [
+      "apps/control-room/src/kernel/authoring/regionCommandContributions.ts:296"
+    ],
+    "couplings.disable": [
+      "apps/control-room/src/kernel/authoring/regionCommandContributions.ts:260"
+    ],
+    "diagnostics.toggle-solver-profiler": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:149",
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2451"
+    ],
+    "execution.fdm-cpu": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:134"
+    ],
+    "execution.fdm-gpu": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:135"
+    ],
+    "execution.fem-cpu": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:136"
+    ],
+    "explorer.collapse-all": [
+      "apps/control-room/src/modules/explorer/manifest.ts:39"
+    ],
+    "explorer.expand-all": [
+      "apps/control-room/src/modules/explorer/manifest.ts:27"
+    ],
+    "fdm-grid.universe-outside-support.visualization": [
+      "apps/control-room/src/modules/inspector/panels/fdm-grid/FdmGridInspectorPanel.tsx:65"
+    ],
+    "field-map.export-png": [
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:701"
+    ],
+    "field-map.open": [
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:257",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:301",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:694"
+    ],
+    "geometry.add-box": [
+      "apps/control-room/src/kernel/authoring/scratchAuthoringGuideModel.ts:16",
+      "apps/control-room/src/kernel/authoring/scratchAuthoringGuideModel.ts:32",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:325"
+    ],
+    "geometry.add-cpw-antenna": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:329",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:525"
+    ],
+    "geometry.add-cylinder": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:326"
+    ],
+    "geometry.add-microstrip-antenna": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:328",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:524"
+    ],
+    "geometry.add-sphere": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:327"
+    ],
+    "geometry.add-thin-film": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:332"
+    ],
+    "geometry.commit-object-draft": [
+      "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts:1577",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:388"
+    ],
+    "geometry.delete-object": [
+      "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts:1641"
+    ],
+    "geometry.focus-primitive": [
+      "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts:1702",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:400"
+    ],
+    "geometry.move-selected": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:363"
+    ],
+    "grid.build-fdm": [
+      "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts:1467",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:540"
+    ],
+    "hysteresis.bookmark-point": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3127"
+    ],
+    "hysteresis.compare-point": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3100"
+    ],
+    "hysteresis.continue-to-next-stage": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2048"
+    ],
+    "hysteresis.export-loop-csv": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3184"
+    ],
+    "hysteresis.export-point-csv": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3160"
+    ],
+    "hysteresis.load-point-in-3d": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2982"
+    ],
+    "hysteresis.return-to-live": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3061"
+    ],
+    "hysteresis.use-point-as-initial-state": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3232"
+    ],
+    "live-charts.fit": [
+      "apps/control-room/src/modules/live-charts/manifest.ts:43"
+    ],
+    "live-charts.follow": [
+      "apps/control-room/src/modules/live-charts/manifest.ts:41"
+    ],
+    "live-charts.open": [
+      "apps/control-room/src/modules/live-charts/manifest.ts:40",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:267",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:302"
+    ],
+    "live-charts.pause": [
+      "apps/control-room/src/modules/live-charts/manifest.ts:42"
+    ],
+    "live-charts.set-preset": [
+      "apps/control-room/src/modules/live-charts/manifest.ts:44"
+    ],
+    "live-charts.set-range": [
+      "apps/control-room/src/modules/live-charts/manifest.ts:46"
+    ],
+    "live-charts.set-selected-series": [
+      "apps/control-room/src/modules/live-charts/manifest.ts:45"
+    ],
+    "magnetization-texture.activate-load-file": [
+      "apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts:184"
+    ],
+    "magnetization-texture.assign-random-seeded": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:430"
+    ],
+    "magnetization-texture.assign-uniform": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:429"
+    ],
+    "magnetization-texture.assign-vortex": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:431"
+    ],
+    "mesh-part.visualization": [
+      "apps/control-room/src/modules/inspector/panels/MeshPartVisualizationPanel.tsx:13"
+    ],
+    "mesh.build-selected": [
+      "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts:1723",
+      "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx:1217",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:389",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:541",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1401"
+    ],
+    "mesh.build-shared-domain": [
+      "apps/control-room/src/kernel/authoring/scratchAuthoringGuideModel.ts:154",
+      "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts:1752",
+      "apps/control-room/src/modules/inspector/panels/mesh-guide/femMeshReadinessGuide.ts:520",
+      "apps/control-room/src/modules/inspector/panels/mesh-guide/femMeshReadinessGuide.ts:541",
+      "apps/control-room/src/modules/inspector/panels/mesh-guide/femMeshReadinessGuide.ts:570",
+      "apps/control-room/src/modules/inspector/panels/mesh-guide/femMeshReadinessGuide.ts:592",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:542",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1408",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1423",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1429"
+    ],
+    "mesh.open-builds": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1415",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1565"
+    ],
+    "mesh.open-object-report": [
+      "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts:1858"
+    ],
+    "mesh.open-overview": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1296",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1303",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1443",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1462",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1496",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1539"
+    ],
+    "mesh.open-quality": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1435",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1511",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1524",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1557"
+    ],
+    "mesh.open-region-report": [
+      "apps/control-room/src/kernel/authoring/regionCommandContributions.ts:329"
+    ],
+    "mesh.open-regions": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1551"
+    ],
+    "mesh.open-shared-domain": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1545"
+    ],
+    "mesh.open-size-fields": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1478",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1490"
+    ],
+    "mesh.refine-worst-quality-element": [
+      "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts:1775"
+    ],
+    "object.antenna.visualization": [
+      "apps/control-room/src/modules/inspector/panels/antenna/AntennaArtifactVisualization.tsx:17"
+    ],
+    "object.region.visualization.debug": [
+      "apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx:594"
+    ],
+    "object.visualization": [
+      "apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.tsx:1214"
+    ],
+    "object.visualization.debug": [
+      "apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx:585"
+    ],
+    "planar-monitor.create": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3099"
+    ],
+    "quick-chart.pin": [
+      "apps/control-room/src/modules/analysis-plots/manifest.ts:50"
+    ],
+    "regions.delete": [
+      "apps/control-room/src/kernel/authoring/regionCommandContributions.ts:214"
+    ],
+    "regions.duplicate": [
+      "apps/control-room/src/kernel/authoring/regionCommandContributions.ts:173"
+    ],
+    "regions.focus": [
+      "apps/control-room/src/kernel/authoring/regionCommandContributions.ts:159"
+    ],
+    "regions.priority-up": [
+      "apps/control-room/src/kernel/authoring/regionCommandContributions.ts:108"
+    ],
+    "start.import": [
+      "apps/control-room/src/modules/start/home/LaunchTiles.tsx:62"
+    ],
+    "start.new-fdm": [
+      "apps/control-room/src/modules/start/home/LaunchTiles.tsx:26"
+    ],
+    "start.new-fem": [
+      "apps/control-room/src/modules/start/home/LaunchTiles.tsx:38"
+    ],
+    "start.open-script": [
+      "apps/control-room/src/modules/start/home/LaunchTiles.tsx:74"
+    ],
+    "start.section.about": [
+      "apps/control-room/src/modules/start/rail/StartRail.tsx:40"
+    ],
+    "start.section.docs": [
+      "apps/control-room/src/modules/start/rail/StartRail.tsx:38"
+    ],
+    "start.section.home": [
+      "apps/control-room/src/modules/start/rail/StartRail.tsx:34"
+    ],
+    "start.section.import": [
+      "apps/control-room/src/modules/start/rail/StartRail.tsx:36"
+    ],
+    "start.section.learn": [
+      "apps/control-room/src/modules/start/rail/StartRail.tsx:37"
+    ],
+    "start.section.settings": [
+      "apps/control-room/src/modules/start/rail/StartRail.tsx:39"
+    ],
+    "start.section.templates": [
+      "apps/control-room/src/modules/start/rail/StartRail.tsx:35"
+    ],
+    "start.templates": [
+      "apps/control-room/src/modules/start/home/LaunchTiles.tsx:50"
+    ],
+    "study.add-autosave-stage": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:602"
+    ],
+    "study.add-eigenmodes-stage": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:606"
+    ],
+    "study.add-fft-response-stage": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:603"
+    ],
+    "study.add-field-drive-stage": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:600"
+    ],
+    "study.add-frequency-response-stage": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:607"
+    ],
+    "study.add-hysteresis-stage": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:605"
+    ],
+    "study.add-relax-stage": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:599"
+    ],
+    "study.add-run-stage": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:604"
+    ],
+    "study.add-save-state-stage": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:608"
+    ],
+    "study.add-table-autosave-stage": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:601"
+    ],
+    "study.animate-phase": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3316"
+    ],
+    "study.compare-selected-peak": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3326"
+    ],
+    "study.compute-energies": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2962",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:652"
+    ],
+    "study.compute-fields": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2942",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:651"
+    ],
+    "study.discard-checkpoint": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2619"
+    ],
+    "study.discard-paused-state": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2532",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:661",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:354"
+    ],
+    "study.export-selected-metadata": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3336"
+    ],
+    "study.export-state": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2850",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:660",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:660"
+    ],
+    "study.import-state": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:84",
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2882",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:659"
+    ],
+    "study.load-field-state": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2712",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:227"
+    ],
+    "study.open-dynamics-workbench": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3286"
+    ],
+    "study.open-overview": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:589"
+    ],
+    "study.open-stages": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:590"
+    ],
+    "study.pause": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:125",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:184",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:655",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:352"
+    ],
+    "study.plot-selected-mode": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3296"
+    ],
+    "study.plot-selected-response-field": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3306"
+    ],
+    "study.prepare-live": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:123",
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2429",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:653",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:350"
+    ],
+    "study.remove-selected-stage": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2136",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:632"
+    ],
+    "study.restore-checkpoint": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2583",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:658"
+    ],
+    "study.resume": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:126",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:656",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:353"
+    ],
+    "study.run": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:124",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:183",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:654",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:351"
+    ],
+    "study.save-checkpoint": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2554",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:657"
+    ],
+    "study.save-field-state": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2654",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:226"
+    ],
+    "study.save-state": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:2810",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:704"
+    ],
+    "study.save-vtk": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:703"
+    ],
+    "study.skip": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:128",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:186",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:663",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:356"
+    ],
+    "study.stop": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:127",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:185",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:662",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:355"
+    ],
+    "study.trigger-field-calculation": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3346"
+    ],
+    "study.update-k-path": [
+      "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts:3365"
+    ],
+    "tools.communication": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:148"
+    ],
+    "tools.data-preview": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:147"
+    ],
+    "tools.material-library": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:146"
+    ],
+    "tools.registry-inspector": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:153"
+    ],
+    "tools.thread-manager": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:145"
+    ],
+    "viewport-3d.capture-frame": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:298",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1903",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:427"
+    ],
+    "viewport-3d.dimension-annotation-both": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:124",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3485"
+    ],
+    "viewport-3d.dimension-annotation-extents": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:119",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3480"
+    ],
+    "viewport-3d.dimension-annotation-ticks": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:114",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3475"
+    ],
+    "viewport-3d.dimension-density-auto": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:135",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3498"
+    ],
+    "viewport-3d.dimension-density-coarse": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:140",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3503"
+    ],
+    "viewport-3d.dimension-density-fine": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:145",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3508"
+    ],
+    "viewport-3d.dimension-frame-cage": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:102",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3457"
+    ],
+    "viewport-3d.dimension-frame-floor": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:97",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3452"
+    ],
+    "viewport-3d.dimension-frame-off": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:92",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3462"
+    ],
+    "viewport-3d.fdm-topography-amplitude": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:545",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2339"
+    ],
+    "viewport-3d.fdm-topography-component-magnitude": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:192",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2354"
+    ],
+    "viewport-3d.fdm-topography-component-x": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:197",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2359"
+    ],
+    "viewport-3d.fdm-topography-component-y": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:202",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2364"
+    ],
+    "viewport-3d.fdm-topography-component-z": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:187",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2349"
+    ],
+    "viewport-3d.fdm-topography-toggle": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:528",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2328"
+    ],
+    "viewport-3d.fit": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:261",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:401"
+    ],
+    "viewport-3d.hsl-reference-auto": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:393",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2183",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:658"
+    ],
+    "viewport-3d.hsl-reference-off": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:419",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2193",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:668"
+    ],
+    "viewport-3d.hsl-reference-on": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:406",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2188",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:663"
+    ],
+    "viewport-3d.inspect-toggle": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:321",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:804"
+    ],
+    "viewport-3d.open": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:247",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:573",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:238",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:252"
+    ],
+    "viewport-3d.open-camera-dialog": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:286",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2263",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:912"
+    ],
+    "viewport-3d.open-settings": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:333"
+    ],
+    "viewport-3d.profile-balanced": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:40",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1882",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:406"
+    ],
+    "viewport-3d.profile-capture": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:50",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1892",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:416"
+    ],
+    "viewport-3d.profile-figure": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:45",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1887",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:411"
+    ],
+    "viewport-3d.profile-interactive": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:35",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1877",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:401"
+    ],
+    "viewport-3d.profile-interactive-lite": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:30",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:1872",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:396"
+    ],
+    "viewport-3d.reset-appearance-all": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:81"
+    ],
+    "viewport-3d.reset-appearance-background": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:61"
+    ],
+    "viewport-3d.reset-appearance-effects": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:76"
+    ],
+    "viewport-3d.reset-appearance-frame": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:66"
+    ],
+    "viewport-3d.reset-appearance-lighting": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:71"
+    ],
+    "viewport-3d.reset-camera": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:272"
+    ],
+    "viewport-3d.rotation-camera": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:432",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2227",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2272",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:288"
+    ],
+    "viewport-3d.rotation-object": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:445",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2232",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:2277",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:293"
+    ],
+    "viewport-3d.scale-labels-toggle": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:500",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3519"
+    ],
+    "viewport-3d.scale-unit-auto": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:155",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3528"
+    ],
+    "viewport-3d.scale-unit-m": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:175",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3548"
+    ],
+    "viewport-3d.scale-unit-mm": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:170",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3543"
+    ],
+    "viewport-3d.scale-unit-nm": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:160",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3533"
+    ],
+    "viewport-3d.scale-unit-um": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:165",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3538"
+    ],
+    "viewport-3d.toggle-viewcube": [
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:309",
+      "apps/control-room/src/modules/ribbon/ribbonTabViews.tsx:640"
+    ],
+    "visualization.target.clear-overrides": [
+      "apps/control-room/src/kernel/visualization/visualizationCommandContributions.ts:541",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3959"
+    ],
+    "visualization.target.set-bounds-visible": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3928"
+    ],
+    "visualization.target.set-geometry-scope": [
+      "apps/control-room/src/kernel/visualization/visualizationCommandContributions.ts:524",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3766",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3882"
+    ],
+    "visualization.target.set-opacity-percent": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3981",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3989",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3997",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:4005",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:4013"
+    ],
+    "visualization.target.set-point-color": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3951"
+    ],
+    "visualization.target.set-points-visible": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3937"
+    ],
+    "visualization.target.set-render-mode": [
+      "apps/control-room/src/kernel/visualization/visualizationCommandContributions.ts:503",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3870"
+    ],
+    "visualization.target.set-shader-mono-color": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3734"
+    ],
+    "visualization.target.set-surface-color-source": [
+      "apps/control-room/src/kernel/visualization/visualizationCommandContributions.ts:435",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3722"
+    ],
+    "visualization.target.set-surface-visible": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3709"
+    ],
+    "visualization.target.set-vector-alpha-percent": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3809"
+    ],
+    "visualization.target.set-vector-color-mode": [
+      "apps/control-room/src/kernel/visualization/visualizationCommandContributions.ts:486",
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3781"
+    ],
+    "visualization.target.set-vector-mono-color": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3793"
+    ],
+    "visualization.target.set-vector-thickness": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3824"
+    ],
+    "visualization.target.set-vectors-visible": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3751"
+    ],
+    "visualization.target.set-visible": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3855"
+    ],
+    "visualization.target.set-wireframe-color": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3903"
+    ],
+    "visualization.target.set-wireframe-opacity-percent": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3919"
+    ],
+    "visualization.target.set-wireframe-visible": [
+      "apps/control-room/src/modules/ribbon/ribbonContributions.tsx:3891"
+    ],
+    "workspace.about-help": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:162",
+      "apps/control-room/src/modules/start/model/startCommands.ts:249"
+    ],
+    "workspace.api-console": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:151"
+    ],
+    "workspace.apply-inspector": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:406",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:94",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:169"
+    ],
+    "workspace.close-project": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:307",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:86"
+    ],
+    "workspace.command-palette": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:98",
+      "apps/control-room/src/modules/overlay/manifest.ts:14"
+    ],
+    "workspace.diagnostics": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:150"
+    ],
+    "workspace.export-python": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:338",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:87"
+    ],
+    "workspace.focus-selection": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:111"
+    ],
+    "workspace.home": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:166"
+    ],
+    "workspace.new-problem": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:190",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:81"
+    ],
+    "workspace.new-project": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:211",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:82"
+    ],
+    "workspace.open-project": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:244",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:83"
+    ],
+    "workspace.redo": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:489",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:97",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:171"
+    ],
+    "workspace.reference": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:161",
+      "apps/control-room/src/modules/start/model/startCommands.ts:236"
+    ],
+    "workspace.reset-inspector": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:435",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:95"
+    ],
+    "workspace.return-to-workspace": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:177"
+    ],
+    "workspace.save-project": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:276",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:85",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:168"
+    ],
+    "workspace.script-view": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:152"
+    ],
+    "workspace.search-docs": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:160",
+      "apps/control-room/src/modules/start/model/startCommands.ts:222"
+    ],
+    "workspace.theme-toggle": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:86"
+    ],
+    "workspace.toggle-left-panel": [
+      "apps/control-room/src/modules/explorer/manifest.ts:51"
+    ],
+    "workspace.toggle-right-panel": [
+      "apps/control-room/src/modules/inspector/manifest.ts:12"
+    ],
+    "workspace.undo": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:460",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:96",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:170"
+    ],
+    "workspace.view-2d": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:106"
+    ],
+    "workspace.view-3d": [
+      "apps/control-room/src/kernel/layout/shellCommands.ts:98",
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:105"
+    ],
+    "workspace.visualization-settings": [
+      "apps/control-room/src/kernel/layout/appMenuModel.tsx:116",
+      "apps/control-room/src/modules/viewport-3d/manifest.ts:356"
+    ]
+  }
+}

@@ -114,6 +114,31 @@ describe("Live preparation materialization", () => {
     expect(fixture.invalidate).not.toHaveBeenCalled();
   });
 
+  it("keeps an already receipted preparation instead of re-planning it", async () => {
+    const fixture = materializationApi();
+    const receipt = {
+      payload_sha256: "c".repeat(64),
+      plan_fingerprint: `sha256:${"d".repeat(64)}`,
+      preparation_id: "prep-current",
+      run_id: "run-current",
+      schema_version: "preparation_receipt.v1",
+    };
+    fixture.preparation.mockResolvedValueOnce({
+      preparation_id: "prep-current",
+      receipt,
+      status: "ready",
+    } as never);
+
+    const outcome = await materializeCurrentLivePreparation(fixture.context, {
+      expectedSceneRevision: 17,
+      requireCurrentSharedDomainMesh: true,
+    });
+
+    expect(outcome).toEqual({ kind: "already-prepared", receipt });
+    expect(fixture.sharedDomainManifest).toHaveBeenCalled();
+    expect(fixture.materializePreparation).not.toHaveBeenCalled();
+  });
+
   it("does not materialize while the Live preparation is still running", async () => {
     const fixture = materializationApi({ status: "running" });
 

@@ -70,7 +70,7 @@ describe("FDM multilayer Airbox target inspector model", () => {
     });
   });
 
-  it("fails closed when a target-only carrier incorrectly claims H_eff", () => {
+  it("reports a composed H_eff on the target-only carrier as available", () => {
     const model = resolveFdmMultilayerAirboxTargetInspectorModel({
       ...layout,
       airbox: {
@@ -80,9 +80,11 @@ describe("FDM multilayer Airbox target inspector model", () => {
       },
     });
 
-    expect(model).toEqual({
-      notice: "Target-only Airbox carrier is not published or failed validation.",
-      status: "unavailable",
-    });
+    expect(model.status).toBe("ready");
+    if (model.status !== "ready") throw new Error("Expected a published target-only Airbox carrier");
+    expect(model.fieldCapabilityRows).toEqual([
+      { label: "H_demag", value: "available" },
+      { label: "H_eff", value: "available" },
+    ]);
   });
 });

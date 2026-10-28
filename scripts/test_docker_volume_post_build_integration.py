@@ -296,6 +296,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
                     ("2" * 64 if drift else hashlib.sha256(_control.records[continuation.CONFIG_RELATIVE]).hexdigest())
                 )),
                 mock.patch.object(dev, "_backend_cache", return_value={
+                    "project_id": "fullmag-project", "shared_package_subpath": "groups/" + "a" * 64,
                     "volume_names": [], "environment": {},
                     "overlay": {"services": {"backend": {"labels": {}, "volumes": []},
                                                  "frontend": {"volumes": []}}, "volumes": {}},

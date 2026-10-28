@@ -29,7 +29,7 @@ const environmentVariants = cva("fm-start-env", {
 const GIGABYTE = 1e9;
 const INITIAL_GPU_SUMMARY_COUNT = 3;
 
-const gigabytes = new Intl.NumberFormat(undefined, {
+const gigabytes = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
   minimumFractionDigits: 1,
 });
@@ -161,14 +161,16 @@ export function ComputeEnvironmentWidget({
       </div>
 
       <Button
+        aria-label="Open compute environment settings"
         className="fm-start-env__cfg"
         onClick={onConfigure}
         size="sm"
+        title="Open compute environment settings"
         type="button"
         variant="ghost"
       >
         <Settings aria-hidden="true" size={14} />
-        Configure compute
+        <span className="fm-start-env__cfg-label">Configure compute</span>
       </Button>
     </section>
   );

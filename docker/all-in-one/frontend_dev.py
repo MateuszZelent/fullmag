@@ -82,6 +82,11 @@ OWNER_ROOT = Path("/run/fullmag/frontend-owner")
 WORKSPACE_ROOT = DEVELOPMENT_ROOT / "workspace"
 FRONTEND_ROOT = DEVELOPMENT_ROOT / "cache"
 PNPM_STORE_ROOT = DEVELOPMENT_ROOT / "pnpm-store"
+SHARED_PNPM_STORE_ENV = "FULLMAG_SHARED_PNPM_STORE"
+SHARED_PNPM_STORE_VALUE = "/opt/fullmag/shared-pnpm"
+SHARED_PNPM_STORE_ROOT = Path(SHARED_PNPM_STORE_VALUE)
+SHARED_PNPM_INSTALL_LOCK_NAME = ".install.lock"
+_UNCLAIMED_SHARED_PNPM_INSTALL_LOCKS: list[Any] = []
 PNPM_HOME = DEVELOPMENT_ROOT / "pnpm-home"
 COREPACK_HOME = DEVELOPMENT_ROOT / "corepack"
 HOME_ROOT = DEVELOPMENT_ROOT / "home"
@@ -265,6 +270,7 @@ class FrontendHandle:
     log_stream: Any | None = None
     log_tailer: Any | None = None
     runtime_lock: Any | None = None
+    shared_pnpm_lock: Any | None = None
     stopped: bool = False
     process_group_id: int | None = None
     process_identity: Mapping[str, Any] | None = None
@@ -308,6 +314,35 @@ def _ensure_directory(path: Path, name: str) -> Path:
         if isinstance(error, FrontendDevError):
             raise
         _fail(str(error))
+
+
+def _shared_pnpm_store_enabled() -> bool:
+    configured = os.environ.get(SHARED_PNPM_STORE_ENV, "")
+    if not configured:
+        return False
+    if configured != SHARED_PNPM_STORE_VALUE:
+        _fail(f"{SHARED_PNPM_STORE_ENV} must be exactly {SHARED_PNPM_STORE_VALUE!r}")
+    return True
+
+
+def _pnpm_store_root() -> Path:
+    return SHARED_PNPM_STORE_ROOT if _shared_pnpm_store_enabled() else PNPM_STORE_ROOT
+
+
+def _validate_shared_pnpm_store_root() -> Path:
+    root = SHARED_PNPM_STORE_ROOT
+    _path_without_parent(root, "shared pnpm store")
+    _assert_no_links(root, "shared pnpm store")
+    try:
+        metadata = root.lstat()
+    except OSError as error:
+        _fail(f"cannot inspect shared pnpm store {root}: {error}")
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        _fail(f"shared pnpm store is not a real directory: {root}")
+    effective_uid = getattr(os, "geteuid", lambda: metadata.st_uid)()
+    if metadata.st_uid != effective_uid:
+        _fail(f"shared pnpm store is not owned by the frontend user: {root}")
+    return root
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -1019,6 +1054,7 @@ def _reject_existing_owner(receipt: Mapping[str, Any] | None) -> None:
 
 
 def _prepare_state_directories() -> None:
+    shared_store_enabled = _shared_pnpm_store_enabled()
     for path, name in (
         (DEVELOPMENT_ROOT, "development root"),
         (OWNER_ROOT, "ephemeral frontend owner root"),
@@ -1030,6 +1066,8 @@ def _prepare_state_directories() -> None:
         (TEMP_ROOT, "frontend temporary root"),
     ):
         _ensure_directory(path, name)
+    if shared_store_enabled:
+        _validate_shared_pnpm_store_root()
 
 
 def _ensure_cache_layout(inputs: DevelopmentInputs) -> None:
@@ -1345,6 +1383,7 @@ def _safe_environment(
         else _validate_watchpack_polling_ms(watchpack_polling_ms)
     )
     mode = _source_watch_mode() if watch_mode is None else _validate_watch_mode(watch_mode)
+    shared_store_enabled = _shared_pnpm_store_enabled()
     environment = {
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "HOME": str(HOME_ROOT),
@@ -1383,7 +1422,7 @@ def _safe_environment(
         "COREPACK_ENABLE_PROJECT_SPEC": "1",
         "COREPACK_DEFAULT_TO_LATEST": "0",
         "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
-        "npm_config_store_dir": str(PNPM_STORE_ROOT),
+        "npm_config_store_dir": str(_pnpm_store_root()),
         "TMPDIR": str(TEMP_ROOT),
         "TEMP": str(TEMP_ROOT),
         "TMP": str(TEMP_ROOT),
@@ -1397,6 +1436,8 @@ def _safe_environment(
     if mode == "native":
         # Without WATCHPACK_POLLING Watchpack uses inotify.
         del environment["WATCHPACK_POLLING"]
+    if shared_store_enabled:
+        environment["npm_config_package_import_method"] = "copy"
     return environment
 
 
@@ -1499,6 +1540,110 @@ def _release_runtime_lock(lock: Any | None) -> None:
         lock.close()
     except OSError:
         pass
+
+
+def _acquire_shared_pnpm_install_lock(
+    stopping_event: Any,
+    deadline: float | None = None,
+) -> Any | None:
+    """Serialize pnpm install processes that write the opt-in shared store."""
+
+    if not _shared_pnpm_store_enabled():
+        return None
+    if fcntl is None:
+        _fail("shared pnpm store locking is unavailable")
+    root = _validate_shared_pnpm_store_root()
+    lock_path = root / SHARED_PNPM_INSTALL_LOCK_NAME
+    _assert_no_links(root, "shared pnpm install lock parent")
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    descriptor: int | None = None
+    lock_stream: Any | None = None
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+        os.set_inheritable(descriptor, False)
+        metadata = os.fstat(descriptor)
+        path_metadata = os.lstat(lock_path)
+        effective_uid = getattr(os, "geteuid", lambda: metadata.st_uid)()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != effective_uid
+            or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or not stat.S_ISREG(path_metadata.st_mode)
+            or path_metadata.st_nlink != 1
+            or (metadata.st_dev, metadata.st_ino)
+            != (path_metadata.st_dev, path_metadata.st_ino)
+        ):
+            raise FrontendDevError(
+                "shared pnpm install lock is not a singly-linked owner-controlled regular file"
+            )
+        lock_stream = os.fdopen(descriptor, "r+b", buffering=0)
+        descriptor = None
+        wait_deadline = (
+            time.monotonic() + INSTALL_TIMEOUT_SECONDS if deadline is None else deadline
+        )
+        while True:
+            if getattr(stopping_event, "is_set", lambda: False)():
+                raise FrontendDevUnknown(
+                    "frontend startup was cancelled while waiting for the shared pnpm store lock"
+                )
+            remaining = wait_deadline - time.monotonic()
+            if remaining <= 0:
+                raise FrontendDevError(
+                    "timed out waiting for the shared pnpm store install lock"
+                )
+            try:
+                fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                if error.errno not in (errno.EACCES, errno.EAGAIN):
+                    raise
+                remaining = wait_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise FrontendDevError(
+                        "timed out waiting for the shared pnpm store install lock"
+                    )
+                time.sleep(min(0.1, remaining))
+                continue
+            path_metadata = os.lstat(lock_path)
+            metadata = os.fstat(lock_stream.fileno())
+            if (
+                not stat.S_ISREG(path_metadata.st_mode)
+                or path_metadata.st_nlink != 1
+                or (metadata.st_dev, metadata.st_ino)
+                != (path_metadata.st_dev, path_metadata.st_ino)
+            ):
+                raise FrontendDevError(
+                    "shared pnpm install lock path changed while acquiring its lock"
+                )
+            return lock_stream
+    except FrontendDevError:
+        if lock_stream is not None:
+            lock_stream.close()
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    except OSError as error:
+        if lock_stream is not None:
+            lock_stream.close()
+        if descriptor is not None:
+            os.close(descriptor)
+        _fail(f"cannot acquire shared pnpm store install lock: {error}")
+
+
+def _release_shared_pnpm_install_lock(lock: Any | None) -> None:
+    if lock is None:
+        return
+    try:
+        lock.close()
+    except OSError:
+        pass
+
+
+def _release_handle_shared_pnpm_lock(handle: FrontendHandle) -> None:
+    lock = handle.shared_pnpm_lock
+    handle.shared_pnpm_lock = None
+    _release_shared_pnpm_install_lock(lock)
 
 
 def _assert_runtime_lock_for_log_rotation(runtime_lock: Any) -> None:
@@ -1947,15 +2092,8 @@ def _stop_log_tailer(log_tailer: _LogTailer | None) -> None:
         log_tailer.stop()
 
 
-def _run_pnpm_install(
-    inputs: DevelopmentInputs,
-    stopping_event: Any,
-    log_stream: Any,
-    receipt: dict[str, Any],
-    runtime_lock: Any,
-) -> None:
+def _pnpm_install_command(inputs: DevelopmentInputs) -> list[str]:
     app_root = inputs.workspace_root / "apps" / "control-room"
-    environment = _safe_environment(inputs)
     command = [
         str(PNPM_BINARY),
         "--dir",
@@ -1963,17 +2101,38 @@ def _run_pnpm_install(
         "install",
         "--frozen-lockfile",
         "--store-dir",
-        str(PNPM_STORE_ROOT),
+        str(_pnpm_store_root()),
     ]
+    if _shared_pnpm_store_enabled():
+        # Copy packages into each group's private node_modules, including when
+        # the shared store is on another filesystem; install scripts must not
+        # mutate store files shared by other groups.
+        command.append("--package-import-method=copy")
+    return command
+
+
+def _run_pnpm_install(
+    inputs: DevelopmentInputs,
+    stopping_event: Any,
+    log_stream: Any,
+    receipt: dict[str, Any],
+    runtime_lock: Any,
+) -> None:
+    environment = _safe_environment(inputs)
+    command = _pnpm_install_command(inputs)
     receipt.update(state="installing", dependency_install="initial-frozen-pnpm", command=command)
     _publish_receipt(receipt)
     install_started = time.monotonic()
+    deadline = install_started + INSTALL_TIMEOUT_SECONDS
     _write_lifecycle_log(
         "frozen_install_start",
         budget_seconds=INSTALL_TIMEOUT_SECONDS,
         log_path=LOG_PATH,
     )
+    shared_pnpm_lock: Any | None = None
     try:
+        shared_pnpm_lock = _acquire_shared_pnpm_install_lock(stopping_event, deadline)
+        _assert_not_stopping(stopping_event)
         process = subprocess.Popen(
             command,
             cwd=str(inputs.workspace_root),
@@ -1983,7 +2142,10 @@ def _run_pnpm_install(
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    except OSError as error:
+    except Exception as error:
+        if shared_pnpm_lock is not None:
+            _release_shared_pnpm_install_lock(shared_pnpm_lock)
+            shared_pnpm_lock = None
         _write_lifecycle_log(
             "frozen_install_result",
             status="failed",
@@ -1991,7 +2153,9 @@ def _run_pnpm_install(
             budget_seconds=INSTALL_TIMEOUT_SECONDS,
             error=str(error),
         )
-        _fail(f"frozen pnpm install could not start: {error}")
+        if isinstance(error, OSError):
+            _fail(f"frozen pnpm install could not start: {error}")
+        raise
     try:
         install_handle = _new_handle(
             process,
@@ -2000,10 +2164,13 @@ def _run_pnpm_install(
             "pnpm-install",
             log_stream,
             runtime_lock=runtime_lock,
+            shared_pnpm_lock=shared_pnpm_lock,
         )
+        shared_pnpm_lock = None
     except Exception as error:
         owned_handle = getattr(error, "frontend_handle", None)
         if isinstance(owned_handle, FrontendHandle):
+            shared_pnpm_lock = None
             _record_handle_identity(receipt, owned_handle)
             try:
                 _publish_receipt(receipt)
@@ -2016,9 +2183,14 @@ def _run_pnpm_install(
             budget_seconds=INSTALL_TIMEOUT_SECONDS,
             error=str(error),
         )
+        if shared_pnpm_lock is not None:
+            # Keep the store locked until the container process exits. This
+            # exceptional path has no authenticated handle to transfer it to.
+            _UNCLAIMED_SHARED_PNPM_INSTALL_LOCKS.append(shared_pnpm_lock)
+            shared_pnpm_lock = None
         raise
-    _record_handle_identity(receipt, install_handle)
     try:
+        _record_handle_identity(receipt, install_handle)
         _publish_receipt(receipt)
     except Exception as error:
         _attach_frontend_handle(error, install_handle)
@@ -2030,7 +2202,6 @@ def _run_pnpm_install(
             error=str(error),
         )
         raise
-    deadline = time.monotonic() + INSTALL_TIMEOUT_SECONDS
     try:
         while True:
             returncode = process.poll()
@@ -2056,6 +2227,7 @@ def _run_pnpm_install(
                     )
                     _attach_frontend_handle(error, install_handle)
                     raise error
+                _release_handle_shared_pnpm_lock(install_handle)
                 _write_lifecycle_log(
                     "frozen_install_result",
                     status="ready",
@@ -2072,6 +2244,7 @@ def _run_pnpm_install(
                     raise FrontendDevUnknown(
                         "pnpm install did not stop within the bounded shutdown window"
                     ) from error
+                _release_handle_shared_pnpm_lock(install_handle)
                 raise FrontendDevUnknown("frontend start was cancelled during pnpm install")
             if time.monotonic() >= deadline:
                 try:
@@ -2079,6 +2252,7 @@ def _run_pnpm_install(
                 except FrontendDevUnknown as shutdown_error:
                     _attach_frontend_handle(shutdown_error, install_handle)
                     raise
+                _release_handle_shared_pnpm_lock(install_handle)
                 error = FrontendDevUnknown("pnpm install exceeded its bounded startup timeout")
                 _attach_frontend_handle(error, install_handle)
                 raise error
@@ -2139,6 +2313,7 @@ def _new_handle(
     log_stream: Any,
     log_tailer: _LogTailer | None = None,
     runtime_lock: Any | None = None,
+    shared_pnpm_lock: Any | None = None,
     inspector_log_offset: int | None = None,
 ) -> FrontendHandle:
     handle = FrontendHandle(
@@ -2152,6 +2327,7 @@ def _new_handle(
         log_stream=log_stream,
         log_tailer=log_tailer,
         runtime_lock=runtime_lock,
+        shared_pnpm_lock=shared_pnpm_lock,
         inspector_log_offset=inspector_log_offset,
     )
     try:
@@ -2770,6 +2946,7 @@ def stop(handle: FrontendHandle, *, timeout: float = STOP_TIMEOUT_SECONDS) -> di
         )
 
     handle.stopped = True
+    _release_handle_shared_pnpm_lock(handle)
     if handle.log_tailer is not None:
         handle.log_tailer.stop()
         handle.log_tailer = None

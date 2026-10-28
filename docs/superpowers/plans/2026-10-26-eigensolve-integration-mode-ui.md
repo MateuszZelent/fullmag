@@ -29,7 +29,7 @@ Nie usuwamy niezintegrowanych worktree, wyników, cache ani aktywnych zasobów. 
 | I2: podpisane osie i tożsamość punktu | Kod wypchnięty; CI UI i browser fixture PASS | Wybór osi kx/ky/kz/path, SI, brak wymyślania znaku, stabilna próbka/mod po zmianie osi; aktualne typecheck/lint/CI |
 | I3: właściciel pola i akcja punkt → mod | Owner-bound JSON/meta/binary i pięć rzeczywistych przejść punkt → mod (próbki 0/3/7/11/14) PASS; import FMS cold oraz visualization_only PASS, końcowy strict i bieżący runtime otwarte | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
 | I4: rzeczywisty mod w UI | Gamma nearest i ±10: rzeczywiste pola, Real/Imag/Abs/Phase, WebGL2, animacja i zrzut samego magnetyka PASS; pełny sweep pozostaje w I7 | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
-| I5: review, PR, master i cleanup | Otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
+| I5: review, PR, master i cleanup | Master 2c67d8f9 scalany na branch zadania; 12 konfliktów rozwiązane, commit/CI w toku; publikacja master/cleanup otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
 | I6: pozostała integracja solvera | Otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
 | I7: kwalifikacja naukowa | 15/15 z Gamma window zachowane w FMS i potwierdzone po imporcie; kompletność, zbieżność, serial/adaptive i COMSOL nadal NOT VERIFIED | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
 
@@ -343,3 +343,7 @@ Aktualny runtime jest niedostępny po utracie demona Docker. Potwierdzone pozost
 CI 40612294926 dla 0a02ca809: default-feature runner 1821 PASS oraz osobny, jawnie uruchomiony checkpoint-inspector Rust→Python 1 PASS. Zapis rzeczywistego manifestu i odczyt integralności potwierdzone; scientific_qualification pozostaje NOT VERIFIED.
 
 [I5 preflight](../../audits/2026-10-28-eigensolve-master-integration-preflight.md): remote master 2c67d8f904b1dede9268bbbc8bf6257cbe33aa4f, 215 commitów incoming, 583 zmienione pliki, 12 tekstowych konfliktów w odczytowym preview. Nie przeprowadzono merge, status indeksu/WIP zachowany. Nowe CI nie zastępuje testów przyszłego zintegrowanego drzewa.
+
+### Integracja mastera — przygotowane rozwiązanie
+
+[Decyzje i dowody](../../audits/2026-10-28-eigensolve-master-merge-resolution.md) obejmują 12 konfliktów, shared-cache/recovery z mastera i zachowanie poprawek FMS/viewportu. Trzy grupy regresji Python: 473/131/192 PASS; to nie suma unikalnych testów. Czternaście cudzych plików pozostaje poza stagingiem i ma identyczne SHA-256. Konieczny commit merge oraz CI dla scalonego drzewa. Docker i aktualny runtime nadal niedostępne.

@@ -80,10 +80,10 @@
      why they diverge there. */
   --fm-project-ready-text: var(--fm-project-ready);
   --fm-project-running-text: var(--fm-project-running);
-  --fm-project-failed-text: #f592ad;    /* danger lightened: 4.75:1 on the selected row */
+  --fm-project-failed-text: var(--fm-danger-text);
   --fm-project-draft-text: var(--fm-start-meta);   /* --fm-text-muted is 3.36:1 */
   --fm-project-migrate-text: var(--fm-project-migrate);
-  --fm-project-missing-text: #f592ad;
+  --fm-project-missing-text: var(--fm-danger-text);
   --fm-project-readonly-text: var(--fm-project-readonly);
 
   /* Solver badge label — Mocha's palette clears 4.5:1 as text. */
@@ -97,16 +97,16 @@
      so the start screen uses Mocha's subtext0 instead: 4.67:1, still clearly
      secondary. */
   --fm-start-nav-active: var(--fm-accent);
-  --fm-start-meta: #a6adc8;              /* Catppuccin Mocha subtext0, 4.67:1 */
-  --fm-start-on-accent: var(--fm-text-inverse);
+  --fm-start-meta: var(--fm-text-tertiary);
+  --fm-start-on-accent: var(--fm-text-on-accent);
 
   /* Thumbnail frame: viewport-dark in both themes, because the thumbnail is
      a render of the 3D viewport and must not be re-tinted by the UI theme. */
-  --fm-start-thumb-bg: var(--fm-bg-viewport);
+  --fm-start-thumb-bg: var(--fm-viewport-thumb-bg);
   --fm-start-thumb-border: var(--fm-border-subtle);
   /* Text laid over a thumbnail ("Last result"): the frame is dark in both
-     themes, so the text is Mocha subtext0 in both (7.9:1 on #11111b). */
-  --fm-start-thumb-text: #a6adc8;
+     themes, so theme.css keeps one light-on-dark pair for it. */
+  --fm-start-thumb-text: var(--fm-viewport-thumb-text);
 }
 
 [data-theme="light"] {
@@ -123,78 +123,33 @@
   --fm-project-missing: var(--fm-danger);
   --fm-project-readonly: var(--fm-chart-teal);
 
-  /* Label colour — darkened.
-     ──────────────────────────────────────────────────────────────────────
-     Catppuccin Latte is an accent palette, not a text palette. Measured as
-     11–12 px text against the launcher's surfaces (#f7f8fb / #eff1f5 / #e6e9ef)
-     the raw tokens fall well short of WCAG AA 4.5:1:
-
-         --fm-success       #40a02b   2.75:1
-         --fm-chart-yellow  #df8e1d   2.15:1
-         --fm-degraded      #fe640b   2.45:1
-         --fm-chart-teal    #179299   3.08:1
-         --fm-text-muted    #9ca0b0   2.14:1
-
-     These values keep the hue and clear 4.5:1 on all three surfaces. They are
-     scoped to the start screen deliberately: the same problem exists elsewhere
-     in the light theme and deserves a separate, repo-wide decision rather than
-     a quiet override here.
-     ────────────────────────────────────────────────────────────────────── */
-  --fm-project-ready-text: #256b15;     /* 4.51:1 */
-  --fm-project-running-text: #865006;   /* 4.55:1 */
-  --fm-project-failed-text: #ba092f;    /* 4.54:1 */
-  --fm-project-draft-text: #585c71;     /* 4.52:1 */
-  --fm-project-migrate-text: #a13b00;   /* 4.58:1 */
-  --fm-project-missing-text: #ba092f;
-  --fm-project-readonly-text: #09676c;  /* 4.54:1 */
+  /* Label colour: the AA-safe "*-text" status tokens from theme.css, which keep
+     each hue but darken it on Latte (an accent palette, not a text palette). */
+  --fm-project-ready-text: var(--fm-success-text);
+  --fm-project-running-text: var(--fm-warning-text);
+  --fm-project-failed-text: var(--fm-danger-text);
+  --fm-project-draft-text: var(--fm-start-meta);
+  --fm-project-migrate-text: var(--fm-degraded-text);
+  --fm-project-missing-text: var(--fm-danger-text);
+  --fm-project-readonly-text: var(--fm-teal-text);
 
   /* Solver badge label. The badge sits on a 13 %-tint of its own colour, which
      lowers the effective contrast further than the plain surface does. */
-  --fm-solver-fdm-text: #044ee0;        /* 4.54:1 */
-  --fm-solver-fem-text: #771af0;        /* 4.51:1 */
+  --fm-solver-fdm-text: var(--fm-accent-text);
+  --fm-solver-fem-text: var(--fm-mauve-text);
   /* A tinted fill drags the label under 4.5:1 once the row is selected, so on
      Latte the badge is a neutral chip with a coloured border instead. */
   --fm-badge-fill: 0%;
 
-  /* Active rail item: --fm-accent on --fm-bg-selected is 3.37:1. */
-  --fm-start-nav-active: #044ee0;       /* 4.54:1 on #c4d7f5 */
+  /* Active rail item: --fm-accent on --fm-bg-selected is only 3.37:1. */
+  --fm-start-nav-active: var(--fm-accent-text);
 
-  /* 10–11 px informational text. Latte's muted is 2.30:1 — unreadable there. */
-  --fm-start-meta: #585c71;             /* 4.52:1 */
+  /* 10–11 px informational text uses tertiary text (AA on every surface). */
+  --fm-start-meta: var(--fm-text-tertiary);
 
-  /* Primary button label: --fm-text-inverse (#eff1f5) on --fm-accent is
-     4.34:1; pure white is 4.91:1. */
-  --fm-start-on-accent: #ffffff;
+  /* Primary button label shares the app-wide on-accent role. */
+  --fm-start-on-accent: var(--fm-text-on-accent);
 
-  --fm-start-thumb-bg: #11111b;
+  --fm-start-thumb-bg: var(--fm-viewport-thumb-bg);
   --fm-start-thumb-border: var(--fm-border-default);
 }
-
-/* ── Tailwind v4 bridge — append to tailwind-theme.css @theme inline ─────
-   Kept here as a comment so the real file stays the single source of truth.
-
-   @theme inline {
-     --color-fm-solver-fdm:     var(--fm-solver-fdm);
-     --color-fm-solver-fem:     var(--fm-solver-fem);
-     --color-fm-project-ready:  var(--fm-project-ready);
-     --color-fm-project-running:var(--fm-project-running);
-     --color-fm-project-failed: var(--fm-project-failed);
-     --color-fm-project-draft:  var(--fm-project-draft);
-     --color-fm-project-migrate:var(--fm-project-migrate);
-     --color-fm-project-ready-text:   var(--fm-project-ready-text);
-     --color-fm-project-running-text: var(--fm-project-running-text);
-     --color-fm-project-failed-text:  var(--fm-project-failed-text);
-     --color-fm-project-draft-text:   var(--fm-project-draft-text);
-     --color-fm-project-migrate-text: var(--fm-project-migrate-text);
-     --color-fm-project-readonly-text:var(--fm-project-readonly-text);
-     --color-fm-start-meta:           var(--fm-start-meta);
-     --color-fm-solver-fdm-text:      var(--fm-solver-fdm-text);
-     --color-fm-solver-fem-text:      var(--fm-solver-fem-text);
-     --color-fm-start-nav-active:     var(--fm-start-nav-active);
-     --color-fm-start-on-accent:      var(--fm-start-on-accent);
-     --spacing-fm-start-rail:      var(--fm-start-rail-width);
-     --spacing-fm-start-inspector: var(--fm-start-inspector-width);
-     --spacing-fm-start-row:       var(--fm-start-row-height);
-     --text-fm-start-title:        var(--fm-start-title-size);
-   }
-   ──────────────────────────────────────────────────────────────────────── */

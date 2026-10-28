@@ -33992,6 +33992,97 @@
         ],
         "type": "object"
       },
+      "SavedPlaybackResource": {
+        "description": "The small JSON read model for a completed saved-result playback.",
+        "properties": {
+          "cell_size_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "grid_cells_xyz": {
+            "items": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "description": "SHA-256 identity of the sidecar and all playback array metadata.",
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "source_note": {
+            "description": "Optional publication context, for example why run provenance is absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/SavedPlaybackStage"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema",
+          "revision",
+          "name",
+          "grid_cells_xyz",
+          "cell_size_m",
+          "origin_m",
+          "stages"
+        ],
+        "type": "object"
+      },
+      "SavedPlaybackStage": {
+        "description": "One stage in a saved playback resource.",
+        "properties": {
+          "frame_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "times_s": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stage_id",
+          "frame_count",
+          "times_s",
+          "quantity_ids"
+        ],
+        "type": "object"
+      },
       "ScalarWindow": {
         "properties": {
           "columns": {
@@ -69094,6 +69185,116 @@
           },
           "409": {
             "description": "The database is read-only (newer schema)"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/playback": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_playback",
+        "parameters": [
+          {
+            "description": "Registered result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPlaybackResource"
+                }
+              }
+            },
+            "description": "Validated saved-result playback metadata"
+          },
+          "400": {
+            "description": "The workspace item is not a result folder"
+          },
+          "404": {
+            "description": "The registered item or playback files are missing"
+          },
+          "409": {
+            "description": "Playback source changed while it was read"
+          },
+          "422": {
+            "description": "The result has no supported playback descriptor or its metadata is invalid"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/playback/frames/{frame_index}": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_playback_frames_frame_index",
+        "parameters": [
+          {
+            "description": "Registered result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Zero-based frame index within the selected stage",
+            "in": "path",
+            "name": "frame_index",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Exact stage id from `SavedPlaybackResource.stages`.",
+            "in": "query",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Revision returned by `GET /v2/workspace/items/{id}/playback`.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "One complete little-endian f64 AoS xyz frame"
+          },
+          "400": {
+            "description": "Invalid item id or non-result item"
+          },
+          "404": {
+            "description": "The item, selected stage, frame, or chunk is missing"
+          },
+          "409": {
+            "description": "The supplied playback revision is stale or the source changed during the read"
+          },
+          "422": {
+            "description": "Playback metadata or frame values are invalid"
           }
         },
         "tags": [

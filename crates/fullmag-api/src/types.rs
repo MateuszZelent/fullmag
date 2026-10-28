@@ -1034,6 +1034,11 @@ impl LatestFields {
         self.0.get(quantity).map(|value| &**value)
     }
 
+    /// The shared value itself, for memos keyed by its content version.
+    pub(crate) fn get_shared(&self, quantity: &str) -> Option<&crate::shared_json::SharedJson> {
+        self.0.get(quantity)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }

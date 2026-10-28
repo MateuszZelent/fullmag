@@ -7,6 +7,7 @@ import {
   findElement,
   findElements,
   installSimulationPreparationTestDom,
+  TestEvent,
 } from "../../../kernel/layout/simulationPreparationTestDom.test-support";
 import { apiItem, entry } from "../model/__fixtures__/workspaceApi";
 import { script } from "../model/__fixtures__/workspaceScripts";
@@ -91,6 +92,7 @@ const props = (over: Partial<RecentProjectsProps> = {}): RecentProjectsProps => 
   onOpenScript: vi.fn(),
   canOpenScript: false,
   onOpen: vi.fn(),
+  onOpenResult: vi.fn(async () => null),
   ...over,
 });
 /** Server render: the stores answer with their server snapshots (nothing selected, defaults). */
@@ -180,6 +182,29 @@ describe("RecentProjects kinds", () => {
     expect(html).toMatch(/id="fm-start-result-r1"[^>]*aria-selected="true"|aria-selected="true"[^>]*id="fm-start-result-r1"/);
     expect(html).toContain('aria-activedescendant="fm-start-result-r1"');
     expect(html).toContain('role="listbox"');
+  });
+
+  it("opens a result row in saved playback on double-click", async () => {
+    const dom = installSimulationPreparationTestDom();
+    restoreDom = dom.restore;
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    mounted.push(root);
+    const onOpenResult = vi.fn(async () => null);
+
+    await act(async () => {
+      root.render(<RecentProjects {...props({ onOpenResult })} />);
+    });
+    const row = findElement(container, (element) => element.getAttribute("data-kind") === "result", "result row");
+
+    await act(async () => {
+      row.dispatchEvent(new TestEvent("dblclick", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(onOpenResult).toHaveBeenCalledWith(expect.objectContaining({ id: "r1", name: "run-0003" }));
+    expect(container.textContent).not.toContain("no viewer of its own");
   });
 
   it("selects a script by its string id", async () => {

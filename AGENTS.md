@@ -22,7 +22,7 @@ Instrukcje dotyczą GPT-Astra, GPT-Sol, GPT-Luna oraz innych agentów pracujący
 ## Obowiązkowy cykl pracy w worktree
 
 - Przed implementacją odczytaj [pełną procedurę](docs/guides/fullmag-build-storage-governance.md#cykl-integracji-zadania) oraz skill `using-git-worktrees`. Ustal główny checkout przez Git; użyj lub utwórz jedno `worktrees/<task-id>` obok niego, branch `codex/<task-id>`, i zapisz właściciela, bazowy commit oraz cel w rejestrze. Dla Docker DEV resolver może zapisywać w hostowym `storage` wyłącznie dane użytkownika, runów użytkownika i rejestrów operacyjnych; dane techniczne buildu kieruj do nazwanych wolumenów Docker/BuildKit przypisanych do grupy Compose. Recepty release i inne jawnie zarządzane profile mogą mieć własną, odrębną lokalizację opisaną w ich kontrakcie.
-- Zakończenie implementacji uruchamia `finishing-a-development-branch`: wymagane testy i review → commit zmian zadania → push brancha → PR do `master` → wymagane kontrole i akceptacje PR → merge PR → przejście do głównego checkoutu na `master` i aktualizacja fast-forward → weryfikacja integracji → zatrzymanie grupy Compose zadania (z drain) i usunięcie jej kontenerów oraz wolumenów cache (`-build`, `-package`, `fullmag-dev-frontend-v1-*`; bez wolumenu kontrolnego, ledgera i storage) → usunięcie worktree zadania przez `git worktree remove` → końcowy wpis w rejestrze. Nie kończ na „kod gotowy” ani na samym otwarciu PR, jeżeli pozostałe kroki są wykonalne.
+- Zakończenie implementacji uruchamia `finishing-a-development-branch`: wymagane testy i review → commit zmian zadania → push brancha → PR do `master` → wymagane kontrole i akceptacje PR → merge PR → przejście do głównego checkoutu na `master` i aktualizacja fast-forward → weryfikacja integracji → zatrzymanie grupy Compose zadania (z drain) i usunięcie jej kontenerów → `worktree-finish ... completed` w istniejącym worktree (automatyczna kwalifikowana retencja prywatnego cache i namespace pakietów; aktywny konsument blokuje zakończenie) → usunięcie worktree zadania przez `git worktree remove` → końcowy wpis w rejestrze. Nie kończ na „kod gotowy” ani na samym otwarciu PR, jeżeli pozostałe kroki są wykonalne.
 - Nie wykonuj drugiego lokalnego merge po scaleniu PR. Zachowaj cudze zmiany w głównym checkoutcie. Przed usunięciem potwierdź scalenie PR, czysty worktree, brak unikalnej niezintegrowanej pracy i brak korzystających procesów/kontenerów/mountów. Nie stosuj `--force`, zbiorczego prune ani usuwania cache lub wyników jako skutku ubocznego.
 - Merge na remote nie kończy lokalnego cyklu: po potwierdzeniu wynikowego commita przełącz lokalny główny checkout na `master`; jeżeli główny checkout jest niedostępny, możesz ustawić pierwotny worktree na wynikowy ref do weryfikacji, ale cleanup musi wykonać inny zachowany checkout. Z dostępnego cleanup executora usuń najpierw dokładnie ten zweryfikowany worktree, a dopiero potem lokalny zmergowany branch zadania. Jeżeli nie ma surviving cleanup executora albo aktywny proces, kontener, mount, dirty/untracked pliki lub obcy właściciel blokują cleanup, zapisz `blocked` z pełną przyczyną i nie przedstawiaj zadania jako zakończonego.
 - Jeżeli CI, review, uprawnienia, dirty checkout lub aktywne zasoby blokują cykl, zapisz `blocked`/`review` z dokładną ścieżką, branchem, HEAD, linkiem PR, przyczyną i następnym krokiem. Zgłoś niedokończoną integrację; nie porzucaj worktree bez wpisu i nie oznaczaj całego zadania jako ukończonego.
@@ -179,6 +179,23 @@ Szczegóły: [Docker development architecture](docs/guides/docker-development-ar
 - Najpierw kwalifikuj zakończone `execution`, następnie zbędny staging i kopie źródeł, a potem zastąpione pakiety runtime. Przestarzałość oznacza wykazaną zbędność: sam wiek, rozmiar lub nowszy commit nie wystarczają. Zachowaj używany cache przyrostowy, ostatni zweryfikowany pakiet i dane referencjonowane przez wyniki, projekty, sesje lub rollback.
 - Przed wykonaniem autoryzowanego planu ponownie sprawdź stan jobów, aktywne procesy, kontenery, mounty, lease oraz dokładne cele w rozwiązanym storage. Zachowaj wyniki, logi, receipty, manifesty i provenance. Nie rozszerzaj zgody na inne katalogi ani nie używaj globalnego prune.
 - W checkpointcie etapu zapisz decyzję dla każdego kandydata, dowód zbędności, zachowywane dane, plan/receipt i pomiar wolnego miejsca. Dla pozostawionych danych podaj warunek ponownej oceny. Preview ani zapis skilla nie dowodzą wykonania lub wdrożenia automatycznego sprzątania.
+
+### Współdzielony cache DEV
+
+Nowy launcher używa project-scoped wolumenów `fullmag-shared-*` dla pakietów,
+Cargo i pnpm. Zasady oraz utrzymanie: [shared build storage](docs/guides/shared-build-storage.md).
+Retencję po gotowości API uruchamia nowy obraz również przy zwykłym restarcie
+kontenera. Starsze worktree migruj aktualnym launcherem przez przypiętą parę
+`--helper-source-root`/`--helper-source-commit`; nie nadpisuj ich źródeł aplikacji.
+Przed każdym recreate ponów kontrolę aktywności i receipts. Działające grupy
+innych wątków odłóż do ich naturalnego zatrzymania; brak drain lub osierocony
+lease wymaga właściwego recovery, bez kasowania markerów i powtarzania Solve.
+Kompilacja nadal należy do grupy wybranego checkoutu; Cargo target/CMake,
+node_modules i `.next` pozostają prywatne. Przy cleanupie pojedynczego zadania
+nie usuwaj całego `fullmag-shared-*`; prywatny package jest subpath
+`groups/<unit_key>`. Przed zamknięciem etapu wykonaj przypięte
+`just docker-dev-maintain-cache <attempt> <config_sha256> <source_root>`;
+nieznani konsumenci lub aktywna publikacja wymagają zachowania danych.
 
 ## Szczegółowe reguły — ładuj według zakresu
 

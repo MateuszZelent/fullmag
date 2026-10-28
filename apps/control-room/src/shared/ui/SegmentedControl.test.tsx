@@ -33,9 +33,26 @@ describe("SegmentedControl", () => {
     expect(html).toContain("border-fm-subtle");
     expect(html).toContain("shadow-fm-control-inset");
     expect(html).toContain("bg-fm-accent");
-    expect(html).toContain("text-fm-inverse");
+    expect(html).toContain("text-fm-on-accent");
     expect(html).toContain("active:scale-[0.98]");
     expect(html).not.toContain("border-r");
+  });
+
+  it.each(["unavailable", "missing"])("keeps a keyboard entry when the value is %s", (value) => {
+    const html = renderToStaticMarkup(
+      <SegmentedControl
+        aria-label="Render mode"
+        options={[
+          { label: "Unavailable", value: "unavailable", disabled: true },
+          { label: "Shaded", value: "surface" },
+          { label: "Wire", value: "wireframe" },
+        ]}
+        value={value}
+        onValueChange={() => undefined}
+      />,
+    );
+    expect(html.match(/tabindex="0"/g)).toHaveLength(1);
+    expect(html).toMatch(/data-value="surface"[^>]*tabindex="0"/);
   });
 
   it("selects an enabled option", () => {

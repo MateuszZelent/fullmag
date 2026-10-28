@@ -11,6 +11,14 @@ function controlRoomApiProxyTarget(): string {
   ).replace(/\/+$/, "");
 }
 
+export function controlRoomDocsProxyTarget(): string {
+  return (
+    process.env.FULLMAG_DOCS_PROXY_TARGET ??
+    process.env.FULLMAG_DOCS_URL ??
+    "https://fullmag.mzelent.pl"
+  ).replace(/\/+$/, "");
+}
+
 const staticExport = process.env.FULLMAG_CONTROL_ROOM_STATIC_EXPORT === "1";
 const auditBuild = process.env.NEXT_PUBLIC_AUDIT_BUILD === "1";
 const frontendRoot = process.env.FULLMAG_FRONTEND_ROOT?.trim();
@@ -347,6 +355,15 @@ export const INSTANCE_TAB_FRAME_ANCESTORS = instanceTabFrameSources(
 );
 
 /**
+ * The same window for the client: an embedded Control Room accepts tab
+ * visibility messages only from these loopback origins (ADR 0069).
+ */
+export function instanceTabPortsClientValue(value: string | undefined): string {
+  const { first, last } = resolveInstanceDiscoveryPorts(value);
+  return `${first}-${last}`;
+}
+
+/**
  * Addresses of Control Room tabs, served by the workspace page. A static
  * export has no rewrites; its server answers unknown paths with the root
  * page, which renders the same workspace.
@@ -367,10 +384,12 @@ function securityHeaders() {
       key: "Content-Security-Policy",
       value: [
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
-        "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data: blob:",
-        "font-src 'self' data:",
+        // Bundled Sphinx documentation pages load MathJax from jsDelivr,
+        // Google Fonts stylesheets/glyphs, and the README logo asset.
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdn.jsdelivr.net",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "img-src 'self' data: blob: https://raw.githubusercontent.com",
+        "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
         "connect-src 'self' http: https: ws: wss:",
         "worker-src 'self' blob:",
         // Session tabs show other local instances in frames (ADR 0069).
@@ -388,6 +407,11 @@ function securityHeaders() {
 const nextConfig: NextConfig = {
   allowedDevOrigins,
   distDir,
+  env: {
+    FULLMAG_INSTANCE_TAB_PORTS: instanceTabPortsClientValue(
+      process.env[INSTANCE_DISCOVERY_PORTS_ENV],
+    ),
+  },
   // R3F v9 force-loses WebGL during React development strict remounts.
   reactStrictMode: false,
   // Next otherwise truncates rewritten uploads at 10 MiB. The backend's
@@ -418,10 +442,15 @@ const nextConfig: NextConfig = {
         },
         async rewrites() {
           const apiTarget = controlRoomApiProxyTarget();
+          const docsTarget = controlRoomDocsProxyTarget();
           return [
             {
               source: "/v2/:path*",
               destination: `${apiTarget}/v2/:path*`,
+            },
+            {
+              source: "/docs/:path*",
+              destination: `${docsTarget}/:path*`,
             },
             // Tab addresses (src/kernel/layout/tabRoutes.ts) all serve the
             // workspace page; the page selects the tab from its address.

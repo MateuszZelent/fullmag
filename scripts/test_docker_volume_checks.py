@@ -15,7 +15,9 @@ def valid_result():
         'source_files': {'/opt/fullmag/source/scripts/' + name + '.py': 'a' * 64
                          for name in ('test_fixture', 'docker_build_control', 'docker_volume_dev', 'docker_volume_activate',
                                       'docker_volume_stop_failed',
-                                      'docker_volume_checks')},
+                                      'docker_volume_checks', 'docker_shared_build_storage',
+                                      'docker_backend_volume_cache', 'docker_volume_cache_maintenance',
+                                      'docker_cache_retirement', 'docker_worktree_finish')},
     }
 
 

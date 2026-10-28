@@ -53,6 +53,139 @@
   pointer-events: none;
 }
 
+/* Button visuals have one owner here; CVA selects these classes in Button.tsx. */
+.fm-button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: var(--fm-control-height-sm);
+  align-items: center;
+  justify-content: center;
+  gap: var(--fm-space-2);
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-control);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  cursor: pointer;
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-font-size-control);
+  font-weight: var(--fm-font-weight-medium);
+  line-height: var(--fm-line-height-control);
+  text-decoration: none;
+  transition:
+    background-color var(--fm-transition-fast),
+    border-color var(--fm-transition-fast),
+    box-shadow var(--fm-transition-fast),
+    color var(--fm-transition-fast),
+    transform var(--fm-duration-fast) ease-out;
+  user-select: none;
+}
+
+.fm-button:hover:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]) {
+  border-color: var(--fm-border-strong);
+  transform: translateY(-1px);
+}
+
+/* Pointer-down feedback is separate from disabled and aria-disabled states. */
+.fm-button:active:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]) {
+  transform: scale(0.97) translateY(0);
+  transition-duration: var(--fm-duration-instant);
+}
+
+.fm-button--primary {
+  border-color: var(--fm-accent);
+  background: var(--fm-accent);
+  color: var(--fm-text-on-accent);
+  font-weight: var(--fm-font-weight-semibold);
+  box-shadow: var(--fm-shadow-control);
+}
+
+.fm-button--primary:hover:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]) {
+  border-color: var(--fm-accent-strong);
+  background: var(--fm-accent);
+  color: var(--fm-text-on-accent);
+  box-shadow: var(--fm-shadow-control-hover);
+}
+
+.fm-button--secondary {
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  box-shadow: var(--fm-shadow-control);
+}
+
+.fm-button--secondary:hover:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]) {
+  background: var(--fm-bg-hover);
+  box-shadow: var(--fm-shadow-control-hover);
+}
+
+.fm-button--primary:active:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]),
+.fm-button--secondary:active:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]) {
+  box-shadow: var(--fm-shadow-control-pressed);
+}
+
+.fm-button--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--fm-text-tertiary);
+}
+
+.fm-button--ghost:hover:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]) {
+  border-color: var(--fm-border-subtle);
+  background: var(--fm-bg-hover);
+  color: var(--fm-text-primary);
+}
+
+.fm-button--danger {
+  border-color: var(--fm-danger);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-danger);
+  font-weight: var(--fm-font-weight-semibold);
+}
+
+.fm-button--danger:hover:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]) {
+  background: var(--fm-bg-hover);
+}
+
+.fm-button--sm {
+  min-height: var(--fm-control-height-sm);
+  padding: 0 var(--fm-space-2);
+}
+
+.fm-button--md {
+  min-height: var(--fm-control-height-md);
+  padding: 0 var(--fm-space-3);
+}
+
+.fm-button--icon {
+  width: var(--fm-control-height-sm);
+  min-width: var(--fm-control-height-sm);
+  min-height: var(--fm-control-height-sm);
+  padding: 0;
+}
+
+.fm-button:disabled,
+.fm-button[aria-disabled="true"],
+.fm-button[data-disabled="true"] {
+  border-color: var(--fm-border-disabled);
+  background: var(--fm-bg-disabled);
+  color: var(--fm-text-disabled);
+  cursor: not-allowed;
+  opacity: var(--fm-disabled-opacity);
+  transform: none;
+  box-shadow: none;
+}
+
+.fm-button:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-button:hover:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]),
+  .fm-button:active:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]) {
+    transform: none;
+  }
+}
+
 @keyframes fm-tooltip-in {
   from {
     opacity: 0;

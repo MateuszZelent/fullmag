@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import json
 import os
@@ -9,7 +9,12 @@ from tempfile import TemporaryDirectory
 import unittest
 
 import fullmag as fm
-from fullmag.runtime.helper import MAX_SOURCE_SNAPSHOT_BYTES, _read_source_snapshot, main
+from fullmag.runtime.helper import (
+    MAX_SOURCE_SNAPSHOT_BYTES,
+    _read_source_snapshot,
+    _run_cli,
+    main,
+)
 from fullmag.runtime.loader import load_problem_from_script
 
 
@@ -87,6 +92,45 @@ class RuntimeSourceSnapshotTests(unittest.TestCase):
         self.assertEqual(config["ir"]["problem_meta"]["name"], "captured_logical-origin")
         self.assertEqual(loaded.source_path, source.resolve())
         self.assertEqual(loaded.script_source, captured_text)
+
+    def test_scene_export_reports_a_raising_script_as_a_typed_rejection(self) -> None:
+        with TemporaryDirectory() as temporary:
+            source = Path(temporary) / "broken.py"
+            source.write_text(
+                'print("user output", end="")\n'
+                'raise ValueError("explicit timestep policy is required")\n',
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with redirect_stdout(output), redirect_stderr(StringIO()):
+                status = _run_cli([
+                    "export-scene-document",
+                    "--script",
+                    str(source),
+                    "--source-snapshot",
+                    str(source),
+                ])
+        self.assertEqual(status, 2)
+        self.assertEqual(json.loads(output.getvalue().splitlines()[-1]), {
+            "schema": "fullmag.script-load-rejection.v1",
+            "code": "script_load_failed",
+            "error_type": "ValueError",
+            "message": "explicit timestep policy is required",
+            "script_line": 2,
+        })
+
+    def test_scene_export_does_not_reclassify_an_unreadable_snapshot(self) -> None:
+        with TemporaryDirectory() as temporary:
+            source = Path(temporary) / "workspace.py"
+            source.write_text("raise ValueError('not reached')\n", encoding="utf-8")
+            with self.assertRaises(FileNotFoundError):
+                _run_cli([
+                    "export-scene-document",
+                    "--script",
+                    str(source),
+                    "--source-snapshot",
+                    str(Path(temporary) / "missing.py"),
+                ])
 
 
 if __name__ == "__main__":

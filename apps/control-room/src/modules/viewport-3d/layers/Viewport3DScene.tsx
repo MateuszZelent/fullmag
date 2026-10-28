@@ -44,9 +44,10 @@ import {
   type PerspectiveCamera as ThreePerspectiveCamera,
 } from "three";
 
-import type {
-  VisualizationTargetRef,
-  VisualizationTargetSettings,
+import {
+  AIRBOX_VISUALIZATION_TARGET,
+  type VisualizationTargetRef,
+  type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import type { ModeCompositionFieldLayerSnapshotMap } from "@/kernel/visualization/ModeCompositionFieldLayerController";
 import type { PeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
@@ -223,6 +224,8 @@ interface Viewport3DSceneProps {
   fdmAirboxVectorBuildReference: Viewport3DVectorBuildReference | null;
   fdmAirboxVectorSegments: Float32Array | null;
   fdmMultilayerAirboxView: FdmMultilayerAirboxRenderView | null;
+  /** Authored Universe box, the multilayer Airbox extent until a carrier is published. */
+  fdmMultilayerAirboxAuthoredBounds: Viewport3DBounds | null;
   fdmMultilayerAirboxBuildError: string | null;
   fdmMultilayerAirboxBuildKey: string | null;
   fdmMultilayerAirboxBuildStatus: string;
@@ -965,6 +968,7 @@ function Viewport3DOverlayLayerStack({
   dimensionFrameMode,
   fdmAirboxPassPlan,
   fdmDomain,
+  fdmMultilayerAirboxAuthoredBounds,
   fdmMultilayerAirboxView,
   fdmUniverseOutsideSupport,
   fdmSettings,
@@ -995,6 +999,7 @@ function Viewport3DOverlayLayerStack({
   | "dimensionFrameMode"
   | "fdmAirboxPassPlan"
   | "fdmDomain"
+  | "fdmMultilayerAirboxAuthoredBounds"
   | "fdmMultilayerAirboxView"
   | "fdmUniverseOutsideSupport"
   | "fdmSettings"
@@ -1074,11 +1079,13 @@ function Viewport3DOverlayLayerStack({
             tracker={tracker}
           />
           <FdmMultilayerAirboxBoundsLayer
+            authoredSettings={airboxSettings}
+            authoredUniverseBounds={fdmMultilayerAirboxAuthoredBounds}
             colors={colors}
             onSelect={() => {
-              if (fdmMultilayerAirboxView) {
-                onSelectFdmTarget(fdmMultilayerAirboxView.target);
-              }
+              onSelectFdmTarget(
+                fdmMultilayerAirboxView?.target ?? AIRBOX_VISUALIZATION_TARGET,
+              );
             }}
             tracker={tracker}
             view={fdmMultilayerAirboxView}
@@ -1808,6 +1815,7 @@ export function Viewport3DScene({
   fdmAirboxVectorGlyphColors,
   fdmAirboxVectorBuildReference,
   fdmAirboxVectorSegments,
+  fdmMultilayerAirboxAuthoredBounds,
   fdmMultilayerAirboxView,
   fdmNativeLayerViews,
   fdmTargetViews,
@@ -2280,6 +2288,7 @@ export function Viewport3DScene({
         dimensionFrameMode={visualProfileId === "capture" && !appearance.exportAnnotations ? "off" : dimensionFrameMode}
         fdmAirboxPassPlan={fdmAirboxPassPlan}
         fdmDomain={fdmDomain}
+        fdmMultilayerAirboxAuthoredBounds={fdmMultilayerAirboxAuthoredBounds}
         fdmMultilayerAirboxView={fdmMultilayerAirboxView}
         fdmUniverseOutsideSupport={fdmUniverseOutsideSupport}
         airboxSettings={airboxSettings}

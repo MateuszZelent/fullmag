@@ -35,7 +35,7 @@
   gap: var(--fm-space-1);
   overflow-x: auto;
   border-bottom: 0;
-  scrollbar-width: none;
+  scrollbar-width: thin;
 }
 
 .fm-instance-tabs__item {
@@ -52,13 +52,14 @@
 }
 
 .fm-instance-tabs__item .fm-instance-tabs__tab {
-  padding-right: calc(var(--fm-space-1) * 6);
+  padding-right: var(--fm-space-2);
 }
 
 .fm-instance-tabs__close {
   width: var(--fm-control-height-compact);
   height: var(--fm-control-height-compact);
-  margin-left: calc(var(--fm-control-height-compact) * -1 - var(--fm-space-1));
+  flex: none;
+  margin-left: 0;
 }
 
 .fm-instance-tabs__name {
@@ -83,6 +84,14 @@
 
 .fm-instance-tabs__dot[data-tone="running"] {
   background: var(--fm-success);
+}
+
+.fm-instance-tabs__dot[data-tone="starting"] {
+  background: var(--fm-accent);
+}
+
+.fm-instance-tabs__dot[data-tone="waiting"] {
+  background: var(--fm-warning);
 }
 
 .fm-instance-tabs__dot[data-tone="failed"] {

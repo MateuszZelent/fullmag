@@ -218,7 +218,7 @@ describe("FooterTelemetry", () => {
 
     const dt = model.metrics.find((metric) => metric.id === "dt");
     expect(model.statusTitle).toBe("System Status: Waiting for compute");
-    expect(model.onlineTitle).toBe("Online / Waiting");
+    expect(model.onlineTitle).toBe("Session / Waiting");
     expect(model.statusState).toBe("waiting_for_compute");
     expect(dt?.subdetail).toBe("State: Waiting for compute");
   });
@@ -313,6 +313,37 @@ describe("FooterTelemetry", () => {
     expect(byId["solver-max-error"]?.subdetail).toBe("Within tolerance");
   });
 
+  it("keeps small simulation times readable in seconds and marks absent values", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        run: { ...status.run!, solver_time: 4e-9 },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(telemetryStatus, null);
+    const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+
+    expect(byId.time?.value).toBe("4.000000e-9");
+    expect(byId.time?.unit).toBe("s");
+    expect(byId.rate?.value).toBe("4.2");
+    expect(byId.rate?.unit).toBe("steps/s");
+
+    const emptyModel = buildFooterTelemetryModel(null, null);
+    const emptyById = Object.fromEntries(emptyModel.metrics.map((metric) => [metric.id, metric]));
+    expect(emptyById.time?.value).toBe("—");
+    expect(emptyById.time?.unit).toBe("s");
+    expect(emptyById.rate?.value).toBe("—");
+    expect(emptyById.rate?.subdetail).toBe("— steps");
+    expect(emptyById.step?.value).toBe("—");
+    expect(emptyById.step?.subdetail).toBe("t=— s");
+    expect(emptyById.dt?.value).toBe("—");
+    expect(emptyById["max-torque"]?.value).toBe("—");
+  });
+
   it("hydrates global magnetization from the HTTP scalar resource without a websocket event", () => {
     const telemetryStatus = selectFooterTelemetryStatus({
       data: status,
@@ -398,7 +429,7 @@ describe("FooterTelemetry", () => {
     expect(byId["sim-time"]?.label).toBe("Sim time");
     expect(byId["sim-time"]?.detail).toBe("Physical simulation time");
     expect(byId["active-runtime"]?.label).toBe("Runtime");
-    expect(byId["active-runtime"]?.value).toBe("00h 00m 00s");
+    expect(byId["active-runtime"]?.value).toBe("0.200 s");
     expect(byId.dt?.label).toBe("Pseudo dt");
     expect(byId.dt?.detail).toBe("Minimizer pseudotime step");
     expect(byId.step?.subdetail).toBe("t=0.000000e+0 s");

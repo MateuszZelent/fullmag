@@ -35,7 +35,7 @@ export const RAIL_SECTIONS: readonly RailEntry[] = [
   { commandId: "start.section.templates", icon: LayoutGrid, id: "templates", keys: "Control+2", label: "Templates", shortcut: "Ctrl 2", count: STUDY_TEMPLATES.length },
   { commandId: "start.section.import", icon: Import, id: "import", keys: "Control+3", label: "Import", shortcut: "Ctrl 3" },
   { commandId: "start.section.learn", icon: GraduationCap, id: "learn", keys: "Control+4", label: "Learn", shortcut: "Ctrl 4" },
-  { commandId: "start.section.docs", icon: BookOpen, id: "docs", label: "Docs", shortcut: "F1" },
+  { commandId: "start.section.docs", icon: BookOpen, id: "docs", keys: "F1", label: "Docs", shortcut: "F1" },
   { commandId: "start.section.settings", icon: Settings, id: "settings", keys: "Control+,", label: "Settings", shortcut: "Ctrl ," },
   { commandId: "start.section.about", icon: Info, id: "about", label: "About" },
 ];
@@ -94,6 +94,7 @@ export function StartRail({
               <li key={entry.id}>
                 <button
                   aria-current={active ? "page" : undefined}
+                  aria-label={entry.label}
                   aria-keyshortcuts={entry.keys}
                   className="fm-start-rail__item"
                   data-section={entry.id}
@@ -103,6 +104,7 @@ export function StartRail({
                     itemRefs.current[index] = node;
                   }}
                   tabIndex={active ? 0 : -1}
+                  title={entry.label}
                   type="button"
                 >
                   <Icon aria-hidden="true" size={16} />

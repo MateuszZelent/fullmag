@@ -285,7 +285,7 @@ try {
       driver.settleApply(false);
     });
     await inspector.getByRole("alert").waitFor();
-    assert.match((await inspector.getByRole("alert").textContent()) || "", /Changes were not applied/);
+    assert.match((await inspector.getByRole("alert").textContent()) || "", /Apply did not finish/);
     await page.waitForFunction(() =>
       window.__fullmagInspectorActionsFixture?.read().lastApplyAck === false,
     );

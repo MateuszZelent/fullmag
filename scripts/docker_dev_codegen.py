@@ -533,6 +533,14 @@ def _validate_mounts(
             raise CodegenError("frontend control namespace differs from the backend environment")
 
 
+def _source_mount_matches_selected(value: object, selected: Path) -> bool:
+    """Use the canonical inode proof for Docker Desktop's rewritten WSL binds."""
+    if _path_identity(value) == _path_identity(str(selected)):
+        return True
+    from docker_dev_browser_qa import _source_mount_matches_selected as matches_selected
+    return matches_selected(value, selected)
+
+
 def _running_service(
     project: str,
     service: str,
@@ -578,10 +586,8 @@ def _running_service(
     if not source_root or _path_identity(source_root) != _path_identity(str(selected)):
         raise CodegenError(f"{service} service environment is mounted from a different source checkout")
     source_mount = _mount_for(document, "/opt/fullmag/source")
-    if _path_identity(source_mount.get("Source")) != _path_identity(str(selected)):
-        from docker_dev_browser_qa import _source_mount_matches_selected
-        if not _source_mount_matches_selected(source_mount.get("Source"), selected):
-            raise CodegenError(f"{service} inspected source mount differs from the selected checkout")
+    if not _source_mount_matches_selected(source_mount.get("Source"), selected):
+        raise CodegenError(f"{service} inspected source mount differs from the selected checkout")
     return container, document
 
 
@@ -955,6 +961,11 @@ def _publish_outputs(source: Path, outputs: Mapping[str, bytes], before: Mapping
         for name, data in outputs.items():
             destination = target_root / name
             handle, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=target_root)
+            # Generated public source must remain readable by the source group
+            # mounted into the unprivileged frontend (mkstemp defaults to 0600).
+            if os.name == "posix":
+                source_mode = stat.S_IMODE(destination.stat().st_mode) if destination.exists() else 0o644
+                os.fchmod(handle, source_mode | stat.S_IRGRP)
             with os.fdopen(handle, "wb", closefd=True) as stream:
                 stream.write(data)
                 stream.flush()

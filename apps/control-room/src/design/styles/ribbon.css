@@ -1,6 +1,6 @@
 /* ── Ribbon container ── */
 .fm-ribbon {
-  --fm-ribbon-action-width: 64px;
+  --fm-ribbon-action-width: 68px;
   --fm-ribbon-group-accent: var(--fm-border-default);
   display: flex;
   height: auto;
@@ -11,22 +11,38 @@
   background: var(--fm-bg-chrome);
 }
 
+/* Tab navigation and view preferences remain available at narrow widths. */
+.fm-ribbon__tabbar {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  border-bottom: 1px solid var(--fm-border-subtle);
+}
+
 /* ── Tab strip ── */
 .fm-ribbon__tabs {
   display: flex;
-  height: var(--fm-ribbon-tabs-height);
+  flex: 1;
+  min-width: 0;
+  height: 40px;
   flex-shrink: 0;
   align-items: flex-end;
   gap: 2px;
   overflow-x: auto;
-  overflow-y: visible;
-  scrollbar-width: none;
-  border-bottom: 1px solid var(--fm-border-subtle);
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fm-border-default) var(--fm-bg-chrome);
   padding-inline: var(--fm-space-3);
 }
 
 .fm-ribbon__tabs::-webkit-scrollbar {
-  display: none;
+  height: 6px;
+}
+
+.fm-ribbon__tabs::-webkit-scrollbar-thumb,
+.fm-ribbon__groups::-webkit-scrollbar-thumb {
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-border-default);
 }
 
 .fm-ribbon__tab {
@@ -40,7 +56,7 @@
   background: transparent;
   color: var(--fm-text-muted);
   cursor: pointer;
-  font-size: var(--fm-font-size-xs);
+  font-size: var(--fm-font-size-sm);
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -85,11 +101,12 @@
   overflow-x: auto;
   overflow-y: hidden;
   padding-inline: var(--fm-space-2);
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fm-border-default) var(--fm-bg-chrome);
 }
 
 .fm-ribbon__groups::-webkit-scrollbar {
-  display: none;
+  height: 7px;
 }
 
 /* ── Single group ── */
@@ -98,6 +115,7 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  min-width: 0;
   padding-inline: var(--fm-space-2);
   border-right: 1px solid color-mix(in srgb, var(--fm-ribbon-group-accent) 34%, var(--fm-border-subtle));
   transition: background-color var(--fm-transition-fast);
@@ -121,13 +139,6 @@
   transition: opacity var(--fm-transition-fast);
 }
 
-/* Tone tints — background only, no border conflicts */
-.fm-ribbon-group[data-tone="authoring"],
-.fm-ribbon-group[data-tone="compose"] {
-  --fm-ribbon-group-accent: var(--fm-success);
-  background: color-mix(in srgb, var(--fm-success) 5%, transparent);
-}
-
 .fm-ribbon-group[data-tone="authoring"]::before,
 .fm-ribbon-group[data-tone="compose"]::before,
 .fm-ribbon-group[data-tone="compute"]::before,
@@ -136,56 +147,64 @@
   opacity: 0.65;
 }
 
-.fm-ribbon-group[data-tone="compute"] {
-  --fm-ribbon-group-accent: var(--fm-accent);
-  background: color-mix(in srgb, var(--fm-accent) 6%, transparent);
+.fm-ribbon-group[data-category="runtime"] {
+  --fm-ribbon-group-accent: var(--fm-category-runtime);
+  background: color-mix(in srgb, var(--fm-category-runtime) 6%, transparent);
 }
 
-.fm-ribbon-group[data-tone="selection"] {
-  --fm-ribbon-group-accent: var(--fm-warning);
-  background: color-mix(in srgb, var(--fm-warning) 5%, transparent);
+.fm-ribbon-group[data-category="solver"] {
+  --fm-ribbon-group-accent: var(--fm-category-solver);
+  background: color-mix(in srgb, var(--fm-category-solver) 5%, transparent);
 }
 
-.fm-ribbon-group[data-tone="sync"] {
-  --fm-ribbon-group-accent: var(--fm-stale);
-  background: color-mix(in srgb, var(--fm-stale) 5%, transparent);
+.fm-ribbon-group[data-category="magnetization"] {
+  --fm-ribbon-group-accent: var(--fm-category-magnetization);
+  background: color-mix(in srgb, var(--fm-category-magnetization) 5%, transparent);
 }
 
-/* ── Group label (bottom) ── */
+.fm-ribbon-group[data-category="energy"] {
+  --fm-ribbon-group-accent: var(--fm-category-energy);
+  background: color-mix(in srgb, var(--fm-category-energy) 5%, transparent);
+}
+
+/* ── Group label (bottom) ──
+   One line inside the fixed 18px row: the title keeps priority and the
+   subtitle follows it and truncates first, so the two never stack. */
 .fm-ribbon-group__label {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
+  align-items: baseline;
+  justify-content: center;
+  gap: var(--fm-space-1);
+  min-width: 0;
   height: 18px;
+  overflow: hidden;
   color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-2xs);
+  font-size: var(--fm-font-size-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
-  line-height: 1;
+  line-height: 18px;
   text-transform: uppercase;
-}
-
-.fm-ribbon-group__label > span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.fm-ribbon-group__label > span {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .fm-ribbon-group__label small {
-  display: block;
-  max-width: 100%;
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   letter-spacing: 0.02em;
-  line-height: 1.1;
-  overflow: hidden;
   text-overflow: ellipsis;
   text-transform: none;
-  white-space: nowrap;
 }
 
 /* ── Group actions row ──
@@ -201,6 +220,15 @@
   padding-inline: 2px;
 }
 
+.fm-ribbon-group:focus-visible,
+.fm-ribbon-group__collapsed-trigger:focus-visible,
+.fm-ribbon-action:focus-visible,
+.fm-ribbon-action-detail:focus-visible,
+.fm-ribbon-density:focus-visible {
+  outline: 2px solid var(--fm-accent);
+  outline-offset: 2px;
+}
+
 /* ── Ribbon action button ──
    The shell ensures minimum sizing while allowing vertical stretch.
    The action button fills the shell height and arranges icon + label vertically. */
@@ -210,6 +238,11 @@
   min-width: var(--fm-ribbon-action-width);
   flex-shrink: 0;
   align-items: stretch;
+}
+
+.fm-ribbon-action-shell--large {
+  width: 84px;
+  min-width: 84px;
 }
 
 .fm-ribbon-action {
@@ -222,13 +255,14 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1px;
+  gap: 2px;
   overflow: hidden;
   border: none;
   border-radius: var(--fm-radius-sm);
   background: transparent;
   color: var(--fm-text-secondary);
   cursor: pointer;
+  min-height: 28px;
   padding: 3px var(--fm-space-1) 2px;
   transition:
     background-color var(--fm-transition-fast),
@@ -242,6 +276,10 @@
   color: var(--fm-text-primary);
   transform: translateY(-1px);
   box-shadow: 0 1px 0 color-mix(in srgb, var(--fm-ribbon-icon-color) 34%, transparent) inset;
+}
+
+.fm-ribbon-action[data-size="large"] {
+  --fm-ribbon-action-width: 84px;
 }
 
 .fm-ribbon-action[data-disabled="true"] {
@@ -283,16 +321,17 @@
 
 .fm-ribbon-action-detail {
   max-width: var(--fm-ribbon-action-width);
+  min-height: 24px;
   overflow: hidden;
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-xs);
   background: var(--fm-bg-panel-raised);
   color: var(--fm-text-secondary);
   cursor: pointer;
-  font-size: var(--fm-font-size-2xs);
+  font-size: var(--fm-font-size-sm);
   letter-spacing: 0;
   line-height: 1;
-  padding: 2px 5px;
+  padding: 4px 6px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -300,6 +339,47 @@
 .fm-ribbon-action-detail:hover {
   border-color: var(--fm-accent);
   color: var(--fm-accent);
+}
+
+.fm-ribbon-action__status {
+  position: absolute;
+  top: 4px;
+  left: 5px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--fm-bg-chrome);
+  border-radius: 50%;
+  background: var(--fm-accent);
+}
+
+.fm-ribbon-action[data-status="failed"] .fm-ribbon-action__status {
+  background: var(--fm-danger);
+}
+
+.fm-ribbon-action[data-status="stale"] .fm-ribbon-action__status {
+  background: var(--fm-stale);
+}
+
+.fm-ribbon-action[data-status="degraded"] .fm-ribbon-action__status {
+  background: var(--fm-degraded);
+}
+
+.fm-ribbon-density {
+  min-height: 28px;
+  flex-shrink: 0;
+  gap: var(--fm-space-1);
+  margin: 2px var(--fm-space-2);
+  border-left: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  padding-inline: var(--fm-space-2);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-sm);
+  white-space: nowrap;
+}
+
+.fm-ribbon-density__value {
+  color: var(--fm-text-primary);
+  font-weight: 600;
 }
 
 /* ── Action icon ── */
@@ -361,7 +441,8 @@
   -webkit-line-clamp: 2;
   line-clamp: 2;
   color: inherit;
-  font-size: var(--fm-font-size-2xs);
+  min-width: 0;
+  font-size: var(--fm-font-size-sm);
   font-weight: 600;
   letter-spacing: 0;
   line-height: 1.15;
@@ -379,6 +460,80 @@
 
 .fm-ribbon-menu {
   min-width: var(--fm-ribbon-dropdown-min-width);
+}
+
+.fm-ribbon-group__collapsed-trigger {
+  display: flex;
+  min-width: 104px;
+  max-width: 156px;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  cursor: pointer;
+  font-size: var(--fm-font-size-sm);
+  font-weight: 600;
+  padding: 0 var(--fm-space-2);
+  text-align: left;
+}
+
+.fm-ribbon-group__collapsed-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-ribbon__groups[data-density="collapsed"] {
+  align-items: center;
+}
+
+.fm-ribbon__groups[data-density="collapsed"] .fm-ribbon-group {
+  justify-content: center;
+  padding-block: var(--fm-space-1);
+}
+
+.fm-ribbon__groups[data-density="collapsed"] .fm-ribbon-group__label {
+  display: none;
+}
+
+.fm-ribbon__groups[data-density="compact"] .fm-ribbon-action-shell,
+.fm-ribbon__groups[data-density="compact"] .fm-ribbon-action-shell--large,
+.fm-ribbon__groups[data-density="compact"] .fm-ribbon-action {
+  width: auto;
+  min-width: 0;
+}
+
+.fm-ribbon__groups[data-density="compact"] .fm-ribbon-action {
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: var(--fm-space-2);
+  padding-inline: var(--fm-space-2);
+}
+
+.fm-ribbon__groups[data-density="compact"] .fm-ribbon-action__label {
+  display: block;
+  width: auto;
+  max-width: 148px;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.fm-ribbon__groups[data-density="compact"] .fm-ribbon-action-stack {
+  flex-direction: row;
+}
+
+.fm-ribbon[data-density="compact"] {
+  min-height: 104px;
+}
+
+.fm-ribbon[data-density="collapsed"] {
+  min-height: 76px;
 }
 
 .fm-ribbon-menu-status {
@@ -412,30 +567,4 @@
   background: var(--fm-border-subtle);
   flex-shrink: 0;
   align-self: center;
-}
-
-/* ── Responsive: narrow viewport ──
-   Below 1400px: hide labels, shrink action buttons to icon-only mode. */
-@media (width < 1400px) {
-  .fm-ribbon {
-    --fm-ribbon-action-width: 36px;
-  }
-  .fm-ribbon-action-shell {
-    width: var(--fm-ribbon-action-width);
-    min-width: var(--fm-ribbon-action-width);
-  }
-  .fm-ribbon-action {
-    width: var(--fm-ribbon-action-width);
-    min-width: var(--fm-ribbon-action-width);
-    padding-inline: 0;
-  }
-  .fm-ribbon-action__label {
-    display: none;
-  }
-  .fm-ribbon-group__label {
-    font-size: var(--fm-font-size-2xs);
-  }
-  .fm-ribbon-group__label small {
-    display: none;
-  }
 }

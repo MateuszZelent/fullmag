@@ -37,7 +37,7 @@ CACHE_CONTROL_DOCUMENTS_PER_ATTEMPT = 6
 MIN_FREE_CONTROL_BYTES = CACHE_CONTROL_ATTEMPT_WINDOW * (
     MAX_LOG_BYTES + CACHE_CONTROL_DOCUMENTS_PER_ATTEMPT * MAX_DOCUMENT_BYTES
 )
-CACHE_ONLY_PHASES = frozenset(("toolchain", "image-dev", "image-backend"))
+CACHE_ONLY_PHASES = frozenset(("toolchain", "image-dev", "image-backend", "cache-maintenance", "cache-retirement"))
 LABEL_SCHEMA = "fullmag.build-control.v1"
 
 
@@ -681,6 +681,8 @@ class BuildControl:
                          "\"$(stat -c '%d:%i' /registry/operation.lock)\"; "
                          "test \"$(sha256sum /registry/namespaces/current.json | cut -d' ' -f1)\" = '"
                          + self.namespace_registry_sha256 + "'; ")
+        if phase != "cache-retirement":
+            admission += "test ! -e /control/cache-retirement/closing.json; test ! -L /control/cache-retirement/closing.json; "
         return (admission +
                 "test ! -e /control/active; "
                 f"mkdir -p /control/{phase}/attempts; "
@@ -899,12 +901,26 @@ def build_volume_toolchain(repo):
     return operation["receipt"]
 
 
-def build_volume_runtime_images(repo, control, toolchain):
+def build_volume_runtime_images(repo, control, toolchain, *, helper_source_binding=None):
     """Prepare trusted wrapper layers through this project's BuildKit only."""
     from docker_dev import BASE_CONTEXT_FILES, RUNTIME_IMAGE_CONTEXT_FILES
     from bootstrap_docker_toolchain import read_input
     require_host()
     repo = validate_host_path(Path(repo).absolute(), "source checkout").resolve(strict=True)
+    helper_source = None
+    if helper_source_binding is not None:
+        import docker_helper_source as helper_source
+        try:
+            helper_source_binding = helper_source.validate_binding_record(helper_source_binding)
+            if Path(helper_source_binding["root"]).resolve(strict=True) != repo:
+                raise helper_source.HelperSourceError("Runtime image context is not the pinned helper checkout")
+            helper_source.revalidate_binding(
+                helper_source_binding,
+                base_context_files=BASE_CONTEXT_FILES,
+                runtime_context_files=RUNTIME_IMAGE_CONTEXT_FILES,
+            )
+        except (OSError, helper_source.HelperSourceError) as error:
+            raise BuildControlError("Pinned helper source is unavailable before runtime image build: " + str(error)) from error
     parent = toolchain["image_id"]
     results = {}
     for kind, inventory in (("dev", BASE_CONTEXT_FILES), ("backend", RUNTIME_IMAGE_CONTEXT_FILES)):
@@ -917,6 +933,8 @@ def build_volume_runtime_images(repo, control, toolchain):
                     for name in names]
         manifest = inputs()
         identity = {"parent_image_id": parent, "files": manifest}
+        if helper_source_binding is not None:
+            identity["helper_source"] = helper_source_binding
         digest = hashlib.sha256(canonical(identity)).hexdigest()
         tag = "fullmag/development-" + kind + ":inputs-" + digest[:24]
         parent_ref = "fullmag/" + control.project + "-base:sha-" + parent.removeprefix("sha256:")
@@ -926,11 +944,14 @@ def build_volume_runtime_images(repo, control, toolchain):
                              FULLMAG_SCRIPT_HELPERS="scripts/")
         else:
             arguments["DEV_BASE"] = parent_ref
+        labels = {"org.fullmag.compose.project": control.project,
+                  "org.fullmag.build.input-digest": digest}
+        if helper_source_binding is not None:
+            labels.update(helper_source.image_labels(helper_source_binding))
         document = {"name": control.project, "services": {"image-" + kind: {
             "image": tag, "build": {"context": str(repo),
             "dockerfile": "docker/all-in-one/Dockerfile." + kind, "args": arguments,
-            "labels": {"org.fullmag.compose.project": control.project,
-                       "org.fullmag.build.input-digest": digest}}}}}
+            "labels": labels}}}}
         with control.operation("image-" + kind, identity,
                                minimum_free_bytes=MIN_FREE_CONTROL_BYTES) as operation:
             # FROM accepts a named local reference, not Docker's raw image ID.
@@ -953,7 +974,25 @@ def build_volume_runtime_images(repo, control, toolchain):
             operation["receipt"].update(state="building", cache_hit=bool(cached))
             if not cached:
                 control.require_build_space(operation=operation)
+                if helper_source_binding is not None:
+                    try:
+                        helper_source.revalidate_binding(
+                            helper_source_binding,
+                            base_context_files=BASE_CONTEXT_FILES,
+                            runtime_context_files=RUNTIME_IMAGE_CONTEXT_FILES,
+                        )
+                    except helper_source.HelperSourceError as error:
+                        raise BuildControlError("Pinned helper source changed before BuildKit: " + str(error)) from error
                 control.build(operation, document, "image-" + kind)
+            if helper_source_binding is not None:
+                try:
+                    helper_source.revalidate_binding(
+                        helper_source_binding,
+                        base_context_files=BASE_CONTEXT_FILES,
+                        runtime_context_files=RUNTIME_IMAGE_CONTEXT_FILES,
+                    )
+                except helper_source.HelperSourceError as error:
+                    raise BuildControlError("Pinned helper source changed during BuildKit: " + str(error)) from error
             parent_documents = json.loads(docker_capture("image", "inspect", parent_ref).stdout)
             if (inputs() != manifest
                     or len(parent_documents) != 1
@@ -966,8 +1005,15 @@ def build_volume_runtime_images(repo, control, toolchain):
             if (labels.get("org.fullmag.compose.project") != control.project
                     or labels.get("org.fullmag.build.input-digest") != digest):
                 raise BuildControlError("Runtime image source labels differ")
+            if helper_source_binding is not None:
+                try:
+                    helper_source.startup_hashes_from_image_labels(labels, helper_source_binding)
+                except helper_source.HelperSourceError as error:
+                    raise BuildControlError("Runtime image helper-source labels differ: " + str(error)) from error
             parent = image[0]["Id"]
             operation["receipt"].update(state="succeeded", source_digest=digest, image=tag,
                                         image_id=parent)
+            if helper_source_binding is not None:
+                operation["receipt"]["helper_source"] = helper_source_binding
         results[kind] = operation["receipt"]
     return results

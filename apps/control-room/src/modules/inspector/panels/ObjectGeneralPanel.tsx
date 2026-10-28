@@ -54,6 +54,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { ObjectExtensionsSection } from "../extensions/ObjectExtensionsSection";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
+import { ColorValue, ColorValueField } from "../primitives/ColorValue";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -830,7 +831,19 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
       const hasGeometryChanges =
         !geometryDraftGeometryEquals(editState.draft, acknowledgedDraft) ||
         !geometryDraftTranslationEquals(editState.draft, acknowledgedDraft);
-      if (hasGeometryChanges) return applyObjectEditPatch(identityAck);
+      if (hasGeometryChanges) {
+        const geometryApplied = await applyObjectEditPatch(identityAck);
+        if (
+          !geometryApplied &&
+          (kernel.commands.getSessionScopeKey() ?? null) === sessionScopeKey &&
+          kernel.objectEditSession.getSnapshot().identity === editState.identity
+        ) {
+          throw new Error(
+            "Object identity was committed. Geometry and placement could not be confirmed. Review the draft and panel feedback before retrying Apply.",
+          );
+        }
+        return geometryApplied;
+      }
       return true;
     }
 
@@ -894,6 +907,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
             <FormField
               label="Notes"
               type="textarea"
+              rows={3}
               value={draftNotes}
               onChange={(event) => updateDraft("notes", event.target.value)}
             />
@@ -924,28 +938,31 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
             <FieldRow label="Region" value={object.region} />
           </>
         )}
-        {object.mode === "committed" && visualizationSettings ? (
-          <>
-            <FormField
-              label="Primitive color"
-              mono={false}
-              type="text"
-              value={visualizationSettings.primitiveMonoColor ?? ""}
-              hint="Viewport-local primitive preference; a solid shader override takes precedence."
-              onChange={(event) => patchObjectColor("primitiveColor", event.target.value)}
-            />
-            <FieldRow label="Preview color" value={primitiveColor?.color ?? "unavailable"} />
-            <FieldRow label="Preview color source" value={primitiveColor?.source ?? "unavailable"} />
-            <FormField
-              label="Frame color"
-              mono={false}
-              type="text"
-              value={visualizationSettings.wireframeColor}
-              onChange={(event) => patchObjectColor("frameColor", event.target.value)}
-            />
-          </>
-        ) : null}
       </InspectorGroup>
+
+      {object.mode === "committed" && visualizationSettings ? (
+        <InspectorGroup title="Viewport display" badge="Live" collapsible defaultOpen>
+          <p className="fm-inspector-form-field__hint">
+            Display colors apply immediately and are not affected by the draft Apply or Revert.
+          </p>
+          <ColorValueField
+            description="Viewport-local primitive preference; a solid shader override takes precedence."
+            label="Primitive color"
+            value={visualizationSettings.primitiveMonoColor ?? ""}
+            onChange={(value) => patchObjectColor("primitiveColor", value)}
+          />
+          <FieldRow
+            label="Preview color"
+            value={primitiveColor ? <ColorValue value={primitiveColor.color} /> : "unavailable"}
+          />
+          <FieldRow label="Preview color source" value={primitiveColor?.source ?? "unavailable"} />
+          <ColorValueField
+            label="Frame color"
+            value={visualizationSettings.wireframeColor}
+            onChange={(value) => patchObjectColor("frameColor", value)}
+          />
+        </InspectorGroup>
+      ) : null}
 
       {!antennaWithoutMagnetization ? <InspectorGroup title="Energies" badge={metricsModel.status} collapsible defaultOpen>
         <FieldRow label="Fetch state" value={objectMetrics.status} />
@@ -983,25 +1000,6 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         <div className="fm-inspector-toolbar">
           {object.mode === "committed" && (
             <>
-              <Button
-                disabled={pending || Boolean(sceneMutationLockReason) || !inspectorDirty}
-                size="sm"
-                type="button"
-                title={sceneMutationLockReason}
-                onClick={() => void applyRegisteredDrafts()}
-              >
-                {identityDraftDirty && !objectEditDraftDirty ? "Apply Identity" : "Apply"}
-              </Button>
-              <Button
-                disabled={pending || Boolean(sceneMutationLockReason) || !inspectorDirty}
-                size="sm"
-                type="button"
-                variant="ghost"
-                title={sceneMutationLockReason}
-                onClick={revertAllDrafts}
-              >
-                Revert
-              </Button>
               <Button
                 size="sm"
                 type="button"

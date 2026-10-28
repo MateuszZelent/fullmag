@@ -64,6 +64,7 @@ BASE_CONTEXT_FILES = (
     ("Dockerfile.dev", "docker/all-in-one/Dockerfile.dev"),
     ("Dockerfile.dev.dockerignore", "docker/all-in-one/Dockerfile.dev.dockerignore"),
     ("entrypoint.py", "docker/all-in-one/entrypoint.py"),
+    ("backend_auto_maintenance.py", "docker/all-in-one/backend_auto_maintenance.py"),
     ("windows_folder_probe.py", "docker/all-in-one/windows_folder_probe.py"),
     ("linux_native_probe.py", "docker/all-in-one/linux_native_probe.py"),
     ("runtime_service.py", "docker/all-in-one/runtime_service.py"),
@@ -77,6 +78,10 @@ RUNTIME_IMAGE_CONTEXT_FILES = (
     ("Dockerfile.backend", "docker/all-in-one/Dockerfile.backend"),
     ("backend_dev.py", "docker/all-in-one/backend_dev.py"),
     ("backend_source.py", "docker/all-in-one/backend_source.py"),
+    ("backend_shared_store.py", "docker/all-in-one/backend_shared_store.py"),
+    ("backend_shared_recovery.py", "docker/all-in-one/backend_shared_recovery.py"),
+    ("backend_compiler_cache.py", "docker/all-in-one/backend_compiler_cache.py"),
+    ("backend_group_retirement.py", "docker/all-in-one/backend_group_retirement.py"),
     ("backend_candidate_retirement.py", "docker/all-in-one/backend_candidate_retirement.py"),
     ("worker_cgroup_gate.py", "docker/all-in-one/worker_cgroup_gate.py"),
     (
@@ -1415,8 +1420,12 @@ def _prepare_backend_cache(layout: Mapping[str, object], repo: Path, image_id: s
             if not isinstance(document, Mapping):
                 raise _fail("running Docker cache-consumer inventory is malformed")
             state = document.get("State")
-            if not isinstance(state, Mapping) or state.get("Running") is not True:
-                raise _fail("Docker cache-consumer inventory changed during inspection")
+            if not isinstance(state, Mapping):
+                raise _fail("running Docker cache-consumer inventory is malformed")
+            # A helper of another DEV group that exited after `docker ps` is
+            # no longer a consumer, exactly as if it had exited before it.
+            if state.get("Running") is not True:
+                continue
             consumers.append(document)
         return tuple(consumers)
 
@@ -2534,6 +2543,25 @@ def _parser() -> argparse.ArgumentParser:
     reattest.add_argument("--config-sha256", required=True)
     reattest.add_argument("--apply", action="store_true")
     reattest.add_argument("--expected-plan-sha256")
+    offline_reconcile = subparsers.add_parser(
+        "reconcile-offline-volume",
+        help="repair one stopped terminal-owner control lease while preserving sessions and unknown activation evidence",
+    )
+    offline_reconcile.add_argument("--source-root", type=Path, required=True)
+    offline_reconcile.add_argument("--attempt", required=True)
+    offline_reconcile.add_argument("--config-sha256", required=True)
+    offline_reconcile.add_argument("--operation-attempt", required=True)
+    offline_reconcile.add_argument("--port", type=int, required=True)
+    offline_reconcile.add_argument("--apply", action="store_true")
+    offline_reconcile.add_argument("--expected-plan-sha256")
+    reattest = subparsers.add_parser("reattest-host-device-volume", help="explicitly reattest a stopped WSL group's renumbered host device")
+    reattest.add_argument("--source-root", type=Path, required=True)
+    reattest.add_argument("--attempt", required=True)
+    reattest.add_argument("--config-sha256", required=True)
+    reattest.add_argument("--certificate-sha256", required=True)
+    reattest.add_argument("--expected-host-device", type=int, required=True)
+    reattest.add_argument("--apply", action="store_true")
+    reattest.add_argument("--interrupted-iteration", help="exact absent helper iteration to reconcile after an abrupt host stop")
     resume_parser = subparsers.add_parser("resume-volume", help="Observe one exact retained volume DEV start without restarting backend")
     resume_parser.add_argument("--attempt", required=True)
     resume_parser.add_argument("--config-sha256", required=True)
@@ -2581,6 +2609,12 @@ def _parser() -> argparse.ArgumentParser:
         "--timeout-seconds", type=float, default=None,
         help="optional observation deadline; expiration does not cancel or replay the script",
     )
+    maintenance = subparsers.add_parser("maintain-cache", help="retain current/direct rollback and bound shared packages in the pinned healthy group")
+    maintenance.add_argument("--attempt", required=True)
+    maintenance.add_argument("--config-sha256", required=True)
+    maintenance.add_argument("--source-root", type=Path, required=True)
+    maintenance.add_argument("--max-shared-entries", type=int, default=8)
+    maintenance.add_argument("--max-shared-bytes", type=int, default=64 * 1024**3)
     idle_restart = subparsers.add_parser("restart-idle-volume", help="Restart the pinned healthy backend only while no session is active")
     idle_restart.add_argument("--attempt", required=True)
     idle_restart.add_argument("--config-sha256", required=True)
@@ -2766,6 +2800,14 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--source-root", type=Path, required=True)
     recreate_volume.add_argument("--port", type=int, required=True)
     recreate_volume.add_argument(
+        "--helper-source-root", type=Path,
+        help="durable clean infrastructure checkout used only for managed runtime helpers",
+    )
+    recreate_volume.add_argument(
+        "--helper-source-commit",
+        help="full commit pin for --helper-source-root",
+    )
+    recreate_volume.add_argument(
         "--migrate-host-capacity", action="store_true",
         help="explicitly migrate quiescent shared host capacity when rendering the replacement services",
     )
@@ -2789,6 +2831,10 @@ def _parser() -> argparse.ArgumentParser:
             "reference is passed unchanged to the volume-only recovery wrapper "
             "and is never resolved as a host path"
         ),
+    )
+    recreate_volume.add_argument(
+        "--offline-reconciliation", metavar="OPERATION_TOKEN",
+        help="consume the exact completed offline control repair without replaying its old operation",
     )
     recreate_volume.add_argument("--fresh-state", action="store_true", help="Preserve the previous session and archive its runtime state before starting an empty session")
     recreate_volume.set_defaults(profile="dev", image=None, toolchain_image=None, source_manifest=None,
@@ -2997,6 +3043,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.port = selected.port
         if args.action == "build":
             build(args)
+        elif args.action == "maintain-cache":
+            from docker_volume_cache_maintenance import maintain
+            maintain(args)
         elif args.action == "restart-idle-volume":
             from docker_volume_dev import restart_idle, stop_idle
             (stop_idle if args.stop_only else restart_idle)(args)
@@ -3033,6 +3082,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise _fail("Apply acknowledgement and plan digest require --apply")
                 result = plan(inspect_retirement(args))
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "reconcile-offline-volume":
+            from docker_volume_offline_reconcile import apply, collect
+            if not args.apply and args.expected_plan_sha256 is not None:
+                raise _fail("A plan digest requires --apply")
+            result = apply(args) if args.apply else collect(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "recover-cancelled-activation":
             from docker_volume_cancelled_activation import run as recover_cancelled_activation
             result = recover_cancelled_activation(args)
@@ -3049,6 +3104,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = stop_iteration(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "recreate-volume":
+            import docker_helper_source as helper_source
+            try:
+                helper_pair = helper_source.validate_option_pair(
+                    args.helper_source_root, args.helper_source_commit
+                )
+            except helper_source.HelperSourceError as error:
+                raise _fail(str(error)) from error
+            if args.recovery_authorization is not None and helper_pair is not None:
+                raise _fail("helper-source pins are unsupported with --recovery-authorization")
             if args.resume_recreation is not None:
                 from docker_volume_dev import resume_recreation
                 resume_recreation(args)
@@ -3071,6 +3135,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "quarantine-empty-stopped":
             from docker_volume_empty_quarantine import quarantine
             quarantine(args)
+        elif args.action == "reattest-host-device-volume":
+            from docker_volume_host_device import run as reattest_host_device
+            print(json.dumps(reattest_host_device(args), sort_keys=True))
         elif args.action == "resume-volume":
             from docker_volume_dev import resume
             resume(args)

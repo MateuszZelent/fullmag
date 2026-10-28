@@ -533,6 +533,58 @@ pub struct NewellKernels {
     pub pz: usize,
 }
 
+#[cfg(feature = "parallel")]
+struct KernelPlaneMut<'a> {
+    n_xx: &'a mut [f64],
+    n_yy: &'a mut [f64],
+    n_zz: &'a mut [f64],
+    n_xy: &'a mut [f64],
+    n_xz: &'a mut [f64],
+    n_yz: &'a mut [f64],
+}
+
+#[cfg(feature = "parallel")]
+fn kernel_planes_mut<'a>(
+    n_xx: &'a mut [f64],
+    n_yy: &'a mut [f64],
+    n_zz: &'a mut [f64],
+    n_xy: &'a mut [f64],
+    n_xz: &'a mut [f64],
+    n_yz: &'a mut [f64],
+    plane_len: usize,
+) -> impl rayon::iter::IndexedParallelIterator<Item = KernelPlaneMut<'a>> + 'a {
+    use rayon::prelude::*;
+
+    n_xx.par_chunks_exact_mut(plane_len)
+        .zip(n_yy.par_chunks_exact_mut(plane_len))
+        .zip(n_zz.par_chunks_exact_mut(plane_len))
+        .zip(n_xy.par_chunks_exact_mut(plane_len))
+        .zip(n_xz.par_chunks_exact_mut(plane_len))
+        .zip(n_yz.par_chunks_exact_mut(plane_len))
+        .map(
+            |(((((n_xx, n_yy), n_zz), n_xy), n_xz), n_yz)| KernelPlaneMut {
+                n_xx,
+                n_yy,
+                n_zz,
+                n_xy,
+                n_xz,
+                n_yz,
+            },
+        )
+}
+
+#[cfg(feature = "parallel")]
+fn split_kernel_plane_regions_mut(
+    values: &mut [f64],
+    plane_len: usize,
+    nz: usize,
+) -> (&mut [f64], &mut [f64], &mut [f64]) {
+    let (zero_plane, after_zero_plane) = values.split_at_mut(plane_len);
+    let (positive_planes, from_midplane) = after_zero_plane.split_at_mut((nz - 1) * plane_len);
+    let (_, negative_planes) = from_midplane.split_at_mut(plane_len);
+    (zero_plane, positive_planes, negative_planes)
+}
+
 /// Compute the six Newell demagnetization tensor components on the zero-padded
 /// `(2nx, 2ny, 2nz)` grid, following the Boris algorithm:
 ///
@@ -645,16 +697,8 @@ pub fn compute_newell_kernels(
     let mut n_xz = vec![0.0; padded_len];
     let mut n_yz = vec![0.0; padded_len];
 
-    // Inner function for one (i,j,k) → writes into the 6 output arrays
-    let compute_and_place = |i: usize,
-                             j: usize,
-                             k: usize,
-                             n_xx: &mut [f64],
-                             n_yy: &mut [f64],
-                             n_zz: &mut [f64],
-                             n_xy: &mut [f64],
-                             n_xz: &mut [f64],
-                             n_yz: &mut [f64]| {
+    // Compute one first-octant tensor before placing it into the padded grid.
+    let compute_tensor = |i: usize, j: usize, k: usize| {
         let (nxx, nyy, nzz, nxy, nxz, nyz);
         let dist2 = i * i + j * j + k * k;
         // The 2D multilayer lane is small enough to retain the exact
@@ -710,6 +754,20 @@ pub fn compute_newell_kernels(
             nyz = ldia_direct(x, y, z, dy, dz, dx, |x, y, z| newell_g(y, z, x));
         }
 
+        [nxx, nyy, nzz, nxy, nxz, nyz]
+    };
+
+    // Inner function for one (i,j,k) → writes into the 6 output arrays.
+    let compute_and_place = |i: usize,
+                             j: usize,
+                             k: usize,
+                             n_xx: &mut [f64],
+                             n_yy: &mut [f64],
+                             n_zz: &mut [f64],
+                             n_xy: &mut [f64],
+                             n_xz: &mut [f64],
+                             n_yz: &mut [f64]| {
+        let [nxx, nyy, nzz, nxy, nxz, nyz] = compute_tensor(i, j, k);
         let pidx = |a: usize, b: usize, c: usize| c * py * px + b * px + a;
         let xs: &[(usize, f64)] = if i == 0 {
             &[(0, 1.0)]
@@ -742,71 +800,135 @@ pub fn compute_newell_kernels(
         }
     };
 
-    // The octant placement for different k values writes to non-overlapping
-    // z-positions (k and pz-k never overlap between different k values),
-    // so we can safely run different k values in parallel.
+    #[cfg(feature = "parallel")]
+    let place_tensor_in_plane =
+        |i: usize, j: usize, tensor: [f64; 6], plane: &mut KernelPlaneMut<'_>, z_sign: f64| {
+            let [nxx, nyy, nzz, nxy, nxz, nyz] = tensor;
+            let xs: &[(usize, f64)] = if i == 0 {
+                &[(0, 1.0)]
+            } else {
+                &[(i, 1.0), (px - i, -1.0)]
+            };
+            let ys: &[(usize, f64)] = if j == 0 {
+                &[(0, 1.0)]
+            } else {
+                &[(j, 1.0), (py - j, -1.0)]
+            };
+
+            for &(ix, sx) in xs {
+                for &(iy, sy) in ys {
+                    let p = iy * px + ix;
+                    plane.n_xx[p] = nxx;
+                    plane.n_yy[p] = nyy;
+                    plane.n_zz[p] = nzz;
+                    plane.n_xy[p] = nxy * sx * sy;
+                    plane.n_xz[p] = nxz * sx * z_sign;
+                    plane.n_yz[p] = nyz * sy * z_sign;
+                }
+            }
+        };
+
+    #[cfg(feature = "parallel")]
+    let compute_and_place_plane_pair =
+        |i: usize,
+         j: usize,
+         k: usize,
+         positive: &mut KernelPlaneMut<'_>,
+         negative: &mut KernelPlaneMut<'_>| {
+            let tensor = compute_tensor(i, j, k);
+            place_tensor_in_plane(i, j, tensor, positive, 1.0);
+            place_tensor_in_plane(i, j, tensor, negative, -1.0);
+        };
+
+    #[cfg(feature = "parallel")]
+    let compute_and_place_zero_plane = |i: usize, j: usize, plane: &mut KernelPlaneMut<'_>| {
+        let tensor = compute_tensor(i, j, 0);
+        place_tensor_in_plane(i, j, tensor, plane, 1.0);
+    };
+
+    // Each worker receives a distinct positive z-plane and its matching
+    // negative z-plane. Plane zero is written once, the midpoint stays zero,
+    // and split mutable slices make the ownership disjoint in safe Rust.
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
+        let plane_len = px * py;
 
-        // Safety wrapper for parallel disjoint writes.
-        // Each (i,j,k) writes to unique octant positions in the output arrays.
-        struct UnsafeSyncSlice {
-            ptr: *mut f64,
-            len: usize,
-        }
-        unsafe impl Send for UnsafeSyncSlice {}
-        unsafe impl Sync for UnsafeSyncSlice {}
-        impl UnsafeSyncSlice {
-            unsafe fn as_mut_slice(&self) -> &mut [f64] {
-                std::slice::from_raw_parts_mut(self.ptr, self.len)
-            }
-        }
+        if nz > 1 && plane_len > 0 {
+            let (xx_zero, xx_positive, xx_negative) =
+                split_kernel_plane_regions_mut(&mut n_xx, plane_len, nz);
+            let (yy_zero, yy_positive, yy_negative) =
+                split_kernel_plane_regions_mut(&mut n_yy, plane_len, nz);
+            let (zz_zero, zz_positive, zz_negative) =
+                split_kernel_plane_regions_mut(&mut n_zz, plane_len, nz);
+            let (xy_zero, xy_positive, xy_negative) =
+                split_kernel_plane_regions_mut(&mut n_xy, plane_len, nz);
+            let (xz_zero, xz_positive, xz_negative) =
+                split_kernel_plane_regions_mut(&mut n_xz, plane_len, nz);
+            let (yz_zero, yz_positive, yz_negative) =
+                split_kernel_plane_regions_mut(&mut n_yz, plane_len, nz);
+            let mut zero_plane = KernelPlaneMut {
+                n_xx: xx_zero,
+                n_yy: yy_zero,
+                n_zz: zz_zero,
+                n_xy: xy_zero,
+                n_xz: xz_zero,
+                n_yz: yz_zero,
+            };
 
-        let s_xx = UnsafeSyncSlice {
-            ptr: n_xx.as_mut_ptr(),
-            len: padded_len,
-        };
-        let s_yy = UnsafeSyncSlice {
-            ptr: n_yy.as_mut_ptr(),
-            len: padded_len,
-        };
-        let s_zz = UnsafeSyncSlice {
-            ptr: n_zz.as_mut_ptr(),
-            len: padded_len,
-        };
-        let s_xy = UnsafeSyncSlice {
-            ptr: n_xy.as_mut_ptr(),
-            len: padded_len,
-        };
-        let s_xz = UnsafeSyncSlice {
-            ptr: n_xz.as_mut_ptr(),
-            len: padded_len,
-        };
-        let s_yz = UnsafeSyncSlice {
-            ptr: n_yz.as_mut_ptr(),
-            len: padded_len,
-        };
-
-        (0..nz).into_par_iter().for_each(|k| {
-            for j in 0..ny {
-                for i in 0..nx {
-                    unsafe {
+            rayon::join(
+                || {
+                    for j in 0..ny {
+                        for i in 0..nx {
+                            compute_and_place_zero_plane(i, j, &mut zero_plane);
+                        }
+                    }
+                },
+                || {
+                    kernel_planes_mut(
+                        xx_positive,
+                        yy_positive,
+                        zz_positive,
+                        xy_positive,
+                        xz_positive,
+                        yz_positive,
+                        plane_len,
+                    )
+                    .zip(
+                        kernel_planes_mut(
+                            xx_negative,
+                            yy_negative,
+                            zz_negative,
+                            xy_negative,
+                            xz_negative,
+                            yz_negative,
+                            plane_len,
+                        )
+                        .rev(),
+                    )
+                    .enumerate()
+                    .for_each(|(plane_index, (mut positive, mut negative))| {
+                        let k = plane_index + 1;
+                        for j in 0..ny {
+                            for i in 0..nx {
+                                compute_and_place_plane_pair(i, j, k, &mut positive, &mut negative);
+                            }
+                        }
+                    });
+                },
+            );
+        } else {
+            for k in 0..nz {
+                for j in 0..ny {
+                    for i in 0..nx {
                         compute_and_place(
-                            i,
-                            j,
-                            k,
-                            s_xx.as_mut_slice(),
-                            s_yy.as_mut_slice(),
-                            s_zz.as_mut_slice(),
-                            s_xy.as_mut_slice(),
-                            s_xz.as_mut_slice(),
-                            s_yz.as_mut_slice(),
+                            i, j, k, &mut n_xx, &mut n_yy, &mut n_zz, &mut n_xy, &mut n_xz,
+                            &mut n_yz,
                         );
                     }
                 }
             }
-        });
+        }
     }
     #[cfg(not(feature = "parallel"))]
     {
@@ -1076,11 +1198,20 @@ pub fn try_compute_newell_kernels_shifted_pair(
         .chain(destination_cell)
         .fold(0.0_f64, f64::max);
     let far_field_radius = ASYMPTOTIC_DISTANCE as f64 * max_cell;
-    let pidx = |x: usize, y: usize, z: usize| z * py * px + y * px + x;
+    let slab_len = px * py;
+    // Each padded z slab holds exactly one signed z lag; slabs no lag reaches
+    // stay zero (the 2-D upper half and the Nyquist slab).
+    let mut lag_of_slab = vec![None; pz];
+    for &(z_lag, iz) in &z_lags {
+        lag_of_slab[iz] = Some(z_lag);
+    }
 
-    for &(x_lag, ix) in &x_lags {
-        for &(y_lag, iy) in &y_lags {
-            for &(z_lag, iz) in &z_lags {
+    // Every tensor depends only on its own lag, so slabs are filled
+    // independently (in parallel when enabled) with bitwise-identical values.
+    let fill_slab = |z_lag: isize, slabs: [&mut [f64]; 6]| -> Result<(), KernelBuildError> {
+        let [s_xx, s_yy, s_zz, s_xy, s_xz, s_yz] = slabs;
+        for &(x_lag, ix) in &x_lags {
+            for &(y_lag, iy) in &y_lags {
                 // For 2-D each layer is represented by one scratch z cell;
                 // source/destination thickness enters the exact pair integral,
                 // not the lag pitch.
@@ -1113,14 +1244,50 @@ pub fn try_compute_newell_kernels_shifted_pair(
                             .to_string(),
                     });
                 }
-                let p = pidx(ix, iy, iz);
-                n_xx[p] = tensor.xx;
-                n_yy[p] = tensor.yy;
-                n_zz[p] = tensor.zz;
-                n_xy[p] = tensor.xy;
-                n_xz[p] = tensor.xz;
-                n_yz[p] = tensor.yz;
+                let p = iy * px + ix;
+                s_xx[p] = tensor.xx;
+                s_yy[p] = tensor.yy;
+                s_zz[p] = tensor.zz;
+                s_xy[p] = tensor.xy;
+                s_xz[p] = tensor.xz;
+                s_yz[p] = tensor.yz;
             }
+        }
+        Ok(())
+    };
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        n_xx.par_chunks_mut(slab_len)
+            .zip(n_yy.par_chunks_mut(slab_len))
+            .zip(n_zz.par_chunks_mut(slab_len))
+            .zip(n_xy.par_chunks_mut(slab_len))
+            .zip(n_xz.par_chunks_mut(slab_len))
+            .zip(n_yz.par_chunks_mut(slab_len))
+            .zip(lag_of_slab.par_iter())
+            .try_for_each(|((((((s_xx, s_yy), s_zz), s_xy), s_xz), s_yz), z_lag)| {
+                z_lag.map_or(Ok(()), |z_lag| {
+                    fill_slab(z_lag, [s_xx, s_yy, s_zz, s_xy, s_xz, s_yz])
+                })
+            })?;
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        for (iz, z_lag) in lag_of_slab.iter().enumerate() {
+            let Some(z_lag) = *z_lag else { continue };
+            let range = iz * slab_len..(iz + 1) * slab_len;
+            fill_slab(
+                z_lag,
+                [
+                    &mut n_xx[range.clone()],
+                    &mut n_yy[range.clone()],
+                    &mut n_zz[range.clone()],
+                    &mut n_xy[range.clone()],
+                    &mut n_xz[range.clone()],
+                    &mut n_yz[range],
+                ],
+            )?;
         }
     }
 
@@ -1294,6 +1461,124 @@ mod tests {
             (kernels.n_xy[i_pos] + kernels.n_xy[i_neg]).abs() < 1e-15,
             "N_xy should be odd in x",
         );
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn parallel_kernel_matches_reference_across_rayon_thread_counts() {
+        let dimensions = [3, 2, 3];
+        let cell = [0.7, 1.1, 0.9];
+        let one_thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("one-thread Rayon pool should build");
+        let four_thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("four-thread Rayon pool should build");
+
+        let one_thread = one_thread_pool.install(|| {
+            compute_newell_kernels(
+                dimensions[0],
+                dimensions[1],
+                dimensions[2],
+                cell[0],
+                cell[1],
+                cell[2],
+            )
+        });
+        let four_threads = four_thread_pool.install(|| {
+            compute_newell_kernels(
+                dimensions[0],
+                dimensions[1],
+                dimensions[2],
+                cell[0],
+                cell[1],
+                cell[2],
+            )
+        });
+
+        let one_thread_components = [
+            ("xx", one_thread.n_xx.as_slice()),
+            ("yy", one_thread.n_yy.as_slice()),
+            ("zz", one_thread.n_zz.as_slice()),
+            ("xy", one_thread.n_xy.as_slice()),
+            ("xz", one_thread.n_xz.as_slice()),
+            ("yz", one_thread.n_yz.as_slice()),
+        ];
+        let four_thread_components = [
+            ("xx", four_threads.n_xx.as_slice()),
+            ("yy", four_threads.n_yy.as_slice()),
+            ("zz", four_threads.n_zz.as_slice()),
+            ("xy", four_threads.n_xy.as_slice()),
+            ("xz", four_threads.n_xz.as_slice()),
+            ("yz", four_threads.n_yz.as_slice()),
+        ];
+
+        for ((name, one_values), (_, four_values)) in one_thread_components
+            .into_iter()
+            .zip(four_thread_components)
+        {
+            assert_eq!(
+                one_values, four_values,
+                "{name} differs by Rayon thread count"
+            );
+        }
+
+        let signed_lag = |index: usize, cells: usize| {
+            if index < cells {
+                Some(index as isize)
+            } else if index > cells {
+                Some(index as isize - (2 * cells) as isize)
+            } else {
+                None
+            }
+        };
+        let index = |x: usize, y: usize, z: usize| {
+            z * four_threads.py * four_threads.px + y * four_threads.px + x
+        };
+
+        for z in 0..four_threads.pz {
+            for y in 0..four_threads.py {
+                for x in 0..four_threads.px {
+                    let expected = match (
+                        signed_lag(x, dimensions[0]),
+                        signed_lag(y, dimensions[1]),
+                        signed_lag(z, dimensions[2]),
+                    ) {
+                        (Some(lag_x), Some(lag_y), Some(lag_z)) => cell_pair_tensor(
+                            cell,
+                            cell,
+                            [
+                                lag_x as f64 * cell[0],
+                                lag_y as f64 * cell[1],
+                                lag_z as f64 * cell[2],
+                            ],
+                        )
+                        .expect("reference tensor should be finite"),
+                        _ => CellPairTensor::default(),
+                    };
+                    let actual_components = [
+                        ("xx", four_threads.n_xx[index(x, y, z)]),
+                        ("yy", four_threads.n_yy[index(x, y, z)]),
+                        ("zz", four_threads.n_zz[index(x, y, z)]),
+                        ("xy", four_threads.n_xy[index(x, y, z)]),
+                        ("xz", four_threads.n_xz[index(x, y, z)]),
+                        ("yz", four_threads.n_yz[index(x, y, z)]),
+                    ];
+
+                    for ((name, actual), (_, reference)) in
+                        actual_components.into_iter().zip(expected.components())
+                    {
+                        let tolerance = 1.0e-12_f64.max(2.0e-12 * reference.abs());
+                        assert!(
+                            (actual - reference).abs() <= tolerance,
+                            "{name} at padded index ({x}, {y}, {z}): actual={actual:.16e}, reference={reference:.16e}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Validate absolute N_xy values against Python reference implementation.

@@ -111,6 +111,14 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Run terminal Docker recovery contracts
+        run: cargo test -p fullmag-session --lib runtime_service::retained_terminal_runs::tests --no-fail-fast
+
+      - name: Run retained manual-held Docker recovery contracts
+        run: |
+          cargo test -p fullmag-session --lib runtime_service::retained_held_manual_runs::tests --no-fail-fast
+          cargo test -p fullmag-session --lib manual_held --no-fail-fast
+
       - name: Run accepted explicit Compute start-gate contracts
         run: |
           cargo test -p fullmag-session --lib accepted_start_gate
@@ -146,6 +154,17 @@ jobs:
 
       - name: Run disconnected mixed-P1 v2 API summary contracts
         run: cargo test -p fullmag-api --bin fullmag-api mixed_v2_summary_tests --no-fail-fast
+
+      - name: Run native container recovery capability CLI contracts
+        run: cargo test -p fullmag-cli --bin fullmag container_recovery_capabilities
+
+      - name: Verify read-only saved FDM playback and binary frame routes
+        run: |
+          cargo test --locked -p fullmag-workspace-inspect --lib
+          cargo test --locked -p fullmag-api --bin fullmag-api saved_playback_routes_return_metadata_and_revision_checked_binary_frames
+
+      - name: Run instance discovery contracts (ADR 0069)
+        run: cargo test -p fullmag-api --bin fullmag-api instance_discovery::tests --no-fail-fast
 
       - name: Run complete session reachability and archive contracts
         run: cargo test -p fullmag-session --lib --no-fail-fast
@@ -196,6 +215,9 @@ jobs:
 
       - name: Run native modal cancellation completion contract
         run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
+
+      - name: Run CPU periodic Newell kernel cache regressions
+        run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
 
       - name: Run typed active eigen Stop and Pause contracts
         run: |
@@ -820,12 +842,31 @@ jobs:
         run: |
           python -B scripts/test_fullmag_docker_runtime.py -v
           python -B scripts/test_docker_backend_dev.py -v
+          python -B scripts/test_docker_shared_build_storage.py -v
+          python -B scripts/test_backend_shared_store.py -v
+          python -B scripts/test_backend_shared_integration.py -v
+          python -B scripts/test_backend_shared_recovery.py -v
+          python -B scripts/test_backend_group_retirement.py -v
+          python -B scripts/test_backend_compiler_cache.py -v
+          python -B scripts/test_backend_auto_maintenance.py -v
+          python -B scripts/test_docker_helper_source.py -v
+          python -B scripts/test_backend_package_backup_retirement.py -v
+          python -B scripts/test_docker_cache_retirement.py -v
+          python -B scripts/test_docker_worktree_finish.py -v
           python -B scripts/test_docker_backend_live_source.py -v
           python -B scripts/test_docker_candidate_retirement.py -v
           python -B scripts/test_docker_operator_capability.py -v
           python -B scripts/test_docker_build_control_cache_admission.py -v
           python -B scripts/test_docker_container_runtime_recovery.py -v
           python -B scripts/test_docker_volume_container_recovery.py -v
+          python -B scripts/test_linux_native_readmission.py -v
+          python -B scripts/test_docker_linux_host_readmission.py -v
+          python -B scripts/test_docker_volume_abrupt_stop_recovery.py -v
+          python -B scripts/test_docker_prepare_container_recovery.py -v
+          python -B scripts/test_docker_foreign_bind_identity.py -v
+          python -B scripts/test_docker_stopped_network.py -v
+          python -B scripts/test_docker_bind_overlap_probe.py -v
+          python -B scripts/test_runtime_service_terminal_container_recovery.py -v
           python -B scripts/test_docker_volume_empty_quarantine.py -v
           python -B scripts/test_docker_volume_preparation_abort_archive.py -v
           python -B scripts/test_docker_volume_dev_runtime_state.py -v
@@ -834,6 +875,8 @@ jobs:
           python -B scripts/test_docker_volume_stop_failed.py -v
           python -B scripts/test_docker_volume_stop_startup_iteration.py -v
           python -B scripts/test_docker_volume_activation_reconcile.py -v
+          python -B scripts/test_docker_volume_offline_reconcile.py -v
+          python -B scripts/test_docker_stopped_network.py -v
           python -B scripts/test_docker_native_failed_recreate.py -v
           python -B scripts/test_docker_retained_recovery_context.py -v
           python -B scripts/test_runtime_service_successor.py -v
@@ -853,6 +896,10 @@ jobs:
           python -B scripts/test_docker_volume_pending_continuation.py -v
           python -B scripts/test_docker_volume_pending_resume.py -v
           python -B scripts/test_docker_prestart_resume.py -v
+          python -B scripts/test_docker_volume_host_device.py -v
+          python -B scripts/test_docker_volume_wsl.py -v
+          python -B scripts/test_linux_native_host.py -v
+          python -B scripts/test_docker_dev_codegen.py -v
           python -B scripts/test_docker_dev_browser_qa.py -v
           python -B scripts/test_docker_volume_receipts.py -v
           python -B scripts/test_docker_volume_checks.py -v

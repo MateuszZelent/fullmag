@@ -38,6 +38,7 @@ import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import type { KernelApi } from "../types";
 import { LayoutController } from "./LayoutController";
 import { SimulationPreparationLog } from "./SimulationPreparationLog";
+import { simulationPreparationWindow } from "./simulationPreparationWindow";
 import {
   SimulationStartupOverlay,
   SimulationStartupOverlayView,
@@ -134,6 +135,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   resetSharedResourceRuntimeStoreForTests();
+  simulationPreparationWindow.resetForTests();
 });
 
 describe("mounted simulation preparation UI", () => {
@@ -337,6 +339,90 @@ describe("mounted simulation preparation UI", () => {
     }
 
     await act(async () => root.unmount());
+    dom.restore();
+  });
+
+  it("closes on completion and reopens the finished preparation from the status bar store", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const { kernel } = makeKernel({
+      loadPreparation: async () => preparationFixture(),
+      loadStatus: async () => statusFixture(),
+    });
+    const readyPreparation: SimulationPreparationResource = {
+      ...preparationFixture(),
+      active_stage_id: null,
+      completed_at_unix_ms: 20_000,
+      status: "ready",
+    };
+    const pendingState = resolveSimulationPreparationViewModel(
+      resource(preparationFixture()),
+      resource(statusFixture()),
+      20_000,
+    );
+    const readyState = resolveSimulationPreparationViewModel(
+      resource(readyPreparation),
+      resource(statusFixture({ solverState: "awaiting_command" })),
+      20_000,
+    );
+    const disruptedReadyState = resolveSimulationPreparationViewModel(
+      { ...resource(readyPreparation), status: "stale" },
+      { ...resource(statusFixture({ solverState: "awaiting_command" })), status: "stale" },
+      20_000,
+      true,
+    );
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const render = async (state: SimulationStartupOverlayState) => {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <TransitionWorkspace state={state} />
+          </KernelContext.Provider>,
+        );
+      });
+    };
+    const windowHidden = () =>
+      findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Simulation preparation window",
+        "preparation window",
+      ).hasAttribute("hidden");
+    const restoreButtons = () =>
+      findElements(container, (element) => element.hasAttribute("data-preparation-restore"));
+
+    await render(pendingState);
+    expect(windowHidden()).toBe(false);
+    expect(simulationPreparationWindow.getSnapshot().summary?.tone).toBe("running");
+
+    // Minimizing records a user mode; completion still closes the window.
+    await act(async () => {
+      findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Minimize simulation preparation",
+        "minimize button",
+      ).click();
+    });
+    expect(restoreButtons()).toHaveLength(1);
+    await render(readyState);
+    expect(windowHidden()).toBe(true);
+    expect(restoreButtons()).toHaveLength(0);
+    expect(simulationPreparationWindow.getSnapshot().summary).toMatchObject({
+      label: "Ready",
+      tone: "ready",
+    });
+
+    await render(disruptedReadyState);
+    expect(windowHidden()).toBe(true);
+
+    await act(async () => simulationPreparationWindow.open());
+    expect(windowHidden()).toBe(false);
+    expect(container.textContent).toContain("Simulation ready");
+    await render(readyState);
+    expect(windowHidden()).toBe(false);
+
+    await act(async () => root.unmount());
+    expect(simulationPreparationWindow.getSnapshot().summary).toBeNull();
     dom.restore();
   });
 

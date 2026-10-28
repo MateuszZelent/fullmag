@@ -254,7 +254,7 @@ try {
     await captureViewportPerformanceSnapshot(page, "cold-baseline"),
   );
 
-  await page.locator('[data-action-id="ws-2d"]').click();
+  await openFieldMapViewport(page);
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
   first2DLayout = await waitForComparable2DViewport(
     page,
@@ -267,15 +267,7 @@ try {
   );
   gpuCheckpoints.push(makeGpuCheckpoint("after-first-unmount", firstUnmount.gpu));
   const unmountedBaselineRuntime = firstUnmount.runtime;
-  const viewport3DMenuItem = page.getByRole("menuitem", { name: "3D viewport" });
-  if (await viewport3DMenuItem.isVisible()) {
-    await viewport3DMenuItem.click();
-  } else {
-    await page.locator('[data-action-id="viewport-3d.open"]').click();
-  }
-  await page.evaluate(() => {
-    window.__FULLMAG_CONTROL_ROOM_AUDIT__?.setActiveViewportModule("viewport-3d");
-  });
+  await openThreeDimensionalViewport(page);
   await canvas.waitFor({ state: "visible", timeout: 10_000 });
   await page.keyboard.press("Escape");
   await waitForDiagnostics(viewport);
@@ -488,7 +480,7 @@ try {
       `Live WebGL buffers did not return to a post-warmup plateau: baseline=${baselineLiveBuffers}, after=${stressLiveBuffers}.`,
     );
   }
-  await page.locator('[data-action-id="ws-2d"]').click();
+  await openFieldMapViewport(page);
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
   final2DLayout = await waitForComparable2DViewport(
     page,
@@ -609,6 +601,9 @@ async function assertCanvasHasFidelity(page) {
     const style = document.createElement("style");
     style.dataset.viewportAuditIsolation = "true";
     style.textContent = `
+      /* Render diagnostics is portalled outside the viewport root. Its changing
+         timings must not contaminate the drawing-buffer fidelity measurement. */
+      .fm-viewport-3d__render-details,
       .fm-viewport-3d *:not(canvas) { visibility: hidden !important; }
       .fm-viewport-3d canvas { visibility: visible !important; }
     `;
@@ -835,6 +830,24 @@ async function waitForFrameBoundary(page, message) {
     1_000,
     message,
   );
+}
+
+async function clickRibbonAction(page, tabName, actionId) {
+  await page.getByRole("tab", { exact: true, name: tabName }).click();
+  const action = page.locator(`[data-action-id="${actionId}"]`);
+  await action.waitFor({
+    state: "visible",
+    timeout: VIEWPORT_2D_MOUNT_TIMEOUT_MS,
+  });
+  await action.click({ timeout: VIEWPORT_2D_MOUNT_TIMEOUT_MS });
+}
+
+async function openFieldMapViewport(page) {
+  await clickRibbonAction(page, "View", "field-map.open");
+}
+
+async function openThreeDimensionalViewport(page) {
+  await clickRibbonAction(page, "Mesh", "mesh-3d");
 }
 
 async function warmViewportForChurn(page, fixture, fixtureRequests, viewport) {
@@ -1136,9 +1149,7 @@ async function assertPartialMultilayerNativeMaskRendered(
     undefined,
     { timeout: 10_000 },
   );
-  await page.evaluate(() => {
-    window.__FULLMAG_CONTROL_ROOM_AUDIT__?.setActiveViewportModule("viewport-3d");
-  });
+  await openThreeDimensionalViewport(page);
   const viewport = page.locator(".fm-viewport-3d");
   const canvas = page.locator(".fm-viewport-3d canvas");
   await canvas.waitFor({ state: "visible", timeout: 10_000 });

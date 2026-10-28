@@ -83,13 +83,13 @@ Phase 5 mounts exactly one R3F `<Canvas frameloop="demand">`.
 
 Not in Phase 5:
 
-- split viewport;
+- multiple 3D viewports;
 - multi-pane grid;
 - synced cameras across panes;
 - per-pane layer/quantity state;
 - multiple WebGL canvases.
 
-If multi-view returns later, it requires a separate ADR/performance plan. Multiple WebGL contexts are not allowed by default because they duplicate GPU uploads.
+ADR 0070 permits a distinct explicit companion (for example 3D beside Analysis), while retaining one 3D canvas. A multi-view grid or multiple 3D views requires a separate ADR/performance plan. Multiple WebGL contexts are not allowed by default because they duplicate GPU uploads.
 
 ## 5. Dirty Rendering
 

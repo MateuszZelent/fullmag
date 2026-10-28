@@ -23,6 +23,8 @@
 //! │     ├─ preparation_receipt.json
 //! │     ├─ task_preparation_receipts/
 //! │     │  └─ <task_id>.json
+//! │     ├─ task_prepared_observations/
+//! │     │  └─ <task_id>.json
 //! │     ├─ accepted_stage_preparation_receipts/
 //! │     │  └─ <task_id>.json
 //! │     ├─ task_admissions/
@@ -939,6 +941,28 @@ fn plan_run_entries(
                     receipt.validate_for_run_intent(&intent)?;
                     entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
                 }
+            }
+        }
+        let observation_dir = run_dir.join("task_prepared_observations");
+        if store_source_exists(&observation_dir)? {
+            validate_store_source(store_root, canonical_root, &observation_dir, true)?;
+            for entry in fs::read_dir(&observation_dir)? {
+                let entry = entry?;
+                crate::repository_path::reject_link(&entry.path())?;
+                if !entry.file_type()?.is_file() {
+                    bail!("task prepared observation entry must be a file");
+                }
+                let file_name = entry.file_name().to_string_lossy().into_owned();
+                let archive_path = format!("runs/{run_id}/task_prepared_observations/{file_name}");
+                validate_portable_namespace_path(&archive_path)?;
+                let data = read_store_file_if_exists(store_root, canonical_root, &entry.path())?
+                    .context("task prepared observation disappeared during export")?;
+                let record: FmsTaskPreparedObservation = serde_json::from_slice(&data)
+                    .context("task prepared observation is not typed")?;
+                if record.relative_path()? != archive_path {
+                    bail!("task prepared observation path identity mismatch");
+                }
+                entries.push_entry(PackEntry::from_bytes(archive_path, data))?;
             }
         }
         let stage_receipt_dir = run_dir.join("accepted_stage_preparation_receipts");

@@ -19,7 +19,7 @@ import type {
 
 const GIGABYTE = 1e9;
 
-const numberFormat = new Intl.NumberFormat(undefined, {
+const numberFormat = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
   minimumFractionDigits: 1,
 });

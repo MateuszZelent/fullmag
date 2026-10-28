@@ -19,3 +19,14 @@
 !backend_candidate_retirement.py
 !worker_cgroup_gate.py
 !backend_volume_cache_maintenance.py
+
+!docker/all-in-one/backend_shared_store.py
+!backend_shared_store.py
+
+!docker/all-in-one/backend_shared_recovery.py
+!backend_shared_recovery.py
+
+!docker/all-in-one/backend_compiler_cache.py
+!backend_compiler_cache.py
+!docker/all-in-one/backend_group_retirement.py
+!backend_group_retirement.py

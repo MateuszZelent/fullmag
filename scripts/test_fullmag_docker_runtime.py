@@ -1,6 +1,7 @@
 """Source-only checks; no Rust/native test compilation or Docker mutation."""
 import importlib.util
 import hashlib
+import io
 import json
 import tempfile
 import os
@@ -10,7 +11,7 @@ import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stdout
 
 import fullmag_docker_runtime as runtime
 import run_managed_browser as managed
@@ -75,7 +76,178 @@ def _v2_cache_fixture(root):
     return ready
 
 
+def _shared_v2_cache_fixture(root):
+    profile, *_ = _profile(
+        str(root), shared_packages=True, worktree_id="worktree-attestation"
+    )
+    documents = DockerVolumeFixture(
+        profile, roles=volume_cache.VOLUME_ROLES
+    ).documents
+    ready = volume_cache.validate(
+        profile,
+        documents,
+        _maintenance_receipt(profile),
+        receipt_path=volume_cache.RECEIPT_TARGET,
+    )
+    ready["compose_overlay"] = None
+    ready["maintenance_compose_overlay"] = None
+    return ready
+
+
+def _binary_fixture(root, *, alias="hardlink", writable=False):
+    unit_key = "f" * 64
+    package = root / "package"
+    group = root / "shared-backend" / "groups" / unit_key
+    binary = package / "bin" / "fullmag-bin"
+    shared_binary = group / "bin" / "fullmag-bin"
+    binary.parent.mkdir(parents=True)
+    shared_binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"sealed backend binary" * 4096)
+    binary.chmod(0o755 if writable else 0o555)
+    if alias == "hardlink":
+        os.link(binary, shared_binary)
+    elif alias == "copy":
+        shared_binary.write_bytes(binary.read_bytes())
+        shared_binary.chmod(binary.stat().st_mode & 0o777)
+    elif alias == "symlink":
+        shared_binary.symlink_to(binary)
+    else:
+        raise AssertionError(alias)
+    return package, root / "shared-backend", group, binary, shared_binary, unit_key
+
+
+def _run_binary_digest_script(script, arguments):
+    stdout = io.StringIO()
+    namespace = {"__name__": "__main__"}
+    with patch.object(sys, "argv", ["binary-attestation", *arguments]), \
+            redirect_stdout(stdout):
+        exec(compile(script, "<backend-binary-attestation>", "exec"), namespace)
+    return json.loads(stdout.getvalue())
+
+
 class DockerRuntimeContract(unittest.TestCase):
+    def test_shared_package_binary_digest_accepts_readonly_group_hardlinks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package, shared, group, binary, alias, unit_key = _binary_fixture(root)
+            script = runtime._backend_binary_digest_script(
+                str(package), str(shared), owner_uid=os.getuid(), owner_gid=os.getgid()
+            )
+            self.assertEqual(binary.stat().st_nlink, 2)
+            observed = _run_binary_digest_script(
+                script, ["--shared", unit_key, f"groups/{unit_key}", binary.name]
+            )
+            self.assertEqual(
+                observed[binary.name], hashlib.sha256(binary.read_bytes()).hexdigest()
+            )
+            self.assertEqual(alias.stat().st_ino, binary.stat().st_ino)
+
+            extra_link = root / "another-group-link"
+            original_read = os.read
+            linked = False
+
+            def add_link_during_hash(descriptor, size):
+                nonlocal linked
+                block = original_read(descriptor, size)
+                if not linked:
+                    os.link(binary, extra_link)
+                    linked = True
+                return block
+
+            with patch.object(os, "read", side_effect=add_link_during_hash):
+                observed = _run_binary_digest_script(
+                    script, ["--shared", unit_key, f"groups/{unit_key}", binary.name]
+                )
+            self.assertEqual(binary.stat().st_nlink, 3)
+            self.assertEqual(
+                observed[binary.name], hashlib.sha256(binary.read_bytes()).hexdigest()
+            )
+
+    def test_binary_digest_keeps_private_link_and_shared_path_checks_strict(self):
+        cases = (
+            ("private-hardlink", "hardlink", False, "--private"),
+            ("shared-writable", "hardlink", True, "--shared"),
+            ("shared-symlink", "symlink", False, "--shared"),
+            ("shared-different-inode", "copy", False, "--shared"),
+        )
+        for label, alias_kind, writable, mode in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                package, shared, _group, binary, _alias, unit_key = _binary_fixture(
+                    root, alias=alias_kind, writable=writable
+                )
+                script = runtime._backend_binary_digest_script(
+                    str(package), str(shared), owner_uid=os.getuid(), owner_gid=os.getgid()
+                )
+                arguments = (
+                    ["--private", binary.name]
+                    if mode == "--private"
+                    else ["--shared", unit_key, f"groups/{unit_key}", binary.name]
+                )
+                with self.assertRaises((RuntimeError, OSError)):
+                    _run_binary_digest_script(script, arguments)
+
+    def test_shared_package_binary_digest_rejects_mutation_while_hashing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package, shared, _group, binary, _alias, unit_key = _binary_fixture(root)
+            script = runtime._backend_binary_digest_script(
+                str(package), str(shared), owner_uid=os.getuid(), owner_gid=os.getgid()
+            )
+            original_read = os.read
+            changed = False
+
+            def mutate_during_hash(descriptor, size):
+                nonlocal changed
+                block = original_read(descriptor, size)
+                if not changed:
+                    binary.chmod(0o755)
+                    binary.write_bytes(b"changed backend binary" * 4096)
+                    binary.chmod(0o555)
+                    changed = True
+                return block
+
+            with patch.object(os, "read", side_effect=mutate_during_hash):
+                with self.assertRaisesRegex(RuntimeError, "changed while hashing"):
+                    _run_binary_digest_script(
+                        script,
+                        ["--shared", unit_key, f"groups/{unit_key}", binary.name],
+                    )
+
+    def test_shared_binary_attestation_uses_validated_cache_pin_and_classifies_exec_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = _shared_v2_cache_fixture(Path(temporary))
+            expected = {name: "a" * 64 for name in runtime.REQUIRED_BINARIES}
+            inputs = {
+                "backend_cache": cache,
+                "package_root": volume_cache.PACKAGE_TARGET,
+            }
+            with patch.object(runtime, "docker", return_value=json.dumps(expected)) as docker_call:
+                self.assertEqual(
+                    runtime._read_backend_binary_hashes(inputs, "b" * 64), expected
+                )
+            args = docker_call.call_args.args
+            self.assertEqual(args[:4], (
+                "exec", "b" * 64, "/usr/local/bin/python3", "-c"
+            ))
+            self.assertIn("/opt/fullmag/package", args[4])
+            self.assertIn("/opt/fullmag/shared-backend", args[4])
+            self.assertEqual(
+                args[5:8],
+                ("--shared", cache["unit_key"], cache["shared_package_subpath"]),
+            )
+            self.assertEqual(args[8:], runtime.REQUIRED_BINARIES)
+
+            with patch.object(
+                runtime, "docker", side_effect=ValueError("docker exec failed: exit 2")
+            ):
+                with self.assertRaisesRegex(ValueError, "command failed"):
+                    runtime._read_backend_binary_hashes(inputs, "b" * 64)
+
+            with patch.object(runtime, "docker", return_value="not json"):
+                with self.assertRaisesRegex(ValueError, "invalid JSON"):
+                    runtime._read_backend_binary_hashes(inputs, "b" * 64)
+
     def test_runtime_process_receipt_reader_uses_compose_control_volume(self):
         raw = (
             b'{"schema":"fullmag.docker-process-tree.v1",'
@@ -1068,7 +1240,7 @@ class DockerRuntimeContract(unittest.TestCase):
             root = Path(directory)
             helpers = root / "capsule/tree/docker/all-in-one"
             helpers.mkdir(parents=True)
-            for name in ("Dockerfile", "Dockerfile.dev", "entrypoint.py", "windows_folder_probe.py", "linux_native_probe.py",
+            for name in ("Dockerfile", "Dockerfile.dev", "backend_auto_maintenance.py", "entrypoint.py", "windows_folder_probe.py", "linux_native_probe.py",
                          "runtime_service.py", "frontend_dev.py", "healthcheck.py"):
                 (helpers / name).write_text(name)
             scripts = root / "capsule/tree/scripts"
@@ -4321,6 +4493,33 @@ class DockerRuntimeContract(unittest.TestCase):
                 entry.preflight()
             load.assert_not_called()
             mkdir.assert_not_called()
+
+
+class RunningContainerInspectionTests(unittest.TestCase):
+    def test_container_that_vanished_after_listing_takes_a_fresh_snapshot(self):
+        calls = []
+
+        def docker(*args, **kwargs):
+            calls.append(args)
+            if args[0] == "ps":
+                return "a" * 12 + "\n" + "b" * 12 if len(calls) == 1 else "a" * 12
+            if args[0] == "inspect" and len(args) == 3:
+                raise ValueError("Error: No such object: " + "b" * 12)
+            return json.dumps([{"Id": "a" * 12}])
+
+        with patch.object(runtime, "docker", side_effect=docker):
+            self.assertEqual(runtime._inspect_running_containers(), [{"Id": "a" * 12}])
+        self.assertEqual([call[0] for call in calls], ["ps", "inspect", "ps", "inspect"])
+
+    def test_other_inspection_failures_are_not_retried(self):
+        def docker(*args, **kwargs):
+            if args[0] == "ps":
+                return "a" * 12
+            raise ValueError("permission denied")
+
+        with patch.object(runtime, "docker", side_effect=docker):
+            with self.assertRaises(ValueError):
+                runtime._inspect_running_containers()
 
 
 if __name__ == "__main__":

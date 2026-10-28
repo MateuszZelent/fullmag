@@ -203,6 +203,10 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
       throw new Error(`Semantic target fixture WebGL is not renderable: ${JSON.stringify(webgl)}`);
     }
 
+    // Diagnostics is a portalled popover: dismiss it before real canvas picking
+    // so it cannot intercept the upper rows of the semantic target scan.
+    await page.keyboard.press("Escape");
+    await page.getByRole("dialog", { name: "Render diagnostics", exact: true }).waitFor({ state: "hidden" });
     const canvasBox = await canvas.boundingBox();
     if (!canvasBox) throw new Error("Semantic target fixture canvas has no bounds.");
     for (let row = 5; row < 20 && selectedNodeIds.size < expectedNodeIds.size; row += 1) {

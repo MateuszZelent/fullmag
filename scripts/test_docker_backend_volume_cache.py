@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 import docker_backend_volume_cache as cache  # noqa: E402
+import docker_shared_build_storage as shared_storage  # noqa: E402
 
 IMAGE = "sha256:" + "a" * 64
 REFRESHED_IMAGE = "sha256:" + "c" * 64
@@ -58,7 +60,14 @@ class DockerVolumeFixture:
         raise AssertionError(f"unexpected Docker call: {args!r}")
 
 
-def _profile(tmp: str, image: str = IMAGE):
+def _profile(
+    tmp: str,
+    image: str = IMAGE,
+    *,
+    shared_packages: bool = False,
+    worktree_id: str = "docker-all-master-integration-20261017",
+    project_id: str = "fullmag",
+):
     root = Path(tmp)
     source = root / "source"
     repo = root / "repo"
@@ -69,9 +78,9 @@ def _profile(tmp: str, image: str = IMAGE):
     runroot.mkdir(parents=True)
     layout = {
         "storage_root": str(storage),
-        "project_id": "fullmag",
-        "worktree_id": "docker-all-master-integration-20261017",
-        "compose_project": "fullmag-worktree-docker-all-master-integration-20261017",
+        "project_id": project_id,
+        "worktree_id": worktree_id,
+        "compose_project": f"fullmag-worktree-{worktree_id}",
     }
     profile = cache.prepare(
         layout,
@@ -80,7 +89,8 @@ def _profile(tmp: str, image: str = IMAGE):
         runroot,
         source_root=source,
         toolchain_image=TOOLCHAIN,
-        control_volume_name="fullmag-build-control-fullmag-worktree-docker-all-master-integration-20261017",
+        control_volume_name=f"fullmag-build-control-fullmag-worktree-{worktree_id}",
+        shared_packages=shared_packages,
     )
     return profile, layout, source, repo, runroot
 
@@ -140,26 +150,45 @@ def _maintenance_receipt(profile):
 
 
 def _container(profile, *, socket=False):
-    mounts = [
-        {
+    volume_docs = profile.get("volume_documents", {})
+
+    def volume_mount(role, target, subpath=""):
+        name = profile["volume_names"][role]
+        document = volume_docs.get(role, {}) if isinstance(volume_docs, dict) else {}
+        root = document.get("Mountpoint", f"/var/lib/docker/volumes/{name}/_data")
+        source = f"{root}/{subpath}" if subpath else root
+        mount = {
             "Type": "volume",
-            "Name": profile["volume_names"][cache.BUILD_VOLUME_ROLE],
-            "Destination": cache.BUILD_TARGET,
+            "Name": name,
+            "Source": source,
+            "Destination": target,
             "RW": True,
-        },
-        {
-            "Type": "volume",
-            "Name": profile["volume_names"][cache.PACKAGE_VOLUME_ROLE],
-            "Destination": cache.PACKAGE_TARGET,
-            "RW": True,
-        },
-        {
-            "Type": "volume",
-            "Name": profile["volume_names"][cache.CONTROL_VOLUME_ROLE],
-            "Destination": cache.CONTROL_TARGET,
-            "RW": True,
-        },
-    ]
+        }
+        host_mount = {"Type": "volume", "Source": name, "Target": target}
+        if subpath:
+            host_mount["VolumeOptions"] = {"Subpath": subpath}
+        return mount, host_mount
+
+    mounts = []
+    host_mounts = []
+    for role, target in (
+        (cache.BUILD_VOLUME_ROLE, cache.BUILD_TARGET),
+        (cache.PACKAGE_VOLUME_ROLE, cache.PACKAGE_TARGET),
+        (cache.CONTROL_VOLUME_ROLE, cache.CONTROL_TARGET),
+    ):
+        subpath = (
+            profile.get("shared_package_subpath", "")
+            if role == cache.PACKAGE_VOLUME_ROLE else ""
+        )
+        mount, host_mount = volume_mount(role, target, subpath or "")
+        mounts.append(mount)
+        host_mounts.append(host_mount)
+    if profile.get("shared_packages") is True:
+        mount, host_mount = volume_mount(
+            cache.PACKAGE_VOLUME_ROLE, cache.SHARED_BACKEND_TARGET
+        )
+        mounts.insert(2, mount)
+        host_mounts.insert(2, host_mount)
     if socket:
         mounts.append({
             "Type": "bind",
@@ -167,17 +196,7 @@ def _container(profile, *, socket=False):
             "Destination": "/var/run/docker.sock",
             "RW": True,
         })
-    labels = {
-        cache.LABEL_SCHEMA: cache.SCHEMA,
-        cache.LABEL_PROFILE: cache.PROFILE,
-        cache.LABEL_PROJECT: profile["project_id"],
-        cache.LABEL_CACHE_KEY: profile["cache_key"],
-        cache.LABEL_UNIT: profile["unit_key"],
-        cache.LABEL_WORKTREE: profile["worktree_id"],
-        cache.LABEL_TOOLCHAIN: profile["toolchain_image_id"],
-        cache.LABEL_CARGO_PROFILE: profile["cargo_profile"],
-        cache.LABEL_OWNER: profile["owner_id"],
-    }
+    labels = cache._container_labels(profile)
     return {
         "Config": {
             "User": "65532:65532",
@@ -190,12 +209,284 @@ def _container(profile, *, socket=False):
             "NetworkMode": "fullmag_default",
             "PidMode": "",
             "Binds": [],
+            "Mounts": host_mounts,
         },
         "Mounts": mounts,
     }
 
 
 class BackendVolumeCacheTests(unittest.TestCase):
+    def test_shared_packages_reuse_project_volume_with_private_groups_and_builds(self):
+        with tempfile.TemporaryDirectory() as tmp_a, tempfile.TemporaryDirectory() as tmp_b, tempfile.TemporaryDirectory() as tmp_other:
+            first, *_ = _profile(
+                tmp_a, shared_packages=True, worktree_id="worktree-alpha"
+            )
+            second, *_ = _profile(
+                tmp_b, shared_packages=True, worktree_id="worktree-beta"
+            )
+            different_project, *_ = _profile(
+                tmp_other, shared_packages=True, worktree_id="worktree-gamma",
+                project_id="another-project",
+            )
+            self.assertNotEqual(first["unit_key"], second["unit_key"])
+            self.assertNotEqual(
+                first["volume_names"][cache.BUILD_VOLUME_ROLE],
+                second["volume_names"][cache.BUILD_VOLUME_ROLE],
+            )
+            shared_name = first["volume_names"][cache.PACKAGE_VOLUME_ROLE]
+            self.assertEqual(shared_name, second["volume_names"][cache.PACKAGE_VOLUME_ROLE])
+            self.assertEqual(
+                shared_name,
+                "fullmag-shared-packages-v1-"
+                + hashlib.sha256(b"fullmag").hexdigest()[:24],
+            )
+            self.assertNotEqual(
+                shared_name,
+                different_project["volume_names"][cache.PACKAGE_VOLUME_ROLE],
+            )
+            self.assertEqual(first["shared_package_subpath"], f"groups/{first['unit_key']}")
+            self.assertEqual(second["shared_package_subpath"], f"groups/{second['unit_key']}")
+            self.assertEqual(
+                cache.volume_labels(first, cache.PACKAGE_VOLUME_ROLE),
+                shared_storage.shared_volume_labels("fullmag", shared_storage.PACKAGE_ROLE),
+            )
+            self.assertNotIn(cache.LABEL_UNIT, cache.volume_labels(first, cache.PACKAGE_VOLUME_ROLE))
+            self.assertEqual(
+                first["environment"]["FULLMAG_SHARED_BACKEND_GROUP"],
+                f"groups/{first['unit_key']}",
+            )
+            self.assertEqual(
+                first["environment"]["FULLMAG_SHARED_BACKEND_STORE"],
+                cache.SHARED_BACKEND_TARGET,
+            )
+            self.assertEqual(
+                first["mounts"][1]["volume"]["subpath"], first["shared_package_subpath"]
+            )
+            root_mount = next(
+                mount for mount in first["mounts"]
+                if mount["target"] == cache.SHARED_BACKEND_TARGET
+            )
+            self.assertNotIn("subpath", root_mount["volume"])
+
+    def test_shared_package_volume_requires_exact_labels_and_safe_backing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile, *_ = _profile(tmp, shared_packages=True)
+            fixture = DockerVolumeFixture(profile, roles=cache.VOLUME_ROLES)
+            package = fixture.documents[cache.PACKAGE_VOLUME_ROLE]
+            cache._validate_volume_document(package, profile, cache.PACKAGE_VOLUME_ROLE)
+            for mutate in (
+                lambda doc: doc.update(Driver="nfs"),
+                lambda doc: doc.update(Options={"device": "/host/path"}),
+                lambda doc: doc["Labels"].update({cache.LABEL_UNIT: profile["unit_key"]}),
+                lambda doc: doc["Labels"].update({shared_storage.LABEL_PROJECT: "foreign"}),
+            ):
+                corrupted = json.loads(json.dumps(package))
+                mutate(corrupted)
+                with self.subTest(corrupted=corrupted), self.assertRaises(cache.BackendVolumeCacheError):
+                    cache._validate_volume_document(
+                        corrupted, profile, cache.PACKAGE_VOLUME_ROLE
+                    )
+
+    def test_active_shared_package_consumers_require_registered_exact_group_subpath(self):
+        with tempfile.TemporaryDirectory() as tmp_a, tempfile.TemporaryDirectory() as tmp_b:
+            current, *_ = _profile(
+                tmp_a, shared_packages=True, worktree_id="worktree-current"
+            )
+            other, *_ = _profile(
+                tmp_b, shared_packages=True, worktree_id="worktree-other"
+            )
+            current["volume_documents"] = DockerVolumeFixture(
+                current, roles=cache.VOLUME_ROLES
+            ).documents
+            other["volume_documents"] = DockerVolumeFixture(
+                other, roles=cache.VOLUME_ROLES
+            ).documents
+
+            def running(profile):
+                result = _container(profile)
+                result["State"] = {"Running": True}
+                return result
+
+            def maintenance(profile):
+                result = running(profile)
+                result["Config"]["User"] = "0:0"
+                result["Config"]["Entrypoint"] = list(cache.MAINTENANCE_ENTRYPOINT)
+                result["Config"]["Cmd"] = ["ensure"]
+                result["Config"]["Labels"].update({
+                    "com.docker.compose.project": profile["control_project"],
+                    "com.docker.compose.service": cache.MAINTENANCE_SERVICE,
+                })
+                result["Config"]["Env"].extend([
+                    "FULLMAG_BACKEND_CACHE_MAINTENANCE_PROFILE=" + cache.MAINTENANCE_PROFILE,
+                    "FULLMAG_BACKEND_CACHE_MAINTENANCE_ACTION=ensure",
+                ])
+                result["Mounts"] = [
+                    mount for mount in result["Mounts"]
+                    if mount.get("Destination") != cache.SHARED_BACKEND_TARGET
+                ]
+                result["HostConfig"]["Mounts"] = [
+                    mount for mount in result["HostConfig"]["Mounts"]
+                    if mount.get("Target") != cache.SHARED_BACKEND_TARGET
+                ]
+                return result
+
+            cache._assert_no_active_consumers(current, [running(other)])
+            cache._assert_no_active_consumers(current, [maintenance(other)])
+
+            spoofed_maintenance = maintenance(other)
+            spoofed_maintenance["Config"]["Cmd"] = ["sh", "-c", "true"]
+            with self.assertRaisesRegex(cache.BackendVolumeCacheError, "incomplete or ambiguous"):
+                cache._assert_no_active_consumers(current, [spoofed_maintenance])
+
+            source_path_proof = running(other)
+            source_path_proof["HostConfig"].pop("Mounts")
+            cache._assert_no_active_consumers(current, [source_path_proof])
+
+            host_config_proof = running(other)
+            for mount in host_config_proof["Mounts"]:
+                if (mount.get("Name") == current["volume_names"][cache.PACKAGE_VOLUME_ROLE]
+                        and mount.get("Destination") == cache.SHARED_BACKEND_TARGET):
+                    mount.pop("Source", None)
+            cache._assert_no_active_consumers(current, [host_config_proof])
+
+            ambiguous_root = running(other)
+            root_entry = next(
+                mount for mount in ambiguous_root["HostConfig"]["Mounts"]
+                if mount.get("Target") == cache.SHARED_BACKEND_TARGET
+            )
+            ambiguous_root["HostConfig"]["Mounts"].append(dict(root_entry))
+            with self.assertRaisesRegex(cache.BackendVolumeCacheError, "ambiguous"):
+                cache._assert_no_active_consumers(current, [ambiguous_root])
+
+            own_group = running(current)
+            other_build_root = (
+                f"/var/lib/docker/volumes/"
+                f"{other['volume_names'][cache.BUILD_VOLUME_ROLE]}/_data"
+            )
+            for mount in own_group["Mounts"]:
+                if mount.get("Destination") == cache.BUILD_TARGET:
+                    mount["Name"] = other["volume_names"][cache.BUILD_VOLUME_ROLE]
+                    mount["Source"] = other_build_root
+            own_group["Config"]["Labels"][cache.LABEL_CACHE_KEY] = "c" * 64
+            with self.assertRaisesRegex(cache.BackendVolumeCacheError, "this backend cache package subpath"):
+                cache._assert_no_active_consumers(current, [own_group])
+
+            own_maintenance = maintenance(current)
+            own_maintenance["Mounts"] = [
+                mount for mount in own_maintenance["Mounts"]
+                if mount.get("Destination") == cache.PACKAGE_TARGET
+                or mount.get("Destination") == cache.CONTROL_TARGET
+                or mount.get("Destination") == cache.BUILD_TARGET
+            ]
+            for mount in own_maintenance["Mounts"]:
+                if mount.get("Destination") == cache.BUILD_TARGET:
+                    mount["Name"] = other["volume_names"][cache.BUILD_VOLUME_ROLE]
+                    mount["Source"] = other_build_root
+            own_maintenance["Config"]["Labels"][cache.LABEL_CACHE_KEY] = "c" * 64
+            own_maintenance["Config"]["Env"] = [
+                "FULLMAG_BACKEND_CACHE_KEY=" + "c" * 64
+                if value.startswith("FULLMAG_BACKEND_CACHE_KEY=") else value
+                for value in own_maintenance["Config"]["Env"]
+            ]
+            with self.assertRaisesRegex(cache.BackendVolumeCacheError, "this backend cache package subpath"):
+                cache._assert_no_active_consumers(current, [own_maintenance])
+
+            unknown_group = running(other)
+            shared_name = current["volume_names"][cache.PACKAGE_VOLUME_ROLE]
+            root = current["volume_documents"][cache.PACKAGE_VOLUME_ROLE]["Mountpoint"]
+            for mount in unknown_group["Mounts"]:
+                if mount.get("Name") == shared_name and mount.get("Destination") == cache.PACKAGE_TARGET:
+                    mount["Source"] = root + "/groups/" + "f" * 64
+            for mount in unknown_group["HostConfig"]["Mounts"]:
+                if mount.get("Source") == shared_name and mount.get("Target") == cache.PACKAGE_TARGET:
+                    mount["VolumeOptions"] = {"Subpath": "groups/" + "f" * 64}
+            with self.assertRaisesRegex(cache.BackendVolumeCacheError, "unknown or unregistered"):
+                cache._assert_no_active_consumers(current, [unknown_group])
+
+            unproven_group = running(other)
+            for mount in unproven_group["Mounts"]:
+                if mount.get("Name") == shared_name and mount.get("Destination") == cache.PACKAGE_TARGET:
+                    mount["Source"] = root
+            for mount in unproven_group["HostConfig"]["Mounts"]:
+                if mount.get("Source") == shared_name and mount.get("Target") == cache.PACKAGE_TARGET:
+                    mount.pop("VolumeOptions", None)
+            with self.assertRaisesRegex(cache.BackendVolumeCacheError, "unknown or unregistered"):
+                cache._assert_no_active_consumers(current, [unproven_group])
+
+            private_build_alias = running(other)
+            for mount in private_build_alias["Mounts"]:
+                if mount.get("Destination") == cache.BUILD_TARGET:
+                    mount["Name"] = current["volume_names"][cache.BUILD_VOLUME_ROLE]
+            with self.assertRaisesRegex(cache.BackendVolumeCacheError, "mounts backend cache volume"):
+                cache._assert_no_active_consumers(current, [private_build_alias])
+
+    def test_active_initializer_root_mount_is_registered_and_other_groups_are_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile, *_ = _profile(tmp, shared_packages=True)
+            profile["volume_documents"] = DockerVolumeFixture(
+                profile, roles=cache.VOLUME_ROLES
+            ).documents
+            other_unit = "e" * 64
+            package_name = profile["volume_names"][cache.PACKAGE_VOLUME_ROLE]
+            package_root = profile["volume_documents"][cache.PACKAGE_VOLUME_ROLE]["Mountpoint"]
+            helper = {
+                "State": {"Running": True},
+                "Config": {
+                    "Labels": shared_storage.initializer_labels(
+                        profile["project_id"], other_unit
+                    ),
+                    "Env": [
+                        f"{key}={value}"
+                        for key, value in shared_storage.initializer_environment(other_unit).items()
+                    ],
+                },
+                "Mounts": [{
+                    "Type": "volume",
+                    "Name": package_name,
+                    "Source": package_root,
+                    "Destination": cache.SHARED_BACKEND_TARGET,
+                }],
+            }
+            cache._assert_no_active_consumers(profile, [helper])
+
+    def test_shared_runtime_validates_package_subpath_and_root_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile, *_ = _profile(tmp, shared_packages=True)
+            ready = dict(profile)
+            ready["state"] = "ready"
+            ready["volume_documents"] = DockerVolumeFixture(
+                profile, roles=cache.VOLUME_ROLES
+            ).documents
+            maintenance = cache.maintenance_overlay(ready)["services"][cache.MAINTENANCE_SERVICE]
+            self.assertNotIn(
+                cache.SHARED_BACKEND_TARGET,
+                {mount["target"] for mount in maintenance["volumes"]},
+            )
+            self.assertIn(
+                cache.SHARED_BACKEND_TARGET,
+                {mount["target"] for mount in ready["mounts"]},
+            )
+            container = _container(ready)
+            attestation = cache.validate_container(container, ready)
+            self.assertEqual(attestation["state"], "attested")
+            self.assertEqual(
+                attestation["targets"]["shared_backend"], cache.SHARED_BACKEND_TARGET
+            )
+
+            wrong_subpath = json.loads(json.dumps(container))
+            for mount in wrong_subpath["HostConfig"]["Mounts"]:
+                if mount["Target"] == cache.PACKAGE_TARGET:
+                    mount["VolumeOptions"] = {"Subpath": "groups/" + "f" * 64}
+            with self.assertRaises(cache.BackendVolumeCacheError):
+                cache.validate_container(wrong_subpath, ready)
+
+            wrong_root_alias = json.loads(json.dumps(container))
+            for mount in wrong_root_alias["HostConfig"]["Mounts"]:
+                if mount["Target"] == cache.SHARED_BACKEND_TARGET:
+                    mount["VolumeOptions"] = {"Subpath": "artifacts"}
+            with self.assertRaises(cache.BackendVolumeCacheError):
+                cache.validate_container(wrong_root_alias, ready)
+
     def test_runtime_image_refresh_reuses_stable_pair_and_labels(self):
         with tempfile.TemporaryDirectory() as tmp:
             first, layout, source, repo, runroot = _profile(tmp, IMAGE)
@@ -371,6 +662,9 @@ class BackendVolumeCacheTests(unittest.TestCase):
 
             ready = dict(profile)
             ready["state"] = "ready"
+            ready["volume_documents"] = DockerVolumeFixture(
+                profile, roles=cache.VOLUME_ROLES
+            ).documents
             self.assertEqual(cache.validate_container(_container(ready), ready)["state"], "attested")
             unsafe = _container(ready)
             unsafe["HostConfig"]["ReadonlyRootfs"] = False

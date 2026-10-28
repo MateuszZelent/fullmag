@@ -1,26 +1,63 @@
 from pathlib import Path
+import ast
 import re
+import subprocess
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CONF = ROOT / "public_docs/site/conf.py"
-CSS = ROOT / "public_docs/site/_static/fullmag-docs.css"
+STATIC_DIR = ROOT / "public_docs/site/_static"
+CSS = STATIC_DIR / "fullmag-docs.css"
 
 
 class ResponsivePublicDocumentationTableTests(unittest.TestCase):
     @staticmethod
     def _rules_for_selector(css: str, selector: str) -> list[str]:
+        uncommented = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
         return [
             declarations
-            for selector_list, declarations in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+            for selector_list, declarations in re.findall(r"([^{}]+)\{([^{}]*)\}", uncommented)
             if selector in {item.strip() for item in selector_list.split(",")}
         ]
 
+    @staticmethod
+    def _conf_list(conf: str, variable_name: str) -> list[str]:
+        tree = ast.parse(conf)
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == variable_name:
+                        value = ast.literal_eval(node.value)
+                        if isinstance(value, list):
+                            return [str(item) for item in value]
+        raise AssertionError(f"{variable_name} not found in conf.py")
+
     def test_sphinx_registers_fullmag_documentation_css(self) -> None:
         conf = CONF.read_text(encoding="utf-8")
-        self.assertIn('html_css_files = ["fullmag-docs.css"]', conf)
+        css_files = self._conf_list(conf, "html_css_files")
+        js_files = self._conf_list(conf, "html_js_files")
+        self.assertIn("fullmag-docs.css", css_files)
+        self.assertIn("fullmag-embed.css", css_files)
+        self.assertIn("fullmag-embed.js", js_files)
         self.assertIn('"responsive_tables"', conf)
+
+        for asset_name in [*css_files, *js_files]:
+            asset_path = STATIC_DIR / asset_name
+            self.assertTrue(
+                asset_path.is_file(),
+                f"Registered Sphinx static asset does not exist: {asset_path}",
+            )
+            check_ignore = subprocess.run(
+                ["git", "-C", str(ROOT), "check-ignore", "-q", str(asset_path.relative_to(ROOT))],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(
+                check_ignore.returncode,
+                0,
+                f"Registered Sphinx static asset must not be git-ignored: {asset_path}",
+            )
 
     def test_tables_own_horizontal_overflow_without_hiding_the_page(self) -> None:
         css = CSS.read_text(encoding="utf-8")
@@ -153,6 +190,52 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
         header_rules = self._rules_for_selector(css, "#main-header")
         self.assertTrue(
             any(re.search(r"overflow-x:\s*clip", declarations) for declarations in header_rules)
+        )
+
+    def test_embedded_mode_collapses_duplicate_sphinx_header_and_search_modal(self) -> None:
+        embed_css = (STATIC_DIR / "fullmag-embed.css").read_text(encoding="utf-8")
+        root_rules = self._rules_for_selector(embed_css, "html[data-fullmag-embedded]")
+        self.assertTrue(
+            any(
+                "--header-height: 0px !important" in declarations
+                and "--announcement-height: 0px !important" in declarations
+                for declarations in root_rules
+            )
+        )
+        for selector in (
+            "html[data-fullmag-embedded] #main-header",
+            "html[data-fullmag-embedded] #searchModal",
+        ):
+            rules = self._rules_for_selector(embed_css, selector)
+            self.assertTrue(
+                any("display: none !important" in declarations for declarations in rules),
+                selector,
+            )
+
+    def test_documentation_theme_tokens_align_with_fullmag_light_and_dark_palettes(self) -> None:
+        css = CSS.read_text(encoding="utf-8")
+        light_rules = self._rules_for_selector(css, 'html[data-theme="light"]')
+        dark_rules = self._rules_for_selector(css, 'html[data-theme="dark"]')
+
+        self.assertTrue(
+            any(
+                "--fm-docs-bg-app: #eff1f5" in declarations
+                and "--fm-docs-bg-chrome: #e6e9ef" in declarations
+                and "--fm-docs-text-primary: #4c4f69" in declarations
+                and "--fm-docs-accent: #1e66f5" in declarations
+                and "--color-base-100: var(--fm-docs-bg-app)" in declarations
+                for declarations in light_rules
+            )
+        )
+        self.assertTrue(
+            any(
+                "--fm-docs-bg-app: #1e1e2e" in declarations
+                and "--fm-docs-bg-chrome: #181825" in declarations
+                and "--fm-docs-text-primary: #cdd6f4" in declarations
+                and "--fm-docs-accent: #89b4fa" in declarations
+                and "--color-base-100: var(--fm-docs-bg-app)" in declarations
+                for declarations in dark_rules
+            )
         )
 
 

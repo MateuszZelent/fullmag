@@ -19,6 +19,7 @@ source_of_truth: readme.md
     <p class="fm-home-label">Authors</p>
     <p><strong>Dr Mateusz Zelent</strong><br />RPTU Kaiserslautern-Landau</p>
     <p><strong>Dr Mateusz Gołebiewski</strong><br />Adam Mickiewicz University, Poznań</p>
+    <p><strong>Uladzislau Makartsou</strong><br />Adam Mickiewicz University, Poznań</p>
     <p><strong>Prof. Philipp Pirro</strong><br />RPTU Kaiserslautern-Landau</p>
   </div>
 </div>

@@ -157,6 +157,38 @@ async fn acquire_workspace_for_restart_inner(
             api_instance_id: state.request_scope_instance_id.clone(),
             session_epoch,
         },
+        Some(snapshot)
+            if allow_restored_terminal_without_display_timestamp
+                && is_unadmitted_startup_failure(snapshot)? =>
+        {
+            // Live retirement only: a Docker startup script rejected before any
+            // RunIntent was accepted leaves no run to drain. Archive it like an
+            // idle workspace; the retirement route proves run-store absence.
+            validate_preparation(snapshot)?;
+            validate_mesh_workspace(snapshot.mesh_workspace.as_deref())?;
+            let scene_document = snapshot
+                .scene_document
+                .as_ref()
+                .ok_or_else(|| not_restartable("the current workspace has no canonical scene"))?;
+            let raw_scene_id = scene_document.scene.id.as_str();
+            let scene_id = raw_scene_id.trim();
+            if scene_id.is_empty() || scene_id != raw_scene_id {
+                return Err(not_restartable(
+                    "the current workspace scene has no stable model identity",
+                ));
+            }
+            validate_connectivity(state, false).await?;
+            RestartableWorkspace::Session {
+                identity: RestartableWorkspaceIdentity {
+                    api_instance_id: state.request_scope_instance_id.clone(),
+                    session_id: snapshot.session.session_id.clone(),
+                    run_id: None,
+                    scene_id: scene_id.to_string(),
+                    session_epoch,
+                },
+                scene_document: scene_document.clone(),
+            }
+        }
         Some(snapshot) => {
             let kind = validate_runtime_status(snapshot)?;
             validate_preparation(snapshot)?;
@@ -259,6 +291,36 @@ fn validate_runtime_status(snapshot: &SessionStateResponse) -> Result<RuntimeSta
         ));
     }
     Ok(expected)
+}
+
+/// A `startup_failed` workspace that never admitted a RunIntent: no run, no
+/// stage execution and a quiescent runtime projection. Any partial match is a
+/// refusal rather than a fallback to the terminal-run checks.
+pub(crate) fn is_unadmitted_startup_failure(
+    snapshot: &SessionStateResponse,
+) -> Result<bool, ApiError> {
+    if snapshot.session.status != "startup_failed" {
+        return Ok(false);
+    }
+    let effective_code = crate::session::effective_runtime_status_code(snapshot);
+    if snapshot.run.is_some()
+        || snapshot.stage_execution.is_some()
+        || snapshot.live_state.is_some()
+        || effective_code != "startup_failed"
+        || snapshot.runtime_status.code != effective_code
+        || snapshot.runtime_status.kind != RuntimeStatus::Unknown
+        || snapshot.runtime_status.is_busy
+        || snapshot.runtime_status.can_accept_commands
+        || snapshot.session.session_id.trim().is_empty()
+        || snapshot.session.session_id != snapshot.session.session_id.trim()
+        || snapshot.session.run_id.trim().is_empty()
+        || snapshot.session.run_id != snapshot.session.run_id.trim()
+    {
+        return Err(not_restartable(
+            "the startup-failed workspace is not demonstrably unadmitted and idle",
+        ));
+    }
+    Ok(true)
 }
 
 fn is_idle_scratch(
@@ -950,6 +1012,45 @@ mod tests {
             &state.current_workspace_root,
         )
         .unwrap());
+    }
+
+    #[tokio::test]
+    async fn unadmitted_startup_failure_is_retirable_only_without_run_evidence() {
+        let state = scratch_state().await;
+        let mut snapshot = state.current_live_state.read().await.clone().unwrap();
+        snapshot.session.status = "startup_failed".to_string();
+        snapshot.runtime_status = crate::session::build_runtime_status_view("startup_failed");
+        assert!(is_unadmitted_startup_failure(&snapshot).unwrap());
+
+        // The ordinary restart route keeps refusing the unknown status.
+        *state.current_live_state.write().await = Some(snapshot.clone());
+        assert!(acquire_workspace_for_restart(&state).await.is_err());
+
+        let mut admitted = snapshot.clone();
+        admitted.run = Some(RunManifest {
+            run_id: admitted.session.run_id.clone(),
+            session_id: admitted.session.session_id.clone(),
+            status: "failed".to_string(),
+            total_steps: 0,
+            final_time: None,
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: "".to_string(),
+        });
+        assert!(is_unadmitted_startup_failure(&admitted).is_err());
+
+        let mut busy = snapshot.clone();
+        busy.runtime_status.is_busy = true;
+        assert!(is_unadmitted_startup_failure(&busy).is_err());
+
+        let mut idle = snapshot;
+        idle.session.status = "awaiting_command".to_string();
+        assert!(!is_unadmitted_startup_failure(&idle).unwrap());
     }
 
     fn tracked_command(

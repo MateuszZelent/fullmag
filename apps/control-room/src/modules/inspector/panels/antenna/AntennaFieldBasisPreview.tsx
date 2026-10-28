@@ -77,7 +77,7 @@ export function AntennaFieldBasisPreview({ solution, quantity = "magnetic_field_
           <SelectTrigger aria-label="Antenna port basis" className="fm-antenna-field-preview__select">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="fm-inspector-select-content">
             {solution.bases.map((candidate) => (
               <SelectItem key={candidate.port_mode_id} value={candidate.port_mode_id}>
                 {candidate.port_mode_id}

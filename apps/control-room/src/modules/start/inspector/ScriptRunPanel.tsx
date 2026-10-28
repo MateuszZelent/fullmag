@@ -1,7 +1,7 @@
 "use client";
 
 import { Square } from "lucide-react";
-import { useId, useState } from "react";
+import { useId } from "react";
 
 import { Button } from "@/shared/ui/Button";
 
@@ -10,7 +10,6 @@ import {
   type ExecutionAvailability,
 } from "../model/executionAvailability";
 import {
-  DEFAULT_RUN_OPTIONS,
   preflightLines,
   receiptText,
   refusalMessage,
@@ -20,7 +19,7 @@ import {
   type ScriptRunOptions,
   type ScriptPreflight,
 } from "../model/scriptRun";
-import type { ScriptRunController } from "../model/useScriptRun";
+import { usePreparedScriptRunOptions, type ScriptRunController } from "../model/useScriptRun";
 
 const DEVICE_CHOICES: readonly { readonly value: ScriptRunOptions["device"]; readonly label: string }[] = [
   { value: "as_authored", label: "As written in the script" },
@@ -65,7 +64,7 @@ interface ReadyProps {
 }
 
 function ReadyView({ preflight, baseId, onRun, executionAvailability }: ReadyProps) {
-  const [options, setOptions] = useState<ScriptRunOptions>(DEFAULT_RUN_OPTIONS);
+  const [options, setOptions] = usePreparedScriptRunOptions(preflight.ticket);
   const availability = executionAvailabilityFor(executionAvailability, "auto");
   const blocked = refusalOf(preflight);
   const nextToScript = options.results === "next_to_script";

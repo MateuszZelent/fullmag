@@ -42,7 +42,12 @@ if (!viewportTypes.includes('VIEWPORT_3D_FRAMELOOP = "demand"')) {
   failures.push("viewport3dTypes must export VIEWPORT_3D_FRAMELOOP = \"demand\".");
 }
 
-if (!viewportModule.includes("frameloop={VIEWPORT_3D_FRAMELOOP}")) {
+// The only other loop allowed is "never" while a hidden instance tab pauses
+// the viewport (ADR 0069).
+const pausesHiddenInstanceTab =
+  viewportModule.includes('useInstanceTabHidden() ? "never" : VIEWPORT_3D_FRAMELOOP') &&
+  viewportModule.includes("frameloop={canvasFrameloop}");
+if (!viewportModule.includes("frameloop={VIEWPORT_3D_FRAMELOOP}") && !pausesHiddenInstanceTab) {
   failures.push("Viewport3DModule must wire Canvas frameloop to VIEWPORT_3D_FRAMELOOP.");
 }
 

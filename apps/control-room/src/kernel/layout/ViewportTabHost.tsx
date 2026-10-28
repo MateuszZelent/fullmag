@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { useEffect, useMemo } from "react";
 
+import { PanelChrome } from "@/shared/ui/PanelFrame";
 import { Button } from "@/shared/ui/Button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/shared/ui/Resizable";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
@@ -66,7 +67,7 @@ export function ViewportTabHost() {
         onValueChange={setActiveViewportMainModule}
         value={activeModule.id}
       >
-        <div className="fm-viewport-tabs__bar">
+        <PanelChrome className="fm-viewport-tabs__bar">
           <TabsList aria-label="Viewport surfaces" className="fm-viewport-tabs__list">
             {modules.map((module) => (
               <TabsTrigger
@@ -90,7 +91,7 @@ export function ViewportTabHost() {
               <X aria-hidden="true" size={14} />
             </Button>
           ) : null}
-        </div>
+        </PanelChrome>
         <div className="fm-viewport-tabs__surface">
           {companionModule && companion ? (
             // Each module keeps a single mounted instance; the split only

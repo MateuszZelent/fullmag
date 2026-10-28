@@ -67,6 +67,27 @@ export function quantityCatalogEntrySupportsSpatialVisualization(
   );
 }
 
+/**
+ * The resolved plan provides the quantity, but no accepted run has produced
+ * it yet and the runtime cannot compute it for the prepared state. Pickers
+ * list it disabled instead of hiding it or requesting a Compute that fails.
+ */
+export function quantityCatalogEntryAwaitsAcceptedState(
+  quantity: QuantityCatalogEntry,
+): boolean {
+  return quantity.materialization_reason_code === "accepted_state_required";
+}
+
+/** Picker item for one catalog entry; unit is appended when the caller wants it. */
+export function quantityCatalogPickerItem(
+  quantity: QuantityCatalogEntry,
+  label: string,
+): { disabled?: boolean; label: string; value: string } {
+  return quantityCatalogEntryAwaitsAcceptedState(quantity)
+    ? { disabled: true, label: `${label} (after Run)`, value: quantity.id }
+    : { label, value: quantity.id };
+}
+
 export function quantityCatalogEntryHasAdoptableSpatialCarrier(
   quantity: QuantityCatalogEntry,
 ): boolean {

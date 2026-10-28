@@ -10,21 +10,53 @@ import {
 
 import {
   DEFAULT_THEME_MODE,
-  resolveThemePreference,
+  DEFAULT_THEME_PREFERENCE,
+  THEME_STORAGE_KEY,
+  parseThemePreference,
+  resolveThemeMode,
+  type ThemePreference,
   type ThemeMode,
 } from "./themePreference";
 import { THEME_TOGGLE_EVENT } from "./themeEvents";
 
-const THEME_STORAGE_KEY = "fullmag.control-room.theme";
+interface ThemeSnapshot {
+  theme: ThemeMode;
+  preference: ThemePreference;
+}
 
 interface ThemeContextValue {
   theme: ThemeMode;
-  setTheme: (theme: ThemeMode) => void;
+  preference: ThemePreference;
+  setTheme: (preference: ThemePreference) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 const themeListeners = new Set<() => void>();
-let currentTheme: ThemeMode = DEFAULT_THEME_MODE;
+
+const SERVER_THEME_SNAPSHOT: ThemeSnapshot = {
+  theme: DEFAULT_THEME_MODE,
+  preference: DEFAULT_THEME_PREFERENCE,
+};
+
+function isThemeMode(value: string | undefined): value is ThemeMode {
+  return value === "dark" || value === "light";
+}
+
+function readDocumentThemeSnapshot(): ThemeSnapshot {
+  if (typeof document === "undefined") {
+    return SERVER_THEME_SNAPSHOT;
+  }
+
+  const root = document.documentElement;
+  const preference = parseThemePreference(root.dataset.themePreference);
+  const theme = isThemeMode(root.dataset.theme)
+    ? root.dataset.theme
+    : resolveThemeMode(preference, readSystemPrefersDark());
+
+  return { theme, preference };
+}
+
+let currentSnapshot = readDocumentThemeSnapshot();
 
 function readStoredTheme(): string | null {
   try {
@@ -38,14 +70,16 @@ function readSystemPrefersDark(): boolean {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
 }
 
-function applyTheme(theme: ThemeMode): void {
-  document.documentElement.dataset.theme = theme;
-  document.documentElement.style.colorScheme = theme;
+function applyTheme(snapshot: ThemeSnapshot): void {
+  const root = document.documentElement;
+  root.dataset.themePreference = snapshot.preference;
+  root.dataset.theme = snapshot.theme;
+  root.style.colorScheme = snapshot.theme;
 }
 
-function persistTheme(theme: ThemeMode): void {
+function persistTheme(preference: ThemePreference): void {
   try {
-    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    window.localStorage.setItem(THEME_STORAGE_KEY, preference);
   } catch {
     // Theme persistence is a preference, not a correctness dependency.
   }
@@ -57,12 +91,12 @@ function emitThemeChange(): void {
   }
 }
 
-function getThemeSnapshot(): ThemeMode {
-  return currentTheme;
+function getThemeSnapshot(): ThemeSnapshot {
+  return currentSnapshot;
 }
 
-function getServerThemeSnapshot(): ThemeMode {
-  return DEFAULT_THEME_MODE;
+function getServerThemeSnapshot(): ThemeSnapshot {
+  return SERVER_THEME_SNAPSHOT;
 }
 
 function subscribeTheme(listener: () => void): () => void {
@@ -70,36 +104,64 @@ function subscribeTheme(listener: () => void): () => void {
   return () => themeListeners.delete(listener);
 }
 
-function setThemePreference(nextTheme: ThemeMode): void {
-  if (currentTheme === nextTheme) {
-    applyTheme(nextTheme);
-    return;
-  }
+function updateThemeSnapshot(
+  preference: ThemePreference,
+  systemPrefersDark: boolean,
+  shouldPersist: boolean,
+): void {
+  const nextSnapshot: ThemeSnapshot = {
+    preference,
+    theme: resolveThemeMode(preference, systemPrefersDark),
+  };
+  const changed =
+    currentSnapshot.preference !== nextSnapshot.preference ||
+    currentSnapshot.theme !== nextSnapshot.theme;
 
-  currentTheme = nextTheme;
-  applyTheme(nextTheme);
-  persistTheme(nextTheme);
-  emitThemeChange();
+  currentSnapshot = nextSnapshot;
+  applyTheme(nextSnapshot);
+  if (shouldPersist) {
+    persistTheme(preference);
+  }
+  if (changed) {
+    emitThemeChange();
+  }
+}
+
+function setThemePreference(preference: ThemePreference): void {
+  updateThemeSnapshot(preference, readSystemPrefersDark(), true);
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const theme = useSyncExternalStore(
+  const snapshot = useSyncExternalStore(
     subscribeTheme,
     getThemeSnapshot,
     getServerThemeSnapshot,
   );
 
   useEffect(() => {
-    const resolvedTheme = resolveThemePreference(
-      readStoredTheme(),
+    updateThemeSnapshot(
+      parseThemePreference(readStoredTheme()),
       readSystemPrefersDark(),
+      false,
     );
-    setThemePreference(resolvedTheme);
+
+    const mediaQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!mediaQuery) return;
+
+    const handleSystemPreferenceChange = (event: MediaQueryListEvent) => {
+      if (currentSnapshot.preference === "system") {
+        updateThemeSnapshot("system", event.matches, false);
+      }
+    };
+    mediaQuery.addEventListener("change", handleSystemPreferenceChange);
+    return () => {
+      mediaQuery.removeEventListener("change", handleSystemPreferenceChange);
+    };
   }, []);
 
   useEffect(() => {
     function handleThemeToggle() {
-      setThemePreference(getThemeSnapshot() === "dark" ? "light" : "dark");
+      setThemePreference(currentSnapshot.theme === "dark" ? "light" : "dark");
     }
 
     window.addEventListener(THEME_TOGGLE_EVENT, handleThemeToggle);
@@ -108,12 +170,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  function setTheme(nextTheme: ThemeMode): void {
-    setThemePreference(nextTheme);
-  }
+  const setTheme = (preference: ThemePreference) => setThemePreference(preference);
 
   return (
-    <ThemeContext.Provider value={{ theme, setTheme }}>
+    <ThemeContext.Provider
+      value={{
+        theme: snapshot.theme,
+        preference: snapshot.preference,
+        setTheme,
+      }}
+    >
       {children}
     </ThemeContext.Provider>
   );

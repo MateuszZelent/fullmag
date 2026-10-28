@@ -541,6 +541,34 @@ def _serve_startup_diagnostics(service, paths, stopping, error):
                   file=sys.stderr, flush=True)
 
 
+def _start_cache_maintenance(service, receipt_path, ready_receipt):
+    if os.environ.get("FULLMAG_AUTO_CACHE_MAINTENANCE", "0") != "1":
+        return None
+    try:
+        import backend_auto_maintenance
+        return backend_auto_maintenance.start(receipt_path, service._atomic_json, ready_receipt)
+    except Exception as error:
+        print(f"[fullmag-backend] Cache maintenance could not start: {error}", file=sys.stderr, flush=True)
+        return None
+
+
+def _observe_cache_maintenance(maintenance, *, stopping=False):
+    if maintenance is None:
+        return
+    try:
+        if stopping:
+            maintenance.stop()
+        else:
+            maintenance.poll()
+    except Exception as error:
+        print(f"[fullmag-backend] Cache maintenance failed: {error}", file=sys.stderr, flush=True)
+        if not stopping:
+            try:
+                maintenance.stop()
+            except Exception as stop_error:
+                print(f"[fullmag-backend] Cache maintenance shutdown failed: {stop_error}", file=sys.stderr, flush=True)
+
+
 def serve():
     import runtime_service as service
     import runtime_service_unclaimed_cancellation as unclaimed_cancellation
@@ -600,6 +628,7 @@ def serve():
         api = subprocess.Popen(["/opt/fullmag/package/bin/fullmag-api"],
                                env=api_environment, stdin=restore_input)
     handle = None
+    maintenance = None
     receipt = {"schema": "fullmag.docker-process-tree.v1", "state": "starting",
                "api_pid": api.pid, "accepted_store": str(paths.store),
                "bootstrap": bootstrap, "qualification": "NOT VERIFIED"}
@@ -667,7 +696,9 @@ def serve():
         receipt.update(state="ready", service_owner=handle.owner)
         service._atomic_json(receipt_path, receipt, "process tree receipt")
         print("[fullmag-backend] Ready: API and runtime service", flush=True)
+        maintenance = _start_cache_maintenance(service, receipt_path, receipt)
         while not stopping.wait(1):
+            _observe_cache_maintenance(maintenance)
             status = api.poll()
             if status is not None:
                 raise RuntimeError(f"Fullmag API exited unexpectedly ({status})")
@@ -729,12 +760,13 @@ def serve():
         # Failed observation must preserve a possibly live detached service.
         # Keep PID 1 alive with admission closed until an explicit stop.
         while not stopping.wait(1):
-            pass
+            _observe_cache_maintenance(maintenance)
     finally:
         # Close this container's admission before draining its authenticated
         # scheduler owner. Never infer completion from an unconfirmed timeout.
         if api.poll() is None:
             api.terminate()
+        _observe_cache_maintenance(maintenance, stopping=True)
         try:
             receipt["api_exit_code"] = api.wait(timeout=10)
             if handle is not None:

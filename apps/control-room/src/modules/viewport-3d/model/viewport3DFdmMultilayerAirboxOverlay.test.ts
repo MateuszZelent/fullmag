@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { FdmMultilayerAirboxRenderView } from "../viewport3dDomainAdapter";
-import { resolveFdmMultilayerAirboxBoundsOverlay } from "./viewport3DFdmMultilayerAirboxOverlay";
+import {
+  resolveFdmMultilayerAirboxBoundsOverlay,
+  resolveFdmMultilayerAuthoredAirboxBoundsOverlay,
+} from "./viewport3DFdmMultilayerAirboxOverlay";
 
 const targetBounds = {
   center: [10, 20, 30] as [number, number, number],
@@ -77,6 +80,41 @@ describe("FDM multilayer Airbox bounds overlay model", () => {
         ...view,
         settings: { ...view.settings, ...settings },
       }),
+    ).toBeNull();
+  });
+});
+
+describe("FDM multilayer authored Airbox extent before a carrier is published", () => {
+  const universeBounds = {
+    center: [0, 0, 1] as [number, number, number],
+    radius: 3,
+    size: [4, 2, 2] as [number, number, number],
+  };
+
+  it("draws the authored Universe extent and wireframe while no carrier exists", () => {
+    expect(
+      resolveFdmMultilayerAuthoredAirboxBoundsOverlay(null, universeBounds, view.settings),
+    ).toEqual({
+      bounds: universeBounds,
+      boundsVisible: true,
+      fullWireframeVisible: true,
+      targetId: "airbox",
+    });
+  });
+
+  it("yields to a published carrier view and to hidden settings", () => {
+    expect(
+      resolveFdmMultilayerAuthoredAirboxBoundsOverlay(view, universeBounds, view.settings),
+    ).toBeNull();
+    expect(
+      resolveFdmMultilayerAuthoredAirboxBoundsOverlay(null, universeBounds, {
+        ...view.settings,
+        boundsVisible: false,
+        wireframeVisible: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveFdmMultilayerAuthoredAirboxBoundsOverlay(null, null, view.settings),
     ).toBeNull();
   });
 });

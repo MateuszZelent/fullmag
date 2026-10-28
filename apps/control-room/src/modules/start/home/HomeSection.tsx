@@ -5,6 +5,7 @@ import { useMemo, useState, useSyncExternalStore, type Ref } from "react";
 import { homeSubline, resolveContinue } from "../model/continueModel";
 import { startSettings } from "../model/startSettings";
 import type { ComputeProbeState, RecentEntry } from "../model/types";
+import type { ApiWorkspaceItem } from "../model/workspaceApiTypes";
 import { useContinueLive } from "../model/useContinueLive";
 import type { RecentIndexController } from "../model/useRecentIndex";
 import type { WorkspaceResultsView, WorkspaceScriptsView } from "../model/workspaceSource";
@@ -17,7 +18,7 @@ import { ContinueCard } from "./ContinueCard";
 import { LaunchTiles } from "./LaunchTiles";
 import { RecentProjects } from "./RecentProjects";
 
-const dateFormat = new Intl.DateTimeFormat(undefined, {
+const dateFormat = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   month: "long",
   weekday: "long",
@@ -50,6 +51,8 @@ export interface HomeSectionProps {
   readonly disabledReasons: Readonly<Record<string, string | null>>;
   readonly initialFocusRef?: Ref<HTMLButtonElement>;
   readonly onOpenRecent: (entry: RecentEntry) => Promise<string | null>;
+  /** Opens a result folder in read-only saved playback. */
+  readonly onOpenResult: (item: ApiWorkspaceItem) => Promise<string | null>;
   /** Restores the checkpoint into the open session; resolves to a failure message. */
   readonly onResumeContinue: (checkpointId: string, entry: RecentEntry) => Promise<string | null>;
   /** Deletes the checkpoint in the open session's runtime; resolves to a failure message. */
@@ -80,6 +83,7 @@ export function HomeSection({
   scriptFlowNotice = null,
   name,
   onOpenRecent,
+  onOpenResult,
   onResumeContinue,
   onDiscardContinue,
   onRunCommand,
@@ -133,9 +137,6 @@ export function HomeSection({
       {onOpenActiveSession ? (
         <ActiveSessions onOpen={onOpenActiveSession} sessions={activeSessions} />
       ) : null}
-      {onOpenInstance ? (
-        <OtherInstances instances={otherInstances} onOpen={onOpenInstance} />
-      ) : null}
       {session && resolution && continueEntry ? (
         <section aria-labelledby="fm-start-continue-title" className="fm-start-section">
           <SectionHeader id="fm-start-continue-title" title="Continue where you left off" />
@@ -177,7 +178,11 @@ export function HomeSection({
         canOpenScript={canOpenScript}
         scriptFlowNotice={scriptFlowNotice}
         onOpen={onOpenRecent}
+        onOpenResult={onOpenResult}
       />
+      {onOpenInstance ? (
+        <OtherInstances instances={otherInstances} onOpen={onOpenInstance} />
+      ) : null}
     </>
   );
 }

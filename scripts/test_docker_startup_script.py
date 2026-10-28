@@ -587,6 +587,17 @@ class StartupRejectionTests(unittest.TestCase):
                 stop=mock.Mock(return_value={"state": "drained"}),
                 _atomic_json=lambda _path, value, _label: receipts.append(copy.deepcopy(value)),
             )
+            maintenance = mock.Mock()
+            def start_maintenance(_service, _path, ready):
+                self.assertEqual(ready["state"], "ready")
+                self.assertEqual(receipts[-1]["state"], "ready")
+                api.terminate.assert_not_called()
+                return maintenance
+            def stop_maintenance():
+                api.terminate.assert_called_once()
+                service.stop.assert_not_called()
+                raise OSError("maintenance receipt failed")
+            maintenance.stop.side_effect = stop_maintenance
             def user_shutdown(_seconds):
                 api.terminate.assert_not_called()
                 self.assertEqual(receipts[-1]["state"], "ready")
@@ -602,11 +613,14 @@ class StartupRejectionTests(unittest.TestCase):
                     mock.patch.object(module.threading, "Event", return_value=event), \
                     mock.patch.object(module.signal, "signal"), \
                     mock.patch.object(module.subprocess, "Popen", return_value=api), \
+                    mock.patch.object(module, "_start_cache_maintenance", side_effect=start_maintenance) as maintenance_start, \
                     mock.patch.object(module, "activate_startup_script", side_effect=startup.run_from_environment), \
                     mock.patch.object(startup, "_load_provenance_with_digest", return_value=(authorization, "a" * 64)), \
                     mock.patch.object(startup, "_bounded_regular", side_effect=self.bounded_regular), \
                     mock.patch.object(startup, "activate", side_effect=startup.StartupScriptRejected(400, "bad_request", "unsupported model")):
                 self.assertEqual(module.serve(), 0)
+            maintenance_start.assert_called_once()
+            maintenance.stop.assert_called_once()
             service.stop.assert_called_once_with(handle, timeout=30)
             self.assertEqual(receipts[-1]["state"], "drained")
 

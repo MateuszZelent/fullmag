@@ -11,15 +11,21 @@ import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
 import nextConfig, {
+  controlRoomDocsProxyTarget,
   DOCKER_DEV_WATCH_POLLING_DEFAULT_MS,
   INSTANCE_TAB_FRAME_ANCESTORS,
   instanceTabFrameSources,
+  instanceTabPortsClientValue,
   isDockerDevGeneratedWatchPath,
   resolveControlRoomDistDir,
   resolveDockerDevWatchOptions,
   resolveDockerDevWatchPollingMs,
   validateManagedControlRoomStorage,
 } from "./next.config";
+import {
+  isInstanceTabHostOrigin,
+  parseInstanceTabPortWindow,
+} from "./src/kernel/layout/instanceTabVisibility";
 
 describe("control-room Next dev proxy config", () => {
   it("preserves bounded full archive uploads through the API proxy", () => {
@@ -33,6 +39,36 @@ describe("control-room Next dev proxy config", () => {
       destination: "/workspace",
       permanent: false,
     });
+  });
+
+  it("proxies /docs/:path* to the configured online documentation host when local static files are absent", async () => {
+    expect(controlRoomDocsProxyTarget()).toBe("https://fullmag.mzelent.pl");
+    const rewrites = await nextConfig.rewrites?.();
+    expect(Array.isArray(rewrites)).toBe(true);
+    expect(rewrites).toContainEqual({
+      source: "/docs/:path*",
+      destination: "https://fullmag.mzelent.pl/:path*",
+    });
+  });
+
+  it("permits MathJax, fonts, and logo assets needed by locally bundled /docs/ pages in CSP", async () => {
+    const headerRules = await nextConfig.headers?.();
+    expect(Array.isArray(headerRules)).toBe(true);
+    const cspHeader = headerRules?.[0]?.headers.find(
+      (header) => header.key === "Content-Security-Policy",
+    );
+    expect(cspHeader?.value).toContain(
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdn.jsdelivr.net",
+    );
+    expect(cspHeader?.value).toContain(
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    );
+    expect(cspHeader?.value).toContain(
+      "img-src 'self' data: blob: https://raw.githubusercontent.com",
+    );
+    expect(cspHeader?.value).toContain(
+      "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
+    );
   });
 
   it("keeps live Docker source trees watchable while ignoring generated trees", () => {
@@ -262,7 +298,9 @@ describe("control-room Next dev proxy config", () => {
 
   it("keeps generated Next route types stable across dev and audit builds", () => {
     const nextEnvSource = readFileSync(
-      new URL("./next-env.d.ts", import.meta.url),
+      process.env.FULLMAG_TEST_SOURCE_ROOT
+        ? resolve(process.env.FULLMAG_TEST_SOURCE_ROOT, "apps/control-room/next-env.d.ts")
+        : new URL("./next-env.d.ts", import.meta.url),
       "utf8",
     );
     const packageSource = readFileSync(
@@ -355,5 +393,19 @@ describe("instance tab framing (ADR 0069)", () => {
     ]);
     expect(() => instanceTabFrameSources("4001-4000")).toThrow();
     expect(() => instanceTabFrameSources("3000-3256")).toThrow();
+  });
+
+  it("gives the client the same window its CSP lists", () => {
+    expect(nextConfig.env?.FULLMAG_INSTANCE_TAB_PORTS).toBe(
+      instanceTabPortsClientValue(process.env.FULLMAG_INSTANCE_DISCOVERY_PORTS),
+    );
+    expect(instanceTabPortsClientValue(undefined)).toBe("3197-3260");
+    const ports = parseInstanceTabPortWindow(instanceTabPortsClientValue("4000-4001"));
+    expect(ports).toEqual({ first: 4000, last: 4001 });
+    for (const origin of instanceTabFrameSources("4000-4001").slice(1)) {
+      expect(isInstanceTabHostOrigin(origin, ports)).toBe(true);
+    }
+    expect(isInstanceTabHostOrigin("http://localhost:3999", ports)).toBe(false);
+    expect(isInstanceTabHostOrigin("http://localhost:4002", ports)).toBe(false);
   });
 });

@@ -11,6 +11,7 @@ import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationP
 import type { KernelApi } from "@/kernel/types";
 
 import FooterModule from "./FooterModule";
+import { setFooterChannelFilter } from "./footerUiStore";
 
 vi.mock("@/shared/analysis-charts/QuickChartResourceView", () => ({
   QuickChartResourceView: () => <div>Quick resource mounted</div>,
@@ -24,7 +25,8 @@ vi.mock("@/shared/ui/Tabs", () => ({
 }));
 
 describe("Footer Quick Chart lifecycle", () => {
-  it("mounts Quick Chart only while its footer tab is active", async () => {
+  it("keeps Quick Chart conditional and preserves the Logs toolbar state", async () => {
+    setFooterChannelFilter("transport");
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     dom.document.body.appendChild(container);
@@ -63,15 +65,39 @@ describe("Footer Quick Chart lifecycle", () => {
         );
       });
       expect(container.textContent).not.toContain("Quick resource mounted");
+      expect(container.querySelector(".fm-footer__clear")).not.toBeNull();
+      const httpFilter = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button[aria-pressed]"),
+      ).find((button) => button.textContent?.trim() === "HTTP");
+      expect(httpFilter?.getAttribute("aria-pressed")).toBe("false");
+      expect(container.textContent).not.toContain("HTTP + WS + Perf");
+
+      await act(async () => httpFilter?.click());
+      const selectedHttpFilter = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button[aria-pressed]"),
+      ).find((button) => button.textContent?.trim() === "HTTP");
+      expect(selectedHttpFilter?.getAttribute("aria-pressed")).toBe("true");
+
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>(".fm-footer__clear")?.click();
+      });
+      expect(kernel.commandDiagnostics.clear).toHaveBeenCalledTimes(1);
+      expect(kernel.diagnostics.clear).toHaveBeenCalledTimes(1);
 
       await act(async () => layout.openBottomPanel("quick-chart"));
       expect(container.textContent).toContain("Quick resource mounted");
+      expect(container.querySelector(".fm-footer__clear")).toBeNull();
       expect(layout.get().activeViewportMainModuleId).toBe("viewport-3d");
 
       await act(async () => layout.setBottomPanelTab("logs"));
       expect(container.textContent).not.toContain("Quick resource mounted");
+      const restoredHttpFilter = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button[aria-pressed]"),
+      ).find((button) => button.textContent?.trim() === "HTTP");
+      expect(restoredHttpFilter?.getAttribute("aria-pressed")).toBe("true");
     } finally {
       await act(async () => root.unmount());
+      setFooterChannelFilter("transport");
       dom.restore();
     }
   });

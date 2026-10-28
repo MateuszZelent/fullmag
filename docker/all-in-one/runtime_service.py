@@ -135,6 +135,9 @@ CONTAINER_RECOVERY_AUTHORIZATION_SCHEMA = (
 )
 CONTAINER_RECOVERY_AUTHORIZATION_SCHEMAS = frozenset({CONTAINER_RECOVERY_AUTHORIZATION_SCHEMA})
 CONTAINER_RECOVERY_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v1"
+CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v3"
+CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v4"
+CONTAINER_RECOVERY_CAPABILITIES_SCHEMA = "runtime_service_container_recovery_capabilities.v1"
 CONTAINER_RECOVERY_ATTESTATION_SCHEMA = "docker_namespace_teardown_attestation.v1"
 CONTAINER_RECOVERY_ABSENCE_ATTESTATION_SCHEMA = "docker_namespace_absence_attestation.v1"
 CONTAINER_RECOVERY_RECEIPT_SCHEMA = "runtime_service_container_recovery.v1"
@@ -3413,6 +3416,7 @@ def _run_cli(
     *,
     timeout: float,
     cli: Path | None = None,
+    raw_output: list[bytes] | None = None,
 ) -> dict[str, Any]:
     executable = _cli_path(paths, cli)
     if timeout <= 0:
@@ -3424,7 +3428,7 @@ def _run_cli(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        text=raw_output is None,
     )
     try:
         stdout, stderr = process.communicate(timeout=timeout)
@@ -3432,6 +3436,15 @@ def _run_cli(
         raise RuntimeServiceUnknown(
             "runtime CLI timed out; outcome is unknown and no retry is allowed"
         ) from error
+    if isinstance(stdout, bytes):
+        raw_stdout = stdout
+        try:
+            stdout = stdout.decode("utf-8", "strict")
+        except UnicodeDecodeError as error:
+            _fail(f"runtime CLI returned invalid UTF-8: {error}")
+        stderr = stderr.decode("utf-8", "replace")
+    else:
+        raw_stdout = stdout.encode("utf-8")
     if process.returncode != 0:
         detail = (stderr or stdout or "runtime CLI failed").strip()
         raise RuntimeServiceError(f"runtime CLI failed: {detail[-4096:]}")
@@ -3443,6 +3456,8 @@ def _run_cli(
         _fail(f"runtime CLI returned invalid JSON: {error}")
     if not isinstance(value, dict):
         _fail("runtime CLI must return a JSON object")
+    if raw_output is not None:
+        raw_output.append(raw_stdout)
     return value
 
 
@@ -3784,6 +3799,67 @@ def _container_recovery_owner_digest(paths: RuntimePaths) -> tuple[dict[str, Any
 
 
 def _container_recovery_expected_outcome(request: Mapping[str, Any]) -> str:
+    if request.get("schema_version") == CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA:
+        if "retained_cancelled_runs" in request:
+            _fail("v4 container recovery cannot carry cancelled-run pins")
+        terminal_pins = request.get("retained_terminal_runs")
+        held_pins = request.get("retained_held_manual_runs")
+        if not isinstance(terminal_pins, list) or not 0 <= len(terminal_pins) <= 128:
+            _fail("v4 container recovery requires 0..128 retained terminal run pins")
+        if not isinstance(held_pins, list) or not 1 <= len(held_pins) <= 128:
+            _fail("v4 container recovery requires 1..128 retained held-manual run pins")
+        if len(terminal_pins) + len(held_pins) > 128:
+            _fail("v4 container recovery retained run pins exceed the combined limit")
+        seen: set[str] = set()
+        for pin in terminal_pins:
+            if not isinstance(pin, dict) or set(pin) != {
+                "run_id", "run_intent_sha256", "run_catalog_sha256", "artifact_catalog_sha256"
+            }:
+                _fail("invalid v4 retained terminal run pin")
+            run_id = _recovery_store_id(pin.get("run_id"), "retained terminal run id")
+            if run_id in seen:
+                _fail("duplicate v4 retained run pin")
+            seen.add(run_id)
+            for key in ("run_intent_sha256", "run_catalog_sha256"):
+                _container_recovery_hex(pin.get(key), key)
+            if pin["artifact_catalog_sha256"] is not None:
+                _container_recovery_hex(pin["artifact_catalog_sha256"], "artifact catalog digest")
+        for pin in held_pins:
+            if not isinstance(pin, dict) or set(pin) != {
+                "run_id", "run_intent_sha256", "run_catalog_sha256", "start_release"
+            } or pin.get("start_release") != "absent":
+                _fail("invalid retained held-manual run pin")
+            run_id = _recovery_store_id(pin.get("run_id"), "retained held-manual run id")
+            if run_id in seen:
+                _fail("duplicate v4 retained run pin")
+            seen.add(run_id)
+            _container_recovery_hex(pin.get("run_intent_sha256"), "held-manual run intent digest")
+            _container_recovery_hex(pin.get("run_catalog_sha256"), "held-manual run catalog digest")
+        return "retained_manual_held_runs_recovered"
+    if "retained_held_manual_runs" in request:
+        _fail("held-manual run pins require container recovery v4")
+    if request.get("schema_version") == CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA:
+        if request.get("retained_cancelled_runs") is not None:
+            _fail("v3 container recovery cannot carry cancelled-only pins")
+        pins = request.get("retained_terminal_runs")
+        if not isinstance(pins, list) or not 1 <= len(pins) <= 128:
+            _fail("v3 container recovery requires 1..128 retained terminal run pins")
+        seen = set()
+        for pin in pins:
+            if not isinstance(pin, dict) or set(pin) != {
+                "run_id", "run_intent_sha256", "run_catalog_sha256", "artifact_catalog_sha256"}:
+                _fail("invalid retained terminal run pin")
+            run_id = _recovery_store_id(pin.get("run_id"), "retained terminal run id")
+            if run_id in seen:
+                _fail("duplicate retained terminal run pin")
+            seen.add(run_id)
+            for key in ("run_intent_sha256", "run_catalog_sha256"):
+                _container_recovery_hex(pin.get(key), key)
+            if pin["artifact_catalog_sha256"] is not None:
+                _container_recovery_hex(pin["artifact_catalog_sha256"], "artifact catalog digest")
+        return "retained_terminal_runs_recovered"
+    if request.get("retained_terminal_runs") is not None:
+        _fail("terminal run pins require container recovery v3")
     if request.get("schema_version") == CONTAINER_RECOVERY_REQUEST_SCHEMA:
         if request.get("retained_cancelled_runs") is not None:
             _fail("v1 container recovery cannot retain cancelled runs")
@@ -3873,6 +3949,12 @@ def _container_recovery_request_sources(
     return by_service, expected_owner
 
 
+def _container_recovery_mapping(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        _fail(f"{name} must contain an object")
+    return value
+
+
 def _validate_container_recovery_attestation_document(
     request: Mapping[str, Any],
     request_sha256: str,
@@ -3881,10 +3963,15 @@ def _validate_container_recovery_attestation_document(
 ) -> None:
     if attestation.get("schema_version") == CONTAINER_RECOVERY_ABSENCE_ATTESTATION_SCHEMA:
         if (
-            request.get("schema_version") != "runtime_service_container_recovery_request.v2"
-            or not isinstance(request.get("retained_cancelled_runs"), list)
+            (request.get("schema_version") != "runtime_service_container_recovery_request.v2"
+             or not isinstance(request.get("retained_cancelled_runs"), list))
+            and (request.get("schema_version") != CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA
+                 or not isinstance(request.get("retained_terminal_runs"), list))
+            and (request.get("schema_version") != CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA
+                 or not isinstance(request.get("retained_terminal_runs"), list)
+                 or not isinstance(request.get("retained_held_manual_runs"), list))
         ):
-            _fail("container namespace absence proof requires a retained-run v2 request")
+            _fail("container namespace absence proof requires a retained-run v2, v3 or v4 request")
         if set(attestation) != {
             "schema_version",
             "request_sha256",
@@ -3913,7 +4000,7 @@ def _validate_container_recovery_attestation_document(
             _fail("container namespace absence observation count differs from request")
         seen: set[str] = set()
         for raw in observations:
-            observed = _require_mapping(raw, "container namespace absence observation")
+            observed = _container_recovery_mapping(raw, "container namespace absence observation")
             if set(observed) != {
                 "container_id", "image_id", "config_sha256", "service", "absence"
             }:
@@ -3933,10 +4020,10 @@ def _validate_container_recovery_attestation_document(
                 for field in ("image_id", "config_sha256", "service")
             ):
                 _fail("container namespace absence identity differs from request")
-            absence = _require_mapping(observed.get("absence"), "container absence evidence")
+            absence = _container_recovery_mapping(observed.get("absence"), "container absence evidence")
             if set(absence) != {"inspect", "ps_all"}:
                 _fail("container namespace absence evidence has unexpected fields")
-            inspect = _require_mapping(absence.get("inspect"), "container inspect absence")
+            inspect = _container_recovery_mapping(absence.get("inspect"), "container inspect absence")
             if set(inspect) != {"outcome", "matched_container_id", "output_sha256"}:
                 _fail("container inspect absence has unexpected fields")
             if (
@@ -3947,7 +4034,7 @@ def _validate_container_recovery_attestation_document(
             _container_recovery_hex(
                 inspect.get("output_sha256"), "container inspect absence output SHA-256"
             )
-            ps_all = _require_mapping(absence.get("ps_all"), "container ps-all absence")
+            ps_all = _container_recovery_mapping(absence.get("ps_all"), "container ps-all absence")
             if set(ps_all) != {"outcome", "output_sha256"}:
                 _fail("container ps-all absence has unexpected fields")
             if ps_all.get("outcome") != "empty":
@@ -3957,7 +4044,7 @@ def _validate_container_recovery_attestation_document(
             )
         if len(seen) != len(requested):
             _fail("container namespace absence attestation omitted a pinned container")
-        release = _require_mapping(
+        release = _container_recovery_mapping(
             attestation.get("device_release"), "container absence device release"
         )
         release_fields = {"resource_id", "mapping_sha256", "mapping_detached"}
@@ -4766,18 +4853,165 @@ def container_recovery_configuration_override(
             os.environ["FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256"] = previous
 
 
+def _container_recovery_binary_sha(paths: RuntimePaths, cli: Path | None) -> str:
+    """Hash the canonical lifecycle ELF through a stable no-follow descriptor."""
+    executable = _cli_path(paths, cli)
+    canonical_executable = _absolute(paths.package / "bin" / "fullmag-bin", "native recovery binary")
+    if executable != canonical_executable:
+        _fail("v3 container recovery must probe the actual native package executable")
+    _assert_no_links(executable, "native recovery binary")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(executable, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 2 * GIB:
+            _fail("native recovery binary is not a bounded regular file")
+        digest = hashlib.sha256()
+        count = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            count += len(chunk)
+            if count > before.st_size:
+                _fail("native recovery binary grew during identity observation")
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        named = os.stat(executable, follow_symlinks=False)
+        def identity(value):
+            return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        if count != before.st_size or identity(before) != identity(after) or identity(after) != identity(named):
+            _fail("native recovery binary changed during identity observation")
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def _publish_container_capability_proof(paths: RuntimePaths, context, proof) -> None:
+    # This explicit runtime-services view is the named control volume. Never
+    # fall back to the host-backed store to publish technical build evidence.
+    if paths.runtime_services is None:
+        _fail("v3 native capability proof requires the explicit runtime-control volume")
+    root = runtime_services_root(paths) / "container-recovery" / context["request_sha256"] / "native-capabilities"
+    _ensure_directory(root, "native container recovery capability proof directory")
+    path = root / (proof["binary_sha256"] + "-" + proof["capabilities_raw_sha256"] + ".json")
+    raw = _canonical_container_recovery_json(proof) + b"\n"
+    try:
+        existing = _read_stable_container_recovery_file(path, "native capability proof", MAX_JSON_BYTES * 2)
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        if existing != raw:
+            _fail("native capability proof history already contains different bytes")
+        return
+    # A partial write must never occupy the deterministic immutable name.
+    # Only this invocation's disposable temporary is cleaned up. A hard link
+    # publishes flushed bytes atomically and refuses to replace any history.
+    temporary = root / ("." + path.name + "." + uuid.uuid4().hex + ".tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o660)
+    try:
+        try:
+            view = memoryview(raw)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    _fail("native capability proof write was incomplete")
+                view = view[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        _assert_no_links(root, "native capability publication directory")
+        try:
+            os.link(temporary, path, follow_symlinks=False)
+        except FileExistsError:
+            if _read_stable_container_recovery_file(path, "native capability proof", MAX_JSON_BYTES * 2) != raw:
+                _fail("native capability proof history already contains different bytes")
+    finally:
+        temporary.unlink()
+    directory = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _probe_container_recovery_capabilities(paths: RuntimePaths, context, *, cli, timeout):
+    """Pure native introspection precedes every first v3/v4 native mutation.
+
+    This gate qualifies the newly built executable inside the backend. It is
+    deliberately not evidence about the earlier host container-removal step.
+    """
+    binary_sha = _container_recovery_binary_sha(paths, cli)
+    provenance_raw = _read_stable_container_recovery_file(paths.provenance, "native package provenance", MAX_JSON_BYTES)
+    try:
+        provenance = json.loads(provenance_raw, object_pairs_hook=_reject_duplicate_keys)
+    except (ValueError, UnicodeDecodeError) as error:
+        _fail(f"native package provenance is invalid: {error}")
+    if not isinstance(provenance, dict):
+        _fail("native package provenance must be an object")
+    commit, snapshot = _source_identity(paths)
+    raw_output: list[bytes] = []
+    try:
+        capability = _run_cli(paths, ("runtime", "service-container-recovery-capabilities"),
+                              timeout=min(timeout, 30.0), cli=cli, raw_output=raw_output)
+    except RuntimeServiceError as error:
+        _fail("native container recovery capabilities are unavailable; no mutator was invoked: " + str(error))
+    if _container_recovery_binary_sha(paths, cli) != binary_sha:
+        _fail("native container recovery binary changed during capability probe")
+    if _read_stable_container_recovery_file(paths.provenance, "native package provenance", MAX_JSON_BYTES) != provenance_raw:
+        _fail("native package provenance changed during capability probe")
+    if not isinstance(capability, dict) or set(capability) != {"schema_version", "supported_recovery_schemas", "build_identity"} or capability.get("schema_version") != CONTAINER_RECOVERY_CAPABILITIES_SCHEMA:
+        _fail("native container recovery capability document has an unsupported schema")
+    supported = capability.get("supported_recovery_schemas")
+    if (not isinstance(supported, list) or not 1 <= len(supported) <= 16
+            or any(not isinstance(item, str) or len(item) > 128
+                   or re.fullmatch(r"runtime_service_container_recovery_request\.v[1-9][0-9]*", item) is None
+                   for item in supported)
+            or len(set(supported)) != len(supported)
+            or context["request"]["schema_version"] not in supported):
+        _fail("actual native executable does not support the requested container recovery schema")
+    build = capability.get("build_identity")
+    if not isinstance(build, dict) or set(build) != {"version", "built_at_utc", "git_commit", "worktree_state", "source_snapshot_sha256"}:
+        _fail("native recovery capabilities have an invalid build identity")
+    _container_recovery_text(build["version"], "native capability version", 128)
+    if (not isinstance(build["built_at_utc"], str)
+            or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", build["built_at_utc"]) is None
+            or not isinstance(build["worktree_state"], str)
+            or build["worktree_state"] not in {"clean", "dirty", "unknown"}
+            or build["git_commit"] != commit or build["source_snapshot_sha256"] != snapshot):
+        _fail("native capability build identity differs from pinned package provenance")
+    if len(raw_output) != 1 or not isinstance(raw_output[0], bytes):
+        _fail("native capability probe has no exact raw stdout evidence")
+    try:
+        raw_document = json.loads(raw_output[0], object_pairs_hook=_reject_duplicate_keys)
+    except (ValueError, UnicodeDecodeError) as error:
+        _fail(f"native capability stdout evidence is invalid: {error}")
+    if raw_document != capability:
+        _fail("native capability parsed result differs from its raw stdout")
+    proof = {"schema_version": "fullmag.native-container-recovery-capability-proof.v1",
+             "request_sha256": context["request_sha256"], "request_schema": context["request"]["schema_version"],
+             "binary_path": str(_cli_path(paths, cli)), "binary_sha256": binary_sha,
+             "capabilities_raw_sha256": _sha256_bytes(raw_output[0]), "capabilities_raw_utf8": raw_output[0].decode("utf-8"),
+             "provenance_sha256": _sha256_bytes(provenance_raw), "build_identity": dict(build)}
+    _publish_container_capability_proof(paths, context, proof)
+    return proof
+
+
 def _run_container_recovery_cli(
     paths: RuntimePaths,
     arguments: Sequence[str],
     *,
     timeout: float,
     cli: Path | None,
+    binary_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Retry only the transient native descriptor conflict for this recovery."""
 
     deadline = time.monotonic() + CONTAINER_RECOVERY_WRITER_BUSY_RETRY_SECONDS
     while True:
         try:
+            if binary_sha256 is not None and _container_recovery_binary_sha(paths, cli) != binary_sha256:
+                _fail("native container recovery binary changed before mutator invocation")
             return _run_cli(paths, arguments, timeout=timeout, cli=cli)
         except RuntimeServiceError as error:
             message = str(error).removeprefix("runtime CLI failed: ").strip()
@@ -4886,12 +5120,25 @@ def recover_container_namespace(
         "--attestation-sha256",
         context["attestation_sha256"],
     )
+    capability = None
+    if request.get("schema_version") in {
+        CONTAINER_RECOVERY_TERMINAL_REQUEST_SCHEMA,
+        CONTAINER_RECOVERY_HELD_MANUAL_REQUEST_SCHEMA,
+    }:
+        capability = _probe_container_recovery_capabilities(paths, context, cli=cli, timeout=timeout)
     result = _run_container_recovery_cli(
         paths,
         recovery_arguments,
         timeout=timeout,
         cli=cli,
+        **({"binary_sha256": capability["binary_sha256"]} if capability is not None else {}),
     )
+    if capability is not None and (
+        not isinstance(result, dict)
+        or result.get("executor_build_commit") != capability["build_identity"]["git_commit"]
+        or result.get("executor_build_snapshot") != capability["build_identity"]["source_snapshot_sha256"]
+    ):
+        _fail("native container recovery receipt executor differs from the capability-qualified binary")
     validated = _validate_container_recovery_receipt(paths, context, result)
     _, _, published_owner_sha256 = _container_recovery_owner_digest(paths)
     if published_owner_sha256 != validated.get("owner_sha256_after"):

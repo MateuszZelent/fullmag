@@ -23,7 +23,9 @@ describe("InstanceTabStrip helpers", () => {
 
   it("colours only running and failed sessions", () => {
     expect(sessionTone("running")).toBe("running");
-    expect(sessionTone("waiting_for_compute")).toBe("running");
+    expect(sessionTone("waiting_for_compute")).toBe("waiting");
+    expect(sessionTone("activating")).toBe("starting");
+    expect(sessionTone("materializing_script")).toBe("starting");
     expect(sessionTone("failed")).toBe("failed");
     expect(sessionTone("awaiting_command")).toBe("idle");
     expect(sessionTone(undefined)).toBe("idle");

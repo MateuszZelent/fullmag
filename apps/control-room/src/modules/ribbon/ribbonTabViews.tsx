@@ -5,15 +5,9 @@ import {
   Sparkles,
   Box,
   Camera,
-  Columns2,
   Monitor,
   PanelRight,
-  Play,
-  Pause,
-  SkipForward,
-  Square,
   Scissors,
-  BarChart3,
   Eye,
   Sigma,
   Zap,
@@ -42,6 +36,7 @@ import {
   fieldCatalogQuantitySupportsSpatialVisualization,
   quantityCatalogEntrySupportsAirbox,
   quantityCatalogEntrySupportsSpatialVisualization,
+  quantityCatalogPickerItem,
 } from "@/kernel/api/quantityIds";
 import { RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND } from "./ribbonCommands";
 
@@ -91,12 +86,14 @@ export function quantityItemsForVisualizationTarget(
             ? quantityCatalogEntrySupportsAirbox
             : quantityCatalogEntrySupportsSpatialVisualization,
         )
-        .map((quantity) => ({
-          label: quantity.unit
-            ? `${quantity.label} / ${quantity.unit}`
-            : quantity.label || quantity.id,
-          value: quantity.id,
-        }))
+        .map((quantity) =>
+          quantityCatalogPickerItem(
+            quantity,
+            quantity.unit
+              ? `${quantity.label} / ${quantity.unit}`
+              : quantity.label || quantity.id,
+          ),
+        )
     : [];
   const fieldItems = fieldCatalog
     ? fieldCatalog.quantities
@@ -134,10 +131,10 @@ export function quantityItemsForVisualizationTarget(
 }
 
 function mergeQuantityItems(
-  capabilityItems: Array<{ label: string; value: string }>,
+  capabilityItems: Array<{ disabled?: boolean; label: string; value: string }>,
   fieldItems: Array<{ label: string; value: string }>,
-): Array<{ label: string; value: string }> {
-  const merged = new Map<string, { label: string; value: string }>();
+): Array<{ disabled?: boolean; label: string; value: string }> {
+  const merged = new Map<string, { disabled?: boolean; label: string; value: string }>();
   for (const item of capabilityItems) merged.set(item.value, item);
   for (const item of fieldItems) {
     if (!merged.has(item.value)) merged.set(item.value, item);
@@ -222,10 +219,10 @@ export const homeTab: RibbonTabContent = {
       subtitle: "files",
       tone: "neutral",
       actions: [
-        { id: "open",       icon: icon(FileText),            label: "Open",      shortcut: "Ctrl+O", disabled: true, iconColor: C.blue, menu: menu("home-open", "Project", [["New problem", "Ctrl+N"], ["Open project", "Ctrl+O"], "Open example", "Recent sessions"]) },
+        { id: "open",       icon: icon(FileText),            label: "Open",      shortcut: "Ctrl+O", preview: true, disabled: true, iconColor: C.blue, menu: menu("home-open", "Project", [["New problem", "Ctrl+N"], ["Open project", "Ctrl+O"], "Open example", "Recent sessions"]) },
         { id: "study.save-field-state", icon: icon(Save), label: "Save Field", iconColor: C.blue },
         { id: "study.load-field-state", icon: icon(Upload), label: "Load Field", iconColor: C.lavender },
-        { id: "vis-preset", icon: icon(Sparkles),            label: "3D Visual", disabled: true,                     iconColor: C.lavender, menu: menu("home-visual", "Visual preset", ["Publication figure", "Live control room", "Debug overlays"]) },
+        { id: "vis-preset", icon: icon(Sparkles),            label: "3D Visual", preview: true, disabled: true, iconColor: C.lavender, menu: menu("home-visual", "Visual preset", ["Publication figure", "Live control room", "Debug overlays"]) },
       ],
     },
     {
@@ -235,47 +232,9 @@ export const homeTab: RibbonTabContent = {
       tone: "neutral",
       actions: [
         {
-          id: "viewport-3d.open",
-          icon: icon(Box),
-          label: "3D",
-          shortcut: "1",
-          iconColor: "text-indigo-400",
-          splitButton: true,
-          menu: [
-            {
-              type: "radio-group",
-              id: "home-workspace:radio",
-              label: "Workspace mode",
-              value: "3d",
-              items: [
-                {
-                  commandId: "viewport-3d.open",
-                  label: "3D viewport",
-                  value: "3d",
-                },
-                {
-                  commandId: "field-map.open",
-                  label: "2D field map",
-                  value: "field-map",
-                },
-                {
-                  commandId: "analysis-plots.open",
-                  label: "Analysis",
-                  value: "analysis",
-                },
-                {
-                  commandId: "live-charts.open",
-                  label: "Live Charts",
-                  value: "live-charts",
-                },
-              ],
-            },
-          ],
-        },
-        {
           id: "home-camera-rotation",
           icon: icon(Camera),
-          label: "Camera",
+          label: "Rotation mode",
           iconColor: "text-sky-300",
           menu: [
             {
@@ -298,14 +257,10 @@ export const homeTab: RibbonTabContent = {
             },
           ],
         },
-        { id: "ws-2d",      icon: icon(Columns2),  label: "2D",      shortcut: "2", commandId: "field-map.open", iconColor: C.sky },
-        { id: "ws-live-charts", icon: icon(Activity), label: "Live Charts", commandId: "live-charts.open", iconColor: C.blue },
-        { id: "ws-analyze", icon: icon(BarChart3), label: "Analyze",               commandId: "analysis-plots.open",       iconColor: C.green },
         {
           id: "ws-panel",
           icon: icon(PanelRight),
           label: "Panel",
-          shortcut: "Ctrl+B",
           menu: [
             { type: "label", id: "home-panels:label", label: "Panels" },
             {
@@ -334,26 +289,12 @@ export const homeTab: RibbonTabContent = {
               type: "item",
               id: "home-panels:reset-layout",
               label: "Reset layout",
+              preview: true,
               disabled: true,
             },
           ],
         },
-        { id: "ws-focus",   icon: icon(Eye),       label: "Focus",   disabled: true,               iconColor: C.teal },
-      ],
-    },
-    {
-      id: "compute",
-      title: "Compute",
-      subtitle: "runtime",
-      tone: "compute",
-      actions: [
-        { id: "study.prepare-live", icon: icon(Layers3), label: "Prepare", iconColor: C.blue, tooltip: "Materialize the current Live scene preparation receipt without starting the solver" },
-        { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Submit the study solve command" },
-        { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
-        { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
-        { id: "study.discard-paused-state", icon: icon(Scissors), label: "Discard", iconColor: C.red },
-        { id: "study.stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   iconColor: C.red },
-        { id: "study.skip",  icon: icon(SkipForward),                           label: "Skip",                   iconColor: C.peach },
+        { id: "ws-focus",   icon: icon(Eye),       label: "Focus", preview: true, disabled: true, iconColor: C.teal },
       ],
     },
   ],
@@ -906,7 +847,7 @@ export const viewTab: RibbonTabContent = {
         {
           id: "view-camera",
           icon: icon(Camera),
-          label: "Camera",
+          label: "Camera settings",
           iconColor: "text-sky-300",
           menu: [
             { type: "item", id: "camera:parameters", label: "Camera parameters", commandId: "viewport-3d.open-camera-dialog" },

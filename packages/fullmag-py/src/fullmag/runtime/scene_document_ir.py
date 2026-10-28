@@ -308,7 +308,36 @@ def scene_document_to_problem_ir(
         include_authored_stages=False,
         include_legacy_relax_stages=True,
     ) as capture:
-        return _scene_capture_to_ir(capture, include_geometry_assets=False)
+        problem_ir = _scene_capture_to_ir(capture, include_geometry_assets=False)
+        if capture.loaded.stages:
+            _drop_stage_default_table_cadence(problem_ir)
+        return problem_ir
+
+
+def _drop_stage_default_table_cadence(problem_ir: dict[str, object]) -> None:
+    """Keep a staged Study's accepted-step table clock out of its base study.
+
+    ``study.tableautosave(every_steps=...)`` on a staged Study is the default
+    its relaxation stages inherit. ProblemIR admits an accepted-step cadence
+    only on a relaxation study, so the non-relaxation base study must not
+    carry it; each stage still does.
+    """
+
+    study = problem_ir.get("study")
+    if not isinstance(study, dict) or study.get("kind") == "relaxation":
+        return
+    sampling = study.get("sampling")
+    if not isinstance(sampling, dict):
+        return
+    table = sampling.get("table_autosave")
+    if (
+        isinstance(table, dict)
+        and table.get("every_steps") is not None
+        and table.get("sample_period_s") is None
+        and table.get("sample_period_policy") is None
+        and table.get("resolved_sample_period_s") is None
+    ):
+        del sampling["table_autosave"]
 
 
 def scene_document_to_execution_config(

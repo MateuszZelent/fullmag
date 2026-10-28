@@ -35,6 +35,7 @@ from docker_build_control import (
 )
 from docker_compose_identity import compose_project_identity, source_labels, validate_source_labels
 from docker_dev_defaults import _validate_live_network, resolve_defaults
+from docker_backend_volume_cache import _safe_project_id as cache_project_id_for_layout
 
 
 PLAYWRIGHT_VERSION = "1.62.1"
@@ -51,6 +52,7 @@ BROWSER_IMAGE_DIGESTS = frozenset({
 })
 RESULT_SCHEMA = "fullmag.docker-dev-browser-qa-result.v1"
 AIRBOX_INSPECTOR_RESULT_SCHEMA = "fullmag.docker-dev-airbox-inspector-result.v1"
+SAVED_PLAYBACK_RESULT_SCHEMA = "fullmag.docker-dev-saved-playback-result.v1"
 OPERATION_SCHEMA = "fullmag.docker-dev-browser-qa.v1"
 BROWSER_IMAGE_RE = re.compile(
     r"^mcr\.microsoft\.com/playwright:v1\.62\.1-noble@sha256:([0-9a-f]{64})$"
@@ -185,6 +187,18 @@ def _script_bind_groups(selected: Path) -> list[str]:
         return []
     gid = (selected / "apps/control-room/scripts").stat().st_gid
     return [str(gid)] if gid not in (0, 65532) else []
+
+
+def _saved_playback_harness_sha256(selected: Path) -> str:
+    harness = selected / "apps/control-room/scripts/check-saved-playback-browser.mjs"
+    try:
+        with harness.open("rb") as source:
+            payload = source.read(2 * 1024 * 1024 + 1)
+    except OSError as error:
+        raise BuildControlError("Selected checkout is missing the Saved Playback browser harness") from error
+    if len(payload) > 2 * 1024 * 1024:
+        raise BuildControlError("Saved Playback browser harness exceeds its source pin bound")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _validate_frontend_volume(
@@ -348,6 +362,45 @@ def _read_recovered_development(control, original, selected, identity):
     }
 
 
+def _validate_shared_frontend_pnpm(document, identity):
+    """Admit only the canonical project-scoped pnpm mount introduced by DEV."""
+    import docker_shared_build_storage as shared
+    from docker_named_volume_safety import validate_local_named_volume
+    target = shared.SHARED_PNPM_TARGET
+    values = [entry.split("=", 1)[1] for entry in document.get("Config", {}).get("Env", [])
+              if isinstance(entry, str) and entry.startswith("FULLMAG_SHARED_PNPM_STORE=")]
+    mounts = document.get("Mounts") or []
+    if not values and not any(isinstance(m, Mapping) and m.get("Destination") == target for m in mounts):
+        return set()
+    if values != [target]:
+        raise BuildControlError("Frontend shared pnpm environment differs")
+    if not isinstance(identity.get("project_id"), str):
+        raise BuildControlError("Frontend shared pnpm cache project identity is unavailable")
+    descriptor = shared.volume_descriptors(identity["project_id"])[shared.PNPM_ROLE]
+    matches = [m for m in mounts if isinstance(m, Mapping) and
+               (m.get("Destination") == target or m.get("Name") == descriptor["name"])]
+    if (len(matches) != 1 or matches[0].get("Type") != "volume"
+            or matches[0].get("Destination") != target or matches[0].get("Name") != descriptor["name"]
+            or matches[0].get("RW") is not True):
+        raise BuildControlError("Frontend shared pnpm mount identity differs")
+    declarations = [m for m in document.get("HostConfig", {}).get("Mounts", [])
+                    if isinstance(m, Mapping) and m.get("Target") == target]
+    if (len(declarations) != 1 or declarations[0].get("Type") != "volume"
+            or declarations[0].get("Source") != descriptor["name"]
+            or declarations[0].get("ReadOnly", False) is not False
+            or declarations[0].get("VolumeOptions") != {"NoCopy": True, "Subpath": "store"}):
+        raise BuildControlError("Frontend shared pnpm subpath declaration differs")
+    volume = _inspect_existing_volume(descriptor["name"], "Shared frontend pnpm")
+    try:
+        validate_local_named_volume(volume, descriptor["name"])
+    except ValueError as error:
+        raise BuildControlError(str(error)) from error
+    labels = volume.get("Labels") or {}
+    if labels != descriptor["labels"]:
+        raise BuildControlError("Frontend shared pnpm ownership differs")
+    return {descriptor["name"]}
+
+
 def _validate_frontend(
     document: dict[str, object],
     control: BuildControl,
@@ -355,6 +408,7 @@ def _validate_frontend(
     frontend_volume: str,
     current: Mapping[str, object],
     port: int,
+    *, cache_project_id: str | None = None,
 ) -> None:
     try:
         validate_source_labels(document, identity)
@@ -392,12 +446,13 @@ def _validate_frontend(
     control_mounts = [m for m in mounts if isinstance(m, Mapping) and m.get("Destination") == "/opt/fullmag/control"]
     if len(control_mounts) != 1 or control_mounts[0].get("Type") != "volume" or control_mounts[0].get("Name") != control.volume or control_mounts[0].get("RW") is not False:
         raise BuildControlError("Frontend control mount is not the selected readonly control namespace")
+    shared_volumes = _validate_shared_frontend_pnpm(document, {"project_id": cache_project_id})
     for mount in mounts:
         if not isinstance(mount, Mapping):
             raise BuildControlError("Frontend mount record is invalid")
         if mount.get("Type") == "bind" and mount.get("RW") is not False:
             raise BuildControlError("Frontend has a writable host bind")
-        if mount.get("Type") == "volume" and mount.get("Name") not in {frontend_volume, control.volume}:
+        if mount.get("Type") == "volume" and mount.get("Name") not in {frontend_volume, control.volume, *shared_volumes}:
             raise BuildControlError("Frontend has an unexpected named volume")
 
 
@@ -666,7 +721,25 @@ def _compose_document(
     expect_airbox_vectors: bool | None = None,
     expect_ambiguous_compute_fields: bool | None = None,
     airbox_inspector: bool = False,
+    saved_playback_item_id: str | None = None,
+    source_script_sha256: str | None = None,
 ) -> dict[str, object]:
+    if saved_playback_item_id is not None:
+        if not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id):
+            raise BuildControlError("Saved Playback QA requires a decimal item id of at most 20 digits")
+        if not isinstance(source_script_sha256, str) or not SHA256_RE.fullmatch(source_script_sha256):
+            raise BuildControlError("Saved Playback QA requires the selected harness SHA-256")
+        if (
+            prepare_viewport_fixture
+            or canvas_only is not None
+            or expect_live_field is not None
+            or expect_airbox_vectors is not None
+            or expect_ambiguous_compute_fields is not None
+            or airbox_inspector
+        ):
+            raise BuildControlError("Saved Playback QA is a separate read-only browser scenario")
+    elif source_script_sha256 is not None:
+        raise BuildControlError("A saved playback harness hash requires its item id")
     if canvas_only is True and prepare_viewport_fixture:
         raise BuildControlError("Canvas-only browser QA cannot prepare a viewport fixture")
     if (expect_live_field is not None or expect_airbox_vectors is True) and canvas_only is not True:
@@ -681,6 +754,7 @@ def _compose_document(
         or expect_live_field is not None
         or expect_airbox_vectors is not None
         or expect_ambiguous_compute_fields is not None
+        or saved_playback_item_id is not None
     ):
         raise BuildControlError("Airbox Inspector QA is a separate live-resource scenario")
     labels = {
@@ -704,6 +778,10 @@ def _compose_document(
     }
     if airbox_inspector:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "airbox-inspector"
+    elif saved_playback_item_id is not None:
+        environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "saved-playback"
+        environment["CONTROL_ROOM_BROWSER_QA_SAVED_PLAYBACK_ITEM_ID"] = saved_playback_item_id
+        environment["CONTROL_ROOM_BROWSER_QA_SAVED_PLAYBACK_SCRIPT_SHA256"] = source_script_sha256
     if prepare_viewport_fixture:
         environment["CONTROL_ROOM_PREPARE_VIEWPORT_FIXTURE"] = "1"
     if canvas_only is not None:
@@ -736,11 +814,20 @@ def _compose_document(
                 "user": "65532:65532",
                 "group_add": _script_bind_groups(selected),
                 "working_dir": "/state/development/workspace/apps/control-room",
-                "command": [
-                    "node",
-                    "/state/development/workspace/apps/control-room/scripts/"
-                    + ("verify-airbox-inspector.mjs" if airbox_inspector else "docker-dev-browser-qa.mjs"),
-                ],
+                "command": (
+                    [
+                        "node",
+                        "/state/development/workspace/apps/control-room/scripts/check-saved-playback-browser.mjs",
+                        "http://frontend:8080",
+                        saved_playback_item_id,
+                    ]
+                    if saved_playback_item_id is not None
+                    else [
+                        "node",
+                        "/state/development/workspace/apps/control-room/scripts/"
+                        + ("verify-airbox-inspector.mjs" if airbox_inspector else "docker-dev-browser-qa.mjs"),
+                    ]
+                ),
                 "volumes": [
                     {
                         "type": "volume",
@@ -783,6 +870,8 @@ def _validate_browser_helper(
     expect_airbox_vectors: bool | None = None,
     expect_ambiguous_compute_fields: bool | None = None,
     airbox_inspector: bool = False,
+    saved_playback_item_id: str | None = None,
+    source_script_sha256: str | None = None,
 ) -> None:
     try:
         validate_source_labels(document, identity)
@@ -812,7 +901,27 @@ def _validate_browser_helper(
         "NVIDIA_VISIBLE_DEVICES=void",
     } - environment:
         raise ControlOutcomeUnknown("Browser helper runtime environment differs")
-    if airbox_inspector:
+    if saved_playback_item_id is not None:
+        if (not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id)
+                or not isinstance(source_script_sha256, str)
+                or not SHA256_RE.fullmatch(source_script_sha256)):
+            raise ControlOutcomeUnknown("Saved Playback helper identity is malformed")
+        if {
+            "CONTROL_ROOM_BROWSER_QA_SCENARIO=saved-playback",
+            f"CONTROL_ROOM_BROWSER_QA_SAVED_PLAYBACK_ITEM_ID={saved_playback_item_id}",
+            f"CONTROL_ROOM_BROWSER_QA_SAVED_PLAYBACK_SCRIPT_SHA256={source_script_sha256}",
+        } - environment:
+            raise ControlOutcomeUnknown("Browser helper Saved Playback scenario identity differs")
+        if config.get("Cmd") != [
+            "node",
+            "/state/development/workspace/apps/control-room/scripts/check-saved-playback-browser.mjs",
+            "http://frontend:8080",
+            saved_playback_item_id,
+        ]:
+            raise ControlOutcomeUnknown("Browser helper did not run the selected Saved Playback harness")
+    elif source_script_sha256 is not None:
+        raise ControlOutcomeUnknown("Saved Playback helper hash has no item identity")
+    elif airbox_inspector:
         if "CONTROL_ROOM_BROWSER_QA_SCENARIO=airbox-inspector" not in environment:
             raise ControlOutcomeUnknown("Browser helper Airbox Inspector scenario differs")
         if config.get("Cmd") != [
@@ -1397,13 +1506,13 @@ def _parse_airbox_inspector_result(
         raise BuildControlError("Airbox Inspector helper did not retain a live visible WebGL canvas")
 
     expected_panels = [
-        ("root", "model:airbox", "airbox.root", "Airbox", "Airbox Overview"),
-        ("mesh", "model:airbox:mesh", "airbox.mesh", "Mesh", "Airbox Mesh Overview"),
-        ("parameters", "model:airbox:mesh:parameters", "airbox.mesh.parameters", "Parameters", "Canonical Authored Parameters"),
-        ("quality-gates", "model:airbox:mesh:quality-gates", "airbox.mesh.quality-gates", "Quality Gates", "Airbox Quality Gates"),
-        ("statistics", "model:airbox:mesh:statistics", "airbox.mesh.statistics", "Statistics", "Airbox Mesh Statistics"),
-        ("topology", "model:airbox:mesh:topology", "airbox.mesh.topology", "Topology", "Airbox Mesh Topology"),
-        ("build", "model:airbox:mesh:build", "airbox.mesh.build", "Build & Provenance", "Airbox Mesh Build"),
+        ("root", "model:airbox", "airbox.root", "Airbox Overview", "Domain policy"),
+        ("mesh", "model:airbox:mesh", "airbox.mesh", "Airbox Mesh Overview", "Airbox Mesh Overview"),
+        ("parameters", "model:airbox:mesh:parameters", "airbox.mesh.parameters", "Airbox Mesh Parameters", "Canonical Authored Parameters"),
+        ("quality-gates", "model:airbox:mesh:quality-gates", "airbox.mesh.quality-gates", "Airbox Mesh Quality Gates", "Airbox Quality Gates"),
+        ("statistics", "model:airbox:mesh:statistics", "airbox.mesh.statistics", "Airbox Mesh Statistics", "Airbox Mesh Statistics"),
+        ("topology", "model:airbox:mesh:topology", "airbox.mesh.topology", "Airbox Mesh Topology", "Airbox Mesh Topology"),
+        ("build", "model:airbox:mesh:build", "airbox.mesh.build", "Airbox Mesh Build", "Airbox Mesh Build"),
     ]
     panels = proof.get("panels")
     if not isinstance(panels, list) or len(panels) != len(expected_panels):
@@ -1523,6 +1632,89 @@ def _parse_airbox_inspector_result(
             or not 250 <= refresh["delay_ms"] <= 2000):
         raise BuildControlError("Airbox Inspector root identity did not survive a bounded live resource refresh")
     _validate_resource_responses(payload.get("resource_responses"))
+    return payload
+
+
+def _parse_saved_playback_result(
+    output: bytes,
+    public_url: str,
+    browser_url: str,
+    expected_item_id: str,
+    expected_script_sha256: str,
+) -> dict[str, object]:
+    text = output.decode("utf-8", "replace")
+    payload = None
+    for line in reversed(text.splitlines()):
+        if not line.strip():
+            continue
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    if not isinstance(payload, dict):
+        raise BuildControlError("Saved Playback helper did not emit one JSON result")
+    if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_RESULT_BYTES:
+        raise BuildControlError("Saved Playback result exceeds its bounded evidence budget")
+    if (payload.get("schema") != SAVED_PLAYBACK_RESULT_SCHEMA
+            or payload.get("state") != "passed"
+            or payload.get("scenario") != "saved-playback"):
+        raise BuildControlError("Saved Playback helper reported a failed or unknown scenario")
+    if payload.get("item_id") != expected_item_id:
+        raise BuildControlError("Saved Playback helper inspected a different workspace item")
+    if (payload.get("public_url") != public_url
+            or payload.get("probe_url") != browser_url):
+        raise BuildControlError("Saved Playback helper URL differs from the selected frontend")
+    if payload.get("playwright_version") != PLAYWRIGHT_VERSION:
+        raise BuildControlError("Saved Playback Playwright version differs from the lock pin")
+    if payload.get("browser_gpu_mode") != "swiftshader-webgl-requested":
+        raise BuildControlError("Saved Playback helper browser mode differs")
+    if (payload.get("script_sha256") != expected_script_sha256
+            or not SHA256_RE.fullmatch(expected_script_sha256)):
+        raise BuildControlError("Saved Playback helper source hash differs from the admitted script")
+    if payload.get("frame_indices") != [0, 400, 800]:
+        raise BuildControlError("Saved Playback helper did not inspect first, midpoint, and last frames")
+    frame_hashes = payload.get("frame_sha256")
+    if (not isinstance(frame_hashes, list)
+            or len(frame_hashes) != 3
+            or any(not isinstance(value, str) or not SHA256_RE.fullmatch(value) for value in frame_hashes)):
+        raise BuildControlError("Saved Playback helper frame hashes are malformed")
+    drawing_buffer = payload.get("drawing_buffer")
+    if (not isinstance(drawing_buffer, list)
+            or len(drawing_buffer) != 2
+            or any(type(value) is not int or value <= 0 for value in drawing_buffer)):
+        raise BuildControlError("Saved Playback helper drawing buffer is invalid")
+    if (payload.get("canvas_visible") is not True
+            or payload.get("context_lost") is not False
+            or payload.get("field_payloads_verified") is not True
+            or payload.get("changed_canvas") is not True
+            or payload.get("inspector_stable") is not True
+            or payload.get("camera_stable") is not True):
+        raise BuildControlError("Saved Playback helper omitted the required visible canvas and data-plane evidence")
+    for key in ("hook_errors", "errors"):
+        value = payload.get(key)
+        if not isinstance(value, list) or value:
+            raise BuildControlError(f"Saved Playback helper reported {key}")
+
+    screenshot = payload.get("screenshot_base64")
+    if screenshot is not None:
+        if (not isinstance(screenshot, str)
+                or len(screenshot) > ((MAX_CANVAS_SCREENSHOT_BYTES + 2) // 3) * 4):
+            raise BuildControlError("Saved Playback screenshot exceeds its encoded size limit")
+        try:
+            screenshot_bytes = base64.b64decode(screenshot, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise BuildControlError("Saved Playback screenshot is not valid base64") from error
+        if (not screenshot_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+                or len(screenshot_bytes) > MAX_CANVAS_SCREENSHOT_BYTES
+                or len(screenshot_bytes) < 24
+                or int.from_bytes(screenshot_bytes[8:12], "big") != 13
+                or screenshot_bytes[12:16] != b"IHDR"
+                or int.from_bytes(screenshot_bytes[16:20], "big") <= 0
+                or int.from_bytes(screenshot_bytes[20:24], "big") <= 0):
+            raise BuildControlError("Saved Playback screenshot is not a bounded PNG")
     return payload
 
 
@@ -1686,6 +1878,8 @@ def _run(
     expect_ambiguous_compute_fields: bool = False,
     airbox_inspector: bool = False,
     airbox_inspector_script_sha256: str | None = None,
+    saved_playback_item_id: str | None = None,
+    source_script_sha256: str | None = None,
 ) -> None:
     root = operation["root"]
     helper_name = "fullmag-browser-qa-" + operation["receipt"]["attempt"][:12]
@@ -1736,8 +1930,14 @@ def _run(
         canvas_only=canvas_only,
         expect_live_field=expect_live_field if expect_live_field is not None else None,
         expect_airbox_vectors=expect_airbox_vectors if expect_live_field is not None else None,
-        expect_ambiguous_compute_fields=(expect_ambiguous_compute_fields if not airbox_inspector else None),
-        airbox_inspector=airbox_inspector)
+        expect_ambiguous_compute_fields=(
+            expect_ambiguous_compute_fields
+            if not airbox_inspector and saved_playback_item_id is None
+            else None
+        ),
+        airbox_inspector=airbox_inspector,
+        saved_playback_item_id=saved_playback_item_id,
+        source_script_sha256=source_script_sha256)
     operation["receipt"]["browser_container_id"] = observed["Id"]
     control.write(root + "/receipt.json", operation["receipt"])
     raw = result.stdout
@@ -1749,7 +1949,13 @@ def _run(
     })
     operation["daemon_pending"] = True
     try:
-        if airbox_inspector:
+        if saved_playback_item_id is not None:
+            if not source_script_sha256:
+                raise BuildControlError("Saved Playback helper source hash is missing")
+            payload = _parse_saved_playback_result(
+                raw, public_url, browser_url, saved_playback_item_id, source_script_sha256,
+            )
+        elif airbox_inspector:
             if not airbox_inspector_script_sha256:
                 raise BuildControlError("Airbox Inspector helper source hash is missing")
             payload = _parse_airbox_inspector_result(
@@ -1820,6 +2026,30 @@ def reconcile_browser_qa(control, selected, identity, args):
         raise BuildControlError("QA reconciliation inputs are missing")
     if inputs.get("source_root") != str(selected) or inputs.get("worktree_id") != identity["worktree_id"]:
         raise BuildControlError("QA reconciliation source identity differs")
+    scenario = inputs.get("scenario", "standard")
+    if scenario not in {"standard", "airbox-inspector", "saved-playback"}:
+        raise BuildControlError("QA reconciliation scenario is unsupported")
+    saved_playback_item_id = None
+    source_script_sha256 = None
+    if scenario == "saved-playback":
+        saved_playback_item_id = inputs.get("saved_playback_item_id")
+        source_script_sha256 = inputs.get("source_script_sha256")
+        if (not isinstance(saved_playback_item_id, str)
+                or not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id)
+                or not isinstance(source_script_sha256, str)
+                or not SHA256_RE.fullmatch(source_script_sha256)):
+            raise BuildControlError("QA reconciliation Saved Playback source identity is malformed")
+        if _saved_playback_harness_sha256(selected) != source_script_sha256:
+            raise BuildControlError("QA reconciliation Saved Playback harness source changed")
+        if (inputs.get("prepare_viewport_fixture") is not False
+                or inputs.get("canvas_only") is not False
+                or inputs.get("expect_live_field") is not None
+                or inputs.get("expect_airbox_vectors") is not False
+                or inputs.get("expect_ambiguous_compute_fields") is not False):
+            raise BuildControlError("QA reconciliation Saved Playback receipt includes another browser scenario")
+    elif "saved_playback_item_id" in inputs or "source_script_sha256" in inputs:
+        raise BuildControlError("QA reconciliation non-playback receipt contains Saved Playback identity")
+    airbox_inspector = scenario == "airbox-inspector"
     prepare_viewport_fixture = inputs.get("prepare_viewport_fixture", False)
     if type(prepare_viewport_fixture) is not bool:
         raise BuildControlError("QA reconciliation viewport fixture input must be boolean")
@@ -1877,10 +2107,16 @@ def reconcile_browser_qa(control, selected, identity, args):
     expected_document = _compose_document(selected, identity, inputs["browser_image"],
         inputs["frontend_volume"], args.port, inputs["browser_runtime_timeout"],
         prepare_viewport_fixture=prepare_viewport_fixture,
-        canvas_only=canvas_only_compose_pin,
-        expect_live_field=expect_live_field_compose_pin,
-        expect_airbox_vectors=expect_airbox_compose_pin,
-        expect_ambiguous_compute_fields=expect_ambiguous_command_compose_pin)
+        canvas_only=(None if scenario == "saved-playback" or airbox_inspector else canvas_only_compose_pin),
+        expect_live_field=(None if scenario == "saved-playback" else expect_live_field_compose_pin),
+        expect_airbox_vectors=(None if scenario == "saved-playback" else expect_airbox_compose_pin),
+        expect_ambiguous_compute_fields=(
+            None if scenario == "saved-playback" or airbox_inspector
+            else expect_ambiguous_command_compose_pin
+        ),
+        airbox_inspector=airbox_inspector,
+        saved_playback_item_id=saved_playback_item_id,
+        source_script_sha256=source_script_sha256)
     if canonical(document) != canonical(expected_document):
         raise BuildControlError("QA reconciliation Compose recipe differs")
     helper_name = "fullmag-control-" + attempt
@@ -1929,10 +2165,16 @@ def reconcile_browser_qa(control, selected, identity, args):
         raise BuildControlError("QA reconciliation browser image pin differs")
     _validate_browser_helper(observed, control, identity, inputs["frontend_volume"],
         image_id, state["ExitCode"], selected,
-        canvas_only=canvas_only_compose_pin,
-        expect_live_field=expect_live_field_compose_pin,
-        expect_airbox_vectors=expect_airbox_compose_pin,
-        expect_ambiguous_compute_fields=expect_ambiguous_command_compose_pin)
+        canvas_only=(None if scenario == "saved-playback" or airbox_inspector else canvas_only_compose_pin),
+        expect_live_field=(None if scenario == "saved-playback" else expect_live_field_compose_pin),
+        expect_airbox_vectors=(None if scenario == "saved-playback" else expect_airbox_compose_pin),
+        expect_ambiguous_compute_fields=(
+            None if scenario == "saved-playback" or airbox_inspector
+            else expect_ambiguous_command_compose_pin
+        ),
+        airbox_inspector=airbox_inspector,
+        saved_playback_item_id=saved_playback_item_id,
+        source_script_sha256=source_script_sha256)
     service = document["services"]["browser-qa"]
     if (observed["Config"].get("Cmd") != service["command"]
             or observed["Config"].get("Entrypoint") != image["Config"].get("Entrypoint")):
@@ -2030,6 +2272,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run the read-only live Airbox mesh Inspector proof in the managed browser service",
     )
+    parser.add_argument(
+        "--saved-playback-item-id",
+        help="Inspect one registered saved-results item through its read-only playback resource",
+    )
     parser.add_argument("--reconcile-attempt")
     parser.add_argument("--expected-receipt-sha256")
     parser.add_argument("--expected-compose-sha256")
@@ -2070,6 +2316,20 @@ def main(argv: list[str] | None = None) -> int:
         or args.expect_ambiguous_compute_fields
     ):
         raise BuildControlError("--airbox-inspector cannot be combined with other browser QA scenarios")
+    if args.saved_playback_item_id is not None:
+        if not re.fullmatch(r"[0-9]{1,20}", args.saved_playback_item_id):
+            raise BuildControlError("--saved-playback-item-id requires at most 20 decimal digits")
+        if (
+            args.prepare_viewport_fixture
+            or args.canvas_only
+            or args.expect_live_field is not None
+            or args.expect_airbox_vectors
+            or args.expect_ambiguous_compute_fields
+            or args.airbox_inspector
+        ):
+            raise BuildControlError("--saved-playback-item-id cannot be combined with another browser QA scenario")
+        if args.reconcile_attempt:
+            raise BuildControlError("Saved Playback reconciliation uses the item id retained in its receipt")
     if not isinstance(args.browser_image, str) or not args.browser_image:
         raise BuildControlError("Browser QA requires a pinned Playwright image reference")
     _validate_browser_image_reference(args.browser_image)
@@ -2086,7 +2346,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     _validate_frontend_volume(control, frontend_volume, frontend_inputs)
     frontend = _inspect(frontend_id)
-    _validate_frontend(frontend, control, identity, frontend_volume, current, args.port)
+    _validate_frontend(frontend, control, identity, frontend_volume, current, args.port, cache_project_id=cache_project_id_for_layout(layout))
     try:
         _validate_live_network(backend_id, frontend_id, control.project, args.port)
     except BuildControlError as error:
@@ -2094,11 +2354,14 @@ def main(argv: list[str] | None = None) -> int:
     public_url = f"http://127.0.0.1:{args.port}"
     browser_url = "http://frontend:8080"
     airbox_inspector_script_sha256 = None
+    source_script_sha256 = None
     if args.airbox_inspector:
         harness = selected / "apps/control-room/scripts/verify-airbox-inspector.mjs"
         if not harness.is_file():
             raise BuildControlError("Selected checkout is missing the Airbox Inspector browser harness")
         airbox_inspector_script_sha256 = hashlib.sha256(harness.read_bytes()).hexdigest()
+    if args.saved_playback_item_id is not None:
+        source_script_sha256 = _saved_playback_harness_sha256(selected)
     document = _compose_document(
         selected,
         identity,
@@ -2107,11 +2370,16 @@ def main(argv: list[str] | None = None) -> int:
         args.port,
         args.timeout,
         prepare_viewport_fixture=args.prepare_viewport_fixture,
-        canvas_only=(None if args.airbox_inspector else args.canvas_only),
+        canvas_only=(None if args.airbox_inspector or args.saved_playback_item_id is not None else args.canvas_only),
         expect_live_field=args.expect_live_field,
         expect_airbox_vectors=(args.expect_airbox_vectors if args.expect_live_field is not None else None),
-        expect_ambiguous_compute_fields=(None if args.airbox_inspector else args.expect_ambiguous_compute_fields),
+        expect_ambiguous_compute_fields=(
+            None if args.airbox_inspector or args.saved_playback_item_id is not None
+            else args.expect_ambiguous_compute_fields
+        ),
         airbox_inspector=args.airbox_inspector,
+        saved_playback_item_id=args.saved_playback_item_id,
+        source_script_sha256=source_script_sha256,
     )
     source_commit = (current.get("source_commit") or (current.get("inputs") or {}).get("source_commit"))
     inputs = {
@@ -2141,9 +2409,16 @@ def main(argv: list[str] | None = None) -> int:
         "expect_live_field": args.expect_live_field,
         "expect_airbox_vectors": args.expect_airbox_vectors,
         "expect_ambiguous_compute_fields": args.expect_ambiguous_compute_fields,
-        "scenario": "airbox-inspector" if args.airbox_inspector else "standard",
+        "scenario": (
+            "saved-playback" if args.saved_playback_item_id is not None
+            else "airbox-inspector" if args.airbox_inspector
+            else "standard"
+        ),
         "airbox_inspector_script_sha256": airbox_inspector_script_sha256,
     }
+    if args.saved_playback_item_id is not None:
+        inputs["saved_playback_item_id"] = args.saved_playback_item_id
+        inputs["source_script_sha256"] = source_script_sha256
     with control.operation("browser-qa", inputs) as operation:
         live_fence = control.read("development/current.json")
         if hashlib.sha256(canonical(live_fence)).hexdigest() != current["development_fence_sha256"]:
@@ -2162,12 +2437,14 @@ def main(argv: list[str] | None = None) -> int:
             public_url,
             browser_url,
             args.timeout,
-            (None if args.airbox_inspector else args.canvas_only),
+            (None if args.airbox_inspector or args.saved_playback_item_id is not None else args.canvas_only),
             args.expect_live_field,
             args.expect_airbox_vectors,
             args.expect_ambiguous_compute_fields,
             args.airbox_inspector,
             airbox_inspector_script_sha256,
+            args.saved_playback_item_id,
+            source_script_sha256,
         )
     return 0
 

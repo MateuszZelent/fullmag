@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { Button } from "./Button";
 
 describe("Button", () => {
-  it("renders shadcn-compatible button variants with fm-prefixed classes", () => {
+  it("renders the selected FM variant and size without duplicate utility styling", () => {
     const html = renderToStaticMarkup(
       <Button size="sm" variant="primary">
         Run
@@ -15,11 +15,11 @@ describe("Button", () => {
     expect(html).toContain("fm-button--primary");
     expect(html).toContain("fm-button--sm");
     expect(html).toContain('data-slot="button"');
-    expect(html).toContain("h-fm-control-sm");
-    expect(html).toContain("bg-fm-accent");
-    expect(html).toContain("text-fm-inverse");
-    expect(html).toContain("shadow-fm-control");
-    expect(html).toContain("active:scale-[0.98]");
+    expect(html).not.toContain("h-fm-control-sm");
+    expect(html).not.toContain("bg-fm-accent");
+    expect(html).not.toContain("text-fm-inverse");
+    expect(html).not.toContain("shadow-fm-control");
+    expect(html).not.toContain("active:scale-");
     expect(html).toContain(">Run</button>");
   });
 });

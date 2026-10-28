@@ -5,7 +5,7 @@
 
 ## 1. Principle
 
-Menu items, ribbon buttons, viewport toolbar controls, context menus, shortcuts, and command palette entries are renderers of one command registry. A command exists once.
+Menu items, ribbon buttons, viewport toolbar controls, context menus, shortcuts, and command palette entries are renderers of one command registry. A command exists once; several renderers may expose the same command when that helps the current task.
 
 Ribbon, toolbar, menu, context-menu, tab, tooltip, and command-palette renderers are built from shared shadcn/ui-style primitives. Module contributions describe commands and groups; they do not define bespoke button systems.
 
@@ -33,7 +33,8 @@ Command ids use domain names: `mesh.build-selected`, `study.run-active`, `viewpo
 
 | Context | Groups |
 |---|---|
-| `Home` | session, open/recent, export, diagnostics |
+| `Workspace` (`home` tab id) | project and field state, model readiness, layout, capture |
+| `View` | display defaults, selected object, camera settings, orientation, planar monitor, overlays |
 | `Definitions` | parameters, materials, named quantities, Python sync |
 | `Geometry` | primitives, transforms, booleans, validation, view tools |
 | `Materials` | material library, assignment, tensor/scalar edits |
@@ -43,9 +44,13 @@ Command ids use domain names: `mesh.build-selected`, `study.run-active`, `viewpo
 | `Results` | datasets, charts, artifacts, export |
 | `Automation` | scripts, batch, managed runtimes, schedules |
 
-Modules contribute groups declaratively. The ribbon chooses visible groups from active context, selection, and capability state.
+Modules contribute groups declaratively. The ribbon chooses visible groups from active context, selection, and capability state. Workspace does not duplicate the viewport surface selector: 3D, 2D, Live Charts, and Analysis remain owned by the viewport tabs, with their command IDs and shortcuts available through the command registry. Rotation mode (Free camera/Object orbit) and Camera settings are separate actions.
 
-The ribbon visual layer consumes Catppuccin-backed `--fm-*` tokens only. Raw colors, module-local button styles, and duplicate command widgets are not allowed.
+The ribbon defaults to full density. Users can persist Compact or Collapsed density; Ctrl+F1 cycles these modes through the registered `ribbon.display.cycle-density` command. Full and Compact retain action labels at narrow widths and use visible horizontal overflow. Collapsed exposes each group by name and renders its existing actions inside that group menu. Every density preserves command ID, input, shortcut, capability gate, disabled reason, active command details, and command feedback ownership.
+
+Ribbon action labels and density control text are at least 12 px; interactive targets are at least 24 px. Toolbar groups have accessible names and horizontal arrow navigation with one tab stop per group. Arrow handling does not intercept inputs, selects, sliders, or open menus. Disabled controls remain focusable through their explanation wrapper.
+
+The ribbon visual layer consumes Catppuccin-backed `--fm-*` tokens only. Category-colored icons and group accents use the explicit `data-category` role with runtime, solver, magnetization, and energy tokens; command status colors are reserved for status indicators. Raw colors, module-local button styles, and duplicate command widgets are not allowed.
 
 ## 4. Button States
 
@@ -59,8 +64,11 @@ Ribbon buttons must distinguish:
 - pending command acceptance;
 - failed last command;
 - stale resource dependency.
+- degraded capability or resource, when the owning resource supplies that state.
 
-Disabled controls need an explanation. Hidden controls are allowed only when a module is disabled or a command is irrelevant to the active context.
+Disabled controls need an explanation. Production may omit an explicitly marked, unimplemented preview; other hidden controls are allowed only when a module is disabled or a command is irrelevant to the active context.
+
+Command feedback distinguishes submitted/ACK from backend completion. Pending means acceptance or completion is not confirmed; Running is shown only when an active command or matching command-queue record supports it. Failed, stale, and degraded states retain their own labels and are not inferred from color alone. Foreground error notices have one shell presenter; ribbon indicators are inline status summaries and do not emit a second toast.
 
 ## 5. Toolbars
 
@@ -68,7 +76,7 @@ Viewport toolbars are command renderers with compact placement. They may hold tr
 
 Common toolbar groups:
 
-- view mode: 3D, 2D, split, chart;
+- view mode: 3D, 2D, Live Charts, Analysis (owned by viewport tabs);
 - quantity: active field/scalar quantity;
 - layers: mesh, vectors, scalar surface, airbox, axes, selection;
 - selected target display: shader, vectors, wireframe, points, opacity, and clear overrides for the selected object or airbox;

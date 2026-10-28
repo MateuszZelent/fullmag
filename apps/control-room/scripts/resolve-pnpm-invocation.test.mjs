@@ -206,7 +206,11 @@ describe("dev-server launcher contract", () => {
       "utf8",
     );
     const webShim = readFileSync(
-      resolve(scriptDir, "../../web/dev-server.mjs"),
+      // The managed frontend shadow intentionally contains only Control Room.
+      // Read cross-app source contracts from the explicitly pinned readonly checkout.
+      process.env.FULLMAG_TEST_SOURCE_ROOT
+        ? resolve(process.env.FULLMAG_TEST_SOURCE_ROOT, "apps/web/dev-server.mjs")
+        : resolve(scriptDir, "../../web/dev-server.mjs"),
       "utf8",
     );
 

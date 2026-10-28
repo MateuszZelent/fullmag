@@ -3449,6 +3449,35 @@ pub fn load_accepted_study_snapshot(
         .study_catalog_object_ref
         .as_deref()
         .context("accepted run has no immutable study catalog object")?;
+    let key = crate::study_snapshot_cache::AcceptedStudyKey::new(
+        store.root(),
+        run_id.as_str(),
+        &intent.payload_sha256,
+        study_ref,
+        catalog_ref,
+    );
+    let validated = crate::study_snapshot_cache::get_or_try_insert(key, || {
+        validate_accepted_study_inputs(store, &run, study_ref, catalog_ref)
+    })?;
+    let (study, catalog, lowered) = (*validated).clone();
+    Ok(AcceptedStudySnapshot {
+        run,
+        study,
+        catalog,
+        lowered,
+    })
+}
+
+/// Everything here is a pure function of the run's immutable RunSpec and the
+/// content-addressed objects it names, so a validated result is memoized.
+fn validate_accepted_study_inputs(
+    store: &SessionStore,
+    run: &crate::AcceptedRunSnapshot,
+    study_ref: &str,
+    catalog_ref: &str,
+) -> Result<crate::study_snapshot_cache::ValidatedAcceptedStudy> {
+    let intent = &run.intent;
+    let specification = &run.specification;
     let study_bytes = store
         .cas()
         .get(study_ref)?
@@ -3503,13 +3532,8 @@ pub fn load_accepted_study_snapshot(
     }
     let lowered = lower_study_plan_with_catalog(&study, &catalog)
         .context("lower immutable study through canonical planner")?;
-    validate_requested_execution(&specification, &catalog, &lowered)?;
-    Ok(AcceptedStudySnapshot {
-        run,
-        study,
-        catalog,
-        lowered,
-    })
+    validate_requested_execution(specification, &catalog, &lowered)?;
+    Ok((study, catalog, lowered))
 }
 
 pub fn validate_requested_execution(

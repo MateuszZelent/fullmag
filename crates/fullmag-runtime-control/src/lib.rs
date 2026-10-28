@@ -30,8 +30,9 @@ use fullmag_session::{
     FMS_COORDINATOR_JOURNAL_SCHEMA,
 };
 
-/// Retry only a transient native store-writer conflict for the same
-/// idempotent operation. Process- and thread-dependent jitter prevents
+/// Retry only a transient native store-writer conflict, or transient store
+/// I/O (see `is_transient_store_io`), for the same idempotent operation.
+/// Process- and thread-dependent jitter prevents
 /// scheduler, supervisor, and worker loops from repeatedly colliding in
 /// lockstep while preserving the five-second bounded wait.
 pub fn retry_store_writer_busy<T>(operation: impl FnMut() -> Result<T>) -> Result<T> {
@@ -58,9 +59,10 @@ pub fn retry_store_writer_busy_within<T>(
         match operation() {
             Ok(value) => return Ok(value),
             Err(error)
-                if error
+                if (error
                     .chain()
                     .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                    || is_transient_store_io(&error))
                     && Instant::now() < deadline =>
             {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -76,10 +78,24 @@ pub fn retry_store_writer_busy_within<T>(
     }
 }
 
-/// Worker retry for idempotent store operations: a busy writer is waited for
-/// up to `WORKER_STORE_WRITER_WAIT`, and a file that briefly reads as missing
-/// (an atomic replace seen through a Docker Desktop host folder) for a few
-/// seconds. A genuinely missing file still fails after that short bound.
+/// A store I/O failure that a later attempt can be expected to clear. A
+/// Windows-folder (9p/drvfs) store under load intermittently fails reads and
+/// writes with ENOMEM although the container has free memory; that failure
+/// changes no durable state, so a scheduler can defer and retry the pass.
+pub fn is_transient_store_io(error: &anyhow::Error) -> bool {
+    const ENOMEM: i32 = 12;
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.raw_os_error() == Some(ENOMEM))
+    })
+}
+
+/// Worker retry for idempotent store operations: a busy writer or transient
+/// store I/O is waited for up to `WORKER_STORE_WRITER_WAIT`, and a file that
+/// briefly reads as missing (an atomic replace seen through a Docker Desktop
+/// host folder) for a few seconds. A genuinely missing file still fails after
+/// that short bound.
 pub fn retry_worker_store_transient<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
     use std::time::{Duration, Instant};
 
@@ -759,6 +775,7 @@ pub use study_field_tensor::{
 mod study_dataset;
 
 mod study;
+mod study_snapshot_cache;
 mod study_completion;
 pub use study::{
     load_accepted_study_snapshot, load_accepted_worker_step, load_accepted_worker_step_for_start,
@@ -786,6 +803,43 @@ mod tests {
         FmsResourceLeaseState, FmsRunCatalog, FmsTaskCatalogEntry, FmsTaskLifecycle,
         FmsTaskReadiness, FMS_RESOURCE_LEASE_SCHEMA, FMS_RUN_CATALOG_SCHEMA,
     };
+
+    #[test]
+    fn only_enomem_store_io_is_transient() {
+        let enomem = anyhow::Error::from(std::io::Error::from_raw_os_error(12))
+            .context("reconcile released host reservations");
+        assert!(super::is_transient_store_io(&enomem));
+        let denied =
+            anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert!(!super::is_transient_store_io(&denied));
+        assert!(!super::is_transient_store_io(&anyhow::anyhow!(
+            "lease identity differs"
+        )));
+    }
+
+    #[test]
+    fn store_retry_repeats_transient_enomem_but_not_other_io_errors() {
+        let mut attempts = 0;
+        let value = super::retry_store_writer_busy(|| {
+            attempts += 1;
+            if attempts < 3 {
+                return Err(anyhow::Error::from(std::io::Error::from_raw_os_error(12))
+                    .context("list run intents"));
+            }
+            Ok(attempts)
+        })
+        .unwrap();
+        assert_eq!(value, 3);
+
+        let mut denied_attempts = 0;
+        let error = super::retry_store_writer_busy(|| -> anyhow::Result<()> {
+            denied_attempts += 1;
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied).into())
+        })
+        .unwrap_err();
+        assert_eq!(denied_attempts, 1);
+        assert!(!super::is_transient_store_io(&error));
+    }
 
     #[test]
     fn accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event() {

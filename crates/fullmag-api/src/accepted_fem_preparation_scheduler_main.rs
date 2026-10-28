@@ -1108,10 +1108,13 @@ fn defer_if_compute_sample_expired<T>(
     Ok(HostAdmissionOperation::Deferred)
 }
 
+/// Busy writer or a transient store I/O failure: either way the pass changed
+/// nothing it cannot resume, so it is deferred to the next iteration.
 fn is_store_writer_busy(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+        || fullmag_runtime_control::is_transient_store_io(error)
 }
 
 /// Defer only this pre-admission snapshot gate when the shared host writer is

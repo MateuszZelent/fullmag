@@ -65,14 +65,29 @@
 }
 
 .fm-visualization-color-field__value {
+  height: var(--fm-inspector-control-height);
   min-width: 0;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-canvas);
+  border-radius: var(--fm-inspector-control-radius);
+  background: var(--fm-bg-panel-raised);
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-xs);
-  padding: var(--fm-space-1) var(--fm-space-2);
+  font-size: var(--fm-inspector-control-font-size);
+  padding: 0 var(--fm-space-2);
+}
+
+.fm-visualization-color-field__value:focus-visible {
+  border-color: var(--fm-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 18%, transparent);
+  outline: none;
+}
+
+.fm-visualization-color-field__value:disabled {
+  border-color: var(--fm-border-disabled);
+  background: var(--fm-bg-disabled);
+  color: var(--fm-text-disabled);
+  opacity: 1;
+  cursor: not-allowed;
 }
 
 /* ── Color swatch (native <input type="color">) polish ── */

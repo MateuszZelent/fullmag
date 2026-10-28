@@ -1180,6 +1180,9 @@ export const PERSISTENCE_RECOVERY_PATH = openApiV2Path(
 export const PLATFORM_OUTPUT_STORAGE_PATH = openApiV2Path("/v2/platform/output-storage");
 
 // Workspace database routes (start screen).
+export const WORKSPACE_ITEM_PLAYBACK_PATH = openApiV2Path("/v2/workspace/items/{id}/playback");
+export const WORKSPACE_ITEM_PLAYBACK_FRAME_PATH = openApiV2Path("/v2/workspace/items/{id}/playback/frames/{frame_index}");
+
 
 export const WORKSPACE_ITEMS_PATH = openApiV2Path("/v2/workspace/items");
 export const WORKSPACE_ITEM_PATH = openApiV2Path("/v2/workspace/items/{id}");

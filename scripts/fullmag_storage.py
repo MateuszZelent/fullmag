@@ -1316,12 +1316,23 @@ def register(layout, task_id, owner, purpose, state="active"):
         previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         if previous and previous.get("task_id") != task_id and (previous.get("state") == "active" or state != "active"):
             raise StorageError(f"Worktree is owned by active task {previous['task_id']}: {layout['repo_root']}")
+        cleanup = None
+        if state == "completed":
+            if previous.get("task_id") != task_id or previous.get("owner") != owner:
+                raise StorageError("Completion requires the exact registered task and owner")
+            from docker_worktree_finish import finish as finish_docker_worktree
+            try:
+                cleanup = finish_docker_worktree(layout, task_id, owner)
+            except RuntimeError as error:
+                raise StorageError("Docker cache retirement blocked completion: " + str(error)) from error
         record = {"schema": SCHEMA, "worktree_id": layout["worktree_id"], "repo_root": layout["repo_root"],
                   "task_id": task_id, "owner": owner, "purpose": purpose, "state": state,
                   "branch": git(layout["repo_root"], "branch", "--show-current"),
                   "head": git(layout["repo_root"], "rev-parse", "HEAD"), "updated_at": now(),
                   "base_commit": previous.get("base_commit", git(layout["repo_root"], "rev-parse", "HEAD")),
                   "created_at": previous.get("created_at", now())}
+        if cleanup is not None:
+            record["docker_cache_retirement"] = cleanup
         atomic_json(path, record)
     return record
 

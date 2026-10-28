@@ -688,8 +688,14 @@ export const VIEWPORT_3D_TOPOLOGY_RETRY_POLICY: ResourceRetryPolicy = {
     "transient_not_found",
   ],
 };
+/**
+ * A field payload can be large (a full 2-3.5M-cell FDM vector is ~80 MB) and
+ * a cold multilayer Airbox read decodes its whole carrier once before the
+ * API caches it; a 5 s budget aborted those loads for good and left the
+ * viewport without data. The deadline bounds a hung request, not normal work.
+ */
 const FIELD_VECTOR_RETRY_POLICY: ResourceRetryPolicy = {
-  deadlineMs: 5_000,
+  deadlineMs: 30_000,
   maxAttempts: 5,
   retryAfterMs: 250,
   retryableReasonCodes: [
@@ -1583,10 +1589,20 @@ export function useViewport3DAnalysisFieldVector(
   return useViewport3DFieldVectorRequest(request, enabled, options);
 }
 
+export interface Viewport3DFieldVectorRequestOptions {
+  /**
+   * Whether a load failure is also announced as a global toast. Callers whose
+   * failure is already the viewport's foreground surface (the field-data issue
+   * banner) pass `false`; resource state and hook diagnostics are kept.
+   */
+  notifyOnError?: boolean;
+  pauseLoad?: boolean;
+}
+
 export function useViewport3DFieldVectorRequest(
   request: Viewport3DFieldResourceRequest,
   enabled = true,
-  options: { pauseLoad?: boolean } = {},
+  options: Viewport3DFieldVectorRequestOptions = {},
 ) {
   const { api, resources } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
@@ -1644,6 +1660,7 @@ export function useViewport3DFieldVectorRequest(
     enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
+    notifyOnError: options.notifyOnError ?? true,
     pauseLoad: options.pauseLoad,
     retryPolicy: FIELD_VECTOR_RETRY_POLICY,
     resolveRevision,
@@ -1681,6 +1698,7 @@ export function validateViewport3DObservationFrameMagnetization(
 export function useViewport3DObservationFrameMagnetization(
   frameId: string | null | undefined,
   enabled = true,
+  options: Pick<Viewport3DFieldVectorRequestOptions, "notifyOnError"> = {},
 ) {
   const { api } = useKernel();
   const sessionIdentity = useViewport3DSessionIdentity();
@@ -1727,6 +1745,7 @@ export function useViewport3DObservationFrameMagnetization(
     abortStaleInflight: true,
     enabled: enabled && Boolean(frameId) && sessionIdentity !== null,
     load,
+    notifyOnError: options.notifyOnError ?? true,
     pauseLoad: false,
     retryPolicy: FIELD_VECTOR_RETRY_POLICY,
     resolveRevision,

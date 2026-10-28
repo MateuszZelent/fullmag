@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
+import type { CommandFeedbackNotice } from "@/kernel/commands/CommandFeedbackController";
 import {
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_CAPABILITIES_PATH,
@@ -75,6 +76,7 @@ import {
   buildAnalysisContextTabContent,
   buildRibbonTabContent,
   resolveRibbonVisualizationTarget,
+  ribbonTabHasContent,
 } from "./ribbonContributions";
 import {
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
@@ -85,7 +87,14 @@ import {
   ribbonTabNeedsSessionStatusResources,
 } from "./ribbonResourcePolicy";
 import { RibbonGroupsRow } from "./RibbonGroupsRow";
+import { RibbonDensityControl } from "./RibbonDensityControl";
 import { RibbonTabStrip } from "./RibbonTabStrip";
+import {
+  getRibbonDensity,
+  getServerRibbonDensity,
+  setRibbonDensity,
+  subscribeRibbonDensity,
+} from "./ribbonPreference";
 import {
   ANALYSIS_CONTEXT_TAB_ID,
   RIBBON_TABS,
@@ -113,6 +122,10 @@ type RibbonRuntimeStatus = {
   run: Pick<NonNullable<LiveStatusResource["run"]>, "run_id"> | null;
   session: Pick<LiveStatusResource["session"], "session_id">;
 };
+
+const EMPTY_COMMAND_FEEDBACK_NOTICES: readonly CommandFeedbackNotice[] =
+  Object.freeze([]);
+const noopSubscribe = () => () => {};
 
 function selectRibbonRuntimeStatus(status: {
   data: LiveStatusResource | null;
@@ -173,10 +186,37 @@ function ribbonRuntimeStatusEquals(
 }
 
 export default function RibbonModule({ kernel }: ModuleProps) {
+  const ribbonDensity = useSyncExternalStore(
+    subscribeRibbonDensity,
+    getRibbonDensity,
+    getServerRibbonDensity,
+  );
+  const subscribeCommandFeedback = useCallback(
+    (listener: () => void) =>
+      kernel.commandFeedback?.subscribe(listener) ?? noopSubscribe(),
+    [kernel.commandFeedback],
+  );
+  const getCommandFeedbackSnapshot = useCallback(
+    () => kernel.commandFeedback?.getSnapshot() ?? EMPTY_COMMAND_FEEDBACK_NOTICES,
+    [kernel.commandFeedback],
+  );
+  const commandFeedbackNotices = useSyncExternalStore(
+    subscribeCommandFeedback,
+    getCommandFeedbackSnapshot,
+    () => EMPTY_COMMAND_FEEDBACK_NOTICES,
+  );
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const [pendingGlobalQuantity, setPendingGlobalQuantity] =
     useState<ApplyGlobalQuantityInput | null>(null);
-  const activeTab = useLayoutSelector((layout) => layout.activeModuleTab);
+  const visibleRibbonTabs = useMemo(
+    () => RIBBON_TABS.filter((tab) => ribbonTabHasContent(tab.id, kernel.commands)),
+    [kernel.commands],
+  );
+  const storedActiveTab = useLayoutSelector((layout) => layout.activeModuleTab);
+  // A restored tab that no longer has working actions falls back to Workspace.
+  const activeTab = visibleRibbonTabs.some((tab) => tab.id === storedActiveTab)
+    ? storedActiveTab
+    : "home";
   const activeViewportMainModuleId = useLayoutSelector(
     (layout) => layout.activeViewportMainModuleId,
   );
@@ -419,14 +459,14 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   );
   const stripActiveTab: RibbonStripTabId = contextTabActive ? ANALYSIS_CONTEXT_TAB_ID : activeTab;
   const stripTabs = useMemo<readonly RibbonStripTabDef[]>(() => {
-    if (!contextModuleTitle) return RIBBON_TABS;
-    const resultsIndex = RIBBON_TABS.findIndex((tab) => tab.id === "results");
+    if (!contextModuleTitle) return visibleRibbonTabs;
+    const resultsIndex = visibleRibbonTabs.findIndex((tab) => tab.id === "results");
     return [
-      ...RIBBON_TABS.slice(0, resultsIndex + 1),
+      ...visibleRibbonTabs.slice(0, resultsIndex + 1),
       { contextual: true, id: ANALYSIS_CONTEXT_TAB_ID, label: contextModuleTitle },
-      ...RIBBON_TABS.slice(resultsIndex + 1),
+      ...visibleRibbonTabs.slice(resultsIndex + 1),
     ];
-  }, [contextModuleTitle]);
+  }, [contextModuleTitle, visibleRibbonTabs]);
   const handleTabClick = useCallback(
     (tabId: RibbonStripTabId) => {
       if (tabId === ANALYSIS_CONTEXT_TAB_ID) {
@@ -454,6 +494,8 @@ export default function RibbonModule({ kernel }: ModuleProps) {
         activeAnalysisField,
         api: kernel.api,
         commandContext,
+        commandFeedback: commandFeedbackNotices,
+        commandQueue: commandQueue.data ?? null,
         commands: kernel.commands,
         fieldCatalog: fieldCatalog.data,
         quantityCatalog: quantityCatalog.data,
@@ -479,6 +521,8 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       activeAnalysisField,
       activeViewportMainModuleId,
       activeTab,
+      commandFeedbackNotices,
+      commandQueue.data,
       contextTabActive,
       commandContext,
       commandVersion,
@@ -532,15 +576,19 @@ export default function RibbonModule({ kernel }: ModuleProps) {
 
   return (
     <WorkspaceRenderProfiler id="RibbonModule">
-      <div className="fm-ribbon">
-      <RibbonTabStrip
-        activeTabId={stripActiveTab}
-        tabs={stripTabs}
-        onTabClick={handleTabClick}
-      />
+      <div className="fm-ribbon" data-density={ribbonDensity}>
+      <div className="fm-ribbon__tabbar">
+        <RibbonTabStrip
+          activeTabId={stripActiveTab}
+          tabs={stripTabs}
+          onTabClick={handleTabClick}
+        />
+        <RibbonDensityControl density={ribbonDensity} onChange={setRibbonDensity} />
+      </div>
       <RibbonGroupsRow
         groups={groups}
         activeTabId={stripActiveTab}
+        density={ribbonDensity}
         onAction={handleAction}
         onCommandDetail={setSelectedCommandId}
       />

@@ -2150,6 +2150,10 @@ fn combine_abm3_normalized(
                         }
                     }
                     let magnitude = norm(candidate);
+                    // Inactive native-mask cells hold m = 0 with a zero RHS.
+                    if magnitude == 0.0 && *value == [0.0; 3] {
+                        return Ok([0.0; 3]);
+                    }
                     if !magnitude.is_finite() || magnitude == 0.0 {
                         return Err(RunError {
                             message:

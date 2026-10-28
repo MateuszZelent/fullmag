@@ -3,21 +3,36 @@
   min-width: 0;
   align-items: center;
   gap: var(--fm-space-1);
-  min-height: var(--fm-inspector-tab-height);
+  min-height: var(--fm-control-height-regular);
+  font-family: var(--fm-font-ui);
+}
+
+.fm-tabs-list--line {
+  border-bottom: 1px solid var(--fm-border-subtle);
+}
+
+.fm-tabs-list--segmented {
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-1);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-chrome);
 }
 
 .fm-tabs-trigger {
   display: inline-flex;
-  height: var(--fm-control-height-regular);
+  min-height: var(--fm-control-height-regular);
   min-width: 0;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
   border-radius: var(--fm-radius-md);
   background: transparent;
-  color: var(--fm-text-muted);
+  color: var(--fm-text-secondary);
   cursor: pointer;
-  font-size: var(--fm-font-size-xs);
+  font: inherit;
+  font-size: var(--fm-font-size-control);
   font-weight: 560;
   padding-inline: var(--fm-space-2);
   transition:
@@ -27,7 +42,7 @@
   white-space: nowrap;
 }
 
-.fm-tabs-trigger:hover {
+.fm-tabs-trigger:hover:not(:disabled) {
   background: var(--fm-bg-panel-raised);
   color: var(--fm-text-primary);
 }
@@ -35,17 +50,31 @@
 .fm-tabs-trigger[data-state="active"] {
   border-color: var(--fm-border-default);
   background: var(--fm-bg-selected);
-  color: var(--fm-accent);
+  color: var(--fm-text-primary);
+}
+
+.fm-tabs-list--line .fm-tabs-trigger {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+}
+
+.fm-tabs-list--line .fm-tabs-trigger[data-state="active"]:not(:disabled) {
+  border-bottom-color: var(--fm-accent);
+  color: var(--fm-text-primary);
+  font-weight: 650;
 }
 
 .fm-tabs-trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--fm-focus-ring);
+  outline: 2px solid var(--fm-accent);
+  outline-offset: -2px;
 }
 
 .fm-tabs-trigger:disabled {
+  color: var(--fm-text-disabled);
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 1;
 }
 
 .fm-tabs-content {
@@ -54,5 +83,6 @@
 }
 
 .fm-tabs-content:focus-visible {
-  outline: none;
+  outline: 2px solid var(--fm-accent);
+  outline-offset: -2px;
 }

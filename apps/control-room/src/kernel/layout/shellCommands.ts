@@ -416,6 +416,7 @@ export const SHELL_COMMANDS: CommandContribution[] = [
       const snapshot = context.pendingForms?.getSnapshot();
       if (!snapshot?.active) return "No Inspector form is active.";
       if (snapshot.lockReason) return snapshot.lockReason;
+      if (snapshot.applyBlockReason) return snapshot.applyBlockReason;
       if (snapshot.applying) return "Inspector changes are already being applied.";
       if (!snapshot.dirty) return "There are no unapplied Inspector changes.";
       if (!snapshot.valid) return "Resolve Inspector validation errors before applying.";

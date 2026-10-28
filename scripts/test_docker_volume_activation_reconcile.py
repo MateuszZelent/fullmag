@@ -49,6 +49,11 @@ class Control:
         "checkout_kind": "worktree",
     }
 
+    def read_raw(self, relative, *, optional=False):
+        if relative == "offline-reconciliation/current.json" and optional:
+            return None
+        raise AssertionError("Unexpected offline control read: " + relative)
+
 
 def unresolved(**changes: object) -> dict[str, object]:
     value: dict[str, object] = {
@@ -256,6 +261,15 @@ class UnknownActivationTests(unittest.TestCase):
         with patch.object(module, "docker_capture", return_value=daemon_error):
             with self.assertRaisesRegex(BuildControlError, "absence could not"):
                 module._probe_helper_absence(helper_name)
+
+    def test_offline_unknown_activation_fences_new_activation_before_other_reads(self) -> None:
+        with patch(
+            "docker_volume_offline_reconcile.assert_activation_allowed",
+            side_effect=BuildControlError("Original activation outcome remains unknown-retained"),
+        ), patch.object(module, "_read_json") as later_read:
+            with self.assertRaisesRegex(BuildControlError, "unknown-retained"):
+                module.assert_no_unresolved_activation(Control(), request_id="new-request")
+            later_read.assert_not_called()
 
     def test_no_quarantine_allows_guard_to_finish_without_docker(self) -> None:
         with patch.object(

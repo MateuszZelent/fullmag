@@ -33,10 +33,28 @@ export type DocsAvailability = "checking" | "available" | "missing";
 export async function probeDocs(fetcher: typeof fetch = fetch): Promise<DocsAvailability> {
   try {
     const response = await fetcher(docsPageUrl(), { method: "HEAD", cache: "no-store" });
-    return response.ok ? "available" : "missing";
+    if (response.ok) return "available";
+    if (response.status === 405) {
+      const getResponse = await fetcher(docsPageUrl(), { method: "GET", cache: "no-store" });
+      return getResponse.ok ? "available" : "missing";
+    }
+    return "missing";
   } catch {
     return "missing";
   }
+}
+
+/**
+ * Normalize a same-origin iframe location (`pathname` + `search`) into a
+ * relative documentation path suitable for `onlineDocsUrl`.
+ */
+export function resolveFramedDocPath(pathname: string, search = ""): string {
+  const stripped = pathname.replace(/^\/?(?:docs\/)?/, "").replace(/^\/+/, "");
+  const page = stripped || "index.html";
+  if (page.split("/").some((part) => part === "..") || /^[a-z][a-z0-9+.-]*:/i.test(page)) {
+    return "index.html";
+  }
+  return `${page}${search}`;
 }
 
 /* ── Messages between the app and the framed documentation ─────────────── */

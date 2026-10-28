@@ -1496,6 +1496,10 @@ pub enum PreparationResourcePoolCommitDisposition {
 pub const FMS_PREPARATION_RECEIPT_SCHEMA: &str = "preparation_receipt.v1";
 /// Schema for an immutable preparation publication scoped to one study task.
 pub const FMS_TASK_PREPARATION_RECEIPT_SCHEMA: &str = "task_preparation_receipt.v1";
+/// Schema for observation-only fields of a task's prepared initial state.
+pub const FMS_TASK_PREPARED_OBSERVATION_SCHEMA: &str = "task_prepared_observation.v1";
+const MAX_PREPARED_OBSERVATION_OBJECTS: usize = 4096;
+const MAX_PREPARED_OBSERVATION_REASON_BYTES: usize = 2048;
 
 /// Durable, opaque publication of an application preparation receipt.
 ///
@@ -1623,6 +1627,153 @@ pub fn task_id_for_study_step(run_id: &str, step_id: &str) -> Result<String> {
         "task-{}",
         crate::hex_sha256(format!("{run_id}\0{step_id}").as_bytes())
     ))
+}
+
+/// Observation-only fields of one task's prepared initial state (ADR 0071),
+/// evaluated by the preparer under its preparation lease and stored one per
+/// task. It never changes the preparation receipt or the task lifecycle; the
+/// field payloads are immutable CAS objects listed in the outcome.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsTaskPreparedObservation {
+    pub schema_version: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub step_id: String,
+    pub preparation_id: String,
+    /// Canonical `sha256:<hex>` fingerprint of the evaluated preparation plan.
+    pub plan_fingerprint: String,
+    /// Bare SHA-256 of the prepared magnetization as little-endian f64 values.
+    pub magnetization_values_sha256: String,
+    /// Lane the evaluator ran on, e.g. `fem_cpu`.
+    pub evaluation_lane: String,
+    /// Lane the task requests for solving, e.g. `fem_gpu`.
+    pub requested_lane: String,
+    pub outcome: FmsTaskPreparedObservationOutcome,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FmsTaskPreparedObservationOutcome {
+    /// `bundle_object_ref` describes the fields; `object_refs` lists every
+    /// CAS object the bundle needs, including the bundle itself.
+    Published {
+        bundle_object_ref: String,
+        object_refs: Vec<String>,
+    },
+    Unavailable {
+        reason: String,
+    },
+}
+
+impl FmsTaskPreparedObservation {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        run_id: impl Into<String>,
+        step_id: impl Into<String>,
+        preparation_id: impl Into<String>,
+        plan_fingerprint: impl Into<String>,
+        magnetization_values_sha256: impl Into<String>,
+        evaluation_lane: impl Into<String>,
+        requested_lane: impl Into<String>,
+        outcome: FmsTaskPreparedObservationOutcome,
+    ) -> Result<Self> {
+        let run_id = run_id.into();
+        let step_id = step_id.into();
+        let record = Self {
+            schema_version: FMS_TASK_PREPARED_OBSERVATION_SCHEMA.into(),
+            task_id: task_id_for_study_step(&run_id, &step_id)?,
+            run_id,
+            step_id,
+            preparation_id: preparation_id.into(),
+            plan_fingerprint: plan_fingerprint.into(),
+            magnetization_values_sha256: magnetization_values_sha256.into(),
+            evaluation_lane: evaluation_lane.into(),
+            requested_lane: requested_lane.into(),
+            outcome,
+            created_at: Utc::now(),
+        };
+        record.validate()?;
+        Ok(record)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_TASK_PREPARED_OBSERVATION_SCHEMA {
+            bail!(
+                "unsupported task prepared observation schema `{}`",
+                self.schema_version
+            );
+        }
+        crate::repository_path::validate_store_id(&self.run_id)
+            .context("invalid task prepared observation run_id")?;
+        validate_study_step_id(&self.step_id)?;
+        if task_id_for_study_step(&self.run_id, &self.step_id)? != self.task_id {
+            bail!("task prepared observation identity does not match run_id and step_id");
+        }
+        if self.preparation_id != format!("prep-{}", self.task_id) {
+            bail!("task prepared observation preparation_id is not the task's preparation");
+        }
+        validate_prefixed_sha256(&self.plan_fingerprint, "plan_fingerprint")?;
+        validate_sha256(&self.magnetization_values_sha256, "magnetization_values_sha256")?;
+        for (lane, field) in [
+            (self.evaluation_lane.as_str(), "evaluation_lane"),
+            (self.requested_lane.as_str(), "requested_lane"),
+        ] {
+            if !matches!(lane, "fdm_cpu" | "fdm_gpu" | "fem_cpu" | "fem_gpu") {
+                bail!("task prepared observation {field} `{lane}` is not a known lane");
+            }
+        }
+        match &self.outcome {
+            FmsTaskPreparedObservationOutcome::Published {
+                bundle_object_ref,
+                object_refs,
+            } => {
+                if object_refs.is_empty() || object_refs.len() > MAX_PREPARED_OBSERVATION_OBJECTS {
+                    bail!("task prepared observation must reference a bounded, non-empty object set");
+                }
+                let mut seen = BTreeSet::new();
+                for object_ref in object_refs {
+                    validate_sha256(object_ref, "object_refs")?;
+                    if !seen.insert(object_ref.as_str()) {
+                        bail!("task prepared observation repeats an object reference");
+                    }
+                }
+                if !seen.contains(bundle_object_ref.as_str()) {
+                    bail!("task prepared observation bundle is not among its object references");
+                }
+            }
+            FmsTaskPreparedObservationOutcome::Unavailable { reason } => {
+                if reason.trim().is_empty() || reason.len() > MAX_PREPARED_OBSERVATION_REASON_BYTES {
+                    bail!("task prepared observation reason must be non-empty and bounded");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn relative_path(&self) -> Result<String> {
+        self.validate()?;
+        Ok(format!(
+            "runs/{}/task_prepared_observations/{}.json",
+            self.run_id, self.task_id
+        ))
+    }
+
+    /// CAS objects that must stay reachable while this record exists.
+    pub fn object_refs(&self) -> &[String] {
+        match &self.outcome {
+            FmsTaskPreparedObservationOutcome::Published { object_refs, .. } => object_refs,
+            FmsTaskPreparedObservationOutcome::Unavailable { .. } => &[],
+        }
+    }
+
+    /// Records are immutable; only the creation time may differ on replay.
+    pub fn same_immutable_payload(&self, other: &Self) -> bool {
+        let mut left = self.clone();
+        left.created_at = other.created_at;
+        &left == other
+    }
 }
 
 /// Immutable accepted-run preparation receipt, stored one per task.

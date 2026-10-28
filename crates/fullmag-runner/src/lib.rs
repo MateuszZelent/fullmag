@@ -108,6 +108,11 @@ pub use accepted_materialization::{
     AcceptedMaterializationRequest, AcceptedMaterializedField,
     validate_accepted_state_execution_provenance,
 };
+mod prepared_materialization;
+pub use prepared_materialization::{
+    materialize_prepared_observables, prepared_observation_clock, PreparedMaterializationBatch,
+    PreparedMaterializationRequest, PreparedStateIdentity, PREPARED_QUANTITY_BUNDLE_SCHEMA,
+};
 
 /// Validate which current FDM multilayer execution realization an accepted
 /// plan selects without probing hardware or creating a native backend/context.

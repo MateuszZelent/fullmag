@@ -11,6 +11,7 @@ import { LayoutController } from "@/kernel/layout/LayoutController";
 import { SimulationStartupOverlayView } from "@/kernel/layout/SimulationStartupOverlay";
 import { resolveSimulationPreparationViewModel } from "@/kernel/layout/simulationPreparationModel";
 import { ModuleRegistry } from "@/kernel/module/ModuleRegistry";
+import { SimulationPreparationStatusEntry } from "@/modules/status-bar/SimulationPreparationStatusEntry";
 import type { KernelApi } from "@/kernel/types";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
@@ -76,6 +77,9 @@ export default function PreparationWindowPreview() {
       </main>
       <div className="fm-workspace-overlay-host">
         <SimulationStartupOverlayView state={state} />
+      </div>
+      <div className="fm-status-bar" role="group" aria-label="Session status">
+        <SimulationPreparationStatusEntry />
       </div>
     </KernelContext.Provider>
   );

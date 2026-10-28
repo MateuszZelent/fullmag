@@ -158,6 +158,15 @@ case "${recipe}" in
     fi
     exec "${bash_executable}" -euo pipefail -c "${recipe}"
     ;;
+  *"scripts/docker_dev_release_unknown_activation.py"*)
+    # Operator release of one proven pre-mutation lease; no build or heavy slot.
+    release_unknown_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_release_unknown_activation.py\" --repo-root \"[^\"]+\" --source-root '[^']+' --activation '[0-9a-f]{32}'[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${release_unknown_pattern} ]]; then
+      echo "[fullmag just] invalid unknown activation release recipe" >&2
+      exit 2
+    fi
+    exec "${bash_executable}" -euo pipefail -c "${recipe}"
+    ;;
   *"scripts/docker_volume_checks.py"*)
     volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '[^']+'[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${volume_checks_pattern} ]]; then
@@ -170,7 +179,7 @@ case "${recipe}" in
     # Browser proof owns its resolver, Compose project, BuildControl lease,
     # and image pull; do not create compatibility links or enter the generic
     # host runner before it can authenticate the selected volume DEV group.
-    browser_qa_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_browser_qa.py\" --repo-root \"[^\"]+\"[[:space:]]+(--source-root '([^']+)'[[:space:]]+)?(--port '([0-9]{1,5})'[[:space:]]+)?--timeout '([0-9]{2,3})'[[:space:]]+--pull-timeout '([0-9]{2,4})'([[:space:]]+--browser-image '([^']+)')?[[:space:]]*$"
+    browser_qa_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_browser_qa.py\" --repo-root \"[^\"]+\"[[:space:]]+(--source-root '([^']+)'[[:space:]]+)?(--port '([0-9]{1,5})'[[:space:]]+)?--timeout '([0-9]{2,3})'[[:space:]]+--pull-timeout '([0-9]{2,4})'([[:space:]]+--browser-image '([^']+)')?([[:space:]]+--saved-playback-item-id '([0-9]{1,20})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${browser_qa_pattern} ]]; then
       echo "[fullmag just] invalid managed Docker DEV browser QA recipe" >&2
       exit 2
@@ -185,6 +194,9 @@ case "${recipe}" in
     browser_qa_args+=(--timeout "${BASH_REMATCH[5]}" --pull-timeout "${BASH_REMATCH[6]}")
     if [[ -n "${BASH_REMATCH[8]:-}" ]]; then
       browser_qa_args+=(--browser-image "${BASH_REMATCH[8]}")
+    fi
+    if [[ -n "${BASH_REMATCH[10]:-}" ]]; then
+      browser_qa_args+=(--saved-playback-item-id "${BASH_REMATCH[10]}")
     fi
     exec "${python_cmd}" -B "${script_dir}/docker_dev_browser_qa.py" "${browser_qa_args[@]}"
     ;;
@@ -212,6 +224,7 @@ case "${recipe}" in
     docker_dev_activate_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" activate-script --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --script '([^']+)'( --request-id '([^']+)')?[[:space:]]*$"
     docker_dev_volume_recreate_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'([[:space:]]+--recovery-authorization '([^']+)')?([[:space:]]+--fresh-state)?[[:space:]]*$"
     docker_dev_idle_restart_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'[[:space:]]*$"
+    docker_dev_cache_maintenance_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" maintain-cache --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)'[[:space:]]*$"
     docker_dev_args=(--repo-root "${repo_root}")
     if [[ "${recipe}" =~ ${docker_dev_codegen_pattern} ]]; then
       docker_dev_args+=(codegen-openapi)
@@ -256,6 +269,9 @@ case "${recipe}" in
         docker_dev_args+=(--recovery-authorization "${BASH_REMATCH[6]}")
       fi
       if [[ -n "${BASH_REMATCH[7]:-}" ]]; then docker_dev_args+=(--fresh-state); fi
+    elif [[ "${recipe}" =~ ${docker_dev_cache_maintenance_pattern} ]]; then
+      docker_dev_args+=(maintain-cache --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}")
     elif [[ "${recipe}" =~ ${docker_dev_idle_restart_pattern} ]]; then
       docker_dev_args+=(restart-idle-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
         --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}")

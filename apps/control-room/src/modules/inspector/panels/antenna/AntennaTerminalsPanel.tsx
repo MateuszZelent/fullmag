@@ -138,7 +138,7 @@ export function AntennaTerminalsPanel({ selection: selected }: InspectorPanelPro
       <p className="fm-inspector-hint">Apply replaces this transport&apos;s legacy boundary conditions and view reference with explicit current-driven preparation. Geometry and port weights are preserved. Directions are world-space outward unit vectors; no orientation is inferred from a transformed preview.</p>
       <Select value={draft?.portId ?? ""} disabled={!editable || pending || Boolean(draft?.dirty)} onValueChange={load}>
         <SelectTrigger aria-label="Terminal preparation port"><SelectValue placeholder="Select port and load caps" /></SelectTrigger>
-        <SelectContent>{ports.map((port) => <SelectItem key={port.id} value={port.id}>{port.id}</SelectItem>)}</SelectContent>
+        <SelectContent className="fm-inspector-select-content">{ports.map((port) => <SelectItem key={port.id} value={port.id}>{port.id}</SelectItem>)}</SelectContent>
       </Select>
       {draft ? <>
         <FormField label="Drive ID" value={draft.driveId} disabled={!editable} onChange={(event) => { const value = event.currentTarget.value; setDraft((current) => current?.key === key ? { ...current, driveId: value, dirty: true } : current); }} />

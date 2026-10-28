@@ -24,6 +24,7 @@ use crate::types::{
     FmsResourceLease, FmsRetryDecision, FmsRunCatalog, FmsRunIntent, FmsRunManifest,
     FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool, FmsSchedulerRunSource,
     FmsSessionManifest, FmsTaskAdmissionRecord, FmsTaskPreparationReceipt,
+    FmsTaskPreparedObservation,
     FmsWorkerProcessExitReceipt, FmsWorkspaceManifest, TensorDescriptor,
 };
 
@@ -273,6 +274,7 @@ fn classify_run_path(relative: &str) -> Result<RunPathKind> {
         && matches!(
             parts[0],
             "task_preparation_receipts"
+                | "task_prepared_observations"
                 | "accepted_stage_preparation_receipts"
                 | "worker_inbox"
                 | "retry_decisions"
@@ -320,6 +322,7 @@ fn is_reserved_run_container(parts: &[&str]) -> bool {
                     | "checkpoints"
                     | "worker_inbox"
                     | "task_preparation_receipts"
+                    | "task_prepared_observations"
                     | "accepted_stage_preparation_receipts"
                     | "retry_decisions"
                     | "preparation_retry_decisions"
@@ -1479,6 +1482,7 @@ impl StoreWalker {
                 self.walk_preparation_receipt_file(&preparation_receipt_path, &run_id)?;
             }
             self.walk_task_preparation_receipts(&run_entry.path(), &run_id)?;
+            self.walk_task_prepared_observations(&run_entry.path(), &run_id)?;
             self.walk_accepted_stage_preparation_receipts(&run_entry.path(), &run_id)?;
             self.walk_run_task_admissions(&run_entry.path(), &run_id)?;
             self.walk_run_task_cancellations(&run_entry.path(), &run_id)?;
@@ -2296,6 +2300,43 @@ impl StoreWalker {
         Ok(())
     }
 
+    /// Prepared-state observation records root their CAS field payloads.
+    fn walk_task_prepared_observations(
+        &mut self,
+        run_path: &Path,
+        expected_run_id: &str,
+    ) -> Result<()> {
+        let directory = run_path.join("task_prepared_observations");
+        crate::repository_path::reject_link(&directory)?;
+        if !directory.exists() {
+            return Ok(());
+        }
+        let metadata = fs::symlink_metadata(&directory)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            bail!(
+                "unsafe task prepared observation directory `{}`",
+                directory.display()
+            );
+        }
+        for entry in read_directory(&directory)? {
+            crate::repository_path::reject_link(&entry.path())?;
+            if !entry.file_type()?.is_file() {
+                bail!("task prepared observation entry must be a file");
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let relative = format!("runs/{expected_run_id}/task_prepared_observations/{file_name}");
+            let data = self.read_json(&relative)?;
+            let record: FmsTaskPreparedObservation = parse_json(&data, &relative)?;
+            if record.relative_path()? != relative {
+                bail!("task prepared observation path identity mismatch");
+            }
+            for object_ref in record.object_refs() {
+                self.add_object(object_ref);
+            }
+        }
+        Ok(())
+    }
+
     fn walk_accepted_stage_preparation_receipts(
         &mut self,
         run_path: &Path,
@@ -3009,6 +3050,7 @@ impl<'a> ArchiveWalker<'a> {
             let run_manifest_ref = format!("runs/{run_id}/run_manifest.json");
             if !self.documents.contains_key(&run_manifest_ref) {
                 self.walk_task_preparation_receipts(&run_id)?;
+                self.walk_task_prepared_observations(&run_id)?;
             }
         }
 
@@ -3918,6 +3960,7 @@ impl<'a> ArchiveWalker<'a> {
             self.walk_preparation_receipt(&preparation_receipt_ref, expected_run_id)?;
         }
         self.walk_task_preparation_receipts(expected_run_id)?;
+        self.walk_task_prepared_observations(expected_run_id)?;
         self.walk_accepted_stage_preparation_receipts(expected_run_id)?;
         self.walk_task_admissions(expected_run_id)?;
         self.walk_task_cancellations(expected_run_id)?;
@@ -4171,6 +4214,40 @@ impl<'a> ArchiveWalker<'a> {
             )
         }
         self.report.file_refs.insert(relative.to_string());
+        Ok(())
+    }
+
+    fn walk_task_prepared_observations(&mut self, expected_run_id: &str) -> Result<()> {
+        let prefix = format!("runs/{expected_run_id}/task_prepared_observations/");
+        let mut names = self
+            .documents
+            .keys()
+            .filter(|name| name.starts_with(&prefix))
+            .cloned()
+            .collect::<Vec<_>>();
+        names.sort();
+        for relative in names {
+            let rest = relative
+                .strip_prefix(&prefix)
+                .context("invalid task prepared observation archive path")?;
+            if rest.is_empty() || rest.contains('/') || !rest.ends_with(".json") {
+                bail!("invalid task prepared observation archive path `{relative}`");
+            }
+            let data = self
+                .documents
+                .read(&relative)?
+                .context("archive task prepared observation disappeared")?;
+            let record: FmsTaskPreparedObservation = parse_json(&data, &relative)?;
+            if record.relative_path()? != relative {
+                bail!("task prepared observation path identity mismatch");
+            }
+            for object_ref in record.object_refs() {
+                if !self.add_archive_payload(object_ref, &relative, None)? {
+                    break;
+                }
+            }
+            self.report.file_refs.insert(relative);
+        }
         Ok(())
     }
 

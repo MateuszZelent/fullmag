@@ -180,6 +180,17 @@ describe("statusBarModel", () => {
   it("summarizes missing and active mesh builds for the status bar", () => {
     expect(
       buildStatusBarMeshModel({
+        meshBuildRevision: null,
+        meshRevision: null,
+        sceneRevision: 3,
+      }),
+    ).toMatchObject({
+      label: "Mesh revision unavailable",
+      state: "unknown",
+    });
+
+    expect(
+      buildStatusBarMeshModel({
         meshBuildRevision: 0,
         meshRevision: 0,
         sceneRevision: 3,

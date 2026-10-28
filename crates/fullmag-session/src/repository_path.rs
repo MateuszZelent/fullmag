@@ -118,7 +118,15 @@ pub fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
 /// Unix nonblocking/no-follow flags prevent a replaced FIFO or final symlink
 /// from turning observation into a blocking stream read. Validate the opened
 /// handle as well as the path; Windows opens final reparse points themselves.
+/// A read failing with transient ENOMEM (a Windows-folder store under load)
+/// is repeated briefly.
 pub fn read_bounded_regular_file(root: &Path, relative: &str, maximum: usize) -> Result<Vec<u8>> {
+    crate::durability::retry_transient_enomem(|| {
+        read_bounded_regular_file_once(root, relative, maximum)
+    })
+}
+
+fn read_bounded_regular_file_once(root: &Path, relative: &str, maximum: usize) -> Result<Vec<u8>> {
     use std::io::Read;
 
     let limit = maximum

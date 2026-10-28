@@ -19,6 +19,10 @@ COPY ${FULLMAG_DOCKER_HELPERS}backend_dev.py /opt/fullmag/backend_dev.py
 # Keep it image-owned and immutable; backend_dev.py remains the command
 # boundary and never executes source-controlled commands.
 COPY ${FULLMAG_DOCKER_HELPERS}backend_source.py /opt/fullmag/backend_source.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_shared_store.py /opt/fullmag/backend_shared_store.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_shared_recovery.py /opt/fullmag/backend_shared_recovery.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_compiler_cache.py /opt/fullmag/backend_compiler_cache.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_group_retirement.py /opt/fullmag/backend_group_retirement.py
 COPY ${FULLMAG_DOCKER_HELPERS}backend_candidate_retirement.py /opt/fullmag/backend_candidate_retirement.py
 COPY ${FULLMAG_DOCKER_HELPERS}worker_cgroup_gate.py /opt/fullmag/worker_cgroup_gate.py
 RUN chmod 0644 /opt/fullmag/worker_cgroup_gate.py && \

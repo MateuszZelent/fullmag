@@ -74,6 +74,15 @@ inactive native cell contributes and receives exactly zero. When the scratch
 extent covers only part of a native cell, the operator represents exactly that
 intersection and its pull remains the volume adjoint of the same map.
 
+Time integration keeps the same carrier. An inactive native cell stores
+$\mathbf m_i=\mathbf 0$ and, because every local field and the pulled demag
+field vanish there, its LLG right-hand side is exactly zero. Each explicit RK
+or ABM3 stage therefore projects $\mathbf m\mapsto\mathbf m/|\mathbf m|$ only
+on cells with a non-zero candidate; an inactive cell whose initial state and
+stage candidate are both exactly zero stays $\mathbf 0$. A zero or non-finite
+candidate on a cell whose initial state is non-zero remains a hard error,
+since it is a numerical failure of an active cell rather than empty space.
+
 The cell represented by a pair kernel has dimensions $\mathbf h^K_l$. In
 `three_d`, $\mathbf h^K_l$ is the layer scratch spacing. In `two_d_stack`, it is
 $(h_{\mathrm{scratch},x},h_{\mathrm{scratch},y},h_{n,z})$: the transform has one
@@ -484,6 +493,7 @@ remain migration adapters but are not canonical tutorial syntax.
 | Parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR | Qualification |
 |---|---|---|---|---|---|---|---|
 | Exterior effective observation | crates/fullmag-runner/src/fdm/cpu/airbox_observation.rs | compose_airbox_h_eff | Complete-source uniform Zeeman plus target demag; shared CPU/CUDA composition | FDM CPU/GPU | not executed in this change | source-only, runtime/science NOT VERIFIED | working-tree hashes in mx3-large-domains-airbox-heff manifest |
+| Target-only Airbox grid | crates/fullmag-runner/src/fdm/cpu/airbox_observation.rs | airbox_observation_target | resolves an explicit target grid or derives one from the study universe with the planned common cell | FDM CPU/GPU | not executed in this change | source-only, runtime/science NOT VERIFIED | current master source snapshot |
 | FDM.cell | Sequence[float] or None | None | $\mathrm m$ | exclusive with default_cell; three positive values when present | legacy/default native cell size | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.cell | implemented authoring |
 | FDM.default_cell | Sequence[float] or None | None | $\mathrm m$ | three positive values when present; needed when per_magnet is incomplete and for the current common-scratch policy | default native cell size | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.default_cell | implemented authoring |
 | FDM.per_magnet | dict[str, FDMGrid] or None | None | $1$ | non-empty names and FDMGrid values | per-object native grid overrides | FDM CPU/GPU authoring; runtime lane gated | backend_policy.discretization_hints.fdm.per_magnet | implemented authoring |

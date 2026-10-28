@@ -2106,6 +2106,31 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("fm-viewport-3d__issue-banner");
   });
 
+  it("keeps informational HUD pills in one truncating lane with tooltips", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+    const css = readFileSync("src/design/styles/viewport-3d.css", "utf8");
+    const lane = source.slice(
+      source.indexOf('<div className="fm-viewport-3d__hud-info">'),
+      source.indexOf("</div>", source.indexOf('<div className="fm-viewport-3d__hud-info">')),
+    );
+
+    expect(lane).toContain("<Viewport3DFieldLabel");
+    expect(lane).toContain("<span title={status || undefined}>{status}</span>");
+    expect(lane).toContain("<span title={hudSampleSummary}>{hudSampleSummary}</span>");
+    // Interactive controls stay outside the truncating lane.
+    expect(lane).not.toContain("<Select");
+    expect(lane).not.toContain("<Button");
+    expect(css).toMatch(/\.fm-viewport-3d__hud-info \{[^}]*flex-wrap: nowrap;[^}]*overflow: hidden;/);
+    expect(css).toMatch(/\.fm-viewport-3d__issue-banner-text \{[^}]*white-space: nowrap;/);
+    // Annotated image export still draws the pills that moved into the lane.
+    expect(
+      readFileSync(new URL("./viewport3dImageExport.ts", import.meta.url), "utf8"),
+    ).toContain(":scope > span, :scope > .fm-viewport-3d__hud-info > span");
+  });
+
   it("gates the temporary azimuth and polar controls behind an explicit browser debug flag", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),

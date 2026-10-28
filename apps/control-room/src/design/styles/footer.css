@@ -41,20 +41,6 @@
   box-shadow: none;
 }
 
-.fm-footer__summary {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: var(--fm-space-2);
-  color: var(--fm-text-muted);
-  font-family: var(--fm-font-mono);
-  white-space: nowrap;
-}
-
-.fm-footer__summary-item {
-  color: var(--fm-text-secondary);
-}
-
 .fm-footer__content {
   display: flex;
   flex: 1 1 auto;

@@ -102,7 +102,7 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <InspectorGroup title="Airbox Overview" badge={policy.status}>
+      <InspectorGroup title="Domain policy" badge={policy.status}>
         <FieldRow label="Canonical target" value="airbox" />
         <FieldRow label="Authored domain mode" value={modeLabel} />
         <FieldRow label="Authored size" value={authoredSize} unit={modeValue === "manual" ? "m" : undefined} />

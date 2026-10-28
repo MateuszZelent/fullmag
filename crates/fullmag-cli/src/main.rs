@@ -30,6 +30,7 @@ mod script_source_capture;
 mod accepted_script_run;
 mod run_manifest;
 mod runtime_service_client;
+mod container_recovery_capabilities;
 mod runtime_supervisor;
 mod saved_fem_snapshot_gate;
 mod accepted_inspection_cold_load;
@@ -210,6 +211,9 @@ fn main() -> Result<()> {
                     &request_sha256,
                 )?)?
             );
+        }
+        Command::Runtime(RuntimeCommand::ServiceContainerRecoveryCapabilities) => {
+            println!("{}", container_recovery_capabilities::document());
         }
         Command::Runtime(RuntimeCommand::ServiceRecoverContainer {
             config,

@@ -50,6 +50,51 @@ describe("PendingFormRegistry", () => {
     }
   });
 
+  it("preserves an Apply blocker and never invokes a blocked form", async () => {
+    const registry = new PendingFormRegistry();
+    const reason = "Resolve the scene revision conflict before applying this draft.";
+    const blockedApply = vi.fn(async () => true);
+    const owner = Symbol("blocked-form");
+    registry.register(owner, form({ apply: blockedApply, applyBlockReason: reason }));
+
+    expect(registry.canApply()).toBe(false);
+    expect(registry.getSnapshot()).toMatchObject({
+      applyBlockReason: reason,
+      canApply: false,
+      lockReason: null,
+    });
+    expect(registry.getTransitionSnapshot()).toMatchObject({
+      applyBlockedOwnerCount: 1,
+      blockedReason: reason,
+      canApplyPendingChanges: false,
+    });
+    await expect(registry.apply()).resolves.toEqual({ message: reason, status: "failed" });
+    await expect(registry.prepareTransition({ applyPendingChanges: true })).rejects.toThrow(reason);
+    expect(blockedApply).not.toHaveBeenCalled();
+  });
+
+  it("keeps Reset available when a form-specific blocker disables Apply", async () => {
+    const registry = new PendingFormRegistry();
+    const blocked = form({ applyBlockReason: "Rebase the draft first." });
+    registry.register(Symbol("blocked-form"), blocked);
+
+    expect(registry.canReset()).toBe(true);
+    await expect(registry.reset()).resolves.toMatchObject({ status: "completed" });
+    expect(blocked.reset).toHaveBeenCalledOnce();
+    expect(blocked.apply).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a pinned transition if the form-specific Apply blocker changes", async () => {
+    const registry = new PendingFormRegistry();
+    const clean = form({ dirty: false });
+    registry.register(Symbol("clean-form"), clean);
+    const guard = await registry.prepareTransition({ applyPendingChanges: false });
+
+    clean.applyBlockReason = "Resolve the newly detected conflict first.";
+    expect(() => guard.assertCurrent()).toThrow("The prepared workspace transition is no longer current.");
+    guard.release();
+  });
+
   it("updates and removes the owner without leaving stale pending state", () => {
     const registry = new PendingFormRegistry();
     const owner = Symbol("form");

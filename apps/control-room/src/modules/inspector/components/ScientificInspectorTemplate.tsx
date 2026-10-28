@@ -35,6 +35,8 @@ export interface ScientificInspectorContextProps {
 }
 
 export interface ScientificInspectorTemplateProps {
+  /** The host Inspector owns identity for nested panels. */
+  showIdentity?: boolean;
   actions?: ReactNode;
   children?: ReactNode;
   breadcrumbs?: ScientificInspectorIdentityProps["breadcrumbs"];
@@ -126,6 +128,7 @@ export function ScientificInspectorContext({
 }
 
 export function ScientificInspectorTemplate({
+  showIdentity = true,
   actions,
   breadcrumbs = [],
   children,
@@ -139,12 +142,12 @@ export function ScientificInspectorTemplate({
 }: ScientificInspectorTemplateProps) {
   return (
     <div className="fm-scientific-inspector">
-      <ScientificInspectorIdentity
+      {showIdentity ? <ScientificInspectorIdentity
         breadcrumbs={breadcrumbs}
         methodLabel={methodLabel}
         physicalLabel={physicalLabel}
         title={title}
-      />
+      /> : null}
       <ScientificInspectorContext
         diagnostics={diagnostics}
         properties={properties}

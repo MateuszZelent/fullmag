@@ -68,9 +68,9 @@ rozmiary. Ustal dokładne nazwy i labels w zarządzanym launcherze.
 | --- | --- | --- |
 | Źródło | Readonly bind checkoutu i Git common | Dane wejściowe, bez kompilacji w checkoutcie |
 | Toolchain | Obraz + warstwy/cache BuildKit | Przypięte wersje i image ID; współdzielenie tylko zgodnych wejść |
-| Backend build | Prywatny named volume → `/build` | Workspace, Cargo home/target, osobne CMake FDM/FEM, TMPDIR i log buildu |
-| Pakiet backendu | Prywatny named volume → `/opt/fullmag/package` | Bieżący pakiet, kandydat, rollback, archiwum receiptów |
-| Frontend development | Named volume na cały katalog roboczy Next | pnpm store, node_modules, Next cache, wygenerowane konfiguracje i next.log |
+| Backend build | Prywatny named volume → `/build` | Workspace, Cargo target, osobne CMake FDM/FEM, TMPDIR i log buildu; Cargo home jest wspólne w nowych renderach |
+| Pakiet backendu | Prywatny subpath wspólnego named volume → `/opt/fullmag/package` | Bieżący pakiet, kandydat, rollback; zapieczętowane payloady współdzielone po kluczu |
+| Frontend development | Prywatny named volume na katalog roboczy Next | node_modules, Next cache, wygenerowane konfiguracje i next.log; pnpm store wspólny w nowych renderach |
 | Kontrola buildu | Named volume, ewentualnie podkatalog build/package | Provenance, wejścia/receipty, staging kontekstów, diagnostyka buildu |
 | Dane użytkownika | Jawne bindy skonfigurowanego storage hosta | Sesje, wyniki, projekty i per-group ustawienia; bez technicznego cache |
 | Ledger hosta | Dotychczasowy zarządzany kontrakt runtime | Rezerwacje fizycznego hosta, zachowana historia; nie cache kompilacji |
@@ -202,6 +202,9 @@ Nie używaj wycofanej komendy `docker-dev-recreate` z hostowym receiptem dla tej
 trasy. Nowa próba przechowuje konfigurację i wynik w wolumenie kontrolnym.
 
 ## 4. Miejsce i retencja
+
+Nowe grupy korzystają z [kontraktu współdzielenia i retencji](../../../../docs/guides/shared-build-storage.md). Po udanym zarządzanym starcie retencja pakietów i prywatnego incremental działa automatycznie; `docker-dev-maintain-cache` służy również do jawnego ponowienia. Przed usunięciem worktree `worktree-finish ... completed` wykonuje kwalifikowane sprzątanie jego prywatnych wolumenów/namespace; aktywny konsument blokuje zakończenie. Nigdy nie usuwa całego `fullmag-shared-*`.
+
 
 Stosuj [kontrakt danych builda](artifact-policy.md): mapa writerów, ograniczenie
 duplikacji, cache, Docker logs/BuildKit i rozdzielone operacje restart/recreate/GC.

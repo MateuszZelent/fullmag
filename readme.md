@@ -689,14 +689,14 @@ solver, mesh, and workload scope.
 Until a versioned release with a persistent identifier is available, cite the repository and the
 exact commit used for the reported result:
 
-> M. Zelent, M. Gołebiewski, and P. Pirro, *FullMag: a computational framework for reproducible finite-difference and finite-element micromagnetics*, research software, 2026. Repository: [github.com/MateuszZelent/fullmag](https://github.com/MateuszZelent/fullmag). Documentation: [fullmag.mzelent.pl](https://fullmag.mzelent.pl/).
+> M. Zelent, M. Gołebiewski, U. Makartsou, and P. Pirro, *FullMag: a computational framework for reproducible finite-difference and finite-element micromagnetics*, research software, 2026. Repository: [github.com/MateuszZelent/fullmag](https://github.com/MateuszZelent/fullmag). Documentation: [fullmag.mzelent.pl](https://fullmag.mzelent.pl/).
 
 <details>
 <summary><strong>BibTeX</strong></summary>
 
 ```bibtex
 @software{fullmag_2026,
-  author = {Zelent, Mateusz and Gołebiewski, Mateusz and Pirro, Philipp},
+  author = {Zelent, Mateusz and Gołebiewski, Mateusz and Makartsou, Uladzislau and Pirro, Philipp},
   title  = {FullMag: A Computational Framework for Reproducible
             Finite-Difference and Finite-Element Micromagnetics},
   year   = {2026},
@@ -711,6 +711,7 @@ exact commit used for the reported result:
 |---|---|
 | Dr Mateusz Zelent | Fachbereich Physik and Landesforschungszentrum OPTIMAS, RPTU Kaiserslautern-Landau, Germany |
 | Dr Mateusz Gołebiewski | Faculty of Physics and Astronomy, Adam Mickiewicz University, Poznań, Poland |
+| Uladzislau Makartsou | Faculty of Physics and Astronomy, Adam Mickiewicz University, Poznań, Poland |
 | Prof. Philipp Pirro | Fachbereich Physik and Landesforschungszentrum OPTIMAS, RPTU Kaiserslautern-Landau, Germany |
 
 Project coordination: **Mateusz Zelent, RPTU Kaiserslautern-Landau**.

@@ -6,6 +6,7 @@ const PROJECT_WORKSPACE_COMMAND_IDS = new Set([
   "workspace.open-project",
   // Archive inspection/import owns its own session transition and empty-epoch guard.
   "study.import-state",
+  "workspace.open-results-folder",
   "workspace.save-project",
   "workspace.close-project",
   "workspace.home",

@@ -798,10 +798,12 @@ fn read_live_magnetization(
     Ok(Some((values, fields)))
 }
 
-// Claim validation is read-only and idempotent, but it can briefly contend
-// with the supervisor heartbeat writer. Keep this retry local to claim
-// validation; never replay worker startup or solver effects.
-const ACCEPTED_WORKER_CLAIM_RETRY_LIMIT: Duration = Duration::from_secs(30);
+// Claim validation is read-only and idempotent, but it contends with the
+// supervisor heartbeat, the scheduler, the API and this worker's own control
+// thread for the writer; on a Docker Desktop host folder 30 s was not enough.
+// Keep this retry local to claim validation; never replay worker startup or
+// solver effects.
+const ACCEPTED_WORKER_CLAIM_RETRY_LIMIT: Duration = fullmag_runtime_control::WORKER_STORE_WRITER_WAIT;
 const ACCEPTED_WORKER_CLAIM_RETRY_DELAY: Duration = Duration::from_millis(10);
 const ACCEPTED_WORKER_GPU_INVENTORY_RETRY_LIMIT: Duration = Duration::from_secs(30);
 const ACCEPTED_WORKER_GPU_INVENTORY_RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -4047,43 +4049,46 @@ fn commit_worker_event(
     bail!("worker event publication exceeded concurrent transition retry limit")
 }
 
+/// Re-publish the coordinator's retained event. Only the busy writer is
+/// retried, with the worker wait: the supervisor, the scheduler passes and the
+/// API take the unfair writer back to back, so a five-second lockstep poll
+/// failed running tasks on a 9p host folder (HeartbeatAck lagged 8-20 s).
 fn retry_pending_worker_event(
     store: &SessionStore,
     coordinator: &mut fullmag_application::DurableWorkerCoordinator,
     expected: &fullmag_application::WorkerEventEnvelope,
 ) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let mut publication_error = None;
-        let result = coordinator.retry_publication(|transition| {
-            fullmag_runtime_control::commit_transition(store, transition)
-                .map(|_| ())
-                .map_err(|error| {
-                    publication_error = Some(error);
-                    fullmag_application::CoordinatorError::Invalid(
-                        "durable worker event publication retry failed".into(),
-                    )
-                })
-        });
-        match (result, publication_error) {
-            (Ok(fullmag_application::CoordinatorMessage::Event(envelope)), None)
-                if envelope == *expected =>
-            {
-                return Ok(());
+    let published = fullmag_runtime_control::retry_store_writer_busy_within(
+        fullmag_runtime_control::WORKER_STORE_WRITER_WAIT,
+        || {
+            let mut publication_error = None;
+            let result = coordinator.retry_publication(|transition| {
+                fullmag_runtime_control::commit_transition(store, transition)
+                    .map(|_| ())
+                    .map_err(|error| {
+                        publication_error = Some(error);
+                        fullmag_application::CoordinatorError::Invalid(
+                            "durable worker event publication retry failed".into(),
+                        )
+                    })
+            });
+            match (result, publication_error) {
+                (Ok(message), None) => Ok(message),
+                (_, Some(error)) => Err(error),
+                (Err(error), None) => Err(anyhow::Error::new(error)),
             }
-            (Ok(fullmag_application::CoordinatorMessage::Event(_)), None) => {
-                bail!("retried worker event differs from the retained publication");
-            }
-            (Ok(fullmag_application::CoordinatorMessage::Command(_)), None) => {
-                bail!("retried worker publication is not an event");
-            }
-            (_, Some(error)) if is_store_writer_busy(&error) && Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            (_, Some(error)) => return Err(error).context("publish durable worker event"),
-            (Err(error), None) => {
-                return Err(anyhow::Error::new(error)).context("publish durable worker event");
-            }
+        },
+    )
+    .context("publish durable worker event")?;
+    match published {
+        fullmag_application::CoordinatorMessage::Event(envelope) if envelope == *expected => {
+            Ok(())
+        }
+        fullmag_application::CoordinatorMessage::Event(_) => {
+            bail!("retried worker event differs from the retained publication")
+        }
+        fullmag_application::CoordinatorMessage::Command(_) => {
+            bail!("retried worker publication is not an event")
         }
     }
 }

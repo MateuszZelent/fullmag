@@ -1,6 +1,7 @@
 .fm-header {
   display: flex;
-  height: var(--fm-menu-height);
+  height: 100%;
+  min-height: var(--fm-menu-height);
   align-items: center;
   gap: var(--fm-space-1);
   border-bottom: 1px solid var(--fm-border-subtle);
@@ -17,10 +18,12 @@
 
 .fm-header__brand {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: min(128px, 25vw);
   align-items: center;
   gap: var(--fm-space-2);
   margin-right: var(--fm-space-2);
+  max-width: min(240px, 25vw);
   -webkit-app-region: no-drag;
 }
 
@@ -53,6 +56,8 @@
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-2xs);
   letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -124,7 +129,7 @@
   display: none;
 }
 
-@media (width >= 1500px) {
+@media (width >= 1800px) {
   .fm-header__quick-action > span {
     display: inline;
   }
@@ -195,6 +200,7 @@
 
 .fm-header__actions {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: var(--fm-space-1);
   -webkit-app-region: no-drag;
@@ -238,6 +244,7 @@
 }
 
 .fm-header__session-indicator {
+  min-height: var(--fm-control-height-compact);
   border: 0;
   padding: 0;
   background: transparent;
@@ -294,12 +301,26 @@
 }
 
 .fm-header__project-status {
-  max-width: min(260px, 22vw);
+  display: inline-flex;
+  /* A floor keeps short states such as "No project" legible; long names ellipsize. */
+  min-width: min(10ch, 22vw);
+  max-width: min(128px, 22vw);
   overflow: hidden;
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-2xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.fm-header__project-status-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fm-header__project-status-dirty {
+  flex: none;
+  color: var(--fm-accent);
 }
 
 .fm-header__project-status[data-project-document-state="loading"] {
@@ -313,7 +334,8 @@
 .fm-header__run-controls {
   display: flex;
   align-items: center;
-  gap: 1px;
+  flex: none;
+  gap: var(--fm-space-1);
   -webkit-app-region: no-drag;
 }
 
@@ -328,35 +350,40 @@
   transform: scale(0.92);
 }
 
-.fm-header__run-btn[data-run-control="run"] {
+.fm-header__run-btn[data-run-control="run"]:not(:disabled) {
   color: var(--fm-success);
 }
 
-.fm-header__run-btn[data-run-control="pause"] {
+.fm-header__run-btn[data-run-control="pause"]:not(:disabled) {
   color: var(--fm-warning);
 }
 
-.fm-header__run-btn[data-run-control="stop"] {
+.fm-header__run-btn[data-run-control="stop"]:not(:disabled) {
   color: var(--fm-danger);
 }
 
-.fm-header__run-btn[data-run-control="skip"] {
+.fm-header__run-btn[data-run-control="skip"]:not(:disabled) {
   color: var(--fm-stale);
 }
 
-@media (width < 1400px) {
+@media (width < 1600px) {
   .fm-header__session-badge,
   .fm-header__helper-badge {
     display: none;
   }
 }
 
-/* Below this the search collapses to its icon; it stays reachable. */
-@media (width < 1180px) {
+/* Save/Apply/Undo/Redo duplicate the ribbon and shortcuts, so they yield
+   first while the full main menu is still shown (at 1600px they overflow
+   the header once the project status keeps its minimum width). */
+@media (width < 1700px) {
   .fm-header__quick-actions {
     display: none;
   }
+}
 
+/* Below this the search collapses to its icon; it stays reachable. */
+@media (width < 1180px) {
   .fm-header__search {
     width: var(--fm-control-height-regular);
     justify-content: center;
@@ -370,13 +397,44 @@
   }
 }
 
-@media (width < 900px) {
+.fm-header__compact-menu {
+  display: none;
+  flex: none;
+}
+
+@media (width < 1440px) {
   .fm-header__nav {
+    display: none;
+  }
+
+  .fm-header__compact-menu {
+    display: block;
+  }
+}
+
+@media (width < 600px) {
+  .fm-header {
+    padding-inline: var(--fm-space-1);
+  }
+
+  /* Phone widths cannot afford the status floor; it ellipsizes freely. */
+  .fm-header__project-status {
+    min-width: 0;
+  }
+
+  .fm-header__brand {
+    flex: none;
+    min-width: 0;
+  }
+
+  .fm-header__brand-copy,
+  .fm-header__separator {
     display: none;
   }
 }
 
 .fm-header__helper-trigger {
+  min-height: var(--fm-control-height-compact);
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-sm);
   padding: 2px var(--fm-space-2);

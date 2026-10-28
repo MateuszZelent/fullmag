@@ -187,18 +187,17 @@ class DockerVolumeActivationTests(unittest.TestCase):
             "daemon_pending": True,
             "receipt": {"attempt": "a" * 32},
         }
-        with self.assertRaisesRegex(BuildControlError, "activation was rejected"):
+        rejection = {
+            "http_status": 422,
+            "code": "workspace_not_empty",
+            "message": "workspace is not empty",
+        }
+        with self.assertRaisesRegex(BuildControlError, "activation was rejected") as raised:
             activate._record_activation_result(
                 operation,
-                {
-                    "state": "rejected",
-                    "rejection": {
-                        "http_status": 422,
-                        "code": "workspace_not_empty",
-                        "message": "workspace is not empty",
-                    },
-                },
+                {"state": "rejected", "rejection": rejection},
             )
+        self.assertEqual(raised.exception.rejection, rejection)
         self.assertFalse(operation["daemon_pending"])
         self.assertEqual(operation["receipt"]["attempt"], "a" * 32)
         self.assertEqual(operation["receipt"]["state"], "failed-confirmed")

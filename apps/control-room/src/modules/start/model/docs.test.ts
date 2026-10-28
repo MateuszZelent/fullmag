@@ -6,6 +6,7 @@ import {
   onlineDocsUrl,
   parseDocsMessage,
   probeDocs,
+  resolveFramedDocPath,
   themeMessage,
 } from "./docs";
 
@@ -37,14 +38,29 @@ describe("docsSearchUrl", () => {
 
 describe("probeDocs", () => {
   it("is available only when the home page answers", async () => {
-    const ok = (async () => ({ ok: true })) as unknown as typeof fetch;
-    const notFound = (async () => ({ ok: false })) as unknown as typeof fetch;
+    const ok = (async () => ({ ok: true, status: 200 })) as unknown as typeof fetch;
+    const headDisallowed = (async (_url: string, init?: RequestInit) => ({
+      ok: init?.method === "GET",
+      status: init?.method === "HEAD" ? 405 : 200,
+    })) as unknown as typeof fetch;
+    const notFound = (async () => ({ ok: false, status: 404 })) as unknown as typeof fetch;
     const broken = (async () => {
       throw new Error("offline");
     }) as unknown as typeof fetch;
     expect(await probeDocs(ok)).toBe("available");
+    expect(await probeDocs(headDisallowed)).toBe("available");
     expect(await probeDocs(notFound)).toBe("missing");
     expect(await probeDocs(broken)).toBe("missing");
+  });
+});
+
+describe("resolveFramedDocPath", () => {
+  it("extracts the relative documentation path and query string from a /docs/ pathname", () => {
+    expect(resolveFramedDocPath("/docs/index.html")).toBe("index.html");
+    expect(resolveFramedDocPath("/docs/physics/index.html", "?q=llg")).toBe(
+      "physics/index.html?q=llg",
+    );
+    expect(resolveFramedDocPath("/docs/")).toBe("index.html");
   });
 });
 

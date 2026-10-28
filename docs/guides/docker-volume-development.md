@@ -314,6 +314,42 @@ kodem 2; nie oznacza wykonania symulacji. Raport zachowuje osobno identyfikator
 operacji oraz `development_attempt`. Długi komunikat błędu pozostaje ograniczony
 do 2048 znaków, lecz zachowuje początek i końcową przyczynę tracebacku.
 
+Wyjątek zgłoszony przez sam skrypt podczas ładowania (np. `ValueError` z walidacji
+DSL) helper SceneDocument zgłasza kopertą `fullmag.script-load-rejection.v1`
+(kod wyjścia 2). Trasa startupowa API zamienia wyłącznie tę kopertę na HTTP 422
+`validation_error`, zanim powstanie stan live, RunIntent lub wpis katalogu. Jest to
+więc terminalne odrzucenie: grupa pozostaje wolna dla kolejnego skryptu, a wynik
+`run-script` zawiera pole `rejection` z kodem i komunikatem API (wraz z numerem
+linii skryptu). Inne niepowodzenie helpera pozostaje HTTP 500 i nieznanym wynikiem.
+
+Grupa zablokowana tym błędem przed poprawką (receipt aktywacji
+`outcome-unknown-resources-retained` z `HTTP 500 ... python SceneDocument helper
+failed`) nie jest przeklasyfikowywana automatycznie i nie ma trasy zwalniającej
+tę kwarantannę: pozostaje zablokowana do wycofania grupy przez jej właściciela
+w cyklu sprzątania worktree (**NOT VERIFIED** jako trasa odzyskania). Nie usuwaj
+ręcznie `active`, markera ani lease.
+
+Przekroczenie 30-sekundowego limitu helpera Pythona podczas ładowania skryptu
+(proces helpera zabity i zebrany) API zwraca teraz również jako HTTP 422
+`validation_error`. Aktywację, która przed tą zmianą zapisała nieznany wynik z
+dokładnie tym HTTP 500 (`Python helper exceeded the 30 second deadline`),
+zwalnia trasa:
+
+```bash
+just docker-dev-release-unknown-activation "<checkout>" <activation-attempt>
+just docker-dev-recreate-volume <attempt> <config-sha256> "<checkout>" <port> true
+```
+
+Pierwsze polecenie wymaga zatrzymanego backendu (`Exited (0)`, bez OOM, ten sam
+kontener, który zapisał wynik, zatrzymany po jego zapisie), drzewa procesów
+`drained` z tego uruchomienia, pustego magazynu zaakceptowanych runów i
+działającego oryginalnego helpera lease. Zapisuje dowód
+`pre-mutation-release-proof.json` i terminal `failed-confirmed`
+(`activation_state: not-admitted`); marker aktywacji pozostaje `started`.
+Nie ponawia skryptu i nie zmienia danych sesji. Inny błąd, uruchomiony backend
+lub zaakceptowany run pozostawiają kwarantannę. Trasa na żywej grupie:
+**NOT VERIFIED**.
+
 Każde jawne wywołanie otrzymuje nowy domyślny `request_id` w postaci
 `docker-volume-<uuid>`, zapisany w receipcie przed wysłaniem żądania. Dzięki temu
 ten sam plik może posłużyć do kolejnej symulacji. Jawny `request_id` pozostaje
@@ -376,9 +412,25 @@ frontend state volume. Nie tworzy brakującego control volume, nie naprawia
 named volume i nie restartuje usług. Domyślny limit pracy przeglądarki wynosi
 180 sekund, a osobny limit pobrania brakującego obrazu wynosi 1800 sekund;
 parametry `timeout` i `pull_timeout` są ostatnimi argumentami pozycyjnymi
-recepty, po `browser_image`. Nieudane lub
+recepty, po `browser_image`; opcjonalne `saved_playback_item_id` jest kolejnym
+argumentem. Nieudane lub
 niejednoznaczne kontrole kończą się zachowaniem zasobów i wymagają ręcznego
 przeglądu receiptu operacji.
+
+Kontrolę odtwarzania zapisanego wyniku można jawnie skierować na istniejący,
+zarejestrowany workspace item. Podaj jego dziesiętny identyfikator jako ostatni
+argument recepty:
+
+```powershell
+just docker-dev-browser-qa "$source" 3298 "" 180 1800 "<item-id>"
+```
+
+Ta odrębna próba uruchamia przypięty harness w tym samym zarządzanym, tylko do
+odczytu kontenerze Playwright. Nie instaluje przeglądarki na hoście i nie
+uruchamia Solve ani Compute Fields. Receipt zapisuje identyfikator oraz SHA-256
+źródłowego harnessu, a wynik potwierdza odczyt payloadów ramek, widoczny canvas,
+żywy kontekst WebGL i stabilność Inspectora oraz kamery. Tryb SwiftShader jest
+dowodem przeglądarki, nie dowodem sprzętowego GPU ani fizyki FEM.
 
 ## Budżet backendu podczas trwającego startu
 
@@ -660,3 +712,35 @@ W takim przypadku operacja zachowuje nieznany wynik i dowody do uzgodnienia;
 nie wolno ponawiać publikacji ani ręcznie poprawiać OWNER/certyfikatu.
 Po sukcesie użyj normalnego pinned `resume-volume`; re-atestacja sama nie
 uruchamia instancji ani nie ponawia Solve.
+### Zmiana numeru urządzenia po restarcie WSL
+
+Numer host_device (st_dev) może zmienić się po restarcie WSL. Zwykłe resume
+nadal wymaga pełnej zgodności certyfikatu. Nie poprawiaj ręcznie certyfikatu,
+ownera ani active. Jawne ponowne poświadczenie wybranej zatrzymanej grupy:
+
+```sh
+python3 -B scripts/docker_dev.py --repo-root <checkout> reattest-host-device-volume \
+  --source-root <checkout> --attempt <development-uuid> \
+  --config-sha256 <compose-sha256> --certificate-sha256 <old-file-sha256> \
+  --expected-host-device <current-st_dev>
+```
+
+Pierwsze wywołanie jest podglądem; --apply zapisuje operację pod blokadą grupy.
+Wymagane są zgodne: inode i ścieżka katalogu, silnik Docker, obraz, zakres i
+token właściciela, sentinel i wcześniejszy restart readback. Kontenery muszą
+być dokładnymi zatrzymanymi inkarnacjami z receiptu, bez innych konsumentów
+storage. Operacja zachowuje inode bind-mountowanego certyfikatu, archiwizuje
+stare/nowe bajty i piny w host-device-reattest/<old-sha>/intent.json oraz dopuszcza
+ponowienie wyłącznie tych dwóch wersji po przerwanym zapisie. Zmienia tylko
+host_device; nie potwierdza nowej symulacji ani nie uruchamia API/solvera.
+
+Jeśli po przerwaniu hosta active wskazuje osieroconą iterację, można dodatkowo
+podać --interrupted-iteration <exact-uuid>. Ścieżka jest ograniczona do starej
+głównej przestrzeni kontrolnej, nieobecnego helpera, obu zatrzymanych usług i
+braku zachowanych runów. Helper odzyskiwania pod operation.lock sprawdza dokładny
+hash active i receipt.json, publikuje oddzielny terminal failed-confirmed i
+dopiero wtedy usuwa wyłącznie zgodny wskaźnik active. Oryginalny receipt pozostaje
+niezmieniony. Nie jest to ogólne odzyskiwanie lease ani trasa dla aktywnego runu.
+
+Po sukcesie użyj zwykłego przypiętego resume-volume --restart-backend.
+Inne zmiany tożsamości, aktywny/nieznany konsument albo różne piny blokują zapis.

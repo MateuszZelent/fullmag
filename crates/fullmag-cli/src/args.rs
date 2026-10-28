@@ -385,6 +385,9 @@ pub(crate) enum RuntimeCommand {
         #[arg(long)]
         request_sha256: String,
     },
+    /// Report recovery request support without opening a store or config.
+    #[command(name = "service-container-recovery-capabilities", hide = true)]
+    ServiceContainerRecoveryCapabilities,
     /// Recover one exactly pinned stopped Docker service container namespace
     /// after an authoritative managed teardown attestation.
     #[command(name = "service-recover-container", hide = true)]

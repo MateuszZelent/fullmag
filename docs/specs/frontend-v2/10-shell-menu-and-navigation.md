@@ -26,11 +26,20 @@ The shell does not know which scientific workflow is active. It hosts slots and 
 
 Shell chrome must use the shared shadcn/ui-style primitives for menu buttons, dropdowns, tabs, command palette, tooltips, and overflow behavior. The shell may add `fm-*` classes for Fullmag geometry, but must not hand-roll accessible menu, tab, or dialog primitives.
 
+### Kontrakt nagłówka po audycie 26.10.2026
+
+Pasek instancji jest nad nagłówkiem hosta, zgodnie z ADR 0069; osadzona instancja nie powiela paska. Nawigacja do Home pozostaje dostępna z nagłówka w obu przypadkach. Przy ograniczonej szerokości menu przechodzi do przycisku „Main menu”, który renderuje te same węzły, command ID i powody niedostępności. Żadna pozycja menu nie znika tylko wskutek breakpointu.
+
+Transport globalny korzysta z jednego renderera dla stanu z sesją i bez niej. Pełny command ID pozostaje w `data-command-id`; `data-run-control` określa prezentację run/pause/stop/skip. Connection, execution i readiness pozostają odrębnymi osiami informacji. Wąski layout nie usuwa Stop ani dostępu do diagnostyki.
+
+Przycisk zamknięcia obcej instancji ma własne pole co najmniej 24 px i nie nachodzi na nazwę lub port karty. Delete na karcie zamyka wyłącznie kartę, bez Stop; focus wraca do sąsiedniej karty lub Home. Przewijanie listy jest widoczne.
+
 ## 2. Workspace Contexts
 
 Top-level contexts are:
 
-- `Home`
+- `Workspace`
+- `View`
 - `Definitions`
 - `Geometry`
 - `Materials`

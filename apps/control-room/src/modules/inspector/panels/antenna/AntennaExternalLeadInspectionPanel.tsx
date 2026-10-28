@@ -91,7 +91,7 @@ export function AntennaExternalLeadInspectionPanel({ authoredStageId }: { author
           <SelectTrigger aria-label="Inspection execution" data-testid="antenna-inspection-execution-select" className="fm-antenna-inspection__execution-select">
             <SelectValue placeholder="Select an execution" />
           </SelectTrigger>
-          <SelectContent className="fm-antenna-inspection__execution-options">
+          <SelectContent className="fm-antenna-inspection__execution-options fm-inspector-select-content">
             {mapping.candidates.map((candidate) => (
               <SelectItem key={candidate.runtimeStageId} value={candidate.runtimeStageId}>
                 {candidate.runtimeStageId} · {candidate.status}

@@ -457,7 +457,9 @@ fn publish_prepared_initial_state(
             fullmag_ir::BackendPlanIR::Fem(plan) => (
                 plan.initial_magnetization.clone(),
                 plan.time_stage.start_time_s,
-                serde_json::json!({"backend": "fem", "location": "node", "node_count": plan.mesh.nodes.len()}),
+                crate::prepared_observation_bundle::prepared_fem_magnetization_layout(
+                    plan.mesh.nodes.len(),
+                ),
             ),
             _ => return Ok(()),
         };
@@ -1680,6 +1682,19 @@ pub(crate) async fn publish_accepted_task_preparation(
         },
     )?;
     publish_prepared_initial_state(&mut prepared_snapshot, &read_model)?;
+    if let Some(store_root) = state.submit_store_root.as_deref() {
+        // Evaluated fields are optional: without them the prepared m stays the
+        // only readable quantity until a run publishes its fields.
+        if let Err(error) = crate::prepared_observation_adoption::adopt_prepared_observation(
+            &mut prepared_snapshot,
+            &read_model,
+            store_root,
+            run_id,
+            step_id,
+        ) {
+            tracing::warn!(error = %error, "prepared-state observation was not adopted");
+        }
+    }
     prepared_snapshot.state_version = prepared_snapshot.state_version.saturating_add(1);
     let display_revision = state.current_display_selection.read().await.revision;
     let realtime_state =

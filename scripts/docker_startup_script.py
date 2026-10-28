@@ -834,7 +834,8 @@ def _validate_retirement_response(
     for field in ("session_epoch", "scene_revision", "state_version"):
         if type(response.get(field)) is not int or response[field] < 0:
             raise StartupScriptError(f"workspace retirement response {field} is invalid")
-    if response.get("terminal_outcome") not in {"completed", "failed", "cancelled"}:
+    # `startup_failed` retires a workspace whose script never admitted a RunIntent.
+    if response.get("terminal_outcome") not in {"completed", "failed", "cancelled", "startup_failed"}:
         raise StartupScriptError("workspace retirement response outcome is invalid")
     if response.get("ui_state_scope") != "backend_typed_workspace":
         raise StartupScriptError("workspace retirement response UI scope is invalid")
@@ -859,15 +860,28 @@ def _validate_retirement_response(
 
 
 def _retirement_preflight_rejection(response: Any) -> str | None:
+    return _retirement_rejection(response)[0]
+
+
+def _retirement_rejection(response: Any) -> tuple[str | None, str]:
+    """Return the no-mutation code, if any, and a bounded detail of the body.
+
+    The detail names the API's code and message so a quarantined activation
+    records why retirement was rejected instead of only its HTTP status.
+    """
     try:
         value = _retirement_json_body(response, "workspace retirement rejection")
     except (StartupScriptError, OSError, ValueError):
-        return None
+        return None, ""
     code = value.get("code")
+    message = value.get("message")
+    detail = ": ".join(str(part)[:1024] for part in (code, message)
+                       if isinstance(part, str) and part)
     status = getattr(response, "status", getattr(response, "code", None))
     expected_status = 400 if code == "live_retirement_invalid_request" else 409
-    return code if (isinstance(code, str) and code in RETIREMENT_NO_MUTATION_CODES
-                    and status == expected_status) else None
+    no_mutation = code if (isinstance(code, str) and code in RETIREMENT_NO_MUTATION_CODES
+                           and status == expected_status) else None
+    return no_mutation, detail
 
 
 def _retirement_archive_receipt(
@@ -1214,14 +1228,15 @@ def _retire_current_workspace_transport(
         opener = urllib.request.build_opener(_NoRedirect())
         with opener.open(request, timeout=timeout) as response:
             if response.status < 200 or response.status >= 300:
-                code = _retirement_preflight_rejection(response)
+                code, detail = _retirement_rejection(response)
                 if predecessor is None and code is not None:
                     raise RetirementRefused(operation_id, code)
                 if response.status == 409 or response.status >= 500:
                     raise RetirementOutcomeUnknown(
                         operation_id,
                         "retirement",
-                        f"workspace retirement returned HTTP {response.status}",
+                        f"workspace retirement returned HTTP {response.status}"
+                        + (f" ({detail})" if detail else ""),
                         retirement=_retirement_archive_receipt_or_none(
                             operation_id,
                             session_id=session_id,
@@ -1249,14 +1264,15 @@ def _retire_current_workspace_transport(
     except RetirementOutcomeUnknown:
         raise
     except urllib.error.HTTPError as error:
-        code = _retirement_preflight_rejection(error)
+        code, detail = _retirement_rejection(error)
         if predecessor is None and code is not None:
             raise RetirementRefused(operation_id, code) from error
         if error.code == 409 or error.code >= 500:
             raise RetirementOutcomeUnknown(
                 operation_id,
                 "retirement",
-                f"workspace retirement returned HTTP {error.code}",
+                f"workspace retirement returned HTTP {error.code}"
+                + (f" ({detail})" if detail else ""),
                 retirement=_retirement_archive_receipt_or_none(
                     operation_id,
                     session_id=session_id,

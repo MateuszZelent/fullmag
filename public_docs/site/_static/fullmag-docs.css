@@ -1,3 +1,172 @@
+/* Fullmag Catppuccin Latte (light) & Catppuccin Mocha (dark) documentation theme.
+ * Mirrors apps/control-room/src/design/styles/theme.css so standalone and
+ * embedded documentation share the exact surface, border, text, and accent tokens.
+ */
+:root,
+html[data-theme="light"] {
+  color-scheme: light;
+
+  --fm-docs-bg-app: #eff1f5;
+  --fm-docs-bg-chrome: #e6e9ef;
+  --fm-docs-bg-surface: #f7f8fb;
+  --fm-docs-bg-elevated: #e6e9ef;
+  --fm-docs-bg-muted: #e9ecf2;
+  --fm-docs-bg-canvas: #dce0e8;
+  --fm-docs-bg-hover: #dce0e8;
+  --fm-docs-bg-selected: #c4d7f5;
+
+  --fm-docs-border-subtle: #ccd0da;
+  --fm-docs-border-default: #bcc0cc;
+  --fm-docs-border-strong: #acb0be;
+
+  --fm-docs-text-primary: #4c4f69;
+  --fm-docs-text-secondary: #525570;
+  --fm-docs-text-muted: #585c71;
+  --fm-docs-text-disabled: #7c7f93;
+  --fm-docs-text-on-accent: #ffffff;
+
+  --fm-docs-accent: #1e66f5;
+  --fm-docs-accent-text: #044ee0;
+  --fm-docs-accent-strong: #7287fd;
+  --fm-docs-accent-soft: #d3e5fd;
+
+  --fm-docs-success: #40a02b;
+  --fm-docs-success-text: #256b15;
+  --fm-docs-info: #04a5e5;
+  --fm-docs-info-text: #09676c;
+  --fm-docs-warning: #df8e1d;
+  --fm-docs-warning-text: #865006;
+  --fm-docs-danger: #d20f39;
+  --fm-docs-danger-text: #ba092f;
+  --fm-docs-mauve: #8839ef;
+  --fm-docs-mauve-text: #771af0;
+  --fm-docs-peach: #fe640b;
+  --fm-docs-degraded-text: #a13b00;
+  --fm-docs-teal: #179299;
+  --fm-docs-teal-text: #09676c;
+
+  --root-bg: var(--fm-docs-bg-app);
+  --color-base-100: var(--fm-docs-bg-app);
+  --color-base-200: var(--fm-docs-border-subtle);
+  --color-base-300: var(--fm-docs-border-default);
+  --color-base-content: var(--fm-docs-text-primary);
+  --color-primary: var(--fm-docs-bg-elevated);
+  --color-primary-content: var(--fm-docs-text-primary);
+  --color-secondary: var(--fm-docs-bg-surface);
+  --color-secondary-content: var(--fm-docs-text-secondary);
+  --color-accent: var(--fm-docs-accent-soft);
+  --color-accent-content: var(--fm-docs-accent-text);
+  --color-neutral: var(--fm-docs-text-primary);
+  --color-neutral-content: var(--fm-docs-bg-app);
+  --color-info: var(--fm-docs-info);
+  --color-info-content: var(--fm-docs-info-text);
+  --color-success: var(--fm-docs-success);
+  --color-success-content: var(--fm-docs-success-text);
+  --color-warning: var(--fm-docs-warning);
+  --color-warning-content: var(--fm-docs-warning-text);
+  --color-error: var(--fm-docs-danger);
+  --color-error-content: var(--fm-docs-danger-text);
+
+  --article-heading--color: var(--fm-docs-text-primary);
+  --article-text--color: var(--fm-docs-text-secondary);
+  --article-mono--color: var(--fm-docs-mauve-text);
+
+  --sd-color-primary: var(--fm-docs-accent);
+  --sd-color-secondary: var(--fm-docs-text-muted);
+  --sd-color-success: var(--fm-docs-success);
+  --sd-color-info: var(--fm-docs-info);
+  --sd-color-warning: var(--fm-docs-warning);
+  --sd-color-danger: var(--fm-docs-danger);
+  --sd-color-card-background: var(--fm-docs-bg-surface);
+  --sd-color-card-border: var(--fm-docs-border-subtle);
+  --sd-color-card-border-hover: var(--fm-docs-accent);
+  --sd-color-card-header: var(--fm-docs-bg-chrome);
+  --sd-color-card-footer: var(--fm-docs-bg-chrome);
+  --sd-color-card-text: var(--fm-docs-text-primary);
+  --sd-color-tabs-label-active: var(--fm-docs-accent-text);
+  --sd-color-tabs-label-hover: var(--fm-docs-accent-text);
+  --sd-color-tabs-label-inactive: var(--fm-docs-text-muted);
+  --sd-color-tabs-underline-active: var(--fm-docs-accent);
+  --sd-color-tabs-overline: var(--fm-docs-border-subtle);
+  --sd-color-tabs-underline: var(--fm-docs-border-subtle);
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --fm-docs-bg-app: #1e1e2e;
+  --fm-docs-bg-chrome: #181825;
+  --fm-docs-bg-surface: #242438;
+  --fm-docs-bg-elevated: #313244;
+  --fm-docs-bg-muted: #262739;
+  --fm-docs-bg-canvas: #11111b;
+  --fm-docs-bg-hover: #3b3c4f;
+  --fm-docs-bg-selected: #264069;
+
+  --fm-docs-border-subtle: #313244;
+  --fm-docs-border-default: #45475a;
+  --fm-docs-border-strong: #585b70;
+
+  --fm-docs-text-primary: #cdd6f4;
+  --fm-docs-text-secondary: #bac2de;
+  --fm-docs-text-muted: #a6adc8;
+  --fm-docs-text-disabled: #7f849c;
+  --fm-docs-text-on-accent: #1e1e2e;
+
+  --fm-docs-accent: #89b4fa;
+  --fm-docs-accent-text: #89b4fa;
+  --fm-docs-accent-strong: #b4befe;
+  --fm-docs-accent-soft: #2a2d52;
+
+  --fm-docs-success: #a6e3a1;
+  --fm-docs-success-text: #a6e3a1;
+  --fm-docs-info: #89dceb;
+  --fm-docs-info-text: #89dceb;
+  --fm-docs-warning: #f9e2af;
+  --fm-docs-warning-text: #f9e2af;
+  --fm-docs-danger: #f38ba8;
+  --fm-docs-danger-text: #f592ad;
+  --fm-docs-mauve: #cba6f7;
+  --fm-docs-mauve-text: #cba6f7;
+  --fm-docs-peach: #fab387;
+  --fm-docs-degraded-text: #fab387;
+  --fm-docs-teal: #94e2d5;
+  --fm-docs-teal-text: #94e2d5;
+
+  --root-bg: var(--fm-docs-bg-app);
+  --color-base-100: var(--fm-docs-bg-app);
+  --color-base-200: var(--fm-docs-border-subtle);
+  --color-base-300: var(--fm-docs-border-default);
+  --color-base-content: var(--fm-docs-text-primary);
+  --color-primary: var(--fm-docs-bg-elevated);
+  --color-primary-content: var(--fm-docs-text-primary);
+  --color-secondary: var(--fm-docs-bg-surface);
+  --color-secondary-content: var(--fm-docs-text-secondary);
+  --color-accent: var(--fm-docs-accent-soft);
+  --color-accent-content: var(--fm-docs-accent-text);
+  --color-neutral: var(--fm-docs-text-primary);
+  --color-neutral-content: var(--fm-docs-bg-app);
+  --color-info: var(--fm-docs-info);
+  --color-info-content: var(--fm-docs-info-text);
+  --color-success: var(--fm-docs-success);
+  --color-success-content: var(--fm-docs-success-text);
+  --color-warning: var(--fm-docs-warning);
+  --color-warning-content: var(--fm-docs-warning-text);
+  --color-error: var(--fm-docs-danger);
+  --color-error-content: var(--fm-docs-danger-text);
+
+  --article-heading--color: var(--fm-docs-text-primary);
+  --article-text--color: var(--fm-docs-text-secondary);
+  --article-mono--color: var(--fm-docs-mauve-text);
+}
+
+html,
+body,
+.bg-base-100 {
+  background-color: var(--fm-docs-bg-app);
+  color: var(--fm-docs-text-primary);
+}
+
 main,
 main > .container,
 main article,
@@ -29,6 +198,51 @@ article > main {
   max-width: 100%;
   width: 100%;
   overflow-x: auto;
+  color: var(--fm-docs-text-secondary);
+}
+
+article > main :is(h1, h2, h3, h4, h5, h6),
+article > main .rubric,
+article > main strong,
+article > main b,
+article > main dt {
+  color: var(--fm-docs-text-primary);
+}
+
+article > main a {
+  color: var(--fm-docs-accent-text);
+  text-decoration-color: color-mix(in srgb, var(--fm-docs-accent-text) 55%, transparent);
+}
+
+article > main a:hover {
+  color: var(--fm-docs-accent);
+  text-decoration-color: var(--fm-docs-accent);
+}
+
+article > main section:has(> h2),
+article > main hr,
+.article-footer {
+  border-color: var(--fm-docs-border-subtle);
+}
+
+article > main :not(pre) > code,
+article > main dt.sig {
+  background-color: var(--fm-docs-bg-elevated);
+  border-color: var(--fm-docs-border-subtle);
+  color: var(--fm-docs-mauve-text);
+}
+
+article > main div.highlight,
+article > main pre {
+  background-color: var(--fm-docs-bg-surface) !important;
+  border-color: var(--fm-docs-border-subtle);
+  color: var(--fm-docs-text-primary);
+}
+
+article > main .literal-block-wrapper .code-block-caption {
+  background-color: var(--fm-docs-bg-chrome);
+  border-color: var(--fm-docs-border-subtle);
+  color: var(--fm-docs-text-secondary);
 }
 
 main article .table-wrapper {
@@ -65,6 +279,13 @@ main article table td {
   overflow-wrap: anywhere;
   word-break: break-word;
   vertical-align: top;
+  border-color: var(--fm-docs-border-subtle);
+}
+
+main article .table-wrapper th,
+main article table th {
+  background-color: var(--fm-docs-bg-surface);
+  color: var(--fm-docs-text-primary);
 }
 
 main article .table-wrapper code,
@@ -90,6 +311,58 @@ main article span.math {
 
 #main-header {
   overflow-x: clip;
+  background-color: var(--fm-docs-bg-chrome);
+  border-bottom: 1px solid var(--fm-docs-border-subtle);
+}
+
+.fm-header-build-stamp {
+  background-color: var(--fm-docs-bg-chrome);
+  border-top-color: var(--fm-docs-border-subtle);
+  color: var(--fm-docs-text-muted);
+}
+
+.global-toc,
+.local-toc {
+  color: var(--fm-docs-text-secondary);
+}
+
+.global-toc .caption,
+.local-toc__caption {
+  color: var(--fm-docs-text-muted);
+}
+
+.global-toc li a:hover,
+.local-toc a:hover {
+  background-color: var(--fm-docs-bg-hover);
+  color: var(--fm-docs-text-primary);
+}
+
+.global-toc li.current > a,
+.local-toc a.active {
+  color: var(--fm-docs-accent-text);
+}
+
+.global-toc li.current > ul {
+  border-left-color: var(--fm-docs-accent);
+}
+
+.highlighted {
+  background-color: color-mix(in srgb, var(--fm-docs-warning) 22%, transparent);
+  border-color: color-mix(in srgb, var(--fm-docs-warning) 55%, transparent);
+  color: var(--fm-docs-text-primary);
+  padding-inline: 0.18em;
+}
+
+#searchModal .modal-box {
+  background-color: var(--fm-docs-bg-surface);
+  border-color: var(--fm-docs-border-default);
+  color: var(--fm-docs-text-primary);
+}
+
+#searchModal .input {
+  background-color: var(--fm-docs-bg-app);
+  border-color: var(--fm-docs-border-subtle);
+  color: var(--fm-docs-text-primary);
 }
 
 /* Sidebar status: reference pages stay neutral; scaffold pages are discoverably pending. */
@@ -97,15 +370,22 @@ main article span.math {
 .toctree-l2 > a.fm-doc-status-active,
 .toctree-l3 > a.fm-doc-status-active,
 .toctree-l4 > a.fm-doc-status-active {
-  color: color-mix(in srgb, currentColor 78%, #6b7280);
+  color: var(--fm-docs-text-secondary);
+}
+
+.toctree-l1.current > a.fm-doc-status-active,
+.toctree-l2.current > a.fm-doc-status-active,
+.toctree-l3.current > a.fm-doc-status-active,
+.toctree-l4.current > a.fm-doc-status-active {
+  color: var(--fm-docs-accent-text);
 }
 
 .toctree-l1 > a.fm-doc-status-planned,
 .toctree-l2 > a.fm-doc-status-planned,
 .toctree-l3 > a.fm-doc-status-planned,
 .toctree-l4 > a.fm-doc-status-planned {
-  color: color-mix(in srgb, #c46a22 72%, currentColor);
-  border-inline-start: 0.18rem solid color-mix(in srgb, #e28a35 68%, transparent);
+  color: var(--fm-docs-degraded-text);
+  border-inline-start: 0.18rem solid color-mix(in srgb, var(--fm-docs-peach) 68%, transparent);
   padding-inline-start: 0.42rem;
 }
 
@@ -122,32 +402,33 @@ main article span.math {
 /* Physics landing navigation: keep the overview compact while retaining the full hierarchy. */
 .fm-physics-menu-group {
   margin-block: 0.9rem;
-  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border: 1px solid var(--fm-docs-border-subtle);
   border-radius: 0.7rem;
-  background: color-mix(in srgb, currentColor 3%, transparent);
+  background: var(--fm-docs-bg-surface);
   overflow: clip;
 }
 
 .fm-physics-menu-group > .sd-summary-title {
   min-height: 3.25rem;
   padding: 0.85rem 1rem;
+  color: var(--fm-docs-text-primary);
   font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: 0.01em;
 }
 
 .fm-physics-menu-group > .sd-summary-title:hover {
-  background: color-mix(in srgb, currentColor 7%, transparent);
+  background: var(--fm-docs-bg-hover);
 }
 
 .fm-physics-menu-group > .sd-summary-title:focus-visible {
-  outline: 0.18rem solid color-mix(in srgb, #2563eb 72%, transparent);
+  outline: 0.18rem solid color-mix(in srgb, var(--fm-docs-accent) 72%, transparent);
   outline-offset: -0.18rem;
 }
 
 .fm-physics-menu-group > .sd-summary-content {
   padding: 0.15rem 1.15rem 1rem;
-  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-top: 1px solid var(--fm-docs-border-subtle);
 }
 
 .fm-physics-menu-group > .sd-summary-content > ul {
@@ -183,7 +464,7 @@ main article span.math {
   max-width: 100%;
   margin: 0 0 1.75rem;
   padding: 0 0 1.25rem;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-bottom: 1px solid var(--fm-docs-border-subtle);
 }
 
 .fm-home-masthead__brand,
@@ -203,11 +484,11 @@ main article span.math {
 .fm-home-eyebrow,
 .fm-home-label {
   margin: 0 0 0.5rem;
+  color: var(--fm-docs-text-muted);
   font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  opacity: 0.72;
 }
 
 .fm-home-label {
@@ -227,7 +508,7 @@ main article span.math {
   gap: 0.85rem;
   align-items: start;
   padding-left: 1.1rem;
-  border-left: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-left: 1px solid var(--fm-docs-border-subtle);
 }
 
 .fm-home-masthead__funding > img {
@@ -266,22 +547,38 @@ main article span.math {
   box-sizing: border-box;
   max-width: 100%;
   padding: 0.6rem 0.85rem;
-  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  border: 1px solid var(--fm-docs-border-default);
   border-radius: 0.4rem;
+  background: var(--fm-docs-bg-surface);
+  color: var(--fm-docs-text-primary);
   overflow-wrap: anywhere;
   text-decoration: none;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.fm-home-action:hover {
+  border-color: var(--fm-docs-border-strong);
+  background: var(--fm-docs-bg-elevated);
+  color: var(--fm-docs-text-primary);
 }
 
 .fm-home-action--primary {
-  color: inherit;
-  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-color: var(--fm-docs-accent);
+  background: var(--fm-docs-accent-soft);
+  color: var(--fm-docs-accent-text);
+}
+
+.fm-home-action--primary:hover {
+  border-color: var(--fm-docs-accent-strong);
+  background: color-mix(in srgb, var(--fm-docs-accent) 24%, var(--fm-docs-bg-surface));
+  color: var(--fm-docs-accent-text);
 }
 
 .fm-home-status {
   max-width: 48rem;
   margin: 0 0 2rem;
   padding: 0.7rem 0 0.7rem 0.9rem;
-  border-left: 3px solid currentColor;
+  border-left: 3px solid var(--fm-docs-accent);
   font-size: 0.92rem;
   line-height: 1.5;
 }
@@ -292,7 +589,7 @@ main article span.math {
     background: linear-gradient(
       to right,
       transparent 95%,
-      color-mix(in srgb, currentColor 10%, transparent)
+      color-mix(in srgb, var(--fm-docs-text-primary) 10%, transparent)
     );
   }
 
@@ -308,7 +605,7 @@ main article span.math {
   .fm-home-masthead__funding {
     padding-top: 1rem;
     padding-left: 0;
-    border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    border-top: 1px solid var(--fm-docs-border-subtle);
     border-left: 0;
   }
 }

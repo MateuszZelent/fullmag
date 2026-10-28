@@ -4940,6 +4940,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/workspace/items/{id}/playback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_playback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/playback/frames/{frame_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_playback_frames_frame_index"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/workspace/items/{id}/thumbnail": {
         parameters: {
             query?: never;
@@ -13578,6 +13610,26 @@ export interface components {
             /** @description SHA-256 of the complete FMMT v2 body, when it fits the bounded transport. */
             topology_binary_sha256?: string | null;
             topology_fingerprint: string;
+        };
+        /** @description The small JSON read model for a completed saved-result playback. */
+        SavedPlaybackResource: {
+            cell_size_m: number[];
+            grid_cells_xyz: number[];
+            name: string;
+            origin_m: number[];
+            /** @description SHA-256 identity of the sidecar and all playback array metadata. */
+            revision: string;
+            schema: string;
+            /** @description Optional publication context, for example why run provenance is absent. */
+            source_note?: string | null;
+            stages: components["schemas"]["SavedPlaybackStage"][];
+        };
+        /** @description One stage in a saved playback resource. */
+        SavedPlaybackStage: {
+            frame_count: number;
+            quantity_ids: string[];
+            stage_id: string;
+            times_s: number[];
         };
         ScalarWindow: {
             columns: string[];
@@ -32478,6 +32530,115 @@ export interface operations {
             };
             /** @description The database is read-only (newer schema) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id_playback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Registered result item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Validated saved-result playback metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedPlaybackResource"];
+                };
+            };
+            /** @description The workspace item is not a result folder */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The registered item or playback files are missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Playback source changed while it was read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The result has no supported playback descriptor or its metadata is invalid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id_playback_frames_frame_index: {
+        parameters: {
+            query: {
+                /** @description Exact stage id from `SavedPlaybackResource.stages`. */
+                stage_id: string;
+                /** @description Revision returned by `GET /v2/workspace/items/{id}/playback`. */
+                revision: string;
+            };
+            header?: never;
+            path: {
+                /** @description Registered result item id (decimal string) */
+                id: string;
+                /** @description Zero-based frame index within the selected stage */
+                frame_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One complete little-endian f64 AoS xyz frame */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Invalid item id or non-result item */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The item, selected stage, frame, or chunk is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The supplied playback revision is stale or the source changed during the read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Playback metadata or frame values are invalid */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

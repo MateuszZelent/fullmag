@@ -1059,7 +1059,7 @@ fn sample_compute_node_inner(
     let cpu_quota_enforcement = {
         #[cfg(target_os = "linux")]
         {
-            if crate::worker_cgroup::probe_delegated_cpu_quota().is_ok() {
+            if crate::worker_cgroup::probe_delegated_cpu_quota_settled().is_ok() {
                 EnforcementStatus::Supported
             } else {
                 EnforcementStatus::Unavailable

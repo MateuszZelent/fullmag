@@ -36,6 +36,32 @@ class DockerDevCodegenTests(unittest.TestCase):
             )
             self.assertEqual(json.loads(result.stdout)[-3:], ["codegen-openapi", "--source-root", source])
 
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires executable POSIX shell fixture")
+    def test_just_wrapper_admits_only_pinned_cache_maintenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            interpreter = Path(directory) / "python-probe"
+            interpreter.write_text(f"#!{sys.executable}\nimport json,sys\n"
+                                   "if sys.argv[1:2] != ['-c']: print(json.dumps(sys.argv[1:]))\n")
+            interpreter.chmod(0o700)
+            root = Path(__file__).resolve().parents[1]
+            source = "/example/selected checkout"
+            prefix = f'python3 "{root}/scripts/docker_dev.py" --repo-root "{root}" '
+            body = f"maintain-cache --attempt '{'a'*32}' --config-sha256 '{'b'*64}' --source-root '{source}'"
+            def invoke(value):
+                return subprocess.run(["bash",str(root/"scripts/just_storage_shell.sh"),prefix+value],
+                                      env={**os.environ,"FULLMAG_STORAGE_PYTHON":str(interpreter)},
+                                      text=True,capture_output=True)
+            result=invoke(body)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(json.loads(result.stdout)[3:],
+                             ["maintain-cache","--attempt","a"*32,"--config-sha256","b"*64,"--source-root",source])
+            for rejected in (body+"; true",body+" --max-shared-entries '1'",body.replace("a"*32,"a"*31)):
+                with self.subTest(rejected=rejected):
+                    result=invoke(rejected)
+                    self.assertEqual(result.returncode,2)
+                    self.assertEqual(result.stdout,"")
+
     def test_frontend_requires_readonly_control_but_writable_build_state(self) -> None:
         document = {"Mounts": [
             {"Destination": "/opt/fullmag/source", "Type": "bind", "RW": False},
@@ -55,6 +81,17 @@ class DockerDevCodegenTests(unittest.TestCase):
             "/run/desktop/mnt/host/c/git/fullmag/fullmag",
         ):
             self.assertEqual(expected, codegen._path_identity(alias))
+
+    def test_desktop_wsl_source_alias_requires_same_inode(self) -> None:
+        alias = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/" + "a" * 64
+        selected = Path("/selected/checkout")
+        with mock.patch.object(Path, "is_dir", return_value=True), mock.patch.object(Path, "samefile", return_value=True):
+            self.assertTrue(codegen._source_mount_matches_selected(alias, selected))
+            self.assertFalse(codegen._source_mount_matches_selected(alias + "/../other", selected))
+        with mock.patch.object(Path, "is_dir", return_value=True), mock.patch.object(Path, "samefile", return_value=False):
+            self.assertFalse(codegen._source_mount_matches_selected(alias, selected))
+        with mock.patch.object(Path, "is_dir", return_value=True), mock.patch.object(Path, "samefile", side_effect=OSError("missing")):
+            self.assertFalse(codegen._source_mount_matches_selected(alias, selected))
 
     def test_source_probe_uses_backend_module_root(self) -> None:
         self.assertIn('sys.path.insert(0, "/opt/fullmag")', codegen.SOURCE_PROBE_SCRIPT)
@@ -344,6 +381,9 @@ class DockerDevCodegenTests(unittest.TestCase):
             outputs = {name: name.encode() for name in names}
             published = codegen._publish_outputs(source, outputs, before)
             self.assertEqual(set(published), set(names))
+            for name in names:
+                self.assertTrue((source / "apps/control-room/src/kernel/api/generated" / name).stat().st_mode & 0o040)
+
             self.assertEqual({name: (generated / name).read_bytes() for name in names}, outputs)
 
 

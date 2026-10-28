@@ -1,0 +1,34 @@
+{
+  "source_package": "/mnt/c/Users/Mateusz/Documents/ChatGPT/Fullmag/design-audit-2026-10-26",
+  "base_commit": "1afcb531630d6cd5b8caba1f8a4d4593bb29cdb7",
+  "documents": [
+    {
+      "name": "00_raport.md",
+      "sha256": "2d3ae4b3dfa4b86a8675af59920677c8ea846b191ea41aa061692cccdbcccb8c"
+    },
+    {
+      "name": "01_weryfikacja.md",
+      "sha256": "0da40cb73bb55e3a80441d6d0bf389027b8231abd29d44d9f30cd6a53ec7d406"
+    },
+    {
+      "name": "02_struktura.md",
+      "sha256": "9b4204d258b2edae48231337ca9dd8b967fcefa52eeddc275191bda65a8abc68"
+    },
+    {
+      "name": "03_plan.md",
+      "sha256": "577f60ce590a47594da43e675b46a693e754eaf8c351ee3d5372f812714880ea"
+    },
+    {
+      "name": "04_chrome_ribbon.md",
+      "sha256": "aa7dedffcc46a33de19f81c23b1393da0bb204e632dde7c5cdbe539b8daa7050"
+    },
+    {
+      "name": "05_panele_dock.md",
+      "sha256": "e6c4588d43063bf4168c29ba5d0ec7f92e59438e00ae066f994bffba48844d5c"
+    },
+    {
+      "name": "06_theme_tokeny.md",
+      "sha256": "956bf0ccba938394b7c5e33e74b2d2ef63aea107d85e109e9c0bdfffb556b580"
+    }
+  ]
+}
