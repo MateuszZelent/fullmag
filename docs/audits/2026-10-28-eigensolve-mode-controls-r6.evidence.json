@@ -1,0 +1,99 @@
+{
+  "schema": "fullmag.eigensolve_mode_controls_r6_evidence.v1",
+  "source_commit": "223ba56533a5aed735c382b1b6279e33759b4474",
+  "ui_url": "http://localhost:3217/session/eigen-mode-ui-de-signed15",
+  "backend_version": "0.1.0-dev.20261028.g59f5db5cf0eb.dirty.s5568ceb529cd+9797",
+  "frontend_delivery": "worktree source via HMR; no backend rebuild this turn",
+  "run_id": "run-live-93df870d6af7a8e9d70a3742a0de6e7860b5a072c98b7359c3463c18b49113de",
+  "data_scope": "imported archived signed-DE 15 samples; no new numerical solve",
+  "browser": {
+    "panel_playback": "PASS",
+    "panel_actions": [
+      "float",
+      "move",
+      "resize",
+      "maximize",
+      "restore",
+      "hide",
+      "show",
+      "dock"
+    ],
+    "webgl": {
+      "width": 703,
+      "height": 573,
+      "contextLost": false,
+      "visible": true
+    },
+    "javascript_errors": [],
+    "unexpected_mutations": [],
+    "return_to_dispersion": "PASS",
+    "gpu_scope": "headless Chromium SwiftShader; hardware GPU NOT VERIFIED",
+    "combined_controls": "PASS",
+    "combined_controls_checks": [
+      "manual range reaches renderer and changes image",
+      "palette changes image",
+      "animate selected sample then +25 and Gamma owner binding",
+      "phase 0 vs pi/2 changes image",
+      "paused image stable",
+      "static Real pauses animation",
+      "8 panel operations during playback",
+      "post-dock surface palette update",
+      "return to dispersion"
+    ]
+  },
+  "active_solver_r6": {
+    "status": "NOT VERIFIED",
+    "reason": "managed activation rejected before mutation: live_retirement_busy for imported_read_only session; terminal run-store proof also required",
+    "operation_id": "359acb20e15f4b0990604c83caf519e7",
+    "request_id": "eigensolve-r6-panel-k10-20261028-1",
+    "new_solver_started": false
+  },
+  "ci": {
+    "url": "https://github.com/MateuszZelent/fullmag/actions/runs/40765299446",
+    "status": "PASS",
+    "test_files": 58,
+    "tests": 1422,
+    "typecheck": "PASS",
+    "architecture": "PASS",
+    "react_doctor": "PASS with 3 existing warnings at 3 locations"
+  },
+  "preservation": {
+    "foreign_dirty_files_checked": 14,
+    "changed": []
+  },
+  "artifact_base": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/mode-controls-r6-20261028",
+  "artifacts": [
+    {
+      "path": "panels-final-v2/probe.json",
+      "sha256": "db2bcf7cb43a87e51d1b614a670c93a52dc40a73b1d740b84580066d8e5c48b5"
+    },
+    {
+      "path": "panels-final-v2/gamma-mode-controls.png",
+      "sha256": "488f00b60e46d7cd9bd1c87df41f12789337e31736b20bbfc2d13284192f2bd1"
+    },
+    {
+      "path": "panels-final-v2/dispersion-after-mode-picker.png",
+      "sha256": "5e77411c9c218330be1ce3efb98bd189caeb0cc39ad3e4e29613f6b9db96447d"
+    },
+    {
+      "path": "final-controls-v2/probe.json",
+      "sha256": "c9b507ef68c032a8794afc8c81b64b80fba45799cbf65d8e43b9e683e471fb60"
+    },
+    {
+      "path": "live-panels/report.json",
+      "sha256": "2bcc469e018134e546e1f9e9bc0fd2527846b331e0f3a1e488c64b69216b084e"
+    },
+    {
+      "path": "combined-final/probe.json",
+      "sha256": "c004f9033bc146d4cfe0f9253d63309387a6037a3ef66858e0ce683a782f2798"
+    },
+    {
+      "path": "combined-final/gamma-mode-controls.png",
+      "sha256": "bc926aa5835c6d93fc490c80d40b5d1abeb7672c27a03dbbd8bd1f3165e4c725"
+    },
+    {
+      "path": "combined-final/dispersion-after-mode-picker.png",
+      "sha256": "e0c190dceb64d8d07e6d0c8edfa00852c11a3e21ecf82ca24aa4f28a86a6cfec"
+    }
+  ]
+}

@@ -16,7 +16,7 @@ async function expand(id){const n=tree(id);await n.waitFor({timeout:30000});if(a
 async function capture(name){await page.waitForTimeout(350);const data=await page.locator('.fm-inspector').evaluate(el=>{const body=el.querySelector('.fm-inspector__content');const text=el.innerText;return {text,unavailableCount:(text.match(/unavailable|not available/ig)||[]).length,notApplicableCount:(text.match(/not applicable/ig)||[]).length,controlCount:el.querySelectorAll('input,select,button').length,activeTab:el.querySelector('[role=tab][aria-selected=true]')?.textContent,scrollableDescendants:[...el.querySelectorAll('*')].filter(n=>n.scrollHeight>n.clientHeight+100&&n.clientHeight>0).map(n=>({className:n.className,clientHeight:n.clientHeight,scrollHeight:n.scrollHeight})).slice(0,8),bodyClientHeight:body?.clientHeight,bodyScrollHeight:body?.scrollHeight};});evidence.views.push({name,...data});if(process.env.FULLMAG_UX_SCREENSHOTS !== '0') await page.screenshot({timeout:60000,path:`${out}/current-${name}.png`});}
 try{
  await page.goto(`${origin}/workspace`,{waitUntil:'domcontentloaded',timeout:60000});
- const analysis=page.locator('.fm-viewport-tabs__trigger').filter({hasText:/^Analysis$/}); if(await analysis.count())await analysis.first().click();
+ const analysis=page.locator('.fm-viewport-tabs__trigger').filter({hasText:/^Analysis$/}); await analysis.first().click({timeout:60000});
  await page.locator('.fm-explorer .fm-tabs-trigger').filter({hasText:/^Results$/}).click({timeout:60000});
  const root=`results:run:${run}`, family=root+':k-resolved', stage=family+':stage:eigenmodes:modal_eigen';
  await expand(root);await expand(family);await tree(family).click();await capture('category');

@@ -1,6 +1,6 @@
 # Wdrożenie audytu Results UX — 2026-10-28
 
-Wdrożono aplikacyjne zmiany R1–R5 z [audytu](2026-10-28-eigensolve-results-ux-audit.md). Testy automatyczne i rzeczywista przeglądarka potwierdzają opisany poniżej zakres. R6 pozostaje otwarte dla ręcznego odbioru użyteczności; nie utożsamiamy go z samym Playwrightem.
+Wdrożono aplikacyjne zmiany R1–R5 z [audytu](2026-10-28-eigensolve-results-ux-audit.md). Testy automatyczne i rzeczywista przeglądarka potwierdzają opisany poniżej zakres. R6 pozostaje otwarte dla próby podczas aktywnego solvera oraz ręcznego odbioru użyteczności; nie utożsamiamy go z samym Playwrightem.
 
 Worktree: `/home/kkingstoun/git/fullmag/worktrees/eigensolve-integration-ui-20261026`. Branch: `codex/eigensolve-integration-ui-20261026`. UI: http://localhost:3217/session/eigen-mode-ui-de-signed15. [PR 262](https://github.com/MateuszZelent/fullmag/pull/262) pozostaje draftem szerszej integracji; ten raport kwalifikuje wyłącznie zmiany UX.
 
@@ -13,7 +13,7 @@ Worktree: `/home/kkingstoun/git/fullmag/worktrees/eigensolve-integration-ui-2026
 | R3 | Implementacja, CI i browser PASS | Explorer, wybór próbki i selekcja z wykresu używają Γ / podpisanego k / GHz. Surowe identyfikatory pozostają w danych. Zachowano run/stage/revision/sample/mode oraz węzły nawigacji; Back to chart wraca do istniejącego wykresu. |
 | R4 | Implementacja, CI i browser PASS | Jedno Color by; solid, scalar range i vectors mają warunkowe controls. Wygląd i Stop są dostępne tylko dla tej samej tożsamości aktywnego pola. Po wyborze innego k pojawia się jawna informacja o poprzednim aktywnym modzie. |
 | R5 | Implementacja, CI i browser PASS w podanym zakresie | Elastyczna wysokość wykresu, Show / hide lower panel, szczegóły telemetryki na żądanie. Status pozostaje widoczny. Sprawdzono trzy rozmiary okna oraz przywrócenie wysokości po hide/show; nie zmieniono właściciela paneli, cache zasobów ani cyklu życia obliczeń. |
-| R6 | Automatyczna macierz PASS; ręczny odbiór OTWARTY | 1267 testów, typecheck, architektura, React Doctor; realne dane, WebGL, brakujące pole i klawiatura. Badanie z nową osobą oraz pełna ręczna sesja dock/float podczas aktywnego solvera: NOT VERIFIED. |
+| R6 | Częściowo zweryfikowane; aktywny solver ZABLOKOWANY | Pierwotna macierz 1267 testów i browser PASS. Dodatkowe poprawki animacji, kolorów i selektora k/f opisano poniżej wraz z nowym CI. Rzeczywisty test dock/float podczas obliczenia nie wystartował przez `live_retirement_busy`; brak podstaw do zamknięcia R6. Badanie z nową osobą również NOT VERIFIED. |
 
 ## Co potwierdzono
 
@@ -62,10 +62,158 @@ Harnessy w repo: `scripts/verify_eigensolve_results_ux.mjs` i `scripts/verify_ei
 
 Nie zmieniono progu COMSOL 0,5%, demagu, operatorów ani danych fizycznych. Zgodność renderowania i residual nie oznacza zbieżności siatki/airboxu, kompletności widma ani zakończenia kwalifikacji naukowej.
 
-## Kontynuacja R6 — kontrolki i aktywny solver
+## Kontynuacja R6 — poprawki kontrolek i przeglądarki modów
 
-Zakres 2026-10-28: (1) odtworzenie animacji i skali, (2) poprawki oraz selektor k/f, (3) rzeczywisty przebieg solvera podczas float/move/resize/hide/dock, (4) CI i raport. Stan: W TOKU.
+Zakres dodatkowego zlecenia: naprawa animacji/skali, wybór k/f dla dużych zbiorów,
+sprawdzenie cyklu życia paneli podczas rzeczywistego obliczenia i aktualizacja dowodów.
 
-Odtworzono: Animate uruchamia poprzednio aktywny mod mimo zaznaczenia Γ; po zmianie maksimum skali ręcznej zakres renderera i screenshot pozostają identyczne. Ustalono dwie przyczyny zakresu: brak atomowego zapisu obu końców oraz ograniczanie override do składowych globalnego pola zamiast składowej aktywnego modu. Dowód: `mode-controls-r6-20261028/baseline/probe.json` w katalogu wizualizacji wątku.
+### Usunięte przyczyny
 
-Wybór setek wyników: inspektor grupuje po próbce k, następnie pokazuje częstotliwości w tej próbce; filtrowanie i strony po 32 pozycje, odrębne ID dla degeneracji. Zmiana k wybiera najniższą zwróconą częstotliwość, nie obiecuje śledzenia gałęzi. Drzewo pokazuje najwyżej 32 pola, pełny zbiór pozostaje dostępny przez inspektor.
+1. **Animacja poprzedniego modu.** `set-3d-animation` wcześniej preferowało aktywny
+   overlay mimo jawnego `fieldId` nowego zaznaczenia. Jawny cel otrzymuje teraz
+   własną pełną tożsamość; brak ownera kończy się odmową, bez użycia starego pola.
+2. **Niedziałający zakres kolorów.** Przełączenie auto → manual nie zapisywało
+   wyświetlanych końców −1/+1. Zapisywane są teraz oba końce wraz z trybem.
+   Override zakresu aktywnego modu obejmuje jego składowe, niezależnie od wyboru
+   składowej globalnego `m`. Dane ani normalizacja `unit_l2` nie są przeskalowywane.
+3. **Sterowanie fazą.** Inspektor wykorzystuje istniejący kontroler i transport
+   fazy: ustawienie fazy, play/pause, tempo, kierunek, pętla. Wybranie statycznego
+   Real/Imag/Abs/Phase wyłącza animację. Tempo odtwarzania nie zmienia fizycznego f.
+4. **Wybór wielu modów.** Inspektor udostępnia wybór wektora k, następnie
+   częstotliwości w tej próbce. Większe zbiory mają wyszukiwanie i strony po 32
+   pozycje; poza stroną może pozostać jedna przypięta wybrana pozycja. Degeneracje
+   mają różne ID. Drzewo pokazuje najwyżej 32 pola i odsyła do pełnego selektora.
+   Wybór innego k zaczyna od najniższej zwróconej częstotliwości; nie jest to
+   automatyczne śledzenie gałęzi.
+5. **Pełny kontekst ścieżki.** Browser znalazł brak `path_s` w nowym selektorze:
+   etykieta +25 zmieniała się, lecz viewport odmawiał renderowania z komunikatem
+   `Active analysis overlay k-path coordinate is missing`. Selektor przekazuje
+   teraz opublikowane s, również zero. Nie osłabiono walidacji ownera ani nie
+   wyliczono fikcyjnego s z indeksu lub normy k.
+
+6. **Powrót do właściwego wykresu.** Selekcja modu ze ścieżki k zachowuje
+   `calculationMode = dispersion_modal`. Domyślne `free_modes` otwierało widmo
+   indeksowane modami przy „Back to chart”. Dodano regresję routingu; wyniki
+   bez ścieżki k nadal prowadzą do widma.
+
+### R6: stan obliczeń i blokada
+
+**Test paneli podczas aktywnego solvera: NOT VERIFIED.** Żaden nowy solver nie
+wystartował w tej próbie. Wskazanie `completed` dotyczy odtworzonego archiwum.
+
+Zarządzane uruchomienie `examples/fem_eigen_mode_ui_de_k10.py`, request
+`eigensolve-r6-panel-k10-20261028-1`, operation
+`359acb20e15f4b0990604c83caf519e7`, zakończyło się potwierdzoną odmową przed
+mutacją (`live_retirement_busy`). Kod importu celowo ustawia
+`runtime_status.code = imported_read_only`, a prywatna bramka retirement wymaga
+zgodności tego kodu z efektywnym `completed`. Dowody w kodzie:
+`session_persistence.rs::normalize_imported_read_only` oraz
+`development_restart.rs::validate_runtime_status`. Dodatkowo retirement wymaga
+własnego dowodu terminalnego run-store; samo dopuszczenie innego napisu statusu
+nie jest kompletną, bezpieczną naprawą.
+
+Sprawdzono też publiczną komendę `run-script-accepted --help` w tym samym
+kontenerze. Trafia ona do parsera skryptu: `is_script_mode` nie zawiera tej
+komendy w tabeli subkomend. Ta alternatywa również nie została użyta do Solve.
+Nie zastąpiono sesji pustą sesją w celu ominięcia blokady i nie zmieniano ledgera.
+
+Warunki zamknięcia tej części R6:
+
+- osobna, testowana ścieżka przejścia z importowanego wyniku do nowego obliczenia,
+  zachowująca archiwum i sprawdzająca aktywnego właściciela runtime;
+- start dokładnie jednego runu i potwierdzenie rzeczywistego stanu `running`;
+- float/move/resize/maximize/restore/hide/show/dock przy tym samym run ID;
+- brak komend stop/cancel/solve z operacji panelowych, postęp i końcowy wynik
+  tego samego solvera. Przy zatrzymaniu solvera choćby w trakcie jednej operacji
+  observer nie zalicza testu.
+
+Observer `scripts/verify_panels_during_solver_ui.mjs` wymaga
+`FULLMAG_EXPECTED_RUN`. Nie uruchamia obliczeń i nie przyłącza się do obcego runu.
+Dotychczasowa próba `live-panels/report.json` zakończyła się
+`No live solver appeared`; nie jest dowodem ciągłości obliczeń.
+
+### Dowody dodatkowej weryfikacji
+
+Baza: `mode-controls-r6-20261028/` pod bazowym katalogiem wizualizacji tego wątku.
+
+- `baseline/`: odtworzone błędy animowania starego modu i nieskutecznej skali.
+- `controls-check/`: PASS zmiany rzeczywistego zakresu bufora i palety oraz
+  Animate po przejściu z próbki 5 do Γ, bez mutacji solvera.
+- `full-controls/`, `picker-diagnosis/`: zachowany błąd brakującego s przed naprawą;
+  metadane HTTP 200 nie wystarczyły do dowodu renderowania.
+- `live-panels/`: nieudana próba oczekiwania na realny solver.
+- `scripts/verify_eigensolve_mode_controls_ui.mjs`: odtwarzalna kontrola danych
+  signed-DE, obrazu animacji, zakresu/palety, wyboru k/f, fazy, pauzy i paneli.
+  Operacje dotyczą prezentacji; nie zastępują testu aktywnego solvera.
+
+CI `40759600486`: 58 plików / 1421 testów PASS, typecheck wykrył brak
+`Selection.moduleSource`. Poprawka `c61c796df4206c3cd07b46c9ad7b5d26d36b54af`
+przeszła pełne CI [40761152801](https://github.com/MateuszZelent/fullmag/actions/runs/40761152801).
+Ponowny dispatch starego SHA `40760894305` nie jest dowodem poprawionej wersji.
+Poprawka s: `8150a2701c8fb086aab7f42bcb52f3bc0d7bc67a`.
+[CI 40762300718](https://github.com/MateuszZelent/fullmag/actions/runs/40762300718):
+**PASS**, 58 plików / 1421 testów, pełny typecheck, architektura i bramka
+React Doctor. Pozostały te same dwie kategorie uwag (trzy miejsca) sprzed zmian.
+
+Lokalny hook React Doctor ponownie zgłosił błąd parsera oxlint
+`Unexpected discriminant 7 for TSTypeName`; nie uznano go za zaliczony.
+Testy jednostkowe kompilowano tylko w GitHub Actions.
+
+W `full-controls-v2` przełączanie +25 → Γ, faza 0 → π/2 i nieruchomy obraz
+po pauzie przeszły; dalszy test zatrzymał się na próbie użycia kontrolki we
+zwiniętej sekcji Appearance. Harness otwiera tę sekcję jawnie. W
+`final-controls` ręczny zakres był poprawnie przekazany, lecz porównanie obrazu
+przy minimum −1 nasycało całe ujemne pole zarówno przed, jak i po zmianie
+maksimum. Kontrola obrazu używa teraz zakresu −5·10¹¹…+5·10¹¹, obejmującego
+rzeczywistą amplitudę tego konkretnego pola. Nie zmieniono rendererów ani
+asercji wymuszającej różny obraz przy faktycznej zmianie odwzorowania kolorów.
+
+W `final-controls-v2` potwierdzono zmianę koloru przy zakresie obejmującym obie
+polaryzacje, paletę, selektor +25/Γ, zmianę fazy, zatrzymanie obrazu po pauzie,
+wyłączenie animacji przez wybór statycznego Real oraz osiem operacji panelowych:
+float, move, resize, maximize, restore, hide, show, dock. Canvas pozostał
+widoczny, WebGL context nie był utracony (703×573). Nie zaliczono całego harnessu:
+ostatni odczyt niezmienionego wpisu `mode-surface-binding` trafił na wyczyszczony
+fragment ograniczonego bufora diagnostycznego. Próba oczekiwania na nowy wpis po zmianie składowej również wykazała ograniczenie
+diagnostyki; końcowy test sprawdza odpowiedź rzeczywistego obrazu po dokowaniu,
+zamiast zakładać nieograniczoną retencję logu. Wszystkie wcześniejsze próby zachowano.
+
+Końcowy test paneli nie może polegać na trwałym wpisie w diagnostyce: strumień
+może nie zachować wpisów po zmianach układu. Rozszerzona kontrola zachowuje
+potwierdzone wiązanie pola przed operacjami, sprawdza WebGL oraz wybrany i
+wyświetlany kontekst Γ po operacjach, a następnie wymaga zmiany rzeczywistego
+obrazu powierzchni po zmianie palety. Nie traktuje samego HTTP 200 ani napisu
+„Selected mode requested” jako dowodu obrazu.
+
+### Wynik końcowej próby paneli
+
+`panels-final-v2/probe.json`: **PASS** dla ośmiu operacji panelowych podczas
+animacji opublikowanego modu Γ. Potwierdzono rzeczywisty bufor zespolony przed
+operacjami, zachowanie kontekstu Γ po operacjach oraz zmianę obrazu powierzchni
+po zmianie palety. Canvas: 703×573, widoczny, `contextLost=false`. Brak błędów JS
+i prób niedozwolonych mutacji. Powrót przez „Back to chart” otwiera dyspersję
+z 15 punktami i dwiema krzywymi referencyjnymi.
+
+Screeny w tym katalogu: `gamma-mode-controls.png` i
+`dispersion-after-mode-picker.png`. SwiftShader potwierdza rendering WebGL;
+nie stanowi kwalifikacji sprzętowego GPU ani ponownego testu fizyki solvera.
+Aktywny solver nadal **NOT VERIFIED** — powyższy PASS nie zamyka tej części R6.
+
+Ostateczne źródła UI: `223ba56533a5aed735c382b1b6279e33759b4474`.
+[CI 40765299446](https://github.com/MateuszZelent/fullmag/actions/runs/40765299446):
+**PASS**, 58 plików / **1422 testy**, pełny typecheck, architektura i React Doctor
+(z trzema wcześniejszymi uwagami w trzech miejscach). Backend pozostaje na
+`59f5db5cf0eb.dirty`; frontend odczytuje źródła worktree przez HMR.
+
+Dowody maszynowe: [eigensolve-mode-controls-r6.evidence.json](2026-10-28-eigensolve-mode-controls-r6.evidence.json).
+Zachowano 14 cudzych zmienionych lub nieśledzonych plików; porównanie SHA-256
+z manifestem zachowania nie wykazało zmian. Nie scalono PR ani nie usunięto
+archiwum wyników.
+
+`combined-final/probe.json`: **PASS całego odtwarzalnego harnessu**
+`verify_eigensolve_mode_controls_ui.mjs` na końcowych źródłach. W jednej sesji
+sprawdzono ręczny zakres docierający do renderera i zmieniający obraz, paletę,
+wybór +25 → Γ, fazę 0 → π/2, nieruchomy obraz po pauzie, zatrzymanie animacji
+przez statyczny Real, osiem operacji panelowych podczas animacji, odpowiedź
+powierzchni po dokowaniu i powrót do dyspersji. Brak błędów JS i niedozwolonych
+mutacji; run ID pozostał niezmieniony. Zestaw nie wysyła Solve.
