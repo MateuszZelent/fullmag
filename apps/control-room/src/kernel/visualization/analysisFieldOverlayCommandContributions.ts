@@ -625,7 +625,11 @@ function rebindTargetFromContext(
 }
 
 function activateViewport3D(context: CommandContext): void {
-  context.layout?.setActiveViewportMainModule("viewport-3d");
+  // A visible companion is already the single 3D instance. Activating it as
+  // the primary tab would collapse the user's chart + field workspace.
+  if (context.layout?.get().viewportCompanion?.moduleId !== "viewport-3d") {
+    context.layout?.setActiveViewportMainModule("viewport-3d");
+  }
   context.layout?.setFocusedSlot("viewport-main");
 }
 

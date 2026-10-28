@@ -460,6 +460,50 @@ describe("analysis field overlay commands", () => {
     expect(layout.get().focusedSlot).toBe("viewport-main");
   });
 
+  it("preserves chart and 3D split when plotting another selected mode", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const events = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(events);
+    const selection = new SelectionController(events);
+    layout.setActiveViewportMainModule("analysis-plots");
+    layout.setViewportCompanion({moduleId:"viewport-3d",placement:"beside"});
+    selection.set(
+      {
+        kind: "results.eigen.mode",
+        label: "Mode 2",
+        nodeId: "results:eigen:sample:0:mode:2",
+        objectId: null,
+        ref: {
+          ...canonicalEigenRef("analysis:eigen:sample-0000:mode-0002", 2),
+          fieldId: "analysis:eigen:sample-0000:mode-0002",
+          kind: "results.eigen.mode",
+          modeIndex: 2,
+          nodeId: "results:eigen:sample:0:mode:2",
+          sampleIndex: 0,
+          type: "frequency-domain",
+        },
+      },
+      "test",
+    );
+
+    const result = await commands.execute(
+      "analysis.eigen.plot-mode-3d-imag",
+      {
+        analysisFieldOverlay: overlay,
+        layout,
+        selection,
+        source: "test",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.query.view).toBe("imag");
+    expect(layout.get().activeViewportMainModuleId).toBe("analysis-plots");
+    expect(layout.get().viewportCompanion).toEqual({moduleId:"viewport-3d",placement:"beside"});
+    expect(layout.get().focusedSlot).toBe("viewport-main");
+  });
+
   it("stores mode appearance on the analysis overlay when plotting", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();

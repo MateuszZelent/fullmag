@@ -298,6 +298,10 @@ function EigenMode3DActions({
         <Pause aria-hidden="true" size={13} />
         <span>Stop</span>
       </Button>
+      <Button aria-label="Show dispersion chart and selected mode together" disabled={disabled} size="sm" variant="secondary" onClick={async () => {
+        const result = await kernel.commands.execute("ribbon.analysis.show-chart-and-field", createCommandContext("inspector", kernel));
+        if (result.status === "completed") plot(normalizeAnalysisFieldView(settings.view));
+      }}>Chart + mode</Button>
       <Button size="sm" variant="secondary" onClick={() => kernel.layout.setActiveViewportMainModule("analysis-plots")}>Back to chart</Button>
       {sameModeResultOwner(settings.activeAnalysisFieldOverlay?.modeIntent, summary.owner) ? <Button size="sm" variant="secondary" onClick={() => void kernel.commands.execute("viewport-3d.fit", createCommandContext("inspector", kernel, { sourceDetail: "results.eigen.mode" }))}>Fit mode</Button> : null}
     </div>
