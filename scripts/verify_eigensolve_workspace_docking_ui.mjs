@@ -1,5 +1,5 @@
-// Independent result windows on published FEM data; no numerical submissions.
-// Edge preview, 50/50 snap, cancel and both-floating peers on retained canvases.
+// Workspace-wide panel docking on published FEM data; no numerical submissions.
+// Preset, nested edge docking, resizing, compact layout and retained canvases.
 const {chromium}=await import(process.env.FULLMAG_PLAYWRIGHT_MODULE ?? new URL('../apps/control-room/node_modules/playwright/index.mjs',import.meta.url).href);
 import {writeFile} from 'node:fs/promises';
 const out=process.env.FULLMAG_UX_EVIDENCE ?? '/tmp/fullmag-results-ux';
@@ -89,6 +89,19 @@ try{
  await page.waitForTimeout(250);
  if((await win('viewport-3d').boundingBox()).x >= (await win('analysis-plots').boundingBox()).x)throw Error('Preset order incorrect');
  await page.screenshot({path:out+'/modes-left-spectrum-right.png'});
+ const resizeChecks=[
+  {handle:'.fm-workspace-docking-tree .fm-resize-handle--vertical',pane:'panel-left',dimension:'width',dx:40,dy:0},
+  {handle:'.fm-workspace-docking-tree .fm-resize-handle--horizontal',pane:'panel-bottom',dimension:'height',dx:0,dy:-45},
+ ];
+ evidence.resizes=[];
+ for(const check of resizeChecks){
+  const before=await pane(check.pane).boundingBox();
+  await drag(page.locator(check.handle).first(),check.dx,check.dy);await page.waitForTimeout(350);
+  const after=await pane(check.pane).boundingBox();
+  if(Math.abs(after[check.dimension]-before[check.dimension])<15)throw Error('Splitter did not resize '+check.pane);
+  evidence.resizes.push({pane:check.pane,before:before[check.dimension],after:after[check.dimension]});
+  await assertAllRetained('resize '+check.pane);
+ }
  const workspaceRoot=page.locator('#fm-main-content');
  async function snap(id,target,edge){
   evidence.stage=`${id} ${edge} of ${target}`;
@@ -121,7 +134,16 @@ try{
  const restored=await second.evaluate(()=>localStorage.getItem('fullmag.workspace.dock-tree.v1'));
  const structure=node=>node.kind==='pane'?node.pane:[node.axis,structure(node.first),structure(node.second)];
  if(JSON.stringify(structure(JSON.parse(saved)))!==JSON.stringify(structure(JSON.parse(restored))))throw Error('Dock tree did not persist');
- evidence.persistedStructure=structure(JSON.parse(restored));await second.close();
+ evidence.persistedStructure=structure(JSON.parse(restored));
+ await second.setViewportSize({width:895,height:1000});
+ await second.locator('[data-panel-frame="panel-right"]').getByRole('button',{name:'Inspector panel menu',exact:true}).click();
+ await second.getByRole('menuitem',{name:'Dock to right of workspace',exact:true}).click();
+ await second.waitForFunction(()=>document.querySelector('[data-panel-frame="panel-right"]')?.getAttribute('data-panel-mode')==='docked');
+ await second.waitForTimeout(500);
+ evidence.compactInspector=await second.locator('[data-panel-frame="panel-right"]').boundingBox();
+ if(!evidence.compactInspector||evidence.compactInspector.width<100)throw Error('Explicit compact Inspector docking failed');
+ await second.screenshot({path:out+'/compact-inspector-docked.png'});
+ await second.close();
  await pane('viewport-main').getByRole('button',{name:'Viewport panel menu',exact:true}).click();await page.getByRole('menuitem',{name:'Reset panel arrangement',exact:true}).click();
  await page.waitForTimeout(400);await assertAllRetained('reset workspace without remount');
  await page.getByRole('button',{name:'Arrange modes left and spectrum right',exact:true}).click();
