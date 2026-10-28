@@ -22,3 +22,8 @@ R4/R5 pierwszy browser: brak błędów JavaScript, pola −25/Γ/+25 załadowane
 
 
 Powtórny browser R4/R5: **PASS**. Raport i screeny: `eigensolve-results-ux-implementation-20261028/r45-browser/` w katalogu wizualizacji tego wątku. Sprawdzono 15 częstotliwości z artefaktu, 2 referencje, 3 rzeczywiste pola (−25, Γ, +25; każde 5127 wartości zespolonych), żywy WebGL i widoczną powierzchnię, brak akcji FEM po kliknięciu referencji, dwie osie k, układy 1600×1100 / 1440×900 / 1100×900 i hide/show dolnego panelu. Błędy JS/HTTP oraz niedozwolone mutacje: 0. Ukrycie dolnego panelu powiększyło wykres; przywrócenie odtworzyło wysokość. Nie wyłączano solvera, nie tworzono drugiego viewportu.
+
+
+R6 kontrola interakcji: **PASS** (`r6-browser.json`). Cztery zakładki różnią się treścią; kategoria nie ma fikcyjnych braków danych. Główna akcja modu mieści się przy 1600×1100 i 1440×900. Wygląd nieaktywnego modu jest zablokowany; aktywacja go odblokowuje; solid/manual/auto mają właściwe controls; zaznaczenie Γ nie pozwala edytować wcześniejszego pola. Zero błędów JS i mutacji poza dozwolonym ACK.
+
+CI na `00c6c6118de91b64c2ea35cd246f788d4315df73`: [run 40739212435](https://github.com/MateuszZelent/fullmag/actions/runs/40739212435), **1267 testów / 55 plików PASS**, architecture PASS, pinned React Doctor PASS. Typecheck FAIL: TS2367 w warunkowej kontrolce Color maximum. Usunięto redundantne porównanie z `auto` (kontrolka istnieje wyłącznie poza auto); powtórne CI wymagane. Nie zmieniono progów, nie pominięto testów.

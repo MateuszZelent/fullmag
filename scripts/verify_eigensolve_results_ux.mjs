@@ -25,6 +25,37 @@ try{
  const tabs=page.locator('.fm-inspector__tabs [role="tab"]');
  evidence.inspectorTabs=await tabs.allTextContents();
  for(const label of ['Data','Provenance','Diagnostics']){const tab=tabs.filter({hasText:new RegExp('^'+label+'$')});if(await tab.count()){await tab.click();await capture('mode-'+label.toLowerCase());}}
+ await tabs.filter({hasText:/^Overview$/}).click();
+ evidence.overviewLayouts=[];
+ for(const viewport of [{width:1600,height:1100},{width:1440,height:900}]){
+   await page.setViewportSize(viewport);await page.waitForTimeout(300);
+   const container=await page.locator('.fm-inspector').boundingBox();
+   const action=await page.getByRole('button',{name:'Show selected eigen mode in 3D',exact:true}).boundingBox();
+   if(!container || !action || action.y+action.height>container.y+container.height || action.x+action.width>container.x+container.width)throw Error('Primary mode action clipped');
+   evidence.overviewLayouts.push({viewport,container,action});
+ }
+ await page.setViewportSize({width:1600,height:1100});
+ const appearance=page.locator('.fm-inspector').getByRole('button',{name:'Appearance',exact:true});
+ await appearance.click();
+ const color=page.getByRole('combobox',{name:'Eigen mode field component',exact:true});
+ if(await color.isEnabled())throw Error('Inactive mode appearance can edit another field');
+ await page.getByRole('button',{name:'Show selected eigen mode in 3D',exact:true}).click();
+ await page.waitForFunction(()=>{const el=document.querySelector('select[aria-label="Eigen mode field component"]');return el && !el.disabled;},{},{timeout:30000});
+ await color.selectOption('solid');
+ if(await page.getByLabel('Eigen mode colormap',{exact:true}).count())throw Error('Solid color exposes scalar colormap');
+ await color.selectOption('magnitude');
+ await page.getByLabel('Eigen mode color range mode',{exact:true}).selectOption('manual');
+ if(!await page.getByLabel('Eigen mode color minimum',{exact:true}).isVisible())throw Error('Manual color minimum missing');
+ await page.getByLabel('Eigen mode color range mode',{exact:true}).selectOption('auto');
+ if(await page.getByLabel('Eigen mode color minimum',{exact:true}).count())throw Error('Auto range exposes manual minimum');
+ await appearance.click();
+ await page.getByRole('button',{name:'Back to chart',exact:true}).click();
+ await page.locator('[role="treeitem"][data-node-id*="sample-0007"][data-node-id*="mode-0000"]').last().click();
+ await page.waitForTimeout(350);
+ if(!await page.locator('.fm-inspector').innerText().then(t=>t.includes('Another mode is active')))throw Error('Selected Gamma impersonates previous active field');
+ await appearance.click();
+ if(await color.isEnabled())throw Error('Changing k leaves old field appearance editable');
+ evidence.appearance={inactiveDisabled:true,activeEnabled:true,conditionalControls:true,differentSampleDisabled:true};
  const modes=evidence.views.filter(v=>v.name.startsWith('mode-'));
  if(new Set(modes.map(v=>v.text)).size!==4)throw Error('Inspector tabs repeat the same content');
  if(evidence.views[0].unavailableCount || evidence.views[0].notApplicableCount)throw Error('Collection masquerades as missing individual result');

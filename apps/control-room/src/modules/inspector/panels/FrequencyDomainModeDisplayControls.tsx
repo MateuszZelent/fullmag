@@ -543,7 +543,7 @@ export function FrequencyDomainModeDisplayControls({
           <input
             aria-label={`${labelPrefix} color minimum`}
             className="fm-inspector-input"
-            disabled={disabled || settings.colorRangeMode !== "manual"}
+            disabled={disabled}
             step="any"
             type="number"
             value={settings.colorRangeMin}
@@ -557,7 +557,7 @@ export function FrequencyDomainModeDisplayControls({
           <input
             aria-label={`${labelPrefix} color maximum`}
             className="fm-inspector-input"
-            disabled={disabled || settings.colorRangeMode === "auto"}
+            disabled={disabled}
             min={settings.colorRangeMode === "symmetric" ? "0" : undefined}
             step="any"
             type="number"
