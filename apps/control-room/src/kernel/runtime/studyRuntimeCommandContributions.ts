@@ -2862,6 +2862,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
   },
   {
     id: "study.import-state",
+    allowsEmptySession: true,
     title: "Restore Runtime State",
     category: "Study",
     group: "study-recovery",

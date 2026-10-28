@@ -124,6 +124,8 @@ export interface CommandContribution {
   shortcut?: string;
   /** Requires a contextual input that the global command palette cannot provide. */
   requiresInput?: boolean;
+  /** Explicit opt-in for opening a session; null remains fenced against any session transition. */
+  allowsEmptySession?: boolean;
   /** When absent the command is always enabled. */
   isEnabled?: (context: CommandContext) => boolean;
   /** User-facing explanation when `isEnabled` returns false. */
