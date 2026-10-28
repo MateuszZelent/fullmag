@@ -65,6 +65,12 @@ jobs:
           grep -F "spectrum_v3_projection_field_link_is_bound_to_the_captured_binary_generation ... ok" "$RUNNER_TEMP/artifact-generations.log"
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::fields::tests::analysis_artifact_generation_precondition_requires_metadata_binding -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::fields::tests::artifact_generation_header_is_emitted_only_for_a_verified_member -- --exact
+      - name: Keep imported modal archives separate from managed observation sources
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::v2_imported_modal_observation_discovery_preserves_source_boundary -- --exact | tee "$RUNNER_TEMP/imported-observation.log"
+          grep -F "v2_imported_modal_observation_discovery_preserves_source_boundary ... ok" "$RUNNER_TEMP/imported-observation.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::v2_live_observation_discovery_still_requires_managed_store -- --exact
       - name: Run older callback magnetization publication contract
         run: cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::v2_older_runtime_m_frame_preserves_newer_selected_source_and_bundle -- --exact
       - name: Run physical row and bundle consistency contract

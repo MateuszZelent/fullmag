@@ -55081,3 +55081,39 @@ async fn manual_domain_outside_blocks_readiness_and_mesh_command_before_queueing
     assert!(String::from_utf8_lossy(&body_bytes(command).await).contains("outside"));
     assert!(state.current_control_queue.lock().await.is_empty());
 }
+
+
+#[tokio::test]
+async fn v2_imported_modal_observation_discovery_preserves_source_boundary() {
+    let state = test_app_state_with_live_session().await;
+    state.current_live_state.write().await.as_mut().unwrap().runtime_status.code = "imported_read_only".into();
+    let app = build_v2_router().with_state(state);
+    let response = app.clone().oneshot(Request::builder()
+        .uri("/v2/sessions/current/data/observation-frames?run_id=test-run")
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["run_id"], "test-run");
+    assert_eq!(body["frames"], serde_json::json!([]));
+    for route in ["/v2/sessions/current/data/observation-frames/frame-unknown",
+                  "/v2/sessions/current/data/observation-frames/frame-unknown/magnetization"] {
+        let response = app.clone().oneshot(Request::builder().uri(route)
+            .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(body_json(response).await["message"].as_str().unwrap().contains("imported snapshot"));
+    }
+    let response = app.oneshot(Request::builder()
+        .uri("/v2/sessions/current/data/observation-frames?run_id=foreign-run")
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn v2_live_observation_discovery_still_requires_managed_store() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+    let response = app.oneshot(Request::builder()
+        .uri("/v2/sessions/current/data/observation-frames?run_id=test-run")
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
