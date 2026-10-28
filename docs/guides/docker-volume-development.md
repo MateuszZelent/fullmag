@@ -751,3 +751,8 @@ Inne zmiany tożsamości, aktywny/nieznany konsument albo różne piny blokują 
 `stop-restarted-terminal-volume` dopuszcza także dokładnie przypięty frontend w stanie `exited`, z PID 0 i bez paused/restarting/dead. Domyślny stop diagnostyczny nadal wymaga obu usług działających. Recovery sprawdza zakończone katalogi zadań, potwierdzone zwolnienia rezerwacji, tożsamość poprzedniego właściciela oraz brak jego procesów. Po zatrzymaniu backendu sieć obu zatrzymanych usług musi być pusta; obcy lub pozostały endpoint blokuje operację. Zmiana lifecycle/procesu frontendu blokuje apply, lecz aktualizacja samego health logu nie oznacza nowej inkarnacji.
 
 Po zatwierdzonym preview tej operacji `--apply` zatrzymuje jedynie diagnostyczny backend i zachowuje wszystkie wyniki, właścicieli oraz receipty. Następnie zarządzane `recreate-volume --fresh-state` archiwizuje stary namespace. Wyniki FMS można otworzyć przez UI jako `visualization_only`, bez Solve.
+
+
+### Restart pustego runtime po utracie hosta
+
+`stop-restarted-terminal-volume` rozpoznaje także dokładny błąd rotacji konfiguracji po udanym odtworzeniu cgroup. Ten wariant wymaga dowodu `worker-cgroup-ready` z failed resume, przypiętego do tego backendu, obrazu i grupy; ponadto store musi mieć wyłącznie dopuszczone techniczne pliki i katalogi pustego namespace, a ledger v4 nie może zawierać rezerwacji. Podgląd i apply porównują hashe store oraz poprzedniego właściciela i sprawdzają wyłącznie diagnostyczne drzewo procesów. Nie powstaje sztuczny receipt drain. Nie jest usuwany helper cgroup, gdy jego odtworzenie się udało. Dalsze `recreate-volume --fresh-state` zachowuje poprzednie dane i nie ponawia Solve. Wariant z niepustymi katalogami zakończonych zadań zachowuje wcześniejsze wymagania.

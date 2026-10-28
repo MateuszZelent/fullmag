@@ -38,6 +38,39 @@ class RestartRecoveryTests(unittest.TestCase):
             with self.subTest(ledger=ledger), self.assertRaises(BuildControlError):
                 validate_terminal_evidence(self.catalogs, ledger)
 
+    def test_empty_rotation_requires_exact_empty_store_and_ledger(self):
+        from docker_volume_empty_quarantine import EMPTY_STORE_DIRECTORIES, EMPTY_STORE_FILES
+        snapshot = {"directories": sorted(EMPTY_STORE_DIRECTORIES),
+                    "files": {path: "a" * 64 for path in EMPTY_STORE_FILES}}
+        ledger = {"schema_version": "host_resource_ledger.v4", "reservations": []}
+        validate_terminal_evidence([], ledger, empty_store=snapshot)
+        for bad_ledger in ({"reservations": []}, self.ledger):
+            with self.subTest(ledger=bad_ledger), self.assertRaises(BuildControlError):
+                validate_terminal_evidence([], bad_ledger, empty_store=snapshot)
+        for extra in ("runs/accepted/run_catalog.json", "objects/sha256/pending"):
+            changed = copy.deepcopy(snapshot); changed["files"][extra] = "b" * 64
+            with self.subTest(extra=extra), self.assertRaises(BuildControlError):
+                validate_terminal_evidence([], ledger, empty_store=changed)
+        with self.assertRaises(BuildControlError):
+            validate_terminal_evidence(self.catalogs, ledger, empty_store=snapshot)
+
+    def test_rotation_resume_binds_successful_cgroup_to_exact_backend(self):
+        from docker_volume_restart_recovery import recovery_kind
+        parent = {"backend_container": "b" * 64, "inputs": {"image_id": "sha256:" + "a" * 64}}
+        resume = {"error": "Runtime startup failed; services retained: runtime configuration rotation requires an authenticated drained process receipt",
+                  "worker_cgroup": {"schema": "fullmag.worker-cgroup-ready.v1", "state": "ready",
+                    "root": "/opt/fullmag/worker-cgroup", "container_id": parent["backend_container"],
+                    "image_id": parent["inputs"]["image_id"], "compose_project": "project"}}
+        self.assertEqual(recovery_kind(resume, parent, "project"), "empty-rotation")
+        for key,value in (("state","unknown"),("container_id","f"*64),("image_id","foreign"),("compose_project","foreign"),("root","/foreign")):
+            changed=copy.deepcopy(resume); changed["worker_cgroup"][key]=value
+            with self.subTest(key=key), self.assertRaises(BuildControlError):
+                recovery_kind(changed,parent,"project")
+        for error in ("", "some unrelated runtime failure"):
+            changed=copy.deepcopy(resume);changed["error"]=error
+            with self.subTest(error=error),self.assertRaises(BuildControlError):
+                recovery_kind(changed,parent,"project")
+
     def test_helper_identity_and_active_rejection(self):
         row = dict(Name='/helper', Image='image', State=dict(Status='exited', Running=False, Pid=0, ExitCode=1),
                    Config={'Labels': {'com.docker.compose.project': 'project', 'com.docker.compose.service': 'worker-cgroup-maintenance'}},

@@ -17,7 +17,29 @@ def require(ok, message):
         raise BuildControlError(message)
 
 
-def validate_terminal_evidence(catalogs, ledger):
+def recovery_kind(resume, parent, project):
+    error = resume.get("error", "")
+    if "backend cgroup already contains Fullmag children; recovery required" in error:
+        return "terminal-cgroup"
+    require(error == "Runtime startup failed; services retained: runtime configuration rotation requires an authenticated drained process receipt",
+            "Not an authenticated diagnostic restart failure")
+    cgroup = resume.get("worker_cgroup")
+    require(isinstance(cgroup, dict) and cgroup.get("schema") == "fullmag.worker-cgroup-ready.v1"
+            and cgroup.get("state") == "ready" and cgroup.get("root") == "/opt/fullmag/worker-cgroup"
+            and cgroup.get("compose_project") == project
+            and cgroup.get("container_id") == parent.get("backend_container")
+            and cgroup.get("image_id") == parent.get("inputs", {}).get("image_id"),
+            "Rotation restart lacks the pinned backend cgroup proof")
+    return "empty-rotation"
+
+
+def validate_terminal_evidence(catalogs, ledger, *, empty_store=None):
+    if empty_store is not None:
+        from docker_volume_empty_quarantine import _validate_empty_store_snapshot, _validate_empty_ledger
+        require(catalogs == [], "Empty rotation recovery refuses retained runs")
+        _validate_empty_store_snapshot(empty_store)
+        _validate_empty_ledger(ledger)
+        return
     require(isinstance(catalogs, list) and bool(catalogs), "Recovery requires retained run catalogs")
     for catalog in catalogs:
         require(isinstance(catalog, dict) and catalog.get("schema_version") == "run_catalog.v1" and isinstance(catalog.get("tasks"), list) and bool(catalog["tasks"]), "Invalid or empty run catalog")
@@ -125,7 +147,7 @@ def run(args):
         require(resume.get('schema')=='fullmag.docker-build-operation.v1' and resume.get('phase')=='resume' and resume.get('attempt')==args.resume_attempt and resume.get('state')=='failed-confirmed','Exact failed resume required')
         require(resume.get('inputs',{}).get('attempt')==args.attempt and resume.get('config_sha256')==args.config_sha256 and parent.get('config_sha256')==args.config_sha256,'Resume/config binding differs')
         require(all(r.get('compose_project')==control.project and r.get('control_volume')==control.volume for r in (parent,resume)),'Wrong control group')
-        require('backend cgroup already contains Fullmag children; recovery required' in resume.get('error',''),'Not the retained cgroup restart failure')
+        kind = recovery_kind(resume, parent, control.project)
         require(_sha256(canonical(document))==args.config_sha256,'Compose bytes differ')
         _port_matches(document,args.port)
         _operator_probe_record_from_retained(parent,document)
@@ -134,8 +156,12 @@ def run(args):
         result=docker_capture('exec',ids['backend'],'/usr/local/bin/python3','-B','-c',PROBE,timeout=40)
         require(result.returncode==0,'Restart preflight failed: '+result.stderr.decode('utf-8','replace')[-2000:])
         probe=json.loads(result.stdout)
-        validate_terminal_evidence(probe['catalogs'],probe['ledger'])
-        proof=dict(receipts=[_sha256(r) for r in raws],probe=probe,ids=ids,image=image,starts={s:actual[s]['State']['StartedAt'] for s in ids},frontend_state=frontend_process_state(actual['frontend']))
+        empty_store = None
+        if kind == 'empty-rotation':
+            from docker_volume_empty_quarantine import _empty_store_snapshot
+            empty_store = _empty_store_snapshot(Path(parent['state_root']) / 'runs/docker-all/session-store')
+        validate_terminal_evidence(probe['catalogs'],probe['ledger'],empty_store=empty_store)
+        proof=dict(recovery_kind=kind,empty_store=empty_store,receipts=[_sha256(r) for r in raws],probe=probe,ids=ids,image=image,starts={s:actual[s]['State']['StartedAt'] for s in ids},frontend_state=frontend_process_state(actual['frontend']))
         return proof,document,effective
     initial,_,_=observe()
     if not args.apply:
@@ -143,21 +169,22 @@ def run(args):
     with control.operation('stop-bootstrap',dict(attempt=args.attempt,resume_attempt=args.resume_attempt,source_root=str(selected),config_sha256=args.config_sha256)) as operation:
         current,document,effective=observe()
         require(current==initial,'Restart evidence changed before lease')
-        name = 'fullmag-cgroup-' + args.resume_attempt
-        rows = json.loads(docker_capture('inspect', name).stdout)
-        require(len(rows) == 1, 'Failed cgroup helper is ambiguous')
-        failed = rows[0]
-        validate_failed_helper(failed, name, control.project, current['image'], control.volume)
-        logs = docker_capture('logs', failed['Id'])
-        retained_log = (logs.stdout + logs.stderr).decode('utf-8', 'replace')
-        require('backend cgroup already contains Fullmag children; recovery required' in retained_log,
-                'Failed helper log differs from retained resume failure')
-        control.write(operation['root'] + '/failed-cgroup-helper.json', failed)
-        control.write(operation['root'] + '/failed-cgroup-helper-log.json', {'log': retained_log})
-        again = json.loads(docker_capture('inspect', failed['Id']).stdout)[0]
-        require(again == failed, 'Failed helper changed before removal')
-        control._assert_live_operation_helper(operation)
-        docker_capture('rm', failed['Id'])
+        if current['recovery_kind'] == 'terminal-cgroup':
+            name = 'fullmag-cgroup-' + args.resume_attempt
+            rows = json.loads(docker_capture('inspect', name).stdout)
+            require(len(rows) == 1, 'Failed cgroup helper is ambiguous')
+            failed = rows[0]
+            validate_failed_helper(failed, name, control.project, current['image'], control.volume)
+            logs = docker_capture('logs', failed['Id'])
+            retained_log = (logs.stdout + logs.stderr).decode('utf-8', 'replace')
+            require('backend cgroup already contains Fullmag children; recovery required' in retained_log,
+                    'Failed helper log differs from retained resume failure')
+            control.write(operation['root'] + '/failed-cgroup-helper.json', failed)
+            control.write(operation['root'] + '/failed-cgroup-helper-log.json', {'log': retained_log})
+            again = json.loads(docker_capture('inspect', failed['Id']).stdout)[0]
+            require(again == failed, 'Failed helper changed before removal')
+            control._assert_live_operation_helper(operation)
+            docker_capture('rm', failed['Id'])
         helper=_assert_group_consumers(control,operation,current['ids'])
         control.write(operation['root']+'/restarted-terminal-preflight.json',current)
         final,_,_=observe()
