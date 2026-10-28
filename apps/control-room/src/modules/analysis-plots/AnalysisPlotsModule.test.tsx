@@ -1851,7 +1851,7 @@ describe("AnalysisPlotsView", () => {
 
     expect(selection).toEqual({
       kind: "results.eigen.mode",
-      label: "Eigen frequency 9.5 GHz",
+      label: "Wavevector not published · 9.5 GHz",
       nodeId:
         "analysis:charts:frequency-domain:eigen-spectrum:point:analysis.frequency-domain:eigen:spectrum:frequency:0",
       objectId: null,
@@ -1905,7 +1905,7 @@ describe("AnalysisPlotsView", () => {
 
     expect(selection).toEqual({
       kind: "results.eigen.mode",
-      label: "Branch acoustic 12.5 GHz",
+      label: "k = (-20, 10, 0) rad/µm · 12.5 GHz",
       nodeId:
         "analysis:charts:frequency-domain:eigen-dispersion:point:analysis.frequency-domain:eigen:dispersion:acoustic:0",
       objectId: null,

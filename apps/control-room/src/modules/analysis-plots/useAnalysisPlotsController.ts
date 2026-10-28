@@ -1,5 +1,7 @@
 "use client";
 
+import { modeResultLabel } from "@/shared/domain/analysis/modeResultPresentation";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { analysisSurfaceForSelectionKind } from "@/kernel/analysis-modules/analysisSurfaceRouting";
@@ -368,7 +370,7 @@ export function frequencyDomainSelectionFromPoint(input: {
   const modeFieldAvailable = mode == null || eigenModeFieldAvailable(mode);
   return {
     kind: "results.eigen.mode",
-    label: `${point.label} ${point.point.y} ${point.unit}`,
+    label: modeResultLabel(dispersionMode?.wavevectorKf ?? wavevectorKf, mode?.frequencyHz),
     nodeId,
     objectId: null,
     ref: compactSelectionRef({

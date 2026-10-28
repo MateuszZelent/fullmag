@@ -13,6 +13,9 @@ const { chromium } = await import(process.env.FULLMAG_PLAYWRIGHT_MODULE ?? new U
 import {writeFile} from 'node:fs/promises';
 const b=await chromium.launch({headless:true,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
 const p=await b.newPage({viewport:{width:1600,height:1100}});const proof={schema:'eigensolve.modal-workbench-ui.v1',url,run,stage,sourceSha:value('--source-sha',null),scope:'UI against published FEM artifacts; SwiftShader rendering is not hardware GPU or convergence qualification',errors:[],httpFailures:[],modes:[],layouts:[]};
+p.setDefaultTimeout(30000);
+proof.blockedMutations=[];
+await p.route('**/*', async route=>{ const request=route.request(); const path=new URL(request.url()).pathname; if(['GET','HEAD','OPTIONS'].includes(request.method()) || request.method()==='POST' && path==='/v2/sessions/current/visualization/client-acks') return route.continue(); proof.blockedMutations.push({method:request.method(),path});return route.abort(); });
 p.on('pageerror',e=>proof.errors.push(e.message));
 p.on('response',response=>{if(response.status()>=400)proof.httpFailures.push({path:new URL(response.url()).pathname,status:response.status()});});
 await p.addInitScript(origin=>{window.__FULLMAG_ENABLE_CHART_DIAGNOSTICS__=true;window.__FULLMAG_CONFIG__={enableDiagnosticRecorder:true,controlRoomApiBase:origin};},new URL(url).origin);
@@ -67,7 +70,8 @@ try{
   });
   if(webgl.contextLost||webgl.width<=0||webgl.height<=0)throw Error(`Mode ${sample} has no healthy WebGL drawing buffer`);
   proof.modes.push({sample,point,canvasVisible:true,webgl,surface:await p.evaluate(()=>{const all=window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.()?.streams?.timeline??[];return all.filter(x=>x.name==='viewport-3d.mode-surface-binding').at(-1)?.detail;})});
-  await p.getByRole('button',{name:'Fit view',exact:true}).click();
+  await p.getByRole('button',{name:'Fit mode',exact:true}).click();
+  console.log(`Rendered sample ${sample}`);
   if(sample===7)await p.screenshot({path:`${screenshots}/modal-sample-${sample}-3d.png`});
   await p.locator('.fm-viewport-tabs__trigger').filter({hasText:/^Analysis$/}).click();
   await p.locator('.fm-analysis-plots__frequency-canvas canvas').waitFor({state:'visible',timeout:30000});
@@ -93,14 +97,27 @@ try{
   if(!canvas || points.some(point=>point.x<canvas.x || point.x>canvas.x+canvas.width || point.y<canvas.y || point.y>canvas.y+canvas.height)) throw new Error(`Axis switch left points outside the rendered canvas: ${axis}`);
   proof.layouts.push({axis,points});
  }
- for(const viewport of [{width:1600,height:1100},{width:1440,height:1000},{width:1100,height:900}]){
+ for(const viewport of [{width:1600,height:1100},{width:1440,height:900},{width:1100,height:900}]){
   await p.setViewportSize(viewport);await p.locator('.fm-analysis-plots').evaluate(e=>e.scrollTop=0);await p.waitForTimeout(800);
   const bounds=await p.locator('.fm-analysis-plots, .fm-analysis-plots__frequency-canvas').evaluateAll(es=>es.map(e=>e.getBoundingClientRect().toJSON()));
   const [host,plot]=bounds;
   if(!host||!plot||plot.left<host.left||plot.right>host.right||plot.top<host.top||plot.bottom>host.bottom)throw Error(`Plot clipped at ${viewport.width}×${viewport.height}: ${JSON.stringify(bounds)}`);
   proof.layouts.push({viewport,bounds});await p.screenshot({path:`${screenshots}/modal-workbench-${viewport.width}.png`});
  }
+ if(proof.errors.length || proof.httpFailures.length || proof.blockedMutations.length)throw Error('Browser or HTTP errors occurred');
+ const plotBounds=()=>p.locator('.fm-analysis-plots__frequency-canvas').boundingBox();
+ await p.setViewportSize({width:1440,height:900}); await p.waitForTimeout(500);
+ const before=await plotBounds();
+ await p.getByRole('button',{name:'Show / hide lower panel',exact:true}).click();await p.waitForTimeout(500);
+ const hidden=await plotBounds();
+ if(!before || !hidden || hidden.height<=before.height)throw Error('Hiding lower panel did not increase chart space');
+ proof.lowerPanelToggle={before,hidden};
+ await p.screenshot({path:`${screenshots}/modal-workbench-focused.png`});
+ await p.getByRole('button',{name:'Show / hide lower panel',exact:true}).click();await p.waitForTimeout(500);
+ const restored=await plotBounds();
+ if(!restored || Math.abs(restored.height-before.height)>2)throw Error('Lower panel toggle did not restore chart layout');
+ proof.lowerPanelToggle.restored=restored;
  proof.runtimeVersion=(await p.locator('body').innerText()).match(/0\.1\.0-dev\.[^\s]+/)?.[0]??null;
  console.log(JSON.stringify({modes:proof.modes.map(m=>({sample:m.sample,field:m.surface.bufferQuantity,complex:m.surface.complexValueCount})),referenceHasModeAction:proof.referenceHasModeAction,errors:proof.errors,layouts:proof.layouts}));
-}catch(e){proof.failure=String(e);console.error(e);await p.screenshot({path:`${screenshots}/modal-workbench-failed.png`});process.exitCode=1;}
+}catch(e){proof.failure=String(e);console.error(e);await p.screenshot({timeout:15000,path:`${screenshots}/modal-workbench-failed.png`}).catch(error=>{proof.failureScreenshot=String(error);});process.exitCode=1;}
 finally{await writeFile(output,JSON.stringify(proof,null,2));await b.close();}

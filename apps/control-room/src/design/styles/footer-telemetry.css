@@ -361,3 +361,12 @@
     border-top-width: 1px;
   }
 }
+
+/* Keep live status visible; archived-result browsing does not need every metric. */
+.fm-footer-telemetry__metrics[hidden] { display: none; }
+.fm-footer-telemetry__details-toggle {
+  align-self: start; background: transparent; border: 0;
+  color: var(--fm-text-secondary); cursor: pointer;
+  padding: var(--fm-space-2); font: inherit;
+}
+.fm-footer-telemetry__details-toggle:focus-visible { outline: 2px solid var(--fm-accent); }

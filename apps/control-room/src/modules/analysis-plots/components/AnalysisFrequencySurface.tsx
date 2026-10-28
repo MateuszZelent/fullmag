@@ -417,6 +417,7 @@ export function AnalysisFrequencySurface({
           target={dispersionModeTarget}
         />
       ) : null}
+    <Button size="sm" variant="secondary" title="Toggle the lower panel without interrupting calculations or changing the selected result" onClick={() => kernel.layout.togglePanel("bottom")}>Show / hide lower panel</Button>
     <ChartDisplayUnitControls displayUnits={displayUnits ?? {}} onDisplayUnitsChange={onDisplayUnitsChange} series={series} />
   </>;
 

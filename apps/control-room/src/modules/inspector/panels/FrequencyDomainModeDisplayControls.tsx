@@ -398,11 +398,11 @@ export function FrequencyDomainModeDisplayControls({
   const selectedView = viewOptions.includes(settings.view)
     ? settings.view
     : normalizeAnalysisFieldView(viewDefaultValue);
-  const selectedComponent = componentOptions.some(
-    (item) => item.value === settings.component,
-  )
-    ? settings.component
-    : componentOptions[0]?.value ?? settings.component;
+  const colorOptions = [
+    ...componentOptions,
+    ...SURFACE_COLOR_SOURCE_ITEMS.filter(item => ["solid", "orientation", "colormap"].includes(item.value)),
+  ];
+  const scalarColors = settings.colorSource !== "solid" && settings.colorSource !== "orientation";
   return (
     <>
       <FieldRow
@@ -426,16 +426,16 @@ export function FrequencyDomainModeDisplayControls({
         }
       />
       <FieldRow
-        label="Mode component"
+        label="Color by"
         value={
           <select
             aria-label={`${labelPrefix} field component`}
             className="fm-inspector-select"
             disabled={disabled}
-            value={selectedComponent}
-            onChange={(event) => settings.setComponent(event.target.value)}
+            value={settings.colorSource}
+            onChange={(event) => settings.setColorSource(event.target.value)}
           >
-            {componentOptions.map((item) => (
+            {colorOptions.map((item) => (
               <option key={item.value} value={item.value}>
                 {item.label}
               </option>
@@ -470,25 +470,7 @@ export function FrequencyDomainModeDisplayControls({
           </div>
         }
       />
-      <FieldRow
-        label="Mode color source"
-        value={
-          <select
-            aria-label={`${labelPrefix} color source`}
-            className="fm-inspector-select"
-            disabled={disabled}
-            value={settings.colorSource}
-            onChange={(event) => settings.setColorSource(event.target.value)}
-          >
-            {SURFACE_COLOR_SOURCE_ITEMS.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-        }
-      />
-      <FieldRow
+      {settings.colorSource === "solid" ? <FieldRow
         label="Mode solid color"
         value={
           <div className="fm-visualization-color-field__control">
@@ -505,13 +487,14 @@ export function FrequencyDomainModeDisplayControls({
               className="fm-visualization-color-field__value"
               disabled={disabled}
               type="text"
-              value={settings.solidColor}
+              value={settings.solidColor.startsWith("var(") ? "" : settings.solidColor}
+              placeholder="Theme default"
               onChange={(event) => settings.setSolidColor(event.target.value)}
             />
           </div>
         }
-      />
-      <FieldRow
+      /> : null}
+      {scalarColors ? <FieldRow
         label="Mode colormap"
         value={
           <div className="fm-inspector-colorbar-control">
@@ -537,8 +520,8 @@ export function FrequencyDomainModeDisplayControls({
             />
           </div>
         }
-      />
-      <FieldRow
+      /> : null}
+      {scalarColors ? <FieldRow
         label="Color range"
         value={
           <select
@@ -553,8 +536,8 @@ export function FrequencyDomainModeDisplayControls({
             <option value="manual">Manual</option>
           </select>
         }
-      />
-      <FieldRow
+      /> : null}
+      {scalarColors && settings.colorRangeMode === "manual" ? <FieldRow
         label="Color minimum"
         value={
           <input
@@ -567,8 +550,8 @@ export function FrequencyDomainModeDisplayControls({
             onChange={(event) => settings.setColorRangeMin(event.currentTarget.value)}
           />
         }
-      />
-      <FieldRow
+      /> : null}
+      {scalarColors && settings.colorRangeMode !== "auto" ? <FieldRow
         label="Color maximum"
         value={
           <input
@@ -582,7 +565,7 @@ export function FrequencyDomainModeDisplayControls({
             onChange={(event) => settings.setColorRangeMax(event.currentTarget.value)}
           />
         }
-      />
+      /> : null}
       <FieldRow
         label="Display gain"
         value={
@@ -598,7 +581,7 @@ export function FrequencyDomainModeDisplayControls({
           />
         }
       />
-      <FieldRow
+      {settings.vectorsVisible ? <FieldRow
         label="Vector budget"
         value={
           <input
@@ -613,8 +596,8 @@ export function FrequencyDomainModeDisplayControls({
             onChange={(event) => settings.setVectorBudget(event.currentTarget.value)}
           />
         }
-      />
-      <FieldRow
+      /> : null}
+      {settings.vectorsVisible ? <FieldRow
         label="Vector scope"
         value={
           <select
@@ -631,8 +614,8 @@ export function FrequencyDomainModeDisplayControls({
             ))}
           </select>
         }
-      />
-      <FieldRow
+      /> : null}
+      {settings.vectorsVisible ? <FieldRow
         label="Vector scale"
         value={
           <input
@@ -646,7 +629,7 @@ export function FrequencyDomainModeDisplayControls({
             onChange={(event) => settings.setVectorScale(event.currentTarget.value)}
           />
         }
-      />
+      /> : null}
       <p className="fm-mode-visualization__presentation-note">
         Visualization only — these controls do not change the computed mode.
       </p>

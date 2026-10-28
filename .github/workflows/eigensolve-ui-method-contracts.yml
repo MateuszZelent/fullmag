@@ -185,6 +185,7 @@ jobs:
           src/modules/viewport-3d/viewport3dResources.test.ts src/modules/viewport-3d/model/modeCompositionViewportProjection.test.ts src/modules/viewport-3d/layers/MeshPartLayer.test.ts
           src/modules/analysis-plots/referenceOverlaySeries.test.ts
           src/modules/analysis-plots/referenceChartQuantity.test.ts
+          src/shared/domain/analysis/modeResultPresentation.test.ts
           src/shared/domain/analysis/modalDampingObservables.test.ts
           src/shared/domain/analysis/phasorConventionAdapter.test.ts
           src/shared/domain/analysis/referenceImport.test.ts
@@ -192,6 +193,7 @@ jobs:
           src/modules/inspector/panels/StudyInspectorPanelModel.test.ts
           src/modules/inspector/panels/StudyInspectorPanel.test.tsx
           src/shared/domain/analysis/frequencyDomainChartModels.test.ts
+          src/modules/inspector/panels/FrequencyDomainModeDisplayControls.test.tsx
           src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.test.tsx
           src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel.test.tsx
           src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.test.tsx

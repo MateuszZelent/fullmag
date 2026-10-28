@@ -28,5 +28,6 @@ try{
  const modes=evidence.views.filter(v=>v.name.startsWith('mode-'));
  if(new Set(modes.map(v=>v.text)).size!==4)throw Error('Inspector tabs repeat the same content');
  if(evidence.views[0].unavailableCount || evidence.views[0].notApplicableCount)throw Error('Collection masquerades as missing individual result');
+ if(evidence.errors.length || evidence.blockedMutations.length)throw Error('Unexpected browser error or mutation');
  evidence.treeLabels=await page.locator('[role="treeitem"] .fm-explorer-tree-row__label').allTextContents();
 }catch(e){evidence.failure=String(e.stack||e);process.exitCode=1;}finally{await writeFile(`${out}/browser-audit.json`,JSON.stringify(evidence,null,2));await browser.close();console.log(JSON.stringify({failure:evidence.failure,errors:evidence.errors,blockedMutations:evidence.blockedMutations,views:evidence.views.map(({text,...v})=>v)}));}

@@ -1,6 +1,6 @@
 # Audyt UX przeglądania wyników eigensolve i plan uporządkowania UI
 
-Data: 2026-10-28. Status: **audyt wykonany; przebudowa aplikacji jeszcze niewdrożona**.
+Data: 2026-10-28. Status dokumentu: **historyczny audyt i plan bazowy**. Implementacja rozpoczęta i zweryfikowana częściowo w aplikacji; bieżące stany R1–R6 oraz ograniczenia: [raport wdrożenia](2026-10-28-eigensolve-results-ux-implementation.md). Poniższe TODO i pomiary opisują stan sprzed wdrożenia.
 
 ## 1. Wniosek i granice
 

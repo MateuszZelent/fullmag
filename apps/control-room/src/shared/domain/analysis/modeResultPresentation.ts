@@ -16,3 +16,18 @@ export function formatModeWavevector(value: unknown): string {
 export function modeResultLabel(wavevector: unknown, frequencyHz: number | null | undefined): string {
   return `${formatModeWavevector(wavevector)} · ${formatFrequencyHz(frequencyHz)}`;
 }
+
+interface ModeResultOwner {
+  fieldId?: string | null;
+  analysisRunId?: string | null;
+  analysisStageId?: string | null;
+  artifactRevision?: string | number | null;
+  sampleIndex?: number | null;
+  modeIndex?: number | null;
+}
+
+/** A field ID is reused across runs: appearance must belong to the selected artifact. */
+export function sameModeResultOwner(a: ModeResultOwner | null | undefined, b: ModeResultOwner | null | undefined): boolean {
+  if (!a || !b || !a.fieldId || !a.analysisRunId || !a.analysisStageId || a.artifactRevision == null || a.sampleIndex == null || a.modeIndex == null) return false;
+  return a.fieldId === b.fieldId && a.analysisRunId === b.analysisRunId && a.analysisStageId === b.analysisStageId && String(a.artifactRevision) === String(b.artifactRevision) && a.sampleIndex === b.sampleIndex && a.modeIndex === b.modeIndex;
+}

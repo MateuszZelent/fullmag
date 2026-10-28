@@ -50,3 +50,13 @@ This glossary fixes the meaning of user-facing terms. It does not change physics
 | **Cancelled** | The session changed or the user cancelled. No foreground notice is shown. |
 
 Surfaces that render a command result inline (Inspector status lines, chart panels) own its presentation. Menu, ribbon, shortcut, palette and Explorer invocations are presented by the shell feedback presenter (`CommandFeedbackController` → `CommandFeedbackPresenter`). Notices belong to one session scope and are discarded when the session changes.
+
+
+### Modal result presentation (2026-10-28)
+
+- **Γ · k = 0**: exactly zero published wavevector; absent or merely small k is not Γ.
+- **kᵧ = ±… rad/µm · … GHz**: physical sample and frequency, rounded for display only. General paths retain all vector components.
+- **Selected mode**: result inspected by the user; may differ from the active 3D field.
+- **Mode field available**: published field can be requested; this is not a convergence or spectrum-completeness certificate.
+- **Appearance / Color by**: one representation and coloring control group. Scalar range, solid color and vector controls appear only when applicable.
+- **Runtime details**: expandable telemetry while browsing results. Status remains visible; hiding the lower panel does not stop computations.

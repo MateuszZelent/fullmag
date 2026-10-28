@@ -22,6 +22,6 @@ it("derives signed k labels once from the published vectors", () => {
     { rowIndex: 0, sampleIndex: 0, x: 0, y: 13, wavevectorKf: [0, -25e6, 0] },
     { rowIndex: 1, sampleIndex: 7, x: 25e6, y: 9.3, wavevectorKf: [0, 0, 0] },
   ] }] as ChartSeries[]);
-  expect(labels.get(0)).toBe("Sample 0 · k = (0, -25, 0) rad/µm");
-  expect(labels.get(7)).toBe("Sample 7 · k = (0, 0, 0) rad/µm");
+  expect(labels.get(0)).toBe("kᵧ = -25 rad/µm");
+  expect(labels.get(7)).toBe("Γ · k = 0");
 });

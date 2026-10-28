@@ -20,7 +20,7 @@ import {
   readEigenModeResourcePayload,
   type EigenResidualSummary,
 } from "@/shared/domain/analysis/eigenResidualSummary";
-import { formatModeWavevector, modeResultLabel } from "@/shared/domain/analysis/modeResultPresentation";
+import { formatModeWavevector, modeResultLabel, sameModeResultOwner } from "@/shared/domain/analysis/modeResultPresentation";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import {
   finiteModalScalar,
@@ -106,13 +106,15 @@ export function EigenModeInspectorPanel({
           <FieldRow label="Frequency" value={summary.frequencyDisplay} />
           <FieldRow label="Wavevector" value={summary.wavevectorLabel} />
           <FieldRow label="Mode field" value={summary.field3DReady ? "Available" : summary.field3DStatus} />
+          <FieldRow label="3D field request" value={sameModeResultOwner(modeDisplaySettings.activeAnalysisFieldOverlay?.modeIntent, summary.owner) ? "Selected mode requested; rendering status is shown in the viewport" : modeDisplaySettings.activeAnalysisFieldOverlay ? "Another mode is active. Show this mode to replace it." : "Not activated"} />
           <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
         </InspectorGroup>
         <p className="fm-result-inspector__help">Select a point on the dispersion chart, then show its field in 3D. Field amplitude is normalized, not a driven-wave amplitude.</p>
         <InspectorGroup title="Appearance" collapsible defaultOpen={false}>
+          {!sameModeResultOwner(modeDisplaySettings.activeAnalysisFieldOverlay?.modeIntent, summary.owner) ? <p className="fm-result-inspector__help">Show this mode in 3D before changing its appearance.</p> : null}
           <FrequencyDomainModeDisplayControls
             componentOptions={summary.componentOptions}
-            disabled={!summary.field3DReady}
+            disabled={!summary.field3DReady || !sameModeResultOwner(modeDisplaySettings.activeAnalysisFieldOverlay?.modeIntent, summary.owner)}
             labelPrefix="Eigen mode"
             settings={modeDisplaySettings}
             viewDefaultValue={summary.defaultView}
@@ -263,7 +265,7 @@ function EigenMode3DActions({
       <Button
         aria-label="Stop selected eigen mode animation"
         className="fm-inspector-action-button"
-        disabled={disabled}
+        disabled={disabled || !sameModeResultOwner(settings.activeAnalysisFieldOverlay?.modeIntent, summary.owner)}
         size="sm"
         title={
           disabled ? summary.field3DStatus : "Stop selected eigen mode animation"
@@ -273,8 +275,10 @@ function EigenMode3DActions({
         onClick={stopAnimation}
       >
         <RotateCw aria-hidden="true" size={13} />
-        <span>Stop animate</span>
+        <span>Stop</span>
       </Button>
+      <Button size="sm" variant="secondary" onClick={() => kernel.layout.setActiveViewportMainModule("analysis-plots")}>Back to chart</Button>
+      {sameModeResultOwner(settings.activeAnalysisFieldOverlay?.modeIntent, summary.owner) ? <Button size="sm" variant="secondary" onClick={() => void kernel.commands.execute("viewport-3d.fit", createCommandContext("inspector", kernel, { sourceDetail: "results.eigen.mode" }))}>Fit mode</Button> : null}
     </div>
   );
 }
@@ -365,6 +369,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
           : "mode field metadata not available";
 
   return {
+    owner: ref,
     wavevectorLabel,
     certificationTolerance: formatNumberOrUnavailable(finiteNumber(certificate?.certification_tolerance)),
     certificationStatus: certificate?.certified === true ? "Accepted for the reported residual scope" : certificate?.certified === false ? "Rejected" : "Not published",

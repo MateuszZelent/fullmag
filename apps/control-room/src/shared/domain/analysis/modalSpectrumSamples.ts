@@ -1,3 +1,4 @@
+import { formatModeWavevector } from "./modeResultPresentation";
 import type { ChartSeries } from "./chartSeries";
 
 /** Sample is a physical dataset coordinate. Never merge equal ranks across k. */
@@ -26,7 +27,7 @@ export function modalSpectrumSampleLabels(series: readonly ChartSeries[]): Reado
       if (sample == null || !Number.isSafeInteger(sample) || sample < 0 || labels.has(sample)) continue;
       const vector = point.wavevectorKf;
       labels.set(sample, vector
-        ? `Sample ${sample} · k = (${vector.map((value) => Number((value / 1e6).toPrecision(6))).join(", ")}) rad/µm`
+        ? formatModeWavevector(vector)
         : `Sample ${sample}`);
     }
   }
