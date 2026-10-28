@@ -278,3 +278,9 @@
 @media (prefers-reduced-motion: reduce) { .fm-workspace-dock-preview { animation: none; } }
 
 .fm-layout-hint { margin: 0; padding: var(--fm-space-2); color: var(--fm-text-secondary); background: var(--fm-bg-panel); font-size: var(--fm-font-size-sm); }
+
+/* The title/blank header is a larger mouse target; controls keep their own actions. */
+.fm-panel-chrome[data-panel-draggable="true"] { cursor: grab; }
+.fm-panel-chrome[data-panel-draggable="true"]:active { cursor: grabbing; }
+.fm-panel-chrome[data-panel-draggable="true"] .fm-panel-chrome__title { user-select: none; touch-action: none; }
+.fm-panel-frame__move { min-width: 32px; min-height: 32px; }

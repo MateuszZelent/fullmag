@@ -187,3 +187,16 @@ An explicit modes-left/chart-right preset restores both center windows to the
 dock without changing selected result ownership; when no frequency-domain result
 is selected, the UI explains the Results selection step. Back-to-chart focuses an
 already visible chart without collapsing the modes-left arrangement.
+
+### Manual docking and compact-screen preferences
+
+A panel can be dragged by its title, blank header or dotted handle. Interactive
+header children retain their own actions. A click does not detach; Escape
+cancels. Pointer events belong to their capture owner and must not be applied
+twice when they bubble through the header. The handle explains dragging and
+keyboard/menu alternatives in a tooltip. Viewport toolbar controls wrap when
+space is constrained; optional hints must not consume the viewport's flexible
+height. Explicit compact-screen docking is persisted separately under
+`fullmag.workspace.explicit-dock.v1`; reset clears this preference and restores
+automatic drawers. Workspace-edge drop targets extend 20 px inward, with the
+existing preview identifying the destination before release.

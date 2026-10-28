@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultWorkspaceTree, dockWorkspacePane, filterWorkspaceTree, paneIds, resizeWorkspaceSplit, restoreWorkspaceTree, workspacePaneIds } from "./workspaceDocking";
+import { restoreExplicitDocked, defaultWorkspaceTree, dockWorkspacePane, filterWorkspaceTree, paneIds, resizeWorkspaceSplit, restoreWorkspaceTree, workspacePaneIds } from "./workspaceDocking";
 import type { DockEdge } from "./viewportDocking";
 
 describe("workspace docking tree", () => {
@@ -39,5 +39,15 @@ describe("workspace docking tree", () => {
     for (const [i,id] of workspacePaneIds.entries()) tree=dockWorkspacePane(tree,id,null,i%2?"left":"bottom",`move-${i}`);
     expect(restoreWorkspaceTree(JSON.stringify(tree))).toEqual(tree);
     expect(new Set(paneIds(tree)).size).toBe(5);
+  });
+});
+
+describe("explicit compact docking preferences", () => {
+  it("restores Inspector docking after reload and deduplicates panel ids", () => {
+    expect(restoreExplicitDocked('["panel-right","panel-left","panel-right"]')).toEqual(["panel-right","panel-left"]);
+  });
+  it("rejects corrupt, unbounded and unknown panel preferences", () => {
+    for (const raw of [null, "broken", '{}', '["unknown"]', '[1]', ' '.repeat(513)])
+      expect(restoreExplicitDocked(raw)).toEqual([]);
   });
 });

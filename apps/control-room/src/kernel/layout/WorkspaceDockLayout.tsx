@@ -6,7 +6,7 @@ import { PanelChrome, PanelFrame, type PanelModeRequest, type PanelMoveEvent } f
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/shared/ui/Resizable";
 import { DEFAULT_WORKSPACE_LAYOUT, WORKSPACE_LAYOUT_RESTORED_EVENT, type WorkspaceColumnLayout } from "./layoutModel";
 import { DockAnchor, type DockBounds } from "./DockAnchor";
-import { defaultWorkspaceTree, dockWorkspacePane, filterWorkspaceTree, resizeWorkspaceSplit, restoreWorkspaceTree, WORKSPACE_TREE_KEY, type WorkspaceDockTree, type WorkspacePaneId } from "./workspaceDocking";
+import { WORKSPACE_EXPLICIT_DOCK_KEY, restoreExplicitDocked, defaultWorkspaceTree, dockWorkspacePane, filterWorkspaceTree, resizeWorkspaceSplit, restoreWorkspaceTree, WORKSPACE_TREE_KEY, type WorkspaceDockTree, type WorkspacePaneId } from "./workspaceDocking";
 import { hitTestDockEdge, type DockEdge } from "./viewportDocking";
 import { SlotHost } from "./SlotHost";
 import { ViewportTabHost } from "./ViewportTabHost";
@@ -114,6 +114,7 @@ export function WorkspaceDockLayout() {
   const panelVisible = useLayoutSelector(layout => layout.panelVisible);
   const hasAux = !projectOnly && !playbackOnly && kernel.modules.forSlot("viewport-aux").length > 0;
   const [tree, setTree] = useState<WorkspaceDockTree>(defaultWorkspaceTree);
+  const [explicitDocked, setExplicitDocked] = useState<WorkspacePaneId[]>([]);
   const [restored, setRestored] = useState(false);
   const [windowWidth, setWindowWidth] = useState(1440);
   const [docked, setDocked] = useState<Partial<Record<WorkspacePaneId, boolean>>>({});
@@ -127,19 +128,20 @@ export function WorkspaceDockLayout() {
   const available = new Set(panes.map(pane => pane.id));
   const visible = (id: WorkspacePaneId) => id === "panel-left" ? panelVisible.left : id === "panel-right" ? playbackOnly || panelVisible.right : id === "panel-bottom" ? panelVisible.bottom : true;
   // Explicit docking takes priority over automatic compact-screen drawers.
-  const drawer = (id: WorkspacePaneId) => requests[id]?.mode !== "docked" && ((id === "panel-right" && windowWidth < 1180) || (id === "panel-left" && windowWidth < 760));
+  const drawer = (id: WorkspacePaneId) => !explicitDocked.includes(id) && ((id === "panel-right" && windowWidth < 1180) || (id === "panel-left" && windowWidth < 760));
   const kept = (id: WorkspacePaneId) => available.has(id) && visible(id) && (docked[id] ?? !drawer(id));
   const activeTree = filterWorkspaceTree(tree, kept);
 
   useEffect(() => {
-    try { setTree(restoreWorkspaceTree(localStorage.getItem(WORKSPACE_TREE_KEY))); } catch { /* Optional layout preference. */ }
+    try { setTree(restoreWorkspaceTree(localStorage.getItem(WORKSPACE_TREE_KEY))); setExplicitDocked(restoreExplicitDocked(localStorage.getItem(WORKSPACE_EXPLICIT_DOCK_KEY))); } catch { /* Optional layout preference. */ }
     setRestored(true);
-    const reset = () => { setTree(defaultWorkspaceTree()); setRequests({}); setDocked({}); setPreview(null); };
+    const reset = () => { setTree(defaultWorkspaceTree()); setExplicitDocked([]); setRequests({}); setDocked({}); setPreview(null); };
     const resize = () => setWindowWidth(window.innerWidth);
     resize();window.addEventListener("resize", resize);window.addEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, reset);
     return () => { window.removeEventListener("resize", resize);window.removeEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, reset); };
   }, []);
   useEffect(() => { if (restored) { try { localStorage.setItem(WORKSPACE_TREE_KEY, JSON.stringify(tree)); } catch { /* Optional preference. */ } } }, [tree, restored]);
+  useEffect(() => { if (restored) { try { localStorage.setItem(WORKSPACE_EXPLICIT_DOCK_KEY, JSON.stringify(explicitDocked)); } catch { /* Optional preference. */ } } }, [explicitDocked, restored]);
   const reportDocked = useCallback((id: WorkspacePaneId, value: boolean) => setDocked(old => old[id] === value ? old : { ...old, [id]: value }), []);
   const reportBounds = useCallback((id: string, next: DockBounds) => setBounds(old => {
     const previous = old[id];
@@ -149,6 +151,7 @@ export function WorkspaceDockLayout() {
   const applyDock = (id: WorkspacePaneId, target: WorkspacePaneId | null, edge: DockEdge) => {
     setPreview(null);
     const splitId = crypto.randomUUID();
+    setExplicitDocked(old => old.includes(id) ? old : [...old, id]);
     setTree(old => dockWorkspacePane(old, id, target, edge, splitId));
     setRequests(old => ({ ...old, [id]: { mode: "docked", sequence: (old[id]?.sequence ?? 0)+1 } }));
     setDocked(old => ({ ...old, [id]: true }));
@@ -160,7 +163,7 @@ export function WorkspaceDockLayout() {
     let target: DockTarget | null = null;
     const rootEdge = hitTestDockEdge(root, event);
     const rootDistance = rootEdge === "left" ? Math.abs(event.x-root.left) : rootEdge === "right" ? Math.abs(event.x-root.right) : rootEdge === "top" ? Math.abs(event.y-root.top) : Math.abs(event.y-root.bottom);
-    if (rootEdge && rootDistance <= 12) target = { edge: rootEdge, target: null, bounds: { left: 0, top: 0, width: root.width, height: root.height }, title: "workspace" };
+    if (rootEdge && rootDistance <= 20) target = { edge: rootEdge, target: null, bounds: { left: 0, top: 0, width: root.width, height: root.height }, title: "workspace" };
     else for (const pane of panes) {
       const b = bounds[pane.id];
       if (pane.id === id || !kept(pane.id) || !b) continue;

@@ -65,3 +65,14 @@ export function restoreWorkspaceTree(raw: string | null): WorkspaceDockTree {
     return panes.size === workspacePaneIds.length ? tree : defaultWorkspaceTree();
   } catch { return defaultWorkspaceTree(); }
 }
+
+/** Explicit compact-screen docking must survive reload, unlike transient requests. */
+export const WORKSPACE_EXPLICIT_DOCK_KEY = "fullmag.workspace.explicit-dock.v1";
+export function restoreExplicitDocked(raw: string | null): WorkspacePaneId[] {
+  try {
+    if (!raw || raw.length > 512) return [];
+    const value: unknown = JSON.parse(raw);
+    return Array.isArray(value) && value.every(id => workspacePaneIds.includes(id))
+      ? [...new Set<WorkspacePaneId>(value)] : [];
+  } catch { return []; }
+}
