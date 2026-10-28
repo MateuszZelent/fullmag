@@ -85,7 +85,7 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
   const [maxBounds, setMaxBounds] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   const scroll = useRef<Array<[HTMLElement, number, number]>>([]);
-  const gesture = useRef<{ x: number; y: number; geometry: Geometry; initialMode: PanelMode; kind: "move" | "resize" } | null>(null);
+  const gesture = useRef<{ x: number; y: number; geometry: Geometry; initialMode: PanelMode; moved: boolean; kind: "move" | "resize" } | null>(null);
   // A pinned frame ignores any floating/maximized mode saved before it was pinned.
   const effectiveMode = !floatable ? "docked" : drawer && mode === "docked" ? "floating" : mode;
   const docked = effectiveMode === "docked";
@@ -154,9 +154,14 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
   const begin = (event: ReactPointerEvent<HTMLButtonElement>, kind: "move" | "resize") => {
     if (event.button !== 0 || effectiveMode === "maximized") return;
     event.preventDefault();
-    const current = interactionGeometry();
+    // Edge docking starts after an actual drag, not a click on the header grip.
+    const deferredDetach = kind === "move" && onMoveGesture && mode === "docked";
+    const bounds = deferredDetach ? frame.current?.getBoundingClientRect() : null;
+    const current = deferredDetach
+      ? (bounds ? { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height } : geometry)
+      : interactionGeometry();
     setGeometry(current);
-    gesture.current = { x: event.clientX, y: event.clientY, geometry: current, initialMode: mode, kind };
+    gesture.current = { x: event.clientX, y: event.clientY, geometry: current, initialMode: mode, moved: false, kind };
     event.currentTarget.focus({ preventScroll: true });
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -164,13 +169,18 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     const start = gesture.current;
     if (!start) return;
     const dx = event.clientX - start.x, dy = event.clientY - start.y;
-    if (start.kind === "move") onMoveGesture?.({ phase: "move", x: event.clientX, y: event.clientY });
+    if (start.kind === "move" && onMoveGesture) {
+      if (!start.moved && Math.hypot(dx, dy) < 4) return;
+      start.moved = true;
+      if (mode === "docked" && (drawer || dragToFloat)) setMode("floating");
+      onMoveGesture({ phase: "move", x: event.clientX, y: event.clientY });
+    }
     setGeometry(constrain(start.kind === "move" ? { ...start.geometry, x: start.geometry.x + dx, y: start.geometry.y + dy } : { ...start.geometry, width: start.geometry.width + dx, height: start.geometry.height + dy }));
   };
   const end = (event: ReactPointerEvent<HTMLButtonElement>) => {
     const start = gesture.current;
     gesture.current = null;
-    if (start?.kind === "move") onMoveGesture?.({ phase: "drop", x: event.clientX, y: event.clientY });
+    if (start?.kind === "move") onMoveGesture?.({ phase: start.moved ? "drop" : "cancel", x: event.clientX, y: event.clientY });
     try { localStorage.setItem(storageKey, JSON.stringify({ mode, geometry })); } catch { /* Layout preference only. */ }
   };
   const cancel = () => {

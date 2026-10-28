@@ -78,6 +78,12 @@ try{
  const grip=()=>page.getByRole('button',{name:'Move 3D Viewport with arrow keys',exact:true});
  const startDrag=async(x,y)=>{const h=await grip().boundingBox();await page.mouse.move(h.x+h.width/2,h.y+h.height/2);await page.mouse.down();await page.mouse.move(x,y,{steps:12});};
  const waitDocked=()=>page.waitForFunction(()=>['viewport-3d','analysis-plots'].every(id=>document.querySelector(`[data-panel-frame="viewport-module:${id}"]`)?.getAttribute('data-panel-mode')==='docked'));
+ const beforeGripClick=await win('viewport-3d').boundingBox();
+ await grip().click();await waitDocked();await page.waitForTimeout(200);
+ const afterGripClick=await win('viewport-3d').boundingBox();
+ if(['x','y','width','height'].some(key=>Math.abs(beforeGripClick[key]-afterGripClick[key])>1))throw Error('Grip click changed layout');
+ if(await page.locator('[data-dock-preview]').count())throw Error('Click started snapping');
+ await assertRetained('grip click keeps dock');
  for(const edge of ['left','right','top','bottom']) {
   evidence.stage='snap '+edge;const b=await surface.boundingBox();
   const x=edge==='left'?b.x+8:edge==='right'?b.x+b.width-8:b.x+b.width/2;
