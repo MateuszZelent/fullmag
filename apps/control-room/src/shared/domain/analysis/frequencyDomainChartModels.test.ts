@@ -2104,6 +2104,27 @@ describe("frequencyDomainChartModels", () => {
     });
   });
 
+  it("shows the published spectrum for fixed nonzero k without turning it into a dispersion path", () => {
+    const manifest = {
+      study_product: "modal_eigen", stage_kind: "eigenmodes",
+      boundary_context: "floquet_periodic",
+      k_sampling: { kind: "single", vector_rad_per_m: [0, 10e6, 0] },
+      artifacts: { spectrum_v2_path: "eigen/spectrum.v2.json", dispersion_csv_path: "eigen/dispersion.csv" },
+    };
+    const classification = frequencyDomainResultContextFromManifest(manifest).classification;
+    expect(classification?.relationKind).toBe("fixed_k_modal");
+    const route = frequencyDomainChartRouteOverrideFromSubview("dispersion.modal", classification)!;
+    expect(route).toEqual({ mode: "free_modes", primaryChart: "modal-spectrum" });
+    expect(frequencyDomainManifestSupportsChartRoute(manifest, route)).toBe(true);
+    const branches = frequencyDomainChartRouteOverrideFromSubview("dispersion.branches", classification)!;
+    expect(branches.primaryChart).toBe("dispersion");
+    expect(frequencyDomainManifestSupportsChartRoute(manifest, branches)).toBe(false);
+    expect(frequencyDomainChartRouteOverrideFromSubview("dispersion.modal", { relationKind: "modal_dispersion" }))
+      .toEqual({ mode: "dispersion_modal", primaryChart: "dispersion" });
+    expect(frequencyDomainChartRouteOverrideFromSubview("dispersion.modal", { relationKind: "fixed_k_driven" }))
+      .toEqual({ mode: "dispersion_modal", primaryChart: "dispersion" });
+  });
+
   it("routes selections from typed calculation mode, never kind, label, or path prefixes", () => {
     expect(frequencyDomainChartRouteOverrideFromSelection({
       kind: "results.frequency_response.sweep",

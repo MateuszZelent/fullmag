@@ -127,7 +127,7 @@ export function useAnalysisFrequencyData(
       ? selection.ref.analysisRunId ?? null
       : null,
   );
-  const frequencyDomainSubviewRouteOverride = frequencyDomainChartRouteOverrideFromSubview(activeSubview);
+  const frequencyDomainSubviewRouteOverride = frequencyDomainChartRouteOverrideFromSubview(activeSubview, frequencyDomainContext.classification);
   const requestedRoutes = [
     frequencyDomainSubviewRouteOverride,
     frequencyDomainRouteOverride,
@@ -163,6 +163,8 @@ export function useAnalysisFrequencyData(
           }
         : selectedRoute;
   const expectedChart = activeSurface === "dispersion" ? "dispersion" : null;
+  const fixedKModalSpectrum = frequencyDomainContext.classification?.relationKind === "fixed_k_modal" &&
+    frequencyDomainRoute.primaryChart === "modal-spectrum";
   const dispersionChart = frequencyDomainRoute.primaryChart === "dispersion" ||
     frequencyDomainRoute.primaryChart === "response-map";
   const resonanceChart =
@@ -173,7 +175,7 @@ export function useAnalysisFrequencyData(
     frequencyDomainRoute.status === "available";
   const surfaceMismatch = manifestReady && (
     expectedChart !== null
-      ? !dispersionChart
+      ? !dispersionChart && !fixedKModalSpectrum
       : activeSurface === "resonance-fmr" && !resonanceChart
   );
   const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch;

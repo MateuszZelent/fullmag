@@ -123,6 +123,7 @@ export function frequencyDomainChartRouteOverrideFromSelection(
 
 export function frequencyDomainChartRouteOverrideFromSubview(
   subview: AnalysisSubview | null | undefined,
+  classification?: Pick<FrequencyDomainResultClassification, "relationKind"> | null,
 ): Pick<FrequencyDomainChartRoute, "mode" | "primaryChart"> | null {
   switch (subview) {
     case "resonance.eigenmodes":
@@ -132,6 +133,11 @@ export function frequencyDomainChartRouteOverrideFromSubview(
     case "resonance.modal-driven":
       return { mode: "fmr_modal_driven", primaryChart: "comparison" };
     case "dispersion.modal":
+      // A single nonzero k belongs to the k-resolved family, but publishes
+      // a frequency spectrum at that k, not a sampled dispersion relation.
+      return classification?.relationKind === "fixed_k_modal"
+        ? FREE_MODES_SELECTION_ROUTE
+        : DISPERSION_MODAL_SELECTION_ROUTE;
     case "dispersion.branches":
       return { mode: "dispersion_modal", primaryChart: "dispersion" };
     case "dispersion.driven-map":
