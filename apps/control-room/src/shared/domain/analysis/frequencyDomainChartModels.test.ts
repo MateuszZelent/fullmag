@@ -2106,6 +2106,7 @@ describe("frequencyDomainChartModels", () => {
 
   it("shows the published spectrum for fixed nonzero k without turning it into a dispersion path", () => {
     const manifest = {
+      run_id: "run-fixed-k", stage_id: "eigenmodes", equilibrium_identity: "eq-fixed-k",
       study_product: "modal_eigen", stage_kind: "eigenmodes",
       boundary_context: "floquet_periodic",
       k_sampling: { kind: "single", vector_rad_per_m: [0, 10e6, 0] },
