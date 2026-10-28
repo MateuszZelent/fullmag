@@ -17,6 +17,23 @@ import docker_volume_dev
 
 
 class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
+    def test_frontend_workspace_key_binds_frozen_configuration(self):
+        inputs = {"dependency_seed_sha256": "a" * 64, "toolpins_sha256": "b" * 64,
+                  "source_commit": "c" * 40,
+                  "files": [{"relative": "next.config.ts", "sha256": "d" * 64},
+                            {"relative": "package.json", "sha256": "e" * 64}]}
+        key = docker_volume_dev._frontend_workspace_key("selected-group", inputs)
+        self.assertEqual(key, docker_volume_dev._frontend_workspace_key(
+            "selected-group", dict(inputs, source_commit="f" * 40,
+                                   files=list(reversed(inputs["files"])))))
+        for field in ("dependency_seed_sha256", "toolpins_sha256"):
+            self.assertNotEqual(key, docker_volume_dev._frontend_workspace_key(
+                "selected-group", dict(inputs, **{field: "0" * 64})))
+        changed_files = [dict(inputs["files"][0], sha256="0" * 64), inputs["files"][1]]
+        self.assertNotEqual(key, docker_volume_dev._frontend_workspace_key(
+            "selected-group", dict(inputs, files=changed_files)))
+        self.assertNotEqual(key, docker_volume_dev._frontend_workspace_key("other-group", inputs))
+
     @staticmethod
     def _frontend_owner_service(actual_options):
         owner = "/run/fullmag/frontend-owner"

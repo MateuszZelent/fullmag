@@ -548,6 +548,17 @@ def _owned_volume(control, role, key):
     return name
 
 
+def _frontend_workspace_key(project, inputs):
+    """Frozen configuration changes require a new workspace, preserving old caches."""
+    return hashlib.sha256(canonical({
+        "schema": "fullmag.frontend-workspace-key.v2",
+        "project": project,
+        "dependencies": inputs["dependency_seed_sha256"],
+        "tools": inputs["toolpins_sha256"],
+        "configuration": sorted(inputs["files"], key=lambda item: item["relative"]),
+    })).hexdigest()
+
+
 def _frontend(control, operation, selected, state, port, image):
     from docker_development_inputs import seed
     files = []
@@ -558,8 +569,7 @@ def _frontend(control, operation, selected, state, port, image):
             and all(previous_inputs.get(key) == inputs.get(key) for key in
                 ("source_root", "worktree_id", "dependency_seed_sha256", "toolpins_sha256", "host_port", "files", "live_directories"))):
         inputs = previous_inputs
-    key = hashlib.sha256(canonical({"project": control.project,
-        "dependencies": inputs["dependency_seed_sha256"], "tools": inputs["toolpins_sha256"]})).hexdigest()
+    key = _frontend_workspace_key(control.project, inputs)
     volume = _owned_volume(control, "frontend", key)
     operation["receipt"]["frontend_volume"] = volume
     request = canonical({"files": files, "inputs": inputs})
