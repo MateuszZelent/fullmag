@@ -36,6 +36,7 @@ export function buildEigenModeBrowser(resource: FrequencyDomainJsonArtifactResou
     const nodeId = `results:mode-browser:${resource?.run_id}:${resource?.stage_id}:${key}`;
     const ref = buildEigenModeSelectionRef(point, {
       analysisRunId: context.runId, analysisStageId: context.stageId, artifactRevision: resource?.revision,
+      calculationMode: context.classification?.relationKind === "modal_dispersion" ? "dispersion_modal" : "free_modes",
       equilibriumId: frequencyDomainEquilibriumIdForSample(context, point.sampleIndex),
       wavevectorKf: k, nodeId, representation: "complex-vector-xyz", studyProduct: "modal_eigen",
       kContextKind: context.classification?.kContext.kind,

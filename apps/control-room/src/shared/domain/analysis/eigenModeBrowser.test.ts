@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { FrequencyDomainJsonArtifactResource } from "@/kernel/api/apiTypes";
+import type { FrequencyDomainJsonArtifactResource, FrequencyDomainManifestResource } from "@/kernel/api/apiTypes";
 import { buildEigenModeBrowser, modePickerPage, MODE_PICKER_PAGE_SIZE } from "./eigenModeBrowser";
+import { frequencyDomainChartRouteOverrideFromSelection } from "./frequencyDomainChartModels";
 
 const spectrum = { status: "ready", schema_version: "eigen_spectrum.v2", artifact_path: "eigen/spectrum.v2.json", missing_reason: null,
  run_id: "run-a", stage_id: "eigen", revision: "revision-a", payload: { samples: [
@@ -23,6 +24,15 @@ describe("mode browser", () => {
   expect(data.samples[0].modes[0].selection.ref).toMatchObject({ kPathCoordinateRadPerM: 0 });
   expect(ref).not.toHaveProperty("fieldId");
   expect(ref).not.toHaveProperty("equilibriumId");
+ });
+ it("returns a k-path selection to dispersion rather than an index spectrum", () => {
+  const manifest = { result_manifest: { payload: {
+   run_id: "run-a", stage_id: "eigen", study_product: "modal_eigen",
+   boundary_context: "floquet_periodic", equilibrium_identity: "eq",
+   k_sampling: { kind: "path", sample_count: 8 },
+  } } } as unknown as FrequencyDomainManifestResource;
+  const mode = buildEigenModeBrowser(spectrum, manifest).samples[1].modes[0];
+  expect(frequencyDomainChartRouteOverrideFromSelection(mode.selection)).toMatchObject({ mode: "dispersion_modal", primaryChart: "dispersion" });
  });
  it("bounds hundreds of choices and keeps search independent of the previous page", () => {
   const items=Array.from({length:601},(_,i)=>({value:String(i),label:`frequency ${i}`}));
