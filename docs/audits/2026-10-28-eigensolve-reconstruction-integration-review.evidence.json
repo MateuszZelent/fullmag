@@ -53,7 +53,8 @@
       "fem::eigen_tests::reference_mode_publication_expands_periodic_and_signed_floquet_fields"
     ],
     "job_id": 122564583507,
-    "job_log_sha256": "5b711d230581fff9cff5c055e1b1e920983bbc95b8ef05d1b29dcb9eaa763ed0"
+    "job_log_sha256": "5b711d230581fff9cff5c055e1b1e920983bbc95b8ef05d1b29dcb9eaa763ed0",
+    "revalidated_run": 40612294926
   },
   "remaining": [
     "other preserved WIP files",
@@ -62,9 +63,14 @@
     "final post-import strict UI and Docker recovery"
   ],
   "checkpoint_inspector_gate": {
-    "status": "pending_ci",
+    "status": "success",
     "test": "fem::single_k_checkpoint::tests::checkpoint_inspector_accepts_actual_persisted_manifest",
     "interpreter": "python3",
-    "scope": "persisted checkpoint integrity; scientific qualification stays NOT VERIFIED"
+    "scope": "persisted checkpoint integrity; scientific qualification stays NOT VERIFIED",
+    "run_id": 40612294926,
+    "head_sha": "0a02ca80970d69c4246f6c9573a1eababd423c98",
+    "job_id": 122566508074,
+    "test_count": 1,
+    "job_log_sha256": "c2089d5b927a05cbff252eb3d0ae47d34dd03a9f3181523c70e5644a9e5216c8"
   }
 }

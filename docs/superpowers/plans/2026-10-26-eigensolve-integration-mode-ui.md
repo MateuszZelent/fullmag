@@ -337,3 +337,9 @@ Dowód: `docs/audits/2026-10-28-eigensolve-modal-runtime-results.md` / `.evidenc
 [Decyzja integracyjna](../../audits/2026-10-28-eigensolve-reconstruction-integration-review.md) porównuje trzy funkcje rekonstrukcji, ekspansji węzłów i transportu baz z zahashowaną kopią WIP. Obecne ciała funkcji są identyczne z zachowanymi; konsumenci zachowują rozdzielenie scalar reference / Full2x2 reference / native. Nie skopiowano ponownie starych plików. Pełny runner CI 40611719529 dla e805d0774: SUCCESS, 1821 passed / 0 failed / 1 ignored. Sprawdzono log: wszystkie dziewięć nazwanych regresji rekonstrukcji, guardów i publikacji wykonane z wynikiem ok. Nie jest to odbiór natywnego runtime/GPU.
 
 Aktualny runtime jest niedostępny po utracie demona Docker. Potwierdzone pozostają wcześniejsze cold import, visualization_only, identyczność 15 wartości z Pythonem i pięć modów w workbench; końcowy strict po naprawie compute_fields pozostaje otwarty. Nie utożsamiać wcześniejszego PASS I4 z bieżącą dostępnością UI ani z nowym strict po imporcie. Źródło szczegółów: audyt modal-ui-file-restore z 28.10.
+
+### Dopięcie bramki zapisu i bieżący master
+
+CI 40612294926 dla 0a02ca809: default-feature runner 1821 PASS oraz osobny, jawnie uruchomiony checkpoint-inspector Rust→Python 1 PASS. Zapis rzeczywistego manifestu i odczyt integralności potwierdzone; scientific_qualification pozostaje NOT VERIFIED.
+
+[I5 preflight](../../audits/2026-10-28-eigensolve-master-integration-preflight.md): remote master 2c67d8f904b1dede9268bbbc8bf6257cbe33aa4f, 215 commitów incoming, 583 zmienione pliki, 12 tekstowych konfliktów w odczytowym preview. Nie przeprowadzono merge, status indeksu/WIP zachowany. Nowe CI nie zastępuje testów przyszłego zintegrowanego drzewa.
