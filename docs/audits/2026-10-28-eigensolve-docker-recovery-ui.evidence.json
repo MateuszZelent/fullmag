@@ -1,0 +1,326 @@
+{
+  "schema": "fullmag.eigensolve.docker-recovery-ui-evidence.v1",
+  "observed_at": "2026-10-28T10:01:06.232167+00:00",
+  "source": {
+    "checkout": "/home/kkingstoun/git/fullmag/worktrees/eigensolve-integration-ui-20261026",
+    "branch": "codex/eigensolve-integration-ui-20261026",
+    "commit": "7abc39f3ba46a677a3dda12d0493004c87cf7eb6",
+    "snapshot": "9da324d0c9dacdc489c025e3b568d63687ff4047b88b4496ea07c31b599ea044"
+  },
+  "runtime": {
+    "url": "http://localhost:3217/workspace",
+    "compose_project": "fullmag-worktree-eigensolve-integration-ui-202610-78b341212cbdaa7d",
+    "development_attempt": "731c60a9f12a46378716545195c3d70e",
+    "compose_sha256": "21a1c193bc0b1152e38a94ead24d42db495c0cabaaf0b289610b33fd7e190c79",
+    "backend_container": "3f14a64ef95453111c75facc2c5d3eeb69a199c001d79f800b035d7dfc4da977",
+    "frontend_container": "f740a1f4ba4beaf66e66dc92e8cf545cf3247f50a7b3ee5b5518c32f2ac05005",
+    "health": "both healthy",
+    "native_storage_gate": "passed",
+    "worker_cgroup_gate": "passed",
+    "new_solve_submitted": false
+  },
+  "recovery": {
+    "failed_resume": "8a5807f01af24d0696bb29a08587c1e3",
+    "controlled_stop": "d251daaed3a847328799d5699035245e",
+    "recreate": "3ab8a663f91f425aae8de132b5811b03",
+    "kind": "empty-rotation",
+    "preserved": "old namespace, results, archive, cache, receipts",
+    "python_tests": 479
+  },
+  "import": {
+    "file": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/eigensolve-modal-updated-signed15-20261027/de-signed15-with-references-20261028.fms",
+    "startedAt": "2026-10-28T09:51:15.004Z",
+    "responses": [
+      {
+        "url": "http://localhost:3217/v2/persistence/imports/file-inspections",
+        "status": 200
+      },
+      {
+        "url": "http://localhost:3217/v2/sessions/current/persistence/file-imports?restore_mode=visualization_only",
+        "status": 200
+      },
+      {
+        "url": "http://localhost:3217/v2/sessions/current/persistence/checkpoints",
+        "status": 200
+      }
+    ],
+    "errors": [],
+    "status": "passed",
+    "beforeStatus": 404,
+    "commitHttp": 200,
+    "spectrum": {
+      "run": "run-live-93df870d6af7a8e9d70a3742a0de6e7860b5a072c98b7359c3463c18b49113de",
+      "generation": "sha256:094bf14b5f4e43d1622336ab43a09cbdce64b3e558519dfbb6c616473a5c215b",
+      "samples": 15,
+      "gammaHz": 9299249697.073517
+    },
+    "observations": {
+      "status": 200,
+      "data": {
+        "run_id": "run-live-93df870d6af7a8e9d70a3742a0de6e7860b5a072c98b7359c3463c18b49113de",
+        "frames": []
+      }
+    },
+    "finishedAt": "2026-10-28T09:53:42.910Z"
+  },
+  "workbench": {
+    "status": "passed",
+    "owner": {
+      "runId": "run-live-93df870d6af7a8e9d70a3742a0de6e7860b5a072c98b7359c3463c18b49113de",
+      "stageId": "eigenmodes",
+      "generationId": "sha256:094bf14b5f4e43d1622336ab43a09cbdce64b3e558519dfbb6c616473a5c215b",
+      "revision": "sha256:e53991281af42ec6080484c8701cb9b58230fb398b60dcb1595f367e223b26e9"
+    },
+    "series": [
+      {
+        "name": "Branch 0 [GHz]",
+        "type": "scatter",
+        "count": 15
+      },
+      {
+        "name": "Finite Dirichlet airbox, n=0 analytical model (reference) [GHz]",
+        "type": "line",
+        "count": 501
+      },
+      {
+        "name": "Open-air 1D reference (different boundary) (reference) [GHz]",
+        "type": "line",
+        "count": 15
+      }
+    ],
+    "modes": [
+      {
+        "sample": 0,
+        "point": {
+          "data": [
+            -25000000,
+            13.560765016846203,
+            0
+          ],
+          "dataIndex": 0,
+          "seriesIndex": 0,
+          "x": 447.609375,
+          "y": 493.20480922507465
+        },
+        "canvasVisible": true,
+        "webgl": {
+          "contextLost": false,
+          "width": 703,
+          "height": 573
+        },
+        "surface": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+          "bufferRepresentation": "phase_rotated_real",
+          "bufferMin": 0,
+          "bufferMax": 250764698895.25244,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        }
+      },
+      {
+        "sample": 3,
+        "point": {
+          "data": [
+            -10000000,
+            11.2118497916512,
+            3
+          ],
+          "dataIndex": 3,
+          "seriesIndex": 0,
+          "x": 605.859375,
+          "y": 601.2549095840448
+        },
+        "canvasVisible": true,
+        "webgl": {
+          "contextLost": false,
+          "width": 703,
+          "height": 573
+        },
+        "surface": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0003:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0003:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0003:mode-0000",
+          "bufferRepresentation": "phase_rotated_real",
+          "bufferMin": 0,
+          "bufferMax": 250195761918.84866,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        }
+      },
+      {
+        "sample": 7,
+        "point": {
+          "data": [
+            0,
+            9.299249697073517,
+            7
+          ],
+          "dataIndex": 7,
+          "seriesIndex": 0,
+          "x": 711.359375,
+          "y": 689.2345139346182
+        },
+        "canvasVisible": true,
+        "webgl": {
+          "contextLost": false,
+          "width": 703,
+          "height": 573
+        },
+        "surface": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0007:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0007:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0007:mode-0000",
+          "bufferRepresentation": "phase_rotated_real",
+          "bufferMin": 0,
+          "bufferMax": 250000000000.0078,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        }
+      },
+      {
+        "sample": 11,
+        "point": {
+          "data": [
+            10000000,
+            11.211886649578224,
+            11
+          ],
+          "dataIndex": 11,
+          "seriesIndex": 0,
+          "x": 816.859375,
+          "y": 601.2532141194017
+        },
+        "canvasVisible": true,
+        "webgl": {
+          "contextLost": false,
+          "width": 703,
+          "height": 573
+        },
+        "surface": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0011:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0011:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0011:mode-0000",
+          "bufferRepresentation": "phase_rotated_real",
+          "bufferMin": 0,
+          "bufferMax": 250202010640.80307,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        }
+      },
+      {
+        "sample": 14,
+        "point": {
+          "data": [
+            25000000,
+            13.5609139692644,
+            14
+          ],
+          "dataIndex": 14,
+          "seriesIndex": 0,
+          "x": 975.109375,
+          "y": 493.19795741383757
+        },
+        "canvasVisible": true,
+        "webgl": {
+          "contextLost": false,
+          "width": 703,
+          "height": 573
+        },
+        "surface": {
+          "partId": "part:film_geom",
+          "surfaceIndexCount": 1560,
+          "fieldQuantity": "analysis:eigen:sample-0014:mode-0000",
+          "requestedQuantity": "analysis:eigen:sample-0014:mode-0000",
+          "surfaceVisible": true,
+          "surfaceColorSource": "magnitude",
+          "bufferQuantity": "analysis:eigen:sample-0014:mode-0000",
+          "bufferRepresentation": "phase_rotated_real",
+          "bufferMin": 0,
+          "bufferMax": 250831002676.04672,
+          "complexValueCount": 5127,
+          "rgbValueCount": 0
+        }
+      }
+    ],
+    "http_failures": [],
+    "js_errors": [],
+    "reference_has_mode_action": 0,
+    "responsive_sizes": [
+      {
+        "width": 1600,
+        "height": 1100
+      },
+      {
+        "width": 1440,
+        "height": 1000
+      },
+      {
+        "width": 1100,
+        "height": 900
+      }
+    ]
+  },
+  "gamma": {
+    "status": "passed",
+    "frequency_hz": 9299249697.073517,
+    "field": "analysis:eigen:sample-0007:mode-0000",
+    "bounds": {
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 2.8722813232690143e-08,
+      "size": [
+        4e-08,
+        4e-08,
+        1e-08
+      ]
+    },
+    "representations": [
+      "real",
+      "imag",
+      "abs",
+      "phase"
+    ],
+    "browser_errors": [],
+    "page_errors": [],
+    "solver_mutation_attempts": [],
+    "animation_pixel_changes": [
+      36939,
+      37159,
+      37159,
+      37207
+    ],
+    "stopped_pixel_changes": 0
+  },
+  "artifacts_root": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/eigensolve-ui-recovery-20261028/after-host-restart",
+  "scope": "actual browser UI with restored FEM results; SwiftShader is not hardware GPU or scientific convergence qualification",
+  "scientific_qualification": "NOT VERIFIED: mesh/airbox convergence, spectrum completeness and COMSOL A1 acceptance remain separate",
+  "source_test_ci": "https://github.com/MateuszZelent/fullmag/actions/runs/40648641404",
+  "report_sha256": {
+    "import.json": "7f8dd5d5cc0140007ef8a772eaa2e2e0a09315acae6f6b129b90760644d9895d",
+    "workbench/report.json": "e445a4455dd8e8177cc8f86e619f1957356a9d4c87a32869ce36314e7200f620",
+    "gamma/report.json": "2ec936c87200cd351d715911f074e42bfd87333ebaa7f20476b47ad6e7b1d6a5",
+    "gamma/animation-pixels.json": "6f40ccd5d85f3afa7161e1d41a34ca9b1e4b9c8f3d35ea6639b7059d9cc454fa",
+    "foreign-wip-check.json": "9ff897f9a2901bafebc18fc1b598fb4cdac8bea08d7e52b0f2dae33de5635457"
+  }
+}
