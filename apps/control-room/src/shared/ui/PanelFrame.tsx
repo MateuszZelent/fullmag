@@ -47,12 +47,17 @@ interface PanelFrameProps {
   /** False pins the frame in the dock: no float, maximize or resize. */
   floatable?: boolean;
   suspendWhenHidden?: boolean;
+  /** A viewport window can detach directly by dragging its docked grip. */
+  dragToFloat?: boolean;
+  onModeChange?: (mode: PanelMode) => void;
+  /** Explicit dock intent, distinct from visibility-driven onDockChange. */
+  onDock?: () => void;
   onDockChange: (docked: boolean) => void;
   onHide?: () => void;
   onMove?: (direction: -1 | 1) => void;
 }
 
-export function PanelFrame({ id, title, visible, children, dockHandle, drawer = false, drawerSide = "right", drawerShared = false, floatable = true, suspendWhenHidden = true, onDockChange, onHide, onMove }: PanelFrameProps) {
+export function PanelFrame({ id, title, visible, children, dockHandle, drawer = false, drawerSide = "right", drawerShared = false, floatable = true, suspendWhenHidden = true, dragToFloat = false, onModeChange, onDock, onDockChange, onHide, onMove }: PanelFrameProps) {
   const storageKey = `fullmag.workspace.panel.${id}.v1`;
   // Keep this frame safe when rendered outside the workspace hydration boundary.
   const [initial] = useState(() => {
@@ -85,6 +90,8 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     try { localStorage.setItem(storageKey, JSON.stringify({ mode, geometry })); } catch { /* Layout preference only. */ }
   }, [geometry, mode, storageKey]);
 
+  useEffect(() => { if (docked) frame.current?.style.removeProperty("z-index"); }, [docked]);
+  useEffect(() => { onModeChange?.(effectiveMode); }, [effectiveMode, onModeChange]);
   useEffect(() => { onDockChange(visible && docked); }, [docked, onDockChange, visible]);
   useEffect(() => {
     const measureWorkspace = () => {
@@ -125,7 +132,7 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
   };
   const hide = () => hideWith(() => onHide?.());
   const interactionGeometry = (): Geometry => {
-    if (!drawer || mode !== "docked") return geometry;
+    if ((!drawer && !dragToFloat) || mode !== "docked") return geometry;
     const bounds = frame.current?.getBoundingClientRect();
     setMode("floating");
     return bounds ? { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height } : geometry;
@@ -158,11 +165,29 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     const current = interactionGeometry();
     setGeometry(constrain(kind === "move" ? { ...current, x: current.x + dx, y: current.y + dy } : { ...current, width: current.width + dx, height: current.height + dy }));
   };
+  const toggleFloat = () => {
+    if (mode === "floating") { setMode("docked"); onDock?.(); return; }
+    if (effectiveMode === "docked") {
+      const bounds = frame.current?.getBoundingClientRect();
+      if (bounds) setGeometry(constrain({ x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height }));
+    }
+    setMode("floating");
+  };
+  const bringToFront = () => {
+    if (docked || !frame.current) return;
+    // Bounded workspace stacking stays below dialogs/menus. No global counter
+    // grows past the overlay layer, and clicking a canvas need not steal focus.
+    const windows = Array.from(document.querySelectorAll<HTMLElement>('.fm-panel-frame[data-panel-mode="floating"], .fm-panel-frame[data-panel-mode="maximized"]'))
+      .filter(element => !element.hidden && element !== frame.current)
+      .sort((a, b) => Number(a.style.zIndex || 60) - Number(b.style.zIndex || 60));
+    windows.push(frame.current);
+    windows.forEach((element, index) => { element.style.zIndex = String(60 + index); });
+  };
   const controls: PanelChromeControls = {
-    move: docked ? dockHandle : <Button size="icon" variant="ghost" aria-label={`Move ${title} with arrow keys`} disabled={effectiveMode === "maximized"} onPointerDown={e => begin(e, "move")} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onKeyDown={e => keyboard(e, "move")}><GripVertical size={14} aria-hidden="true" /></Button>,
+    move: docked && !dragToFloat ? dockHandle : <Button className="fm-panel-frame__move" size="icon" variant="ghost" aria-label={`Move ${title} with arrow keys`} disabled={effectiveMode === "maximized"} onPointerDown={e => begin(e, "move")} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onKeyDown={e => keyboard(e, "move")}><GripVertical size={14} aria-hidden="true" /></Button>,
     actions: menuItems => <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={`${title} panel menu`}><MoreHorizontal size={15} aria-hidden="true" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end" onCloseAutoFocus={event => { if (!visible) event.preventDefault(); }}>
       {menuItems ? <>{menuItems}<DropdownMenuSeparator /></> : null}
-      {floatable ? <><DropdownMenuItem onSelect={() => setMode(mode === "floating" ? "docked" : "floating")}>{mode === "floating" ? "Dock panel" : "Float panel"}</DropdownMenuItem>
+      {floatable ? <><DropdownMenuItem onSelect={toggleFloat}>{mode === "floating" ? "Dock panel" : "Float panel"}</DropdownMenuItem>
       <DropdownMenuItem onSelect={() => { if (mode === "maximized") setMode(restoreMode.current); else { restoreMode.current = mode; setMode("maximized"); } }}>{mode === "maximized" ? "Restore panel" : "Maximize panel"}</DropdownMenuItem></> : null}
       {onMove ? <><DropdownMenuItem onSelect={() => onMove(-1)}>Move panel left</DropdownMenuItem><DropdownMenuItem onSelect={() => onMove(1)}>Move panel right</DropdownMenuItem></> : null}
       {onHide ? <><DropdownMenuSeparator /><DropdownMenuItem onSelect={hide}>Hide panel</DropdownMenuItem></> : null}
@@ -170,7 +195,8 @@ export function PanelFrame({ id, title, visible, children, dockHandle, drawer = 
     hideWith,
   };
   return <section ref={frame} className="fm-panel-frame" data-panel-frame={id} data-panel-mode={effectiveMode} hidden={!visible} aria-label={`${title} panel`}
-    onFocusCapture={event => { if (frame.current?.contains(event.target as HTMLElement) && !(event.target as HTMLElement).closest(".fm-panel-chrome")) previousFocus.current = event.target as HTMLElement; }}
+    onPointerDownCapture={bringToFront}
+    onFocusCapture={event => { bringToFront(); if (frame.current?.contains(event.target as HTMLElement) && !(event.target as HTMLElement).closest(".fm-panel-chrome")) previousFocus.current = event.target as HTMLElement; }}
     onScrollCapture={() => { if (visible && frame.current) scroll.current = Array.from(frame.current.querySelectorAll<HTMLElement>("*")).filter(e => e.scrollTop || e.scrollLeft).map(e => [e, e.scrollTop, e.scrollLeft]); }} style={!docked ? (effectiveMode === "maximized" ? maxBounds ?? { inset: 8 } : drawer && mode === "docked" ? { ...(drawerSide === "left" ? { left: 8 } : { right: 8 }), top: 144, width: drawerShared ? "calc(50vw - 12px)" : "min(416px, calc(100vw - 16px))", height: "calc(100dvh - 180px)" } : { left: geometry.x, top: geometry.y, width: geometry.width, height: geometry.height }) : undefined}>
     <ChromeContext.Provider value={controls}>
       <Activity mode={!visible && suspendWhenHidden ? "hidden" : "visible"}>{children}</Activity>

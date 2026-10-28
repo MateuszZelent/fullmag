@@ -139,7 +139,7 @@ The diagnostics module must expose resource counts in development mode.
 
 ## 7. Center Surface Tabs
 
-When multiple modules target `viewport-main`, the kernel owns center-surface tab state. Switching tabs must unmount the previously active heavy module instead of hiding it. A non-3D tab must have:
+When multiple modules target `viewport-main`, the kernel owns center-surface tab state. Each visible center surface has its own PanelFrame. Active, split companion and explicitly floating/maximized windows have at most one mounted instance each. Docking, moving, resizing and changing the split orientation preserve the component parent and renderer instance. Hidden windows and inactive docked tabs unmount their heavy modules. A non-3D tab with no visible 3D companion or floating 3D window must have:
 
 - no mounted `.fm-viewport-3d` root;
 - no R3F canvas;
@@ -161,3 +161,5 @@ Global realtime invalidation and registry controllers may remain active, but the
 ### Pasek narzędzi po audycie 26.10.2026
 
 Kontrolki 3D zajmują oddzielny wiersz nad canvasem. Nazwany region zachowuje appearance/settings, Details/Retry, freshness, quantity, target, źródło historyczne, mesh quality/size, Regions, Airbox, Frozen Spins, countdown oraz Render details. Dopuszczalne jest zawijanie i przewijanie narzędzi; nie redukuje ono danych ani domyślnej jakości sceny. ViewCube, legendy i wymiary zachowują dotychczasową semantykę.
+
+Floating center windows use the same frame controls and geometry persistence as Inspector. A stable window layer is independent of measured docking anchors; resizing anchors never reparents a renderer. Returning an inactive floating window to the dock selects it as the companion. Tabs restore hidden windows. Layout controls do not own solver commands or numerical state.

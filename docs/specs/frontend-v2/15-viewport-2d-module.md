@@ -20,10 +20,10 @@ must be recovered from git history, not treated as current architecture.
 
 ## 1. Lifecycle Contract
 
-All heavy center surfaces mount through the `viewport-main` tab host. Only the
-active tab is mounted. Switching away from `viewport-3d` must unmount the 3D
-module instead of hiding it, which releases its R3F canvas, render loop,
-observers, and viewport-local resource subscriptions.
+All heavy center surfaces mount through the `viewport-main` tab host. Only visible active, companion or explicitly floating windows are mounted,
+with one instance per module. Switching away from an inactive docked 3D tab
+unmounts it, releasing its R3F canvas, render loop, observers and viewport-local
+subscriptions. Changing the placement of a visible window preserves its instance.
 
 Inactive tabs may keep lightweight manifest metadata and command definitions in
 the module registry, but they must not keep renderer instances, WebGL contexts,
@@ -183,7 +183,7 @@ folds or overlaps remain visible degraded diagnostics.
 
 Required tests:
 
-- center tab host renders all tab triggers but mounts only one active module;
+- center tab host renders all tab triggers but mounts only visible active, companion or floating modules;
 - stale persisted active tab ids repair to a registered module;
 - committing an authored monitor draft updates canonical model/script and switches
   `activeViewportMainModuleId` to `field-map`;

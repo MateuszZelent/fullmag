@@ -264,3 +264,6 @@
 .fm-panel-move { cursor: grab; touch-action: none; }
 
 .fm-workspace-body { position: relative; }
+
+.fm-panel-frame__move { cursor: grab; touch-action: none; }
+.fm-panel-frame__move:active { cursor: grabbing; }
