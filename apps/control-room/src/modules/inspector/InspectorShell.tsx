@@ -180,7 +180,7 @@ export function InspectorShell({
         <div className="fm-inspector__body">{children}</div>
       </ScrollArea>
 
-      <InspectorFooter key={descriptorKey} focusDisabled={focusDisabled} onFocus={onFocus} />
+      {descriptor.typeLabel !== "Result" && descriptor.typeLabel !== "Result collection" ? <InspectorFooter key={descriptorKey} focusDisabled={focusDisabled} onFocus={onFocus} /> : null}
     </section>
   );
 }

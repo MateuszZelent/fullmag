@@ -354,6 +354,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
 
   if (isFrequencyDomainSelectionNode(node)) {
     return {
+      ...(node.collectionStudyCount !== undefined ? { collectionStudyCount: node.collectionStudyCount } : {}),
       ...(node.analysisRunId ? { analysisRunId: node.analysisRunId } : {}),
       ...(node.analysisStageId ? { analysisStageId: node.analysisStageId } : {}),
       ...(node.artifactRevision !== undefined

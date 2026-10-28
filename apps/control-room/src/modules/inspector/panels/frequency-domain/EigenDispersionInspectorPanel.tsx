@@ -74,23 +74,14 @@ export function EigenDispersionInspectorPanel({
         metrics={[
           { label: "Points", value: summary.badge, tone: summary.dispersionPointCount > 0 ? "success" : "neutral" },
           { label: "Branches", value: String(summary.branchCount), tone: "neutral" },
-          {
-            label: "Comparison",
-            value: summary.referenceComparisonStatus.replaceAll("_", " "),
-            tone: summary.referenceComparisonStatus === "matching"
-              ? "success"
-              : summary.referenceComparisonStatus === "no_data"
-                ? "neutral"
-                : "warning",
-          },
-          { label: "Selected", value: selectedPoint ? dispersionPointLabel(selectedPoint) : "none", tone: selectedPoint ? "success" : "neutral" },
+
         ]}
         primary={
           <>
             <FieldRow label="Frequency range" value={summary.frequencyRange} />
             <FieldRow label="k-path span" value={summary.kPathSpan} />
             <FieldRow label="Path sampling" value={summary.pathSampling} />
-            <FieldRow label="Path labels" value={summary.pathLabels} />
+            <p className="fm-result-inspector__help">Select a chart point to inspect its mode. Published branches do not establish spectrum completeness.</p>
             <FieldRow
               label="Branch tracking"
               value={`${summary.branchCount} branch(es), ${summary.trackedPointCount} tracked point(s)`}
@@ -102,7 +93,7 @@ export function EigenDispersionInspectorPanel({
         sections={[
           {
             id: "reference",
-            defaultOpen: true,
+            defaultOpen: false,
             title: "Reference & comparison",
             icon: <Scale size={16} strokeWidth={1.5} />,
             summary: summary.referenceComparisonStatus.replaceAll("_", " "),
@@ -116,7 +107,7 @@ export function EigenDispersionInspectorPanel({
           },
           {
             id: "selected-point",
-            defaultOpen: true,
+            defaultOpen: Boolean(selectedPoint),
             title: "Selected Dispersion Point",
             icon: <Target size={16} strokeWidth={1.5} />,
             summary: selectedPoint ? dispersionPointLabel(selectedPoint) : "not selected",
@@ -159,7 +150,7 @@ export function EigenDispersionInspectorPanel({
           },
           {
             id: "chart",
-            defaultOpen: true,
+            defaultOpen: false,
             title: "Dispersion Chart",
             icon: <LineChart size={16} strokeWidth={1.5} />,
             summary: summary.badge,
@@ -172,7 +163,7 @@ export function EigenDispersionInspectorPanel({
           },
           {
             id: "branches",
-            defaultOpen: true,
+            defaultOpen: false,
             title: "Dispersion Branch Table",
             icon: <GitBranch size={16} strokeWidth={1.5} />,
             summary: `${summary.branchCount} branch(es)`,

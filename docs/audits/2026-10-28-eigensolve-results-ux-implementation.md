@@ -5,8 +5,8 @@ Plan: [audyt](2026-10-28-eigensolve-results-ux-audit.md). Worktree: eigensolve-i
 | Etap | Stan | Dowód / pozostałe prace |
 | --- | --- | --- |
 | R1 | Implementacja + browser PASS; CI oczekuje | Zakładki rozdzielone, kolekcja bez pól pojedynczego artefaktu, poprawione undamped/phasor/residual. `scripts/verify_eigensolve_results_ux.mjs`: cztery różne widoki, brak page errors i mutacji. |
-| R2 | W toku | Zwięzły overview modu gotowy; dalsze uporządkowanie kategorii i dyspersji. |
-| R3 | TODO | Fizyczne etykiety, zachowanie tożsamości. |
+| R2 | Implementacja + browser PASS; CI oczekuje | Kategoria z liczbą badań, zwięzły overview modu i dyspersji, szczegóły zwinięte, bez stopki edycji dla wyników. |
+| R3 | Implementacja + browser PASS; CI oczekuje | Etykiety fizycznego k i f, zachowane klucze tożsamości, jawny run i liczba badań kolekcji. |
 | R4 | TODO | Kontekstowy wygląd i aktywne pole. |
 | R5 | TODO | Układ i telemetryka. |
 | R6 | TODO | Macierz browser, CI, dokumentacja i kwalifikacja użyteczności. |

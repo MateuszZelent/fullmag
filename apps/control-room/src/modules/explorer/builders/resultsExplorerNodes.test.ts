@@ -104,6 +104,8 @@ describe("buildPhysicsFirstResultsTree", () => {
     );
     const dispersion = families?.find((node) => node.kind === "results.dispersion.root");
     expect(dispersion?.analysisModuleId).toBe("analysis.dispersion");
+    expect(dispersion?.analysisRunId).toBe(modalFinite.runId);
+    expect(dispersion?.collectionStudyCount).toBe(dispersion?.children?.length);
     for (const descendant of flattenExplorerNodes(dispersion?.children ?? [])) {
       expect(descendant.analysisModuleId).toBe("analysis.dispersion");
     }
@@ -770,6 +772,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       modeIndex: 3,
       sampleIndex: 2,
       wavevectorKf: [5e7, 0, 0],
+      label: "kₓ = +50 rad/µm · 13 GHz",
     });
   });
 

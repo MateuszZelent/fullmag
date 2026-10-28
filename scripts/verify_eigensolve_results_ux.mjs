@@ -20,7 +20,7 @@ try{
  const root=`results:run:${run}`, family=root+':k-resolved', stage=family+':stage:eigenmodes:modal_eigen';
  await expand(root);await expand(family);await tree(family).click();await capture('category');
  await expand(stage);await expand(stage+':modes-at-k');
- const mode=page.locator('[role="treeitem"][data-node-id]').filter({hasText:/Sample 5 · Mode 0/}).last();
+ const mode=page.locator('[role="treeitem"][data-node-id*="sample-0005"][data-node-id*="mode-0000"]').last();
  await mode.click();await page.waitForTimeout(700);await capture('mode-overview');
  const tabs=page.locator('.fm-inspector__tabs [role="tab"]');
  evidence.inspectorTabs=await tabs.allTextContents();

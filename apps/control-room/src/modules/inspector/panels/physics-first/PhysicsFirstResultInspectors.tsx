@@ -1,3 +1,4 @@
+import { useInspectorActiveTab } from "../../InspectorTabState";
 import type { ComponentType } from "react";
 
 import { ReferenceImportSection } from "../analysis-results/ReferenceImportSection";
@@ -219,17 +220,13 @@ export function ResonanceDrivenProvenanceResultInspector(props: InspectorPanelPr
 }
 
 export function DispersionOverviewResultInspector(props: InspectorPanelProps) {
+  const ref = props.selection.ref?.type === "frequency-domain" ? props.selection.ref : null;
   return (
     <PhysicsFirstResultInspectorFrame selection={props.selection}>
-      <InspectorGroup title="Wavevector products" badge="k-resolved">
-        <FieldRow label="Modal relation" value="Modal relation fₙ(k) from eigenfrequency branches" />
-        <FieldRow label="Driven map" value="Driven map A(k,f), χ(k,f) or P_abs(k,f), with the published observable unit" />
-        <FieldRow label="k context" value="Fixed k, k path or k grid; a single nonzero-k sample is not a dispersion relation" />
-      </InspectorGroup>
-      <InspectorGroup title="Product boundary" badge="Physics-first">
-        <FieldRow label="Meaning" value="A driven response map is not a modal dispersion relation" />
-        <FieldRow label="Modal handoff" value="Open branches, modes at k and the exact complex mode field" />
-        <FieldRow label="Driven handoff" value="Open response map, frequency points and response field at k" />
+      <InspectorGroup title="Wavevector-resolved results">
+        {ref?.collectionStudyCount !== undefined ? <FieldRow label="Published studies" value={String(ref.collectionStudyCount)} /> : null}
+        <p className="fm-result-inspector__help">Open a study in Results, choose its dispersion chart, then select a point to inspect the mode at that wavevector.</p>
+        <p className="fm-result-inspector__help">Modal frequencies and driven response maps are separate results. Their axes, units and available fields are shown with the selected dataset.</p>
       </InspectorGroup>
     </PhysicsFirstResultInspectorFrame>
   );
@@ -248,10 +245,11 @@ export function DispersionKSamplingResultInspector(props: InspectorPanelProps) {
 }
 
 export function DispersionRelationResultInspector(props: InspectorPanelProps) {
+  const tab = useInspectorActiveTab();
   return (
     <>
       <ScientificFrameRoute Panel={EigenDispersionInspectorPanel} props={props} />
-      <ReferenceImportSection />
+      {tab === "data" ? <ReferenceImportSection /> : null}
     </>
   );
 }

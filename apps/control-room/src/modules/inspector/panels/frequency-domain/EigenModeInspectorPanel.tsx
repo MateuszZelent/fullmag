@@ -20,6 +20,7 @@ import {
   readEigenModeResourcePayload,
   type EigenResidualSummary,
 } from "@/shared/domain/analysis/eigenResidualSummary";
+import { formatModeWavevector, modeResultLabel } from "@/shared/domain/analysis/modeResultPresentation";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import {
   finiteModalScalar,
@@ -88,7 +89,7 @@ export function EigenModeInspectorPanel({
       componentCount: summary.componentCount,
       defaultPhaseRad: 0,
       fieldId: summary.fieldId,
-      label: summary.modeIdentity,
+      label: summary.physicalLabel,
       source: "eigen-mode",
       valueKind: summary.valueKind,
     },
@@ -232,7 +233,7 @@ function EigenMode3DActions({
         animatePhase: animate ? true : undefined,
         animationRateHz: animate ? 1 : undefined,
         fieldId: summary.fieldId,
-        label: summary.modeIdentity,
+        label: summary.physicalLabel,
         phaseRad: 0,
         source: "eigen-mode",
         view: animate ? "phase_rotated_real" : view,
@@ -345,9 +346,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
   const rawPhasorConvention = resolveModalPhasorConvention(modePayload, physics);
   const phaseConvention = rawPhasorConvention ?? "Temporal phasor convention not published";
   const wavevector = ref?.wavevectorKf ?? modePayload?.k_vector;
-  const wavevectorLabel = Array.isArray(wavevector) && wavevector.length === 3 && wavevector.every(v => typeof v === "number" && Number.isFinite(v))
-    ? wavevector.every(v => v === 0) ? "Γ · k = 0" : `k = (${wavevector.map(v => formatNumber(v / 1e6)).join(", ")}) rad/µm`
-    : "Wavevector not published";
+  const wavevectorLabel = formatModeWavevector(wavevector);
   const certificate = record(modePayload?.block_residuals);
   const damping = modalDampingObservables(
     frequencyHz,
@@ -414,6 +413,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     imaginaryFrequency: formatFrequency(imaginaryFrequencyHz),
     damping,
     modeIdentity: identity.label,
+    physicalLabel: modeResultLabel(wavevector, frequencyHz),
     phaseConvention,
     residual,
     tangentLeakageMax: formatNumberOrUnavailable(tangentLeakage),

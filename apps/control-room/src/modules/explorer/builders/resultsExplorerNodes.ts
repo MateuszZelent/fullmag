@@ -1,3 +1,4 @@
+import { modeResultLabel } from "@/shared/domain/analysis/modeResultPresentation";
 import type { AnalysisModuleId } from "@/kernel/analysis-modules/analysisModuleContract";
 import {
   PIN_MODE_VISUALIZATION_COMMAND,
@@ -347,7 +348,7 @@ function modalFieldTargets({
         fieldId: point.modeFieldId,
         frequencyHz: point.frequencyHz,
         kPathCoordinateRadPerM: point.pathS,
-        label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+        label: modeResultLabel(wavevectorKf, point.frequencyHz),
         ...(point.modeId ? { modeId: point.modeId } : {}),
         modeIndex: point.rawModeIndex,
         representation: "complex-vector-xyz" as const,
@@ -368,7 +369,7 @@ function modalFieldTargets({
       ? [{
           fieldId: point.modeFieldId,
           frequencyHz: point.frequencyHz,
-          label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+          label: modeResultLabel(fixedWavevector ?? (kSampling?.kind === "grid" ? gridWavevectorAtSample(dispersion?.path_metadata, point.sampleIndex) : undefined), point.frequencyHz),
           ...(point.modeId ? { modeId: point.modeId } : {}),
           modeIndex: point.rawModeIndex,
           representation: "complex-vector-xyz" as const,
@@ -1201,12 +1202,15 @@ function rootWithChildren(
   label: string,
   parentId: string,
   children: readonly (ExplorerNode | null)[],
+  analysisRunId?: string,
 ): ExplorerNode {
   const materializedChildren = children.filter(
     (child): child is ExplorerNode => child !== null,
   );
   return node(id, kind, label, parentId, {
     children: materializedChildren,
+    collectionStudyCount: materializedChildren.length,
+    ...(analysisRunId ? { analysisRunId } : {}),
     ...(materializedChildren.length === 0
       ? {
           availability: "unavailable" as const,
@@ -1455,11 +1459,12 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
                 "Dynamics",
                 resultsId,
                 [observationFramesRoot(`${resultsId}:dynamics`, snapshot)],
+                snapshot.resultContextRunId,
               )
             : null,
         ),
         ...publishedAnalysisRoot(
-          rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages),
+          rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages, snapshot.resultContextRunId),
           "analysis.resonance",
         ),
         ...publishedAnalysisRoot(
@@ -1469,6 +1474,7 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
             "Dispersion & k-resolved response",
             resultsId,
             dispersionStages,
+            snapshot.resultContextRunId,
           ),
           "analysis.dispersion",
         ),
