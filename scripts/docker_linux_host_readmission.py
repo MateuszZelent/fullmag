@@ -567,7 +567,8 @@ def _under(path, root):
 def _assert_no_live_consumers(containers, *, state_paths, control_volume,
                               ledger_mounts, allowed_ids, state_alias_sources=(),
                               protected_paths=(), canonicalize_foreign=None,
-                              prove_foreign_disjoint=None):
+                              prove_foreign_disjoint=None, prove_foreign_windows=None,
+                              windows_reference_root=None, windows_engine_id=None):
     """Reject every unproved running bind alias or shared protected resource."""
     allowed = set(allowed_ids)
     known_aliases = set(state_alias_sources)
@@ -616,21 +617,34 @@ def _assert_no_live_consumers(containers, *, state_paths, control_volume,
                     raise ValueError("a live Docker consumer references the control volume or ledger")
             elif kind == "bind":
                 source = mount.get("Source")
-                if (not isinstance(source, str) or not source.startswith("/") or source.startswith("//")
+                from docker_windows_bind_identity import is_windows_bind_source
+                windows_source = is_windows_bind_source(source)
+                if (not windows_source and (not isinstance(source, str) or not source.startswith("/") or source.startswith("//")
                         or ".." in PurePosixPath(source).parts
-                        or str(PurePosixPath(source)) != source):
+                        or str(PurePosixPath(source)) != source)):
                     raise ValueError("running Docker consumer bind source is unsafe")
                 # Raw protected aliases must win over both a canonical
                 # resolver and any future platform-specific disjoint proof.
                 if any(_under(source, path) or _under(path, source) for path in canonical_paths):
                     raise ValueError("a live Docker consumer references the retained Linux state/control/ledger")
-                if (any(source == prefix.rstrip("/") or source.startswith(prefix)
-                        for prefix in _DESKTOP_HOST_PREFIXES)
-                        and not source.startswith(_WSL_ALIAS_PREFIXES)):
-                    # This is the daemon's Windows namespace, not a path in
-                    # the Linux caller's filesystem. Lexical comparison here
-                    # cannot establish physical disjointness.
-                    raise ValueError("foreign Windows Docker Desktop bind has unresolved storage identity")
+                if windows_source:
+                    # A typed base-bind proof never skips the remaining Mounts.
+                    # In particular, a child volume can still be our ledger.
+                    if prove_foreign_windows is None:
+                        raise ValueError("foreign Windows Docker Desktop bind has unresolved storage identity")
+                    ledger_names = {name for kind, name in ledger_mounts if kind == "volume"}
+                    if len(ledger_names) != 1 or any(kind != "volume" for kind, _ in ledger_mounts):
+                        raise ValueError("Windows exclusion requires one exact named ledger")
+                    try:
+                        from docker_windows_bind_identity import validate_foreign_windows_bind_disjoint_proof
+                        proof = prove_foreign_windows(item, source)
+                        validate_foreign_windows_bind_disjoint_proof(
+                            proof, source=source, container_id=item["Id"],
+                            reference_root=windows_reference_root, control_volume=control_volume,
+                            ledger_volume=next(iter(ledger_names)), engine_id=windows_engine_id)
+                    except Exception as error:
+                        raise ValueError("foreign Windows bind has no current qualified proof") from error
+                    continue
                 canonical_source = source
                 alias_was_authenticated = False
                 use_kernel_fallback = False
@@ -712,6 +726,11 @@ def _canonicalize_foreign_alias(context, container):
     return foreign_identity.canonical_bind_sources(
         container, repo_root=context["repo"]
     )
+
+
+def _prove_foreign_windows_for_readmission(control, backend, container, source, state):
+    from docker_windows_bind_identity import prove_foreign_windows_bind_disjoint
+    return prove_foreign_windows_bind_disjoint(control, backend, container, source, state)
 
 
 def _prove_foreign_alias_for_readmission(control, backend, container, alias, state):
@@ -821,6 +840,9 @@ def _observe(context, request, request_raw, request_path, *, plan=None, allowed_
         canonicalize_foreign=lambda container: _canonicalize_foreign_alias(context, container),
         prove_foreign_disjoint=lambda container, alias: _prove_foreign_alias_for_readmission(
             control, actual_by_service["backend"], container, alias, state),
+        prove_foreign_windows=lambda container, source: _prove_foreign_windows_for_readmission(
+            control, actual_by_service["backend"], container, source, state),
+        windows_reference_root=state, windows_engine_id=engine_id,
     )
     # Planner/classifier performs another complete no-follow readback. Keep the
     # raw old records in the snapshot for immutable archival and resume CAS.

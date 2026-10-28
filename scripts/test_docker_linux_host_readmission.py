@@ -411,6 +411,28 @@ class DockerLinuxHostReadmissionTests(unittest.TestCase):
                     ledger_mounts={("volume", "ledger-vol")}, allowed_ids=set(),
                 )
 
+    def test_windows_parent_qualification_never_skips_other_mounts(self):
+        source = r"C:\git\foreign"
+        foreign = {"Id": "9" * 64, "Mounts": [
+            {"Type": "bind", "Source": source, "Destination": "/state", "RW": True}]}
+        kwargs = dict(state_paths=["/storage/fullmag"], control_volume="control-vol",
+                      ledger_mounts={("volume", "ledger-vol")}, allowed_ids=set(),
+                      windows_reference_root="/storage/fullmag", windows_engine_id="engine",
+                      prove_foreign_windows=lambda *_: {"from": "qualified-adapter"})
+        with patch("docker_windows_bind_identity.validate_foreign_windows_bind_disjoint_proof") as validate:
+            readmission._assert_no_live_consumers([foreign], **kwargs)
+            self.assertEqual(validate.call_args.kwargs, dict(source=source, container_id=foreign["Id"],
+                reference_root="/storage/fullmag", control_volume="control-vol",
+                ledger_volume="ledger-vol", engine_id="engine"))
+            for child in ({"Type": "volume", "Name": "control-vol", "Destination": "/state/control"},
+                          {"Type": "volume", "Name": "ledger-vol", "Destination": "/state/ledger"},
+                          {"Type": "bind", "Source": "/storage/fullmag", "Destination": "/state/data"}):
+                with self.subTest(child=child), self.assertRaises(ValueError):
+                    readmission._assert_no_live_consumers(
+                        [{**foreign, "Mounts": [*foreign["Mounts"], child]}], **kwargs)
+        with self.assertRaisesRegex(ValueError, "no current qualified proof"):
+            readmission._assert_no_live_consumers([foreign], **kwargs)
+
     def test_foreign_wsl_alias_requires_readonly_canonical_mapping(self):
         alias = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Other/hash/state"
         container = {"Id": "9" * 64, "Mounts": [

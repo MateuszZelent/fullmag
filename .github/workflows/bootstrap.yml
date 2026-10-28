@@ -835,6 +835,10 @@ jobs:
           python -B scripts/test_docker_foreign_bind_identity.py -v
           python -B scripts/test_docker_stopped_network.py -v
           python -B scripts/test_docker_bind_overlap_probe.py -v
+          python -B scripts/test_windows_bind_identity.py -v
+          python -B scripts/test_windows_vhd_identity.py -v
+          python -B scripts/test_docker_windows_bind_probe.py -v
+          python -B scripts/test_docker_windows_bind_identity.py -v
           python -B scripts/test_runtime_service_terminal_container_recovery.py -v
           python -B scripts/test_docker_volume_empty_quarantine.py -v
           python -B scripts/test_docker_volume_preparation_abort_archive.py -v

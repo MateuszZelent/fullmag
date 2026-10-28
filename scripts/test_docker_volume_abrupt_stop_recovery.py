@@ -226,6 +226,36 @@ class AbruptStopTests(unittest.TestCase):
                 with self.assertRaisesRegex(r.ContainerRecoveryError, 'Windows.*unresolved|unsafe'):
                     r._assert_no_foreign_storage_consumers(SimpleNamespace(), backend, frontend, compose)
 
+    def test_windows_parent_proof_does_not_hide_protected_nested_mount(self):
+        proof, _, compose = self.fixture()
+        backend, frontend = proof['containers'].values()
+        next(m for m in backend['Mounts'] if m['Destination'] == '/state')['Source'] = '/canonical/state'
+        backend['Mounts'].extend([
+            {'Type': 'volume', 'Name': 'control-vol', 'Source': '/control', 'Destination': '/opt/fullmag/control'},
+            {'Type': 'volume', 'Name': 'ledger-vol', 'Source': '/ledger', 'Destination': '/host-ledger'}])
+        parent = {'Type': 'bind', 'Source': r'C:\git\foreign', 'Destination': '/state', 'RW': True}
+        for child in (None,
+                      {'Type': 'volume', 'Name': 'control-vol', 'Destination': '/state/control'},
+                      {'Type': 'volume', 'Name': 'ledger-vol', 'Destination': '/state/ledger'},
+                      {'Type': 'bind', 'Source': '/canonical/state', 'Destination': '/state/data'}):
+            foreign = {'Id': 'a' * 64, 'Mounts': [parent] + ([child] if child else [])}
+            responses = [SimpleNamespace(stdout=foreign['Id'].encode()),
+                         SimpleNamespace(stdout=json.dumps([foreign]).encode())]
+            with self.subTest(child=child), patch.object(r, 'docker_capture', side_effect=responses), \
+                 patch.object(r, '_retained_compose_state_root', return_value=Path('/canonical/state')), \
+                 patch.object(r, '_docker_engine_id', return_value='engine'), \
+                 patch('docker_windows_bind_identity.validate_foreign_windows_bind_disjoint_proof') as validate:
+                call = lambda: r._assert_no_foreign_storage_consumers(
+                    SimpleNamespace(volume='control-vol'), backend, frontend, compose,
+                    prove_foreign_windows=lambda *_: {'from': 'qualified-adapter'})
+                if child:
+                    with self.assertRaisesRegex(r.ContainerRecoveryError, 'references'):
+                        call()
+                else:
+                    call()
+                    self.assertEqual(validate.call_args.kwargs['source'], parent['Source'])
+                    self.assertEqual(validate.call_args.kwargs['ledger_volume'], 'ledger-vol')
+
     def test_unknown_foreign_alias_uses_only_exact_disjoint_proof_and_keeps_other_guards(self):
         proof, _, compose = self.fixture()
         backend, frontend = proof['containers'].values()
