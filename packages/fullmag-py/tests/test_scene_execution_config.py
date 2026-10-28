@@ -171,8 +171,8 @@ def test_scene_capture_exports_shared_stage_config_without_execution(tmp_path, m
     assert nodes[2]["payload"]["integrator"] == "rk45"
     assert nodes[2]["payload"]["fixed_timestep"] == "1e-13"
     assert nodes[3]["payload"]["until_seconds"] == 3e-12
-    assert nodes[3]["payload"]["integrator"] == "heun"
-    assert nodes[3]["payload"]["fixed_timestep"] == "2e-13"
+    assert "integrator" not in nodes[3]["payload"]
+    assert "fixed_timestep" not in nodes[3]["payload"]
     assert config["study_pipeline"]["nodes"][0]["node_kind"] == "group"
     assert config["study_pipeline"]["nodes"][0]["id"] == "stage-group"
     assert config["ir"]["problem_meta"]["runtime_metadata"]["study_pipeline"] == config["study_pipeline"]
@@ -180,6 +180,53 @@ def test_scene_capture_exports_shared_stage_config_without_execution(tmp_path, m
     assert runtime_metadata["output_storage_source_dir"] == str(source_root.resolve())
     assert "execution_materialization" not in runtime_metadata
     assert not (source_root / "results").exists()
+
+
+def test_scene_capture_run_autosave_roundtrip_keeps_only_run_owned_payload(tmp_path):
+    source_path = tmp_path / "run_autosave.py"
+    source_path.write_text(
+        "import fullmag as fm\n"
+        "study = fm.study('run-autosave-scene')\n"
+        "study.engine('fdm')\n"
+        "study.cell(4e-9, 4e-9, 4e-9)\n"
+        "body = study.geometry(fm.Box(16e-9, 16e-9, 8e-9), name='body')\n"
+        "body.Ms = 800e3\n"
+        "body.Aex = 13e-12\n"
+        "body.alpha = 0.05\n"
+        "body.m = fm.texture.uniform(1, 0, 0)\n"
+        "study.solver(integrator='rk4', fix_dt=1e-12)\n"
+        "study.stages.add_run(stage_id='run', until=1e-10).autosave(\n"
+        "    fm.StageAutosave(\n"
+        "        target='results', format='zarr',\n"
+        "        table=fm.TableAutosave(t_sampl=2e-11, quantities=('time', 'mx')),\n"
+        "        fields=(fm.FieldAutosave('m', every=2e-11),),\n"
+        "    )\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(source_path, lightweight_assets=True)
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+
+    payload = scene["study"]["study_pipeline"]["nodes"][0]["payload"]
+    assert set(payload) == {
+        "kind",
+        "entrypoint_kind",
+        "stage_id",
+        "until_seconds",
+        "autosave",
+    }
+    assert payload["until_seconds"] == "1e-10"
+    assert payload["autosave"] == loaded.stages[0].autosave.to_ir()
+
+    config = scene_document_to_execution_config(
+        scene,
+        requested_backend="fdm",
+        requested_device="cpu",
+        requested_precision="double",
+        requested_mode="strict",
+        source_root=tmp_path,
+    )
+    assert config["study_pipeline"]["nodes"][0]["payload"] == payload
 
 
 def test_scene_without_pipeline_captures_concrete_stage_ir_order_and_timing(tmp_path):

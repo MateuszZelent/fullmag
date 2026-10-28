@@ -512,19 +512,36 @@ def build():
             {
                 "kind": "run",
                 "entrypoint_kind": "build",
-                "integrator": "rk4",
-                "fixed_timestep": "1e-15",
-                "demag_interval_s": "",
                 "until_seconds": "4e-12",
-                "relax_algorithm": "",
-                "torque_tolerance": "",
-                "energy_tolerance": "",
-                "max_steps": "",
-                "sampling": {"outputs": [
-                    {"kind": "scalar", "name": "E_total", "every_seconds": 1e-12},
-                ]},
-                "spin_wave_response": None,
             },
+        )
+
+    def test_run_pipeline_projects_explicit_autosave_without_solver_defaults(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.solver(integrator="rk4", dt=1e-15)
+study.stages.add_run(stage_id="run", until=4e-12).autosave(
+    fm.StageAutosave(
+        target="results",
+        layout="continuous",
+        format="zarr",
+        table=fm.TableAutosave(t_sampl=1e-12, quantities=("time", "mx")),
+        fields=(fm.FieldAutosave("m", every=1e-12),),
+    )
+)
+"""
+        )
+
+        payload = loaded.study_pipeline_document()["nodes"][0]["payload"]
+        self.assertEqual(
+            set(payload),
+            {"kind", "entrypoint_kind", "stage_id", "until_seconds", "autosave"},
+        )
+        self.assertEqual(payload["until_seconds"], "4e-12")
+        self.assertEqual(
+            payload["autosave"],
+            loaded.stages[0].autosave.to_ir(),
         )
 
     def test_run_relax_and_minimize_preserve_explicit_stage_ids(self) -> None:

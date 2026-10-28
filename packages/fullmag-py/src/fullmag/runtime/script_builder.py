@@ -2735,10 +2735,15 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
     stages = _builder_stage_sequence(loaded)
     if not stages:
         return None
+    base_problem = _builder_base_problem(loaded)
     return {
         "version": "study_pipeline.v1",
         "nodes": [
-            _export_study_pipeline_node(stage, index=index)
+            _export_study_pipeline_node(
+                stage,
+                index=index,
+                base_problem=base_problem,
+            )
             for index, stage in enumerate(stages)
         ],
     }
@@ -2755,9 +2760,20 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
     return payload
 
 
-def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, object]:
+def _export_study_pipeline_node(
+    stage: LoadedStage,
+    *,
+    index: int,
+    base_problem: Problem,
+) -> dict[str, object]:
     draft = _export_stage_draft_with_identity(stage)
     stage_kind = _infer_pipeline_stage_kind(draft)
+    if stage_kind == "run":
+        draft = _project_run_pipeline_payload(
+            stage,
+            draft,
+            base_problem=base_problem,
+        )
     if stage_kind == "antenna_field_solve":
         definition = cast(dict[str, object], draft["definition"])
         # The executor resolves the definition from the canonical problem model.
@@ -2776,6 +2792,55 @@ def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, 
         "stage_kind": stage_kind,
         "payload": draft,
     }
+
+
+def _project_run_pipeline_payload(
+    stage: LoadedStage,
+    draft: dict[str, object],
+    *,
+    base_problem: Problem,
+) -> dict[str, object]:
+    """Project one Run into the strict shared pipeline contract.
+
+    Solver, sampling and response settings belong to independent study/action
+    stages.  A Run node carries only its horizon and explicit output policy.
+    Keep a differing captured setting in the payload so the Rust materializer
+    rejects an unsupported stage-local configuration instead of silently
+    dropping user intent.
+    """
+
+    payload = {
+        key: draft[key]
+        for key in (
+            "kind",
+            "entrypoint_kind",
+            "stage_id",
+            "until_seconds",
+            "output_every_seconds",
+            "table_autosave",
+            "autosave",
+        )
+        if key in draft
+    }
+
+    stage_study = stage.problem.study
+    base_study = base_problem.study
+    stage_study_ir = stage_study.to_ir()
+    base_study_ir = base_study.to_ir()
+    if stage_study_ir.get("dynamics") != base_study_ir.get("dynamics"):
+        for key in ("integrator", "fixed_timestep", "demag_interval_s"):
+            if key in draft:
+                payload[key] = draft[key]
+    if stage_study_ir.get("sampling") != base_study_ir.get("sampling"):
+        if "sampling" in draft:
+            payload["sampling"] = draft["sampling"]
+    if stage.problem.runtime_metadata.get("spin_wave_response") != base_problem.runtime_metadata.get(
+        "spin_wave_response"
+    ):
+        if "spin_wave_response" in draft:
+            payload["spin_wave_response"] = draft["spin_wave_response"]
+
+    return payload
 
 
 def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
