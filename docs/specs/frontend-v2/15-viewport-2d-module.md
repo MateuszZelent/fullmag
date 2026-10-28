@@ -192,9 +192,9 @@ Required tests:
 - `field-map` reads slice/projection resources only through `ControlRoomApi`
   and resource hooks, preserves ETag/query identity, and handles empty masks;
 - the field-map renderer is created once, remains idle without changed
-  revisions or controls, resizes by observer, and is disposed on tab switch;
+  revisions or controls, resizes by observer, and is disposed when hidden or unmounted;
 - switching between `viewport-3d`, `field-map`, and `analysis-plots` mounts only
-  the active heavy surface and keeps memory growth bounded;
+  visible active, companion, or floating heavy surfaces; hidden surfaces release resources;
 - browser smoke confirms one-click/shortcut opening, scalar/slab/surface images,
   PNG export resources, and no removed live 2D or static cross-section center module;
 - manufactured FDM/FEM tests prove plane, slab, depth, surface, vector-basis,
