@@ -831,13 +831,13 @@ async function capturePlanarPng(evidence, observedPlanarMeta, filename) {
 
 async function captureLayerCases(page, monitor, observedPlanarMeta) {
   const definitions = [
-    { id: "shaded", layers: { boundaries: false, mesh: false, points: false, raster: true } },
+    { id: "raster", layers: { boundaries: false, mesh: false, points: false, raster: true } },
     { id: "contours", layers: { contours: true, raster: true } },
-    { id: "shaded-wireframe", layers: { boundaries: true, mesh: true, points: false, raster: true } },
+    { id: "mesh", layers: { boundaries: true, mesh: true, points: false, raster: true } },
     { id: "boundaries", layers: { boundaries: true, raster: true } },
     { id: "bounds", layers: { bounds: true, raster: true } },
     { id: "points", layers: { points: true, raster: true } },
-    { id: "shaded-vectors", layers: { boundaries: false, mesh: false, raster: true, vectors: true } },
+    { id: "vectors", layers: { boundaries: false, mesh: false, raster: true, vectors: true } },
     { id: "probes", layers: { probes: true, raster: true } },
   ];
   const cases = [];
@@ -874,9 +874,9 @@ async function captureLayerCases(page, monitor, observedPlanarMeta) {
           ? evidence.overlayCounts.boundsSegments === 4
           : definition.id === "points"
             ? evidence.overlayCounts.pointMarkers > 0
-        : ["shaded-wireframe", "boundaries"].includes(definition.id)
+        : ["mesh", "boundaries"].includes(definition.id)
           ? evidence.overlayCounts.meshSegments > 0
-          : definition.id === "shaded-vectors"
+          : definition.id === "vectors"
             ? evidence.glyphCount > 0
             : true;
     const acceptedLayers = visualizationState.planar?.layers ?? null;

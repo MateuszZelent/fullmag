@@ -131,6 +131,7 @@ mod canonical_relaxation_time_tests {
             conservative_current_view_ref: None,
             model: fullmag_ir::AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature,
+            surface_field_policy: None,
             conductor_mesh_policy: "default".into(),
             field_sampling_domain: fullmag_ir::FieldTargetIR::Global {},
             target_refs: Vec::new(),
@@ -934,7 +935,7 @@ fn resolve_antenna_field_solve_action(
     })
 }
 
-fn select_antenna_port_reference(singular: Option<&str>, plural: &[String]) -> Result<String> {
+pub(crate) fn select_antenna_port_reference(singular: Option<&str>, plural: &[String]) -> Result<String> {
     match (singular, plural) {
         (Some(value), []) if !value.trim().is_empty() => {
             Ok(value.to_owned())
@@ -1479,11 +1480,9 @@ fn standalone_antenna_study(stage_id: &str, port_mode_id: &str) -> fullmag_ir::S
     }
 }
 
-fn materialize_pipeline_antenna_field_solve(
-    current_ir: &mut ProblemIR,
+pub(crate) fn parse_antenna_solve_selection(
     payload: &BTreeMap<String, Value>,
-    antenna_inventory: &ScriptAntennaAuthoringInventory,
-) -> Result<ResolvedScriptStage> {
+) -> Result<(String, String)> {
     let unsupported = payload
         .keys()
         .filter(|key| {
@@ -1514,6 +1513,15 @@ fn materialize_pipeline_antenna_field_solve(
             .context("antenna_field_solve payload.port_mode_ids must be an array of strings"))
         .transpose()?.unwrap_or_default();
     let port_mode_id = select_antenna_port_reference(singular, &plural)?;
+    Ok((stage_id, port_mode_id))
+}
+
+fn materialize_pipeline_antenna_field_solve(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+    antenna_inventory: &ScriptAntennaAuthoringInventory,
+) -> Result<ResolvedScriptStage> {
+    let (stage_id, port_mode_id) = parse_antenna_solve_selection(payload)?;
     let mut candidate = current_ir.clone();
     select_antenna_solve_definition(&mut candidate, antenna_inventory, &stage_id)?;
     if candidate.magnets.is_empty() {

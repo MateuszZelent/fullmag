@@ -1,63 +1,56 @@
-# 2D Slice
+# 2D View
 
-The `field-map` module is the spatial field view for inspecting a physical slice or projection of the active simulation domain. Click **2D** in the workspace or press `2`. When monitors exist, the first usable monitor is selected automatically. When none exist, Fullmag opens an uncommitted `Midplane` draft in the Inspector; **Apply** is required before the canonical scene is changed.
+The `field-map` module (**2D View**) shows a physical slice or projection of the
+active simulation domain. Open it with the **2D View** tab or press `2`. A new
+session opens the session **Default** slice (XY, mid-plane); it never creates or
+edits a planar monitor. Authored planar monitors are created explicitly from the
+Inspector and selected as the source there.
 
-The view is a demand-driven Canvas 2D surface, not a second WebGL viewport. Only the active center surface is mounted.
+The view is a Canvas 2D surface with a worker, not a second WebGL viewport; only
+the active centre tab is mounted. The plot keeps the physical u:v aspect ratio.
 
-## Heatmap / Quantity Overlay
+## Toolbar (mumax3-style)
 
-The quantity overlay renders scalar raster data from the 2D field resource path when available. For FEM exact local rendering, the renderer samples the local tetrahedral section and fills slice polygons.
+The row above the map holds the decisions changed most often. Every control edits
+the same session state as the Inspector.
 
-Supported controls:
+| Control | Effect |
+|---|---|
+| Quantity | Any available spatial quantity from the field catalog. |
+| Component | `Direction` colours the full vector with the mumax3 HSL wheel (hue = in-plane angle in world XY, +X red; lightness = z, +Z white, −Z black). `x`, `y`, `z` use a diverging palette with a symmetric range; `|v|` a sequential palette with an automatic range. A manual range is kept. |
+| Plane | `XY`, `XZ`, `YZ` for the Default slice. |
+| Single layer / Average | One section, or the occupied-measure mean over the full thickness along the normal. |
+| Object layer | A realized object as a named layer: the mean over a slab of the object's thickness, centred on it (`name · z ∈ [a, b] · slab`). `Free section` returns to a plane. Selecting an object region in the scene scopes the map to that region. |
+| Layer slider, `‹` `›` | On a structured FDM grid: the cell layer, shown as `layer k / N−1` and the snapped cell-centre coordinate. On a swept FEM mesh: the certificate node planes, shown as `node plane k / N−1`; a request between planes is sampled where it is and reads `between node planes`, and `‹` `›` move to the adjacent plane. On other FEM meshes: a continuous coordinate; `‹` `›` move by the median height of the elements the plane cuts (a navigation aid, not a data layer), and the caption shows how many elements the plane cuts. While a new layer loads, the caption reads `showing … · loading …` and the previous image stays on screen. |
+| Arrows | Quiver on a screen grid with arrowheads; ⊙ / ⊗ mark vectors mostly out of / into the plane. Over direction colours the arrows are dark. |
+| Mesh | FEM: section of the mesh; FDM: the structured-grid lines (`FMFG v1`). |
 
-- quantity selection,
-- component selection,
-- auto-scale,
-- colorbar visibility through the quantity overlay toggle.
+## Keyboard
 
-## Plane, Cut, Component
+`[` / `]` previous/next layer, `Shift+{` / `Shift+}` ±10 layers, `V` direction,
+`X` `Y` `Z` components, `M` magnitude, `A` arrows, `G` mesh. Inside the map:
+wheel or `+`/`−` zoom, drag or arrow keys pan, `0` or double-click fit, click or
+`Enter` pins a probe. Shortcuts act only while the 2D View is the active tab.
 
-Planar monitors support `xy`, `xz`, `yz`, and arbitrary right-handed frames. Operators are `plane_sample`, `slab_average`, `depth_projection`, and `surface_projection`.
+## Inspector
 
-Slab averaging and depth projection are distinct physical reductions. They are not aliases for an unweighted all-layers average.
+The Inspector **2D visualization** panel holds the rest: source (Default or
+monitor), resolution presets (FDM native grid and integer reductions), slab
+thickness, colour map and range, units, opacity, vector style, contours, mesh
+and boundary style, and provenance. `Requested → resolved` shows the coordinate
+you asked for and the one the backend sampled (FDM snaps to a cell centre). The
+data state reads **Live** only when the frame on screen matches the current
+metadata and field revision.
 
-## Mesh Wireframe
+## Export
 
-FEM single-slice mesh overlay is supported through:
+`Export 2D PNG` uses the session colour map and range (direction colours
+included). `Export 2D Data` writes a CSV of the sampled raster in SI units with
+frame (u, v) and world (x, y, z) coordinates; empty pixels keep an empty value.
 
-- backend slice mesh overlay when the resource is available,
-- local exact fallback when backend overlay is unavailable,
-- source status text such as `mesh: backend`, `mesh: local`, or `mesh: local fallback after backend error`.
+## Limits
 
-Large overlays are sampled before rendering. The current hard cap is 50k segments.
-
-## Airbox 2D
-
-FEM single-slice airbox wireframe is supported when the current domain has an `air` or `outer_boundary` mesh part.
-
-Rules:
-
-- 2D airbox visibility is local to the 2D slice toolbar by default.
-- 2D airbox toggles do not call the 3D airbox display command.
-- Full-domain quantities such as `H_demag`, `H_eff`, `H_ext`, and `H_ant` request dense FEM field data so the quantity overlay can include airbox nodes.
-- Magnetic-only quantities such as `m`, `H_ex`, and `torque` remain restricted to magnetic objects even when the airbox wireframe is visible.
-- Missing airbox topology is reported as `No airbox mesh part in current domain`.
-
-## Vectors
-
-Magnetic vectors are supported in:
-
-- backend raster slice rendering when the 2D field resource returns arrows,
-- FEM exact local rendering through local in-plane arrow glyphs.
-
-Airbox vectors remain staged until vector-domain routing is split from magnetic vectors.
-
-## Projection / All Layers
-
-`all_layers` uses projection/reduction controls. Single-slice-only overlays such as FEM exact mesh and airbox wireframe are disabled or unavailable in projection mode unless a dedicated projection outline exists.
-
-## Export and diagnostics
-
-`field-map.export-png` uses the revisioned planar `render.png` resource. The filename contains monitor, quantity, field revision, and a unit-safe slug. Surface overlap/fold occupancy remains visible as a degraded diagnostic rather than being silently discarded.
-
-The legacy FEM mesh-quality cross-section endpoint remains available for mesh diagnostics and export, but it is no longer a competing top-level center surface.
+FEM sampling accepts Tet4, Prism6, Pyramid5 and Hex8 carriers (scientific note
+`docs/physics/0970-planar-monitor-sampling-and-projection.md`). Line profiles, multislice and streamlines are planned in
+`docs/plans/active/viewport-2d-mumax-parity-2026-10-27/05-plan-wdrozenia.md`.
+Current evidence per lane is in `docs/status/2d-slice-capabilities.md`.

@@ -1,3 +1,4 @@
+import { tensorProjectionOutputKind } from "@/kernel/api/tensorFieldProjection";
 import type {
   PlanarFieldProbeQuery,
   PlanarFieldQuery,
@@ -6,12 +7,34 @@ import type {
 
 import { planarScopeCapability } from "./fieldMapCapabilities";
 
-export type FieldMapViewScopeKind = "monitor_target" | "mesh_part" | "airbox";
+export type FieldMapViewScopeKind = "monitor_target" | "mesh_part" | "airbox" | "layer" | "region";
 
 /** The planar profile is the source of truth for scope identity. */
 export interface FieldMapViewScope {
   kind: FieldMapViewScopeKind;
   scope_id?: string | null;
+  /** Region within the `scope_id` object for `region` scopes. */
+  region_id?: string | null;
+}
+
+/**
+ * Query parameters of a planar view scope. The v2 contract accepts an id only
+ * for mesh_part, layer and region (object id plus `scope_region_id`);
+ * monitor_target and airbox must not receive a guessed id.
+ */
+export function planarScopeQuery(
+  viewScope: FieldMapViewScope,
+): Pick<PlanarFieldQuery, "scope_id" | "scope_kind" | "scope_region_id"> {
+  const scopeId = viewScope.kind === "mesh_part" ||
+    viewScope.kind === "layer" ||
+    viewScope.kind === "region"
+    ? viewScope.scope_id ?? undefined
+    : undefined;
+  return {
+    scope_id: scopeId,
+    scope_kind: viewScope.kind,
+    scope_region_id: viewScope.kind === "region" ? viewScope.region_id ?? undefined : undefined,
+  };
 }
 
 export type FieldMapDataPlanAvailability =
@@ -27,8 +50,11 @@ export interface FieldMapDataPlanInput {
   source: PlanarFieldSource;
   quality: "interactive" | "export";
   quantityId: string;
+  projectionAllowed?: boolean;
   resolution: readonly [number, number];
   showVectors: boolean;
+  /** The raster is coloured by vector direction, which needs the vector payload. */
+  colorByDirection?: boolean;
   snapshotId?: string | null;
   stageId?: string | null;
   vectorBudget: number;
@@ -56,12 +82,16 @@ export function buildFieldMapDataPlan(
     discretization: input.discretization,
     scopeKind: viewScope.kind,
   });
+  const projectionAllowed = input.projectionAllowed !== false;
   const unavailableReason = !scope.enabled
-    ? "structured FDM grid planar sampling does not support mesh-part or airbox scopes."
-    : null;
-  const enabled =
-    input.active && scope.enabled;
-  const availability: FieldMapDataPlanAvailability = !scope.enabled
+    ? scope.reasonCode === "fem_layer_scope_not_supported"
+      ? "native layer scope requires an FDM multilayer carrier."
+      : "structured FDM grid planar sampling does not support mesh-part scope."
+    : !projectionAllowed ? "The selected tensor projection is not available in the canonical catalog." : null;
+  const enabled = input.active && scope.enabled && projectionAllowed;
+  const needsVectors = tensorProjectionOutputKind(input.component) !== "scalar" &&
+    (input.showVectors || input.colorByDirection === true);
+  const availability: FieldMapDataPlanAvailability = !scope.enabled || !projectionAllowed
     ? "not-applicable"
     : enabled
       ? "ready"
@@ -77,19 +107,15 @@ export function buildFieldMapDataPlan(
       quality: input.quality,
       resolution_x: input.resolution[0],
       resolution_y: input.resolution[1],
-      // The v2 contract only accepts an id for mesh_part. In particular,
-      // monitor_target and airbox must not receive a guessed id.
-      scope_id:
-        viewScope.kind === "mesh_part" ? viewScope.scope_id ?? undefined : undefined,
-      scope_kind: viewScope.kind,
+      ...planarScopeQuery(viewScope),
       snapshot_id: input.snapshotId ?? undefined,
       stage_id: input.stageId ?? undefined,
-      vector_budget: input.showVectors ? input.vectorBudget : 0,
+      vector_budget: needsVectors ? input.vectorBudget : 0,
     },
     requestMask: enabled,
     requestMesh: enabled && input.includeMesh,
     requestScalar: enabled,
-    requestVectors: enabled && input.showVectors,
+    requestVectors: enabled && needsVectors,
     unavailableReason,
   };
 }

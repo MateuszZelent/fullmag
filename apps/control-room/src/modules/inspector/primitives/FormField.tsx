@@ -1,6 +1,7 @@
 import { HelpCircle } from "lucide-react";
 import { useId, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
+import { homeView } from "@/kernel/layout/homeView";
 import {
   Dialog,
   DialogClose,
@@ -20,6 +21,7 @@ import { InspectorPropertyRow } from "./InspectorPropertyRow";
 export interface FormFieldHelp {
   description: string;
   details?: readonly string[];
+  docsPage?: string;
   title?: string;
 }
 
@@ -152,6 +154,18 @@ function FormFieldHelpButton({
           </div>
         ) : null}
         <DialogFooter>
+          {normalized.docsPage ? (
+            <DialogClose asChild>
+              <Button
+                size="sm"
+                type="button"
+                variant="secondary"
+                onClick={() => homeView.openDocs(normalized.docsPage)}
+              >
+                Open in documentation
+              </Button>
+            </DialogClose>
+          ) : null}
           <DialogClose asChild>
             <Button size="sm" type="button" variant="primary">
               Close

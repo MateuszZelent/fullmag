@@ -112,6 +112,7 @@ impl StageOerstedProvider {
             }
             // OE-F2 publishes the nodal H1 projection even when no explicit
             // point list is requested; `Some(empty)` selects that ABI branch.
+            NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface => return Err(RunError { message: "RT0 surface is unavailable outside prepared closed-loop inspection".into() }),
             NativeFemSteadyTransportOerstedMethod::FemVectorPotential => Some(Vec::new()),
         };
         Ok(Some(Self {

@@ -167,7 +167,12 @@ export type PlanarViewScopeState =
   components["schemas"]["PlanarViewScopeState"];
 
 export type PlanarFieldSource =
-  | { kind: "default" }
+  /**
+   * `sliceKey` is client-only resource identity for the session default slice:
+   * the server resolves the slice from visualization state, so a slice change
+   * must produce a new resource key even though the HTTP query is unchanged.
+   */
+  | { kind: "default"; sliceKey?: string }
   | { kind: "monitor"; monitorId: string };
 
 export interface PlanarFieldQuery {
@@ -186,6 +191,8 @@ export interface PlanarFieldQuery {
   resolution_y?: number;
   scope_id?: string;
   scope_kind?: string;
+  /** Region within the `scope_id` object when `scope_kind` is `region`. */
+  scope_region_id?: string;
   snapshot_id?: string;
   stage_id?: string;
   vector_budget?: number;
@@ -206,6 +213,7 @@ export interface PlanarFieldProbeQuery
     | "resolution_y"
     | "scope_id"
     | "scope_kind"
+    | "scope_region_id"
     | "snapshot_id"
     | "stage_id"
   > {
@@ -996,11 +1004,36 @@ export type StructuredCommandRequest =
   | FdmGridRefreshCommandRequest;
 export type UniversePatchRequest = components["schemas"]["UniversePatchRequest"];
 export type UniverseResource = components["schemas"]["UniverseResource"];
-export type VisualizationStatePatch =
-  components["schemas"]["VisualizationStatePatch"];
+/** Pending managed export: schemas/visualization_state.rs tensor and planar serde fields. */
+type VisualizationStyleOverride = components["schemas"]["VisualizationTargetStyleOverride"] & {
+  tensor_projection?: string | null;
+};
+type VisualizationOverride = Omit<components["schemas"]["VisualizationOverrideState"], "style"> & {
+  style?: VisualizationStyleOverride | null;
+};
+type VisualizationTargetEntry = Omit<components["schemas"]["VisualizationTargetRegistryEntry"], "settings" | "override"> & {
+  settings: components["schemas"]["VisualizationResolvedTargetSettings"] & { tensor_projection?: string | null };
+  override?: VisualizationOverride | null;
+};
+type VisualizationTargets = Omit<components["schemas"]["VisualizationTargetRegistryState"], "airbox" | "objects" | "parts"> & {
+  airbox: VisualizationTargetEntry;
+  objects: VisualizationTargetEntry[];
+  parts: VisualizationTargetEntry[];
+};
+type PlanarFieldComponent = components["schemas"]["PlanarFieldComponent"] | import("./tensorFieldProjection").TensorProjectionToken;
+type PlanarVisualizationPatch = Omit<components["schemas"]["PlanarVisualizationPatch"], "component"> & {
+  component?: PlanarFieldComponent | null;
+};
+export type VisualizationStatePatch = Omit<components["schemas"]["VisualizationStatePatch"], "overrides" | "planar"> & {
+  overrides?: VisualizationOverride[] | null;
+  planar?: PlanarVisualizationPatch | null;
+};
 export type DisplaySelection = components["schemas"]["DisplaySelection"];
-export type VisualizationStateResource =
-  components["schemas"]["VisualizationStateResource"];
+export type VisualizationStateResource = Omit<components["schemas"]["VisualizationStateResource"], "overrides" | "targets" | "planar"> & {
+  overrides: VisualizationOverride[];
+  targets?: VisualizationTargets;
+  planar?: Omit<components["schemas"]["PlanarVisualizationState"], "component"> & { component: PlanarFieldComponent };
+};
 export type ModeCompositionDatasetPatch =
   components["schemas"]["ModeCompositionDatasetPatch"];
 export type EigenModeResourceRef =

@@ -104,6 +104,59 @@
         "type": "object"
       },
       "AcceptedAntennaInspectionResource": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AcceptedExternalLeadInspectionResource"
+          },
+          {
+            "$ref": "#/components/schemas/AcceptedClosedLoopInspectionResource"
+          }
+        ]
+      },
+      "AcceptedClosedLoopInspectionResource": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/AntennaInspectionDisplayCapabilities"
+          },
+          "closed_loop_display": {
+            "description": "Existing verified, bounded closed-loop descriptors; numerical arrays stay binary."
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/AcceptedAntennaInspectionIdentity"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "resource_id",
+          "project_id",
+          "owner",
+          "port_mode_id",
+          "output_id",
+          "capabilities",
+          "normalization",
+          "closed_loop_display"
+        ],
+        "type": "object"
+      },
+      "AcceptedExternalLeadInspectionResource": {
         "properties": {
           "display": {
             "$ref": "#/components/schemas/AntennaInspectionDisplayDataResource"
@@ -208,6 +261,34 @@
           "domain_generation_id",
           "topology_revision",
           "source_step"
+        ],
+        "type": "object"
+      },
+      "AcceptedRunExportSource": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "run_catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "run_id",
+          "run_catalog_revision",
+          "artifact_catalog_revision"
         ],
         "type": "object"
       },
@@ -3059,6 +3140,30 @@
         ],
         "type": "object"
       },
+      "AntennaInspectionDiscoveryResource": {
+        "properties": {
+          "reason_code": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AntennaInspectionDiscoveryState"
+          }
+        },
+        "required": [
+          "state",
+          "reason_code"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionDiscoveryState": {
+        "description": "Discovery of a registered inspection owner, not validation of its numerical payload.",
+        "enum": [
+          "retained",
+          "absent",
+          "unknown"
+        ],
+        "type": "string"
+      },
       "AntennaInspectionDisplayCapabilities": {
         "properties": {
           "current_density": {
@@ -3600,6 +3705,41 @@
         ],
         "type": "string"
       },
+      "AntennaOperationProgressResource": {
+        "description": "Operation progress is independent of the LLG integration clock.",
+        "properties": {
+          "completed_targets": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "elapsed_seconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "source_cells": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_targets": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "completed_targets",
+          "total_targets",
+          "source_cells",
+          "elapsed_seconds"
+        ],
+        "type": "object"
+      },
       "AntennaPortBranchResource": {
         "additionalProperties": false,
         "properties": {
@@ -3640,6 +3780,16 @@
           "id": {
             "type": "string"
           },
+          "normalization": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaPortNormalizationResource"
+              }
+            ]
+          },
           "normalization_current_a": {
             "format": "double",
             "type": "number"
@@ -3659,6 +3809,32 @@
           "branches"
         ],
         "type": "object"
+      },
+      "AntennaPortNormalizationResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "source_cut_rt0"
+                ],
+                "type": "string"
+              },
+              "orientation": {
+                "$ref": "#/components/schemas/AntennaSourceCutOrientationResource"
+              },
+              "source_cut_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_cut_ref",
+              "orientation",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "AntennaQuadratureEvidenceRefResource": {
         "additionalProperties": false,
@@ -3760,6 +3936,12 @@
             "$ref": "#/components/schemas/AntennaFieldSolutionRefResource"
           }
         ]
+      },
+      "AntennaSourceCutOrientationResource": {
+        "enum": [
+          "minus_outward"
+        ],
+        "type": "string"
       },
       "AntennaSourceSpectrumResource": {
         "properties": {
@@ -4593,6 +4775,17 @@
           },
           "owner": {
             "$ref": "#/components/schemas/ArtifactFieldOwnerBinding"
+          },
+          "sample_carrier": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaSampleCarrierResource",
+                "description": "Verified producer sampling provenance, independent of the source conductor.\nAbsence preserves legacy inspection and provides no Universe mesh-adoption proof."
+              }
+            ]
           },
           "sample_count": {
             "format": "int64",
@@ -27754,6 +27947,24 @@
           "scope_kind": {
             "type": "string"
           },
+          "scope_region_id": {
+            "description": "Region within the `scope_id` object for `region` scopes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "section": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarSectionResource",
+                "description": "Section of the session `Default` slice; null for authored monitors."
+              }
+            ]
+          },
           "source": {
             "$ref": "#/components/schemas/PlanarSampleSourceResource"
           }
@@ -28463,6 +28674,106 @@
           }
         ]
       },
+      "PlanarSectionResource": {
+        "description": "Requested vs. resolved position of the session `Default` slice along its\nnormal. A snap to an FDM cell centre is published, never hidden.",
+        "properties": {
+          "cut_element_count": {
+            "description": "Target elements cut by the sampled FEM plane, when known.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "layer_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "layer_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "layer_spacing_m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "layer_stops_m": {
+            "description": "Discrete stops along the normal (FEM node planes); empty otherwise.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "navigation_step_kind": {
+            "description": "`fdm_cell`, `fem_node_plane_spacing`, `median_element_height` (median\nnormal extent of the cut FEM elements; a navigation aid, not a data\nlayer) or `extent_fraction`.",
+            "type": "string"
+          },
+          "navigation_step_m": {
+            "description": "Distance moved by one layer or navigation step along the normal.",
+            "format": "double",
+            "type": "number"
+          },
+          "normal_axis": {
+            "description": "World axis of the slice normal: `x`, `y` or `z`.",
+            "type": "string"
+          },
+          "normal_max_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "normal_min_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "plane": {
+            "description": "`xy`, `xz` or `yz`.",
+            "type": "string"
+          },
+          "requested_coordinate_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "requested_fraction": {
+            "format": "double",
+            "type": "number"
+          },
+          "resolved_coordinate_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "stops_kind": {
+            "description": "`fdm_cell_layers` (snapped to a cell centre), `fem_node_planes` (on a\nswept-mesh node plane), `fem_node_planes_between` (between planes) or\n`continuous`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plane",
+          "normal_axis",
+          "requested_fraction",
+          "requested_coordinate_m",
+          "resolved_coordinate_m",
+          "stops_kind",
+          "normal_min_m",
+          "normal_max_m",
+          "navigation_step_m",
+          "navigation_step_kind",
+          "layer_stops_m"
+        ],
+        "type": "object"
+      },
       "PlanarSourceSelectionState": {
         "description": "The source selected by the session-scoped planar viewport state.\n\n`Default` is a presentation source resolved from the current domain. It is\nintentionally not a monitor identity and is never written into the scene\ndocument or the canonical Python model.",
         "oneOf": [
@@ -28661,6 +28972,48 @@
               }
             },
             "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Native layer of an FDM multilayer carrier, keyed by its canonical layer id.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "layer"
+                ],
+                "type": "string"
+              },
+              "scope_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One region of a ferromagnetic object: `scope_id` is the object id.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              },
+              "scope_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope_id",
+              "region_id",
               "kind"
             ],
             "type": "object"
@@ -30281,6 +30634,17 @@
             "description": "Canonical or source-preserving `.fms` bytes for the next host adapter.",
             "type": "string"
           },
+          "authoring_scene_document": {
+            "additionalProperties": {},
+            "description": "Validated runtime-free authoring scene, available only on eligible Open.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "dirty": {
             "type": "boolean"
           },
@@ -30404,6 +30768,17 @@
           },
           {
             "properties": {
+              "scene_document": {
+                "additionalProperties": {},
+                "description": "Exact authoring scene embedded in this archive; new imports always provide it.",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "script_import": {
                 "$ref": "#/components/schemas/ProjectScriptImportResource"
               }
@@ -31608,6 +31983,35 @@
         ],
         "type": "string"
       },
+      "QuantityProjectionCapability": {
+        "properties": {
+          "components": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_shape": {
+            "type": "string"
+          },
+          "publication": {
+            "$ref": "#/components/schemas/QuantityPublicationCapability"
+          },
+          "render": {
+            "$ref": "#/components/schemas/QuantityRenderCapability"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "components",
+          "output_shape",
+          "render",
+          "publication"
+        ],
+        "type": "object"
+      },
       "QuantityProviderCapability": {
         "enum": [
           "available",
@@ -32731,6 +33135,12 @@
           "precision": {
             "type": "string"
           },
+          "projections": {
+            "items": {
+              "$ref": "#/components/schemas/QuantityProjectionCapability"
+            },
+            "type": "array"
+          },
           "provider": {
             "$ref": "#/components/schemas/QuantityProviderCapability"
           },
@@ -32940,7 +33350,9 @@
           "exact_resume",
           "logical_resume",
           "initial_condition_import",
-          "config_only"
+          "saved_fields_read_only",
+          "config_only",
+          "unsupported"
         ],
         "type": "string"
       },
@@ -33984,6 +34396,167 @@
           "topology_binary_schema",
           "support_binary_schema",
           "support_binary_byte_length"
+        ],
+        "type": "object"
+      },
+      "SavedPlaybackFemMesh": {
+        "description": "Bounded, JSON-only metadata for a saved FEM P1 playback mesh.",
+        "properties": {
+          "cell_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "facet_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "geometry_sha256": {
+            "type": "string"
+          },
+          "node_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "support_byte_length": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "support_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "topology_byte_length": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "topology_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "node_count",
+          "cell_count",
+          "facet_count",
+          "geometry_sha256"
+        ],
+        "type": "object"
+      },
+      "SavedPlaybackResource": {
+        "description": "The small JSON read model for a completed saved-result playback.",
+        "properties": {
+          "cell_size_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "fem_mesh": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SavedPlaybackFemMesh",
+                "description": "Canonical FEM P1 mesh metadata. The heavy mesh and active-node mask\nremain behind the revision-pinned binary geometry endpoint."
+              }
+            ]
+          },
+          "grid_cells_xyz": {
+            "items": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "revision": {
+            "description": "SHA-256 identity of the sidecar and all playback array metadata.",
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "source_note": {
+            "description": "Optional publication context, for example why run provenance is absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/SavedPlaybackStage"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema",
+          "revision",
+          "name",
+          "stages"
+        ],
+        "type": "object"
+      },
+      "SavedPlaybackStage": {
+        "description": "One stage in a saved playback resource.",
+        "properties": {
+          "frame_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "times_s": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stage_id",
+          "frame_count",
+          "times_s",
+          "quantity_ids"
         ],
         "type": "object"
       },
@@ -35321,6 +35894,11 @@
               "boolean",
               "null"
             ]
+          },
+          "visualization_hint": {
+            "additionalProperties": true,
+            "description": "Authored presentation metadata; it does not select physics modules.",
+            "type": "object"
           }
         },
         "required": [
@@ -36049,6 +36627,31 @@
               },
               "kind": {
                 "enum": [
+                  "homogeneous_spin_potential_gradient"
+                ],
+                "type": "string"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
                   "spin_insulating"
                 ],
                 "type": "string"
@@ -36238,6 +36841,16 @@
               "ferromagnet_side": {
                 "$ref": "#/components/schemas/SceneRegionRef"
               },
+              "ferromagnet_surface": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneSurfaceRef"
+                  }
+                ]
+              },
               "formula_version": {
                 "type": "string"
               },
@@ -36272,6 +36885,16 @@
               },
               "normal_side": {
                 "$ref": "#/components/schemas/SceneRegionRef"
+              },
+              "normal_surface": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneSurfaceRef"
+                  }
+                ]
               },
               "normal_to_ferromagnet": {
                 "items": {
@@ -38398,6 +39021,17 @@
       },
       "SessionExportRequest": {
         "properties": {
+          "accepted_run": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AcceptedRunExportSource",
+                "description": "Explicit immutable historical source. Solved downloads only; the current\nauthoring workspace is not changed or used as historical result evidence."
+              }
+            ]
+          },
           "compression": {
             "oneOf": [
               {
@@ -40415,6 +41049,72 @@
         },
         "type": "object"
       },
+      "SolverProfileOperationResource": {
+        "properties": {
+          "accounting_issue": {
+            "type": "boolean"
+          },
+          "execution_config": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SolverProfileCommandConfig",
+                "description": "Immutable configuration that produced this operation sample. The\nenclosing resource config may describe a later admission request."
+              }
+            ]
+          },
+          "native_call_wall_ns": {
+            "description": "Entire native ABI call, containing the surface operator duration.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "native_operator_wall_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "phases": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfilePhaseResource"
+            },
+            "type": "array"
+          },
+          "sequence": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "operation_id",
+          "outcome",
+          "total_wall_time_ns",
+          "phases",
+          "accounting_issue"
+        ],
+        "type": "object"
+      },
       "SolverProfileOverheadDiagnosticsResource": {
         "properties": {
           "heartbeat_seed_deep_clone_count": {
@@ -40566,6 +41266,12 @@
                 "$ref": "#/components/schemas/LivePublisherDiagnosticsResource"
               }
             ]
+          },
+          "operation_samples": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfileOperationResource"
+            },
+            "type": "array"
           },
           "overhead": {
             "$ref": "#/components/schemas/SolverProfileOverheadDiagnosticsResource"
@@ -42129,6 +42835,26 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "antenna_inspection": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaInspectionDiscoveryResource"
+              }
+            ]
+          },
+          "antenna_progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaOperationProgressResource"
+              }
             ]
           },
           "antenna_solve_stage_id": {
@@ -46787,6 +47513,24 @@
         },
         "required": [
           "pinned"
+        ],
+        "type": "object"
+      },
+      "WorkspacePlaybackGeometryQuery": {
+        "description": "Revision-pinned binary topology/support selection for saved FEM playback.",
+        "properties": {
+          "part": {
+            "description": "`topology` returns FMMT v2; `support` returns FMSP v1.",
+            "type": "string"
+          },
+          "revision": {
+            "description": "Exact revision returned by `GET /v2/workspace/items/{id}/playback`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "part"
         ],
         "type": "object"
       },
@@ -55273,6 +56017,15 @@
             }
           },
           {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "stage_id",
             "required": false,
@@ -55478,6 +56231,15 @@
           {
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
             "required": false,
             "schema": {
               "type": "string"
@@ -55692,6 +56454,15 @@
           {
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
             "required": false,
             "schema": {
               "type": "string"
@@ -55962,6 +56733,15 @@
             }
           },
           {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "stage_id",
             "required": false,
@@ -56125,6 +56905,15 @@
           {
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
             "required": false,
             "schema": {
               "type": "string"
@@ -56339,6 +57128,15 @@
             }
           },
           {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "stage_id",
             "required": false,
@@ -56544,6 +57342,15 @@
           {
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
             "required": false,
             "schema": {
               "type": "string"
@@ -56769,6 +57576,15 @@
             }
           },
           {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "stage_id",
             "required": false,
@@ -56988,6 +57804,15 @@
             }
           },
           {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "stage_id",
             "required": false,
@@ -57201,6 +58026,15 @@
           {
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
             "required": false,
             "schema": {
               "type": "string"
@@ -57479,6 +58313,15 @@
             }
           },
           {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "stage_id",
             "required": false,
@@ -57650,6 +58493,15 @@
           {
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
             "required": false,
             "schema": {
               "type": "string"
@@ -57872,6 +58724,15 @@
             }
           },
           {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "stage_id",
             "required": false,
@@ -58085,6 +58946,15 @@
           {
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
             "required": false,
             "schema": {
               "type": "string"
@@ -68985,6 +69855,173 @@
           },
           "409": {
             "description": "The database is read-only (newer schema)"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/playback": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_playback",
+        "parameters": [
+          {
+            "description": "Registered result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPlaybackResource"
+                }
+              }
+            },
+            "description": "Validated saved-result playback metadata"
+          },
+          "400": {
+            "description": "The workspace item is not a result folder"
+          },
+          "404": {
+            "description": "The registered item or playback files are missing"
+          },
+          "409": {
+            "description": "Playback source changed while it was read"
+          },
+          "422": {
+            "description": "The result has no supported playback descriptor or its metadata is invalid"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/playback/frames/{frame_index}": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_playback_frames_frame_index",
+        "parameters": [
+          {
+            "description": "Registered result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Zero-based frame index within the selected stage",
+            "in": "path",
+            "name": "frame_index",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Exact stage id from `SavedPlaybackResource.stages`.",
+            "in": "query",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Revision returned by `GET /v2/workspace/items/{id}/playback`.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "One complete little-endian f64 AoS xyz frame"
+          },
+          "400": {
+            "description": "Invalid item id or non-result item"
+          },
+          "404": {
+            "description": "The item, selected stage, frame, or chunk is missing"
+          },
+          "409": {
+            "description": "The supplied playback revision is stale or the source changed during the read"
+          },
+          "422": {
+            "description": "Playback metadata or frame values are invalid"
+          }
+        },
+        "tags": [
+          "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/playback/geometry": {
+      "get": {
+        "operationId": "workspace_items_get_workspace_items_id_playback_geometry",
+        "parameters": [
+          {
+            "description": "Registered result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact revision returned by `GET /v2/workspace/items/{id}/playback`.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`topology` returns FMMT v2; `support` returns FMSP v1.",
+            "in": "query",
+            "name": "part",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Revision-pinned saved FEM topology (FMMT v2) or active-node support (FMSP v1)"
+          },
+          "400": {
+            "description": "Invalid item id or geometry part"
+          },
+          "404": {
+            "description": "The item or geometry file is missing"
+          },
+          "409": {
+            "description": "The supplied playback revision is stale or the source changed during the read"
+          },
+          "422": {
+            "description": "The result has no FEM geometry or its metadata is invalid"
           }
         },
         "tags": [

@@ -613,7 +613,7 @@ function spectrumDetails(
       { label: "Window", value: request.window },
       { label: "Normalization", value: request.normalization },
       { label: "k-grid", value: request.nonuniform_k_grid ? "nonuniform authored" : "FFT grid" },
-      { label: "Publication", value: "Spectrum request is configured; binary FFT payload is published after a qualified solve." },
+      { label: "Publication", value: "Saving a spectrum request does not run FFT. FFT execution is not yet available in this workspace." },
     ],
   };
 }
@@ -681,8 +681,9 @@ function fieldSolutionRuntimeRows(
 ): DetailRow[] {
   const data = result.data;
   const rows: DetailRow[] = [{ label: "Runtime result", value: verifiedStatus }];
-  if (result.error) {
-    rows.push({ label: "Runtime error", value: result.error.message });
+  const error = result.error ?? result.refreshError;
+  if (error) {
+    rows.push({ label: "Runtime error", value: error.message });
   }
   if (!data || verifiedStatus !== "ready") return rows;
   rows.push(
@@ -924,7 +925,7 @@ export function AntennaCompositionPanel({
       {kind !== "conductor" ? <AntennaRelatedResources key={JSON.stringify(["related", scope, kind, resourceId])} scene={scene.data} selection={selection} scope={scope} available={scene.status === "ready" && scene.sessionScopeKey === scope && Boolean(scope)} /> : null}
       {kind === "spectrum" ? <InspectorGroup title={model.title} badge={model.badge}>
         {model.rows.filter(row => ["Validation", "Runtime result", "Runtime error", "Stage catalog error"].includes(row.label)).map(row => <FieldRow key={row.label} label={row.label} value={row.value} />)}
-        <p className="fm-inspector-hint">Spatial spectrum of the antenna source field. Magnetic response and excited modes require separate analysis.</p>
+        <p className="fm-inspector-hint">Spatial spectrum of the antenna source field. Magnetic response and excited modes require separate analysis. Saving a request does not run FFT; FFT execution is not yet available in this workspace.</p>
       </InspectorGroup> : null}
       {kind === "spectrum" &&
       ids.spectrumOutputId &&
@@ -952,7 +953,7 @@ export function AntennaCompositionPanel({
             kind="warning"
             message={model.badge.startsWith("invalid")
               ? "Complete the antenna stage validation requirements before field solve; an older published result is not current."
-              : "To publish H_ant or FFT results, run the configured field-solve/projection stage first."}
+              : "FFT execution is not yet available in this workspace. A qualified field solve alone does not compute a spectrum."}
           />
         ) : null}
       </InspectorGroup>}

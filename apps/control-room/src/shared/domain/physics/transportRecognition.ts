@@ -346,7 +346,7 @@ function isSpinInterface(value: unknown): boolean {
 
 function isSpinBoundary(value: unknown): boolean {
   if (!isObject(value) || typeof value.id !== "string" || typeof value.kind !== "string") return false;
-  if (["spin_insulating", "spin_sink"].includes(value.kind)) {
+  if (["spin_insulating", "homogeneous_spin_potential_gradient", "spin_sink"].includes(value.kind)) {
     return hasOnlyKeys(value, ["id", "kind", "surfaces"])
       && isArrayOf(value.surfaces, isSurfaceRef);
   }

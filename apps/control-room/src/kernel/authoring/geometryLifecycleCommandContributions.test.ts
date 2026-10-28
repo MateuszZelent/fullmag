@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
+import type { SceneResource } from "../api/apiTypes";
+import {
+  antennaLayoutDimensionDraft,
+  antennaLayoutGeometry,
+  buildAntennaLayoutGeometry,
+  buildMicrostripCircuitPatch,
+  microstripCircuitDraft,
+  widthStationDraft,
+} from "@/modules/inspector/panels/antenna/MicrostripGeometryEditorModel";
 
 import {
   MESHING_BUILDS_CURRENT_PATH,
@@ -1154,6 +1163,75 @@ describe("geometry lifecycle command contributions", () => {
     });
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(22);
     now.mockRestore();
+  });
+
+  it("preserves creator defaults until full 3D circuit authoring selects the canonical stage policies", async () => {
+    const registry = registryWithLifecycleCommands();
+    const commitTransaction = vi.fn(async (_request: unknown) => ({
+      committed_scene: { revision: 22 },
+      scene_revision: 22,
+      transaction_kind: "merge_patch",
+    }));
+    const result = await registry.execute("geometry.add-microstrip-antenna", {
+      api: { model: {
+        commitTransaction,
+        scene: vi.fn(async () => ({ revision: 20, objects: [], current_transports: [] })),
+      } } as never,
+      source: "test",
+    });
+    expect(result.status).toBe("completed");
+    const request = commitTransaction.mock.calls[0]?.[0] as {
+      merge_patch?: Record<string, unknown>;
+    } | undefined;
+    if (!request?.merge_patch) throw new Error("Microstrip creator did not submit its authoring transaction.");
+    const authored = { version: "scene.v2", revision: 22, ...request.merge_patch } as unknown as SceneResource;
+    const objectId = authored.objects?.[0]?.id;
+    const originalStage = authored.antenna_field_solve_stages?.[0];
+    if (!objectId || !originalStage) throw new Error("Microstrip creator omitted its object or field stage.");
+    expect(originalStage).toMatchObject({
+      conductor_mesh_policy: "shared_domain_conforming",
+      solver_policy: "fem_cpu_double_reference",
+    });
+    const otherObject = { ...originalStage, id: "other-object", source_object_id: "other" };
+    const otherTransport = { ...originalStage, id: "other-transport", current_transport_id: "other" };
+    authored.antenna_field_solve_stages = [originalStage, otherObject, otherTransport];
+    const before = JSON.stringify(authored);
+    const geometry = antennaLayoutGeometry(authored, objectId);
+    if (!geometry) throw new Error("Microstrip creator omitted its geometry.");
+    const draft = microstripCircuitDraft(geometry, authored, objectId);
+    expect(draft.enabled).toBe(false);
+    draft.enabled = true;
+    draft.potentialJumpV = "0.25";
+    draft.parameters = {
+      inlet_connection_length_m: "2e-7",
+      inlet_connection_width_m: "4e-7",
+      inlet_connection_offset_v_m: "0",
+      inlet_connection_part_id: "inlet",
+      inlet_connection_conductivity_s_per_m: "3e7",
+      outlet_connection_length_m: "2e-7",
+      outlet_connection_width_m: "4e-7",
+      outlet_connection_offset_v_m: "0",
+      outlet_connection_part_id: "outlet",
+      outlet_connection_conductivity_s_per_m: "3e7",
+    };
+    const patchedGeometry = buildAntennaLayoutGeometry(
+      geometry, widthStationDraft(geometry), antennaLayoutDimensionDraft(geometry),
+    );
+    const patch = buildMicrostripCircuitPatch(authored, objectId, patchedGeometry, draft);
+    const expectedStage = {
+      ...originalStage,
+      conductor_mesh_policy: "authored_shared_domain",
+      solver_policy: "production_default",
+    };
+    delete expectedStage.conservative_current_view_ref;
+    expect(patch.antenna_field_solve_stages).toEqual([expectedStage, otherObject, otherTransport]);
+    expect(patch.objects).toEqual(expect.arrayContaining([expect.objectContaining({
+      id: objectId,
+      geometry: expect.objectContaining({
+        geometry_params: expect.objectContaining({ loop: expect.objectContaining({ enabled: true }) }),
+      }),
+    })]));
+    expect(JSON.stringify(authored)).toBe(before);
   });
 
   it("turns concurrent antenna adds into a revision conflict instead of a silent overwrite", async () => {

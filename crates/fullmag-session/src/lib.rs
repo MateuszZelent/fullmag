@@ -78,11 +78,11 @@ pub use fms::{
 };
 pub use store::{
     ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease, CheckpointStillReferenced, GcPlan,
-    RunBacklogFull, SessionStore,
+    RunBacklogFull, SessionStore, accepted_run_start_policy_is_manual,
 };
 pub use task_cancellation::{
     FMS_TASK_CANCELLATION_INTENT_SCHEMA, FmsTaskCancellationIntent,
     TaskCancellationIntentCommitDisposition, TaskCancellationIntentConflict,
 };
 pub use types::*;
-pub use writer::{StoreWriterBusy, WriteTransaction};
+pub use writer::{ReadTransaction, StoreWriterBusy, WriteTransaction};

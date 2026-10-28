@@ -39,6 +39,7 @@ mod accepted_fem_gpu_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
 mod accepted_antenna_inspection_worker;
+use accepted_study_worker::accepted_solver_profile;
 mod accepted_study_worker;
 mod accepted_observation_spool;
 mod accepted_field_binary;
@@ -50,6 +51,7 @@ mod build_info;
 mod coordinator_persistence;
 pub(crate) mod compute_operator_env;
 mod development_accepted_restore;
+mod isolated_snapshot_restore;
 mod development_handoff_validation;
 mod development_owner_control;
 mod development_consumer_readiness;
@@ -66,6 +68,7 @@ mod field_render_png;
 mod field_slice;
 mod field_store;
 mod instance_discovery;
+mod imported_observation_retirement;
 mod live_command_journal;
 mod live_execution_binding;
 mod accepted_field_materialization;
@@ -75,6 +78,8 @@ mod live_accepted_execution;
 mod live_retirement;
 mod live_accepted_projection;
 mod live_scene_preparation;
+mod prepared_observation_adoption;
+mod prepared_observation_bundle;
 mod docker_startup;
 mod openapi_v2;
 mod orientation_color;
@@ -2690,6 +2695,16 @@ async fn main() {
         "[fullmag-api] bootstrap phase=app_state state=complete elapsed_ms={}",
         bootstrap_started.elapsed().as_millis()
     );
+    if !runtime_diagnostic_only {
+        if let Err(error) = isolated_snapshot_restore::restore_before_listen(&state).await {
+            eprintln!("[fullmag-api] startup failure phase=isolated-snapshot-restore error={error:#}");
+            state.development_admission.latch_runtime_failure(
+                "Isolated snapshot initialization failed. API remains available; inspect the backend log for the cause. No task was replayed.",
+            );
+            runtime_diagnostic_only = true;
+            diagnostic_reason = Some("isolated-snapshot-restore-failed");
+        }
+    }
     if !runtime_diagnostic_only {
         if let Err(error) = development_accepted_restore::restore_before_listen(&state).await {
             eprintln!("[fullmag-api] startup failure phase=accepted-run-restore error={error:#}");

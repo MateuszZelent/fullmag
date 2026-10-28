@@ -10,6 +10,14 @@ function controlRoomApiProxyTarget(): string {
   ).replace(/\/+$/, "");
 }
 
+export function controlRoomDocsProxyTarget(): string {
+  return (
+    process.env.FULLMAG_DOCS_PROXY_TARGET ??
+    process.env.FULLMAG_DOCS_URL ??
+    "https://fullmag.mzelent.pl"
+  ).replace(/\/+$/, "");
+}
+
 const staticExport = process.env.FULLMAG_CONTROL_ROOM_STATIC_EXPORT === "1";
 const auditBuild = process.env.NEXT_PUBLIC_AUDIT_BUILD === "1";
 const frontendRoot = process.env.FULLMAG_FRONTEND_ROOT?.trim();
@@ -375,10 +383,12 @@ function securityHeaders() {
       key: "Content-Security-Policy",
       value: [
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
-        "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data: blob:",
-        "font-src 'self' data:",
+        // Bundled Sphinx documentation pages load MathJax from jsDelivr,
+        // Google Fonts stylesheets/glyphs, and the README logo asset.
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdn.jsdelivr.net",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "img-src 'self' data: blob: https://raw.githubusercontent.com",
+        "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
         "connect-src 'self' http: https: ws: wss:",
         "worker-src 'self' blob:",
         // Session tabs show other local instances in frames (ADR 0069).
@@ -393,7 +403,13 @@ function securityHeaders() {
   ];
 }
 
+// Bounded transport wait for the existing synchronous closed-loop Mesh command:
+// render 30s + source capture 90s + accepted frontier 1800s + one 250ms poll.
+// These are owner phase budgets, not a hard maximum for locks/CPU/filesystem work.
+export const CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS = (30 + 90 + 1800) * 1000 + 250;
+
 const nextConfig: NextConfig = {
+  experimental: { proxyTimeout: CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS },
   allowedDevOrigins,
   distDir,
   env: {
@@ -425,10 +441,15 @@ const nextConfig: NextConfig = {
         },
         async rewrites() {
           const apiTarget = controlRoomApiProxyTarget();
+          const docsTarget = controlRoomDocsProxyTarget();
           return [
             {
               source: "/v2/:path*",
               destination: `${apiTarget}/v2/:path*`,
+            },
+            {
+              source: "/docs/:path*",
+              destination: `${docsTarget}/:path*`,
             },
             // Tab addresses (src/kernel/layout/tabRoutes.ts) all serve the
             // workspace page; the page selects the tab from its address.

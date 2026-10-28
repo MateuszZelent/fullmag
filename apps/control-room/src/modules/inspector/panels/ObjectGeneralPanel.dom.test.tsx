@@ -535,6 +535,68 @@ describe("ObjectGeneralPanel staged identity edits", () => {
     }
   });
 
+  it("reports a saved identity when the following geometry write fails", async () => {
+    const before = mocks.sceneData as {
+      objects: Array<Record<string, unknown>>;
+      revision: number;
+      scene_revision: number;
+    };
+    const identityAck = {
+      ...before,
+      objects: [{ ...before.objects[0], name: "Updated magnet" }],
+      revision: 11,
+      scene_revision: 11,
+    };
+    mocks.readScene.mockReset();
+    mocks.readScene.mockResolvedValueOnce(before).mockResolvedValueOnce(identityAck);
+    mocks.patchObject.mockResolvedValueOnce(identityAck);
+    mocks.commitTransaction.mockRejectedValueOnce(new Error("revision conflict"));
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <InspectorEditSessionProvider>
+          <ObjectGeneralPanel selection={selection} />
+          <InspectorFooter focusDisabled onFocus={() => undefined} />
+        </InspectorEditSessionProvider>,
+      ));
+      const baseDraft = resolveCommittedGeometryObjectDraft(mocks.sceneData as never, "object-a");
+      if (!baseDraft) throw new Error("Expected base draft");
+      const identity = mocks.objectEditSession!.activate({
+        objectId: "object-a",
+        sessionScopeKey: "session=A&epoch=1",
+        targetKey: geometryObjectEditSessionTargetKey("session=A&epoch=1", baseDraft),
+      }, baseDraft);
+      await act(async () => {
+        mocks.objectEditSession!.updateDraft(identity, (draft) => ({
+          ...draft,
+          size: ["2e-7", "1e-7", "1e-8"],
+        }));
+        changeInput(container, "Name", "Updated magnet");
+      });
+      await act(async () => {
+        findButton(container, "Apply").click();
+        for (let i = 0; i < 8; i += 1) await Promise.resolve();
+      });
+
+      expect(mocks.patchObject).toHaveBeenCalledOnce();
+      expect(mocks.commitTransaction).toHaveBeenCalledOnce();
+      expect(mocks.recordHistory).toHaveBeenCalledOnce();
+      expect(mocks.objectEditSession!.getSnapshot()).toMatchObject({
+        dirty: true,
+        draft: { baseRevision: 11, name: "Updated magnet", size: ["2e-7", "1e-7", "1e-8"] },
+      });
+      expect(container.textContent).toContain(
+        "Object identity was committed. Geometry and placement could not be confirmed.",
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("keeps newer General metadata through sequential identity and geometry ACKs", async () => {
     const before = mocks.sceneData as {
       objects: Array<Record<string, unknown>>;

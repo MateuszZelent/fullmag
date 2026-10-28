@@ -37,14 +37,14 @@ inline void export_closed_loop_source_snapshot(const ConservativeCurrentView &vi
         for(int local=0;local<4;++local) {
             cell.vertex_ids[local]=ids.local_to_stable.at(vertices[local]);
             const auto *point=mesh.GetVertex(vertices[local]);
-            const auto current=evaluator.current_at({point[0],point[1],point[2]});
+            const auto current=evaluator.retained_current_at({point[0],point[1],point[2]});
             for(int axis=0;axis<3;++axis) {
                 require(std::isfinite(current[axis]),"closed-loop J trace is nonfinite");
                 cell.vertex_xyz_m[3*local+axis]=point[axis];
                 cell.vertex_current_xyz_apm2[3*local+axis]=current[axis];
             }
         }
-        const auto current=evaluator.current_at(center);
+        const auto current=evaluator.retained_current_at(center);
         for(int axis=0;axis<3;++axis) {
             require(std::isfinite(current[axis]),"closed-loop center J is nonfinite");
             cell.center_current_xyz_apm2[axis]=current[axis];

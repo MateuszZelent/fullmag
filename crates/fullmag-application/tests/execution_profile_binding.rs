@@ -89,3 +89,23 @@ fn binding_keeps_legacy_precision_aliases_consistent_with_typed_policy() {
         fullmag_ir::ExecutionPrecision::Single
     );
 }
+
+#[test]
+fn binding_preserves_null_and_absent_auto_identity_on_replay() {
+    let snapshot = materialize_execution_request(Some(profile(json!("auto"))), vec![]).unwrap();
+    let canonical = bind_materialized_execution(
+        &ProblemIR::bootstrap_example(), &snapshot,
+    ).unwrap();
+    for value in [None, Some(serde_json::Value::Null)] {
+        let mut authored = canonical.clone();
+        let selection = authored.problem_meta.runtime_metadata
+            .get_mut("runtime_selection").unwrap().as_object_mut().unwrap();
+        if let Some(value) = value {
+            selection.insert("cpu_threads".into(), value);
+        }
+        let bound = bind_materialized_execution(&authored, &snapshot).unwrap();
+        assert_eq!(bound, authored, "Auto must preserve an already valid captured input");
+        let rebound = bind_materialized_execution(&bound, &snapshot).unwrap();
+        assert_eq!(rebound, bound, "Replay must preserve either historical Auto spelling");
+    }
+}

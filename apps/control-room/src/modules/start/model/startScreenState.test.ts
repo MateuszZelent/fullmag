@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { homeView } from "@/kernel/layout/homeView";
+
 import { startScreenStore, type StartScreenHost } from "./startScreenState";
 
 function fakeHost(): StartScreenHost {
@@ -12,6 +14,7 @@ function fakeHost(): StartScreenHost {
 }
 
 afterEach(() => {
+  homeView.resetForTests();
   startScreenStore.resetForTests();
 });
 
@@ -116,6 +119,18 @@ describe("startScreenStore", () => {
     startScreenStore.requestOpenScript();
     startScreenStore.requestOpenScript();
     expect(startScreenStore.getSnapshot().openScriptNonce).toBe(2);
+  });
+
+  it("opens the Docs section at the requested page when homeView.openDocs is called", () => {
+    homeView.openDocs("physics/interactions/exchange/index.html");
+    expect(homeView.isOpen()).toBe(true);
+    expect(startScreenStore.getSnapshot()).toMatchObject({
+      section: "docs",
+      docsRequest: {
+        seq: 1,
+        page: "physics/interactions/exchange/index.html",
+      },
+    });
   });
 
   it("renders Home on the server", () => {

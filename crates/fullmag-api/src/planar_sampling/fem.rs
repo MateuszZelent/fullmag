@@ -3,13 +3,19 @@ use fullmag_ir::{EmptyPolicyIR, PlanarOperatorIR, PlanarReductionIR};
 
 use super::fdm::finish_reduction;
 use super::frame::{cross, dot, ResolvedFrame};
-use super::geometry::{integrate_clipped_convex_element, projected_pixel_bounds, LinearVertex};
+use super::geometry::{
+    integrate_clipped_convex_element, integrate_clipped_element_quadrature, projected_pixel_bounds,
+    LinearVertex,
+};
 use super::provenance;
 use super::reduction::{AccumulatorReduction, WeightedAccumulator};
 use super::surface;
+use super::operator::{
+    fem_topology_fingerprint, FemPlaneOperator, FemPlanePixel, MAX_PLANE_OPERATOR_NODES,
+};
 use super::{
-    FemPlanarElement, FemPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarSampleResult,
-    ResolvedPlanarSampleRequest,
+    FemPlanarElement, FemPlanarField, FemSectionExtent, PlanarCompatibilityReduction,
+    PlanarSampleResult, ResolvedPlanarSampleRequest,
 };
 use super::{
     PlanarMeshOverlay, PlanarOverlayPolygon, PlanarOverlaySegment, PlanarOverlaySegmentKind,
@@ -97,10 +103,12 @@ pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> Pl
             .map(|point| frame.project(*point))
             .collect::<Vec<_>>();
         let mut points = Vec::<OverlayPoint>::new();
+        // Scale-relative on-plane tolerance (nm and mm meshes behave alike).
+        let on_plane = 1.0e-12 * element_diameter(&nodes);
         for &(a, b) in element.edges() {
             let da = projected[a][2];
             let db = projected[b][2];
-            if da.abs() <= 1.0e-12 {
+            if da.abs() <= on_plane {
                 push_overlay_point(
                     &mut points,
                     [projected[a][0], projected[a][1]],
@@ -109,7 +117,7 @@ pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> Pl
                     true,
                 );
             }
-            if db.abs() <= 1.0e-12 {
+            if db.abs() <= on_plane {
                 push_overlay_point(
                     &mut points,
                     [projected[b][0], projected[b][1]],
@@ -253,12 +261,22 @@ fn sample_plane(
     request: &ResolvedPlanarSampleRequest,
     frame: ResolvedFrame,
 ) -> Result<PlanarSampleResult, ApiError> {
+    let operator = build_plane_operator(field, request, &frame, fem_topology_fingerprint(field));
+    Ok(apply_plane_operator(&operator, field, request))
+}
+
+/// Geometry pass of FEM plane sampling: element, local nodes and shape
+/// weights for every occupied pixel centre (`eq-planar-sampling-operator`).
+pub(super) fn build_plane_operator(
+    field: &FemPlanarField,
+    request: &ResolvedPlanarSampleRequest,
+    frame: &ResolvedFrame,
+    topology_fingerprint: u64,
+) -> FemPlaneOperator {
     let pixel_count = request.resolution[0] as usize * request.resolution[1] as usize;
-    let mut occupancy = vec![Occupancy::Empty; pixel_count];
-    let mut scalar_values = vec![f64::NAN; pixel_count];
-    let mut vector_values = vec![[f64::NAN; 3]; pixel_count];
-    let mut component_values = vec![f64::NAN; pixel_count * field.n_comp()];
-    let mut source_entity_ids = vec![None; pixel_count];
+    let mut claimed = vec![false; pixel_count];
+    let mut pixels = Vec::new();
+    let mut cut_extents = Vec::new();
     let du = (frame.bounds[1] - frame.bounds[0]) / request.resolution[0] as f64;
     let dv = (frame.bounds[3] - frame.bounds[2]) / request.resolution[1] as f64;
     for (element_index, element) in field.elements().iter().enumerate() {
@@ -285,6 +303,7 @@ fn sample_plane(
         if n_min > 0.0 || n_max < 0.0 {
             continue;
         }
+        cut_extents.push(n_max - n_min);
         let u_min = projected
             .iter()
             .map(|point| point[0])
@@ -314,51 +333,33 @@ fn sample_plane(
         for y in y_start..=y_end {
             for x in x_start..=x_end {
                 let index = (y * request.resolution[0] + x) as usize;
-                if occupancy[index] != Occupancy::Empty {
+                if claimed[index] {
                     continue;
                 }
                 let uv = frame.pixel_center(x, y, request.resolution);
                 let point = frame.point(uv[0], uv[1], 0.0);
-                let Some(value) = interpolate_element(field, element, &nodes, point) else {
+                let Some(pixel) =
+                    plane_pixel(element_index as u32, element, &nodes, point, index as u32)
+                else {
                     continue;
                 };
-                occupancy[index] = Occupancy::Occupied;
-                source_entity_ids[index] = Some(element_index as u32);
-                component_values[index * field.n_comp()..(index + 1) * field.n_comp()]
-                    .copy_from_slice(&value);
-                scalar_values[index] = if field.n_comp() == 1 {
-                    value[0]
-                } else {
-                    value
-                        .iter()
-                        .map(|component| component * component)
-                        .sum::<f64>()
-                        .sqrt()
-                };
-                if field.n_comp() == 3 {
-                    vector_values[index] = [value[0], value[1], value[2]];
-                }
+                claimed[index] = true;
+                pixels.push(pixel);
             }
         }
     }
-    let overlay = build_overlay(field, &frame);
+    // Elements smaller than a pixel may contain no pixel centre. Their section
+    // polygon still owns its centroid pixel; it is evaluated in the polygon's
+    // own parent element instead of scanning every element of the mesh.
+    let overlay = build_overlay(field, frame);
     for polygon in &overlay.polygons {
         if polygon.vertices_uv_m.is_empty() {
             continue;
         }
+        let count = polygon.vertices_uv_m.len() as f64;
         let centroid = [
-            polygon
-                .vertices_uv_m
-                .iter()
-                .map(|point| point[0])
-                .sum::<f64>()
-                / polygon.vertices_uv_m.len() as f64,
-            polygon
-                .vertices_uv_m
-                .iter()
-                .map(|point| point[1])
-                .sum::<f64>()
-                / polygon.vertices_uv_m.len() as f64,
+            polygon.vertices_uv_m.iter().map(|point| point[0]).sum::<f64>() / count,
+            polygon.vertices_uv_m.iter().map(|point| point[1]).sum::<f64>() / count,
         ];
         let x = (((centroid[0] - frame.bounds[0]) / (frame.bounds[1] - frame.bounds[0])
             * request.resolution[0] as f64)
@@ -369,32 +370,111 @@ fn sample_plane(
             .floor() as i64)
             .clamp(0, request.resolution[1] as i64 - 1) as u32;
         let index = (y * request.resolution[0] + x) as usize;
-        if occupancy[index] != Occupancy::Empty {
+        if claimed[index] {
             continue;
         }
-        let Some((element_id, value)) =
-            interpolate_at(field, frame.point(centroid[0], centroid[1], 0.0))
+        let Some(element) = field.elements().get(polygon.parent_element_id as usize) else {
+            continue;
+        };
+        let nodes = element
+            .nodes()
+            .iter()
+            .map(|node| field.nodes()[*node as usize])
+            .collect::<Vec<_>>();
+        let point = frame.point(centroid[0], centroid[1], 0.0);
+        let Some(pixel) = plane_pixel(polygon.parent_element_id, element, &nodes, point, index as u32)
         else {
             continue;
         };
-        occupancy[index] = Occupancy::Occupied;
-        source_entity_ids[index] = Some(element_id);
-        component_values[index * field.n_comp()..(index + 1) * field.n_comp()]
-            .copy_from_slice(&value);
-        scalar_values[index] = if field.n_comp() == 1 {
+        claimed[index] = true;
+        pixels.push(pixel);
+    }
+    pixels.sort_unstable_by_key(|pixel| pixel.index);
+    FemPlaneOperator {
+        resolution: request.resolution,
+        topology_fingerprint,
+        pixels,
+        overlay,
+        section_extent: section_extent(cut_extents),
+    }
+}
+
+/// Median normal extent of the cut elements (`eq-planar-navigation-step`).
+pub(super) fn section_extent(mut extents: Vec<f64>) -> Option<FemSectionExtent> {
+    extents.retain(|extent| extent.is_finite() && *extent > 0.0);
+    if extents.is_empty() {
+        return None;
+    }
+    extents.sort_unstable_by(f64::total_cmp);
+    let middle = extents.len() / 2;
+    let median = if extents.len() % 2 == 0 {
+        0.5 * (extents[middle - 1] + extents[middle])
+    } else {
+        extents[middle]
+    };
+    Some(FemSectionExtent {
+        cut_element_count: u32::try_from(extents.len()).unwrap_or(u32::MAX),
+        normal_extent_median_m: median,
+    })
+}
+
+fn plane_pixel(
+    element_index: u32,
+    element: &FemPlanarElement,
+    nodes: &[[f64; 3]],
+    point: [f64; 3],
+    pixel_index: u32,
+) -> Option<FemPlanePixel> {
+    let weights = element_weights(element, nodes, point)?;
+    let mut pixel = FemPlanePixel {
+        index: pixel_index,
+        element: element_index,
+        node_count: element.nodes().len() as u8,
+        nodes: [0; MAX_PLANE_OPERATOR_NODES],
+        weights: [0.0; MAX_PLANE_OPERATOR_NODES],
+    };
+    pixel.nodes[..element.nodes().len()].copy_from_slice(element.nodes());
+    pixel.weights[..weights.len()].copy_from_slice(&weights);
+    Some(pixel)
+}
+
+/// Field pass: gather the nodal values with the cached weights.
+pub(super) fn apply_plane_operator(
+    operator: &FemPlaneOperator,
+    field: &FemPlanarField,
+    request: &ResolvedPlanarSampleRequest,
+) -> PlanarSampleResult {
+    let pixel_count = operator.resolution[0] as usize * operator.resolution[1] as usize;
+    let n_comp = field.n_comp();
+    let values = field.values();
+    let occupancy = operator.occupancy();
+    let mut scalar_values = vec![f64::NAN; pixel_count];
+    let mut vector_values = vec![[f64::NAN; 3]; pixel_count];
+    let mut component_values = vec![f64::NAN; pixel_count * n_comp];
+    let mut source_entity_ids = vec![None; pixel_count];
+    let mut value = vec![0.0; n_comp];
+    for pixel in &operator.pixels {
+        value.fill(0.0);
+        for local in 0..pixel.node_count as usize {
+            let node = pixel.nodes[local] as usize;
+            let weight = pixel.weights[local];
+            for component in 0..n_comp {
+                value[component] += weight * values[node * n_comp + component];
+            }
+        }
+        let index = pixel.index as usize;
+        source_entity_ids[index] = Some(pixel.element);
+        component_values[index * n_comp..(index + 1) * n_comp].copy_from_slice(&value);
+        scalar_values[index] = if n_comp == 1 {
             value[0]
         } else {
-            value
-                .iter()
-                .map(|component| component * component)
-                .sum::<f64>()
-                .sqrt()
+            value.iter().map(|component| component * component).sum::<f64>().sqrt()
         };
-        if field.n_comp() == 3 {
+        if n_comp == 3 {
             vector_values[index] = [value[0], value[1], value[2]];
         }
     }
-    Ok(PlanarSampleResult {
+    PlanarSampleResult {
         meta: provenance::meta(
             request,
             "fem_p1_barycentric_plane",
@@ -405,14 +485,15 @@ fn sample_plane(
             1,
             0,
         ),
-        n_comp: field.n_comp(),
+        n_comp,
         component_values,
         scalar_values,
-        vector_values: (field.n_comp() == 3).then_some(vector_values),
+        vector_values: (n_comp == 3).then_some(vector_values),
         occupancy,
         source_entity_ids,
         overlay: None,
-    })
+        section_extent: operator.section_extent,
+    }
 }
 
 fn pixel_center_range(
@@ -476,18 +557,40 @@ fn sample_volume(
                 let pixel = (y * request.resolution[0] + x) as usize;
                 let u_min = frame.bounds[0] + x as f64 * du;
                 let v_min = frame.bounds[2] + y as f64 * dv;
-                let contribution = integrate_clipped_convex_element(
-                    &projected,
-                    element.faces(),
-                    [
-                        u_min,
-                        u_min + du,
-                        v_min,
-                        v_min + dv,
-                        s_bounds[0],
-                        s_bounds[1],
-                    ],
-                );
+                let prism = [u_min, u_min + du, v_min, v_min + dv, s_bounds[0], s_bounds[1]];
+                // Tet4 is affine, so linear vertex values are exact; other
+                // elements integrate their own basis on the clipped region.
+                let contribution = if matches!(element, FemPlanarElement::Tet4(_)) {
+                    integrate_clipped_convex_element(&projected, element.faces(), prism)
+                } else {
+                    let positions = projected.iter().map(|vertex| vertex.position).collect::<Vec<_>>();
+                    integrate_clipped_element_quadrature(
+                        &positions,
+                        element.faces(),
+                        prism,
+                        field.n_comp(),
+                        |local| {
+                            let world = frame.point(local[0], local[1], local[2]);
+                            let weights = element_shape_weights(element, &nodes, world)?;
+                            Some(
+                                (0..field.n_comp())
+                                    .map(|component| {
+                                        element
+                                            .nodes()
+                                            .iter()
+                                            .zip(&weights)
+                                            .map(|(node, weight)| {
+                                                weight
+                                                    * field.values()
+                                                        [*node as usize * field.n_comp() + component]
+                                            })
+                                            .sum::<f64>()
+                                    })
+                                    .collect(),
+                            )
+                        },
+                    )
+                };
                 if contribution.measure <= 0.0 {
                     continue;
                 }
@@ -510,7 +613,9 @@ fn sample_volume(
         reduction,
         pixel_area,
         include_air_as_zero,
-        "fem_p1_tetra_volume_weighted",
+        // Topology-neutral: Tet4 uses exact linear clipping, other cells the
+        // clipped-element quadrature of their own basis.
+        "fem_element_volume_weighted",
         thickness.map(|value| pixel_area * value),
     )
 }
@@ -533,8 +638,8 @@ pub(super) fn interpolate_at(field: &FemPlanarField, point: [f64; 3]) -> Option<
     None
 }
 
-fn interpolate_element(
-    field: &FemPlanarField,
+/// Shape-function weights of `point` in `element`, or `None` outside it.
+pub(super) fn element_weights(
     element: &FemPlanarElement,
     nodes: &[[f64; 3]],
     point: [f64; 3],
@@ -542,6 +647,12 @@ fn interpolate_element(
     let weights = match element {
         FemPlanarElement::Tet4(_) => barycentric(nodes.try_into().ok()?, point)?.to_vec(),
         FemPlanarElement::Prism6(_) => prism6_weights(nodes.try_into().ok()?, point)?.to_vec(),
+        FemPlanarElement::Hex8(_) => {
+            isoparametric_weights(nodes, point, [0.5; 3], hex8_shape, hex8_contains)?
+        }
+        FemPlanarElement::Pyramid5(_) => {
+            isoparametric_weights(nodes, point, [0.25, 0.25, 0.2], pyramid5_shape, pyramid5_contains)?
+        }
     };
     if weights
         .iter()
@@ -549,6 +660,41 @@ fn interpolate_element(
     {
         return None;
     }
+    Some(weights)
+}
+
+/// Shape weights of an interior quadrature point, without the containment
+/// check (points of a clipped region may sit on a slightly curved face).
+fn element_shape_weights(
+    element: &FemPlanarElement,
+    nodes: &[[f64; 3]],
+    point: [f64; 3],
+) -> Option<Vec<f64>> {
+    let anywhere = |_: [f64; 3]| true;
+    match element {
+        FemPlanarElement::Tet4(_) => Some(barycentric(nodes.try_into().ok()?, point)?.to_vec()),
+        FemPlanarElement::Prism6(_) => {
+            isoparametric_weights(nodes, point, [1.0 / 3.0, 1.0 / 3.0, 0.5], prism6_shape_vec, anywhere)
+        }
+        FemPlanarElement::Hex8(_) => isoparametric_weights(nodes, point, [0.5; 3], hex8_shape, anywhere),
+        FemPlanarElement::Pyramid5(_) => {
+            isoparametric_weights(nodes, point, [0.25, 0.25, 0.2], pyramid5_shape, anywhere)
+        }
+    }
+}
+
+fn prism6_shape_vec(reference: [f64; 3]) -> (Vec<f64>, Vec<[f64; 3]>) {
+    let (weights, derivatives) = prism6_shape(reference);
+    (weights.to_vec(), derivatives.to_vec())
+}
+
+fn interpolate_element(
+    field: &FemPlanarField,
+    element: &FemPlanarElement,
+    nodes: &[[f64; 3]],
+    point: [f64; 3],
+) -> Option<Vec<f64>> {
+    let weights = element_weights(element, nodes, point)?;
     let mut result = vec![0.0; field.n_comp()];
     for (local, node) in element.nodes().iter().enumerate() {
         for component in 0..field.n_comp() {
@@ -636,19 +782,167 @@ fn prism6_shape(reference: [f64; 3]) -> ([f64; 6], [[f64; 3]; 6]) {
     )
 }
 
+const REFERENCE_TOLERANCE: f64 = 1.0e-11;
+
+/// Damped Newton inversion of an isoparametric map `x(ξ) = Σ N_a(ξ) x_a`,
+/// with a stopping rule relative to the element diameter. Returns the shape
+/// weights at the located reference point when it lies inside the element.
+fn isoparametric_weights(
+    nodes: &[[f64; 3]],
+    point: [f64; 3],
+    initial: [f64; 3],
+    shape: fn([f64; 3]) -> (Vec<f64>, Vec<[f64; 3]>),
+    contains: fn([f64; 3]) -> bool,
+) -> Option<Vec<f64>> {
+    let scale = element_diameter(nodes).max(f64::MIN_POSITIVE);
+    let mut reference = initial;
+    for _ in 0..32 {
+        let (weights, derivatives) = shape(reference);
+        let mapped = [0, 1, 2].map(|axis| {
+            weights
+                .iter()
+                .zip(nodes)
+                .map(|(weight, node)| weight * node[axis])
+                .sum::<f64>()
+        });
+        let residual = sub(mapped, point);
+        if dot(residual, residual).sqrt() <= scale * 1.0e-12 {
+            return contains(reference).then_some(weights);
+        }
+        let jacobian = std::array::from_fn::<_, 3, _>(|column| {
+            [0, 1, 2].map(|axis| {
+                derivatives
+                    .iter()
+                    .zip(nodes)
+                    .map(|(derivative, node)| derivative[column] * node[axis])
+                    .sum::<f64>()
+            })
+        });
+        let determinant = dot(jacobian[0], cross(jacobian[1], jacobian[2]));
+        if !(determinant.abs() > scale.powi(3) * 1.0e-15) {
+            return None;
+        }
+        let delta = [
+            dot(residual, cross(jacobian[1], jacobian[2])) / determinant,
+            dot(jacobian[0], cross(residual, jacobian[2])) / determinant,
+            dot(jacobian[0], cross(jacobian[1], residual)) / determinant,
+        ];
+        for axis in 0..3 {
+            reference[axis] -= delta[axis];
+        }
+        // Keep iterates inside a bounded box so a far point cannot diverge.
+        for coordinate in &mut reference {
+            *coordinate = coordinate.clamp(-0.5, 1.5);
+        }
+    }
+    None
+}
+
+/// Trilinear Hex8 basis on [0,1]³ (eq-planar-fem-hex8); node order: bottom
+/// face counter-clockwise, then the top face in the same order.
+fn hex8_shape(reference: [f64; 3]) -> (Vec<f64>, Vec<[f64; 3]>) {
+    const CORNERS: [[f64; 3]; 8] = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ];
+    let factor = |corner: f64, x: f64| if corner > 0.5 { x } else { 1.0 - x };
+    let derivative = |corner: f64| if corner > 0.5 { 1.0 } else { -1.0 };
+    let mut weights = Vec::with_capacity(8);
+    let mut derivatives = Vec::with_capacity(8);
+    for corner in CORNERS {
+        let [fx, fy, fz] = [0, 1, 2].map(|axis| factor(corner[axis], reference[axis]));
+        weights.push(fx * fy * fz);
+        derivatives.push([
+            derivative(corner[0]) * fy * fz,
+            fx * derivative(corner[1]) * fz,
+            fx * fy * derivative(corner[2]),
+        ]);
+    }
+    (weights, derivatives)
+}
+
+fn hex8_contains(reference: [f64; 3]) -> bool {
+    reference
+        .iter()
+        .all(|value| *value >= -REFERENCE_TOLERANCE && *value <= 1.0 + REFERENCE_TOLERANCE)
+}
+
+/// First-order rational Pyramid5 basis (eq-planar-fem-pyramid5): base
+/// [0,1]² at τ = 0 (counter-clockwise), apex at (0, 0, 1).
+fn pyramid5_shape(reference: [f64; 3]) -> (Vec<f64>, Vec<[f64; 3]>) {
+    let [xi, eta, tau] = reference;
+    let w = 1.0 - tau;
+    if w.abs() < 1.0e-12 {
+        // At the apex only N5 survives; the derivatives use the limit of the
+        // linear edge functions so Newton can leave the apex.
+        return (
+            vec![0.0, 0.0, 0.0, 0.0, 1.0],
+            vec![
+                [-1.0, -1.0, -1.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+        );
+    }
+    let a = 1.0 - xi - tau;
+    let b = 1.0 - eta - tau;
+    let w2 = w * w;
+    (
+        vec![a * b / w, xi * b / w, xi * eta / w, a * eta / w, tau],
+        vec![
+            [-b / w, -a / w, (a * b - (a + b) * w) / w2],
+            [b / w, -xi / w, -xi * eta / w2],
+            [eta / w, xi / w, xi * eta / w2],
+            [-eta / w, a / w, -xi * eta / w2],
+            [0.0, 0.0, 1.0],
+        ],
+    )
+}
+
+fn pyramid5_contains(reference: [f64; 3]) -> bool {
+    let [xi, eta, tau] = reference;
+    xi >= -REFERENCE_TOLERANCE
+        && eta >= -REFERENCE_TOLERANCE
+        && tau >= -REFERENCE_TOLERANCE
+        && xi + tau <= 1.0 + REFERENCE_TOLERANCE
+        && eta + tau <= 1.0 + REFERENCE_TOLERANCE
+}
+
 fn barycentric(nodes: [[f64; 3]; 4], point: [f64; 3]) -> Option<[f64; 4]> {
     let a = sub(nodes[0], nodes[3]);
     let b = sub(nodes[1], nodes[3]);
     let c = sub(nodes[2], nodes[3]);
     let p = sub(point, nodes[3]);
     let determinant = dot(a, cross(b, c));
-    if determinant == 0.0 {
+    let scale = element_diameter(&nodes);
+    // Degenerate relative to the element size, not to an absolute volume.
+    if !(determinant.abs() > 1.0e-15 * scale * scale * scale) {
         return None;
     }
     let w0 = dot(p, cross(b, c)) / determinant;
     let w1 = dot(a, cross(p, c)) / determinant;
     let w2 = dot(a, cross(b, p)) / determinant;
     Some([w0, w1, w2, 1.0 - w0 - w1 - w2])
+}
+
+/// Largest vertex distance of an element (its diameter).
+fn element_diameter(nodes: &[[f64; 3]]) -> f64 {
+    let mut diameter = 0.0_f64;
+    for (index, a) in nodes.iter().enumerate() {
+        for b in &nodes[index + 1..] {
+            let d = sub(*a, *b);
+            diameter = diameter.max(dot(d, d).sqrt());
+        }
+    }
+    diameter
 }
 
 pub(super) fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

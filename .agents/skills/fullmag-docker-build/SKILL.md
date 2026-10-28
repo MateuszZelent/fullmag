@@ -70,6 +70,8 @@ sprawdzić, jeśli źródła się zmieniły.
 
 ## Granica danych i retencja
 
+Nowe grupy automatycznie utrzymują current + jeden rollback i limit incremental po udanym zarządzanym starcie. Zakończenie `worktree-finish ... completed` wymaga usuniętych kontenerów i wykonuje kwalifikowaną retencję prywatnego cache; zachowuje globalne shared volumes, control i dane użytkownika. Szczegóły: [kontrakt retencji](../../../docs/guides/shared-build-storage.md).
+
 Buildowe zależności, cache Cargo/CMake/pnpm/Next, pakiety, logi i techniczne
 receipty aktywnej trasy są przypięte do named volumes grupy lub magazynu
 BuildKit. Nie zapisuj ich do storage Windows. Hostowe storage zachowuje

@@ -7127,6 +7127,21 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertGreater(voxels.active_cell_count, 0)
         self.assertLess(voxels.active_fraction, 1.0)
 
+    def test_axis_aligned_cylinder_voxel_box_follows_its_axis(self) -> None:
+        ring = fm.Difference(
+            base=fm.Cylinder(radius=3.0, height=2.0, axis=(1.0, 0.0, 0.0)),
+            tool=fm.Cylinder(radius=1.0, height=2.0, axis=(1.0, 0.0, 0.0)),
+        )
+
+        voxels = voxelize_geometry(ring, (1.0, 1.0, 1.0))
+
+        self.assertEqual(voxels.shape, (6, 6, 2))
+        self.assertEqual(voxels.origin, (-1.0, -3.0, -3.0))
+        # The full annulus, not a slab cut at |z| <= h/2, is voxelized.
+        self.assertTrue(voxels.mask[0, 2, :].all())
+        self.assertTrue(voxels.mask[5, 3, :].all())
+        self.assertFalse(voxels.mask[2:4, 2:4, :].any())
+
     def test_difference_translation_and_finite_height_match_problem_ir_fingerprint(self) -> None:
         base = fm.Box(size=(4.0, 4.0, 4.0), name="base")
         translated_cylinder = fm.Translate(

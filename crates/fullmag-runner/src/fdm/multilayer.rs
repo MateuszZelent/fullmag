@@ -83,6 +83,11 @@ fn combine_normalized(
                         .map(|component| component * component)
                         .sum::<f64>()
                         .sqrt();
+                    // An inactive native-mask cell carries m = 0 and an exactly
+                    // zero RHS; it stays empty rather than being normalized.
+                    if norm == 0.0 && *m == [0.0; 3] {
+                        return Ok([0.0; 3]);
+                    }
                     if !norm.is_finite() || norm == 0.0 {
                         return Err(
                             "explicit RK stage produced a non-normalizable magnetization"
@@ -167,6 +172,22 @@ mod tests {
         let actual =
             explicit_rk_step(&initial, 0.2, IntegratorChoice::Heun, manufactured_rhs).unwrap();
         assert_vector_close(actual[0][0], [0.98021667, -0.07564913, 0.18290020]);
+    }
+
+    #[test]
+    fn multilayer_rk_keeps_inactive_mask_cells_empty() {
+        // The second cell is an inactive native-mask slot: m = 0, zero RHS.
+        let initial = vec![vec![[1.0, 0.0, 0.0], [0.0; 3]]];
+        for integrator in [IntegratorChoice::Heun, IntegratorChoice::Rk4, IntegratorChoice::Rk23] {
+            let actual = explicit_rk_step(&initial, 0.2, integrator, manufactured_rhs).unwrap();
+            assert_eq!(actual[0][1], [0.0; 3]);
+            let norm = actual[0][0].iter().map(|c| c * c).sum::<f64>().sqrt();
+            assert!((norm - 1.0).abs() < 1.0e-12);
+        }
+        let collapsed = |state: &MultilayerVectorState| {
+            Ok(state.iter().map(|layer| layer.iter().map(|m| [-5.0 * m[0], 0.0, 0.0]).collect()).collect())
+        };
+        assert!(explicit_rk_step(&initial, 0.2, IntegratorChoice::Heun, collapsed).is_err());
     }
 
     #[test]

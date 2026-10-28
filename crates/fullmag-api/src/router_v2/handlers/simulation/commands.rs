@@ -279,6 +279,9 @@ async fn submit_structured_command_impl_with_context(
             )
             .await;
         }
+        if crate::live_accepted_execution::docker_api_only_runtime() && command.kind == "set_solver_profile" {
+            return configure_accepted_solver_profile_under_transition(Arc::clone(&state), headers, command, context).await;
+        }
         if crate::live_accepted_execution::docker_api_only_runtime()
             && matches!(command.kind.as_str(), "compute_fields" | "compute_energies")
         {
@@ -433,6 +436,69 @@ async fn fdm_grid_refresh_rejection_reason(
 /// Adopt only worker-evaluated immutable fields. The caller holds the existing
 /// session transition fence; there is no legacy queue consumer or HTTP-side
 /// native compute. Every accepted command gets a durable terminal outcome.
+/// Configure only future RunIntent admission; accepted specifications stay immutable.
+async fn configure_accepted_solver_profile_under_transition(
+    state: Arc<AppState>, headers: &HeaderMap, mut command: SessionCommand,
+    context: &crate::types::CurrentLiveRequestContext,
+) -> Result<CommandResponse, ApiError> {
+    if let Some(response) = cached_command_response(&state, headers).await { return Ok(response); }
+    let value = command.profile.clone().ok_or_else(|| ApiError::unprocessable("solver profile config missing"))?;
+    let object = value.as_object().ok_or_else(|| ApiError::unprocessable("solver profile config must be an object"))?;
+    const KEYS: &[&str] = &["enabled", "sample_every", "sample_interval_wall_ms", "max_samples", "emit_engine_log", "persist_artifact"];
+    if object.keys().any(|key| !KEYS.contains(&key.as_str())) { return Err(ApiError::unprocessable("unknown solver profile config key")); }
+    let config: fullmag_runner::SolverProfileConfig = serde_json::from_value(value)
+        .map_err(|error| ApiError::unprocessable(error.to_string()))?;
+    let config = config.normalized();
+    crate::accepted_solver_profile::parameter(config.clone())
+        .map_err(|error| ApiError::unprocessable(error.to_string()))?;
+    command.profile = Some(serde_json::to_value(&config).map_err(|error| ApiError::internal(error.to_string()))?);
+    let snapshot = state.current_live_state.read().await.as_ref().cloned()
+        .ok_or_else(|| ApiError::not_found("no current workspace"))?;
+    crate::ensure_current_live_request_context(&snapshot, context,
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
+    let command_id = command.command_id.clone();
+    let request_id = command_request_id(headers);
+    let mut next_sequence = state.current_control_next_seq.lock().await;
+    let sequence = next_sequence.checked_add(1).ok_or_else(|| ApiError::internal("command sequence exhausted"))?;
+    command.seq = sequence;
+    crate::live_command_journal::mutate(&state, &snapshot, |ledger| {
+        validate_runtime_command_contract(&snapshot, ledger, &command)?;
+        reserve_command_ledger_entry(ledger)?;
+        ledger.push_back(TrackedCommandRecord { command, request_id: request_id.clone(),
+            status: CommandLifecycleState::Completed, dispatched_at_unix_ms: None,
+            completed_at_unix_ms: Some(crate::session::unix_time_millis_now()),
+            completion_status: Some(crate::types::CommandCompletionState::Completed), error: None });
+        Ok(((), true))
+    }).await?;
+    *next_sequence = sequence;
+    drop(next_sequence);
+    {
+        let mut guard = state.current_live_state.write().await;
+        let current = guard.as_mut().ok_or_else(|| ApiError::not_found("no current workspace"))?;
+        crate::ensure_current_live_request_context(current, context,
+            state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
+        current.solver_profile.config = serde_json::from_value(serde_json::to_value(&config)
+            .map_err(|error| ApiError::internal(error.to_string()))?)
+            .map_err(|error| ApiError::internal(error.to_string()))?;
+        current.solver_profile.state = if config.enabled { "enabled" } else { "disabled" }.into();
+        if !config.enabled { current.solver_profile.operation_samples.clear(); }
+        current.solver_profile.revision = current.solver_profile.revision.wrapping_add(1);
+    }
+    let response = CommandResponse { accepted: true, command_id, request_id, error: None };
+    if let Some(key) = command_request_key(headers) {
+        let mut responses = state.current_command_responses.lock().await;
+        responses.push_back((key, response.clone()));
+        while responses.len() > 128 { responses.pop_front(); }
+    }
+    let snapshot = { state.current_live_state.read().await.as_ref().cloned() };
+    if let Some(snapshot) = snapshot {
+        let display_revision = state.current_display_selection.read().await.revision;
+        let realtime = crate::current_live_realtime_state_from_snapshot(&state, &snapshot, display_revision).await;
+        crate::publish_current_live_realtime_batch_changed(&state, &realtime, false, 0).await?;
+    }
+    Ok(response)
+}
+
 async fn publish_materialized_fields_under_transition(
     state: Arc<AppState>,
     headers: &HeaderMap,

@@ -143,7 +143,10 @@ public_docs/_build/
 tests/vlad/
 apps/control-room/.next*
 apps/control-room/.artifacts/
-public_docs/site/
+public_docs/site/_build*/
+public_docs/site/**/PAGE_TEMPLATE.md
+public_docs/site/_extensions/page_dates.py
+public_docs/site/_templates/partials/
 .worktrees_old/
 
 # Local Windows build/cache outputs; keep these outside the repository.

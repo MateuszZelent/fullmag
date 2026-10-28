@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import stat
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +19,70 @@ import docker_dev_codegen as codegen  # noqa: E402
 
 
 class DockerDevCodegenTests(unittest.TestCase):
+    def test_failed_command_retains_both_streams_and_exit_code(self) -> None:
+        command = [sys.executable, '-B', '-c',
+                   'import sys; print("compiler diagnostic"); print("wrapper failure", file=sys.stderr); sys.exit(7)']
+        with mock.patch.object(codegen, '_docker_argv', return_value=command):
+            with self.assertRaises(codegen.CodegenError) as raised:
+                codegen._capture(('fixture',), timeout=5)
+        self.assertEqual(raised.exception.exit_code, 7)
+        self.assertEqual(raised.exception.stdout.strip(), b'compiler diagnostic')
+        self.assertEqual(raised.exception.stderr.strip(), b'wrapper failure')
+        self.assertFalse(raised.exception.reconciliation_required)
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX hardlinks and O_NOFOLLOW")
+    def test_backend_probe_accepts_only_sealed_shared_binaries(self) -> None:
+        script = codegen.BACKEND_DOCUMENTS_SCRIPT
+        functions = script[script.index("def read(path):"):script.index("\nprint(json.dumps({")]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "api"
+            target.write_bytes(b"sealed test binary")
+            alias = Path(directory) / "shared"
+            os.link(target, alias)
+            target.chmod(0o555)
+            proxy = mock.Mock(wraps=os)
+            proxy.open.side_effect = lambda _path, flags: os.open(target, flags)
+            namespace = {"os": proxy, "stat": stat, "hashlib": hashlib, "json": json,
+                         "MAXIMUM": 16 * 1024 * 1024,
+                         "FLAGS": os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW}
+            exec(compile(functions, "<backend-provenance-probe>", "exec"), namespace)
+            digest = namespace["digest_binary"]
+            expected = hashlib.sha256(target.read_bytes()).hexdigest()
+            self.assertEqual(digest("fullmag-api"), expected)
+            # Mutable metadata must never inherit the binary hardlink policy.
+            with self.assertRaisesRegex(RuntimeError, "handoff"):
+                namespace["read"]("receipt.json")
+            target.chmod(0o755)
+            with self.assertRaisesRegex(RuntimeError, "sealed shared"):
+                digest("fullmag-api")
+            target.chmod(0o555)
+            original = target
+            symlink = Path(directory) / "symlink"
+            symlink.symlink_to(original)
+            target = symlink
+            with self.assertRaises(OSError):
+                digest("fullmag-api")
+            target = original
+            # Legitimate concurrent retention may release another hardlink.
+            def read_and_release(fd, size):
+                if alias.exists():
+                    alias.unlink()
+                return os.read(fd, size)
+            proxy.read.side_effect = read_and_release
+            self.assertEqual(digest("fullmag-api"), expected)
+            changed = False
+            def read_and_touch(fd, size):
+                nonlocal changed
+                if not changed:
+                    before = target.stat()
+                    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000))
+                    changed = True
+                return os.read(fd, size)
+            proxy.read.side_effect = read_and_touch
+            with self.assertRaisesRegex(RuntimeError, "changed while hashing"):
+                digest("fullmag-api")
+
+
     @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires executable POSIX shell fixture")
     def test_just_wrapper_preserves_explicit_codegen_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -36,6 +103,32 @@ class DockerDevCodegenTests(unittest.TestCase):
             )
             self.assertEqual(json.loads(result.stdout)[-3:], ["codegen-openapi", "--source-root", source])
 
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires executable POSIX shell fixture")
+    def test_just_wrapper_admits_only_pinned_cache_maintenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            interpreter = Path(directory) / "python-probe"
+            interpreter.write_text(f"#!{sys.executable}\nimport json,sys\n"
+                                   "if sys.argv[1:2] != ['-c']: print(json.dumps(sys.argv[1:]))\n")
+            interpreter.chmod(0o700)
+            root = Path(__file__).resolve().parents[1]
+            source = "/example/selected checkout"
+            prefix = f'python3 "{root}/scripts/docker_dev.py" --repo-root "{root}" '
+            body = f"maintain-cache --attempt '{'a'*32}' --config-sha256 '{'b'*64}' --source-root '{source}'"
+            def invoke(value):
+                return subprocess.run(["bash",str(root/"scripts/just_storage_shell.sh"),prefix+value],
+                                      env={**os.environ,"FULLMAG_STORAGE_PYTHON":str(interpreter)},
+                                      text=True,capture_output=True)
+            result=invoke(body)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(json.loads(result.stdout)[3:],
+                             ["maintain-cache","--attempt","a"*32,"--config-sha256","b"*64,"--source-root",source])
+            for rejected in (body+"; true",body+" --max-shared-entries '1'",body.replace("a"*32,"a"*31)):
+                with self.subTest(rejected=rejected):
+                    result=invoke(rejected)
+                    self.assertEqual(result.returncode,2)
+                    self.assertEqual(result.stdout,"")
+
     def test_frontend_requires_readonly_control_but_writable_build_state(self) -> None:
         document = {"Mounts": [
             {"Destination": "/opt/fullmag/source", "Type": "bind", "RW": False},
@@ -55,6 +148,29 @@ class DockerDevCodegenTests(unittest.TestCase):
             "/run/desktop/mnt/host/c/git/fullmag/fullmag",
         ):
             self.assertEqual(expected, codegen._path_identity(alias))
+
+    def test_desktop_wsl_source_alias_requires_same_inode(self) -> None:
+        alias = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/" + "a" * 64
+        selected = Path("/selected/checkout")
+        with mock.patch.object(Path, "is_dir", return_value=True), mock.patch.object(Path, "samefile", return_value=True):
+            self.assertTrue(codegen._source_mount_matches_selected(alias, selected))
+            self.assertFalse(codegen._source_mount_matches_selected(alias + "/../other", selected))
+        with mock.patch.object(Path, "is_dir", return_value=True), mock.patch.object(Path, "samefile", return_value=False):
+            self.assertFalse(codegen._source_mount_matches_selected(alias, selected))
+        with mock.patch.object(Path, "is_dir", return_value=True), mock.patch.object(Path, "samefile", side_effect=OSError("missing")):
+            self.assertFalse(codegen._source_mount_matches_selected(alias, selected))
+
+    def test_source_match_binds_build_inputs_not_documentation_edits(self) -> None:
+        backend = {"commit": "c" * 40, "snapshot": "s" * 64, "source_digest": "d" * 64, "native": {"n": 1}}
+        probe = {
+            "resolved_commit": "c" * 40,
+            "source_snapshot_sha256": "s" * 64,
+            "source_digest": "e" * 64,
+            "native_source_identity": {"n": 1},
+        }
+        self.assertTrue(codegen._source_matches(probe, backend))
+        self.assertFalse(codegen._source_matches({**probe, "source_snapshot_sha256": "t" * 64}, backend))
+        self.assertFalse(codegen._source_matches({**probe, "native_source_identity": {"n": 2}}, backend))
 
     def test_source_probe_uses_backend_module_root(self) -> None:
         self.assertIn('sys.path.insert(0, "/opt/fullmag")', codegen.SOURCE_PROBE_SCRIPT)
@@ -123,6 +239,91 @@ class DockerDevCodegenTests(unittest.TestCase):
                     codegen._running_service(
                         "project", "backend", identity, Path(r"C:\git\fullmag\fullmag")
                     )
+
+    def _wsl_services(self):
+        from bootstrap_docker_toolchain import control_volume_name
+        selected = Path("/home/kking/git/fullmag/worktrees/antenna")
+        alias = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/" + "5d" * 32
+        identity = {"project_id":"project-id", "worktree_id":"worktree-id", "checkout_kind":"worktree"}
+        image = "sha256:" + "a" * 64
+        ids = {"backend":"b" * 64, "frontend":"f" * 64}
+        control = control_volume_name("project")
+        owner = "/run/fullmag/frontend-owner"
+        owner_options = "rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
+        compose = {"name":"project", "services":{}, "volumes":{}}
+        actual = {}
+        for role in ids:
+            labels = {"com.docker.compose.project":"project", "com.docker.compose.service":role,
+                "org.fullmag.compose.project":"project", "org.fullmag.source.project-id":"project-id",
+                "org.fullmag.source.worktree-id":"worktree-id", "org.fullmag.source.checkout-kind":"worktree"}
+            environment = {"FULLMAG_SOURCE_HOST_ROOT" if role == "backend" else "FULLMAG_SOURCE_ROOT":str(selected)}
+            volumes = [{"target":"/opt/fullmag/source", "type":"bind", "read_only":True, "source":str(selected)}]
+            pins = {"/opt/fullmag/source":alias}
+            if role == "backend":
+                volumes.append({"target":"/opt/fullmag/source-git", "type":"bind", "read_only":True,
+                    "source":"/home/kking/git/fullmag/.git"})
+                pins["/opt/fullmag/source-git"] = "/home/kking/git/fullmag/.git"
+            for target, name, readonly in (("/build","build",False), ("/opt/fullmag/package","package",False),
+                    ("/opt/fullmag/control","control",role == "frontend")) if role == "backend" else (
+                    ("/state/development","state",False), ("/opt/fullmag/control","control",True)):
+                compose["volumes"][name] = {"name":control if name == "control" else "project-" + name}
+                volumes.append({"target":target,"type":"volume","source":name,"read_only":readonly})
+            expected = {"image":image, "environment":environment, "labels":labels,
+                "volumes":volumes,"x-fullmag-daemon-binds":pins}
+            if role == "frontend":
+                expected["tmpfs"] = [owner + ":" + owner_options]
+            compose["services"][role] = expected
+            mounts = [{"Destination":v["target"],"Type":v["type"],"RW":not v["read_only"],
+                **({"Source":pins[v["target"]]} if v["type"] == "bind" else
+                   {"Name":compose["volumes"][v["source"]]["name"]})} for v in volumes]
+            if role == "frontend":
+                mounts.append({"Destination":owner,"Type":"tmpfs","RW":True})
+            actual[role] = {"Id":ids[role],"Image":image,"State":{"Running":True},
+                "Config":{"Image":image,"Labels":labels,"Env":[k + "=" + v for k,v in environment.items()]},
+                "HostConfig":{"ReadonlyRootfs":True,"Privileged":False,
+                    "Tmpfs":{owner:owner_options} if role == "frontend" else {}},"Mounts":mounts}
+        return selected, identity, actual
+
+    def _select_wsl_service(self, role, fixture, *, same_inode=True):
+        selected, identity, actual = fixture
+        with mock.patch.object(codegen, "_capture", return_value=(actual[role]["Id"].encode() + b"\n", b"")), mock.patch.object(
+                codegen, "_inspect", return_value=actual[role]), mock.patch.object(
+                Path, "is_dir", return_value=True), mock.patch.object(
+                Path, "samefile", return_value=same_inode), mock.patch.object(
+                codegen, "_exec", side_effect=AssertionError("source identity must not fetch alternate admission receipts")):
+            return codegen._running_service("project", role, identity, selected)
+
+    def test_wsl_alias_selection_requires_source_inode_for_both_services(self):
+        for role in ("backend", "frontend"):
+            with self.subTest(role=role):
+                fixture = self._wsl_services()
+                container, actual = self._select_wsl_service(role, fixture)
+                self.assertEqual(container, fixture[2][role]["Id"])
+                self.assertIs(actual, fixture[2][role])
+                with self.assertRaisesRegex(codegen.CodegenError, "source mount differs"):
+                    self._select_wsl_service(role, fixture, same_inode=False)
+
+    def test_wsl_alias_selection_refuses_source_and_service_drift(self):
+        for role in ("backend", "frontend"):
+            for change in ("source-env", "invalid-alias", "writable-source", "foreign-label", "stopped", "control-bind"):
+                with self.subTest(role=role, change=change):
+                    fixture = self._wsl_services()
+                    actual = fixture[2][role]
+                    if change == "source-env":
+                        key = "FULLMAG_SOURCE_HOST_ROOT" if role == "backend" else "FULLMAG_SOURCE_ROOT"
+                        actual["Config"]["Env"] = [key + "=/foreign/checkout"]
+                    elif change == "invalid-alias":
+                        actual["Mounts"][0]["Source"] += "/../foreign"
+                    elif change == "writable-source":
+                        actual["Mounts"][0]["RW"] = True
+                    elif change == "foreign-label":
+                        actual["Config"]["Labels"]["com.docker.compose.project"] = "foreign"
+                    elif change == "stopped":
+                        actual["State"]["Running"] = False
+                    else:
+                        next(m for m in actual["Mounts"] if m["Destination"] == "/opt/fullmag/control")["Type"] = "bind"
+                    with self.assertRaises(codegen.CodegenError):
+                        self._select_wsl_service(role, fixture)
 
     def test_backend_provenance_requires_receipt_and_binary_binding(self) -> None:
         receipt_sha = "a" * 64
@@ -322,7 +523,64 @@ class DockerDevCodegenTests(unittest.TestCase):
             outputs = {name: name.encode() for name in names}
             published = codegen._publish_outputs(source, outputs, before)
             self.assertEqual(set(published), set(names))
+            for name in names:
+                self.assertTrue((source / "apps/control-room/src/kernel/api/generated" / name).stat().st_mode & 0o040)
+
             self.assertEqual({name: (generated / name).read_bytes() for name in names}, outputs)
+
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX permission bits")
+    def test_published_sources_preserve_group_readability_before_atomic_replace(self) -> None:
+        for existing_mode in (None, 0o640):
+            with self.subTest(existing_mode=existing_mode), tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary)
+                generated = source / "apps/control-room/src/kernel/api/generated"
+                generated.mkdir(parents=True)
+                names = ("openapi-v2.json", "openapi-v2-types.ts", "openapi-v2-client.ts", "openapi-v2-paths.ts")
+                if existing_mode is not None:
+                    for name in names:
+                        (generated / name).write_bytes(b"previous")
+                        (generated / name).chmod(existing_mode)
+                before = codegen._output_baseline(source, names)
+                replace = os.replace
+                observed = []
+                expected_mode = 0o644 if existing_mode is None else existing_mode | stat.S_IRGRP
+                def publish(prepared, destination):
+                    self.assertEqual(stat.S_IMODE(prepared.stat().st_mode), expected_mode)
+                    observed.append(destination.name)
+                    replace(prepared, destination)
+                with mock.patch.object(codegen.os, "replace", side_effect=publish):
+                    codegen._publish_outputs(source, {name:name.encode() for name in names}, before)
+                self.assertEqual(observed, list(names))
+                for name in names:
+                    self.assertEqual(stat.S_IMODE((generated / name).stat().st_mode), expected_mode)
+                    self.assertEqual((generated / name).read_bytes(), name.encode())
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX permission bits")
+    def test_fchmod_failure_and_source_collision_preserve_existing_outputs(self) -> None:
+        for failure in ("fchmod", "collision"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary)
+                generated = source / "apps/control-room/src/kernel/api/generated"
+                generated.mkdir(parents=True)
+                names = ("openapi-v2.json", "openapi-v2-types.ts", "openapi-v2-client.ts", "openapi-v2-paths.ts")
+                for name in names:
+                    (generated / name).write_bytes(b"previous")
+                    (generated / name).chmod(0o640)
+                before = codegen._output_baseline(source, names)
+                if failure == "collision":
+                    (generated / names[0]).write_bytes(b"concurrent edit")
+                preserved = {name:((generated / name).read_bytes(), (generated / name).stat().st_mode) for name in names}
+                outputs = {name:name.encode() for name in names}
+                if failure == "fchmod":
+                    with mock.patch.object(codegen.os, "fchmod", side_effect=PermissionError("refused")):
+                        with self.assertRaises(PermissionError):
+                            codegen._publish_outputs(source, outputs, before)
+                else:
+                    with self.assertRaisesRegex(codegen.CodegenError, "changed while codegen"):
+                        codegen._publish_outputs(source, outputs, before)
+                self.assertEqual({name:((generated / name).read_bytes(), (generated / name).stat().st_mode) for name in names}, preserved)
+                self.assertEqual(sorted(path.name for path in generated.iterdir()), sorted(names))
 
 
 if __name__ == "__main__":

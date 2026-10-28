@@ -131,8 +131,30 @@ describe("viewport 3D layer performance contracts", () => {
     expect(topChanged.get("layer:bottom")).toEqual(both.get("layer:bottom"));
     expect(topChanged.get("layer:top")?.quantityId).toBe("H_demag");
     expect(topChanged.get("layer:top")?.requestId).toBe(
-      "fdm-native-layer:layer:top:H_demag",
+      "fdm-native-layer:layer:top:H_demag:full",
     );
+  });
+
+  it("isolates tensor projection requests without changing another layer's owner", () => {
+    const settings = { activeQuantityId: "spin_current", shaderVisible: true, vectorsVisible: false, visible: true };
+    const plan = (tensorProjection: "c0" | "spin_flow_z" | null) =>
+      resolveViewport3DFdmNativeLayerFieldRequests({
+        available: true,
+        layers: [
+          { layerId: "layer:bottom", settings },
+          { layerId: "layer:top", settings: { ...settings, tensorProjection } },
+        ],
+        maxSamples: 256,
+      });
+    const full = plan(null);
+    const scalar = plan("c0");
+    const vector = plan("spin_flow_z");
+    expect(scalar.get("layer:bottom")).toEqual(full.get("layer:bottom"));
+    expect(vector.get("layer:bottom")).toEqual(full.get("layer:bottom"));
+    expect(scalar.get("layer:top")?.query.component).toBe("c0");
+    expect(vector.get("layer:top")?.query.component).toBe("spin_flow_z");
+    expect(new Set([full, scalar, vector].map((requests) => requests.get("layer:top")?.requestId)).size).toBe(3);
+    expect(vector.get("layer:top")?.consumers).toEqual(full.get("layer:top")?.consumers);
   });
 
   it("keys multilayer cuboid builds from target-local carrier, field, and settings identities", () => {

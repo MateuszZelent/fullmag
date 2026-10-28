@@ -1,4 +1,5 @@
 import { resolveDisplayUnitConversion } from "@/shared/domain/physics/displayUnits";
+import { isDirectionColormap } from "@/shared/visualization/directionColor";
 
 import { isRenderablePlanarOccupancy } from "./planarOccupancy";
 
@@ -68,6 +69,8 @@ export interface FieldMapRenderModelInput {
   sampleIdentity: string;
   scalar: Float32Array | Float64Array;
   vectors?: Float32Array | Float64Array | null;
+  /** World-frame vector components per pixel, used by the direction colormap. */
+  worldVectors?: Float32Array | Float64Array | null;
   vectorBudget?: number;
   vectorScale?: number;
   vectorStyle?: { color: string; colorMode: string; lengthMode: string; opacity: number; thickness: number };
@@ -84,6 +87,8 @@ export interface FieldMapRenderModel {
   colormap: string;
   component: string;
   diagnostics: readonly string[];
+  /** World vectors when the raster is coloured by direction; null for scalar colouring. */
+  directionVectors: Float32Array | Float64Array | null;
   display: {
     axisUnit: "m";
     legendUnit: string;
@@ -229,6 +234,16 @@ export function buildFieldMapRenderModel(
     ? resolvePlanarDisplayRange(input.scalar, input.mask ?? undefined, input.range)
     : null;
   if (!input.range || range === null) diagnostics.push("Planar color range is invalid and was not rendered.");
+  const pixelCount = input.resolution[0] * input.resolution[1];
+  const directionRequested = isDirectionColormap(input.colormap);
+  const directionVectors = directionRequested &&
+    input.worldVectors &&
+    input.worldVectors.length === pixelCount * 3
+    ? input.worldVectors
+    : null;
+  if (directionRequested && directionVectors === null) {
+    diagnostics.push("Direction colouring needs a three-component vector field; showing the scalar component instead.");
+  }
   const rasterOpacity = input.rasterOpacity ?? 1;
   const rasterOpacityValid = Number.isFinite(rasterOpacity) && rasterOpacity >= 0 && rasterOpacity <= 1;
   if (!rasterOpacityValid) diagnostics.push("Planar raster opacity is invalid and was not rendered.");
@@ -246,9 +261,12 @@ export function buildFieldMapRenderModel(
     ],
     boundsOutline: input.layers.bounds ? input.bounds : null,
     canonicalUnit: input.canonicalUnit,
-    colormap: input.colormap ?? "viridis",
+    colormap: directionRequested && directionVectors === null
+      ? "viridis"
+      : input.colormap ?? "viridis",
     component: input.component,
     diagnostics,
+    directionVectors,
     display: {
       axisUnit: "m",
       legendUnit: displayUnit.unit,

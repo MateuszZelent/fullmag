@@ -17,7 +17,7 @@ pub(crate) struct DirectQuadratureEvidenceV2 {
 }
 impl DirectQuadratureEvidenceV2 {
     fn validate(&self) -> Result<(), RunError> {
-        self.snapshot.validate()?;
+        self.snapshot.validate_closed_loop()?;
         if normalization_scale(self.signed_normalization_a, self.source_absolute_flux_a)?.to_bits()
             != self.scale_per_a.to_bits()
             || !super::closed_loop_v2::is_digest(&self.current_balance_certificate_digest)
@@ -26,6 +26,34 @@ impl DirectQuadratureEvidenceV2 {
         }
         Ok(())
     }
+    pub(crate) fn verify_policy_binding(
+        &self, requested: &serde_json::Value, resolved: &serde_json::Value,
+    ) -> Result<(), RunError> {
+        self.validate()?;
+        match (requested.get("solver_policy"), resolved.get("direct_field_policy")) {
+            (None, None) => self.snapshot.validate(),
+            (Some(name), Some(policy)) => {
+                let budget = name.as_str().and_then(fullmag_ir::antenna_closed_loop_direct_budget)
+                    .ok_or_else(|| invalid("unknown retained direct field policy"))?;
+                let s = &self.snapshot;
+                let expected = serde_json::json!({
+                    "policy_version": budget.policy_version,
+                    "maximum_source_target_pairs": budget.maximum_source_target_pairs,
+                    "maximum_kernel_evaluations": budget.maximum_kernel_evaluations,
+                    "maximum_ledger_leaf_visits": budget.maximum_ledger_leaf_visits,
+                });
+                if *policy != expected
+                    || s.maximum_source_target_pairs != budget.maximum_source_target_pairs
+                    || s.maximum_kernel_evaluations != budget.maximum_kernel_evaluations
+                    || s.maximum_ledger_leaf_visits != budget.maximum_ledger_leaf_visits {
+                    return Err(invalid("direct evidence differs from retained requested/resolved policy"));
+                }
+                Ok(())
+            }
+            _ => Err(invalid("incomplete retained direct field policy")),
+        }
+    }
+
     pub(crate) fn encode(&self) -> Result<Vec<u8>, RunError> {
         self.validate()?;
         let s = &self.snapshot;
@@ -199,5 +227,73 @@ impl DirectQuadratureEvidenceV2 {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod volume_policy_tests {
+    use super::*;
+    fn example(name: &str) -> DirectQuadratureEvidenceV2 {
+        let legacy = super::super::direct_quadrature::tests::example();
+        let mut snapshot = legacy.snapshot;
+        let budget = fullmag_ir::antenna_closed_loop_direct_budget(name).unwrap();
+        snapshot.maximum_source_target_pairs = budget.maximum_source_target_pairs;
+        snapshot.maximum_kernel_evaluations = budget.maximum_kernel_evaluations;
+        snapshot.maximum_ledger_leaf_visits = budget.maximum_ledger_leaf_visits;
+        DirectQuadratureEvidenceV2 {
+            snapshot, signed_normalization_a: 3.0, source_absolute_flux_a: 3.0,
+            scale_per_a: 1.0 / 3.0, current_balance_certificate_digest: "b".repeat(64),
+        }
+    }
+    fn provenance(name: &str) -> (serde_json::Value, serde_json::Value) {
+        let b = fullmag_ir::antenna_closed_loop_direct_budget(name).unwrap();
+        (serde_json::json!({"solver_policy": name}), serde_json::json!({"direct_field_policy": {
+            "policy_version": b.policy_version, "maximum_source_target_pairs": b.maximum_source_target_pairs,
+            "maximum_kernel_evaluations": b.maximum_kernel_evaluations,
+            "maximum_ledger_leaf_visits": b.maximum_ledger_leaf_visits,
+        }}))
+    }
+    #[test]
+    fn both_profiles_roundtrip_without_changing_raw_bits() {
+        for name in ["production_default", "volume_inspection_v1"] {
+            let original = example(name);
+            let bytes = original.encode().unwrap();
+            let restored = DirectQuadratureEvidenceV2::decode(&bytes).unwrap();
+            assert_eq!(restored.encode().unwrap(), bytes);
+            assert_eq!(restored.snapshot.targets[0].h_xyz_apm[1].to_bits(), (-0.0_f64).to_bits());
+            let (requested, resolved) = provenance(name);
+            restored.verify_policy_binding(&requested, &resolved).unwrap();
+        }
+    }
+    #[test]
+    fn legacy_evidence_stays_readable_but_volume_cannot_lose_its_policy() {
+        let empty = serde_json::json!({});
+        example("production_default").verify_policy_binding(&empty, &empty).unwrap();
+        let volume = example("volume_inspection_v1");
+        assert!(volume.snapshot.validate().is_err());
+        assert!(volume.verify_policy_binding(&empty, &empty).is_err());
+        let (requested, resolved) = provenance("production_default");
+        assert!(volume.verify_policy_binding(&requested, &resolved).is_err());
+        let (requested, mut resolved) = provenance("volume_inspection_v1");
+        assert!(volume.verify_policy_binding(&requested, &empty).is_err());
+        resolved["direct_field_policy"]["policy_version"] = "unknown".into();
+        assert!(volume.verify_policy_binding(&requested, &resolved).is_err());
+        let mut hybrid = volume;
+        hybrid.snapshot.maximum_ledger_leaf_visits = 100_000_000;
+        assert!(hybrid.encode().is_err());
+    }
+    #[test]
+    fn aggregate_work_is_not_reset_for_each_target() {
+        let mut volume = example("volume_inspection_v1");
+        for row in &mut volume.snapshot.targets { row.kernel_evaluations = 10_000_000; }
+        volume.snapshot.kernel_evaluations = 120_000_000;
+        volume.encode().unwrap();
+        let mut legacy = example("production_default");
+        legacy.snapshot.targets = volume.snapshot.targets.clone();
+        legacy.snapshot.kernel_evaluations = 120_000_000;
+        assert!(legacy.encode().is_err());
+        for row in &mut volume.snapshot.targets { row.kernel_evaluations = 42_000_000; }
+        volume.snapshot.kernel_evaluations = 504_000_000;
+        assert!(volume.encode().is_err());
     }
 }

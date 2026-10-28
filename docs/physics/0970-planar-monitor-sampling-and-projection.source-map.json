@@ -21,13 +21,13 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "focused-tests-only-unqualified",
-      "reason": "Tet4 and Prism6 nodal P1 sampling, native face topology, mapped compact carriers, and quantity-domain-aware default targeting have focused tests. Managed/browser/runtime/production execution is not yet qualified."
+      "reason": "Tet4, Prism6, Pyramid5 and Hex8 nodal first-order sampling, cached plane operators, native face topology, mapped compact carriers, and quantity-domain-aware default targeting compile in the DEV backend; unit tests are written but not run, Pyramid5/MFEM basis equality (PM-N19) is unverified, and managed/browser/production execution is not yet qualified."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "source-compatible-unqualified",
-      "reason": "A compatible transported Tet4 or Prism6 nodal P1 field may enter the CPU postprocessor; no fresh GPU source/device proof exists and native GPU sampling is absent."
+      "reason": "A compatible transported first-order Tet4/Prism6/Pyramid5/Hex8 nodal field enters the CPU postprocessor; native GPU sampling is absent and fresh managed GPU qualification is pending."
     }
   ],
   "contract_types": [
@@ -59,6 +59,11 @@
     }
   ],
   "qualification_gates": [
+    {
+      "id": "PM-N15",
+      "status": "unqualified",
+      "requirement": "FDM plane_sample equals the arithmetic mean of covered cells when raster dimensions divide the cell counts; an equal raster reproduces cell values."
+    },
     {
       "id": "PM-N05",
       "status": "red",
@@ -93,6 +98,51 @@
       "id": "PM-D03",
       "status": "planned",
       "requirement": "Default and authored monitors use the same sampler and measure-weighted reductions after source resolution."
+    },
+    {
+      "id": "PM-N16",
+      "status": "unqualified",
+      "requirement": "Cached plane operator agrees with direct evaluation within 1e-13 of the occupied range; repeated builds are bitwise identical."
+    },
+    {
+      "id": "PM-N17",
+      "status": "unqualified",
+      "requirement": "Spatially indexed or element-driven plane sampling equals direct traversal on 10k/200k/2M Tet4 meshes with bounded candidates."
+    },
+    {
+      "id": "PM-N18",
+      "status": "unqualified",
+      "requirement": "Hex8 and Pyramid5 reproduce affine fields within 1e-12 on axis and oblique planes without tetrahedral splitting."
+    },
+    {
+      "id": "PM-N19",
+      "status": "unqualified",
+      "requirement": "Pyramid5 shape functions agree pointwise with the first-order pyramid of the linked MFEM release."
+    },
+    {
+      "id": "PM-N20",
+      "status": "unqualified",
+      "requirement": "Slab of the element interpolant (q = xi*tau) on Prism6/Hex8/Pyramid5 is integrated exactly to quadrature tolerance."
+    },
+    {
+      "id": "PM-N21",
+      "status": "unqualified",
+      "requirement": "Probe on the raster edge, outside the frame and outside the target reports occupied, outside and empty without clamping."
+    },
+    {
+      "id": "PM-N22",
+      "status": "unqualified",
+      "requirement": "Default section on even/odd FDM grids at phi in {0,0.5,1} publishes k and the resolved coordinate of eq-planar-default-layer."
+    },
+    {
+      "id": "PM-N23",
+      "status": "unqualified",
+      "requirement": "Continuous FEM section through a graded Tet4 film publishes h_perp of eq-planar-navigation-step over the cut elements, changing with the plane, while the raster is unchanged by the step."
+    },
+    {
+      "id": "PM-N24",
+      "status": "unqualified",
+      "requirement": "An object-layer slab on an even FDM cell count stays centred on the object, and region scope on two regions of opposite m yields two different maps, each empty outside its region."
     }
   ],
   "equations": [
@@ -162,6 +212,11 @@
       "sources": ["fdm-sample", "clipped-tetra", "weighted-reduction"]
     },
     {
+      "id": "eq-planar-fdm-plane-area",
+      "symbols": ["qbar", "qc", "Acij", "c"],
+      "sources": ["fdm-sample", "sampling-tests"]
+    },
+    {
       "id": "eq-planar-fem-p1",
       "symbols": ["q", "Na", "qa", "a"],
       "sources": ["fem-sample", "clipped-tetra"]
@@ -175,6 +230,65 @@
       "id": "eq-planar-node-average",
       "symbols": ["qnodes", "N", "qa", "a"],
       "sources": ["fem-sample", "sampling-tests"]
+    },
+    {
+      "id": "eq-planar-sampling-operator",
+      "symbols": [
+        "W_pa",
+        "M_p",
+        "Pi_p",
+        "xi_e"
+      ],
+      "sources": [
+        "plane-operator",
+        "plane-operator-build",
+        "plane-operator-apply"
+      ]
+    },
+    {
+      "id": "eq-planar-fem-hex8",
+      "symbols": [
+        "xi_eta",
+        "tau"
+      ],
+      "sources": [
+        "hex8-basis",
+        "isoparametric-inverse"
+      ]
+    },
+    {
+      "id": "eq-planar-fem-pyramid5",
+      "symbols": [
+        "xi_eta",
+        "tau"
+      ],
+      "sources": [
+        "pyramid5-basis",
+        "isoparametric-inverse"
+      ]
+    },
+    {
+      "id": "eq-planar-default-layer",
+      "symbols": [
+        "k_layer",
+        "N_n",
+        "h_n",
+        "pn_res"
+      ],
+      "sources": [
+        "default-section"
+      ]
+    },
+    {
+      "id": "eq-planar-navigation-step",
+      "symbols": [
+        "h_perp",
+        "pn_res"
+      ],
+      "sources": [
+        "fem-navigation-step",
+        "default-section"
+      ]
     }
   ],
   "symbols": [
@@ -213,6 +327,7 @@
     {"id": "c", "latex": "c", "meaning": "FDM cell index", "si_unit": "1"},
     {"id": "qc", "latex": "q_c", "meaning": "Cell-constant FDM value", "si_unit": "[q]"},
     {"id": "Vcij", "latex": "V_{c,ij}", "meaning": "Cell/pixel-support intersection volume", "si_unit": "\\mathrm{m^3}"},
+    {"id": "Acij", "latex": "A_{c,ij}", "meaning": "Area of the cell section inside the pixel footprint", "si_unit": "\\mathrm{m^2}"},
     {"id": "a", "latex": "a", "meaning": "Local FEM node index", "si_unit": "1"},
     {"id": "Na", "latex": "N_a", "meaning": "Tet4 barycentric or Prism6 triangle-P1 tensor-product interval-P1 basis function", "si_unit": "1"},
     {"id": "qa", "latex": "q_a", "meaning": "Nodal P1 value", "si_unit": "[q]"},
@@ -224,7 +339,103 @@
     {"id": "pi", "latex": "\\pi", "meaning": "Circle constant", "si_unit": "1"},
     {"id": "phi", "latex": "\\phi", "meaning": "Validated default-source position fraction", "si_unit": "1"},
     {"id": "pn", "latex": "p_n", "meaning": "Resolved physical coordinate along the selected normal", "si_unit": "\\mathrm{m}"},
-    {"id": "normal_bounds", "latex": "b_{\\min},b_{\\max}", "meaning": "Published domain bounds along the selected normal", "si_unit": "\\mathrm{m}"}
+    {"id": "normal_bounds", "latex": "b_{\\min},b_{\\max}", "meaning": "Published domain bounds along the selected normal", "si_unit": "\\mathrm{m}"},
+    {
+      "id": "W_pa",
+      "latex": "W_{pa}",
+      "meaning": "Sampling-operator weight of carrier degree of freedom $a$ in pixel $p$",
+      "si_unit": "1\\ \\text{(plane)}\\ \\text{or}\\ \\mathrm{m^3}\\ \\text{(slab, depth)}"
+    },
+    {
+      "id": "M_p",
+      "latex": "M_p",
+      "meaning": "Sampling-operator measure of pixel $p$ ($1$ for occupied plane pixels)",
+      "si_unit": "1\\ \\text{or}\\ \\mathrm{m^3}"
+    },
+    {
+      "id": "Pi_p",
+      "latex": "\\Pi_p",
+      "meaning": "Pixel prism of pixel $p$ for slab/depth operators",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "xi_e",
+      "latex": "\\boldsymbol\\xi_e",
+      "meaning": "Reference coordinates of a point in element $e$",
+      "si_unit": "1"
+    },
+    {
+      "id": "xi_eta",
+      "latex": "\\xi,\\eta",
+      "meaning": "Hex8/Pyramid5 in-plane reference coordinates",
+      "si_unit": "1"
+    },
+    {
+      "id": "tau",
+      "latex": "\\tau",
+      "meaning": "Hex8/Pyramid5 vertical reference coordinate",
+      "si_unit": "1"
+    },
+    {
+      "id": "h_e",
+      "latex": "h_e",
+      "meaning": "Diameter of element $e$",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "eps_x",
+      "latex": "\\varepsilon_x",
+      "meaning": "Scale-relative geometric tolerance",
+      "si_unit": "m"
+    },
+    {
+      "id": "eps_xi",
+      "latex": "\\varepsilon_\\xi",
+      "meaning": "Reference-space containment tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "x_star",
+      "latex": "\\mathbf x_\\star",
+      "meaning": "Probe world position",
+      "si_unit": "m"
+    },
+    {
+      "id": "pn_req",
+      "latex": "p_n^{\\mathrm{req}}",
+      "meaning": "Requested coordinate along the default-slice normal",
+      "si_unit": "m"
+    },
+    {
+      "id": "pn_res",
+      "latex": "p_n^{\\mathrm{res}}",
+      "meaning": "Resolved coordinate along the default-slice normal",
+      "si_unit": "m"
+    },
+    {
+      "id": "k_layer",
+      "latex": "k",
+      "meaning": "FDM cell-layer index along the normal",
+      "si_unit": "1"
+    },
+    {
+      "id": "N_n",
+      "latex": "N_n",
+      "meaning": "FDM cell count along the normal",
+      "si_unit": "1"
+    },
+    {
+      "id": "h_n",
+      "latex": "h_n",
+      "meaning": "FDM cell edge along the normal",
+      "si_unit": "m"
+    },
+    {
+      "id": "h_perp",
+      "latex": "h_\\perp",
+      "meaning": "Navigation step of a continuous FEM section: median normal extent of the cut target elements",
+      "si_unit": "m"
+    }
   ],
   "sources": [
     {
@@ -462,6 +673,83 @@
       "path": "crates/fullmag-api/src/planar_sampling/tests.rs",
       "symbol": "planar_sampling_fem_volume_mean_is_not_node_count_average_and_is_refinement_invariant",
       "responsibility": "Prove focused refinement invariance for the manufactured P1 fixture."
+    },
+    {
+      "id": "plane-operator",
+      "path": "crates/fullmag-api/src/planar_sampling/operator.rs",
+      "symbol": "FemPlaneOperator",
+      "responsibility": "Geometry-only plane operator and bounded LRU cache keyed by geometry identity and topology fingerprint.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "plane-operator-build",
+      "path": "crates/fullmag-api/src/planar_sampling/fem.rs",
+      "symbol": "build_plane_operator",
+      "responsibility": "Element-driven plane rasterization recording element, local nodes and shape weights per pixel.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "plane-operator-apply",
+      "path": "crates/fullmag-api/src/planar_sampling/fem.rs",
+      "symbol": "apply_plane_operator",
+      "responsibility": "Field gather of eq-planar-sampling-operator for a new field revision.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "isoparametric-inverse",
+      "path": "crates/fullmag-api/src/planar_sampling/fem.rs",
+      "symbol": "isoparametric_weights",
+      "responsibility": "Damped Newton inversion with scale-relative stopping for Prism6, Hex8 and Pyramid5.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "hex8-basis",
+      "path": "crates/fullmag-api/src/planar_sampling/fem.rs",
+      "symbol": "hex8_shape",
+      "responsibility": "Trilinear Hex8 basis of eq-planar-fem-hex8.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "pyramid5-basis",
+      "path": "crates/fullmag-api/src/planar_sampling/fem.rs",
+      "symbol": "pyramid5_shape",
+      "responsibility": "Rational first-order Pyramid5 basis of eq-planar-fem-pyramid5.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "clipped-quadrature",
+      "path": "crates/fullmag-api/src/planar_sampling/geometry.rs",
+      "symbol": "integrate_clipped_element_quadrature",
+      "responsibility": "Degree-3 tetrahedral quadrature of the element basis over the clipped region.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "default-section",
+      "path": "crates/fullmag-api/src/planar_sampling/source.rs",
+      "symbol": "resolve_default_planar_source_with_stops",
+      "responsibility": "Requested vs. resolved Default section, FDM layer snap and FEM node-plane stops.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "fem-node-planes",
+      "path": "crates/fullmag-api/src/planar_sampling/source.rs",
+      "symbol": "FemNodePlaneStops",
+      "responsibility": "Node planes from the mixed-layer topology certificate (v1 or v2).",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "point-probe",
+      "path": "crates/fullmag-api/src/planar_sampling/target.rs",
+      "symbol": "evaluate_point",
+      "responsibility": "Point evaluation of the probe with the raster locator and basis.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "fem-navigation-step",
+      "path": "crates/fullmag-api/src/planar_sampling/fem.rs",
+      "symbol": "section_extent",
+      "responsibility": "Median normal extent and count of the target elements cut by a FEM sampling plane, from the plane-operator geometry pass; published as the continuous navigation step.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
     }
   ],
   "public_api": {

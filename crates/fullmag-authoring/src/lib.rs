@@ -13,6 +13,7 @@ mod scene;
 mod scene_study_plan;
 mod spin_transport;
 mod study_contract;
+mod universe_state;
 mod validation;
 
 pub use adapters::{

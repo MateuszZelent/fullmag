@@ -31,7 +31,6 @@ import {
   useObjectMetricsResource,
   useScalarWindowResource,
   useSolverStatusResource,
-  useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   formatRuntimeStateLabel,
@@ -42,10 +41,16 @@ import {
   resolveRuntimeUserSolvePhase,
   type RuntimeUserSolvePhase,
 } from "@/kernel/runtime/runtimeStateDisplay";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import { Progress } from "@/shared/ui/Progress";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
+
+import {
+  formatAntennaFieldEta,
+  useAntennaFieldEta,
+  type AntennaFieldEta,
+} from "./antennaFieldEta";
 
 // UI display locale only. Scientific values and exports keep their existing
 // invariant serialization and are not routed through this formatter.
@@ -79,16 +84,35 @@ const FOOTER_SCALAR_COLUMNS = [
 
 export function FooterTelemetry({
   bus,
+  status,
+  stageExecution,
+  view,
 }: {
   bus: EventBus<KernelEventMap>;
+  status: FooterTelemetryStatus | null;
+  stageExecution: Pick<ResourceResult<StageExecutionResource | null>, "data" | "status">;
+  view: "overview" | "antenna";
 }) {
-  const status = useSessionStatusSelector(selectFooterTelemetryStatus, {
-    isEqual: footerTelemetryStatusEquals,
-  });
+  const solverStatus = useSolverStatusResource({ enabled: Boolean(status) && view === "overview" });
+  const antennaStage = resolveFooterAntennaStage(status, stageExecution.data);
+  const antennaNumerical = antennaStage ? readAntennaProgress(antennaStage.record) : null;
+  const antennaNowMs = useAntennaStageClock(
+    view === "antenna" && !antennaNumerical ? antennaStage?.clockKey ?? null : null,
+  );
+  const antennaEta = useAntennaFieldEta(
+    view === "antenna" && antennaStage?.active && antennaNumerical?.phase === "evaluating_field"
+      ? {
+          identity: antennaStage.identityKey,
+          completed: antennaNumerical.completed_targets,
+          total: antennaNumerical.total_targets,
+          elapsedSeconds: antennaNumerical.elapsed_seconds,
+        } : null,
+  );
+  const generalTelemetryEnabled = Boolean(status) && view === "overview" && !antennaStage;
   const liveSample = useFooterLiveScalarSample(bus);
   const scalarWindow = useScalarWindowResource({
     columns: FOOTER_SCALAR_COLUMNS,
-    enabled: Boolean(status),
+    enabled: generalTelemetryEnabled,
     limit: 1,
     tail: true,
   });
@@ -104,16 +128,14 @@ export function FooterTelemetry({
     () => resolvePrimaryTelemetryObjectId(scene.data, selectedObjectId),
     [scene.data, selectedObjectId],
   );
-  const objectMetrics = useObjectMetricsResource(objectId);
-  const solverStatus = useSolverStatusResource({ enabled: Boolean(status) });
-  const stageExecution = useStageExecutionResource({ enabled: Boolean(status) });
+  const objectMetrics = useObjectMetricsResource(generalTelemetryEnabled ? objectId : null);
   const responseProgress = useFrequencyDomainResponseProgressResource({
-    enabled: Boolean(status),
+    enabled: generalTelemetryEnabled,
   });
   const responseSweep = useFrequencyDomainResponseSweepResource({
-    enabled: Boolean(status),
+    enabled: generalTelemetryEnabled,
   });
-  const currentRun = useCurrentRunResource({ enabled: Boolean(status) });
+  const currentRun = useCurrentRunResource({ enabled: generalTelemetryEnabled });
   const userSolvePhase = status
     ? resolveRuntimeUserSolvePhase({
         detailedRuntimeState: solverStatus.data?.runtime_state,
@@ -136,11 +158,33 @@ export function FooterTelemetry({
     responseProgress.data,
     responseSweep.data,
     scalarResourceSample,
-    { stageExecutionUnpublished, userSolvePhase },
+    {
+      magneticModelPresent: resolveFooterMagneticModelPresent(scene),
+      nowMs: antennaNowMs,
+      stageExecutionUnpublished,
+      userSolvePhase,
+    },
   );
 
+  if (view === "antenna" && !antennaStage) {
+    return (
+      <div className="fm-footer-telemetry__empty" role="region" aria-label="Antenna telemetry">
+        <strong>No antenna stage in the current execution</strong>
+        <span>Antenna progress requires an explicitly authored stage matching the current session and run.</span>
+      </div>
+    );
+  }
+  if (view === "overview" && antennaStage) {
+    return (
+      <div className="fm-footer-telemetry__empty" role="region" aria-label="Simulation telemetry">
+        <strong>{telemetry.statusTitle}</strong>
+        <span>Open the Antenna tab for field samples, phase and result publication.</span>
+      </div>
+    );
+  }
+
   return (
-    <div className="fm-footer-telemetry" role="region" aria-label="Simulation telemetry">
+    <div className="fm-footer-telemetry" role="region" aria-label={view === "antenna" ? "Antenna telemetry" : "Simulation telemetry"}>
       <div className="fm-footer-telemetry__strip">
         <span
           className="fm-footer-telemetry__strip-dot"
@@ -154,7 +198,9 @@ export function FooterTelemetry({
         <span className="text-fm-xs text-fm-secondary whitespace-nowrap truncate">
           {telemetry.onlineTitle}
         </span>
-        {telemetry.frequencyDomainProgress ? (
+        {telemetry.antennaProgress ? (
+          <AntennaFieldProgressStrip progress={telemetry.antennaProgress} eta={antennaEta} />
+        ) : telemetry.frequencyDomainProgress ? (
           <>
             <span className="w-px h-3 bg-fm-subtle flex-shrink-0 mx-fm-1" aria-hidden="true" />
             <FrequencyDomainProgressStrip progress={telemetry.frequencyDomainProgress} />
@@ -205,7 +251,7 @@ type FooterTelemetryMetric = {
   value: string;
 };
 
-type FooterTelemetryStatus = {
+export type FooterTelemetryStatus = {
   energies: Pick<
     LiveStatusResource["energies"],
     "anisotropy" | "demag" | "dmi" | "exchange" | "total" | "zeeman"
@@ -226,6 +272,8 @@ type FooterTelemetryStatus = {
     | "solver_time"
   > | null;
   sessionId: string;
+  sessionEpoch: string;
+  requestScopeEpoch: string;
   scalarsRevision: number;
   solver: Pick<
     LiveStatusResource["solver"],
@@ -267,6 +315,8 @@ export function selectFooterTelemetryStatus(
         }
       : null,
     sessionId: data.session.session_id,
+    sessionEpoch: data.session.session_epoch,
+    requestScopeEpoch: data.session.request_scope_epoch,
     scalarsRevision: data.resources.scalars_revision,
     solver: {
       converged: data.solver.converged ?? null,
@@ -288,6 +338,8 @@ export function footerTelemetryStatusEquals(
     Object.is(previous.metrics.steps_per_second, next.metrics.steps_per_second) &&
     Object.is(previous.metrics.total_steps, next.metrics.total_steps) &&
     Object.is(previous.sessionId, next.sessionId) &&
+    Object.is(previous.sessionEpoch, next.sessionEpoch) &&
+    Object.is(previous.requestScopeEpoch, next.requestScopeEpoch) &&
     Object.is(previous.scalarsRevision, next.scalarsRevision) &&
     Object.is(previous.run?.run_id ?? null, next.run?.run_id ?? null) &&
     Object.is(
@@ -356,10 +408,28 @@ export function buildFooterTelemetryModel(
   responseSweep?: unknown,
   scalarResourceSample?: FooterScalarResourceSample | null,
   runtimePhase?: {
+    magneticModelPresent?: boolean | null;
+    nowMs?: number | null;
     stageExecutionUnpublished?: boolean;
     userSolvePhase?: RuntimeUserSolvePhase | null;
   },
 ) {
+  if (!status) return {
+    awaitingCompute: false,
+    antennaProgress: null,
+    frequencyDomainProgress: null,
+    stageProgressNotice: null,
+    metrics: [] as FooterTelemetryMetric[],
+    onlineDetail: "No current session telemetry",
+    onlineTitle: "Local / Standby",
+    statusDetail: "Waiting for current session telemetry",
+    statusState: "unknown",
+    statusTitle: "System Status: No live telemetry",
+  };
+
+  const antennaStage = resolveFooterAntennaStage(status, stageExecution);
+  if (antennaStage) return buildAntennaSolveTelemetry(antennaStage, runtimePhase?.nowMs ?? null);
+
   const liveSampleForStatus = resolveLiveSampleForStatus(status, liveSample);
   const scalarSample = selectLatestFooterScalarSample(
     liveSampleForStatus,
@@ -486,8 +556,9 @@ export function buildFooterTelemetryModel(
   return {
     awaitingCompute: userSolvePhase === "awaiting_user_solve",
     frequencyDomainProgress,
+    antennaProgress: null,
     stageProgressNotice,
-    metrics: [
+    metrics: ([
       {
         detail: usesPseudoTime
           ? "Direct minimizer pseudotime"
@@ -627,7 +698,11 @@ export function buildFooterTelemetryModel(
       energyMetric("zeeman", "Zeeman", "Zeeman"),
       energyMetric("anisotropy", "Anisotropy", "Anisotropy"),
       energyMetric("dmi", "DMI", "DMI"),
-    ] satisfies FooterTelemetryMetric[],
+    ] satisfies FooterTelemetryMetric[]).filter((metric) =>
+      runtimePhase?.magneticModelPresent !== false ||
+      (metric.id !== "max-torque" && metricGroup(metric.id) !== "magnetization" &&
+        metricGroup(metric.id) !== "energy"),
+    ),
     onlineDetail: status ? "Session state" : "Awaiting session",
     onlineTitle: userSolvePhase === "preparing_model"
       ? "Session / Preparing"
@@ -641,6 +716,176 @@ export function buildFooterTelemetryModel(
     statusDetail: status ? "Runtime telemetry" : "Waiting for runtime",
     statusState: runtimeState,
     statusTitle,
+  };
+}
+
+type FooterAntennaStage = {
+  active: boolean;
+  identityKey: string;
+  clockKey: string | null;
+  record: StageExecutionResource["stages"][number];
+};
+
+export function resolveFooterAntennaStage(
+  status: FooterTelemetryStatus | null | undefined,
+  execution: StageExecutionResource | null | undefined,
+): FooterAntennaStage | null {
+  if (!status?.sessionId || !status.sessionEpoch || !status.requestScopeEpoch ||
+    !status.run?.run_id || !execution ||
+    execution.session_id !== status.sessionId ||
+    execution.session_epoch !== status.sessionEpoch ||
+    execution.request_scope_epoch !== status.requestScopeEpoch ||
+    execution.run_id !== status.run.run_id) return null;
+
+  // Accepted terminal/pending runs have no active index. Only a single-stage
+  // run is unambiguous in that case; never guess a multi-stage run's physics.
+  const index = execution.active_stage_index ?? (execution.stages.length === 1 ? 0 : null);
+  if (index === null || !Number.isInteger(index) || index < 0) return null;
+  const record = execution.stages[index];
+  if (!record || record.index !== index || !record.stage_id?.trim() ||
+    !record.antenna_solve_stage_id?.trim() ||
+    !["pending", "running", "completed", "failed", "cancelled"].includes(record.status)) return null;
+
+  const clockKey = record.status === "running" && execution.runtime_state === "running" &&
+    validStageTimestamp(record.started_at_unix_ms)
+    ? JSON.stringify([execution.session_id, execution.session_epoch,
+      execution.request_scope_epoch, execution.run_id, record.stage_id,
+      record.antenna_solve_stage_id, record.started_at_unix_ms])
+    : null;
+  return {
+    active: record.status === "running" && execution.runtime_state === "running",
+    identityKey: JSON.stringify([execution.session_id, execution.session_epoch,
+      execution.request_scope_epoch, execution.run_id, record.stage_id, record.antenna_solve_stage_id, record.index]),
+    clockKey, record,
+  };
+}
+
+function validStageTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function useAntennaStageClock(identity: string | null): number | null {
+  const [clock, setClock] = useState<{ identity: string; nowMs: number } | null>(null);
+  useEffect(() => {
+    if (!identity) return;
+    const timer = globalThis.setInterval(() => {
+      setClock({ identity, nowMs: Date.now() });
+    }, 1_000);
+    return () => globalThis.clearInterval(timer);
+  }, [identity]);
+  return clock?.identity === identity ? clock.nowMs : null;
+}
+
+const ANTENNA_PHASE_LABELS = {
+  preparing_source: "Preparing source",
+  solving_potential: "Solving electric potential",
+  reconstructing_current: "Reconstructing current density",
+  evaluating_field: "Evaluating Oersted field",
+  validating_result: "Validating numerical result",
+  publishing_result: "Publishing result",
+} as const;
+
+type FooterAntennaProgress = {
+  active: boolean;
+  percent: number | null;
+  samples: string;
+};
+
+function readAntennaProgress(record: FooterAntennaStage["record"]) {
+  const progress = record.antenna_progress;
+  if (!progress || !Object.hasOwn(ANTENNA_PHASE_LABELS, progress.phase) ||
+    !Number.isSafeInteger(progress.completed_targets) || progress.completed_targets < 0 ||
+    !Number.isSafeInteger(progress.total_targets) || progress.total_targets <= 0 ||
+    progress.completed_targets > progress.total_targets ||
+    !Number.isSafeInteger(progress.source_cells) || progress.source_cells <= 0 ||
+    !Number.isFinite(progress.elapsed_seconds) || progress.elapsed_seconds < 0) return null;
+  const phase = progress.phase as keyof typeof ANTENNA_PHASE_LABELS;
+  if ((["preparing_source", "solving_potential", "reconstructing_current"].includes(phase) &&
+      progress.completed_targets !== 0) ||
+    (["validating_result", "publishing_result"].includes(phase) &&
+      progress.completed_targets !== progress.total_targets)) return null;
+  return { ...progress, phase };
+}
+
+function AntennaFieldProgressStrip({ progress, eta }: {
+  progress: FooterAntennaProgress;
+  eta: AntennaFieldEta;
+}) {
+  return (
+    <div className="fm-footer-telemetry__antenna-progress" data-active={progress.active}>
+      <span className="fm-footer-telemetry__antenna-progress-label">Field samples</span>
+      <Progress
+        value={progress.percent}
+        aria-label="Antenna field sampling"
+        aria-valuetext={progress.percent === null ? "Progress not reported" : progress.samples}
+      />
+      <span className="fm-footer-telemetry__antenna-progress-count">
+        {progress.percent === null ? "Progress not reported" : progress.samples}
+      </span>
+      {progress.percent === 100 ? (
+        <span className="fm-footer-telemetry__antenna-eta">Field sampling complete</span>
+      ) : eta.state === "ready" || eta.state === "estimating" ? (
+        <span
+          className="fm-footer-telemetry__antenna-eta"
+          title="Approximate remaining field evaluation time from recent completed points and elapsed pulses. Point cost varies; validation and publication are excluded."
+        >
+          {eta.state === "ready"
+            ? "Estimated field time left " + formatAntennaFieldEta(eta.seconds)
+            : "Estimating field time…"}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function buildAntennaSolveTelemetry(stage: FooterAntennaStage, nowMs: number | null) {
+  const { record } = stage;
+  const state = record.status;
+  const label = state.charAt(0).toUpperCase() + state.slice(1);
+  const reason = record.state_transition_reason ?? record.reason ?? null;
+  const numerical = readAntennaProgress(record);
+  const start = record.started_at_unix_ms;
+  const end = state === "running" ? nowMs : record.completed_at_unix_ms;
+  const elapsed = numerical ? formatDuration(numerical.elapsed_seconds)
+    : validStageTimestamp(start) && validStageTimestamp(end) && end >= start
+      ? formatDuration((end - start) / 1_000) : "Not reported";
+  const fieldSamplingStarted = numerical &&
+    ["evaluating_field", "validating_result", "publishing_result"].includes(numerical.phase);
+  const percent = fieldSamplingStarted ? 100 * numerical.completed_targets / numerical.total_targets : null;
+  const samples = numerical
+    ? `${INTEGER_FORMAT.format(numerical.completed_targets)} / ${INTEGER_FORMAT.format(numerical.total_targets)}`
+    : "Progress not reported";
+  const phase = numerical ? ANTENNA_PHASE_LABELS[numerical.phase] : "Progress not reported";
+  const publication = state === "failed" ? "Not completed"
+    : state === "cancelled" ? "Cancelled"
+      : state === "completed" ? "Check saved results"
+        : numerical?.phase === "publishing_result" ? "Publishing"
+          : state === "pending" ? "Awaiting execution" : "Awaiting result";
+  const metric = (id: string, title: string, value: string, detail: string): FooterTelemetryMetric => ({
+    id, label: title, value, detail, subdetail: "Authoritative antenna stage execution",
+    icon: <Radio size={14} aria-hidden="true" />,
+  });
+  return {
+    antennaProgress: { active: stage.active, percent, samples } satisfies FooterAntennaProgress,
+    awaitingCompute: false,
+    frequencyDomainProgress: null,
+    stageProgressNotice: null,
+    metrics: [
+      metric("antenna-state", "Solve state", label, reason ? String(reason) : "Antenna field solve lifecycle"),
+      metric("antenna-phase", "Phase", phase, "Source preparation, electric solve, current reconstruction, field evaluation and publication"),
+      metric("antenna-targets", "Field samples", samples, "Completed observation points; this is not overall stage completion"),
+      metric("antenna-source", "Source cells", numerical ? INTEGER_FORMAT.format(numerical.source_cells) : "Not reported", "Conductor cells contributing to the field integral"),
+      metric("antenna-elapsed", numerical ? "Operation elapsed" : "Stage elapsed", elapsed,
+        numerical
+          ? "Wall-clock elapsed since the antenna operation runner started; stage preparation may begin earlier"
+          : "Wall-clock duration from the published stage timestamps; not CPU time or LLG simulation time"),
+      metric("antenna-results", "Publication", publication, "100% field sampling does not establish publication or saved-result verification"),
+    ],
+    onlineDetail: "Session state",
+    onlineTitle: state === "running" ? "Online / Active" : "Online / Antenna solve",
+    statusDetail: reason ? String(reason) : "Antenna field solve lifecycle",
+    statusState: state,
+    statusTitle: `System Status: Antenna solve — ${label}`,
   };
 }
 
@@ -1140,6 +1385,13 @@ function selectLatestFooterScalarSample(
     return resourceSample;
   }
   return liveSample;
+}
+
+export function resolveFooterMagneticModelPresent(
+  scene: Pick<ResourceResult<SceneResource>, "data" | "status">,
+): boolean | null {
+  if (scene.status !== "ready" || !Array.isArray(scene.data?.objects)) return null;
+  return !scene.data.objects.every(hasEmptyObjectMagneticModel);
 }
 
 export function resolvePrimaryTelemetryObjectId(

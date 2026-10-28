@@ -1,0 +1,103 @@
+{
+  "reference_run_id": "run-live-62d110763485b10e2512922267a1aed284996710852d4fd27cb3f4ad71a1e496",
+  "reference_script_sha256": "eb9151d4a0fc39ab6ef742c86830e0947bd747415255edcf6ef53c7a150afe65",
+  "raw_source_nodes_cells": [
+    664,
+    1856
+  ],
+  "prepared_source_nodes_cells": [
+    677,
+    1856
+  ],
+  "global_nodes_cells": [
+    1145,
+    6428
+  ],
+  "sampling_nodes_cells": [
+    4,
+    1
+  ],
+  "sampling_global_cell_ordinal": 1726,
+  "sampling_global_node_indices": [
+    22,
+    944,
+    144,
+    961
+  ],
+  "sampling_coordinates_m": [
+    [
+      0.0,
+      -5e-07,
+      -5e-07
+    ],
+    [
+      2.141857431349173e-07,
+      -6.226009493164518e-07,
+      -2.690815017035986e-07
+    ],
+    [
+      1.4275900503243965e-07,
+      -5e-07,
+      -5e-07
+    ],
+    [
+      -7.804741220100222e-08,
+      -4.250133708987016e-07,
+      -2.96802236536864e-07
+    ]
+  ],
+  "sampling_presentation_bounds_m": {
+    "size": [
+      2.9223315533591953e-07,
+      1.9758757841775015e-07,
+      2.309184982964014e-07
+    ],
+    "center": [
+      6.806916546695753e-08,
+      -5.238071601075767e-07,
+      -3.845407508517993e-07
+    ]
+  },
+  "field_total_seconds": 180,
+  "field_per_target_seconds": 90,
+  "scope": "Diagnostyka czterech punktów; nie pełna mapa Universe, nie kwalifikowana baza ani reprodukcja publikacji. Budżet pola nie jest twardym timeoutem całego runu.",
+  "assets": {
+    "antenna-raw.npz": {
+      "bytes": 98553,
+      "sha256": "d11f6f81aad859673c5a37672e8bf86e9f4249db5ec3c0d8cae2f2a98caef374"
+    },
+    "global.fullmag-mesh": {
+      "bytes": 72287,
+      "sha256": "ccee2a8e2c0bced293be055054fb574d9d30d5a1c28c34f657c2cadc3ee6ef84"
+    },
+    "sampling.npz": {
+      "bytes": 4614,
+      "sha256": "b257e35a97850e88b850cdfadbbd874bd47d3e8b8442df26b049c8a610143f65"
+    }
+  },
+  "script_sha256": "7213dcfe8a70714c88bb9e3b9e19ed4269cc34b499dc13efe149f73327363bdb",
+  "universe_frozen_bounds_m": {
+    "size": [
+      3.3999999999999996e-06,
+      2e-06,
+      1.7999999999999997e-06
+    ],
+    "center": [
+      1.0000000000000002e-06,
+      0.0,
+      -3.0000000000000004e-07
+    ]
+  },
+  "universe_intent": "Granice manualne równe bbox zamrożonego Global; dodatkowy obiekt sampling nie rozszerza domeny auto.",
+  "paths": "Skrypt rozwiązuje jawne wejścia względem własnego __file__, niezależnie od katalogu wywołującego; nie zmienia cwd ani środowiska capture.",
+  "reference_diagnostic_ir_sha256": "08eae531d9414a7aa13e2051cb7e51a91e2cd6035bf8ecbc631fda6820fdc23b",
+  "reference_input_script_sha256": "4b04bf81528e5a3c4d01f718d175d2b76acedd75c6b388cbfb692db9f07a7eee",
+  "authored_cpu_threads": 1,
+  "authored_resource_calls": [
+    "study.threads(1)",
+    "study.resources(fm.ComputeResources(cpu=fm.CpuResources(threads=1)))"
+  ],
+  "cpu_native_and_blas_policy": "Domyślne Auto; nie dodano polityki affinity ani core.",
+  "manifest_state": "Stan przy zapisie wejść; późniejsze dowody capture i wykonania są przechowywane oddzielnie.",
+  "native_or_capture_executed_at_manifest_creation": false
+}

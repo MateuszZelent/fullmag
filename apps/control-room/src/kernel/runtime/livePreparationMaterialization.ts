@@ -16,8 +16,11 @@ import {
 
 type JsonRecord = Record<string, unknown>;
 
+type PreparationReceipt = NonNullable<SimulationPreparationResource["receipt"]>;
+
 export type LivePreparationMaterializationOutcome =
   | { kind: "materialized"; resource: LivePreparationMaterializationResource }
+  | { kind: "already-prepared"; receipt: PreparationReceipt }
   | { kind: "rejected"; result: CommandResult };
 
 export interface LivePreparationMaterializationOptions {
@@ -101,6 +104,14 @@ export async function materializeCurrentLivePreparation(
           "A shared-domain mesh for the current scene revision is required before preparation.",
         );
       }
+    }
+
+    // A ready preparation that already carries its receipt was published by
+    // the accepted preparation lane (for FEM, with native mesh evidence).
+    // Materializing it again would re-plan from the scene without that
+    // evidence, so Compute proceeds with the accepted plan.
+    if (preparation.receipt?.preparation_id === preparation.preparation_id) {
+      return { kind: "already-prepared", receipt: preparation.receipt };
     }
 
     const resource = await api.simulation.materializePreparation(

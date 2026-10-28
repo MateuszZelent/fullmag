@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::script_stage_contract::{
-    ResolvedScriptStage, ScriptExecutionConfig, StudyPipelineDocument, StudyPipelineNode,
+    ResolvedScriptStage, ScriptExecutionConfig, StudyPipelineDocument, StudyPipelineNode, ScriptStageProvenance,
 };
 use crate::script_stage_materialization::{
     materialize_script_stages_with_output_policy_bounded, StageOutputPolicy,
@@ -58,15 +58,28 @@ pub fn materialize_script_pipeline_with_output_policy_bounded(
         .as_ref()
         .context("pipeline compilation requires an authored study_pipeline")?
         .clone();
-    if !config.stages.is_empty() {
-        bail!("pipeline compilation cannot mix explicit stages with study_pipeline");
-    }
-    let authored_pipeline_sha256 =
-        fullmag_ir::canonical_ir_json_sha256(&serde_json::to_value(&authored_pipeline)?)?;
-    let stages =
-        materialize_script_stages_with_output_policy_bounded(config, output_policy, max_stages)?;
+    let explicit = !config.stages.is_empty();
     let mut nodes = Vec::new();
     collect_node_bindings(&authored_pipeline.nodes, &[], true, &mut nodes);
+    if explicit { validate_physical_snapshot_coverage(&authored_pipeline, &nodes, &config)?; }
+    let authored_pipeline_sha256 =
+        fullmag_ir::canonical_ir_json_sha256(&serde_json::to_value(&authored_pipeline)?)?;
+    let mut stages =
+        materialize_script_stages_with_output_policy_bounded(config, output_policy, max_stages)?;
+    if explicit {
+        let expected: Vec<_> = nodes.iter().filter(|node| node.kind == ScriptPipelineNodeKind::Primitive && node.effectively_enabled).collect();
+        if stages.len() != expected.len() { bail!("explicit physical snapshot coverage changed during materialization"); }
+        for (stage,binding) in stages.iter_mut().zip(expected) {
+            if stage.ir.problem_meta.runtime_metadata.get("active_stage_id").and_then(serde_json::Value::as_str) != Some(binding.authored_step_id.as_str()) {
+                bail!("materialized snapshot changed its authored stage identity");
+            }
+            let Some(StudyPipelineNode::Primitive {label,notes,source,..}) = authored_node(&authored_pipeline.nodes,&binding.authored_step_id) else {
+                bail!("explicit physical snapshot has no primitive authored owner");
+            };
+            stage.provenance=Some(ScriptStageProvenance {authored_step_id:binding.authored_step_id.clone(),expansion_index:0,
+                ancestor_group_ids:binding.ancestor_group_ids.clone(),label:label.clone(),notes:notes.clone(),source:source.clone()});
+        }
+    }
     let by_id: BTreeMap<_, _> = nodes
         .iter()
         .enumerate()
@@ -114,6 +127,54 @@ pub fn materialize_script_pipeline_with_output_policy_bounded(
         nodes,
         executions,
     })
+}
+
+pub(crate) fn authored_node<'a>(nodes:&'a [StudyPipelineNode], id:&str) -> Option<&'a StudyPipelineNode> {
+    for node in nodes {
+        let node_id=match node {StudyPipelineNode::Primitive{id,..}|StudyPipelineNode::Macro{id,..}|StudyPipelineNode::Group{id,..}=>id};
+        if node_id==id { return Some(node); }
+        if let StudyPipelineNode::Group{children,..}=node { if let Some(found)=authored_node(children,id) {return Some(found);} }
+    }
+    None
+}
+
+/// Dual representations require complete ordered snapshots with matching authored selections.
+/// The existing explicit materializer owns numerical state; final base IR is never replayed over it.
+fn validate_physical_snapshot_coverage(document:&StudyPipelineDocument,nodes:&[ScriptPipelineNodeBinding],config:&ScriptExecutionConfig)->Result<()> {
+    let reject=||anyhow::anyhow!("pipeline compilation cannot mix explicit stages with study_pipeline unless complete ordered Relax/Run or antenna_field_solve snapshots match authored nodes");
+    if document.version!="study_pipeline.v1" {return Err(reject());}
+    let mut ids=BTreeSet::new();
+    for node in nodes {
+        if node.authored_step_id.trim().is_empty() || !ids.insert(&node.authored_step_id) {return Err(reject());}
+        match authored_node(&document.nodes,&node.authored_step_id) {
+            Some(StudyPipelineNode::Group{..})=>{},
+            Some(StudyPipelineNode::Primitive{stage_kind,..}) if matches!(stage_kind.as_str(),"relax"|"run"|"antenna_field_solve")=>{},
+            _=>return Err(reject()),
+        }
+    }
+    let expected:Vec<_>=nodes.iter().filter(|node|node.kind==ScriptPipelineNodeKind::Primitive && node.effectively_enabled).collect();
+    if config.stages.len()!=expected.len() {return Err(reject());}
+    for (snapshot,binding) in config.stages.iter().zip(expected) {
+        if snapshot.ir.problem_meta.runtime_metadata.get("active_stage_id").and_then(serde_json::Value::as_str)!=Some(binding.authored_step_id.as_str()) {
+            return Err(reject());
+        }
+        let Some(StudyPipelineNode::Primitive{stage_kind,payload,..})=authored_node(&document.nodes,&binding.authored_step_id) else {return Err(reject());};
+        match (stage_kind.as_str(), snapshot.action.as_ref(), &snapshot.ir.study) {
+            ("relax", None, fullmag_ir::StudyIR::Relaxation { .. })
+            | ("run", None, fullmag_ir::StudyIR::TimeEvolution { .. }) => {},
+            ("antenna_field_solve", Some(crate::script_stage_contract::ScriptExecutionStageAction::AntennaFieldSolve {
+                stage_id, port_mode_id, port_mode_ids,
+            }), _) => {
+                let (authored_stage_id, authored_port_id) =
+                    crate::script_stage_materialization::parse_antenna_solve_selection(payload)?;
+                let snapshot_port_id = crate::script_stage_materialization::select_antenna_port_reference(
+                    port_mode_id.as_deref(), port_mode_ids)?;
+                if stage_id != &authored_stage_id || snapshot_port_id != authored_port_id { return Err(reject()); }
+            },
+            _ => return Err(reject()),
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn collect_node_bindings(

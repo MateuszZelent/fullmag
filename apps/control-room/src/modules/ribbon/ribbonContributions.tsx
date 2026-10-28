@@ -3702,7 +3702,9 @@ function buildSelectedVisualizationGroup(
   const { selection, visualizationSnapshot } = context;
   const target = resolveRibbonVisualizationTarget(context);
   const targetCapabilities = target
-    ? visualizationTargetCapabilities(target)
+    ? visualizationTargetCapabilities(target, target.kind === "airbox" &&
+        visualizationSnapshot.artifactFieldSelection?.quantityId === "H_ant" &&
+        visualizationSnapshot.artifactFieldSelection.carrierScopeKind === "full")
     : null;
   const isAirboxLikeTarget =
     target?.kind === "airbox" ||

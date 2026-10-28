@@ -22,6 +22,10 @@ use crate::solution_tensor_source::{
 use crate::{CasStore, SessionStore, TensorDescriptor};
 
 pub const SOLUTION_FIELD_GEOMETRY_SCHEMA: &str = "fullmag.solution_field_geometry.v1";
+#[path = "solution_field_geometry/owned_samples.rs"]
+mod owned_samples;
+pub use owned_samples::*;
+
 pub const FEM_P1_GEOMETRY_SCHEMA: &str = "fullmag.fem_p1_field_geometry.v1";
 pub const MAX_FIELD_GEOMETRY_MANIFEST_BYTES: u64 = 1024 * 1024;
 /// Maximum byte length of the canonical persisted JSON geometry CAS object.
@@ -141,6 +145,9 @@ impl SolutionFieldGeometryManifest {
         }
         self.source.validate()?;
         validate_geometry_ref(&self.geometry)?;
+        if self.geometry.schema_id == OWNED_SAMPLE_GEOMETRY_SCHEMA && self.tensor_artifact.accepted_state.is_some() {
+            bail!("owned sample geometry cannot bind an accepted magnetic state");
+        }
         crate::solution_tensor_source::validate_metadata_length(&self.tensor_artifact)?;
         if self.tensor_artifact.schema_id != SOLUTION_TENSOR_SCHEMA
             || self.tensor_artifact.kind != SolutionArtifactKind::State
@@ -155,7 +162,7 @@ impl SolutionFieldGeometryManifest {
 
 fn validate_geometry_ref(reference: &SavedFieldGeometryRef) -> Result<()> {
     crate::cas::validate_hash(&reference.object_ref)?;
-    if reference.schema_id != FEM_P1_GEOMETRY_SCHEMA
+    if !matches!(reference.schema_id.as_str(), FEM_P1_GEOMETRY_SCHEMA | OWNED_SAMPLE_GEOMETRY_SCHEMA)
         || reference.byte_length == 0
         || reference.byte_length > MAX_FEM_P1_GEOMETRY_BYTES
     {
@@ -191,6 +198,7 @@ pub fn parse_saved_fem_p1_geometry(
     reference: &SavedFieldGeometryRef,
 ) -> Result<SavedFemP1FieldGeometry> {
     validate_geometry_ref(reference)?;
+    if reference.schema_id != FEM_P1_GEOMETRY_SCHEMA { bail!("saved geometry is not FEM P1"); }
     if bytes.len() as u64 != reference.byte_length
         || crate::hex_sha256(bytes) != reference.object_ref
     {
@@ -451,9 +459,17 @@ pub(crate) fn verify_field_geometries_for_solution(
                     .context("saved field geometry historical owner revision is missing")?;
                 validate_field_geometry_owner(&manifest, &historical, &member.member_id, true)?;
             }
-            let geometry = read_saved_fem_p1_geometry(cas, &manifest.geometry)?;
             let tensor = read_solution_tensor_artifact(cas, &manifest.tensor_artifact)?;
-            validate_saved_geometry_tensor(&geometry, &tensor)?;
+            if manifest.geometry.schema_id == OWNED_SAMPLE_GEOMETRY_SCHEMA {
+                if manifest.tensor_artifact.accepted_state.is_some() {
+                    bail!("owned sample geometry cannot claim an accepted magnetic state");
+                }
+                let geometry = read_saved_owned_sample_geometry(cas, &manifest.geometry)?;
+                validate_saved_owned_sample_tensor(&geometry, &tensor)?;
+            } else {
+                let geometry = read_saved_fem_p1_geometry(cas, &manifest.geometry)?;
+                validate_saved_geometry_tensor(&geometry, &tensor)?;
+            }
             references.push(manifest.geometry);
         }
     }

@@ -1,3 +1,8 @@
+import { directionHslSrgb } from "@/shared/visualization/directionColor";
+import { scalarColorSrgb } from "@/shared/visualization/scalarColorPalette";
+
+import { glyphSpacingForBudget, layoutScreenGlyphs, type ScreenGlyph } from "./vectorGlyphs";
+
 export interface PlanarRenderer {
   clearBase(): void;
   dispose(): void;
@@ -16,12 +21,16 @@ export interface PlanarRenderer {
 export interface PlanarOverlayLayers {
   axisPointer?: { u: number; v: number } | null;
   contours?: readonly (readonly [number, number, number, number])[];
-  glyphs?: readonly {
-    index: number;
-    normal: number;
-    u: number;
-    v: number;
-  }[];
+  /** Frame-projected vectors (u, v, normal per raster cell) for the quiver layer. */
+  vectorField?: {
+    values: ArrayLike<number>;
+    budget: number;
+    lengthMode: string;
+    mask?: ArrayLike<number> | null;
+    scale: number;
+    /** Physical sample bounds [uMin, uMax, vMin, vMax]. */
+    sampleBounds: readonly [number, number, number, number];
+  } | null;
   gridWidth: number;
   gridHeight?: number;
   boundarySegments?: Float32Array;
@@ -43,7 +52,8 @@ export function drawPlanarOverlays(
   canvasWidth: number,
   canvasHeight: number,
   layers: PlanarOverlayLayers,
-): void {
+): { glyphCount: number } {
+  let glyphCount = 0;
   context.clearRect(0, 0, canvasWidth, canvasHeight);
   context.save();
   setCanvasStrokeStyle(context, "currentColor");
@@ -135,38 +145,26 @@ export function drawPlanarOverlays(
     context.stroke();
   }
 
-  if (layers.layers?.vectors !== false && layers.glyphs?.length) {
-    context.globalAlpha = layers.vectorStyle?.opacity ?? 1;
-    context.lineWidth = layers.vectorStyle?.thickness ?? 1;
-    for (const glyph of layers.glyphs) {
-      context.beginPath();
-      setCanvasStrokeStyle(context, layers.vectorColorMode === "monochrome"
-        ? layers.vectorStyle?.color ?? "currentColor"
-        : vectorGlyphStrokeStyle(glyph, layers.vectorColorMode));
-      const x = glyph.index % layers.gridWidth;
-      const y = Math.floor(glyph.index / layers.gridWidth);
-      const gridHeight = layers.gridHeight ?? layers.gridWidth;
-      const viewport = layers.viewport ?? [0, layers.gridWidth, 0, gridHeight];
-      const scaleX = canvasWidth / Math.max(1e-12, viewport[1] - viewport[0]);
-      const scaleY = canvasHeight / Math.max(1e-12, viewport[3] - viewport[2]);
-      const originX = (x + 0.5 - viewport[0]) * scaleX;
-      const originY = canvasHeight - (y + 0.5 - viewport[2]) * scaleY;
-      context.moveTo(originX, originY);
-      context.lineTo(
-        (x + 0.5 + glyph.u - viewport[0]) * scaleX,
-        canvasHeight - (y + 0.5 + glyph.v - viewport[2]) * scaleY,
-      );
-      if (Math.abs(glyph.normal) > 1e-15) {
-        const normalDirection = glyph.normal < 0 ? -1 : 1;
-        context.moveTo(originX, originY);
-        context.lineTo(originX + normalDirection * 0.25 * scaleX, originY);
-      }
-      context.stroke();
-    }
-    context.globalAlpha = 1;
-    context.lineWidth = 1;
+  if (layers.layers?.vectors !== false && layers.vectorField && layers.meshViewport) {
+    const field = layers.vectorField;
+    const glyphs = layoutScreenGlyphs({
+      bounds: field.sampleBounds,
+      canvasHeight,
+      canvasWidth,
+      gridHeight: layers.gridHeight ?? layers.gridWidth,
+      gridWidth: layers.gridWidth,
+      lengthMode: field.lengthMode,
+      mask: field.mask,
+      scale: field.scale,
+      spacingPx: glyphSpacingForBudget(canvasWidth, canvasHeight, field.budget),
+      vectors: field.values,
+      viewport: layers.meshViewport,
+    });
+    drawScreenGlyphs(context, glyphs, layers.vectorColorMode, layers.vectorStyle);
+    glyphCount = glyphs.length;
   }
   context.restore();
+  return { glyphCount };
 }
 
 function resolveCanvasTokenColor(
@@ -226,16 +224,92 @@ export function partitionPlanarMeshSegments(overlay: {
   return { boundarySegments: boundary, meshSegments: overlay.segments };
 }
 
-function vectorGlyphStrokeStyle(
-  glyph: { normal: number; u: number; v: number },
+/** Dark halo under each glyph keeps coloured arrows readable over the raster. */
+const GLYPH_HALO = "rgba(17, 17, 27, 0.55)";
+/** mumax3 draws dark arrows over its direction image; a light halo separates them. */
+const GLYPH_CONTRAST = "rgba(17, 17, 27, 0.9)";
+const GLYPH_CONTRAST_HALO = "rgba(255, 255, 255, 0.7)";
+
+function glyphColor(
+  glyph: ScreenGlyph,
   colorMode: string | undefined,
+  monochrome: string,
 ): string {
   if (colorMode === "orientation") {
-    const hue = Math.round(((Math.atan2(glyph.v, glyph.u) * 180) / Math.PI + 360) % 360);
-    return `hsl(${hue} 80% 60%)`;
+    const [red, green, blue] = directionHslSrgb(glyph.u, glyph.v, glyph.normal);
+    return `rgb(${Math.round(red * 255)} ${Math.round(green * 255)} ${Math.round(blue * 255)})`;
   }
-  if (colorMode === "normal") return glyph.normal < 0 ? "var(--fm-danger)" : "var(--fm-info)";
-  return "currentColor";
+  if (colorMode === "contrast") return GLYPH_CONTRAST;
+  if (colorMode === "magnitude") {
+    const [red, green, blue] = scalarColorSrgb(glyph.magnitudeRatio, "viridis");
+    return `rgb(${Math.round(red * 255)} ${Math.round(green * 255)} ${Math.round(blue * 255)})`;
+  }
+  return monochrome;
+}
+
+function traceArrow(context: CanvasRenderingContext2D, glyph: ScreenGlyph, lineWidth: number) {
+  const half = glyph.length / 2;
+  const cos = Math.cos(glyph.angle);
+  const sin = Math.sin(glyph.angle);
+  const tipX = glyph.x + cos * half;
+  const tipY = glyph.y + sin * half;
+  const headLength = Math.max(4 * lineWidth, 0.38 * glyph.length);
+  const headHalfWidth = 0.55 * headLength / 2 + lineWidth / 2;
+  const neckX = tipX - cos * headLength;
+  const neckY = tipY - sin * headLength;
+  context.moveTo(glyph.x - cos * half, glyph.y - sin * half);
+  context.lineTo(neckX, neckY);
+  context.moveTo(tipX, tipY);
+  context.lineTo(neckX - sin * headHalfWidth, neckY + cos * headHalfWidth);
+  context.lineTo(neckX + sin * headHalfWidth, neckY - cos * headHalfWidth);
+  context.closePath();
+}
+
+function drawScreenGlyphs(
+  context: CanvasRenderingContext2D,
+  glyphs: readonly ScreenGlyph[],
+  colorMode: string | undefined,
+  style: PlanarOverlayLayers["vectorStyle"],
+) {
+  if (glyphs.length === 0) return;
+  const lineWidth = Math.max(1, style?.thickness ?? 1) * 1.4;
+  const monochrome = resolveCanvasPaintColor(context, style?.color ?? "currentColor");
+  context.save();
+  context.globalAlpha = style?.opacity ?? 1;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  const halo = colorMode === "contrast" ? GLYPH_CONTRAST_HALO : GLYPH_HALO;
+  for (const pass of ["halo", "glyph"] as const) {
+    for (const glyph of glyphs) {
+      const color = pass === "halo" ? halo : glyphColor(glyph, colorMode, monochrome);
+      context.strokeStyle = color;
+      context.fillStyle = color;
+      context.lineWidth = pass === "halo" ? lineWidth + 2 : lineWidth;
+      context.beginPath();
+      if (glyph.kind === "arrow") {
+        traceArrow(context, glyph, lineWidth);
+        context.stroke();
+        context.fill();
+        continue;
+      }
+      const radius = 3 + lineWidth;
+      context.arc(glyph.x, glyph.y, radius, 0, Math.PI * 2);
+      context.stroke();
+      context.beginPath();
+      if (glyph.kind === "out-of-plane") {
+        context.arc(glyph.x, glyph.y, Math.max(1, lineWidth * 0.9), 0, Math.PI * 2);
+        context.fill();
+      } else {
+        const arm = radius * 0.7;
+        context.moveTo(glyph.x - arm, glyph.y - arm);
+        context.lineTo(glyph.x + arm, glyph.y + arm);
+        context.moveTo(glyph.x + arm, glyph.y - arm);
+        context.lineTo(glyph.x - arm, glyph.y + arm);
+        context.stroke();
+      }
+    }
+  }
+  context.restore();
 }
 
 export function createPlanarRenderer(

@@ -224,6 +224,19 @@ describe("the results viewer", () => {
     expect(viewerRoute(item, undefined).reason).toBe(RESULTS_VIEWER_NEEDS_SOURCE);
   });
 
+  it("opens a source-less result folder directly without requiring an active session", () => {
+    const html = render({
+      detail: ready({ linked_source: undefined }),
+      onOpenPlayback: vi.fn(async () => null),
+      openDisabledReason: "Fullmag could not confirm that no session is running.",
+    });
+    const open = button(html, "open-results-viewer");
+
+    expect(open).not.toContain(' disabled=""');
+    expect(open).not.toContain("could not confirm");
+    expect(html).toContain("Open saved playback");
+  });
+
   it("is disabled when the source project is missing, the folder is missing, or opening is refused", () => {
     expect(viewerRoute(item, answerOf({ linked_source: { ...rawProject, status: "missing" } })).reason).toBe(
       "The source project is missing.",

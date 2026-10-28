@@ -18,6 +18,7 @@ import { RealtimeConnectionController } from "../realtime/RealtimeConnectionCont
 import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import { SavedResultsPlaybackController } from "../saved-results/SavedResultsPlaybackController";
 import {
   resetSharedResourceRuntimeStoreForTests,
 } from "../resources/ResourceRuntimeStore";
@@ -90,6 +91,37 @@ afterEach(() => {
 });
 
 describe("WorkspaceShellClient Home entry surface", () => {
+  it("opens a read-only saved playback shell without a session and returns to Home on close", async () => {
+    const playback = new SavedResultsPlaybackController();
+    playback.open({ itemId: "result-source-less", name: "orphaned-run" });
+    const kernel = makeKernel(
+      vi.fn(async () => ({ schema_version: "2.0.0", sessions: [] })),
+      vi.fn(),
+      undefined,
+      { savedResultsPlayback: playback },
+    );
+    const { container, dispose } = await mountWorkspace(kernel);
+
+    try {
+      await settle();
+      expect(findByAttribute(container, "data-saved-results-playback", "read-only")).toBeTruthy();
+      expect(container.textContent).toContain("Saved results · read only");
+      expect(container.textContent).toContain("orphaned-run");
+      expect(findByAttribute(container, "data-slot-id", "viewport-aux")).toBeNull();
+      expect(findByAttribute(container, "data-slot-id", "panel-bottom")).toBeNull();
+      expect(findByAttribute(container, "data-slot-id", "start-screen")).toBeNull();
+      expect(findByAttribute(container, "data-saved-playback-viewport", "mounted")).toBeTruthy();
+      expect(findByAttribute(container, "data-saved-results-folder-summary", "read-only")).toBeTruthy();
+
+      await act(async () => playback.close());
+      await settle();
+      expect(findByAttribute(container, "data-slot-id", "start-screen")).toBeTruthy();
+      expect(container.textContent).toContain("Welcome to Fullmag");
+    } finally {
+      await dispose();
+    }
+  });
+
   it("keeps the AppMenu slot and mounts the start screen after a confirmed empty response", async () => {
     const list = vi.fn(async () => ({ schema_version: "2.0.0", sessions: [] }));
     const currentStatus = vi.fn();
@@ -694,6 +726,7 @@ function makeKernel(
     readonly includeStartScreen?: boolean;
     readonly startScreenComponent?: ModuleManifest["component"];
     readonly startScreenId?: string;
+    readonly savedResultsPlayback?: SavedResultsPlaybackController;
   } = {},
 ): KernelApi {
   const bus = new EventBus<KernelEventMap>();
@@ -715,9 +748,19 @@ function makeKernel(
       default: () => <input aria-label="Workspace draft" />,
     }),
   });
+  if (options.savedResultsPlayback) {
+    modules.register({
+      id: "viewport-3d",
+      title: "Saved playback viewport",
+      version: "0.1.0",
+      slots: ["viewport-main"],
+      component: async () => ({ default: () => <div data-saved-playback-viewport="mounted" /> }),
+    });
+  }
   for (const command of SHELL_COMMANDS) commands.register(command);
   for (const command of startScreenManifest.contributes?.commands ?? []) commands.register(command);
   return {
+    savedResultsPlayback: options.savedResultsPlayback,
     api: {
       diagnostics: {
         cpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },

@@ -15,6 +15,7 @@ import {
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -23,6 +24,8 @@ import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsCont
 import type { CommandDiagnosticEntry } from "@/kernel/commands/CommandDiagnosticsController";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
+import { useStageExecutionResource } from "@/kernel/resources/studyRuntimeResources";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { ModuleProps } from "@/kernel/types";
 import { QuickChartResourceView } from "@/shared/analysis-charts/QuickChartResourceView";
 import { copyTextToClipboard } from "@/shared/browser/copyTextToClipboard";
@@ -42,7 +45,12 @@ import {
 } from "./footerUiStore";
 import { CommandAuditTable } from "./CommandAuditTable";
 import { FooterDiagnostics } from "./FooterDiagnostics";
-import { FooterTelemetry } from "./FooterTelemetry";
+import {
+  FooterTelemetry,
+  footerTelemetryStatusEquals,
+  resolveFooterAntennaStage,
+  selectFooterTelemetryStatus,
+} from "./FooterTelemetry";
 import { DiagnosticRecorderFooterPanel } from "./DiagnosticRecorderFooterPanel";
 import { OperationsPanel, ProblemsPanel } from "./OperationsProblemsPanel";
 import { TransportLogTable } from "./TransportLogTable";
@@ -62,6 +70,34 @@ export default function FooterModule(props: ModuleProps) {
 
 function FooterModuleContent({ kernel }: ModuleProps) {
   const activeTab = useLayoutSelector((layout) => layout.activeBottomPanelTab);
+  const status = useSessionStatusSelector(selectFooterTelemetryStatus, {
+    isEqual: footerTelemetryStatusEquals,
+  });
+  // The footer owns one execution subscription even when another dock tab is active.
+  const stageExecution = useStageExecutionResource({ enabled: Boolean(status) });
+  const antennaStage = resolveFooterAntennaStage(status, stageExecution.data);
+  const sessionKey = status
+    ? JSON.stringify([status.sessionId, status.sessionEpoch, status.requestScopeEpoch])
+    : null;
+  const [telemetrySelection, setTelemetrySelection] = useState<{
+    sessionKey: string | null; tab: "overview" | "antenna";
+  }>({ sessionKey: null, tab: "overview" });
+  const telemetryTab = telemetrySelection.sessionKey === sessionKey ? telemetrySelection.tab : "overview";
+  const navigation = useRef<{ sessionKey: string | null; seen: Set<string> }>({
+    sessionKey: null, seen: new Set(),
+  });
+  const runningAntennaIdentity = antennaStage?.active ? antennaStage.identityKey : null;
+
+  useEffect(() => {
+    if (navigation.current.sessionKey !== sessionKey) {
+      navigation.current = { sessionKey, seen: new Set() };
+    }
+    if (!runningAntennaIdentity || navigation.current.seen.has(runningAntennaIdentity)) return;
+    navigation.current.seen.add(runningAntennaIdentity);
+    setTelemetrySelection({ sessionKey, tab: "antenna" });
+    kernel.layout.openBottomPanel("telemetry");
+  }, [kernel.layout, runningAntennaIdentity, sessionKey]);
+
 
   useEffect(() => {
     return kernel.bus.subscribe("footer:tab-requested", ({ tab }) => {
@@ -118,9 +154,28 @@ function FooterModuleContent({ kernel }: ModuleProps) {
 
       <TabsContent value="telemetry" className={FOOTER_CONTENT_CLASS_NAME}>
         {activeTab === "telemetry" ? (
-          <div className={FOOTER_PANEL_CLASS_NAME}>
-            <FooterTelemetry bus={kernel.bus} />
-          </div>
+          <Tabs
+            value={telemetryTab}
+            onValueChange={(value) => {
+              if (value === "overview" || value === "antenna") {
+                setTelemetrySelection({ sessionKey, tab: value });
+              }
+            }}
+            className="fm-footer-telemetry-tabs"
+          >
+            <TabsList aria-label="Telemetry views" className="fm-footer-telemetry-tabs__list">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="antenna">Antenna</TabsTrigger>
+            </TabsList>
+            <TabsContent value={telemetryTab} className="fm-footer-telemetry-tabs__content">
+              <FooterTelemetry
+                bus={kernel.bus}
+                status={status}
+                stageExecution={stageExecution}
+                view={telemetryTab}
+              />
+            </TabsContent>
+          </Tabs>
         ) : null}
       </TabsContent>
 

@@ -23,7 +23,7 @@ describe("planar renderer lifecycle", () => {
     expect(context.clearRect).toHaveBeenCalled();
   });
 
-  it("draws mesh, contours, and bounded vectors in one imperative layer", () => {
+  it("draws mesh and contours in one imperative layer", () => {
     const context = {
       beginPath: vi.fn(),
       clearRect: vi.fn(),
@@ -38,14 +38,38 @@ describe("planar renderer lifecycle", () => {
 
     drawPlanarOverlays(context, 100, 50, {
       contours: [[0, 1, 2, 3]],
-      glyphs: [{ index: 3, normal: 1, u: 2, v: 0 }],
       gridWidth: 2,
       meshSegments: new Float32Array([0, 0, 1, 1]),
     });
 
     expect(context.clearRect).toHaveBeenCalledWith(0, 0, 100, 50);
-    expect(context.stroke).toHaveBeenCalledTimes(3);
+    expect(context.stroke).toHaveBeenCalledTimes(2);
     expect(context.restore).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws arrowheads with a dark halo and reports the drawn glyph count", () => {
+    const context = {
+      arc: vi.fn(), beginPath: vi.fn(), clearRect: vi.fn(), closePath: vi.fn(), fill: vi.fn(),
+      fillStyle: "", globalAlpha: 1, lineCap: "butt", lineJoin: "miter", lineTo: vi.fn(),
+      lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
+    } as unknown as CanvasRenderingContext2D;
+    const values = new Float64Array(4 * 3);
+    for (let index = 0; index < 4; index += 1) values.set([1, 0, 0], index * 3);
+
+    const result = drawPlanarOverlays(context, 100, 100, {
+      gridHeight: 2,
+      gridWidth: 2,
+      layers: { contours: false, mesh: false, vectors: true },
+      meshViewport: [0, 1, 0, 1],
+      vectorColorMode: "monochrome",
+      vectorField: { budget: 4, lengthMode: "uniform", sampleBounds: [0, 1, 0, 1], scale: 1, values },
+      vectorStyle: { color: "#0000ff", opacity: 1, thickness: 1 },
+    });
+
+    expect(result.glyphCount).toBe(4);
+    // One halo pass and one colour pass per glyph, each with a filled head.
+    expect(context.fill).toHaveBeenCalledTimes(8);
+    expect(context.closePath).toHaveBeenCalledTimes(8);
   });
 
   it("draws only explicitly enabled overlay layers", () => {
@@ -63,9 +87,10 @@ describe("planar renderer lifecycle", () => {
 
     drawPlanarOverlays(context, 100, 50, {
       contours: [[0, 0, 1, 1]],
-      glyphs: [{ index: 0, normal: 1, u: 0.4, v: 0 }],
       gridWidth: 2,
       layers: { contours: false, mesh: false, vectors: false },
+      meshViewport: [0, 1, 0, 1],
+      vectorField: { budget: 4, lengthMode: "uniform", sampleBounds: [0, 1, 0, 1], scale: 1, values: new Float64Array([1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0]) },
       meshSegments: new Float32Array([0, 0, 1, 1]),
     });
 
@@ -98,7 +123,7 @@ describe("planar renderer lifecycle", () => {
     expect(context.fill).toHaveBeenCalledTimes(1);
   });
 
-  it("applies shared Inspector wireframe, point, and monochrome vector styles", () => {
+  it("applies shared Inspector wireframe and point styles", () => {
     const context = {
       arc: vi.fn(), beginPath: vi.fn(), clearRect: vi.fn(), fill: vi.fn(), fillStyle: "",
       globalAlpha: 1, lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(),
@@ -106,9 +131,8 @@ describe("planar renderer lifecycle", () => {
     } as unknown as CanvasRenderingContext2D;
 
     drawPlanarOverlays(context, 100, 50, {
-      glyphs: [{ index: 0, normal: 0, u: 0.4, v: 0.2 }],
       gridWidth: 2,
-      layers: { contours: false, mesh: true, points: true, vectors: true },
+      layers: { contours: false, mesh: true, points: true, vectors: false },
       meshSegments: new Float32Array([0, 0, 1, 1]),
       meshViewport: [0, 1, 0, 1],
       pointStyle: { color: "#00ff00", opacity: 0.5, size: 8 },
@@ -119,7 +143,7 @@ describe("planar renderer lifecycle", () => {
     });
 
     expect(context.arc).toHaveBeenCalledWith(50, 25, 4, 0, Math.PI * 2);
-    expect(context.stroke).toHaveBeenCalledTimes(2);
+    expect(context.stroke).toHaveBeenCalledTimes(1);
     expect(context.fill).toHaveBeenCalledTimes(1);
     expect(context.globalAlpha).toBe(1);
     expect(context.lineWidth).toBe(1);
@@ -294,20 +318,19 @@ describe("planar renderer lifecycle", () => {
     }
   });
 
-  it("maps backend row zero at v_min to the bottom consistently for raster contours glyphs and probe", () => {
+  it("maps backend row zero at v_min to the bottom consistently for raster contours", () => {
     const context = {
       beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), imageSmoothingEnabled: true,
       lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
     } as unknown as CanvasRenderingContext2D;
     drawPlanarOverlays(context, 100, 100, {
       contours: [[0, 0, 1, 1]],
-      glyphs: [{ index: 0, normal: 0, u: 0, v: 0.1 }],
       gridHeight: 2,
       gridWidth: 2,
-      layers: { contours: true, mesh: false, vectors: true },
+      layers: { contours: true, mesh: false, vectors: false },
     });
     expect(context.moveTo).toHaveBeenCalledWith(0, 100);
-    expect(context.moveTo).toHaveBeenCalledWith(25, 75);
+    expect(context.lineTo).toHaveBeenCalledWith(100, 0);
   });
 
   it("draws exact target boundaries independently from the mesh layer", () => {

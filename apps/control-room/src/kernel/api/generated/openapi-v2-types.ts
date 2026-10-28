@@ -4907,6 +4907,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/workspace/items/{id}/playback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_playback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/playback/frames/{frame_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_playback_frames_frame_index"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/playback/geometry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_items_get_workspace_items_id_playback_geometry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/workspace/items/{id}/thumbnail": {
         parameters: {
             query?: never;
@@ -4999,7 +5047,20 @@ export interface components {
             study_step_id: string;
             task_id: string;
         };
-        AcceptedAntennaInspectionResource: {
+        AcceptedAntennaInspectionResource: components["schemas"]["AcceptedExternalLeadInspectionResource"] | components["schemas"]["AcceptedClosedLoopInspectionResource"];
+        AcceptedClosedLoopInspectionResource: {
+            capabilities: components["schemas"]["AntennaInspectionDisplayCapabilities"];
+            /** @description Existing verified, bounded closed-loop descriptors; numerical arrays stay binary. */
+            closed_loop_display: unknown;
+            normalization: string;
+            output_id: string;
+            owner: components["schemas"]["AcceptedAntennaInspectionIdentity"];
+            port_mode_id: string;
+            project_id: string;
+            resource_id: string;
+            schema_version: string;
+        };
+        AcceptedExternalLeadInspectionResource: {
             display: components["schemas"]["AntennaInspectionDisplayDataResource"];
             manifest: components["schemas"]["AntennaInspectionManifestResource"];
             output_id: string;
@@ -5027,6 +5088,14 @@ export interface components {
             /** Format: double */
             source_time_seconds?: number | null;
             topology_revision: string;
+        };
+        AcceptedRunExportSource: {
+            /** Format: int64 */
+            artifact_catalog_revision: number;
+            project_id: string;
+            /** Format: int64 */
+            run_catalog_revision: number;
+            run_id: string;
         };
         AcceptedStateGenerationResource: {
             /** Format: int64 */
@@ -5706,6 +5775,15 @@ export interface components {
             sampling_policy: string;
             schema_version: string;
         };
+        AntennaInspectionDiscoveryResource: {
+            reason_code: string;
+            state: components["schemas"]["AntennaInspectionDiscoveryState"];
+        };
+        /**
+         * @description Discovery of a registered inspection owner, not validation of its numerical payload.
+         * @enum {string}
+         */
+        AntennaInspectionDiscoveryState: "retained" | "absent" | "unknown";
         AntennaInspectionDisplayCapabilities: {
             current_density: boolean;
             display: boolean;
@@ -5843,6 +5921,18 @@ export interface components {
         };
         /** @enum {string} */
         AntennaOerstedRealizationResource: "direct_tetra_quadrature" | "vector_potential_solver";
+        /** @description Operation progress is independent of the LLG integration clock. */
+        AntennaOperationProgressResource: {
+            /** Format: int64 */
+            completed_targets: number;
+            /** Format: double */
+            elapsed_seconds: number;
+            phase: string;
+            /** Format: int64 */
+            source_cells: number;
+            /** Format: int64 */
+            total_targets: number;
+        };
         AntennaPortBranchResource: {
             id: string;
             inlet_terminal_ref: string;
@@ -5854,10 +5944,17 @@ export interface components {
             branches: components["schemas"]["AntennaPortBranchResource"][];
             current_transport_id: string;
             id: string;
+            normalization?: null | components["schemas"]["AntennaPortNormalizationResource"];
             /** Format: double */
             normalization_current_a?: number;
             schema_version: string;
             source_object_id: string;
+        };
+        AntennaPortNormalizationResource: {
+            /** @enum {string} */
+            kind: "source_cut_rt0";
+            orientation: components["schemas"]["AntennaSourceCutOrientationResource"];
+            source_cut_ref: string;
         };
         AntennaQuadratureEvidenceRefResource: {
             byte_length: number;
@@ -5882,6 +5979,8 @@ export interface components {
             topology_digest: string;
         };
         AntennaSolutionRefResource: components["schemas"]["AntennaStageOutputRefResource"] | components["schemas"]["AntennaResolvedAssetRefResource"] | components["schemas"]["AntennaFieldSolutionRefResource"];
+        /** @enum {string} */
+        AntennaSourceCutOrientationResource: "minus_outward";
         AntennaSourceSpectrumResource: {
             amplitude_count: number;
             amplitude_unit: string;
@@ -6082,6 +6181,7 @@ export interface components {
             coordinate_unit: string;
             indexing: components["schemas"]["ArtifactSampleIndexing"];
             owner: components["schemas"]["ArtifactFieldOwnerBinding"];
+            sample_carrier?: null | components["schemas"]["AntennaSampleCarrierResource"];
             /** Format: int64 */
             sample_count: number;
             topology_binary_schema: string;
@@ -11870,6 +11970,9 @@ export interface components {
             schema_version: string;
             scope_id?: string | null;
             scope_kind: string;
+            /** @description Region within the `scope_id` object for `region` scopes. */
+            scope_region_id?: string | null;
+            section?: null | components["schemas"]["PlanarSectionResource"];
             source: components["schemas"]["PlanarSampleSourceResource"];
         };
         PlanarFieldOccupancyResource: {
@@ -12046,6 +12149,56 @@ export interface components {
             monitor_revision: string;
         };
         /**
+         * @description Requested vs. resolved position of the session `Default` slice along its
+         *     normal. A snap to an FDM cell centre is published, never hidden.
+         */
+        PlanarSectionResource: {
+            /**
+             * Format: int32
+             * @description Target elements cut by the sampled FEM plane, when known.
+             */
+            cut_element_count?: number | null;
+            /** Format: int32 */
+            layer_count?: number | null;
+            /** Format: int32 */
+            layer_index?: number | null;
+            /** Format: double */
+            layer_spacing_m?: number | null;
+            /** @description Discrete stops along the normal (FEM node planes); empty otherwise. */
+            layer_stops_m: number[];
+            /**
+             * @description `fdm_cell`, `fem_node_plane_spacing`, `median_element_height` (median
+             *     normal extent of the cut FEM elements; a navigation aid, not a data
+             *     layer) or `extent_fraction`.
+             */
+            navigation_step_kind: string;
+            /**
+             * Format: double
+             * @description Distance moved by one layer or navigation step along the normal.
+             */
+            navigation_step_m: number;
+            /** @description World axis of the slice normal: `x`, `y` or `z`. */
+            normal_axis: string;
+            /** Format: double */
+            normal_max_m: number;
+            /** Format: double */
+            normal_min_m: number;
+            /** @description `xy`, `xz` or `yz`. */
+            plane: string;
+            /** Format: double */
+            requested_coordinate_m: number;
+            /** Format: double */
+            requested_fraction: number;
+            /** Format: double */
+            resolved_coordinate_m: number;
+            /**
+             * @description `fdm_cell_layers` (snapped to a cell centre), `fem_node_planes` (on a
+             *     swept-mesh node plane), `fem_node_planes_between` (between planes) or
+             *     `continuous`.
+             */
+            stops_kind: string;
+        };
+        /**
          * @description The source selected by the session-scoped planar viewport state.
          *
          *     `Default` is a presentation source resolved from the current domain. It is
@@ -12100,6 +12253,15 @@ export interface components {
         } | {
             /** @enum {string} */
             kind: "airbox";
+        } | {
+            /** @enum {string} */
+            kind: "layer";
+            scope_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            region_id: string;
+            scope_id: string;
         };
         PlanarVisualizationPatch: {
             colormap?: string | null;
@@ -12530,6 +12692,10 @@ export interface components {
         ProjectDocumentResource: {
             /** @description Canonical or source-preserving `.fms` bytes for the next host adapter. */
             archive_base64: string;
+            /** @description Validated runtime-free authoring scene, available only on eligible Open. */
+            authoring_scene_document?: {
+                [key: string]: unknown;
+            } | null;
             dirty: boolean;
             /** @description Bytes-only transport never claims filesystem or power-loss durability. */
             durability: components["schemas"]["ProjectArchiveDurability"];
@@ -12572,6 +12738,10 @@ export interface components {
         };
         /** @description The created project (same fields as create/open) plus what was imported. */
         ProjectFromScriptResource: components["schemas"]["ProjectDocumentResource"] & {
+            /** @description Exact authoring scene embedded in this archive; new imports always provide it. */
+            scene_document?: {
+                [key: string]: unknown;
+            } | null;
             script_import: components["schemas"]["ProjectScriptImportResource"];
         };
         ProjectFromScriptSource: {
@@ -12916,6 +13086,14 @@ export interface components {
         };
         /** @enum {string} */
         QuantityMaterializationCapability: "not_applicable" | "unmaterialized" | "pending" | "materialized" | "legacy_unverified" | "unavailable";
+        QuantityProjectionCapability: {
+            /** Format: int32 */
+            components: number;
+            output_shape: string;
+            publication: components["schemas"]["QuantityPublicationCapability"];
+            render: components["schemas"]["QuantityRenderCapability"];
+            token: string;
+        };
         /** @enum {string} */
         QuantityProviderCapability: "available" | "unavailable";
         /** @enum {string} */
@@ -13189,6 +13367,7 @@ export interface components {
             lane: string;
             materialization: components["schemas"]["QuantityMaterializationCapability"];
             precision: string;
+            projections?: components["schemas"]["QuantityProjectionCapability"][];
             provider: components["schemas"]["QuantityProviderCapability"];
             publication: components["schemas"]["QuantityPublicationCapability"];
             quantity_id: string;
@@ -13257,7 +13436,7 @@ export interface components {
          * @description What level of session restoration is possible.
          * @enum {string}
          */
-        RestoreClass: "exact_resume" | "logical_resume" | "initial_condition_import" | "config_only";
+        RestoreClass: "exact_resume" | "logical_resume" | "initial_condition_import" | "saved_fields_read_only" | "config_only" | "unsupported";
         /** @description Facts of a Fullmag results folder, read from metadata files only. */
         ResultDetail: {
             finished_at?: string | null;
@@ -13540,6 +13719,38 @@ export interface components {
             /** @description SHA-256 of the complete FMMT v2 body, when it fits the bounded transport. */
             topology_binary_sha256?: string | null;
             topology_fingerprint: string;
+        };
+        /** @description Bounded, JSON-only metadata for a saved FEM P1 playback mesh. */
+        SavedPlaybackFemMesh: {
+            cell_count: number;
+            facet_count: number;
+            geometry_sha256: string;
+            node_count: number;
+            support_byte_length?: number | null;
+            support_sha256?: string | null;
+            topology_byte_length?: number | null;
+            topology_sha256?: string | null;
+        };
+        /** @description The small JSON read model for a completed saved-result playback. */
+        SavedPlaybackResource: {
+            cell_size_m?: number[] | null;
+            fem_mesh?: null | components["schemas"]["SavedPlaybackFemMesh"];
+            grid_cells_xyz?: number[] | null;
+            name: string;
+            origin_m?: number[] | null;
+            /** @description SHA-256 identity of the sidecar and all playback array metadata. */
+            revision: string;
+            schema: string;
+            /** @description Optional publication context, for example why run provenance is absent. */
+            source_note?: string | null;
+            stages: components["schemas"]["SavedPlaybackStage"][];
+        };
+        /** @description One stage in a saved playback resource. */
+        SavedPlaybackStage: {
+            frame_count: number;
+            quantity_ids: string[];
+            stage_id: string;
+            times_s: number[];
         };
         ScalarWindow: {
             columns: string[];
@@ -13855,6 +14066,10 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             visible?: boolean | null;
+            /** @description Authored presentation metadata; it does not select physics modules. */
+            visualization_hint?: {
+                [key: string]: unknown;
+            };
         };
         SceneOerstedField: components["schemas"]["KnownSceneOerstedField"] | components["schemas"]["UnsupportedAuthoringRecord"];
         SceneOerstedTimeDependence: {
@@ -14032,6 +14247,11 @@ export interface components {
         SceneSpinBoundary: {
             id: string;
             /** @enum {string} */
+            kind: "homogeneous_spin_potential_gradient";
+            surfaces: components["schemas"]["SceneSurfaceRef"][];
+        } | {
+            id: string;
+            /** @enum {string} */
             kind: "spin_insulating";
             surfaces: components["schemas"]["SceneSurfaceRef"][];
         } | {
@@ -14069,6 +14289,7 @@ export interface components {
         } | {
             absorption: string;
             ferromagnet_side: components["schemas"]["SceneRegionRef"];
+            ferromagnet_surface?: null | components["schemas"]["SceneSurfaceRef"];
             formula_version: string;
             /** Format: double */
             g_down_Spm2: number;
@@ -14084,6 +14305,7 @@ export interface components {
             /** @enum {string} */
             kind: "mixing_conductance";
             normal_side: components["schemas"]["SceneRegionRef"];
+            normal_surface?: null | components["schemas"]["SceneSurfaceRef"];
             normal_to_ferromagnet: number[];
             spin_memory_loss?: null | components["schemas"]["SceneSpinMemoryLossReservoir"];
         };
@@ -14652,6 +14874,7 @@ export interface components {
             precision: components["schemas"]["ScratchSessionPrecision"];
         };
         SessionExportRequest: {
+            accepted_run?: null | components["schemas"]["AcceptedRunExportSource"];
             compression?: null | components["schemas"]["CompressionProfile"];
             /** @description Optional session name override. */
             name?: string | null;
@@ -15199,6 +15422,24 @@ export interface components {
             /** Format: int64 */
             sample_interval_wall_ms?: number;
         };
+        SolverProfileOperationResource: {
+            accounting_issue: boolean;
+            execution_config?: null | components["schemas"]["SolverProfileCommandConfig"];
+            /**
+             * Format: int64
+             * @description Entire native ABI call, containing the surface operator duration.
+             */
+            native_call_wall_ns?: number | null;
+            /** Format: int64 */
+            native_operator_wall_ns?: number | null;
+            operation_id: string;
+            outcome: string;
+            phases: components["schemas"]["SolverProfilePhaseResource"][];
+            /** Format: int64 */
+            sequence: number;
+            /** Format: int64 */
+            total_wall_time_ns: number;
+        };
         SolverProfileOverheadDiagnosticsResource: {
             /** Format: int64 */
             heartbeat_seed_deep_clone_count?: number;
@@ -15245,6 +15486,7 @@ export interface components {
             config: components["schemas"]["SolverProfileCommandConfig"];
             latest_samples: components["schemas"]["SolverProfileStepSampleResource"][];
             live_publisher?: null | components["schemas"]["LivePublisherDiagnosticsResource"];
+            operation_samples?: components["schemas"]["SolverProfileOperationResource"][];
             overhead?: components["schemas"]["SolverProfileOverheadDiagnosticsResource"];
             persistence_failed?: boolean;
             preview_3d_disabled?: boolean;
@@ -15668,6 +15910,8 @@ export interface components {
         };
         StageExecutionRecordResource: {
             action?: string | null;
+            antenna_inspection?: null | components["schemas"]["AntennaInspectionDiscoveryResource"];
+            antenna_progress?: null | components["schemas"]["AntennaOperationProgressResource"];
             /** @description Exact authored antenna definition ID, not the study node or runtime ID. */
             antenna_solve_stage_id?: string | null;
             artifact_refs?: string[];
@@ -16780,6 +17024,13 @@ export interface components {
         };
         WorkspacePinRequest: {
             pinned: boolean;
+        };
+        /** @description Revision-pinned binary topology/support selection for saved FEM playback. */
+        WorkspacePlaybackGeometryQuery: {
+            /** @description `topology` returns FMMT v2; `support` returns FMSP v1. */
+            part: string;
+            /** @description Exact revision returned by `GET /v2/workspace/items/{id}/playback`. */
+            revision: string;
         };
         WorkspaceRibbonReplaceRequest: {
             active_contextual_tab?: string | null;
@@ -22658,6 +22909,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -22742,6 +22995,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -22833,6 +23088,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -22923,6 +23180,8 @@ export interface operations {
                 quality?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 expected_scene_revision?: string;
@@ -22996,6 +23255,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -23073,6 +23334,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -23157,6 +23420,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -23241,6 +23506,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -23326,6 +23593,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -23411,6 +23680,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -23502,6 +23773,8 @@ export interface operations {
                 quality?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 expected_scene_revision?: string;
@@ -23576,6 +23849,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -23654,6 +23929,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -23739,6 +24016,8 @@ export interface operations {
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
+                /** @description Region id within the `scope_id` object when `scope_kind=region`. */
+                scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
                 resolution_x?: number;
@@ -32321,6 +32600,171 @@ export interface operations {
             };
             /** @description The database is read-only (newer schema) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id_playback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Registered result item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Validated saved-result playback metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedPlaybackResource"];
+                };
+            };
+            /** @description The workspace item is not a result folder */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The registered item or playback files are missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Playback source changed while it was read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The result has no supported playback descriptor or its metadata is invalid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id_playback_frames_frame_index: {
+        parameters: {
+            query: {
+                /** @description Exact stage id from `SavedPlaybackResource.stages`. */
+                stage_id: string;
+                /** @description Revision returned by `GET /v2/workspace/items/{id}/playback`. */
+                revision: string;
+            };
+            header?: never;
+            path: {
+                /** @description Registered result item id (decimal string) */
+                id: string;
+                /** @description Zero-based frame index within the selected stage */
+                frame_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One complete little-endian f64 AoS xyz frame */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Invalid item id or non-result item */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The item, selected stage, frame, or chunk is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The supplied playback revision is stale or the source changed during the read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Playback metadata or frame values are invalid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_items_get_workspace_items_id_playback_geometry: {
+        parameters: {
+            query: {
+                /** @description Exact revision returned by `GET /v2/workspace/items/{id}/playback`. */
+                revision: string;
+                /** @description `topology` returns FMMT v2; `support` returns FMSP v1. */
+                part: string;
+            };
+            header?: never;
+            path: {
+                /** @description Registered result item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revision-pinned saved FEM topology (FMMT v2) or active-node support (FMSP v1) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Invalid item id or geometry part */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The item or geometry file is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The supplied playback revision is stale or the source changed during the read */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The result has no FEM geometry or its metadata is invalid */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

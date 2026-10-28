@@ -24,6 +24,16 @@ Custom `fm-*` classes define shared primitive variants, layout geometry and doma
 - A segmented radiogroup always offers one keyboard entry when any option is enabled, even if its current value is missing or disabled. Focus fallback does not change the value until the user acts.
 
 
+### Readable Inspector controls (design audit, 2026-10-27)
+
+Inspector inputs and selects use a dedicated 35 px control height, 8 px radius
+and 13 px control text. Labels sit above ordinary editable fields; specialized
+vectors, checkboxes and other dense controls retain layouts suited to their
+interaction. Labels, values, units and validation remain visible in both
+Catppuccin themes and in narrow panels. Read-only results remain distinguishable
+from editable controls. These Inspector-specific values do not change the global
+compact or regular control geometry.
+
 ### File ownership
 
 `apps/control-room/app/globals.css` is import-only:

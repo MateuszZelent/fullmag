@@ -10,6 +10,7 @@ import {
 } from "@/kernel/authoring/authoringMutationInvalidation";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import { useKernel } from "@/kernel/KernelContext";
+import { homeView } from "@/kernel/layout/homeView";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import {
   resolveObjectInteractionResourceKey,
@@ -1022,6 +1023,19 @@ function PhysicsInteractionHelpDialog({
           ))}
         </div>
         <DialogFooter>
+          {spec.docsPage ? (
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                onOpenChange(false);
+                homeView.openDocs(spec.docsPage);
+              }}
+            >
+              Open in documentation
+            </Button>
+          ) : null}
           <Button size="sm" type="button" onClick={() => onOpenChange(false)}>
             Close
           </Button>

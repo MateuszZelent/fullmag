@@ -48,6 +48,7 @@ export interface InteractionFieldSpec {
 export interface InteractionSpec {
   availability: InteractionAvailability;
   description: string;
+  docsPage?: string;
   fields: readonly InteractionFieldSpec[];
   id: PhysicsInteractionId;
   label: string;
@@ -124,6 +125,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "study",
     description:
       "Nearest-neighbour exchange stiffness. The numeric A value is owned by assigned materials; this switch controls whether exchange contributes to H_eff for the authored problem.",
+    docsPage: "physics/interactions/exchange/index.html",
     fields: [],
     id: "exchange",
     label: "Exchange",
@@ -134,6 +136,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "study",
     description:
       "Magnetostatic self-interaction. Fullmag treats demagnetization as a global study-level interaction because the field couples all magnetic bodies through the air or convolution domain.",
+    docsPage: "physics/interactions/demagnetization/index.html",
     fields: [
       {
         defaultValue: "auto",
@@ -155,6 +158,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "study",
     description:
       "Uniform externally applied magnetic flux density. The Python/script surface expresses this as B_ext in tesla; the planner converts to H_ext where required by a backend.",
+    docsPage: "physics/interactions/zeeman/index.html",
     fields: [
       {
         defaultValue: ["0", "0", "0"],
@@ -175,6 +179,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "study",
     description:
       "Typed electric-current transport source used by STT and Oersted authoring workflows. Prescribed density is executable where supported; Ohmic Poisson remains a semantic authoring contract until its runtime lane is qualified.",
+    docsPage: "physics/interactions/spin-transfer-torque/index.html",
     fields: [
       {
         defaultValue: "drive",
@@ -232,6 +237,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "study",
     description:
       "Typed source-bound Slonczewski, Zhang-Li, and prescribed spin-orbit torque authoring. Unsupported future variants are rejected without mutating the scene.",
+    docsPage: "physics/interactions/spin-transfer-torque/index.html",
     fields: [
       {
         defaultValue: "slonczewski",
@@ -299,6 +305,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "object",
     description:
       "Interfacial Dzyaloshinskii-Moriya interaction. The editable control room path currently stores the interfacial D constant on the object interaction entry.",
+    docsPage: "physics/interactions/dmi/interfacial.html",
     fields: [
       {
         defaultValue: "1e-3",
@@ -319,6 +326,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "study",
     description:
       "Göbel rotated interfacial DMI with D21 = D32 = D for in-plane bimerons.",
+    docsPage: "physics/interactions/dmi/rotated-interfacial.html",
     fields: [
       {
         defaultValue: "0.003",
@@ -339,6 +347,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "study",
     description:
       "Bulk DMI is implemented in execution backends and ProblemIR, but the current scene authoring stack does not yet have a safe Python/UI round-trip path.",
+    docsPage: "physics/interactions/dmi/bulk.html",
     fields: [
       {
         defaultValue: "0",
@@ -360,6 +369,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "object",
     description:
       "Uniaxial anisotropy with a user-defined easy axis. K values are energy densities in SI units.",
+    docsPage: "physics/interactions/anisotropy/uniaxial.html",
     fields: [
       {
         defaultValue: "0",
@@ -397,6 +407,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "deferred",
     description:
       "Cubic anisotropy is available in backend plan/runtime structures, but control-room authoring needs canonical material/region round-trip before edits are safe.",
+    docsPage: "physics/interactions/anisotropy/cubic.html",
     fields: [
       {
         defaultValue: "0",
@@ -450,6 +461,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "study",
     description:
       "Typed Oersted field authoring from a named current-transport source or an analytic cylindrical conductor.",
+    docsPage: "physics/interactions/oersted-field/index.html",
     fields: [
       {
         defaultValue: "current_transport",
@@ -526,6 +538,7 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     availability: "deferred",
     description:
       "Prescribed-strain magnetoelastic coupling is represented in ProblemIR/backend paths. The browser authoring surface still needs canonical strain-source resources.",
+    docsPage: "physics/interactions/magnetoelastic/index.html",
     fields: [
       {
         defaultValue: "0",

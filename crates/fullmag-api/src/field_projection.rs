@@ -87,12 +87,7 @@ pub fn parse_quantity_component(
                 "invalid_tensor_projection: canonical tensor metadata is required",
             )
         })?;
-        if descriptor.rank != 2
-            || descriptor.shape != [3, 3]
-            || descriptor.layout != "flow_major"
-            || descriptor.axes != ["flow", "spin"]
-            || descriptor.component_labels.len() != 9
-            || n_comp != 9
+        if !descriptor.supports_flow_major_projections() || n_comp != 9
         {
             return Err(ApiError::bad_request(
                 "invalid_tensor_projection: unsupported tensor rank, shape, layout, or axes",

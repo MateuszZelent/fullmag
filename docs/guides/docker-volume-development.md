@@ -131,6 +131,37 @@ a kolizja tworzy nową nazwę. Export nadal pobiera archiwum przez przeglądark�
 Wyniki i sesje nie są danymi buildu. Pliki wynikowe bez wpisu w indeksie Git
 nie zmieniają source identity; świadomie śledzone fixtures nadal są sprawdzane.
 
+### Historyczna odmowa mapowania wyjścia bez przyjęcia wykonania
+
+Starszy helper mógł zapisać `started`, mimo kompletnej odpowiedzi HTTP422
+`docker_startup_output_mapping_required` albo `docker_startup_output_mapping_invalid`.
+Nowy helper zapisuje dla tych konkretnych kodów terminal `rejected`; odczyt
+terminalu nie wysyła ponownie POST. Błędy nieznane,409 i500 pozostają odrębne.
+
+Historyczne rozstrzygnięcie korzysta wyłącznie z przypiętego requestu w control
+volume i istniejącej blokady oryginalnej operacji. `docker_activation_preflight`
+wymaga kompletnej końcowej odpowiedzi422 z receiptu kontrolera, zgodnych bajtów
+autoryzacji/provenance, skryptu, obrazu i nieprzerwanej inkarnacji backendu.
+Skan store/ledgera i bieżącej sesji jest kontrolą anomalii, a nie dowodem globalnej
+bezczynności API. Przypadek przyjętego wykonania lub niepełnego logu jest odrzucany.
+
+```text
+just docker-dev-reconcile-activation <request-w-control-volume> <sha256-requestu> <source> <port> true
+just docker-dev-reconcile-activation <ten-sam-request> <ten-sam-sha256> <source> <port> false
+```
+
+Pierwsza komenda wykonuje wyłącznie preview. Druga zachowuje oryginalny receipt
+i started marker, utrwala prepared journal, publikuje marker `rejected`, a na
+końcu terminal operacji. Oryginalny helper sam zwalnia `active`. Kontroler nie
+restartuje usług, nie usuwa danych i nie ponawia aktywacji/Solve. Częściowy zapis
+może przyjąć tylko oryginalne albo dokładnie przygotowane bajty; nieznany stan
+obserwatora zachowuje jego blokadę i dokładną tożsamość w journal, zamiast
+uruchamiać nowego startera. Replay kompletnego terminalu jest tylko odczytem.
+
+Po naprawie konfiguracji nowa aktywacja jest osobnym żądaniem i ponownie podlega
+zwykłym kontrolom sesji, źródeł, mountów oraz uprawnień do katalogu wyników.
+Ta procedura nie przyznaje automatycznie prawa zapisu do `examples`.
+
 ## Iteracje i awarie
 
 Gotowy kandydat pakietu po nieudanej publikacji jest odrębny od działającego
@@ -151,6 +182,14 @@ sprawdza prywatną sieć bez obcych konsumentów, restartuje backend i ponownie
 uruchamia ten sam frontend. Zachowuje cache oraz storage hosta. Nie jest komendą do przerywania obliczeń. Wymaga wyłącznego okna operatorskiego,
 bez równoległych klientów wysyłających polecenia do tej grupy; odczyt health
 nie jest dowodem opróżnienia wszystkich kolejek aplikacji.
+
+Opcjonalny ostatni argument `true` recepty `docker-dev-restart-idle` przekazuje
+istniejący tryb `--allow-prepared-session`. Pozwala zachować nigdy niewykonane,
+wstrzymane zadania Study również po zakończonym zadaniu. Nadal wymagane są
+sprawdzenie ich historii i brak aktywnych konsumentów oraz natywny drain;
+tryb nie zwalnia Solve i nie anuluje zadań. Domyślne `false` zachowuje
+restrykcyjny restart; inne wartości argumentu są odrzucane.
+
 Wyjątkiem od braku aktywnej sesji jest dokładnie przypięty model nieudanej
 aktywacji, którego przyjęte zadanie zostało jawnie anulowane przed rozpoczęciem
 przygotowania. Wymagany jest trwały dowód anulowania, brak rezerwacji i bieżącego
@@ -219,6 +258,26 @@ odtworzenia usług; sam restart zachowuje przypięty obraz.
 
 `docker-dev-resume` wznawia obserwację konkretnego potwierdzonego nieudanego
 startu; opcja `restart_backend=true` może uruchomić zachowany zatrzymany backend, również po wcześniej udanym starcie.
+Po wcześniej udanym starcie `docker-dev-resume` może również odzyskać frontend
+zakończony przez OOM. Wymaga zdrowego, niezmienionego backendu, dokładnych
+ID/konfiguracji oraz ponownego sprawdzenia inkarnacji przed operacją i po niej.
+Dla zgodnej konfiguracji uruchamia ten sam kontener bez zmiany seeda i zależności;
+osobny receipt `frontend-recovery` potwierdza odzyskanie procesu UI.
+
+Starszy frontend bez prywatnego tmpfs właściciela nie jest uruchamiany ponownie.
+Launcher wymaga już przygotowanego obrazu zgodnego z bieżącą receptą oraz
+zweryfikowanego łańcucha receiptów toolchain → development → backend. Tworzy nowy
+seed i wolumen frontendu, dodaje tmpfs i odtwarza wyłącznie usługę `frontend`.
+Zachowuje stary wolumen i konfigurację do przeglądu. Nowy receipt `development`
+z `recovery_scope=legacy-oom-frontend-recreation` przypina osobno obrazy obu usług.
+Backend zachowuje swój obraz, kontener, procesy, pakiet, sesję i rewizję sceny;
+launcher porównuje te dane przed odtworzeniem frontendu i po nim.
+
+Żaden wariant odzyskania frontendu nie restartuje backendu ani nie ponawia Solve.
+Zgodność zachowanego pakietu backendu z bieżącymi źródłami pozostaje
+`NOT VERIFIED`. Odzyskanie UI nie zastępuje buildu backendu ani kontroli
+przeglądarki. Nieznany wynik operacji zachowuje lease do jawnej rekonsyliacji.
+
 `docker-dev-recreate-volume` wymaga zatrzymanego backendu i dokładnych pinów
 próby/konfiguracji. Zachowuje wolumeny; opcja `fresh_state=true` tworzy nowy root
 sesji, pozostawiając poprzedni. Nie powtarza automatycznie aktywacji Solve.
@@ -412,9 +471,25 @@ frontend state volume. Nie tworzy brakującego control volume, nie naprawia
 named volume i nie restartuje usług. Domyślny limit pracy przeglądarki wynosi
 180 sekund, a osobny limit pobrania brakującego obrazu wynosi 1800 sekund;
 parametry `timeout` i `pull_timeout` są ostatnimi argumentami pozycyjnymi
-recepty, po `browser_image`. Nieudane lub
+recepty, po `browser_image`; opcjonalne `saved_playback_item_id` jest kolejnym
+argumentem. Nieudane lub
 niejednoznaczne kontrole kończą się zachowaniem zasobów i wymagają ręcznego
 przeglądu receiptu operacji.
+
+Kontrolę odtwarzania zapisanego wyniku można jawnie skierować na istniejący,
+zarejestrowany workspace item. Podaj jego dziesiętny identyfikator jako ostatni
+argument recepty:
+
+```powershell
+just docker-dev-browser-qa "$source" 3298 "" 180 1800 "<item-id>"
+```
+
+Ta odrębna próba uruchamia przypięty harness w tym samym zarządzanym, tylko do
+odczytu kontenerze Playwright. Nie instaluje przeglądarki na hoście i nie
+uruchamia Solve ani Compute Fields. Receipt zapisuje identyfikator oraz SHA-256
+źródłowego harnessu, a wynik potwierdza odczyt payloadów ramek, widoczny canvas,
+żywy kontekst WebGL i stabilność Inspectora oraz kamery. Tryb SwiftShader jest
+dowodem przeglądarki, nie dowodem sprzętowego GPU ani fizyki FEM.
 
 ## Budżet backendu podczas trwającego startu
 
@@ -497,6 +572,29 @@ ten odrębny wariant i domyka receipt również bez sygnału. Następnie zwykła
 `recreate-volume` zachowuje model, cache i dane. Przed capture wstrzymaj zapisy
 źródeł do czasu potwierdzenia spójnego cienia; restart z Docker Desktop może
 zbiec się z edycją hosta i nie jest dowodem ukończonego buildu ani API.
+
+### Zachowanie profilu urządzeń przy odtwarzaniu
+
+Odtwarzanie zachowuje zarówno żądany tryb `auto/required/disabled`, jak i
+zweryfikowany wcześniej dostęp `gpu/cpu`. Dla zachowanego GPU launcher wymaga
+świeżego dowodu hostowego i kontenerowego przed zatrzymaniem lub usunięciem
+usług, a następnie przed nowym startem. Błąd probe lub nieznany wynik nie
+powoduje przejścia na CPU. Nowa grupa nadal może rozstrzygnąć `auto` do CPU.
+Nie zmienia to polityki istniejącego ledgera.
+
+`recreate-volume` rozpoznaje także wąski przypadek następcy, który po poprawnym
+buildzie zakończył się przed API na błędzie `stored host resource policy differs
+from explicit ledger configuration`, ponieważ `auto` zmieniło dostęp GPU na CPU.
+Osobny witness wiąże dokładny terminal, logi i namespace następcy z poprzednim
+ukończonym odtworzeniem, oryginalnym dowodem afterReady oraz niezmienionymi
+OWNER/config/process. Wszystkie zasoby muszą być Released; nowy skrypt startowy
+jest zabroniony. Witness i obie usługi są ponownie sprawdzane pod blokadą.
+Oryginalny kontekst restartu pozostaje identyczny, a nowy start wymaga GPU.
+
+Ta ścieżka nie resetuje ownera, nie migruje ledgera i nie powtarza Solve.
+Celowo nie udaje recovery po usunięciu namespace: przerwane odtworzenie
+wymaga osobnego przeglądu zachowanych dowodów. Zwykłe uruchomienie tej samej
+komendy nie zastępuje brakującego potwierdzenia.
 
 ## Granica zapisu i retencja
 
@@ -592,3 +690,36 @@ drainu ani wykonania fizyki. Następnie obowiązuje zwykły docker-dev up
 wybranego checkoutu i nowe jawne żądanie skryptu. Implementacja i kontrola
 interpretowana nie zastępują dowodu runtime tej trasy: NOT VERIFIED do
 zakończenia rzeczywistego preflight→apply→API→browser.
+
+### Zmiana numeru urządzenia po restarcie WSL
+
+Numer host_device (st_dev) może zmienić się po restarcie WSL. Zwykłe resume
+nadal wymaga pełnej zgodności certyfikatu. Nie poprawiaj ręcznie certyfikatu,
+ownera ani active. Jawne ponowne poświadczenie wybranej zatrzymanej grupy:
+
+```sh
+python3 -B scripts/docker_dev.py --repo-root <checkout> reattest-host-device-volume \
+  --source-root <checkout> --attempt <development-uuid> \
+  --config-sha256 <compose-sha256> --certificate-sha256 <old-file-sha256> \
+  --expected-host-device <current-st_dev>
+```
+
+Pierwsze wywołanie jest podglądem; --apply zapisuje operację pod blokadą grupy.
+Wymagane są zgodne: inode i ścieżka katalogu, silnik Docker, obraz, zakres i
+token właściciela, sentinel i wcześniejszy restart readback. Kontenery muszą
+być dokładnymi zatrzymanymi inkarnacjami z receiptu, bez innych konsumentów
+storage. Operacja zachowuje inode bind-mountowanego certyfikatu, archiwizuje
+stare/nowe bajty i piny w host-device-reattest/<old-sha>/intent.json oraz dopuszcza
+ponowienie wyłącznie tych dwóch wersji po przerwanym zapisie. Zmienia tylko
+host_device; nie potwierdza nowej symulacji ani nie uruchamia API/solvera.
+
+Jeśli po przerwaniu hosta active wskazuje osieroconą iterację, można dodatkowo
+podać --interrupted-iteration <exact-uuid>. Ścieżka jest ograniczona do starej
+głównej przestrzeni kontrolnej, nieobecnego helpera, obu zatrzymanych usług i
+braku zachowanych runów. Helper odzyskiwania pod operation.lock sprawdza dokładny
+hash active i receipt.json, publikuje oddzielny terminal failed-confirmed i
+dopiero wtedy usuwa wyłącznie zgodny wskaźnik active. Oryginalny receipt pozostaje
+niezmieniony. Nie jest to ogólne odzyskiwanie lease ani trasa dla aktywnego runu.
+
+Po sukcesie użyj zwykłego przypiętego resume-volume --restart-backend.
+Inne zmiany tożsamości, aktywny/nieznany konsument albo różne piny blokują zapis.

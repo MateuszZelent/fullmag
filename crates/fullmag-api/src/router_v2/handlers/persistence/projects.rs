@@ -139,18 +139,16 @@ fn project_run_task_resource(
                 }
                 let bytes = store
                     .cas()
-                    .get(object_ref)
+                    .get_bounded(object_ref, fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)
                     .map_err(|error| ApiError::internal(error.to_string()))?
                     .ok_or_else(|| {
                         ApiError::internal("study output manifest CAS object is missing")
                     })?;
-                let manifest: fullmag_session::FmsStudyOutputManifest =
-                    serde_json::from_slice(&bytes).map_err(|error| {
+                // This resource exposes identity metadata, not numerical observation admission.
+                let manifest = fullmag_runtime_control::read_study_output_manifest_projection(&bytes)
+                    .map_err(|error| {
                         ApiError::internal(format!("invalid study output manifest: {error}"))
                     })?;
-                manifest
-                    .validate()
-                    .map_err(|error| ApiError::internal(error.to_string()))?;
                 if manifest.run_id != run_id
                     || manifest.task_id != task.task_id
                     || manifest.attempt_id != attempt_id
@@ -447,6 +445,8 @@ pub async fn submit_run(
         request.study_problem_catalog.into_iter().collect(),
     ))
     .map_err(|error| ApiError::bad_request(format!("invalid_study_problem_catalog: {error}")))?;
+    crate::accepted_solver_profile::validate_study_profile(&intent.specification.parameters, &study)
+        .map_err(|error| ApiError::bad_request(format!("invalid_solver_profile: {error:#}")))?;
     if intent.specification.snapshot.project_id != project_id {
         return Err(ApiError::conflict(
             "run snapshot project_id differs from request path",
@@ -569,6 +569,8 @@ pub async fn submit_batch(
         request.study_problem_catalog.into_iter().collect(),
     ))
     .map_err(|error| ApiError::bad_request(format!("invalid_study_problem_catalog: {error}")))?;
+    crate::accepted_solver_profile::validate_study_profile(&batch_request.template.parameters, &study)
+        .map_err(|error| ApiError::bad_request(format!("invalid_solver_profile: {error:#}")))?;
     if batch_request.template.snapshot.project_id != project_id {
         return Err(ApiError::conflict(
             "batch template project_id differs from request path",
@@ -2323,6 +2325,21 @@ pub async fn create(
     let view = application
         .create(CreateProjectRequest::new(request.name))
         .map_err(|error| ApiError::bad_request(format!("invalid_project_document: {error}")))?;
+    let mut draft = application
+        .current_document()
+        .cloned()
+        .ok_or_else(|| ApiError::internal("project application has no current document"))?;
+    // Only a freshly created project is known to have no historical runs.
+    draft.opaque_documents.push(
+        OpaqueDocument::new(
+            super::script_project::PROVENANCE_PATH,
+            br#"{"authors":[],"history":[],"runs":[]}"#.to_vec(),
+        )
+        .map_err(|error| ApiError::internal(format!("invalid provenance path: {error}")))?,
+    );
+    let view = application
+        .replace_draft(draft, view.revision)
+        .map_err(|error| ApiError::internal(format!("initialize project provenance: {error}")))?;
     let archive = encode_current(&application)?;
     Ok((
         StatusCode::CREATED,
@@ -2359,11 +2376,10 @@ pub async fn open(
     } else {
         source_bytes
     };
-    Ok(Json(resource_from_application(
-        &application,
-        opened.view,
-        archive,
-    )?))
+    let authoring_scene_document = opened_authoring_scene(&application, &opened.view);
+    let mut resource = resource_from_application(&application, opened.view, archive)?;
+    resource.authoring_scene_document = authoring_scene_document;
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -2460,10 +2476,7 @@ fn authoring_update_blocking(
         .cloned()
         .ok_or_else(|| ApiError::internal("project application has no current document"))?;
     let raw_scene_matches = current.definition.scene.value() == &scene_value;
-    let renderable = scene_document
-        .objects
-        .iter()
-        .any(|object| object.role == "magnet")
+    let renderable = !scene_document.objects.is_empty()
         && validate_scene_document(&scene_document).is_ok();
     let generated_source = if renderable {
         let private_dir = workspace_root.join(format!(
@@ -2715,6 +2728,227 @@ pub(super) fn encode_current(
         .map_err(|error| ApiError::bad_request(format!("project archive is not writable: {error}")))
 }
 
+fn opened_authoring_scene(
+    application: &ProjectApplication<FileProjectRepository>,
+    view: &fullmag_application::DocumentView,
+) -> Option<std::collections::BTreeMap<String, Value>> {
+    if !view.mode.is_writable() || !view.migration.can_write || view.migration.migrated
+        || view.schema_version != fullmag_application::CURRENT_PROJECT_SCHEMA
+        || view.migration.source_schema != fullmag_application::CURRENT_PROJECT_SCHEMA
+        || view.source_hash.is_none()
+    {
+        return None;
+    }
+    let document = application.current_document()?;
+    if !document.assets.is_empty()
+        || !document.raw_definition.unknown_object_fields(
+            ["schema", "project_id", "name", "revision", "scene"]).is_empty()
+        || document.opaque_documents.iter().any(|entry| {
+            if matches!(entry.path(),
+                "project/provenance.json" | "project/source/script.py" | "project/source/script.json")
+            {
+                return false;
+            }
+            // Accept only the exact content-addressed history emitted by this writer.
+            entry.path() != format!("project/source-history/{:x}.py", Sha256::digest(entry.bytes()))
+        })
+    {
+        return None;
+    }
+    let provenance = document.opaque_documents.iter()
+        .find(|entry| entry.path() == super::script_project::PROVENANCE_PATH)?;
+    let raw: Value = serde_json::from_slice(provenance.bytes()).ok()?;
+    // The display parser drops malformed records. Never infer "no runs" from it.
+    if !raw.get("runs")?.as_array()?.is_empty() { return None; }
+    let parsed = fullmag_workspace_inspect::provenance::parse_provenance(provenance.bytes()).ok()?;
+    for key in ["authors", "history", "runs"] {
+        if raw.get(key)?.as_array()? != parsed.get(key)?.as_array()? { return None; }
+    }
+    if raw.as_object()?.keys().any(|key| !matches!(key.as_str(), "authors" | "history" | "runs" | "citation"))
+        || raw["history"].as_array()?.iter().any(|entry|
+            !matches!(entry["kind"].as_str(), Some("import" | "edit")) || entry.get("run_id").is_some())
+    {
+        return None;
+    }
+    let raw_scene = document.definition.scene.value();
+    if raw_scene.get("version")?.as_str()? != "scene.v2" { return None; }
+    let scene: SceneDocument = serde_json::from_value(raw_scene.clone()).ok()?;
+    validate_scene_document_for_authoring(&scene).ok()?;
+    // Structural drafts can retain unsupported execution strings as evidence;
+    // an activation projection still requires the canonical backend contract.
+    serde_json::from_value::<fullmag_ir::BackendTarget>(Value::String(
+        scene.study.requested_backend.trim().to_ascii_lowercase(),
+    )).ok()?;
+    let projected = authoring_scene_wire_projection(raw_scene, &scene)?;
+    if !raw_scene_survives_projection(raw_scene, &projected)
+        || scene_references_unmaterialized_assets(&projected)
+    {
+        return None;
+    }
+    // Open has no asset materialization lease; external fields remain evidence-only.
+    if scene.study.initial_state.is_some()
+        || scene.magnetization_assets.iter().any(|asset| asset.source_path.is_some())
+    {
+        return None;
+    }
+    Some(raw_scene.as_object()?.iter().map(|(key, value)| (key.clone(), value.clone())).collect())
+}
+
+
+/// Compare Python's redundant Universe wire names with the canonical typed
+/// values without changing the serialization used by checkpoint identities.
+fn authoring_scene_wire_projection(raw: &Value, scene: &SceneDocument) -> Option<Value> {
+    let mut projected = serde_json::to_value(scene).ok()?;
+    for owner in ["/universe", "/study/universe_mesh"] {
+        let Some(supplied) = raw.pointer(owner).and_then(Value::as_object) else { continue; };
+        let canonical = projected.pointer_mut(owner)?.as_object_mut()?;
+        for (current, legacy) in [
+            ("maximum_element_size", "airbox_hmax"),
+            ("minimum_element_size", "airbox_hmin"),
+        ] {
+            if supplied.contains_key(current) {
+                // Values come only from the validated typed state, never raw JSON.
+                let value = canonical.get(legacy).cloned().unwrap_or(Value::Null);
+                canonical.insert(current.into(), value);
+            }
+        }
+        for field in ["size", "center", "padding", "airbox_hmax", "airbox_hmin",
+            "airbox_growth_rate", "airbox_grading"] {
+            if supplied.get(field) == Some(&Value::Null) && !canonical.contains_key(field) {
+                canonical.insert(field.into(), Value::Null);
+            }
+        }
+    }
+    Some(projected)
+}
+
+/// Supplied semantic values must survive typed projection. Only exact empty
+/// placeholders emitted by the canonical Python scene producer may be omitted.
+fn raw_scene_survives_projection(raw: &Value, projected: &Value) -> bool {
+    fn at<'a>(raw: &'a Value, projected: &Value, path: &mut Vec<&'a str>) -> bool {
+        match (raw, projected) {
+            (Value::Object(raw), Value::Object(projected)) => raw.iter().all(|(key, value)| {
+                path.push(key);
+                let survives = match projected.get(key) {
+                    Some(next) => at(value, next, path),
+                    None => known_omitted_scene_default(path, value),
+                };
+                path.pop();
+                survives
+            }),
+            (Value::Array(raw), Value::Array(projected)) => {
+                raw.len() == projected.len() && raw.iter().zip(projected).all(|(a, b)| {
+                    path.push("*");
+                    let survives = at(a, b, path);
+                    path.pop();
+                    survives
+                })
+            }
+            (Value::Number(a), Value::Number(b)) => exact_projected_number(a, b),
+            _ => raw == projected,
+        }
+    }
+    at(raw, projected, &mut Vec::new())
+}
+
+/// These are complete owner paths, never field-name or generic empty-value
+/// exceptions. Some Python mesh/solver placeholders have no Rust realization;
+/// their nonempty values remain evidence-only rather than implying support.
+fn known_omitted_scene_default(path: &[&str], value: &Value) -> bool {
+    let Some((field, owner)) = path.split_last() else { return false; };
+    let empty_array = value.as_array().is_some_and(Vec::is_empty);
+    let empty_object = value.as_object().is_some_and(serde_json::Map::is_empty);
+    match owner {
+        [] => (value.is_null() && *field == "universe") || (empty_array && matches!(*field,
+            "objects" | "couplings" | "materials" | "magnetization_assets" | "selections"
+            | "magnetization_constraints" | "current_transports" | "spin_transports"
+            | "spin_torques" | "oersted_fields" | "antenna_port_modes"
+            | "antenna_field_solve_stages" | "antenna_target_projections"
+            | "solved_antenna_drives" | "antenna_spectrum_requests")),
+        ["current_modules"] => (empty_array && *field == "modules")
+            || (value.is_null() && *field == "excitation_analysis"),
+        ["field_drives"] => empty_array && *field == "drives",
+        ["monitors"] => empty_array && *field == "planar",
+        ["outputs"] => empty_array && *field == "items",
+        ["editor"] => (value.is_null() && matches!(*field,
+            "selected_object_id" | "gizmo_mode" | "transform_space" | "selected_entity_id"
+            | "focused_entity_id" | "object_view_mode" | "air_mesh_visible"
+            | "air_mesh_opacity" | "active_visualization_preset_ref" | "active_transform_scope"))
+            || (empty_object && *field == "mesh_entity_view_state")
+            || (empty_array && *field == "visualization_presets"),
+        ["objects", "*"] => (value.is_null() && matches!(*field,
+            "region_name" | "magnetization_ref" | "object_mesh" | "mesh_override"
+            | "absorbing_boundary" | "notes"))
+            || (empty_array && matches!(*field, "physics_stack" | "regions"
+                | "allocated_region_ids" | "material_parameter_fields" | "tags"))
+            || (empty_object && matches!(*field, "region_overrides" | "visualization_hint")),
+        ["study"] => (value.is_null() && matches!(*field,
+            "backend" | "requested_cpu_threads" | "fem_demag_solver_policy" | "demag_realization"
+            | "fdm" | "external_field" | "rotated_interfacial_dmi" | "universe_mesh"
+            | "study_pipeline" | "table_autosave" | "output_storage" | "execution_profile"
+            | "initial_state")) || (empty_array && matches!(*field,
+                "mesh_interfaces" | "stages" | "execution_layers")),
+        ["study", "solver"] => value.as_str() == Some("")
+            && matches!(*field, "gamma" | "max_relaxation_time_s"),
+        ["study", "mesh_defaults" | "shared_domain_mesh"]
+        | ["objects", "*", "object_mesh" | "mesh_override"] => {
+            let per_object = owner[0] == "objects";
+            (empty_array && matches!(*field, "boundary_layer_target_curve_selectors"
+                | "boundary_layer_target_curve_tags" | "boundary_layer_target_surface_selectors"
+                | "boundary_layer_target_surface_tags"))
+                || (value.is_null() && matches!(*field, "boundary_layer_count"
+                    | "boundary_layer_stretching" | "resolved_narrow_regions"
+                    | "resolved_size_from_curvature"))
+                || (value.as_str() == Some("") && matches!(*field, "boundary_layer_thickness"
+                    | "interface_maximum_element_size"))
+                || (!per_object && value.as_str() == Some("") && matches!(*field,
+                    "corner_extent" | "corner_maximum_element_size" | "corner_transition_distance"
+                    | "edge_maximum_element_size" | "edge_thickness" | "edge_transition_distance"))
+                || (per_object && empty_array && matches!(*field, "operations" | "size_fields"))
+                || (per_object && value.is_null() && matches!(*field,
+                    "algorithm_2d" | "algorithm_3d" | "calibrate_for" | "compute_quality"
+                    | "element_family" | "exact_layer_count" | "mesh_strategy" | "narrow_regions"
+                    | "optimize" | "optimize_iterations" | "order" | "per_element_quality"
+                    | "size_factor" | "size_from_curvature" | "size_preset" | "smoothing_steps"
+                    | "source" | "sweep_direction" | "sweep_face_meshing" | "through_thickness_distribution"
+                    | "through_thickness_element_ratio" | "through_thickness_elements"
+                    | "through_thickness_symmetric" | "topology" | "transition_growth" | "transition_policy"))
+        }
+        _ => false,
+    }
+}
+
+fn exact_projected_number(a: &serde_json::Number, b: &serde_json::Number) -> bool {
+    if a == b { return true; }
+    let (integer, float) = if a.is_f64() { (b, a) } else { (a, b) };
+    if !float.is_f64() { return false; }
+    let Some(value) = float.as_f64() else { return false; };
+    if !value.is_finite() || value.fract() != 0.0 { return false; }
+    if let Some(integer) = integer.as_u64() {
+        value >= 0.0 && value < 18_446_744_073_709_551_616.0 && value as u64 == integer
+    } else if let Some(integer) = integer.as_i64() {
+        value >= -9_223_372_036_854_775_808.0 && value < 9_223_372_036_854_775_808.0
+            && value as i64 == integer
+    } else {
+        false
+    }
+}
+
+/// Open has no archive-asset materialization owner. Conservatively retain
+/// asset-bearing authoring payloads as evidence, including opaque extensions.
+fn scene_references_unmaterialized_assets(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => fields.iter().any(|(key, value)| {
+            key == "asset_id"
+                || (matches!(key.as_str(), "source_path" | "mode_basis_ref" | "equilibrium_ref")
+                    && value.as_str().is_some_and(|text| !text.trim().is_empty()))
+                || scene_references_unmaterialized_assets(value)
+        }),
+        Value::Array(items) => items.iter().any(scene_references_unmaterialized_assets),
+        _ => false,
+    }
+}
+
 pub(super) fn resource_from_application(
     application: &ProjectApplication<FileProjectRepository>,
     view: fullmag_application::DocumentView,
@@ -2737,6 +2971,7 @@ pub(super) fn resource_from_application(
         dirty: view.dirty,
         mode,
         source_hash: view.source_hash,
+        authoring_scene_document: None,
         migration: ProjectMigrationResource {
             source_schema: view.migration.source_schema,
             target_schema: view.migration.target_schema,
@@ -2748,4 +2983,244 @@ pub(super) fn resource_from_application(
         archive_base64: STANDARD.encode(archive),
         durability: ProjectArchiveDurability::MemoryOnly,
     })
+}
+
+#[cfg(test)]
+mod authoring_open_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn opened(provenance: Value) -> (ProjectApplication<FileProjectRepository>, fullmag_application::DocumentView) {
+        let mut application = ProjectApplication::new(FileProjectRepository::new());
+        let created = application.create(CreateProjectRequest::new("Archived authoring")).unwrap();
+        let mut draft = application.current_document().unwrap().clone();
+        draft.replace_scene(RawJsonEnvelope::from_value(json!({
+            "version":"scene.v2","revision":11,
+            "study":{"requested_backend":"fem","requested_device":"cpu","requested_precision":"double"}
+        })).unwrap()).unwrap();
+        for (path, bytes) in [
+            ("project/provenance.json", serde_json::to_vec(&provenance).unwrap()),
+            ("project/source/script.py", b"raise RuntimeError('must never execute')".to_vec()),
+            ("project/source/script.json", b"{}".to_vec()),
+        ] {
+            draft.opaque_documents.push(OpaqueDocument::new(path,bytes).unwrap());
+        }
+        application.replace_draft(draft,created.revision).unwrap();
+        let bytes = application.repository().encode_archive(application.current_document().unwrap()).unwrap();
+        let mut reopened = ProjectApplication::new(FileProjectRepository::new());
+        let result = reopened.open(ProjectSource::Bytes { display_name:"authoring.fms".into(),bytes }).unwrap();
+        (reopened,result.view)
+    }
+
+    fn provenance() -> Value {
+        json!({"authors":[],"history":[{"revision":0,"at":"2026-10-20T00:00:00Z","kind":"import","summary":"Original source"}],"runs":[]})
+    }
+
+    #[test]
+    fn authoring_projection_uses_owner_parsed_archive_without_changing_source() {
+        let (application,view) = opened(provenance());
+        let before=application.current_document().unwrap().clone();
+        let scene=opened_authoring_scene(&application,&view).unwrap();
+        assert_eq!(scene["version"],"scene.v2");
+        assert_eq!(scene["revision"],11);
+        assert_eq!(application.current_document().unwrap(),&before);
+        assert_eq!(view.project_id,before.definition.project_id);
+        assert_eq!(view.revision,before.definition.revision);
+    }
+
+    #[test]
+    fn universe_aliases_survive_archive_open_without_unknown_field_exceptions() {
+        for owner in ["/universe", "/study/universe_mesh"] {
+            for universe in [
+                json!({"mode":"auto","size":null,"airbox_hmax":5e-7,"airbox_hmin":1.5e-7}),
+                json!({"mode":"auto","size":null,"maximum_element_size":5e-7,"minimum_element_size":1.5e-7}),
+                json!({"mode":"auto","size":null,"airbox_hmax":5e-7,"airbox_hmin":1.5e-7,
+                    "maximum_element_size":5e-7,"minimum_element_size":1.5e-7}),
+            ] {
+                let (mut application, view) = opened(provenance());
+                let mut draft = application.current_document().unwrap().clone();
+                let mut raw = draft.definition.scene.value().clone();
+                if owner == "/universe" {
+                    raw["universe"] = universe;
+                } else {
+                    raw["study"]["universe_mesh"] = universe;
+                }
+                draft.replace_scene(RawJsonEnvelope::from_value(raw.clone()).unwrap()).unwrap();
+                application.replace_draft(draft, view.revision).unwrap();
+                let bytes = application.repository().encode_archive(application.current_document().unwrap()).unwrap();
+                let mut cold = ProjectApplication::new(FileProjectRepository::new());
+                let result = cold.open(ProjectSource::Bytes { display_name:"universe.fms".into(), bytes }).unwrap();
+                let before = cold.current_document().unwrap().clone();
+                let projected = opened_authoring_scene(&cold, &result.view).unwrap();
+                assert_eq!(serde_json::to_value(projected).unwrap(), raw);
+                assert_eq!(cold.current_document().unwrap(), &before);
+
+                for unknown in [Value::Null, json!({}), json!([]), json!("future")] {
+                    let mut unknown_raw = raw.clone();
+                    unknown_raw.pointer_mut(owner).unwrap().as_object_mut().unwrap().insert("future".into(), unknown);
+                    let scene: SceneDocument = serde_json::from_value(unknown_raw.clone()).unwrap();
+                    let projected = authoring_scene_wire_projection(&unknown_raw, &scene).unwrap();
+                    assert!(!raw_scene_survives_projection(&unknown_raw, &projected));
+                }
+                let mut conflict = raw;
+                let universe = conflict.pointer_mut(owner).unwrap().as_object_mut().unwrap();
+                universe.insert("airbox_hmax".into(), json!(5e-7));
+                universe.insert("maximum_element_size".into(), json!(6e-7));
+                assert!(serde_json::from_value::<SceneDocument>(conflict).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn historical_malformed_missing_and_read_only_inputs_have_no_activation_projection() {
+        for change in 0..7 {
+            let mut provenance=provenance();
+            match change {
+                0 => provenance["runs"]=json!([{"unrecognised":"must not disappear"}]),
+                1 => { provenance.as_object_mut().unwrap().remove("runs"); }
+                2 => provenance["history"][0]["kind"]=json!("run"),
+                3 => provenance["history"][0]["run_id"]=json!("accepted-run"),
+                4 => provenance["authors"]=json!([{}]),
+                5 => provenance["accepted_provenance"]=json!({}),
+                _ => {}
+            }
+            let (application,mut view)=opened(provenance);
+            if change==6 { view.mode=DocumentMode::ReadOnly {reason:"legacy execution archive".into()}; }
+            assert!(opened_authoring_scene(&application,&view).is_none(),"change {change}");
+        }
+    }
+
+    #[test]
+    fn unresolved_assets_and_unknown_documents_remain_evidence_only() {
+        for change in 0..5 {
+            let (mut application,view)=opened(provenance());
+            let mut draft=application.current_document().unwrap().clone();
+            if change==0 {
+                draft.assets.push(fullmag_application::OpaqueAsset::new("project/assets/mesh.dat",b"unresolved".to_vec(),None).unwrap());
+            } else if change==1 {
+                draft.opaque_documents.push(OpaqueDocument::new("project/accepted_provenance.json",b"{}".to_vec()).unwrap());
+            } else {
+                let mut scene = draft.definition.scene.value().clone();
+                if change == 2 {
+                    scene["study"]["requested_backend"] = json!("unknown");
+                } else if change == 3 {
+                    scene["study"]["initial_state"] = json!({"source_path":"missing.ovf","format":"ovf"});
+                } else {
+                    scene["magnetization_assets"] = json!([{"id":"external","name":"External","kind":"uniform","source_path":"missing.ovf"}]);
+                }
+                draft.replace_scene(RawJsonEnvelope::from_value(scene).unwrap()).unwrap();
+            }
+            application.replace_draft(draft,view.revision).unwrap();
+            assert!(opened_authoring_scene(&application,&application.current().unwrap()).is_none(),"change {change}");
+        }
+    }
+
+    #[test]
+    fn omitted_defaults_survive_without_allowing_unknown_null_or_empty_fields() {
+        let raw = json!({"version":"scene.v2","study":{"requested_backend":"fem"}});
+        let scene: SceneDocument = serde_json::from_value(raw.clone()).unwrap();
+        let projected = serde_json::to_value(&scene).unwrap();
+        assert!(raw_scene_survives_projection(&raw, &projected));
+        for unknown in [Value::Null, json!({}), json!([]), json!(""), json!("future")] {
+            let mut raw = raw.clone();
+            raw["study"]["future"] = unknown;
+            assert!(!raw_scene_survives_projection(&raw, &projected));
+        }
+        // A known canonical empty collection carries no authored semantic state.
+        assert!(raw_scene_survives_projection(&json!({"objects":[]}), &json!({})));
+    }
+
+    #[test]
+    fn canonical_placeholder_exceptions_are_owner_and_value_exact() {
+        for (owner, field, empty) in [
+            ("/study/solver", "max_relaxation_time_s", json!("")),
+            ("/study/mesh_defaults", "boundary_layer_count", Value::Null),
+            ("/study/mesh_defaults", "boundary_layer_thickness", json!("")),
+            ("/study/shared_domain_mesh", "boundary_layer_target_surface_tags", json!([])),
+            ("/objects/0/mesh_override", "boundary_layer_thickness", json!("")),
+        ] {
+            let projected = json!({"study":{"solver":{},"mesh_defaults":{},"shared_domain_mesh":{}},
+                "objects":[{"mesh_override":{}}]});
+            let mut raw = projected.clone();
+            raw.pointer_mut(owner).unwrap().as_object_mut().unwrap().insert(field.into(), empty.clone());
+            assert!(raw_scene_survives_projection(&raw, &projected), "{owner}/{field}");
+            for semantic in [json!("authored"), json!(1), json!([1]), json!({"value":1})] {
+                raw.pointer_mut(owner).unwrap().as_object_mut().unwrap().insert(field.into(), semantic);
+                assert!(!raw_scene_survives_projection(&raw, &projected), "{owner}/{field}");
+            }
+            // A valid placeholder name at an unrecognized owner is not an exception.
+            assert!(!raw_scene_survives_projection(&json!({"extension":{(field):empty}}),
+                &json!({"extension":{}})));
+        }
+        for empty in [Value::Null, json!({}), json!([]), json!("")] {
+            assert!(!raw_scene_survives_projection(
+                &json!({"study/solver/max_relaxation_time_s":empty}), &json!({})));
+            assert!(!raw_scene_survives_projection(
+                &json!({"study":{"solver":{"future":empty}}}), &json!({"study":{"solver":{}}})));
+        }
+    }
+
+    #[test]
+    fn unknown_nested_object_geometry_transform_and_tagged_fields_are_evidence_only() {
+        let base = json!({
+            "version":"scene.v2","revision":11,
+            "objects":[{"id":"body","name":"Body","role":"geometry","material_ref":"",
+                "geometry":{"geometry_kind":"Box","geometry_params":{"size":[1e-6,1e-6,1e-6]}},
+                "transform":{"translation":[0,0,0]}}],
+            "study":{"requested_backend":"fem","requested_device":"cpu","requested_precision":"double"}
+        });
+        for path in ["/objects/0", "/objects/0/geometry", "/objects/0/transform"] {
+            for unknown in [Value::Null, json!({}), json!([]), json!(""), json!("preserve me")] {
+                let mut raw = base.clone();
+                raw.pointer_mut(path).unwrap().as_object_mut().unwrap().insert("future".into(), unknown);
+                let scene: SceneDocument = serde_json::from_value(raw.clone()).unwrap();
+                assert!(!raw_scene_survives_projection(&raw, &serde_json::to_value(&scene).unwrap()), "{path}");
+                let (mut application, view) = opened(provenance());
+                let mut draft = application.current_document().unwrap().clone();
+                draft.replace_scene(RawJsonEnvelope::from_value(raw).unwrap()).unwrap();
+                let current = application.replace_draft(draft, view.revision).unwrap();
+                assert!(opened_authoring_scene(&application, &current).is_none());
+            }
+        }
+        let raw = json!({"kind":"constant","value":1.0,"future":null});
+        let field: fullmag_authoring::SceneMaterialParameterField = serde_json::from_value(raw.clone()).unwrap();
+        assert!(!raw_scene_survives_projection(&raw, &serde_json::to_value(field).unwrap()));
+    }
+
+    #[test]
+    fn numeric_projection_has_no_tolerance_or_large_integer_rounding() {
+        for (raw, projected, expected) in [
+            (json!(1), json!(1.0), true),
+            (json!(-1), json!(-1.0), true),
+            (json!(1e-12), json!(1e-12), true),
+            (json!(1.0), json!(1.0 + 1e-12), false),
+            (json!(9_007_199_254_740_993_u64), json!(9_007_199_254_740_992.0), false),
+            (json!(u64::MAX), json!(18_446_744_073_709_551_616.0), false),
+            (json!(i64::MIN), json!(-9_223_372_036_854_775_808.0), true),
+        ] {
+            assert_eq!(raw_scene_survives_projection(&raw, &projected), expected);
+        }
+    }
+
+    #[test]
+    fn all_nested_asset_reference_families_remain_evidence_only() {
+        for reference in [
+            json!({"objects":[{"material_parameter_fields":[{"value":{"kind":"sampled","asset_id":"missing"}}]}]}),
+            json!({"objects":[{"regions":[{"material_overrides":[{"value":{"kind":"sampled","asset_id":"missing"}}]}]}]}),
+            json!({"magnetization_constraints":[{"reference":{"kind":"explicit_field_asset","asset_id":"missing"}}]}),
+            json!({"selections":[{"expression":{"kind":"inside_geometry","geometry":{"kind":"imported_solid","asset_id":"missing"}}}]}),
+            json!({"antenna_target_projections":[{"solution":{"asset_id":"missing"}}]}),
+            json!({"antenna_spectrum_requests":[{"equilibrium_ref":{"kind":"artifact","asset_id":"missing"}}]}),
+            json!({"antenna_spectrum_requests":[{"equilibrium_ref":"legacy-artifact"}]}),
+            json!({"antenna_spectrum_requests":[{"mode_basis_ref":"missing"}]}),
+            json!({"opaque_payload":{"nested":[{"asset_id":null}]}}),
+        ] {
+            assert!(scene_references_unmaterialized_assets(&reference));
+        }
+        assert!(!scene_references_unmaterialized_assets(&json!({
+            "solution":{"kind":"stage_output","stage_id":"solve","output_id":"basis"},
+            "equilibrium_ref":{"kind":"stage_output","stage_id":"relax","output_id":"state"}
+        })));
+    }
+
 }

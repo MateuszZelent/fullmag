@@ -30,6 +30,8 @@ mod script_source_capture;
 mod accepted_script_run;
 mod run_manifest;
 mod runtime_service_client;
+mod retained_snapshot_validation;
+mod container_recovery_capabilities;
 mod runtime_supervisor;
 mod saved_fem_snapshot_gate;
 mod accepted_inspection_cold_load;
@@ -197,6 +199,30 @@ fn main() -> Result<()> {
                 )?)?
             );
         }
+        Command::Runtime(RuntimeCommand::ServiceInspectTerminalRun {
+            config, config_sha256, run_id,
+        }) => {
+            let digest = runtime_service_client::inspect_terminal_run_evidence(
+                &config, &config_sha256, &run_id,
+            )?;
+            println!("{}", serde_json::json!({
+                "schema_version": "runtime_service_terminal_run_evidence.v1",
+                "run_id": run_id, "terminal_evidence_sha256": digest,
+                "mutations_applied": false, "solve_replayed": false,
+            }));
+        }
+        Command::Runtime(RuntimeCommand::ServiceInspectHeldManualRun {
+            config, config_sha256, run_id,
+        }) => {
+            let digest = runtime_service_client::inspect_held_manual_run_evidence(
+                &config, &config_sha256, &run_id,
+            )?;
+            println!("{}", serde_json::json!({
+                "schema_version": "runtime_service_held_manual_run_evidence.v1",
+                "run_id": run_id, "held_evidence_sha256": digest,
+                "mutations_applied": false, "solve_replayed": false,
+            }));
+        }
         Command::Runtime(RuntimeCommand::ServiceRecover {
             config,
             request,
@@ -210,6 +236,27 @@ fn main() -> Result<()> {
                     &request_sha256,
                 )?)?
             );
+        }
+        Command::Runtime(RuntimeCommand::ValidateRetainedSnapshot {
+            store,
+            config,
+            config_sha256,
+            request,
+            request_sha256,
+        }) => {
+            println!(
+                "{}",
+                serde_json::to_string(&retained_snapshot_validation::validate(
+                    &store,
+                    &config,
+                    &config_sha256,
+                    &request,
+                    &request_sha256,
+                )?)?
+            );
+        }
+        Command::Runtime(RuntimeCommand::ServiceContainerRecoveryCapabilities) => {
+            println!("{}", container_recovery_capabilities::document());
         }
         Command::Runtime(RuntimeCommand::ServiceRecoverContainer {
             config,
@@ -412,8 +459,8 @@ fn main() -> Result<()> {
                 serde_json::to_string_pretty(&direct_run_summary(&result, &output_dir))?
             );
         }
-        Command::RunScriptAccepted { script, project, execution_profile, resources, idempotency_key, api_url, submit_only } => {
-            let result=accepted_script_run::submit_script(&script,&project,&execution_profile,&resources,&idempotency_key,&api_url,submit_only)?;
+        Command::RunScriptAccepted { script, project, execution_profile, resources, idempotency_key, api_url, submit_only, prepare_only } => {
+            let result=accepted_script_run::submit_script(&script,&project,&execution_profile,&resources,&idempotency_key,api_url.as_deref(),submit_only,prepare_only)?;
             println!("{}",serde_json::to_string_pretty(&result)?);
         }
         Command::PrepareRunJson {
@@ -449,6 +496,8 @@ fn main() -> Result<()> {
             let BackendPlanIR::Fdm(fdm) = &execution_plan.backend_plan else {
                 bail!("FDM checkpoint resume requires a single-grid FDM plan");
             };
+            fullmag_runner::validate_fdm_transport_checkpoint_resume_support(fdm)
+                .map_err(|error| anyhow!(error.message))?;
             let raw = std::fs::read(&checkpoint)
                 .with_context(|| format!("reading checkpoint {}", checkpoint.display()))?;
             let checkpoint_value: Value = serde_json::from_slice(&raw)
@@ -1021,6 +1070,8 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "validate-json",
         "plan-json",
         "run-json",
+        "prepare-run-json",
+        "run-script-accepted",
         "submit-run-json",
         "run-problem-json-direct",
         "resume-json",
@@ -1944,6 +1995,40 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_read_only_retained_snapshot_validation() {
+        let cli = Cli::try_parse_from([
+            "fullmag",
+            "runtime",
+            "validate-retained-snapshot",
+            "--store",
+            "/snapshot/state/runs/docker-all/session-store",
+            "--config",
+            "/snapshot/config/runtime.json",
+            "--config-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--request",
+            "/snapshot/request.json",
+            "--request-sha256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ])
+        .expect("cli parse");
+        assert!(matches!(
+            cli.command,
+            Command::Runtime(RuntimeCommand::ValidateRetainedSnapshot {
+                store,
+                config,
+                config_sha256,
+                request,
+                request_sha256,
+            }) if store == std::path::Path::new("/snapshot/state/runs/docker-all/session-store")
+                && config == std::path::Path::new("/snapshot/config/runtime.json")
+                && config_sha256 == "a".repeat(64)
+                && request == std::path::Path::new("/snapshot/request.json")
+                && request_sha256 == "b".repeat(64)
+        ));
+    }
+
+    #[test]
     fn cli_parses_run_json_as_public_accepted_run_transport() {
         let cli = Cli::try_parse_from([
             "fullmag",
@@ -2065,6 +2150,17 @@ mod tests {
             parsed.initial_magnetization_state.as_deref(),
             Some(std::path::Path::new("states/m_repeated_unit.json"))
         );
+    }
+
+    #[test]
+    fn accepted_run_producers_are_not_treated_as_script_mode() {
+        for command in ["prepare-run-json", "run-script-accepted"] {
+            assert!(!is_script_mode(&[
+                OsString::from("fullmag"),
+                OsString::from(command),
+                OsString::from("--help"),
+            ]));
+        }
     }
 
     #[test]

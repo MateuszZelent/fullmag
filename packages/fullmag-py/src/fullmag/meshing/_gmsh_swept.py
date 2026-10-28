@@ -76,6 +76,7 @@ from ._gmsh_types import (
     _is_sha256_digest,
 )
 from ._gmsh_infra import (
+    _quality_volumes_in_si,
     _import_gmsh,
     _configure_gmsh_threads,
     _GmshProgressLogger,
@@ -211,26 +212,6 @@ def _fresh_scoped_layer_plane_attempt_options(options: MeshOptions) -> MeshOptio
         options,
         size_fields=_clone_descriptors(options.size_fields),
         lower_bound_fields=_clone_descriptors(options.lower_bound_fields),
-    )
-
-
-def _quality_volumes_in_si(
-    quality: MeshQualityReport | None, coordinate_scale: float
-) -> MeshQualityReport | None:
-    """Convert dimensional volumes when Gmsh coordinates are scaled from SI."""
-    if quality is None:
-        return None
-    volume_factor = coordinate_scale ** -3
-    return _dc_replace(
-        quality,
-        volume_min=quality.volume_min * volume_factor,
-        volume_max=quality.volume_max * volume_factor,
-        volume_mean=quality.volume_mean * volume_factor,
-        volume_std=quality.volume_std * volume_factor,
-        element_volume=(
-            [volume * volume_factor for volume in quality.element_volume]
-            if quality.element_volume is not None else None
-        ),
     )
 
 

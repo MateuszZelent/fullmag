@@ -71,8 +71,9 @@ They must not depend on `viewport-3d` internals or reuse 3D renderer buffers.
 
 `field-map` is the canonical active-only center module for scientific spatial
 field inspection. It consumes planar-monitor resources through the typed API
-facade and resource hooks. Existing slice/projection resources remain
-compatibility adapters during migration. It supports heatmap, contours, bounded
+facade and resource hooks (`planar-default` and `planar-monitors`). The legacy
+`samples/slice` and `projection` routes are not consumed by Control Room and
+remain only for API compatibility. It supports heatmap, contours, bounded
 vectors, probe, mesh/boundary overlays, occupancy, surface diagnostics, and
 export without reconstructing FDM/FEM fields in the browser.
 
@@ -114,14 +115,17 @@ copy target labels, ownership, carrier metadata, or selection state. Editing
 the Airbox cannot change an object/part entry, editing an object cannot change
 the Airbox, and wireframe-only changes cannot alter scalar/vector/mask/mesh
 sampling request identity or their ETags. The visualization-state revision and
-ETag do change, and styled `render.png` identity includes the effective target
-wireframe. Three-dimensional target overrides remain independent. Region,
+ETag do change. The exported `render.png` applies the session planar colormap
+and SI color range, and its ETag combines the sample identity with that style;
+it does not draw the target wireframe. Three-dimensional target overrides remain independent. Region,
 FDM-domain, and native-layer overrides remain unsupported until the canonical
 backend registry publishes them.
 
-The backend performs physical sampling. FDM uses explicit cell reconstruction
-and cell-intersection measure. FEM P1 uses barycentric point evaluation and
-conservative tetrahedron/boundary measure. Node count is diagnostics only.
+The backend performs physical sampling. FDM uses explicit cell reconstruction:
+`plane_sample` averages the cells under each pixel footprint (exact when the
+raster divides the cell counts) and slab/depth use cell-intersection measure.
+FEM P1 uses barycentric (Tet4) or isoparametric (Prism6) point evaluation and
+conservative element/boundary measure. Node count is diagnostics only.
 Vector reduction precedes world or monitor-basis component derivation.
 
 ## 4. Planar Source and Monitor Authoring Flow
@@ -134,6 +138,62 @@ selected, `field-map` resolves `Default` from the published domain with
 change `SceneDocument`, or update canonical Python. The default source uses
 the same backend sampler as authored monitors after the server resolves its
 target, frame, extent, and operator.
+
+For the `Default` source, a section strip above the surface (MuMax3-fork
+style) edits the same session `default_slice` as the Inspector: plane
+`XY/XZ/YZ`, `Single layer | Average`, and the position along the normal. On a
+structured FDM grid the position is a discrete layer index shown with its
+snapped cell-centre coordinate (`fraction = (i + 0.5)/N`, mirrored by the
+backend snap `i = ceil(fN) - 1`); on FEM it stays continuous. `Average` is a
+slab of twice the normal extent, so it covers the whole domain from any snapped
+centre and yields the occupied-measure mean over the full thickness. The
+strip stays visible on loading and error states so a failing section can be
+changed. FDM rasters offer native-grid presets (one pixel per cell and integer
+reductions). A selected FDM multilayer layer maps to the `layer` view scope;
+the Airbox scope is resolved by the backend carrier for FDM and FEM.
+
+### 4.1 Toolbar, direction colours and keyboard (mumax3 parity)
+
+Plan: `docs/plans/active/viewport-2d-mumax-parity-2026-10-27/`.
+
+- A toolbar above the map (`FieldMapToolbar`) holds the most frequent
+  decisions: quantity, component preset (`Direction | x | y | z | |v|`), the
+  section strip, `Arrows` and `Mesh`. It patches the same
+  `visualization/state.planar` as the Inspector; there is no local copy.
+- `Direction` sets the planar colormap `hsl_direction`: the raster is coloured
+  by the full vector with the mumax3 HSL wheel in the world frame (hue =
+  atan2(v̂y, v̂x), lightness = 0.5·v̂z + 0.5, grey for vectors without a
+  direction). The 2D and 3D viewports share one implementation
+  (`shared/visualization/directionColor.ts`), the backend `render.png` uses
+  the same formula, and the legend shows the two hemispheres. The scalar
+  component stays `magnitude` for contours and probes. New sessions open `m`
+  with this colormap.
+- Cartesian presets use `coolwarm` with a symmetric range, `|v|` uses
+  `viridis` with an automatic range; a manual range is never overwritten.
+- Vectors are laid out on a screen-space 2D grid anchored to the (u, v)
+  frame (`layoutScreenGlyphs`), spacing derived from `vector_budget` (a
+  presentation-only density, outside the sample identity) with a 24 px
+  minimum, length = mumax3 in-plane projection with a 7 px minimum,
+  filled arrowheads, and `⊙/⊗` markers when |v∥|/|v| < 0.25. Over a
+  direction raster, `orientation`-coloured arrows are drawn dark with a light
+  halo.
+- Frame retention ignores the default-slice position: a layer step keeps the
+  last frame on screen and the section caption says `showing … · loading …`
+  until the new frame arrives. Pointer gestures are coalesced to one patch per
+  animation frame. The plot area is a size container that keeps the physical
+  u:v aspect ratio.
+- Sample metadata `section` publishes requested vs. resolved coordinate,
+  `stops_kind` (`fdm_cell_layers | continuous`), layer index/count and
+  navigation step; the Inspector shows `requested → resolved`.
+- Commands (enabled only while 2D is the active centre module, except
+  `export-data`): `[`/`]` layer, `Shift+{`/`Shift+}` ±10 layers,
+  `V X Y Z M` component presets, `A` arrows, `G` mesh, `fit`, `reset-view`,
+  `toggle-contours`, and `export-data` (CSV of the sampled raster in SI with
+  frame and world coordinates). The mounted surface publishes its presented
+  profile, section geometry and frame evidence in
+  `kernel/visualization/fieldMapSurfaceStore.ts`; commands and the Inspector
+  read that single owner. The Inspector reports `Live` only for a frame whose
+  meta, scalar and raster identities match.
 
 Creating or editing an authored monitor remains an explicit Inspector
 transaction. While that draft is active, the 3D viewport may show a
@@ -189,7 +249,7 @@ Required tests:
   `activeViewportMainModuleId` to `field-map`;
 - the typed API exposes the cross-section PNG endpoint as a binary resource;
 - object URLs created by the image surface are revoked on replacement/unmount;
-- `field-map` reads slice/projection resources only through `ControlRoomApi`
+- `field-map` reads planar resources only through `ControlRoomApi`
   and resource hooks, preserves ETag/query identity, and handles empty masks;
 - the field-map renderer is created once, remains idle without changed
   revisions or controls, resizes by observer, and is disposed on tab switch;
@@ -212,8 +272,8 @@ Required tests:
   covered by API tests;
 - Airbox/object/part overrides remain exact and independent through optimistic
   state and HTTP ACK, while 3D overrides stay byte-identical;
-- wireframe-only edits change visualization-state and `render.png` identity but
-  leave `sample_token` plus scalar/vector/mask/mesh-overlay requests and ETags
+- wireframe-only edits change visualization-state identity but leave
+  `sample_token` plus scalar/vector/mask/mesh-overlay requests and ETags
   unchanged;
 - a 100-switch browser audit proves no increasing worker/listener/canvas count,
   no idle RAF, bounded heap, and a healthy 3D WebGL context after returning.

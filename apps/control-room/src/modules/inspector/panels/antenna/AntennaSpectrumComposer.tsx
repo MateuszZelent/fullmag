@@ -82,7 +82,7 @@ export function AntennaSpectrumComposer({ stageId, scene, sceneScopeKey, status,
       invalidateAuthoringMutationDependents(resources, "interaction", response.scene_revision);
       setLocal((value) => acknowledgeAntennaSpectrumDraft(value, submitted, response.scene_revision));
       setRejected(null);
-      setFeedback({ token, kind: "success", message: "Source FFT request committed. No spectrum was computed; qualified field data and analysis execution are still required." });
+      setFeedback({ token, kind: "success", message: "Source FFT request saved. No spectrum was computed. FFT execution is not yet available in this workspace." });
       return true;
     } catch (error) {
       if (!isCurrent()) return false;

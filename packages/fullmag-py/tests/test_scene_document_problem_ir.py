@@ -646,6 +646,31 @@ def test_scene_document_problem_ir_preserves_study_table_autosave(tmp_path: Path
     assert problem_ir["study"]["sampling"]["table_autosave"] == autosave
 
 
+def test_staged_scene_keeps_step_table_cadence_out_of_its_base_study(tmp_path: Path) -> None:
+    source = tmp_path / "staged_table_autosave.py"
+    source.write_text(
+        """import fullmag as fm
+study = fm.study('staged-table-autosave')
+study.engine('fdm')
+film = study.geometry(fm.Box(20e-9, 10e-9, 5e-9), name='film', object_id='film')
+film.Ms = 800000
+film.Aex = 13e-12
+film.m = fm.texture.uniform(0, 0, 1)
+study.tableautosave(every_steps=1, quantities=['t', 'step', 'mx'])
+study.stages.add_minimize(method='bb', max_steps=10, tolA=1e-4)
+""",
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(source, lightweight_assets=True)
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    assert scene["study"]["table_autosave"]["every_steps"] == 1
+
+    problem_ir = _lower_scene_document(scene, tmp_path)
+
+    assert problem_ir["study"]["kind"] != "relaxation"
+    assert "table_autosave" not in problem_ir["study"]["sampling"]
+
+
 def test_scene_document_problem_ir_accepts_default_empty_field_drive_state(
     tmp_path: Path,
 ) -> None:

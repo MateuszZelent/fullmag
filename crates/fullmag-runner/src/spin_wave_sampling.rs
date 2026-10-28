@@ -633,6 +633,8 @@ pub(crate) fn requested_finite_k_artifacts(
             "finite-k time-domain analysis currently requires a FEM plan",
         ));
     };
+    // Accepted antenna bases are packed into the same native H_drive observable.
+    // Require the real m/H_drive snapshots below; never synthesize response data.
     let has_active_drive = fem
         .field_drives
         .iter()

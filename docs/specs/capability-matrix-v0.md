@@ -524,6 +524,15 @@ The frequency-domain UI may expose the diagnostic readiness labels `periodic_air
 
 ## Microwave antenna field-basis slice
 
+Aktualizacja24.10.2026: addytywny `analytic_rt0_surface` dla prepared closed-loop
+ma publiczne authoring/IR/planner oraz compiled native FEM CPU/double/strict
+adapter i odrębny inspection evidence. Pakiet4b64b46b6025e2ddb0534135c904f58541a3ee9251b1af2cd93ec22c1b4b9453
+potwierdza build/start; nowy native run i publiczny odczyt surface nadal
+NOT VERIFIED. Wariant nie jest kwalifikowaną bazą, nie odblokowuje FFT/LLG,
+require_qualified ani GPU/FDM; inne kombinacje jawnie odmawiają. Pełne parametry
+w nocie0950. Tabela historycznej ścieżki poniżej nie promuje tego wariantu.
+
+
 The solved-antenna target is defined by
 `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
 and ADR 0017. The regional-drive target is defined independently by

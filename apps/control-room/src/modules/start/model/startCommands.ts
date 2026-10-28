@@ -226,8 +226,10 @@ export const START_COMMANDS: readonly CommandContribution[] = [
     scope: "global",
     shortcut: "F1",
     // Documentation opens as an overlay so the workspace remains mounted.
-    run: () => {
-      startScreenStore.requestDocs();
+    run: (context) => {
+      const pageInput = (context.input as { page?: unknown } | undefined)?.page;
+      const page = typeof pageInput === "string" && pageInput.trim() ? pageInput : undefined;
+      startScreenStore.requestDocs(page);
       homeView.open();
       return { status: "completed" };
     },

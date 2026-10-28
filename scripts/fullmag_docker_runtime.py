@@ -759,6 +759,34 @@ def select_loopback_port(preferred, project, *, attempts=64):
     )
 
 
+_NO_SUCH_CONTAINER = re.compile(
+    r"(?:error(?: response from daemon)?: )?no such (?:object|container): [0-9a-f]{12,64}",
+    re.IGNORECASE,
+)
+
+
+def _inspect_running_containers(attempts=3):
+    """Inspect the running containers as one consistent snapshot.
+
+    Other DEV groups start and remove short-lived helper containers all the
+    time; one that disappears between ``docker ps`` and ``docker inspect``
+    makes the whole inspect fail although it can no longer own a port. Take a
+    fresh snapshot in that case; any other failure is reported unchanged.
+    """
+    for attempt in range(attempts):
+        running_ids = [value for value in docker("ps", "--quiet").splitlines() if value.strip()]
+        if not running_ids:
+            return []
+        try:
+            return json.loads(docker("inspect", *running_ids))
+        except ValueError as error:
+            lines = [line.strip() for line in str(error).splitlines() if line.strip()]
+            vanished = bool(lines) and all(_NO_SUCH_CONTAINER.fullmatch(line) for line in lines)
+            if not vanished or attempt + 1 == attempts:
+                raise
+    raise AssertionError("unreachable")
+
+
 def assert_loopback_port_available(port, project):
     """Reject host listeners before any runtime state mutation."""
 
@@ -772,11 +800,8 @@ def assert_loopback_port_available(port, project):
             f"Requested loopback port {port} is already bound by native Windows: "
             + ", ".join(native_conflicts)
         )
-    running_ids = [value for value in docker("ps", "--quiet").splitlines() if value.strip()]
-    if not running_ids:
-        return
     try:
-        documents = json.loads(docker("inspect", *running_ids))
+        documents = _inspect_running_containers()
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError("Could not inspect running Docker containers for port ownership") from error
     if not isinstance(documents, list):
@@ -1100,7 +1125,7 @@ def submit_build(repo, commit=None, *, development=False, source_root=None):
     if development:
         from docker_development_inputs import select_checkout
         source_repo = select_checkout(repo, source_root)
-        required_helpers = ("Dockerfile", "Dockerfile.dev", "entrypoint.py", "windows_folder_probe.py", "linux_native_probe.py",
+        required_helpers = ("Dockerfile", "Dockerfile.dev", "backend_auto_maintenance.py", "entrypoint.py", "windows_folder_probe.py", "linux_native_probe.py",
                             "runtime_service.py", "frontend_dev.py", "healthcheck.py")
         for name in required_helpers:
             relative = "docker/all-in-one/" + name
@@ -1179,6 +1204,9 @@ def stage_image_context(capsule, package, stage, *, development):
         shutil.copytree(package, stage / "package", symlinks=False)
     for name in ("entrypoint.py", "windows_folder_probe.py", "linux_native_probe.py", "runtime_service.py", "frontend_dev.py", "healthcheck.py"):
         shutil.copyfile(capsule / "tree/docker/all-in-one" / name, stage / name)
+    if development:
+        shutil.copyfile(capsule / "tree/docker/all-in-one/backend_auto_maintenance.py",
+                        stage / "backend_auto_maintenance.py")
     for name in ("docker_startup_script.py", "fullmag_storage.py"):
         source = capsule / "tree/scripts" / name
         if not source.is_file():
@@ -2596,34 +2624,196 @@ _BACKEND_BINARY_DIGESTS_SCRIPT = r'''
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 
-FLAGS = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+PACKAGE_ROOT = __PACKAGE_ROOT__
+SHARED_ROOT = __SHARED_ROOT__
+OWNER_UID = __OWNER_UID__
+OWNER_GID = __OWNER_GID__
+DIRECTORY_FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+FILE_FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
 MAXIMUM = 16 * 1024 * 1024 * 1024
-result = {}
-for name in sys.argv[1:]:
-    path = "/opt/fullmag/package/bin/" + name
-    descriptor = os.open(path, FLAGS)
+UNIT_KEY = re.compile(r"^[a-f0-9]{64}$")
+
+
+def open_directory(path):
+    if not isinstance(path, str) or not path.startswith("/"):
+        raise RuntimeError("runtime artifact root is not absolute")
+    components = path.split("/")[1:]
+    if any(component in {"", ".", ".."} for component in components):
+        raise RuntimeError("runtime artifact root is not canonical")
+    descriptor = os.open("/", DIRECTORY_FLAGS)
     try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise RuntimeError("runtime artifact is not one regular file")
-        digest = hashlib.sha256()
-        total = 0
-        while True:
-            block = os.read(descriptor, 1024 * 1024)
-            if not block:
-                break
-            total += len(block)
-            if total > MAXIMUM:
-                raise RuntimeError("runtime artifact exceeds its size bound")
-            digest.update(block)
-        result[name] = digest.hexdigest()
-    finally:
+        for component in components:
+            child = os.open(component, DIRECTORY_FLAGS, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
         os.close(descriptor)
+        raise
+
+
+def open_relative_directory(parent, relative):
+    components = relative.split("/")
+    if (not components or any(component in {"", ".", ".."} for component in components)
+            or any("\\" in component for component in components)):
+        raise RuntimeError("runtime artifact alias path is not canonical")
+    descriptor = os.dup(parent)
+    try:
+        for component in components:
+            child = os.open(component, DIRECTORY_FLAGS, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def safe_name(value):
+    if (not isinstance(value, str) or not value or value in {".", ".."}
+            or "/" in value or "\\" in value or "\x00" in value):
+        raise RuntimeError("runtime artifact name is not a basename")
+
+
+def signature(metadata):
+    # ctime and nlink are intentionally excluded: other package groups may
+    # link or unlink the same sealed payload while this process hashes it.
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns,
+            metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode))
+
+
+def open_file(parent, name):
+    metadata = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError("runtime artifact is not a regular file")
+    descriptor = os.open(name, FILE_FLAGS, dir_fd=parent)
+    return descriptor
+
+
+arguments = list(sys.argv[1:])
+shared = False
+unit_key = None
+group_path = None
+if arguments and arguments[0] == "--shared":
+    if len(arguments) < 4:
+        raise RuntimeError("shared runtime artifact pin is incomplete")
+    _, unit_key, group_path, *names = arguments
+    if (not isinstance(unit_key, str) or UNIT_KEY.fullmatch(unit_key) is None
+            or group_path != "groups/" + unit_key):
+        raise RuntimeError("shared runtime artifact pin is invalid")
+    shared = True
+elif arguments and arguments[0] == "--private":
+    names = arguments[1:]
+else:
+    raise RuntimeError("runtime artifact mode is not explicitly pinned")
+if not names:
+    raise RuntimeError("runtime artifact inventory is empty")
+
+package_root_fd = open_directory(PACKAGE_ROOT)
+shared_root_fd = None
+group_fd = None
+package_bin_fd = None
+group_bin_fd = None
+result = {}
+try:
+    package_bin_fd = open_relative_directory(package_root_fd, "bin")
+    if shared:
+        shared_root_fd = open_directory(SHARED_ROOT)
+        group_fd = open_relative_directory(shared_root_fd, group_path)
+        group_metadata = os.fstat(group_fd)
+        if (not stat.S_ISDIR(group_metadata.st_mode)
+                or (group_metadata.st_uid, group_metadata.st_gid) != (OWNER_UID, OWNER_GID)):
+            raise RuntimeError("shared runtime artifact group has a foreign owner")
+        group_bin_fd = open_relative_directory(group_fd, "bin")
+
+    for name in names:
+        safe_name(name)
+        descriptor = open_file(package_bin_fd, name)
+        alias_descriptor = None
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise RuntimeError("runtime artifact is not a regular file")
+            if shared:
+                alias_descriptor = open_file(group_bin_fd, name)
+                alias_metadata = os.fstat(alias_descriptor)
+                if (not stat.S_ISREG(alias_metadata.st_mode)
+                        or (metadata.st_dev, metadata.st_ino)
+                        != (alias_metadata.st_dev, alias_metadata.st_ino)):
+                    raise RuntimeError("runtime artifact does not alias its pinned shared group")
+                if ((metadata.st_uid, metadata.st_gid) != (OWNER_UID, OWNER_GID)
+                        or (alias_metadata.st_uid, alias_metadata.st_gid) != (OWNER_UID, OWNER_GID)
+                        or stat.S_IMODE(metadata.st_mode) != 0o555
+                        or stat.S_IMODE(alias_metadata.st_mode) != 0o555):
+                    raise RuntimeError("shared runtime artifact owner or mode is invalid")
+            elif metadata.st_nlink != 1:
+                raise RuntimeError("runtime artifact is not one regular file")
+            if metadata.st_size > MAXIMUM:
+                raise RuntimeError("runtime artifact exceeds its size bound")
+
+            before = signature(metadata)
+            digest = hashlib.sha256()
+            total = 0
+            while True:
+                block = os.read(descriptor, 1024 * 1024)
+                if not block:
+                    break
+                total += len(block)
+                if total > MAXIMUM:
+                    raise RuntimeError("runtime artifact exceeds its size bound")
+                digest.update(block)
+
+            after = os.fstat(descriptor)
+            if shared:
+                alias_after = os.fstat(alias_descriptor)
+                package_path_after = os.stat(name, dir_fd=package_bin_fd, follow_symlinks=False)
+                group_path_after = os.stat(name, dir_fd=group_bin_fd, follow_symlinks=False)
+                if (signature(after) != before
+                        or signature(alias_after) != before
+                        or signature(package_path_after) != before
+                        or signature(group_path_after) != before):
+                    raise RuntimeError("shared runtime artifact changed while hashing")
+            elif (after.st_nlink != 1 or signature(after) != before):
+                raise RuntimeError("runtime artifact changed while hashing")
+            result[name] = digest.hexdigest()
+        finally:
+            if alias_descriptor is not None:
+                os.close(alias_descriptor)
+            os.close(descriptor)
+finally:
+    for descriptor in (group_bin_fd, group_fd, shared_root_fd, package_bin_fd, package_root_fd):
+        if descriptor is not None:
+            os.close(descriptor)
+
 print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 '''
+
+
+def _backend_binary_digest_script(
+    package_root="/opt/fullmag/package",
+    shared_root="/opt/fullmag/shared-backend",
+    *,
+    owner_uid=65532,
+    owner_gid=65532,
+):
+    """Bind the embedded reader to host-selected guest roots and owner."""
+
+    if (not isinstance(package_root, str) or not package_root.startswith("/")
+            or not isinstance(shared_root, str) or not shared_root.startswith("/")
+            or type(owner_uid) is not int or owner_uid < 0
+            or type(owner_gid) is not int or owner_gid < 0):
+        raise ValueError("Backend binary attestation pin is invalid")
+    return (
+        _BACKEND_BINARY_DIGESTS_SCRIPT
+        .replace("__PACKAGE_ROOT__", json.dumps(package_root), 1)
+        .replace("__SHARED_ROOT__", json.dumps(shared_root), 1)
+        .replace("__OWNER_UID__", str(owner_uid), 1)
+        .replace("__OWNER_GID__", str(owner_gid), 1)
+    )
 
 
 def _read_backend_binary_hashes(inputs, container_id):
@@ -2631,6 +2821,12 @@ def _read_backend_binary_hashes(inputs, container_id):
 
     cache = inputs.get("backend_cache") if isinstance(inputs, Mapping) else None
     cache_kind = _backend_cache_kind(cache)[0] if isinstance(cache, dict) else None
+    adapter = (
+        _validate_backend_volume_cache(
+            cache, expected_package=inputs.get("package_root")
+        )
+        if cache_kind == "v2" else None
+    )
     package_path = None if cache_kind == "v2" else Path(str(inputs["package_root"]))
     if package_path is not None and package_path.is_dir():
         return {
@@ -2639,15 +2835,38 @@ def _read_backend_binary_hashes(inputs, container_id):
         }
     if not container_id:
         raise ValueError("Backend package is daemon-owned and has no running container for attestation")
+    shared = cache_kind == "v2" and cache.get("shared_packages") is True
+    if shared:
+        unit_key = cache.get("unit_key")
+        package_subpath = cache.get("shared_package_subpath")
+        if (not isinstance(unit_key, str)
+                or re.fullmatch(r"[a-f0-9]{64}", unit_key) is None
+                or package_subpath != "groups/" + unit_key
+                or cache.get("environment", {}).get("FULLMAG_SHARED_BACKEND_GROUP") != package_subpath):
+            raise ValueError("Backend shared package attestation pin is invalid")
+        package_target = getattr(adapter, "PACKAGE_TARGET", None)
+        shared_target = getattr(adapter, "SHARED_BACKEND_TARGET", None)
+        if (package_target != "/opt/fullmag/package"
+                or shared_target != "/opt/fullmag/shared-backend"):
+            raise ValueError("Backend shared package guest paths are not canonical")
+        script_arguments = ["--shared", unit_key, package_subpath]
+    else:
+        package_target = "/opt/fullmag/package"
+        shared_target = "/opt/fullmag/shared-backend"
+        script_arguments = ["--private"]
+    script = _backend_binary_digest_script(package_target, shared_target)
     try:
         raw = docker(
             "exec", container_id, "/usr/local/bin/python3", "-c",
-            _BACKEND_BINARY_DIGESTS_SCRIPT, *REQUIRED_BINARIES, timeout=120,
+            script, *script_arguments, *REQUIRED_BINARIES, timeout=120,
         )
-        value = json.loads(raw)
     except DockerOutcomeUnknown:
         raise
-    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:
+        raise ValueError("Backend container binary attestation command failed") from error
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError("Backend container binary attestation returned invalid JSON") from error
     if (not isinstance(value, dict)
             or set(value) != set(REQUIRED_BINARIES)

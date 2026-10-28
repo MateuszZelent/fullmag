@@ -29,6 +29,8 @@ use crate::types::{
     AppState, CurrentLiveRequestContext, CurrentLiveSnapshotRequest, RunManifest, SessionManifest,
 };
 
+mod terminal_observation;
+
 const INPUT_ENV: &str = "FULLMAG_DEVELOPMENT_ACCEPTED_REATTACH_STDIN";
 const LEGACY_INPUT_ENV: &str = "FULLMAG_DEVELOPMENT_RESTORE_STDIN";
 const RUNTIME_CONTROL_ROOT_ENV: &str = "FULLMAG_RUNTIME_CONTROL_ROOT";
@@ -288,6 +290,9 @@ impl Drop for RestoreCheckpoint {
 /// listening.  An absent environment switch is a no-op so ordinary startup
 /// and the legacy authoring restore retain their existing behavior.
 pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), String> {
+    if std::env::var_os(terminal_observation::ENV).is_some() {
+        return terminal_observation::restore_before_listen(state).await;
+    }
     match std::env::var_os(INPUT_ENV) {
         None => return Ok(()),
         Some(value) if value == "1" => {}
@@ -436,7 +441,16 @@ pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
 fn validate_current_build(input: &AcceptedRestoreInput) -> Result<()> {
     let build = fullmag_build_info::identity();
     validate_compiled_target(input, build)?;
+    validate_current_build_provenance(build)
+}
 
+fn validate_current_build_identity(target_commit: &str, target_snapshot: &str) -> Result<()> {
+    let build = fullmag_build_info::identity();
+    validate_compiled_target_identity(target_commit, target_snapshot, build)?;
+    validate_current_build_provenance(build)
+}
+
+fn validate_current_build_provenance(build: fullmag_build_info::BuildIdentity) -> Result<()> {
     let configured = std::env::var_os(RUNTIME_PROVENANCE_ENV)
         .context("accepted-run reattach requires Docker runtime provenance")?;
     let configured = Path::new(&configured);
@@ -492,13 +506,21 @@ fn validate_compiled_target(
     input: &AcceptedRestoreInput,
     build: fullmag_build_info::BuildIdentity,
 ) -> Result<()> {
+    validate_compiled_target_identity(&input.target_build_id, &input.target_source_sha256, build)
+}
+
+fn validate_compiled_target_identity(
+    target_build_id: &str,
+    target_source_sha256: &str,
+    build: fullmag_build_info::BuildIdentity,
+) -> Result<()> {
     validate_commit(build.git_commit, "compiled build commit")?;
     validate_digest(
         build.source_snapshot_sha256,
         "compiled build source snapshot",
     )?;
-    if input.target_build_id != build.git_commit
-        || input.target_source_sha256 != build.source_snapshot_sha256
+    if target_build_id != build.git_commit
+        || target_source_sha256 != build.source_snapshot_sha256
     {
         bail!("accepted-run reattach input targets a different compiled build");
     }
@@ -743,89 +765,11 @@ fn load_held_preparation_failure(
     planned_inputs: &std::collections::BTreeMap<String, (String, String)>,
     catalog: &fullmag_session::FmsRunCatalog,
 ) -> Result<Option<Value>> {
-    let exits = store.list_preparation_process_exit_receipts(run_id)?;
-    let decisions = store.list_preparation_retry_decisions(run_id)?;
-    let launches = store.list_preparation_process_launches(run_id)?;
     let mut failures = Vec::new();
     for task in &catalog.tasks {
-        if !matches!(&task.readiness, FmsTaskReadiness::Blocked { reason }
-            if reason == fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON)
-        {
-            continue;
+        if let Some(failure) = load_task_preparation_failure(store, run_id, task, planned_inputs)? {
+            failures.push(failure);
         }
-        let candidates = exits.iter().filter(|receipt| {
-            receipt.task_id == task.task_id
-                && !receipt.status_success
-                && !decisions.iter().any(|decision| {
-                    decision.task_id == task.task_id
-                        && decision.failed_preparation_attempt_id == receipt.preparation_attempt_id
-                })
-        }).collect::<Vec<_>>();
-        if candidates.is_empty() {
-            continue;
-        }
-        // This validates retry history and excludes an authorized newer retry.
-        if store.preparation_attempt_authorization_sequence(run_id, &task.task_id)?.is_some() {
-            continue;
-        }
-        if candidates.len() != 1 || task.lifecycle != FmsTaskLifecycle::Accepted
-            || task.attempt_id.is_some() || task.ownership_epoch.is_some()
-            || task.resource_id.is_some()
-        {
-            bail!("held preparation failure requires one unclaimed, un-retried failed attempt");
-        }
-        let (step_id, input_fingerprint) = planned_inputs.get(&task.task_id)
-            .context("held failed preparation task is not a planned accepted Study step")?;
-        if task.input_fingerprint != *input_fingerprint
-            || store.read_task_preparation_receipt(run_id, &task.task_id)?.is_some()
-            || store.read_accepted_stage_preparation_receipt(run_id, step_id)?.is_some()
-        {
-            bail!("held failed preparation differs from its immutable task inputs");
-        }
-        let receipt = candidates[0];
-        receipt.validate()?;
-        let lease = store.read_preparation_resource_lease(
-            run_id, &receipt.resource_id, &receipt.lease_token,
-        )?.context("held preparation failure has no exact resource lease")?;
-        lease.validate()?;
-        if receipt.run_id != run_id || lease.run_id != run_id
-            || lease.task_id != receipt.task_id
-            || lease.preparation_attempt_id != receipt.preparation_attempt_id
-            || lease.resource_id != receipt.resource_id || lease.lease_token != receipt.lease_token
-            || lease.state != fullmag_session::FmsResourceLeaseState::Released
-            || lease.heartbeat_sequence != receipt.lease_heartbeat_sequence
-        {
-            bail!("held preparation failure does not match its finalized lease");
-        }
-        let matching = launches.iter().filter(|launch| {
-            launch.task_id == receipt.task_id
-                && launch.preparation_attempt_id == receipt.preparation_attempt_id
-        }).collect::<Vec<_>>();
-        if matching.len() != 1 {
-            bail!("held preparation failure requires exactly one durable launch");
-        }
-        let launch = matching[0];
-        launch.validate()?;
-        if launch.run_id != run_id || launch.resource_id != receipt.resource_id
-            || launch.lease_token != receipt.lease_token
-            || launch.lease_heartbeat_sequence > receipt.lease_heartbeat_sequence
-        {
-            bail!("held preparation failure launch identity differs from its exit proof");
-        }
-        failures.push(json!({
-            "task_id": &task.task_id,
-            "step_id": step_id,
-            "preparation_attempt_id": &receipt.preparation_attempt_id,
-            "exit_receipt_id": &receipt.receipt_id,
-            "exit_code": receipt.exit_code,
-            "timed_out": receipt.timed_out,
-            "started_at_unix_ms": u64::try_from(launch.created_at.timestamp_millis())
-                .context("preparation launch timestamp predates the Unix epoch")?,
-            "completed_at_unix_ms": u64::try_from(receipt.observed_at.timestamp_millis())
-                .context("preparation exit timestamp predates the Unix epoch")?,
-            "error": receipt.failure_reason.as_deref().unwrap_or("preparation failed")
-                .replace(&receipt.lease_token, "[redacted lease token]"),
-        }));
     }
     if failures.is_empty() {
         return Ok(None);
@@ -838,6 +782,98 @@ fn load_held_preparation_failure(
         "preparation_error_code": "accepted_preparation_process_failed",
         "preparation_error": failures[0]["error"],
         "failures": failures,
+    })))
+}
+
+/// Validate one finalized failure under the caller's store snapshot guard.
+/// Retry authorization and immutable task/launch/lease bindings are shared by
+/// development restore and the live preparation command observer.
+pub(crate) fn load_task_preparation_failure(
+    store: &fullmag_session::SessionStore,
+    run_id: &str,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+    planned_inputs: &std::collections::BTreeMap<String, (String, String)>,
+) -> Result<Option<Value>> {
+    let exits = store.list_preparation_process_exit_receipts(run_id)?;
+    let decisions = store.list_preparation_retry_decisions(run_id)?;
+    let launches = store.list_preparation_process_launches(run_id)?;
+    if !matches!(&task.readiness, FmsTaskReadiness::Blocked { reason }
+        if reason == fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON)
+    {
+        return Ok(None);
+    }
+    let candidates = exits.iter().filter(|receipt| {
+        receipt.task_id == task.task_id
+            && !receipt.status_success
+            && !decisions.iter().any(|decision| {
+                decision.task_id == task.task_id
+                    && decision.failed_preparation_attempt_id == receipt.preparation_attempt_id
+            })
+    }).collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    // This validates retry history and excludes an authorized newer retry.
+    if store.preparation_attempt_authorization_sequence(run_id, &task.task_id)?.is_some() {
+        return Ok(None);
+    }
+    if candidates.len() != 1 || task.lifecycle != FmsTaskLifecycle::Accepted
+        || task.attempt_id.is_some() || task.ownership_epoch.is_some()
+        || task.resource_id.is_some()
+    {
+        bail!("held preparation failure requires one unclaimed, un-retried failed attempt");
+    }
+    let (step_id, input_fingerprint) = planned_inputs.get(&task.task_id)
+        .context("held failed preparation task is not a planned accepted Study step")?;
+    if task.input_fingerprint != *input_fingerprint
+        || store.read_task_preparation_receipt(run_id, &task.task_id)?.is_some()
+        || store.read_accepted_stage_preparation_receipt(run_id, step_id)?.is_some()
+    {
+        bail!("held failed preparation differs from its immutable task inputs");
+    }
+    let receipt = candidates[0];
+    receipt.validate()?;
+    let lease = store.read_preparation_resource_lease(
+        run_id, &receipt.resource_id, &receipt.lease_token,
+    )?.context("held preparation failure has no exact resource lease")?;
+    lease.validate()?;
+    if receipt.run_id != run_id || lease.run_id != run_id
+        || lease.task_id != receipt.task_id
+        || lease.preparation_attempt_id != receipt.preparation_attempt_id
+        || lease.resource_id != receipt.resource_id || lease.lease_token != receipt.lease_token
+        || lease.state != fullmag_session::FmsResourceLeaseState::Released
+        || lease.heartbeat_sequence != receipt.lease_heartbeat_sequence
+    {
+        bail!("held preparation failure does not match its finalized lease");
+    }
+    let matching = launches.iter().filter(|launch| {
+        launch.task_id == receipt.task_id
+            && launch.preparation_attempt_id == receipt.preparation_attempt_id
+    }).collect::<Vec<_>>();
+    if matching.len() != 1 {
+        bail!("held preparation failure requires exactly one durable launch");
+    }
+    let launch = matching[0];
+    launch.validate()?;
+    if launch.run_id != run_id || launch.resource_id != receipt.resource_id
+        || launch.lease_token != receipt.lease_token
+        || launch.lease_heartbeat_sequence > receipt.lease_heartbeat_sequence
+    {
+        bail!("held preparation failure launch identity differs from its exit proof");
+    }
+    Ok(Some(json!({
+        "task_id": &task.task_id,
+        "step_id": step_id,
+        "preparation_attempt_id": &receipt.preparation_attempt_id,
+        "exit_receipt_id": &receipt.receipt_id,
+        "exit_code": receipt.exit_code,
+        "timed_out": receipt.timed_out,
+        "started_at_unix_ms": u64::try_from(launch.created_at.timestamp_millis())
+            .context("preparation launch timestamp predates the Unix epoch")?,
+        "completed_at_unix_ms": u64::try_from(receipt.observed_at.timestamp_millis())
+            .context("preparation exit timestamp predates the Unix epoch")?,
+        "error": receipt.failure_reason.as_deref().unwrap_or("preparation failed")
+            .replace(&receipt.lease_token, "[redacted lease token]"),
     })))
 }
 
@@ -874,7 +910,6 @@ fn publish_restore_ack(
     if expected_api != api_instance_id {
         bail!("accepted-run restore ack path does not bind the current API instance");
     }
-    let destination = fullmag_session::repository_path::checked_path(proof_root, ack_relative)?;
     let ack = AcceptedRestoreAck {
         schema: RESTORE_ACK_SCHEMA.into(),
         state: "consumed".into(),
@@ -900,48 +935,53 @@ fn publish_restore_ack(
     if bytes.len() > MAX_PROOF_BYTES {
         bail!("accepted-run restore ack exceeds its size bound");
     }
+    publish_immutable_restore_bytes(proof_root, ack_relative, &bytes)
+}
+
+fn publish_immutable_restore_bytes(proof_root: &Path, relative: &str, bytes: &[u8]) -> Result<String> {
+    let destination = fullmag_session::repository_path::checked_path(proof_root, relative)?;
     match OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&destination)
     {
         Ok(mut file) => {
-            file.write_all(&bytes)
-                .context("write accepted-run restore ack")?;
+            file.write_all(bytes)
+                .context("write accepted-run restore receipt")?;
             file.sync_all()
-                .context("sync accepted-run restore ack")?;
+                .context("sync accepted-run restore receipt")?;
             drop(file);
-            fs::File::open(destination.parent().context("restore ack has no parent")?)
-                .context("open accepted-run restore ack directory")?
+            fs::File::open(destination.parent().context("restore receipt has no parent")?)
+                .context("open accepted-run restore receipt directory")?
                 .sync_all()
-                .context("sync accepted-run restore ack directory")?;
+                .context("sync accepted-run restore receipt directory")?;
             let published = fullmag_session::repository_path::read_bounded_regular_file(
                 proof_root,
-                ack_relative,
+                relative,
                 MAX_PROOF_BYTES,
             )?;
-            if published != bytes {
-                bail!("accepted-run restore ack changed during publication");
+            if published.as_slice() != bytes {
+                bail!("accepted-run restore receipt changed during publication");
             }
             Ok(fullmag_session::hex_sha256(&published))
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             let metadata = fs::symlink_metadata(&destination)
-                .context("inspect existing accepted-run restore ack")?;
+                .context("inspect existing accepted-run restore receipt")?;
             if !metadata.is_file() || metadata.file_type().is_symlink() {
-                bail!("accepted-run restore ack destination is not a regular file");
+                bail!("accepted-run restore receipt destination is not a regular file");
             }
             let existing = fullmag_session::repository_path::read_bounded_regular_file(
                 proof_root,
-                ack_relative,
+                relative,
                 MAX_PROOF_BYTES,
             )?;
-            if existing != bytes {
-                bail!("accepted-run restore ack already exists with different bytes");
+            if existing.as_slice() != bytes {
+                bail!("accepted-run restore receipt already exists with different bytes");
             }
             Ok(fullmag_session::hex_sha256(&existing))
         }
-        Err(error) => Err(error).context("create accepted-run restore ack exclusively"),
+        Err(error) => Err(error).context("create accepted-run restore receipt exclusively"),
     }
 }
 
@@ -1792,7 +1832,7 @@ fn configured_runtime_control_root() -> Result<std::path::PathBuf> {
         .context("FULLMAG_RUNTIME_CONTROL_ROOT is not a managed regular directory")
 }
 
-fn scene_from_definition(bytes: &[u8], specification: &RunSpecification) -> Result<SceneDocument> {
+pub(crate) fn scene_from_definition(bytes: &[u8], specification: &RunSpecification) -> Result<SceneDocument> {
     if fullmag_session::hex_sha256(bytes) != specification.snapshot.definition_sha256 {
         bail!("accepted project definition bytes differ from immutable snapshot digest");
     }
@@ -3299,14 +3339,111 @@ fn restored_preparation_failure_snapshot(
     })
 }
 
+/// Neutral read-model inputs shared by held recovery and failed observations.
+/// No activation, reconciliation or predecessor ACK is fabricated here.
+struct SnapshotHydration {
+    run_id: RunId,
+    project_id: ProjectId,
+    specification: RunSpecification,
+    scene: SceneDocument,
+    logical_session_id: String,
+    session_epoch: u64,
+    source_request_id: String,
+    source_sha256: String,
+    startup_provenance_sha256: Option<String>,
+    config_sha256: String,
+    proof_sha256: String,
+    total_steps: usize,
+    terminal_outcome: Option<String>,
+    preparation_failure: Option<Value>,
+    metadata_schema: &'static str,
+    started_at_unix_ms: Option<u64>,
+    stage_execution: Option<crate::types::StageExecutionState>,
+}
+
+/// Pure live projection shared by independently validated private startup authorities.
+pub(crate) struct AcceptedSnapshotProjection<'a> {
+    pub(crate) run_id: &'a RunId,
+    pub(crate) specification: &'a RunSpecification,
+    pub(crate) scene: &'a SceneDocument,
+    pub(crate) logical_session_id: &'a str,
+    pub(crate) total_steps: usize,
+    pub(crate) terminal_outcome: Option<&'a str>,
+    pub(crate) preparation_failure: Option<&'a Value>,
+    pub(crate) authority_metadata: Value,
+    pub(crate) accepted_plan_metadata: Value,
+}
+
 fn build_snapshot(
     workspace_root: &Path,
     loaded: &LoadedAcceptedRestore,
 ) -> Result<crate::types::SessionStateResponse> {
+    build_snapshot_from_hydration(workspace_root, &SnapshotHydration {
+        run_id: loaded.run_id.clone(), project_id: loaded.project_id.clone(),
+        specification: loaded.specification.clone(), scene: loaded.scene.clone(),
+        logical_session_id: loaded.logical_session_id.clone(), session_epoch: loaded.session_epoch,
+        source_request_id: loaded.source_request_id.clone(), source_sha256: loaded.source_sha256.clone(),
+        startup_provenance_sha256: Some(loaded.startup_provenance_sha256.clone()),
+        config_sha256: loaded.config_sha256.clone(), proof_sha256: loaded.proof_sha256.clone(),
+        total_steps: loaded.total_steps, terminal_outcome: loaded.terminal_outcome.clone(),
+        preparation_failure: loaded.preparation_failure.clone(),
+        metadata_schema: INPUT_SCHEMA, started_at_unix_ms: None,
+        stage_execution: None,
+    })
+}
+
+fn build_snapshot_from_hydration(
+    workspace_root: &Path,
+    loaded: &SnapshotHydration,
+) -> Result<crate::types::SessionStateResponse> {
+    let mut snapshot = build_accepted_snapshot(workspace_root, AcceptedSnapshotProjection {
+        run_id: &loaded.run_id,
+        specification: &loaded.specification,
+        scene: &loaded.scene,
+        logical_session_id: &loaded.logical_session_id,
+        total_steps: loaded.total_steps,
+        terminal_outcome: loaded.terminal_outcome.as_deref(),
+        preparation_failure: loaded.preparation_failure.as_ref(),
+        accepted_plan_metadata: json!({
+            "run_id": loaded.run_id.as_str(),
+            "project_id": loaded.project_id.as_str(),
+            "source_request_id": &loaded.source_request_id,
+            "source_sha256": &loaded.source_sha256,
+            "startup_provenance_sha256": &loaded.startup_provenance_sha256,
+            "proof_sha256": &loaded.proof_sha256,
+        }),
+        authority_metadata: json!({
+            "accepted_run_reattach": {
+                "schema": loaded.metadata_schema,
+                "run_id": loaded.run_id.as_str(),
+                "project_id": loaded.project_id.as_str(),
+                "source_request_id": &loaded.source_request_id,
+                "source_sha256": &loaded.source_sha256,
+                "startup_provenance_sha256": &loaded.startup_provenance_sha256,
+                "config_sha256": &loaded.config_sha256,
+                "session_epoch": loaded.session_epoch,
+                "proof_sha256": &loaded.proof_sha256,
+                "terminal_outcome": &loaded.terminal_outcome,
+            }
+        }),
+    })?;
+    if let Some(started_at) = loaded.started_at_unix_ms {
+        snapshot.session.started_at_unix_ms = u128::from(started_at);
+    }
+    if let Some(execution) = &loaded.stage_execution {
+        crate::session::replace_current_live_stage_execution(&mut snapshot, execution.clone());
+    }
+    Ok(snapshot)
+}
+
+pub(crate) fn build_accepted_snapshot(
+    workspace_root: &Path,
+    loaded: AcceptedSnapshotProjection<'_>,
+) -> Result<crate::types::SessionStateResponse> {
     let requested = &loaded.specification.requested_execution;
-    let session_id = loaded.logical_session_id.clone();
+    let session_id = loaded.logical_session_id.to_owned();
     let run_id = loaded.run_id.as_str().to_string();
-    let terminal_status = match loaded.terminal_outcome.as_deref() {
+    let terminal_status = match loaded.terminal_outcome {
         Some("interrupted") => "failed",
         Some(outcome) => outcome,
         None if loaded.preparation_failure.is_some() => "failed",
@@ -3358,14 +3495,7 @@ fn build_snapshot(
         finished_at_unix_ms: 0,
         plan_summary: json!({
             "requested_execution": requested,
-            "accepted_run": {
-                "run_id": &run_id,
-                "project_id": loaded.project_id.as_str(),
-                "source_request_id": &loaded.source_request_id,
-                "source_sha256": &loaded.source_sha256,
-                "startup_provenance_sha256": &loaded.startup_provenance_sha256,
-                "proof_sha256": &loaded.proof_sha256,
-            },
+            "accepted_run": loaded.accepted_plan_metadata,
         }),
     };
     let run = RunManifest {
@@ -3387,23 +3517,10 @@ fn build_snapshot(
         session_id,
         session: Some(session),
         session_status: Some(session_status.clone()),
-        metadata: Some(json!({
-            "accepted_run_reattach": {
-                "schema": INPUT_SCHEMA,
-                "run_id": loaded.run_id.as_str(),
-                "project_id": loaded.project_id.as_str(),
-                "source_request_id": &loaded.source_request_id,
-                "source_sha256": &loaded.source_sha256,
-                "startup_provenance_sha256": &loaded.startup_provenance_sha256,
-                "config_sha256": &loaded.config_sha256,
-                "session_epoch": loaded.session_epoch,
-                "proof_sha256": &loaded.proof_sha256,
-                "terminal_outcome": &loaded.terminal_outcome,
-            }
-        })),
+        metadata: Some(loaded.authority_metadata),
         mesh_workspace: None,
         stage_execution: None,
-        simulation_preparation: loaded.preparation_failure.as_ref()
+        simulation_preparation: loaded.preparation_failure
             .map(restored_preparation_failure_snapshot).transpose()?,
         run: Some(RunManifest {
             status: run_status,
@@ -3431,7 +3548,7 @@ fn build_snapshot(
     snapshot.run = request.run;
     snapshot.metadata = request.metadata.map(Into::into);
     snapshot.scene_document = Some(loaded.scene.clone());
-    if let Some(failure) = loaded.preparation_failure.as_ref() {
+    if let Some(failure) = loaded.preparation_failure {
         snapshot.metadata.as_deref_mut()
             .and_then(Value::as_object_mut)
             .context("restored preparation failure metadata is not an object")?
@@ -3511,6 +3628,193 @@ mod tests {
         }
     }
 
+    fn failed_preparation_store() -> (tempfile::TempDir, fullmag_session::SessionStore) {
+        use fullmag_session::*;
+        use chrono::Utc;
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(dir.path().join("store")).unwrap();
+        let run_id = "run-preparation-retry";
+        let task_id = "task-preparation-retry";
+        store
+            .commit_run_catalog(&FmsRunCatalog {
+                schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.into(),
+                revision: 1,
+                updated_at: Utc::now(),
+                tasks: vec![FmsTaskCatalogEntry {
+                    task_id: task_id.into(),
+                    input_fingerprint: "a".repeat(64),
+                    lifecycle: FmsTaskLifecycle::Accepted,
+                    readiness: FmsTaskReadiness::Blocked {
+                        reason: FMS_TASK_AWAITING_PREPARATION_REASON.into(),
+                    },
+                    observation: None,
+                    attempt_id: None,
+                    ownership_epoch: None,
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: None,
+                    coordinator_watermark: None,
+                    coordinator_genesis: None,
+                }],
+            })
+            .unwrap();
+        let budget = FmsResourceBudget {
+            cpu_millis: 100,
+            memory_bytes: 1024,
+            gpu_memory_bytes: 0,
+            storage_bytes: 4096,
+        };
+        let pool = FmsPreparationResourcePool {
+            schema_version: FMS_PREPARATION_RESOURCE_POOL_SCHEMA.into(),
+            pool_id: "pool-preparation-retry".into(),
+            generation: 1,
+            resources: vec![FmsPreparationResourceOffer {
+                resource_id: "cpu-preparation-retry".into(),
+                budget: budget.clone(),
+            }],
+        };
+        store.commit_preparation_resource_pool(0, &pool).unwrap();
+
+        let now = Utc::now();
+        let first_lease = FmsPreparationResourceLease {
+            schema_version: FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "cpu-preparation-retry".into(),
+            budget: budget.clone(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: "prep-attempt-r0-first".into(),
+            lease_token: "prep-lease-first".into(),
+            state: FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 0,
+            released_at: None,
+            host_launch_binding: None,
+        };
+        assert_eq!(
+            store
+                .try_commit_preparation_resource_lease_from_pool(
+                    &pool.pool_id,
+                    pool.generation,
+                    0,
+                    &first_lease,
+                )
+                .unwrap(),
+            Some(PreparationResourceLeaseCommitDisposition::Acquired)
+        );
+        let launch = FmsPreparationProcessLaunch {
+            schema_version: FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA.into(),
+            launch_id: "prep-launch-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: first_lease.preparation_attempt_id.clone(),
+            resource_id: first_lease.resource_id.clone(),
+            lease_token: first_lease.lease_token.clone(),
+            lease_heartbeat_sequence: 0,
+            supervisor_process_id: 41,
+            supervisor_start_token: Some("supervisor-first".into()),
+            created_at: now,
+        };
+        store.commit_preparation_process_launch(&launch).unwrap();
+        let failed_exit = FmsPreparationProcessExitReceipt {
+            schema_version: FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+            receipt_id: "prep-exit-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: first_lease.preparation_attempt_id.clone(),
+            resource_id: first_lease.resource_id.clone(),
+            lease_token: first_lease.lease_token.clone(),
+            lease_heartbeat_sequence: 0,
+            process_id: 42,
+            process_start_token: Some("preparer-first".into()),
+            status_success: false,
+            exit_code: Some(1),
+            timed_out: false,
+            failure_reason: Some("fixture failure".into()),
+            observed_at: now,
+        };
+        store
+            .commit_preparation_process_exit_receipt(&failed_exit)
+            .unwrap();
+        assert_eq!(
+            store
+                .finalize_preparation_process_exit(&failed_exit)
+                .unwrap(),
+            PreparationProcessFinalizationDisposition::Failed
+        );
+        assert_eq!(
+            store
+                .preparation_attempt_authorization_sequence(run_id, task_id)
+                .unwrap(),
+            None
+        );
+
+        (dir, store)
+    }
+
+    fn failure_inputs() -> std::collections::BTreeMap<String, (String, String)> {
+        std::collections::BTreeMap::from([(
+            "task-preparation-retry".into(), ("step-first".into(), "a".repeat(64)),
+        )])
+    }
+
+    #[test]
+    fn task_failure_reads_finalized_store_proof_and_preserves_restore_aggregation() {
+        let (_dir, store) = failed_preparation_store();
+        let _snapshot = store.write_transaction().unwrap();
+        let catalog = store.read_run_catalog("run-preparation-retry").unwrap().unwrap();
+        let failure = load_task_preparation_failure(
+            &store, &catalog.run_id, &catalog.tasks[0], &failure_inputs(),
+        ).unwrap().unwrap();
+        assert_eq!(failure["exit_receipt_id"], "prep-exit-first");
+        assert_eq!(failure["error"], "fixture failure");
+        let restored = load_held_preparation_failure(
+            &store, &catalog.run_id, &failure_inputs(), &catalog,
+        ).unwrap().unwrap();
+        assert_eq!(restored["failures"][0], failure);
+        assert!(store.read_task_preparation_receipt(
+            &catalog.run_id, &catalog.tasks[0].task_id,
+        ).unwrap().is_none());
+    }
+
+    #[test]
+    fn task_failure_does_not_report_an_explicitly_retried_attempt() {
+        use fullmag_session::*;
+        let (_dir, store) = failed_preparation_store();
+        store.commit_preparation_retry_decision(&FmsPreparationRetryDecision {
+            schema_version: FMS_PREPARATION_RETRY_DECISION_SCHEMA.into(),
+            decision_id: "prep-retry-first".into(),
+            run_id: "run-preparation-retry".into(),
+            task_id: "task-preparation-retry".into(),
+            failed_preparation_attempt_id: "prep-attempt-r0-first".into(),
+            retry_sequence: 1, max_attempts: 2,
+            reason: "operator approved one retry".into(), created_at: chrono::Utc::now(),
+        }).unwrap();
+        let _snapshot = store.write_transaction().unwrap();
+        let catalog = store.read_run_catalog("run-preparation-retry").unwrap().unwrap();
+        assert!(load_task_preparation_failure(
+            &store, &catalog.run_id, &catalog.tasks[0], &failure_inputs(),
+        ).unwrap().is_none());
+    }
+
+    #[test]
+    fn task_failure_rejects_changed_inputs_and_ignores_other_tasks() {
+        let (_dir, store) = failed_preparation_store();
+        let _snapshot = store.write_transaction().unwrap();
+        let catalog = store.read_run_catalog("run-preparation-retry").unwrap().unwrap();
+        let mut inputs = failure_inputs();
+        inputs.get_mut("task-preparation-retry").unwrap().1 = "b".repeat(64);
+        assert!(load_task_preparation_failure(
+            &store, &catalog.run_id, &catalog.tasks[0], &inputs,
+        ).unwrap_err().to_string().contains("immutable task inputs"));
+        let mut other = catalog.tasks[0].clone();
+        other.task_id = "other-task".into();
+        assert!(load_task_preparation_failure(
+            &store, &catalog.run_id, &other, &failure_inputs(),
+        ).unwrap().is_none());
+    }
+
     #[test]
     fn build_snapshot_hydrates_held_run_and_reattach_metadata() {
         let loaded = loaded_snapshot_fixture(AcceptedRestoreMode::Held, None, None);
@@ -3527,6 +3831,48 @@ mod tests {
                 .and_then(Value::as_str),
             Some("run-accepted-test")
         );
+    }
+
+    #[test]
+    fn terminal_hydration_preserves_stage_evidence_without_scientific_progress() {
+        let loaded = loaded_snapshot_fixture(AcceptedRestoreMode::Consumed, Some("failed"), None);
+        let legacy = build_snapshot(Path::new("test-workspace"), &loaded).unwrap();
+        assert!(legacy.stage_execution.is_none());
+        assert_eq!(legacy.stage_execution_revision, 0);
+        let mut record = crate::session::accepted_stage_record(
+            "runtime-stage", None, crate::types::StageLifecycleState::Failed);
+        record.antenna_solve_stage_id = Some("authored-inspection".into());
+        record.started_at_unix_ms = Some(100);
+        record.completed_at_unix_ms = Some(250);
+        record.state_transition_reason = Some("retained native failure".into());
+        let execution = crate::session::accepted_stage_execution_state(
+            vec![record], crate::types::RuntimeLifecycleState::Failed);
+        let hydration = SnapshotHydration {
+            run_id: loaded.run_id.clone(), project_id: loaded.project_id.clone(),
+            specification: loaded.specification.clone(), scene: loaded.scene.clone(),
+            logical_session_id: loaded.logical_session_id.clone(), session_epoch: loaded.session_epoch,
+            source_request_id: loaded.source_request_id.clone(), source_sha256: loaded.source_sha256.clone(),
+            startup_provenance_sha256: Some(loaded.startup_provenance_sha256.clone()),
+            config_sha256: loaded.config_sha256.clone(), proof_sha256: loaded.proof_sha256.clone(),
+            total_steps: loaded.total_steps, terminal_outcome: loaded.terminal_outcome.clone(),
+            preparation_failure: None, metadata_schema: INPUT_SCHEMA, started_at_unix_ms: Some(50),
+            stage_execution: Some(execution.clone()),
+        };
+        let snapshot = build_snapshot_from_hydration(Path::new("test-workspace"), &hydration).unwrap();
+        assert_eq!(snapshot.session.started_at_unix_ms, 50);
+        assert_eq!(snapshot.stage_execution.as_ref(), Some(&execution));
+        assert_eq!(snapshot.stage_execution_revision, 1);
+        assert_eq!(snapshot.session.status, "failed");
+        assert_eq!(snapshot.run.as_ref().unwrap().status, "failed");
+        let stage = &snapshot.stage_execution.as_ref().unwrap().stages[0];
+        assert!(stage.artifact_refs.is_empty());
+        assert!(stage.applied_step.is_none());
+        assert!(stage.completed_step.is_none());
+        assert!(stage.applied_time_seconds.is_none());
+        assert!(stage.command_id.is_none());
+        assert!(snapshot.field_publication_bundles.is_empty());
+        assert!(snapshot.fem_mesh.is_none());
+        assert!(snapshot.live_state.is_none());
     }
 
     #[test]

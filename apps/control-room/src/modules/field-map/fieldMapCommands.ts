@@ -17,17 +17,12 @@ import {
 } from "@/kernel/workspace/crossSectionWorkspace";
 
 import { downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
+import { planarScopeQuery } from "./model/fieldMapDataPlan";
 
 const commandTitles = {
-  "field-map.export-data": "Export 2D Data",
   "field-map.export-png": "Export 2D PNG",
-  "field-map.fit": "Fit 2D View",
   "field-map.open": "Open 2D View",
-  "field-map.reset-view": "Reset 2D View",
   "field-map.select-monitor": "Select Planar Monitor",
-  "field-map.toggle-contours": "Toggle 2D Contours",
-  "field-map.toggle-mesh": "Toggle 2D Mesh",
-  "field-map.toggle-vectors": "Toggle 2D Vectors",
   "planar-monitor.create": "Create Planar Monitor",
   "planar-monitor.delete": "Delete Planar Monitor",
   "planar-monitor.duplicate": "Duplicate Planar Monitor",
@@ -261,11 +256,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           component: planar.component,
           resolution_x: planar.resolution.width,
           resolution_y: planar.resolution.height,
-          scope_id:
-            planar.view_scope.kind === "mesh_part"
-              ? planar.view_scope.scope_id
-              : undefined,
-          scope_kind: planar.view_scope.kind,
+          ...planarScopeQuery(planar.view_scope),
         },
         requestOptions,
       );
@@ -316,11 +307,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         quality: "export",
         resolution_x: planar.resolution.width,
         resolution_y: planar.resolution.height,
-        scope_id:
-          planar.view_scope.kind === "mesh_part"
-            ? planar.view_scope.scope_id
-            : undefined,
-        scope_kind: planar.view_scope.kind,
+        ...planarScopeQuery(planar.view_scope),
         vector_budget: planar.resolution.vector_budget,
       };
       const [meta, monitor, png] = await Promise.all([

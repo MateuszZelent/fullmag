@@ -1,7 +1,9 @@
+import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import type { ArtifactCarrierGeometryQuery, FieldVectorQuery, FieldVectorResponseMetadata } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs/types";
 
 interface ArtifactFieldLocator {
+  sample_carrier?: components["schemas"]["AntennaSampleCarrierResource"] | null;
   carrier_scope_kind: "object" | "full"; carrier_scope_id: string | null;
   carrier_id: string; carrier_digest: string; carrier_revision: string;
   indexing: string; sample_count: number; coordinate_frame: "world"; coordinate_unit: "m"; topology_binary_schema: "FMMT.v2";

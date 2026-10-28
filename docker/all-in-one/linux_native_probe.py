@@ -110,7 +110,31 @@ def _publish(path, value):
         os.close(directory)
 
 
-def run(require_restart=True, state=Path("/state"), certificate=CERTIFICATE):
+def publish_bound_evidence(path, payload):
+    """Update one existing diagnostic evidence inode shared by a readonly bind."""
+    descriptor = _open_nofollow(path, os.O_RDWR)
+    with os.fdopen(descriptor, "r+b", buffering=0) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 1024 * 1024:
+            raise RuntimeError("Linux bound probe evidence must be one bounded regular file")
+        stream.seek(0)
+        stream.truncate()
+        offset = 0
+        while offset < len(payload):
+            written = stream.write(payload[offset:])
+            if not written:
+                raise OSError("Linux bound probe evidence write made no progress")
+            offset += written
+        os.fchmod(stream.fileno(), 0o644)
+        os.fsync(stream.fileno())
+        stream.seek(0)
+        if stream.read(1024 * 1024 + 1) != payload:
+            raise RuntimeError("Linux bound probe evidence readback differs")
+
+
+def run(require_restart=True, state=Path("/state"), certificate=CERTIFICATE, *, evidence_path=None):
+    if evidence_path is not None and not require_restart:
+        raise RuntimeError("Diagnostic bound evidence requires verified restart readback")
     state = Path(state)
     kind = subprocess.check_output(["stat", "-f", "-c", "%t", str(state)], text=True).strip().lower().lstrip("0")
     if kind not in {"ef53", "58465342", "9123683e"}:
@@ -161,7 +185,11 @@ def run(require_restart=True, state=Path("/state"), certificate=CERTIFICATE):
                     "root_device": metadata.st_dev, "root_inode": metadata.st_ino,
                     "mount_namespace_inode": Path("/proc/self/ns/mnt").stat().st_ino,
                     "checks": checks}
-        _publish(state / ".linux-native-probe.json", json.dumps(evidence, sort_keys=True).encode())
+        encoded = json.dumps(evidence, sort_keys=True).encode()
+        if evidence_path is None:
+            _publish(state / ".linux-native-probe.json", encoded)
+        else:
+            publish_bound_evidence(evidence_path, encoded)
         return evidence
     finally:
         shutil.rmtree(directory)

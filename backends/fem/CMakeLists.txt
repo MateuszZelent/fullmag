@@ -159,6 +159,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/backend_lifecycle.cpp
     cpu/mfem/runtime/backend_step.cpp
     cpu/mfem/runtime/cpu_threads.cpp
+    cpu/mfem/runtime/hypre_host_policy.cpp
     cpu/mfem/runtime/eigen_dense.cpp
     cpu/mfem/runtime/field_refresh.cpp
     gpu/cuda/runtime/gpu_state_runtime.cpp
@@ -266,8 +267,10 @@ if(FULLMAG_USE_MFEM_STACK)
         cpu/mfem/workflows/antenna_field_solve/charge_control_nullspace_rank.cpp
         cpu/mfem/workflows/antenna_field_solve/charge_terminal_current_constraints.cpp
         cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp
+        cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.cpp
           cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp
         cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
+        cpu/mfem/interactions/oersted/surface_rt0.cpp
         cpu/mfem/interactions/oersted/vector_potential.cpp
     )
 
@@ -427,6 +430,10 @@ target_include_directories(fullmag_fem
 )
 
 if(FULLMAG_USE_MFEM_STACK)
+    # DOC-ANCHOR: antenna-surface-gmp-dependency
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FULLMAG_SURFACE_ARITHMETIC REQUIRED IMPORTED_TARGET gmp "mpfr>=4.1")
+    target_link_libraries(fullmag_fem PRIVATE PkgConfig::FULLMAG_SURFACE_ARITHMETIC)
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_MFEM_STACK=1)
     if(FULLMAG_ENABLE_CUDA)
         target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=1)

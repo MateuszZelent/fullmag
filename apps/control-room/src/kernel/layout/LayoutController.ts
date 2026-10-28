@@ -34,6 +34,7 @@ export class LayoutController {
       activeBottomPanelTab:
         nextState.activeBottomPanelTab ?? DEFAULT_LAYOUT.activeBottomPanelTab,
       activeModuleTab: nextState.activeModuleTab,
+      resultsSource: nextState.resultsSource ?? "current",
       activeViewportMainModuleId: nextState.activeViewportMainModuleId,
       lastSpatialViewportMainModuleId:
         spatialViewportModule(nextState.activeViewportMainModuleId) ??
@@ -50,6 +51,7 @@ export class LayoutController {
     const layoutChanged =
       this.state.activeBottomPanelTab !== next.activeBottomPanelTab ||
       this.state.activeModuleTab !== next.activeModuleTab ||
+      this.state.resultsSource !== next.resultsSource ||
       this.state.activeViewportMainModuleId !== next.activeViewportMainModuleId ||
       this.state.lastSpatialViewportMainModuleId !==
         next.lastSpatialViewportMainModuleId ||
@@ -71,12 +73,31 @@ export class LayoutController {
     this.notify("workspace:layout-changed");
   }
 
+  setResultsSource(source: "current" | "saved"): void {
+    if ((this.state.resultsSource ?? "current") === source) return;
+    this.state = { ...this.state, resultsSource: source };
+    this.notify("workspace:layout-changed");
+  }
+
+  openSavedResults(): void {
+    this.replace({
+      ...this.state,
+      activeModuleTab: "results",
+      resultsSource: "saved",
+      focusedSlot: "panel-left",
+      panelVisible: this.state.panelVisible.left
+        ? this.state.panelVisible
+        : { ...this.state.panelVisible, left: true },
+    });
+  }
+
   applyPreset(presetId: WorkspaceLayoutPresetId): void {
     switch (presetId) {
       case "workspace.results.frequency-domain":
         this.replace({
           ...this.state,
           activeModuleTab: "results",
+          resultsSource: "current",
           activeViewportMainModuleId: "analysis-plots",
           focusedSlot: "panel-left",
           panelVisible: { left: true, right: true, bottom: true },

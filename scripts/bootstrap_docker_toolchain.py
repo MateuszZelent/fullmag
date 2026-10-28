@@ -349,9 +349,12 @@ def _control_environment(project):
 
 
 def _compose_environment(repo, project):
+    from docker_dev_defaults import configured_toolchain_environment
+
     # Compose interpolates every service, including inactive profiles, before
     # running the control helper. Receipt I/O needs the build inputs as well.
     return {
+        **configured_toolchain_environment(repo),
         **_control_environment(project),
         "FULLMAG_TOOLCHAIN_CONTEXT": str(Path(repo).resolve(strict=True)),
         "FULLMAG_TOOLCHAIN_IMAGE": toolchain_image_reference(project),

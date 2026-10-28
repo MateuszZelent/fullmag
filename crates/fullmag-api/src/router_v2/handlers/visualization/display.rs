@@ -663,6 +663,28 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
             }
         }
     }
+    if let Some(
+        crate::schemas::visualization_state::PlanarViewScopeState::MeshPart { scope_id }
+        | crate::schemas::visualization_state::PlanarViewScopeState::Layer { scope_id },
+    ) = &patch.view_scope
+    {
+        if scope_id.trim().is_empty() {
+            return Err(ApiError::bad_request(
+                "planar.view_scope.scope_id must not be empty",
+            ));
+        }
+    }
+    if let Some(crate::schemas::visualization_state::PlanarViewScopeState::Region {
+        scope_id,
+        region_id,
+    }) = &patch.view_scope
+    {
+        if scope_id.trim().is_empty() || region_id.trim().is_empty() {
+            return Err(ApiError::bad_request(
+                "planar.view_scope region requires non-empty scope_id and region_id",
+            ));
+        }
+    }
     if let Some(source) = &patch.source {
         if let crate::schemas::visualization_state::PlanarSourceSelectionState::Monitor {
             monitor_id,
@@ -2420,6 +2442,12 @@ fn observation_quantities_for_visualization_state(
             candidates.push(target.settings.active_quantity_id.clone());
         }
     }
+    // The planar field map samples full-domain fields of its own quantity, which
+    // may differ from the 3D selection. Without this demand the runtime never
+    // materializes it and the 2D view stays stale or unavailable.
+    if planar_requests_spatial_observation(&visualization.planar) {
+        candidates.push(visualization.planar.quantity_id.clone());
+    }
 
     let mut canonical = CurrentDisplaySelection::default();
     canonical.observation_quantities = candidates;
@@ -2432,6 +2460,12 @@ fn target_requests_spatial_observation(settings: &VisualizationResolvedTargetSet
         && ((settings.surface_visible
             && !matches!(settings.surface_color_source, SurfaceColorSource::Solid))
             || (settings.vectors_visible && settings.vector_budget > 0))
+}
+
+fn planar_requests_spatial_observation(planar: &PlanarVisualizationState) -> bool {
+    planar.visible
+        && !planar.quantity_id.trim().is_empty()
+        && (planar.layers.raster || planar.layers.contours || planar.layers.vectors)
 }
 
 const MAX_VISUALIZATION_RESTORE_WARNINGS: usize = 16;
@@ -3052,6 +3086,33 @@ mod visualization_override_migration_tests {
         assert_eq!(
             observation_quantities_for_visualization_state(&visualization),
             vec!["m".to_string(), "frozen_spins".to_string()]
+        );
+    }
+
+    #[test]
+    fn observation_demand_includes_visible_planar_quantity_only() {
+        let selection = CurrentDisplaySelection::default();
+        let presentation = DisplayPresentationState::default();
+        let mut visualization = build_visualization_state_response(&selection, &presentation, None);
+        visualization.planar.quantity_id = "H_demag".to_string();
+        assert_eq!(
+            observation_quantities_for_visualization_state(&visualization),
+            vec!["m".to_string(), "H_demag".to_string()]
+        );
+
+        visualization.planar.visible = false;
+        assert_eq!(
+            observation_quantities_for_visualization_state(&visualization),
+            vec!["m".to_string()]
+        );
+
+        visualization.planar.visible = true;
+        visualization.planar.layers.raster = false;
+        visualization.planar.layers.contours = false;
+        visualization.planar.layers.vectors = false;
+        assert_eq!(
+            observation_quantities_for_visualization_state(&visualization),
+            vec!["m".to_string()]
         );
     }
 

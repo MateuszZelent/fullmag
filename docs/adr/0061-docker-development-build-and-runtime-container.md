@@ -1001,3 +1001,46 @@ przygotowania bez pozostawienia Unknown helpera. Nie zmienia Python/IR,
 OpenAPI, wyboru FEM/FDM CPU/GPU ani fizyki. Rollback zachowuje stare archiwum
 i blokuje jego wykonanie. Source review i parser nie zastępują wykonania
 zarządzanej ścieżki; runtime pozostaje NOT VERIFIED do zapisania receiptu.
+
+
+### Zachowanie przygotowanych modeli z ręcznym startem (28.10.2026)
+
+Po nagłym zatrzymaniu runtime store może zawierać jednocześnie runy terminalne
+oraz poprawnie przygotowane modele `Accepted`, które nadal oczekują na Compute.
+Ich obecność nie upoważnia recovery do anulowania runu, utworzenia `start_release`,
+powtórzenia skryptu ani rozpoczęcia Solve lub Compute Fields.
+
+Osobny request `runtime_service_container_recovery_request.v4` przypina rozłączne
+listy `retained_terminal_runs` (dopuszczalna pusta lista) i
+`retained_held_manual_runs` (co najmniej jeden wpis). Suma musi dokładnie pokrywać
+cały inventory store, łącznie najwyżej 128 runów. Held pin zawiera SHA-256
+RunIntent i katalogu oraz jawne `start_release: absent`. Typed manual-start policy,
+fizyczny brak release, katalog Accepted/Blocked bez compute claim/attempt,
+artefaktów, cancellation intent lub aktywnych zasobów są warunkami koniecznymi.
+Zakończone preparation jest dopuszczone wyłącznie z released lease i dokładnymi
+receiptami zakończenia z kodem zero. Recovery sprawdza wszystkie referencje
+CAS i checkpointy względem sumy obu list, zachowując checkpointy i katalogi.
+
+Budżet agregatu odczytów v4 wynosi 1 GiB, limit pojedynczego obiektu CAS nadal
+128 MiB. Operator nie może zwiększyć tych limitów. Kontrakty v1/v2/v3 oraz ich
+domyślny agregat 128 MiB pozostają bez zmian. Nowy outcome
+`retained_manual_held_runs_recovered` dotyczy wyłącznie odzyskania ownera do
+Failed pod istniejącymi blokadami; nie terminalizuje oczekujących runów.
+
+Host, proof abrupt-stop v2 i bridge muszą jawnie przenosić dokładnie te same
+piny v4. Przed mutacją bridge sprawdza capabilities faktycznego natywnego
+binarium; brak v4 blokuje operację bez fallbacku. Replay również porównuje
+request i wynik. Po restarcie istniejący durable manual gate nadal wymaga
+osobnego jawnego Compute. Właściciel: native runtime service i Docker DEV
+launcher. Rollback zachowuje store i dowody, ale starsze binarium odmawia v4;
+nie wolno zmienić requestu na starszą wersję lub pominąć modeli oczekujących.
+
+Stan tej decyzji: implementacja źródłowa i review są oddzielone od kwalifikacji
+CI i rzeczywistego recovery. Do uzyskania receiptu zarządzanego wykonania oraz
+porównania zachowanych danych runtime pozostaje NOT VERIFIED.
+
+Hostowy preflight uwzględnia także opublikowane obiekty CAS z przypiętego
+katalogu artefaktów, zgodne z terminalnym task/attempt/epoch/resource i released
+lease. Nie zbiera dowolnych referencji z payloadów workerów. Izolowany helper
+pozostaje ograniczony do 64 MiB pamięci: CAS czyta i hashuje strumieniowo,
+z kontrolą limitów, liczby bajtów i niezmienności tożsamości pliku przed/po.

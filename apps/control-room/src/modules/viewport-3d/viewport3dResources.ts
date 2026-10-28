@@ -688,8 +688,14 @@ export const VIEWPORT_3D_TOPOLOGY_RETRY_POLICY: ResourceRetryPolicy = {
     "transient_not_found",
   ],
 };
+/**
+ * A field payload can be large (a full 2-3.5M-cell FDM vector is ~80 MB) and
+ * a cold multilayer Airbox read decodes its whole carrier once before the
+ * API caches it; a 5 s budget aborted those loads for good and left the
+ * viewport without data. The deadline bounds a hung request, not normal work.
+ */
 const FIELD_VECTOR_RETRY_POLICY: ResourceRetryPolicy = {
-  deadlineMs: 5_000,
+  deadlineMs: 30_000,
   maxAttempts: 5,
   retryAfterMs: 250,
   retryableReasonCodes: [

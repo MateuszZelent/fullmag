@@ -240,5 +240,29 @@ def retirement_receipt_evidence(operation_id, _inputs_sha256):
         probe.assert_called_once_with("fullmag-control-" + operation)
 
 
+class RetirementRejectionDetailTests(unittest.TestCase):
+    def rejection(self, status, body):
+        import io
+        import docker_startup_script as helper
+
+        response = SimpleNamespace(status=status, read=io.BytesIO(body).read,
+                                   headers={"Content-Type": "application/json"})
+        with patch.object(helper, "_retirement_json_body",
+                          side_effect=lambda value, label: json.loads(body)):
+            return helper._retirement_rejection(response)
+
+    def test_unknown_conflict_keeps_its_code_and_message_for_the_receipt(self):
+        body = json.dumps({"code": "live_retirement_terminal_evidence_unknown",
+                           "message": "terminal evidence is unavailable: boom"}).encode()
+        code, detail = self.rejection(409, body)
+        self.assertIsNone(code)
+        self.assertEqual(detail, "live_retirement_terminal_evidence_unknown: "
+                                 "terminal evidence is unavailable: boom")
+
+    def test_no_mutation_conflict_is_still_a_refusal(self):
+        body = json.dumps({"code": "live_retirement_busy", "message": "busy"}).encode()
+        self.assertEqual(self.rejection(409, body)[0], "live_retirement_busy")
+
+
 if __name__ == "__main__":
     unittest.main()

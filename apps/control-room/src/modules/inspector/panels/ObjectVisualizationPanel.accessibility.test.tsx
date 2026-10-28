@@ -193,8 +193,20 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
 
     expect(html).toContain('aria-label="Wireframe color picker"');
     expect(html).toContain('aria-label="Wireframe color value"');
+    expect(html).toContain('class="fm-inspector-color-value__swatch"');
     expect(html).toContain('data-slot="inspector-property-row"');
     expect(html).toContain('data-slot="visualization-color-control"');
+
+    const tokenHtml = renderToStaticMarkup(
+      <ColorField
+        disabled={false}
+        label="Surface color"
+        value="var(--fm-surface-magnetic)"
+        onChange={vi.fn()}
+      />,
+    );
+    expect(tokenHtml).toContain('placeholder="Theme · surface magnetic"');
+    expect(tokenHtml).toContain('style="background:var(--fm-surface-magnetic)"');
   });
 
   it("renders numeric visualization controls as labelled Radix sliders", () => {

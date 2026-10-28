@@ -257,6 +257,9 @@ export interface Viewport3DTargetRenderPassModel {
     degradation: Viewport3DTargetPassDegradation | null;
     passId: string;
     segments: Float32Array | null;
+    /** Global source node for each emitted, nonzero glyph. */
+    nodeIndices?: Uint32Array | null;
+    glyphColors?: Float32Array | null;
   };
 }
 
@@ -324,6 +327,11 @@ export interface Viewport3DFieldRenderOptions {
 }
 
 export type Viewport3DVectorAnchorMode = "center" | "tail";
+
+interface Viewport3DVectorSegmentBuild {
+  segments: Float32Array;
+  nodeIndices: Uint32Array;
+}
 
 export interface Viewport3DVectorSegmentOptions {
   anchorMode?: Viewport3DVectorAnchorMode;
@@ -420,11 +428,11 @@ const mappedScalarColorCache = new WeakMap<
 >();
 const fullVectorSegmentCache = new WeakMap<
   Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
-  WeakMap<Viewport3DFieldVector, Map<string, Float32Array | null>>
+  WeakMap<Viewport3DFieldVector, Map<string, Viewport3DVectorSegmentBuild | null>>
 >();
 const partVectorSegmentCache = new WeakMap<
   Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
-  WeakMap<Viewport3DFieldVector, Map<string, Float32Array | null>>
+  WeakMap<Viewport3DFieldVector, Map<string, Viewport3DVectorSegmentBuild | null>>
 >();
 const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>();
 const topologySurfaceIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
@@ -954,7 +962,13 @@ export function buildViewport3DFieldRenderModel(
               : { nodeCount: 0, nodeStart: 0 },
           }
         : { renderSelection: vectorSelection };
-    const renderVectorSelection = scopedVectorSelection.renderSelection;
+    const renderVectorSelection = partUsesMagneticOnlyField && magneticFieldNodeIndices
+      ? intersectNodeSelections(
+          nodeIndicesToSelection(magneticFieldNodeIndices),
+          scopedVectorSelection.renderSelection,
+          topology,
+        )
+      : scopedVectorSelection.renderSelection;
     const scopedFieldExceedsCarrier = Boolean(
       airboxPartSet.has(partModel) &&
         partFieldVector &&
@@ -1137,7 +1151,7 @@ export function buildViewport3DFieldRenderModel(
       targetRenderPlan?.vectors.anchorMode ??
       options.partVectorAnchorModes?.get(partId) ??
       "center";
-    const partSegments =
+    const partSegmentBuild =
       scopedFieldExceedsCarrier || !partFieldMatchesTopology
         ? null
         : isScopedPartFieldVector && !scopedPartFieldNodeIndices
@@ -1167,6 +1181,7 @@ export function buildViewport3DFieldRenderModel(
             },
             fieldValueResolver,
           );
+    const partSegments = partSegmentBuild?.segments ?? null;
     partVectorSegments.set(partId, partSegments);
     const partVectorBuildReference = buildVectorGlyphBuildReference({
       budget: partBudget,
@@ -1220,6 +1235,7 @@ export function buildViewport3DFieldRenderModel(
         }),
         passId: `${partId}:vector-glyph`,
         segments: partSegments,
+        nodeIndices: partSegmentBuild?.nodeIndices ?? null,
       },
     });
   }
@@ -1232,7 +1248,7 @@ export function buildViewport3DFieldRenderModel(
     options.fullVectorSurfaceOffsetEnabled ?? false;
   const fullVectorSurfaceOffsetScale =
     options.fullVectorSurfaceOffsetScale ?? 0;
-  const fullVectorSegments = buildCachedFullVectorSegments(
+  const fullSegmentBuild = buildCachedFullVectorSegments(
     topology,
     fullFieldVector,
     scale,
@@ -1249,6 +1265,7 @@ export function buildViewport3DFieldRenderModel(
           : null,
     },
   );
+  const fullVectorSegments = fullSegmentBuild?.segments ?? null;
   const fullVectorBuild = buildVectorGlyphBuildReference({
     budget: fullVectorBudget,
     fieldVector: fullFieldVector,
@@ -1312,6 +1329,7 @@ export function buildViewport3DFieldRenderModel(
         }),
         passId: `${FULL_VIEWPORT_3D_TARGET_ID}:vector-glyph`,
         segments: fullTargetVectorsRequested ? fullVectorSegments : null,
+        nodeIndices: fullTargetVectorsRequested ? fullSegmentBuild?.nodeIndices ?? null : null,
       },
     });
   }
@@ -2164,7 +2182,7 @@ function buildCachedFullVectorSegments(
   scale: number,
   budget: number,
   vectorOptions: Viewport3DVectorSegmentOptions = {},
-): Float32Array | null {
+): Viewport3DVectorSegmentBuild | null {
   if (!fieldVector || budget <= 0) return null;
 
   const anchorMode = vectorOptions.anchorMode ?? "center";
@@ -2197,7 +2215,7 @@ function buildCachedPartVectorSegments(
   budget: number,
   vectorOptions: Viewport3DVectorSegmentOptions = {},
   fieldValueResolver: Viewport3DVectorFieldValueResolver | null = null,
-): Float32Array | null {
+): Viewport3DVectorSegmentBuild | null {
   if (!fieldVector || budget <= 0) return null;
 
   const anchorMode = vectorOptions.anchorMode ?? "center";
@@ -2329,6 +2347,11 @@ function estimateRenderCacheValueByteLength(value: unknown): number {
   if (!value) return 0;
   if (ArrayBuffer.isView(value)) return value.byteLength;
   if (typeof value !== "object") return 0;
+
+  const segmentBuild = value as Partial<Viewport3DVectorSegmentBuild>;
+  if (segmentBuild.segments && segmentBuild.nodeIndices) {
+    return segmentBuild.segments.byteLength + segmentBuild.nodeIndices.byteLength;
+  }
 
   const maybeDecodedFieldVector = value as Partial<Viewport3DFieldVector>;
   if (ArrayBuffer.isView(maybeDecodedFieldVector.values)) {
@@ -2730,7 +2753,7 @@ export function buildVectorLineSegments(
       surfaceTriangleIndices:
         options.surfaceTriangleIndices ?? topology.boundaryFaces,
     },
-  );
+  )?.segments ?? null;
 }
 
 /** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
@@ -2797,10 +2820,10 @@ function buildVectorLineSegmentsFromPositions(
   scale: number,
   maxVectors = 2048,
   options: Viewport3DVectorSegmentOptions = {},
-): Float32Array | null {
+): Viewport3DVectorSegmentBuild | null {
   if (
     !fieldVector ||
-    fieldVector.nComp < 3 ||
+    fieldVector.nComp !== 3 ||
     fieldVector.pointCount === 0 ||
     topology.nodeCount === 0
   ) {
@@ -2860,6 +2883,7 @@ function buildVectorLineSegmentsFromPositions(
   );
 
   const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
+  const nodeIndices = new Uint32Array(vectorCount);
   let visibleVectorCount = 0;
 
   for (let vector = 0; vector < vectorCount; vector += 1) {
@@ -2904,11 +2928,13 @@ function buildVectorLineSegmentsFromPositions(
       segments[target + 5] = az + uz * halfScale;
     }
     segments[target + 6] = length / scaleMag; // relative magnitude [0..1]
+    nodeIndices[visibleVectorCount] = pointIndex;
     visibleVectorCount += 1;
   }
 
   return visibleVectorCount > 0
-    ? segments.slice(0, visibleVectorCount * VECTOR_SEGMENT_STRIDE)
+    ? { segments: segments.slice(0, visibleVectorCount * VECTOR_SEGMENT_STRIDE),
+        nodeIndices: nodeIndices.slice(0, visibleVectorCount) }
     : null;
 }
 
@@ -2932,7 +2958,7 @@ export function buildVectorLineSegmentsForNodeSelection(
       surfaceTriangleIndices:
         options.surfaceTriangleIndices ?? topology.boundaryFaces,
     },
-  );
+  )?.segments ?? null;
 }
 
 function buildVectorLineSegmentsForNodeSelectionFromPositions(
@@ -2943,10 +2969,10 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
   maxVectors = 2048,
   options: Viewport3DVectorSegmentOptions = {},
   fieldValueResolver: Viewport3DVectorFieldValueResolver | null = null,
-): Float32Array | null {
+): Viewport3DVectorSegmentBuild | null {
   if (
     !fieldVector ||
-    fieldVector.nComp < 3 ||
+    fieldVector.nComp !== 3 ||
     fieldVector.pointCount === 0 ||
     topology.nodeCount === 0
   ) {
@@ -3037,6 +3063,7 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
   );
 
   const segments = new Float32Array(samples.length * VECTOR_SEGMENT_STRIDE);
+  const nodeIndices = new Uint32Array(samples.length);
   let visibleVectorCount = 0;
 
   for (let vector = 0; vector < samples.length; vector += 1) {
@@ -3082,11 +3109,13 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
       segments[target + 5] = az + uz * halfScale;
     }
     segments[target + 6] = length / scaleMag; // relative magnitude [0..1]
+    nodeIndices[visibleVectorCount] = sample.pointIndex;
     visibleVectorCount += 1;
   }
 
   return visibleVectorCount > 0
-    ? segments.slice(0, visibleVectorCount * VECTOR_SEGMENT_STRIDE)
+    ? { segments: segments.slice(0, visibleVectorCount * VECTOR_SEGMENT_STRIDE),
+        nodeIndices: nodeIndices.slice(0, visibleVectorCount) }
     : null;
 }
 

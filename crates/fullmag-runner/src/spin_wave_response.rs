@@ -263,6 +263,20 @@ pub(crate) fn append_requested_spin_wave_artifacts(
     if request.get("analysis").and_then(serde_json::Value::as_str) != Some("gamma") {
         return Ok(());
     }
+    let has_active_antenna = match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => fem.solved_antenna_drive_bases.iter().any(|basis| {
+            crate::time_events::resolved_solved_antenna_drive_is_active(basis, &fem.time_stage)
+        }),
+        BackendPlanIR::Fdm(fdm) => fdm.solved_antenna_drive_bases.iter().any(|basis| {
+            crate::time_events::resolved_solved_antenna_drive_is_active(basis, &fdm.time_stage)
+        }),
+        _ => false,
+    };
+    if has_active_antenna {
+        return Err(run_error(
+            "Gamma analysis does not resolve the spatial source of a solved antenna; finite-k analysis requires a supported FEM plan and recorded m and H_drive snapshots",
+        ));
+    }
     let component = match request
         .get("response_component")
         .and_then(serde_json::Value::as_str)

@@ -242,6 +242,7 @@ def _scene_capture_to_ir(
     capture: _SceneDocumentCapture,
     *,
     include_geometry_assets: bool,
+    _accepted_preparation: dict[str, object] | None = None,
 ) -> dict[str, object]:
     loaded = capture.loaded
     result = loaded.to_ir(
@@ -255,6 +256,7 @@ def _scene_capture_to_ir(
         ),
         source_root=capture.source_root,
         _copy_cached_geometry_assets=False,
+        _accepted_preparation=_accepted_preparation,
     )
     runtime_metadata = result.get("problem_meta", {}).get("runtime_metadata")
     if isinstance(runtime_metadata, dict):
@@ -308,7 +310,36 @@ def scene_document_to_problem_ir(
         include_authored_stages=False,
         include_legacy_relax_stages=True,
     ) as capture:
-        return _scene_capture_to_ir(capture, include_geometry_assets=False)
+        problem_ir = _scene_capture_to_ir(capture, include_geometry_assets=False)
+        if capture.loaded.stages:
+            _drop_stage_default_table_cadence(problem_ir)
+        return problem_ir
+
+
+def _drop_stage_default_table_cadence(problem_ir: dict[str, object]) -> None:
+    """Keep a staged Study's accepted-step table clock out of its base study.
+
+    ``study.tableautosave(every_steps=...)`` on a staged Study is the default
+    its relaxation stages inherit. ProblemIR admits an accepted-step cadence
+    only on a relaxation study, so the non-relaxation base study must not
+    carry it; each stage still does.
+    """
+
+    study = problem_ir.get("study")
+    if not isinstance(study, dict) or study.get("kind") == "relaxation":
+        return
+    sampling = study.get("sampling")
+    if not isinstance(sampling, dict):
+        return
+    table = sampling.get("table_autosave")
+    if (
+        isinstance(table, dict)
+        and table.get("every_steps") is not None
+        and table.get("sample_period_s") is None
+        and table.get("sample_period_policy") is None
+        and table.get("resolved_sample_period_s") is None
+    ):
+        del sampling["table_autosave"]
 
 
 def scene_document_to_execution_config(
@@ -320,6 +351,7 @@ def scene_document_to_execution_config(
     requested_mode: str,
     source_root: str | Path | None = None,
     materialize_geometry_assets: bool = False,
+    _accepted_preparation: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Capture stages without solving; geometry realization is execution-only opt-in.
 
@@ -331,11 +363,15 @@ def scene_document_to_execution_config(
     if not isinstance(materialize_geometry_assets, bool):
         raise TypeError("materialize_geometry_assets must be a bool")
 
+    if _accepted_preparation is not None and not materialize_geometry_assets:
+        raise ValueError("accepted preparation requires geometry materialization")
     raw_study = scene_document.get("study") if isinstance(scene_document, Mapping) else None
     raw_pipeline = (
         raw_study.get("study_pipeline") if isinstance(raw_study, Mapping) else None
     )
     scene_pipeline_owns_stage_expansion = raw_pipeline is not None
+    if _accepted_preparation is not None and not scene_pipeline_owns_stage_expansion:
+        raise ValueError("accepted preparation requires the canonical Scene pipeline")
 
     with _capture_scene_document(
         scene_document,
@@ -367,7 +403,8 @@ def scene_document_to_execution_config(
                     workspace_problem=base_problem,
                 ),
             )
-        base_ir = _scene_capture_to_ir(run_capture, include_geometry_assets=materialize_geometry_assets)
+        base_ir = _scene_capture_to_ir(run_capture, include_geometry_assets=materialize_geometry_assets,
+                                       _accepted_preparation=_accepted_preparation)
         return export_run_config(
             run_capture.loaded,
             base_ir,

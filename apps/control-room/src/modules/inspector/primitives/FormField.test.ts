@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { homeView } from "@/kernel/layout/homeView";
+
 import { FormField } from "./FormField";
 
 describe("FormField physical numeric input contract", () => {
@@ -81,5 +83,33 @@ describe("FormField physical numeric input contract", () => {
     expect(html).toContain('aria-invalid="true"');
     expect(html).toContain('id="');
     expect(html).toContain("Maximum element size is outside the valid range.");
+  });
+
+  it("renders a help button when help is provided and homeView.openDocs notifies docs listeners", () => {
+    const onDocs = vi.fn();
+    const unsubscribe = homeView.subscribeDocs(onDocs);
+    try {
+      const html = renderToStaticMarkup(
+        createElement(FormField, {
+          help: {
+            description: "Maximum element size requested along object edges.",
+            docsPage: "frontend/meshing/object-mesh.html",
+          },
+          label: "Edge maximum element size",
+          onChange: () => undefined,
+          type: "number",
+          unit: "m",
+          value: "1e-9",
+        }),
+      );
+      expect(html).toContain('aria-label="Explain Edge maximum element size"');
+
+      homeView.openDocs("frontend/meshing/object-mesh.html");
+      expect(homeView.isOpen()).toBe(true);
+      expect(onDocs).toHaveBeenCalledWith("frontend/meshing/object-mesh.html");
+    } finally {
+      unsubscribe();
+      homeView.resetForTests();
+    }
   });
 });

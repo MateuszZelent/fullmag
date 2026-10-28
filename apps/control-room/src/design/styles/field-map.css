@@ -22,6 +22,7 @@
 
 .fm-field-map__toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--fm-space-3);
   align-items: center;
   min-height: var(--fm-inspector-nav-icon-size);
@@ -29,6 +30,27 @@
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-panel);
   font-variant-numeric: tabular-nums;
+}
+
+.fm-field-map__section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2) var(--fm-space-3);
+  align-items: center;
+  min-width: 0;
+  margin-left: auto;
+  padding: var(--fm-space-1) 0;
+}
+
+.fm-field-map__section-slider {
+  width: clamp(96px, 16vw, 220px);
+  accent-color: var(--fm-accent);
+}
+
+.fm-field-map__section-caption {
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  white-space: nowrap;
 }
 
 .fm-field-map__diagnostic {
@@ -46,13 +68,21 @@
   padding: var(--fm-space-6) var(--fm-space-6) var(--fm-space-4) calc(var(--fm-space-6) + 4.5rem);
 }
 
+/* Size container: the stack fits whichever dimension limits it while
+   keeping the physical u:v aspect ratio (--fm-planar-aspect). */
+.fm-field-map__plot-area {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  container-type: size;
+}
+
 .fm-field-map__canvas-stack {
   position: relative;
   display: block;
-  align-self: center;
-  width: 100%;
-  height: auto;
-  max-height: 100%;
+  width: min(100cqw, calc(100cqh * var(--fm-planar-aspect, 1)));
+  aspect-ratio: var(--fm-planar-aspect, 1);
 }
 
 .fm-field-map__canvas {
@@ -351,4 +381,76 @@
   .fm-field-map__colorbar-row {
     grid-template-columns: minmax(4rem, auto) minmax(4rem, 1fr) minmax(4rem, auto);
   }
+}
+
+/* 2D toolbar: one row of mumax3-style display decisions above the map. */
+.fm-field-map__controls {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: var(--fm-space-2) var(--fm-space-3);
+  align-items: center;
+  min-width: 0;
+  padding: var(--fm-space-1) 0;
+}
+
+.fm-field-map__control {
+  display: inline-flex;
+  gap: var(--fm-space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.fm-field-map__control-label {
+  color: var(--fm-text-tertiary);
+  font-size: var(--fm-font-size-xs);
+  white-space: nowrap;
+}
+
+.fm-field-map__quantity-trigger {
+  min-width: 9rem;
+  max-width: 16rem;
+}
+
+.fm-field-map__component {
+  min-width: 15rem;
+}
+
+.fm-field-map__toggles {
+  display: inline-flex;
+  gap: var(--fm-space-1);
+  align-items: center;
+}
+
+.fm-field-map__controls .fm-field-map__section {
+  margin-left: 0;
+}
+
+.fm-field-map__direction-legend {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: var(--fm-space-2) var(--fm-space-3);
+  justify-content: start;
+  align-items: center;
+}
+
+.fm-field-map__direction-hemisphere {
+  display: grid;
+  gap: var(--fm-space-1);
+  justify-items: center;
+  margin: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-field-map__direction-swatch {
+  width: 40px;
+  height: 40px;
+}
+
+.fm-field-map__direction-note {
+  margin: 0;
+  color: var(--fm-text-tertiary);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.4;
 }

@@ -1,0 +1,204 @@
+--- a/scripts/docker_volume_reconcile.py
++++ b/scripts/docker_volume_reconcile.py
+@@ -14,6 +14,7 @@
+ 
+ SCHEMA = "fullmag.docker-iteration-reconciliation.v1"
+ FAILED_BUILD_SCHEMA = "fullmag.docker-iteration-failed-build-reconciliation.v1"
++PRESTART_SCHEMA = "fullmag.docker-iteration-prestart-reconciliation.v1"
+ ACTIVATION_PREFLIGHT_SCHEMA = "fullmag.docker-activation-preflight-reconciliation.v1"
+ SHA = re.compile(r"[0-9a-f]{64}\Z")
+ TOKEN = re.compile(r"[0-9a-f]{32}\Z")
+@@ -59,12 +60,15 @@
+ 
+ 
+ def validate_request(request):
+-    failed = isinstance(request, dict) and request.get("schema") == FAILED_BUILD_SCHEMA
++    prestart = isinstance(request, dict) and request.get("schema") == PRESTART_SCHEMA
++    failed = isinstance(request, dict) and request.get("schema") in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA)
+     expected = {"schema", "attempt", "compose_project", "source_root", "port", "config_sha256",
+         "unknown_receipt_sha256", "controller_sha256", "containers", "package_documents"}
+     if failed:
+         expected = (expected - {"package_documents"}) | {"failure"}
+-    require(isinstance(request, dict) and set(request) == expected and request["schema"] in (SCHEMA, FAILED_BUILD_SCHEMA),
++    if prestart:
++        expected.add("prestart_helper_sha256")
++    require(isinstance(request, dict) and set(request) == expected and request["schema"] in (SCHEMA, FAILED_BUILD_SCHEMA, PRESTART_SCHEMA),
+             "Reconciliation request schema/keys differ")
+     require(isinstance(request["attempt"], str) and TOKEN.fullmatch(request["attempt"]), "Invalid iteration attempt")
+     for key in ("config_sha256", "unknown_receipt_sha256", "controller_sha256"):
+@@ -81,6 +85,11 @@
+                 and isinstance(pin["started_at"], str) and bool(pin["started_at"]), "Incomplete container pin: " + name)
+     require(len({pin["id"] for pin in request["containers"].values()}) == 3,
+             "Lease/backend/frontend must be distinct containers")
++    if prestart:
++        from docker_volume_prestart_recovery import validate_failure_pin
++        require(isinstance(request["prestart_helper_sha256"], str) and SHA.fullmatch(request["prestart_helper_sha256"]), "Invalid prestart helper digest")
++        validate_failure_pin(request["failure"])
++        return
+     if failed:
+         proof = request["failure"]
+         require(isinstance(proof, dict) and set(proof) == {
+@@ -111,8 +120,8 @@
+     for name, pin in request["containers"].items():
+         records = json.loads(docker_capture("inspect", pin["id"]).stdout)
+         require(len(records) == 1, "Ambiguous container inspection")
+-        validate_incarnation(records[0], pin, request["compose_project"], running=(frontend_running if name == "frontend" else
+-                not (name == "backend" and request["schema"] == FAILED_BUILD_SCHEMA)))
++        validate_incarnation(records[0], pin, request["compose_project"], running=(False if name != "lease" and request["schema"] == PRESTART_SCHEMA else
++                frontend_running if name == "frontend" else not (name == "backend" and request["schema"] == FAILED_BUILD_SCHEMA)))
+         result[name] = records[0]
+     return result
+ 
+@@ -183,6 +192,9 @@
+ def validate_failed_build(control, root, request, original, actual, state):
+     import docker_volume_dev as dev
+     from docker_volume_stop_unadmitted import _read_terminal_process_receipt
++    if request["schema"] == PRESTART_SCHEMA:
++        from docker_volume_prestart_recovery import validate_failure
++        return validate_failure(control, root, request, original, actual, state)
+     proof = request["failure"]
+     checkpoint_raw = read_raw(control, root + "/saved-authoring-checkpoint.json")
+     drain_raw = read_raw(control, root + "/backend-drain.json")
+@@ -308,13 +320,15 @@
+     if isinstance(request, dict) and request.get("schema") == ACTIVATION_PREFLIGHT_SCHEMA:
+         from docker_activation_preflight_runtime import reconcile_preflight
+         return reconcile_preflight(args, control, selected, request, request_raw)
+-    require(not getattr(args, "preview", False), "Preview is scoped to activation-preflight reconciliation")
+-    _require_native_windows()
++    prestart = isinstance(request, dict) and request.get("schema") == PRESTART_SCHEMA
++    require(prestart or not getattr(args, "preview", False), "Preview is scoped to activation-preflight or prestart reconciliation")
++    if not prestart:
++        _require_native_windows()
+     if isinstance(request, dict) and request.get("schema") == "fullmag.boris.preproducer-reconciliation.v1":
+         from docker_boris_volume import reconcile_preproducer
+         return reconcile_preproducer(args, control, selected, request, request_raw)
+     validate_request(request)
+-    failed_build = request["schema"] == FAILED_BUILD_SCHEMA
++    failed_build = request["schema"] in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA)
+     require(request["source_root"] == str(selected) and request["compose_project"] == control.project
+             and request["port"] == args.port, "Selected checkout/group/port differs")
+     require(digest(Path(__file__).read_bytes()) == request["controller_sha256"], "Controller code differs from reviewed request")
+@@ -331,7 +345,7 @@
+             and original.get("control_volume") == control.volume, "Only the exact unknown iteration is admissible")
+     require(failed_build or not original.get("saved_authoring_restore_required"),
+             "Saved-authoring success requires its completion gate; retained for dedicated recovery")
+-    require(original.get("backend_started_at") == request["containers"]["backend"]["started_at"], "Recorded backend start differs")
++    require(prestart or original.get("backend_started_at") == request["containers"]["backend"]["started_at"], "Recorded backend start differs")
+     require(original.get("helper_container") == "fullmag-control-" + request["attempt"], "Recorded lease owner differs")
+     document = control.read(root + "/compose.json")
+     require(digest(canonical(document)) == request["config_sha256"] and document.get("name") == control.project
+@@ -360,16 +374,21 @@
+     dev._operator_probe_record_from_retained(original, document)
+     cache = control.read(base + "/backend-cache.json")
+     state = storage.validate_path(Path(original["state_root"]), layout["runtime_root"], "retained Windows sessions")
+-    certificate_path = state / "windows-folder-host.json"
+-    certificate = json.loads(read_owned_regular(certificate_path))
+-    require(json.loads(read_owned_regular(state / ".fullmag-windows-folder-owner.json")) == certificate,
+-            "Windows storage certificate/owner differs")
+-    ledger_profile = {"profile": "host-ledger-v1", "image_id": image, "environment": environment,
+-        "mount_root": environment["FULLMAG_HOST_LEDGER_MOUNT_ROOT"],
+-        "project_id": environment["FULLMAG_HOST_LEDGER_PROJECT_ID"],
+-        "backing_image": environment["FULLMAG_HOST_LEDGER_BACKING_IMAGE"],
+-        "host_receipt": control.read(base + "/host-ledger.json"),
+-        "maintenance_document": control.read(base + "/ledger-maintenance-compose.json")}
++    if prestart:
++        certificate_path = dev._certificate_path(state)
++        certificate = dev._retained_certificate(state, document)
++        ledger_profile = None  # Failure-only reconciliation never calls _finish.
++    else:
++        certificate_path = state / "windows-folder-host.json"
++        certificate = json.loads(read_owned_regular(certificate_path))
++        require(json.loads(read_owned_regular(state / ".fullmag-windows-folder-owner.json")) == certificate,
++                "Windows storage certificate/owner differs")
++        ledger_profile = {"profile": "host-ledger-v1", "image_id": image, "environment": environment,
++            "mount_root": environment["FULLMAG_HOST_LEDGER_MOUNT_ROOT"],
++            "project_id": environment["FULLMAG_HOST_LEDGER_PROJECT_ID"],
++            "backing_image": environment["FULLMAG_HOST_LEDGER_BACKING_IMAGE"],
++            "host_receipt": control.read(base + "/host-ledger.json"),
++            "maintenance_document": control.read(base + "/ledger-maintenance-compose.json")}
+     image_config = json.loads(docker_capture("image", "inspect", image).stdout)[0]["Config"]
+     actual = inspect_pins(request)
+     helper_image_id = json.loads(docker_capture("image", "inspect", control.image).stdout)[0]["Id"]
+@@ -386,6 +405,9 @@
+         validate_package(request)
+     validate_partial_journal(control, journal_root, current_raw,
+                              request["unknown_receipt_sha256"], args.request_sha256)
++    if prestart and getattr(args, "preview", False):
++        print(json.dumps({"state": "validated-only", "attempt": request["attempt"], "schema": PRESTART_SCHEMA}))
++        return
+     claim_name = "fullmag-iteration-observer-" + uuid.uuid4().hex
+     claim = subprocess.Popen(control.helper_args(claim_script(control, root, request, digest(current_raw), publish_verified=not failed_build), name=claim_name),
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+@@ -430,7 +452,7 @@
+         require(control._line(claim) == "OBSERVING", "Observer BEGIN outcome unknown; resources retained")
+         if failed_build:
+             actual = inspect_pins(request)
+-            result["failed_build_proof"] = validate_failed_build(control, root, request, original, actual, state)
++            result["prestart_failure_proof" if prestart else "failed_build_proof"] = validate_failed_build(control, root, request, original, actual, state)
+             result.update(state="failed-confirmed", backend_container=ids["backend"],
+                           frontend_container=ids["frontend"])
+         else:
+--- a/scripts/docker_volume_dev.py
++++ b/scripts/docker_volume_dev.py
+@@ -6260,20 +6260,35 @@
+     cache_adapter.validate_container(actual["backend"], cache)
+     environment = document["services"]["backend"]["environment"]
+     ledger_profile = _retained_ledger_profile(control, previous_root, document, image)
++    from docker_volume_prestart_recovery import continuation
++    prestart_checkpoint = continuation(control, args, previous, document, actual, state)
+     with control.operation("resume", {"attempt": args.attempt, "config_sha256": args.config_sha256,
+                                        **operator_probe_record}) as operation:
+         operation["receipt"].update(operator_probe_record)
+         operation["receipt"].update(state="resuming-observation", state_root=str(state),
+             backend_volumes=previous["backend_volumes"], frontend_volume=previous["frontend_volume"])
++        if prestart_checkpoint:
++            fresh = {name: json.loads(docker_text("inspect", identifier))[0] for name, identifier in ids.items()}
++            _assert_private_restart_network(fresh, ids, control.project)
++            _retained_certificate(state, document)
++            prestart_checkpoint = continuation(control, args, previous, document, fresh, state)
++            operation["receipt"].update(
++                saved_authoring_restore_required=prestart_checkpoint[0]["archive"],
++                prestart_reconciliation=args.prestart_reconciliation,
++                prestart_reconciliation_sha256=args.prestart_reconciliation_sha256)
++            operation["daemon_pending"] = True
+         if not actual["frontend"]["State"]["Running"]:
+             _frontend(control, operation, selected, state, args.port, image)
+             compose_capture(document, "start", "frontend", timeout=90)
+         if restart_backend:
+             operation["daemon_pending"] = True
+             compose_capture(document, "start", "backend", timeout=90)
+-            operation["daemon_pending"] = False
++            operation["daemon_pending"] = bool(prestart_checkpoint)
+         git_common = Path(environment["FULLMAG_SOURCE_GIT_COMMON"]) if "FULLMAG_SOURCE_GIT_COMMON" in environment else Path(
+             next(m["source"] for m in document["services"]["backend"]["volumes"] if m["target"] == "/opt/fullmag/source-git"))
+         _finish(control, operation, document, ids["backend"], ids["frontend"], selected, state,
+             certificate_path, certificate, cache, {"image_id": environment["FULLMAG_TOOLCHAIN_IMAGE_ID"]},
+-            image, git_common, ledger_profile, args.port)
++            image, git_common, ledger_profile, args.port,
++            completion_gate=(lambda: _saved_authoring_complete(control, operation,
++                ids["backend"], prestart_checkpoint[0], state, prestart_checkpoint[1]))
++                if prestart_checkpoint else None)
+--- a/scripts/docker_dev.py
++++ b/scripts/docker_dev.py
+@@ -2491,6 +2491,8 @@
+     resume_parser.add_argument("--source-root", type=Path, required=True)
+     resume_parser.add_argument("--port", type=int, required=True)
+     resume_parser.add_argument("--restart-backend", action="store_true", help="Start the retained stopped backend; never stop an active service")
++    resume_parser.add_argument("--prestart-reconciliation", help="Exact confirmed prestart iteration UUID")
++    resume_parser.add_argument("--prestart-reconciliation-sha256", help="SHA-256 of its terminal receipt")
+     activate_parser = subparsers.add_parser(
+         "activate-script",
+         help="activate one Python script in the already-running retained backend",
+--- a/justfile
++++ b/justfile
+@@ -76,8 +76,8 @@
+     @{{storage_python}} "{{repo_root}}/scripts/docker_dev_browser_qa.py" --repo-root "{{repo_root}}" {{if source_root == "" { "" } else { "--source-root " + quote(source_root) }}} {{if port == "" { "" } else { "--port " + quote(port) }}} --timeout {{quote(timeout)}} --pull-timeout {{quote(pull_timeout)}} {{if browser_image == "" { "" } else { "--browser-image " + quote(browser_image) }}}
+ 
+ # Resume observation of one retained volume DEV start without restarting backend.
+-docker-dev-resume attempt config_sha256 source_root port="3197" restart_backend="false":
+-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" resume-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} {{if restart_backend == "true" { "--restart-backend" } else if restart_backend == "false" { "" } else { error("restart_backend must be true or false") }}}
++docker-dev-resume attempt config_sha256 source_root port="3197" restart_backend="false" prestart_reconciliation="" prestart_reconciliation_sha256="":
++    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" resume-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} {{if restart_backend == "true" { "--restart-backend" } else if restart_backend == "false" { "" } else { error("restart_backend must be true or false") }}}{{if prestart_reconciliation == "" { if prestart_reconciliation_sha256 == "" { "" } else { error("prestart recovery requires both pins") } } else if prestart_reconciliation_sha256 == "" { error("prestart recovery requires both pins") } else { " --prestart-reconciliation " + quote(prestart_reconciliation) + " --prestart-reconciliation-sha256 " + quote(prestart_reconciliation_sha256) }}}
+ 
+ # Reconcile only the existing unknown iteration; no backend/frontend lifecycle.
+ docker-dev-reconcile-iteration request request_sha256 source_root port="3197":

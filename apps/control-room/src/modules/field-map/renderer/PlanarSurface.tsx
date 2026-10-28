@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
 
@@ -102,222 +102,239 @@ export function PlanarSurface({
     resetHoverProbe(setHoverProbe);
   }, [drawOverlayRef, model.layers.probes, renderStateRef]);
 
+  // The plot area is a size container so the canvas keeps the physical
+  // u:v aspect ratio whichever dimension (width or height) is limiting.
+  const aspect = Math.abs((model.bounds[1] - model.bounds[0]) / (model.bounds[3] - model.bounds[2])) || 1;
+  const summaryId = useId();
+  const length = (metres: number) =>
+    formatValueWithUnit(metres * axes.displayLengthUnit.scale, axes.displayLengthUnit.symbol);
+  const summary = [
+    `2D field map, ${axes.horizontal.label} from ${length(axes.horizontal.rangeMetres[0])} to ${length(axes.horizontal.rangeMetres[1])}`,
+    `${axes.vertical.label} from ${length(axes.vertical.rangeMetres[0])} to ${length(axes.vertical.rangeMetres[1])}`,
+    model.directionVectors
+      ? "coloured by vector direction"
+      : model.range
+        ? `colour range ${formatValueWithUnit(model.range.min * model.display.probeScale, model.display.legendUnit)} to ${formatValueWithUnit(model.range.max * model.display.probeScale, model.display.legendUnit)}`
+        : "colour range unavailable",
+    "Arrow keys pan, plus and minus zoom, 0 fits, Enter pins a probe.",
+  ].join("; ");
   return (
-    <div
-      className="fm-field-map__canvas-stack"
-      style={{
-        aspectRatio: String(
-          Math.abs((model.bounds[1] - model.bounds[0]) / (model.bounds[3] - model.bounds[2])) || 1,
-        ),
-      }}
-    >
-      <PlanarAxes
-        bounds={model.bounds}
-        frame={axisFrame}
-        plotSize={plotSize}
-        viewport={model.viewport}
-      />
-      <canvas
-        ref={canvasRef}
-        aria-label="Planar scalar field"
-        className="fm-field-map__canvas"
-        role="img"
-        data-probes-enabled={String(model.layers.probes)}
-        tabIndex={model.layers.probes ? 0 : -1}
-        onClick={(event) => {
-          if (gestureMovedRef.current) {
-            gestureMovedRef.current = false;
-            return;
-          }
-          if (!model.layers.probes) return;
-          const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
-          onPin?.(u, v);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "0") {
+    <div className="fm-field-map__plot-area">
+      <div
+        className="fm-field-map__canvas-stack"
+        style={{ "--fm-planar-aspect": String(aspect) } as CSSProperties}
+      >
+        <PlanarAxes
+          bounds={model.bounds}
+          frame={axisFrame}
+          plotSize={plotSize}
+          viewport={model.viewport}
+        />
+        <canvas
+          ref={canvasRef}
+          aria-describedby={summaryId}
+          aria-label="Planar scalar field"
+          className="fm-field-map__canvas"
+          role="img"
+          data-probes-enabled={String(model.layers.probes)}
+          // Keyboard pan, zoom and fit must stay reachable without probes.
+          tabIndex={0}
+          onClick={(event) => {
+            if (gestureMovedRef.current) {
+              gestureMovedRef.current = false;
+              return;
+            }
+            if (!model.layers.probes) return;
+            const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
+            onPin?.(u, v);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "0") {
+              event.preventDefault();
+              interactionRef.current = fitPlanarInteraction();
+              onInteraction?.(interactionRef.current);
+              return;
+            }
+            if (event.key === "+" || event.key === "-") {
+              event.preventDefault();
+              interactionRef.current = zoomPlanarInteractionAt(
+                model.bounds,
+                interactionRef.current,
+                model.boundsCenter[0],
+                model.boundsCenter[1],
+                interactionRef.current.zoom * (event.key === "+" ? 1.25 : 0.8),
+              );
+              onInteraction?.(interactionRef.current);
+              return;
+            }
+            if (event.key.startsWith("Arrow")) {
+              event.preventDefault();
+              const spanU = (model.bounds[1] - model.bounds[0]) / interactionRef.current.zoom;
+              const spanV = (model.bounds[3] - model.bounds[2]) / interactionRef.current.zoom;
+              const delta = event.key === "ArrowLeft" ? [-spanU / 10, 0]
+                : event.key === "ArrowRight" ? [spanU / 10, 0]
+                  : event.key === "ArrowUp" ? [0, spanV / 10]
+                    : [0, -spanV / 10];
+              interactionRef.current = panPlanarInteraction(interactionRef.current, delta[0]!, delta[1]!);
+              onInteraction?.(interactionRef.current);
+              return;
+            }
+            if (!model.layers.probes) return;
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onPin?.(model.boundsCenter[0], model.boundsCenter[1]);
+            }
+          }}
+          onDoubleClick={(event) => {
             event.preventDefault();
             interactionRef.current = fitPlanarInteraction();
             onInteraction?.(interactionRef.current);
-            return;
-          }
-          if (event.key === "+" || event.key === "-") {
-            event.preventDefault();
-            interactionRef.current = zoomPlanarInteractionAt(
-              model.bounds,
-              interactionRef.current,
-              model.boundsCenter[0],
-              model.boundsCenter[1],
-              interactionRef.current.zoom * (event.key === "+" ? 1.25 : 0.8),
-            );
-            onInteraction?.(interactionRef.current);
-            return;
-          }
-          if (event.key.startsWith("Arrow")) {
-            event.preventDefault();
-            const spanU = (model.bounds[1] - model.bounds[0]) / interactionRef.current.zoom;
-            const spanV = (model.bounds[3] - model.bounds[2]) / interactionRef.current.zoom;
-            const delta = event.key === "ArrowLeft" ? [-spanU / 10, 0]
-              : event.key === "ArrowRight" ? [spanU / 10, 0]
-                : event.key === "ArrowUp" ? [0, spanV / 10]
-                  : [0, -spanV / 10];
-            interactionRef.current = panPlanarInteraction(interactionRef.current, delta[0]!, delta[1]!);
-            onInteraction?.(interactionRef.current);
-            return;
-          }
-          if (!model.layers.probes) return;
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onPin?.(model.boundsCenter[0], model.boundsCenter[1]);
-          }
-        }}
-        onDoubleClick={(event) => {
-          event.preventDefault();
-          interactionRef.current = fitPlanarInteraction();
-          onInteraction?.(interactionRef.current);
-        }}
-        onPointerDown={(event) => {
-          pointersRef.current.set(event.pointerId, {
-            clientX: event.clientX,
-            clientY: event.clientY,
-          });
-          const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
-          if (pointersRef.current.size === 1) {
-            gestureMovedRef.current = false;
-            dragRef.current = { pointerId: event.pointerId, u, v };
-          } else if (pointersRef.current.size === 2) {
-            const [first, second] = [...pointersRef.current.values()];
-            if (first && second) {
-              const [anchorU, anchorV] = pointerUv(
-                event.currentTarget,
-                (first.clientX + second.clientX) / 2,
-                (first.clientY + second.clientY) / 2,
-                model.viewport,
-              );
-              pinchRef.current = {
-                anchorU,
-                anchorV,
-                distance: pointerDistance(first, second),
-                interaction: interactionRef.current,
-              };
-              gestureMovedRef.current = true;
-              dragRef.current = null;
-            }
-          }
-          event.currentTarget.setPointerCapture(event.pointerId);
-        }}
-        onPointerUp={(event) => {
-          releasePlanarPointer(event.currentTarget, event.pointerId, pointersRef.current);
-          pinchRef.current = null;
-          if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
-        }}
-        onPointerCancel={(event) => {
-          releasePlanarPointer(event.currentTarget, event.pointerId, pointersRef.current);
-          pinchRef.current = null;
-          dragRef.current = null;
-        }}
-        onWheel={(event) => {
-          event.preventDefault();
-          const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
-          interactionRef.current = zoomPlanarInteractionAt(
-            model.bounds,
-            interactionRef.current,
-            u,
-            v,
-            interactionRef.current.zoom * Math.exp(-event.deltaY * 0.001),
-          );
-          onInteraction?.(interactionRef.current);
-        }}
-        onPointerMove={(event) => {
-          if (pointersRef.current.has(event.pointerId)) {
+          }}
+          onPointerDown={(event) => {
             pointersRef.current.set(event.pointerId, {
               clientX: event.clientX,
               clientY: event.clientY,
             });
-          }
-          const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
-          const pinch = pinchRef.current;
-          if (pinch && pointersRef.current.size >= 2) {
-            const [first, second] = [...pointersRef.current.values()];
-            if (first && second && pinch.distance > 0) {
-              interactionRef.current = zoomPlanarInteractionAt(
-                model.bounds,
-                pinch.interaction,
-                pinch.anchorU,
-                pinch.anchorV,
-                pinch.interaction.zoom * pointerDistance(first, second) / pinch.distance,
-              );
+            const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
+            if (pointersRef.current.size === 1) {
+              gestureMovedRef.current = false;
+              dragRef.current = { pointerId: event.pointerId, u, v };
+            } else if (pointersRef.current.size === 2) {
+              const [first, second] = [...pointersRef.current.values()];
+              if (first && second) {
+                const [anchorU, anchorV] = pointerUv(
+                  event.currentTarget,
+                  (first.clientX + second.clientX) / 2,
+                  (first.clientY + second.clientY) / 2,
+                  model.viewport,
+                );
+                pinchRef.current = {
+                  anchorU,
+                  anchorV,
+                  distance: pointerDistance(first, second),
+                  interaction: interactionRef.current,
+                };
+                gestureMovedRef.current = true;
+                dragRef.current = null;
+              }
+            }
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerUp={(event) => {
+            releasePlanarPointer(event.currentTarget, event.pointerId, pointersRef.current);
+            pinchRef.current = null;
+            if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+          }}
+          onPointerCancel={(event) => {
+            releasePlanarPointer(event.currentTarget, event.pointerId, pointersRef.current);
+            pinchRef.current = null;
+            dragRef.current = null;
+          }}
+          onWheel={(event) => {
+            event.preventDefault();
+            const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
+            interactionRef.current = zoomPlanarInteractionAt(
+              model.bounds,
+              interactionRef.current,
+              u,
+              v,
+              interactionRef.current.zoom * Math.exp(-event.deltaY * 0.001),
+            );
+            onInteraction?.(interactionRef.current);
+          }}
+          onPointerMove={(event) => {
+            if (pointersRef.current.has(event.pointerId)) {
+              pointersRef.current.set(event.pointerId, {
+                clientX: event.clientX,
+                clientY: event.clientY,
+              });
+            }
+            const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
+            const pinch = pinchRef.current;
+            if (pinch && pointersRef.current.size >= 2) {
+              const [first, second] = [...pointersRef.current.values()];
+              if (first && second && pinch.distance > 0) {
+                interactionRef.current = zoomPlanarInteractionAt(
+                  model.bounds,
+                  pinch.interaction,
+                  pinch.anchorU,
+                  pinch.anchorV,
+                  pinch.interaction.zoom * pointerDistance(first, second) / pinch.distance,
+                );
+                gestureMovedRef.current = true;
+                onInteraction?.(interactionRef.current);
+              }
+              return;
+            }
+            const drag = dragRef.current;
+            if (drag && drag.pointerId === event.pointerId) {
+              interactionRef.current = panPlanarInteraction(interactionRef.current, drag.u - u, drag.v - v);
+              dragRef.current = { ...drag, u, v };
               gestureMovedRef.current = true;
               onInteraction?.(interactionRef.current);
             }
-            return;
-          }
-          const drag = dragRef.current;
-          if (drag && drag.pointerId === event.pointerId) {
-            interactionRef.current = panPlanarInteraction(interactionRef.current, drag.u - u, drag.v - v);
-            dragRef.current = { ...drag, u, v };
-            gestureMovedRef.current = true;
-            onInteraction?.(interactionRef.current);
-          }
-          if (!model.layers.probes) return;
-          const values = valuesRef.current;
-          if (!values) return;
-          hoverPointerRef.current = [u, v];
-          if (hoverFrameRef.current !== null) return;
-          hoverFrameRef.current = -1;
-          let frame = -1;
-          frame = requestAnimationFrame(() => {
-            if (hoverFrameRef.current !== -1 && hoverFrameRef.current !== frame) return;
-            hoverFrameRef.current = null;
-            const point = hoverPointerRef.current;
-            const latestValues = valuesRef.current;
-            const current = modelRef.current;
-            if (!current.layers.probes || !point || !latestValues) return;
-            const probe = localProbe(
-              point[0],
-              point[1],
-              current.bounds,
-              current.resolution,
-              latestValues,
-              maskRef.current ?? undefined,
-            );
-            renderStateRef.current.axisPointer = { u: point[0], v: point[1] };
+            if (!model.layers.probes) return;
+            const values = valuesRef.current;
+            if (!values) return;
+            hoverPointerRef.current = [u, v];
+            if (hoverFrameRef.current !== null) return;
+            hoverFrameRef.current = -1;
+            let frame = -1;
+            frame = requestAnimationFrame(() => {
+              if (hoverFrameRef.current !== -1 && hoverFrameRef.current !== frame) return;
+              hoverFrameRef.current = null;
+              const point = hoverPointerRef.current;
+              const latestValues = valuesRef.current;
+              const current = modelRef.current;
+              if (!current.layers.probes || !point || !latestValues) return;
+              const probe = localProbe(
+                point[0],
+                point[1],
+                current.bounds,
+                current.resolution,
+                latestValues,
+                maskRef.current ?? undefined,
+              );
+              renderStateRef.current.axisPointer = { u: point[0], v: point[1] };
+              drawOverlayRef.current();
+              setHoverProbe({ u: point[0], v: point[1], value: probe.value });
+            });
+            if (hoverFrameRef.current === -1) hoverFrameRef.current = frame;
+          }}
+          onPointerLeave={() => {
+            if (dragRef.current) return;
+            hoverPointerRef.current = null;
+            renderStateRef.current.axisPointer = null;
             drawOverlayRef.current();
-            setHoverProbe({ u: point[0], v: point[1], value: probe.value });
-          });
-          if (hoverFrameRef.current === -1) hoverFrameRef.current = frame;
-        }}
-        onPointerLeave={() => {
-          if (dragRef.current) return;
-          hoverPointerRef.current = null;
-          renderStateRef.current.axisPointer = null;
-          drawOverlayRef.current();
-          resetHoverProbe(setHoverProbe);
-        }}
-      />
-      <canvas
-        ref={overlayRef}
-        aria-hidden="true"
-        className="fm-field-map__canvas fm-field-map__canvas--overlay"
-      />
-      {probeOverlay}
-      <output className="fm-field-map__probe" aria-live="polite">
-        {!model.layers.probes || hoverProbe?.value === null || !hoverCoordinates
-          ? "No sample"
-          : [
-              `${hoverCoordinates.horizontal.label} ${formatValueWithUnit(
-                hoverCoordinates.horizontal.valueMetres * axes.displayLengthUnit.scale,
-                axes.displayLengthUnit.symbol,
-              )}`,
-              `${hoverCoordinates.vertical.label} ${formatValueWithUnit(
-                hoverCoordinates.vertical.valueMetres * axes.displayLengthUnit.scale,
-                axes.displayLengthUnit.symbol,
-              )}`,
-              formatValueWithUnit(
-                hoverProbe!.value! * model.display.probeScale,
-                model.display.legendUnit,
-              ),
-            ].join(" · ")}
-      </output>
+            resetHoverProbe(setHoverProbe);
+          }}
+        />
+        <canvas
+          ref={overlayRef}
+          aria-hidden="true"
+          className="fm-field-map__canvas fm-field-map__canvas--overlay"
+        />
+        <p className="fm-visually-hidden" id={summaryId}>{summary}</p>
+        {probeOverlay}
+        <output className="fm-field-map__probe" aria-live="polite">
+          {!model.layers.probes || hoverProbe?.value === null || !hoverCoordinates
+            ? "No sample"
+            : [
+                `${hoverCoordinates.horizontal.label} ${formatValueWithUnit(
+                  hoverCoordinates.horizontal.valueMetres * axes.displayLengthUnit.scale,
+                  axes.displayLengthUnit.symbol,
+                )}`,
+                `${hoverCoordinates.vertical.label} ${formatValueWithUnit(
+                  hoverCoordinates.vertical.valueMetres * axes.displayLengthUnit.scale,
+                  axes.displayLengthUnit.symbol,
+                )}`,
+                formatValueWithUnit(
+                  hoverProbe!.value! * model.display.probeScale,
+                  model.display.legendUnit,
+                ),
+              ].join(" · ")}
+        </output>
+      </div>
     </div>
   );
 }

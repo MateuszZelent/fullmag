@@ -31,6 +31,8 @@ import {
   buildViewport3DAirboxSyntheticVectorField,
   applyViewport3DFieldLayerDiagnosticOverrides,
   resolveViewport3DActiveQuantityId,
+  resolveViewport3DModelQuantityId,
+  resolveViewport3DPublishedModelQuantityIds,
   resolveViewport3DAnalysisComplexFieldQuery,
   resolveViewport3DAnalysisComplexProjectionEnabled,
   resolveViewport3DModeFieldOverlaySourceIdentity,
@@ -53,6 +55,7 @@ import {
   resolveViewport3DMembershipRegionOverlays,
   resolveViewport3DMeshBackedRegionKeys,
   resolveViewport3DMeshBackedRegionOverlays,
+  resolveViewport3DPrimitiveVisualizationSettings,
   resolveViewport3DPartVisualizationSettings,
   resolveViewport3DPartScalarRangeRequests,
   mergeViewport3DPartScalarRanges,
@@ -824,6 +827,7 @@ describe("useViewport3DSceneModel", () => {
       "visualizationState: renderingState",
     );
     expect(airboxSettingsBlock).not.toContain("resolveViewport3DFdmTargetVisualization({");
+    expect(airboxSettingsBlock).not.toContain("femLaneActive ? renderingState : null");
 
     const singleGridDisplayBlock = source.slice(
       source.indexOf("const fdmAirboxMaxVectorGlyphs ="),
@@ -965,7 +969,7 @@ describe("useViewport3DSceneModel", () => {
       "(fdmLaneActive ? fdmBuildState?.error?.message : null)",
     );
     expect(source).toContain(
-      "[femLaneActive, objectVisualizationSnapshot, renderingState]",
+      "[objectVisualizationSnapshot, renderingState]",
     );
   });
 
@@ -1572,9 +1576,9 @@ describe("useViewport3DSceneModel", () => {
       },
       etag: '"m-frame-a"',
       resourceKey:
-        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1"),
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=carrier-1&snapshot_id=snap-1"),
       responseMetadata: {
-        carrierRevision: "top-1",
+        carrierRevision: "carrier-1",
         component: "full",
         domainGenerationId: "gen-1",
         encoding: "FMVP;version=2",
@@ -1600,7 +1604,7 @@ describe("useViewport3DSceneModel", () => {
       ...frameA,
       etag: '"m-frame-b"',
       resourceKey:
-        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong"),
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=carrier-1&snapshot_id=snap-wrong"),
       responseMetadata: {
         ...frameA.responseMetadata!,
         fieldRevision: "rev-B",
@@ -1621,7 +1625,7 @@ describe("useViewport3DSceneModel", () => {
       quantityId: "m",
       query: {
         component: "full",
-        expected_carrier_revision: "top-1",
+        expected_carrier_revision: "carrier-1",
         expected_generation_id: "gen-1",
         scope_id: "part-1",
         scope_kind: "part",
@@ -1766,9 +1770,9 @@ describe("useViewport3DSceneModel", () => {
       },
       etag: '"m-frame-a"',
       resourceKey:
-        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1"),
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=carrier-1&snapshot_id=snap-1"),
       responseMetadata: {
-        carrierRevision: "top-1",
+        carrierRevision: "carrier-1",
         component: "full",
         domainGenerationId: "gen-1",
         encoding: "FMVP;version=2",
@@ -1794,7 +1798,7 @@ describe("useViewport3DSceneModel", () => {
       ...frameA,
       etag: '"m-frame-b"',
       resourceKey:
-        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong"),
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=carrier-1&snapshot_id=snap-wrong"),
       responseMetadata: {
         ...frameA.responseMetadata!,
         fieldRevision: "rev-B",
@@ -1806,7 +1810,7 @@ describe("useViewport3DSceneModel", () => {
       quantityId: "m",
       query: {
         component: "full",
-        expected_carrier_revision: "top-1",
+        expected_carrier_revision: "carrier-1",
         expected_generation_id: "gen-1",
         scope_id: "part-1",
         scope_kind: "part",
@@ -2030,9 +2034,9 @@ describe("useViewport3DSceneModel", () => {
       },
       etag: '"m-frame-a"',
       resourceKey:
-        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-1"),
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=carrier-1&snapshot_id=snap-1"),
       responseMetadata: {
-        carrierRevision: "top-1",
+        carrierRevision: "carrier-1",
         component: "full",
         domainGenerationId: "gen-1",
         encoding: "FMVP;version=2",
@@ -2058,7 +2062,7 @@ describe("useViewport3DSceneModel", () => {
       ...frameA,
       etag: '"m-frame-b"',
       resourceKey:
-        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=top-1&snapshot_id=snap-wrong"),
+        currentFieldVectorResourcePath("scope_kind=part&scope_id=part-1&component=full&expected_generation_id=gen-1&expected_carrier_revision=carrier-1&snapshot_id=snap-wrong"),
       responseMetadata: {
         ...frameA.responseMetadata!,
         fieldRevision: "rev-B",
@@ -2079,7 +2083,7 @@ describe("useViewport3DSceneModel", () => {
       quantityId: "m",
       query: {
         component: "full",
-        expected_carrier_revision: "top-1",
+        expected_carrier_revision: "carrier-1",
         expected_generation_id: "gen-1",
         scope_id: "part-1",
         scope_kind: "part",
@@ -2538,7 +2542,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("useRenderableAnalysisFieldOverlay");
     expect(source).toContain("startAnalysisFieldOverlayPhaseAnimation");
     expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ??");
-    expect(source).toContain('(pinnedObservationActive ? "m" : quantityId);');
+    expect(source).toContain('(pinnedObservationActive ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);');
     expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo(() => {");
     expect(source).toContain("query: analysisOverlay.query,");
     expect(source).toContain("consumers: [\"primary-field-vector\"],");
@@ -4332,6 +4336,100 @@ describe("useViewport3DSceneModel", () => {
     ).toEqual(["film:core", "film:edge"]);
   });
 
+  it("requires canonical spatial support for the ordinary primary quantity without assuming magnetic support", () => {
+    const spatial = { solver_capability: "supported", requestable: true, renderable: true,
+      materializable: true, interactive_preview: true, supports_preview_3d: true, location: "cell" };
+    const quantityCatalog = { quantities: [
+      { ...spatial, id: "m", domain: "magnetic_only" },
+      { ...spatial, id: "V", domain: "full_domain" },
+      { ...spatial, id: "E_total", domain: "magnetic_only", location: "global" },
+    ] } as never;
+    const empty = [{ id: "wire", magnetization_ref: null, physics_stack: [], regions: [] }] as never;
+    const magnetic = [{ id: "film", magnetization_ref: { kind: "uniform" } }] as never;
+    expect(resolveViewport3DModelQuantityId("m", quantityCatalog, empty)).toBe("");
+    expect(resolveViewport3DModelQuantityId("V", quantityCatalog, empty)).toBe("V");
+    expect(resolveViewport3DModelQuantityId("m", quantityCatalog, magnetic)).toBe("m");
+    expect(resolveViewport3DModelQuantityId("E_total", quantityCatalog, magnetic)).toBe("");
+    expect(resolveViewport3DModelQuantityId("missing", quantityCatalog, magnetic)).toBe("");
+    expect(resolveViewport3DModelQuantityId("m", null, magnetic)).toBe("");
+    expect(resolveViewport3DModelQuantityId("m", quantityCatalog, null)).toBe("");
+    expect(canonicalFieldVectorQuery(resolveViewport3DModelQuantityId("m", quantityCatalog, empty)).quantityId).toBe("");
+  });
+
+  it("admits runtime overlay fields by publication and authored physics, never by presentation type", () => {
+    const spatial = { solver_capability: "supported", requestable: true, renderable: true,
+      materializable: true, interactive_preview: true, supports_preview_3d: true, location: "cell" };
+    const catalog = { quantities: [
+      { ...spatial, id: "frozen_spins", domain: "magnetic_only" },
+      { ...spatial, id: "m", domain: "magnetic_only" },
+      { ...spatial, id: "V", domain: "full_domain" },
+      { ...spatial, id: "unsupported", domain: "full_domain", solver_capability: "unsupported", renderable: false },
+    ] } as never;
+    const published = new Set(["frozen_spins", "m", "V", "unsupported", "unknown"]);
+    for (const role of ["antenna", "magnet"]) {
+      const objects = [{ id: "sample", role, magnetization_ref: null, physics_stack: [], regions: [] }] as never;
+      expect([...resolveViewport3DPublishedModelQuantityIds(published, catalog, objects)]).toEqual(["V"]);
+    }
+    const magnetic = [{ id: "sample", role: "antenna", magnetization_ref: "texture" }] as never;
+    expect([...resolveViewport3DPublishedModelQuantityIds(published, catalog, magnetic)])
+      .toEqual(["frozen_spins", "m", "V"]);
+    expect(resolveViewport3DPublishedModelQuantityIds(new Set(["V"]), catalog, magnetic).has("frozen_spins")).toBe(false);
+    expect(resolveViewport3DPublishedModelQuantityIds(null, catalog, magnetic).size).toBe(0);
+    expect(resolveViewport3DPublishedModelQuantityIds(published, null, magnetic).size).toBe(0);
+    expect(resolveViewport3DPublishedModelQuantityIds(published, catalog, null).size).toBe(0);
+    expect(resolveViewport3DPublishedModelQuantityIds(published, catalog, []).has("frozen_spins")).toBe(false);
+    const resolved = { quantities: [{
+      ...spatial, id: "frozen_spins", domain: "magnetic_only",
+      resolved_capability: { provider: "available", request: "field_vector", render: "renderable",
+        publication: "interactive", materialization: "materialized" },
+    }] } as never;
+    expect(resolveViewport3DPublishedModelQuantityIds(published, resolved, magnetic).has("frozen_spins")).toBe(true);
+    const unavailable = { quantities: [{
+      ...spatial, id: "frozen_spins", domain: "magnetic_only",
+      resolved_capability: { provider: "unavailable", request: "field_vector", render: "renderable",
+        publication: "interactive", materialization: "materialized" },
+    }] } as never;
+    expect(resolveViewport3DPublishedModelQuantityIds(published, unavailable, magnetic).has("frozen_spins")).toBe(false);
+  });
+
+  it("passes canonical object context through owned-part and region settings without changing preferences", () => {
+    const visualization = new ObjectVisualizationController();
+    const target = { id: "object:wire", kind: "object" as const };
+    visualization.patchTarget(target, { activeQuantityId: "m", shaderVisible: true, vectorsVisible: true, wireframeVisible: true });
+    const before = visualization.getSnapshot();
+    const part = { id: "owned-wire", object_id: "wire_geom" } as never;
+    const quantityCatalog = { quantities: [{ id: "m", domain: "magnetic_only", solver_capability: "supported", requestable: true,
+      renderable: true, materializable: true, interactive_preview: true, supports_preview_3d: true, location: "cell" }] } as never;
+    const sceneObjectsById = new Map([["wire", { id: "wire", magnetization_ref: null, physics_stack: [], regions: [] } as never]]);
+    const input = { objectVisualizationSnapshot: before, part, sceneObjectIds: new Set(["wire"]) };
+    expect(resolveViewport3DPartVisualizationSettings(input).activeQuantityId).toBe("m");
+    for (const regionTarget of [undefined, { id: "region:wire:core", kind: "region" as const }]) {
+      expect(resolveViewport3DPartVisualizationSettings({ ...input, sceneObjectsById, quantityCatalog, regionTarget }))
+        .toMatchObject({ activeQuantityId: "", vectorsVisible: false, wireframeVisible: true });
+    }
+    expect(resolveViewport3DPartVisualizationSettings({ ...input, sceneObjectsById, quantityCatalog: null }).activeQuantityId).toBe("");
+    expect(resolveViewport3DPartVisualizationSettings({ ...input, sceneObjectsById: new Map(), quantityCatalog }).activeQuantityId).toBe("");
+    expect(visualization.getSnapshot()).toBe(before);
+  });
+
+  it("does not apply an object's catalog to a mesh part without an object owner", () => {
+    const visualization = new ObjectVisualizationController();
+    const input = { objectVisualizationSnapshot: visualization.getSnapshot(), part: { id: "unowned-carrier" } as never };
+    const legacy = resolveViewport3DPartVisualizationSettings(input);
+    expect(resolveViewport3DPartVisualizationSettings({ ...input, sceneObjectsById: new Map(), quantityCatalog: null }))
+      .toEqual(legacy);
+  });
+
+  it("forwards explicit FDM object and region context while leaving legacy targets unchanged", () => {
+    const visualization = new ObjectVisualizationController();
+    const objectContext = { object: { id: "wire", magnetization_ref: null, physics_stack: [] } as never, quantityCatalog: null };
+    for (const target of [{ id: "object:wire", kind: "object" as const }, { id: "region:wire:core", kind: "region" as const }]) {
+      const snapshot = visualization.getSnapshot();
+      expect(resolveViewport3DFdmTargetVisualization({ snapshot, target, objectContext }).effectiveSettings.activeQuantityId).toBe("");
+      expect(resolveViewport3DFdmTargetVisualization({ snapshot, target }).effectiveSettings.activeQuantityId).not.toBe("");
+    }
+  });
+
   it("inherits owner passes for mesh-backed regions except sparse overrides", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
@@ -5834,5 +5932,46 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("preparedRevision: fieldVectorPreparedRevision");
     expect(source).toContain("displayedRevision: fieldVectorDisplayedRevision");
     expect(source).toContain("selectedTargetId: selectedVisualizationTargetId, tracker");
+  });
+});
+
+describe("primitive geometry without a compatible field", () => {
+  function resolve(patch: Partial<typeof DEFAULT_OBJECT_VISUALIZATION> = {}) {
+    const controller = new ObjectVisualizationController();
+    const target = { kind: "object" as const, id: "object:antenna" };
+    controller.patchTarget(target, {
+      activeQuantityId: "m", surfaceColorSource: "orientation",
+      shaderVisible: true, primitiveVisible: false, vectorsVisible: true,
+      ...patch,
+    });
+    const snapshot = controller.getSnapshot();
+    const result = resolveViewport3DPrimitiveVisualizationSettings({
+      target, snapshot,
+      objectContext: { object: { id: "antenna", role: "antenna" }, quantityCatalog: null },
+    });
+    expect(controller.getSnapshot()).toBe(snapshot);
+    return result;
+  }
+
+  it("keeps the requested geometry while refusing unavailable magnetic surface and vectors", () => {
+    expect(resolve()).toMatchObject({
+      activeQuantityId: "", primitiveVisible: true,
+      shaderVisible: false, vectorsVisible: false, visible: true,
+    });
+  });
+
+  it("respects explicitly hidden objects and disabled surface requests", () => {
+    expect(resolve({ visible: false })).toMatchObject({
+      visible: false, primitiveVisible: false, shaderVisible: false, vectorsVisible: false,
+    });
+    expect(resolve({ shaderVisible: false, wireframeVisible: true })).toMatchObject({
+      primitiveVisible: false, shaderVisible: false, wireframeVisible: true,
+    });
+  });
+
+  it("retains explicit primitive visibility independently of surface shading", () => {
+    expect(resolve({ primitiveVisible: true, shaderVisible: false })).toMatchObject({
+      primitiveVisible: true, shaderVisible: false, vectorsVisible: false,
+    });
   });
 });

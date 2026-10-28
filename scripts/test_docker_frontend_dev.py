@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
@@ -1253,6 +1254,293 @@ else:
                     self.module._acquire_runtime_lock()
             finally:
                 self.module._release_runtime_lock(first)
+
+    def test_private_pnpm_store_remains_the_default(self):
+        with isolated(self.module) as (root, _workspace, inputs):
+            with patch.dict(os.environ, {self.module.SHARED_PNPM_STORE_ENV: ""}):
+                environment = self.module._safe_environment(inputs, watch_mode="polling")
+                command = self.module._pnpm_install_command(inputs)
+
+            self.assertEqual(environment["npm_config_store_dir"], str(root / "pnpm-store"))
+            self.assertNotIn("npm_config_package_import_method", environment)
+            self.assertNotIn("--package-import-method=copy", command)
+            self.assertEqual(environment["PNPM_HOME"], str(root / "pnpm-home"))
+            self.assertEqual(environment["COREPACK_HOME"], str(root / "corepack"))
+
+    def test_shared_pnpm_store_is_common_and_imports_packages_by_copy(self):
+        with isolated(self.module) as (root, _workspace, inputs):
+            shared_store = root / "shared-pnpm"
+            shared_store.mkdir()
+            with patch.object(self.module, "SHARED_PNPM_STORE_ROOT", shared_store):
+                with patch.dict(
+                    os.environ,
+                    {self.module.SHARED_PNPM_STORE_ENV: self.module.SHARED_PNPM_STORE_VALUE},
+                ):
+                    first_group_store = self.module._pnpm_store_root()
+                    second_group_store = self.module._pnpm_store_root()
+                    environment = self.module._safe_environment(inputs, watch_mode="polling")
+                    command = self.module._pnpm_install_command(inputs)
+
+            self.assertEqual(first_group_store, shared_store)
+            self.assertEqual(second_group_store, shared_store)
+            self.assertEqual(environment["npm_config_store_dir"], str(shared_store))
+            self.assertEqual(environment["npm_config_package_import_method"], "copy")
+            self.assertIn("--package-import-method=copy", command)
+            self.assertEqual(environment["PNPM_HOME"], str(root / "pnpm-home"))
+            self.assertEqual(environment["COREPACK_HOME"], str(root / "corepack"))
+
+    def test_shared_pnpm_store_rejects_any_noncanonical_environment_path(self):
+        with isolated(self.module):
+            with patch.dict(
+                os.environ,
+                {self.module.SHARED_PNPM_STORE_ENV: "/tmp/another-pnpm-store"},
+            ):
+                with self.assertRaisesRegex(
+                    self.module.FrontendDevError,
+                    "must be exactly",
+                ):
+                    self.module._pnpm_store_root()
+
+    @skipIf(os.name == "nt", "shared pnpm store serialization uses POSIX flock")
+    def test_shared_pnpm_store_lock_serializes_groups_and_is_cloexec(self):
+        with isolated(self.module) as (root, _workspace, _inputs):
+            shared_store = root / "shared-pnpm"
+            shared_store.mkdir()
+            stopping = threading.Event()
+            with patch.object(self.module, "SHARED_PNPM_STORE_ROOT", shared_store):
+                with patch.dict(
+                    os.environ,
+                    {self.module.SHARED_PNPM_STORE_ENV: self.module.SHARED_PNPM_STORE_VALUE},
+                ):
+                    with patch.object(self.module, "INSTALL_TIMEOUT_SECONDS", 0.05):
+                        first_group_lock = self.module._acquire_shared_pnpm_install_lock(stopping)
+                        try:
+                            metadata = os.fstat(first_group_lock.fileno())
+                            self.assertEqual(metadata.st_nlink, 1)
+                            self.assertFalse(os.get_inheritable(first_group_lock.fileno()))
+                            with self.assertRaisesRegex(
+                                self.module.FrontendDevError,
+                                "timed out waiting",
+                            ):
+                                self.module._acquire_shared_pnpm_install_lock(stopping)
+                        finally:
+                            self.module._release_shared_pnpm_install_lock(first_group_lock)
+
+                    second_group_lock = self.module._acquire_shared_pnpm_install_lock(stopping)
+                    self.module._release_shared_pnpm_install_lock(second_group_lock)
+
+    @skipIf(os.name == "nt", "shared pnpm store cancellation uses POSIX flock")
+    def test_shared_pnpm_store_lock_wait_honors_startup_cancellation(self):
+        with isolated(self.module) as (root, _workspace, _inputs):
+            shared_store = root / "shared-pnpm"
+            shared_store.mkdir()
+            stopping = threading.Event()
+            with patch.object(self.module, "SHARED_PNPM_STORE_ROOT", shared_store):
+                with patch.dict(
+                    os.environ,
+                    {self.module.SHARED_PNPM_STORE_ENV: self.module.SHARED_PNPM_STORE_VALUE},
+                ):
+                    first_lock = self.module._acquire_shared_pnpm_install_lock(threading.Event())
+                    errors = []
+
+                    def wait_for_lock():
+                        try:
+                            acquired = self.module._acquire_shared_pnpm_install_lock(stopping)
+                            self.module._release_shared_pnpm_install_lock(acquired)
+                        except Exception as error:
+                            errors.append(error)
+
+                    try:
+                        with patch.object(self.module, "INSTALL_TIMEOUT_SECONDS", 2.0):
+                            waiter = threading.Thread(target=wait_for_lock)
+                            waiter.start()
+                            time.sleep(0.05)
+                            self.assertTrue(waiter.is_alive())
+                            stopping.set()
+                            waiter.join(timeout=2.0)
+                            self.assertFalse(waiter.is_alive())
+                        self.assertEqual(len(errors), 1)
+                        self.assertIsInstance(errors[0], self.module.FrontendDevUnknown)
+                        self.assertIn("cancelled while waiting", str(errors[0]))
+                    finally:
+                        self.module._release_shared_pnpm_install_lock(first_lock)
+
+    @skipIf(os.name == "nt", "shared pnpm lock validation uses POSIX link semantics")
+    def test_shared_pnpm_store_lock_rejects_symlinks_and_hardlinks(self):
+        with isolated(self.module) as (root, _workspace, _inputs):
+            shared_store = root / "shared-pnpm"
+            shared_store.mkdir()
+            lock_path = shared_store / self.module.SHARED_PNPM_INSTALL_LOCK_NAME
+            target = root / "lock-target"
+            target.write_text("", encoding="utf-8")
+            with patch.object(self.module, "SHARED_PNPM_STORE_ROOT", shared_store):
+                with patch.dict(
+                    os.environ,
+                    {self.module.SHARED_PNPM_STORE_ENV: self.module.SHARED_PNPM_STORE_VALUE},
+                ):
+                    lock_path.symlink_to(target)
+                    with self.assertRaises(self.module.FrontendDevError):
+                        self.module._acquire_shared_pnpm_install_lock(threading.Event())
+
+                    lock_path.unlink()
+                    lock_path.write_text("", encoding="utf-8")
+                    os.link(lock_path, shared_store / "lock-alias")
+                    with self.assertRaisesRegex(
+                        self.module.FrontendDevError,
+                        "singly-linked",
+                    ):
+                        self.module._acquire_shared_pnpm_install_lock(threading.Event())
+
+    @skipIf(os.name == "nt", "shared pnpm store lock release uses POSIX flock")
+    def test_shared_pnpm_store_lock_releases_if_install_process_cannot_start(self):
+        with isolated(self.module) as (root, _workspace, inputs):
+            shared_store = root / "shared-pnpm"
+            shared_store.mkdir()
+            self.module._prepare_state_directories()
+            stopping = threading.Event()
+            with patch.object(self.module, "SHARED_PNPM_STORE_ROOT", shared_store):
+                with patch.dict(
+                    os.environ,
+                    {self.module.SHARED_PNPM_STORE_ENV: self.module.SHARED_PNPM_STORE_VALUE},
+                ):
+                    with patch.object(self.module, "_write_lifecycle_log"):
+                        with patch.object(
+                            self.module.subprocess,
+                            "Popen",
+                            side_effect=OSError("simulated spawn failure"),
+                        ):
+                            with self.assertRaisesRegex(
+                                self.module.FrontendDevError,
+                                "could not start",
+                            ):
+                                self.module._run_pnpm_install(
+                                    inputs, stopping, io.BytesIO(), {}, None
+                                )
+
+                    lock = self.module._acquire_shared_pnpm_install_lock(stopping)
+                    self.module._release_shared_pnpm_install_lock(lock)
+
+    @skipIf(os.name == "nt", "shared pnpm install ownership uses Linux process groups")
+    def test_failed_install_keeps_shared_lock_on_handle_for_supervised_cleanup(self):
+        with isolated(self.module) as (root, _workspace, inputs):
+            shared_store = root / "shared-pnpm"
+            shared_store.mkdir()
+            self.module._prepare_state_directories()
+            process = _DeadProcess(2)
+            identity = {
+                "pid": process.pid,
+                "pid_namespace": "pid:[4026531836]",
+                "process_start_time_ticks": 18,
+                "session_id": process.pid,
+                "process_group_id": process.pid,
+            }
+            stopping = threading.Event()
+
+            with patch.object(self.module, "SHARED_PNPM_STORE_ROOT", shared_store):
+                with patch.dict(
+                    os.environ,
+                    {self.module.SHARED_PNPM_STORE_ENV: self.module.SHARED_PNPM_STORE_VALUE},
+                ):
+                    with patch.object(self.module, "_write_lifecycle_log"):
+                        with patch.object(self.module.subprocess, "Popen", return_value=process):
+                            with patch.object(
+                                self.module, "_read_process_identity", return_value=identity
+                            ):
+                                with self.assertRaisesRegex(
+                                    self.module.FrontendDevError,
+                                    "exit code 2",
+                                ) as raised:
+                                    receipt = self.module._receipt_base(inputs, None)
+                                    self.module._run_pnpm_install(
+                                        inputs, stopping, io.BytesIO(), receipt, None
+                                    )
+
+                    handle = raised.exception.frontend_handle
+                    self.assertIsInstance(handle, self.module.FrontendHandle)
+                    self.assertIsNotNone(handle.shared_pnpm_lock)
+                    with patch.object(self.module, "INSTALL_TIMEOUT_SECONDS", 0.05):
+                        with self.assertRaisesRegex(
+                            self.module.FrontendDevError,
+                            "timed out waiting",
+                        ):
+                            self.module._acquire_shared_pnpm_install_lock(stopping)
+
+                    with patch.object(self.module, "_wait_for_group_empty", return_value=True):
+                        receipt = self.module.stop(handle)
+                    self.assertEqual(receipt["state"], "stopped-after-failure")
+                    self.assertIsNone(handle.shared_pnpm_lock)
+
+                    available = self.module._acquire_shared_pnpm_install_lock(stopping)
+                    self.module._release_shared_pnpm_install_lock(available)
+
+    @skipIf(os.name == "nt", "process-group supervision is a Linux container contract")
+    def test_stop_releases_shared_install_lock_only_after_group_empty_proof(self):
+        with isolated(self.module) as (root, _workspace, inputs):
+            shared_store = root / "shared-pnpm"
+            shared_store.mkdir()
+            with patch.object(self.module, "SHARED_PNPM_STORE_ROOT", shared_store):
+                with patch.dict(
+                    os.environ,
+                    {self.module.SHARED_PNPM_STORE_ENV: self.module.SHARED_PNPM_STORE_VALUE},
+                ):
+                    install_lock = self.module._acquire_shared_pnpm_install_lock(threading.Event())
+                    process = _RunningProcess()
+                    identity = {
+                        "pid": process.pid,
+                        "pid_namespace": "pid:[4026531836]",
+                        "process_start_time_ticks": 18,
+                        "session_id": process.pid,
+                        "process_group_id": process.pid,
+                    }
+                    handle = self.module.FrontendHandle(
+                        process=process,
+                        inputs=inputs,
+                        stopping_event=threading.Event(),
+                        kind="pnpm-install",
+                        pid=process.pid,
+                        owner_token="owner-token",
+                        log_path=self.module.LOG_PATH,
+                        shared_pnpm_lock=install_lock,
+                        process_group_id=process.pid,
+                        process_identity=identity,
+                    )
+                    self.module._atomic_json(
+                        self.module.RECEIPT_PATH,
+                        {
+                            "schema": self.module.RECEIPT_SCHEMA,
+                            "state": "failed",
+                            "pid": process.pid,
+                            "owner_token": handle.owner_token,
+                            **{
+                                field: identity[field]
+                                for field in self.module.PROCESS_IDENTITY_FIELDS
+                            },
+                        },
+                        "receipt",
+                    )
+
+                    def prove_store_lock_is_still_held(_group_id, _timeout):
+                        with patch.object(self.module, "INSTALL_TIMEOUT_SECONDS", 0.05):
+                            with self.assertRaisesRegex(
+                                self.module.FrontendDevError,
+                                "timed out waiting",
+                            ):
+                                self.module._acquire_shared_pnpm_install_lock(threading.Event())
+                        return True
+
+                    with patch.object(self.module, "_confirmed_live_identity", return_value=identity):
+                        with patch.object(
+                            self.module,
+                            "_wait_for_group_empty",
+                            side_effect=prove_store_lock_is_still_held,
+                        ):
+                            with patch.object(self.module.os, "killpg"):
+                                receipt = self.module.stop(handle)
+
+                    self.assertEqual(receipt["state"], "stopped-after-failure")
+                    self.assertIsNone(handle.shared_pnpm_lock)
+                    available = self.module._acquire_shared_pnpm_install_lock(threading.Event())
+                    self.module._release_shared_pnpm_install_lock(available)
 
     @skipIf(os.name == "nt", "Node module resolution regression uses Linux symlink semantics")
     def test_generated_cache_path_requires_from_managed_dependency_alias(self):

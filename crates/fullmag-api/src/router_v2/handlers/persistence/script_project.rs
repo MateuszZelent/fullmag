@@ -350,6 +350,11 @@ fn build_project_from_script(
         ));
     }
 
+    // Return the canonical scene without a parallel browser ZIP parser.
+    let activation_scene = scene_value.as_object()
+        .ok_or_else(|| ApiError::internal("exported scene is not an object"))?
+        .iter().map(|(key, value)| (key.clone(), value.clone())).collect();
+
     // 3. Build the project: scene, embedded script, metadata, provenance.
     let sha256 = format!("{:x}", Sha256::digest(&script_bytes));
     let sha12 = &sha256[..12];
@@ -422,6 +427,7 @@ fn build_project_from_script(
     }
     let project = resource_from_application(&application, view, archive)?;
     Ok(ProjectFromScriptResource {
+        scene_document: Some(activation_scene),
         project,
         script_import: ProjectScriptImportResource {
             name: script_leaf.to_string(),
@@ -503,7 +509,7 @@ fn check_round_trip(
     if mismatches.is_empty() {
         fidelity.round_trip = ScriptRoundTripState::Verified;
         fidelity.notes.push(
-            "compared with a second evaluation of the original script: geometry, materials, magnets and initial state, regions, FDM grid, FEM mesh policy, runtime request, study dynamics and stages"
+            "compared with a second evaluation of the original script: geometry, materials, magnets and initial state, regions, FDM grid, FEM mesh policy, runtime request, study dynamics and stages; exact antenna and transport declarations in the model, stages and authoring inventory"
                 .to_string(),
         );
     } else {
@@ -626,12 +632,52 @@ fn without_zero_zeeman(terms: &Value) -> Value {
     }
 }
 
+/// Preserve authored source identities, parameter values and field presence.
+/// Both inputs are canonical Python helper exports: missing, null and empty
+/// collections are distinct, and integer identifiers never pass through f64.
+fn antenna_transport_summary(document: &Value) -> Value {
+    let ir = pointer(document, "/ir");
+    let fields = [
+        "field_drives",
+        "antenna_port_modes",
+        "antenna_field_solve_stages",
+        "antenna_target_projections",
+        "solved_antenna_drives",
+        "antenna_spectrum_requests",
+        "current_modules",
+        "spin_transport_modules",
+        "spin_torque_modules",
+        "current_density",
+        "stt_degree",
+        "stt_spin_polarization",
+        "stt_lambda",
+        "stt_epsilon_prime",
+        "stt_fixed_layer_position",
+        "stt_thickness",
+        "stt_beta",
+        "material_parameter_fields",
+        "physics_graph",
+        "physics_objects",
+        "excitation_analysis",
+    ]
+    .into_iter()
+    .filter_map(|key| ir.get(key).map(|value| (key.to_string(), value.clone())))
+    .collect::<serde_json::Map<String, Value>>();
+    let mut summary = serde_json::Map::new();
+    summary.insert("ir".to_string(), Value::Object(fields));
+    if let Some(inventory) = document.get("antenna_inventory") {
+        summary.insert("antenna_inventory".to_string(), inventory.clone());
+    }
+    Value::Object(summary)
+}
+
 fn stage_summary(stage: &Value) -> Value {
     json!({
         "default_until_seconds": stage.get("default_until_seconds"),
         "action": stage.get("action"),
         "study_kind": stage.pointer("/ir/study/kind"),
         "study_dynamics": stage.pointer("/ir/study/dynamics"),
+        "runtime_request": runtime_request_summary(stage),
         "energy_terms": without_zero_zeeman(pointer(stage, "/ir/energy_terms")),
     })
 }
@@ -762,12 +808,132 @@ fn compare_lowered(original: &Value, rendered: &Value) -> Vec<String> {
     };
     let rendered_summary = summaries(&rendered_stages);
     check("study stages", &original_summary, &rendered_summary, &[]);
+
+    let original_physics = antenna_transport_summary(original);
+    let rendered_physics = antenna_transport_summary(rendered);
+    if original_physics != rendered_physics {
+        notes.push(mismatch(
+            "antenna and transport declarations",
+            &original_physics,
+            &rendered_physics,
+        ));
+    }
+    let original_stage_physics = if legacy_single_stage {
+        vec![antenna_transport_summary(&json!({"ir": original.get("ir")}))]
+    } else {
+        original_stages.iter().map(antenna_transport_summary).collect()
+    };
+    let rendered_stage_physics: Vec<Value> = rendered_stages
+        .iter()
+        .map(antenna_transport_summary)
+        .collect();
+    if original_stage_physics != rendered_stage_physics {
+        notes.push(mismatch(
+            "stage antenna and transport declarations",
+            &Value::Array(original_stage_physics),
+            &Value::Array(rendered_stage_physics),
+        ));
+    }
     notes
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comparison_checks_source_cut_and_stage_current_parameters_exactly() {
+        let ir = json!({
+            "antenna_port_modes": [{"id": "loop_port", "normalization": {
+                "kind": "source_cut_rt0", "source_cut_ref": "inlet_cut",
+                "orientation": "minus_outward"}}],
+            "current_modules": [{"name": "antenna_charge", "structured_current_closure": {
+                "source_cuts": [{"source_cut_id": "inlet_cut", "drive": {
+                    "potential_jump_V": 0.25}}]}}]
+        });
+        let original = json!({"ir": ir, "stages": [{"ir": ir}]});
+        assert!(compare_lowered(&original, &original).is_empty());
+        let mut changed_cut = original.clone();
+        changed_cut["ir"]["antenna_port_modes"][0]["normalization"]["source_cut_ref"] =
+            json!("other_cut");
+        assert!(compare_lowered(&original, &changed_cut)
+            .iter().any(|note| note.starts_with("antenna and transport declarations differs")));
+        let mut changed_stage = original.clone();
+        // This is below the legacy relative float tolerance; authored intent
+        // must still be preserved even when only a per-stage IR changes.
+        changed_stage["stages"][0]["ir"]["current_modules"][0]
+            ["structured_current_closure"]["source_cuts"][0]["drive"]["potential_jump_V"] =
+            json!(0.250000000001);
+        assert!(compare_lowered(&original, &changed_stage)
+            .iter().any(|note| note.starts_with("stage antenna and transport declarations differs")));
+    }
+
+    #[test]
+    fn comparison_checks_authoring_inventory_outside_execution_ir() {
+        let original = json!({"ir": {"solved_antenna_drives": []},
+            "antenna_inventory": {"solved_antenna_drives": [{
+                "id": "drive", "peak_current_a": 0.001}]}});
+        let mut changed = original.clone();
+        changed["antenna_inventory"]["solved_antenna_drives"][0]["peak_current_a"] =
+            json!(0.002);
+        assert!(!compare_lowered(&original, &changed).is_empty());
+        changed.as_object_mut().unwrap().remove("antenna_inventory");
+        assert!(!compare_lowered(&original, &changed).is_empty());
+    }
+
+    #[test]
+    fn comparison_keeps_global_inventory_out_of_legacy_stage_fallback() {
+        let ir = json!({"antenna_port_modes": [], "current_modules": []});
+        let inventory = json!({"solved_antenna_drives": [{
+            "id": "drive", "peak_current_a": 0.001}]});
+        let original = json!({"ir": ir, "antenna_inventory": inventory});
+        let rendered = json!({"ir": ir, "antenna_inventory": inventory,
+            "stages": [{"ir": ir}]});
+        assert!(compare_lowered(&original, &rendered).is_empty());
+    }
+
+    #[test]
+    fn comparison_preserves_empty_presence_and_prepared_integer_identities() {
+        let absent = json!({"ir": {}});
+        let null = json!({"ir": {"antenna_port_modes": null}});
+        let empty = json!({"ir": {"antenna_port_modes": []}});
+        for (left, right) in [(&absent, &null), (&absent, &empty), (&null, &empty)] {
+            assert!(!compare_lowered(left, right).is_empty());
+            assert!(!compare_lowered(right, left).is_empty());
+        }
+        let original = json!({"ir": {"current_modules": [{
+            "name": "source", "conservative_current_view": {
+                "stable_vertex_ids": [9007199254740992u64, 9007199254740996u64,
+                    9007199254741000u64]}}]}});
+        let mut changed = original.clone();
+        changed["ir"]["current_modules"][0]["conservative_current_view"]
+            ["stable_vertex_ids"][0] = json!(9007199254740993u64);
+        assert!(!compare_lowered(&original, &changed).is_empty());
+    }
+
+    #[test]
+    fn comparison_checks_runtime_request_of_each_stage() {
+        let ir = json!({"backend_policy": {"requested_backend": "fem",
+            "execution_precision": "double"}, "problem_meta": {
+                "runtime_metadata": {"runtime_selection": {"device": "cpu",
+                    "device_index": 0, "execution_mode": "strict"}}}});
+        let original = json!({"ir": ir, "stages": [{"ir": ir}]});
+        for (field, value) in [("device", json!("gpu")),
+            ("execution_mode", Value::Null), ("device_index", json!(1))] {
+            let mut changed = original.clone();
+            changed["stages"][0]["ir"]["problem_meta"]["runtime_metadata"]
+                ["runtime_selection"][field] = value;
+            assert!(compare_lowered(&original, &changed)
+                .iter().any(|note| note.starts_with("study stages differs")));
+        }
+        for (field, value) in [("requested_backend", json!("fdm")),
+            ("execution_precision", json!("single"))] {
+            let mut changed = original.clone();
+            changed["stages"][0]["ir"]["backend_policy"][field] = value;
+            assert!(compare_lowered(&original, &changed)
+                .iter().any(|note| note.starts_with("study stages differs")));
+        }
+    }
 
     #[test]
     fn safe_file_name_keeps_the_stem_and_drops_unsafe_characters() {

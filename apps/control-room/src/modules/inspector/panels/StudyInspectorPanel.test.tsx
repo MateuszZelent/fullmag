@@ -27,6 +27,8 @@ import {
   StudyCommandButton,
   StudyRuntimeSection,
   StudySelectedStageSection,
+  applyStudyDraftsWithPartialFailure,
+  studyInspectorPanelReducer,
   studyInspectorRuntimeStatusEquals,
 } from "./StudyInspectorPanel";
 import {
@@ -61,6 +63,90 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
+  it("reports a partial Apply after globals commit and keeps stage drafts for review", async () => {
+    const baselineGlobalDraft = createStudyGlobalDraft(null);
+    const globalDraft = { ...baselineGlobalDraft, requestedBackend: "fdm" };
+    const baselineStage = createDefaultStudyStageDraft("relax", 0);
+    const stageDraft = { ...baselineStage, stageId: "relax-pending" };
+    let state = {
+      authoringDraftsInitialized: true,
+      authoringBusy: false,
+      authoringFeedback: null,
+      authoringFeedbackScope: null,
+      baselineGlobalDraft,
+      baselineStageDrafts: [baselineStage],
+      draftSceneRevision: 1,
+      draftSceneSignature: "before-global-ack",
+      globalDraft,
+      selectedDraftIndex: 0,
+      stageDrafts: [stageDraft],
+    } as Parameters<typeof studyInspectorPanelReducer>[0];
+
+    const commitGlobal = vi.fn(async () => {
+      state = studyInspectorPanelReducer(state, { type: "acceptGlobalDraft" });
+      const preserveStageDrafts =
+        JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts)
+          ? state.stageDrafts
+          : undefined;
+      state = studyInspectorPanelReducer(state, {
+        type: "resetStageDrafts",
+        drafts: [baselineStage],
+        globalDraft: state.globalDraft,
+        preserveStageDrafts,
+        revision: 2,
+        selectedIndex: 0,
+        signature: "after-global-ack",
+      });
+      return true;
+    });
+    const commitStages = vi.fn(async () => false);
+
+    await expect(
+      applyStudyDraftsWithPartialFailure({
+        globalDirty: true,
+        stagesDirty: true,
+        commitGlobal,
+        commitStages,
+      }),
+    ).rejects.toThrow(
+      "Global Study settings were committed. The Pipeline stage save could not be confirmed.",
+    );
+
+    expect(commitGlobal).toHaveBeenCalledOnce();
+    expect(commitStages).toHaveBeenCalledOnce();
+    expect(state.baselineGlobalDraft).toEqual(globalDraft);
+    expect(state.baselineStageDrafts).toEqual([baselineStage]);
+    expect(state.stageDrafts).toEqual([stageDraft]);
+    expect(state.stageDrafts).not.toEqual(state.baselineStageDrafts);
+  });
+
+  it("does not report partial success if the global transaction fails", async () => {
+    const commitGlobal = vi.fn(async () => false);
+    const commitStages = vi.fn(async () => true);
+
+    await expect(
+      applyStudyDraftsWithPartialFailure({
+        globalDirty: true,
+        stagesDirty: true,
+        commitGlobal,
+        commitStages,
+      }),
+    ).resolves.toBe(false);
+    expect(commitGlobal).toHaveBeenCalledOnce();
+    expect(commitStages).not.toHaveBeenCalled();
+  });
+
+  it("includes the stage error when the stage transaction throws after global ACK", async () => {
+    await expect(
+      applyStudyDraftsWithPartialFailure({
+        globalDirty: true,
+        stagesDirty: true,
+        commitGlobal: vi.fn(async () => true),
+        commitStages: vi.fn(async () => { throw new Error("revision conflict"); }),
+      }),
+    ).rejects.toThrow("Stage save error: revision conflict");
+  });
+
   it("rerenders when the runtime advertises a new relaxation algorithm", () => {
     const previous = {
       capabilities: {

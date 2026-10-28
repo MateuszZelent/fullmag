@@ -17,7 +17,7 @@ fullmag-build-info.workspace = true
 fullmag-session = { path = "../fullmag-session" }
 fullmag-antenna-artifacts = { path = "../fullmag-antenna-artifacts" }
 fullmag-engine = { path = "../fullmag-engine", features = ["parallel"] }
-fullmag-fdm-demag = { path = "../fullmag-fdm-demag" }
+fullmag-fdm-demag = { path = "../fullmag-fdm-demag", features = ["parallel"] }
 fullmag-fdm-sys = { path = "../fullmag-fdm-sys", optional = true }
 fullmag-fem-sys = { path = "../fullmag-fem-sys", optional = true }
 fullmag-ir = { path = "../fullmag-ir" }
@@ -27,6 +27,8 @@ rayon = "1.10"
 rustfft = "6.4"
 nalgebra = "0.33"
 num-complex = "0.4"
+num-bigint = "0.4"
+num-rational = "0.4"
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "0.10"

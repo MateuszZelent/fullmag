@@ -118,6 +118,70 @@ pub struct WriteTransaction {
     token: String,
 }
 
+/// Holds an existing store's native shared fence without writing owner metadata.
+pub struct ReadTransaction {
+    root: PathBuf,
+    _lock: NativeLock,
+}
+
+impl ReadTransaction {
+    pub(crate) fn acquire(root: &Path) -> Result<Self> {
+        require_local_filesystem(root)?;
+        let path = checked_path(root, LOCK_DESCRIPTOR_PATH)?;
+        let metadata = fs::symlink_metadata(&path)?;
+        if !metadata.is_file() {
+            bail!("session read lock descriptor must be a regular file");
+        }
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let file = options.open(&path)?;
+        let opened = file.metadata()?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if opened.file_attributes() & 0x400 != 0 {
+                bail!("session read lock descriptor must not be a reparse point");
+            }
+        }
+        if !opened.is_file() {
+            bail!("session read lock descriptor must be a regular file");
+        }
+        file.try_lock_shared()
+            .context("session read transaction requires no active store writer")?;
+        let lock = NativeLock { file, locked: true };
+        let mut descriptor = Vec::new();
+        lock.file
+            .try_clone()?
+            .take(LOCK_DESCRIPTOR.len() as u64 + 1)
+            .read_to_end(&mut descriptor)?;
+        if descriptor != LOCK_DESCRIPTOR {
+            bail!("legacy or corrupt session read lock descriptor");
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+            _lock: lock,
+        })
+    }
+
+    pub(crate) fn require_root(&self, root: &Path) -> Result<()> {
+        if self.root != root {
+            bail!("session read transaction belongs to another store");
+        }
+        Ok(())
+    }
+}
+
 impl Writer {
     pub(crate) fn new(root: PathBuf) -> Arc<Self> {
         Arc::new(Self {
@@ -521,6 +585,37 @@ mod tests {
             .is::<StoreWriterBusy>());
         drop(next);
         drop(open_lock_descriptor(root).unwrap());
+    }
+
+    #[test]
+    fn read_transaction_rejects_missing_and_invalid_descriptors_without_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        assert!(ReadTransaction::acquire(root).is_err());
+        assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+        let path = root.join(LOCK_DESCRIPTOR_PATH);
+        for bytes in [b"".as_slice(), b"invalid", b"fullmag.writer.lock.v1\nextra"] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(ReadTransaction::acquire(root).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            assert!(!root.join(OWNER_RECORD_PATH).exists());
+            let file = OpenOptions::new().read(true).write(true).open(&path).unwrap();
+            file.try_lock().unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_transaction_rejects_linked_descriptor_without_touching_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("store");
+        std::fs::create_dir(&root).unwrap();
+        let target = directory.path().join("descriptor");
+        std::fs::write(&target, LOCK_DESCRIPTOR).unwrap();
+        std::os::unix::fs::symlink(&target, root.join(LOCK_DESCRIPTOR_PATH)).unwrap();
+        assert!(ReadTransaction::acquire(&root).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), LOCK_DESCRIPTOR);
+        assert!(!root.join(OWNER_RECORD_PATH).exists());
     }
 
     #[test]

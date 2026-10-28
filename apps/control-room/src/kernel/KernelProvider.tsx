@@ -1,5 +1,8 @@
 "use client";
 
+import { SavedResultsPlaybackController } from "./saved-results/SavedResultsPlaybackController";
+import { homeView } from "./layout/homeView";
+
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
@@ -130,6 +133,7 @@ function createKernel(): KernelApi {
     binaryDecodeScheduler,
     diagnostics,
   });
+  const savedResultsPlayback = new SavedResultsPlaybackController();
   const projectDocument = new ProjectDocumentController(api);
   const commands = new CommandRegistry();
   commands.attachSessionScopeSource(
@@ -227,6 +231,32 @@ function createKernel(): KernelApi {
     commands.register(cmd);
   }
 
+  commands.register({
+    id: "workspace.open-results-folder", title: "Open Saved Results",
+    group: "workspace-document", category: "File", scope: "global",
+    isEnabled: () => true,
+    run: async (context) => {
+      const input = context.input as {itemId?: string; name?: string} | undefined;
+      if (!input?.itemId || !input.name) return {status: "failed", message: "Select a result folder first."};
+      if (objectEditSession.getSnapshot().dirty) {
+        return {status: "failed", message: "Apply or cancel the current object edit before opening saved results."};
+      }
+      const transition = await pendingForms.prepareTransition({applyPendingChanges: false});
+      try {
+        await api.workspace.playback(input.itemId);
+        transition.assertCurrent();
+        if (objectEditSession.getSnapshot().dirty) {
+          return {status: "failed", message: "Object edits changed while opening saved results."};
+        }
+        savedResultsPlayback.open({itemId: input.itemId, name: input.name});
+        homeView.close();
+        return {status: "completed", message: "Saved results opened read only."};
+      } finally {
+        transition.release();
+      }
+    },
+  });
+
   // Register modules and auto-register their contributed commands.
   for (const manifest of resolveControlRoomModules()) {
     modules.register(manifest);
@@ -238,6 +268,7 @@ function createKernel(): KernelApi {
   }
 
   return {
+    savedResultsPlayback,
     api,
     analysisFieldOverlay,
     authoringHistory,

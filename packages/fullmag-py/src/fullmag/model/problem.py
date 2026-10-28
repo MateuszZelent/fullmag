@@ -896,6 +896,9 @@ def build_geometry_assets_for_request(
     _coincident_closures: Mapping[str, object] | None = None,
 ) -> dict[str, Any] | None:
     if discretization is None:
+        if any(isinstance(entry, Mapping) and entry.get("source") is not None
+               for entry in ((mesh_workflow or {}).get("per_geometry") or [])):
+            raise ValueError("explicit owner-bound MeshData source requires FEM configuration")
         return None
 
     fdm_only = requested_backend == BackendTarget.FDM or (
@@ -903,6 +906,30 @@ def build_geometry_assets_for_request(
         and discretization.fdm is not None
         and discretization.fem is None
     )
+    from fullmag.meshing._mesh_targets import _scope_per_geometry_entries
+
+    owner_geometry_names = tuple(dict.fromkeys(
+        [*(geometry_object_ids or ()), *(geometry.geometry_name for geometry in geometries)]
+    ))
+    explicit_object_sources: dict[str, str] = {}
+    for owner, entry in _scope_per_geometry_entries(
+        (mesh_workflow or {}).get("per_geometry"),
+        geometries=geometries, owner_geometry_names=owner_geometry_names,
+    ):
+        source = entry.get("source")
+        if source is None:
+            continue
+        if not isinstance(source, str) or not source.strip() or Path(source).suffix.lower() != ".npz":
+            raise ValueError("per-object mesh source requires a non-empty MeshData NPZ path")
+        if entry.get("order") not in {None, 1}:
+            raise ValueError("explicit owner-bound MeshData source requires FEM P1")
+        if owner in explicit_object_sources and explicit_object_sources[owner] != source:
+            raise ValueError(f"conflicting explicit mesh sources for owner '{owner}'")
+        explicit_object_sources[owner] = source
+
+    if explicit_object_sources and (fdm_only or discretization.fem is None):
+        raise ValueError("explicit owner-bound MeshData source requires FEM configuration, not FDM-only")
+
     asset_cache_key = _geometry_asset_cache_key(
         requested_backend=requested_backend,
         geometries=geometries,
@@ -918,7 +945,7 @@ def build_geometry_assets_for_request(
     if _coincident_closures:
         from fullmag.runtime.transport_identity import tagged_json_digest
         asset_cache_key += tagged_json_digest({name: closure.to_ir() for name, closure in _coincident_closures.items()})
-    if _realized_object_mesh_sink is None and asset_cache is not None and asset_cache_key in asset_cache:
+    if not explicit_object_sources and _realized_object_mesh_sink is None and asset_cache is not None and asset_cache_key in asset_cache:
         cached = asset_cache[asset_cache_key]
         return copy.deepcopy(cached) if _copy_cached_assets else cached
 
@@ -1019,7 +1046,7 @@ def build_geometry_assets_for_request(
         or (
             requested_backend == BackendTarget.AUTO
             and discretization.fem is not None
-            and discretization.fem.mesh is not None
+            and (discretization.fem.mesh is not None or bool(explicit_object_sources))
         )
     )
 
@@ -1040,11 +1067,28 @@ def build_geometry_assets_for_request(
             explicit_domain_mesh_source is not None or study_universe is not None
         )
 
-        if not has_shared_domain_mesh_asset:
-            owner_geometry_names = tuple(
-                candidate.geometry_name for candidate in geometries
-            )
+        if not has_shared_domain_mesh_asset or explicit_object_sources:
             for geometry in geometries:
+                explicit_source = explicit_object_sources.get(geometry.geometry_name)
+                if explicit_source is not None:
+                    if discretization.fem.order != 1:
+                        raise ValueError("explicit owner-bound MeshData source requires FEM P1")
+                    mesh = MeshData.load(Path(explicit_source).expanduser())
+                    mesh.validate_strict(require_positive_orientation=True)
+                    if any(cell_type != "tet4" for cell_type in mesh.cell_types):
+                        raise ValueError("explicit owner-bound MeshData source requires Tet4 cells")
+                    mesh_ir = mesh.to_ir(geometry.geometry_name)
+                    if validate_mesh_ir(mesh_ir) is False:
+                        raise ValueError(f"explicit mesh asset for '{geometry.geometry_name}' failed Rust validation")
+                    assets["fem_mesh_assets"].append({
+                        "geometry_name": geometry.geometry_name,
+                        "mesh_source": explicit_source, "mesh": mesh_ir,
+                    })
+                    if _realized_object_mesh_sink is not None:
+                        _realized_object_mesh_sink[geometry.geometry_name] = mesh
+                    continue
+                if has_shared_domain_mesh_asset:
+                    continue
                 imported_surface_only = (
                     discretization.fem.mesh is None
                     and isinstance(geometry, ImportedGeometry)
@@ -1570,7 +1614,7 @@ def build_geometry_assets_for_request(
     else:
         result = assets
 
-    if asset_cache is not None and _include_domain_mesh_ir:
+    if not explicit_object_sources and asset_cache is not None and _include_domain_mesh_ir:
         asset_cache[asset_cache_key] = (
             copy.deepcopy(result) if _copy_cached_assets else result
         )
@@ -3051,6 +3095,7 @@ class Problem:
           study_pipeline: dict[str, object] | None = None,
           runtime_device_override: str | None = None,
           _copy_cached_geometry_assets: bool = True,
+          _accepted_preparation: dict[str, object] | None = None,
     ) -> dict[str, object]:
         runtime = self.runtime.resolved(
             backend=requested_backend,
@@ -3079,6 +3124,35 @@ class Problem:
         effective_asset_cache = asset_cache if asset_cache is not None else self.geometry_asset_cache
         runtime_metadata = dict(self.runtime_metadata)
         runtime_metadata["runtime_selection"] = runtime.to_runtime_metadata()
+        if _accepted_preparation is not None:
+            if not include_geometry_assets:
+                raise ValueError("accepted preparation requires geometry materialization")
+            if not isinstance(_accepted_preparation, dict):
+                raise ValueError("accepted preparation requires a bound ProblemIR")
+            problem_meta = _accepted_preparation.get("problem_meta")
+            metadata = problem_meta.get("runtime_metadata") if isinstance(problem_meta, dict) else None
+            if not isinstance(metadata, dict):
+                raise ValueError("accepted preparation requires bound runtime metadata")
+            selection = metadata.get("runtime_selection")
+            materialization = metadata.get("execution_materialization")
+            if not isinstance(selection, dict) or not isinstance(materialization, dict):
+                raise ValueError("accepted preparation requires the canonical bound execution handoff")
+            requested = materialization.get("requested")
+            if not isinstance(requested, dict) or materialization.get("schema_version") != "execution_request.v1":
+                raise ValueError("accepted preparation requires materialized execution_request.v1")
+            if (requested.get("backend") != runtime.backend_target.value
+                    or requested.get("precision") != runtime.execution_precision.value
+                    or requested.get("mode") != runtime.execution_mode.value
+                    or requested.get("device") != selection.get("device")
+                    or selection.get("backend") != requested.get("backend")
+                    or selection.get("execution_precision") != requested.get("precision")
+                    or selection.get("execution_mode") != requested.get("mode")
+                    or not isinstance(metadata.get("compute_resources"), dict)):
+                raise ValueError("accepted preparation execution differs from the bound request")
+            for key in ("runtime_selection", "compute_resources", "execution_materialization"):
+                runtime_metadata[key] = copy.deepcopy(metadata[key])
+            runtime_metadata.pop("execution_profile", None)
+            runtime_metadata.pop("execution_layers", None)
         if isinstance(self.study, Eigenmodes) and self.study.solver_policy is not None:
             runtime_metadata["modal_solver_policy"] = self.study.solver_policy.to_ir()
         effective_study_pipeline = _normalize_study_pipeline_value(study_pipeline)

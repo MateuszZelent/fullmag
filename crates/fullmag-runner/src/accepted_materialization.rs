@@ -195,7 +195,7 @@ pub fn materialize_captured_observables(
     crate::materialize_study_magnetization_input(request.plan,
         &capture.carrier.layout, &request.magnetization.values).map_err(|error| error.to_string())?;
     if let BackendPlanIR::Fem(plan) = &request.plan.backend_plan {
-        validate_fem_snapshot_identity(plan, request)?;
+        validate_fem_snapshot_identity(plan, request.magnetization, request.clock)?;
         let accepted_map = request.magnetization.native_node_map.as_ref()
             .ok_or_else(|| "accepted FEM node map missing".to_string())?;
         let captured_map = capture.carrier.fem_local_node_map.as_ref()
@@ -247,10 +247,10 @@ pub fn materialize_captured_observables(
         source: request.source.clone(), clock: request.clock,
         plan_sha256: request.accepted_plan_digest.into(), lane: request.lane,
         magnetization_content_sha256: request.magnetization.content_sha256.clone(),
-        evaluator_build_identity: observation_evaluator_identity(request, capture.evaluator_build_identity),
+        evaluator_build_identity: observation_evaluator_identity(&accepted_lane_input(request), capture.evaluator_build_identity),
         fields: capture.fields, unavailable_scopes: BTreeMap::new(), energies: capture.energies,
     };
-    append_airbox_observations(request, &mut batch.fields, &mut batch.unavailable_scopes)?;
+    append_airbox_observations(&accepted_lane_input(request), &mut batch.fields, &mut batch.unavailable_scopes)?;
     Ok(batch)
 }
 
@@ -258,20 +258,102 @@ pub fn materialize_accepted_observables(
     request: &AcceptedMaterializationRequest<'_>,
 ) -> Result<AcceptedMaterializationBatch, String> {
     validate_request(request)?;
-    let (requested, implicit_default) = requested_field_ids(request.requested_quantity_ids)?;
+    let input = accepted_lane_input(request);
+    let observations = evaluate_lane_observables(&input)?;
+    Ok(AcceptedMaterializationBatch {
+        source: request.source.clone(),
+        clock: request.clock,
+        plan_sha256: request.source.id.plan_digest.clone(),
+        lane: request.lane,
+        magnetization_content_sha256: request.magnetization.content_sha256.clone(),
+        evaluator_build_identity: observation_evaluator_identity(&input, crate::artifacts::build_identity_json()),
+        fields: observations.fields,
+        unavailable_scopes: observations.unavailable_scopes,
+        energies: observations.energies,
+    })
+}
+
+fn accepted_lane_input<'a>(request: &'a AcceptedMaterializationRequest<'a>) -> LaneObservationInput<'a> {
+    LaneObservationInput {
+        plan: request.plan,
+        problem: request.problem,
+        lane: request.lane,
+        clock: request.clock,
+        values: &request.magnetization.values,
+        layout: &request.magnetization.layout,
+        requested_quantity_ids: request.requested_quantity_ids,
+        origin: ObservationOrigin::Accepted(request.magnetization),
+    }
+}
+
+/// Where the evaluated magnetization came from. Only an accepted state carries
+/// execution provenance and native snapshot receipts that must be verified; a
+/// prepared initial state is the plan's own input, evaluated before any step.
+pub(crate) enum ObservationOrigin<'a> {
+    Accepted(&'a AcceptedMagnetizationInput),
+    Prepared,
+}
+
+/// One observation-only evaluation of an exact magnetization on one lane.
+pub(crate) struct LaneObservationInput<'a> {
+    pub(crate) plan: &'a ExecutionPlanIR,
+    pub(crate) problem: &'a ProblemIR,
+    pub(crate) lane: AcceptedMaterializationLane,
+    pub(crate) clock: ObservationClock,
+    pub(crate) values: &'a [[f64; 3]],
+    pub(crate) layout: &'a Value,
+    /// Empty selects every active catalog field for this exact lane/plan.
+    pub(crate) requested_quantity_ids: &'a [QuantityId],
+    pub(crate) origin: ObservationOrigin<'a>,
+}
+
+impl LaneObservationInput<'_> {
+    fn validate_engine(&self, expected_engine: &str) -> Result<(), String> {
+        match self.origin {
+            ObservationOrigin::Accepted(magnetization) => validate_provenance(magnetization, expected_engine),
+            ObservationOrigin::Prepared => Ok(()),
+        }
+    }
+
+    fn accepted_engine(&self) -> Result<&str, String> {
+        match self.origin {
+            ObservationOrigin::Accepted(magnetization) => magnetization.provenance
+                .get("execution_engine").and_then(Value::as_str)
+                .ok_or_else(|| "accepted GPU engine is missing".to_string()),
+            // The multilayer CUDA engine variant is chosen while solving; a
+            // prepared state has not resolved it yet.
+            ObservationOrigin::Prepared => Err(
+                "prepared-state evaluation does not support the multilayer CUDA lane".to_string(),
+            ),
+        }
+    }
+}
+
+pub(crate) struct LaneObservations {
+    pub(crate) fields: Vec<AcceptedMaterializedField>,
+    pub(crate) unavailable_scopes: BTreeMap<String, String>,
+    pub(crate) energies: BTreeMap<String, f64>,
+}
+
+/// Evaluate every requested active field and the global energies without
+/// advancing a solver. The device follows the lane; there is no fallback.
+pub(crate) fn evaluate_lane_observables(
+    input: &LaneObservationInput<'_>,
+) -> Result<LaneObservations, String> {
+    let (requested, implicit_default) = requested_field_ids(input.requested_quantity_ids)?;
     // Reuse the runner's single canonical compatibility check and M installer.
     // Layout equality is exact; no field-order or cross-space inference happens here.
     let materialized_plan = crate::materialize_study_magnetization_input(
-        request.plan,
-        &request.magnetization.layout,
-        &request.magnetization.values,
+        input.plan,
+        input.layout,
+        input.values,
     )
     .map_err(|error| error.to_string())?;
     let mut fields = Vec::new();
-    let unavailable_scopes = BTreeMap::new();
-    let energies = match (&materialized_plan.backend_plan, request.lane) {
+    let mut unavailable_scopes = BTreeMap::new();
+    let energies = match (&materialized_plan.backend_plan, input.lane) {
         (BackendPlanIR::Fdm(plan), AcceptedMaterializationLane::FdmCpu) => {
-            validate_provenance(request.magnetization, "fdm_cpu_reference")?;
+            input.validate_engine("fdm_cpu_reference")?;
             reject_missing_fdm_primary_inputs(plan, false)?;
             let active = crate::quantities::active_fdm_preview_quantities(
                 crate::dispatch::FdmEngine::CpuReference,
@@ -280,7 +362,7 @@ pub fn materialize_accepted_observables(
             );
             let selected = select_active_quantities(&requested, &active, implicit_default)?;
             let mut exact_plan = plan.clone();
-            set_observation_time(&mut exact_plan.time_stage, request.clock.time_seconds);
+            set_observation_time(&mut exact_plan.time_stage, input.clock.time_seconds);
             let preview_request = full_resolution_request();
             let snapshots = crate::fdm::cpu::reference::snapshot_vector_fields(
                 &exact_plan,
@@ -291,11 +373,11 @@ pub fn materialize_accepted_observables(
             fields.extend(fields_from_preview(
                 snapshots,
                 &selected,
-                request.magnetization.layout.clone(),
+                input.layout.clone(),
                 "fdm:magnetic",
                 "magnetic",
                 product3_usize(exact_plan.grid.cells)?,
-                request.clock,
+                input.clock,
             )?);
             let (problem, state) = crate::fdm::cpu::reference::build_snapshot_problem_and_state(
                 &exact_plan,
@@ -313,7 +395,7 @@ pub fn materialize_accepted_observables(
             energies_from_observables(&observables)?
         }
         (BackendPlanIR::Fdm(plan), AcceptedMaterializationLane::FdmGpu) => {
-            validate_provenance(request.magnetization, "fdm_cuda")?;
+            input.validate_engine("fdm_cuda")?;
             reject_missing_fdm_primary_inputs(plan, true)?;
             let active = crate::quantities::active_fdm_preview_quantities(
                 crate::dispatch::FdmEngine::CudaFdm,
@@ -324,11 +406,11 @@ pub fn materialize_accepted_observables(
             #[cfg(feature = "cuda")]
             {
                 let mut exact_plan = plan.clone();
-                set_observation_time(&mut exact_plan.time_stage, request.clock.time_seconds);
+                set_observation_time(&mut exact_plan.time_stage, input.clock.time_seconds);
                 let mut backend = crate::fdm::gpu::cuda::native::NativeFdmBackend::create(&exact_plan)
                     .map_err(|error| error.to_string())?;
                 backend
-                    .upload_magnetization(&request.magnetization.values)
+                    .upload_magnetization(input.values)
                     .map_err(|error| error.to_string())?;
                 let stats = backend
                     .snapshot_step_stats(exact_plan.grid.cells)
@@ -348,11 +430,11 @@ pub fn materialize_accepted_observables(
                 fields.extend(fields_from_preview(
                     snapshots,
                     &selected,
-                    request.magnetization.layout.clone(),
+                    input.layout.clone(),
                     "fdm:magnetic",
                     "magnetic",
                     product3_usize(exact_plan.grid.cells)?,
-                    request.clock,
+                    input.clock,
                 )?);
                 energies_from_stats(&stats)?
             }
@@ -362,13 +444,13 @@ pub fn materialize_accepted_observables(
             }
         }
         (BackendPlanIR::FdmMultilayer(plan), AcceptedMaterializationLane::FdmCpu) => {
-            validate_provenance(request.magnetization, "cpu_reference_multilayer")?;
+            input.validate_engine("cpu_reference_multilayer")?;
             let active = crate::quantities::active_fdm_multilayer_preview_quantities(plan, &requested);
             let selected = select_active_quantities(&requested, &active, implicit_default)?;
             let exact_plan = plan.clone();
             let observables = crate::fdm::cpu::multilayer_reference::observe_accepted_state(
                 &exact_plan,
-                request.clock.time_seconds,
+                input.clock.time_seconds,
             )
             .map_err(|error| error.to_string())?;
             let snapshots = crate::fdm::cpu::multilayer_reference::snapshot_vector_fields(
@@ -377,23 +459,22 @@ pub fn materialize_accepted_observables(
                 &full_resolution_request(),
             )
             .map_err(|error| error.to_string())?;
-            let sample_count = request.magnetization.values.len();
+            let sample_count = input.values.len();
             fields.extend(fields_from_preview(
                 snapshots,
                 &selected,
-                request.magnetization.layout.clone(),
+                input.layout.clone(),
                 "fdm_multilayer:native_layers",
                 "layer_native",
                 sample_count,
-                request.clock,
+                input.clock,
             )?);
             let energies = energies_from_observables(&observables)?;
             energies
         }
         (BackendPlanIR::FdmMultilayer(plan), AcceptedMaterializationLane::FdmGpu) => {
-            validate_provenance(request.magnetization, "fdm_multilayer_cuda")?;
-            let actual_engine = request.magnetization.provenance
-                .get("execution_engine").and_then(Value::as_str).unwrap_or_default();
+            input.validate_engine("fdm_multilayer_cuda")?;
+            let actual_engine = input.accepted_engine()?;
             let active = crate::quantities::active_fdm_multilayer_preview_quantities(plan, &requested);
             let selected = select_active_quantities(&requested, &active, implicit_default)?;
             #[cfg(feature = "cuda")]
@@ -401,18 +482,18 @@ pub fn materialize_accepted_observables(
                 let exact_plan = plan.clone();
                 let (observables, snapshots) = crate::fdm::gpu::cuda::multilayer::snapshot_accepted_multilayer_observables(
                     &exact_plan,
-                    &request.magnetization.values,
+                    input.values,
                     &selected,
                     actual_engine,
                 ).map_err(|error| error.to_string())?;
                 fields.extend(fields_from_preview(
                     snapshots,
                     &selected,
-                    request.magnetization.layout.clone(),
+                    input.layout.clone(),
                     "fdm_multilayer:native_layers",
                     "layer_native",
-                    request.magnetization.values.len(),
-                    request.clock,
+                    input.values.len(),
+                    input.clock,
                 )?);
                 energies_from_observables(&observables)?
             }
@@ -424,8 +505,10 @@ pub fn materialize_accepted_observables(
         }
         (BackendPlanIR::Fem(plan), lane @ (AcceptedMaterializationLane::FemCpu | AcceptedMaterializationLane::FemGpu)) => {
             let gpu = lane == AcceptedMaterializationLane::FemGpu;
-            validate_fem_snapshot_identity(plan, request)?;
-            validate_provenance(request.magnetization, if gpu { "fem_native_gpu" } else { "fem_cpu_native" })?;
+            if let ObservationOrigin::Accepted(magnetization) = input.origin {
+                validate_fem_snapshot_identity(plan, magnetization, input.clock)?;
+            }
+            input.validate_engine(if gpu { "fem_native_gpu" } else { "fem_cpu_native" })?;
             reject_missing_fem_primary_inputs(plan)?;
             let active = crate::quantities::active_fem_preview_quantities(
                 if gpu { crate::dispatch::FemEngine::NativeGpu } else { crate::dispatch::FemEngine::CpuNative },
@@ -455,27 +538,33 @@ pub fn materialize_accepted_observables(
                 if gpu {
                     backend.set_gpu_execution_request(true).map_err(|error| error.to_string())?;
                 }
-                let accepted_map = request
-                    .magnetization
-                    .native_node_map
-                    .as_ref()
-                    .ok_or_else(|| "accepted native FEM node map is missing".to_string())?;
-                let observed_map = backend.local_node_index_map().map_err(|error| error.to_string())?;
-                if &observed_map != accepted_map {
-                    return Err("accepted FEM node map differs from the materializer mesh".into());
+                // A prepared state is the plan's own nodal input, so it shares
+                // the materializer mesh by construction; only an accepted state
+                // must prove its native map and representation match.
+                if let ObservationOrigin::Accepted(magnetization) = input.origin {
+                    let accepted_map = magnetization
+                        .native_node_map
+                        .as_ref()
+                        .ok_or_else(|| "accepted native FEM node map is missing".to_string())?;
+                    let observed_map = backend.local_node_index_map().map_err(|error| error.to_string())?;
+                    if &observed_map != accepted_map {
+                        return Err("accepted FEM node map differs from the materializer mesh".into());
+                    }
+                    let observed_representation = backend.representation_receipt().map_err(|error| error.to_string())?;
+                    let claimed = &magnetization.native_state_snapshot
+                        .as_ref().ok_or_else(|| "accepted native FEM snapshot receipt is missing".to_string())?
+                        .representation;
+                    if observed_representation.state_space != claimed.state_space
+                        || observed_representation.local_node_count != claimed.local_node_count
+                        || observed_representation.true_node_count != claimed.true_node_count
+                        || observed_representation.periodic_map_revision != claimed.periodic_map_revision
+                    {
+                        return Err("accepted FEM representation differs from the materializer mesh".into());
+                    }
+                } else if input.values.len() != exact_plan.mesh.nodes.len() {
+                    return Err("prepared FEM magnetization does not cover the resolved mesh".into());
                 }
-                let observed_representation = backend.representation_receipt().map_err(|error| error.to_string())?;
-                let claimed = &request.magnetization.native_state_snapshot
-                    .as_ref().ok_or_else(|| "accepted native FEM snapshot receipt is missing".to_string())?
-                    .representation;
-                if observed_representation.state_space != claimed.state_space
-                    || observed_representation.local_node_count != claimed.local_node_count
-                    || observed_representation.true_node_count != claimed.true_node_count
-                    || observed_representation.periodic_map_revision != claimed.periodic_map_revision
-                {
-                    return Err("accepted FEM representation differs from the materializer mesh".into());
-                }
-                backend.upload_magnetization(&request.magnetization.values)
+                backend.upload_magnetization(input.values)
                     .map_err(|error| error.to_string())?;
                 let node_count = exact_plan.mesh.nodes.len();
                 let stats = backend.snapshot_step_stats(node_count).map_err(|error| error.to_string())?;
@@ -500,11 +589,11 @@ pub fn materialize_accepted_observables(
                 fields.extend(fields_from_preview(
                     snapshots,
                     &selected,
-                    request.magnetization.layout.clone(),
+                    input.layout.clone(),
                     "fem:local_nodes",
                     "magnetic",
                     node_count,
-                    request.clock,
+                    input.clock,
                 )?);
                 energies_from_stats(&stats)?
             }
@@ -519,19 +608,8 @@ pub fn materialize_accepted_observables(
     if fields.is_empty() {
         return Err("accepted materialization produced no spatial fields".into());
     }
-    let mut batch = AcceptedMaterializationBatch {
-        source: request.source.clone(),
-        clock: request.clock,
-        plan_sha256: request.source.id.plan_digest.clone(),
-        lane: request.lane,
-        magnetization_content_sha256: request.magnetization.content_sha256.clone(),
-        evaluator_build_identity: observation_evaluator_identity(request, crate::artifacts::build_identity_json()),
-        fields,
-        unavailable_scopes,
-        energies,
-    };
-    append_airbox_observations(request, &mut batch.fields, &mut batch.unavailable_scopes)?;
-    Ok(batch)
+    append_airbox_observations(input, &mut fields, &mut unavailable_scopes)?;
+    Ok(LaneObservations { fields, unavailable_scopes, energies })
 }
 
 fn validate_request(request: &AcceptedMaterializationRequest<'_>) -> Result<(), String> {
@@ -568,16 +646,16 @@ fn validate_request(request: &AcceptedMaterializationRequest<'_>) -> Result<(), 
     Ok(())
 }
 
-fn observation_evaluator_identity(
-    request: &AcceptedMaterializationRequest<'_>, mut identity: Value,
+pub(crate) fn observation_evaluator_identity(
+    input: &LaneObservationInput<'_>, mut identity: Value,
 ) -> Value {
-    if request.lane == AcceptedMaterializationLane::FdmGpu
-        && matches!(request.plan.backend_plan, BackendPlanIR::FdmMultilayer(_)) {
+    if input.lane == AcceptedMaterializationLane::FdmGpu
+        && matches!(input.plan.backend_plan, BackendPlanIR::FdmMultilayer(_)) {
         // The GPU Solve identity remains unchanged. Derived visualization
         // components/densities are explicitly host-postprocessed from that
         // execution's exact M and component fields, not a new CPU trajectory.
         let postprocessing = json!({
-            "execution_engine": request.magnetization.provenance.get("execution_engine"),
+            "execution_engine": input.accepted_engine().ok(),
             "carrier": "exact_native_layers",
             "host_postprocessed_quantities": ["H_ani_cubic", "H_dmi_bulk", "eden_ex",
                 "eden_demag", "eden_ext", "eden_ani", "eden_dmi", "eden_rotated_dmi",
@@ -728,17 +806,18 @@ fn validate_execution_engine_provenance(
     Ok(())
 }
 
-fn validate_fem_snapshot_identity(plan: &fullmag_ir::FemPlanIR, request: &AcceptedMaterializationRequest<'_>) -> Result<(), String> {
-    let input = request.magnetization;
+fn validate_fem_snapshot_identity(
+    plan: &fullmag_ir::FemPlanIR, input: &AcceptedMagnetizationInput, clock: ObservationClock,
+) -> Result<(), String> {
     let node_count = plan.mesh.nodes.len();
     let receipt = input.native_state_snapshot.as_ref()
         .ok_or_else(|| "accepted native FEM snapshot receipt is missing".to_string())?;
     let map = input.native_node_map.as_ref()
         .ok_or_else(|| "accepted native FEM node map is missing".to_string())?;
     receipt.validate_snapshot(
-        request.clock.accepted_step,
-        request.clock.time_seconds,
-        request.clock.dt_seconds.unwrap_or(0.0),
+        clock.accepted_step,
+        clock.time_seconds,
+        clock.dt_seconds.unwrap_or(0.0),
         &input.values,
     ).map_err(|error| error.to_string())?;
     receipt.validate_node_map(Some(map)).map_err(|error| error.to_string())?;
@@ -951,27 +1030,26 @@ fn airbox_quantity_field(artifacts: Vec<crate::types::AuxiliaryArtifact>, quanti
 }
 
 fn append_airbox_observations(
-    request: &AcceptedMaterializationRequest<'_>,
+    input: &LaneObservationInput<'_>,
     fields: &mut Vec<AcceptedMaterializedField>,
     unavailable: &mut BTreeMap<String, String>,
 ) -> Result<(), String> {
-    if !matches!(&request.plan.backend_plan, BackendPlanIR::FdmMultilayer(_))
-        || !crate::fdm::cpu::airbox_observation::airbox_observation_requested(request.problem)
+    if !matches!(&input.plan.backend_plan, BackendPlanIR::FdmMultilayer(_))
+        || !crate::fdm::cpu::airbox_observation::airbox_observation_requested(input.problem)
         || !fields.iter().any(|field| field.quantity_id == "H_demag")
     { return Ok(()); }
-    let plan = crate::materialize_study_magnetization_input(request.plan,
-        &request.magnetization.layout, &request.magnetization.values).map_err(|error| error.to_string())?;
+    let plan = crate::materialize_study_magnetization_input(input.plan,
+        input.layout, input.values).map_err(|error| error.to_string())?;
     let BackendPlanIR::FdmMultilayer(plan) = &plan.backend_plan else { return Ok(()); };
-    let artifacts = match request.lane {
+    let artifacts = match input.lane {
         AcceptedMaterializationLane::FdmCpu =>
-            crate::fdm::cpu::airbox_observation::materialize_airbox_observation_snapshot(request.problem, plan),
+            crate::fdm::cpu::airbox_observation::materialize_airbox_observation_snapshot(input.problem, plan),
         AcceptedMaterializationLane::FdmGpu => {
             #[cfg(feature = "cuda")]
             {
-                let engine = request.magnetization.provenance.get("execution_engine")
-                    .and_then(Value::as_str).ok_or_else(|| "accepted GPU engine is missing".to_string())?;
+                let engine = input.accepted_engine()?;
                 crate::fdm::gpu::cuda::multilayer::materialize_airbox_observation_snapshot_gpu(
-                    request.problem, plan, engine,
+                    input.problem, plan, engine,
                 ).map_err(|error| error.to_string())
             }
             #[cfg(not(feature = "cuda"))]

@@ -148,6 +148,30 @@ def test_exact_u64_preimage_and_existing_codec():
     with pytest.raises(ValueError):tagged_json_digest(payload)
 
 
+def test_explicit_port_v3_export_and_scene_round_trip(tmp_path):
+    from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
+    from fullmag.runtime.script_builder import render_loaded_problem_as_script, export_builder_draft, render_scene_document_as_script
+    from fullmag.runtime.scene_document import build_scene_document_from_builder
+    problem=authored_problem()
+    loaded=LoadedProblem(problem=problem,source_path=tmp_path / "author.py",script_source="",entrypoint_kind="flat_workspace")
+    draft=export_builder_draft(loaded)
+    scene=build_scene_document_from_builder(draft)
+    scripts=[render_loaded_problem_as_script(loaded),render_scene_document_as_script(scene)]
+    for index,script in enumerate(scripts):
+        assert "fm.AntennaSourceCutRt0(" in script and "antenna_port_mode.v3" in script
+        path=tmp_path / f"roundtrip-{index}.py"
+        path.write_text(script,encoding="utf-8")
+        imported=load_problem_from_script(path,lightweight_assets=True)
+        assert imported.problem.antenna_port_modes[0].to_ir()==problem.antenna_port_modes[0].to_ir()
+        assert imported.problem.current_modules[0].to_ir()==problem.current_modules[0].to_ir()
+    port=problem.antenna_port_modes[0]
+    with pytest.raises(ValueError,match="v2 cannot"):
+        fm.AntennaPortMode(id=port.id,source_object_id=port.source_object_id,current_transport_id=port.current_transport_id,
+            branches=port.branches,normalization=port.normalization)
+    with pytest.raises(ValueError,match="minus_outward"):
+        fm.AntennaSourceCutRt0("cut","plus_outward")
+    v2=fm.AntennaPortMode(id=port.id,source_object_id=port.source_object_id,current_transport_id=port.current_transport_id,branches=port.branches)
+    assert v2.to_ir()["schema_version"]=="antenna_port_mode.v2" and "normalization" not in v2.to_ir()
 
 
 def test_cached_cut_plane_and_missing_contact_are_rejected(cached_execution,tmp_path):
@@ -203,6 +227,40 @@ def test_unsupported_lanes_and_wrong_sourcecut_fail_before_prepare(cached_execut
         replace(problem,antenna_port_modes=[port]).to_ir(include_geometry_assets=True)
 
 
+def test_scene_owner_rotation_translation_composes_with_local_frame_and_prepares(tmp_path, monkeypatch):
+    import copy
+    from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
+    from fullmag.runtime.script_builder import export_builder_draft, render_scene_document_as_script
+    from fullmag.runtime.scene_document import build_scene_document_from_builder
+    monkeypatch.setenv("FULLMAG_FEM_MESH_CACHE_DIR",str(tmp_path / "owner-mesh-cache"))
+    inner=fm.RigidTransform(rotation_matrix=((0.,-1.,0.),(1.,0.,0.),(0.,0.,1.)),
+                            translation_m=(0.2e-6,-0.3e-6,0.4e-6))
+    problem=authored_problem(geometry=loop_geometry(transform=inner))
+    scene=build_scene_document_from_builder(export_builder_draft(LoadedProblem(problem=problem,
+        source_path=tmp_path / "original.py",script_source="",entrypoint_kind="flat_workspace")))
+    q=float(np.sqrt(0.5))
+    scene["objects"][0]["transform"]["rotation_quat"]=[q,0.,0.,q]
+    scene["objects"][0]["transform"]["translation"]=[2e-6,3e-6,-1e-6]
+    original=copy.deepcopy(scene)
+    path=tmp_path / "owner-loop.py"
+    path.write_text(render_scene_document_as_script(scene),encoding="utf-8")
+    loaded=load_problem_from_script(path,lightweight_assets=True)
+    geometry=loaded.problem.auxiliary_geometries[0]
+    outer=np.asarray(((1.,0.,0.),(0.,0.,-1.),(0.,1.,0.)))
+    assert np.allclose(geometry.transform.rotation_matrix,outer @ np.asarray(inner.rotation_matrix),atol=1e-14,rtol=0.)
+    assert np.allclose(geometry.transform.translation_m,outer @ np.asarray(inner.translation_m)+[2e-6,3e-6,-1e-6],atol=1e-20,rtol=0.)
+    assert scene==original
+    authored=loaded.problem.to_ir(include_geometry_assets=False)
+    assert authored["current_modules"][0]["structured_current_closure"]["source_cuts"][0]["plane"]["coordinate_frame"]=="object"
+    prepared=loaded.problem.to_ir(include_geometry_assets=True)
+    mesh=prepared["geometry_assets"]["fem_mesh_assets"][0]["mesh"]
+    xyz=np.asarray(mesh["nodes"])
+    expected=np.asarray(geometry.world_bounds())
+    assert np.allclose(xyz.min(axis=0),expected[0],atol=1e-18,rtol=0.)
+    assert np.allclose(xyz.max(axis=0),expected[1],atol=1e-18,rtol=0.)
+    source=prepared["current_modules"][0]["conservative_current_source"]
+    assert len(source["terminal_observations"])==4
+    assert loaded.problem.to_ir(include_geometry_assets=False)==authored
 
 
 def test_antenna_owner_identity_preserves_legacy_parameters_and_rejects_nonrigid():
@@ -217,3 +275,52 @@ def test_antenna_owner_identity_preserves_legacy_parameters_and_rejects_nonrigid
     for transform in ({"scale":[2.,1.,1.]},{"rotation_quat":[0.,0.,0.,0.]},{"pivot":[1e-6,0.,0.]}):
         with pytest.raises(ValueError):
             _compose_antenna_owner_transform(params,transform,"object")
+
+
+def test_scene_null_legacy_current_view_is_canonical_absence(tmp_path):
+    import copy
+    from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
+    from fullmag.runtime.script_builder import export_builder_draft, render_scene_document_as_script
+    from fullmag.runtime.scene_document import build_scene_document_from_builder
+    problem = authored_problem()
+    loaded = LoadedProblem(problem=problem, source_path=tmp_path / "author.py",
+                           script_source="", entrypoint_kind="flat_workspace")
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    scene["antenna_field_solve_stages"][0]["conservative_current_view_ref"] = None
+    original = copy.deepcopy(scene)
+    script = render_scene_document_as_script(scene)
+    assert "conservative_current_view_ref=" not in script
+    assert scene == original
+    path = tmp_path / "null-legacy-view.py"
+    path.write_text(script, encoding="utf-8")
+    replayed = load_problem_from_script(path, lightweight_assets=True)
+    authored = replayed.workspace_problem or replayed.problem
+    assert authored.antenna_field_solve_stages[0].to_ir() == problem.antenna_field_solve_stages[0].to_ir()
+    scene["antenna_field_solve_stages"][0]["conservative_current_view_ref"] = ""
+    with pytest.raises(ValueError):
+        render_scene_document_as_script(scene)
+
+
+def test_scoped_accepted_preparation_rejects_unbound_or_conflicting_intent_before_geometry():
+    problem = authored_problem()
+    producer = "fullmag.runtime.antenna_coincident_materialization.materialize_antenna_coincident_loops"
+    for handoff in ({}, {"problem_meta": {"runtime_metadata": {
+        "runtime_selection": {"backend": "fem", "device": "cpu"},
+        "execution_materialization": {"schema_version": "execution_request.v1", "requested": {
+            "backend": "fem", "device": "gpu", "precision": "double", "mode": "strict"}},
+        "compute_resources": {},
+    }}}):
+        with patch(producer, side_effect=AssertionError("geometry must not start")) as prepare:
+            with pytest.raises(ValueError, match="accepted preparation"):
+                problem.to_ir(include_geometry_assets=True, _accepted_preparation=handoff)
+            prepare.assert_not_called()
+    with pytest.raises(ValueError, match="requires geometry materialization"):
+        problem.to_ir(include_geometry_assets=False, _accepted_preparation={})
+
+
+def test_ordinary_authoring_does_not_acquire_accepted_execution_metadata():
+    ir = authored_problem().to_ir(include_geometry_assets=False)
+    metadata = ir["problem_meta"]["runtime_metadata"]
+    assert "execution_materialization" not in metadata
+    assert "cpu_threads" in metadata["runtime_selection"]
+    assert metadata["runtime_selection"]["cpu_threads"] is None

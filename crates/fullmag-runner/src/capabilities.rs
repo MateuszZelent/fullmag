@@ -170,6 +170,46 @@ pub struct FieldCarrierDescriptor {
     pub payload_state: FieldPayloadState,
 }
 
+/// A legal explicit derived view, independent of the raw tensor's render policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuantityProjectionCapability {
+    pub token: String,
+    pub components: u8,
+    pub output_shape: String,
+    pub render: QuantityRenderCapability,
+    pub publication: QuantityPublicationCapability,
+}
+
+/// Resolve projection eligibility without inventing a provider or materialized payload.
+pub fn resolve_quantity_projection_capabilities(
+    spec: &fullmag_quantities::QuantitySpec,
+    provider: QuantityProviderCapability,
+    request: QuantityRequestCapability,
+    materialization: QuantityMaterializationCapability,
+    carriers: &[FieldCarrierDescriptor],
+) -> Vec<QuantityProjectionCapability> {
+    let valid_carrier = carriers.iter().any(|carrier| {
+        carrier.components == spec.n_comp && !carrier.carrier_id.trim().is_empty()
+            && !carrier.carrier_fingerprint.trim().is_empty() && !carrier.scope_kind.trim().is_empty()
+            && !carrier.indexing.trim().is_empty() && carrier.indexing != "legacy_count_only"
+            && !carrier.view.trim().is_empty()
+            && matches!(carrier.payload_state, FieldPayloadState::Current | FieldPayloadState::Historical)
+    });
+    let legal_materialization = match materialization {
+        QuantityMaterializationCapability::Materialized => valid_carrier,
+        QuantityMaterializationCapability::Unmaterialized | QuantityMaterializationCapability::Pending => true,
+        _ => false,
+    };
+    if provider != QuantityProviderCapability::Available || request != QuantityRequestCapability::FieldVector
+        || !spec.ui_exposed || !legal_materialization { return Vec::new(); }
+    spec.tensor_projections().into_iter().map(|projection| QuantityProjectionCapability {
+        token: projection.as_str().to_string(), components: projection.components(),
+        output_shape: projection.output_shape().as_str().to_string(),
+        render: QuantityRenderCapability::Renderable,
+        publication: QuantityPublicationCapability::Interactive,
+    }).collect()
+}
+
 /// Five independent capability planes resolved for one runtime lane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedQuantityCapability {
@@ -185,6 +225,8 @@ pub struct ResolvedQuantityCapability {
     pub lane: String,
     pub precision: String,
     pub carriers: Vec<FieldCarrierDescriptor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projections: Vec<QuantityProjectionCapability>,
 }
 
 /// Request-local evidence supplied by API/resource owners to the canonical
@@ -456,7 +498,9 @@ pub fn resolve_quantity_capability(
         None
     };
 
+    let projections = resolve_quantity_projection_capabilities(spec, provider, request, materialization, &context.carriers);
     ResolvedQuantityCapability {
+        projections,
         quantity_id: spec.id.as_str().to_string(),
         provider,
         request,
@@ -2004,5 +2048,40 @@ mod tests {
             resolved.carriers[0].payload_state,
             FieldPayloadState::LegacyUnverified
         );
+    }
+}
+
+#[cfg(test)]
+mod tensor_projection_capability_tests {
+    use super::*;
+
+    #[test]
+    fn derived_views_require_provider_and_verified_carrier_or_legal_materialization() {
+        let spec = fullmag_quantities::quantity_spec("spin_current_tensor").unwrap();
+        let resolve = |provider, request, state, carriers: &[FieldCarrierDescriptor]| {
+            resolve_quantity_projection_capabilities(spec, provider, request, state, carriers)
+        };
+        let available = QuantityProviderCapability::Available;
+        let request = QuantityRequestCapability::FieldVector;
+        assert_eq!(resolve(available, request, QuantityMaterializationCapability::Unmaterialized, &[]).len(), 13);
+        assert!(resolve(QuantityProviderCapability::Unavailable, request, QuantityMaterializationCapability::Unmaterialized, &[]).is_empty());
+        assert!(resolve(available, QuantityRequestCapability::Unavailable, QuantityMaterializationCapability::Unmaterialized, &[]).is_empty());
+        for state in [QuantityMaterializationCapability::Materialized, QuantityMaterializationCapability::LegacyUnverified,
+            QuantityMaterializationCapability::Unavailable, QuantityMaterializationCapability::NotApplicable] {
+            assert!(resolve(available, request, state, &[]).is_empty());
+        }
+        let mut carrier = FieldCarrierDescriptor {
+            carrier_id: "mesh".into(), carrier_fingerprint: "fingerprint".into(),
+            scope: "full".into(), scope_kind: "full".into(), scope_id: None,
+            components: 9, indexing: "node".into(), view: "full".into(),
+            payload_version: None, payload_state: FieldPayloadState::Current,
+        };
+        assert_eq!(resolve(available, request, QuantityMaterializationCapability::Materialized, &[carrier.clone()]).len(), 13);
+        carrier.components = 3;
+        assert!(resolve(available, request, QuantityMaterializationCapability::Materialized, &[carrier.clone()]).is_empty());
+        carrier.components = 9;
+        carrier.payload_state = FieldPayloadState::LegacyUnverified;
+        assert!(resolve(available, request, QuantityMaterializationCapability::Materialized, &[carrier]).is_empty());
+        assert!(!spec.interactive_preview && !spec.supports_preview_2d && !spec.supports_preview_3d);
     }
 }

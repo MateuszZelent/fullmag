@@ -23,12 +23,25 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+#[path = "accepted_solver_profile.rs"]
+pub(crate) mod accepted_solver_profile;
+#[path = "accepted_antenna_progress.rs"]
+pub(crate) mod accepted_antenna_progress;
+#[path = "completed_inspection_recovery.rs"]
+pub(crate) mod completed_inspection_recovery;
+
+#[path = "accepted_worker_execution_receipt.rs"]
+mod accepted_worker_execution_receipt;
+use accepted_worker_execution_receipt::{
+    worker_execution_identity_from_plan, WorkerExecutionReceiptIdentity,
+    WorkerExecutionStartedReceipt, WORKER_EXECUTION_RECEIPT_SCHEMA,
+    WORKER_EXECUTION_STARTED_RECEIPT,
+};
+
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
 pub(crate) const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
-const WORKER_EXECUTION_STARTED_RECEIPT: &str = "worker_execution_started.v1.json";
 const WORKER_PRELAUNCH_FAILED_RECEIPT: &str = "worker_prelaunch_failed.v1.json";
 const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.json";
-const WORKER_EXECUTION_RECEIPT_SCHEMA: &str = "fullmag.accepted_worker_execution.v1";
 
 // Live observation channel (accepted worker -> current-live projector).
 //
@@ -75,7 +88,10 @@ pub(crate) struct AcceptedLiveObservationHeader {
     pub(crate) sequence: u64,
     pub(crate) written_at_unix_ms: u64,
     /// Bounded scalar runner statistics of the latest accepted step.
-    pub(crate) stats: fullmag_runner::StepStats,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stats: Option<fullmag_runner::StepStats>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) operation_progress: Option<fullmag_runner::AntennaOperationProgress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) magnetization: Option<AcceptedLiveMagnetizationRef>,
 }
@@ -449,7 +465,8 @@ impl AcceptedLiveObservationWriter {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
                 .unwrap_or(0),
-            stats: stats.clone(),
+            stats: Some(stats.clone()),
+            operation_progress: None,
             magnetization: self.current_magnetization.clone(),
         };
         let bytes = serde_json::to_vec(&header).context("serialize live observation header")?;
@@ -518,24 +535,25 @@ fn accepted_live_magnetization_domain(
 fn validate_accepted_worker_parameters(
     parameters: &serde_json::Value,
     accepted_step_id: &str,
+    allow_operation_profile: bool,
 ) -> Result<()> {
+    if parameters.get(crate::accepted_solver_profile::PARAMETER).is_some() && !allow_operation_profile {
+        bail!("solver_profile is supported only for accepted closed-loop inspection");
+    }
+    crate::accepted_solver_profile::config(parameters)?;
     let parameters = parameters
         .as_object()
         .context("accepted worker RunSpec parameters must be an object")?;
     for key in parameters.keys() {
-        if key != "live_workspace" && key != fullmag_session::ACCEPTED_RUN_START_POLICY_KEY {
+        if key != "live_workspace" && key != fullmag_session::ACCEPTED_RUN_START_POLICY_KEY
+            && key != crate::accepted_solver_profile::PARAMETER {
             bail!("accepted worker has no binding for RunSpec parameter `{key}`");
         }
     }
 
     if let Some(policy) = parameters.get(fullmag_session::ACCEPTED_RUN_START_POLICY_KEY) {
-        let expected = serde_json::json!({
-            "schema_version": "accepted_run_start_policy.v1",
-            "mode": "manual",
-        });
-        if policy != &expected {
-            bail!("accepted worker received an unsupported run-start policy");
-        }
+        fullmag_session::accepted_run_start_policy_is_manual(policy)
+            .context("accepted worker received an unsupported run-start policy")?;
     }
 
     if let Some(live_workspace) = parameters.get("live_workspace") {
@@ -701,6 +719,7 @@ pub(crate) fn read_accepted_live_observation(
     {
         bail!("accepted live observation identity differs from its task attempt");
     }
+    accepted_antenna_progress::validate_header_payload(&header)?;
     let mut magnetization_values = None;
     let mut fields = Vec::new();
     if let Some(reference) = header.magnetization.as_ref() {
@@ -804,15 +823,18 @@ fn read_live_magnetization(
     Ok(Some((values, fields)))
 }
 
-// Claim validation is read-only and idempotent, but it can briefly contend
-// with the supervisor heartbeat writer. Keep this retry local to claim
-// validation; never replay worker startup or solver effects.
-const ACCEPTED_WORKER_CLAIM_RETRY_LIMIT: Duration = Duration::from_secs(30);
+// Claim validation is read-only and idempotent, but it contends with the
+// supervisor heartbeat, the scheduler, the API and this worker's own control
+// thread for the writer; on a Docker Desktop host folder 30 s was not enough.
+// Keep this retry local to claim validation; never replay worker startup or
+// solver effects.
+const ACCEPTED_WORKER_CLAIM_RETRY_LIMIT: Duration = fullmag_runtime_control::WORKER_STORE_WRITER_WAIT;
 const ACCEPTED_WORKER_CLAIM_RETRY_DELAY: Duration = Duration::from_millis(10);
 const ACCEPTED_WORKER_GPU_INVENTORY_RETRY_LIMIT: Duration = Duration::from_secs(30);
 const ACCEPTED_WORKER_GPU_INVENTORY_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 pub(crate) struct AcceptedRunnerExecution {
+    pub(crate) terminal_publication: Option<fullmag_runtime_control::PreparedTerminalPublicationV4>,
     pub(crate) status: RunStatus,
     pub(crate) completed_step_count: usize,
     pub(crate) outputs: Vec<StudyOutputPayload>,
@@ -836,34 +858,6 @@ struct WorkerControlLoop {
 struct WorkerControlLoopResult {
     stop_received: bool,
     acknowledged_heartbeat_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct WorkerExecutionReceiptIdentity {
-    schema_version: String,
-    claim: fullmag_application::TaskClaim,
-    start_message_id: String,
-    start_sequence: u64,
-    case_id: String,
-    plan_fingerprint: String,
-}
-
-impl WorkerExecutionReceiptIdentity {
-    fn matches_same_attempt(&self, current: &Self) -> bool {
-        self.schema_version == current.schema_version
-            && self.claim.is_same_or_renewed_by(&current.claim)
-            && self.start_message_id == current.start_message_id
-            && self.start_sequence == current.start_sequence
-            && self.case_id == current.case_id
-            && self.plan_fingerprint == current.plan_fingerprint
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WorkerExecutionStartedReceipt {
-    identity: WorkerExecutionReceiptIdentity,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -908,6 +902,25 @@ struct WorkerExecutionCompletedReceipt {
     accepted_state_ref: Option<AcceptedStateRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     observation_source: Option<WorkerObservationSourceReference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerExecutionCompletedReceiptV2 {
+    schema_version: String,
+    identity: WorkerExecutionReceiptIdentity,
+    status: RunStatus,
+    completed_step_count: usize,
+    outputs: Vec<WorkerExecutionOutputReference>,
+    accepted_state_ref: AcceptedStateRef,
+    terminal_publication: fullmag_runtime_control::PreparedTerminalPublicationV4,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WorkerExecutionCompletedReceiptWire {
+    V1(WorkerExecutionCompletedReceipt),
+    V2(WorkerExecutionCompletedReceiptV2),
 }
 
 /// Reserve one private runner output directory for the exact active task
@@ -1330,7 +1343,7 @@ fn ensure_real_child_directory(parent: &Path, name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn existing_private_attempt_output_dir(
+pub(crate) fn existing_private_attempt_output_dir(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
 ) -> Result<PathBuf> {
@@ -1351,7 +1364,7 @@ fn existing_private_attempt_output_dir(
     require_real_directory(&attempt_root.join(format!("epoch-{}", claim.ownership_epoch.value())))
 }
 
-fn write_immutable_attempt_receipt<T: Serialize>(
+pub(crate) fn write_immutable_attempt_receipt<T: Serialize>(
     attempt_output_dir: &Path,
     file_name: &str,
     receipt: &T,
@@ -1373,7 +1386,7 @@ fn write_immutable_attempt_receipt<T: Serialize>(
     Ok(())
 }
 
-fn read_attempt_receipt<T: serde::de::DeserializeOwned>(
+pub(crate) fn read_attempt_receipt<T: serde::de::DeserializeOwned>(
     attempt_output_dir: &Path,
     file_name: &str,
 ) -> Result<Option<T>> {
@@ -1386,29 +1399,22 @@ fn read_attempt_receipt<T: serde::de::DeserializeOwned>(
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         bail!("worker receipt `{}` must be a regular file", path.display());
     }
-    let bytes = fs::read(&path).with_context(|| format!("read `{}`", path.display()))?;
+    if metadata.len() > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
+        bail!("worker receipt exceeds existing control-document metadata budget");
+    }
+    let bytes = read_explicit_runner_artifact(attempt_output_dir,file_name,
+        fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)?;
     let receipt = serde_json::from_slice(&bytes)
         .with_context(|| format!("parse worker receipt `{}`", path.display()))?;
     Ok(Some(receipt))
 }
 
-fn worker_execution_receipt_identity(
+pub(crate) fn worker_execution_receipt_identity(
     start: &fullmag_application::WorkerCommandEnvelope,
     accepted_step: &AcceptedWorkerStep,
     case_id: &str,
 ) -> Result<WorkerExecutionReceiptIdentity> {
-    let plan_fingerprint = fullmag_session::canonical_json_sha256(
-        &serde_json::to_value(&accepted_step.execution_plan)
-            .context("serialize accepted worker execution plan for receipt")?,
-    );
-    Ok(WorkerExecutionReceiptIdentity {
-        schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(),
-        claim: accepted_step.claim.clone(),
-        start_message_id: start.message_id.clone(),
-        start_sequence: start.sequence,
-        case_id: case_id.to_owned(),
-        plan_fingerprint,
-    })
+    worker_execution_identity_from_plan(start, &accepted_step.claim, &accepted_step.execution_plan, case_id)
 }
 
 fn accepted_state_ref_from_runner_snapshot(
@@ -1732,6 +1738,46 @@ fn collect_fdm_cpu_observation_source(
     Ok(Some(payload))
 }
 
+
+fn collect_terminal_study_publication(store: &SessionStore,
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot, step: &AcceptedWorkerStep,
+    plan: &ExecutionPlanIR, root: &Path, outputs: &[StudyOutputPayload])
+    -> Result<Option<fullmag_runtime_control::PreparedTerminalPublicationV4>> {
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan else { return Ok(None); };
+    if !fdm.spin_transport_plans.iter().any(|transport|transport.fdm_cpu_double_transient.is_some()) { return Ok(None); }
+    if step.resolved_input.frozen_stage_context.is_none() { bail!("M3 terminal source lacks admitted full activation history"); }
+    let maximum = step.claim.lease.budget.storage_bytes.min(64*1024*1024);
+    let snapshot_bytes = read_explicit_runner_artifact(root,fullmag_runner::FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE_V2,64*1024)?;
+    let snapshot = fullmag_runner::FdmCpuAcceptedStateSnapshotV2::decode_metadata(&snapshot_bytes)
+        .map_err(|error|anyhow::anyhow!(error.to_string()))?;
+    let mut total = snapshot_bytes.len() as u64;
+    let mut primary_preimages = Vec::with_capacity(4);
+    for (id,_,path) in fullmag_runner::TERMINAL_PRIMARY_ROLES {
+        let semantic = snapshot.primary_carriers.iter().find(|carrier|carrier.carrier_id==id).context("terminal semantic role missing")?;
+        if semantic.byte_count>maximum { bail!("terminal primary exceeds bounded artifact budget"); }
+        total = total.checked_add(semantic.byte_count).context("terminal primary byte count overflow")?;
+        if total>step.claim.lease.budget.storage_bytes { bail!("terminal primary package exceeds admitted storage budget"); }
+        let bytes = read_explicit_runner_artifact(root,path,semantic.byte_count)?;
+        if bytes.len() as u64 != semantic.byte_count || fullmag_session::hex_sha256(&bytes)!=semantic.preimage_sha256 {
+            bail!("terminal primary artifact differs from its exact semantic raw binding");
+        }
+        primary_preimages.push(fullmag_runner::TerminalPrimaryPreimage {carrier_id:id.into(),bytes});
+    }
+    let legacy_m=read_explicit_runner_artifact(root,RUNNER_FINAL_STATE_FILE,maximum)?;
+    let decoded=fullmag_application::decode_study_artifact_bytes("state",fullmag_application::STUDY_MAGNETIZATION_CODEC_ID,
+        fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION,&legacy_m)?;
+    let DecodedStudyArtifact::MagnetizationState(sample)=decoded else {bail!("terminal raw M has another codec");};
+    if sample.step>snapshot.clock.accepted_step || !fullmag_runner::terminal_output_times_coalesce(sample.time_s,snapshot.clock.time_seconds) {
+        bail!("legacy sampled M clock is not an alias of the actual terminal primary bundle");
+    }
+    let state_bytes=fullmag_application::materialize_study_state_at_terminal_clock(&legacy_m,snapshot.clock)?;
+    let source = fullmag_runtime_control::ObservationSourcePayloadV2 {snapshot_bytes,
+        state_bytes,primary_preimages,
+        coverage_bytes:read_explicit_runner_artifact(root,"solver/terminal_output_coverage.v1.json",fullmag_session::MAX_OUTPUT_HISTORY_METADATA_BYTES)?,
+    };
+    fullmag_runtime_control::prepare_terminal_study_publication(store,accepted,step,plan,&source,outputs,root).map(Some)
+}
+
 fn fdm_cpu_observation_grid(accepted_step: &AcceptedWorkerStep) -> Option<[u32; 3]> {
     let fullmag_ir::BackendPlanIR::Fdm(fdm_plan) = &accepted_step.execution_plan.backend_plan
     else {
@@ -1782,6 +1828,12 @@ fn expected_output_binding(
     }
 }
 
+fn frozen_output_binding(port: &StudyOutputPort, codec_id: &str, version: &str) -> bool {
+    matches!(port.data_kind, StudyPortDataKind::State | StudyPortDataKind::InitialState)
+        && codec_id == fullmag_application::STUDY_FROZEN_STATE_CODEC_ID
+        && version == fullmag_application::STUDY_FROZEN_STATE_CODEC_VERSION
+}
+
 fn persist_completed_worker_execution(
     store: &SessionStore,
     attempt_output_dir: &Path,
@@ -1792,6 +1844,22 @@ fn persist_completed_worker_execution(
     outputs: &[StudyOutputPayload],
     accepted_state_ref: Option<&AcceptedStateRef>,
     observation_source: Option<&ObservationSourcePayload>,
+) -> Result<()> {
+    persist_completed_worker_execution_with_terminal(store,attempt_output_dir,identity,declared_outputs,
+        status,completed_step_count,outputs,accepted_state_ref,observation_source,None)
+}
+
+fn persist_completed_worker_execution_with_terminal(
+    store: &SessionStore,
+    attempt_output_dir: &Path,
+    identity: &WorkerExecutionReceiptIdentity,
+    declared_outputs: &[StudyOutputPort],
+    status: RunStatus,
+    completed_step_count: usize,
+    outputs: &[StudyOutputPayload],
+    accepted_state_ref: Option<&AcceptedStateRef>,
+    observation_source: Option<&ObservationSourcePayload>,
+    terminal_publication: Option<&fullmag_runtime_control::PreparedTerminalPublicationV4>,
 ) -> Result<()> {
     let mut declared = BTreeMap::new();
     for port in declared_outputs {
@@ -1844,8 +1912,8 @@ fn persist_completed_worker_execution(
         })?;
         let (data_kind, codec_id, codec_version) = expected_output_binding(port)?;
         if output.case_id != identity.case_id
-            || output.codec_id != codec_id
-            || output.codec_version != codec_version
+            || ((output.codec_id != codec_id || output.codec_version != codec_version)
+                && !frozen_output_binding(port, &output.codec_id, &output.codec_version))
         {
             bail!("accepted worker output codec version is not registered");
         }
@@ -1854,8 +1922,8 @@ fn persist_completed_worker_execution(
             port_id: output.port_id.clone(),
             case_id: output.case_id.clone(),
             data_kind: data_kind.into(),
-            codec_id: codec_id.into(),
-            codec_version: codec_version.into(),
+            codec_id: output.codec_id.clone(),
+            codec_version: output.codec_version.clone(),
             object_ref,
             byte_count: u64::try_from(output.bytes.len())
                 .context("accepted worker output byte count overflowed")?,
@@ -1882,6 +1950,21 @@ fn persist_completed_worker_execution(
             })
         })
         .transpose()?;
+    if let Some(terminal) = terminal_publication {
+        if status != RunStatus::Completed || observation_source.is_some()
+            || accepted_state_ref != Some(&terminal.manifest.accepted_state_ref) {
+            bail!("terminal completed receipt has incompatible legacy observation fields");
+        }
+        let receipt=WorkerExecutionCompletedReceiptV2 {
+            schema_version:"fullmag.accepted_worker_execution.v2".into(),identity:identity.clone(),status,
+            completed_step_count,outputs:output_refs,accepted_state_ref:terminal.manifest.accepted_state_ref.clone(),
+            terminal_publication:terminal.clone(),
+        };
+        if serde_json::to_vec_pretty(&receipt)?.len() as u64>fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
+            bail!("terminal completed receipt exceeds the existing bounded metadata owner");
+        }
+        return write_immutable_attempt_receipt(attempt_output_dir,WORKER_EXECUTION_COMPLETED_RECEIPT,&receipt);
+    }
     let receipt = WorkerExecutionCompletedReceipt {
         schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(),
         identity: identity.clone(),
@@ -1942,15 +2025,31 @@ fn recover_completed_worker_execution(
     if !started.identity.matches_same_attempt(expected_identity) {
         bail!("existing worker start receipt belongs to another command or claim");
     }
-    let completed: WorkerExecutionCompletedReceipt =
+    let wire: WorkerExecutionCompletedReceiptWire =
         read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT)?.context(
             "worker outcome is unknown because no completed receipt exists; refusing to rerun",
         )?;
-    if completed.schema_version != WORKER_EXECUTION_RECEIPT_SCHEMA
+    let (completed,terminal_publication)=match wire {
+        WorkerExecutionCompletedReceiptWire::V1(receipt)=>(receipt,None),
+        WorkerExecutionCompletedReceiptWire::V2(receipt)=>(WorkerExecutionCompletedReceipt {
+            schema_version:receipt.schema_version,identity:receipt.identity,status:receipt.status,
+            completed_step_count:receipt.completed_step_count,outputs:receipt.outputs,
+            accepted_state_ref:Some(receipt.accepted_state_ref),observation_source:None,
+        },Some(receipt.terminal_publication)),
+    };
+    let terminal_receipt = terminal_publication.as_ref();
+    let version_valid = match terminal_receipt {
+        Some(terminal) => completed.schema_version == "fullmag.accepted_worker_execution.v2"
+            && completed.observation_source.is_none() && expected_observation_grid.is_none()
+            && expected_accepted_state_ref.is_none()
+            && completed.accepted_state_ref.as_ref() == Some(&terminal.manifest.accepted_state_ref),
+        None => completed.schema_version == WORKER_EXECUTION_RECEIPT_SCHEMA
+            && completed.accepted_state_ref.as_ref() == expected_accepted_state_ref,
+    };
+    if !version_valid
         || !completed.identity.matches_same_attempt(expected_identity)
         || completed.status != RunStatus::Completed
         || completed.completed_step_count == 0
-        || completed.accepted_state_ref.as_ref() != expected_accepted_state_ref
     {
         bail!("completed worker receipt is invalid for the current accepted Start");
     }
@@ -2025,8 +2124,8 @@ fn recover_completed_worker_execution(
         let (data_kind, codec_id, codec_version) = expected_output_binding(port)?;
         if output.case_id != expected_identity.case_id
             || output.data_kind != data_kind
-            || output.codec_id != codec_id
-            || output.codec_version != codec_version
+            || ((output.codec_id != codec_id || output.codec_version != codec_version)
+                && !frozen_output_binding(port, &output.codec_id, &output.codec_version))
         {
             bail!(
                 "completed worker output `{}` differs from its accepted port",
@@ -2054,8 +2153,8 @@ fn recover_completed_worker_execution(
         }
         fullmag_application::decode_study_artifact_bytes(
             data_kind,
-            codec_id,
-            codec_version,
+            &output.codec_id,
+            &output.codec_version,
             &bytes,
         )
         .with_context(|| format!("validate recovered worker output `{}`", output.port_id))?;
@@ -2125,6 +2224,7 @@ fn recover_completed_worker_execution(
         bail!("recovered worker artifacts exceed the attempt storage budget");
     }
     Ok(AcceptedRunnerExecution {
+        terminal_publication,
         status: completed.status,
         completed_step_count: completed.completed_step_count,
         outputs,
@@ -2142,106 +2242,7 @@ pub(crate) fn materialize_resolved_study_inputs(
     store: &SessionStore,
     accepted_step: &AcceptedWorkerStep,
 ) -> Result<ExecutionPlanIR> {
-    let resolved_input = &accepted_step.resolved_input;
-    resolved_input
-        .validate()
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    if resolved_input.run_id != accepted_step.claim.run_id
-        || resolved_input.task_id != accepted_step.claim.task_id
-        || resolved_input.attempt_id != accepted_step.claim.attempt_id
-        || resolved_input.ownership_epoch != accepted_step.claim.ownership_epoch
-    {
-        bail!("accepted worker inputs differ from the current task claim");
-    }
-    let plan_fingerprint = fullmag_session::canonical_json_sha256(
-        &serde_json::to_value(&accepted_step.execution_plan)
-            .context("serialize accepted worker execution plan")?,
-    );
-    if resolved_input.plan_fingerprint != plan_fingerprint {
-        bail!("accepted worker inputs differ from the pinned execution plan");
-    }
-
-    let mut declared = BTreeMap::<&str, &StudyInputPort>::new();
-    for port in &accepted_step.study_inputs {
-        fullmag_session::repository_path::validate_store_id(&port.port_id)
-            .with_context(|| format!("accepted study input port `{}` is invalid", port.port_id))?;
-        if declared.insert(port.port_id.as_str(), port).is_some() {
-            bail!("accepted study input port `{}` is duplicated", port.port_id);
-        }
-    }
-    for port in &accepted_step.study_inputs {
-        // Authored initial conditions are already part of the immutable
-        // ProblemIR and canonical plan reconstructed by the accepted loader.
-        if port.required
-            && !resolved_input.inputs.contains_key(&port.port_id)
-            && !matches!(&port.source, StudyInputSource::AuthoredInitialState { .. })
-        {
-            bail!(
-                "required accepted study input `{}` has no resolved artifact",
-                port.port_id
-            );
-        }
-    }
-
-    let mut execution_plan = accepted_step.execution_plan.clone();
-    let mut materialized_state = false;
-    for (port_id, input) in &resolved_input.inputs {
-        let port = declared.get(port_id.as_str()).with_context(|| {
-            format!("resolved input `{port_id}` is not declared by the accepted study")
-        })?;
-        input
-            .validate()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        let artifact = input.study_artifact.as_ref().with_context(|| {
-            format!("resolved study input `{port_id}` has no typed CAS artifact binding")
-        })?;
-        let expected_data_kind = match port.data_kind {
-            StudyPortDataKind::InitialState => "initial_state",
-            StudyPortDataKind::State => "state",
-            unsupported => bail!(
-                "accepted worker has no solver input binding for `{unsupported:?}` port `{port_id}`"
-            ),
-        };
-        if artifact.data_kind != expected_data_kind {
-            bail!(
-                "accepted study input `{port_id}` expects `{expected_data_kind}` but its artifact is `{}`",
-                artifact.data_kind
-            );
-        }
-        if let StudyInputSource::PinnedArtifact {
-            artifact_id,
-            content_sha256,
-        } = &port.source
-        {
-            if artifact.artifact_id != *artifact_id || artifact.object_ref != *content_sha256 {
-                bail!("pinned artifact input `{port_id}` differs from its accepted identity");
-            }
-        }
-        if materialized_state {
-            bail!("accepted worker cannot bind multiple magnetization inputs to one initial state");
-        }
-        let bytes = store
-            .cas()
-            .get(&artifact.object_ref)?
-            .with_context(|| format!("accepted input `{port_id}` CAS object is missing"))?;
-        let decoded = fullmag_application::decode_study_artifact(artifact, &bytes)
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
-            .with_context(|| format!("decode accepted study input `{port_id}`"))?;
-        let DecodedStudyArtifact::MagnetizationState(state) = decoded else {
-            bail!("accepted state input `{port_id}` decoded to a non-state artifact");
-        };
-        execution_plan = fullmag_runner::materialize_study_magnetization_input(
-            &execution_plan,
-            &state.layout,
-            &state.values,
-        )
-        .with_context(|| {
-            format!("materialize accepted state input `{port_id}` into runner plan")
-        })?;
-        materialized_state = true;
-    }
-
-    Ok(execution_plan)
+    fullmag_runtime_control::materialize_accepted_worker_execution_plan(store, accepted_step)
 }
 
 /// Match canonical CLI stage timing: relaxation may have only a step or
@@ -2448,7 +2449,7 @@ fn execute_accepted_worker_start_with_snapshot(
     }
     // Validate the same bounded RunSpec metadata before backend dispatch;
     // FEM must not bypass the live-workspace/start-policy binding guard.
-    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id)?;
+    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id, false)?;
     if request.backend == "fem" {
         crate::accepted_fem_study_worker::validate_declared_outputs(&study_step.outputs)
             .context("validate accepted FEM output contract before recovery or reservation")?;
@@ -2620,7 +2621,27 @@ fn execute_accepted_worker_start_with_snapshot(
             format!("fdm_{}", request.device),
         );
         let field_cadence = live_observation.field_cadence();
-        let runner_result =
+        let frozen = match accepted_step.resolved_input.frozen_stage_context.as_ref() {
+            Some(binding) => {
+                let fullmag_ir::BackendPlanIR::Fdm(plan) = &execution_plan.backend_plan else {
+                    bail!("admitted frozen stage does not have an FDM plan");
+                };
+                Some(fullmag_runtime_control::frozen_stage_lifecycle::load_execution_context(store,
+                    &accepted_step.claim.run_id, &accepted_step.step_id, plan,
+                    &accepted_step.claim, binding)?)
+            }
+            None => None,
+        };
+        let runner_result = if let Some(context) = &frozen {
+            fullmag_runner::run_planned_problem_with_live_preview_and_frozen_stage_context_and_observer(
+                &problem, &execution_plan, until_seconds, &attempt_output_dir,
+                storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
+                interrupt_requested, &context.frozen, context.source_frozen_plan.as_ref(),
+                field_cadence, |update| {
+                    live_observation.observe(&update);
+                    StepAction::Continue
+                })
+        } else {
         fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
             &problem,
             &execution_plan,
@@ -2636,15 +2657,16 @@ fn execute_accepted_worker_start_with_snapshot(
                 live_observation.observe(&update);
                 StepAction::Continue
             },
-        );
-        // Keep observation cleanup on both the successful and error return
-        // paths. The sidecar never becomes an accepted output.
+        )
+        };
+        // Drain the live sidecar for both frozen and ordinary execution, including errors.
         live_observation.finish();
         let result = runner_result
         .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("execute accepted FDM {} runner plan", request.device))?;
         if result.status == RunStatus::Cancelled {
             return Ok(AcceptedRunnerExecution {
+        terminal_publication: None,
                 status: result.status,
                 completed_step_count: result.steps.len(),
                 outputs: Vec::new(),
@@ -2660,16 +2682,26 @@ fn execute_accepted_worker_start_with_snapshot(
                 request.device
             );
         }
-        let outputs = collect_runner_study_outputs(
+        let lifecycle = if frozen.is_some() {
+            let bytes = read_explicit_runner_artifact(&attempt_output_dir,
+                "solver/frozen_output_lifecycle.v1.json", 64 * 1024 * 1024)?;
+            Some(fullmag_runner::constraints::FrozenOutputLifecycleV1::decode(&bytes)?)
+        } else { None };
+        let outputs = collect_runner_study_outputs_with_lifecycle(
             &study_step.outputs,
             case_id,
             &result,
             &attempt_output_dir,
             accepted_step.claim.lease.budget.storage_bytes,
+            lifecycle.as_ref(),
         )
         .context("collect explicit typed outputs from the accepted runner attempt")?;
-        let accepted_state_ref =
-            accepted_state_ref_from_runner_snapshot(&attempt_output_dir, accepted_step, true)?;
+        let terminal_publication = if result.status == RunStatus::Completed {
+            collect_terminal_study_publication(store,&accepted,accepted_step,&execution_plan,&attempt_output_dir,&outputs)?
+        } else { None };
+        let accepted_state_ref = if let Some(terminal) = &terminal_publication {
+            Some(terminal.manifest.accepted_state_ref.clone())
+        } else { accepted_state_ref_from_runner_snapshot(&attempt_output_dir, accepted_step, true)? };
         let observation_source = collect_fdm_cpu_observation_source(
             &attempt_output_dir,
             accepted_step,
@@ -2679,7 +2711,7 @@ fn execute_accepted_worker_start_with_snapshot(
         if let Some(storage) = &mut storage {
             storage.finish(true, &attempt_output_dir)?;
         }
-        persist_completed_worker_execution(
+        persist_completed_worker_execution_with_terminal(
             store,
             &attempt_output_dir,
             &receipt_identity,
@@ -2689,10 +2721,12 @@ fn execute_accepted_worker_start_with_snapshot(
             &outputs,
             accepted_state_ref.as_ref(),
             observation_source.as_ref(),
+            terminal_publication.as_ref(),
         )
         .context("persist immutable completed worker output receipt")?;
 
         Ok(AcceptedRunnerExecution {
+        terminal_publication,
             status: result.status,
             completed_step_count: result.steps.len(),
             outputs,
@@ -2718,6 +2752,89 @@ fn execute_accepted_worker_start_with_snapshot(
     execution
 }
 
+/// These existing live/start-policy fields describe orchestration only. Physical
+/// parameters still have no binding in inspection workers. Validate against
+/// immutable acceptance, never the current API incarnation (cold recovery).
+pub(crate) fn validate_accepted_inspection_run_parameters(
+    specification: &fullmag_application::RunSpecification,
+    step_id: &str,
+) -> Result<()> {
+    validate_inspection_run_parameters(specification, step_id, false)
+}
+
+fn validate_inspection_run_parameters(
+    specification: &fullmag_application::RunSpecification,
+    step_id: &str,
+    allow_operation_profile: bool,
+) -> Result<()> {
+    validate_accepted_worker_parameters(&specification.parameters, step_id, allow_operation_profile)?;
+    let parameters = specification.parameters.as_object()
+        .context("inspection RunSpec parameters must be an object")?;
+    if parameters.keys().any(|key| {
+        key != "live_workspace" && key != fullmag_session::ACCEPTED_RUN_START_POLICY_KEY
+            && key != crate::accepted_solver_profile::PARAMETER
+    }) {
+        bail!("accepted inspection has no binding for physical RunSpec parameters");
+    }
+    let Some(live) = parameters.get("live_workspace") else { return Ok(()); };
+    let live = live.as_object().context("inspection live workspace binding must be an object")?;
+    let expected_keys: BTreeSet<_> = [
+        "api_instance_id", "session_id", "session_epoch", "scene_revision", "command_id",
+        "request_idempotency_key", "step_id", "command", "startup_source_sha256",
+    ].into_iter().collect();
+    if live.keys().map(String::as_str).filter(|key| *key != "execution_input")
+        .collect::<BTreeSet<_>>() != expected_keys {
+        bail!("inspection live workspace binding has unsupported fields");
+    }
+    let text = |key: &str| -> Result<&str> {
+        live.get(key).and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .with_context(|| format!("inspection live workspace `{key}` is missing"))
+    };
+    let api = text("api_instance_id")?;
+    let session = text("session_id")?;
+    let command = text("command_id")?;
+    let epoch = live["session_epoch"].as_u64().context("inspection session epoch is invalid")?;
+    let revision = live["scene_revision"].as_u64().context("inspection scene revision is invalid")?;
+    let request_key = if live["request_idempotency_key"].is_null() {
+        ""
+    } else {
+        text("request_idempotency_key")?
+    };
+    if !live["step_id"].is_null() && live["step_id"].as_str() != Some(step_id) {
+        bail!("inspection live workspace selects another step");
+    }
+    let identity = format!("{api}\0{session}\0{epoch}\0{revision}\0{command}\0{request_key}");
+    let digest = fullmag_session::hex_sha256(identity.as_bytes());
+    let project_digest = fullmag_session::hex_sha256(format!("{api}\0{session}").as_bytes());
+    if specification.run_id.as_str() != format!("run-live-{digest}")
+        || specification.study.study_id.as_str() != format!("live-study-{digest}")
+        || specification.snapshot.project_id.as_str() != format!("project-live-{project_digest}")
+        || specification.snapshot.definition_revision != revision
+    {
+        bail!("inspection live workspace differs from its immutable run/project/study binding");
+    }
+    let authored_command = &live["command"];
+    if live["startup_source_sha256"].is_null() {
+        if authored_command.get("command_id").and_then(serde_json::Value::as_str) != Some(command)
+            || authored_command.get("kind").and_then(serde_json::Value::as_str) != Some("solve")
+        {
+            bail!("inspection live command must be the accepted Solve command");
+        }
+    } else {
+        let source = text("startup_source_sha256")?;
+        if source.len() != 64 || !source.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || authored_command != &serde_json::json!({
+                "kind": "startup_script", "request_id": command, "source_sha256": source,
+            })
+            || request_key != command || !live["step_id"].is_null()
+        {
+            bail!("inspection startup source differs from its accepted command");
+        }
+    }
+    Ok(())
+}
+
 /// Same supervised Start/Stop/receipt owner as solver tasks; the physical effect remains in the canonical runner.
 fn execute_accepted_closed_loop_worker_start(
     store:&SessionStore, accepted:&fullmag_runtime_control::AcceptedStudySnapshot,
@@ -2730,9 +2847,12 @@ fn execute_accepted_closed_loop_worker_start(
         || request.backend!="fem" || !matches!(request.device.as_str(),"cpu"|"auto") || request.precision!="double" || request.mode!="strict"
         || accepted_step.until_seconds.is_some() || !accepted_step.resolved_input.inputs.is_empty()
         || study_step.outputs.len()!=1 || study_step.outputs[0].port_id!="inspection" || study_step.outputs[0].data_kind!=StudyPortDataKind::Artifact
-        || !accepted.run.specification.parameters.as_object().is_some_and(|values|values.is_empty())
         || !accepted.run.specification.seeds.is_empty() || !accepted_step.problem.problem_meta.seeds.is_empty() {
-        bail!("accepted inspection requires v4 FEM CPU/auto strict double, one artifact, no horizon/state/parameters/seeds");
+        bail!("accepted inspection requires v4 FEM CPU/auto strict double, one artifact, no horizon/state/seeds");
+    }
+    validate_inspection_run_parameters(&accepted.run.specification, &study_step.step_id, true)?;
+    if !store.accepted_run_start_permitted(accepted.run.specification.run_id.as_str())? {
+        bail!("accepted inspection refuses to execute before explicit Compute release");
     }
     let maximum=fullmag_runtime_control::study_inspection::inspection_bundle_budget(&accepted_step.claim)?;
     let receipt=accepted.read_task_preparation(store, accepted_step.claim.task_id.as_str())?;
@@ -2764,11 +2884,27 @@ fn execute_accepted_closed_loop_worker_start(
     };
     write_immutable_attempt_receipt(&attempt,WORKER_EXECUTION_STARTED_RECEIPT,&WorkerExecutionStartedReceipt {identity:identity.clone()})?;
     let mut storage=prepare_accepted_project_storage(&accepted_step.problem,store,accepted,accepted_step,&identity,&attempt)?;
-    let execution:Result<AcceptedRunnerExecution>=(|| {
-        let artifacts=match fullmag_runner::execute_antenna_closed_loop_inspection(&input,&requested_execution,&output_id,interrupt_requested) {
+    let operation_started = Instant::now();
+    let execution:Result<AcceptedRunnerExecution>=accepted_antenna_progress::with_progress(
+        &attempt, accepted_step, &input, |observer| {
+        let config = crate::accepted_solver_profile::config(&accepted.run.specification.parameters)?;
+        let mut profile = fullmag_runner::SolverProfileState::new(config.clone().unwrap_or_default());
+        let result = fullmag_runner::execute_antenna_closed_loop_inspection_observed_typed(
+            &input, &requested_execution, &output_id, interrupt_requested,
+            config.as_ref(), &mut profile, Some(observer));
+        if config.is_some() {
+            if let Err(error) = crate::accepted_solver_profile::persist(&attempt, &identity, &profile) {
+                return Err(match result {
+                    Ok(_) => error.context("persist accepted operation diagnostics before terminal outcome"),
+                    Err(native) => anyhow::Error::new(native).context(format!("operation diagnostics persistence also failed: {error:#}")),
+                });
+            }
+        }
+        let artifacts=match result {
             Ok(artifacts)=>artifacts,
-            Err(_error) if interrupt_requested.is_some_and(|flag|flag.load(Ordering::Acquire))=>return Ok(AcceptedRunnerExecution {status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None}),
-            Err(error)=>return Err(anyhow::anyhow!(error.to_string())).context("execute canonical full-volume inspection"),
+            Err(_error) if interrupt_requested.is_some_and(|flag|flag.load(Ordering::Acquire))=>return Ok(AcceptedRunnerExecution {
+        terminal_publication: None,status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None}),
+            Err(error)=>return Err(anyhow::Error::new(error)).context("execute canonical full-volume inspection"),
         };
         let manifest_path=format!("antenna/field_solutions/{output_id}/manifest.v2.json");
         let mut manifest=None;let mut payloads=BTreeMap::new();let mut total=0usize;
@@ -2784,8 +2920,16 @@ fn execute_accepted_closed_loop_worker_start(
         drop(payloads);drop(manifest);
         fullmag_runtime_control::study_inspection::validate_accepted_inspection_bytes(&accepted_step.problem,study_step,&bytes,maximum)?;
         if interrupt_requested.is_some_and(|flag|flag.load(Ordering::Acquire)) {
-            return Ok(AcceptedRunnerExecution {status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None});
+            return Ok(AcceptedRunnerExecution {
+        terminal_publication: None,status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None});
         }
+        observer(fullmag_runner::AntennaOperationProgress {
+            phase: fullmag_runner::AntennaOperationPhase::PublishingResult,
+            completed_targets: input.field_sampling.positions_xyz_m.len() as u64,
+            total_targets: input.field_sampling.positions_xyz_m.len() as u64,
+            source_cells: input.conductivity_spm_per_element.len() as u64,
+            elapsed_seconds: operation_started.elapsed().as_secs_f64(),
+        });
         let output=StudyOutputPayload {port_id:"inspection".into(),case_id:case_id.into(),codec_id:fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID.into(),codec_version:fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION.into(),bytes};
         let root=storage.as_ref().map(|value|value.data_root()).unwrap_or(&attempt);
         // One owned framing file; no untrusted payload path is extracted to the filesystem.
@@ -2795,8 +2939,9 @@ fn execute_accepted_closed_loop_worker_start(
         std::fs::File::open(root)?.sync_all()?;
         if let Some(storage)=&mut storage { storage.finish(true,&attempt)?; }
         persist_completed_worker_execution(store,&attempt,&identity,&study_step.outputs,RunStatus::Completed,1,std::slice::from_ref(&output),None,None)?;
-        Ok(AcceptedRunnerExecution {status:RunStatus::Completed,completed_step_count:1,outputs:vec![output],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None})
-    })();
+        Ok(AcceptedRunnerExecution {
+        terminal_publication: None,status:RunStatus::Completed,completed_step_count:1,outputs:vec![output],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None})
+    });
     if let Some(storage)=&mut storage {
         match &execution { Ok(result) if result.status==RunStatus::Cancelled=>storage.note_outcome("cancelled",None),Err(error)=>storage.note_outcome("failed",Some(format!("{error:#}"))),_=>{} }
         storage.finish(execution.as_ref().is_ok_and(|result|result.status==RunStatus::Completed),&attempt)?;
@@ -2910,6 +3055,7 @@ fn execute_accepted_fem_worker_start(
                 completed_step_count,
                 attempt_output_dir,
             } => Ok(AcceptedRunnerExecution {
+        terminal_publication: None,
                 status: RunStatus::Cancelled,
                 completed_step_count,
                 outputs: Vec::new(),
@@ -2937,6 +3083,7 @@ fn execute_accepted_fem_worker_start(
                 )
                 .context("persist immutable completed FEM worker output receipt")?;
                 Ok(AcceptedRunnerExecution {
+        terminal_publication: None,
                     status: execution.status,
                     completed_step_count: execution.completed_step_count,
                     outputs: execution.outputs,
@@ -3087,6 +3234,7 @@ fn execute_accepted_antenna_worker_start(
             )?;
         }
         Ok(AcceptedRunnerExecution {
+        terminal_publication: None,
             status,
             completed_step_count: count,
             outputs,
@@ -3202,7 +3350,7 @@ fn recover_accepted_fdm_worker_attempt(
     refuse_known_prelaunch_failure(&existing_path, identity)?;
     let expected_accepted_state_ref =
         accepted_state_ref_from_runner_snapshot(&existing_path, accepted_step, false)?;
-    recover_completed_worker_execution(
+    let recovered = recover_completed_worker_execution(
         store,
         &existing_path,
         identity,
@@ -3211,7 +3359,11 @@ fn recover_accepted_fdm_worker_attempt(
         expected_accepted_state_ref.as_ref(),
         fdm_cpu_observation_grid(accepted_step),
     )
-    .context("recover completed accepted worker attempt without rerunning solver")
+    .context("recover completed accepted worker attempt without rerunning solver")?;
+    if let Some(terminal) = &recovered.terminal_publication {
+        fullmag_runtime_control::validate_prepared_terminal_publication(store,accepted_step,terminal)?;
+    }
+    Ok(recovered)
 }
 
 fn recover_accepted_fem_worker_attempt(
@@ -3473,8 +3625,17 @@ fn apply_accepted_start_effect(
         &accepted_step,
         "default",
         Some(&control.interrupt_requested),
-    )
-    .context("execute accepted worker Start")?;
+    );
+    let execution = match execution {
+        Ok(execution) => execution,
+        Err(error) if error.chain().any(|cause| matches!(
+            cause.downcast_ref::<fullmag_runner::ClosedLoopExecutionError>(),
+            Some(fullmag_runner::ClosedLoopExecutionError::NativeCallFailed { .. })
+        )) => {
+            return publish_native_call_failure(store, claim, control, error);
+        }
+        Err(error) => return Err(error).context("execute accepted worker Start"),
+    };
     if execution.status == RunStatus::Cancelled {
         let control_result = finish_worker_control(store, claim, control)?;
         return publish_worker_stopped(store, claim, control_result);
@@ -3495,6 +3656,7 @@ fn apply_accepted_start_effect(
     if !durable_execution.recovered_from_receipt
         || durable_execution.outputs != execution.outputs
         || durable_execution.accepted_state_ref != execution.accepted_state_ref
+        || durable_execution.terminal_publication != execution.terminal_publication
     {
         bail!("worker receipt recovery differs from the completed runner output");
     }
@@ -3557,6 +3719,10 @@ fn apply_accepted_start_effect(
         // slow store a busy writer between them restarted the publication
         // from scratch until the retry budget ran out.
         let _publication = store.write_transaction()?;
+        if let Some(terminal) = &durable_execution.terminal_publication {
+            fullmag_runtime_control::publish_terminal_study_outputs(store,accepted,claim,
+                &accepted_step.step_id,&durable_execution.outputs,terminal)
+        } else {
         fullmag_runtime_control::publish_study_outputs(
             store,
             accepted,
@@ -3566,6 +3732,7 @@ fn apply_accepted_start_effect(
             durable_execution.accepted_state_ref.as_ref(),
             durable_execution.observation_source.as_ref(),
         )
+        }
     })
     .context("publish accepted worker outputs")?;
     fullmag_runtime_control::validate_study_task_completion(store, claim)
@@ -3600,6 +3767,59 @@ fn apply_accepted_start_effect(
             receipt_recovered_before_publication: true,
         },
     ))
+}
+
+/// Freeze new heartbeats with the existing Completing barrier, drain every
+/// prior control command, then publish failure. Terminal events forbid ACKs.
+fn publish_native_call_failure(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    control: WorkerControlLoop,
+    error: anyhow::Error,
+) -> Result<AcceptedWorkerProcessOutcome> {
+    {
+        let _transaction = retry_store_writer_busy(|| store.write_transaction())?;
+        let recovered = fullmag_runtime_control::recover_coordinator(store, claim)?;
+        let mut coordinator =
+            fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
+        match coordinator.phase() {
+            fullmag_application::CoordinatorPhase::Stopping => {}
+            fullmag_application::CoordinatorPhase::Running => {
+                commit_worker_event(store, &mut coordinator,
+                    fullmag_application::WorkerEvent::Completing)?;
+            }
+            _ => bail!("native failure barrier requires the exact running or stopping claim"),
+        }
+    }
+    let control_result = finish_worker_control(store, claim, control)?;
+    if control_result.stop_received {
+        return publish_worker_stopped(store, claim, control_result);
+    }
+    let stopped = {
+        let _transaction = retry_store_writer_busy(|| store.write_transaction())?;
+        let recovered = fullmag_runtime_control::recover_coordinator(store, claim)?;
+        let mut coordinator =
+            fullmag_application::DurableWorkerCoordinator::new(recovered.coordinator);
+        match coordinator.phase() {
+            fullmag_application::CoordinatorPhase::Stopping => true,
+            fullmag_application::CoordinatorPhase::Running => {
+                commit_worker_event(store, &mut coordinator,
+                    fullmag_application::WorkerEvent::Failed {
+                        retryable: false, reason: format!("{error:#}"),
+                    })?;
+                false
+            }
+            _ => bail!("native failure publication requires the exact running or stopping claim"),
+        }
+    };
+    if stopped {
+        let interrupt = AtomicBool::new(false);
+        let consumed = consume_worker_control_commands(store, claim, &interrupt)?;
+        return publish_worker_stopped(store, claim, consumed);
+    }
+    // The process remains unsuccessful. Only its fenced terminal report and
+    // the supervisor's reaped-child proof permit release of this allocation.
+    Err(error).context("reported nonretryable prepared native failure")
 }
 
 fn finish_worker_control(
@@ -3774,13 +3994,13 @@ fn consume_worker_control_commands_with_inbox(
             fullmag_application::WorkerCommand::Heartbeat {
                 lease_heartbeat_sequence,
             } => {
-                inbox
-                    .receive(&command, |_| Ok(()))
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-                let recovered_after_apply = retry_store_writer_busy(|| {
+                inbox.receive_control(&command, |_| Ok(()))?;
+                // Keep recovery, duplicate detection, and ACK publication under
+                // one writer fence so Completing cannot stale this watermark.
+                let _transaction = retry_store_writer_busy(|| store.write_transaction())?;
+                let recovered_after_apply =
                     fullmag_runtime_control::recover_coordinator(store, claim)
-                })
-                .context("recover coordinator before worker HeartbeatAck")?;
+                        .context("recover coordinator before worker HeartbeatAck")?;
                 if !recovered_after_apply.events.iter().any(|event| {
                     matches!(
                         &event.event,
@@ -3804,12 +4024,10 @@ fn consume_worker_control_commands_with_inbox(
                 acknowledged_heartbeat_count += 1;
             }
             fullmag_application::WorkerCommand::Stop { .. } => {
-                inbox
-                    .receive(&command, |_| {
-                        interrupt_requested.store(true, Ordering::Release);
-                        Ok(())
-                    })
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                inbox.receive_control(&command, |_| {
+                    interrupt_requested.store(true, Ordering::Release);
+                    Ok(())
+                })?;
                 return Ok(WorkerControlLoopResult {
                     stop_received: true,
                     acknowledged_heartbeat_count,
@@ -3961,43 +4179,46 @@ fn commit_worker_event(
     bail!("worker event publication exceeded concurrent transition retry limit")
 }
 
+/// Re-publish the coordinator's retained event. Only the busy writer is
+/// retried, with the worker wait: the supervisor, the scheduler passes and the
+/// API take the unfair writer back to back, so a five-second lockstep poll
+/// failed running tasks on a 9p host folder (HeartbeatAck lagged 8-20 s).
 fn retry_pending_worker_event(
     store: &SessionStore,
     coordinator: &mut fullmag_application::DurableWorkerCoordinator,
     expected: &fullmag_application::WorkerEventEnvelope,
 ) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let mut publication_error = None;
-        let result = coordinator.retry_publication(|transition| {
-            fullmag_runtime_control::commit_transition(store, transition)
-                .map(|_| ())
-                .map_err(|error| {
-                    publication_error = Some(error);
-                    fullmag_application::CoordinatorError::Invalid(
-                        "durable worker event publication retry failed".into(),
-                    )
-                })
-        });
-        match (result, publication_error) {
-            (Ok(fullmag_application::CoordinatorMessage::Event(envelope)), None)
-                if envelope == *expected =>
-            {
-                return Ok(());
+    let published = fullmag_runtime_control::retry_store_writer_busy_within(
+        fullmag_runtime_control::WORKER_STORE_WRITER_WAIT,
+        || {
+            let mut publication_error = None;
+            let result = coordinator.retry_publication(|transition| {
+                fullmag_runtime_control::commit_transition(store, transition)
+                    .map(|_| ())
+                    .map_err(|error| {
+                        publication_error = Some(error);
+                        fullmag_application::CoordinatorError::Invalid(
+                            "durable worker event publication retry failed".into(),
+                        )
+                    })
+            });
+            match (result, publication_error) {
+                (Ok(message), None) => Ok(message),
+                (_, Some(error)) => Err(error),
+                (Err(error), None) => Err(anyhow::Error::new(error)),
             }
-            (Ok(fullmag_application::CoordinatorMessage::Event(_)), None) => {
-                bail!("retried worker event differs from the retained publication");
-            }
-            (Ok(fullmag_application::CoordinatorMessage::Command(_)), None) => {
-                bail!("retried worker publication is not an event");
-            }
-            (_, Some(error)) if is_store_writer_busy(&error) && Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            (_, Some(error)) => return Err(error).context("publish durable worker event"),
-            (Err(error), None) => {
-                return Err(anyhow::Error::new(error)).context("publish durable worker event");
-            }
+        },
+    )
+    .context("publish durable worker event")?;
+    match published {
+        fullmag_application::CoordinatorMessage::Event(envelope) if envelope == *expected => {
+            Ok(())
+        }
+        fullmag_application::CoordinatorMessage::Event(_) => {
+            bail!("retried worker event differs from the retained publication")
+        }
+        fullmag_application::CoordinatorMessage::Command(_) => {
+            bail!("retried worker publication is not an event")
         }
     }
 }
@@ -4020,6 +4241,18 @@ pub(crate) fn collect_runner_study_outputs(
     result: &RunResult,
     attempt_output_dir: &Path,
     max_output_bytes: u64,
+) -> Result<Vec<StudyOutputPayload>> {
+    collect_runner_study_outputs_with_lifecycle(declared, case_id, result, attempt_output_dir,
+        max_output_bytes, None)
+}
+
+pub(crate) fn collect_runner_study_outputs_with_lifecycle(
+    declared: &[StudyOutputPort],
+    case_id: &str,
+    result: &RunResult,
+    attempt_output_dir: &Path,
+    max_output_bytes: u64,
+    lifecycle: Option<&fullmag_runner::constraints::FrozenOutputLifecycleV1>,
 ) -> Result<Vec<StudyOutputPayload>> {
     if result.status != RunStatus::Completed {
         bail!("accepted study outputs require a completed runner result");
@@ -4066,6 +4299,33 @@ pub(crate) fn collect_runner_study_outputs(
                     RUNNER_FINAL_STATE_FILE,
                     max_output_bytes.saturating_sub(total_bytes),
                 )?;
+                let (bytes, codec_id, codec_version) = if let Some(lifecycle) = lifecycle {
+                    let decoded = fullmag_application::decode_study_artifact_bytes("state",
+                        fullmag_application::STUDY_MAGNETIZATION_CODEC_ID,
+                        fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION, &bytes)?;
+                    let DecodedStudyArtifact::MagnetizationState(state) = decoded else {
+                        bail!("terminal M codec returned another state kind");
+                    };
+                    // Runner already validated the child against the actual terminal state.
+                    // The envelope binds that state semantically; its raw hash covers the whole envelope.
+                    let child = lifecycle.frozen_spins.as_ref().map(serde_json::to_string).transpose()?
+                        .map(serde_json::value::RawValue::from_string).transpose()?;
+                    let set = serde_json::value::RawValue::from_string(serde_json::to_string(&lifecycle.frozen_activation_set)?)?;
+                    if let Some(child) = &lifecycle.frozen_spins {
+                        if state.step > child.step || !fullmag_runner::terminal_output_times_coalesce(child.time_s,state.time_s)
+                            || child.magnetization.len() != state.values.len()
+                            || child.magnetization.iter().flatten().zip(state.values.iter().flatten())
+                                .any(|(left, right)| left.to_bits() != right.to_bits())
+                        { bail!("terminal lifecycle child differs from final M output"); }
+                    }
+                    let terminal_clock=lifecycle.frozen_spins.as_ref().map(|child|fullmag_quantities::ObservationClock {
+                        accepted_step:child.step,time_seconds:child.time_s,dt_seconds:(child.dt>0.0).then_some(child.dt),
+                    });
+                    (fullmag_application::encode_frozen_study_state(&bytes, child.as_deref(), &set,terminal_clock)?,
+                        fullmag_application::STUDY_FROZEN_STATE_CODEC_ID,
+                        fullmag_application::STUDY_FROZEN_STATE_CODEC_VERSION)
+                } else { (bytes, fullmag_application::STUDY_MAGNETIZATION_CODEC_ID,
+                    fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION) };
                 push_typed_output(
                     &mut outputs,
                     &mut total_bytes,
@@ -4073,8 +4333,8 @@ pub(crate) fn collect_runner_study_outputs(
                     port,
                     case_id,
                     "state",
-                    fullmag_application::STUDY_MAGNETIZATION_CODEC_ID,
-                    fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION,
+                    codec_id,
+                    codec_version,
                     bytes,
                 )?;
             }
@@ -4199,6 +4459,135 @@ pub(crate) fn read_explicit_runner_artifact(
         bail!("runner artifact `{file_name}` changed while it was being read");
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod closed_loop_run_parameter_tests {
+    use super::validate_accepted_inspection_run_parameters;
+    use fullmag_application::{ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget,
+        RunId, RunSpecification, StudyId, StudyReference};
+    use serde_json::json;
+
+    fn startup() -> RunSpecification {
+        let source = "a".repeat(64);
+        let identity = fullmag_session::hex_sha256(b"api\0session\01\07\0request\0request");
+        let project = fullmag_session::hex_sha256(b"api\0session");
+        let mut specification = RunSpecification::new(
+            ProjectSnapshot {
+                project_id: ProjectId::parse(format!("project-live-{project}")).unwrap(),
+                definition_revision: 7,
+                definition_sha256: "b".repeat(64),
+            },
+            StudyReference {
+                study_id: StudyId::parse(format!("live-study-{identity}")).unwrap(),
+                plan_version: "study_plan.v4".into(),
+                plan_sha256: "c".repeat(64),
+            },
+            "d".repeat(64),
+            json!({"live_workspace": {
+                "api_instance_id": "api", "session_id": "session", "session_epoch": 1,
+                "scene_revision": 7, "command_id": "request", "request_idempotency_key": "request",
+                "step_id": null, "startup_source_sha256": source,
+                "command": {"kind": "startup_script", "request_id": "request", "source_sha256": source},
+            }}),
+            RequestedExecution { backend: "fem".into(), device: "cpu".into(),
+                precision: "double".into(), mode: "strict".into(),
+                minimum_resources: Some(RequestedResourceBudget {
+                    cpu_millis: 1000, memory_bytes: 1024, gpu_memory_bytes: 0, storage_bytes: 1024,
+                }),
+            },
+        );
+        specification.run_id = RunId::parse(format!("run-live-{identity}")).unwrap();
+        specification.validate().unwrap();
+        specification
+    }
+
+    #[test]
+    fn startup_control_metadata_is_not_an_unbound_physics_parameter() {
+        let mut specification = startup();
+        validate_accepted_inspection_run_parameters(&specification, "inspect").unwrap();
+        specification.parameters[fullmag_session::ACCEPTED_RUN_START_POLICY_KEY] = json!({
+            "schema_version": "accepted_run_start_policy.v1", "mode": "manual",
+        });
+        // The existing durable start gate separately requires the exact Compute release.
+        validate_accepted_inspection_run_parameters(&specification, "inspect").unwrap();
+        specification.parameters = json!({});
+        validate_accepted_inspection_run_parameters(&specification, "inspect").unwrap();
+    }
+
+    #[test]
+    fn startup_and_solve_accept_versioned_input_identity_and_legacy_binding() {
+        let mut solve = startup();
+        solve.parameters["live_workspace"]["command"] = json!({
+            "kind": "solve", "command_id": "request",
+        });
+        solve.parameters["live_workspace"]["startup_source_sha256"] = json!(null);
+        solve.parameters["live_workspace"]["request_idempotency_key"] = json!(null);
+        let solve_identity = fullmag_session::hex_sha256(b"api\0session\01\07\0request\0");
+        solve.run_id = RunId::parse(format!("run-live-{solve_identity}")).unwrap();
+        solve.study.study_id = StudyId::parse(format!("live-study-{solve_identity}")).unwrap();
+        for mut specification in [startup(), solve] {
+            validate_accepted_inspection_run_parameters(&specification, "inspect").unwrap();
+            specification.parameters["live_workspace"]["execution_input"] = json!({
+                "schema_version": fullmag_authoring::SCENE_EXECUTION_INPUT_SCHEMA,
+                "sha256": "f".repeat(64),
+            });
+            validate_accepted_inspection_run_parameters(&specification, "inspect").unwrap();
+            for mode in ["manual", "automatic"] {
+                specification.parameters[fullmag_session::ACCEPTED_RUN_START_POLICY_KEY] = json!({
+                    "schema_version": "accepted_run_start_policy.v1", "mode": mode,
+                });
+                validate_accepted_inspection_run_parameters(&specification, "inspect").unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_versioned_input_identity_and_start_policy_are_rejected() {
+        for identity in [
+            json!(null),
+            json!({"schema_version": "unknown", "sha256": "f".repeat(64)}),
+            json!({"schema_version": fullmag_authoring::SCENE_EXECUTION_INPUT_SCHEMA,
+                "sha256": "not-a-digest"}),
+            json!({"schema_version": fullmag_authoring::SCENE_EXECUTION_INPUT_SCHEMA,
+                "sha256": "g".repeat(64)}),
+            json!({"schema_version": fullmag_authoring::SCENE_EXECUTION_INPUT_SCHEMA,
+                "sha256": "f".repeat(64), "extra": true}),
+        ] {
+            let mut specification = startup();
+            specification.parameters["live_workspace"]["execution_input"] = identity;
+            assert!(validate_accepted_inspection_run_parameters(&specification, "inspect").is_err());
+        }
+        for policy in [
+            json!(null),
+            json!({"schema_version": "unknown", "mode": "manual"}),
+            json!({"schema_version": "accepted_run_start_policy.v1", "mode": "unknown"}),
+            json!({"schema_version": "accepted_run_start_policy.v1", "mode": "manual", "extra": true}),
+        ] {
+            let mut specification = startup();
+            specification.parameters[fullmag_session::ACCEPTED_RUN_START_POLICY_KEY] = policy;
+            assert!(validate_accepted_inspection_run_parameters(&specification, "inspect").is_err());
+        }
+    }
+
+    #[test]
+    fn unknown_physics_foreign_live_context_and_source_substitution_are_rejected() {
+        let original = startup();
+        for (pointer, value) in [
+            ("/parameters/temperature", json!(300)),
+            ("/parameters/live_workspace/extra", json!(true)),
+            ("/parameters/live_workspace/session_epoch", json!(2)),
+            ("/parameters/live_workspace/scene_revision", json!(8)),
+            ("/parameters/live_workspace/step_id", json!("foreign")),
+            ("/parameters/live_workspace/startup_source_sha256", json!("e".repeat(64))),
+        ] {
+            let mut value_spec = serde_json::to_value(&original).unwrap();
+            let (parent, key) = pointer.rsplit_once('/').unwrap();
+            value_spec.pointer_mut(parent).unwrap().as_object_mut().unwrap().insert(key.into(), value);
+            let changed: RunSpecification = serde_json::from_value(value_spec).unwrap();
+            assert!(validate_accepted_inspection_run_parameters(&changed, "inspect").is_err(), "{pointer}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -4516,5 +4905,70 @@ mod accepted_worker_claim_retry_tests {
 
         assert_eq!(attempts, 1, "durable cancellation must stop before retry");
         assert!(format!("{error:#}").contains("cancelled by durable task cancellation"));
+    }
+}
+
+
+#[cfg(test)]
+mod native_failure_protocol_tests {
+    use fullmag_application::{
+        CoordinatorPhase, ResourceBudget, ResourceKind, ResourceLease, RunId,
+        TaskLifecycle, TaskRecord, WorkerCoordinator, WorkerEvent, WorkerEventEnvelope,
+        WORKER_PROTOCOL_SCHEMA,
+    };
+
+    fn running() -> WorkerCoordinator {
+        let mut task = TaskRecord::new(RunId::parse("run-native-failure-contract").unwrap(), "a".repeat(64)).unwrap();
+        task.queue().unwrap();
+        let claim = task.claim(ResourceLease::new("cpu-native-failure", ResourceKind::Cpu,
+            ResourceBudget { cpu_millis: 1000, memory_bytes: 1024, gpu_memory_bytes: 0, storage_bytes: 1024 },
+        ).unwrap()).unwrap();
+        task.begin_running(&claim).unwrap();
+        WorkerCoordinator::new(task, claim).unwrap()
+    }
+
+    fn event(coordinator: &WorkerCoordinator, sequence: u64, event: WorkerEvent) -> WorkerEventEnvelope {
+        WorkerEventEnvelope {
+            schema_version: WORKER_PROTOCOL_SCHEMA.into(),
+            message_id: format!("native-failure-event-{sequence}"), sequence,
+            claim: coordinator.claim().identity(), event,
+        }
+    }
+
+    #[test]
+    fn completing_drains_pending_heartbeat_before_terminal_failure() {
+        let mut coordinator = running();
+        let heartbeat = coordinator.heartbeat().unwrap();
+        let sequence = coordinator.claim().lease.heartbeat_sequence;
+        let completing = event(&coordinator, 1, WorkerEvent::Completing);
+        coordinator.accept_event(completing.clone()).unwrap();
+        assert_eq!(coordinator.phase(), CoordinatorPhase::Running);
+        let ack = event(&coordinator, 2, WorkerEvent::HeartbeatAck { lease_heartbeat_sequence: sequence });
+        coordinator.accept_event(ack.clone()).unwrap();
+        let failed = event(&coordinator, 3, WorkerEvent::Failed { retryable: false, reason: "returned native error".into() });
+        coordinator.accept_event(failed.clone()).unwrap();
+        assert_eq!(coordinator.task().lifecycle, TaskLifecycle::Failed);
+        let restored = WorkerCoordinator::restore(coordinator.checkpoint(), &[heartbeat], &[completing, ack, failed]).unwrap();
+        assert_eq!(restored.phase(), CoordinatorPhase::Terminal);
+        let late = event(&coordinator, 4, WorkerEvent::HeartbeatAck { lease_heartbeat_sequence: sequence });
+        assert!(coordinator.accept_event(late).is_err());
+    }
+
+    #[test]
+    fn stop_winning_either_failure_fence_remains_cancellation() {
+        for completing_first in [false, true] {
+            let mut coordinator = running();
+            let mut next = 1;
+            if completing_first {
+                coordinator.accept_event(event(&coordinator, next, WorkerEvent::Completing)).unwrap();
+                next += 1;
+            }
+            coordinator.stop("operator stop").unwrap();
+            assert_eq!(coordinator.phase(), CoordinatorPhase::Stopping);
+            coordinator.accept_event(event(&coordinator, next, WorkerEvent::Stopped)).unwrap();
+            assert_eq!(coordinator.task().lifecycle, TaskLifecycle::Cancelled);
+            assert!(coordinator.accept_event(event(&coordinator, next + 1,
+                WorkerEvent::Failed { retryable: false, reason: "late native failure".into() })).is_err());
+        }
     }
 }

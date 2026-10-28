@@ -73,6 +73,7 @@ export function resolveViewport3DTargetVectorLayerInput({
 }): {
   buildReference: Viewport3DVectorBuildReference | null;
   segments: Float32Array | null;
+  glyphColors?: Float32Array | null;
 } {
   if (!fieldModel) {
     return {
@@ -86,6 +87,7 @@ export function resolveViewport3DTargetVectorLayerInput({
     return {
       buildReference: targetVectors.buildReference,
       segments: targetVectors.segments,
+      ...(targetVectors.glyphColors ? { glyphColors: targetVectors.glyphColors } : {}),
     };
   }
   if (fieldModel.targetPasses && fieldModel.targetPasses.size > 0) {

@@ -9,6 +9,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/runtime/hypre_host_policy.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 
 #include <algorithm>
@@ -187,10 +188,11 @@ void log_cpu_runtime_selection(const Context &ctx)
         return;
     }
     const char *thread_mode = ctx.cpu_threads.auto_requested ? "auto" : "manual";
+    const HypreHostPolicySnapshot hypre = current_hypre_host_policy();
 
     std::fprintf(
         stderr,
-        "[fullmag-fem] cpu runtime: poisson_solver=%s preconditioner=%s cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d cap_reason=%d dynamic_threads=disabled nested_parallelism=disabled max_active_parallel_levels=%d mesh_nodes=%u elements=%u\n",
+        "[fullmag-fem] cpu runtime: poisson_solver=%s preconditioner=%s cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d cap_reason=%d dynamic_threads=disabled nested_parallelism=disabled max_active_parallel_levels=%d mesh_nodes=%u elements=%u hypre_memory=%s hypre_execution=%s hypre_policy_owner=%s\n",
         demag_poisson_linear_solver_name(ctx.demag.solver.solver),
         demag_poisson_preconditioner_name(ctx.demag.solver.preconditioner),
         thread_mode,
@@ -199,7 +201,10 @@ void log_cpu_runtime_selection(const Context &ctx)
         ctx.cpu_threads.cap_reason,
         ctx.cpu_threads.max_active_parallel_levels,
         ctx.mesh.n_nodes,
-        ctx.mesh.n_elements);
+        ctx.mesh.n_elements,
+        hypre_memory_location_name(hypre),
+        hypre_execution_policy_name(hypre),
+        !hypre.hypre_gpu_build ? "host_build" : hypre.bound_by_cpu_lane ? "cpu_lane" : "process");
 }
 
 } // namespace fullmag::fem

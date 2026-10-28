@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { IMPORT_ACCEPT, classifyImportFile } from "./importFormats";
 
 describe("classifyImportFile", () => {
+  it("accepts a Python source file regardless of case", () => {
+    expect(classifyImportFile("antenna.PY")).toMatchObject({ kind: "supported", format: { id: "python" } });
+    expect(IMPORT_ACCEPT).toContain(".py");
+  });
+
   it("accepts a Fullmag archive regardless of case", () => {
     expect(classifyImportFile("YIG.FMS").kind).toBe("supported");
     expect(classifyImportFile("a.b.fms").kind).toBe("supported");

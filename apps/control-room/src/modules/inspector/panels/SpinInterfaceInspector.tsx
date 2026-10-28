@@ -34,7 +34,7 @@ import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
 import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
-import { buildInterface, interfaceDraft, record, region, reconcileInterfaceDraft, type InterfaceDraft } from "./SpinInterfaceInspectorModel";
+import { INTERFACE_TRACE_DIRECTIONS, bindInterfaceTraces, canBindInterfaceTraces, interfaceTraceSelection, buildInterface, interfaceDraft, record, region, reconcileInterfaceDraft, type InterfaceDraft } from "./SpinInterfaceInspectorModel";
 import { transportScopeOptions } from "./TransportCollectionFieldsModel";
 import { verifySpinInterfaceMeshOrientation } from "./SpinInterfaceMeshEvidenceModel";
 import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecycleResources";
@@ -361,7 +361,29 @@ function InterfaceFields({ draft, scene, identityReadOnly, patch }: { scene: Sce
     </> : <>
       {scope("Normal-metal scope", "normalObject", "normalRegion")}
       {scope("Ferromagnet scope", "ferromagnetObject", "ferromagnetRegion")}
-      <FormField label="Normal-to-ferromagnet orientation" value={draft.normalToFerromagnet} onChange={field("normalToFerromagnet")} />
+      <FormField
+        label="Oriented trace pair (normal metal → ferromagnet)"
+        type="select"
+        value={interfaceTraceSelection(draft)}
+        disabled={!canBindInterfaceTraces(draft)}
+        hint="Choose explicitly to bind or replace both region traces. Axis IDs declare orientation; they do not certify a realized CAD face."
+        onChange={(event) => patch(bindInterfaceTraces(draft, event.currentTarget.value))}
+      >
+        <option value="" disabled>No explicit trace binding</option>
+        {interfaceTraceSelection(draft) === "stored" ? <option value="stored" disabled>Stored binding (review before rebind)</option> : null}
+        {INTERFACE_TRACE_DIRECTIONS.map((direction) => <option key={direction.surfaceId} value={direction.surfaceId}>{direction.surfaceId + " normal-metal trace → " + direction.oppositeId + " ferromagnet trace"}</option>)}
+      </FormField>
+      <div className="fm-help-text" role="status">
+        <div>Normal-metal scope: {draft.normalObject || "not selected"} / {draft.normalRegion || "whole object"}</div>
+        <div>Ferromagnet scope: {draft.ferromagnetObject || "not selected"} / {draft.ferromagnetRegion || "whole object"}</div>
+        <div>Each region is selected by its authored scope. Review scope changes before Apply; stored object references require an explicit rebind.</div>
+        <div>Normal-metal trace: {draft.normalSurface ? draft.normalSurface.objectId + ":" + draft.normalSurface.surfaceId + "; outward [" + draft.normalSurface.orientation + "]" : "not bound"}</div>
+        <div>Ferromagnet trace: {draft.ferromagnetSurface ? draft.ferromagnetSurface.objectId + ":" + draft.ferromagnetSurface.surfaceId + "; outward [" + draft.ferromagnetSurface.orientation + "]" : "not bound"}</div>
+        {interfaceTraceSelection(draft) === "stored" ? <div>Stored references or orientations differ from the selected canonical pair. They remain unchanged until an explicit rebind or clear.</div> : null}
+        <div>Declared orientation only. Geometry and mesh adjacency/orientation are NOT VERIFIED by this selection.</div>
+      </div>
+      <Button type="button" disabled={!draft.normalSurface && !draft.ferromagnetSurface} onClick={() => patch({ normalSurface: null, ferromagnetSurface: null })}>Clear both trace bindings</Button>
+      <FormField label="Normal-to-ferromagnet orientation" readOnly={Boolean(draft.normalSurface || draft.ferromagnetSurface)} value={draft.normalToFerromagnet} hint={draft.normalSurface || draft.ferromagnetSurface ? "Rebind the pair to change its orientation, or clear both bindings to edit the legacy normal." : undefined} onChange={field("normalToFerromagnet")} />
       <FormField label="g_up" unit="S/m²" value={draft.gUp} onChange={field("gUp")} /><FormField label="g_down" unit="S/m²" value={draft.gDown} onChange={field("gDown")} />
       <FormField label="g_r" unit="S/m²" value={draft.gR} onChange={field("gR")} /><FormField label="g_i" unit="S/m²" value={draft.gI} onChange={field("gI")} />
       <FormField label="Legacy SML conductance" unit="S/m²" value={draft.gSml} onChange={field("gSml")} />

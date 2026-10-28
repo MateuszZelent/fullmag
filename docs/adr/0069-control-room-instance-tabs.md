@@ -210,10 +210,14 @@ on tylko tę instancję; sekcja innych instancji jest tam ukryta.
 
 ## Weryfikacja
 
-- Testy jednostkowe Rust (parsowanie okna portów, parsowanie odpowiedzi
-  sondy, oznaczanie własnej instancji): **NOT VERIFIED lokalnie**.
-  AGENTS.md zakazuje kompilacji testów jednostkowych na hoście, więc
-  kompilują się i uruchamiają tylko w CI.
+- Testy jednostkowe Rust `instance_discovery::tests` (parsowanie okna
+  portów, parsowanie odpowiedzi sondy, oznaczanie własnej instancji):
+  **NOT VERIFIED lokalnie**, bo AGENTS.md zakazuje kompilacji testów
+  jednostkowych na hoście. W CI job `rust-contracts` kompilował je razem z
+  celem testowym binarki `fullmag-api`, ale do 25.10.2026 ich nie
+  uruchamiał: wykonuje tylko wymienione filtry `cargo test`, a tego filtra
+  brakowało. Uruchamia je krok „Run instance discovery contracts
+  (ADR 0069)” w `.github/workflows/bootstrap.yml`.
 - Testy vitest: magazyn zakładek (otwieranie, zamykanie, aktywacja, LRU
   ramek, rozpoznanie ramki po nazwie, odporność na brak `localStorage`),
   etykiety paska, sekcja Home, lista originów CSP.

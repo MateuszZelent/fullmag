@@ -78,6 +78,7 @@ import {
 } from "../api/apiPaths";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import {
+  describeSessionAuthoringDiscretization,
   hasSessionActiveLaneDeclaration,
   projectFlatActiveLaneDiscretization,
   resolveSessionDiscretization,
@@ -362,6 +363,7 @@ export function studyRuntimeCommandSessionStatusEquals(
     previous.capabilities.binary_fields === next.capabilities.binary_fields &&
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
+    hasPublishedFemMeshEvidence(previous) === hasPublishedFemMeshEvidence(next) &&
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.artifact_revision === next.resources.artifact_revision &&
     previous.resources.artifacts_revision === next.resources.artifacts_revision &&
@@ -424,6 +426,9 @@ export function runtimeCommandControlSessionStatusEquals(
     previous.capabilities.explicit_topology !==
     next.capabilities.explicit_topology
   ) {
+    return false;
+  }
+  if (hasPublishedFemMeshEvidence(previous) !== hasPublishedFemMeshEvidence(next)) {
     return false;
   }
   if (previous.domain.discretization !== next.domain.discretization) {
@@ -511,28 +516,45 @@ export function shouldLoadRuntimeMeshSummary(
   );
 }
 
+type PublishedFemMeshStatus = {
+  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology"> &
+    SessionDiscretizationCapabilitiesProjection;
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
+  resources: Pick<LiveStatusResource["resources"], "mesh_revision"> &
+    Partial<Pick<LiveStatusResource["resources"], "domain_generation_id">>;
+};
+
+/** Published topology permits inspection, never solver execution or physics. */
+export function hasPublishedFemMeshEvidence(
+  status: PublishedFemMeshStatus | null | undefined,
+): boolean {
+  if (!status || status.capabilities.explicit_topology !== true ||
+      status.domain.discretization !== "fem" ||
+      !(hasPositiveRevision(status.resources.mesh_revision) ||
+        hasPositiveRevision(status.resources.domain_generation_id))) return false;
+  // Retained DomainMeta and legacy lane hints alone are not a publication proof.
+  const activeLane = status.capabilities.active_lane;
+  if (!activeLane) return false;
+  if (activeLane.resolved != null) {
+    const resolved = describeSessionAuthoringDiscretization({
+      capabilities: { active_lane: { authored: activeLane.resolved } },
+    });
+    return resolved.state === "known" && resolved.method === "fem";
+  }
+  if (activeLane.resolved !== null || !activeLane.authored) return false;
+  const authored = describeSessionAuthoringDiscretization(status);
+  return authored.state === "known" && authored.method === "fem";
+}
+
 export function shouldLoadRuntimeMeshManifest(
   enabled: boolean,
-  status:
-    | {
-        capabilities: Pick<
-          LiveStatusResource["capabilities"],
-          "explicit_topology"
-        > & SessionDiscretizationCapabilitiesProjection;
-        domain: Pick<LiveStatusResource["domain"], "discretization">;
-        resources: Pick<LiveStatusResource["resources"], "mesh_revision"> &
-          Partial<
-            Pick<LiveStatusResource["resources"], "domain_generation_id">
-          >;
-      }
-    | null
-    | undefined,
+  status: PublishedFemMeshStatus | null | undefined,
 ): boolean {
   if (!enabled || !status) return false;
   const laneDeclared = hasSessionActiveLaneDeclaration(status);
   const lane = resolveSessionDiscretization(status);
   const requiresSharedDomain = laneDeclared
-    ? lane === "fem"
+    ? lane === "fem" || hasPublishedFemMeshEvidence(status)
     : status.capabilities.explicit_topology || lane === "fem";
   return (
     requiresSharedDomain &&

@@ -101,7 +101,7 @@ type UpdateObjectMeshPolicyDraft = (
   patch: Partial<ObjectMeshPolicyDraft>,
 ) => void;
 
-const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
+const RAW_OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
   algorithm2d: {
     description: "Gmsh 2D surface meshing algorithm used before tetrahedralization.",
     details: [
@@ -119,25 +119,31 @@ const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
   boundaryLayerCount: {
     description: "Number of boundary-layer elements generated on selected curves or surfaces.",
     details: ["Requires boundary-layer selectors or explicit Gmsh tags."],
+    docsPage: "python-api/meshing/fem/ferromagnet/boundary-layers.html",
   },
   boundaryLayerStretching: {
     description: "Growth ratio between consecutive boundary-layer elements.",
+    docsPage: "python-api/meshing/fem/ferromagnet/boundary-layers.html",
   },
   boundaryLayerTags: {
     description: "Raw Gmsh entity tags used as boundary-layer targets.",
     details: ["Prefer selectors when possible; raw tags are fragile across geometry rebuilds."],
+    docsPage: "python-api/meshing/fem/ferromagnet/boundary-layers.html",
   },
   boundaryLayerSelectors: {
     description: "JSON selector list that resolves boundary-layer target entities from geometry semantics.",
+    docsPage: "python-api/meshing/fem/ferromagnet/boundary-layers.html",
   },
   boundaryLayerThickness: {
     description: "Total physical thickness of the boundary-layer stack.",
+    docsPage: "python-api/meshing/fem/ferromagnet/boundary-layers.html",
   },
   calibrateFor: {
     description: "High-level calibration family for automatic mesh-size presets.",
   },
   computeQuality: {
     description: "Requests aggregate mesh quality diagnostics after mesh generation.",
+    docsPage: "python-api/meshing/fem/build-and-quality.html",
   },
   coreRelaxation: {
     description: "Adds an object-local size field that relaxes from fine surface/edge sizing to a coarser object core.",
@@ -192,6 +198,7 @@ const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
   meshStrategy: {
     description: "Requested meshing strategy for the selected object.",
     details: ["thin_film_tetrahedral is the current feature-aware path for thin films."],
+    docsPage: "python-api/meshing/fem/ferromagnet/thin-film-tetrahedral.html",
   },
   minimumElementSize: {
     description: "Lower bound for object mesh sizing. Local requests below this can be clamped.",
@@ -213,6 +220,7 @@ const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
   },
   perElementQuality: {
     description: "Requests per-element quality arrays in addition to aggregate quality diagnostics.",
+    docsPage: "python-api/meshing/fem/build-and-quality.html",
   },
   sizeFactor: {
     description: "Multiplier applied to preset-derived mesh sizes.",
@@ -228,9 +236,11 @@ const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
   },
   source: {
     description: "Optional external mesh source path for imported mesh workflows.",
+    docsPage: "python-api/meshing/fem/ferromagnet/imported-mesh.html",
   },
   sweep: {
     description: "Thin-film through-thickness sweep controls. These determine how many layers are placed across film thickness.",
+    docsPage: "python-api/meshing/fem/ferromagnet/thin-film-tetrahedral.html",
   },
   transitionDistance: {
     description: "Interface transition distance from near-interface sizing to bulk/far-field sizing.",
@@ -243,6 +253,16 @@ const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
     description: "Requested growth rate for transition sizing fields.",
   },
 };
+
+const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = Object.fromEntries(
+  Object.entries(RAW_OBJECT_MESH_HELP).map(([key, value]) => [
+    key,
+    {
+      docsPage: "frontend/meshing/object-mesh.html",
+      ...value,
+    },
+  ]),
+);
 
 function ObjectMeshPolicySummarySection({
   hasConfig,

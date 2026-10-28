@@ -14,7 +14,6 @@ import {
   partitionPlanarMeshSegments,
   type PlanarRenderer,
 } from "./planarRenderer";
-import { buildVectorGlyphs } from "./vectorGlyphs";
 
 export function usePlanarSurfaceRenderer(
   model: FieldMapRenderModel,
@@ -33,9 +32,9 @@ export function usePlanarSurfaceRenderer(
   const renderStateRef = useRef<{
     axisPointer: { u: number; v: number } | null;
     contours: readonly ContourSegment[];
-    glyphs: ReturnType<typeof buildVectorGlyphs>;
+    glyphCount: number;
     mesh: ReturnType<typeof decodePlanarMeshOverlayForDescriptor> | null;
-  }>({ axisPointer: null, contours: [], glyphs: [], mesh: null });
+  }>({ axisPointer: null, contours: [], glyphCount: 0, mesh: null });
   const [plotSize, setPlotSize] = useState({ height: 0, width: 0 });
   const rangeMin = model.range?.min;
   const rangeMax = model.range?.max;
@@ -93,19 +92,13 @@ export function usePlanarSurfaceRenderer(
     if (!renderer || !overlayContext || !overlayCanvas) return;
     valuesRef.current = model.layers.probes ? model.scalar : null;
     maskRef.current = model.layers.probes ? model.mask : null;
-    const glyphs = model.layers.vectors && model.vectors
-      ? buildVectorGlyphs(model.vectors, model.vectorBudget, 1e-15, {
-          lengthMode: model.vectorStyle.lengthMode,
-          maxLengthCells: 0.4 * model.vectorScale,
-        })
-      : [];
     const mesh = (model.layers.mesh || model.layers.boundaries) && model.meshOverlay
       ? decodePlanarMeshOverlayForDescriptor(model.meshOverlay, model.meshOverlayDescriptor ?? {})
       : null;
     renderStateRef.current = {
       axisPointer: model.layers.probes ? renderStateRef.current.axisPointer : null,
       contours: [],
-      glyphs,
+      glyphCount: 0,
       mesh,
     };
     drawOverlayRef.current = (contours) => {
@@ -113,12 +106,21 @@ export function usePlanarSurfaceRenderer(
       const current = modelRef.current;
       const state = renderStateRef.current;
       const currentMeshSegments = state.mesh ? partitionPlanarMeshSegments(state.mesh) : null;
-      drawPlanarOverlays(overlayContext, overlayCanvas.width, overlayCanvas.height, {
+      const drawn = drawPlanarOverlays(overlayContext, overlayCanvas.width, overlayCanvas.height, {
         axisPointer: state.axisPointer,
         boundsOutline: current.boundsOutline,
         contours: state.contours,
         boundarySegments: currentMeshSegments?.boundarySegments,
-        glyphs: state.glyphs,
+        vectorField: current.layers.vectors && current.vectors
+          ? {
+              budget: current.vectorBudget,
+              lengthMode: current.vectorStyle.lengthMode,
+              mask: current.mask,
+              sampleBounds: current.bounds,
+              scale: current.vectorScale,
+              values: current.vectors,
+            }
+          : null,
         gridHeight: current.resolution[1],
         gridWidth: current.resolution[0],
         layers: current.layers,
@@ -127,7 +129,11 @@ export function usePlanarSurfaceRenderer(
         meshViewport: current.viewport,
         samplePoints: current.samplePoints,
         pointStyle: current.pointStyle,
-        vectorColorMode: current.vectorStyle.colorMode,
+        // Over a direction-coloured raster, orientation-coloured arrows would
+        // repeat the raster colour; draw them dark instead, as mumax3 does.
+        vectorColorMode: current.directionVectors && current.vectorStyle.colorMode === "orientation"
+          ? "contrast"
+          : current.vectorStyle.colorMode,
         vectorStyle: current.vectorStyle,
         wireframeStyle: current.wireframeStyle,
         viewport: [
@@ -137,6 +143,7 @@ export function usePlanarSurfaceRenderer(
           ((current.viewport[3] - current.bounds[2]) / (current.bounds[3] - current.bounds[2])) * (current.resolution[1] - 1),
         ],
       });
+      state.glyphCount = drawn.glyphCount;
     };
     const range = rangeMin === undefined || rangeMax === undefined
       ? null
@@ -155,7 +162,7 @@ export function usePlanarSurfaceRenderer(
           drawOverlayRef.current(contours);
           if (!current.layers.raster || !current.range) return;
           onRenderEvidence?.({
-            glyphCount: state.glyphs.length,
+            glyphCount: state.glyphCount,
             overlayCounts: {
               boundsSegments: current.layers.bounds ? 4 : 0,
               contours: contours.length,
@@ -175,6 +182,7 @@ export function usePlanarSurfaceRenderer(
       colorizerRef.current.colorize(model.scalar, range, model.mask ?? undefined, {
         colormap: model.colormap,
         contours: model.layers.contours,
+        directionVectors: model.directionVectors,
         height: model.resolution[1],
         level: (range.min + range.max) / 2,
         opacity: model.rasterOpacity ?? 1,
@@ -191,7 +199,7 @@ export function usePlanarSurfaceRenderer(
         current.layers.points || current.layers.vectors
       ) {
         onRenderEvidence?.({
-          glyphCount: state.glyphs.length,
+          glyphCount: state.glyphCount,
           overlayCounts: {
             boundsSegments: current.layers.bounds ? 4 : 0,
             contours: 0,
@@ -205,6 +213,7 @@ export function usePlanarSurfaceRenderer(
     }
   }, [
     model.colormap,
+    model.directionVectors,
     model.layers.boundaries,
     model.layers.bounds,
     model.layers.contours,

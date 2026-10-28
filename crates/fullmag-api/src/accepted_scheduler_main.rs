@@ -502,7 +502,17 @@ fn run_scheduler(
                         .pool_id
                         .as_deref()
                         .context("dynamic resource discovery requires a scheduler pool id")?;
-                    if let Some(discovered) = store.read_scheduler_resource_pool(pool_id)? {
+                    let discovered = match defer_scheduler_writer_busy(
+                        || store.read_scheduler_resource_pool(pool_id),
+                        || "compute scheduler: read resource pool".to_owned(),
+                    )? {
+                        SchedulerOperation::Completed(discovered) => discovered,
+                        SchedulerOperation::Deferred => {
+                            scheduling_deferred = true;
+                            break 'scheduling_pass;
+                        }
+                    };
+                    if let Some(discovered) = discovered {
                         if let Some(host_admission) = host_admission.as_ref() {
                             host_admission.validate_compute_pool(&discovered)?;
                         }
@@ -568,12 +578,20 @@ fn run_scheduler(
                             break 'scheduling_pass;
                         }
                     }
-                    let mut discovered = store
-                        .list_run_intents()?
+                    let intents = match defer_scheduler_writer_busy(
+                        || store.list_run_intent_ids(),
+                        || "compute scheduler: list run intent ids".to_owned(),
+                    )? {
+                        SchedulerOperation::Completed(intents) => intents,
+                        SchedulerOperation::Deferred => {
+                            scheduling_deferred = true;
+                            break 'scheduling_pass;
+                        }
+                    };
+                    let mut discovered = intents
                         .into_iter()
-                        .map(|intent| {
-                            RunId::parse(intent.run_id)
-                                .map_err(|error| anyhow::anyhow!(error.to_string()))
+                        .map(|run_id| {
+                            RunId::parse(run_id).map_err(|error| anyhow::anyhow!(error.to_string()))
                         })
                         .collect::<Result<Vec<_>>>()?;
                     discovered.sort();
@@ -974,6 +992,20 @@ fn build_run_queue_snapshot(
 ) -> Result<RunQueueSnapshot> {
     let mut queued = Vec::new();
     for run_id in run_ids {
+        let Some(catalog) = store.read_run_catalog(run_id.as_str())? else {
+            continue;
+        };
+        // This fresh observation only excludes runs with no possible queue
+        // candidate. Readiness and admission still reread their exact state.
+        if !catalog.tasks.iter().any(|task| {
+            matches!(
+                task.lifecycle,
+                fullmag_session::FmsTaskLifecycle::Accepted
+                    | fullmag_session::FmsTaskLifecycle::Queued
+            )
+        }) {
+            continue;
+        }
         let intent = store.read_run_intent(run_id.as_str())?.with_context(|| {
             format!(
                 "scheduler run `{}` has no immutable intent",
@@ -1138,10 +1170,13 @@ fn classify_scheduler_operation<T>(result: Result<T>) -> Result<SchedulerOperati
     }
 }
 
+/// Busy writer or a transient store I/O failure: either way the pass changed
+/// nothing it cannot resume, so it is deferred to the next iteration.
 fn is_store_writer_busy(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+        || fullmag_runtime_control::is_transient_store_io(error)
 }
 
 fn is_stale_admission_candidate(error: &anyhow::Error) -> bool {

@@ -271,15 +271,18 @@ fn materialize_spool(
             let value_bytes = (value_count as u64).checked_mul(8).context("binary field size overflow")?;
             if value_bytes > field_budget { bail!("materialized quantity exceeds its per-field budget"); }
             let values_sha256 = fullmag_runner::live_preview_values_sha256(&materialized.values);
-            let mut chunks = Vec::new();
-            for (ordinal, values) in materialized.values.chunks(65_536).enumerate() {
+            let chunk_bytes = materialized.values.chunks(65_536).map(|values| {
                 let mut bytes = Vec::with_capacity(values.len() * 8);
                 for value in values { bytes.extend_from_slice(&value.to_le_bytes()); }
-                let hash = publish_observation_object(store, step, bundle_id, &bytes,
-                    storage_budget, &mut stored_bytes, entries)?;
-                chunks.push(BinaryFieldChunk { object_ref: hash, value_offset: ordinal * 65_536,
-                    value_count: values.len() });
-            }
+                bytes
+            }).collect::<Vec<_>>();
+            let chunk_slices = chunk_bytes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            let hashes = publish_observation_objects(store, step, bundle_id, &chunk_slices,
+                storage_budget, &mut stored_bytes, entries)?;
+            let chunks = hashes.into_iter().zip(materialized.values.chunks(65_536)).enumerate()
+                .map(|(ordinal, (hash, values))| BinaryFieldChunk { object_ref: hash,
+                    value_offset: ordinal * 65_536, value_count: values.len() })
+                .collect::<Vec<_>>();
             // Preserve the original Airbox JSON digest proof without keeping
             // its large JSON tree inside the metadata record or live snapshot.
             if let Some(serde_json::Value::String(raw)) = materialized.layout.as_object_mut()
@@ -331,9 +334,33 @@ fn publish_observation_object(
     store: &SessionStore, step: &AcceptedWorkerStep, bundle_id: &str, bytes: &[u8],
     budget: u64, used: &mut u64, entries: &mut Vec<FmsArtifactCatalogEntry>,
 ) -> Result<String> {
-    *used = used.checked_add(bytes.len() as u64).context("observation storage size overflow")?;
+    let mut hashes = publish_observation_objects(
+        store, step, bundle_id, &[bytes], budget, used, entries)?;
+    hashes.pop().context("observation publication returned no digest")
+}
+
+/// Publish one field's chunks in a single CAS batch: one writer lease and one
+/// barrier per directory instead of a lease and two barriers per chunk.
+fn publish_observation_objects(
+    store: &SessionStore, step: &AcceptedWorkerStep, bundle_id: &str, objects: &[&[u8]],
+    budget: u64, used: &mut u64, entries: &mut Vec<FmsArtifactCatalogEntry>,
+) -> Result<Vec<String>> {
+    for bytes in objects {
+        *used = used.checked_add(bytes.len() as u64).context("observation storage size overflow")?;
+    }
     if *used > budget { bail!("binary observations exceed the remaining storage lease"); }
-    let hash = retry_worker_store_writer_busy(|| store.cas().put(bytes))?;
+    let hashes = retry_worker_store_writer_busy(|| store.cas().put_batch(objects))?;
+    for hash in &hashes {
+        record_observation_entry(step, bundle_id, hash, entries);
+    }
+    Ok(hashes)
+}
+
+fn record_observation_entry(
+    step: &AcceptedWorkerStep, bundle_id: &str, hash: &str,
+    entries: &mut Vec<FmsArtifactCatalogEntry>,
+) {
+    let hash = hash.to_string();
     if !entries.iter().any(|entry| entry.content_sha256 == hash) {
         entries.push(FmsArtifactCatalogEntry {
             artifact_id: format!("accepted-field-{}", fullmag_session::canonical_json_sha256(
@@ -346,7 +373,6 @@ fn publish_observation_object(
             required: false, study_output: None,
         });
     }
-    Ok(hash)
 }
 
 fn is_store_writer_busy(error: &anyhow::Error) -> bool {

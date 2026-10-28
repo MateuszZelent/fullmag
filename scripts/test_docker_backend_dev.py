@@ -17,6 +17,20 @@ import backend_dev as backend
 
 @unittest.skipIf(os.name == "nt", "Linux container symlink contract")
 class BackendPackageTests(unittest.TestCase):
+    def setUp(self):
+        control = tempfile.TemporaryDirectory()
+        self.addCleanup(control.cleanup)
+        root = Path(control.name)
+        for name, path in {
+            "CONTROL_ROOT": root,
+            "BACKEND_CONTROL_ROOT": root / "backend",
+            "PROVENANCE_PATH": root / "backend" / "runtime-provenance.json",
+            "CACHE_RECEIPT_PATH": root / "backend" / backend.PACKAGE_CACHE_RECEIPT_NAME,
+        }.items():
+            patcher = patch.object(backend, name, path)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     @staticmethod
     def _capsule(source_digest, files):
         entries = []
@@ -596,6 +610,47 @@ class BackendPackageTests(unittest.TestCase):
             finally:
                 backend.PACKAGE_ROOT = original_package_root
 
+    def test_serve_exports_receipt_source_identity_for_mesh_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output, records = self._published_package(root)
+            _, manifest = self._live_manifest(root)
+            receipt = self._receipt_for_manifest(records, manifest, self._toolchain_fixture())
+            backend._write_json(output / "backend-build-receipt.json", receipt, "test receipt")
+            for inherited in (None, "e" * 64):
+                with (
+                    self.subTest(inherited=inherited),
+                    patch.object(backend, "PACKAGE_ROOT", output),
+                    patch.dict(os.environ, {}, clear=True),
+                    patch("worker_cgroup_gate.wait_for_delegation", return_value={"state": "ready"}),
+                    patch.object(backend.os, "execvpe") as handoff,
+                ):
+                    if inherited is not None:
+                        os.environ["FULLMAG_SOURCE_SNAPSHOT_SHA256"] = inherited
+                    self.assertEqual(backend._serve([]), 0)
+                    environment = handoff.call_args.args[2]
+                    self.assertEqual(environment.get("FULLMAG_SOURCE_SNAPSHOT_SHA256"), "d" * 64)
+                    self.assertEqual(environment.get("FULLMAG_SOURCE_GIT_COMMIT"), "a" * 40)
+                    self.assertEqual(environment.get("FULLMAG_SOURCE_WORKTREE_STATE"), "clean")
+
+    def test_serve_rejects_inconsistent_source_identity_before_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output, records = self._published_package(root)
+            _, manifest = self._live_manifest(root)
+            receipt = self._receipt_for_manifest(records, manifest, self._toolchain_fixture())
+            receipt["source"]["source_snapshot_sha256"] = "e" * 64
+            backend._write_json(output / "backend-build-receipt.json", receipt, "test receipt")
+            with (
+                patch.object(backend, "PACKAGE_ROOT", output),
+                patch.dict(os.environ, {}, clear=True),
+                patch("worker_cgroup_gate.wait_for_delegation", return_value={"state": "ready"}),
+                patch.object(backend.os, "execvpe") as handoff,
+            ):
+                with self.assertRaisesRegex(backend.BackendBuildError, "source snapshot"):
+                    backend._serve([])
+                handoff.assert_not_called()
+
     def test_development_compose_selects_receipt_validated_backend_start(self):
         repository = Path(__file__).resolve().parents[1]
         development_compose = (repository / "compose.dev.yaml").read_text(encoding="utf-8")
@@ -627,14 +682,10 @@ class BackendPackageTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             output, records = self._published_package(Path(directory))
+            _, source_manifest = self._live_manifest(Path(directory))
             backend._write_json(
                 output / "backend-build-receipt.json",
-                {
-                    "schema": backend.RECEIPT_SCHEMA,
-                    "state": "succeeded",
-                    "execution_lanes": {lane: {} for lane in backend.LANES},
-                    "artifacts": records,
-                },
+                self._receipt_for_manifest(records, source_manifest, self._toolchain_fixture()),
                 "test backend build receipt",
             )
             original_package_root = backend.PACKAGE_ROOT
@@ -1252,17 +1303,17 @@ class BackendPackageTests(unittest.TestCase):
             current = backend._validated_package(
                 package, "retention fixture current", exclude_development_control=True
             )
-            original_remove = backend._remove_owned_tree
             failed = False
 
-            def fail_first_backup_delete(path):
+            def fail_first_backup_retirement(source, target, backup_name):
                 nonlocal failed
-                if path.name.startswith(".backend-package-backup-") and not failed:
+                if not failed:
                     failed = True
-                    raise backend.BackendBuildError("injected backup delete failure")
-                return original_remove(path)
+                    raise backend.BackendBuildError("injected backup retirement failure")
+                return original_rename(source, target, backup_name)
 
-            with patch.object(backend, "_remove_owned_tree", side_effect=fail_first_backup_delete):
+            original_rename = backend._rename_backup_to_tombstone
+            with patch.object(backend, "_rename_backup_to_tombstone", side_effect=fail_first_backup_retirement):
                 with self.assertRaises(backend.BackendBuildError):
                     backend._retain_package_backups(package, control, current[0], current[1])
             self.assertEqual(
@@ -1880,6 +1931,32 @@ class BackendPackageTests(unittest.TestCase):
                     "host certificate and owner marker differ",
                 ):
                     backend._wait_for_windows_folder_attestation(provenance, receipt_sha256)
+
+    def test_host_attestation_read_racing_an_in_place_write_is_pending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host_path = Path(directory) / "windows-folder-host.json"
+            host_path.write_text('{"schema": "x"}\n', encoding="utf-8")
+            with patch.object(
+                backend,
+                "_read_json",
+                side_effect=backend.BackendBuildError(
+                    "Windows-folder host attestation changed while reading"
+                ),
+            ):
+                self.assertIsNone(
+                    backend._read_optional_storage_attestation(
+                        host_path, "Windows-folder host attestation"
+                    )
+                )
+            with patch.object(
+                backend,
+                "_read_json",
+                side_effect=backend.BackendBuildError("Windows-folder host attestation is not one file"),
+            ):
+                with self.assertRaises(backend.BackendBuildError):
+                    backend._read_optional_storage_attestation(
+                        host_path, "Windows-folder host attestation"
+                    )
 
     def test_windows_folder_development_gate_retries_restart_flag_publication_race(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2837,6 +2914,18 @@ class BackendPackageTests(unittest.TestCase):
                                 / backend.FAILED_MAKE_LOG_NAME
                             ).exists()
                         )
+
+    def test_recovery_archive_is_preserved_by_package_root_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "package"
+            control = backend._ensure_package_development_root(package)
+            archive = control / backend.PACKAGE_QUARANTINE_DIRNAME
+            archive.mkdir()
+            payload = archive / "preserved-evidence"
+            payload.write_bytes(b"retained publication")
+            self.assertEqual(backend._ensure_package_development_root(package), control)
+            self.assertEqual(payload.read_bytes(), b"retained publication")
+
 
     def test_successful_make_log_is_copied_then_external_log_is_retired(self):
         with tempfile.TemporaryDirectory() as directory:

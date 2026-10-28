@@ -31,7 +31,12 @@ use crate::{
 };
 
 pub mod retained_cancelled_runs;
+pub mod retained_terminal_runs;
+pub mod retained_attempt_histories;
+pub mod retained_held_manual_runs;
 pub mod container_recovery_proof;
+mod retained_snapshot;
+pub use retained_snapshot::validate_retained_snapshot;
 
 pub const RUNTIME_SERVICE_OWNER_SCHEMA: &str = "runtime_service_owner.v1";
 pub const RUNTIME_SERVICE_CONFIG_SCHEMA_V1: &str = "runtime_service_config.v1";
@@ -48,6 +53,12 @@ pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA: &str =
     "runtime_service_container_recovery_request.v1";
 pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2: &str =
     "runtime_service_container_recovery_request.v2";
+pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3: &str =
+    "runtime_service_container_recovery_request.v3";
+pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4: &str =
+    "runtime_service_container_recovery_request.v4";
+pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5: &str =
+    "runtime_service_container_recovery_request.v5";
 pub const RUNTIME_SERVICE_CONTAINER_RECOVERY_SCHEMA: &str =
     "runtime_service_container_recovery.v1";
 
@@ -267,24 +278,73 @@ pub struct RuntimeServiceContainerRecoveryRequest {
     pub containers: Vec<RuntimeServiceContainerPin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retained_cancelled_runs: Option<Vec<retained_cancelled_runs::RetainedCancelledRunPin>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_terminal_runs: Option<Vec<retained_terminal_runs::RetainedTerminalRunPin>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_held_manual_runs: Option<Vec<retained_held_manual_runs::RetainedHeldManualRunPin>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_attempt_histories")]
+    pub retained_attempt_histories: Option<Vec<retained_attempt_histories::RetainedAttemptHistoryPin>>,
+}
+
+// Absence preserves old requests; explicit null is not an alternate way to
+// carry the v5-only field through an older schema.
+fn deserialize_attempt_histories<'de, D>(deserializer: D) -> std::result::Result<Option<Vec<retained_attempt_histories::RetainedAttemptHistoryPin>>, D::Error>
+where D: serde::Deserializer<'de> {
+    Vec::<retained_attempt_histories::RetainedAttemptHistoryPin>::deserialize(deserializer).map(Some)
 }
 
 impl RuntimeServiceContainerRecoveryRequest {
     pub fn validate(&self) -> Result<()> {
-        let retains_cancelled_runs = match self.schema_version.as_str() {
+        if self.schema_version != RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5
+            && self.retained_attempt_histories.is_some()
+        { bail!("attempt-history pins require the separate v5 recovery contract"); }
+        if !matches!(self.schema_version.as_str(), RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4 | RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5)
+            && self.retained_held_manual_runs.is_some()
+        { bail!("held-manual run pins require the separate v4 recovery contract"); }
+        let retains_runs = match self.schema_version.as_str() {
             RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA
-                if self.retained_cancelled_runs.is_none() =>
+                if self.retained_cancelled_runs.is_none()
+                    && self.retained_terminal_runs.is_none() =>
             {
                 false
             }
             RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA => {
-                bail!("v1 runtime service container recovery request cannot retain cancelled runs")
+                bail!("v1 runtime service container recovery request cannot retain run pins")
             }
             RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2 => {
+                if self.retained_terminal_runs.is_some() {
+                    bail!("v2 runtime service container recovery request cannot retain terminal runs");
+                }
                 let pins = self.retained_cancelled_runs.as_deref().context(
                     "v2 runtime service container recovery request requires retained cancelled-run pins",
                 )?;
                 validate_retained_cancelled_run_pins(pins)?;
+                true
+            }
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3 => {
+                if self.retained_cancelled_runs.is_some() {
+                    bail!("v3 runtime service container recovery request cannot retain cancelled runs");
+                }
+                let pins = self.retained_terminal_runs.as_deref().context(
+                    "v3 runtime service container recovery request requires retained terminal-run pins",
+                )?;
+                validate_retained_terminal_run_pins(pins)?;
+                true
+            }
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4 => {
+                if self.retained_cancelled_runs.is_some() { bail!("v4 cannot carry the cancelled-only list"); }
+                let terminal = self.retained_terminal_runs.as_deref().context("v4 requires an explicit terminal subset, including an empty list")?;
+                let held = self.retained_held_manual_runs.as_deref().context("v4 requires an explicit held-manual subset")?;
+                retained_manual_held_run_ids(terminal, held)?;
+                true
+            }
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 => {
+                if self.retained_cancelled_runs.is_some() { bail!("v5 cannot carry the cancelled-only list"); }
+                let terminal = self.retained_terminal_runs.as_deref().context("v5 requires an explicit terminal subset")?;
+                let held = self.retained_held_manual_runs.as_deref().context("v5 requires an explicit held-manual subset")?;
+                retained_manual_held_run_ids(terminal, held)?;
+                let histories = self.retained_attempt_histories.as_deref().context("v5 requires explicit attempt-history pins")?;
+                retained_attempt_histories::validate_pins(histories, terminal)?;
                 true
             }
             _ => bail!("unsupported runtime service container recovery request schema"),
@@ -337,7 +397,7 @@ impl RuntimeServiceContainerRecoveryRequest {
                 "runtime service container recovery requires a Ready or Unknown expected owner"
             );
         }
-        if retains_cancelled_runs {
+        if retains_runs {
             require_recoverable_owner_identity_v2(&self.expected_owner)?;
         } else {
             require_recoverable_owner_identity(&self.expected_owner)?;
@@ -426,6 +486,142 @@ fn validate_retained_cancelled_run_pins(
     Ok(())
 }
 
+fn validate_retained_terminal_run_pins(
+    pins: &[retained_terminal_runs::RetainedTerminalRunPin],
+) -> Result<()> {
+    if pins.is_empty() || pins.len() > retained_cancelled_runs::MAX_RETAINED_CANCELLED_RUN_PINS {
+        bail!(
+            "retained terminal-run pin count must be between 1 and {}",
+            retained_cancelled_runs::MAX_RETAINED_CANCELLED_RUN_PINS
+        );
+    }
+    let mut run_ids = BTreeSet::new();
+    for pin in pins {
+        validate_store_id(&pin.run_id).context("retained terminal-run pin id")?;
+        validate_lower_hex(
+            &pin.run_intent_sha256,
+            "retained terminal-run intent SHA-256",
+            64,
+        )?;
+        validate_lower_hex(
+            &pin.run_catalog_sha256,
+            "retained terminal-run catalog SHA-256",
+            64,
+        )?;
+        if let Some(digest) = pin.artifact_catalog_sha256.as_deref() {
+            validate_lower_hex(digest, "retained terminal-run artifact-catalog SHA-256", 64)?;
+        }
+        if !run_ids.insert(pin.run_id.as_str()) {
+            bail!("retained terminal-run pins contain a duplicate run id");
+        }
+    }
+    Ok(())
+}
+
+/// Validate only request shape and return the exact disjoint union IDs.
+/// No caller-supplied byte budget or policy override is part of this contract.
+fn retained_manual_held_run_ids(
+    terminal: &[retained_terminal_runs::RetainedTerminalRunPin],
+    held: &[retained_held_manual_runs::RetainedHeldManualRunPin],
+) -> Result<BTreeSet<String>> {
+    let total = terminal
+        .len()
+        .checked_add(held.len())
+        .context("v4 retained-run count overflow")?;
+    if held.is_empty() || total > retained_cancelled_runs::MAX_RETAINED_CANCELLED_RUN_PINS {
+        bail!("v4 requires at least one held-manual run and at most 128 combined runs");
+    }
+    if !terminal.is_empty() {
+        validate_retained_terminal_run_pins(terminal)?;
+    }
+    let mut ids = terminal
+        .iter()
+        .map(|pin| pin.run_id.clone())
+        .collect::<BTreeSet<_>>();
+    for pin in held {
+        validate_store_id(&pin.run_id).context("held-manual run pin id")?;
+        validate_lower_hex(&pin.run_intent_sha256, "held-manual intent SHA-256", 64)?;
+        validate_lower_hex(&pin.run_catalog_sha256, "held-manual catalog SHA-256", 64)?;
+        // The required non-optional enum has exactly this one serde value.
+        match pin.start_release {
+            retained_held_manual_runs::TypedExpectedAbsent::Absent => {}
+        }
+        if !ids.insert(pin.run_id.clone()) {
+            bail!("v4 terminal and held-manual subsets must have unique disjoint run IDs");
+        }
+    }
+    Ok(ids)
+}
+
+/// Recovery callers invoke this under the native startup/launch/owner/store/
+/// ledger guards. Read-only inspection may also use it against an isolated,
+/// stable snapshot. It preserves every run, start release and checkpoint;
+/// only a recovery caller's later owner transition may write state.
+fn validate_manual_held_union(
+    store: &SessionStore,
+    terminal: &[retained_terminal_runs::RetainedTerminalRunPin],
+    held: &[retained_held_manual_runs::RetainedHeldManualRunPin],
+) -> Result<BTreeSet<String>> {
+    validate_retained_union(store, terminal, held, None)
+}
+
+fn validate_attempt_history_union(
+    store: &SessionStore,
+    terminal: &[retained_terminal_runs::RetainedTerminalRunPin],
+    held: &[retained_held_manual_runs::RetainedHeldManualRunPin],
+    histories: &[retained_attempt_histories::RetainedAttemptHistoryPin],
+) -> Result<BTreeSet<String>> {
+    retained_attempt_histories::validate_pins(histories, terminal)?;
+    validate_retained_union(store, terminal, held, Some(histories))
+}
+
+fn validate_retained_union(
+    store: &SessionStore,
+    terminal: &[retained_terminal_runs::RetainedTerminalRunPin],
+    held: &[retained_held_manual_runs::RetainedHeldManualRunPin],
+    histories: Option<&[retained_attempt_histories::RetainedAttemptHistoryPin]>,
+) -> Result<BTreeSet<String>> {
+    let expected = retained_manual_held_run_ids(terminal, held)?;
+    let mut budget = if histories.is_some() { retained_cancelled_runs::ReadBudget::for_attempt_history_v5() }
+        else { retained_cancelled_runs::ReadBudget::for_manual_held_v4() };
+    if let Some(histories) = histories { retained_attempt_histories::validate_inventory(store, histories, &mut budget)?; }
+    let actual = retained_cancelled_runs::list_run_inventory(store, &mut budget)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if actual != expected {
+        bail!("v4 retained subsets do not exactly cover the durable run inventory");
+    }
+    let held_facts = retained_held_manual_runs::validate_held_manual_runs_subset_with_budget(
+        store,
+        held,
+        &mut budget,
+    )?;
+    let mut refs = held_facts.referenced_object_refs;
+    let terminal_tasks = if let Some(histories) = histories {
+        retained_terminal_runs::validate_terminal_runs_subset_with_histories(store, terminal, &mut budget, &mut refs, histories)?
+    } else {
+        retained_terminal_runs::validate_terminal_runs_subset(store, terminal, &mut budget, &mut refs)?
+    };
+    let total_tasks = held_facts
+        .task_count
+        .checked_add(terminal_tasks)
+        .context("v4 retained task count overflow")?;
+    if total_tasks > retained_cancelled_runs::MAX_RETAINED_CANCELLED_TASKS {
+        bail!("v4 combined retained subsets exceed the task limit");
+    }
+    // Pins may belong to either subset, including held prepared-field CAS.
+    // This must run once on their union, never independently on a partial set.
+    retained_cancelled_runs::validate_run_cas_pins(store, &refs, &mut budget)?;
+    let final_inventory = retained_cancelled_runs::list_run_inventory(store, &mut budget)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if final_inventory != expected {
+        bail!("v4 durable run inventory changed before recovery");
+    }
+    if let Some(histories) = histories { retained_attempt_histories::validate_inventory(store, histories, &mut budget)?; }
+    Ok(expected)
+}
+
 /// Durable result of a Docker namespace recovery. `failed` is the resulting
 /// owner state; it means the previous owner is no longer admitted, never that
 /// the old children were observed to drain successfully.
@@ -504,7 +700,11 @@ impl RuntimeServiceContainerRecoveryReceipt {
         }
         if !matches!(
             self.outcome.as_str(),
-            "empty_namespace_recovered" | "retained_cancelled_runs_recovered"
+            "empty_namespace_recovered"
+                | "retained_cancelled_runs_recovered"
+                | "retained_terminal_runs_recovered"
+                | "retained_manual_held_runs_recovered"
+                | "retained_attempt_history_recovered"
         ) {
             bail!("runtime service container recovery has an unsupported outcome");
         }
@@ -1956,6 +2156,64 @@ impl RuntimeServiceConfig {
         Ok(persisted)
     }
 
+    /// Read a diagnostic terminal-evidence digest without changing the run,
+    /// owner, leases, or admission. The host writer precedes the store writer.
+    pub fn inspect_terminal_run_evidence(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+    ) -> Result<String> {
+        self.validate()?;
+        self.require_application_binding(store, &self.target_id)?;
+        let host = self.host_execution.as_ref()
+            .context("terminal evidence requires a host execution binding")?;
+        let ledger = crate::host_resource_ledger::HostResourceLedger::open(
+            &host.ledger_root, host.policy.clone(),
+        )?;
+        ledger.with_terminal_run_evidence_fence(store, run_id, |_, digest| Ok(digest.to_owned()))
+    }
+
+    /// Read v4 held-manual evidence without releasing the run or changing its
+    /// completed preparation. The diagnostic digest is not a v4 request pin;
+    /// the canonical subset validator is rechecked under the same writer fence.
+    pub fn inspect_held_manual_run_evidence(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+    ) -> Result<String> {
+        self.validate()?;
+        self.require_application_binding(store, &self.target_id)?;
+        let host = self.host_execution.as_ref()
+            .context("held manual evidence requires a host execution binding")?;
+        let ledger = crate::host_resource_ledger::HostResourceLedger::open(
+            &host.ledger_root, host.policy.clone(),
+        )?;
+        ledger.with_held_manual_run_evidence_fence(store, run_id, |_, digest| {
+            let intent = read_stable_regular_path(
+                &require_existing_regular_path(store.root(), &format!("runs/{run_id}/run_intent.json"))?,
+                crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize,
+                "held-manual inspection run intent",
+            )?;
+            let catalog = read_stable_regular_path(
+                &require_existing_regular_path(store.root(), &format!("runs/{run_id}/run_catalog.json"))?,
+                crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize,
+                "held-manual inspection run catalog",
+            )?;
+            let pin = retained_held_manual_runs::RetainedHeldManualRunPin {
+                run_id: run_id.into(),
+                run_intent_sha256: crate::cas::hex_sha256(&intent),
+                run_catalog_sha256: crate::cas::hex_sha256(&catalog),
+                start_release: retained_held_manual_runs::TypedExpectedAbsent::Absent,
+            };
+            retained_held_manual_runs::validate_held_manual_runs_subset_with_budget(
+                store,
+                &[pin],
+                &mut retained_cancelled_runs::ReadBudget::for_manual_held_v4(),
+            )?;
+            Ok(digest.to_owned())
+        })
+    }
+
     /// Recover exactly one pinned `Unknown` owner after proving that the
     /// session and host stores are empty and quiescent.  This operation is
     /// explicit and operator-authorized; `ensure` never calls it implicitly.
@@ -2116,8 +2374,8 @@ impl RuntimeServiceConfig {
 
     /// Recover a stopped Docker runtime namespace using either the existing
     /// exited-container proof or the recovery-only exact-ID absence proof.
-    /// Absence is accepted only for v2 requests that retain explicitly pinned
-    /// cancelled runs; it never fabricates container exit or native drain.
+    /// Absence is accepted only for explicit retained-run request versions;
+    /// it never fabricates container exit or native drain.
     pub fn recover_container_with_proof(
         store: &SessionStore,
         candidate: &Self,
@@ -2529,20 +2787,35 @@ fn require_retained_cancelled_runtime_store(
     config: &RuntimeServiceConfig,
     pins: &[retained_cancelled_runs::RetainedCancelledRunPin],
 ) -> Result<()> {
-    for relative in [
-        "manifests",
-        "live_command_journals",
-        "recovery",
-        "temp",
-    ] {
-        require_empty_store_namespace(store, relative)?;
-    }
-    require_empty_batch_namespace(store)?;
     let retained_run_ids = pins
         .iter()
         .map(|pin| pin.run_id.clone())
         .collect::<BTreeSet<_>>();
-    require_runtime_recovery_scheduler_state(store, config, Some(&retained_run_ids))
+    require_retained_runtime_store_for_run_ids(store, config, &retained_run_ids)
+}
+
+fn require_retained_terminal_runtime_store(
+    store: &SessionStore,
+    config: &RuntimeServiceConfig,
+    pins: &[retained_terminal_runs::RetainedTerminalRunPin],
+) -> Result<()> {
+    let retained_run_ids = pins
+        .iter()
+        .map(|pin| pin.run_id.clone())
+        .collect::<BTreeSet<_>>();
+    require_retained_runtime_store_for_run_ids(store, config, &retained_run_ids)
+}
+
+fn require_retained_runtime_store_for_run_ids(
+    store: &SessionStore,
+    config: &RuntimeServiceConfig,
+    retained_run_ids: &BTreeSet<String>,
+) -> Result<()> {
+    for relative in ["manifests", "live_command_journals", "recovery", "temp"] {
+        require_empty_store_namespace(store, relative)?;
+    }
+    require_empty_batch_namespace(store)?;
+    require_runtime_recovery_scheduler_state(store, config, Some(retained_run_ids))
 }
 
 fn require_runtime_recovery_scheduler_state(
@@ -2619,7 +2892,7 @@ fn require_runtime_recovery_checkpoint_references(
                 || next_run_id.is_some_and(|run_id| !allowed.contains(run_id))
             {
                 bail!(
-                    "{role} scheduler checkpoint references a run outside the pinned cancelled-run inventory"
+                    "{role} scheduler checkpoint references a run outside the pinned retained-run inventory"
                 );
             }
         }
@@ -3672,6 +3945,9 @@ fn validate_container_receipt_for_request(
     let expected_outcome = match request.schema_version.as_str() {
         RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA => "empty_namespace_recovered",
         RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2 => "retained_cancelled_runs_recovered",
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3 => "retained_terminal_runs_recovered",
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4 => "retained_manual_held_runs_recovered",
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 => "retained_attempt_history_recovered",
         _ => bail!("unsupported runtime service container recovery request schema"),
     };
     if receipt.request_id != request.request_id
@@ -3895,12 +4171,44 @@ fn recover_container_proof_locked(
     owner_lock
         .metadata()
         .context("runtime service owner lock disappeared during container recovery")?;
-    match request.retained_cancelled_runs.as_deref() {
-        Some(pins) => {
+    match request.schema_version.as_str() {
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA => {
+            require_empty_runtime_store(store, candidate)?;
+        }
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2 => {
+            let pins = request
+                .retained_cancelled_runs
+                .as_deref()
+                .context("v2 recovery request lost its retained-run pins after validation")?;
             retained_cancelled_runs::validate_retained_cancelled_runs(store, pins)?;
             require_retained_cancelled_runtime_store(store, candidate, pins)?;
         }
-        None => require_empty_runtime_store(store, candidate)?,
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3 => {
+            let pins = request
+                .retained_terminal_runs
+                .as_deref()
+                .context("v3 recovery request lost its retained-run pins after validation")?;
+            retained_terminal_runs::validate_retained_terminal_runs(store, pins)?;
+            require_retained_terminal_runtime_store(store, candidate, pins)?;
+        }
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4 => {
+            let terminal = request.retained_terminal_runs.as_deref().context("v4 lost its terminal subset")?;
+            let held = request.retained_held_manual_runs.as_deref().context("v4 lost its held-manual subset")?;
+            let retained_ids = validate_manual_held_union(store, terminal, held)?;
+            for relative in ["manifests", "live_command_journals", "recovery", "temp"] { require_empty_store_namespace(store, relative)?; }
+            require_empty_batch_namespace(store)?;
+            require_runtime_recovery_scheduler_state(store, candidate, Some(&retained_ids))?;
+        }
+        RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 => {
+            let terminal = request.retained_terminal_runs.as_deref().context("v5 lost its terminal subset")?;
+            let held = request.retained_held_manual_runs.as_deref().context("v5 lost its held-manual subset")?;
+            let histories = request.retained_attempt_histories.as_deref().context("v5 lost its attempt-history pins")?;
+            let retained_ids = validate_attempt_history_union(store, terminal, held, histories)?;
+            for relative in ["manifests", "live_command_journals", "recovery", "temp"] { require_empty_store_namespace(store, relative)?; }
+            require_empty_batch_namespace(store)?;
+            require_runtime_recovery_scheduler_state(store, candidate, Some(&retained_ids))?;
+        }
+        _ => bail!("unsupported runtime service container recovery request schema"),
     }
     if ledger_snapshot.stable_sha256()? != request.ledger_snapshot_sha256 {
         bail!("runtime service container recovery ledger snapshot changed");
@@ -4073,11 +4381,23 @@ fn recover_container_proof_locked(
         request_id: request.request_id.clone(),
         request_sha256: request_sha256.into(),
         status: "prepared".into(),
-        outcome: if request.retained_cancelled_runs.is_some() {
-            "retained_cancelled_runs_recovered".into()
-        } else {
-            "empty_namespace_recovered".into()
-        },
+        outcome: (match request.schema_version.as_str() {
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA => "empty_namespace_recovered",
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2 => {
+                "retained_cancelled_runs_recovered"
+            }
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3 => {
+                "retained_terminal_runs_recovered"
+            }
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4 => {
+                "retained_manual_held_runs_recovered"
+            }
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5 => {
+                "retained_attempt_history_recovered"
+            }
+            _ => bail!("unsupported runtime service container recovery request schema"),
+        })
+        .into(),
         target_id: request.expected_owner.target_id.clone(),
         config_sha256: request.config_sha256.clone(),
         owner_state_before: state_name(request.expected_owner.state).into(),
@@ -5531,7 +5851,8 @@ mod container_recovery_contract_tests {
     };
     use crate::{
         FmsPreparationResourcePool, FmsResourceBudget, FmsResourceKind,
-        FmsSchedulerResourcePool, FMS_PREPARATION_RESOURCE_POOL_SCHEMA,
+        FmsSchedulerPoolCheckpoint, FmsSchedulerResourcePool, FmsSchedulerRunSource,
+        FMS_PREPARATION_RESOURCE_POOL_SCHEMA, FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA,
         FMS_SCHEDULER_RESOURCE_POOL_SCHEMA,
     };
     use tempfile::TempDir;
@@ -5614,6 +5935,9 @@ mod container_recovery_contract_tests {
                 },
             ],
             retained_cancelled_runs: None,
+            retained_terminal_runs: None,
+            retained_held_manual_runs: None,
+            retained_attempt_histories: None,
         }
     }
 
@@ -5854,6 +6178,9 @@ mod container_recovery_contract_tests {
                 },
             ],
             retained_cancelled_runs: None,
+            retained_terminal_runs: None,
+            retained_held_manual_runs: None,
+            retained_attempt_histories: None,
         };
         let request_sha256 = request.canonical_sha256().unwrap();
         let observed_containers = request
@@ -5908,11 +6235,482 @@ mod container_recovery_contract_tests {
         }
     }
 
+    fn held_pin(run_id: &str) -> retained_held_manual_runs::RetainedHeldManualRunPin {
+        retained_held_manual_runs::RetainedHeldManualRunPin {
+            run_id: run_id.into(),
+            run_intent_sha256: "a".repeat(64),
+            run_catalog_sha256: "b".repeat(64),
+            start_release: retained_held_manual_runs::TypedExpectedAbsent::Absent,
+        }
+    }
+
+    fn write_held_run(
+        store: &SessionStore,
+        run_id: &str,
+    ) -> retained_held_manual_runs::RetainedHeldManualRunPin {
+        use crate::types::{
+            FmsRunCatalog, FmsRunIntent, FmsTaskCatalogEntry, FmsTaskLifecycle, FmsTaskReadiness,
+            FMS_RUN_CATALOG_SCHEMA,
+        };
+        let intent = FmsRunIntent::new(
+            run_id,
+            format!("intent-{run_id}"),
+            serde_json::json!({
+                "run_id":run_id, "parameters":{"fullmag.accepted_run_start":{"schema_version":"accepted_run_start_policy.v1","mode":"manual"}}
+            }),
+        );
+        store.commit_run_intent(&intent).unwrap();
+        store
+            .commit_run_catalog(&FmsRunCatalog {
+                schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.into(),
+                revision: 1,
+                updated_at: Utc::now(),
+                tasks: vec![FmsTaskCatalogEntry {
+                    task_id: format!("task-{run_id}"),
+                    input_fingerprint: "c".repeat(64),
+                    lifecycle: FmsTaskLifecycle::Accepted,
+                    readiness: FmsTaskReadiness::Blocked {
+                        reason: "manual-held preview".into(),
+                    },
+                    observation: None,
+                    attempt_id: None,
+                    ownership_epoch: None,
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: None,
+                    coordinator_watermark: None,
+                    coordinator_genesis: None,
+                }],
+            })
+            .unwrap();
+        let mut pin = held_pin(run_id);
+        pin.run_intent_sha256 = crate::hex_sha256(
+            &fs::read(store.root().join(format!("runs/{run_id}/run_intent.json"))).unwrap(),
+        );
+        pin.run_catalog_sha256 = crate::hex_sha256(
+            &fs::read(store.root().join(format!("runs/{run_id}/run_catalog.json"))).unwrap(),
+        );
+        pin
+    }
+
+    #[test]
+    fn v5_attempt_history_wire_contract_is_explicit_and_forbidden_in_older_schemas() {
+        let mut history = request();
+        history.schema_version = RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V5.into();
+        history.retained_terminal_runs = Some(vec![retained_terminal_runs::RetainedTerminalRunPin {
+            run_id: "terminal-history".into(), run_intent_sha256: "a".repeat(64), run_catalog_sha256: "b".repeat(64), artifact_catalog_sha256: None,
+        }]);
+        history.retained_held_manual_runs = Some(vec![held_pin("held-1")]);
+        assert!(history.validate().is_err());
+        history.retained_attempt_histories = Some(vec![retained_attempt_histories::RetainedAttemptHistoryPin {
+            run_id: "terminal-history".into(), run_evidence_sha256: "c".repeat(64), attempts: vec![retained_attempt_histories::RetainedAttemptPin {
+                task_id: "task-history".into(), attempt_id: "attempt-history".into(), ownership_epoch: 1, resource_id: "compute-cpu".into(),
+            }],
+        }]);
+        history.validate().unwrap();
+        let encoded = serde_json::to_value(&history).unwrap();
+        let decoded: RuntimeServiceContainerRecoveryRequest = serde_json::from_value(encoded).unwrap();
+        assert_eq!(history, decoded);
+        let mut null_field = serde_json::to_value(request()).unwrap();
+        null_field["retained_attempt_histories"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<RuntimeServiceContainerRecoveryRequest>(null_field).is_err());
+        for schema in [RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA, RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2,
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3, RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4] {
+            let mut legacy = history.clone(); legacy.schema_version = schema.into();
+            assert!(format!("{:#}", legacy.validate().unwrap_err()).contains("attempt-history"));
+        }
+        let mut empty = history.clone(); empty.retained_attempt_histories = Some(Vec::new()); assert!(empty.validate().is_err());
+        let mut foreign = history.clone(); foreign.retained_attempt_histories.as_mut().unwrap()[0].run_id = "held-1".into(); assert!(foreign.validate().is_err());
+        let mut duplicate = history.clone(); let claim = duplicate.retained_attempt_histories.as_ref().unwrap()[0].attempts[0].clone();
+        duplicate.retained_attempt_histories.as_mut().unwrap()[0].attempts.push(claim); assert!(duplicate.validate().is_err());
+        let mut oversized = history; let template = oversized.retained_attempt_histories.as_ref().unwrap()[0].attempts[0].clone();
+        oversized.retained_attempt_histories.as_mut().unwrap()[0].attempts = (1..=129).map(|epoch| {
+            let mut claim = template.clone(); claim.attempt_id = format!("attempt-{epoch}"); claim.ownership_epoch = epoch; claim
+        }).collect(); assert!(oversized.validate().is_err());
+    }
+
+    #[test]
+    fn v4_manual_held_pin_union_requires_explicit_disjoint_nonempty_held_subset() {
+        let mut manual = request();
+        manual.schema_version = RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4.into();
+        assert!(manual.validate().is_err());
+        manual.retained_terminal_runs = Some(Vec::new());
+        manual.retained_held_manual_runs = Some(vec![held_pin("held-1")]);
+        manual.validate().unwrap();
+        let encoded = serde_json::to_value(&manual).unwrap();
+        assert_eq!(
+            encoded["retained_held_manual_runs"][0]["start_release"],
+            "absent"
+        );
+        assert_eq!(encoded["retained_terminal_runs"], serde_json::json!([]));
+        for schema in [
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA,
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2,
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3,
+        ] {
+            let mut older = manual.clone();
+            older.schema_version = schema.into();
+            assert!(older.validate().is_err());
+        }
+        let mut empty = manual.clone();
+        empty.retained_held_manual_runs = Some(Vec::new());
+        assert!(empty.validate().is_err());
+        let mut duplicate = manual.clone();
+        duplicate.retained_held_manual_runs = Some(vec![held_pin("held-1"), held_pin("held-1")]);
+        assert!(duplicate.validate().is_err());
+        let mut overlap = manual.clone();
+        overlap.retained_terminal_runs =
+            Some(vec![retained_terminal_runs::RetainedTerminalRunPin {
+                run_id: "held-1".into(),
+                run_intent_sha256: "a".repeat(64),
+                run_catalog_sha256: "b".repeat(64),
+                artifact_catalog_sha256: None,
+            }]);
+        assert!(overlap.validate().is_err());
+        let mut too_many = manual.clone();
+        too_many.retained_held_manual_runs = Some(
+            (0..129)
+                .map(|index| held_pin(&format!("held-{index}")))
+                .collect(),
+        );
+        assert!(too_many.validate().is_err());
+        let mut cancelled = manual;
+        cancelled.retained_cancelled_runs = Some(Vec::new());
+        assert!(cancelled.validate().is_err());
+    }
+
+    #[test]
+    fn v4_manual_held_union_checks_inventory_and_preserves_held_refs_in_scheduler_checkpoints() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let first = write_held_run(&store, "held-first");
+        let second = write_held_run(&store, "held-second");
+        let _writer = store.write_transaction().unwrap();
+        assert!(validate_manual_held_union(&store, &[], std::slice::from_ref(&first)).is_err());
+        let ids = validate_manual_held_union(&store, &[], &[first, second]).unwrap();
+        assert_eq!(ids.len(), 2);
+        let checkpoint = vec!["held-second".into()];
+        require_runtime_recovery_checkpoint_references(
+            &checkpoint,
+            Some("held-second"),
+            Some(&ids),
+            "preparation",
+        )
+        .unwrap();
+        assert!(require_runtime_recovery_checkpoint_references(
+            &checkpoint,
+            Some("unknown"),
+            Some(&ids),
+            "preparation"
+        )
+        .is_err());
+        assert!(!store.accepted_run_start_permitted("held-first").unwrap());
+        assert!(!store.accepted_run_start_permitted("held-second").unwrap());
+    }
+
+    #[test]
+    fn retained_snapshot_validation_is_read_only_and_returns_sorted_run_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let config = executable_config(&store);
+        let second = write_held_run(&store, "held-z");
+        let first = write_held_run(&store, "held-a");
+        store
+            .commit_scheduler_resource_pool(
+                0,
+                &FmsSchedulerResourcePool {
+                    schema_version: FMS_SCHEDULER_RESOURCE_POOL_SCHEMA.into(),
+                    pool_id: config.compute_pool_id.clone(),
+                    generation: 1,
+                    resources: config.compute_resources.clone(),
+                },
+            )
+            .unwrap();
+        store
+            .commit_preparation_resource_pool(
+                0,
+                &FmsPreparationResourcePool {
+                    schema_version: FMS_PREPARATION_RESOURCE_POOL_SCHEMA.into(),
+                    pool_id: config.preparation_pool_id.clone(),
+                    generation: 1,
+                    resources: config.preparation_resources.clone(),
+                },
+            )
+            .unwrap();
+        let held_runs = [second, first];
+        let mut preparation_checkpoint = FmsSchedulerPoolCheckpoint {
+            schema_version: FMS_SCHEDULER_POOL_CHECKPOINT_SCHEMA.into(),
+            pool_id: config.preparation_pool_id.clone(),
+            sequence: 1,
+            run_source: FmsSchedulerRunSource::Store,
+            run_ids: vec!["held-z".into()],
+            next_run_id: Some("held-z".into()),
+        };
+        store
+            .commit_preparation_scheduler_pool_checkpoint(0, &preparation_checkpoint)
+            .unwrap();
+
+        let run_ids = validate_retained_snapshot(&store, &config, &[], &held_runs).unwrap();
+
+        assert_eq!(run_ids, vec!["held-a", "held-z"]);
+        preparation_checkpoint.sequence = 2;
+        preparation_checkpoint.run_ids = vec!["unknown-run".into()];
+        preparation_checkpoint.next_run_id = Some("unknown-run".into());
+        store
+            .commit_preparation_scheduler_pool_checkpoint(1, &preparation_checkpoint)
+            .unwrap();
+        assert!(validate_retained_snapshot(&store, &config, &[], &held_runs).is_err());
+        assert!(!store
+            .root()
+            .join(RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)
+            .exists());
+        assert!(!store.root().join(RUNTIME_SERVICE_OWNER_LOCK_PATH).exists());
+        assert!(!store.root().join("shared-host-ledger").exists());
+        assert!(!store
+            .root()
+            .join("runs/held-a/start_release.json")
+            .exists());
+        assert!(!store
+            .root()
+            .join("runs/held-z/start_release.json")
+            .exists());
+    }
+
+    #[test]
+    fn v4_manual_held_native_recovery_and_replay_only_change_owner_not_manual_catalog_or_release() {
+        let mut fixture = executable_fixture();
+        let pin = write_held_run(&fixture.store, "held-preview");
+        fixture.request.schema_version =
+            RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4.into();
+        fixture.request.retained_terminal_runs = Some(Vec::new());
+        fixture.request.retained_held_manual_runs = Some(vec![pin]);
+        fixture.request_sha256 = fixture.request.canonical_sha256().unwrap();
+        fixture.attestation.request_sha256 = fixture.request_sha256.clone();
+        let proof = container_recovery_proof::RuntimeServiceContainerRecoveryProof::Exited(
+            fixture.attestation.clone(),
+        );
+        let catalog_path = fixture
+            .store
+            .root()
+            .join("runs/held-preview/run_catalog.json");
+        let intent_path = fixture
+            .store
+            .root()
+            .join("runs/held-preview/run_intent.json");
+        let before_catalog = fs::read(&catalog_path).unwrap();
+        let before_intent = fs::read(&intent_path).unwrap();
+        let first = RuntimeServiceConfig::recover_container_with_proof(
+            &fixture.store,
+            &fixture.config,
+            &fixture.configuration_bytes,
+            &fixture.request,
+            &fixture.request_sha256,
+            &proof,
+            &fixture.recovery_build_commit,
+            &fixture.recovery_build_snapshot,
+        )
+        .unwrap();
+        assert_eq!(first.outcome, "retained_manual_held_runs_recovered");
+        assert_eq!(first.owner_state_after, "failed");
+        assert_eq!(fs::read(&catalog_path).unwrap(), before_catalog);
+        assert_eq!(fs::read(&intent_path).unwrap(), before_intent);
+        assert!(!fixture
+            .store
+            .root()
+            .join("runs/held-preview/start_release.json")
+            .exists());
+        let owner_path = fixture
+            .store
+            .root()
+            .join(RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH);
+        let before_owner = fs::read(&owner_path).unwrap();
+        let replay = RuntimeServiceConfig::recover_container_with_proof(
+            &fixture.store,
+            &fixture.config,
+            &fixture.configuration_bytes,
+            &fixture.request,
+            &fixture.request_sha256,
+            &proof,
+            &fixture.recovery_build_commit,
+            &fixture.recovery_build_snapshot,
+        )
+        .unwrap();
+        assert_eq!(replay, first);
+        assert_eq!(fs::read(owner_path).unwrap(), before_owner);
+        assert_eq!(fs::read(catalog_path).unwrap(), before_catalog);
+        assert_eq!(fs::read(intent_path).unwrap(), before_intent);
+        assert!(!fixture
+            .store
+            .accepted_run_start_permitted("held-preview")
+            .unwrap());
+    }
+
     #[test]
     fn container_recovery_request_accepts_complete_ready_owner_pin() {
         let request = request();
         request.validate().unwrap();
         assert_eq!(request.canonical_sha256().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn container_recovery_request_v1_v2_v3_pin_shapes_are_versioned() {
+        let legacy = request();
+        legacy.validate().unwrap();
+        let legacy_json = serde_json::to_value(&legacy).unwrap();
+        assert!(legacy_json.get("retained_terminal_runs").is_none());
+
+        let mut cancelled = request();
+        cancelled.schema_version = RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V2.into();
+        cancelled.retained_cancelled_runs = Some(vec![retained_cancelled_runs::RetainedCancelledRunPin {
+            run_id: "run-cancelled".into(),
+            run_intent_sha256: "a".repeat(64),
+            run_catalog_sha256: "b".repeat(64),
+        }]);
+        cancelled.validate().unwrap();
+        assert!(serde_json::to_value(&cancelled)
+            .unwrap()
+            .get("retained_terminal_runs")
+            .is_none());
+        cancelled.retained_terminal_runs = Some(vec![retained_terminal_runs::RetainedTerminalRunPin {
+            run_id: "run-terminal".into(),
+            run_intent_sha256: "c".repeat(64),
+            run_catalog_sha256: "d".repeat(64),
+            artifact_catalog_sha256: None,
+        }]);
+        assert!(cancelled.validate().is_err());
+
+        let mut terminal = request();
+        terminal.schema_version = RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3.into();
+        terminal.retained_terminal_runs = Some(vec![retained_terminal_runs::RetainedTerminalRunPin {
+            run_id: "run-terminal".into(),
+            run_intent_sha256: "c".repeat(64),
+            run_catalog_sha256: "d".repeat(64),
+            artifact_catalog_sha256: Some("e".repeat(64)),
+        }]);
+        terminal.validate().unwrap();
+        assert!(serde_json::to_value(&terminal)
+            .unwrap()
+            .get("retained_terminal_runs")
+            .is_some());
+        terminal.retained_terminal_runs = Some(Vec::new());
+        assert!(terminal.validate().is_err());
+        terminal.retained_terminal_runs = Some(vec![retained_terminal_runs::RetainedTerminalRunPin {
+            run_id: "run-terminal".into(),
+            run_intent_sha256: "c".repeat(64),
+            run_catalog_sha256: "d".repeat(64),
+            artifact_catalog_sha256: None,
+        }]);
+        terminal.retained_cancelled_runs = Some(vec![retained_cancelled_runs::RetainedCancelledRunPin {
+            run_id: "run-cancelled".into(),
+            run_intent_sha256: "a".repeat(64),
+            run_catalog_sha256: "b".repeat(64),
+        }]);
+        assert!(terminal.validate().is_err());
+    }
+
+    #[test]
+    fn container_recovery_receipt_accepts_terminal_run_outcome() {
+        let receipt = RuntimeServiceContainerRecoveryReceipt {
+            schema_version: RUNTIME_SERVICE_CONTAINER_RECOVERY_SCHEMA.into(),
+            request_id: "00000000-0000-4000-8000-000000000021".into(),
+            request_sha256: "a".repeat(64),
+            status: "prepared".into(),
+            outcome: "retained_terminal_runs_recovered".into(),
+            target_id: "desktop".into(),
+            config_sha256: "b".repeat(64),
+            owner_state_before: "ready".into(),
+            owner_sha256_before: "c".repeat(64),
+            owner_state_after: "failed".into(),
+            owner_sha256_after: "d".repeat(64),
+            store_root_sha256: "e".repeat(64),
+            application: RuntimeServiceApplicationPin::ExternalOnly {
+                raw_sha256: "f".repeat(64),
+            },
+            ledger_root_sha256: "1".repeat(64),
+            ledger_snapshot_sha256: "2".repeat(64),
+            attestation_sha256: "3".repeat(64),
+            docker_manifest_sha256: "4".repeat(64),
+            prior_ready_owner_proof_sha256: "5".repeat(64),
+            device_release_mapping_sha256: "6".repeat(64),
+            archived_evidence_path: "/tmp/container-recovery-evidence".into(),
+            archived_evidence_sha256: "7".repeat(64),
+            archived_files: [("configuration.json".into(), "8".repeat(64))]
+                .into_iter()
+                .collect(),
+            archived_absent_sources: BTreeMap::new(),
+            historical_build_commit: "9".repeat(40),
+            historical_build_snapshot: "a".repeat(64),
+            executor_build_commit: "b".repeat(40),
+            executor_build_snapshot: "c".repeat(64),
+            created_at: Utc::now(),
+            completed_at: None,
+        };
+        receipt.validate().unwrap();
+    }
+
+    #[test]
+    fn namespace_absence_proof_accepts_v3_terminal_pins_but_not_v1() {
+        let mut terminal = request();
+        terminal.schema_version = RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V3.into();
+        terminal.retained_terminal_runs = Some(vec![retained_terminal_runs::RetainedTerminalRunPin {
+            run_id: "run-terminal".into(),
+            run_intent_sha256: "a".repeat(64),
+            run_catalog_sha256: "b".repeat(64),
+            artifact_catalog_sha256: None,
+        }]);
+        let request_sha256 = terminal.canonical_sha256().unwrap();
+        let attestation = container_recovery_proof::DockerNamespaceAbsenceAttestation {
+            schema_version: container_recovery_proof::DOCKER_NAMESPACE_ABSENCE_ATTESTATION_SCHEMA
+                .into(),
+            request_sha256: request_sha256.clone(),
+            docker_engine_id_sha256: terminal.docker_engine_id_sha256.clone(),
+            containers: terminal
+                .containers
+                .iter()
+                .map(|pin| {
+                    container_recovery_proof::DockerContainerNamespaceAbsenceObservation {
+                        container_id: pin.container_id.clone(),
+                        image_id: pin.image_id.clone(),
+                        config_sha256: pin.config_sha256.clone(),
+                        service: pin.service.clone(),
+                        absence: container_recovery_proof::DockerNamespaceAbsenceObservation {
+                            inspect: container_recovery_proof::DockerNamespaceAbsenceInspectObservation {
+                                outcome: container_recovery_proof::DockerNamespaceAbsenceInspectOutcome::NoSuchObject,
+                                matched_container_id: pin.container_id.clone(),
+                                output_sha256: "c".repeat(64),
+                            },
+                            ps_all: container_recovery_proof::DockerNamespaceAbsencePsAllObservation {
+                                outcome: container_recovery_proof::DockerNamespaceAbsencePsAllOutcome::Empty,
+                                output_sha256: "d".repeat(64),
+                            },
+                        },
+                    }
+                })
+                .collect(),
+            device_release: DockerDeviceReleaseObservation {
+                resource_id: terminal.device_release_resource_id.clone(),
+                gpu_uuid: terminal.device_release_gpu_uuid.clone(),
+                mapping_sha256: terminal.device_release_mapping_sha256.clone(),
+                mapping_detached: true,
+            },
+            manifest_sha256: terminal.docker_manifest_sha256.clone(),
+            result: container_recovery_proof::DockerNamespaceAbsenceResult::AuthoritativeNamespaceAbsence,
+        };
+        attestation
+            .validate_for_request(&terminal, &request_sha256)
+            .unwrap();
+
+        let mut manual=terminal.clone();
+        manual.schema_version=RUNTIME_SERVICE_CONTAINER_RECOVERY_REQUEST_SCHEMA_V4.into();
+        manual.retained_held_manual_runs=Some(vec![held_pin("run-held")]);
+        let manual_sha=manual.canonical_sha256().unwrap();
+        let mut manual_attestation=attestation.clone();manual_attestation.request_sha256=manual_sha.clone();
+        manual_attestation.validate_for_request(&manual,&manual_sha).unwrap();
+        let mut missing_held=manual.clone();missing_held.retained_held_manual_runs=None;
+        assert!(manual_attestation.validate_for_request(&missing_held,&manual_sha).is_err());
+        let legacy = request();
+        assert!(attestation.validate_for_request(&legacy, &request_sha256).is_err());
     }
 
     #[test]

@@ -25,8 +25,9 @@ import {
   fieldCatalogQuantitySupportsAirbox,
   fieldCatalogQuantitySupportsSpatialVisualization,
   isScalarSpatialQuantityId,
+  quantityCatalogEntrySupportsAnyAirboxVisualization,
   quantityCatalogEntrySupportsAirbox,
-  quantityCatalogEntrySupportsSpatialVisualization,
+  quantityCatalogEntrySupportsAnySpatialVisualization,
   quantityCatalogPickerItem,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
@@ -359,7 +360,7 @@ export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
   { value: "component_x", label: "Component X" },
   { value: "component_y", label: "Component Y" },
   { value: "component_z", label: "Component Z" },
-  { value: "magnitude", label: "Magnitude |m|" },
+  { value: "magnitude", label: "Magnitude" },
   { value: "colormap", label: "Colormap" },
 ];
 
@@ -756,7 +757,7 @@ export function resolveObjectVisualizationTargetForLane({
   selection: Selection;
   selectionTarget: VisualizationTargetRef | null;
 }): VisualizationTargetRef | null {
-  if (artifactInspection) return selectionTarget?.kind === "object" ? selectionTarget : null;
+  if (artifactInspection) return selectionTarget?.kind === "object" || selectionTarget?.kind === "airbox" && selectionTarget.id === "airbox" ? selectionTarget : null;
 
   const objectVisualizationSelection =
     selection.kind === "object.antenna.visualization" ||
@@ -2289,8 +2290,8 @@ export function visualizationQuantityItems(
     ? quantityCatalog.quantities
         .filter(
           targetKind === "airbox"
-            ? quantityCatalogEntrySupportsAirbox
-            : quantityCatalogEntrySupportsSpatialVisualization,
+            ? quantityCatalogEntrySupportsAnyAirboxVisualization
+            : quantityCatalogEntrySupportsAnySpatialVisualization,
         )
         .map((quantity) =>
           quantityCatalogPickerItem(quantity, quantity.label || quantity.id),
@@ -2314,7 +2315,10 @@ export function visualizationQuantityItems(
         })
     : [];
   const baseItems = quantityCatalog
-    ? mergeVisualizationQuantityItems(capabilityItems, fieldItems)
+    ? mergeVisualizationQuantityItems<{ disabled?: boolean; label: string; value: string }>(
+        mergeVisualizationQuantityItems(capabilityItems, fieldItems),
+        targetKind === "airbox" ? pendingAirboxQuantityItems(quantityCatalog) : [],
+      )
     : targetKind === "airbox"
       ? fieldItems.filter((item) =>
           fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value),
@@ -2376,11 +2380,68 @@ export function visualizationQuantityItems(
   ];
 }
 
-function mergeVisualizationQuantityItems(
-  capabilityItems: Array<{ disabled?: boolean; label: string; value: string }>,
-  fieldItems: Array<{ label: string; value: string }>,
-): Array<{ disabled?: boolean; label: string; value: string }> {
-  const merged = new Map<string, { disabled?: boolean; label: string; value: string }>();
+/** Keep the selector and overview honest about catalog availability. */
+export function visualizationQuantitySelectionState({ activeQuantityId, items, loading, error, executionRequired = false }: {
+  activeQuantityId: string;
+  items: readonly { value: string; label: string; disabled?: boolean }[];
+  loading: boolean;
+  error?: string | null;
+  executionRequired?: boolean;
+}) {
+  const selected = items.find(item =>
+    resolveCanonicalQuantityId(item.value) === resolveCanonicalQuantityId(activeQuantityId));
+  const status = executionRequired ? "execution-required" : error ? "error" : loading ? "loading" : items.length === 0
+    ? "empty" : selected?.disabled ? "unavailable" : selected ? "selected" : "unselected";
+  const placeholder = status === "execution-required" ? "Select a source and execution"
+    : status === "error" ? "Field catalog unavailable"
+    : status === "loading" ? "Loading quantities…"
+      : status === "empty" ? "No compatible field available" : "Select an available quantity";
+  return {
+    status,
+    selectedValue: executionRequired ? "" : selected?.value ?? "",
+    placeholder,
+    summary: status === "selected" ? selected!.label
+      : status === "unavailable" ? `Unavailable / ${selected!.label}` : placeholder,
+  };
+}
+
+/**
+ * Full-domain fields the Airbox can show once the solver provides them
+ * (H_demag, H_ext, H_eff before or early in a run). Listing them disabled
+ * explains an otherwise empty Airbox quantity list.
+ */
+function pendingAirboxQuantityItems(
+  quantityCatalog: QuantityCatalogResource,
+): Array<{ disabled: true; label: string; value: string }> {
+  return quantityCatalog.quantities
+    .filter(
+      (quantity) =>
+        quantity.domain === "full_domain" &&
+        (quantity.shape === "vector_field" || quantity.shape === "spatial_scalar") &&
+        quantity.interactive_preview &&
+        !quantityCatalogEntrySupportsAirbox(quantity),
+    )
+    .map((quantity) => ({
+      disabled: true,
+      // A term the study does not contain (no external field, say) never
+      // becomes available; anything else is still waiting for the solver.
+      label: `${quantity.label || quantity.id} (${
+        quantity.resolved_capability?.reason_code === "quantity_unsupported"
+          ? "not in this study"
+          : "not available yet"
+      })`,
+      value: quantity.id,
+    }));
+}
+
+function mergeVisualizationQuantityItems<
+  Item extends { disabled?: boolean; label: string; value: string },
+>(
+  capabilityItems: Item[],
+  fieldItems: Item[],
+): Item[] {
+  const merged = new Map<string, Item>();
+
   for (const item of capabilityItems) merged.set(item.value, item);
   for (const item of fieldItems) {
     if (!merged.has(item.value)) merged.set(item.value, item);
@@ -2406,7 +2467,7 @@ export function quantitySourcePatch(
   quantityId: string,
 ): VisualizationTargetPatch {
   const activeQuantityId = resolveCanonicalQuantityId(quantityId);
-  const patch: VisualizationTargetPatch = { activeQuantityId };
+  const patch: VisualizationTargetPatch = { activeQuantityId, tensorProjection: null };
 
   if (isScalarSpatialQuantityId(activeQuantityId)) {
     if (settings.surfaceColorSource !== "colormap") {
@@ -3100,17 +3161,19 @@ export function buildAirboxVisibilityDiagnostic({
 }
 
 export function buildVisualizationPanelSections({
+  artifactInspection = false,
   effectiveSettings,
   settings,
   target,
 }: {
+  artifactInspection?: boolean;
   effectiveSettings: VisualizationTargetSettings;
   settings: VisualizationTargetSettings;
   target?: VisualizationTargetRef;
 }): VisualizationPanelSection[] {
   const passDisabled = !settings.visible;
-  const capabilities = target ? visualizationTargetCapabilities(target) : null;
-  const isAirboxTarget = target?.kind === "airbox";
+  const capabilities = target ? visualizationTargetCapabilities(target, artifactInspection) : null;
+  const isAirboxTarget = target?.kind === "airbox" && !artifactInspection;
   const isFdmAirboxTarget = target ? isFdmUniverseOutsideSupportTarget(target) : false;
 
   if (capabilities?.supportsFieldData === false) {
@@ -3279,7 +3342,7 @@ export function resolveArtifactInspectionDataState({ executionSelected = true, c
   if (!executionSelected) return "Select execution";
   if (catalogError) return "Unavailable";
   if (!catalogReady) return "Loading catalog";
-  if (!quantityAvailable) return "Select raw SI quantity";
+  if (!quantityAvailable) return "Select a compatible field";
   if (!ownerReady) return "Select execution";
   return presentationReady ? "Historical snapshot" : "Loading historical result";
 }

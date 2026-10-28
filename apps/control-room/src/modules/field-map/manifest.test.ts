@@ -17,8 +17,13 @@ describe("field-map manifest", () => {
         "field-map.open",
         "field-map.fit",
         "field-map.export-png",
+        "field-map.export-data",
+        "field-map.layer-next",
+        "field-map.component-direction",
         "field-map.toggle-vectors",
       ]),
     );
+    const ids = fieldMapManifest.contributes?.commands?.map((command) => command.id) ?? [];
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

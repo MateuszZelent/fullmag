@@ -13,6 +13,15 @@ import type { KernelApi } from "@/kernel/types";
 import FooterModule from "./FooterModule";
 import { setFooterChannelFilter } from "./footerUiStore";
 
+vi.mock("@/kernel/resources/useSessionStatus", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/kernel/resources/useSessionStatus")>(),
+  useSessionStatusSelector: () => null,
+}));
+vi.mock("@/kernel/resources/studyRuntimeResources", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/kernel/resources/studyRuntimeResources")>(),
+  useStageExecutionResource: () => ({ data: null, status: "idle" }),
+}));
+
 vi.mock("@/shared/analysis-charts/QuickChartResourceView", () => ({
   QuickChartResourceView: () => <div>Quick resource mounted</div>,
 }));

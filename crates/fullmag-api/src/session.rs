@@ -296,6 +296,7 @@ pub(crate) fn accepted_stage_record(
     StageExecutionRecord {
         stage_id: Some(stage_id.to_string()),
         antenna_solve_stage_id: None,
+        antenna_progress: None,
         kind,
         status,
         // Accepted stages are not linked to a journal command: the whole-run
@@ -1696,6 +1697,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         run: None,
         live_state: None,
         coupled_checkpoint: req.coupled_checkpoint.clone(),
+        imported_antenna_mesh_proof: None,
         runtime_status: build_runtime_status_view(&status),
         capabilities: None,
         metadata: None,
@@ -2088,6 +2090,84 @@ fn is_standalone_antenna_lead_inspection(current: &SessionStateResponse) -> bool
         == Some("antenna_external_lead_inspection")
 }
 
+fn is_antenna_field_only(current: &SessionStateResponse) -> bool {
+    current
+        .metadata
+        .as_ref()
+        .and_then(|value| value.get("execution_plan"))
+        .and_then(|value| value.get("backend_plan"))
+        .and_then(|value| value.get("kind"))
+        .and_then(Value::as_str)
+        == Some("antenna_field_only")
+}
+
+/// Remove inherited magnetic/unqualified carriers at preparation publication.
+/// Inspection artifacts keep their existing independent, typed owner.
+fn clear_magnetic_carriers_for_field_only(current: &mut SessionStateResponse) {
+    let magnetic = |quantity: &str| {
+        fullmag_quantities::quantity_spec(quantity).is_some_and(|spec| {
+            spec.domain == fullmag_quantities::QuantityDomain::MagneticOnly
+        })
+    };
+    let removed_latest: Vec<_> = current.latest_fields.entries()
+        .filter(|(quantity, value)| {
+            magnetic(quantity) || !latest_field_source_is_qualified(current, quantity, value)
+        })
+        .map(|(quantity, _)| quantity.clone())
+        .collect();
+    let removed_previews: Vec<_> = current.preview_cache.iter()
+        .filter(|(quantity, field)| {
+            magnetic(quantity) || !preview_field_source_is_qualified(current, field)
+        })
+        .map(|(quantity, _)| quantity.clone())
+        .collect();
+    let retained_previews: Vec<_> = current.preview_cache.iter()
+        .filter(|(quantity, _)| !removed_previews.contains(quantity))
+        .map(|(_, field)| field.clone())
+        .collect();
+    let mut removed: BTreeSet<String> = removed_latest.iter()
+        .chain(&removed_previews).cloned().collect();
+    if current.live_state.as_ref().is_some_and(|state| state.latest_step.magnetization.is_some()) {
+        removed.insert(fullmag_quantities::QuantityId::M.as_str().to_owned());
+    }
+    for quantity in removed_latest {
+        current.latest_fields.remove(&quantity);
+    }
+    current.preview_cache.clear_fields();
+    for field in retained_previews {
+        current.preview_cache.insert(field);
+    }
+    // Artifact inspection bundles are validated by their artifact locator
+    // owner; clearing inherited live state must not erase those results.
+    let removed_bundles: Vec<_> = current.field_publication_bundles.iter()
+        .filter(|(quantity, bundle)| {
+            magnetic(quantity)
+                || (bundle.field.artifact_field_locator.is_none() && removed.contains(*quantity))
+        })
+        .map(|(quantity, _)| quantity.clone())
+        .collect();
+    for quantity in removed_bundles {
+        current.field_publication_bundles.remove(&quantity);
+        removed.insert(quantity);
+    }
+    for quantity in &removed {
+        bump_field_sample_revision(current, quantity, None);
+    }
+    if !removed.is_empty() {
+        bump_field_catalog_revision(current);
+    }
+    let clear_preview = match current.preview.as_ref() {
+        Some(PreviewState::Spatial(preview)) => magnetic(&preview.quantity) || removed.contains(&preview.quantity),
+        Some(PreviewState::GlobalScalar(preview)) => magnetic(&preview.quantity) || removed.contains(&preview.quantity),
+        None => false,
+    };
+    if clear_preview {
+        current.preview = None;
+    }
+    current.live_state = None;
+    current.coupled_checkpoint = None;
+}
+
 fn finalize_current_live_apply(
     current: &mut SessionStateResponse,
     flags: CurrentLiveApplyFlags,
@@ -2134,6 +2214,8 @@ fn finalize_current_live_apply(
         current.quantities.clear();
         // Keep terminal generation history: clearing a display carrier must
         // not reopen admission for a stale terminal publication.
+    } else if flags.has_metadata && is_antenna_field_only(current) {
+        clear_magnetic_carriers_for_field_only(current);
     }
     if let Some(run) = current.run.as_ref() {
         current.session.run_id = run.run_id.clone();
@@ -3354,6 +3436,94 @@ fn authored_material_field_values(
     Some(values)
 }
 
+/// Material coefficient fields are fixed by the prepared domain, so their
+/// publication with the domain's initial state stays valid for every later
+/// step of that domain generation. They are not physical observations, and
+/// the Docker accepted runtime keeps only a thin plan read model, so the
+/// authored-value comparison cannot qualify them there.
+fn static_material_field_is_current(
+    current: &SessionStateResponse,
+    quantity_id: &str,
+    raw: &Value,
+) -> bool {
+    if !matches!(quantity_id, "mat_ms" | "mat_aex" | "mat_alpha" | "mat_dind" | "mat_dbulk") {
+        return false;
+    }
+    let Some(frame) = raw.get("observation_frame").and_then(|value| {
+        serde_json::from_value::<crate::schemas::common::AcceptedObservationFrameRef>(value.clone())
+            .ok()
+    }) else {
+        return false;
+    };
+    accepted_frame_belongs_to_current_session(current, &frame)
+        && frame.domain_generation_id == domain_generation_id(current)
+}
+
+/// The frame of the stored material field when it still belongs to the
+/// current session and domain generation.
+fn current_static_material_frame(current: &SessionStateResponse, quantity_id: &str) -> Option<Value> {
+    let stored = current.latest_fields.get(quantity_id)?;
+    static_material_field_is_current(current, quantity_id, stored)
+        .then(|| stored.get("observation_frame").cloned())
+        .flatten()
+}
+
+/// Frame provenance of a material field that could not be qualified, for the
+/// deferral diagnostic; `None` for non-material quantities.
+fn static_material_frame_detail(
+    current: &SessionStateResponse,
+    quantity_id: &str,
+    raw: &Value,
+) -> Option<String> {
+    if !matches!(quantity_id, "mat_ms" | "mat_aex" | "mat_alpha" | "mat_dind" | "mat_dbulk") {
+        return None;
+    }
+    let frame_of = |value: &Value| {
+        value
+            .get("observation_frame")
+            .map(|frame| {
+                format!(
+                    "session={} domain={} step={}",
+                    frame.get("session_epoch").and_then(Value::as_str).unwrap_or("?"),
+                    frame.get("domain_generation_id").and_then(Value::as_str).unwrap_or("?"),
+                    frame.get("source_step").map(Value::to_string).unwrap_or_default(),
+                )
+            })
+            .unwrap_or_else(|| "none".to_string())
+    };
+    Some(format!(
+        "material frame: incoming {}; stored {}; current session={}@{} domain={}",
+        frame_of(raw),
+        current.latest_fields.get(quantity_id).map(frame_of).unwrap_or_else(|| "absent".into()),
+        current.session.session_id,
+        current.session.started_at_unix_ms,
+        domain_generation_id(current),
+    ))
+}
+
+/// Why an authored material field did not match its plan values, for the
+/// deferral diagnostic; `None` for non-material quantities.
+fn authored_material_mismatch_detail(
+    current: &SessionStateResponse,
+    quantity_id: &str,
+    raw: &Value,
+) -> Option<String> {
+    let expected = authored_material_field_values(current, quantity_id)?;
+    let actual = flatten_json_field_values(raw);
+    let first_mismatch = actual
+        .iter()
+        .zip(expected.iter())
+        .position(|(left, right)| left != right);
+    Some(format!(
+        "authored material mismatch: {} published values, {} plan values, first difference {}",
+        actual.len(),
+        expected.len(),
+        first_mismatch
+            .map(|index| format!("at {index}: {} vs {}", actual[index], expected[index]))
+            .unwrap_or_else(|| "none in the common prefix".to_string()),
+    ))
+}
+
 fn authored_material_field_matches(
     current: &SessionStateResponse,
     quantity_id: &str,
@@ -3373,6 +3543,23 @@ fn authored_material_field_matches(
         || (expected.len() == 1 && actual.iter().all(|value| *value == expected[0]))
 }
 
+/// The material comparison flattens and compares every cell of both arrays
+/// (millions on a large FDM grid) and runs for every field read, so it is
+/// memoized on the latest field per version of the plan-bearing metadata.
+fn authored_material_field_matches_memoized(
+    current: &SessionStateResponse,
+    quantity_id: &str,
+    raw: &Value,
+) -> bool {
+    match (current.latest_fields.get_shared(quantity_id), current.metadata.as_ref()) {
+        (Some(shared), Some(metadata)) if std::ptr::eq(&**shared, raw) => shared
+            .dependent_flag(metadata.version(), || {
+                authored_material_field_matches(current, quantity_id, raw)
+            }),
+        _ => authored_material_field_matches(current, quantity_id, raw),
+    }
+}
+
 pub(crate) fn latest_field_source_is_qualified(
     current: &SessionStateResponse,
     quantity_id: &str,
@@ -3384,7 +3571,10 @@ pub(crate) fn latest_field_source_is_qualified(
     {
         return false;
     }
-    if quantity_id != "m" && authored_material_field_matches(current, quantity_id, raw) {
+    if quantity_id != "m"
+        && (authored_material_field_matches_memoized(current, quantity_id, raw)
+            || static_material_field_is_current(current, quantity_id, raw))
+    {
         return true;
     }
     let frame = raw
@@ -3698,8 +3888,20 @@ fn bind_latest_field_observation_frames_with_candidate(
         } else {
             accepted_latest_field_replay_frame(current, quantity_id, value)
         };
-        if authored_material_field_matches(current, quantity_id, value) {
+        if authored_material_field_matches(current, quantity_id, value)
+            || static_material_field_is_current(current, quantity_id, value)
+        {
             continue;
+        }
+        // Streamed material fields arrive without a frame; they keep the
+        // frame of the domain's initial publication while that domain lasts.
+        if let Some(stored_frame) = current_static_material_frame(current, quantity_id) {
+            if value.get("observation_frame").is_none() {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("observation_frame".to_string(), stored_frame);
+                    continue;
+                }
+            }
         }
         let Some(object) = value.as_object_mut() else {
             return Err(ApiError::bad_request(format!(
@@ -3800,7 +4002,11 @@ fn bind_latest_field_observation_frames_with_candidate(
         };
         let Some(accepted_frame) = accepted_frame else {
             return Err(ApiError::bad_request(format!(
-                "latest field '{quantity_id}' has no accepted physical observation source"
+                "latest field '{quantity_id}' has no accepted physical observation source{}",
+                authored_material_mismatch_detail(current, quantity_id, value)
+                    .or_else(|| static_material_frame_detail(current, quantity_id, value))
+                    .map(|detail| format!(" ({detail})"))
+                    .unwrap_or_default()
             )));
         };
         if supplied_frame
@@ -5423,6 +5629,7 @@ mod tests {
             stages: vec![StageExecutionRecord {
                 stage_id: None,
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
@@ -6315,6 +6522,7 @@ mod tests {
             stages: vec![StageExecutionRecord {
                 stage_id: None,
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: None,
                 status: StageLifecycleState::Paused,
                 command_id: Some("cmd-stage-0".into()),
@@ -6373,6 +6581,7 @@ mod tests {
                     stages: vec![StageExecutionRecord {
                         stage_id: None,
                         antenna_solve_stage_id: None,
+                        antenna_progress: None,
                         kind: None,
                         status: StageLifecycleState::Completed,
                         command_id: Some("cmd-stage-0".into()),
@@ -7187,6 +7396,76 @@ mod tests {
     }
 
     #[test]
+    fn field_only_snapshot_retains_source_mesh_and_rejects_stale_magnetic_carriers() {
+        let mut current = test_current_snapshot();
+        current.fem_mesh = Some(domain_fem_mesh("inspection-source").into());
+        current.latest_fields = serde_json::from_value(json!({
+            "m": {"values": [[1.0, 0.0, 0.0]]},
+            "mat_ms": {"values": [800_000.0]},
+            "mat_aex": {"values": [1e-11]},
+            "V_electric": {"values": [1.0]},
+            "J_charge": {"values": [[2.0, 0.0, 0.0]]},
+            "H_oe": {"values": [[0.0, 3.0, 0.0]]},
+        })).unwrap();
+        let frame = accepted_observation_frame_ref(&current, 0, Some(0.0));
+        for quantity in ["V_electric", "J_charge", "H_oe"] {
+            let mut value = current.latest_fields.get(quantity).unwrap().clone();
+            value.as_object_mut().unwrap().insert(
+                "observation_frame".into(), serde_json::to_value(&frame).unwrap(),
+            );
+            current.latest_fields.insert(quantity.into(), value);
+            current.preview_cache.remember_accepted_latest_source(quantity, frame.clone());
+        }
+        current.latest_fields.insert("H_eff".into(), json!({"values": [[9.0, 0.0, 0.0]]}));
+        current.preview_cache.insert(preview_field("m"));
+        current.live_state = Some(live_state_with_magnetization(4, vec![1.0, 0.0, 0.0]));
+        current.terminal_field_generations.insert("previous-run".into(), 4);
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "test-session",
+            "metadata": {"execution_plan": {"backend_plan": {"kind": "antenna_field_only"}}},
+        })).unwrap();
+        apply_current_live_snapshot(&mut current, request).unwrap();
+        assert_eq!(current.fem_mesh.as_ref().unwrap().generation_id.as_deref(), Some("inspection-source"));
+        assert!(current.live_state.is_none());
+        assert!(current.latest_fields.get("H_eff").is_none(), "unqualified FullDomain legacy data must be removed");
+        assert_eq!(current.latest_fields.len(), 3);
+        assert_eq!(current.latest_fields.get("V_electric").unwrap()["values"], json!([1.0]));
+        assert_eq!(current.latest_fields.get("J_charge").unwrap()["values"], json!([[2.0, 0.0, 0.0]]));
+        assert_eq!(current.latest_fields.get("H_oe").unwrap()["values"], json!([[0.0, 3.0, 0.0]]));
+        assert!(current.preview_cache.is_empty());
+        assert!(current.field_publication_bundles.is_empty());
+        assert!(current.quantities.is_empty());
+        assert_eq!(current.terminal_field_generations["previous-run"], 4);
+        let revisions = (current.mesh_revision, current.field_catalog_revision, current.field_samples_revision);
+        finalize_current_live_apply(&mut current, CurrentLiveApplyFlags::default()).unwrap();
+        assert_eq!(revisions, (current.mesh_revision, current.field_catalog_revision, current.field_samples_revision));
+    }
+
+    #[test]
+    fn field_only_preparation_rejects_foreign_full_domain_carrier_without_touching_solver_profile() {
+        let mut current = test_current_snapshot();
+        current.fem_mesh = Some(domain_fem_mesh("inspection-source").into());
+        let mut foreign = accepted_observation_frame_ref(&current, 0, Some(0.0));
+        foreign.session_epoch = "foreign-session@1".into();
+        current.latest_fields = serde_json::from_value(json!({
+            "V_electric": {
+                "values": [1.0],
+                "observation_frame": foreign,
+            },
+        })).unwrap();
+        current.preview_cache.remember_accepted_latest_source("V_electric", foreign);
+        let solver_profile = serde_json::to_value(&current.solver_profile).unwrap();
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "test-session",
+            "metadata": {"execution_plan": {"backend_plan": {"kind": "antenna_field_only"}}},
+        })).unwrap();
+        apply_current_live_snapshot(&mut current, request).unwrap();
+        assert!(current.latest_fields.get("V_electric").is_none());
+        assert_eq!(serde_json::to_value(&current.solver_profile).unwrap(), solver_profile);
+        assert!(current.fem_mesh.is_some());
+    }
+
+    #[test]
     fn standalone_snapshot_clears_magnetic_carriers_without_clearing_terminal_fence() {
         let mut current = test_current_snapshot();
         current.fem_mesh = Some(domain_fem_mesh("old-magnetic-mesh").into());
@@ -7622,6 +7901,7 @@ mod tests {
             stages: vec![StageExecutionRecord {
                 stage_id: None,
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: None,
                 status: stage_status,
                 command_id: None,

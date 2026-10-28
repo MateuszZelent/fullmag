@@ -2433,14 +2433,14 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
             name=str(entry.get("name") or params.get("name") or "antenna"),
         )
     elif kind in {"importedgeometry", "imported_geometry"}:
-        path = params.get("source")
-        if not isinstance(path, str) or not path:
-            raise ValueError("ImportedGeometry requires an explicit path")
-        kwargs = [f"source={_python_literal(path)}"]
+        source = params.get("source")
+        if not isinstance(source, str) or not source:
+            raise ValueError("ImportedGeometry requires a source path.")
+        kwargs = {"source": source}
         for key in ("scale", "volume", "name"):
             if params.get(key) is not None:
-                kwargs.append(f"{key}={_python_literal(params[key])}")
-        expression = f"fm.ImportedGeometry({', '.join(kwargs)})"
+                kwargs[key] = params[key]
+        expression = f"fm.ImportedGeometry({_python_keyword_args(kwargs)})"
     elif kind in {"difference", "union", "intersection"}:
         operands = ("base", "tool") if kind == "difference" else ("a", "b")
         operator = {"difference": "-", "union": "+", "intersection": "&"}[kind]
@@ -5012,6 +5012,8 @@ def _render_spin_boundary_payload(payload: object) -> str:
     surfaces_expr = "[" + ", ".join(_render_surface_ref_payload(item) for item in surfaces) + "]"
     if kind == "spin_insulating":
         return f"fm.SpinInsulating({_py_repr(boundary_id)}, {surfaces_expr})"
+    if kind == "homogeneous_spin_potential_gradient":
+        return f"fm.HomogeneousSpinPotentialGradient({_py_repr(boundary_id)}, {surfaces_expr})"
     if kind == "spin_sink":
         return f"fm.SpinSink({_py_repr(boundary_id)}, {surfaces_expr})"
     if kind == "specified_spin_potential":
@@ -5634,6 +5636,9 @@ def _render_antenna_field_solve_definition_expr(definition: dict[str, object]) -
         "model", "oersted_realization", "conductor_mesh_policy", "solver_policy",
     )
     args = [f"{field}={_py_literal(definition[field])}" for field in scalar_fields]
+    if definition.get("surface_field_policy") is not None:
+        args.append("surface_field_policy=fm.AntennaSurfaceFieldPolicy(**"
+                    + _py_literal(_normalize_mapping(definition["surface_field_policy"])) + ")")
     if definition.get("conservative_current_view_ref") is not None:
         args.append(
             "conservative_current_view_ref="
@@ -9971,7 +9976,7 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
         fem.hmax if isinstance(fem, FEM) else None
     )
     declared_order = default_mesh.get("order") if use_declared_defaults else None
-    if declared_order is None and isinstance(fem, FEM):
+    if not use_declared_defaults and declared_order is None and isinstance(fem, FEM):
         declared_order = fem.order
 
     return {

@@ -362,6 +362,24 @@ pub struct LivePublisherDiagnosticsResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SolverProfileOperationResource {
+    /// Immutable configuration that produced this operation sample. The
+    /// enclosing resource config may describe a later admission request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_config: Option<SolverProfileCommandConfig>,
+    pub sequence: u64,
+    pub operation_id: String,
+    pub outcome: String,
+    pub total_wall_time_ns: u64,
+    pub native_operator_wall_ns: Option<u64>,
+    /// Entire native ABI call, containing the surface operator duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_call_wall_ns: Option<u64>,
+    pub phases: Vec<SolverProfilePhaseResource>,
+    pub accounting_issue: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SolverProfileResource {
     pub revision: u64,
     pub state: String,
@@ -371,6 +389,8 @@ pub struct SolverProfileResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threading: Option<SolverProfileThreadingResource>,
     pub latest_samples: Vec<SolverProfileStepSampleResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operation_samples: Vec<SolverProfileOperationResource>,
     pub aggregates: SolverProfileAggregatesResource,
     #[serde(default)]
     pub rates: SolverRateDiagnosticsResource,
@@ -460,6 +480,7 @@ impl Default for SolverProfileResource {
             preview_3d_disabled: false,
             threading: None,
             latest_samples: Vec::new(),
+            operation_samples: Vec::new(),
             aggregates: SolverProfileAggregatesResource::default(),
             rates: SolverRateDiagnosticsResource::default(),
             overhead: SolverProfileOverheadDiagnosticsResource::default(),

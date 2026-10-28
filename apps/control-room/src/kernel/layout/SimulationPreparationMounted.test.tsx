@@ -872,6 +872,7 @@ describe("mounted simulation preparation UI", () => {
 
     expect(container.textContent).toContain("Simulation preparation failed");
     expect(container.textContent).toContain("Recording");
+    expect(container.textContent).not.toContain("failed to mount");
     expect(
       findElement(
         container,
@@ -1267,6 +1268,7 @@ function statusFixture(
       session_resource: "active",
       solver: "idle",
     },
+    metrics: { steps_per_second: 0, total_steps: 0 },
     solver: { state: patch.solverState ?? "bootstrapping" },
   } as LiveStatusResource;
 }

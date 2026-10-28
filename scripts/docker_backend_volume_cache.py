@@ -31,6 +31,20 @@ from docker_named_volume_safety import (
     validate_linux_volume_mountpoint,
     validate_local_named_volume,
 )
+from docker_shared_build_storage import (
+    LABEL_INITIALIZER as SHARED_INITIALIZER_LABEL,
+    LABEL_PROJECT as SHARED_PROJECT_LABEL,
+    LABEL_SCHEMA as SHARED_SCHEMA_LABEL,
+    LABEL_UNIT as SHARED_UNIT_LABEL,
+    PACKAGE_ROLE as SHARED_PACKAGE_ROLE,
+    SHARED_BACKEND_TARGET,
+    SharedBuildStorageError,
+    package_mount_descriptor,
+    shared_group,
+    shared_volume_labels,
+    shared_volume_names,
+    validate_volume_document as validate_shared_volume_document,
+)
 
 SCHEMA = "fullmag.backend-build-cache.v2"
 KEY_SCHEMA = "fullmag.backend-build-cache-key.v2"
@@ -229,16 +243,21 @@ def cache_key(
 
 
 def _volume_names(
-    project_id: str, unit_key: str, control_volume_name: str
+    project_id: str, unit_key: str, control_volume_name: str,
+    *, shared_packages: bool = False,
 ) -> dict[str, str]:
     # Keep Docker names bounded.  Full identity remains in labels and receipts.
     name_id = hashlib.sha256(f"{project_id}:{unit_key}".encode()).hexdigest()[:24]
     base = f"fullmag-backend-v2-{name_id}"
     if not isinstance(control_volume_name, str) or _VOLUME_NAME.fullmatch(control_volume_name) is None:
         raise BackendVolumeCacheError("control_volume_name is not a safe Docker volume name")
+    package_name = (
+        shared_volume_names(project_id)[SHARED_PACKAGE_ROLE]
+        if shared_packages else f"{base}-package"
+    )
     return {
         BUILD_VOLUME_ROLE: f"{base}-build",
-        PACKAGE_VOLUME_ROLE: f"{base}-package",
+        PACKAGE_VOLUME_ROLE: package_name,
         CONTROL_VOLUME_ROLE: control_volume_name,
     }
 
@@ -262,6 +281,8 @@ def volume_labels(profile: Mapping[str, Any], role: str) -> dict[str, str]:
         raise BackendVolumeCacheError(f"unknown volume role: {role}")
     if role == CONTROL_VOLUME_ROLE:
         return _control_volume_labels(profile)
+    if role == PACKAGE_VOLUME_ROLE and profile.get("shared_packages") is True:
+        return shared_volume_labels(str(profile["project_id"]), SHARED_PACKAGE_ROLE)
     return {
         LABEL_SCHEMA: SCHEMA,
         LABEL_PROFILE: PROFILE,
@@ -287,7 +308,21 @@ def mount_specs(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
     control_subpath = _control_namespace_subpath(control_namespace)
     if control_subpath:
         control_volume["subpath"] = control_subpath
-    return [
+    package_mount = (
+        package_mount_descriptor(
+            str(profile["project_id"]), str(profile["unit_key"])
+        )
+        if profile.get("shared_packages") is True
+        else {
+            "type": "volume",
+            "source": COMPOSE_PACKAGE_VOLUME,
+            "target": PACKAGE_TARGET,
+            "read_only": False,
+            "volume": {"nocopy": True},
+        }
+    )
+    package_mount["source"] = COMPOSE_PACKAGE_VOLUME
+    mounts = [
         {
             "type": "volume",
             "source": COMPOSE_BUILD_VOLUME,
@@ -295,28 +330,40 @@ def mount_specs(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
             "read_only": False,
             "volume": {"nocopy": True},
         },
-        {
+        package_mount,
+    ]
+    if profile.get("shared_packages") is True:
+        mounts.append({
             "type": "volume",
             "source": COMPOSE_PACKAGE_VOLUME,
-            "target": PACKAGE_TARGET,
+            "target": SHARED_BACKEND_TARGET,
             "read_only": False,
             "volume": {"nocopy": True},
-        },
-        {
-            "type": "volume",
-            "source": COMPOSE_CONTROL_VOLUME,
-            "target": CONTROL_TARGET,
-            "read_only": False,
-            "volume": control_volume,
-        },
-    ]
+        })
+    mounts.append({
+        "type": "volume",
+        "source": COMPOSE_CONTROL_VOLUME,
+        "target": CONTROL_TARGET,
+        "read_only": False,
+        "volume": control_volume,
+    })
+    return mounts
 
 
 _mount_specs = mount_specs
 
 
+def _maintenance_mount_specs(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Keep root maintenance scoped to the private package subpath."""
+
+    mounts = _mount_specs(profile)
+    if profile.get("shared_packages") is True:
+        mounts = [mount for mount in mounts if mount.get("target") != SHARED_BACKEND_TARGET]
+    return mounts
+
+
 def _cache_environment(profile: Mapping[str, Any]) -> dict[str, str]:
-    return {
+    environment = {
         "FULLMAG_BACKEND_CACHE_SCHEMA": SCHEMA,
         "FULLMAG_BACKEND_CACHE_PROFILE": PROFILE,
         "FULLMAG_BACKEND_CACHE_PROJECT_ID": str(profile["project_id"]),
@@ -338,6 +385,14 @@ def _cache_environment(profile: Mapping[str, Any]) -> dict[str, str]:
         "FULLMAG_BACKEND_CACHE_CONTROL_NAMESPACE": CONTROL_BACKEND_TARGET,
         "FULLMAG_BACKEND_CACHE_RECEIPT": RECEIPT_TARGET,
     }
+    if profile.get("shared_packages") is True:
+        environment.update({
+            "FULLMAG_SHARED_BACKEND_STORE": SHARED_BACKEND_TARGET,
+            "FULLMAG_SHARED_BACKEND_UNIT_KEY": str(profile["unit_key"]),
+            "FULLMAG_SHARED_BACKEND_GROUP": shared_group(str(profile["unit_key"])),
+            "FULLMAG_SHARED_BACKEND_VOLUME": profile["volume_names"][PACKAGE_VOLUME_ROLE],
+        })
+    return environment
 
 
 def _container_labels(profile: Mapping[str, Any]) -> dict[str, str]:
@@ -395,7 +450,7 @@ def _maintenance_service(profile: Mapping[str, Any]) -> dict[str, Any]:
         "entrypoint": list(MAINTENANCE_ENTRYPOINT),
         "command": ["ensure"],
         "labels": _container_labels(profile),
-        "volumes": _mount_specs(profile),
+        "volumes": _maintenance_mount_specs(profile),
         "environment": environment,
     }
 
@@ -411,7 +466,10 @@ def _plan(
     cargo_profile: str,
     control_volume_name: str,
     control_namespace: str,
+    shared_packages: bool = False,
 ) -> dict[str, Any]:
+    if not isinstance(shared_packages, bool):
+        raise BackendVolumeCacheError("shared_packages must be a boolean")
     repo_path = Path(repo)
     if not repo_path.is_absolute() or repo_path.is_symlink() or not repo_path.is_dir():
         raise BackendVolumeCacheError("repo must be an absolute real directory")
@@ -432,12 +490,17 @@ def _plan(
         "toolchain_image_id": toolchain_image,
         "cargo_profile": cargo_profile,
     })
-    volume_names = _volume_names(project_id, unit_key, control_volume_name)
+    volume_names = _volume_names(
+        project_id, unit_key, control_volume_name,
+        shared_packages=shared_packages,
+    )
     owner_id = unit_key
     profile = {
         "schema": SCHEMA,
         "profile": PROFILE,
         "state": "prepared",
+        "shared_packages": bool(shared_packages),
+        "shared_package_subpath": shared_group(unit_key) if shared_packages else None,
         "project_id": project_id,
         "worktree_id": worktree_id,
         "cache_key": identity["key"],
@@ -459,12 +522,16 @@ def _plan(
                 "toolchain_image_id": toolchain_image,
                 "cargo_profile": cargo_profile, "owner_id": owner_id,
             }, BUILD_VOLUME_ROLE)},
-            PACKAGE_VOLUME_ROLE: {"target": PACKAGE_TARGET, "labels": _labels({
-                "project_id": project_id, "cache_key": identity["key"],
-                "unit_key": unit_key, "worktree_id": worktree_id,
-                "toolchain_image_id": toolchain_image,
-                "cargo_profile": cargo_profile, "owner_id": owner_id,
-            }, PACKAGE_VOLUME_ROLE)},
+            PACKAGE_VOLUME_ROLE: {
+                "target": PACKAGE_TARGET,
+                "labels": _labels({
+                    "project_id": project_id, "cache_key": identity["key"],
+                    "unit_key": unit_key, "worktree_id": worktree_id,
+                    "toolchain_image_id": toolchain_image,
+                    "cargo_profile": cargo_profile, "owner_id": owner_id,
+                    "shared_packages": shared_packages,
+                }, PACKAGE_VOLUME_ROLE),
+            },
             CONTROL_VOLUME_ROLE: {
                 "target": CONTROL_TARGET,
                 "labels": {
@@ -506,6 +573,7 @@ def prepare(
     control_namespace: str = "",
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
+    shared_packages: bool = False,
 ) -> dict[str, Any]:
     """Build the v2 plan and optionally create only its exact missing pair.
 
@@ -522,6 +590,7 @@ def prepare(
         toolchain_image=toolchain_image, cargo_profile=cargo_profile,
         control_volume_name=control_volume_name,
         control_namespace=control_namespace,
+        shared_packages=shared_packages,
     )
     if docker is not None:
         profile["volume_documents"] = ensure_volume_pair(
@@ -545,6 +614,7 @@ def prepare_ready(
     control_namespace: str = "",
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
+    shared_packages: bool = False,
 ) -> dict[str, Any]:
     """Prepare and admit a pair after a managed guest maintenance callback.
 
@@ -566,6 +636,7 @@ def prepare_ready(
         control_volume_name=control_volume_name,
         control_namespace=control_namespace,
         active_consumers=active_consumers,
+        shared_packages=shared_packages,
     )
     if not isinstance(profile.get("volume_documents"), Mapping):
         raise BackendVolumeCacheError("ready cache preparation has no volume receipt")
@@ -628,6 +699,13 @@ def _validate_volume_document(
         if any(key.startswith(_LABEL_PREFIX) for key in labels):
             raise BackendVolumeCacheError("shared control volume has backend cache labels")
         return {**dict(document), "Mountpoint": mountpoint, "Labels": dict(labels)}
+    if role == PACKAGE_VOLUME_ROLE and profile.get("shared_packages") is True:
+        try:
+            return validate_shared_volume_document(
+                document, str(profile["project_id"]), SHARED_PACKAGE_ROLE
+            )
+        except SharedBuildStorageError as error:
+            raise BackendVolumeCacheError(str(error)) from error
     expected = volume_labels(profile, role)
     for key, value in expected.items():
         if labels.get(key) != value:
@@ -647,7 +725,7 @@ def _validate_volume_documents(
         for role in VOLUME_ROLES
     }
     paired_labels = result[BUILD_VOLUME_ROLE]["Labels"]
-    for role in (PACKAGE_VOLUME_ROLE,):
+    for role in ((PACKAGE_VOLUME_ROLE,) if profile.get("shared_packages") is not True else ()):
         labels = result[role]["Labels"]
         for key in (LABEL_SCHEMA, LABEL_PROFILE, LABEL_PROJECT, LABEL_CACHE_KEY,
                     LABEL_UNIT, LABEL_WORKTREE, LABEL_TOOLCHAIN, LABEL_CARGO_PROFILE,
@@ -718,6 +796,245 @@ def _active_consumer_snapshot(
         ) from error
 
 
+def _safe_shared_subpath(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise BackendVolumeCacheError("shared package mount subpath is missing or malformed")
+    path = PurePosixPath(value)
+    if (path.is_absolute() or str(path) != value
+            or any(part in {"", ".", ".."} for part in path.parts)):
+        raise BackendVolumeCacheError("shared package mount subpath is unsafe")
+    return value
+
+
+def _observed_volume_subpath(
+    document: Mapping[str, Any],
+    mount: Mapping[str, Any],
+    target: str,
+    expected_name: str,
+    mountpoint: str,
+) -> str:
+    """Prove one volume mount path using HostConfig or its inspected source."""
+
+    name = mount.get("Name", mount.get("name"))
+    if name != expected_name:
+        raise BackendVolumeCacheError("shared package mount volume identity changed")
+    explicit, observed = _declared_volume_subpath(document, mount, target)
+    if explicit:
+        if observed == "":
+            subpath = ""
+        else:
+            subpath = _safe_shared_subpath(observed)
+    else:
+        subpath = ""
+    host_config = document.get("HostConfig")
+    host_mounts = host_config.get("Mounts") if isinstance(host_config, Mapping) else None
+    if host_mounts is not None and not isinstance(host_mounts, list):
+        raise BackendVolumeCacheError("shared package HostConfig mount inventory is malformed")
+    if isinstance(host_mounts, list) and any(not isinstance(item, Mapping) for item in host_mounts):
+        raise BackendVolumeCacheError("shared package HostConfig mount inventory is malformed")
+    host_entries = [
+        item for item in host_mounts
+        if isinstance(item, Mapping) and item.get("Target") == target
+    ] if isinstance(host_mounts, list) else []
+    if len(host_entries) > 1:
+        raise BackendVolumeCacheError("shared package HostConfig mount is ambiguous")
+    host_root_proof = bool(host_entries) and not explicit
+
+    source = mount.get("Source", mount.get("source"))
+    if source is None:
+        if explicit:
+            return subpath
+        if host_root_proof:
+            return ""
+        raise BackendVolumeCacheError("shared package mount subpath is not provable")
+    source_path = _safe_daemon_path(source, "shared package mount source")
+    root = _safe_daemon_path(mountpoint, "shared package volume mountpoint")
+    if explicit:
+        expected_source = posixpath.normpath(
+            posixpath.join(root, subpath) if subpath else root
+        )
+        if posixpath.normpath(source_path) not in {root, expected_source}:
+            raise BackendVolumeCacheError("shared package mount source conflicts with its subpath")
+        return subpath
+    if source_path == root:
+        return ""
+    if host_root_proof:
+        raise BackendVolumeCacheError("shared package root mount source conflicts with HostConfig")
+    prefix = root.rstrip("/") + "/"
+    if source_path.startswith(prefix):
+        return _safe_shared_subpath(source_path[len(prefix):])
+    raise BackendVolumeCacheError("shared package mount source does not match its volume")
+
+
+def _config_environment(config: Mapping[str, Any]) -> dict[str, str]:
+    values = config.get("Env", [])
+    if not isinstance(values, list):
+        raise BackendVolumeCacheError("active consumer environment inventory is malformed")
+    environment: dict[str, str] = {}
+    for value in values:
+        if isinstance(value, str) and "=" in value:
+            key, item = value.split("=", 1)
+            environment[key] = item
+    return environment
+
+
+def _is_registered_shared_initializer(
+    config: Mapping[str, Any], labels: Mapping[str, Any], project_id: str
+) -> bool:
+    environment = _config_environment(config)
+    unit_key = labels.get(SHARED_UNIT_LABEL)
+    return (
+        labels.get(SHARED_INITIALIZER_LABEL) == "true"
+        and labels.get(SHARED_SCHEMA_LABEL) == "fullmag.shared-build-storage.v1"
+        and labels.get(SHARED_PROJECT_LABEL) == project_id
+        and isinstance(unit_key, str)
+        and _HEX_OR_ID.fullmatch(unit_key) is not None
+        and environment.get("FULLMAG_SHARED_BACKEND_UNIT_KEY") == unit_key
+        and environment.get("FULLMAG_SHARED_BACKEND_GROUP") == shared_group(unit_key)
+        and environment.get("FULLMAG_SHARED_BACKEND_STORE") == SHARED_BACKEND_TARGET
+    )
+
+
+def _is_registered_shared_maintenance(
+    config: Mapping[str, Any], labels: Mapping[str, Any], project_id: str
+) -> tuple[str, dict[str, str]] | None:
+    """Recognize only the fixed owner-marker helper with a private group mount."""
+
+    environment = _config_environment(config)
+    unit_key = labels.get(LABEL_UNIT)
+    cache_key_value = labels.get(LABEL_CACHE_KEY)
+    worktree_id = labels.get(LABEL_WORKTREE)
+    toolchain_id = labels.get(LABEL_TOOLCHAIN)
+    cargo_profile = labels.get(LABEL_CARGO_PROFILE)
+    compose_project = labels.get("com.docker.compose.project")
+    valid = (
+        labels.get("com.docker.compose.service") == MAINTENANCE_SERVICE
+        and isinstance(compose_project, str)
+        and _IDENTIFIER.fullmatch(compose_project) is not None
+        and labels.get(LABEL_SCHEMA) == SCHEMA
+        and labels.get(LABEL_PROFILE) == PROFILE
+        and labels.get(LABEL_PROJECT) == project_id
+        and isinstance(unit_key, str)
+        and _HEX_OR_ID.fullmatch(unit_key) is not None
+        and labels.get(LABEL_OWNER) == unit_key
+        and isinstance(cache_key_value, str)
+        and _HEX_OR_ID.fullmatch(cache_key_value) is not None
+        and isinstance(worktree_id, str)
+        and _IDENTIFIER.fullmatch(worktree_id) is not None
+        and isinstance(toolchain_id, str)
+        and _IMAGE_ID.fullmatch(toolchain_id) is not None
+        and cargo_profile in SUPPORTED_CARGO_PROFILES
+        and config.get("Entrypoint") == list(MAINTENANCE_ENTRYPOINT)
+        and config.get("Cmd") == ["ensure"]
+        and config.get("User") in {"0", "0:0"}
+        and environment.get("FULLMAG_BACKEND_CACHE_SCHEMA") == SCHEMA
+        and environment.get("FULLMAG_BACKEND_CACHE_PROFILE") == PROFILE
+        and environment.get("FULLMAG_BACKEND_CACHE_PROJECT_ID") == project_id
+        and environment.get("FULLMAG_BACKEND_CACHE_UNIT_KEY") == unit_key
+        and environment.get("FULLMAG_BACKEND_CACHE_OWNER_ID") == unit_key
+        and environment.get("FULLMAG_BACKEND_CACHE_KEY") == cache_key_value
+        and environment.get("FULLMAG_BACKEND_CACHE_WORKTREE_ID") == worktree_id
+        and environment.get("FULLMAG_BACKEND_CACHE_TOOLCHAIN_IMAGE_ID") == toolchain_id
+        and environment.get("FULLMAG_BACKEND_CARGO_PROFILE") == cargo_profile
+        and environment.get("FULLMAG_BACKEND_CACHE_MAINTENANCE_PROFILE") == MAINTENANCE_PROFILE
+        and environment.get("FULLMAG_BACKEND_CACHE_MAINTENANCE_ACTION") == "ensure"
+        and environment.get("FULLMAG_SHARED_BACKEND_UNIT_KEY") == unit_key
+        and environment.get("FULLMAG_SHARED_BACKEND_GROUP") == shared_group(unit_key)
+        and environment.get("FULLMAG_SHARED_BACKEND_STORE") == SHARED_BACKEND_TARGET
+    )
+    if not valid:
+        return None
+    return unit_key, environment
+
+
+def _assert_shared_package_mounts(
+    document: Mapping[str, Any],
+    config: Mapping[str, Any],
+    labels: Mapping[str, Any],
+    mounts: list[Mapping[str, Any]],
+    profile: Mapping[str, Any],
+    mountpoint: str,
+) -> None:
+    shared_name = profile["volume_names"][PACKAGE_VOLUME_ROLE]
+    package_mounts = [
+        mount for mount in mounts
+        if mount.get("Name", mount.get("name")) == shared_name
+    ]
+    if len(package_mounts) == 1 and _is_registered_shared_initializer(
+        config, labels, str(profile["project_id"])
+    ):
+        initializer_mount = package_mounts[0]
+        target = initializer_mount.get("Destination", initializer_mount.get("destination"))
+        if target != SHARED_BACKEND_TARGET:
+            raise BackendVolumeCacheError("shared package initializer mount target is unknown")
+        subpath = _observed_volume_subpath(
+            document, initializer_mount, SHARED_BACKEND_TARGET, shared_name, mountpoint
+        )
+        if subpath != "":
+            raise BackendVolumeCacheError("shared package initializer must mount the volume root")
+        return
+    if len(package_mounts) == 1:
+        maintenance_identity = _is_registered_shared_maintenance(
+            config, labels, str(profile["project_id"])
+        )
+        if maintenance_identity is not None:
+            maintenance_mount = package_mounts[0]
+            target = maintenance_mount.get("Destination", maintenance_mount.get("destination"))
+            unit_key, _environment = maintenance_identity
+            if target != PACKAGE_TARGET:
+                raise BackendVolumeCacheError("shared package maintenance mount target is unknown")
+            package_subpath = _observed_volume_subpath(
+                document, maintenance_mount, PACKAGE_TARGET, shared_name, mountpoint
+            )
+            if package_subpath != shared_group(unit_key):
+                raise BackendVolumeCacheError("shared package maintenance subpath is unknown")
+            if unit_key == profile["unit_key"]:
+                raise BackendVolumeCacheError("active consumer mounts this backend cache package subpath")
+            return
+
+    targets = [
+        mount.get("Destination", mount.get("destination"))
+        for mount in package_mounts
+    ]
+    if (len(package_mounts) != 2
+            or targets.count(PACKAGE_TARGET) != 1
+            or targets.count(SHARED_BACKEND_TARGET) != 1
+            or len(set(targets)) != 2):
+        raise BackendVolumeCacheError("active shared package mounts are incomplete or ambiguous")
+    by_target = {
+        mount.get("Destination", mount.get("destination")): mount
+        for mount in package_mounts
+    }
+    package_subpath = _observed_volume_subpath(
+        document, by_target[PACKAGE_TARGET], PACKAGE_TARGET, shared_name, mountpoint
+    )
+    root_subpath = _observed_volume_subpath(
+        document, by_target[SHARED_BACKEND_TARGET], SHARED_BACKEND_TARGET,
+        shared_name, mountpoint,
+    )
+    unit_key = labels.get(LABEL_UNIT)
+    registered = (
+        labels.get(LABEL_SCHEMA) == SCHEMA
+        and labels.get(LABEL_PROFILE) == PROFILE
+        and labels.get(LABEL_PROJECT) == profile["project_id"]
+        and isinstance(unit_key, str)
+        and _HEX_OR_ID.fullmatch(unit_key) is not None
+        and labels.get(LABEL_OWNER) == unit_key
+        and isinstance(labels.get(LABEL_CACHE_KEY), str)
+        and _HEX_OR_ID.fullmatch(str(labels.get(LABEL_CACHE_KEY))) is not None
+    )
+    environment = _config_environment(config)
+    expected_group = shared_group(unit_key) if isinstance(unit_key, str) else None
+    if (not registered
+            or environment.get("FULLMAG_SHARED_BACKEND_GROUP") != expected_group
+            or environment.get("FULLMAG_SHARED_BACKEND_STORE") != SHARED_BACKEND_TARGET
+            or package_subpath != expected_group
+            or root_subpath != ""):
+        raise BackendVolumeCacheError("active shared package subpath is unknown or unregistered")
+    if unit_key == profile["unit_key"]:
+        raise BackendVolumeCacheError("active consumer mounts this backend cache package subpath")
+
+
 def _assert_no_active_consumers(
     profile: Mapping[str, Any], consumers: Iterable[Mapping[str, Any]]
 ) -> None:
@@ -725,6 +1042,15 @@ def _assert_no_active_consumers(
     mountpoints = _selected_volume_mountpoints(profile)
     expected_identity = _container_labels(profile)
     exact_identity = (LABEL_OWNER, LABEL_UNIT, LABEL_CACHE_KEY)
+    package_volume = profile["volume_names"][PACKAGE_VOLUME_ROLE]
+    shared_mountpoint = None
+    if profile.get("shared_packages") is True:
+        documents = profile.get("volume_documents")
+        package_document = documents.get(PACKAGE_VOLUME_ROLE) if isinstance(documents, Mapping) else None
+        if isinstance(package_document, Mapping):
+            if package_document.get("Name") != package_volume:
+                raise BackendVolumeCacheError("shared package volume inventory changed")
+            shared_mountpoint = _validate_mountpoint(package_document.get("Mountpoint"))
     for document in consumers:
         if not isinstance(document, Mapping):
             raise BackendVolumeCacheError("active consumer inspect is not an object")
@@ -743,12 +1069,14 @@ def _assert_no_active_consumers(
             raise BackendVolumeCacheError(
                 "backend cache has an active owned consumer"
             )
-        mounts = document.get("Mounts")
-        if not isinstance(mounts, list):
+        raw_mounts = document.get("Mounts")
+        if not isinstance(raw_mounts, list):
             raise BackendVolumeCacheError("active consumer has no mount inventory")
-        for mount in mounts:
+        mounts: list[Mapping[str, Any]] = []
+        for mount in raw_mounts:
             if not isinstance(mount, Mapping):
                 raise BackendVolumeCacheError("active consumer mount inventory is malformed")
+            mounts.append(mount)
             mount_type = mount.get("Type")
             if not isinstance(mount_type, str):
                 raise BackendVolumeCacheError("active consumer mount type is malformed")
@@ -756,11 +1084,11 @@ def _assert_no_active_consumers(
                 name = mount.get("Name")
                 if not isinstance(name, str):
                     raise BackendVolumeCacheError("active consumer volume name is malformed")
+                if profile.get("shared_packages") is True and name == package_volume:
+                    continue
                 if name in names:
                     if name == profile["volume_names"][CONTROL_VOLUME_ROLE]:
-                        # Control is intentionally shared by toolchain,
-                        # frontend and backend services in one Compose group.
-                        # Build/package remain exclusive to this backend unit.
+                        # Control is intentionally shared by services in a Compose group.
                         continue
                     raise BackendVolumeCacheError("active consumer mounts backend cache volume")
                 source = mount.get("Source")
@@ -785,6 +1113,17 @@ def _assert_no_active_consumers(
             elif mount_type not in {"tmpfs", "npipe", "cluster", "image"}:
                 raise BackendVolumeCacheError(
                     "active consumer mount type is unsupported"
+                )
+        if profile.get("shared_packages") is True:
+            if any(
+                mount.get("Type") == "volume"
+                and mount.get("Name") == package_volume
+                for mount in mounts
+            ):
+                if shared_mountpoint is None:
+                    raise BackendVolumeCacheError("shared package volume mountpoint is not available")
+                _assert_shared_package_mounts(
+                    document, config, labels, mounts, profile, shared_mountpoint
                 )
 
 
@@ -1151,7 +1490,7 @@ def validate_maintenance_overlay(document: Mapping[str, Any], profile: Mapping[s
             or (isinstance(maintenance_pid, str)
                 and maintenance_pid in {"host", "container"})):
         raise BackendVolumeCacheError("volume cache maintenance isolation changed")
-    if maintenance.get("volumes") != _mount_specs(profile):
+    if maintenance.get("volumes") != _maintenance_mount_specs(profile):
         raise BackendVolumeCacheError("volume cache maintenance mounts are not exact")
     if maintenance.get("entrypoint") != list(MAINTENANCE_ENTRYPOINT) or maintenance.get("command") != ["ensure"]:
         raise BackendVolumeCacheError("volume cache maintenance entrypoint changed")
@@ -1264,6 +1603,30 @@ def _validate_control_mount_subpath(
         raise BackendVolumeCacheError("backend control mount source does not prove its exact subpath")
 
 
+def _validate_shared_mount_subpath(
+    document: Mapping[str, Any],
+    mount: Mapping[str, Any],
+    target: str,
+    profile: Mapping[str, Any],
+    expected_subpath: str,
+    volume_documents: Any,
+) -> None:
+    if not isinstance(volume_documents, Mapping):
+        raise BackendVolumeCacheError("shared package volume receipt is missing")
+    package_volume = volume_documents.get(PACKAGE_VOLUME_ROLE)
+    if not isinstance(package_volume, Mapping):
+        raise BackendVolumeCacheError("shared package volume receipt is malformed")
+    expected_name = profile["volume_names"][PACKAGE_VOLUME_ROLE]
+    if package_volume.get("Name") != expected_name:
+        raise BackendVolumeCacheError("shared package volume receipt name changed")
+    mountpoint = _validate_mountpoint(package_volume.get("Mountpoint"))
+    observed = _observed_volume_subpath(
+        document, mount, target, expected_name, mountpoint
+    )
+    if observed != expected_subpath:
+        raise BackendVolumeCacheError("backend shared package mount subpath changed")
+
+
 def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) -> dict[str, Any]:
     """Fail closed unless the backend owns exactly the three named volume mounts."""
 
@@ -1326,6 +1689,8 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
         PACKAGE_TARGET: profile["volume_names"][PACKAGE_VOLUME_ROLE],
         CONTROL_TARGET: profile["volume_names"][CONTROL_VOLUME_ROLE],
     }
+    if profile.get("shared_packages") is True:
+        expected[SHARED_BACKEND_TARGET] = profile["volume_names"][PACKAGE_VOLUME_ROLE]
     matching: dict[str, Mapping[str, Any]] = {}
     for mount in mounts:
         if not isinstance(mount, Mapping):
@@ -1362,6 +1727,16 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
         _control_namespace_subpath(control_namespace),
         volume_documents,
     )
+    if profile.get("shared_packages") is True:
+        package_subpath = shared_group(str(profile["unit_key"]))
+        _validate_shared_mount_subpath(
+            document, matching[PACKAGE_TARGET], PACKAGE_TARGET, profile,
+            package_subpath, volume_documents,
+        )
+        _validate_shared_mount_subpath(
+            document, matching[SHARED_BACKEND_TARGET], SHARED_BACKEND_TARGET,
+            profile, "", volume_documents,
+        )
     return {
         "schema": SCHEMA,
         "state": "attested",
@@ -1371,5 +1746,7 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
             BUILD_VOLUME_ROLE: BUILD_TARGET,
             PACKAGE_VOLUME_ROLE: PACKAGE_TARGET,
             CONTROL_VOLUME_ROLE: CONTROL_TARGET,
+            **({"shared_backend": SHARED_BACKEND_TARGET}
+               if profile.get("shared_packages") is True else {}),
         },
     }

@@ -1649,6 +1649,7 @@ struct WeightedRt0Constraint {
     std::string id;
     std::vector<std::pair<int, double>> coefficients;
     double rhs = 0.0;
+    bool terminal_current = false;
 };
 
 struct WeightedRt0Result {
@@ -1930,6 +1931,7 @@ WeightedRt0Result solve_weighted_rt0_projection(
         WeightedRt0Constraint constraint;
         constraint.id = "terminal-current:" + terminal.id;
         constraint.rhs = terminal.measured_outward_current_a;
+        constraint.terminal_current = true;
         for (const auto &key : terminal.boundary_face_vertex_ids) {
             const int face = face_by_key.at(key);
             require(face_incidence.at(static_cast<std::size_t>(face)).size() == 1,
@@ -2147,6 +2149,107 @@ WeightedRt0Result solve_weighted_rt0_projection(
             solver.Mult(kkt_rhs, kkt_solution);
             require(solver.GetConverged(),
                 "OE-T0 sparse KKT solver did not converge");
+            const int initial_iterations = solver.GetNumIterations();
+            require(initial_iterations >= 0 &&
+                    static_cast<std::size_t>(initial_iterations) <= max_iterations,
+                "OE-T0 sparse KKT initial iteration count exceeds its budget");
+            std::size_t used_iterations = static_cast<std::size_t>(initial_iterations);
+
+            // Keep true residuals in separate SI units. The recursive MINRES
+            // norm is not an admission test for a local current balance.
+            const int *rows = free_mass.GetI();
+            const int *columns = free_mass.GetJ();
+            const double *values = free_mass.GetData();
+            std::vector<long double> voltage_residual(free_count);
+            std::vector<long double> voltage_scale(free_count);
+            mfem::Vector true_residual(total_size), correction(total_size);
+            const auto checked_rhs = [](long double value) {
+                const double result = static_cast<double>(value);
+                require(std::isfinite(value) && std::isfinite(result) &&
+                        (value == 0.0L || result != 0.0),
+                    "OE-T0 sparse KKT true residual is not representable");
+                return result;
+            };
+            const auto measure_true_residual = [&] {
+                for (int row = 0; row < free_size; ++row) {
+                    const double load = weighted_rhs.at(
+                        static_cast<std::size_t>(free_dofs[row]));
+                    long double residual = load, scale = std::abs(static_cast<long double>(load));
+                    for (int entry = rows[row]; entry < rows[row + 1]; ++entry) {
+                        const long double term = static_cast<long double>(values[entry]) *
+                            kkt_solution[columns[entry]];
+                        residual -= term;
+                        scale += std::abs(term);
+                    }
+                    voltage_residual[row] = residual;
+                    voltage_scale[row] = scale;
+                }
+                for (int row = 0; row < constraint_size; ++row) {
+                    long double residual = active[row].rhs;
+                    const double multiplier = kkt_solution[free_size + row];
+                    for (const auto [dof, coefficient] : active[row].coefficients) {
+                        const int index = free_index.at(static_cast<std::size_t>(dof));
+                        require(index >= 0 && index < free_size,
+                            "OE-T0 sparse KKT residual references a fixed or invalid dof");
+                        const long double term = static_cast<long double>(coefficient) * multiplier;
+                        voltage_residual[index] -= term;
+                        voltage_scale[index] += std::abs(term);
+                        residual -= static_cast<long double>(coefficient) * kkt_solution[index];
+                    }
+                    true_residual[free_size + row] = checked_rhs(residual);
+                }
+                bool accepted = true;
+                for (int row = 0; row < free_size; ++row) {
+                    const long double residual = voltage_residual[row], scale = voltage_scale[row];
+                    true_residual[row] = checked_rhs(residual);
+                    require(std::isfinite(scale),
+                        "OE-T0 sparse KKT stationarity scale is nonfinite");
+                    accepted = (std::abs(residual) <= 1.0e-12L * scale) && accepted;
+                }
+                // Include omitted rows and fixed zero traces. Checking only
+                // active D can hide an accumulated dependent-row imbalance.
+                for (const auto &constraint : constraints) {
+                    long double residual = -static_cast<long double>(constraint.rhs), scale = 0.0L;
+                    for (const auto [dof, coefficient] : constraint.coefficients) {
+                        const int index = free_index.at(static_cast<std::size_t>(dof));
+                        const long double term = index < 0 ? 0.0L :
+                            static_cast<long double>(coefficient) * kkt_solution[index];
+                        residual += term;
+                        scale += std::abs(term);
+                    }
+                    const long double tolerance = 1.0e-18L + (constraint.terminal_current
+                        ? 1.0e-8L * std::abs(static_cast<long double>(constraint.rhs))
+                        : 1.0e-10L * scale);
+                    require(std::isfinite(residual) && std::isfinite(scale) && std::isfinite(tolerance),
+                        "OE-T0 sparse KKT physical row residual is nonfinite");
+                    accepted = (std::abs(residual) <= tolerance) && accepted;
+                }
+                return accepted;
+            };
+            while (!measure_true_residual()) {
+                require(used_iterations < max_iterations,
+                    "OE-T0 sparse KKT true-residual refinement exhausted its iteration budget");
+                const std::size_t remaining = max_iterations - used_iterations;
+                solver.SetMaxIter(static_cast<int>(remaining));
+                correction = 0.0;
+                solver.Mult(true_residual, correction);
+                require(solver.GetConverged(),
+                    "OE-T0 sparse KKT true-residual correction did not converge");
+                const int iterations = solver.GetNumIterations();
+                require(iterations > 0 && static_cast<std::size_t>(iterations) <= remaining,
+                    "OE-T0 sparse KKT true-residual correction made no iterative progress");
+                used_iterations += static_cast<std::size_t>(iterations);
+                bool changed = false;
+                for (int index = 0; index < total_size; ++index) {
+                    const double updated = kkt_solution[index] + correction[index];
+                    require(std::isfinite(correction[index]) && std::isfinite(updated),
+                        "OE-T0 sparse KKT true-residual correction is nonfinite");
+                    changed = (updated != kkt_solution[index]) || changed;
+                    kkt_solution[index] = updated;
+                }
+                require(changed,
+                    "OE-T0 sparse KKT true-residual correction stagnated in binary64");
+            }
         }
         for (std::size_t index = 0; index < free_count; ++index) {
             solution.at(static_cast<std::size_t>(free_dofs[index])) =

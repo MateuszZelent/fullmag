@@ -3,6 +3,7 @@ from .absorbing_boundary import AbsorbingBoundaryLayer
 from .output_storage import OutputStorage
 from .antenna import (
     AntennaFieldSolveStage,
+    AntennaSurfaceFieldPolicy,
     AntennaFieldSolutionRef,
     AntennaStageOutputRef,
     AntennaWaveformBandwidthDeclaration,
@@ -188,6 +189,7 @@ from .spin_transport import (
     SpecifiedSpinPotential,
     SpinDriftDiffusion,
     ReciprocalNonlinearSolverPolicy,
+    HomogeneousSpinPotentialGradient,
     SpinInsulating,
     SpinSink,
     SpinSolverPolicy,
@@ -244,6 +246,7 @@ __all__ = [
     "UniaxialAnisotropy",
     "AdaptiveTimestep",
     "AntennaFieldSource",
+    "AntennaSurfaceFieldPolicy",
     "AntennaLayout",
     "AntennaRigidTransform",
     "DriveActivation",
@@ -295,6 +298,7 @@ __all__ = [
     "SpecifiedSpinPotential",
     "SpinDriftDiffusion",
     "ReciprocalNonlinearSolverPolicy",
+    "HomogeneousSpinPotentialGradient",
     "SpinInsulating",
     "SpinSink",
     "SpinSolverPolicy",

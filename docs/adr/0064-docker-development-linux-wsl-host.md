@@ -58,6 +58,54 @@ z bind mountu do kontenera, więc Watchpack nie odpytuje drzewa. Windows
 zachowuje polling, bo bind 9p nie dostarcza zdarzeń. Checkout DEV na ext4 w WSL
 usuwa też koszt 9p z capture i synchronizacji źródeł backendu.
 
+## Jawna readmisja po renumeracji urządzenia i nagłym zatrzymaniu
+
+Rozszerzenie z 27.10.2026: `st_dev` może zmienić się po restarcie WSL.
+Zwykły start nadal wymaga zgodnego certyfikatu; nie ignoruje tej różnicy.
+Legacy certyfikat v1 nie zapisuje UUID filesystemu, więc sama zgodność inode
+nie potwierdza jego historycznej tożsamości. Operator może jawnie ponownie
+przyjąć konkretny istniejący magazyn: przypina źródła i grupę, dawny attempt,
+Compose, kontenery i obraz oraz surowe SHA dokumentów właściciela. Nowy UUID
+jest obserwacją bieżącego filesystemu, a nie dowodem brakującego starego UUID.
+
+Readmisja dopuszcza zmianę wyłącznie `host_device`. Zachowuje root, inode,
+engine, owner token i provenance. Pod blokadami grupy, OWNER i writera store
+ponownie sprawdza zatrzymanie konsumentów i wszystkie piny. Przed publikacją
+zachowuje dokładne bajty certyfikatu, markera, probe i readback w control volume.
+Częściową publikację można kontynuować tylko z przypiętym manifestem i jedną
+z dokładnych par starych/nowych bajtów; trzecia wartość blokuje operację.
+Nieznana aktywna operacja kontrolera nadal wymaga osobnego recovery.
+
+Zmiana certyfikatu unieważnia dawny probe. Readmisja nie produkuje nowego
+probe, nie zmienia zapisanego `restart_verified` ani natywnego OWNER i nie
+zwalnia rezerwacji. Przed admission API musi wykonać się normalny świeży
+storage probe w zarządzanej grupie. Stabilna tożsamość accepted store nadal
+używa engine, owner token i względnej ścieżki; dane sesji nie są migrowane.
+
+Nagły stop kontenera z historycznym `Ready` nie jest dowodem drain. Hostowy
+proof `fullmag.docker-abrupt-stop-proof.v1` zachowuje oryginalne bajty procesu,
+OWNER, LAUNCH i konfiguracji oraz przypina rzeczywiste obserwacje stopped
+namespace. Osobny schemat autoryzacji operatora v2 konsumuje ten proof bez
+wymyślania stop-journalu i bez przepisywania historii na `shutdown_unknown`.
+Brak starej bridge wymaga potwierdzonej nieobecności dokładnej sieci i pełnej
+izolacji pozostałych zasobów; awaria odczytu Dockera nie oznacza nieobecności.
+Natywne recovery nadal sprawdza blokady, store, leases i host reservations.
+Tylko ono może opublikować rzeczywiste przejście właściciela.
+
+Dla niepustego store request v3 przypina pełną listę terminalnych runów oraz
+SHA ich intent, katalogów i opcjonalnego artifact catalog. Wyniki pozostają
+niezmienione. Aktywny lub nieznany wynik obliczenia blokuje recovery; nie jest
+automatycznie ponawiany ani oznaczany jako anulowany. Dotychczasowe requesty
+v1 dla pustego store i v2 dla cancelled runs zachowują własne ścisłe reguły.
+
+Stan wdrożenia: walidator i kontroler readmisji, hostowy abrupt-stop recovery
+oraz bridge v3 zaimplementowane z regresjami Python. Bridge v3 wymaga
+read-only introspekcji faktycznego binarium i zgodności SHA/provenance przed
+natywną mutacją. Nowy helper nie aktualizuje kodu Rust wybranego checkoutu.
+Kwalifikacja operacyjna pozostaje `NOT VERIFIED` do czasu rzeczywistej próby.
+Wycofanie nie usuwa archiwów ani wyników i nie przywraca starych bajtów, jeśli
+istnieją aktywni konsumenci lub zdążyło nastąpić kolejne admission.
+
 ## Obowiązki i weryfikacja
 
 Adapter klienta i host paths: `docker_dev_host.py`; build kontrolny:

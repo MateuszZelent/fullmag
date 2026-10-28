@@ -1,0 +1,38 @@
+{
+  "schema": "antenna_frozen_full_universe_inspection.v1",
+  "scope": "Pełna inspekcja H na wszystkich 1145 węzłach zamrożonego Global; nadal nie kwalifikowana baza, nie LLG/FFT ani reprodukcja publikacji.",
+  "prerequisite_geometry_diagnostic_run_id": "run-bb36bd56d49ba6da9201623cd8d5566f141e292f0c7d474e4c9f897c0cebb6a1",
+  "source_nodes_cells": [
+    664,
+    1856
+  ],
+  "prepared_source_nodes_cells": [
+    677,
+    1856
+  ],
+  "global_nodes_cells": [
+    1145,
+    6428
+  ],
+  "field_source_target_pairs": 2125120,
+  "field_pair_limit": 4000000,
+  "field_per_target_pair_limit": 40000,
+  "field_total_seconds": 10800,
+  "field_per_target_seconds": 90,
+  "time_policy": "Zachowano wcześniej zadany budżet pełnej próby 3 h; bez zmiany tolerancji i limitów CPU/RAM kontenera. To budżet operatora pola, nie twardy timeout całego runu.",
+  "sampling_domain": "global",
+  "all_global_nodes_retained": true,
+  "no_magnetic_objects_or_llg_stages": true,
+  "native_or_capture_executed_at_manifest_creation": false,
+  "assets": {
+    "assets/antenna-raw.npz": {
+      "bytes": 98553,
+      "sha256": "d11f6f81aad859673c5a37672e8bf86e9f4249db5ec3c0d8cae2f2a98caef374"
+    },
+    "assets/global.fullmag-mesh": {
+      "bytes": 72287,
+      "sha256": "ccee2a8e2c0bced293be055054fb574d9d30d5a1c28c34f657c2cadc3ee6ef84"
+    }
+  },
+  "script_sha256": "1464892889d0998ba09fd836324d92644bee698117f1f5f7b2faebd6dd2b9127"
+}

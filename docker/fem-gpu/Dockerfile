@@ -456,7 +456,15 @@ COPY docker/fem-gpu/write_dependency_versions.py /usr/local/sbin/fullmag-write-d
 RUN if command -v nsys >/dev/null 2>&1; then nsys --version; else echo "profiler tools are optional: nsys unavailable"; fi && \
     if command -v ncu >/dev/null 2>&1; then ncu --version; else echo "profiler tools are optional: ncu unavailable"; fi
 
+# DOC-ANCHOR: antenna-surface-gmp-dev-package
+# Keep exact-arithmetic packages after the cached native dependencies and tools.
+ARG FULLMAG_MPFR_DEBIAN_VERSION="4.1.0-3build3"
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libgmp-dev "libmpfr-dev=${FULLMAG_MPFR_DEBIAN_VERSION}" "libmpfr6=${FULLMAG_MPFR_DEBIAN_VERSION}" && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase runtime --output "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
+RUN python3 -c 'import json,subprocess,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); value["actual"].setdefault("system_packages", {}).update({name:subprocess.check_output(["dpkg-query","-W","-f=${Version}",name],text=True).strip() for name in ("libgmp-dev","libgmp10","libmpfr-dev","libmpfr6","libboost-dev")}); p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
 
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}

@@ -1,0 +1,22 @@
+{
+  "cel": "Regresja publicznego przygotowania anteny z domyślnym Auto; bez Submit i Solve.",
+  "skrypt": "fem_antenna_rt0_auto_180s.py",
+  "sha256": "1ee2b0001e1506e670f4d155e886c9942b9d23a149d29132999e7cac43191153",
+  "baza": "fem_antenna_rt0_four_target_180s.py",
+  "zmiana": "Usunięto jawne threads(1) i ComputeResources(threads=1); fizyka, siatki i polityka pola bez zmian.",
+  "assets": {
+    "antenna-raw.npz": {
+      "bytes": 98553,
+      "sha256": "d11f6f81aad859673c5a37672e8bf86e9f4249db5ec3c0d8cae2f2a98caef374"
+    },
+    "global.fullmag-mesh": {
+      "bytes": 72287,
+      "sha256": "ccee2a8e2c0bced293be055054fb574d9d30d5a1c28c34f657c2cadc3ee6ef84"
+    },
+    "sampling.npz": {
+      "bytes": 4614,
+      "sha256": "b257e35a97850e88b850cdfadbbd874bd47d3e8b8442df26b049c8a610143f65"
+    }
+  },
+  "zakres": "Tylko zgodność przygotowania i tożsamości, nie nowa kwalifikacja fizyczna."
+}

@@ -315,6 +315,10 @@ pub enum SceneSpinInterface {
         normal_to_ferromagnet: [f64; 3],
         normal_side: SceneRegionRef,
         ferromagnet_side: SceneRegionRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        normal_surface: Option<SceneSurfaceRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ferromagnet_surface: Option<SceneSurfaceRef>,
         #[serde(rename = "g_up_Spm2")]
         g_up_spm2: f64,
         #[serde(rename = "g_down_Spm2")]
@@ -335,6 +339,10 @@ pub enum SceneSpinInterface {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SceneSpinBoundary {
+    HomogeneousSpinPotentialGradient {
+        id: String,
+        surfaces: Vec<SceneSurfaceRef>,
+    },
     SpinInsulating {
         id: String,
         surfaces: Vec<SceneSurfaceRef>,

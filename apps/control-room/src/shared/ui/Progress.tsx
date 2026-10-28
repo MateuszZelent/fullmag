@@ -14,6 +14,7 @@ function Progress({
   return (
     <ProgressPrimitive.Root
       ref={ref}
+      value={value ?? null}
       className={cn("fm-progress", className)}
       {...props}
     >

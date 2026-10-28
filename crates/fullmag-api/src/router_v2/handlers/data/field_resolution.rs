@@ -43,7 +43,14 @@ pub(crate) fn json_field_matches_current_domain(
     n_comp: usize,
     raw: &serde_json::Value,
 ) -> bool {
-    let value_count = json_field_value_count(raw);
+    // Counting walks every value of a large field; reuse the count of the
+    // shared latest-field version when `raw` is that value.
+    let value_count = match snapshot.latest_fields.get_shared(quantity_id) {
+        Some(shared) if std::ptr::eq(&**shared, raw) => {
+            shared.memoized_count(json_field_value_count)
+        }
+        _ => json_field_value_count(raw),
+    };
     if !field_value_count_matches_current_domain(snapshot, quantity_id, n_comp, value_count) {
         return false;
     }

@@ -82,7 +82,7 @@ import {
   vectorStyleFromSettings,
   wireframeColorFromSettings,
 } from "./viewport3DLayerSettings";
-import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
+import { resolveViewport3DTargetRenderPlan, type Viewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
 import {
   resolveViewport3DTargetSurfaceLayerInput,
   resolveViewport3DTargetLayerRequestedSourceIdentity,
@@ -565,6 +565,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   fieldModel,
   materialProfile,
   onSelectPart,
+  onGeometryReady,
+  renderVisible = true,
   partModel,
   magnetizationTexturePreview,
   meshQualityColors,
@@ -587,6 +589,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   fieldModel: Viewport3DFieldRenderModel | null;
   materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
+  onGeometryReady?: (part: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>, ready: boolean) => void;
+  renderVisible?: boolean;
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshQualityColors: ScalarColorBuffer | null;
@@ -627,14 +631,20 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     ? surfaceIndices?.length ?? 0
     : topologyModel?.nodeCount ?? 0;
   const topologyNodeCount = topologyModel?.nodeCount ?? 0;
+  const surfaceOwners = useMemo(() => new WeakMap<BufferGeometry, {
+    positions: Float32Array;
+    indices: Uint32Array | null;
+  }>(), []);
   const createSurfaceGeometry = useCallback(() => {
     if (!topologyModel) return null;
-    return createMeshPartSurfaceGeometry({
+    const next = createMeshPartSurfaceGeometry({
       expandSurfaceFaces,
       positions: topologyModel.positions,
       surfaceIndices,
     });
-  }, [expandSurfaceFaces, surfaceIndices, topologyModel]);
+    if (next) surfaceOwners.set(next, { positions: topologyModel.positions, indices: surfaceIndices });
+    return next;
+  }, [expandSurfaceFaces, surfaceIndices, topologyModel, surfaceOwners]);
   const geometry = useViewport3DGeometryUpload({
     createGeometry: createSurfaceGeometry,
     dirtyReason: "mesh-part-surface",
@@ -1129,14 +1139,25 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     fieldModel,
     partId: part.id,
   });
-  const hasAnyVisibleRenderableSubLayer =
-    ((modalSurfaceActive || renderPlan.surface.visible) && Boolean(geometry)) ||
-    (renderPlan.wireframe.visible && Boolean(edgeGeometry)) ||
-    (renderPlan.points.visible && Boolean(pointGeometry)) ||
-    renderPlan.bounds.visible ||
-    ((modalVectorsActive || renderPlan.vectors.visible) &&
-      viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      Boolean(modalVectorLayerInput?.segments ?? vectorLayerInput.segments));
+  const hasAnyVisibleRenderableSubLayer = hasMeshPartRenderableLayer({
+    renderPlan,
+    surfaceReady: Boolean(geometry),
+    wireframeReady: Boolean(edgeGeometry),
+    pointsReady: Boolean(pointGeometry),
+    vectorsReady: viewport3DVectorLayersEnabledFromBrowserConfig() &&
+      Boolean(modalVectorLayerInput?.segments ?? vectorLayerInput.segments),
+    modalSurfaceActive,
+    modalVectorsActive,
+  });
+
+  useLayoutEffect(() => {
+    const owner = geometry ? surfaceOwners.get(geometry) : null;
+    // Uploaded but suppressed fields cannot replace the field-free preview.
+    onGeometryReady?.(partModel, Boolean(hasAnyVisibleRenderableSubLayer && owner &&
+      owner.positions === topologyModel?.positions && owner.indices === surfaceIndices));
+    return () => onGeometryReady?.(partModel, false);
+  }, [geometry, hasAnyVisibleRenderableSubLayer, onGeometryReady, partModel,
+    surfaceIndices, surfaceOwners, topologyModel]);
   const hasRenderableSurfaceOrEdgeGeometry =
     renderableGeometryStageVisible &&
     ((renderSettings.visible &&
@@ -1208,6 +1229,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
 
   return (
     <group
+      visible={renderVisible}
       onPointerDown={handlePointerDown}
       userData={{ viewportSemanticPickPriority: VIEWPORT_3D_PICK_PRIORITY.meshPart }}
     >
@@ -1341,6 +1363,25 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     </group>
   );
 });
+
+/** The handoff and actual layer render must agree on visible, realized content. */
+export function hasMeshPartRenderableLayer({
+  renderPlan, surfaceReady, wireframeReady, pointsReady, vectorsReady,
+  modalSurfaceActive = false, modalVectorsActive = false,
+}: {
+  renderPlan: Viewport3DTargetRenderPlan;
+  surfaceReady: boolean;
+  wireframeReady: boolean;
+  pointsReady: boolean;
+  vectorsReady: boolean;
+  modalSurfaceActive?: boolean;
+  modalVectorsActive?: boolean;
+}): boolean {
+  return ((modalSurfaceActive || renderPlan.surface.visible) && surfaceReady) ||
+    (renderPlan.wireframe.visible && wireframeReady) ||
+    (renderPlan.points.visible && pointsReady) || renderPlan.bounds.visible ||
+    ((modalVectorsActive || renderPlan.vectors.visible) && vectorsReady);
+}
 
 export function resolveMeshPartPointNodeSelection(
   geometryScope: "full" | "surface",

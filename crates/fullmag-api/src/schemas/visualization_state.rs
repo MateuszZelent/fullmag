@@ -329,6 +329,10 @@ pub enum PlanarViewScopeState {
     MonitorTarget,
     MeshPart { scope_id: String },
     Airbox,
+    /// Native layer of an FDM multilayer carrier, keyed by its canonical layer id.
+    Layer { scope_id: String },
+    /// One region of a ferromagnetic object: `scope_id` is the object id.
+    Region { scope_id: String, region_id: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
@@ -436,7 +440,9 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
         view_scope: PlanarViewScopeState::MonitorTarget,
         quantity_id: "m".to_string(),
         component: PlanarFieldComponent::Magnitude,
-        colormap: "viridis".to_string(),
+        // mumax3-style default: m is shown as one direction-coloured image
+        // (HSL wheel); the magnitude component still feeds contours/probes.
+        colormap: crate::field_render_png::DIRECTION_COLORMAP.to_string(),
         range: default_planar_color_range_state(),
         raster_opacity: default_planar_raster_opacity(),
         viewport_colorbar_visible: true,

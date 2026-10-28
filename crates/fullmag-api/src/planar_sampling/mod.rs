@@ -3,6 +3,7 @@ mod fdm;
 mod fem;
 mod frame;
 mod geometry;
+mod operator;
 mod provenance;
 mod reduction;
 mod source;
@@ -11,6 +12,7 @@ mod target;
 
 pub(crate) use contract::*;
 pub(crate) use fdm::MAX_FDM_PLANAR_GRID_SEGMENTS;
+pub(crate) use operator::PlanarOperatorCache;
 pub(crate) use source::*;
 pub(crate) use target::*;
 

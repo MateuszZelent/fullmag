@@ -9,7 +9,9 @@ import { cn } from "@/shared/utils/className";
 import { IMPORT_ACCEPT, IMPORT_FORMATS, classifyImportFile } from "../model/importFormats";
 import { translateMx3, type Mx3Translation } from "../model/mx3Import";
 import { copyScript, saveScriptFile } from "../model/scriptExport";
-import type { ProjectCreator } from "../model/scriptProject";
+import type { ProjectCreator, ScriptProjectSource } from "../model/scriptProject";
+import { readPythonImport } from "../model/pythonImport";
+import { CreateProjectAction } from "../ui/CreateProjectAction";
 import { buildImportSaveRequest, saveTranslatedMx3, type ScriptSaver } from "../model/scriptOpen";
 
 import { Mx3ImportReport } from "./Mx3ImportReport";
@@ -20,7 +22,7 @@ export interface ImportSectionProps {
   readonly openDisabledReason: string | null;
   /** Saves a translated script as a new file; null where there is no desktop host. */
   readonly scriptSaver?: ScriptSaver | null;
-  /** Creates a project from the translated script after consent; null without a project document service. */
+  /** Creates a project from reviewed Python source after consent; null without a project document service. */
   readonly projectCreator?: ProjectCreator | null;
 }
 
@@ -42,14 +44,28 @@ export function ImportSection({
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [staged, setStaged] = useState<StagedImport | null>(null);
+  const [pythonSource, setPythonSource] = useState<ScriptProjectSource | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handle = async (file: File | undefined) => {
-    if (!file) return;
+    if (!file || busy) return;
     setStaged(null);
+    setPythonSource(null);
     const verdict = classifyImportFile(file.name);
     if (verdict.kind !== "supported") {
       setMessage(verdict.reason);
+      return;
+    }
+    if (verdict.format.id === "python") {
+      setBusy(true);
+      setMessage(null);
+      try {
+        setPythonSource(await readPythonImport(file));
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : `Could not read ${file.name}.`);
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     if (verdict.format.id === "mx3") {
@@ -108,7 +124,7 @@ export function ImportSection({
           <h1>Import</h1>
           <p>
             Fullmag reads models from the common micromagnetic packages. What cannot be mapped is
-            reported before anything is written. A .mx3 file is translated into a Python script you can review and save.
+            reported before anything is written. Review a .py source file before creating a project, or translate a .mx3 file into Python.
           </p>
         </div>
       </div>
@@ -149,6 +165,19 @@ export function ImportSection({
       <div aria-live="polite" role="status">
         {message ? <p className="fm-start-notice fm-start-notice--warning">{message}</p> : null}
       </div>
+
+      {pythonSource ? (
+        <section aria-label="Python source review" className="fm-start-report">
+          <h2 className="fm-start-report__title">Review: {pythonSource.fileName}</h2>
+          <p className="fm-start-inspector__note">
+            Self-contained scripts only. Companion files and relative assets are not included.
+            Reading this file does not execute it. Create project asks for consent before running it.
+          </p>
+          <pre aria-label="Python source" className="fm-start-report__source" style={{ maxHeight: "24rem", overflow: "auto" }} tabIndex={0}><code>{pythonSource.text}</code></pre>
+          <CreateProjectAction creator={projectCreator} disabled={busy} source={pythonSource} />
+          <Button onClick={() => setPythonSource(null)} type="button" variant="ghost">Discard</Button>
+        </section>
+      ) : null}
 
       {staged ? (
         <Mx3ImportReport

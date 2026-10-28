@@ -85,3 +85,19 @@ def test_cylinder_quality_is_not_scaled_twice():
         options=MeshOptions(compute_quality=True, per_element_quality=True),
     )
     _assert_quality_matches_si_nodes(mesh, domains=False)
+
+
+def test_occ_universe_quality_is_in_cubic_metres():
+    import fullmag as fm
+    from fullmag.meshing._gmsh_occ import generate_shared_domain_mesh_via_occ
+    from fullmag.meshing._gmsh_types import AirboxOptions, MeshOptions
+    mesh = generate_shared_domain_mesh_via_occ(
+        [fm.Box((4.0e-6, 2.0e-6, 1.0e-6), name="conductor")],
+        hmax=0.8e-6,
+        airbox=AirboxOptions(
+            size=(8.0e-6, 6.0e-6, 4.0e-6), center=(0.0, 0.0, 0.0),
+            minimum_element_size=0.8e-6, maximum_element_size=1.6e-6,
+        ),
+        options=MeshOptions(compute_quality=True, per_element_quality=True),
+    ).mesh
+    _assert_quality_matches_si_nodes(mesh, domains=True)

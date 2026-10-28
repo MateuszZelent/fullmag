@@ -4,6 +4,7 @@ export interface PendingForm {
   apply: () => Promise<boolean> | boolean;
   applying: boolean;
   dirty: boolean;
+  applyBlockReason?: string;
   lockReason?: string;
   mode: PendingFormMode;
   reset: () => Promise<void> | void;
@@ -17,6 +18,7 @@ export interface PendingFormSnapshot {
   canReset: boolean;
   dirty: boolean;
   lockReason: string | null;
+  applyBlockReason: string | null;
   mode: PendingFormMode | null;
   registeredCount: number;
   valid: boolean;
@@ -31,6 +33,7 @@ export interface PendingFormTransitionSnapshot {
   guarded: boolean;
   invalidDirtyOwnerCount: number;
   lockedDirtyOwnerCount: number;
+  applyBlockedOwnerCount: number;
   nonStagedDirtyOwnerCount: number;
   preparing: boolean;
   registeredCount: number;
@@ -57,6 +60,7 @@ interface RegisteredFormState {
   applying: boolean;
   dirty: boolean;
   form: PendingForm;
+  applyBlockReason: string | undefined;
   lockReason: string | undefined;
   mode: PendingFormMode;
   owner: symbol;
@@ -78,6 +82,7 @@ function applyReason(form: PendingForm | null): string {
   if (form.mode === "liveViewport") return "Viewport changes are applied live.";
   if (form.mode === "immediate") return "This Inspector view has no staged changes.";
   if (!form.dirty) return "There are no unapplied Inspector changes.";
+  if (form.applyBlockReason) return form.applyBlockReason;
   if (!form.valid) return "Resolve Inspector validation errors before applying.";
   if (form.applying) return "Inspector changes are already being applied.";
   return "";
@@ -90,7 +95,8 @@ function canApply(form: PendingForm | null): boolean {
       form.dirty &&
       form.valid &&
       !form.applying &&
-      !form.lockReason,
+      !form.lockReason &&
+      !form.applyBlockReason,
   );
 }
 
@@ -127,6 +133,7 @@ export class PendingFormRegistry {
       canReset: this.canReset(),
       dirty: form?.dirty ?? false,
       lockReason: form?.lockReason ?? null,
+      applyBlockReason: form?.applyBlockReason ?? null,
       mode: form?.mode ?? null,
       registeredCount: this.forms.size,
       valid: form?.valid ?? true,
@@ -152,6 +159,9 @@ export class PendingFormRegistry {
     const lockedDirtyOwnerCount = dirtyForms.filter(
       (form) => Boolean(form.lockReason),
     ).length;
+    const applyBlockedOwnerCount = dirtyForms.filter(
+      (form) => Boolean(form.applyBlockReason),
+    ).length;
     const nonStagedDirtyOwnerCount = dirtyForms.filter(
       (form) => form.mode !== "staged",
     ).length;
@@ -162,6 +172,7 @@ export class PendingFormRegistry {
         applyingOwnerCount === 0 &&
         invalidDirtyOwnerCount === 0 &&
         lockedDirtyOwnerCount === 0 &&
+        applyBlockedOwnerCount === 0 &&
         nonStagedDirtyOwnerCount === 0,
     );
 
@@ -176,6 +187,8 @@ export class PendingFormRegistry {
       blockedReason = "Resolve Inspector validation errors before continuing.";
     } else if (lockedDirtyOwnerCount > 0) {
       blockedReason = "Unlock Inspector changes before continuing.";
+    } else if (applyBlockedOwnerCount > 0) {
+      blockedReason = dirtyForms.find((form) => form.applyBlockReason)?.applyBlockReason ?? "Inspector changes cannot be applied in their current state.";
     } else if (nonStagedDirtyOwnerCount > 0) {
       blockedReason = "Resolve live or immediate Inspector changes before continuing.";
     } else if (dirtyForms.length > 0) {
@@ -191,6 +204,7 @@ export class PendingFormRegistry {
       guarded: this.transitionGuard !== null,
       invalidDirtyOwnerCount,
       lockedDirtyOwnerCount,
+      applyBlockedOwnerCount,
       nonStagedDirtyOwnerCount,
       preparing: this.preparation !== null,
       registeredCount: forms.length,
@@ -296,7 +310,7 @@ export class PendingFormRegistry {
       }
       if (options.applyPendingChanges) {
         const ineligible = dirtyForms.find((entry) =>
-          entry.mode !== "staged" || !entry.valid || Boolean(entry.lockReason),
+          entry.mode !== "staged" || !entry.valid || Boolean(entry.lockReason) || Boolean(entry.applyBlockReason),
         );
         if (ineligible) {
           throw new Error(this.dirtyFormBlockReason(ineligible));
@@ -474,6 +488,7 @@ export class PendingFormRegistry {
       applying: form.applying,
       dirty: form.dirty,
       form,
+      applyBlockReason: form.applyBlockReason,
       lockReason: form.lockReason,
       mode: form.mode,
       owner,
@@ -498,6 +513,7 @@ export class PendingFormRegistry {
         current.applying !== expected.applying ||
         current.dirty !== expected.dirty ||
         current.lockReason !== expected.lockReason ||
+        current.applyBlockReason !== expected.applyBlockReason ||
         current.mode !== expected.mode ||
         current.valid !== expected.valid
       ) {
@@ -511,6 +527,7 @@ export class PendingFormRegistry {
     if (form.mode === "liveViewport") return "Viewport changes are applied live.";
     if (form.mode === "immediate") return "This Inspector view has no staged changes.";
     if (form.lockReason) return form.lockReason;
+    if (form.applyBlockReason) return form.applyBlockReason;
     if (!form.valid) return "Resolve Inspector validation errors before applying.";
     return "Inspector changes cannot be applied in their current state.";
   }
@@ -550,6 +567,7 @@ export class PendingFormRegistry {
         current.applying !== pinned.applying ||
         current.dirty !== pinned.dirty ||
         current.lockReason !== pinned.lockReason ||
+        current.applyBlockReason !== pinned.applyBlockReason ||
         current.mode !== pinned.mode ||
         current.valid !== pinned.valid ||
         current.dirty ||

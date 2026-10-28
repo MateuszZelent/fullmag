@@ -15,12 +15,12 @@ import { antennaCurrentTraceShape, buildAntennaCurrentOverlayModel, projectAnten
 import { antennaInspectionIntentMatchesOwner, type AntennaFieldIntent } from "@/kernel/visualization/antennaFieldIntent";
 
 /** One data owner outside the manual R3F root. Binary arrays stay in resource cache / render model. */
-export function useAntennaFieldOverlay() {
+export function useAntennaFieldOverlay(enabled = true) {
   const controller = useObjectVisualizationController();
   const requested = useObjectVisualizationSelector((snapshot) => snapshot.antennaFieldIntent ?? null);
   const owner = useSessionResourceIdentity();
   const selectedObjectId = useSelectionSelector((selection) => selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId);
-  const displayIntent = requested && owner && requested.sessionId === owner.sessionId &&
+  const displayIntent = enabled && requested && owner && requested.sessionId === owner.sessionId &&
     requested.sessionEpoch === owner.sessionEpoch && requested.requestScopeEpoch === owner.requestScopeEpoch &&
     requested.sourceObjectId === selectedObjectId && (requested.points || requested.vectors || requested.surface || requested.wireframe) ? requested : null;
   // Color/depth controls present the immutable carrier without re-decoding its payloads.

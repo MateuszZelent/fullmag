@@ -2212,6 +2212,55 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(visualizationQuantityItems("H_demag", "airbox")).toEqual([]);
   });
 
+  it("lists Airbox fields the solver has not provided yet as disabled", () => {
+    const pending = (id: string, label: string, domain: string) => ({
+      capability_state: "unsupported",
+      description: label,
+      domain,
+      id,
+      interactive_preview: true,
+      label,
+      location: "node",
+      materializable: false,
+      materialization_state: "unavailable",
+      n_comp: 3,
+      normalization_hint: "max_abs",
+      requestable: false,
+      shape: "vector_field",
+      supports_export: true,
+      supports_history: false,
+      supports_preview_2d: true,
+      supports_preview_3d: true,
+      unit: "A/m",
+    });
+    const quantityCatalog = {
+      schema_version: "quantities.v2",
+      quantities: [
+        pending("H_ex", "Exchange field", "magnetic_only"),
+        pending("H_demag", "Demag field", "full_domain"),
+        pending("H_eff", "Effective field", "full_domain"),
+      ],
+    } as unknown as QuantityCatalogResource;
+
+    expect(visualizationQuantityItems("H_eff", "airbox", null, quantityCatalog)).toEqual([
+      { disabled: true, label: "Demag field (not available yet)", value: "H_demag" },
+      { disabled: true, label: "Effective field (not available yet)", value: "H_eff" },
+    ]);
+
+    const zeeman = {
+      ...pending("H_ext", "External field", "full_domain"),
+      resolved_capability: { reason_code: "quantity_unsupported" },
+    };
+    expect(
+      visualizationQuantityItems("H_ext", "airbox", null, {
+        ...quantityCatalog,
+        quantities: [zeeman],
+      } as unknown as QuantityCatalogResource),
+    ).toEqual([
+      { disabled: true, label: "External field (not in this study)", value: "H_ext" },
+    ]);
+  });
+
   it("keeps a ready target-scoped active quantity selectable without a global catalog entry", () => {
     const targetAvailability = new Map([
       [
@@ -2458,11 +2507,13 @@ describe("ObjectVisualizationPanelModel", () => {
       quantitySourcePatch(
         {
           ...DEFAULT_OBJECT_VISUALIZATION,
+          tensorProjection: "spin_flow_z",
           surfaceColorSource: "orientation",
         },
         "material_ms",
       ),
     ).toEqual({
+      tensorProjection: null,
       activeQuantityId: "mat_ms",
       surfaceColorSource: "colormap",
     });
@@ -2977,12 +3028,14 @@ describe("ObjectVisualizationPanelModel", () => {
       quantitySourcePatch(
         {
           ...DEFAULT_OBJECT_VISUALIZATION,
+          tensorProjection: "spin_flow_z",
           surfaceColorSource: "colormap",
           vectorColorMode: "orientation",
         },
         "H_eff",
       ),
     ).toEqual({
+      tensorProjection: null,
       activeQuantityId: "H_eff",
       surfaceColorSource: "orientation",
     });
@@ -2993,12 +3046,14 @@ describe("ObjectVisualizationPanelModel", () => {
       quantitySourcePatch(
         {
           ...DEFAULT_OBJECT_VISUALIZATION,
+          tensorProjection: "spin_flow_z",
           surfaceColorSource: "component_z",
           vectorColorMode: "orientation",
         },
         "H_demag",
       ),
     ).toEqual({
+      tensorProjection: null,
       activeQuantityId: "H_demag",
     });
   });

@@ -815,6 +815,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
       <DraftIdentitySection draft={draft} onFieldChange={updateField} showCommitted={draft.mode === "committed"} />
       <ActionsSection
         draft={draft}
+        valid={inspectorValid}
         feedback={feedback}
         sceneMutationLockReason={sceneMutationLockReason}
         pending={pending}
@@ -1033,9 +1034,11 @@ function ActionsSection({
   onRetryAfterConflict,
   pending,
   revisionConflictPhase,
+  valid,
 }: {
   draft: GeometryObjectDraft;
   feedback: Feedback | null;
+  valid: boolean;
   sceneMutationLockReason?: string;
   onApplyCreateDraft: () => Promise<boolean>;
   onRebaseAfterConflict: () => void;
@@ -1051,6 +1054,7 @@ function ActionsSection({
           <Button
             disabled={
               pending ||
+              !valid ||
               Boolean(sceneMutationLockReason) ||
               typeof draft.baseRevision !== "number" ||
               !Number.isFinite(draft.baseRevision) ||
@@ -1059,7 +1063,7 @@ function ActionsSection({
             size="sm"
             type="button"
             variant="primary"
-            title={sceneMutationLockReason}
+            title={sceneMutationLockReason ?? (!valid ? "Resolve validation errors before applying." : undefined)}
             onClick={() => void onApplyCreateDraft()}
           >
             Apply Draft

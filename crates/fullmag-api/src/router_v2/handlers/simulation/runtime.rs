@@ -545,7 +545,7 @@ pub async fn get_stage_execution(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
 
-    Ok(Json(StageExecutionResource {
+    let mut resource = StageExecutionResource {
         session_id: request_context.session_id.clone(),
         session_epoch: crate::router_v2::handlers::sessions::current_live_session_epoch(snapshot),
         request_scope_epoch: request_context.request_scope_epoch.clone(),
@@ -583,6 +583,9 @@ pub async fn get_stage_execution(
                         .clone()
                         .unwrap_or_else(|| stage_id_for_index(index)),
                     antenna_solve_stage_id: record.antenna_solve_stage_id.clone(),
+                    antenna_inspection: None,
+                    antenna_progress: record.antenna_progress.as_ref()
+                        .map(crate::schemas::runtime::AntennaOperationProgressResource::from),
                     index: index as u32,
                     label: Some(format!("Stage {}", index + 1)),
                     kind,
@@ -642,8 +645,24 @@ pub async fn get_stage_execution(
                 }
             })
             .collect(),
-    })
-    .into_response())
+    };
+    drop(guard);
+    let inspection_ids = resource.stages.iter()
+        .filter(|stage| stage.antenna_solve_stage_id.is_some())
+        .map(|stage| stage.stage_id.clone()).collect::<Vec<_>>();
+    let accepted_candidate = resource.stages.iter().any(|stage|
+        stage.antenna_solve_stage_id.is_some() && stage.status == "completed");
+    let discovery = crate::router_v2::handlers::data::antenna_inspection::inspection_discovery_metadata(
+        &state, &inspection_ids, accepted_candidate).await?;
+    crate::validate_current_live_request_context(&state, &request_context).await?;
+    let current = state.current_live_state.read().await;
+    if current.as_ref().is_none_or(|snapshot| snapshot.state_version != resource.revision) {
+        return Err(ApiError::conflict("stage execution changed during inspection discovery"));
+    }
+    for stage in &mut resource.stages {
+        stage.antenna_inspection = discovery.get(&stage.stage_id).cloned();
+    }
+    Ok(Json(resource).into_response())
 }
 
 struct StageProgressProjection {

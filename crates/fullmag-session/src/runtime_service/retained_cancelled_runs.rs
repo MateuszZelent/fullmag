@@ -31,6 +31,7 @@ pub const MAX_RETAINED_CANCELLED_TASKS: usize = 4096;
 const MAX_OBSERVED_ENTRIES: usize = 32_768;
 const MAX_OBSERVED_FILES: usize = 16_384;
 const MAX_OBSERVED_FILE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_MANUAL_HELD_V4_AGGREGATE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_CAS_PIN_BYTES: usize = 4096;
 const MAX_TASK_CANCELLATION_INTENT_BYTES: usize = 256 * 1024;
 const MAX_TASK_ADMISSION_RECORD_BYTES: usize = 1024 * 1024;
@@ -53,11 +54,47 @@ pub struct RetainedCancelledRunsPreflight {
     pub inspected_file_bytes: u64,
 }
 
-#[derive(Default)]
-struct ReadBudget {
+pub(super) struct ReadBudget {
     entries: usize,
     files: BTreeSet<String>,
     file_bytes: u64,
+    aggregate_limit: u64,
+    file_limit: usize,
+}
+
+impl Default for ReadBudget {
+    fn default() -> Self {
+        Self {
+            entries: 0,
+            files: BTreeSet::new(),
+            file_bytes: 0,
+            aggregate_limit: MAX_OBSERVED_FILE_BYTES,
+            file_limit: MAX_OBSERVED_FILES,
+        }
+    }
+}
+
+impl ReadBudget {
+    /// Native v4 only: operator JSON cannot select this budget. Per-object
+    /// reads remain bounded by the unchanged 128 MiB CAS limit below.
+    pub(super) fn for_manual_held_v4() -> Self {
+        Self {
+            aggregate_limit: MAX_MANUAL_HELD_V4_AGGREGATE_BYTES,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn for_attempt_history_v5() -> Self {
+        Self { aggregate_limit: MAX_MANUAL_HELD_V4_AGGREGATE_BYTES, file_limit: 32768, ..Self::default() }
+    }
+
+    pub(super) fn inspected_file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    pub(super) fn inspected_file_bytes(&self) -> u64 {
+        self.file_bytes
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,7 +105,7 @@ struct CasPinRecord {
 }
 
 impl ReadBudget {
-    fn observe_entry(&mut self) -> Result<()> {
+    pub(super) fn observe_entry(&mut self) -> Result<()> {
         self.entries = self
             .entries
             .checked_add(1)
@@ -79,11 +116,16 @@ impl ReadBudget {
         Ok(())
     }
 
-    fn observe_file(&mut self, root: &Path, relative: &str, maximum: usize) -> Result<()> {
+    pub(super) fn observe_file(
+        &mut self,
+        root: &Path,
+        relative: &str,
+        maximum: usize,
+    ) -> Result<()> {
         if !self.files.insert(relative.to_owned()) {
             return Ok(());
         }
-        if self.files.len() > MAX_OBSERVED_FILES {
+        if self.files.len() > self.file_limit {
             bail!("retained-run preflight exceeds its file limit");
         }
         let path = checked_path(root, relative)?;
@@ -97,7 +139,7 @@ impl ReadBudget {
             .file_bytes
             .checked_add(metadata.len())
             .context("retained-run byte count overflow")?;
-        if self.file_bytes > MAX_OBSERVED_FILE_BYTES {
+        if self.file_bytes > self.aggregate_limit {
             bail!("retained-run preflight exceeds its aggregate byte limit");
         }
         Ok(())
@@ -265,7 +307,7 @@ pub fn validate_retained_cancelled_runs(
 /// retained run intents. Run-intent validation above proves these references
 /// match the accepted definition, study, catalog, and immutable asset records.
 /// This check is read-only and intentionally never releases pins.
-fn validate_run_cas_pins(
+pub(super) fn validate_run_cas_pins(
     store: &SessionStore,
     referenced_object_refs: &BTreeSet<String>,
     budget: &mut ReadBudget,
@@ -323,7 +365,10 @@ fn validate_run_cas_pins(
     Ok(())
 }
 
-fn list_run_inventory(store: &SessionStore, budget: &mut ReadBudget) -> Result<Vec<String>> {
+pub(super) fn list_run_inventory(
+    store: &SessionStore,
+    budget: &mut ReadBudget,
+) -> Result<Vec<String>> {
     let root = checked_path(store.root(), "runs")?;
     let metadata = fs::symlink_metadata(&root).context("retained-run inventory is missing")?;
     reject_link(&root)?;
@@ -576,12 +621,12 @@ fn scan_preparation_leases(
     Ok(())
 }
 
-fn required_directory(root: &Path, relative: &str) -> Result<PathBuf> {
+pub(super) fn required_directory(root: &Path, relative: &str) -> Result<PathBuf> {
     optional_directory(root, relative)?
         .with_context(|| format!("missing required directory {relative}"))
 }
 
-fn optional_directory(root: &Path, relative: &str) -> Result<Option<PathBuf>> {
+pub(super) fn optional_directory(root: &Path, relative: &str) -> Result<Option<PathBuf>> {
     let path = checked_path(root, relative)?;
     match fs::symlink_metadata(&path) {
         Ok(metadata) => {
@@ -596,7 +641,7 @@ fn optional_directory(root: &Path, relative: &str) -> Result<Option<PathBuf>> {
     }
 }
 
-fn validate_sha256(value: &str, field: &str) -> Result<()> {
+pub(super) fn validate_sha256(value: &str, field: &str) -> Result<()> {
     if value.len() != 64
         || !value
             .bytes()
@@ -605,4 +650,97 @@ fn validate_sha256(value: &str, field: &str) -> Result<()> {
         bail!("retained-run pin `{field}` must be lowercase SHA-256");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod scoped_budget_tests {
+    use super::*;
+
+    fn sparse(root: &Path, relative: &str, length: u64) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::File::create(path).unwrap().set_len(length).unwrap();
+    }
+
+    #[test]
+    fn manual_held_v4_accepts_observed_aggregate_using_synthetic_sparse_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        // Synthetic three-object fixture reproduces the preserved store
+        // aggregate; each object fits the unchanged 128 MiB object cap.
+        for index in 0..3 {
+            sparse(directory.path(), &format!("object-{index}"), 115_969_632);
+        }
+        let mut legacy = ReadBudget::default();
+        legacy
+            .observe_file(
+                directory.path(),
+                "object-0",
+                MAX_OBSERVED_FILE_BYTES as usize,
+            )
+            .unwrap();
+        assert!(legacy
+            .observe_file(
+                directory.path(),
+                "object-1",
+                MAX_OBSERVED_FILE_BYTES as usize
+            )
+            .is_err());
+        let mut v4 = ReadBudget::for_manual_held_v4();
+        for index in 0..3 {
+            v4.observe_file(
+                directory.path(),
+                &format!("object-{index}"),
+                MAX_OBSERVED_FILE_BYTES as usize,
+            )
+            .unwrap();
+        }
+        assert_eq!(v4.inspected_file_bytes(), 347_908_896);
+        v4.observe_file(
+            directory.path(),
+            "object-0",
+            MAX_OBSERVED_FILE_BYTES as usize,
+        )
+        .unwrap();
+        assert_eq!(
+            v4.inspected_file_bytes(),
+            347_908_896,
+            "shared subset budget must deduplicate the global CAS reread"
+        );
+    }
+
+    #[test]
+    fn manual_held_v4_aggregate_is_fixed_one_gib_and_individual_objects_remain_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut v4 = ReadBudget::for_manual_held_v4();
+        for index in 0..8 {
+            let name = format!("chunk-{index}");
+            sparse(directory.path(), &name, MAX_OBSERVED_FILE_BYTES);
+            v4.observe_file(directory.path(), &name, MAX_OBSERVED_FILE_BYTES as usize)
+                .unwrap();
+        }
+        assert_eq!(v4.inspected_file_bytes(), 1024 * 1024 * 1024);
+        sparse(directory.path(), "over-aggregate", 1);
+        assert!(v4
+            .observe_file(
+                directory.path(),
+                "over-aggregate",
+                MAX_OBSERVED_FILE_BYTES as usize
+            )
+            .is_err());
+        sparse(directory.path(), "over-object", MAX_OBSERVED_FILE_BYTES + 1);
+        assert!(ReadBudget::for_manual_held_v4()
+            .observe_file(
+                directory.path(),
+                "over-object",
+                MAX_OBSERVED_FILE_BYTES as usize
+            )
+            .is_err());
+        assert!(ReadBudget::default()
+            .observe_file(
+                directory.path(),
+                "over-object",
+                MAX_OBSERVED_FILE_BYTES as usize
+            )
+            .is_err());
+    }
 }

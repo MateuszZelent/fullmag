@@ -610,6 +610,7 @@ fn reserved_run_namespace_files_are_rejected_before_import() {
         "runs/run-1/checkpoints/cp-1",
         "runs/run-1/worker_inbox",
         "runs/run-1/task_preparation_receipts",
+        "runs/run-1/task_prepared_observations",
         "runs/run-1/retry_decisions",
         "runs/run-1/preparation_retry_decisions",
         "runs/run-1/worker_process_exit_receipts",

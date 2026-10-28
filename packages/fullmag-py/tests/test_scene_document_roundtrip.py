@@ -163,3 +163,29 @@ study.stages.add_eigenmodes(target='frequency_window', frequency_min=1e9, freque
         assert ir["backend_policy"]["execution_precision"] == "double"
         assert ir["validation_profile"]["execution_mode"] == "strict"
         assert ir["problem_meta"]["runtime_metadata"]["runtime_selection"]["device"] == device
+
+def test_scene_round_trip_preserves_authored_global_mesh_order(tmp_path: Path) -> None:
+    from fullmag.runtime.loader import load_problem_from_script
+
+    for order in (None, 1, 2):
+        order_arg = "" if order is None else f", order={order}"
+        source = tmp_path / f"mesh_order_{order}.py"
+        source.write_text(
+            "import fullmag as fm\n"
+            "study = fm.study('mesh-order-roundtrip')\n"
+            "study.engine('fem')\n"
+            f"study.objects.mesh.defaults(maximum_element_size=20e-9{order_arg})\n"
+            "film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name='film')\n"
+            "film.Ms = 800e3\n"
+            "film.Aex = 13e-12\n"
+            "study.stages.add_run(stage_id='run', until=1e-12)\n",
+            encoding="utf-8",
+        )
+        loaded = load_problem_from_script(source, lightweight_assets=True)
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        assert builder_overrides_from_scene_document(scene)["mesh"]["order"] == order
+        exported = tmp_path / f"exported_mesh_order_{order}.py"
+        exported.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+        reloaded = load_problem_from_script(exported, lightweight_assets=True)
+        rebuilt = build_scene_document_from_builder(export_builder_draft(reloaded))
+        assert builder_overrides_from_scene_document(rebuilt)["mesh"]["order"] == order

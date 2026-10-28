@@ -17,6 +17,8 @@ pub struct PlanarFieldQuery {
     pub component: Option<String>,
     pub scope_kind: Option<String>,
     pub scope_id: Option<String>,
+    /// Region id within the `scope_id` object when `scope_kind=region`.
+    pub scope_region_id: Option<String>,
     pub stage_id: Option<String>,
     pub snapshot_id: Option<String>,
     pub resolution_x: Option<u32>,
@@ -56,6 +58,8 @@ pub struct PlanarFieldProbeQuery {
     pub quality: Option<String>,
     pub scope_kind: Option<String>,
     pub scope_id: Option<String>,
+    /// Region id within the `scope_id` object when `scope_kind=region`.
+    pub scope_region_id: Option<String>,
     pub stage_id: Option<String>,
     pub snapshot_id: Option<String>,
     #[serde(default, with = "crate::schemas::decimal_u64::optional")]
@@ -135,6 +139,38 @@ pub struct PlanarMeshOverlayDescriptor {
     pub geometry_source: String,
 }
 
+/// Requested vs. resolved position of the session `Default` slice along its
+/// normal. A snap to an FDM cell centre is published, never hidden.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PlanarSectionResource {
+    /// `xy`, `xz` or `yz`.
+    pub plane: String,
+    /// World axis of the slice normal: `x`, `y` or `z`.
+    pub normal_axis: String,
+    pub requested_fraction: f64,
+    pub requested_coordinate_m: f64,
+    pub resolved_coordinate_m: f64,
+    /// `fdm_cell_layers` (snapped to a cell centre), `fem_node_planes` (on a
+    /// swept-mesh node plane), `fem_node_planes_between` (between planes) or
+    /// `continuous`.
+    pub stops_kind: String,
+    pub layer_index: Option<u32>,
+    pub layer_count: Option<u32>,
+    pub layer_spacing_m: Option<f64>,
+    pub normal_min_m: f64,
+    pub normal_max_m: f64,
+    /// Distance moved by one layer or navigation step along the normal.
+    pub navigation_step_m: f64,
+    /// `fdm_cell`, `fem_node_plane_spacing`, `median_element_height` (median
+    /// normal extent of the cut FEM elements; a navigation aid, not a data
+    /// layer) or `extent_fraction`.
+    pub navigation_step_kind: String,
+    /// Target elements cut by the sampled FEM plane, when known.
+    pub cut_element_count: Option<u32>,
+    /// Discrete stops along the normal (FEM node planes); empty otherwise.
+    pub layer_stops_m: Vec<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlanarFieldMetaResource {
     pub schema_version: String,
@@ -165,7 +201,11 @@ pub struct PlanarFieldMetaResource {
     pub field_precision: Option<String>,
     pub scope_kind: String,
     pub scope_id: Option<String>,
+    /// Region within the `scope_id` object for `region` scopes.
+    pub scope_region_id: Option<String>,
     pub frame: PlanarFieldFrameResource,
+    /// Section of the session `Default` slice; null for authored monitors.
+    pub section: Option<PlanarSectionResource>,
     pub operator: PlanarOperatorSchema,
     pub resolution: [u32; 2],
     pub pixel_size_m: [f64; 2],

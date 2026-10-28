@@ -248,7 +248,7 @@ const STUDY_INSPECTOR_INITIAL_STATE: StudyInspectorPanelState = {
   stageDrafts: [],
 };
 
-function studyInspectorPanelReducer(
+export function studyInspectorPanelReducer(
   state: StudyInspectorPanelState,
   action: StudyInspectorPanelAction,
 ): StudyInspectorPanelState {
@@ -688,6 +688,48 @@ export function studyInspectorRuntimeStatusEquals(
     previous.resources.stages_revision === next.resources.stages_revision &&
     studyInspectorRunEquals(previous.run, next.run)
   );
+}
+
+const PARTIAL_STUDY_APPLY_MESSAGE =
+  "Global Study settings were committed. The Pipeline stage save could not be confirmed. Review the current scene and Pipeline feedback before retrying Apply.";
+
+function partialStudyApplyError(cause?: unknown): Error {
+  const detail = cause instanceof Error ? " Stage save error: " + cause.message : "";
+  return new Error(PARTIAL_STUDY_APPLY_MESSAGE + detail);
+}
+
+export async function applyStudyDraftsWithPartialFailure({
+  globalDirty,
+  stagesDirty,
+  commitGlobal,
+  commitStages,
+}: {
+  globalDirty: boolean;
+  stagesDirty: boolean;
+  commitGlobal: () => Promise<boolean>;
+  commitStages: () => Promise<boolean>;
+}): Promise<boolean> {
+  let globalCommitted = false;
+  if (globalDirty) {
+    globalCommitted = await commitGlobal();
+    if (!globalCommitted) return false;
+  }
+
+  if (stagesDirty) {
+    let stagesCommitted: boolean;
+    try {
+      stagesCommitted = await commitStages();
+    } catch (error) {
+      if (globalCommitted) throw partialStudyApplyError(error);
+      throw error;
+    }
+    if (!stagesCommitted) {
+      if (globalCommitted) throw partialStudyApplyError();
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export function useStudyInspectorPanelController(
@@ -1533,9 +1575,12 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
       if (globalDirty || stagesDirty) return false;
       return (await profileEditSessionRef.current?.apply()) === true;
     }
-    if (globalDirty && !(await commitGlobalDraft())) return false;
-    if (stagesDirty && !(await commitStageDrafts())) return false;
-    return true;
+    return applyStudyDraftsWithPartialFailure({
+      globalDirty,
+      stagesDirty,
+      commitGlobal: commitGlobalDraft,
+      commitStages: commitStageDrafts,
+    });
   }, [commitGlobalDraft, commitStageDrafts, globalDirty, profileEditState.dirty, stagesDirty]);
   const resetInspectorDraft = useCallback(() => {
     dispatch({ type: "revertGlobalDraft" });

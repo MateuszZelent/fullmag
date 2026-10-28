@@ -164,6 +164,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
             allocated_region_ids: Vec::new(),
             material_parameter_fields: Vec::new(),
             absorbing_boundary: None,
+            visualization_hint: Default::default(),
         }],
         mesh_interfaces: Vec::new(),
         field_drives: Vec::new(),
@@ -765,6 +766,7 @@ pub(crate) async fn test_app_state_with_live_session() -> Arc<AppState> {
         run: None,
         live_state: None,
         coupled_checkpoint: None,
+        imported_antenna_mesh_proof: None,
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -1072,6 +1074,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                 StageExecutionRecord {
                     stage_id: None,
                     antenna_solve_stage_id: None,
+                    antenna_progress: None,
                     kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
@@ -1113,6 +1116,7 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                 StageExecutionRecord {
                     stage_id: None,
                     antenna_solve_stage_id: None,
+                    antenna_progress: None,
                     kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
@@ -2764,6 +2768,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 StageExecutionRecord {
                     stage_id: None,
                     antenna_solve_stage_id: None,
+                    antenna_progress: None,
                     kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
@@ -2805,6 +2810,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 StageExecutionRecord {
                     stage_id: None,
                     antenna_solve_stage_id: None,
+                    antenna_progress: None,
                     kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
@@ -3030,15 +3036,13 @@ async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) 
 async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc<AppState>, PathBuf)
 {
     let state = test_app_state();
+    static NEXT_ARTIFACT_DIR: AtomicU64 = AtomicU64::new(0);
     let artifact_dir = std::env::temp_dir().join(format!(
         "fullmag-api-router-v1-assets-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time before unix epoch")
-            .as_nanos(),
+        uuid_v4_hex(),
+        NEXT_ARTIFACT_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     ));
-    fs::create_dir_all(&artifact_dir).expect("failed to create artifact dir");
+    fs::create_dir(&artifact_dir).expect("failed to create exclusive artifact dir");
 
     let session = SessionManifest {
         session_id: "test-session".into(),
@@ -3079,6 +3083,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         run: None,
         live_state: None,
         coupled_checkpoint: None,
+        imported_antenna_mesh_proof: None,
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -3289,6 +3294,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
             },
         }),
         coupled_checkpoint: None,
+        imported_antenna_mesh_proof: None,
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -18580,7 +18586,7 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
     assert_eq!(meta_json["scene_revision"], SCENE_REVISION.to_string());
     assert_eq!(meta_json["mesh_revision"], MESH_REVISION.to_string());
     assert_eq!(meta_json["field_revision"], FIELD_REVISION.to_string());
-    assert_eq!(meta_json["schema_version"], "planar_sample_meta.v4");
+    assert_eq!(meta_json["schema_version"], "planar_sample_meta.v7");
     assert_eq!(meta_json["mesh_overlay_descriptor"]["available"], true);
     assert_eq!(
         meta_json["mesh_overlay_descriptor"]["boundary_classification"],
@@ -24370,6 +24376,7 @@ async fn commands_endpoint_invalidates_hysteresis_stage_resources() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hysteresis-run".into()),
@@ -24578,6 +24585,7 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Cancelled,
                 command_id: Some("cmd-solve".into()),
@@ -25094,6 +25102,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
             stages: vec![StageExecutionRecord {
                 stage_id: None,
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
@@ -25995,6 +26004,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-003".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_frequency_response".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-stage-3".into()),
@@ -26454,6 +26464,7 @@ async fn hysteresis_progress_endpoint_returns_current_stage_progress() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-hyst".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -26558,6 +26569,7 @@ async fn hysteresis_progress_endpoint_reports_active_first_point_before_completi
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -26652,6 +26664,7 @@ async fn hysteresis_progress_endpoint_projects_live_magnetization_for_sample_ang
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-angle".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -26739,6 +26752,7 @@ async fn hysteresis_progress_endpoint_uses_measurement_axis_for_live_projection(
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-measurement-axis".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -26833,6 +26847,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-fem-magnetic-average".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -26928,6 +26943,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-fem-volume-average".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -27023,6 +27039,7 @@ async fn hysteresis_progress_endpoint_uses_snapshot_fem_mesh_for_live_average() 
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-snapshot-fem-average".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -27158,6 +27175,7 @@ async fn hysteresis_execution_tree_returns_windowed_active_points() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -27319,6 +27337,7 @@ async fn hysteresis_bookmarks_round_trip_through_resource_and_execution_tree() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
@@ -27472,6 +27491,7 @@ async fn hysteresis_execution_tree_marks_missing_snapshot_payloads() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
@@ -27660,6 +27680,7 @@ async fn hysteresis_execution_tree_uses_settle_trace_status_for_completed_points
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-1".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-hyst".into()),
@@ -27845,6 +27866,7 @@ async fn hysteresis_execution_tree_exposes_runtime_branch_nodes() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("hysteresis-branches".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -27970,6 +27992,7 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-relax".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-relax".into()),
@@ -28207,6 +28230,7 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-relax".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: None,
@@ -30048,7 +30072,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     assert_eq!(json["checkpoint"]["source"], "manual_test");
     assert_eq!(json["checkpoint"]["vector_count"], 2);
     assert_eq!(json["checkpoint"]["coordinate_frame"], "solver_domain");
-    assert_eq!(json["checkpoint"]["resume_class"], "exact_resume");
+    assert_eq!(json["checkpoint"]["resume_class"], "unsupported");
     assert_eq!(json["checkpoint"]["stage_id"], "stage-001");
     assert_eq!(json["checkpoint"]["command_id"], "cmd-stage-1");
     let checkpoint_artifact_ref = json["checkpoint"]["artifact_ref"]
@@ -30119,6 +30143,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let detail = body_json(detail_response).await;
     assert_eq!(detail["checkpoint_id"], checkpoint_id.as_str());
     assert_eq!(detail["vector_count"], 2);
+    assert_eq!(detail["resume_class"], "unsupported");
     let mut active_after_capture = coupled_checkpoint.clone();
     active_after_capture["magnetization"][0] = serde_json::json!([0.0, 0.0, 1.0]);
     refresh_coupled_m3_checkpoint_digest(&mut active_after_capture);
@@ -30130,6 +30155,15 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .unwrap()
         .coupled_checkpoint = Some(active_after_capture);
 
+    let before_restore = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .clone();
+    let field_revision_before_restore =
+        crate::router_v2::handlers::sessions::status::field_revision(&before_restore);
     let restore_response = app
         .clone()
         .oneshot(
@@ -30150,35 +30184,25 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .await
         .unwrap();
 
-    if restore_response.status() != StatusCode::OK {
-        let status = restore_response.status();
-        let body = body_bytes(restore_response).await;
-        panic!(
-            "checkpoint restore returned {status}: {}",
-            String::from_utf8_lossy(&body)
+    assert_eq!(restore_response.status(), StatusCode::CONFLICT);
+    let refused = body_json(restore_response).await;
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("transport ExactResume is temporarily unsupported"));
+    {
+        let guard = state.current_live_state.read().await;
+        let after_restore = guard.as_ref().unwrap();
+        assert_eq!(
+            serde_json::to_value(after_restore).unwrap(),
+            serde_json::to_value(&before_restore).unwrap(),
+            "refused transport restore must not mutate the session snapshot"
+        );
+        assert_eq!(
+            after_restore.coupled_checkpoint,
+            before_restore.coupled_checkpoint
         );
     }
-    let restored = body_json(restore_response).await;
-    assert_eq!(
-        restored["checkpoint"]["checkpoint_id"],
-        checkpoint_id.as_str()
-    );
-    assert_eq!(restored["restore_class"], "exact_resume");
-    assert_eq!(restored["restored_vector_count"], 2);
-    assert_eq!(restored["field_revision"], 2);
-    assert_eq!(restored["checkpoint"]["stage_id"], "stage-001");
-    assert_eq!(restored["checkpoint"]["command_id"], "cmd-stage-1");
-    assert_eq!(
-        state
-            .current_live_state
-            .read()
-            .await
-            .as_ref()
-            .unwrap()
-            .coupled_checkpoint
-            .as_ref(),
-        Some(&coupled_checkpoint)
-    );
 
     let stage_after_restore_response = app
         .clone()
@@ -30193,18 +30217,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
 
     assert_eq!(stage_after_restore_response.status(), StatusCode::OK);
     let stage_after_restore = body_json(stage_after_restore_response).await;
-    assert_eq!(
-        stage_after_restore["stages"][1]["resume_from_checkpoint_ref"],
-        checkpoint_id.as_str()
-    );
-    assert_eq!(
-        stage_after_restore["stages"][1]["loaded_state_ref"],
-        checkpoint_artifact_ref
-    );
-    assert_eq!(
-        stage_after_restore["stages"][1]["state_transition"],
-        "restored"
-    );
+    assert_eq!(stage_after_restore, stage_after_create);
 
     let status_response = app
         .clone()
@@ -30219,7 +30232,10 @@ async fn session_checkpoint_create_captures_live_magnetization() {
 
     assert_eq!(status_response.status(), StatusCode::OK);
     let status = body_json(status_response).await;
-    assert_eq!(status["resources"]["field_revision"], 2);
+    assert_eq!(
+        status["resources"]["field_revision"],
+        field_revision_before_restore
+    );
 
     let list_response = app
         .oneshot(
@@ -30233,6 +30249,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
 
     assert_eq!(list_response.status(), StatusCode::OK);
     let listed = body_json(list_response).await;
+    assert_eq!(listed["checkpoints"][0]["resume_class"], "unsupported");
     assert_eq!(
         listed["checkpoints"][0]["checkpoint_id"],
         checkpoint_id.as_str()
@@ -30527,11 +30544,11 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
         )
         .await
         .unwrap();
-    assert_eq!(restore.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(restore.status(), StatusCode::CONFLICT);
     let body = body_json(restore).await;
     assert!(body
         .to_string()
-        .contains("legacy magnetization-only checkpoint"));
+        .contains("transport ExactResume is temporarily unsupported"));
     let _ = fs::remove_dir_all(&repo_root);
 }
 
@@ -30907,7 +30924,18 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             .await
             .unwrap();
         let create_status = create.status();
-        if create_status == StatusCode::BAD_REQUEST {
+        if create_status == StatusCode::BAD_REQUEST || label == "common-state magnetization" {
+            if label == "common-state magnetization" {
+                // Split primary frames are rejected by storage capture before
+                // any checkpoint exists; do not bypass that coherence gate.
+                assert_eq!(create_status, StatusCode::INTERNAL_SERVER_ERROR);
+                let response_body = body_json(create).await;
+                assert_eq!(response_body["code"], "internal_error");
+                assert_eq!(
+                    response_body["message"],
+                    "capturing checkpoint: capture backend and common primary frame differ"
+                );
+            }
             let mut guard = state.current_live_state.write().await;
             let snapshot = guard.as_mut().unwrap();
             assert_eq!(
@@ -30957,11 +30985,13 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             .expect("bounded restore error response");
         assert_eq!(
             restore_status,
-            StatusCode::BAD_REQUEST,
+            StatusCode::CONFLICT,
             "restore {label}; fixture_root={}; response_body={}",
             repo_root.display(),
             String::from_utf8_lossy(&restore_body),
         );
+        assert!(String::from_utf8_lossy(&restore_body)
+            .contains("transport ExactResume is temporarily unsupported"));
         let guard = state.current_live_state.read().await;
         let snapshot = guard.as_ref().unwrap();
         let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
@@ -37676,6 +37706,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Completed,
                 command_id: None,
@@ -37839,6 +37870,7 @@ async fn hysteresis_analysis_uses_active_hysteresis_kind_only_when_record_kind_i
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: None,
                 status: StageLifecycleState::Running,
                 command_id: None,
@@ -38004,6 +38036,7 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -38107,6 +38140,7 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -38189,6 +38223,7 @@ async fn hysteresis_analysis_points_returns_empty_for_running_stage_before_first
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -38747,6 +38782,7 @@ async fn field_vector_snapshot_id_validates_optional_hysteresis_stage_scope() {
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
                 antenna_solve_stage_id: None,
+                antenna_progress: None,
                 kind: Some("flat_hysteresis".into()),
                 status: StageLifecycleState::Running,
                 command_id: Some("cmd-hyst".into()),
@@ -46038,7 +46074,7 @@ async fn planar_default_meta_publishes_source_and_offset_domain_frame() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let meta = body_json(response).await;
-    assert_eq!(meta["schema_version"], "planar_sample_meta.v4");
+    assert_eq!(meta["schema_version"], "planar_sample_meta.v7");
     assert_eq!(meta["source"]["kind"], "default");
     assert!(meta["source"]["default_slice_hash"].is_string());
     assert!(meta["source"]["default_slice_revision"].is_string());
@@ -50681,6 +50717,144 @@ async fn frequency_domain_response_field_meta_uses_v2_linked_payload_path() {
 }
 
 #[tokio::test]
+async fn frequency_response_binary_cache_tracks_content_and_representation() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    {
+        let mut current = state.current_live_state.write().await;
+        current.as_mut().unwrap().fem_mesh = Some(sample_fem_mesh_payload().into());
+    }
+    let point_dir = artifact_dir.join("response/frequency_points");
+    let payload_dir = artifact_dir.join("response/field_payloads/frequency_0001");
+    fs::create_dir_all(&point_dir).unwrap();
+    fs::create_dir_all(&payload_dir).unwrap();
+    let payload_path = payload_dir.join("vector_xyz.bin");
+    let mut bytes = Vec::new();
+    for value in 1..=12 {
+        bytes.extend_from_slice(&(value as f64).to_le_bytes());
+        bytes.extend_from_slice(&0.5f64.to_le_bytes());
+    }
+    fs::write(&payload_path, &bytes).unwrap();
+    fs::write(
+        point_dir.join("frequency_0001.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "frequency_response_point.v1",
+            "frequency_index": 1,
+            "frequency_hz": 2.0e9,
+            "field_payload_path": "response/field_payloads/frequency_0001/vector_xyz.bin",
+            "payload_encoding": "f64_interleaved_real_imag_xyz",
+            "binary_layout": "complex_f64_pairs_little_endian",
+            "value_kind": "complex_spatial_vector",
+            "component_basis": "global_xyz",
+            "component_count": 3,
+            "components": ["x", "y", "z"],
+            "complex_pair_count": 12,
+            "payload_value_count": 24,
+            "available_views": ["complex", "real", "imag", "abs", "phase", "phase_rotated_real"],
+            "default_view": "phase_rotated_real",
+            "default_phase_rad": 0.0
+        })).unwrap(),
+    ).unwrap();
+
+    let path = "/v2/sessions/current/data/fields/analysis:frequency-response:frequency-0001/samples/vector";
+    let request = |query: &str, etag: Option<&str>| {
+        let mut builder = Request::builder().method("GET").uri(format!("{path}{query}"));
+        if let Some(etag) = etag {
+            builder = builder.header(header::IF_NONE_MATCH, etag);
+        }
+        builder.body(Body::empty()).unwrap()
+    };
+    let meta_request = || Request::builder().method("GET")
+        .uri("/v2/sessions/current/analysis/frequency-domain/response/field/1/meta")
+        .body(Body::empty()).unwrap();
+    let meta_response = app.clone().oneshot(meta_request()).await.unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let first_meta = body_json(meta_response).await;
+    let first_digest = first_meta["content_digest"].as_str().unwrap();
+    let query = "?view=phase_rotated_real&phase_rad=0";
+    let first = app.clone().oneshot(request(query, None)).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_etag = first.headers()[header::ETAG].to_str().unwrap().to_owned();
+    let first_revision = first.headers()["x-fullmag-field-revision"].to_str().unwrap().to_owned();
+    assert!(first_etag.contains(first_digest));
+    let expected_revision = u64::from_str_radix(first_digest.strip_prefix("sha256:").unwrap()
+        .get(..16).unwrap(), 16).unwrap().max(1).to_string();
+    assert_eq!(first_revision, expected_revision);
+    let first_body = body_bytes(first).await;
+    let unchanged = app.clone().oneshot(request(query, Some(&first_etag))).await.unwrap();
+    assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(unchanged).await.is_empty());
+
+    let original_length = bytes.len();
+    bytes[..8].copy_from_slice(&20.0f64.to_le_bytes());
+    assert_eq!(original_length, bytes.len());
+    fs::write(&payload_path, &bytes).unwrap();
+    let changed = app.clone().oneshot(request(query, Some(&first_etag))).await.unwrap();
+    assert_eq!(changed.status(), StatusCode::OK);
+    let changed_etag = changed.headers()[header::ETAG].to_str().unwrap().to_owned();
+    let changed_revision = changed.headers()["x-fullmag-field-revision"].to_str().unwrap().to_owned();
+    assert_ne!(first_etag, changed_etag);
+    assert_ne!(first_revision, changed_revision);
+    let changed_body = body_bytes(changed).await;
+    assert_eq!(first_body.len(), changed_body.len());
+    assert_ne!(first_body, changed_body);
+    let meta_response = app.clone().oneshot(meta_request()).await.unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let changed_meta = body_json(meta_response).await;
+    let changed_digest = changed_meta["content_digest"].as_str().unwrap();
+    assert_ne!(first_digest, changed_digest);
+    assert!(changed_etag.contains(changed_digest));
+
+    for variant in [
+        "?view=imag&phase_rad=0",
+        "?view=phase_rotated_real&phase_rad=0&component=x",
+        "?view=phase_rotated_real&phase_rad=0.5",
+    ] {
+        let response = app.clone().oneshot(request(variant, Some(&changed_etag))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{variant}");
+        assert_ne!(response.headers()[header::ETAG].to_str().unwrap(), changed_etag);
+        assert_eq!(response.headers()["x-fullmag-field-revision"].to_str().unwrap(), changed_revision);
+    }
+
+    let baseline_mesh_revision = state.current_live_state.read().await
+        .as_ref().unwrap().mesh_revision;
+    for mutation in ["generation", "revision", "geometry"] {
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.fem_mesh = Some(sample_fem_mesh_payload().into());
+            snapshot.mesh_revision = baseline_mesh_revision;
+        }
+        let baseline = app.clone().oneshot(request(query, None)).await.unwrap();
+        assert_eq!(baseline.status(), StatusCode::OK);
+        assert_eq!(baseline.headers()[header::ETAG].to_str().unwrap(), changed_etag);
+        assert_eq!(body_bytes(baseline).await, changed_body);
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            match mutation {
+                "generation" => snapshot.fem_mesh.as_mut().unwrap()
+                    .generation_id = Some("43".to_owned()),
+                "revision" => snapshot.mesh_revision += 1,
+                "geometry" => snapshot.fem_mesh.as_mut().unwrap().nodes[1][0] = 2.0,
+                _ => unreachable!(),
+            }
+        }
+        let remeshed = app.clone().oneshot(request(query, Some(&changed_etag))).await.unwrap();
+        assert_eq!(remeshed.status(), StatusCode::OK, "{mutation}");
+        let remeshed_etag = remeshed.headers()[header::ETAG].to_str().unwrap().to_owned();
+        assert_ne!(remeshed_etag, changed_etag, "{mutation}");
+        assert_eq!(remeshed.headers()["x-fullmag-field-revision"].to_str().unwrap(), changed_revision);
+        assert_ne!(body_bytes(remeshed).await, changed_body, "{mutation}");
+        let meta_response = app.clone().oneshot(meta_request()).await.unwrap();
+        assert_eq!(meta_response.status(), StatusCode::OK);
+        assert_eq!(body_json(meta_response).await["content_digest"], changed_meta["content_digest"]);
+        let unchanged = app.clone().oneshot(request(query, Some(&remeshed_etag))).await.unwrap();
+        assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED, "{mutation}");
+        assert!(body_bytes(unchanged).await.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn frequency_domain_response_field_fallback_uses_spatial_xyz_payload() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let response_dir = artifact_dir.join("response");
@@ -51309,7 +51483,14 @@ async fn frequency_domain_response_field_meta_rejects_complex_pair_count_overflo
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let status = response.status();
+    let body = body_bytes(response).await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "overflow metadata unexpectedly accepted: {}",
+        String::from_utf8_lossy(&body)
+    );
 }
 
 #[tokio::test]

@@ -323,7 +323,34 @@ pub(crate) fn current_global_energy(
     if spec.location != fullmag_quantities::QuantityLocation::Global || spec.unit != "J" { return None; }
     let raw = current.latest_fields.get(quantity)?;
     let provenance = raw.get("provenance")?;
-    if provenance.get("source")?.as_str()? != SCHEMA { return None; }
+    let current_source = match provenance.get("source")?.as_str()? {
+        SCHEMA => accepted_energy_source_matches(current, provenance).is_some(),
+        crate::prepared_observation_adoption::PROVENANCE_SOURCE => {
+            prepared_energy_source_is_current(current, quantity, raw, provenance)
+        }
+        _ => false,
+    };
+    if !current_source { return None; }
+    let values = raw.get("values")?.as_array()?;
+    if values.len() != 1 { return None; }
+    values[0].as_f64().filter(|value| value.is_finite())
+}
+
+/// A prepared-state energy belongs to exactly one preparation of the current
+/// scene and to the step-0 frame it was evaluated on; a new preparation or an
+/// accepted run frame makes it stale, like the prepared spatial fields.
+fn prepared_energy_source_is_current(
+    current: &crate::types::SessionStateResponse, quantity: &str,
+    raw: &Value, provenance: &Value,
+) -> bool {
+    let Some(preparation) = current.simulation_preparation.as_ref() else { return false };
+    provenance.get("preparation_id").and_then(Value::as_str) == Some(preparation.preparation_id.as_str())
+        && crate::session::latest_field_source_is_qualified(current, quantity, raw)
+}
+
+fn accepted_energy_source_matches(
+    current: &crate::types::SessionStateResponse, provenance: &Value,
+) -> Option<()> {
     let source: fullmag_quantities::AcceptedStateRef = serde_json::from_value(provenance.get("accepted_state_ref")?.clone()).ok()?;
     if current.run.as_ref()?.run_id != source.id.run_id { return None; }
     let m = current.latest_fields.get("m")?;
@@ -333,9 +360,7 @@ pub(crate) fn current_global_energy(
     let input: fullmag_authoring::SceneExecutionInputIdentity =
         serde_json::from_value(provenance.get("execution_input")?.clone()).ok()?;
     if input != crate::live_execution_binding::input_identity(current.scene_document.as_ref()?).ok()? { return None; }
-    let values = raw.get("values")?.as_array()?;
-    if values.len() != 1 { return None; }
-    values[0].as_f64().filter(|value| value.is_finite())
+    Some(())
 }
 
 /// Current-energy consumers use the existing resource shape. Solver history

@@ -1,5 +1,10 @@
 # Refaktoryzacja widoku 2D i monitorów planarnych — audyt oraz plan implementacji
 
+> **Status: superseded (2026-10-27).** Otwarte pozycje tego planu przeniesiono do
+> `docs/plans/active/viewport-2d-mumax-parity-2026-10-27/05-plan-wdrozenia.md`;
+> jedynym ledgerem statusu jest `docs/status/2d-slice-capabilities.md`. Checkboxy
+> poniżej są historyczne i nie są dowodem działania.
+
 > **Status dokumentu:** plan wykonawczy po audycie kodu; nie jest potwierdzeniem kwalifikacji produkcyjnej.
 >
 > **Stan źródeł:** Fullmag `4474f035c9a6b051df7f444551dcb4bd2642000a`, A‑MuMax `03c9bf19a5266e64db5658d6d118db10a6a4c78f`, 2026-08-12.

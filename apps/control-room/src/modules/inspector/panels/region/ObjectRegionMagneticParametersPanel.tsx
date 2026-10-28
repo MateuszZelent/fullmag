@@ -45,7 +45,7 @@ import {
   defaultMaterialFieldDraft,
   isEditableMaterialField,
   materialFieldDraftFromAssignment,
-  materialFieldDraftKey,
+  materialFieldDraftKey as materialFieldAssignmentsKey,
   materialFieldRealizationRows,
   materialFieldFromDraft,
   MATERIAL_FIELD_PARAMETERS,
@@ -195,7 +195,7 @@ function useObjectRegionMagneticParametersPanelView({
       ).length,
     [model.regionId, objectMaterialFields],
   );
-  const fieldDraftKey = materialFieldDraftKey(editableRegionAssignments);
+  const fieldDraftKey = materialFieldAssignmentsKey(editableRegionAssignments);
   const baseFieldDrafts = useMemo(
     () =>
       editableRegionAssignments.flatMap((assignment) => {

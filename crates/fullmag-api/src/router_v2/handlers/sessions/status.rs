@@ -382,13 +382,29 @@ pub(crate) fn build_live_status(
         transport_authoring: Some(crate::router_v2::handlers::transport_authoring_policy::transport_authoring_capabilities()),
     };
 
-    let energies = EnergySummary {
-        total: latest.map(|s| s.e_total),
-        exchange: latest.map(|s| s.e_ex),
-        demag: latest.map(|s| s.e_demag),
-        zeeman: latest.map(|s| s.e_ext),
-        anisotropy: latest.map(|s| s.e_ani),
-        dmi: latest.map(|s| s.e_dmi),
+    // Before the first physical step the source-qualified current observation
+    // (for example the prepared state before Compute) supplies the energies.
+    let observation = latest
+        .is_none()
+        .then(|| crate::accepted_field_materialization::current_energy_observation(snapshot))
+        .flatten();
+    let energies = match observation {
+        Some(observation) => EnergySummary {
+            total: Some(observation.total),
+            exchange: Some(observation.exchange),
+            demag: Some(observation.demag),
+            zeeman: Some(observation.zeeman),
+            anisotropy: Some(observation.anisotropy),
+            dmi: Some(observation.dmi),
+        },
+        None => EnergySummary {
+            total: latest.map(|s| s.e_total),
+            exchange: latest.map(|s| s.e_ex),
+            demag: latest.map(|s| s.e_demag),
+            zeeman: latest.map(|s| s.e_ext),
+            anisotropy: latest.map(|s| s.e_ani),
+            dmi: latest.map(|s| s.e_dmi),
+        },
     };
 
     let uptime = std::time::SystemTime::now()

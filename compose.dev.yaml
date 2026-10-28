@@ -136,6 +136,7 @@ services:
       - /build
     environment:
       FULLMAG_DOCKER_ROLE: backend
+      FULLMAG_AUTO_CACHE_MAINTENANCE: "1"
       FULLMAG_COMPOSE_PROJECT: ${FULLMAG_COMPOSE_PROJECT:-fullmag-master}
       FULLMAG_SOURCE_HOST_ROOT: ${FULLMAG_SOURCE_ROOT:?Select the Windows source checkout}
       FULLMAG_SESSION_STORAGE_PROFILE: windows-folder-v1

@@ -535,7 +535,7 @@ def _validate_helper(
     activation_attempt: str,
     *, phase: str = "activation",
 ) -> tuple[dict[str, object], str]:
-    if phase not in {"activation", "iteration", "browser-qa", "development", "stop-diagnostic"}:
+    if phase not in {"activation", "iteration", "browser-qa", "development", "toolchain", "stop-diagnostic"}:
         raise _fail("Unsupported retained helper phase")
     result = docker_capture("inspect", helper_name, timeout=90)
     try:
@@ -673,9 +673,10 @@ def _validate_activation_receipt(
     source_root: str,
     image_id: str,
     backend_id: str,
+    receipt_raw: bytes | None = None,
 ) -> tuple[dict[str, object], bytes, dict[str, object]]:
     root = "activation/attempts/" + activation_attempt
-    raw = _control_bytes(control, root + "/receipt.json")
+    raw = _control_bytes(control, root + "/receipt.json") if receipt_raw is None else receipt_raw
     if raw is None:
         raise _fail("Unknown activation has no durable receipt")
     receipt = _json(raw, "unknown activation receipt")
@@ -802,6 +803,8 @@ def assert_no_unresolved_activation(
     request_id: str | None = None,
 ) -> None:
     """Block every new activation while one prior activation is unknown."""
+    from docker_volume_offline_reconcile import assert_activation_allowed
+    assert_activation_allowed(control)
     from docker_control_namespace import assert_namespace_activation
     assert_namespace_activation(control, request_id)
     from docker_volume_cancelled_activation_guard import assert_start_allowed

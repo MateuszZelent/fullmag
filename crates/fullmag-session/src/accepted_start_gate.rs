@@ -57,6 +57,12 @@ fn manual_policy(intent: &FmsRunIntent) -> Result<bool> {
         // their existing automatic scheduling semantics.
         return Ok(false);
     };
+    accepted_run_start_policy_is_manual(value)
+}
+
+/// Decode the shared optional RunSpec policy without changing its start grant.
+/// Scheduler and worker must accept the same closed set of modes and fields.
+pub fn accepted_run_start_policy_is_manual(value: &Value) -> Result<bool> {
     let policy: StartPolicy =
         serde_json::from_value(value.clone()).context("invalid accepted run start policy")?;
     if policy.schema_version != POLICY_SCHEMA {
@@ -164,6 +170,23 @@ impl SessionStore {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn shared_start_policy_accepts_both_modes_and_rejects_unknown_contracts() {
+        for (mode, manual) in [("manual", true), ("automatic", false)] {
+            let value = serde_json::json!({"schema_version": POLICY_SCHEMA, "mode": mode});
+            assert_eq!(accepted_run_start_policy_is_manual(&value).unwrap(), manual);
+        }
+        for value in [
+            serde_json::json!({"schema_version": POLICY_SCHEMA, "mode": "other"}),
+            serde_json::json!({"schema_version": "unknown", "mode": "automatic"}),
+            serde_json::json!({"schema_version": POLICY_SCHEMA, "mode": "manual", "grant": true}),
+            serde_json::json!({"schema_version": POLICY_SCHEMA}),
+            serde_json::Value::Null,
+        ] {
+            assert!(accepted_run_start_policy_is_manual(&value).is_err());
+        }
+    }
 
     fn fixture(policy: Value) -> (tempfile::TempDir, SessionStore, FmsRunIntent) {
         let directory = tempfile::tempdir().unwrap();

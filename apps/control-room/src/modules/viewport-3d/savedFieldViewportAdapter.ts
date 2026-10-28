@@ -1,3 +1,4 @@
+import type { SavedFieldPresentation, VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import type { DecodedTopology } from "@/kernel/api/codecs";
 import type { SavedFieldGeometryResource } from "@/kernel/api/apiTypes";
 import {
@@ -7,6 +8,7 @@ import {
 import type { SavedFieldViewportValues } from "@/kernel/resources/savedFieldViewportResources";
 
 import {
+  FULL_VIEWPORT_3D_TARGET_ID,
   buildViewport3DFieldRenderModel,
   buildViewport3DTopologyRenderModel,
   resolveTopologyBounds,
@@ -20,6 +22,8 @@ import type {
   FemManifestRenderDomain,
   Viewport3DMeshPart,
 } from "./viewport3dDomainAdapter";
+import { planViewport3DDerivedWorkItems } from "./model/viewport3DDerivedWorkPlan";
+import { summarizeViewport3DTargetDiagnostics } from "./model/viewport3DTargetDiagnostics";
 import { srgbToLinearChannel } from "./viewport3dColorSpace";
 
 /**
@@ -63,7 +67,7 @@ function savedCarrier(
     fieldCapable: true,
     geometry_id: null,
     id: `saved-domain:${geometry.geometry_manifest.object_ref}`,
-    label: "Saved FEM domain",
+    label: "Saved sampling domain",
     node_count: topology.nodeCount,
     node_start: 0,
     object_id: null,
@@ -142,6 +146,25 @@ function savedFieldVector(
 }
 
 const SAVED_INACTIVE_LINEAR_CHANNEL = srgbToLinearChannel(0.5);
+const savedGlyphColorCache = new WeakMap<Uint32Array, WeakMap<ScalarColorBuffer, Float32Array>>();
+
+function savedGlyphColors(nodes: Uint32Array, buffer: ScalarColorBuffer): Float32Array {
+  let byBuffer = savedGlyphColorCache.get(nodes);
+  if (!byBuffer) {
+    byBuffer = new WeakMap();
+    savedGlyphColorCache.set(nodes, byBuffer);
+  }
+  const cached = byBuffer.get(buffer);
+  if (cached) return cached;
+  const colors = new Float32Array(nodes.length * 3);
+  for (let glyph = 0; glyph < nodes.length; glyph += 1) {
+    const source = nodes[glyph]! * 3;
+    colors.set(buffer.colors.subarray(source, source + 3), glyph * 3);
+  }
+  byBuffer.set(buffer, colors);
+  return colors;
+}
+
 
 function neutralizeScalarColorBuffer(
   buffer: ScalarColorBuffer,
@@ -213,6 +236,9 @@ export function buildSavedFieldViewportSceneModel({
   topology,
   vectorColorMode,
   vectorScale,
+  settings,
+  colorRanges,
+  sceneVectorCap = 2048,
 }: {
   geometry: SavedFieldGeometryResource;
   field: SavedFieldViewportValues;
@@ -221,6 +247,9 @@ export function buildSavedFieldViewportSceneModel({
   topology: DecodedTopology;
   vectorColorMode: string;
   vectorScale: number;
+  settings?: Pick<VisualizationTargetSettings, "shaderColorMode" | "vectorBudget">;
+  colorRanges?: SavedFieldPresentation["colorRanges"];
+  sceneVectorCap?: number;
 }): SavedFieldViewportSceneModel | null {
   if (
     field.representationEvidence !== "not_verified" ||
@@ -253,6 +282,10 @@ export function buildSavedFieldViewportSceneModel({
   const savedRenderVector = savedFieldVector(geometry, field, support);
   if (!savedRenderVector) return null;
   const fieldVector = savedRenderVector.vector;
+  const scalarMode = field.componentCount === 3 ? settings?.shaderColorMode ?? "magnitude" : "magnitude";
+  const vectorBudget = field.componentCount === 3
+    ? Math.max(0, Math.min(settings?.vectorBudget ?? 2048, sceneVectorCap, savedRenderVector.activeNodeIndices.length))
+    : 0;
   const fieldModel = buildViewport3DFieldRenderModel(
     topologyModel,
     fieldVector,
@@ -261,30 +294,54 @@ export function buildSavedFieldViewportSceneModel({
       buildDomainId: field.savedScopeKey,
       buildSessionId: field.savedScopeKey,
       fieldRevision: field.savedScopeKey,
-      fullScalarColorMode: "magnitude",
+      fullScalarColorMode: scalarMode,
       fullScalarColorPalette: palette,
-      fullVectorBudget: field.componentCount === 3
-        ? Math.min(2048, field.nodeCount)
-        : 0,
-      partScalarColorModes: new Map([[carrier.id, "magnitude"]]),
+      fullVectorBudget: vectorBudget,
+      partScalarColorModes: new Map([[carrier.id, scalarMode]]),
       partScalarColorPalettes: new Map([[carrier.id, palette]]),
       partVectorBudgets: new Map([
-        [carrier.id, field.componentCount === 3 ? Math.min(2048, field.nodeCount) : 0],
+        [carrier.id, vectorBudget],
       ]),
       partVectorScopes: new Map([[carrier.id, "full"]]),
-      scalarColorModes: new Set(["magnitude"]),
+      scalarColorModes: new Set([scalarMode]),
       scalarColorPalette: palette,
       scalarColorsVisible: true,
+      scalarRangesByMode: colorRanges ? new Map(Object.entries(colorRanges).map(([mode, range]) =>
+        [mode, { min: range.minimum, max: range.maximum }])) : undefined,
       topologyRevision: field.savedScopeKey,
       vectorColorMode: quantityVectorColorMode,
     },
   );
   if (fieldModel) {
+    // The saved fallback draws the owned carrier, including sparse support.
+    // Keep its explicit node mapping rather than pretending missing samples are zero.
+    const ownedPass = fieldModel.targetPasses.get(carrier.id);
+    const fullPass = fieldModel.targetPasses.get(FULL_VIEWPORT_3D_TARGET_ID);
+    if (ownedPass && fullPass && fieldVector.indexing === "explicit_node_indices") {
+      fullPass.fieldBufferState = ownedPass.fieldBufferState;
+      fullPass.vectors = { ...ownedPass.vectors, passId: `${FULL_VIEWPORT_3D_TARGET_ID}:vector-glyph` };
+      fieldModel.fullVectorBuild = ownedPass.vectors.buildReference;
+      fieldModel.fullVectorSegments = ownedPass.vectors.segments;
+      fieldModel.derivedWorkItems = planViewport3DDerivedWorkItems({ targetPasses: fieldModel.targetPasses });
+      fieldModel.targetDiagnostics = summarizeViewport3DTargetDiagnostics({
+        derivedWorkItems: fieldModel.derivedWorkItems, targetPasses: fieldModel.targetPasses,
+      });
+    }
     maskSavedFieldColors(
       fieldModel,
       savedRenderVector.activeNodeMask,
       topology.nodeCount,
     );
+    const vectorColors = fieldModel.scalarColorsByMode.get(quantityVectorColorMode);
+    if (vectorColors?.colors.length === topology.nodeCount * 3) {
+      for (const pass of fieldModel.targetPasses.values()) {
+        const nodes = pass.vectors.nodeIndices;
+        if (!nodes || nodes.length * 7 !== pass.vectors.segments?.length) continue;
+        // Use the physical values, range and palette shared with the legend.
+        // Segment endpoints are display geometry and carry no field units.
+        pass.vectors.glyphColors = savedGlyphColors(nodes, vectorColors);
+      }
+    }
   }
 
   const femDomain: FemManifestRenderDomain = {

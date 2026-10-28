@@ -3,6 +3,7 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import type { FieldMapCapability, PlanarInspectorCapabilities } from "@/kernel/visualization/planarCapabilities";
+import type { PlanarResolutionPreset } from "@/kernel/visualization/planarSectionModel";
 import { Button } from "@/shared/ui/Button";
 import { ArrowRightLeft, Crosshair, Eye, ScanLine, SquareDashed } from "lucide-react";
 
@@ -34,10 +35,12 @@ function reason(capability: FieldMapCapability): string | undefined {
     case "occupancy_mask_unavailable": return "Sample points require the canonical occupancy mask.";
     case "planar_meta_unavailable": return "Planar sample metadata is not materialized.";
     case "boundaries_not_exact": return "Exact boundaries are unavailable for this overlay descriptor.";
-    case "fdm_scope_not_supported": return "Structured FDM sampling does not support mesh-part or airbox scope.";
+    case "fdm_scope_not_supported": return "Structured FDM sampling does not support mesh-part scope.";
+    case "fem_layer_scope_not_supported": return "Native layer scope requires an FDM multilayer carrier.";
     case "quantity_not_vector": return "The selected scalar quantity has no vector components.";
     case "quantity_not_spatial": return "The selected quantity is not spatially sampleable.";
-    default: return "Unavailable";
+    case "airbox_carrier_unresolved": return "Waiting for the backend to resolve the Airbox carrier.";
+    default: return capability.reasonCode ? `Unavailable: ${capability.reasonCode}` : "Unavailable";
   }
 }
 
@@ -234,17 +237,21 @@ export function PlanarQualitySection({
   interaction,
   quality,
   resolution,
+  resolutionPresets = [],
   patch,
 }: {
   capability: FieldMapCapability;
   interaction: Planar["interaction"];
   quality: Planar["quality"];
   resolution: Planar["resolution"];
+  resolutionPresets?: readonly PlanarResolutionPreset[];
   patch: (next: PlanarPatch) => void;
 }) {
   const hint = capability.enabled ? undefined : capability.reasonCode === "quantity_not_spatial" ? "The selected quantity is not spatially sampleable." : capability.reasonCode?.replaceAll("_", " ");
+  const activePreset = resolutionPresets.find((preset) => preset.width === resolution.width && preset.height === resolution.height);
   return <InspectorGroup collapsible defaultOpen={false} title="Sampling & Resolution">
     <FormField disabled={!capability.enabled} hint={hint} label="Render quality" type="select" value={quality} onChange={(event) => patch({ quality: event.currentTarget.value as Planar["quality"] })}>{PLANAR_QUALITY_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
+    {resolutionPresets.length > 0 ? <FormField disabled={!capability.enabled} hint="Pixels covering whole cells are exact area averages." label="Grid resolution" type="select" value={activePreset ? `${activePreset.width}x${activePreset.height}` : "custom"} onChange={(event) => { const preset = resolutionPresets.find((item) => `${item.width}x${item.height}` === event.currentTarget.value); if (preset) patch(planarResolutionPatch(resolution, { width: preset.width, height: preset.height })); }}>{activePreset ? null : <option value="custom">Custom ({resolution.width} × {resolution.height})</option>}{resolutionPresets.map((preset) => <option key={preset.label} value={`${preset.width}x${preset.height}`}>{preset.label}</option>)}</FormField> : null}
     <FormField disabled={!capability.enabled} hint={hint} label="Resolution width" max="2048" min="16" step="1" type="number" value={resolution.width} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value >= 16 && value <= 2048) patch(planarResolutionPatch(resolution, { width: value })); }} />
     <FormField disabled={!capability.enabled} hint={hint} label="Resolution height" max="2048" min="16" step="1" type="number" value={resolution.height} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value >= 16 && value <= 2048) patch(planarResolutionPatch(resolution, { height: value })); }} />
     <FormField disabled={!capability.enabled} hint={hint} label="Interaction zoom" min="0.01" step="0.1" type="number" value={interaction.zoom} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value > 0) patch(planarInteractionPatch(interaction, { zoom: value })); }} />
