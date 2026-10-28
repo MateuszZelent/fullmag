@@ -5043,13 +5043,13 @@ export function useViewport3DSceneModel({
         max: configuredMax / denominator,
         min: configuredMin / denominator,
       };
-      for (const scalarMode of enabledScalarRangeModes(scalarRangeModeFlags)) {
+      for (const scalarMode of analysisFieldIntent ? ["magnitude", "x", "y", "z"] : enabledScalarRangeModes(scalarRangeModeFlags)) {
         entries.push([scalarMode, range]);
       }
     } else if (mode === "symmetric" && configuredMax != null) {
       const extent = Math.abs(configuredMax) /
         (analysisFieldIntent ? 1 : Math.max(gain, Number.EPSILON));
-      for (const scalarMode of enabledScalarRangeModes(scalarRangeModeFlags)) {
+      for (const scalarMode of analysisFieldIntent ? ["magnitude", "x", "y", "z"] : enabledScalarRangeModes(scalarRangeModeFlags)) {
         entries.push([scalarMode, { max: extent, min: -extent }]);
       }
     }

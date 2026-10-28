@@ -339,3 +339,9 @@ zastępowane przez ten wzorzec.
 ### Implemented Results UX slice — 2026-10-28
 
 The eigenmode inspector uses Overview (f, physical k, field action), Data (observables and temporal convention), Provenance (owner/revision) and Diagnostics (residual and qualification scope). Collection inspectors describe their published studies, not a nonexistent single artifact. Appearance is editable only for the same run/stage/revision/sample/mode as the active field intent. Chart and explorer selections share physical labels, while stable machine IDs remain unchanged. These changes do not establish spectrum completeness or scientific convergence. See `docs/audits/2026-10-28-eigensolve-results-ux-implementation.md` for verification boundaries.
+
+### Mode selection and playback corrections (2026-10-28)
+
+The mode inspector offers wavevector and frequency choices. Choices are keyed by sample/raw mode identity, never by rounded labels. Search and pages of 32 bound visible choices; coincident frequency labels retain an ID discriminator. Switching k selects its lowest returned frequency and explicitly does not claim branch tracking. The Explorer is a preview of at most 32 modal fields; the inspector addresses the entire returned spectrum.
+
+Animate with an explicit target resolves that target's complete owner before changing playback. It must not animate the previous field on failure. Phase/speed/reverse/loop controls reuse the existing visualization controller; visual cycles per second do not modify eigenfrequencies. Manual/symmetric range controls publish both bounds atomically, with component overrides applied to the modal field.

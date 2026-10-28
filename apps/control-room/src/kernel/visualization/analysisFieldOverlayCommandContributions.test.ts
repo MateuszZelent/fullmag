@@ -1550,6 +1550,36 @@ describe("analysis field overlay commands", () => {
     });
   });
 
+  it("animates the explicitly selected mode instead of the previously active field", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const oldId = "analysis:eigen:sample-0000:mode-0002";
+    const nextId = "analysis:eigen:sample-0000:mode-0003";
+    overlay.set({ fieldId: oldId, modeIntent: createModeFieldOverlayIntent(canonicalEigenRef(oldId))!,
+      label: "Previous", source: "eigen-mode", query: { view: "real" } });
+    const result = await commands.execute("analysis.frequency-domain.set-3d-animation",
+      { analysisFieldOverlay: overlay, selection: canonicalEigenSelection(nextId), source: "test" },
+      { fieldId: nextId, source: "eigen-mode", animatePhase: true, animationRateHz: 1 });
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.fieldId).toBe(nextId);
+    expect(overlay.getSnapshot()?.modeIntent?.fieldId).toBe(nextId);
+    expect(overlay.getSnapshot()?.animation?.animatePhase).toBe(true);
+  });
+
+  it("does not animate a previous field when the explicit target lacks an owner", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const oldId = "analysis:eigen:sample-0000:mode-0002";
+    overlay.set({ fieldId: oldId, modeIntent: createModeFieldOverlayIntent(canonicalEigenRef(oldId))!,
+      label: "Previous", source: "eigen-mode", query: { view: "real" } });
+    const original = overlay.getSnapshot();
+    const result = await commands.execute("analysis.frequency-domain.set-3d-animation",
+      { analysisFieldOverlay: overlay, source: "test" },
+      { fieldId: "analysis:eigen:sample-0007:mode-0000", source: "eigen-mode", animatePhase: true });
+    expect(result.status).toBe("failed");
+    expect(overlay.getSnapshot()).toBe(original);
+  });
+
   it("rejects eigen mode phase animation when the active overlay is a response field", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();

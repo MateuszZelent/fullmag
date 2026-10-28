@@ -698,7 +698,12 @@ function analysisFieldTargetNodes(
     | "results.resonance.modal.mode",
 ): ExplorerNode[] {
   const classification = classifyFrequencyDomainResult(entry);
-  return (entry.analysisFieldTargets ?? []).map((target) =>
+  // The inspector provides paged k/f selection for the full collection.
+  // Keep the tree a bounded preview, not an ever-growing mode table.
+  const targets = entry.analysisFieldTargets ?? [];
+  const visibleTargets = kind === "results.dispersion.modal.mode_at_k" || kind === "results.resonance.modal.mode"
+    ? targets.slice(0, 32) : targets;
+  return visibleTargets.map((target) =>
     node(
       `${parentId}:${target.source}:${key(target.fieldId)}`,
       kind,
@@ -892,6 +897,7 @@ function kResolvedStage(
     if (entry.products.modeShapes) {
       const parentId = `${stageId}:modes-at-k`;
       children.push(leaf(stageId, "modes-at-k", "results.dispersion.modal.modes_at_k", "Modes at k", entry, {
+        badge: `${entry.analysisFieldTargets?.length ?? 0} fields · choose k/f`,
         children: analysisFieldTargetNodes(
           parentId,
           entry,

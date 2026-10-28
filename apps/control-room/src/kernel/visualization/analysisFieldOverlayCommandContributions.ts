@@ -770,9 +770,12 @@ function setOverlayAnimationCommand(options: {
           message: options.missingMessage,
         };
       }
-      const overlay =
-        existingOverlay ??
-        overlayStateFromContext(context, options.defaultSource);
+      // An explicit target must resolve its own owner. Never animate a stale
+      // active field merely because another result has already been displayed.
+      const explicitTarget = stringValue(overlayCommandInput(context).fieldId);
+      const overlay = explicitTarget
+        ? overlayStateFromContext(context, options.defaultSource)
+        : existingOverlay ?? overlayStateFromContext(context, options.defaultSource);
       if (!overlay) {
         return {
           status: "failed",
@@ -803,7 +806,7 @@ function setOverlayAnimationCommand(options: {
             }
           : overlay.query,
       };
-      if (existingOverlay) {
+      if (existingOverlay && !explicitTarget) {
         controller.update(nextOverlay);
       } else {
         controller.set(nextOverlay);

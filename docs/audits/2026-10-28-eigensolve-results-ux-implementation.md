@@ -61,3 +61,11 @@ Baza dowodów:
 Harnessy w repo: `scripts/verify_eigensolve_results_ux.mjs` i `scripts/verify_eigensolve_modal_workbench_ui.mjs`. Pierwszy przyjmuje `FULLMAG_UI_URL`, `FULLMAG_UX_EVIDENCE`, `FULLMAG_PLAYWRIGHT_MODULE`, `FULLMAG_UX_SCREENSHOTS=0` oraz `FULLMAG_UX_MISSING_FIELD=1` dla testu braku metadanych. Drugi wymaga `--run` i obsługuje `--samples`, `--output`, `--screenshots`. Są to lane'y istniejącego benchmarku signed-DE, nie uniwersalny kwalifikator solvera.
 
 Nie zmieniono progu COMSOL 0,5%, demagu, operatorów ani danych fizycznych. Zgodność renderowania i residual nie oznacza zbieżności siatki/airboxu, kompletności widma ani zakończenia kwalifikacji naukowej.
+
+## Kontynuacja R6 — kontrolki i aktywny solver
+
+Zakres 2026-10-28: (1) odtworzenie animacji i skali, (2) poprawki oraz selektor k/f, (3) rzeczywisty przebieg solvera podczas float/move/resize/hide/dock, (4) CI i raport. Stan: W TOKU.
+
+Odtworzono: Animate uruchamia poprzednio aktywny mod mimo zaznaczenia Γ; po zmianie maksimum skali ręcznej zakres renderera i screenshot pozostają identyczne. Ustalono dwie przyczyny zakresu: brak atomowego zapisu obu końców oraz ograniczanie override do składowych globalnego pola zamiast składowej aktywnego modu. Dowód: `mode-controls-r6-20261028/baseline/probe.json` w katalogu wizualizacji wątku.
+
+Wybór setek wyników: inspektor grupuje po próbce k, następnie pokazuje częstotliwości w tej próbce; filtrowanie i strony po 32 pozycje, odrębne ID dla degeneracji. Zmiana k wybiera najniższą zwróconą częstotliwość, nie obiecuje śledzenia gałęzi. Drzewo pokazuje najwyżej 32 pola, pełny zbiór pozostaje dostępny przez inspektor.

@@ -244,7 +244,7 @@ export function useFrequencyDomainModeDisplaySettings({
     },
     setColorRangeMode: (value: string) => {
       const next = value === "manual" || value === "symmetric" ? value : "auto";
-      updateActiveModeAppearance({ colorRangeMode: next });
+      updateActiveModeAppearance({ colorRangeMode: next, colorRangeMin, colorRangeMax });
     },
     setColorRangeMin: (value: string) => {
       updateActiveModeAppearance({ colorRangeMin: finiteNumber(value) ?? colorRangeMin });
@@ -346,6 +346,8 @@ export function useFrequencyDomainModeDisplaySettings({
             ...activeAnalysisFieldOverlay.query,
             view: nextView,
           },
+          ...(nextView !== "phase_rotated_real" && activeAnalysisFieldOverlay.animation
+            ? { animation: { ...activeAnalysisFieldOverlay.animation, animatePhase: false } } : {}),
         });
       } else if (activation?.fieldId) {
         void kernel.commands

@@ -1,17 +1,14 @@
 "use client";
 
-import { Play, RotateCw } from "lucide-react";
+import { Play, Pause } from "lucide-react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   useFrequencyDomainEigenModeFieldMetaResource,
   useFrequencyDomainEigenModeResource,
-  useFrequencyDomainEigenSpectrumResource,
-  useFrequencyDomainManifestResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
-  buildEigenSpectrumChartModel,
   eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -29,6 +26,8 @@ import {
   type ModalDampingObservables,
 } from "@/shared/domain/analysis/modalDampingObservables";
 import { Button } from "@/shared/ui/Button";
+import { EigenModePicker, useEigenModeBrowserData } from "./EigenModePicker";
+import { ModeVisualizationPhaseControl } from "../ModeVisualizationInspectorPanel";
 
 import { useInspectorActiveTab } from "../../InspectorTabState";
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -80,6 +79,7 @@ export function buildEigenModeIdentityViewModel(input: {
 export function EigenModeInspectorPanel({
   selection,
 }: InspectorPanelProps) {
+  const kernel = useKernel();
   const summary = useEigenModeSummary(selection);
   const activeTab = useInspectorActiveTab();
   const modeDisplaySettings = useFrequencyDomainModeDisplaySettings({
@@ -102,14 +102,34 @@ export function EigenModeInspectorPanel({
       data-inspector-surface="eigen-mode"
     >
       {activeTab === "overview" ? <>
+        <EigenModePicker samples={summary.samples} selection={selection} />
         <InspectorGroup title="Selected eigenmode">
-          <FieldRow label="Frequency" value={summary.frequencyDisplay} />
-          <FieldRow label="Wavevector" value={summary.wavevectorLabel} />
           <FieldRow label="Mode field" value={summary.field3DReady ? "Available" : summary.field3DStatus} />
           <FieldRow label="3D field request" value={sameModeResultOwner(modeDisplaySettings.activeAnalysisFieldOverlay?.modeIntent, summary.owner) ? "Selected mode requested; rendering status is shown in the viewport" : modeDisplaySettings.activeAnalysisFieldOverlay ? "Another mode is active. Show this mode to replace it." : "Not activated"} />
           <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
         </InspectorGroup>
         <p className="fm-result-inspector__help">Select a point on the dispersion chart, then show its field in 3D. Field amplitude is normalized, not a driven-wave amplitude.</p>
+        <InspectorGroup title="Phase & playback" collapsible defaultOpen={false}>
+          <ModeVisualizationPhaseControl
+            key={summary.fieldId}
+            disabled={!summary.field3DReady || !sameModeResultOwner(modeDisplaySettings.activeAnalysisFieldOverlay?.modeIntent, summary.owner)}
+            animate={modeDisplaySettings.activeAnalysisFieldOverlay?.animation?.animatePhase ?? false}
+            animationDirection={modeDisplaySettings.activeAnalysisFieldOverlay?.animation?.direction ?? 1}
+            animationLoop={modeDisplaySettings.activeAnalysisFieldOverlay?.animation?.loop ?? true}
+            animationRateHz={modeDisplaySettings.activeAnalysisFieldOverlay?.animation?.animationRateHz || 1}
+            phaseRad={String(modeDisplaySettings.activeAnalysisFieldOverlay?.visualizationPhaseRad ?? 0)}
+            onAnimationChange={(animation) => kernel.analysisFieldOverlay.update({
+              animation,
+              query: { ...modeDisplaySettings.activeAnalysisFieldOverlay?.query, view: "phase_rotated_real" },
+            })}
+            onSetPhase={(value) => kernel.analysisFieldOverlay.update({
+              animation: { ...modeDisplaySettings.activeAnalysisFieldOverlay?.animation, animatePhase: false, animationRateHz: modeDisplaySettings.activeAnalysisFieldOverlay?.animation?.animationRateHz || 1 },
+              visualizationPhaseRad: Number(value),
+              query: { ...modeDisplaySettings.activeAnalysisFieldOverlay?.query, view: "phase_rotated_real" },
+            })}
+          />
+          <p className="fm-result-inspector__help">Playback speed is visual only. Choose a signed component or vectors to see precession; magnitude can remain constant.</p>
+        </InspectorGroup>
         <InspectorGroup title="Appearance" collapsible defaultOpen={false}>
           {!sameModeResultOwner(modeDisplaySettings.activeAnalysisFieldOverlay?.modeIntent, summary.owner) ? <p className="fm-result-inspector__help">Show this mode in 3D before changing its appearance.</p> : null}
           <FrequencyDomainModeDisplayControls
@@ -233,10 +253,11 @@ function EigenMode3DActions({
       }),
       {
         animatePhase: animate ? true : undefined,
-        animationRateHz: animate ? 1 : undefined,
+        animationRateHz: animate ? settings.activeAnalysisFieldOverlay?.animation?.animationRateHz || 1 : undefined,
         fieldId: summary.fieldId,
         label: summary.physicalLabel,
-        phaseRad: 0,
+        phaseRad: sameModeResultOwner(settings.activeAnalysisFieldOverlay?.modeIntent, summary.owner)
+          ? settings.activeAnalysisFieldOverlay?.visualizationPhaseRad ?? 0 : 0,
         source: "eigen-mode",
         view: animate ? "phase_rotated_real" : view,
       },
@@ -274,7 +295,7 @@ function EigenMode3DActions({
         variant="secondary"
         onClick={stopAnimation}
       >
-        <RotateCw aria-hidden="true" size={13} />
+        <Pause aria-hidden="true" size={13} />
         <span>Stop</span>
       </Button>
       <Button size="sm" variant="secondary" onClick={() => kernel.layout.setActiveViewportMainModule("analysis-plots")}>Back to chart</Button>
@@ -287,13 +308,12 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
   const sampleIndex = ref?.sampleIndex ?? null;
   const modeIndex = ref?.modeIndex ?? null;
-  const spectrum = useFrequencyDomainEigenSpectrumResource();
+  const { samples, spectrumModel, manifest } = useEigenModeBrowserData();
   const eigenMode = useFrequencyDomainEigenModeResource(sampleIndex, modeIndex);
   const fieldMeta = useFrequencyDomainEigenModeFieldMetaResource(
     sampleIndex,
     modeIndex,
   );
-  const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const spectrumPoint = spectrumModel.points.find(
     (point) =>
       point.sampleIndex === sampleIndex && point.rawModeIndex === modeIndex,
@@ -344,7 +364,6 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
   const fieldMetaRecord = record(fieldMeta.data);
 
 
-  const manifest = useFrequencyDomainManifestResource();
   const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const physics = record(manifestPayload?.physics);
   const rawPhasorConvention = resolveModalPhasorConvention(modePayload, physics);
@@ -369,6 +388,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
           : "mode field metadata not available";
 
   return {
+    samples,
     owner: ref,
     wavevectorLabel,
     certificationTolerance: formatNumberOrUnavailable(finiteNumber(certificate?.certification_tolerance)),
