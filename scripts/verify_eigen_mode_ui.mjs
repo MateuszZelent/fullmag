@@ -1199,6 +1199,10 @@ async function main() {
     throw error;
   } finally {
     if (page) {
+      report.ui.surfaceBindings = await page.evaluate(() =>
+        (window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.()?.streams?.timeline ?? [])
+          .filter((entry) => entry.name === "viewport-3d.mode-surface-binding").slice(-16),
+      ).catch((error) => ({ error: String(error) }));
       report.ui.modeControllerDiagnostics = await page.evaluate(() => {
         const artifact = window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.();
         return (artifact?.streams?.timeline ?? []).filter((entry) =>

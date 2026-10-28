@@ -33,5 +33,13 @@
     "complex_values_each": 5127,
     "scope": "existing deployed ga63 runtime, not file transport deployment"
   },
-  "cold_import": "not_verified"
+  "cold_import": "replace_project HTTP 200, reconciled without replay",
+  "frontend_latest": {
+    "sha": "e37cb2b520753e4212d649db844f9b5c7ea0bb6e",
+    "run": 40610859641,
+    "status": "success"
+  },
+  "visualization_only_import": "HTTP 200, exact 15-point Python parity",
+  "final_runtime": "unavailable: Docker daemon not responding",
+  "final_strict": "not verified; abs binding timeout followed by unavailable Docker/API"
 }
