@@ -1,0 +1,188 @@
+{
+  "source_commit": "7fbe626bd1b7e3e2e69c09037fcb480571b0710c",
+  "scope": "viewport-main drag-to-edge snap docking on completed FEM k10 result; no solver submissions; Chromium SwiftShader",
+  "ci": {
+    "url": "https://github.com/MateuszZelent/fullmag/actions/runs/40781408280",
+    "conclusion": "success",
+    "test_files": 62,
+    "tests_passed": 1445,
+    "typecheck": "PASS",
+    "architecture_hygiene": "PASS",
+    "react_doctor_score": 83,
+    "react_doctor_issues": 12
+  },
+  "browser": {
+    "capturedAt": "2026-10-28T22:35:09.561Z",
+    "origin": "http://localhost:3217",
+    "runId": "run-live-bf62fc7d346d46ad1cca97c205d6d59a96eeca8f708d37fefacf09dd5cdb5c01",
+    "pass": true,
+    "windowActions": [
+      {
+        "name": "preview left",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 347,
+          "h": 477
+        }
+      },
+      {
+        "name": "dock left",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 349,
+          "h": 479
+        }
+      },
+      {
+        "name": "preview right",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 347,
+          "h": 477
+        }
+      },
+      {
+        "name": "dock right",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 349,
+          "h": 479
+        }
+      },
+      {
+        "name": "preview top",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 347,
+          "h": 477
+        }
+      },
+      {
+        "name": "dock top",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 703,
+          "h": 220
+        }
+      },
+      {
+        "name": "preview bottom",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 701,
+          "h": 218
+        }
+      },
+      {
+        "name": "dock bottom",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 703,
+          "h": 220
+        }
+      },
+      {
+        "name": "cancel with Escape",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 703,
+          "h": 220
+        }
+      },
+      {
+        "name": "interior drop floats",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 701,
+          "h": 218
+        }
+      },
+      {
+        "name": "dock both floating peers",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 349,
+          "h": 479
+        }
+      }
+    ],
+    "errors": [],
+    "blockedMutations": []
+  },
+  "artifacts": [
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/probe.json",
+      "sha256": "ced28de7e028d201fc1bf86d27ef9719075e1fb371dbc4bd3bb7a50477787b45"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/preview-left.png",
+      "sha256": "8610f92af2491a59716dd2086967984bc62961666d7bfe2478e273f066245f9f"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/preview-bottom.png",
+      "sha256": "273fcd870b3d16e4828e9589684dbfaaad7d5de4d0ed412943c4197d4b5baf77"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/docked-right.png",
+      "sha256": "4dfaa776daebd59bd58e2973ebd5a90562723feec53a246dda67b5030eeeb61c"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/docked-bottom.png",
+      "sha256": "89a4fb329c9f3924a50e5964d28d26cb158487f14c13c8c8eb242265f4927331"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/snap-final.png",
+      "sha256": "1c5f6c2db9d8296672c3390c4eddc65642d83c3a2db6cc3d76ab1878e3daa80e"
+    }
+  ],
+  "source_files": [
+    {
+      "path": "apps/control-room/src/kernel/layout/ViewportTabHost.tsx",
+      "sha256": "f739a282e318af816eaf68b8b5861864c3aff47cf1d2aae8e9d0f491cd53464f"
+    },
+    {
+      "path": "apps/control-room/src/kernel/layout/viewportDocking.ts",
+      "sha256": "5dcaf7fdde3530d192b8b13ba121cf19d39cd3bd6b08d1bdeca7f6699b0265ae"
+    },
+    {
+      "path": "apps/control-room/src/shared/ui/PanelFrame.tsx",
+      "sha256": "6f576f392bd793507ac6c84c3e72260384d5f8e7cf49ce3604c0b2f919d964ec"
+    },
+    {
+      "path": "apps/control-room/src/shared/ui/Resizable.tsx",
+      "sha256": "10df07c76459720fda14fb90816f338f39ecc7e0339a8fcc6eefcd17b74675b5"
+    },
+    {
+      "path": "apps/control-room/src/design/styles/slots.css",
+      "sha256": "8ac436420edcfc33cea0646aebda8577c4e26ebf0e217a1a951dc3ce35e1bad0"
+    },
+    {
+      "path": "scripts/verify_eigensolve_snap_ui.mjs",
+      "sha256": "3deae7e7bfe0ec77c12ecedfb283f179aa221e88b353494e58bdf27a1665a441"
+    }
+  ],
+  "foreign_wip": {
+    "preserved_file_count": 14,
+    "hashes_unchanged": true
+  },
+  "not_verified": [
+    "new layout during active solver",
+    "hardware GPU qualification",
+    "new scientific dispersion qualification"
+  ],
+  "outside_scope": [
+    "arbitrary nested multi-group docking",
+    "new snap docking of Explorer/Inspector/Diagnostics"
+  ]
+}
