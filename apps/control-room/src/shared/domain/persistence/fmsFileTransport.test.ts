@@ -3,10 +3,10 @@ import { defaultFmsRestoreMode, fmsFileSizeError, MAX_FMS_FILE_BYTES } from "./f
 
 describe("FMS file import policy", () => {
   it.each([
-    ["exact_resume", "resume"],
-    ["logical_resume", "resume"],
+    ["exact_resume", "visualization_only"],
+    ["logical_resume", "visualization_only"],
     ["initial_condition_import", "visualization_only"],
-    ["config_only", "replace_project"],
+    ["config_only", "visualization_only"],
   ])("maps archive class %s to operation %s", (classification, mode) => {
     expect(defaultFmsRestoreMode(classification)).toBe(mode);
   });

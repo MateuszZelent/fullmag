@@ -59,3 +59,9 @@ Dalszy przegląd wykazał, że `CommandRegistry.captureSessionContext` zawsze za
 ### Rzeczywiste wdrożenie konfiguracji proxy
 
 Kontener ma Next 16.3.8, lecz restart retained zachował historyczny seed `next.config.ts` bez nowych limitów. Inspekcja rzeczywistego pliku potwierdziła komunikat obcięcia do 10 MB. Zmiana samego `src` i restart backendu nie odświeża zamrożonej konfiguracji frontendu. `_frontend` używał klucza zależności/toolpins, a więc zmiana konfiguracji trafiała do tego samego niezmiennego workspace. Klucz v2 dodaje manifest plików seed (nie commit ani bieżące src), dzięki czemu kontrolowane recreate może wybrać nowy frontend workspace bez nadpisywania starego. Poprzedni cache, wyniki i named volumes zostają zachowane. Regresja sprawdza zmianę konfiguracji/dependencies/tools/grupy oraz reuse przy samym commicie i przestawieniu kolejności manifestu. Brak lokalnej kompilacji testów.
+
+### Klasyfikacja checkpointu a otwieranie wyników
+
+Rzeczywiste FMS ma `config_only`, ponieważ klasyfikator nie znajduje primary/restart checkpoint payload; nie opisuje to obecności zapisanych modów. Pierwszy udany import przez menu użył replace_project (HTTP 200), a odczyt API potwierdził ten sam run i generację widma oraz katalog `session-store/imports/...`. Obserwator utracił response body podczas nawigacji (inspector cache eviction); nie powtarzano POST i uzgodniono wynik przez API. Obie nie-resume ścieżki importu przechodzą ten sam `normalize_imported_read_only`.
+
+Korekta domyślnego zachowania: rozpoznana klasa archiwum domyślnie daje visualization_only, zgodnie z domyślną operacją API. Sam brak checkpointu nie może wybierać replace_project, a jego obecność nie powinna automatycznie żądać nieobsługiwanego resume. Jawny wybór w formularzu nadal ma pierwszeństwo; nieznana klasa nadal jest odrzucana. Nowy rzeczywisty odbiór będzie jawnie weryfikował query visualization_only.

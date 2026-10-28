@@ -19,11 +19,11 @@ export function defaultFmsRestoreMode(restoreClass: string): FmsRestoreMode {
   switch (restoreClass) {
     case "exact_resume":
     case "logical_resume":
-      return "resume";
     case "initial_condition_import":
-      return "visualization_only";
     case "config_only":
-      return "replace_project";
+      // Checkpoint classification does not describe the stored modal results.
+      // Opening an archive must not implicitly request checkpoint execution.
+      return "visualization_only";
     default:
       throw new Error(`Unsupported archive restore class: ${restoreClass}`);
   }
