@@ -3,7 +3,7 @@
 import { Columns2, Rows2, ArrowLeftRight, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
-import { PanelChrome, PanelFrame, type PanelMode } from "@/shared/ui/PanelFrame";
+import { PanelChrome, PanelFrame, usePanelChromeControls, type PanelMode } from "@/shared/ui/PanelFrame";
 import { Button } from "@/shared/ui/Button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/shared/ui/Resizable";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
@@ -44,6 +44,15 @@ function DockAnchor({ id, surface, onBounds }: {
   return <div ref={anchor} className="fm-viewport-dock-anchor" data-dock-anchor={id} aria-hidden="true" />;
 }
 
+function WindowChrome({ title, onHide }: { title: string; onHide: () => void }) {
+  const chrome = usePanelChromeControls();
+  return <PanelChrome>
+    <span className="fm-panel-chrome__title">{title}</span>
+    <Button aria-label={`Hide ${title} window`} size="icon" variant="ghost"
+      onClick={() => chrome ? chrome.hideWith(onHide) : onHide()}><X aria-hidden="true" size={14} /></Button>
+  </PanelChrome>;
+}
+
 function ViewportWindow({ manifest, visible, bounds, onModeChange, onDock, onHide }: {
   manifest: ModuleManifest;
   visible: boolean;
@@ -60,10 +69,7 @@ function ViewportWindow({ manifest, visible, bounds, onModeChange, onDock, onHid
     hidden={!visible} style={bounds ?? { inset: 0 }}>
     <PanelFrame id={`viewport-module:${manifest.id}`} title={manifest.title} visible={visible}
       dragToFloat onModeChange={reportMode} onDockChange={ignoreDockChange} onDock={dock} onHide={hide}>
-      <PanelChrome>
-        <span className="fm-panel-chrome__title">{manifest.title}</span>
-        <Button aria-label={`Hide ${manifest.title} window`} size="icon" variant="ghost" onClick={hide}><X aria-hidden="true" size={14} /></Button>
-      </PanelChrome>
+      <WindowChrome title={manifest.title} onHide={hide} />
       {visible ? <div className="fm-viewport-window__content"><MountedModule kernel={kernel} manifest={manifest} slotId="viewport-main" /></div> : null}
     </PanelFrame>
   </div>;
@@ -104,7 +110,7 @@ export function ViewportTabHost() {
     // Selecting a visible floating/companion window focuses it, preserving the
     // other visible windows and the current dock composition.
     if ((!modes[id] || modes[id] === "docked") && companionModule?.id !== id) setActiveViewportMainModule(id);
-    document.getElementById(`fm-viewport-window-${id}`)?.querySelector<HTMLButtonElement>("button")?.focus();
+    document.getElementById(`fm-viewport-window-${id}`)?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
   };
   const swap = () => {
     if (!activeModule || !companionModule || !companion) return;
@@ -128,11 +134,11 @@ export function ViewportTabHost() {
 
   return <section className="fm-slot fm-viewport-tabs" data-active-module-id={activeModule.id}
     data-companion-module-id={companionModule?.id} data-slot-id="viewport-main">
-    <Tabs className="fm-viewport-tabs__root" onValueChange={select} value={activeModule.id}>
+    <Tabs activationMode="manual" className="fm-viewport-tabs__root" onValueChange={select} value={activeModule.id}>
       <PanelChrome className="fm-viewport-tabs__bar">
         <TabsList aria-label="Viewport surfaces" className="fm-viewport-tabs__list">
           {modules.map(module => <TabsTrigger key={module.id} className="fm-viewport-tabs__trigger"
-            data-companion={module.id === companionModule?.id || undefined} value={module.id} onClick={() => select(module.id)}>
+            data-companion={module.id === companionModule?.id || undefined} data-restore-panel={`viewport-module:${module.id}`} value={module.id} onClick={() => select(module.id)}>
             {module.title}
           </TabsTrigger>)}
         </TabsList>

@@ -135,6 +135,7 @@ describe("ViewportTabHost", () => {
     expect(html).toContain('data-panel-frame="viewport-module:analysis-plots-test"');
     expect(html).toContain('aria-label="Move 3D with arrow keys"');
     expect(html).toContain('aria-label="Move Plots with arrow keys"');
+    expect(html).toContain('data-restore-panel="viewport-module:viewport-3d-test"');
     expect(html).toContain('aria-label="Arrange viewport windows vertically"');
     expect(html).toContain('aria-label="Swap viewport window positions"');
     expect(html).toContain('data-companion="true"');
